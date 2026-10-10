@@ -4,6 +4,7 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
+[![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
 **MinOS (Cat Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi çekirdeğidir.
 
@@ -13,7 +14,10 @@
 
 MinOS'u derlemeden doğrudan QEMU, VirtualBox veya gerçek donanımda test etmek için hazır ISO imajı:
 
-🔗 **Download address:**  
+🔗 **GitHub Releases (Son Sürüm ISO İndir):**  
+[https://github.com/tbagriyanik/minos/releases/latest](https://github.com/tbagriyanik/minos/releases/latest)
+
+🔗 **Repo Üzerinden Doğrudan İndir:**  
 [https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
 
 ---

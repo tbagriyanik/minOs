@@ -7,3 +7,6 @@ pub mod browser;
 pub mod imageviewer;
 pub mod musicplayer;
 pub mod videoplayer;
+pub mod calculator;
+pub mod paint;
+pub mod terminal;

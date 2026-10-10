@@ -124,6 +124,14 @@ impl NotepadApp {
         for c in self.buffer.iter_mut() {
             *c = ' ';
         }
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    /// Tüm metni seçer (Kopyala/Kes/Sil ile birlikte kullanılır).
+    pub fn select_all(&mut self) {
+        self.selection_start = Some(0);
+        self.selection_end = Some(self.len);
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
@@ -139,18 +147,9 @@ impl NotepadApp {
         MinGuiCompositor::draw_string(fb, win_x + win_w - 124, win_y + 36, "Temizle", Color::ACCENT_RED);
         fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "Kaydet", Color::DARK_BG);
-        // Context menu (right‑click) placeholder
-        if self.show_context_menu {
-            // Simple box
-            fb.draw_rect(win_x + 100, win_y + 100, 80, 60, Color::TITLE_BAR);
-            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 112, "Kopyala", Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 132, "Kes", Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 152, "Sil", Color::TEXT_MAIN);
-        }
 
-
-        // Metin Editör Alanı (Beyazımsı / Koyu Arka Plan)
-        let text_bg = 0x11111B;
+        // Metin Editörü Alanı (tema duyarlı yüzey)
+        let text_bg = Color::DARK_BG;
         let area_x = win_x + 6;
         let area_y = win_y + 58;
         let area_w = win_w - 12;

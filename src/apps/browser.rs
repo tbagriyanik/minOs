@@ -55,7 +55,7 @@ impl BrowserApp {
         let page_y = win_y + 82;
         let page_w = win_w - 12;
         let page_h = 170;
-        fb.draw_rect(page_x, page_y, page_w, page_h, 0x181825);
+        fb.draw_rect(page_x, page_y, page_w, page_h, Color::DARK_BG);
 
         // Web Başlık Afişi (Hero Banner)
         fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);

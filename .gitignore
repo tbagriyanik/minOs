@@ -9,3 +9,7 @@ minos_boot.iso
 convert*.ps1
 inspect*.ps1
 *.log
+target/temp_build.iso
+target/iso_root/boot/minos-kernel
+target/x86_64-minos/release/minos-kernel
+target/x86_64-minos/release/minos-kernel.d

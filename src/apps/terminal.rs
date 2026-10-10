@@ -1,0 +1,4 @@
+use crate::drivers::video::Framebuffer;
+use crate::gui::{Color, MinGuiCompositor};
+pub struct TerminalApp { pub line:[char;96], pub len:usize }
+impl TerminalApp { pub const fn new()->Self{Self{line:[' ';96],len:0}} pub fn insert(&mut self,c:char){if self.len<95{self.line[self.len]=c;self.len+=1;}} pub fn backspace(&mut self){if self.len>0{self.len-=1;}} pub fn render_content(&self,fb:&mut Framebuffer,x:usize,y:usize,w:usize,h:usize){fb.draw_rect(x+8,y+34,w-16,h.saturating_sub(44),Color::BLACK);MinGuiCompositor::draw_string(fb,x+16,y+46,"MinOS Komut Istemi v1.0",Color::ACCENT_GREEN);let mut b=[0u8;100];for i in 0..self.len{b[i]=self.line[i] as u8;}if let Ok(s)=core::str::from_utf8(&b[..self.len]){MinGuiCompositor::draw_string(fb,x+16,y+66,s,Color::TEXT_MAIN);}MinGuiCompositor::draw_string(fb,x+16,y+h.saturating_sub(24),"> _",Color::ACCENT_GREEN);}}

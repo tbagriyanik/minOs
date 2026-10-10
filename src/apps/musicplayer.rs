@@ -27,7 +27,7 @@ impl MusicPlayerApp {
         let eq_y = win_y + 74;
         let eq_w = 230;
         let eq_h = 75;
-        fb.draw_rect(eq_x, eq_y, eq_w, eq_h, 0x11111B);
+        fb.draw_rect(eq_x, eq_y, eq_w, eq_h, Color::DARK_BG);
 
         let num_bars = 18;
         let bar_width = 9;

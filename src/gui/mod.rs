@@ -1,28 +1,90 @@
 pub mod font;
+pub mod theme;
 
 use crate::drivers::video::Framebuffer;
 use crate::drivers::mouse::MouseState;
+use crate::drivers::keyboard::KeyboardState;
+use crate::drivers::rtc::DateTime;
 
+/// Arayüz renkleri artık *tema jetonu* taşır. Gerçek RGB değeri çizim anında
+/// aktif temadan okunur (bkz. `theme::resolve`). Böylece tema değişimi tüm
+/// arayüzü tek seferde günceller.
 pub struct Color;
 
 impl Color {
-    pub const BLACK: u32 = 0x000000;
+    pub const DARK_BG: u32 = theme::token(theme::IDX_DESKTOP_BG); // masaüstü zemin
+    pub const WINDOW_BG: u32 = theme::token(theme::IDX_WINDOW_BG); // pencere gövdesi
+    pub const TITLE_BAR: u32 = theme::token(theme::IDX_TITLEBAR); // aktif başlık
+    pub const TITLE_BAR_INACTIVE: u32 = theme::token(theme::IDX_TITLEBAR_INACTIVE);
+    pub const TASKBAR_BG: u32 = theme::token(theme::IDX_TASKBAR_BG);
+    pub const ACCENT_BLUE: u32 = theme::token(theme::IDX_ACCENT_BLUE);
+    pub const ACCENT_GREEN: u32 = theme::token(theme::IDX_ACCENT_GREEN);
+    pub const ACCENT_RED: u32 = theme::token(theme::IDX_ACCENT_RED);
+    pub const ACCENT_YELLOW: u32 = theme::token(theme::IDX_ACCENT_YELLOW);
+    pub const ACCENT_PINK: u32 = theme::token(theme::IDX_ACCENT_PINK);
+    pub const ACCENT_CAT_EARS: u32 = theme::token(theme::IDX_ACCENT_CAT);
+    pub const TEXT_MAIN: u32 = theme::token(theme::IDX_TEXT_MAIN);
+    pub const TEXT_MUTED: u32 = theme::token(theme::IDX_TEXT_MUTED);
+    pub const CURSOR_FILL: u32 = theme::token(theme::IDX_CURSOR_FILL);
+    pub const CURSOR_OUTLINE: u32 = theme::token(theme::IDX_CURSOR_OUTLINE);
+    pub const BORDER: u32 = theme::token(theme::IDX_BORDER);
+    pub const SHADOW: u32 = theme::token(theme::IDX_SHADOW);
     pub const WHITE: u32 = 0xFFFFFF;
-    pub const DARK_BG: u32 = 0x181825;
-    pub const TITLE_BAR: u32 = 0x313244;
-    pub const TITLE_BAR_INACTIVE: u32 = 0x1E1E2E;
-    pub const ACCENT_BLUE: u32 = 0x89B4FA;
-    pub const ACCENT_GREEN: u32 = 0xA6E3A1;
-    pub const ACCENT_RED: u32 = 0xF38BA8;
-    pub const ACCENT_YELLOW: u32 = 0xF9E2AF;
-    pub const ACCENT_PINK: u32 = 0xF5C2E7;
-    pub const ACCENT_CAT_EARS: u32 = 0xF2CDCD;
-    pub const TEXT_MAIN: u32 = 0xCDD6F4;
-    pub const TEXT_MUTED: u32 = 0x6C7086;
-    pub const TASKBAR_BG: u32 = 0x11111B;
-    pub const WINDOW_BG: u32 = 0x1E1E2E;
+    pub const BLACK: u32 = 0x000000;
 }
 
+// ---------------------------------------------------------------------------
+// Metin tamponu (no_std, sabit boyutlu) — sayı/tarih biçimlendirme için.
+// ---------------------------------------------------------------------------
+pub struct TextBuf {
+    buf: [u8; 32],
+    len: usize,
+}
+
+impl TextBuf {
+    pub const fn new() -> Self {
+        Self { buf: [0; 32], len: 0 }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn push_byte(&mut self, b: u8) {
+        if self.len < self.buf.len() {
+            self.buf[self.len] = b;
+            self.len += 1;
+        }
+    }
+
+    pub fn push_str(&mut self, s: &str) {
+        for b in s.bytes() {
+            self.push_byte(b);
+        }
+    }
+
+    /// İki haneli sayı (baştaki sıfır ile).
+    pub fn push_u2(&mut self, v: u32) {
+        self.push_byte(b'0' + ((v / 10) % 10) as u8);
+        self.push_byte(b'0' + (v % 10) as u8);
+    }
+
+    /// Dört haneli yıl.
+    pub fn push_u4(&mut self, v: u32) {
+        self.push_byte(b'0' + ((v / 1000) % 10) as u8);
+        self.push_byte(b'0' + ((v / 100) % 10) as u8);
+        self.push_byte(b'0' + ((v / 10) % 10) as u8);
+        self.push_byte(b'0' + (v % 10) as u8);
+    }
+
+    pub fn as_str(&self) -> &str {
+        core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pencere
+// ---------------------------------------------------------------------------
 #[derive(Copy, Clone, Debug)]
 pub struct WindowState {
     pub x: usize,
@@ -47,7 +109,15 @@ pub struct Window {
     pub is_focused: bool,
     pub is_minimized: bool,
     pub is_open: bool,
+    pub is_maximized: bool,
+    /// Maksimize öncesi konum/boyut (geri yükleme için).
+    pub restore: Option<(usize, usize, usize, usize)>,
+    /// Z-sırası: büyük olan üstte çizilir.
+    pub z: u8,
 }
+
+pub const TITLEBAR_H: usize = 24;
+pub const TASKBAR_H: usize = 36;
 
 impl Window {
     pub fn new(title: &'static str, tab_title: &'static str, x: usize, y: usize, width: usize, height: usize, is_open: bool) -> Self {
@@ -65,6 +135,9 @@ impl Window {
             is_focused: false,
             is_minimized: false,
             is_open,
+            is_maximized: false,
+            restore: None,
+            z: 0,
         }
     }
 
@@ -84,94 +157,446 @@ impl Window {
         self.width = state.width;
         self.height = state.height;
         self.is_open = state.is_open;
+        if self.is_open {
+            self.is_minimized = false;
+        }
+    }
+
+    /// Başlık çubuğu kontrol düğmesi dikdörtgenleri.
+    pub fn close_rect(&self) -> (usize, usize, usize, usize) {
+        (self.x + self.width.saturating_sub(20), self.y + 5, 14, 14)
+    }
+    pub fn max_rect(&self) -> (usize, usize, usize, usize) {
+        (self.x + self.width.saturating_sub(40), self.y + 5, 14, 14)
+    }
+    pub fn min_rect(&self) -> (usize, usize, usize, usize) {
+        (self.x + self.width.saturating_sub(60), self.y + 5, 14, 14)
+    }
+    pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
+        (self.x + self.width.saturating_sub(18), self.y + self.height.saturating_sub(18), 18, 18)
+    }
+    pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
+        (self.x, self.y, self.width.saturating_sub(66), TITLEBAR_H)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Görev çubuğu yerleşimi (hem çizim hem tıklama testi için ortak)
+// ---------------------------------------------------------------------------
+#[derive(Copy, Clone)]
+pub struct TrayLayout {
+    pub tb_y: usize,
+    pub start: (usize, usize, usize, usize),
+    pub clock: (usize, usize, usize, usize),
+    pub volume: (usize, usize, usize, usize),
+    pub theme: (usize, usize, usize, usize),
+    pub kbd: (usize, usize, usize, usize),
+}
+
+impl MinGuiCompositor {
+    pub fn start_menu_item_y(menu_y: usize, index: usize) -> usize {
+        let mut y = menu_y + 42;
+        for i in 0..index { y += 23; if i == 1 || i == 3 || i == 7 || i == 10 { y += 17; } }
+        y
+    }
+    pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
+        let tb_y = height.saturating_sub(TASKBAR_H);
+        let by = tb_y + 6;
+        let h = 24;
+        let pad = 10;
+        let clock_x = width.saturating_sub(pad + 62);
+        let vol_x = clock_x.saturating_sub(10 + 44);
+        let theme_x = vol_x.saturating_sub(8 + 66);
+        let kbd_x = theme_x.saturating_sub(8 + 46);
+        TrayLayout {
+            tb_y,
+            start: (6, tb_y + 5, 104, 26),
+            clock: (clock_x, by, 62, h),
+            volume: (vol_x, by, 44, h),
+            theme: (theme_x, by, 66, h),
+            kbd: (kbd_x, by, 46, h),
+        }
+    }
+}
+
+pub fn in_rect(mx: usize, my: usize, r: (usize, usize, usize, usize)) -> bool {
+    mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+}
+
+// ---------------------------------------------------------------------------
+// Bağlam Menüsü (sağ tık) — tıklanan yere göre değişir
+// ---------------------------------------------------------------------------
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ContextKind {
+    /// Masaüstü boş alanı
+    Desktop,
+    /// Dosya Yöneticisi içindeki bir dosya
+    FileManager,
+    /// Not Defteri metin alanı (Kes/Kopyala/Yapıştır...)
+    Notepad,
+    /// Pencere başlık çubuğu / gövdesi
+    Window,
+}
+
+/// Masaüstü sağ tık menüsü.
+pub const CTX_DESKTOP: [(&str, u32); 6] = [
+    ("Dosya Yoneticisini Ac", Color::ACCENT_BLUE),
+    ("Yeni Not Olustur", Color::TEXT_MAIN),
+    ("Sistem Ayarlari", Color::ACCENT_PINK),
+    ("Gorev Yoneticisi", Color::ACCENT_YELLOW),
+    ("Tema Degistir", Color::ACCENT_GREEN),
+    ("Masaustunu Yenile", Color::TEXT_MUTED),
+];
+
+/// Dosya Yöneticisi'nde bir dosyaya sağ tık menüsü.
+pub const CTX_FILE: [(&str, u32); 6] = [
+    ("Iliskili Uygulama ile Ac", Color::ACCENT_GREEN),
+    ("Not Defterinde Duzenle", Color::TEXT_MAIN),
+    ("Resim Gosterici ile Bak", Color::ACCENT_PINK),
+    ("Muzik Calarda Cal", Color::ACCENT_YELLOW),
+    ("Video Oynaticida Oynat", Color::ACCENT_RED),
+    ("Dosya Ozellikleri", Color::ACCENT_BLUE),
+];
+
+/// Not Defteri metin alanına sağ tık menüsü.
+pub const CTX_NOTEPAD: [(&str, u32); 6] = [
+    ("Kes", Color::ACCENT_RED),
+    ("Kopyala", Color::ACCENT_BLUE),
+    ("Yapistir", Color::ACCENT_GREEN),
+    ("Sil", Color::ACCENT_YELLOW),
+    ("Tumunu Sec", Color::ACCENT_PINK),
+    ("Tumunu Temizle", Color::TEXT_MUTED),
+];
+
+/// Pencere başlık çubuğuna sağ tık menüsü.
+pub const CTX_WINDOW: [(&str, u32); 4] = [
+    ("Kucult", Color::ACCENT_YELLOW),
+    ("Maksimize Et / Geri Yukle", Color::ACCENT_GREEN),
+    ("Pencereyi Ortala", Color::ACCENT_BLUE),
+    ("Kapat", Color::ACCENT_RED),
+];
+
+pub const CONTEXT_MENU_W: usize = 226;
+pub const CONTEXT_MENU_ITEM_H: usize = 26;
+
+
+// ---------------------------------------------------------------------------
+// Pencere Yöneticisi / Kompozitör
+// ---------------------------------------------------------------------------
 pub struct MinGuiCompositor {
-    pub windows: [Option<Window>; 8],
+    pub windows: [Option<Window>; 11],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
     pub is_context_menu_open: bool,
     pub is_alt_tab_open: bool,
+    pub is_calendar_open: bool,
+    pub is_volume_popup_open: bool,
     pub context_menu_x: usize,
     pub context_menu_y: usize,
     pub context_file_idx: Option<usize>,
+    /// Sağ tık menüsünün türü (tıklanan yere göre).
+    pub context_kind: ContextKind,
+    /// Pencere menüsü için hedef pencere indeksi.
+    pub context_window: Option<usize>,
+    /// Takvimde gösterilen ay/yıl (saatten bağımsız gezinilebilir).
+    pub cal_year: u16,
+    pub cal_month: u8,
+    z_counter: u8,
 }
 
 impl MinGuiCompositor {
     pub const fn new() -> Self {
         Self {
-            windows: [None, None, None, None, None, None, None, None],
+            windows: [None, None, None, None, None, None, None, None, None, None, None],
             active_window_idx: None,
             is_start_menu_open: true,
             is_context_menu_open: false,
             is_alt_tab_open: false,
+            is_calendar_open: false,
+            is_volume_popup_open: false,
             context_menu_x: 0,
             context_menu_y: 0,
             context_file_idx: None,
+            context_kind: ContextKind::Desktop,
+            context_window: None,
+            cal_year: 2026,
+            cal_month: 1,
+            z_counter: 0,
         }
     }
 
-    pub fn add_window(&mut self, win: Window) -> bool {
-        for slot in self.windows.iter_mut() {
-            if slot.is_none() {
-                *slot = Some(win);
+    pub fn add_window(&mut self, mut win: Window) -> bool {
+        for idx in 0..self.windows.len() {
+            if self.windows[idx].is_none() {
+                self.z_counter = self.z_counter.wrapping_add(1);
+                win.z = self.z_counter;
+                self.windows[idx] = Some(win);
                 return true;
             }
         }
         false
     }
 
-    pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
-        Self::draw_string_narrow(fb, x, y, text, color, 7);
+    /// Belirtilen pencereyi odaklar ve z-sırasında en öne taşır.
+    pub fn focus_window(&mut self, idx: usize) {
+        if idx >= self.windows.len() || self.windows[idx].is_none() {
+            return;
+        }
+        self.z_counter = self.z_counter.wrapping_add(1);
+        let z = self.z_counter;
+        self.active_window_idx = Some(idx);
+        for (i, slot) in self.windows.iter_mut().enumerate() {
+            if let Some(w) = slot {
+                w.is_focused = i == idx;
+                if i == idx {
+                    w.z = z;
+                }
+            }
+        }
     }
 
+    /// En üstte duran, açık ve küçültülmemiş pencereye odaklanır.
+    pub fn focus_top_window(&mut self) {
+        let mut best: Option<(usize, u8)> = None;
+        for (i, slot) in self.windows.iter().enumerate() {
+            if let Some(w) = slot {
+                if w.is_open && !w.is_minimized {
+                    match best {
+                        Some((_, bz)) if bz >= w.z => {}
+                        _ => best = Some((i, w.z)),
+                    }
+                }
+            }
+        }
+        if let Some((i, _)) = best {
+            self.focus_window(i);
+        } else {
+            self.active_window_idx = None;
+            for slot in self.windows.iter_mut() {
+                if let Some(w) = slot {
+                    w.is_focused = false;
+                }
+            }
+        }
+    }
+
+    /// Sıradaki açık pencereye geçer (Alt+Tab).
+    pub fn cycle_focus(&mut self) {
+        let mut order: [usize; 8] = [0; 8];
+        let mut count = 0usize;
+        for (i, slot) in self.windows.iter().enumerate() {
+            if let Some(w) = slot {
+                if w.is_open && !w.is_minimized {
+                    order[count] = i;
+                    count += 1;
+                }
+            }
+        }
+        if count == 0 {
+            return;
+        }
+        // z-sırasına göre sırala (küçükten büyüğe)
+        for i in 0..count {
+            for j in i + 1..count {
+                let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
+                let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
+                if zj < zi {
+                    order.swap(i, j);
+                }
+            }
+        }
+        let current = self.active_window_idx.unwrap_or(order[count - 1]);
+        let mut pos = count - 1;
+        for k in 0..count {
+            if order[k] == current {
+                pos = k;
+                break;
+            }
+        }
+        let next = order[(pos + 1) % count];
+        self.focus_window(next);
+    }
+
+    /// Açık pencereleri z-sırasına göre (arkadan öne) indeks listesi olarak döndürür.
+    pub fn draw_order(&self) -> ([usize; 8], usize) {
+        let mut order: [usize; 8] = [0; 8];
+        let mut count = 0usize;
+        for (i, slot) in self.windows.iter().enumerate() {
+            if let Some(w) = slot {
+                if w.is_open && !w.is_minimized {
+                    order[count] = i;
+                    count += 1;
+                }
+            }
+        }
+        for i in 0..count {
+            for j in i + 1..count {
+                let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
+                let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
+                if zj < zi {
+                    order.swap(i, j);
+                }
+            }
+        }
+        (order, count)
+    }
+
+    pub fn toggle_maximize(&mut self, idx: usize, screen_w: usize, screen_h: usize) {
+        if let Some(ref mut win) = self.windows[idx] {
+            if win.is_maximized {
+                if let Some((x, y, w, h)) = win.restore {
+                    win.x = x;
+                    win.y = y;
+                    win.width = w;
+                    win.height = h;
+                }
+                win.is_maximized = false;
+            } else {
+                win.restore = Some((win.x, win.y, win.width, win.height));
+                win.x = 0;
+                win.y = 0;
+                win.width = screen_w;
+                win.height = screen_h.saturating_sub(TASKBAR_H);
+                win.is_maximized = true;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Çizim yardımcıları
+// ---------------------------------------------------------------------------
+impl MinGuiCompositor {
+    /// Aktif temadan okunan RGB ile bir rengi aydınlatır/koyulaştırır.
+    pub fn shade(color: u32, delta: i32) -> u32 {
+        let c = theme::resolve(color);
+        let r = (((c >> 16) & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+        let g = (((c >> 8) & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+        let b = ((c & 0xFF) as i32 + delta).clamp(0, 255) as u32;
+        (r << 16) | (g << 8) | b
+    }
+
+    /// Bir karakterin 8x8 bitmap glyph'ini döndürür.
+    #[inline(always)]
+    fn glyph_for(c: char) -> Option<[u8; 8]> {
+        if let Some(g) = font::get_turkish_glyph(c) {
+            return Some(g);
+        }
+        let b = c as u32;
+        if (32..=126).contains(&b) {
+            Some(font::FONT_8X8_BASIC[(b - 32) as usize])
+        } else {
+            None
+        }
+    }
+
+    fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [u8; 8], color: u32, scale: usize) {
+        for row in 0..8 {
+            let bits = glyph[row];
+            if bits == 0 {
+                continue;
+            }
+            for col in 0..8 {
+                if (bits & (1 << (7 - col))) != 0 {
+                    if scale <= 1 {
+                        fb.put_pixel(x + col, y + row, color);
+                    } else {
+                        fb.draw_rect(x + col * scale, y + row * scale, scale, scale, color);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Standart metin (1x ölçek, 7px ilerleme — fontun dahili boşluğu kullanılır).
+    pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
+        Self::draw_string_scaled(fb, x, y, text, color, 1);
+    }
+
+    /// Geriye dönük uyumluluk: özel harf aralığı.
     pub fn draw_string_narrow(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, spacing: usize) {
         let mut cur_x = x;
         for c in text.chars() {
-            if let Some(tr_glyph) = font::get_turkish_glyph(c) {
-                for row in 0..8 {
-                    for col in 0..8 {
-                        if (tr_glyph[row] & (1 << (7 - col))) != 0 {
-                            fb.put_pixel(cur_x + col, y + row, color);
-                        }
-                    }
-                }
-            } else {
-                let b = c as u32;
-                if b >= 32 && b <= 126 {
-                    let glyph = font::FONT_8X8_BASIC[(b - 32) as usize];
-                    for row in 0..8 {
-                        for col in 0..8 {
-                            if (glyph[row] & (1 << (7 - col))) != 0 {
-                                fb.put_pixel(cur_x + col, y + row, color);
-                            }
-                        }
-                    }
-                }
+            if let Some(g) = Self::glyph_for(c) {
+                Self::blit_glyph(fb, cur_x, y, g, color, 1);
             }
             cur_x += spacing;
         }
     }
 
+    /// Ölçeklenebilir metin. `scale` = 1..3 (piksel büyütme).
+    pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
+        let scale = scale.max(1);
+        let advance = 7 * scale;
+        let mut cur_x = x;
+        for c in text.chars() {
+            if let Some(g) = Self::glyph_for(c) {
+                Self::blit_glyph(fb, cur_x, y, g, color, scale);
+            }
+            cur_x += advance;
+        }
+    }
+
+    /// Gölgeli metin — renkli başlık/buton zeminlerinde okunabilirliği artırır.
+    pub fn draw_string_shadow(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+        shadow: u32,
+        scale: usize,
+    ) {
+        Self::draw_string_scaled(fb, x + 1, y + 1, text, shadow, scale);
+        Self::draw_string_scaled(fb, x, y, text, color, scale);
+    }
+
+    /// Merkezlenmiş metin genişliğini hesaplar (px).
+    pub fn text_width(text: &str, scale: usize) -> usize {
+        // Font 8px hücre, 7px içerik; son karakter için tam hücre genişliği eklenir.
+        let n = text.chars().count();
+        if n == 0 {
+            0
+        } else {
+            (n - 1) * 7 * scale + 8 * scale
+        }
+    }
+
+    /// Etiketli, hover durumuna duyarlı düğme.
+    pub fn draw_button(
+        fb: &mut Framebuffer,
+        r: (usize, usize, usize, usize),
+        bg: u32,
+        label: &str,
+        label_color: u32,
+        hovered: bool,
+    ) {
+        let bg = if hovered { Self::shade(bg, 26) } else { bg };
+        fb.draw_rect(r.0, r.1, r.2, r.3, bg);
+        let tw = Self::text_width(label, 1).saturating_sub(1);
+        let tx = r.0 + r.2.saturating_sub(tw) / 2;
+        let ty = r.1 + r.3.saturating_sub(8) / 2;
+        Self::draw_string(fb, tx, ty, label, label_color);
+    }
+
     /// MinOS Özel Kedi (Cat) Logosu ve Simgesi Çizici (16x16)
     pub fn draw_cat_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         const CAT_ICON_MAP: [u16; 16] = [
-            0b0110000000000110, // Kulak uçları
-            0b1111000000001111, // Kulaklar
-            0b1111111111111111, // Baş üstü
-            0b1111111111111111, // Alın
-            0b1100111111110011, // Gözler
-            0b1100111111110011, // Gözler
-            0b1111111111111111, // Yanaklar
-            0b1001111001111001, // Bıyıklar ve Burun
-            0b1111110000111111, // Ağız
-            0b0111111111111110, // Çene
-            0b0011111111111100, // Boyun
-            0b0011111111111100, // Gövde
-            0b0111001111001110, // Patiler
-            0b0111001111001110, // Patiler
-            0b0011111111111100, // Alt taban
+            0b0110000000000110,
+            0b1111000000001111,
+            0b1111111111111111,
+            0b1111111111111111,
+            0b1100111111110011,
+            0b1100111111110011,
+            0b1111111111111111,
+            0b1001111001111001,
+            0b1111110000111111,
+            0b0111111111111110,
+            0b0011111111111100,
+            0b0011111111111100,
+            0b0111001111001110,
+            0b0111001111001110,
+            0b0011111111111100,
             0b0000000000000000,
         ];
 
@@ -182,6 +607,9 @@ impl MinGuiCompositor {
                         Color::ACCENT_BLUE
                     } else if row == 8 && (col == 7 || col == 8) {
                         Color::ACCENT_PINK
+                    } else if theme::current() == theme::ThemeId::Daylight {
+                        // Açık temada logo kontrastı için kedi gövdesi turuncu.
+                        0xE67E22
                     } else if row <= 1 {
                         Color::ACCENT_CAT_EARS
                     } else {
@@ -193,250 +621,517 @@ impl MinGuiCompositor {
         }
     }
 
-    /// 1. Masaüstü Arka Planı ve Masaüstü Simgeleri
+    // -----------------------------------------------------------------------
+    // 1. Masaüstü Arka Planı
+    // -----------------------------------------------------------------------
     pub fn render_desktop_bg(&self, fb: &mut Framebuffer) {
-        fb.clear(Color::DARK_BG);
+        // Hafif dikey gradyan masaüstüne derinlik katar.
+        let top = Color::DARK_BG;
+        let bottom = Self::shade(Color::DARK_BG, -12);
+        fb.draw_vgradient(0, 0, fb.width, fb.height, top, bottom);
 
         // Masaüstü Sağ Üst MinOS Kedi Logosu ve Başlığı (Watermark)
         Self::draw_cat_icon(fb, fb.width.saturating_sub(210), 30);
-        Self::draw_string(fb, fb.width.saturating_sub(185), 35, "MinOS Sarman Edition", Color::ACCENT_PINK);
+        Self::draw_string_shadow(
+            fb,
+            fb.width.saturating_sub(185),
+            35,
+            "MinOS Sarman Edition",
+            Color::ACCENT_PINK,
+            Color::SHADOW,
+            1,
+        );
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
         let desk_icons = [
-            ("📁 Bilgisayarım", Color::ACCENT_BLUE),
-            ("📝 Notlar", Color::TEXT_MAIN),
-            ("🌐 SarmanNet", Color::ACCENT_GREEN),
-            ("🎵 Çalma Listesi", Color::ACCENT_YELLOW),
-            ("⚙️ Ayarlar", Color::ACCENT_PINK),
+            ("Bilgisayarim", Color::ACCENT_BLUE),
+            ("Notlar", Color::TEXT_MAIN),
+            ("SarmanNet", Color::ACCENT_GREEN),
+            ("Calma Listesi", Color::ACCENT_YELLOW),
+            ("Ayarlar", Color::ACCENT_PINK),
         ];
 
         for (i, (lbl, col)) in desk_icons.iter().enumerate() {
-            let dy = 30 + i * 50;
-            fb.draw_rect(20, dy, 32, 26, Color::TITLE_BAR_INACTIVE);
-            Self::draw_cat_icon(fb, 28, dy + 5);
-            Self::draw_string(fb, 60, dy + 10, lbl, *col);
+            let dy = 30 + i * 54;
+            // İkon kartı (gölgeli)
+            fb.draw_rect(20, dy, 34, 30, Self::shade(Color::WINDOW_BG, 8));
+            fb.draw_rect_outline(20, dy, 34, 30, Color::BORDER);
+            Self::draw_cat_icon(fb, 29, dy + 7);
+            Self::draw_string_shadow(fb, 62, dy + 12, lbl, *col, Color::SHADOW, 1);
         }
     }
 
-    /// 2. Tek Bir Pencerenin Çerçevesini ve Başlık Çubuğunu Çiz
-    pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window) {
-        if !win.is_open || win.is_minimized { return; }
+    // -----------------------------------------------------------------------
+    // 2. Pencere Çerçevesi ve Başlık Çubuğu
+    // -----------------------------------------------------------------------
+    pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window, mouse: &MouseState) {
+        if !win.is_open || win.is_minimized {
+            return;
+        }
+        let mx = mouse.x as usize;
+        let my = mouse.y as usize;
 
-        // Pencere Gövdesi Arka Planı
+        // Gölge (pencere arkasına derinlik)
+        fb.draw_shadow(win.x, win.y, win.width, win.height, Color::SHADOW);
+
+        // Çerçeve (border) — önce dış, sonra gövde üstüne
+        let border = if win.is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
+        fb.draw_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, border);
+        // Pencere Gövdesi
         fb.draw_rect(win.x, win.y, win.width, win.height, Color::WINDOW_BG);
-        // Çerçeve (border) ekle
-        fb.draw_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, Color::ACCENT_BLUE);
 
-        // Başlık Çubuğu
-        let title_color = if win.is_focused { Color::TITLE_BAR } else { Color::TITLE_BAR_INACTIVE };
-        fb.draw_rect(win.x, win.y, win.width, 24, title_color);
+        // Başlık Çubuğu (dikey gradyan — aktifse vurgulu)
+        let (t_top, t_bottom) = if win.is_focused {
+            (Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14))
+        } else {
+            (Color::TITLE_BAR_INACTIVE, Self::shade(Color::TITLE_BAR_INACTIVE, -10))
+        };
+        fb.draw_vgradient(win.x, win.y, win.width, TITLEBAR_H, t_top, t_bottom);
+        // Başlık çubuğu alt çizgisi
+        fb.draw_rect(win.x, win.y + TITLEBAR_H - 1, win.width, 1, border);
 
-        // Pencere Başlığı yanında mini kedi ikonu
+        // Mini kedi ikonu ve başlık
         Self::draw_cat_icon(fb, win.x + 6, win.y + 4);
-        Self::draw_string(fb, win.x + 28, win.y + 8, win.title, Color::TEXT_MAIN);
+        let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
+        Self::draw_string_shadow(fb, win.x + 28, win.y + 8, win.title, title_col, Color::SHADOW, 1);
 
-        // Kontrol Butonları: [X] Kapat (Kırmızı), [-] Simge Durumuna Küçült (Sarı)
-        fb.draw_rect(win.x + win.width - 20, win.y + 5, 14, 14, Color::ACCENT_RED);
-        Self::draw_string(fb, win.x + win.width - 16, win.y + 8, "x", Color::DARK_BG);
+        // Kontrol Butonları (hover'da parlama)
+        let (cx, cy) = (win.close_rect().0, win.close_rect().1);
+        let hover_close = in_rect(mx, my, win.close_rect());
+        fb.draw_rect(cx, cy, 14, 14, if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED });
+        Self::draw_string(fb, cx + 4, cy + 3, "x", Color::DARK_BG);
 
-        fb.draw_rect(win.x + win.width - 38, win.y + 5, 14, 14, Color::ACCENT_YELLOW);
-        Self::draw_string(fb, win.x + win.width - 34, win.y + 8, "-", Color::DARK_BG);
+        let (mxr, myr) = (win.max_rect().0, win.max_rect().1);
+        let hover_max = in_rect(mx, my, win.max_rect());
+        fb.draw_rect(mxr, myr, 14, 14, if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN });
+        if win.is_maximized {
+            // Geri yükle simgesi (üst üste iki kare)
+            fb.draw_rect_outline(mxr + 3, myr + 3, 7, 7, Color::DARK_BG);
+            fb.draw_rect_outline(mxr + 5, myr + 5, 6, 6, Color::DARK_BG);
+        } else {
+            fb.draw_rect_outline(mxr + 3, myr + 3, 8, 8, Color::DARK_BG);
+        }
 
-        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) İkonu
-        let grip_x = win.x + win.width - 12;
-        let grip_y = win.y + win.height - 12;
+        let (nx, ny) = (win.min_rect().0, win.min_rect().1);
+        let hover_min = in_rect(mx, my, win.min_rect());
+        fb.draw_rect(nx, ny, 14, 14, if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW });
+        fb.draw_rect(nx + 4, ny + 9, 6, 2, Color::DARK_BG);
+
+        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) — üç çizgi
+        let grip_x = win.x + win.width - 14;
+        let grip_y = win.y + win.height - 14;
         let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
-        fb.draw_rect(grip_x + 6, grip_y + 2, 4, 4, grip_color);
-        fb.draw_rect(grip_x + 2, grip_y + 6, 8, 4, grip_color);
+        fb.draw_rect(grip_x + 8, grip_y + 2, 4, 4, grip_color);
+        fb.draw_rect(grip_x + 4, grip_y + 6, 8, 4, grip_color);
+        fb.draw_rect(grip_x, grip_y + 10, 12, 4, grip_color);
     }
 
-    /// 3. Görev Çubuğu, Başlat Menüsü ve Donanım Fare İmleci
+    // -----------------------------------------------------------------------
+    // 3. Görev Çubuğu, Sistem Tepsisi (saat/ses/tema) ve Kaplamalar
+    // -----------------------------------------------------------------------
     pub fn render_taskbar_and_overlays(
         &self,
         fb: &mut Framebuffer,
         mouse: &MouseState,
-        kbd: &crate::drivers::keyboard::KeyboardState,
+        kbd: &KeyboardState,
+        now: &DateTime,
+        volume: u8,
+        is_muted: bool,
+        english: bool,
     ) {
-        let tb_height = 36;
-        let tb_y = fb.height.saturating_sub(tb_height);
+        let l = Self::tray_layout(fb.width, fb.height);
+        let tb_y = l.tb_y;
+        let mx = mouse.x as usize;
+        let my = mouse.y as usize;
 
-        // Görev Çubuğu Zemin
-        fb.draw_rect(0, tb_y, fb.width, tb_height, Color::TASKBAR_BG);
+        // Görev Çubuğu Zemin (gradyan)
+        fb.draw_vgradient(0, tb_y, fb.width, TASKBAR_H, Color::TASKBAR_BG, Self::shade(Color::TASKBAR_BG, 8));
+        fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
-        // Kedi Simgeli Başlat Menüsü Butonu
-        let start_btn_color = if self.is_start_menu_open { Color::ACCENT_PINK } else { Color::ACCENT_BLUE };
-        fb.draw_rect(6, tb_y + 4, 90, 28, start_btn_color);
+        // Başlat Menüsü Butonu
+        let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
+        let start_bg = if self.is_start_menu_open { Color::ACCENT_PINK } else { Color::ACCENT_BLUE };
+        Self::draw_button(fb, l.start, start_bg, "", Color::TASKBAR_BG, start_hover);
         Self::draw_cat_icon(fb, 12, tb_y + 10);
-        Self::draw_string(fb, 34, tb_y + 14, "MinOS", Color::TASKBAR_BG);
+        Self::draw_string_shadow(fb, 36, tb_y + 14, "MinOS", Color::TASKBAR_BG, Color::SHADOW, 1);
 
-        // Görev Çubuğu Uygulama Sekmeleri (Taskbar Tabs)
-        let mut tab_x = 104;
+        // Uygulama Sekmeleri (z-sırasına göre değil, sabit sırayla)
+        let mut tab_x = 118;
         for opt_win in self.windows.iter() {
             if let Some(win) = opt_win {
                 if win.is_open {
-                    let tab_bg = if win.is_focused && !win.is_minimized {
-                        Color::TITLE_BAR
-                    } else {
-                        Color::TITLE_BAR_INACTIVE
-                    };
-                    fb.draw_rect(tab_x, tb_y + 4, 76, 28, tab_bg);
+                    let rect = (tab_x, tb_y + 5, 84, 26);
+                    let active = win.is_focused && !win.is_minimized;
+                    let base = if active { Color::TITLE_BAR } else { Color::TITLE_BAR_INACTIVE };
+                    let hovered = in_rect(mx, my, rect);
+                    fb.draw_rect(rect.0, rect.1, rect.2, rect.3, if hovered { Self::shade(base, 20) } else { base });
+                    if active {
+                        fb.draw_rect(rect.0, rect.1, 3, rect.3, Color::ACCENT_BLUE);
+                    }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
-                    Self::draw_string(fb, tab_x + 8, tb_y + 14, win.tab_title, tab_text_color);
-                    tab_x += 80;
+                    Self::draw_string(fb, tab_x + 10, tb_y + 14, win.tab_title, tab_text_color);
+                    tab_x += 88;
                 }
             }
         }
 
-        // Sistem Saati & Dil Seçeneği (TR / EN)
-        Self::draw_string(fb, fb.width.saturating_sub(75), tb_y + 14, "12:00", Color::TEXT_MAIN);
-        
-        // TR / EN Klavye Rozeti (Badge)
-        let kbd_badge_color = match kbd.layout {
+        // Sistem Tepsisi (sağdan sola): saat, ses, tema, klavye
+        // Klavye rozeti
+        let kbd_tag = kbd.layout_tag();
+        let kbd_col = match kbd.layout {
             crate::drivers::keyboard::KeyboardLayout::TurkishQ => Color::ACCENT_RED,
             crate::drivers::keyboard::KeyboardLayout::EnglishUS => Color::ACCENT_BLUE,
         };
-        fb.draw_rect(fb.width.saturating_sub(130), tb_y + 6, 45, 24, Color::TITLE_BAR);
-        Self::draw_string(fb, fb.width.saturating_sub(122), tb_y + 14, kbd.layout_tag(), kbd_badge_color);
+        let kbd_hover = in_rect(mx, my, l.kbd);
+        fb.draw_rect(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, if kbd_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
+        Self::draw_string(fb, l.kbd.0 + 9, tb_y + 14, kbd_tag, kbd_col);
 
-        Self::draw_string(fb, fb.width.saturating_sub(190), tb_y + 14, "[ETH0]", Color::ACCENT_GREEN);
-        Self::draw_string(fb, fb.width.saturating_sub(240), tb_y + 14, "[VOL]", Color::ACCENT_BLUE);
+        // Tema butonu (renk örneği + kısa ad)
+        let theme_hover = in_rect(mx, my, l.theme);
+        fb.draw_rect(l.theme.0, l.theme.1, l.theme.2, l.theme.3, if theme_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
+        fb.draw_rect(l.theme.0 + 5, l.theme.1 + 6, 12, 12, Color::ACCENT_PINK);
+        fb.draw_rect_outline(l.theme.0 + 5, l.theme.1 + 6, 12, 12, Color::BORDER);
+        Self::draw_string(fb, l.theme.0 + 22, tb_y + 14, theme::current().short_name(), Color::TEXT_MAIN);
 
-        // Başlat Menüsü Açık ise Çizimi
+        // Ses butonu
+        let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
+        fb.draw_rect(l.volume.0, l.volume.1, l.volume.2, l.volume.3, if vol_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
+        let vol_col = if is_muted { Color::TEXT_MUTED } else { Color::ACCENT_GREEN };
+        Self::draw_string(fb, l.volume.0 + 8, tb_y + 14, if is_muted { "SESX" } else { "SES" }, vol_col);
+
+        // Saat (canlı) — saat tıklanınca takvim açılır
+        let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
+        fb.draw_rect(l.clock.0, l.clock.1, l.clock.2, l.clock.3, if clock_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
+        let mut clock = TextBuf::new();
+        clock.push_u2(now.hour as u32);
+        clock.push_byte(b':');
+        clock.push_u2(now.minute as u32);
+        clock.push_byte(b':');
+        clock.push_u2(now.second as u32);
+        Self::draw_string(fb, l.clock.0 + 6, tb_y + 14, clock.as_str(), Color::TEXT_MAIN);
+
+        // Akıllı tepsi ağı simgesi
+        Self::draw_string(fb, l.kbd.0.saturating_sub(58), tb_y + 14, "ETH0", Color::ACCENT_GREEN);
+
+        // Başlat Menüsü
         if self.is_start_menu_open {
-            self.render_start_menu(fb, tb_y);
+            self.render_start_menu(fb, tb_y, english);
         }
-
-        // Sağ Tık Bağlam Menüsü (Context Menu) Açık ise Çizimi
+        // Bağlam Menüsü
         if self.is_context_menu_open {
             self.render_context_menu(fb);
         }
-
-        // Alt+Tab Uygulama Geçiş Penceresi Açık ise Çizimi
+        // Alt+Tab
         if self.is_alt_tab_open {
             self.render_alt_tab_overlay(fb);
         }
+        // Takvim
+        if self.is_calendar_open {
+            self.render_calendar(fb, now, &l);
+        }
+        // Ses paneli
+        if self.is_volume_popup_open {
+            self.render_volume_popup(fb, &l, volume, is_muted);
+        }
 
         // Donanım Fare İmleci
-        self.draw_mouse_cursor(fb, mouse.x as usize, mouse.y as usize);
+        self.draw_mouse_cursor(fb, mx, my);
     }
 
     pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {
-        let box_w = 460;
-        let box_h = 160;
+        let box_w = 470;
+        let box_h = 168;
         let box_x = (fb.width - box_w) / 2;
         let box_y = (fb.height - box_h) / 2;
 
-        // Arka Plan Karartma (Overlay Modal)
+        fb.draw_shadow(box_x, box_y, box_w, box_h, Color::SHADOW);
         fb.draw_rect(box_x, box_y, box_w, box_h, Color::TASKBAR_BG);
-        fb.draw_rect(box_x, box_y, box_w, 24, Color::TITLE_BAR);
-        Self::draw_string(fb, box_x + 12, box_y + 8, "Uygulama Geçişi (Alt + Tab)", Color::TEXT_MAIN);
+        fb.draw_rect_outline(box_x, box_y, box_w, box_h, Color::BORDER);
+        fb.draw_rect(box_x, box_y, box_w, 26, Color::TITLE_BAR);
+        Self::draw_string_shadow(fb, box_x + 12, box_y + 9, "Uygulama Geçişi (Alt + Tab)", Color::TEXT_MAIN, Color::SHADOW, 1);
 
         let mut app_count = 0;
         let mut active_app_title = "Pencere Seçilmedi";
 
-        for (_i, opt_win) in self.windows.iter().enumerate() {
+        for opt_win in self.windows.iter() {
             if let Some(win) = opt_win {
-                if win.is_open {
-                    let card_x = box_x + 12 + app_count * 54;
-                    let card_y = box_y + 36;
+                if win.is_open && !win.is_minimized {
+                    let card_x = box_x + 12 + app_count * 58;
+                    let card_y = box_y + 40;
                     let is_sel = win.is_focused;
                     let card_bg = if is_sel { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-                    
+
                     if is_sel {
                         active_app_title = win.title;
                     }
 
-                    fb.draw_rect(card_x, card_y, 48, 54, card_bg);
-                    Self::draw_cat_icon(fb, card_x + 16, card_y + 10);
+                    fb.draw_rect(card_x, card_y, 50, 58, card_bg);
+                    if is_sel {
+                        fb.draw_rect_outline(card_x.saturating_sub(1), card_y.saturating_sub(1), 52, 60, Color::ACCENT_PINK);
+                    }
+                    Self::draw_cat_icon(fb, card_x + 17, card_y + 12);
                     let tab_col = if is_sel { Color::DARK_BG } else { Color::TEXT_MAIN };
-                    Self::draw_string(fb, card_x + 6, card_y + 34, win.tab_title, tab_col);
+                    Self::draw_string(fb, card_x + 8, card_y + 38, win.tab_title, tab_col);
                     app_count += 1;
                 }
             }
         }
 
-        // Seçili Programın Tam İsmi ve Kısayol İpucu
-        fb.draw_rect(box_x + 12, box_y + 104, box_w - 24, 42, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, box_x + 20, box_y + 112, "Aktif Pencere:", Color::TEXT_MUTED);
-        Self::draw_string(fb, box_x + 130, box_y + 112, active_app_title, Color::ACCENT_GREEN);
-        Self::draw_string(fb, box_x + 20, box_y + 130, "Alt tuşunu bıraktığınızda pencere otomatik açılır.", Color::TEXT_MUTED);
+        fb.draw_rect(box_x + 12, box_y + 110, box_w - 24, 46, Color::TITLE_BAR_INACTIVE);
+        Self::draw_string(fb, box_x + 20, box_y + 118, "Aktif Pencere:", Color::TEXT_MUTED);
+        Self::draw_string(fb, box_x + 130, box_y + 118, active_app_title, Color::ACCENT_GREEN);
+        Self::draw_string(fb, box_x + 20, box_y + 138, "Alt tuşunu bıraktığınızda pencere öne gelir.", Color::TEXT_MUTED);
     }
 
-    pub fn render_context_menu(&self, fb: &mut Framebuffer) {
-        let menu_w = 170;
-        let menu_h = 138;
-        let menu_x = self.context_menu_x.min(fb.width.saturating_sub(menu_w));
-        let menu_y = self.context_menu_y.min(fb.height.saturating_sub(menu_h));
-
-        // Menü Arka Planı ve Çerçevesi
-        fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
-        fb.draw_rect(menu_x, menu_y, menu_w, 2, Color::ACCENT_BLUE);
-
-        let items = if self.context_file_idx.is_some() {
-            [
-                ("⚡ İlişkili Uygulama ile Aç", Color::ACCENT_GREEN),
-                ("📝 Not Defterinde Düzenle", Color::TEXT_MAIN),
-                ("🖼️ Görüntüleyici ile Bak", Color::ACCENT_PINK),
-                ("🎵 Müzik Çalarda Çal", Color::ACCENT_YELLOW),
-                ("📋 Dosya Özellikleri", Color::ACCENT_BLUE),
-            ]
-        } else {
-            [
-                ("📂 Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
-                ("📝 Yeni Not Oluştur", Color::TEXT_MAIN),
-                ("⚙️ Sistem Ayarları", Color::ACCENT_PINK),
-                ("📊 Görev Yöneticisi", Color::ACCENT_YELLOW),
-                ("🔄 Masaüstünü Yenile", Color::ACCENT_GREEN),
-            ]
-        };
-
-        for (i, (label, color)) in items.iter().enumerate() {
-            let item_y = menu_y + 4 + i * 26;
-            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, 22, Color::WINDOW_BG);
-            Self::draw_string(fb, menu_x + 10, item_y + 6, label, *color);
+    /// Aktif bağlam menüsünün öğe listesi.
+    pub fn context_items(&self) -> &'static [(&'static str, u32)] {
+        match self.context_kind {
+            ContextKind::Desktop => &CTX_DESKTOP,
+            ContextKind::FileManager => &CTX_FILE,
+            ContextKind::Notepad => &CTX_NOTEPAD,
+            ContextKind::Window => &CTX_WINDOW,
         }
     }
 
-    pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize) {
-        let menu_w = 230;
-        let menu_h = 312;
+    /// Bağlam menüsünün ekran üzerindeki dikdörtgeni (çizim ve tıklama ortak).
+    pub fn context_menu_geom(&self, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
+        let items = self.context_items();
+        let w = CONTEXT_MENU_W;
+        // 22px başlık + öğeler (26px) + 4px alt boşluk
+        let h = 26 + items.len() * CONTEXT_MENU_ITEM_H;
+        let x = self.context_menu_x.min(fb_w.saturating_sub(w));
+        let y = self.context_menu_y.min(fb_h.saturating_sub(h));
+        (x, y, w, h)
+    }
+
+    pub fn render_context_menu(&self, fb: &mut Framebuffer) {
+        let (menu_x, menu_y, menu_w, menu_h) = self.context_menu_geom(fb.width, fb.height);
+
+        fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
+        fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+        fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
+        fb.draw_rect(menu_x, menu_y, menu_w, 2, Color::ACCENT_BLUE);
+
+        // Menü başlığı (tür)
+        let header = match self.context_kind {
+            ContextKind::Desktop => "Masaustu",
+            ContextKind::FileManager => "Dosya Islemleri",
+            ContextKind::Notepad => "Duzen",
+            ContextKind::Window => "Pencere",
+        };
+        Self::draw_string(fb, menu_x + 8, menu_y + 6, header, Color::TEXT_MUTED);
+        fb.draw_rect(menu_x + 4, menu_y + 18, menu_w - 8, 1, Color::BORDER);
+
+        for (i, (label, color)) in self.context_items().iter().enumerate() {
+            let item_y = menu_y + 22 + i * CONTEXT_MENU_ITEM_H;
+            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, 22, Color::WINDOW_BG);
+            Self::draw_string(fb, menu_x + 10, item_y + 7, label, *color);
+        }
+    }
+
+    /// Bağlam menüsünde tıklanan öğe indeksini döndürür (menü dışındaysa None).
+    pub fn context_hit(&self, fb_w: usize, fb_h: usize, mx: usize, my: usize) -> Option<usize> {
+        let (menu_x, menu_y, menu_w, menu_h) = self.context_menu_geom(fb_w, fb_h);
+        if !in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) {
+            return None;
+        }
+        if my < menu_y + 22 {
+            // Başlık satırı — öğe yok
+            return None;
+        }
+        let items = self.context_items();
+        let rel = my - (menu_y + 22);
+        let idx = rel / CONTEXT_MENU_ITEM_H;
+        if idx < items.len() {
+            Some(idx)
+        } else {
+            None
+        }
+    }
+
+    pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize, english: bool) {
+        let menu_w = 240;
+        let menu_h = 430;
         let menu_x = 6;
         let menu_y = tb_y.saturating_sub(menu_h + 4);
 
-        // Başlat Menüsü Arka Planı ve Çerçevesi
+        fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
-        // Çerçeve (border) ekle
-        fb.draw_rect(menu_x.saturating_sub(1), menu_y.saturating_sub(1), menu_w + 2, menu_h + 2, Color::ACCENT_BLUE);
-        fb.draw_rect(menu_x, menu_y, menu_w, 2, Color::ACCENT_BLUE);
+        fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
 
-        // Başlık / Profil Şeridi
-        fb.draw_rect(menu_x + 4, menu_y + 6, menu_w - 8, 30, Color::TITLE_BAR);
-        Self::draw_cat_icon(fb, menu_x + 10, menu_y + 12);
-        Self::draw_string(fb, menu_x + 32, menu_y + 14, "MinOS Başlat Menüsü", Color::TEXT_MAIN);
+        // Profil Şeridi (gradyan)
+        fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, 34, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
+        Self::draw_cat_icon(fb, menu_x + 10, menu_y + 10);
+        Self::draw_string_shadow(fb, menu_x + 32, menu_y + 13, "MinOS Başlat Menüsü", Color::TEXT_MAIN, Color::SHADOW, 1);
 
-        // 9 Menü Öğesi
-        let menu_items = [
+        let menu_items = if english { [
+            ("1. File Manager", Color::ACCENT_YELLOW), ("2. Settings", Color::ACCENT_BLUE), ("3. Notepad", Color::TEXT_MAIN),
+            ("4. Web Browser", Color::ACCENT_GREEN), ("5. Image Viewer", Color::ACCENT_PINK), ("6. Music Player", Color::ACCENT_YELLOW),
+            ("7. Video Player", Color::ACCENT_RED), ("8. Task Manager", Color::ACCENT_BLUE), ("9. Calculator", Color::ACCENT_GREEN),
+            ("A. Paint", Color::ACCENT_PINK), ("B. Terminal", Color::ACCENT_YELLOW), ("0. Shut Down", Color::ACCENT_RED),
+        ] } else { [
             ("1. Dosya Yöneticisi", Color::ACCENT_YELLOW),
-            ("2. Kontrol Paneli", Color::ACCENT_BLUE),
+            ("2. Sistem Ayarları", Color::ACCENT_BLUE),
             ("3. Not Defteri", Color::TEXT_MAIN),
             ("4. Web Tarayıcısı", Color::ACCENT_GREEN),
             ("5. Resim Gösterici", Color::ACCENT_PINK),
             ("6. Müzik Çalar", Color::ACCENT_YELLOW),
             ("7. Video Oynatıcı", Color::ACCENT_RED),
             ("8. Görev Yöneticisi", Color::ACCENT_BLUE),
-            ("9. ⏻ Sistemi Kapat (Shutdown)", Color::ACCENT_RED),
-        ];
+            ("9. Hesap Makinesi", Color::ACCENT_GREEN),
+            ("A. Çizim Tahtası", Color::ACCENT_PINK),
+            ("B. Komut İstemi", Color::ACCENT_YELLOW),
+            ("0. Sistemi Kapat", Color::ACCENT_RED),
+        ] };
 
+        let groups = [("Sistem", 0usize), ("Üretkenlik", 2), ("Medya", 4), ("Geliştirici", 8)];
+        for (title, first) in groups.iter() {
+            let gy = Self::start_menu_item_y(menu_y, *first).saturating_sub(17);
+            Self::draw_string(fb, menu_x + 12, gy, title, Color::TEXT_MUTED);
+        }
         for (i, (name, col)) in menu_items.iter().enumerate() {
-            let item_y = menu_y + 42 + i * 26;
-            let bg_col = if i == 8 { Color::TITLE_BAR } else { Color::WINDOW_BG };
-            fb.draw_rect(menu_x + 6, item_y, menu_w - 12, 23, bg_col);
-            Self::draw_string(fb, menu_x + 14, item_y + 7, name, *col);
+            let item_y = Self::start_menu_item_y(menu_y, i);
+            let bg_col = if i == 11 { Color::TITLE_BAR } else { Color::WINDOW_BG };
+            fb.draw_rect(menu_x + 6, item_y, menu_w - 12, 21, bg_col);
+            Self::draw_string(fb, menu_x + 14, item_y + 6, name, *col);
         }
 
         // Alt Bilgi Şeridi
-        fb.draw_rect(menu_x + 4, menu_y + menu_h - 22, menu_w - 8, 18, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 12, menu_y + menu_h - 17, "Sarman Çekirdeği v1.0 | 64-Bit", Color::TEXT_MUTED);
+        fb.draw_rect(menu_x + 1, menu_y + menu_h - 24, menu_w - 2, 23, Color::TITLE_BAR_INACTIVE);
+        Self::draw_string(fb, menu_x + 12, menu_y + menu_h - 18, "Sarman Çekirdeği v1.1 | 64-Bit", Color::TEXT_MUTED);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Takvim Kaplaması (Clock -> Calendar)
+    // -----------------------------------------------------------------------
+    pub fn calendar_rect(width: usize, layout: &TrayLayout) -> (usize, usize, usize, usize) {
+        let w = 252;
+        let h = 238;
+        let x = (layout.clock.0 + layout.clock.2).saturating_sub(w).min(width.saturating_sub(w));
+        let y = layout.tb_y.saturating_sub(h + 6);
+        (x, y, w, h)
+    }
+
+    pub fn render_calendar(&self, fb: &mut Framebuffer, now: &DateTime, layout: &TrayLayout) {
+        let (x, y, w, h) = Self::calendar_rect(fb.width, layout);
+
+        fb.draw_shadow(x, y, w, h, Color::SHADOW);
+        fb.draw_rect(x, y, w, h, Color::TASKBAR_BG);
+        fb.draw_rect_outline(x, y, w, h, Color::BORDER);
+
+        // Başlık: < Ay Yıl >
+        fb.draw_vgradient(x + 1, y + 1, w - 2, 30, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
+        Self::draw_string(fb, x + 10, y + 11, "<", Color::ACCENT_BLUE);
+        let mut title = TextBuf::new();
+        title.push_str(DateTime::month_name(self.cal_month));
+        title.push_byte(b' ');
+        title.push_u4(self.cal_year as u32);
+        let tw = Self::text_width(title.as_str(), 1);
+        Self::draw_string(fb, x + (w - tw) / 2, y + 11, title.as_str(), Color::TEXT_MAIN);
+        Self::draw_string(fb, x + w - 22, y + 11, ">", Color::ACCENT_BLUE);
+
+        // Gün başlıkları (Pt..Pz)
+        let grid_x = x + 10;
+        let grid_y = y + 40;
+        let cell_w = (w - 20) / 7;
+        for d in 0..7usize {
+            let label = DateTime::weekday_short(d as u8);
+            Self::draw_string(fb, grid_x + d * cell_w + 6, grid_y, label, Color::TEXT_MUTED);
+        }
+
+        // Ayın günleri
+        let first_w = DateTime::weekday(self.cal_year, self.cal_month, 1) as usize;
+        let dim = DateTime::days_in_month(self.cal_year, self.cal_month) as usize;
+        let today_month = self.cal_year == now.year && self.cal_month == now.month;
+        let row_h = 26;
+        for day in 1..=dim {
+            let idx = first_w + (day - 1);
+            let row = idx / 7;
+            let col = idx % 7;
+            let cx = grid_x + col * cell_w;
+            let cy = grid_y + 16 + row * row_h;
+            if cy + 20 > y + h - 8 {
+                break;
+            }
+            let is_today = today_month && day == now.day as usize;
+            if is_today {
+                fb.draw_rect(cx, cy, cell_w - 2, 20, Color::ACCENT_BLUE);
+            }
+            let mut db = TextBuf::new();
+            if day < 10 {
+                db.push_byte(b' ');
+            }
+            db.push_u2(day as u32);
+            let col_txt = if is_today { Color::DARK_BG } else { Color::TEXT_MAIN };
+            Self::draw_string(fb, cx + 6, cy + 6, db.as_str(), col_txt);
+        }
+
+        // Alt bilgi: tam tarih ve saat
+        fb.draw_rect(x + 1, y + h - 26, w - 2, 25, Color::TITLE_BAR_INACTIVE);
+        let mut foot = TextBuf::new();
+        foot.push_u2(now.hour as u32);
+        foot.push_byte(b':');
+        foot.push_u2(now.minute as u32);
+        foot.push_byte(b':');
+        foot.push_u2(now.second as u32);
+        foot.push_str("  ");
+        foot.push_str(DateTime::weekday_name(DateTime::weekday(now.year, now.month, now.day)));
+        Self::draw_string(fb, x + 12, y + h - 20, foot.as_str(), Color::ACCENT_GREEN);
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Ses Paneli (Volume Popup)
+    // -----------------------------------------------------------------------
+    pub fn volume_slider_rect(&self, layout: &TrayLayout) -> (usize, usize, usize, usize) {
+        let w = 220;
+        let x = layout.volume.0.saturating_sub(w).saturating_sub(10).max(10);
+        let y = layout.tb_y.saturating_sub(96);
+        (x, y, w, 90)
+    }
+
+    pub fn volume_track_rect(&self, layout: &TrayLayout) -> (usize, usize, usize, usize) {
+        let panel = self.volume_slider_rect(layout);
+        (panel.0 + 16, panel.1 + 46, panel.2 - 32, 12)
+    }
+
+    pub fn volume_mute_rect(&self, layout: &TrayLayout) -> (usize, usize, usize, usize) {
+        let panel = self.volume_slider_rect(layout);
+        (panel.0 + panel.2 - 78, panel.1 + 66, 62, 20)
+    }
+
+    pub fn render_volume_popup(&self, fb: &mut Framebuffer, layout: &TrayLayout, volume: u8, is_muted: bool) {
+        let panel = self.volume_slider_rect(layout);
+        let (x, y, w, h) = panel;
+
+        fb.draw_shadow(x, y, w, h, Color::SHADOW);
+        fb.draw_rect(x, y, w, h, Color::TASKBAR_BG);
+        fb.draw_rect_outline(x, y, w, h, Color::BORDER);
+        fb.draw_vgradient(x + 1, y + 1, w - 2, 26, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
+        Self::draw_string_shadow(fb, x + 12, y + 10, "Ses Düzeyi", Color::TEXT_MAIN, Color::SHADOW, 1);
+
+        // Yüzde
+        let mut pct = TextBuf::new();
+        pct.push_byte(b'%');
+        pct.push_u2(volume as u32);
+        let pc = if is_muted { Color::TEXT_MUTED } else { Color::ACCENT_GREEN };
+        Self::draw_string(fb, x + w - 42, y + 10, pct.as_str(), pc);
+
+        // Kaydırıcı yolu
+        let track = self.volume_track_rect(layout);
+        fb.draw_rect(track.0, track.1, track.2, track.3, Color::TITLE_BAR_INACTIVE);
+        let fill_w = (track.2 * volume as usize) / 100;
+        if !is_muted {
+            fb.draw_rect(track.0, track.1, fill_w, track.3, Color::ACCENT_BLUE);
+        }
+        // Tutamaç
+        let knob_x = track.0 + fill_w.saturating_sub(4);
+        fb.draw_rect(knob_x, track.1 - 4, 8, track.3 + 8, Color::TEXT_MAIN);
+
+        // Sessiz düğmesi
+        let mute = self.volume_mute_rect(layout);
+        let bg = if is_muted { Color::ACCENT_RED } else { Color::TITLE_BAR };
+        let label = if is_muted { "Sesi Ac" } else { "Sustur" };
+        Self::draw_button(fb, mute, bg, label, Color::TEXT_MAIN, false);
     }
 
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
@@ -455,10 +1150,20 @@ impl MinGuiCompositor {
             0b00001100,
         ];
 
+        // Önce dış hat (outline), sonra dolgu — her zeminde görünür kalır.
         for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
             for col in 0..8 {
                 if (byte & (1 << (7 - col))) != 0 {
-                    fb.put_pixel(mx + col, my + row, Color::WHITE);
+                    fb.put_pixel(mx + col + 1, my + row, Color::CURSOR_OUTLINE);
+                    fb.put_pixel(mx + col, my + row + 1, Color::CURSOR_OUTLINE);
+                    fb.put_pixel(mx + col + 1, my + row + 1, Color::CURSOR_OUTLINE);
+                }
+            }
+        }
+        for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
+            for col in 0..8 {
+                if (byte & (1 << (7 - col))) != 0 {
+                    fb.put_pixel(mx + col, my + row, Color::CURSOR_FILL);
                 }
             }
         }

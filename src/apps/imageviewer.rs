@@ -30,14 +30,14 @@ impl ImageViewerApp {
         let canvas_y = win_y + 60;
         let canvas_w = 210;
         let canvas_h = 180;
-        fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, 0x11111B);
+        fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, Color::TASKBAR_BG);
 
         // Dama tahtası deseni (Şeffaflık / Tuval hissi)
         let tile_size = 10;
         for ty in (0..canvas_h).step_by(tile_size) {
             for tx in (0..canvas_w).step_by(tile_size) {
                 if ((tx / tile_size) + (ty / tile_size)) % 2 == 1 {
-                    fb.draw_rect(canvas_x + tx, canvas_y + ty, tile_size, tile_size, 0x181825);
+                    fb.draw_rect(canvas_x + tx, canvas_y + ty, tile_size, tile_size, Color::DARK_BG);
                 }
             }
         }
@@ -45,7 +45,7 @@ impl ImageViewerApp {
         // 16x16 Cyber-Cat Pixel-Art Resmi (4x Zoom ile 64x64 Çizim)
         let art_ox = canvas_x + (canvas_w - 64) / 2;
         let art_oy = canvas_y + (canvas_h - 64) / 2;
-        let scale = 4;
+        let scale = self.zoom_level;
 
         const ART_DATA: [u16; 16] = [
             0b0110000000000110,
@@ -95,7 +95,7 @@ impl ImageViewerApp {
         MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 52, "Format: BMP (RGB32)", Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 72, "Boyut: 4.096 B", Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 92, "Renk Paleti: 16 Renk", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 112, "Yakınlaştırma: 4x", Color::ACCENT_YELLOW);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 112, "Yakınlaştırma: aktif", Color::ACCENT_YELLOW);
         MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 132, "Durum: Başarılı", Color::ACCENT_GREEN);
 
         // Alt Durum Çubuğu

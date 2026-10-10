@@ -37,13 +37,26 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 8 adet yerleşik uygulama
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Görev çubuğundaki kedi ikonlu **MinOS** butonuyla açılır; tüm uygulamaları numaralı kısayollarla (`1-8`) listeler. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
-| **⚙️ Kontrol Paneli** | Sistem Bilgisi, Ekran & Ses kaydırıcıları, Ağ Durumu (IP/DNS/Gateway) ve Dil/Klavye yönetim paneli. |
-| **📝 Not Defteri** | Doğrudan klavye ile yazı yazılabilen metin editörü. Türkçe karakter desteği (`ç`, `ğ`, `ı`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları (01-09) ve yanıp sönen imleç. |
+| **⚙️ Sistem Ayarları** | Tema seçimi/değiştirme, canlı saat & tarih, ses düzeyi kaydırıcısı, ağ durumu (IP/DNS/Gateway), dil/klavye ve pencere düzeni kaydetme paneli. |
+| **📝 Not Defteri** | Doğrudan klavye ile yazı yazılabilen metin editörü. Türkçe karakter desteği (`ç`, `ğ`, `ı`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları (01-09) ve yanıp sönen imleç. Sağ tık menüsüyle **Kes / Kopyala / Yapıştır / Sil / Tümünü Seç**. |
 | **🌐 Web Tarayıcısı (SarmanNet)** | Sekmeler, URL çubuğu (`https://catnet.os/portal`), SSL rozeti ve stilize edilmiş kart görünümleri. |
 | **🖼️ Resim Gösterici (MinViewer)** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
 | **🎵 Müzik Çalar (SarmanBeats)** | Müzik ritmine göre dalgalanan dinamik 18 bantlı renkli spektrum ekolayzerı (yeşil/sarı/pembe), tepe ışıkları, parça scrubber'ı ve çalma listesi. |
 | **🎬 Video Player (MinPlayer)** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU durumu, görev tablosu ve çalışma süresi. |
+
+### 🆕 Modern Arayüz Yenilikleri (v1.1)
+
+- **🎨 Dinamik Tema Motoru:** Tüm arayüz *renk jetonları* (token) üzerinden çizilir. Görev çubuğundaki renk örneğine, sistem ayarlarındaki **Değiştir** düğmesine veya masaüstü sağ tık menüsüne tıklayarak anında **Kadife Gece (Dark)**, **Gün Işığı (Light)** ve **Kutup Mavisi (Nord)** temaları arasında geçiş yapabilirsiniz. Tek tıkla masaüstü, pencereler ve tüm uygulamalar uyum sağlar.
+- **🕓 Gerçek Zamanlı Saat & Takvim:** CMOS/RTC sürücüsü (`0x70`/`0x71`) üzerinden gerçek saat okunur ve görev çubuğunda canlı `SS:DD:SS` olarak gösterilir. Saate tıklayınca içinde bulunulan ayı, haftanın günlerini ve **bugünü** vurgulayan, `<` / `>` ile aylar arasında gezilebilen bir **takvim** açılır.
+- **🔊 Çalışan Ses Kontrolü:** Görev çubuğundaki **SES** düğmesi ses düzeyi panelini açar; kaydırıcıyı sürükleyerek ve **Sustur** düğmesiyle sesi ayarlayabilirsiniz. Değer `AudioDevice`'a uygulanır ve ayarlar penceresindeki kaydırıcıyla senkronize çalışır.
+- **🖱️ Bağlama Duyarlı Sağ Tık Menüsü:** Sağ tık menüsü tıklanan yere göre değişir:
+  - **Masaüstü:** Dosya Yöneticisini Aç, Yeni Not, Sistem Ayarları, Görev Yöneticisi, Tema Değiştir, Masaüstünü Yenile.
+  - **Not Defteri:** Kes, Kopyala, Yapıştır, Sil, Tümünü Seç, Tümünü Temizle.
+  - **Dosya Yöneticisi:** İlişkili Uygulamayla Aç, Not Defterinde Düzenle, Resim Gösterici, Müzik Çalar, Video Oynatıcı, Dosya Özellikleri.
+  - **Pencere Başlığı:** Küçült, Maksimize Et / Geri Yükle, Pencereyi Ortala, Kapat.
+- **🪟 ZENGİN PENCERE DAVRANIŞLARI:** Pencereler artık düzgün bir z-sırası yığınıyla yönetilir (odaklanan pencere daima en üste gelir). Başlık çubuğunda **yeşil maksimize/geri yükle** düğmesi bulunur; başlık çubuğuna **çift tıklayarak** da maksimize edebilirsiniz. Pencereler dış çerçeve, yumuşak gölge ve gradyan başlık çubuğuyla çizilir; düğmeler üzerine gelince parlar.
+- **🔤 İyileştirilmiş Yazı Okunabilirliği:** Yüksek kontrastlı metin renkleri, başlıklar için gölgeli metin çizimi, gradyan paneller ve ölçeklenebilir/merkezlenebilir metin yardımcıları eklendi.
 
 ---
 
@@ -120,8 +133,13 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 - **Pencere Taşıma (Drag & Drop):** Herhangi bir pencerenin üst başlık çubuğuna sol tıklayıp basılı tutarak ekran üzerinde sürükleyebilirsiniz.
 - **Pencere Kontrolleri:** 
   - Kırmızı `[x]` butonu: Pencereyi kapatır.
+  - Yeşil `[□]` butonu: Pencereyi maksimize eder (tekrar tıklayınca geri yükler). Başlık çubuğuna **çift tıklamak** da aynı işi yapar.
   - Sarı `[-]` butonu: Pencereyi simge durumuna küçülterek görev çubuğuna indirir.
+  - Sağ alt köşedeki tutamaçtan pencereyi yeniden boyutlandırabilirsiniz.
 - **Görev Çubuğu:** Açık olan pencerelerin sekmeleri (`[Dosya]`, `[Not]`, `[Müzik]`, vb.) görev çubuğunda listelenir. Tıklayarak pencereleri öne getirebilir veya simge durumuna küçültebilirsiniz.
+- **Sistem Tepsisi (Sağ Alt):** Sırasıyla **klavye rozeti**, **tema düğmesi**, **SES** düğmesi ve **canlı saat** bulunur. Saate tıklayınca takvim, **SES**'e tıklayınca ses paneli açılır.
+- **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine veya masaüstü sağ tık > **Tema Değiştir**'e tıklayın.
+- **Bağlama Duyarlı Sağ Tık:** Masaüstünde, Not Defteri'nde, Dosya Yöneticisi'nde veya pencere başlığında farklı menüler açılır (bkz. yukarıdaki yenilikler).
 - **Klavye Düzeni Değiştirme:** Görev çubuğunun sağ altındaki `[TR]` / `[EN]` rozetine tıklayarak veya `Tab` tuşuna basarak Türkçe Q ve Amerikan US klavye düzenleri arasında geçiş yapabilirsiniz.
 - **Hızlı Uygulama Başlatma:** Başlat menüsü açıkken klavyeden `1` ile `8` arasındaki sayılara basarak ilgili uygulamayı anında açabilirsiniz.
 
@@ -133,8 +151,8 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 minos/
 ├── src/
 │   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
-│   ├── drivers/             # PS/2 fare, klavye, framebuffer video ve donanım sürücüleri
-│   ├── gui/                 # Pencere yöneticisi, font motoru ve masaüstü kompozitörü
+│   ├── drivers/             # PS/2 fare, klavye, framebuffer video, RTC (CMOS) saat ve donanım sürücüleri
+│   ├── gui/                 # Pencere yöneticisi, font motoru, tema motoru (theme.rs) ve masaüstü kompozitörü
 │   ├── apps/                # 8 Masaüstü uygulaması (Not Defteri, Müzik Çalar, Tarayıcı...)
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM)
 │   ├── fs/                  # Sanal dosya sistemi (VFS / TarFS)

@@ -1,0 +1,137 @@
+use crate::drivers::video::Framebuffer;
+use crate::gui::{Color, MinGuiCompositor};
+
+pub struct VideoPlayerApp {
+    pub is_playing: bool,
+    pub frame: usize,
+}
+
+impl VideoPlayerApp {
+    pub const fn new() -> Self {
+        Self {
+            is_playing: true,
+            frame: 0,
+        }
+    }
+
+    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
+        // Araç Çubuğu / Başlık Bilgisi
+        fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 22, Color::TITLE_BAR);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 34, "retro_drive.mp4 - 30 FPS MinVideo Engine", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 90, win_y + 34, "● CANLI", Color::ACCENT_RED);
+
+        // Video Ekranı (Viewport)
+        let vp_x = win_x + 8;
+        let vp_y = win_y + 52;
+        let vp_w = win_w - 16;
+        let vp_h = 145;
+        
+        // 1. Gökyüzü (Koyu Mor / Gece)
+        let sky_color = 0x181028;
+        fb.draw_rect(vp_x, vp_y, vp_w, vp_h / 2, sky_color);
+
+        // 2. Neon Synthwave Güneşi (Ufuk çizgisinde)
+        let sun_cx = vp_x + vp_w / 2;
+        let sun_cy = vp_y + vp_h / 2;
+        let sun_r = 24;
+        for dy in -sun_r..=0 {
+            let line_y = (sun_cy as isize + dy) as usize;
+            if line_y >= vp_y && line_y < vp_y + vp_h {
+                // Güneş çizgileri (Scanlines)
+                if (dy.abs() % 4) != 0 {
+                    // Yaklaşık genişlik
+                    let hw = match dy.abs() {
+                        0..=6 => 22,
+                        7..=12 => 20,
+                        13..=18 => 16,
+                        _ => 10,
+                    };
+                    for px in (sun_cx.saturating_sub(hw))..=(sun_cx + hw) {
+                        if px >= vp_x && px < vp_x + vp_w {
+                            let sun_color = if dy < -12 { Color::ACCENT_YELLOW } else { Color::ACCENT_PINK };
+                            fb.put_pixel(px, line_y, sun_color);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Ufuk Çizgisi (Neon Pembe)
+        let horizon_y = vp_y + vp_h / 2;
+        fb.draw_rect(vp_x, horizon_y, vp_w, 2, Color::ACCENT_PINK);
+
+        // 4. Izgara Zemin (Yol / Retro Grid)
+        let road_color = 0x0A0612;
+        fb.draw_rect(vp_x, horizon_y + 2, vp_w, vp_h - (vp_h / 2) - 2, road_color);
+
+        // Dinamik Akan Yatay Izgara Çizgileri
+        let ground_h = vp_h - (vp_h / 2) - 2;
+        let speed = (tick * 2) % 20;
+
+        for step in 0..6 {
+            let offset_y = ((step * 14 + speed) * (step * 14 + speed)) / 45;
+            if offset_y < ground_h {
+                let gy = horizon_y + 2 + offset_y;
+                if gy < vp_y + vp_h {
+                    fb.draw_rect(vp_x, gy, vp_w, 1, 0x5C2D91);
+                }
+            }
+        }
+
+        // Dikey Perspektif Çizgileri (Ufuk noktasından aşağıya doğru açılan çizgiler)
+        let vanish_x = sun_cx;
+        for i in -4..=4 {
+            // Basit çizgi projeksiyonu
+            let mut y = horizon_y + 2;
+            while y < vp_y + vp_h {
+                let progress = y - horizon_y;
+                let px = (vanish_x as isize + (i * 40 * progress as isize) / ground_h as isize) as usize;
+                if px >= vp_x && px < vp_x + vp_w {
+                    fb.put_pixel(px, y, 0x482070);
+                }
+                y += 2;
+            }
+        }
+
+        // 5. Yolda İlerleyen Retro Siber Araç / Kedi Gemisi
+        let car_x = sun_cx.saturating_sub(18);
+        let car_y = vp_y + vp_h - 22;
+        fb.draw_rect(car_x, car_y, 36, 12, Color::TITLE_BAR);
+        fb.draw_rect(car_x + 6, car_y - 6, 24, 7, Color::WINDOW_BG); // Tavan / Cam
+        fb.draw_rect(car_x + 8, car_y - 4, 20, 4, Color::ACCENT_BLUE); // Cam ışıltısı
+        // Arka neon stop lambaları
+        fb.draw_rect(car_x + 2, car_y + 4, 8, 4, Color::ACCENT_RED);
+        fb.draw_rect(car_x + 26, car_y + 4, 8, 4, Color::ACCENT_RED);
+
+        // Video İlerleme Çubuğu (Timeline)
+        let scrub_y = vp_y + vp_h + 8;
+        MinGuiCompositor::draw_string(fb, win_x + 12, scrub_y, "00:15", Color::TEXT_MAIN);
+        let scrub_w = win_w - 110;
+        let scrub_x = win_x + 54;
+        fb.draw_rect(scrub_x, scrub_y + 2, scrub_w, 6, Color::DARK_BG);
+        fb.draw_rect(scrub_x, scrub_y + 2, (scrub_w * 22) / 100, 6, Color::ACCENT_RED);
+        fb.draw_rect(scrub_x + (scrub_w * 22) / 100 - 2, scrub_y, 5, 10, Color::WHITE);
+        MinGuiCompositor::draw_string(fb, scrub_x + scrub_w + 8, scrub_y, "01:30", Color::TEXT_MUTED);
+
+        // Oynatıcı Kontrolleri
+        let ctrl_y = scrub_y + 18;
+        fb.draw_rect(win_x + 12, ctrl_y, 42, 22, Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, win_x + 18, ctrl_y + 6, "|| >", Color::DARK_BG);
+
+        fb.draw_rect(win_x + 58, ctrl_y, 40, 22, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, "Durdur", Color::TEXT_MAIN);
+
+        fb.draw_rect(win_x + 102, ctrl_y, 48, 22, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 108, ctrl_y + 6, "-10s", Color::TEXT_MUTED);
+
+        fb.draw_rect(win_x + 154, ctrl_y, 48, 22, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MUTED);
+
+        fb.draw_rect(win_x + win_w - 76, ctrl_y, 64, 22, Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, "Tam Ekran", Color::DARK_BG);
+
+        // Durum Çubuğu
+        fb.draw_rect(win_x + 6, win_y + 250, win_w - 12, 18, Color::TASKBAR_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 254, "Donanım Çözücü: SSE2 Optimize | YUV to RGB Framebuffer", Color::TEXT_MUTED);
+    }
+}

@@ -1,2 +1,9 @@
 pub mod taskmgr;
 pub mod settings;
+pub mod filemanager;
+pub mod controlpanel;
+pub mod notepad;
+pub mod browser;
+pub mod imageviewer;
+pub mod musicplayer;
+pub mod videoplayer;

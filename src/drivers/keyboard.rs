@@ -10,6 +10,7 @@ pub struct KeyboardState {
     pub caps_lock: bool,
     pub alt_gr: bool,
     pub ctrl: bool,
+    pub last_char: Option<char>,
 }
 
 impl KeyboardState {
@@ -20,6 +21,7 @@ impl KeyboardState {
             caps_lock: false,
             alt_gr: false,
             ctrl: false,
+            last_char: None,
         }
     }
 
@@ -44,6 +46,10 @@ impl KeyboardState {
         }
     }
 
+    pub fn take_last_char(&mut self) -> Option<char> {
+        self.last_char.take()
+    }
+
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
         // Tuş bırakma (Release / Break code) kontrolü
         if scancode & 0x80 != 0 {
@@ -61,7 +67,7 @@ impl KeyboardState {
         }
 
         // Tuşa basılma (Make code)
-        match scancode {
+        let ch = match scancode {
             0x2A | 0x36 => {
                 self.shift = true;
                 None
@@ -86,7 +92,12 @@ impl KeyboardState {
                     KeyboardLayout::EnglishUS => Self::scancode_to_us(scancode, uppercase, self.shift),
                 }
             }
+        };
+
+        if ch.is_some() {
+            self.last_char = ch;
         }
+        ch
     }
 
     fn scancode_to_tr(scancode: u8, uppercase: bool, shift: bool, _alt_gr: bool) -> Option<char> {

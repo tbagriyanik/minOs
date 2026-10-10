@@ -117,17 +117,25 @@ if (-not $oscdimg -and (Test-Path "tools\oscdimg.exe")) { $oscdimg = (Get-Item "
 if (-not $mkisofs -and (Test-Path "tools\mkisofs.exe")) { $mkisofs = (Get-Item "tools\mkisofs.exe").FullName }
 
 if ($oscdimg) {
+    $tempIso = "target\temp_build.iso"
+    if (Test-Path $tempIso) { Remove-Item -Force $tempIso }
     $bootBin = "$OutputDir\boot\limine\limine-bios-cd.bin"
     if (Test-Path "$OutputDir\boot\limine\limine-uefi-cd.bin") {
-        & $oscdimg -m -o -n -d "-bootdata:2#p0,e,b$bootBin#pEF,e,b$OutputDir\boot\limine\limine-uefi-cd.bin" $OutputDir $IsoName
+        & $oscdimg -m -o -n -d "-bootdata:2#p0,e,b$bootBin#pEF,e,b$OutputDir\boot\limine\limine-uefi-cd.bin" $OutputDir $tempIso
     } else {
-        & $oscdimg -m -o -n -d -b"$bootBin" $OutputDir $IsoName
+        & $oscdimg -m -o -n -d -b"$bootBin" $OutputDir $tempIso
     }
     if (Test-Path $bootBin) {
-        $patched = [LimineIsoPatcher]::Patch((Resolve-Path $IsoName).Path, (Resolve-Path $bootBin).Path)
+        $patched = [LimineIsoPatcher]::Patch((Resolve-Path $tempIso).Path, (Resolve-Path $bootBin).Path)
         if ($patched) {
             Write-Host "[BİLGİ] Limine El Torito Boot Information Table başarıyla yamalandı." -ForegroundColor Cyan
         }
+    }
+    try {
+        Copy-Item -Force $tempIso $IsoName
+    } catch {
+        Copy-Item -Force $tempIso "minos_boot.iso"
+        $IsoName = "minos_boot.iso"
     }
     Write-Host "[BAŞARILI] $IsoName oscdimg & Limine ile boot edilebilir oluşturuldu!" -ForegroundColor Green
 } elseif ($xorriso) {

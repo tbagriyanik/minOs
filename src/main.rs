@@ -85,44 +85,14 @@ fn serial_print(s: &str) {
     }
 }
 
-#[inline(never)]
-fn serial_print_hex(mut val: u64) {
-    let hex_chars = b"0123456789ABCDEF";
-    let mut buf = [b'0'; 16];
-    for i in (0..16).rev() {
-        buf[i] = hex_chars[(val & 0xF) as usize];
-        val >>= 4;
-    }
-    serial_print("0x");
-    for b in buf {
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b);
-        }
-    }
-    serial_print("\n");
-}
-
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_print("[MinOS] Kernel _start reached!\n");
     arch::x86_64::enable_sse();
     arch::x86_64::disable_pic();
     serial_print("[MinOS] SSE enabled & PIC IRQs masked!\n");
-    let base_rev_val = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(LIMINE_BASE_REVISION[2]))
-    };
-    let resp_ptr = unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
-    };
-    serial_print("[MinOS] Base revision[2]: ");
-    serial_print_hex(base_rev_val);
-    serial_print("[MinOS] FB Request addr: ");
-    serial_print_hex(core::ptr::addr_of!(FRAMEBUFFER_REQUEST) as u64);
-    serial_print("[MinOS] FB Request response ptr: ");
-    serial_print_hex(resp_ptr as u64);
 
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
-    serial_print("[MinOS] Step 1: IDT & PMM\n");
     arch::x86_64::init_interrupts();
     let mut memory_mgr = mm::MemoryManager::new();
     let sample_memory_map = [
@@ -135,30 +105,18 @@ pub extern "C" fn _start() -> ! {
     memory_mgr.pmm.init(&sample_memory_map);
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
-    serial_print("[MinOS] Step 2: VFS\n");
     let _fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı
-    serial_print("[MinOS] Step 3: Drivers\n");
     let _net_dev = drivers::net::NetworkInterface::new();
     let _audio_dev = drivers::audio::AudioDevice::new();
 
     // 4. Limine Framebuffer Alımı
-    serial_print("[MinOS] Step 4: Framebuffer\n");
     let (fb_ptr, width, height, pitch) = unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response));
         if !resp.is_null() && (*resp).framebuffer_count > 0 {
-            serial_print("[MinOS] Limine Framebuffer response OK!\n");
             let fb_ptr_ptr = (*resp).framebuffers;
             let fb_info = **fb_ptr_ptr;
-            serial_print("[MinOS] FB Address: ");
-            serial_print_hex(fb_info.address as u64);
-            serial_print("[MinOS] FB Width: ");
-            serial_print_hex(fb_info.width);
-            serial_print("[MinOS] FB Height: ");
-            serial_print_hex(fb_info.height);
-            serial_print("[MinOS] FB Pitch: ");
-            serial_print_hex(fb_info.pitch);
             (
                 fb_info.address as *mut u32,
                 fb_info.width as usize,
@@ -177,103 +135,293 @@ pub extern "C" fn _start() -> ! {
         drivers::video::Framebuffer::new(fb_ptr, width, height, pitch)
     };
 
-
-    serial_print("[MinOS] Step 5: Compositor\n");
-
-    serial_print("[MinOS] Step 5.1: Mouse & Kbd (PS/2 Init)\n");
+    // 5. PS/2 Donanım Sürücüleri
     let mut mouse = drivers::mouse::MouseState::new();
     let mut keyboard = drivers::keyboard::KeyboardState::new();
     drivers::ps2::init();
 
-    // 5. MinGUI Pencere Yöneticisi ve Uygulamalar
-    serial_print("[MinOS] Step 5.2: MinGuiCompositor\n");
+    // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
     let mut compositor = gui::MinGuiCompositor::new();
+    let filemanager_app = apps::filemanager::FileManagerApp::new();
+    let controlpanel_app = apps::controlpanel::ControlPanelApp::new();
+    let mut notepad_app = apps::notepad::NotepadApp::new();
+    let browser_app = apps::browser::BrowserApp::new();
+    let imageviewer_app = apps::imageviewer::ImageViewerApp::new();
+    let musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
+    let videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
     let taskmgr_app = apps::taskmgr::TaskManagerApp::new();
-    let mut settings_app = apps::settings::SystemSettings::default();
-    settings_app.keyboard_layout = keyboard.layout;
 
-    // Uygulama Pencerelerini Ekle
-    serial_print("[MinOS] Step 5.3: Add windows\n");
-    compositor.add_window(gui::Window::new("Görev Yöneticisi - [MinOS]", 60, 60, 400, 220));
-    compositor.add_window(gui::Window::new("Sistem Ayarları (TR & ENG)", 500, 80, 440, 230));
+    // 8 Uygulama Penceresini Kaydet
+    // 0: Dosya Yöneticisi
+    compositor.add_window(gui::Window::new("Dosya Yöneticisi - [VFS / Home]", "[Dosya]", 30, 30, 480, 290, true));
+    // 1: Kontrol Paneli
+    compositor.add_window(gui::Window::new("Kontrol Paneli (Donanım & Sistem)", "[Panel]", 530, 30, 480, 290, false));
+    // 2: Not Defteri
+    compositor.add_window(gui::Window::new("Not Defteri - [adsiz.txt]", "[Not]", 80, 70, 460, 270, true));
+    // 3: Web Tarayıcısı (CatNet)
+    compositor.add_window(gui::Window::new("CatNet Web Gezgini - [v1.0]", "[Web]", 550, 60, 480, 280, false));
+    // 4: Resim Gösterici (MinViewer)
+    compositor.add_window(gui::Window::new("Resim Gösterici - [kedi_maskotu.bmp]", "[Resim]", 120, 90, 450, 270, false));
+    // 5: Müzik Çalar (CatBeats)
+    compositor.add_window(gui::Window::new("CatBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, true));
+    // 6: Video Oynatıcı (MinPlayer)
+    compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - [retro_drive.mp4]", "[Video]", 150, 110, 460, 275, false));
+    // 7: Görev Yöneticisi
+    compositor.add_window(gui::Window::new("Görev Yöneticisi - [MinOS]", "[Görev]", 600, 100, 400, 220, false));
 
-    serial_print("[MinOS] Step 6: Rendering Initial Frame\n");
-    compositor.render_desktop(&mut fb, &mouse, &keyboard);
-    taskmgr_app.render_content(&mut fb, 60, 60);
-    settings_app.render_content(&mut fb, 500, 80);
-    serial_print("[MinOS] MinOS GUI Desktop is now running with full interaction!\n");
+    // Pencere 2'yi (Not Defteri) başlangıçta odakla
+    if let Some(ref mut win) = compositor.windows[2] {
+        win.is_focused = true;
+    }
 
     let mut last_mouse_x = mouse.x;
     let mut last_mouse_y = mouse.y;
     let mut last_buttons = (mouse.left_button, mouse.right_button);
-    let mut last_layout = keyboard.layout;
     let mut dragging_win: Option<usize> = None;
     let mut drag_offset_x = 0;
     let mut drag_offset_y = 0;
+    let mut anim_tick: usize = 0;
+    let mut spin_counter: usize = 0;
 
-    // 6. Ana Masaüstü Etkileşim ve Olay Döngüsü
+    let render_full_frame = |fb: &mut drivers::video::Framebuffer,
+                             compositor: &gui::MinGuiCompositor,
+                             fm: &apps::filemanager::FileManagerApp,
+                             cp: &apps::controlpanel::ControlPanelApp,
+                             np: &apps::notepad::NotepadApp,
+                             br: &apps::browser::BrowserApp,
+                             iv: &apps::imageviewer::ImageViewerApp,
+                             mp: &apps::musicplayer::MusicPlayerApp,
+                             vp: &apps::videoplayer::VideoPlayerApp,
+                             tm: &apps::taskmgr::TaskManagerApp,
+                             mouse: &drivers::mouse::MouseState,
+                             kbd: &drivers::keyboard::KeyboardState,
+                             tick: usize| {
+        // 1. Masaüstü Arka Planı
+        compositor.render_desktop_bg(fb);
+
+        // 2. Açık ve Küçültülmemiş Pencereleri Çiz
+        for (idx, opt_win) in compositor.windows.iter().enumerate() {
+            if let Some(win) = opt_win {
+                if !win.is_open || win.is_minimized { continue; }
+
+                // Pencere Çerçevesi
+                compositor.render_window_frame(fb, win);
+
+                // Uygulama Özel İçerik Render
+                match idx {
+                    0 => fm.render_content(fb, win.x, win.y, win.width, win.height),
+                    1 => cp.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout),
+                    2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                    3 => br.render_content(fb, win.x, win.y, win.width, win.height),
+                    4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
+                    5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                    6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                    7 => tm.render_content(fb, win.x, win.y),
+                    _ => {}
+                }
+            }
+        }
+
+        // 3. Görev Çubuğu, Başlat Menüsü ve Donanım İmleci
+        compositor.render_taskbar_and_overlays(fb, mouse, kbd);
+    };
+
+    // İlk kareyi çiz
+    render_full_frame(
+        &mut fb, &compositor, &filemanager_app, &controlpanel_app,
+        &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
+        &videoplayer_app, &taskmgr_app, &mouse, &keyboard, anim_tick,
+    );
+
+    // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
     loop {
         let input_occurred = drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+        let mx = mouse.x as usize;
+        let my = mouse.y as usize;
+        let mouse_clicked = mouse.left_button && !last_buttons.0;
+        let mouse_released = !mouse.left_button && last_buttons.0;
+        let tb_y = height.saturating_sub(36);
 
-        // Pencere Sürükleme (Drag & Drop)
-        if mouse.left_button {
-            if let Some(idx) = dragging_win {
-                if let Some(ref mut win) = compositor.windows[idx] {
-                    win.x = (mouse.x as usize).saturating_sub(drag_offset_x).min(width.saturating_sub(win.width));
-                    win.y = (mouse.y as usize).saturating_sub(drag_offset_y).min(height.saturating_sub(win.height));
-                }
-            } else {
-                for (idx, win_opt) in compositor.windows.iter_mut().enumerate() {
-                    if let Some(win) = win_opt {
-                        let mx = mouse.x as usize;
-                        let my = mouse.y as usize;
-                        if mx >= win.x && mx <= win.x + win.width && my >= win.y && my <= win.y + 24 {
-                            dragging_win = Some(idx);
-                            drag_offset_x = mx.saturating_sub(win.x);
-                            drag_offset_y = my.saturating_sub(win.y);
-                            win.is_focused = true;
+        // 1. Fare Tıklama Olayları (Mouse Down)
+        if mouse_clicked {
+            // A) Başlat Butonuna Tıklama (x: 6..96, y: tb_y + 4..tb_y + 32)
+            if mx >= 6 && mx <= 96 && my >= tb_y + 4 && my <= tb_y + 32 {
+                compositor.is_start_menu_open = !compositor.is_start_menu_open;
+            }
+            // B) Başlat Menüsü Açıkken Menü Öğelerine veya Dışına Tıklama
+            else if compositor.is_start_menu_open {
+                let menu_w = 230;
+                let menu_h = 284;
+                let menu_x = 6;
+                let menu_y = tb_y.saturating_sub(menu_h + 4);
+
+                if mx >= menu_x && mx <= menu_x + menu_w && my >= menu_y && my <= menu_y + menu_h {
+                    for i in 0..8 {
+                        let item_y = menu_y + 42 + i * 27;
+                        if my >= item_y && my <= item_y + 24 {
+                            // Uygulamayı aç ve odakla
+                            for j in 0..8 {
+                                if let Some(ref mut w) = compositor.windows[j] {
+                                    w.is_focused = j == i;
+                                }
+                            }
+                            if let Some(ref mut target_win) = compositor.windows[i] {
+                                target_win.is_open = true;
+                                target_win.is_minimized = false;
+                                target_win.is_focused = true;
+                            }
+                            compositor.is_start_menu_open = false;
                             break;
+                        }
+                    }
+                } else {
+                    compositor.is_start_menu_open = false;
+                }
+            }
+            // C) Görev Çubuğundaki Uygulama Sekmelerine Tıklama
+            else if my >= tb_y + 4 && my <= tb_y + 32 && mx >= 104 && mx < 104 + 8 * 80 {
+                let mut tab_start_x = 104;
+                for i in 0..8 {
+                    if let Some(ref mut win) = compositor.windows[i] {
+                        if win.is_open {
+                            if mx >= tab_start_x && mx <= tab_start_x + 76 {
+                                if win.is_minimized {
+                                    win.is_minimized = false;
+                                    win.is_focused = true;
+                                } else if win.is_focused {
+                                    win.is_minimized = true;
+                                } else {
+                                    win.is_focused = true;
+                                }
+                            }
+                            tab_start_x += 80;
                         }
                     }
                 }
             }
-        } else {
-            dragging_win = None;
-        }
+            // D) Dil Rozetine Tıklama [TR] / [EN]
+            else if my >= tb_y + 4 && mx >= width.saturating_sub(130) && mx <= width.saturating_sub(85) {
+                keyboard.toggle_layout();
+            }
+            // E) Pencerelerin Başlıklarına / Butonlarına Tıklama (Önden arkaya arama)
+            else {
+                let mut hit_window = false;
+                for idx in (0..8).rev() {
+                    if let Some(ref mut win) = compositor.windows[idx] {
+                        if !win.is_open || win.is_minimized { continue; }
 
-        // Görev Çubuğundaki [TR] / [EN] Rozetine Tıklama
-        let tb_y = height.saturating_sub(36);
-        if mouse.left_button && (mouse.y as usize) >= tb_y {
-            let mx = mouse.x as usize;
-            if mx >= width.saturating_sub(130) && mx <= width.saturating_sub(85) {
-                if !last_buttons.0 {
-                    keyboard.toggle_layout();
+                        // Kapat [X] Butonu
+                        if mx >= win.x + win.width - 20 && mx <= win.x + win.width - 6 && my >= win.y + 5 && my <= win.y + 19 {
+                            win.is_open = false;
+                            hit_window = true;
+                            break;
+                        }
+
+                        // Simge Durumu [-] Butonu
+                        if mx >= win.x + win.width - 38 && mx <= win.x + win.width - 24 && my >= win.y + 5 && my <= win.y + 19 {
+                            win.is_minimized = true;
+                            hit_window = true;
+                            break;
+                        }
+
+                        // Başlık Çubuğunu Tutma (Sürükleme)
+                        if mx >= win.x && mx <= win.x + win.width - 40 && my >= win.y && my <= win.y + 24 {
+                            dragging_win = Some(idx);
+                            drag_offset_x = mx.saturating_sub(win.x);
+                            drag_offset_y = my.saturating_sub(win.y);
+                            win.is_focused = true;
+                            hit_window = true;
+                            break;
+                        }
+
+                        // Pencere Gövdesine Tıklayarak Odaklama
+                        if mx >= win.x && mx <= win.x + win.width && my >= win.y && my <= win.y + win.height {
+                            win.is_focused = true;
+                            hit_window = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Odaklanan pencere dışındakilerin odağını kaldır
+                if hit_window {
+                    if let Some(drag_idx) = dragging_win {
+                        for j in 0..8 {
+                            if j != drag_idx {
+                                if let Some(ref mut w) = compositor.windows[j] {
+                                    w.is_focused = false;
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        // Ayarlar Uygulamasını Güncel Klavye Düzeniyle Eşitle
-        if keyboard.layout != last_layout {
-            settings_app.keyboard_layout = keyboard.layout;
-            last_layout = keyboard.layout;
+        // 2. Pencere Sürükleme (Drag & Drop)
+        if mouse.left_button {
+            if let Some(idx) = dragging_win {
+                if let Some(ref mut win) = compositor.windows[idx] {
+                    win.x = mx.saturating_sub(drag_offset_x).min(width.saturating_sub(win.width));
+                    win.y = my.saturating_sub(drag_offset_y).min(height.saturating_sub(win.height));
+                }
+            }
+        }
+
+        if mouse_released {
+            dragging_win = None;
+        }
+
+        // 3. Klavye Girişlerinin İlgili Uygulamaya Gönderimi
+        while let Some(ch) = keyboard.take_last_char() {
+            // Başlat Menüsü açıkken 1..8 tuşlarıyla hızlı açılış
+            if compositor.is_start_menu_open && ch >= '1' && ch <= '8' {
+                let app_idx = (ch as usize) - ('1' as usize);
+                for j in 0..8 {
+                    if let Some(ref mut w) = compositor.windows[j] {
+                        w.is_focused = j == app_idx;
+                    }
+                }
+                if let Some(ref mut target_win) = compositor.windows[app_idx] {
+                    target_win.is_open = true;
+                    target_win.is_minimized = false;
+                    target_win.is_focused = true;
+                }
+                compositor.is_start_menu_open = false;
+            } else {
+                // Not Defteri odaklı ise doğrudan metin yaz
+                let notepad_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                if notepad_focused {
+                    if ch == '\x08' {
+                        notepad_app.backspace();
+                    } else if ch == '\n' || ch >= ' ' {
+                        notepad_app.insert_char(ch);
+                    }
+                }
+            }
         }
 
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        // Herhangi bir fare hareketi, tıklama veya tuş basımında ekranı güncelle
-        if input_occurred || mouse_moved || buttons_changed {
+        spin_counter += 1;
+        let timer_tick_fired = spin_counter >= 15_000;
+        if timer_tick_fired {
+            spin_counter = 0;
+            anim_tick = anim_tick.wrapping_add(1);
+        }
+
+        // Kullanıcı girdisi olduğunda veya animasyon zamanında ekranı güncelle
+        if input_occurred || mouse_moved || buttons_changed || timer_tick_fired {
             last_mouse_x = mouse.x;
             last_mouse_y = mouse.y;
             last_buttons = (mouse.left_button, mouse.right_button);
 
-            compositor.render_desktop(&mut fb, &mouse, &keyboard);
-            let w0_x = compositor.windows[0].as_ref().map_or(60, |w| w.x);
-            let w0_y = compositor.windows[0].as_ref().map_or(60, |w| w.y);
-            let w1_x = compositor.windows[1].as_ref().map_or(500, |w| w.x);
-            let w1_y = compositor.windows[1].as_ref().map_or(80, |w| w.y);
-            taskmgr_app.render_content(&mut fb, w0_x, w0_y);
-            settings_app.render_content(&mut fb, w1_x, w1_y);
+            render_full_frame(
+                &mut fb, &compositor, &filemanager_app, &controlpanel_app,
+                &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
+                &videoplayer_app, &taskmgr_app, &mouse, &keyboard, anim_tick,
+            );
         }
 
         core::hint::spin_loop();

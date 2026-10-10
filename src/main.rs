@@ -348,7 +348,7 @@ let scroll = mouse.take_scroll_delta();
 if scroll != 0 {
     if let Some(ref mut win) = compositor.windows[2] {
         if win.is_open && !win.is_minimized {
-            let max_offset = if notepad_app.len > 0 { (notepad_app.len / 16) } else { 0 };
+            let max_offset = if notepad_app.len > 0 { notepad_app.len / 16 } else { 0 };
             let new_offset = (notepad_app.scroll_offset as i32 + scroll as i32).max(0).min(max_offset as i32) as usize;
             notepad_app.scroll_offset = new_offset;
         }

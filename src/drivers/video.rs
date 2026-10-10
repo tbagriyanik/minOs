@@ -1,4 +1,5 @@
 static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
+const BACKBUFFER_LEN: usize = 1280 * 720;
 
 pub struct Framebuffer {
     pub address: *mut u32,
@@ -22,7 +23,7 @@ impl Framebuffer {
         if x < self.width && y < self.height {
             unsafe {
                 let offset = y * self.width + x;
-                if offset < BACKBUFFER.len() {
+                if offset < BACKBUFFER_LEN {
                     BACKBUFFER[offset] = color;
                 }
             }
@@ -31,7 +32,7 @@ impl Framebuffer {
 
     pub fn clear(&mut self, color: u32) {
         unsafe {
-            let limit = (self.width * self.height).min(BACKBUFFER.len());
+            let limit = (self.width * self.height).min(BACKBUFFER_LEN);
             for i in 0..limit {
                 BACKBUFFER[i] = color;
             }
@@ -46,7 +47,7 @@ impl Framebuffer {
             for cx in x..x_end {
                 let offset = row_offset + cx;
                 unsafe {
-                    if offset < BACKBUFFER.len() {
+                    if offset < BACKBUFFER_LEN {
                         BACKBUFFER[offset] = color;
                     }
                 }
@@ -58,15 +59,15 @@ impl Framebuffer {
         let pitch_words = self.pitch / 4;
         unsafe {
             if pitch_words == self.width {
-                let total_pixels = (self.width * self.height).min(BACKBUFFER.len());
-                core::ptr::copy_nonoverlapping(BACKBUFFER.as_ptr(), self.address, total_pixels);
+                let total_pixels = (self.width * self.height).min(BACKBUFFER_LEN);
+                core::ptr::copy_nonoverlapping(core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32, self.address, total_pixels);
             } else {
                 for y in 0..self.height {
                     let src_offset = y * self.width;
                     let dst_offset = y * pitch_words;
-                    let row_len = self.width.min(BACKBUFFER.len().saturating_sub(src_offset));
+                    let row_len = self.width.min(BACKBUFFER_LEN.saturating_sub(src_offset));
                     core::ptr::copy_nonoverlapping(
-                        BACKBUFFER.as_ptr().add(src_offset),
+                        (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(src_offset),
                         self.address.add(dst_offset),
                         row_len,
                     );

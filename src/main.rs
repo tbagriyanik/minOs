@@ -644,6 +644,13 @@ if scroll != 0 {
                     if mx >= win_x && mx <= win_x + win_w && my >= win_y && my <= win_y + win_h {
                         if let Some(ref mut win) = compositor.windows[idx] {
                             win.is_focused = true;
+                            // Move focused window to the front (draw last)
+                            let focused_win = compositor.windows[idx].take();
+                            // Shift others forward
+                            for shift in idx..7 {
+                                compositor.windows[shift] = compositor.windows[shift + 1].take();
+                            }
+                            compositor.windows[7] = focused_win;
                         }
                         hit_window = true;
                         break;
@@ -706,9 +713,16 @@ if scroll != 0 {
                     }
 
                     if let Some(target) = next_idx {
+                        // Move the selected window to the front (last slot)
+                        let selected_win = compositor.windows[target].take();
+                        for shift in target..7 {
+                            compositor.windows[shift] = compositor.windows[shift + 1].take();
+                        }
+                        compositor.windows[7] = selected_win;
+                        // Update focus flags
                         for j in 0..8 {
                             if let Some(ref mut w) = compositor.windows[j] {
-                                w.is_focused = j == target;
+                                w.is_focused = j == 7; // last slot is now focused
                             }
                         }
                     }
@@ -790,10 +804,13 @@ if scroll != 0 {
                 }
             } else if let Some(idx) = resizing_win {
                 if let Some(ref mut win) = compositor.windows[idx] {
-                    let new_w = mx.saturating_sub(win.x).max(win.min_width);
-                    let new_h = my.saturating_sub(win.y).max(win.min_height);
-                    win.width = new_w.min(width.saturating_sub(win.x));
-                    win.height = new_h.min(height.saturating_sub(win.y));
+                    let mut new_w = mx.saturating_sub(win.x).max(win.min_width);
+                    let mut new_h = my.saturating_sub(win.y).max(win.min_height);
+                    // Apply max limits defined in Window
+                    new_w = new_w.min(win.max_width.min(width.saturating_sub(win.x)));
+                    new_h = new_h.min(win.max_height.min(height.saturating_sub(win.y)));
+                    win.width = new_w;
+                    win.height = new_h;
                 }
             }
         }

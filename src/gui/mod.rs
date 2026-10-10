@@ -42,6 +42,8 @@ pub struct Window {
     pub height: usize,
     pub min_width: usize,
     pub min_height: usize,
+    pub max_width: usize,
+    pub max_height: usize,
     pub is_focused: bool,
     pub is_minimized: bool,
     pub is_open: bool,
@@ -58,6 +60,8 @@ impl Window {
             height,
             min_width: 200,
             min_height: 120,
+            max_width: 800,
+            max_height: 600,
             is_focused: false,
             is_minimized: false,
             is_open,
@@ -220,6 +224,8 @@ impl MinGuiCompositor {
 
         // Pencere Gövdesi Arka Planı
         fb.draw_rect(win.x, win.y, win.width, win.height, Color::WINDOW_BG);
+        // Çerçeve (border) ekle
+        fb.draw_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, Color::ACCENT_BLUE);
 
         // Başlık Çubuğu
         let title_color = if win.is_focused { Color::TITLE_BAR } else { Color::TITLE_BAR_INACTIVE };
@@ -399,6 +405,8 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü Arka Planı ve Çerçevesi
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+        // Çerçeve (border) ekle
+        fb.draw_rect(menu_x.saturating_sub(1), menu_y.saturating_sub(1), menu_w + 2, menu_h + 2, Color::ACCENT_BLUE);
         fb.draw_rect(menu_x, menu_y, menu_w, 2, Color::ACCENT_BLUE);
 
         // Başlık / Profil Şeridi

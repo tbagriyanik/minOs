@@ -31,7 +31,7 @@ impl FileManagerApp {
         }
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize) {
+    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
         // Üst Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 26, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, "Konum: ", Color::TEXT_MUTED);
@@ -63,6 +63,10 @@ impl FileManagerApp {
         // Dosya Listesi
         let mut row_y = win_y + 86;
         for (i, file) in self.files.iter().enumerate() {
+            // Stop rendering if rows would go beyond window bottom
+            if row_y + 22 > win_y + win_h - 30 { // reserve space for status bar
+                break;
+            }
             let is_sel = i == self.selected_idx;
             if is_sel {
                 fb.draw_rect(list_x, row_y - 2, list_w, 22, Color::TITLE_BAR);

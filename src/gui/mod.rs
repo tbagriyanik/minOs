@@ -2,6 +2,8 @@ pub mod font;
 pub mod theme;
 pub mod scrollbar;
 
+pub use scrollbar::{ScrollState, ScrollbarGeom};
+
 use crate::drivers::video::Framebuffer;
 use crate::drivers::mouse::MouseState;
 use crate::drivers::keyboard::KeyboardState;
@@ -44,6 +46,7 @@ impl Color {
 pub enum FontMode {
     Pixel,
     Compact,
+    ClearType,
 }
 
 static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
@@ -54,6 +57,7 @@ pub fn set_font_mode(mode: FontMode) {
         match mode {
             FontMode::Pixel => 0,
             FontMode::Compact => 1,
+            FontMode::ClearType => 2,
         },
         core::sync::atomic::Ordering::Relaxed,
     );
@@ -61,12 +65,13 @@ pub fn set_font_mode(mode: FontMode) {
 
 #[inline(always)]
 pub fn font_mode() -> FontMode {
-    if FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) == 1 {
-        FontMode::Compact
-    } else {
-        FontMode::Pixel
-    }
+    match FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) { 1 => FontMode::Compact, 2 => FontMode::ClearType, _ => FontMode::Pixel }
 }
+
+static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::sync::atomic::Ordering::Relaxed); }
+pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
+pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
 
 /// Bir karakter hücresi için yatay ilerleme (px).
 #[inline(always)]
@@ -74,6 +79,7 @@ fn cell_advance(scale: usize) -> usize {
     let base = match font_mode() {
         FontMode::Pixel => 7,
         FontMode::Compact => 6,
+        FontMode::ClearType => 7,
     };
     base * scale.max(1)
 }
@@ -84,6 +90,7 @@ fn cell_width(scale: usize) -> usize {
     let base = match font_mode() {
         FontMode::Pixel => 8,
         FontMode::Compact => 6,
+        FontMode::ClearType => 8,
     };
     base * scale.max(1)
 }
@@ -132,6 +139,13 @@ impl TextBuf {
         self.push_byte(b'0' + (v % 10) as u8);
     }
 
+    pub fn push_usize(&mut self, mut v: usize) {
+        let mut tmp = [0u8; 20]; let mut n = 0;
+        if v == 0 { self.push_byte(b'0'); return; }
+        while v > 0 && n < tmp.len() { tmp[n] = b'0' + (v % 10) as u8; n += 1; v /= 10; }
+        while n > 0 { n -= 1; self.push_byte(tmp[n]); }
+    }
+
     pub fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
     }
@@ -148,6 +162,9 @@ pub struct WindowState {
     pub height: usize,
     pub is_open: bool,
 }
+
+pub const TITLEBAR_H: usize = 24;
+pub const TASKBAR_H: usize = 36;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Window {
@@ -169,12 +186,25 @@ pub struct Window {
     pub restore: Option<(usize, usize, usize, usize)>,
     /// Z-sırası: büyük olan üstte çizilir.
     pub z: u8,
+    /// İçerik kaydırma durumu (pencere içeriği taşarsa kaydırılır).
+    pub scroll: scrollbar::ScrollState,
+    /// Uygulamanın bir önceki karede bildirdiği içerik boyutu (px).
+    /// Kaydırma çubuğunun gerekip gerekmediğini belirlemek için kullanılır.
+    pub content_w: usize,
+    pub content_h: usize,
 }
 
-pub const TITLEBAR_H: usize = 24;
-pub const TASKBAR_H: usize = 36;
-
 impl Window {
+    /// Pencerenin içerik (çerçeve dışı, başlık çubuğu altı) alanı.
+    /// Sağ altta durum çubuğu için ayrılan alan çağıran tarafından düşülür.
+    pub fn content_rect(&self) -> (usize, usize, usize, usize) {
+        let x = self.x + 1;
+        let y = self.y + TITLEBAR_H;
+        let w = self.width.saturating_sub(2);
+        let h = self.height.saturating_sub(TITLEBAR_H + 1);
+        (x, y, w, h)
+    }
+
     pub fn new(title: &'static str, tab_title: &'static str, x: usize, y: usize, width: usize, height: usize, is_open: bool) -> Self {
         Self {
             title,
@@ -193,6 +223,9 @@ impl Window {
             is_maximized: false,
             restore: None,
             z: 0,
+            scroll: scrollbar::ScrollState::new(),
+            content_w: width,
+            content_h: height.saturating_sub(TITLEBAR_H),
         }
     }
 
@@ -577,6 +610,24 @@ impl MinGuiCompositor {
         }
         None
     }
+
+    /// En üstteki pencerenin dikey kaydırma çubuğu (varsa) `(idx, track, content_h, view_h)`.
+    pub fn topmost_v_scrollbar(&self, content_h_of: impl Fn(usize) -> usize) -> Option<(usize, (usize, usize, usize, usize), usize, usize)> {
+        let (order, count) = self.draw_order();
+        for k in (0..count).rev() {
+            let idx = order[k];
+            if let Some(win) = self.windows[idx] {
+                let (cx, cy, cw, ch) = win.content_rect();
+                let content_h = content_h_of(idx);
+                if content_h > ch {
+                    let track = (cx + cw - scrollbar::SCROLLBAR_THICKNESS, cy,
+                                 scrollbar::SCROLLBAR_THICKNESS, ch - scrollbar::SCROLLBAR_THICKNESS.min(ch));
+                    return Some((idx, track, content_h, ch));
+                }
+            }
+        }
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -614,6 +665,10 @@ impl MinGuiCompositor {
             }
             for col in 0..8 {
                 if (bits & (1 << (7 - col))) != 0 {
+                    if scale <= 1 && font_mode() == FontMode::ClearType {
+                        if col > 0 { fb.put_pixel(x + col - 1, y + row, 0x604040); }
+                        if col + 1 < 8 { fb.put_pixel(x + col + 1, y + row, 0x404060); }
+                    }
                     if scale <= 1 {
                         fb.put_pixel(x + col, y + row, color);
                     } else {
@@ -806,6 +861,17 @@ impl MinGuiCompositor {
         fb.draw_vgradient(win.x, win.y, win.width, TITLEBAR_H, t_top, t_bottom);
         // Başlık çubuğu alt çizgisi
         fb.draw_rect(win.x, win.y + TITLEBAR_H - 1, win.width, 1, border);
+        // Hafif yuvarlatılmış pencere köşeleri (4px yarıçap).
+        let corners = [(win.x, win.y), (win.x + win.width.saturating_sub(1), win.y),
+            (win.x, win.y + win.height.saturating_sub(1)),
+            (win.x + win.width.saturating_sub(1), win.y + win.height.saturating_sub(1))];
+        for &(cx, cy) in corners.iter() {
+            for &(dx, dy) in &[(0usize,0usize),(1,0),(0,1)] {
+                let px = if cx == win.x { cx.saturating_add(dx) } else { cx.saturating_sub(dx) };
+                let py = if cy == win.y { cy.saturating_add(dy) } else { cy.saturating_sub(dy) };
+                if dx + dy < 2 { fb.put_pixel(px, py, Color::DARK_BG); }
+            }
+        }
 
         // Mini kedi ikonu ve başlık
         Self::draw_cat_icon(fb, win.x + 6, win.y + 4);

@@ -1,5 +1,17 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor};
+use crate::gui::{Color, MinGuiCompositor, TextBuf};
+use crate::gui::scrollbar::{self, ScrollState};
+
+/// Metin satır yüksekliği (px).
+const LINE_H: usize = 16;
+/// Karakter hücre ilerlemesi (px).
+const CHAR_W: usize = 7;
+/// Satır numarası şeridi (gutter) genişliği.
+const GUTTER_W: usize = 32;
+/// Araç çubuğu yüksekliği (px).
+const TOOLBAR_H: usize = 24;
+/// Alt durum çubuğu yüksekliği (px).
+const STATUS_H: usize = 22;
 
 pub struct NotepadApp {
     pub buffer: [char; 512],
@@ -15,6 +27,7 @@ pub struct NotepadApp {
     // For double‑click detection
     pub last_click_tick: usize,
     pub last_click_pos: (usize, usize),
+    pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Biçim, 4 Yardım
 }
 
 // Simple clipboard for copy / paste (static mutable, unsafe)
@@ -88,8 +101,9 @@ impl NotepadApp {
             scroll_offset: 0,
             last_click_tick: 0,
             last_click_pos: (0, 0),
+            menu: 0,
         };
-        
+
         let initial_text = "MinOS Not Defteri v1.0 (Sarman Edition)\n---------------------------------------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
         for c in initial_text.chars() {
             if app.len < 510 {
@@ -144,79 +158,149 @@ impl NotepadApp {
         let mut pos = 0; while idx < self.len && pos < col && self.buffer[idx] != '\n' { idx += 1; pos += 1; } idx.min(self.len)
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
+    /// Metnin kapladığı toplam satır sayısı ve en uzun satır uzunluğu (px).
+    /// Kaydırma çubuğu gereksinimini hesaplamak için kullanılır.
+    pub fn text_extent(&self, wrap_cols: usize) -> (usize, usize) {
+        let mut lines = 1usize;
+        let mut col = 0usize;
+        let mut max_cols = 0usize;
+        for i in 0..self.len {
+            let ch = self.buffer[i];
+            if ch == '\n' {
+                max_cols = max_cols.max(col);
+                lines += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if wrap_cols > 0 && col >= wrap_cols {
+                    max_cols = max_cols.max(col);
+                    lines += 1;
+                    col = 0;
+                }
+            }
+        }
+        max_cols = max_cols.max(col);
+        (lines, max_cols)
+    }
+
+    pub fn render_content(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        tick: usize,
+        scroll: &ScrollState,
+    ) {
         // Araç Çubuğu (Toolbar)
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 24, Color::TITLE_BAR);
+        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, TOOLBAR_H, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, "[Dosya]", Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, "[Düzen]", Color::TEXT_MUTED);
         MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, "[Biçim]", Color::TEXT_MUTED);
         MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, "[Yardım]", Color::TEXT_MUTED);
+        if self.menu != 0 {
+            let mx = win_x + match self.menu { 1=>8, 2=>68, 3=>128, _=>188 };
+            let items = match self.menu { 1=>["Yeni", "Ac", "Kaydet", "Kapat"], 2=>["Geri Al", "Kes", "Kopyala", "Yapistir"], 3=>["Tumunu Sec", "Sil", "Temizle", ""] , _=>["Not Defteri Yardim", "MinOS v1.0", "", ""] };
+            fb.draw_shadow(mx, win_y+54, 142, 94, Color::SHADOW); fb.draw_rect(mx,win_y+54,142,94,Color::WINDOW_BG); fb.draw_rect_outline(mx,win_y+54,142,94,Color::BORDER);
+            for i in 0..4 { if !items[i].is_empty() { MinGuiCompositor::draw_string(fb,mx+10,win_y+64+i*20,items[i],Color::TEXT_MAIN); } }
+        }
 
-        // Hızlı Aksiyon Düğmeleri
-        fb.draw_rect(win_x + win_w - 130, win_y + 32, 56, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 124, win_y + 36, "Temizle", Color::ACCENT_RED);
-        fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "Kaydet", Color::DARK_BG);
+        // Hızlı Aksiyon Düğmeleri (sağa hizalı)
+        fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, "Temizle", Color::ACCENT_RED);
+        fb.draw_rect(win_x + win_w.saturating_sub(68), win_y + 32, 56, 20, Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, "Kaydet", Color::DARK_BG);
 
-        // Metin Editörü Alanı (tema duyarlı yüzey)
-        let text_bg = Color::DARK_BG;
+        // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         let area_x = win_x + 6;
         let area_y = win_y + 58;
-        let area_w = win_w - 12;
-        let area_h = 180;
-        fb.draw_rect(area_x, area_y, area_w, area_h, text_bg);
+        // İçerik alanı, kaydırma çubuğu ve durum çubuğu düşülerek hesaplanır.
+        let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
+        let area_h = win_h
+            .saturating_sub((area_y - win_y) + STATUS_H + scrollbar::SCROLLBAR_THICKNESS);
+        fb.draw_rect(area_x, area_y, area_w, area_h, Color::DARK_BG);
 
-        // Satır Numaraları Şeridi (Gutter)
-        fb.draw_rect(area_x, area_y, 28, area_h, Color::TITLE_BAR_INACTIVE);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 8, "01", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 24, "02", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 40, "03", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 56, "04", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 72, "05", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 88, "06", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 104, "07", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 120, "08", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, area_x + 6, area_y + 136, "09", Color::TEXT_MUTED);
+        // Kaydırılabilir metin alanı sınırları.
+        let text_x = area_x + GUTTER_W + 6;
+        let text_w = area_w.saturating_sub(GUTTER_W + 10);
+        let wrap_cols = (text_w / CHAR_W).max(1);
+        let (total_lines, _max_cols) = self.text_extent(wrap_cols);
+        let view_lines = (area_h / LINE_H).max(1);
+        let sy = scroll.y / LINE_H; // satır cinsinden kaydırma
 
-        // Metin İçeriği ve İmleç
-        let mut cur_x = area_x + 36;
-        let mut cur_y = area_y + 8 + self.scroll_offset * 16;
+        // Satır Numaraları Şeridi (Gutter) — görünür satırlara göre dinamik
+        fb.draw_rect(area_x, area_y, GUTTER_W, area_h, Color::TITLE_BAR_INACTIVE);
+        let last_visible = (sy + view_lines).min(total_lines);
+        let mut gutter = TextBuf::new();
+        for ln in sy..last_visible {
+            let row = ln - sy;
+            let gy = area_y + row * LINE_H + 4;
+            gutter.clear();
+            let n = ln + 1;
+            if n < 10 { gutter.push_byte(b'0'); }
+            if n < 100 { gutter.push_byte(b'0' + ((n / 10) % 10) as u8); }
+            gutter.push_byte(b'0' + (n % 10) as u8);
+            MinGuiCompositor::draw_string(fb, area_x + 8, gy, gutter.as_str(), Color::TEXT_MUTED);
+        }
 
+        // Metin İçeriği ve İmleç — kaydırma ofseti uygulanır, satır kaydırmalı (wrap).
+        let first_line = sy;
+        let mut line = 0usize;
+        let mut col = 0usize;
+        let mut cursor_screen: Option<(usize, usize)> = None;
         for i in 0..self.len {
             let ch = self.buffer[i];
+            if line >= first_line && line < first_line + view_lines {
+                let row = line - first_line;
+                let cx = text_x + col * CHAR_W;
+                let cy = area_y + row * LINE_H + 4;
+                if ch != '\n' {
+                    let mut char_buf = [0u8; 4];
+                    let s = ch.encode_utf8(&mut char_buf);
+                    let selected = match (self.selection_start, self.selection_end) {
+                        (Some(a), Some(b)) => i >= a.min(b) && i < a.max(b),
+                        _ => false,
+                    };
+                    if selected { fb.draw_rect(cx, cy, CHAR_W, 12, Color::ACCENT_BLUE); }
+                    MinGuiCompositor::draw_string(fb, cx, cy, s, if selected { Color::DARK_BG } else { Color::TEXT_MAIN });
+                }
+            }
+            if i == self.cursor.saturating_sub(1) {
+                let row = line.saturating_sub(first_line);
+                cursor_screen = Some((text_x + (col + 1) * CHAR_W, area_y + row * LINE_H + 4));
+            }
+            // İlerleme (satır kaydırma dahil)
             if ch == '\n' {
-                cur_y += 16;
-                cur_x = area_x + 36;
-                if cur_y + 16 > area_y + area_h {
-                    break;
-                }
-                continue;
-            }
-
-            let mut char_buf = [0u8; 4];
-            let s = ch.encode_utf8(&mut char_buf);
-            let selected = match (self.selection_start, self.selection_end) { (Some(a),Some(b)) => i >= a.min(b) && i < a.max(b), _ => false };
-            if selected { fb.draw_rect(cur_x, cur_y, 7, 12, Color::ACCENT_BLUE); }
-            MinGuiCompositor::draw_string(fb, cur_x, cur_y, s, if selected { Color::DARK_BG } else { Color::TEXT_MAIN });
-            cur_x += 7;
-
-            if cur_x + 16 > area_x + area_w {
-                cur_y += 16;
-                cur_x = area_x + 36;
-                if cur_y + 16 > area_y + area_h {
-                    break;
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if col >= wrap_cols {
+                    line += 1;
+                    col = 0;
                 }
             }
         }
 
-        // Yanıp Sönen İmleç (Blinking Cursor)
-        if (tick / 20) % 2 == 0 {
-            fb.draw_rect(cur_x, cur_y, 2, 12, Color::ACCENT_YELLOW);
+        // Yanıp Sönen İmleç (Blinking Cursor) — imleç görünür aralıktaysa çiz
+        if let Some((cx, cy)) = cursor_screen {
+            if (tick / 20) % 2 == 0 && cy >= area_y && cy + 12 <= area_y + area_h {
+                fb.draw_rect(cx, cy, 2, 12, Color::ACCENT_YELLOW);
+            }
         }
 
-        // Alt Durum Çubuğu
-        fb.draw_rect(win_x + 6, win_y + 242, win_w - 12, 18, Color::TASKBAR_BG);
-        let status = "Yardım: https://github.com/tbagriyanik/minos | UTF-8 / TR-Q";
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 246, status, Color::TEXT_MUTED);
+        // Alt Durum Çubuğu — pencerenin en altına sabitlenir
+        let status_y = win_y + win_h - STATUS_H + 4;
+        fb.draw_rect(win_x + 6, status_y, win_w - 12, STATUS_H - 4, Color::TASKBAR_BG);
+        let mut status = TextBuf::new();
+        status.push_str("Satir: ");
+        status.push_u2(((sy + 1).min(total_lines)) as u32);
+        status.push_byte(b'/');
+        status.push_u2(total_lines.min(99) as u32);
+        status.push_str("  |  " );
+        status.push_u2(self.len.min(99) as u32);
+        status.push_str(" karakter  |  UTF-8 / TR-Q");
+        MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, status.as_str(), Color::TEXT_MUTED);
     }
 }

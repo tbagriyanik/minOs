@@ -8,9 +8,9 @@ use crate::gui::WindowState;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum UiLanguage { Turkish, English }
-impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish => Self::English, Self::English => Self::Turkish }; } pub fn is_english(&self) -> bool { matches!(self, Self::English) } }
+impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish => Self::English, Self::English => Self::Turkish }; crate::gui::set_ui_language_english(self.is_english()); } pub fn is_english(&self) -> bool { matches!(self, Self::English) } }
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub enum FontChoice { TurkishPixel, Compact }
+pub enum FontChoice { TurkishPixel, Compact, ClearType }
 
 impl FontChoice {
     /// Seçimi GUI font motoruna uygular (tek gerçek kaynak).
@@ -18,6 +18,7 @@ impl FontChoice {
         let mode = match self {
             FontChoice::TurkishPixel => crate::gui::FontMode::Pixel,
             FontChoice::Compact => crate::gui::FontMode::Compact,
+            FontChoice::ClearType => crate::gui::FontMode::ClearType,
         };
         crate::gui::set_font_mode(mode);
     }
@@ -28,13 +29,16 @@ impl FontChoice {
             (FontChoice::TurkishPixel, true) => "Font: Turkish Pixel",
             (FontChoice::Compact, false) => "Font: Sikistirilmis",
             (FontChoice::Compact, true) => "Font: Compact",
+            (FontChoice::ClearType, false) => "Font: ClearType",
+            (FontChoice::ClearType, true) => "Font: ClearType",
         }
     }
 
     pub fn cycle(&mut self) {
         *self = match self {
             FontChoice::TurkishPixel => FontChoice::Compact,
-            FontChoice::Compact => FontChoice::TurkishPixel,
+            FontChoice::Compact => FontChoice::ClearType,
+            FontChoice::ClearType => FontChoice::TurkishPixel,
         };
         self.apply();
     }
@@ -152,7 +156,10 @@ impl SystemSettings {
 
     pub fn set_volume_from_click(&mut self, x: usize) {
         let t = Self::volume_track_rect(0, 0);
-        let ratio = ((x.saturating_sub(t.0)) * 100 / t.2).min(100);
+        self.set_volume_from_range(x, t.0, t.2);
+    }
+    pub fn set_volume_from_range(&mut self, x: usize, start: usize, width: usize) {
+        let ratio = (x.saturating_sub(start) * 100 / width.max(1)).min(100);
         self.volume = ratio as u8;
         if self.is_muted && self.volume > 0 {
             self.is_muted = false;

@@ -62,6 +62,7 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
   - **Pencere Başlığı:** Küçült, Maksimize Et / Geri Yükle, Pencereyi Ortala, Kapat.
 - **🪟 ZENGİN PENCERE DAVRANIŞLARI:** Pencereler düzgün bir z-sırası yığınıyla yönetilir (odaklanan pencere daima en üste gelir). Başlık çubuğunda **yeşil maksimize/geri yükle** düğmesi bulunur; başlık çubuğuna **çift tıklayarak** da maksimize edebilir, **ekranın en üstüne sürükleyip bırakarak** da otomatik maksimize edebilirsiniz. Pencereler **dört bir yanından ve köşelerinden** yeniden boyutlandırılabilir; kenar/köşe üzerine gelindiğinde yönlü fare imleci görünür. Dış çerçeve, yumuşak gölge ve gradyan başlık çubuğuyla çizilir; düğmeler üzerine gelince parlar.
 - **🔤 İyileştirilmiş Yazı Okunabilirliği:** Yüksek kontrastlı metin renkleri, başlıklar için gölgeli metin çizimi, gradyan paneller ve ölçeklenebilir/merkezlenebilir metin yardımcıları. Para birimi, ok ve sembol glyphleri ile **Piksel/Sıkıştırılmış** font modu desteği.
+- **📜 Taşma Koruması, Kaydırma Çubukları (Scrollbar) ve İçerik Kırpma:** Tüm pencere içeriği, pencere çerçevesine **kırpılır (clip)** — içerik hiçbir koşulda pencere dışına taşmaz. İçerik pencereye sığmadığında **dikey ve yatay kaydırma çubukları** otomatik belirir. Kaydırma çubuğu tutamacını fare ile sürükleyebilir, track üzerine tıklayarak zıplayabilir veya **fare tekerleği** ile kaydırabilirsiniz. **Not Defteri** metni pencere genişliğine göre otomatik satır kaydırma (word-wrap) yapar ve satır numaraları (gutter) kaydırma konumuna göre dinamik güncellenir; **Dosya Yöneticisi** listesi dikey olarak kaydırılır. Pencereler yeniden boyutlandırıldıkça içerik alanı canlı olarak yeniden hesaplanır.
 
 ---
 
@@ -147,6 +148,7 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 - **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine, **tema palet şeridindeki renk örneklerine** veya masaüstü sağ tık > **Tema Değiştir**'e tıklayın. Beş hazır tema arasında geçiş yapılır.
 - **Bağlama Duyarlı Sağ Tık:** Masaüstünde, Not Defteri'nde, Dosya Yöneticisi'nde veya pencere başlığında farklı menüler açılır (bkz. yukarıdaki yenilikler).
 - **Klavye Düzeni Değiştirme:** Görev çubuğunun sağ altındaki `[TR]` / `[EN]` rozetine tıklayarak veya `Tab` tuşuna basarak Türkçe Q ve Amerikan US klavye düzenleri arasında geçiş yapabilirsiniz.
+- **Kaydırma (Scroll):** İçerik pencereye sığmadığında sağda/altta kaydırma çubukları belirir. **Fare tekerleği** ile kaydırın, çubuğun tutamacını sürükleyin veya çubuk üzerine tıklayın. İçerik asla pencere dışına taşmaz.
 - **Hızlı Uygulama Başlatma:** Başlat menüsü açıkken klavyeden `1` ile `8` arasındaki sayılara basarak ilgili uygulamayı anında açabilirsiniz.
 
 ---

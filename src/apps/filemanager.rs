@@ -1,5 +1,13 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
+use crate::gui::scrollbar::{self, ScrollState};
+
+/// Dosya listesi satır yüksekliği (px).
+const ROW_H: usize = 24;
+/// Listenin başladığı Y ofseti (pencere içine göre).
+pub const LIST_TOP: usize = 86;
+/// Durum çubuğu için ayrılan alt alan (px).
+const STATUS_H: usize = 30;
 
 pub struct FileItem {
     pub name: &'static str,
@@ -31,48 +39,67 @@ impl FileManagerApp {
         }
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
+    /// Listenin toplam içerik yüksekliği (kaydırma çubuğu için).
+    pub fn list_content_h(&self) -> usize {
+        self.files.len() * ROW_H
+    }
+
+    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState) {
+        // İçerik alanı ve kaydırma çubuğu farkındalığı
+        let sidebar_w = 110;
+        let list_x = win_x + sidebar_w + 14;
+        let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        let list_top = win_y + LIST_TOP;
+        let list_bottom = win_y + win_h - STATUS_H;
+        let list_view_h = list_bottom.saturating_sub(list_top);
+        let content_h = self.list_content_h();
+        let sy = scroll.y.min(content_h.saturating_sub(list_view_h));
+
         // Üst Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 26, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, "Konum: ", Color::TEXT_MUTED);
         MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.current_path, Color::ACCENT_BLUE);
 
         // Hızlı Butonlar
-        fb.draw_rect(win_x + win_w - 120, win_y + 32, 50, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 112, win_y + 38, "[Yenile]", Color::TEXT_MAIN);
-        fb.draw_rect(win_x + win_w - 62, win_y + 32, 50, 22, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 52, win_y + 38, "Aç", Color::DARK_BG);
+        fb.draw_rect(win_x + win_w.saturating_sub(120), win_y + 32, 50, 22, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, "[Yenile]", Color::TEXT_MAIN);
+        fb.draw_rect(win_x + win_w.saturating_sub(62), win_y + 32, 50, 22, Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, "Aç", Color::DARK_BG);
 
-        // Sol Gezinti Paneli (Sidebar)
-        let sidebar_w = 110;
-        fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, 200, Color::TITLE_BAR_INACTIVE);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 68, "> Kök (/)", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 90, "  Belgeler", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 112, "  Medyalar", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 134, "  İndirilenler", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 156, "  Sistem (Limine)", Color::ACCENT_PINK);
+        // Sol Gezinti Paneli (Sidebar) — pencere yüksekliğine göre uyarlanır
+        let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
+        fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
+        let nav = ["> Kök (/)", "  Belgeler", "  Medyalar", "  İndirilenler", "  Sistem (Limine)"];
+        for (i, item) in nav.iter().enumerate() {
+            let iy = win_y + 68 + i * 22;
+            if iy + 8 > win_y + 60 + sidebar_h { break; }
+            let col = if i == 0 { Color::TEXT_MAIN } else if i == 4 { Color::ACCENT_PINK } else { Color::TEXT_MUTED };
+            MinGuiCompositor::draw_string(fb, win_x + 12, iy, item, col);
+        }
 
         // Sağ Liste Başlıkları
-        let list_x = win_x + sidebar_w + 14;
-        let list_w = win_w - sidebar_w - 22;
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, list_x + 6, win_y + 66, "DOSYA ADI", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, list_x + 160, win_y + 66, "TÜR", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, list_x + 290, win_y + 66, "BOYUT", Color::TEXT_MUTED);
+        if list_w > 200 {
+            MinGuiCompositor::draw_string(fb, list_x + 160, win_y + 66, "TÜR", Color::TEXT_MUTED);
+        }
+        if list_w > 330 {
+            MinGuiCompositor::draw_string(fb, list_x + 290, win_y + 66, "BOYUT", Color::TEXT_MUTED);
+        }
 
-        // Dosya Listesi
-        let mut row_y = win_y + 86;
+        // Dosya Listesi — scroll ofsetine göre çizilir; satırlar list_view_h'ye kırpılır.
         for (i, file) in self.files.iter().enumerate() {
-            // Stop rendering if rows would go beyond window bottom
-            if row_y + 22 > win_y + win_h - 30 { // reserve space for status bar
-                break;
+            let row_y = list_top + i * ROW_H;
+            let draw_y = row_y.saturating_sub(sy);
+            // Görünür aralığın dışındakileri atla.
+            if row_y + ROW_H <= list_top + sy || row_y >= list_top + sy + list_view_h {
+                continue;
             }
             let is_sel = i == self.selected_idx;
             if is_sel {
-                fb.draw_rect(list_x, row_y - 2, list_w, 22, Color::TITLE_BAR);
+                fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
             }
 
-            // Simge ve Dosya Adı
             let icon_color = match file.icon_tag {
                 "[IMG]" => Color::ACCENT_YELLOW,
                 "[SND]" => Color::ACCENT_GREEN,
@@ -80,18 +107,23 @@ impl FileManagerApp {
                 "[WEB]" => Color::ACCENT_BLUE,
                 _ => Color::TEXT_MAIN,
             };
-            MinGuiCompositor::draw_string(fb, list_x + 4, row_y + 4, file.icon_tag, icon_color);
-            MinGuiCompositor::draw_string(fb, list_x + 48, row_y + 4, file.name, if is_sel { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
+            MinGuiCompositor::draw_string(fb, list_x + 4, draw_y + 4, file.icon_tag, icon_color);
+            MinGuiCompositor::draw_string(fb, list_x + 48, draw_y + 4, file.name, if is_sel { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
 
-            // Tür ve Boyut
-            MinGuiCompositor::draw_string(fb, list_x + 160, row_y + 4, file.file_type, Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, list_x + 290, row_y + 4, file.size_str, Color::TEXT_MAIN);
-
-            row_y += 24;
+            if list_w > 200 {
+                MinGuiCompositor::draw_string(fb, list_x + 160, draw_y + 4, file.file_type, Color::TEXT_MUTED);
+            }
+            if list_w > 330 {
+                MinGuiCompositor::draw_string(fb, list_x + 290, draw_y + 4, file.size_str, Color::TEXT_MAIN);
+            }
         }
 
-        // Alt Durum Çubuğu
-        fb.draw_rect(win_x + 6, win_y + 266, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 270, "7 Dosya (Toplam 16.1 MB) | Salt Okunur VFS", Color::TEXT_MUTED);
+        // Alt Durum Çubuğu (pencerenin en altına sabitlenir)
+        let status_y = win_y + win_h - STATUS_H + 6;
+        fb.draw_rect(win_x + 6, status_y, win_w - 12, 18, Color::TASKBAR_BG);
+        let mut sb = crate::gui::TextBuf::new();
+        sb.push_str("7 Dosya | ");
+        sb.push_str(self.current_path);
+        MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);
     }
 }

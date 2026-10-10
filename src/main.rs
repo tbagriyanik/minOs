@@ -95,6 +95,28 @@ fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     compositor.focus_window(idx);
 }
 
+/// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
+/// Kaydırma çubuğunun gerekip gerekmediğini ve tutamaç boyutunu belirlemek için
+/// hem çizim hem de tıklama kod yollarında ortak kullanılır.
+fn window_content_h(
+    idx: usize,
+    win_h: usize,
+    win_w: usize,
+    fm: &apps::filemanager::FileManagerApp,
+    np: &apps::notepad::NotepadApp,
+) -> usize {
+    match idx {
+        0 => apps::filemanager::LIST_TOP + fm.list_content_h() + 30,
+        2 => {
+            let text_w = win_w.saturating_sub(12 + 32 + 16);
+            let wrap_cols = (text_w / 7).max(1);
+            let (lines, _) = np.text_extent(wrap_cols);
+            lines * 16 + 58 + 22
+        }
+        _ => win_h,
+    }
+}
+
 /// Takvimde ay ileri/geri gezinme.
 fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
     if forward {
@@ -130,7 +152,7 @@ pub extern "C" fn _start() -> ! {
     memory_mgr.pmm.init(&sample_memory_map);
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
-    let _fs_mgr = fs::FileSystemManager::new();
+    let fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı
     let _net_dev = drivers::net::NetworkInterface::new();
@@ -178,7 +200,7 @@ pub extern "C" fn _start() -> ! {
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
-    let taskmgr_app = apps::taskmgr::TaskManagerApp::new();
+    let mut taskmgr_app = apps::taskmgr::TaskManagerApp::new();
     let mut calculator_app = apps::calculator::CalculatorApp::new();
     let mut paint_app = apps::paint::PaintApp::new();
     let mut terminal_app = apps::terminal::TerminalApp::new();
@@ -224,6 +246,8 @@ pub extern "C" fn _start() -> ! {
     let mut resize_orig: (usize, usize, usize, usize) = (0, 0, 0, 0);
     let mut drag_offset_x = 0;
     let mut drag_offset_y = 0;
+    // Kaydırma çubuğu sürükleme: (idx, thumb_üst_ofset, thumb_h, track_h, content_h, view_h)
+    let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
     let mut anim_tick: usize = 0;
     let mut spin_counter: usize = 0;
     let mut loop_counter: u64 = 0;
@@ -232,6 +256,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_title_click: u64 = 0;
     
 
+    taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs);
     let render_full_frame = |fb: &mut drivers::video::Framebuffer,
                              compositor: &gui::MinGuiCompositor,
                              fm: &apps::filemanager::FileManagerApp,
@@ -261,10 +286,26 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
                 compositor.render_window_frame(fb, &win, mouse);
+
+                // İçerik alanını pencere çerçevesine kırp (taşma önleme).
+                let (cx, cy, cw, ch) = win.content_rect();
+                fb.set_clip(cx, cy, cw, ch);
+
+                // Uygulamaya göre ölçülen içerik boyutu (kaydırma çubuğu gerekli mi?).
+                let content_h = window_content_h(idx, win.height, win.width, fm, np);
+                let content_w = cw;
+                let want_v = content_h > ch;
+                let want_h = content_w > cw;
+                let v_gutter = if want_v { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
+                let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
+                // İçerik alanı (kaydırma çubukları kadar daraltılmış).
+                let content_area = (cx, cy, cw.saturating_sub(v_gutter), ch.saturating_sub(h_gutter));
+                fb.set_clip(content_area.0, content_area.1, content_area.2.max(1), content_area.3.max(1));
+
                 match idx {
-                    0 => fm.render_content(fb, win.x, win.y, win.width, win.height),
+                    0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now),
-                    2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick),
+                    2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
                     3 => br.render_content(fb, win.x, win.y, win.width, win.height),
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
                     5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
@@ -275,8 +316,24 @@ pub extern "C" fn _start() -> ! {
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height),
                     _ => {}
                 }
+
+                // Kırpmayı kaldır ve kaydırma çubuklarını pencerenin içinde çiz.
+                fb.reset_clip();
+                if want_v {
+                    let track = (cx + cw - crate::gui::scrollbar::SCROLLBAR_THICKNESS, cy,
+                                 crate::gui::scrollbar::SCROLLBAR_THICKNESS, content_area.3);
+                    let g = crate::gui::scrollbar::v_geom(track, content_h, content_area.3, win.scroll.y);
+                    crate::gui::scrollbar::draw_vertical(fb, &g);
+                }
+                if want_h {
+                    let track = (cx, cy + ch - crate::gui::scrollbar::SCROLLBAR_THICKNESS,
+                                 content_area.2, crate::gui::scrollbar::SCROLLBAR_THICKNESS);
+                    let g = crate::gui::scrollbar::h_geom(track, content_w, content_area.2, win.scroll.x);
+                    crate::gui::scrollbar::draw_horizontal(fb, &g);
+                }
             }
         }
+        fb.reset_clip();
 
         // 3. Görev Çubuğu, sistem tepsisi, popup'lar ve fare imleci
         compositor.render_taskbar_and_overlays(fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english());
@@ -414,7 +471,8 @@ pub extern "C" fn _start() -> ! {
                     if gui::in_rect(mx, my, compositor.volume_mute_rect(&l)) {
                         settings_app.is_muted = !settings_app.is_muted;
                     } else {
-                        settings_app.set_volume_from_click(mx);
+                        let track = compositor.volume_track_rect(&l);
+                        if gui::in_rect(mx, my, track) { settings_app.set_volume_from_range(mx, track.0, track.2); }
                     }
                     consumed = true;
                 } else {
@@ -648,6 +706,32 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_window(idx);
                         break;
                     }
+                    // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
+                    {
+                        let (ccx, ccy, ccw, cch) = win.content_rect();
+                        let c_h = window_content_h(idx, wh, ww, &filemanager_app, &notepad_app);
+                        if c_h > cch {
+                            let t = gui::scrollbar::SCROLLBAR_THICKNESS;
+                            let track = (ccx + ccw - t, ccy, t, cch);
+                            if gui::in_rect(mx, my, track) {
+                                let g = gui::scrollbar::v_geom(track, c_h, cch, win.scroll.y);
+                                // Tutamaç yakınındaysa tutamacın üstünü koru, değilse anında zıpla.
+                                if gui::in_rect(mx, my, g.thumb) {
+                                    vscroll_drag = Some((idx, g.thumb.1.saturating_sub(my), g.thumb.3, track.3, c_h, cch));
+                                } else {
+                                    // Track üzerinde tıklanan konumdan kaydırmayı hesapla.
+                                    let ratio = (my.saturating_sub(track.1)) as f32 / track.3.max(1) as f32;
+                                    let max_off = c_h.saturating_sub(cch);
+                                    if let Some(wm) = compositor.windows[idx].as_mut() {
+                                        wm.scroll.y = ((ratio * max_off as f32) as usize).min(max_off);
+                                    }
+                                    vscroll_drag = Some((idx, g.thumb.3 / 2, g.thumb.3, track.3, c_h, cch));
+                                }
+                                compositor.focus_window(idx);
+                                break;
+                            }
+                        }
+                    }
                     // Başlık çubuğu — sürükle / çift tık ile maksimize
                     if gui::in_rect(mx, my, win.title_drag_rect()) {
                         let dbl = last_title_idx == Some(idx)
@@ -734,7 +818,7 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
-                                        settings_app.set_volume_from_click(mx);
+                                        let track=apps::settings::SystemSettings::volume_track_rect(wx,wy); settings_app.set_volume_from_range(mx,track.0,track.2);
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
                                         settings_app.save_all(&compositor);
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
@@ -749,8 +833,13 @@ pub extern "C" fn _start() -> ! {
                             }
                             2 => {
                                 // Not Defteri: Dosya/Düzen araç çubuğu ve hızlı düğmeler
-                                if my >= wy + 30 && my <= wy + 56 && mx >= wx + 66 && mx < wx + 128 { notepad_app.select_all(); }
-                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 66 { notepad_app.clear(); }
+                                if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 60 { notepad_app.menu = 1; }
+                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 68 && mx < wx + 128 { notepad_app.menu = 2; }
+                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 188 { notepad_app.menu = 3; }
+                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 188 && mx < wx + 250 { notepad_app.menu = 4; }
+                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 230 && my >= wy + 54 && my < wy + 150 {
+                                    let item=(my-wy-54)/20; match (notepad_app.menu,item) { (1,0)=>notepad_app.clear(), (1,2)=>notepad_app.insert_char(' '), (2,0)=>{}, (2,1)=>notepad_app.cut_selection(), (2,2)=>notepad_app.copy_selection(), (2,3)=>notepad_app.paste_clipboard(), (3,0)=>notepad_app.select_all(), (3,1)=>notepad_app.delete_forward(), (3,2)=>notepad_app.clear(), _=>{} } notepad_app.menu=0;
+                                }
                                 if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
                                 } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
@@ -802,7 +891,13 @@ pub extern "C" fn _start() -> ! {
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy) { calculator_app.press(key); } }
                             9 => {
-                                if my >= wy + 58 && mx >= wx + 8 && mx < wx + ww - 8 {
+                                if my >= wy + 34 && my < wy + 56 {
+                                    if mx >= wx+58 && mx < wx+80 { paint_app.color=gui::Color::ACCENT_BLUE; paint_app.eraser=false; }
+                                    else if mx >= wx+80 && mx < wx+102 { paint_app.color=gui::Color::ACCENT_RED; paint_app.eraser=false; }
+                                    else if mx >= wx+102 && mx < wx+124 { paint_app.color=gui::Color::ACCENT_GREEN; paint_app.eraser=false; }
+                                    else if mx >= wx+124 && mx < wx+146 { paint_app.color=gui::Color::BLACK; paint_app.eraser=false; }
+                                    else if mx >= wx+150 && mx < wx+208 { paint_app.eraser=true; }
+                                } else if my >= wy + 58 && mx >= wx + 8 && mx < wx + ww - 8 {
                                     paint_app.paint(mx.saturating_sub(wx+8), my.saturating_sub(wy+58));
                                 }
                             }
@@ -875,32 +970,69 @@ pub extern "C" fn _start() -> ! {
         // 4. Fare Tekerlek (Scroll)
         let scroll_val = mouse.take_scroll_delta();
         if scroll_val != 0 {
+            // Dosya Yöneticisi (pencere 0): listeyi kaydır ve imleci de taşı.
             if let Some(w) = compositor.windows[0] {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     if scroll_val > 0 {
-                        if filemanager_app.selected_idx > 0 {
-                            filemanager_app.selected_idx -= 1;
-                        }
+                        if filemanager_app.selected_idx > 0 { filemanager_app.selected_idx -= 1; }
                     } else if filemanager_app.selected_idx + 1 < filemanager_app.files.len() {
                         filemanager_app.selected_idx += 1;
                     }
                 }
             }
+            // Not Defteri (pencere 2): satır bazlı dikey kaydırma.
             if let Some(w) = compositor.windows[2] {
                 if w.is_open && w.is_focused && !w.is_minimized {
-                    let max_offset = if notepad_app.len > 0 { notepad_app.len / 16 } else { 0 };
-                    let new_off = (notepad_app.scroll_offset as i32 - scroll_val as i32)
-                        .max(0)
-                        .min(max_offset as i32) as usize;
-                    notepad_app.scroll_offset = new_off;
+                    let c_h = window_content_h(2, w.height, w.width, &filemanager_app, &notepad_app);
+                    let view_h = w.content_rect().3;
+                    let max_y = c_h.saturating_sub(view_h);
+                    let delta = (scroll_val as isize) * 16; // 1 satır = 16px
+                    let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                    if let Some(wm) = compositor.windows[2].as_mut() {
+                        wm.scroll.y = new_off;
+                    }
+                }
+            }
+            // Dosya Yöneticisi listesi de kaydırılabilir (içerik sığmıyorsa).
+            if let Some(w) = compositor.windows[0] {
+                if w.is_open && w.is_focused && !w.is_minimized {
+                    let c_h = window_content_h(0, w.height, w.width, &filemanager_app, &notepad_app);
+                    let view_h = w.content_rect().3;
+                    let max_y = c_h.saturating_sub(view_h);
+                    let delta = (scroll_val as isize) * 24;
+                    let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                    if let Some(wm) = compositor.windows[0].as_mut() {
+                        wm.scroll.y = new_off;
+                    }
                 }
             }
         }
 
         // 5. Pencere Sürükleme ve Yeniden Boyutlandırma
         if mouse.left_button {
+            if let Some(w)=compositor.windows[9] { if w.is_focused && mx>=w.x+8 && mx<w.x+w.width-8 && my>=w.y+58 && my<w.y+w.height-10 { paint_app.paint(mx.saturating_sub(w.x+8),my.saturating_sub(w.y+58)); } }
+            if compositor.is_volume_popup_open {
+                let track = compositor.volume_track_rect(&l);
+                if gui::in_rect(mx, my, (track.0.saturating_sub(8), track.1.saturating_sub(8), track.2+16, track.3+16)) {
+                    settings_app.set_volume_from_range(mx, track.0, track.2);
+                }
+            }
             if let Some(w) = compositor.windows[2] { if w.is_focused && notepad_app.selection_start.is_some() { let at=notepad_app.index_at(mx,my,w.x,w.y); notepad_app.selection_end=Some(at); } }
-            if let Some(idx) = dragging_win {
+            if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
+                // Tutamacı fare ile sürükle → kaydırma ofseti.
+                let track_top = compositor.windows[idx]
+                    .map(|w| w.content_rect().1)
+                    .unwrap_or(0);
+                let max_thumb_travel = track_h.saturating_sub(thumb_h);
+                let desired_top = my.saturating_sub(grab).max(track_top).min(track_top + max_thumb_travel);
+                let ratio = if max_thumb_travel == 0 { 0.0 }
+                    else { (desired_top - track_top) as f32 / max_thumb_travel as f32 };
+                let max_off = content_h.saturating_sub(view_h);
+                let new_off = ((ratio * max_off as f32) as usize).min(max_off);
+                if let Some(wm) = compositor.windows[idx].as_mut() {
+                    wm.scroll.y = new_off;
+                }
+            } else if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     let max_x = width.saturating_sub(w.width);
                     let max_y = height.saturating_sub(w.height + gui::TASKBAR_H);
@@ -955,6 +1087,7 @@ pub extern "C" fn _start() -> ! {
         }
 
         if mouse_released {
+            paint_app.end_stroke();
             // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
             // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
             if let Some(idx) = dragging_win {
@@ -966,6 +1099,7 @@ pub extern "C" fn _start() -> ! {
             dragging_win = None;
             resizing_win = None;
             resize_edge = None;
+            vscroll_drag = None;
         }
 
         // Alt tuşu bırakıldığında Alt+Tab penceresini kapat
@@ -997,6 +1131,8 @@ pub extern "C" fn _start() -> ! {
                 let term_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_focused);
                 if calc_focused { if ch == '\x08' { calculator_app.backspace(); } else if ch == '\x1b' { calculator_app.clear(); } else if ch >= '0' && ch <= '9' || ch == '+' || ch == '-' { calculator_app.insert(ch); } }
                 if term_focused { if ch == '\x08' { terminal_app.backspace(); } else if ch >= ' ' { terminal_app.insert(ch); } }
+                let paint_focused = compositor.windows[9].as_ref().map_or(false, |w| w.is_focused);
+                if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }
             }
         }
 
@@ -1015,6 +1151,7 @@ pub extern "C" fn _start() -> ! {
             last_mouse_y = mouse.y;
             last_buttons = (mouse.left_button, mouse.right_button);
 
+            taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs);
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,

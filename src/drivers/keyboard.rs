@@ -1,4 +1,12 @@
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum KeyAction {
+    ToggleStartMenu,
+    CloseActiveWindow,
+    CycleWindowFocus,
+    OpenTaskManager,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum KeyboardLayout {
     TurkishQ,
     EnglishUS,
@@ -10,7 +18,10 @@ pub struct KeyboardState {
     pub caps_lock: bool,
     pub alt_gr: bool,
     pub ctrl: bool,
+    pub alt: bool,
+    pub super_key: bool,
     pub last_char: Option<char>,
+    pub last_action: Option<KeyAction>,
 }
 
 impl KeyboardState {
@@ -21,7 +32,10 @@ impl KeyboardState {
             caps_lock: false,
             alt_gr: false,
             ctrl: false,
+            alt: false,
+            super_key: false,
             last_char: None,
+            last_action: None,
         }
     }
 
@@ -50,6 +64,10 @@ impl KeyboardState {
         self.last_char.take()
     }
 
+    pub fn take_last_action(&mut self) -> Option<KeyAction> {
+        self.last_action.take()
+    }
+
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
         // Tuş bırakma (Release / Break code) kontrolü
         if scancode & 0x80 != 0 {
@@ -61,37 +79,65 @@ impl KeyboardState {
                 self.ctrl = false;
             }
             if released == 0x38 {
+                self.alt = false;
                 self.alt_gr = false;
+            }
+            if released == 0x5B || released == 0x5C {
+                self.super_key = false;
             }
             return None;
         }
 
         // Tuşa basılma (Make code)
-        let ch = match scancode {
+        match scancode {
             0x2A | 0x36 => {
                 self.shift = true;
-                None
+                return None;
             }
             0x3A => {
                 self.caps_lock = !self.caps_lock;
-                None
+                return None;
             }
             0x1D => {
                 self.ctrl = true;
-                None
+                return None;
             }
             0x38 => {
+                self.alt = true;
                 self.alt_gr = true;
-                None
+                return None;
             }
-            _ => {
-                // Layout'a göre harf/karakter çevirisi
-                let uppercase = self.shift ^ self.caps_lock;
-                match self.layout {
-                    KeyboardLayout::TurkishQ => Self::scancode_to_tr(scancode, uppercase, self.shift, self.alt_gr),
-                    KeyboardLayout::EnglishUS => Self::scancode_to_us(scancode, uppercase, self.shift),
+            0x5B | 0x5C => { // Left / Right Super (Windows) key
+                self.super_key = true;
+                self.last_action = Some(KeyAction::ToggleStartMenu);
+                return None;
+            }
+            0x3E => { // F4 key
+                if self.alt {
+                    self.last_action = Some(KeyAction::CloseActiveWindow);
+                    return None;
                 }
             }
+            0x0F => { // Tab key
+                if self.alt {
+                    self.last_action = Some(KeyAction::CycleWindowFocus);
+                    return None;
+                }
+            }
+            0x53 => { // Delete key
+                if self.ctrl && self.alt {
+                    self.last_action = Some(KeyAction::OpenTaskManager);
+                    return None;
+                }
+            }
+            _ => {}
+        }
+
+        // Layout'a göre harf/karakter çevirisi
+        let uppercase = self.shift ^ self.caps_lock;
+        let ch = match self.layout {
+            KeyboardLayout::TurkishQ => Self::scancode_to_tr(scancode, uppercase, self.shift, self.alt_gr),
+            KeyboardLayout::EnglishUS => Self::scancode_to_us(scancode, uppercase, self.shift),
         };
 
         if ch.is_some() {
@@ -123,7 +169,7 @@ impl KeyboardState {
             0x14 => Some(if uppercase { 'T' } else { 't' }),
             0x15 => Some(if uppercase { 'Y' } else { 'y' }),
             0x16 => Some(if uppercase { 'U' } else { 'u' }),
-            0x17 => Some(if uppercase { 'İ' } else { 'ı' }),
+            0x17 => Some(if uppercase { 'I' } else { 'ı' }),
             0x18 => Some(if uppercase { 'O' } else { 'o' }),
             0x19 => Some(if uppercase { 'P' } else { 'p' }),
             0x1A => Some(if uppercase { 'Ğ' } else { 'ğ' }),

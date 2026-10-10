@@ -55,6 +55,10 @@ pub struct MinGuiCompositor {
     pub windows: [Option<Window>; 8],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
+    pub is_context_menu_open: bool,
+    pub context_menu_x: usize,
+    pub context_menu_y: usize,
+    pub context_file_idx: Option<usize>,
 }
 
 impl MinGuiCompositor {
@@ -63,6 +67,10 @@ impl MinGuiCompositor {
             windows: [None, None, None, None, None, None, None, None],
             active_window_idx: None,
             is_start_menu_open: true,
+            is_context_menu_open: false,
+            context_menu_x: 0,
+            context_menu_y: 0,
+            context_file_idx: None,
         }
     }
 
@@ -247,8 +255,48 @@ impl MinGuiCompositor {
             self.render_start_menu(fb, tb_y);
         }
 
+        // Sağ Tık Bağlam Menüsü (Context Menu) Açık ise Çizimi
+        if self.is_context_menu_open {
+            self.render_context_menu(fb);
+        }
+
         // Donanım Fare İmleci
         self.draw_mouse_cursor(fb, mouse.x as usize, mouse.y as usize);
+    }
+
+    pub fn render_context_menu(&self, fb: &mut Framebuffer) {
+        let menu_w = 170;
+        let menu_h = 138;
+        let menu_x = self.context_menu_x.min(fb.width.saturating_sub(menu_w));
+        let menu_y = self.context_menu_y.min(fb.height.saturating_sub(menu_h));
+
+        // Menü Arka Planı ve Çerçevesi
+        fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+        fb.draw_rect(menu_x, menu_y, menu_w, 2, Color::ACCENT_BLUE);
+
+        let items = if self.context_file_idx.is_some() {
+            [
+                ("⚡ İlişkili Uygulama ile Aç", Color::ACCENT_GREEN),
+                ("📝 Not Defterinde Düzenle", Color::TEXT_MAIN),
+                ("🖼️ Görüntüleyici ile Bak", Color::ACCENT_PINK),
+                ("🎵 Müzik Çalarda Çal", Color::ACCENT_YELLOW),
+                ("📋 Dosya Özellikleri", Color::ACCENT_BLUE),
+            ]
+        } else {
+            [
+                ("📂 Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
+                ("📝 Yeni Not Oluştur", Color::TEXT_MAIN),
+                ("⚙️ Sistem Ayarları", Color::ACCENT_PINK),
+                ("📊 Görev Yöneticisi", Color::ACCENT_YELLOW),
+                ("🔄 Masaüstünü Yenile", Color::ACCENT_GREEN),
+            ]
+        };
+
+        for (i, (label, color)) in items.iter().enumerate() {
+            let item_y = menu_y + 4 + i * 26;
+            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, 22, Color::WINDOW_BG);
+            Self::draw_string(fb, menu_x + 10, item_y + 6, label, *color);
+        }
     }
 
     pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize) {

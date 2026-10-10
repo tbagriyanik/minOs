@@ -12,6 +12,34 @@ impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum FontChoice { TurkishPixel, Compact }
 
+impl FontChoice {
+    /// Seçimi GUI font motoruna uygular (tek gerçek kaynak).
+    pub fn apply(self) {
+        let mode = match self {
+            FontChoice::TurkishPixel => crate::gui::FontMode::Pixel,
+            FontChoice::Compact => crate::gui::FontMode::Compact,
+        };
+        crate::gui::set_font_mode(mode);
+    }
+
+    pub fn label(self, english: bool) -> &'static str {
+        match (self, english) {
+            (FontChoice::TurkishPixel, false) => "Font: Turkce Piksel",
+            (FontChoice::TurkishPixel, true) => "Font: Turkish Pixel",
+            (FontChoice::Compact, false) => "Font: Sikistirilmis",
+            (FontChoice::Compact, true) => "Font: Compact",
+        }
+    }
+
+    pub fn cycle(&mut self) {
+        *self = match self {
+            FontChoice::TurkishPixel => FontChoice::Compact,
+            FontChoice::Compact => FontChoice::TurkishPixel,
+        };
+        self.apply();
+    }
+}
+
 /// Yardımcı düğme/geometri tanımları (çizim ve tıklama testi ortak kullanır).
 const TAB_X: usize = 10;
 const TAB_W: usize = 90;
@@ -29,6 +57,7 @@ pub struct SystemSettings {
     pub is_muted: bool,
     pub mouse_speed: u8,
     pub screen_res: (usize, usize),
+    pub night_light: bool,
 
     // Saklanan Pencere Konum ve Durumları (8 Pencere)
     pub saved_window_states: [Option<WindowState>; 11],
@@ -53,6 +82,7 @@ impl SystemSettings {
             is_muted: false,
             mouse_speed: 5,
             screen_res: (1280, 720),
+            night_light: false,
             saved_window_states: [None; 11],
             dhcp_enabled: true,
             static_ip: [192, 168, 1, 100],
@@ -83,11 +113,24 @@ impl SystemSettings {
     pub fn mute_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X + 210, win_y + 142, 66, 18)
     }
-    pub fn save_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + 172, 90, 22)
+    pub fn save_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X, win_y + win_h.saturating_sub(44), 90, 22)
     }
-    pub fn reset_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 100, win_y + 172, 95, 22)
+    pub fn reset_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 100, win_y + win_h.saturating_sub(44), 95, 22)
+    }
+    pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + i * 82, win_y + 188, 76, 22)
+    }
+    pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
+    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+250,y+214,110,22) }
+    /// Tema palet şeridi: her tema için bir renk örneği kutusu.
+    pub fn theme_swatch_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + i * 24, win_y + 152, 20, 16)
+    }
+    /// Tema adı etiketi (örneklerin altında).
+    pub fn theme_swatch_count() -> usize {
+        ThemeId::ALL.len()
     }
 
     // -----------------------------------------------------------------
@@ -181,9 +224,21 @@ impl SystemSettings {
                     false,
                 );
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 128,
-                    if self.language.is_english() { "Font: Turkish Pixel" } else { "Font: Turkce Piksel" }, Color::ACCENT_YELLOW);
+                    self.font.label(self.language.is_english()), Color::ACCENT_YELLOW);
                 MinGuiCompositor::draw_button(fb, Self::font_btn_rect(win_x, win_y, win_w), Color::ACCENT_YELLOW,
                     if self.language.is_english() { "Change" } else { "Degistir" }, Color::DARK_BG, false);
+
+                // --- Tema Palet Seridi (dogrudan secim icin renk ornekleri) ---
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 148,
+                    if self.language.is_english() { "Palette:" } else { "Palet:" }, Color::TEXT_MUTED);
+                for (i, tid) in ThemeId::ALL.iter().enumerate() {
+                    let r = Self::theme_swatch_rect(win_x, win_y, i);
+                    let (bg, accent) = theme::preview_colors(*tid);
+                    fb.draw_rect(r.0, r.1, r.2, r.3, bg);
+                    fb.draw_rect(r.0 + 4, r.1 + 4, r.2 - 8, r.3 - 8, accent);
+                    let border = if *tid == self.theme { Color::ACCENT_GREEN } else { Color::BORDER };
+                    fb.draw_rect_outline(r.0, r.1, r.2, r.3, border);
+                }
 
                 // --- Klavye / Dil ---
                 let kbd_str = match kbd_layout {
@@ -250,6 +305,11 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Onyukleme: Limine Stivale2", Color::TEXT_MUTED);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, "RTC / CMOS Saat: Calisiyor", Color::ACCENT_BLUE);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazir tema hazir", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 182,
+                    if self.language.is_english() { "Target resolution:" } else { "Hedef cozunurluk:" }, Color::ACCENT_YELLOW);
+                for i in 0..4 { let r=Self::resolution_btn_rect(win_x,win_y,i); let active=self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; MinGuiCompositor::draw_button(fb,r,if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR},Self::resolution_name(i),Color::TEXT_MAIN,false); }
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+218, if self.night_light { "Gece isigi: Acik" } else { "Gece isigi: Kapali" }, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Ac" }, Color::DARK_BG, false);
             }
             2 => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ag Arayuzu: RTL8139 / e1000", Color::TEXT_MAIN);
@@ -266,8 +326,8 @@ impl SystemSettings {
         }
 
         // Alt Aksiyon Butonları (Kaydet & Sıfırla)
-        MinGuiCompositor::draw_button(fb, Self::save_btn_rect(win_x, win_y), Color::ACCENT_GREEN, "Kaydet", Color::DARK_BG, false);
-        MinGuiCompositor::draw_button(fb, Self::reset_btn_rect(win_x, win_y), Color::ACCENT_RED, "Sifirla", Color::WHITE, false);
+        MinGuiCompositor::draw_button(fb, Self::save_btn_rect(win_x, win_y, win_h), Color::ACCENT_GREEN, "Kaydet", Color::DARK_BG, false);
+        MinGuiCompositor::draw_button(fb, Self::reset_btn_rect(win_x, win_y, win_h), Color::ACCENT_RED, "Sifirla", Color::WHITE, false);
 
         // Durum Çubuğu
         let bar_y = win_y + win_h.saturating_sub(26);

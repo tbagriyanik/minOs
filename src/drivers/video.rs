@@ -3,11 +3,22 @@ use crate::gui::theme;
 static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
 const BACKBUFFER_LEN: usize = 1280 * 720;
 
+/// Dikdörtgen kırpma (clip) bölgesi. Tüm çizimler bu sınırların içinde kalır.
+#[derive(Copy, Clone)]
+pub struct ClipRect {
+    pub x0: usize,
+    pub y0: usize,
+    pub x1: usize,
+    pub y1: usize,
+}
+
 pub struct Framebuffer {
     pub address: *mut u32,
     pub width: usize,
     pub height: usize,
     pub pitch: usize,
+    /// Aktif kırpma bölgesi. Varsayılan: tüm ekran.
+    clip: ClipRect,
 }
 
 #[inline(always)]
@@ -41,12 +52,40 @@ impl Framebuffer {
             width,
             height,
             pitch,
+            clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
         }
+    }
+
+    /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgene kısıtlar).
+    pub fn set_clip(&mut self, x: usize, y: usize, w: usize, h: usize) {
+        self.clip = ClipRect {
+            x0: x.min(self.width),
+            y0: y.min(self.height),
+            x1: (x + w).min(self.width),
+            y1: (y + h).min(self.height),
+        };
+    }
+
+    /// Kırpma bölgesini tüm ekrana geri alır.
+    pub fn reset_clip(&mut self) {
+        self.clip = ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height };
+    }
+
+    /// Aktif kırpma bölgesi.
+    #[inline(always)]
+    pub fn clip(&self) -> ClipRect {
+        self.clip
+    }
+
+    /// Bir noktanın aktif kırpma bölgesi içinde olup olmadığı.
+    #[inline(always)]
+    fn in_clip(&self, x: usize, y: usize) -> bool {
+        x >= self.clip.x0 && x < self.clip.x1 && y >= self.clip.y0 && y < self.clip.y1
     }
 
     #[inline(always)]
     pub fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
-        if x < self.width && y < self.height {
+        if self.in_clip(x, y) {
             let c = rgb(color);
             unsafe {
                 let offset = y * self.width + x;
@@ -72,11 +111,17 @@ impl Framebuffer {
             return;
         }
         let c = rgb(color);
-        let x_end = (x + w).min(self.width);
-        let y_end = (y + h).min(self.height);
-        for cy in y..y_end {
+        // Kırpma bölgesi ile kesiştir.
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end || y0 >= y_end {
+            return;
+        }
+        for cy in y0..y_end {
             let row_offset = cy * self.width;
-            for cx in x..x_end {
+            for cx in x0..x_end {
                 let offset = row_offset + cx;
                 unsafe {
                     if offset < BACKBUFFER_LEN {
@@ -105,13 +150,18 @@ impl Framebuffer {
         }
         let ct = rgb(top);
         let cb = rgb(bottom);
-        let x_end = (x + w).min(self.width);
-        let y_end = (y + h).min(self.height);
-        for cy in y..y_end {
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end {
+            return;
+        }
+        for cy in y0..y_end {
             let t = cy - y;
             let c = lerp_color(ct, cb, t, h.saturating_sub(1).max(1));
             let row_offset = cy * self.width;
-            for cx in x..x_end {
+            for cx in x0..x_end {
                 let offset = row_offset + cx;
                 unsafe {
                     if offset < BACKBUFFER_LEN {
@@ -130,7 +180,7 @@ impl Framebuffer {
         let bb = cx & 0xFF;
         // alpha: 256 = tamamen gölge
         let blend_px = |fb: &mut Framebuffer, px: usize, py: usize, alpha: u32| {
-            if px >= fb.width || py >= fb.height {
+            if !fb.in_clip(px, py) {
                 return;
             }
             let off = py * fb.width + px;
@@ -187,5 +237,12 @@ impl Framebuffer {
                 }
             }
         }
+    }
+
+    /// Gece ışığı: mavi kanalı azaltıp kırmızı/yeşili sıcaklaştırır.
+    pub fn apply_night_light(&mut self, enabled: bool) {
+        if !enabled { return; }
+        let limit=(self.width*self.height).min(BACKBUFFER_LEN);
+        unsafe { for i in 0..limit { let c=BACKBUFFER[i]; let r=((c>>16)&255).min(255); let g=((c>>8)&255).min(255); let b=c&255; let nr=(r+((255-r)*12/100)).min(255); let ng=(g+((255-g)*4/100)).min(255); let nb=b*55/100; BACKBUFFER[i]=(nr<<16)|(ng<<8)|nb; } }
     }
 }

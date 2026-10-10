@@ -102,6 +102,7 @@ impl NotepadApp {
     }
 
     pub fn insert_char(&mut self, c: char) {
+        self.delete_selection();
         if self.len < 500 {
             // Sona ekle
             self.buffer[self.len] = c;
@@ -111,12 +112,14 @@ impl NotepadApp {
     }
 
     pub fn backspace(&mut self) {
+        if self.selection_start != self.selection_end && self.selection_start.is_some() { self.delete_selection(); return; }
         if self.len > 0 {
             self.len -= 1;
             self.buffer[self.len] = ' ';
             self.cursor = self.len;
         }
     }
+    pub fn delete_forward(&mut self) { if self.selection_start.is_some() && self.selection_start != self.selection_end { self.delete_selection(); } else if self.cursor < self.len { self.selection_start=Some(self.cursor); self.selection_end=Some(self.cursor+1); self.delete_selection(); } }
 
     pub fn clear(&mut self) {
         self.len = 0;
@@ -132,6 +135,13 @@ impl NotepadApp {
     pub fn select_all(&mut self) {
         self.selection_start = Some(0);
         self.selection_end = Some(self.len);
+    }
+    pub fn index_at(&self, x: usize, y: usize, win_x: usize, win_y: usize) -> usize {
+        let col = x.saturating_sub(win_x + 42) / 7;
+        let row = y.saturating_sub(win_y + 66) / 16;
+        let mut line = 0; let mut idx = 0;
+        while idx < self.len && line < row { if self.buffer[idx] == '\n' { line += 1; } idx += 1; }
+        let mut pos = 0; while idx < self.len && pos < col && self.buffer[idx] != '\n' { idx += 1; pos += 1; } idx.min(self.len)
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
@@ -185,7 +195,9 @@ impl NotepadApp {
 
             let mut char_buf = [0u8; 4];
             let s = ch.encode_utf8(&mut char_buf);
-            MinGuiCompositor::draw_string(fb, cur_x, cur_y, s, Color::TEXT_MAIN);
+            let selected = match (self.selection_start, self.selection_end) { (Some(a),Some(b)) => i >= a.min(b) && i < a.max(b), _ => false };
+            if selected { fb.draw_rect(cur_x, cur_y, 7, 12, Color::ACCENT_BLUE); }
+            MinGuiCompositor::draw_string(fb, cur_x, cur_y, s, if selected { Color::DARK_BG } else { Color::TEXT_MAIN });
             cur_x += 7;
 
             if cur_x + 16 > area_x + area_w {

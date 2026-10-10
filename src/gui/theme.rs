@@ -65,32 +65,46 @@ pub enum ThemeId {
     VelvetDark,
     Daylight,
     Nord,
+    TerminalGreen,
+    Sunset,
 }
 
 impl ThemeId {
-    pub const ALL: [ThemeId; 3] = [ThemeId::VelvetDark, ThemeId::Daylight, ThemeId::Nord];
+    pub const ALL: [ThemeId; 5] = [
+        ThemeId::VelvetDark,
+        ThemeId::Daylight,
+        ThemeId::Nord,
+        ThemeId::TerminalGreen,
+        ThemeId::Sunset,
+    ];
 
     pub fn next(self) -> Self {
         match self {
             ThemeId::VelvetDark => ThemeId::Daylight,
             ThemeId::Daylight => ThemeId::Nord,
-            ThemeId::Nord => ThemeId::VelvetDark,
+            ThemeId::Nord => ThemeId::TerminalGreen,
+            ThemeId::TerminalGreen => ThemeId::Sunset,
+            ThemeId::Sunset => ThemeId::VelvetDark,
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
             ThemeId::VelvetDark => "Kadife Gece (Velvet Dark)",
-            ThemeId::Daylight => "Gün Işığı (Daylight)",
+            ThemeId::Daylight => "Gun Isigi (Daylight)",
             ThemeId::Nord => "Kutup Mavisi (Nord)",
+            ThemeId::TerminalGreen => "Yesil Terminal (Terminal)",
+            ThemeId::Sunset => "Gun Batimi (Sunset)",
         }
     }
 
     pub fn short_name(self) -> &'static str {
         match self {
             ThemeId::VelvetDark => "Gece",
-            ThemeId::Daylight => "Gündüz",
+            ThemeId::Daylight => "Gunduz",
             ThemeId::Nord => "Nord",
+            ThemeId::TerminalGreen => "Yesil",
+            ThemeId::Sunset => "Gunbatimi",
         }
     }
 
@@ -99,6 +113,8 @@ impl ThemeId {
             ThemeId::VelvetDark => 0,
             ThemeId::Daylight => 1,
             ThemeId::Nord => 2,
+            ThemeId::TerminalGreen => 3,
+            ThemeId::Sunset => 4,
         }
     }
 }
@@ -157,11 +173,53 @@ const NORD: [u32; PALETTE_LEN] = [
     0xB48EAD, // accent pink
     0xD08770, // accent cat
     0xECEFF4, // text main
-    0xB8C0CE, // text muted
+    0xC8D0DC, // text muted (yüksek kontrast)
     0xECEFF4, // cursor fill
     0x2E3440, // cursor outline
     0x4C566A, // border
     0x1E222A, // shadow
+];
+
+// Modern terminal temasi: derin siyah zemin uzerinde yuksek kontrastli neon yesil.
+const TERMINAL_GREEN: [u32; PALETTE_LEN] = [
+    0x050805, // desktop bg
+    0x0B120B, // window bg
+    0x14260F, // titlebar (aktif)
+    0x0E1A0C, // titlebar (pasif)
+    0x030603, // taskbar
+    0x39FF6A, // accent blue (neon mint)
+    0x7CFF9B, // accent green
+    0xFF5C6C, // accent red
+    0xE8FF6B, // accent yellow
+    0x63D2FF, // accent pink (cyan)
+    0xB6FF7A, // accent cat
+    0xDFFFE2, // text main
+    0x8FCE9A, // text muted
+    0xDFFFE2, // cursor fill
+    0x050805, // cursor outline
+    0x1F3A1C, // border
+    0x000000, // shadow
+];
+
+// Modern gun batimi temasi: sicak mor-gul zemin, turuncu vurgular.
+const SUNSET: [u32; PALETTE_LEN] = [
+    0x241726, // desktop bg
+    0x2F1E33, // window bg
+    0x4A2B46, // titlebar (aktif)
+    0x3A233C, // titlebar (pasif)
+    0x1A1020, // taskbar
+    0xFFB86B, // accent blue (amber)
+    0x8BE9A5, // accent green
+    0xFF6B8B, // accent red (coral)
+    0xFFD479, // accent yellow
+    0xE58BFF, // accent pink (orchid)
+    0xFFA36B, // accent cat
+    0xFFF1E6, // text main
+    0xD3B8D8, // text muted
+    0xFFF1E6, // cursor fill
+    0x241726, // cursor outline
+    0x5E4064, // border
+    0x140B18, // shadow
 ];
 
 const fn palette_for(id: ThemeId) -> [u32; PALETTE_LEN] {
@@ -169,7 +227,17 @@ const fn palette_for(id: ThemeId) -> [u32; PALETTE_LEN] {
         ThemeId::VelvetDark => VELVET_DARK,
         ThemeId::Daylight => DAYLIGHT,
         ThemeId::Nord => NORD,
+        ThemeId::TerminalGreen => TERMINAL_GREEN,
+        ThemeId::Sunset => SUNSET,
     }
+}
+
+/// Bir temanın önizleme renklerini (zemin + vurgu) aktif paleti değiştirmeden döndürür.
+/// Ayar ekranındaki renk örnekleri (swatch) için kullanılır.
+pub const fn preview_colors(id: ThemeId) -> (u32, u32) {
+    let p = palette_for(id);
+    // (masaüstü zemin, vurgu mavi)
+    (p[IDX_DESKTOP_BG as usize], p[IDX_ACCENT_BLUE as usize])
 }
 
 // ---------------------------------------------------------------------------

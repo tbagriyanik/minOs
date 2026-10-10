@@ -180,7 +180,7 @@ pub extern "C" fn _start() -> ! {
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
     let taskmgr_app = apps::taskmgr::TaskManagerApp::new();
     let mut calculator_app = apps::calculator::CalculatorApp::new();
-    let paint_app = apps::paint::PaintApp::new();
+    let mut paint_app = apps::paint::PaintApp::new();
     let mut terminal_app = apps::terminal::TerminalApp::new();
 
     // 8 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği)
@@ -219,6 +219,9 @@ pub extern "C" fn _start() -> ! {
     let mut last_buttons = (mouse.left_button, mouse.right_button);
     let mut dragging_win: Option<usize> = None;
     let mut resizing_win: Option<usize> = None;
+    let mut resize_edge: Option<gui::ResizeEdge> = None;
+    // Kenar yeniden boyutlandırma başlangıcında pencere geometrisi (sol/üst kenarlar için)
+    let mut resize_orig: (usize, usize, usize, usize) = (0, 0, 0, 0);
     let mut drag_offset_x = 0;
     let mut drag_offset_y = 0;
     let mut anim_tick: usize = 0;
@@ -227,6 +230,7 @@ pub extern "C" fn _start() -> ! {
     let mut clock_spin: usize = 0;
     let mut last_title_idx: Option<usize> = None;
     let mut last_title_click: u64 = 0;
+    
 
     let render_full_frame = |fb: &mut drivers::video::Framebuffer,
                              compositor: &gui::MinGuiCompositor,
@@ -278,6 +282,7 @@ pub extern "C" fn _start() -> ! {
         compositor.render_taskbar_and_overlays(fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english());
 
         // 4. Backbuffer'ı VRAM'e tek seferde kopyala (flicker-free)
+        fb.apply_night_light(st.night_light);
         fb.flush();
     };
 
@@ -378,6 +383,7 @@ pub extern "C" fn _start() -> ! {
         if mouse_clicked {
             compositor.is_alt_tab_open = false;
             let mut consumed = false;
+            if let Some(w) = compositor.windows[2] { if w.is_focused && gui::in_rect(mx, my, (w.x+6,w.y+58,w.width-12,180)) { let at=notepad_app.index_at(mx,my,w.x,w.y); notepad_app.selection_start=Some(at); notepad_app.selection_end=Some(at); consumed=true; } }
 
             // A) Takvim açıkken
             if compositor.is_calendar_open {
@@ -623,9 +629,22 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_top_window();
                         break;
                     }
-                    // Yeniden boyutlandırma köşesi
+                    // Tüm kenarlardan/köşelerden yeniden boyutlandırma (modern
+                    // kenar tutamaçları) — içerik tıklamalarından ÖNCE kontrol edilir.
+                    if !win.is_maximized {
+                        if let Some(edge) = win.resize_edge_at(mx, my) {
+                            compositor.focus_window(idx);
+                            resizing_win = Some(idx);
+                            resize_edge = Some(edge);
+                            resize_orig = (wx, wy, ww, wh);
+                            break;
+                        }
+                    }
+                    // Geriye dönük uyumluluk: sağ alt köşe görsel tutamacı
                     if gui::in_rect(mx, my, win.resize_grip_rect()) {
                         resizing_win = Some(idx);
+                        resize_edge = Some(gui::ResizeEdge::BottomRight);
+                        resize_orig = (wx, wy, ww, wh);
                         compositor.focus_window(idx);
                         break;
                     }
@@ -693,17 +712,25 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                                 if settings_app.active_tab == 0 {
-                                    if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_btn_rect(wx, wy, ww)) {
+                                    let mut swatch_hit = false;
+                                    for i in 0..apps::settings::SystemSettings::theme_swatch_count() {
+                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_swatch_rect(wx, wy, i)) {
+                                            settings_app.theme = gui::theme::ThemeId::ALL[i];
+                                            gui::theme::set_theme(settings_app.theme);
+                                            swatch_hit = true;
+                                            break;
+                                        }
+                                    }
+                                    if swatch_hit {
+                                        // Tema paletinden dogrudan secim yapildi.
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_btn_rect(wx, wy, ww)) {
                                         settings_app.cycle_theme();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::kbd_btn_rect(wx, wy, ww)) {
                                         keyboard.toggle_layout();
                                         settings_app.language.toggle();
                                         settings_app.keyboard_layout = keyboard.layout;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::font_btn_rect(wx, wy, ww)) {
-                                        settings_app.font = match settings_app.font {
-                                            apps::settings::FontChoice::TurkishPixel => apps::settings::FontChoice::Compact,
-                                            apps::settings::FontChoice::Compact => apps::settings::FontChoice::TurkishPixel,
-                                        };
+                                        settings_app.font.cycle();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
@@ -715,9 +742,15 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.reset_defaults();
                                     }
                                 }
+                                if settings_app.active_tab == 1 {
+                                    for i in 0..4 { if gui::in_rect(mx,my,apps::settings::SystemSettings::resolution_btn_rect(wx,wy,i)) { settings_app.screen_res=match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; settings_app.status_msg="Cozunurluk hedefi secildi."; } }
+                                    if gui::in_rect(mx,my,apps::settings::SystemSettings::night_light_rect(wx,wy)) { settings_app.night_light=!settings_app.night_light; settings_app.status_msg=if settings_app.night_light { "Gece isigi acildi." } else { "Gece isigi kapatildi." }; }
+                                }
                             }
                             2 => {
-                                // Not Defteri: Temizle / Kaydet
+                                // Not Defteri: Dosya/Düzen araç çubuğu ve hızlı düğmeler
+                                if my >= wy + 30 && my <= wy + 56 && mx >= wx + 66 && mx < wx + 128 { notepad_app.select_all(); }
+                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 66 { notepad_app.clear(); }
                                 if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
                                 } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
@@ -765,6 +798,12 @@ pub extern "C" fn _start() -> ! {
                                         videoplayer_app.is_playing = false;
                                         videoplayer_app.frame = 0;
                                     }
+                                }
+                            }
+                            8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy) { calculator_app.press(key); } }
+                            9 => {
+                                if my >= wy + 58 && mx >= wx + 8 && mx < wx + ww - 8 {
+                                    paint_app.paint(mx.saturating_sub(wx+8), my.saturating_sub(wy+58));
                                 }
                             }
                             _ => {}
@@ -828,7 +867,7 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::PasteText => { notepad_app.paste_clipboard(); }
                 drivers::keyboard::KeyAction::CutText => { notepad_app.cut_selection(); }
                 drivers::keyboard::KeyAction::SelectAllText => { /* TODO */ }
-                drivers::keyboard::KeyAction::Delete => { notepad_app.delete_selection(); }
+                drivers::keyboard::KeyAction::Delete => { notepad_app.delete_forward(); }
                 drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
             }
         }
@@ -860,6 +899,7 @@ pub extern "C" fn _start() -> ! {
 
         // 5. Pencere Sürükleme ve Yeniden Boyutlandırma
         if mouse.left_button {
+            if let Some(w) = compositor.windows[2] { if w.is_focused && notepad_app.selection_start.is_some() { let at=notepad_app.index_at(mx,my,w.x,w.y); notepad_app.selection_end=Some(at); } }
             if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     let max_x = width.saturating_sub(w.width);
@@ -868,21 +908,64 @@ pub extern "C" fn _start() -> ! {
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
                 }
             } else if let Some(idx) = resizing_win {
+                let edge = resize_edge.unwrap_or(gui::ResizeEdge::BottomRight);
                 if let Some(w) = compositor.windows[idx].as_mut() {
-                    let mut new_w = mx.saturating_sub(w.x).max(w.min_width);
-                    let mut new_h = my.saturating_sub(w.y).max(w.min_height);
-                    new_w = new_w.min(w.max_width.min(width.saturating_sub(w.x)));
-                    new_h = new_h.min(w.max_height.min(height.saturating_sub(w.y)));
-                    w.width = new_w;
-                    w.height = new_h;
+                    use gui::ResizeEdge::*;
+                    let (ox, oy, ow, oh) = resize_orig;
+                    let left = ox + ow;   // sol kenarın sabit sağ referansı
+                    let right = ox;       // sağ kenarın sabit sol referansı
+                    let top = oy + oh;    // üst kenarın sabit alt referansı
+                    let bottom = oy;      // alt kenarın sabit üst referansı
+
+                    let mut nx = w.x;
+                    let mut ny = w.y;
+                    let mut nw = w.width;
+                    let mut nh = w.height;
+
+                    // Sağ kenar sürükleniyor
+                    if matches!(edge, Right | TopRight | BottomRight) {
+                        nw = mx.saturating_sub(right).max(w.min_width)
+                            .min(w.max_width.min(width.saturating_sub(w.x)));
+                    }
+                    // Sol kenar sürükleniyor
+                    if matches!(edge, Left | TopLeft | BottomLeft) {
+                        let desired = mx.min(left);
+                        nw = left.saturating_sub(desired).max(w.min_width);
+                        nx = left.saturating_sub(nw);
+                    }
+                    // Alt kenar sürükleniyor
+                    if matches!(edge, Bottom | BottomLeft | BottomRight) {
+                        let max_h = height.saturating_sub(gui::TASKBAR_H).saturating_sub(w.y);
+                        nh = my.saturating_sub(bottom).max(w.min_height).min(w.max_height).min(max_h);
+                    }
+                    // Üst kenar sürükleniyor
+                    if matches!(edge, Top | TopLeft | TopRight) {
+                        let desired = my.min(top);
+                        nh = top.saturating_sub(desired).max(w.min_height);
+                        ny = top.saturating_sub(nh);
+                    }
+
+                    w.x = nx;
+                    w.y = ny;
+                    w.width = nw;
+                    w.height = nh;
                     w.is_maximized = false;
                 }
             }
         }
 
         if mouse_released {
+            // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
+            // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
+            if let Some(idx) = dragging_win {
+                if my <= 4 {
+                    compositor.focus_window(idx);
+                    compositor.toggle_maximize(idx, width, height);
+                }
+            }
             dragging_win = None;
             resizing_win = None;
+            resize_edge = None;
         }
 
         // Alt tuşu bırakıldığında Alt+Tab penceresini kapat

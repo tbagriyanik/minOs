@@ -7,6 +7,7 @@ impl CalculatorApp {
     pub fn insert(&mut self, c: char) { if self.len < 63 { self.input[self.len] = c; self.len += 1; } }
     pub fn backspace(&mut self) { if self.len > 0 { self.len -= 1; } }
     pub fn clear(&mut self) { self.len = 0; }
+    pub fn press(&mut self, label: char) { if label == 'C' { self.clear(); } else if label == '=' { let v=self.value(); self.clear(); let mut n=v; if n<0 {self.insert('-'); n=-n;} let mut d=[0u8;12]; let mut k=0; if n==0 {d[0]=b'0';k=1;} while n>0 {d[k]=b'0'+(n%10) as u8;k+=1;n/=10;} for i in (0..k).rev(){self.insert(d[i] as char);} } else { self.insert(label); } }
     fn value(&self) -> i32 {
         let mut total=0i32; let mut current=0i32; let mut op=b'+'; let mut n=0i32; let mut has=false;
         for i in 0..=self.len { let c=if i==self.len {'+'} else {self.input[i]};
@@ -21,6 +22,9 @@ impl CalculatorApp {
         for i in 0..dn/2 { digits.swap(i,dn-1-i); } for i in 0..dn {s[n]=digits[i];n+=1;} s[n]=0;
         if let Ok(text)=core::str::from_utf8(&s[..n]) { MinGuiCompositor::draw_string(fb,x+16,y+50,text,Color::ACCENT_GREEN); }
         MinGuiCompositor::draw_string(fb,x+16,y+92,"Ornek: 12+3*4 / Backspace / Esc",Color::TEXT_MUTED);
+        let keys = [['7','8','9','/'],['4','5','6','*'],['1','2','3','-'],['C','0','=','+']];
+        for row in 0..4 { for col in 0..4 { let bx=x+16+col*48; let by=y+112+row*24; fb.draw_rect(bx,by,40,20,if keys[row][col]=='=' {Color::ACCENT_GREEN} else {Color::TITLE_BAR}); let mut b=[0u8;1]; b[0]=keys[row][col] as u8; if let Ok(s)=core::str::from_utf8(&b){MinGuiCompositor::draw_string(fb,bx+16,by+6,s,Color::TEXT_MAIN);} } }
         MinGuiCompositor::draw_string(fb,x+16,y+h.saturating_sub(24),"Backspace: sil   Esc: temizle",Color::TEXT_MUTED);
     }
+    pub fn key_at(x: usize, y: usize, wx: usize, wy: usize) -> Option<char> { if x<wx+16 || y<wy+112 {return None;} let col=(x-wx-16)/48; let row=(y-wy-112)/24; if col>=4||row>=4{return None;} Some([['7','8','9','/'],['4','5','6','*'],['1','2','3','-'],['C','0','=','+']][row][col]) }
 }

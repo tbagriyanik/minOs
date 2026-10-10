@@ -34,6 +34,60 @@ impl Color {
 }
 
 // ---------------------------------------------------------------------------
+// Yazı Tipi Modu (Font Mode)
+// ---------------------------------------------------------------------------
+/// Aktif yazı tipi modu. `Compact` daha sıkı harf aralığı kullanır ve uzun
+/// satırların pencereye sığmasını kolaylaştırır; `Pixel` ferah (varsayılan)
+/// aralığı korur ve okunabilirliği en üstte tutar.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum FontMode {
+    Pixel,
+    Compact,
+}
+
+static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+#[inline(always)]
+pub fn set_font_mode(mode: FontMode) {
+    FONT_MODE.store(
+        match mode {
+            FontMode::Pixel => 0,
+            FontMode::Compact => 1,
+        },
+        core::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+#[inline(always)]
+pub fn font_mode() -> FontMode {
+    if FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) == 1 {
+        FontMode::Compact
+    } else {
+        FontMode::Pixel
+    }
+}
+
+/// Bir karakter hücresi için yatay ilerleme (px).
+#[inline(always)]
+fn cell_advance(scale: usize) -> usize {
+    let base = match font_mode() {
+        FontMode::Pixel => 7,
+        FontMode::Compact => 6,
+    };
+    base * scale.max(1)
+}
+
+/// Bir karakter hücresi için görsel genişlik (px).
+#[inline(always)]
+fn cell_width(scale: usize) -> usize {
+    let base = match font_mode() {
+        FontMode::Pixel => 8,
+        FontMode::Compact => 6,
+    };
+    base * scale.max(1)
+}
+
+// ---------------------------------------------------------------------------
 // Metin tamponu (no_std, sabit boyutlu) — sayı/tarih biçimlendirme için.
 // ---------------------------------------------------------------------------
 pub struct TextBuf {
@@ -180,6 +234,52 @@ impl Window {
     }
 }
 
+/// Pencere kenarı tutamaçları — modern kenar/ köse yeniden boyutlandırma.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ResizeEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+/// Kenar tutamacı için algılama kalınlığı (px).
+const RESIZE_BORDER: usize = 5;
+
+impl Window {
+    /// Verilen fare konumunun hangi kenar/köşe tutamacına denk geldiğini döndürür.
+    /// Yalnızca pencerenin sınırları (ve biraz dışı) içinde anlamlıdır.
+    pub fn resize_edge_at(&self, mx: usize, my: usize) -> Option<ResizeEdge> {
+        if !self.is_open || self.is_minimized || self.is_maximized {
+            return None;
+        }
+        let (x0, y0) = (self.x, self.y);
+        let (x1, y1) = (self.x + self.width, self.y + self.height);
+        // Pencere dikdörtgeninin biraz dışına da tolerans tanı.
+        if mx + RESIZE_BORDER < x0 || mx > x1 + RESIZE_BORDER || my + RESIZE_BORDER < y0 || my > y1 + RESIZE_BORDER {
+            return None;
+        }
+        let near_left = mx <= x0 + RESIZE_BORDER;
+        let near_right = mx + RESIZE_BORDER >= x1;
+        let near_top = my <= y0 + RESIZE_BORDER;
+        let near_bottom = my + RESIZE_BORDER >= y1;
+        match (near_left, near_right, near_top, near_bottom) {
+            (true, _, true, _) => Some(ResizeEdge::TopLeft),
+            (_, true, true, _) => Some(ResizeEdge::TopRight),
+            (true, _, _, true) => Some(ResizeEdge::BottomLeft),
+            (_, true, _, true) => Some(ResizeEdge::BottomRight),
+            (true, _, _, _) => Some(ResizeEdge::Left),
+            (_, true, _, _) => Some(ResizeEdge::Right),
+            (_, _, true, _) => Some(ResizeEdge::Top),
+            (_, _, _, true) => Some(ResizeEdge::Bottom),
+            _ => None,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Görev çubuğu yerleşimi (hem çizim hem tıklama testi için ortak)
 // ---------------------------------------------------------------------------
@@ -240,38 +340,38 @@ pub enum ContextKind {
 
 /// Masaüstü sağ tık menüsü.
 pub const CTX_DESKTOP: [(&str, u32); 6] = [
-    ("Dosya Yoneticisini Ac", Color::ACCENT_BLUE),
-    ("Yeni Not Olustur", Color::TEXT_MAIN),
-    ("Sistem Ayarlari", Color::ACCENT_PINK),
-    ("Gorev Yoneticisi", Color::ACCENT_YELLOW),
-    ("Tema Degistir", Color::ACCENT_GREEN),
-    ("Masaustunu Yenile", Color::TEXT_MUTED),
+    ("Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
+    ("Yeni Not Oluştur", Color::TEXT_MAIN),
+    ("Sistem Ayarları", Color::ACCENT_PINK),
+    ("Görev Yöneticisi", Color::ACCENT_YELLOW),
+    ("Tema Değiştir", Color::ACCENT_GREEN),
+    ("Masaüstünü Yenile", Color::TEXT_MUTED),
 ];
 
 /// Dosya Yöneticisi'nde bir dosyaya sağ tık menüsü.
 pub const CTX_FILE: [(&str, u32); 6] = [
-    ("Iliskili Uygulama ile Ac", Color::ACCENT_GREEN),
-    ("Not Defterinde Duzenle", Color::TEXT_MAIN),
-    ("Resim Gosterici ile Bak", Color::ACCENT_PINK),
-    ("Muzik Calarda Cal", Color::ACCENT_YELLOW),
-    ("Video Oynaticida Oynat", Color::ACCENT_RED),
-    ("Dosya Ozellikleri", Color::ACCENT_BLUE),
+    ("İlişkili Uygulama ile Aç", Color::ACCENT_GREEN),
+    ("Not Defterinde Düzenle", Color::TEXT_MAIN),
+    ("Resim Gösterici ile Bak", Color::ACCENT_PINK),
+    ("Müzik Çalarda Çal", Color::ACCENT_YELLOW),
+    ("Video Oynatıcıda Oynat", Color::ACCENT_RED),
+    ("Dosya Özellikleri", Color::ACCENT_BLUE),
 ];
 
 /// Not Defteri metin alanına sağ tık menüsü.
 pub const CTX_NOTEPAD: [(&str, u32); 6] = [
     ("Kes", Color::ACCENT_RED),
     ("Kopyala", Color::ACCENT_BLUE),
-    ("Yapistir", Color::ACCENT_GREEN),
+    ("Yapıştır", Color::ACCENT_GREEN),
     ("Sil", Color::ACCENT_YELLOW),
-    ("Tumunu Sec", Color::ACCENT_PINK),
-    ("Tumunu Temizle", Color::TEXT_MUTED),
+    ("Tümünü Seç", Color::ACCENT_PINK),
+    ("Tümünü Temizle", Color::TEXT_MUTED),
 ];
 
 /// Pencere başlık çubuğuna sağ tık menüsü.
 pub const CTX_WINDOW: [(&str, u32); 4] = [
-    ("Kucult", Color::ACCENT_YELLOW),
-    ("Maksimize Et / Geri Yukle", Color::ACCENT_GREEN),
+    ("Küçült", Color::ACCENT_YELLOW),
+    ("Maksimize Et / Geri Yükle", Color::ACCENT_GREEN),
     ("Pencereyi Ortala", Color::ACCENT_BLUE),
     ("Kapat", Color::ACCENT_RED),
 ];
@@ -461,6 +561,21 @@ impl MinGuiCompositor {
             }
         }
     }
+
+    /// En üstteki (görünür) pencerenin verilen noktadaki kenar tutamacını döndürür.
+    /// İmleç şeklini ve yeniden boyutlandırma başlangıcını belirlemek için kullanılır.
+    pub fn topmost_resize_edge(&self, mx: usize, my: usize) -> Option<(usize, ResizeEdge)> {
+        let (order, count) = self.draw_order();
+        for k in (0..count).rev() {
+            let idx = order[k];
+            if let Some(win) = self.windows[idx] {
+                if let Some(edge) = win.resize_edge_at(mx, my) {
+                    return Some((idx, edge));
+                }
+            }
+        }
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -525,9 +640,10 @@ impl MinGuiCompositor {
     }
 
     /// Ölçeklenebilir metin. `scale` = 1..3 (piksel büyütme).
+    /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır.
     pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
         let scale = scale.max(1);
-        let advance = 7 * scale;
+        let advance = cell_advance(scale);
         let mut cur_x = x;
         for c in text.chars() {
             if let Some(g) = Self::glyph_for(c) {
@@ -551,14 +667,14 @@ impl MinGuiCompositor {
         Self::draw_string_scaled(fb, x, y, text, color, scale);
     }
 
-    /// Merkezlenmiş metin genişliğini hesaplar (px).
+    /// Merkezlenmiş metin genişliğini hesaplar (px). Aktif font moduna duyarlı.
     pub fn text_width(text: &str, scale: usize) -> usize {
-        // Font 8px hücre, 7px içerik; son karakter için tam hücre genişliği eklenir.
+        let scale = scale.max(1);
         let n = text.chars().count();
         if n == 0 {
             0
         } else {
-            (n - 1) * 7 * scale + 8 * scale
+            (n - 1) * cell_advance(scale) + cell_width(scale)
         }
     }
 
@@ -914,9 +1030,9 @@ impl MinGuiCompositor {
 
         // Menü başlığı (tür)
         let header = match self.context_kind {
-            ContextKind::Desktop => "Masaustu",
-            ContextKind::FileManager => "Dosya Islemleri",
-            ContextKind::Notepad => "Duzen",
+            ContextKind::Desktop => "Masaüstü",
+            ContextKind::FileManager => "Dosya İşlemleri",
+            ContextKind::Notepad => "Düzen",
             ContextKind::Window => "Pencere",
         };
         Self::draw_string(fb, menu_x + 8, menu_y + 6, header, Color::TEXT_MUTED);
@@ -1036,7 +1152,8 @@ impl MinGuiCompositor {
         let cell_w = (w - 20) / 7;
         for d in 0..7usize {
             let label = DateTime::weekday_short(d as u8);
-            Self::draw_string(fb, grid_x + d * cell_w + 6, grid_y, label, Color::TEXT_MUTED);
+            let tw = Self::text_width(label, 1);
+            Self::draw_string(fb, grid_x + d * cell_w + cell_w.saturating_sub(tw) / 2, grid_y, label, Color::TEXT_MUTED);
         }
 
         // Ayın günleri
@@ -1058,12 +1175,10 @@ impl MinGuiCompositor {
                 fb.draw_rect(cx, cy, cell_w - 2, 20, Color::ACCENT_BLUE);
             }
             let mut db = TextBuf::new();
-            if day < 10 {
-                db.push_byte(b' ');
-            }
             db.push_u2(day as u32);
             let col_txt = if is_today { Color::DARK_BG } else { Color::TEXT_MAIN };
-            Self::draw_string(fb, cx + 6, cy + 6, db.as_str(), col_txt);
+            let tw = Self::text_width(db.as_str(), 1);
+            Self::draw_string(fb, cx + cell_w.saturating_sub(tw) / 2, cy + 6, db.as_str(), col_txt);
         }
 
         // Alt bilgi: tam tarih ve saat
@@ -1135,6 +1250,12 @@ impl MinGuiCompositor {
     }
 
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
+        // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
+        if let Some((_, edge)) = self.topmost_resize_edge(mx, my) {
+            self.draw_resize_cursor(fb, mx, my, edge);
+            return;
+        }
+
         const CURSOR_PATTERN: [u8; 12] = [
             0b10000000,
             0b11000000,
@@ -1164,6 +1285,40 @@ impl MinGuiCompositor {
             for col in 0..8 {
                 if (byte & (1 << (7 - col))) != 0 {
                     fb.put_pixel(mx + col, my + row, Color::CURSOR_FILL);
+                }
+            }
+        }
+    }
+
+    /// Yönlü yeniden boyutlandırma imleci: kenarlar için çift ok, köşeler için çapraz.
+    fn draw_resize_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, edge: ResizeEdge) {
+        use ResizeEdge::*;
+        // Her yön için 7x7 ikon deseni (1 = dolgu).
+        const H_ARROW: [u8; 7] = [
+            0b0001000, 0b0001100, 0b1111111, 0b1111111, 0b1111111, 0b0001100, 0b0001000,
+        ];
+        const V_ARROW: [u8; 7] = [
+            0b0001000, 0b0011100, 0b0101010, 0b0001000, 0b0101010, 0b0011100, 0b0001000,
+        ];
+        const DIAG_TLBR: [u8; 7] = [
+            0b1100000, 0b1110000, 0b1111000, 0b0001000, 0b0001100, 0b0001110, 0b0000011,
+        ];
+        const DIAG_TRBL: [u8; 7] = [
+            0b0000011, 0b0000111, 0b0001111, 0b0001000, 0b0011000, 0b0111000, 0b1100000,
+        ];
+        let pat: &[u8; 7] = match edge {
+            Left | Right => &H_ARROW,
+            Top | Bottom => &V_ARROW,
+            TopLeft | BottomRight => &DIAG_TLBR,
+            TopRight | BottomLeft => &DIAG_TRBL,
+        };
+        // İmleci tutamacın merkezine hizala.
+        let ox = mx.saturating_sub(3);
+        let oy = my.saturating_sub(3);
+        for (row, &bits) in pat.iter().enumerate() {
+            for col in 0..7 {
+                if (bits & (1 << (6 - col))) != 0 {
+                    fb.put_pixel(ox + col, oy + row, Color::CURSOR_FILL);
                 }
             }
         }

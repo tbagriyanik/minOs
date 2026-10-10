@@ -158,12 +158,12 @@ pub extern "C" fn _start() -> ! {
     compositor.add_window(gui::Window::new("Kontrol Paneli (Donanım & Sistem)", "[Panel]", 530, 30, 480, 290, false));
     // 2: Not Defteri
     compositor.add_window(gui::Window::new("Not Defteri - [adsiz.txt]", "[Not]", 80, 70, 460, 270, true));
-    // 3: Web Tarayıcısı (CatNet)
-    compositor.add_window(gui::Window::new("CatNet Web Gezgini - [v1.0]", "[Web]", 550, 60, 480, 280, false));
+    // 3: Web Tarayıcısı (SarmanNet)
+    compositor.add_window(gui::Window::new("SarmanNet Web Gezgini - [v1.0]", "[Web]", 550, 60, 480, 280, false));
     // 4: Resim Gösterici (MinViewer)
     compositor.add_window(gui::Window::new("Resim Gösterici - [kedi_maskotu.bmp]", "[Resim]", 120, 90, 450, 270, false));
-    // 5: Müzik Çalar (CatBeats)
-    compositor.add_window(gui::Window::new("CatBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, true));
+    // 5: Müzik Çalar (SarmanBeats)
+    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, true));
     // 6: Video Oynatıcı (MinPlayer)
     compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - [retro_drive.mp4]", "[Video]", 150, 110, 460, 275, false));
     // 7: Görev Yöneticisi
@@ -276,6 +276,8 @@ pub extern "C" fn _start() -> ! {
 
         // 2. Fare Sol Tıklama Olayları (Mouse Down)
         if mouse_clicked {
+            compositor.is_alt_tab_open = false;
+
             // Sağ tık menüsü açıkken tıklama yapıldıysa
             if compositor.is_context_menu_open {
                 let menu_w = 170;
@@ -346,14 +348,23 @@ pub extern "C" fn _start() -> ! {
             // B) Başlat Menüsü Açıkken Menü Öğelerine veya Dışına Tıklama
             else if compositor.is_start_menu_open {
                 let menu_w = 230;
-                let menu_h = 284;
+                let menu_h = 312;
                 let menu_x = 6;
                 let menu_y = tb_y.saturating_sub(menu_h + 4);
 
                 if mx >= menu_x && mx <= menu_x + menu_w && my >= menu_y && my <= menu_y + menu_h {
-                    for i in 0..8 {
-                        let item_y = menu_y + 42 + i * 27;
+                    for i in 0..9 {
+                        let item_y = menu_y + 42 + i * 26;
                         if my >= item_y && my <= item_y + 24 {
+                            if i == 8 {
+                                // 9. Sistemi Kapat (ACPI QEMU / VirtualBox Port 0x604 / 0x404)
+                                serial_print("[MinOS] System Shutdown requested via Start Menu!\n");
+                                unsafe {
+                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16); // QEMU ACPI
+                                    core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16); // VirtualBox
+                                    core::arch::asm!("cli; hlt");
+                                }
+                            }
                             // Uygulamayı aç ve odakla
                             for j in 0..8 {
                                 if let Some(ref mut w) = compositor.windows[j] {
@@ -535,6 +546,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
+                    compositor.is_alt_tab_open = true;
+
                     let mut current_focused = None;
                     for i in 0..8 {
                         if let Some(ref win) = compositor.windows[i] {
@@ -579,6 +592,32 @@ pub extern "C" fn _start() -> ! {
                         tm_win.is_focused = true;
                     }
                     compositor.is_start_menu_open = false;
+                }
+                drivers::keyboard::KeyAction::ArrowUp => {
+                    if let Some(ref win) = compositor.windows[0] {
+                        if win.is_open && win.is_focused && !win.is_minimized {
+                            if filemanager_app.selected_idx > 0 {
+                                filemanager_app.selected_idx -= 1;
+                            }
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::ArrowDown => {
+                    if let Some(ref win) = compositor.windows[0] {
+                        if win.is_open && win.is_focused && !win.is_minimized {
+                            if filemanager_app.selected_idx + 1 < filemanager_app.files.len() {
+                                filemanager_app.selected_idx += 1;
+                            }
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::ArrowLeft | drivers::keyboard::KeyAction::ArrowRight => {}
+                drivers::keyboard::KeyAction::ShutdownOS => {
+                    serial_print("[MinOS] System Shutdown requested!\n");
+                    unsafe {
+                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+                        core::arch::asm!("cli; hlt");
+                    }
                 }
             }
         }

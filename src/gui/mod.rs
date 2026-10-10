@@ -56,6 +56,7 @@ pub struct MinGuiCompositor {
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
     pub is_context_menu_open: bool,
+    pub is_alt_tab_open: bool,
     pub context_menu_x: usize,
     pub context_menu_y: usize,
     pub context_file_idx: Option<usize>,
@@ -68,6 +69,7 @@ impl MinGuiCompositor {
             active_window_idx: None,
             is_start_menu_open: true,
             is_context_menu_open: false,
+            is_alt_tab_open: false,
             context_menu_x: 0,
             context_menu_y: 0,
             context_file_idx: None,
@@ -156,14 +158,14 @@ impl MinGuiCompositor {
         fb.clear(Color::DARK_BG);
 
         // Masaüstü Sağ Üst MinOS Kedi Logosu ve Başlığı (Watermark)
-        Self::draw_cat_icon(fb, fb.width.saturating_sub(180), 30);
-        Self::draw_string(fb, fb.width.saturating_sub(155), 35, "MinOS Cat Edition", Color::ACCENT_PINK);
+        Self::draw_cat_icon(fb, fb.width.saturating_sub(210), 30);
+        Self::draw_string(fb, fb.width.saturating_sub(185), 35, "MinOS Sarman Edition", Color::ACCENT_PINK);
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
         let desk_icons = [
             ("📁 Bilgisayarım", Color::ACCENT_BLUE),
             ("📝 Notlar", Color::TEXT_MAIN),
-            ("🌐 CatNet", Color::ACCENT_GREEN),
+            ("🌐 SarmanNet", Color::ACCENT_GREEN),
             ("🎵 Çalma Listesi", Color::ACCENT_YELLOW),
             ("⚙️ Ayarlar", Color::ACCENT_PINK),
         ];
@@ -260,8 +262,45 @@ impl MinGuiCompositor {
             self.render_context_menu(fb);
         }
 
+        // Alt+Tab Uygulama Geçiş Penceresi Açık ise Çizimi
+        if self.is_alt_tab_open {
+            self.render_alt_tab_overlay(fb);
+        }
+
         // Donanım Fare İmleci
         self.draw_mouse_cursor(fb, mouse.x as usize, mouse.y as usize);
+    }
+
+    pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {
+        let box_w = 420;
+        let box_h = 100;
+        let box_x = (fb.width - box_w) / 2;
+        let box_y = (fb.height - box_h) / 2;
+
+        // Arka Plan Karartma (Overlay Modal)
+        fb.draw_rect(box_x, box_y, box_w, box_h, Color::TASKBAR_BG);
+        fb.draw_rect(box_x, box_y, box_w, 24, Color::TITLE_BAR);
+        Self::draw_string(fb, box_x + 12, box_y + 8, "Uygulama Geçişi (Alt + Tab)", Color::TEXT_MAIN);
+
+        let mut app_count = 0;
+        for (i, opt_win) in self.windows.iter().enumerate() {
+            if let Some(win) = opt_win {
+                if win.is_open {
+                    let card_x = box_x + 12 + app_count * 48;
+                    let card_y = box_y + 36;
+                    let card_bg = if win.is_focused { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                    fb.draw_rect(card_x, card_y, 42, 50, card_bg);
+                    Self::draw_cat_icon(fb, card_x + 13, card_y + 8);
+                    let num_str = match i {
+                        0 => "1", 1 => "2", 2 => "3", 3 => "4",
+                        4 => "5", 5 => "6", 6 => "7", _ => "8",
+                    };
+                    let num_col = if win.is_focused { Color::DARK_BG } else { Color::TEXT_MAIN };
+                    Self::draw_string(fb, card_x + 18, card_y + 32, num_str, num_col);
+                    app_count += 1;
+                }
+            }
+        }
     }
 
     pub fn render_context_menu(&self, fb: &mut Framebuffer) {
@@ -301,7 +340,7 @@ impl MinGuiCompositor {
 
     pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize) {
         let menu_w = 230;
-        let menu_h = 284;
+        let menu_h = 312;
         let menu_x = 6;
         let menu_y = tb_y.saturating_sub(menu_h + 4);
 
@@ -314,7 +353,7 @@ impl MinGuiCompositor {
         Self::draw_cat_icon(fb, menu_x + 10, menu_y + 12);
         Self::draw_string(fb, menu_x + 32, menu_y + 14, "MinOS Başlat Menüsü", Color::TEXT_MAIN);
 
-        // 8 Uygulama Öğesi
+        // 9 Menü Öğesi
         let menu_items = [
             ("1. Dosya Yöneticisi", Color::ACCENT_YELLOW),
             ("2. Kontrol Paneli", Color::ACCENT_BLUE),
@@ -324,17 +363,19 @@ impl MinGuiCompositor {
             ("6. Müzik Çalar", Color::ACCENT_YELLOW),
             ("7. Video Oynatıcı", Color::ACCENT_RED),
             ("8. Görev Yöneticisi", Color::ACCENT_BLUE),
+            ("9. ⏻ Sistemi Kapat (Shutdown)", Color::ACCENT_RED),
         ];
 
         for (i, (name, col)) in menu_items.iter().enumerate() {
-            let item_y = menu_y + 42 + i * 27;
-            fb.draw_rect(menu_x + 6, item_y, menu_w - 12, 23, Color::WINDOW_BG);
+            let item_y = menu_y + 42 + i * 26;
+            let bg_col = if i == 8 { Color::TITLE_BAR } else { Color::WINDOW_BG };
+            fb.draw_rect(menu_x + 6, item_y, menu_w - 12, 23, bg_col);
             Self::draw_string(fb, menu_x + 14, item_y + 7, name, *col);
         }
 
         // Alt Bilgi Şeridi
         fb.draw_rect(menu_x + 4, menu_y + menu_h - 22, menu_w - 8, 18, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 12, menu_y + menu_h - 17, "Kedi Çekirdeği v1.0 | 64-Bit", Color::TEXT_MUTED);
+        Self::draw_string(fb, menu_x + 12, menu_y + menu_h - 17, "Sarman Çekirdeği v1.0 | 64-Bit", Color::TEXT_MUTED);
     }
 
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {

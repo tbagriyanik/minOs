@@ -106,6 +106,6 @@ impl MusicPlayerApp {
 
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 218, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, "AC97 / HD Audio | 320 kbps Çalma Modu | CatBeats v1", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, "AC97 / HD Audio | 320 kbps Çalma Modu | SarmanBeats v1", Color::TEXT_MUTED);
     }
 }

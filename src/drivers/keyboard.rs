@@ -4,6 +4,11 @@ pub enum KeyAction {
     CloseActiveWindow,
     CycleWindowFocus,
     OpenTaskManager,
+    ArrowUp,
+    ArrowDown,
+    ArrowLeft,
+    ArrowRight,
+    ShutdownOS,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -129,6 +134,22 @@ impl KeyboardState {
                     self.last_action = Some(KeyAction::OpenTaskManager);
                     return None;
                 }
+            }
+            0x48 => { // Arrow Up
+                self.last_action = Some(KeyAction::ArrowUp);
+                return None;
+            }
+            0x50 => { // Arrow Down
+                self.last_action = Some(KeyAction::ArrowDown);
+                return None;
+            }
+            0x4B => { // Arrow Left
+                self.last_action = Some(KeyAction::ArrowLeft);
+                return None;
+            }
+            0x4D => { // Arrow Right
+                self.last_action = Some(KeyAction::ArrowRight);
+                return None;
             }
             _ => {}
         }

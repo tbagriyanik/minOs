@@ -1,4 +1,7 @@
 # MinOS Derle ve QEMU ile Çalıştır (PowerShell)
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 param(
     [switch]$BuildOnly = $false,
     [switch]$Debug = $false

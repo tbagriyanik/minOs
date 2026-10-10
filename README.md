@@ -1,4 +1,4 @@
-# 🐱 MinOS - Cat Edition
+# 🐱 MinOS - Sarman Edition
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20Nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
@@ -6,16 +6,13 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
-**MinOS (Cat Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi çekirdeğidir.
+**MinOS (Sarman Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi çekirdeğidir.
 
 ---
 
 ## 📥 Hazır ISO İndirme (Download)
 
-MinOS'u derlemeden doğrudan QEMU, VirtualBox veya gerçek donanımda test etmek için hazır ISO imajı:
-
-🔗 **GitHub Releases (Son Sürüm ISO İndir):**  
-[https://github.com/tbagriyanik/minos/releases/latest](https://github.com/tbagriyanik/minos/releases/latest)
+MinOS'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
 
 🔗 **Repo Üzerinden Doğrudan İndir:**  
 [https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
@@ -42,9 +39,9 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 8 adet yerleşik uygulama
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
 | **⚙️ Kontrol Paneli** | Sistem Bilgisi, Ekran & Ses kaydırıcıları, Ağ Durumu (IP/DNS/Gateway) ve Dil/Klavye yönetim paneli. |
 | **📝 Not Defteri** | Doğrudan klavye ile yazı yazılabilen metin editörü. Türkçe karakter desteği (`ç`, `ğ`, `ı`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları (01-09) ve yanıp sönen imleç. |
-| **🌐 Web Tarayıcısı (CatNet)** | Sekmeler, URL çubuğu (`https://catnet.os/portal`), SSL rozeti ve stilize edilmiş kart görünümleri. |
+| **🌐 Web Tarayıcısı (SarmanNet)** | Sekmeler, URL çubuğu (`https://catnet.os/portal`), SSL rozeti ve stilize edilmiş kart görünümleri. |
 | **🖼️ Resim Gösterici (MinViewer)** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
-| **🎵 Müzik Çalar (CatBeats)** | Müzik ritmine göre dalgalanan dinamik 18 bantlı renkli spektrum ekolayzerı (yeşil/sarı/pembe), tepe ışıkları, parça scrubber'ı ve çalma listesi. |
+| **🎵 Müzik Çalar (SarmanBeats)** | Müzik ritmine göre dalgalanan dinamik 18 bantlı renkli spektrum ekolayzerı (yeşil/sarı/pembe), tepe ışıkları, parça scrubber'ı ve çalma listesi. |
 | **🎬 Video Player (MinPlayer)** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU durumu, görev tablosu ve çalışma süresi. |
 
@@ -107,6 +104,14 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 ```powershell
 & 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std
 ```
+
+#### 4. VirtualBox Kurulumu & Ayarları (VirtualBox Setup)
+VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası alıyorsanız aşağıdaki 2 ayarı kontrol edin:
+
+1. **Sanal Makine Türü:** Sanal makineyi oluştururken **İşletim Sistemi Türü** olarak **`Other / Other (64-bit)`** seçildiğinden emin olun (Varsayılan 32-bit seçildiğinde 64-bit mod çalışmaz).
+2. **Sanal Donanım İvmelendirmesi (VT-x / AMD-V):**
+   - Windows kullanıyorsanız ve VirtualBox 64-bit seçeneği çıkmıyorsa, **Hyper-V**'nin açık olmadığından ve BIOS'ta **Intel VT-x / AMD-V** donanım sanallaştırmasının aktif olduğundan emin olun.
+   - VM Ayarları -> **Sistem** -> **Hızlandırma** sekmesinde **Sanallaştırma Arabirimi** varsayılan/KVM olarak ayarlanmalıdır.
 
 ---
 

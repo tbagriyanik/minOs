@@ -4,6 +4,9 @@ param(
     [string]$OutputDir = "target\iso_root"
 )
 
+$OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan

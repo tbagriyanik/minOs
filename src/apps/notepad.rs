@@ -15,7 +15,7 @@ impl NotepadApp {
             cursor: 0,
         };
         
-        let initial_text = "MinOS Not Defteri v1.0 (Cat Edition)\n------------------------------------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
+        let initial_text = "MinOS Not Defteri v1.0 (Sarman Edition)\n---------------------------------------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
         for c in initial_text.chars() {
             if app.len < 510 {
                 app.buffer[app.len] = c;

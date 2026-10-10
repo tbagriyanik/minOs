@@ -260,15 +260,23 @@ impl Window {
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         (self.x + self.width.saturating_sub(60), self.y + 5, 14, 14)
     }
+    /// Sağ-alt köşe yeniden boyutlandırma tutamacı (tek resize noktası).
+    /// Fare ile tutması kolay olsun diye pencerenin içine doğru genişletilmiştir.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x + self.width.saturating_sub(18), self.y + self.height.saturating_sub(18), 18, 18)
+        let g = RESIZE_GRIP;
+        (
+            self.x + self.width.saturating_sub(g),
+            self.y + self.height.saturating_sub(g),
+            g,
+            g,
+        )
     }
     pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
         (self.x, self.y, self.width.saturating_sub(66), TITLEBAR_H)
     }
 }
 
-/// Pencere kenarı tutamaçları — modern kenar/ köse yeniden boyutlandırma.
+/// Yeniden boyutlandırma yönü. Şu an yalnızca sağ-alt köşe etkindir.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ResizeEdge {
     Left,
@@ -280,36 +288,32 @@ pub enum ResizeEdge {
     BottomLeft,
     BottomRight,
 }
-/// Kenar tutamacı için algılama kalınlığı (px).
-const RESIZE_BORDER: usize = 5;
+
+/// Sağ-alt köşe resize tutamacının kenar uzunluğu (px).
+/// Fareyle yakalamayı kolaylaştırmak için kalın tutulur.
+pub const RESIZE_GRIP: usize = 22;
 
 impl Window {
-    /// Verilen fare konumunun hangi kenar/köşe tutamacına denk geldiğini döndürür.
-    /// Yalnızca pencerenin sınırları (ve biraz dışı) içinde anlamlıdır.
+    /// Verilen fare konumunun yeniden boyutlandırma tutamacına denk gelip
+    /// gelmediğini döndürür. Resize yalnızca **sağ-alt köşeye** sabitlenmiştir;
+    /// tutamaç, pencerenin sınırlarının biraz dışına taşan kalın bir bölgedir.
     pub fn resize_edge_at(&self, mx: usize, my: usize) -> Option<ResizeEdge> {
         if !self.is_open || self.is_minimized || self.is_maximized {
             return None;
         }
-        let (x0, y0) = (self.x, self.y);
+        let g = RESIZE_GRIP;
         let (x1, y1) = (self.x + self.width, self.y + self.height);
-        // Pencere dikdörtgeninin biraz dışına da tolerans tanı.
-        if mx + RESIZE_BORDER < x0 || mx > x1 + RESIZE_BORDER || my + RESIZE_BORDER < y0 || my > y1 + RESIZE_BORDER {
-            return None;
-        }
-        let near_left = mx <= x0 + RESIZE_BORDER;
-        let near_right = mx + RESIZE_BORDER >= x1;
-        let near_top = my <= y0 + RESIZE_BORDER;
-        let near_bottom = my + RESIZE_BORDER >= y1;
-        match (near_left, near_right, near_top, near_bottom) {
-            (true, _, true, _) => Some(ResizeEdge::TopLeft),
-            (_, true, true, _) => Some(ResizeEdge::TopRight),
-            (true, _, _, true) => Some(ResizeEdge::BottomLeft),
-            (_, true, _, true) => Some(ResizeEdge::BottomRight),
-            (true, _, _, _) => Some(ResizeEdge::Left),
-            (_, true, _, _) => Some(ResizeEdge::Right),
-            (_, _, true, _) => Some(ResizeEdge::Top),
-            (_, _, _, true) => Some(ResizeEdge::Bottom),
-            _ => None,
+        // Sağ-alt bölge: sağ kenardan `g` içeride başlar, alt kenardan `g` yukarıda;
+        // pencere dışına da `g / 2` kadar tolerans tanır.
+        let in_right = mx + g / 2 >= x1 && mx >= x1.saturating_sub(g);
+        let in_bottom = my + g / 2 >= y1 && my >= y1.saturating_sub(g);
+        // Sağ kenarın hemen dışına da izin ver (tutamağı yakalamak kolaylaşsın).
+        let near_x = mx + g / 2 >= x1 && mx <= x1 + g / 2;
+        let near_y = my + g / 2 >= y1 && my <= y1 + g / 2;
+        if (in_right || near_x) && (in_bottom || near_y) {
+            Some(ResizeEdge::BottomRight)
+        } else {
+            None
         }
     }
 }
@@ -327,11 +331,24 @@ pub struct TrayLayout {
     pub kbd: (usize, usize, usize, usize),
 }
 
+/// Başlat menüsü öğe adımı (satır aralığı) ve öğe yüksekliği (px).
+/// Çizim ve tıklama testi ortak kullanır.
+pub const MENU_ITEM_STEP: usize = 23;
+pub const MENU_ITEM_H: usize = 21;
+
 impl MinGuiCompositor {
     pub fn start_menu_item_y(menu_y: usize, index: usize) -> usize {
         let mut y = menu_y + 42;
-        for i in 0..index { y += 23; if i == 1 || i == 3 || i == 7 || i == 10 { y += 17; } }
+        for i in 0..index { y += MENU_ITEM_STEP; if i == 1 || i == 3 || i == 7 || i == 10 { y += 17; } }
         y
+    }
+
+    /// Başlat menüsü öğesinin tıklanabilir/çizilebilir dikdörtgeni.
+    /// Çizim ve tıklama testi bu tek kaynağı kullanır; böylece görsel öğe ile
+    /// tıklanan öğe her zaman birebir örtüşür (yanlış öğe tetiklenmez).
+    pub fn start_menu_item_rect(menu_y: usize, index: usize) -> (usize, usize, usize, usize) {
+        let y = Self::start_menu_item_y(menu_y, index);
+        (6, y, 228, MENU_ITEM_H)
     }
     pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
         let tb_y = height.saturating_sub(TASKBAR_H);
@@ -435,6 +452,8 @@ pub struct MinGuiCompositor {
     /// Takvimde gösterilen ay/yıl (saatten bağımsız gezinilebilir).
     pub cal_year: u16,
     pub cal_month: u8,
+    /// Sistem kapatma onayı bekleniyor mu? (Yanlış tetiklenmeyi önler.)
+    pub confirm_shutdown: bool,
     z_counter: u8,
 }
 
@@ -455,6 +474,7 @@ impl MinGuiCompositor {
             context_window: None,
             cal_year: 2026,
             cal_month: 1,
+            confirm_shutdown: false,
             z_counter: 0,
         }
     }
@@ -900,13 +920,14 @@ impl MinGuiCompositor {
         fb.draw_rect(nx, ny, 14, 14, if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW });
         fb.draw_rect(nx + 4, ny + 9, 6, 2, Color::DARK_BG);
 
-        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) — üç çizgi
-        let grip_x = win.x + win.width - 14;
-        let grip_y = win.y + win.height - 14;
+        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) — üç kademeli çizgi.
+        // Kalın tutma bölgesiyle (RESIZE_GRIP) hizalı, belirgin bir tutamaç gösterir.
+        let grip_x = win.x + win.width - 16;
+        let grip_y = win.y + win.height - 16;
         let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
-        fb.draw_rect(grip_x + 8, grip_y + 2, 4, 4, grip_color);
-        fb.draw_rect(grip_x + 4, grip_y + 6, 8, 4, grip_color);
-        fb.draw_rect(grip_x, grip_y + 10, 12, 4, grip_color);
+        fb.draw_rect(grip_x + 10, grip_y + 2, 4, 4, grip_color);
+        fb.draw_rect(grip_x + 6, grip_y + 6, 8, 4, grip_color);
+        fb.draw_rect(grip_x + 2, grip_y + 10, 12, 4, grip_color);
     }
 
     // -----------------------------------------------------------------------
@@ -1173,10 +1194,21 @@ impl MinGuiCompositor {
             Self::draw_string(fb, menu_x + 12, gy, title, Color::TEXT_MUTED);
         }
         for (i, (name, col)) in menu_items.iter().enumerate() {
-            let item_y = Self::start_menu_item_y(menu_y, i);
-            let bg_col = if i == 11 { Color::TITLE_BAR } else { Color::WINDOW_BG };
-            fb.draw_rect(menu_x + 6, item_y, menu_w - 12, 21, bg_col);
-            Self::draw_string(fb, menu_x + 14, item_y + 6, name, *col);
+            let r = Self::start_menu_item_rect(menu_y, i);
+            let bg_col = if i == 11 {
+                // Kapatma onayı beklenirken kırmızı vurgu göster.
+                if self.confirm_shutdown { Color::ACCENT_RED } else { Color::TITLE_BAR }
+            } else {
+                Color::WINDOW_BG
+            };
+            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
+            // Kapatma onayı beklenirken düğme metni netleştirilir.
+            let label = if i == 11 && self.confirm_shutdown {
+                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tikla)", "0. CONFIRM SHUTDOWN (click again)")
+            } else {
+                name
+            };
+            Self::draw_string(fb, r.0 + 8, r.1 + 6, label, *col);
         }
 
         // Alt Bilgi Şeridi

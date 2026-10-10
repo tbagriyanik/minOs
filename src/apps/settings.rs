@@ -5,6 +5,7 @@ use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use crate::gui::theme::{self, ThemeId};
 
 use crate::gui::WindowState;
+use crate::fs::vfs::VirtualFileSystem;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum UiLanguage { Turkish, English }
@@ -96,6 +97,22 @@ impl SystemSettings {
         }
     }
 
+    pub fn load_from_vfs(&mut self, vfs: &VirtualFileSystem) {
+        let data = match vfs.read_file("settings.cfg") { Some(d) => d, None => return };
+        let text = match core::str::from_utf8(data) { Ok(s) => s, Err(_) => return };
+        for item in text.split(';') {
+            let mut p = item.split('='); let key=p.next().unwrap_or(""); let val=p.next().unwrap_or("");
+            match key {
+                "volume" => if let Ok(v)=val.parse::<u8>() { self.volume=v.min(100); },
+                "muted" => self.is_muted=val=="1",
+                "night" => self.night_light=val=="1",
+                "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
+                _ => {}
+            }
+        }
+        self.status_msg="Ayarlar kalici depolamadan yuklendi.";
+    }
+
     // -----------------------------------------------------------------
     // Geometri yardımcıları (main.rs tıklama testi de bunları kullanır)
     // -----------------------------------------------------------------
@@ -167,13 +184,20 @@ impl SystemSettings {
         self.status_msg = "Ses duzeyi guncellendi.";
     }
 
-    pub fn save_all(&mut self, compositor: &MinGuiCompositor) {
+    pub fn save_all(&mut self, compositor: &MinGuiCompositor, vfs: &mut VirtualFileSystem) {
         for (i, opt_win) in compositor.windows.iter().enumerate() {
             if let Some(ref win) = opt_win {
                 self.saved_window_states[i] = Some(win.get_state());
             }
         }
-        self.status_msg = "Pencere Duzeni ve Ayarlar Saklandi!";
+        let (w,_h)=self.screen_res;
+        let mut cfg=[0u8;96]; let mut n=0usize;
+        fn put(d:&mut [u8], n:&mut usize, s:&[u8]) { let l=core::cmp::min(s.len(),d.len()-*n); d[*n..*n+l].copy_from_slice(&s[..l]); *n+=l; }
+        put(&mut cfg,&mut n,b"volume="); let digits=[b'0'+self.volume/10,b'0'+self.volume%10]; put(&mut cfg,&mut n,&digits);
+        put(&mut cfg,&mut n,b";muted="); put(&mut cfg,&mut n,if self.is_muted{b"1"}else{b"0"}); put(&mut cfg,&mut n,b";res=");
+        if w==800 {put(&mut cfg,&mut n,b"800x600")} else if w==1024 {put(&mut cfg,&mut n,b"1024x768")} else if w==1920 {put(&mut cfg,&mut n,b"1920x1080")} else {put(&mut cfg,&mut n,b"1280x720")};
+        put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"}); vfs.write_file("settings.cfg",&cfg[..n]);
+        self.status_msg = "Ayarlar ve pencere duzeni kalici olarak kaydedildi.";
     }
 
     pub fn restore_windows(&self, compositor: &mut MinGuiCompositor) {

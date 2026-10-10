@@ -100,20 +100,24 @@ fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
 /// hem çizim hem de tıklama kod yollarında ortak kullanılır.
 fn window_content_h(
     idx: usize,
-    win_h: usize,
+    _win_h: usize,
     win_w: usize,
     fm: &apps::filemanager::FileManagerApp,
     np: &apps::notepad::NotepadApp,
 ) -> usize {
     match idx {
+        // Dosya Yöneticisi: liste içeriği (üst araç çubuğu + satırlar + durum çubuğu).
         0 => apps::filemanager::LIST_TOP + fm.list_content_h() + 30,
+        // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
         2 => {
             let text_w = win_w.saturating_sub(12 + 32 + 16);
             let wrap_cols = (text_w / 7).max(1);
             let (lines, _) = np.text_extent(wrap_cols);
             lines * 16 + 58 + 22
         }
-        _ => win_h,
+        // Diğer uygulamalar sabit düzenlidir: kaydırma gerekmez, içerik pencereye
+        // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
+        _ => 0,
     }
 }
 
@@ -152,7 +156,7 @@ pub extern "C" fn _start() -> ! {
     memory_mgr.pmm.init(&sample_memory_map);
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
-    let fs_mgr = fs::FileSystemManager::new();
+    let mut fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı
     let _net_dev = drivers::net::NetworkInterface::new();
@@ -195,6 +199,9 @@ pub extern "C" fn _start() -> ! {
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     let mut settings_app = apps::settings::SystemSettings::default();
+    settings_app.load_from_vfs(&fs_mgr.vfs);
+    settings_app.font.apply();
+    gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
     let browser_app = apps::browser::BrowserApp::new();
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
@@ -205,29 +212,31 @@ pub extern "C" fn _start() -> ! {
     let mut paint_app = apps::paint::PaintApp::new();
     let mut terminal_app = apps::terminal::TerminalApp::new();
 
-    // 8 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği)
+    // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
+    // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
+    // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
     // 0: Dosya Yöneticisi
-    compositor.add_window(gui::Window::new("Dosya Yöneticisi - [VFS / Home]", "[Dosya]", 30, 30, 480, 290, true));
+    compositor.add_window(gui::Window::new("Dosya Yöneticisi - [VFS / Home]", "[Dosya]", 30, 30, 480, 290, false));
     // 1: Sistem Ayarları
     compositor.add_window(gui::Window::new("Sistem Ayarları - [Tema, Ses, Saat]", "[Ayarlar]", 530, 30, 480, 290, false));
     // 2: Not Defteri
-    compositor.add_window(gui::Window::new("Not Defteri - [adsiz.txt]", "[Not]", 80, 70, 460, 270, true));
+    compositor.add_window(gui::Window::new("Not Defteri - [adsiz.txt]", "[Not]", 80, 70, 460, 270, false));
     // 3: Web Tarayıcısı (SarmanNet)
     compositor.add_window(gui::Window::new("SarmanNet Web Gezgini - [v1.1]", "[Web]", 550, 60, 480, 280, false));
     // 4: Resim Gösterici (MinViewer)
     compositor.add_window(gui::Window::new("Resim Gösterici - [kedi_maskotu.bmp]", "[Resim]", 120, 90, 450, 270, false));
     // 5: Müzik Çalar (SarmanBeats)
-    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, true));
+    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, false));
     // 6: Video Oynatıcı (MinPlayer)
     compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - [retro_drive.mp4]", "[Video]", 150, 110, 460, 275, false));
     // 7: Görev Yöneticisi
-    compositor.add_window(gui::Window::new("Görev Yöneticisi - [MinOS]", "[Görev]", 600, 100, 400, 220, false));
+    compositor.add_window(gui::Window::new("Görev Yöneticisi - [MinOS]", "[Görev]", 220, 80, 400, 220, false));
     compositor.add_window(gui::Window::new("Hesap Makinesi - [MinCalc]", "[Hesap]", 260, 120, 360, 220, false));
     compositor.add_window(gui::Window::new("Çizim Tahtası - [MinPaint]", "[Çizim]", 180, 80, 520, 360, false));
     compositor.add_window(gui::Window::new("Komut İstemi - [MinShell]", "[Komut]", 220, 100, 560, 300, false));
 
-    // Not Defteri'ni başlangıçta odakla
-    compositor.focus_window(2);
+    // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
+    compositor.active_window_idx = None;
 
     // RTC - gerçek zamanlı saat
     let mut now = drivers::rtc::DateTime::read();
@@ -319,17 +328,25 @@ pub extern "C" fn _start() -> ! {
 
                 // Kırpmayı kaldır ve kaydırma çubuklarını pencerenin içinde çiz.
                 fb.reset_clip();
+                // Sağ-alt köşedeki resize tutamacıyla çakışmayı önle: kaydırma
+                // çubuklarının pencerenin son `RESIZE_GRIP` pikseline girmesini engelle.
+                let grip = crate::gui::RESIZE_GRIP;
+                let sb = crate::gui::scrollbar::SCROLLBAR_THICKNESS;
                 if want_v {
-                    let track = (cx + cw - crate::gui::scrollbar::SCROLLBAR_THICKNESS, cy,
-                                 crate::gui::scrollbar::SCROLLBAR_THICKNESS, content_area.3);
-                    let g = crate::gui::scrollbar::v_geom(track, content_h, content_area.3, win.scroll.y);
-                    crate::gui::scrollbar::draw_vertical(fb, &g);
+                    let v_h = content_area.3.saturating_sub(grip);
+                    if v_h > 0 {
+                        let track = (cx + cw - sb, cy, sb, v_h);
+                        let g = crate::gui::scrollbar::v_geom(track, content_h, v_h, win.scroll.y);
+                        crate::gui::scrollbar::draw_vertical(fb, &g);
+                    }
                 }
                 if want_h {
-                    let track = (cx, cy + ch - crate::gui::scrollbar::SCROLLBAR_THICKNESS,
-                                 content_area.2, crate::gui::scrollbar::SCROLLBAR_THICKNESS);
-                    let g = crate::gui::scrollbar::h_geom(track, content_w, content_area.2, win.scroll.x);
-                    crate::gui::scrollbar::draw_horizontal(fb, &g);
+                    let h_w = content_area.2.saturating_sub(grip);
+                    if h_w > 0 {
+                        let track = (cx, cy + ch - sb, h_w, sb);
+                        let g = crate::gui::scrollbar::h_geom(track, content_w, h_w, win.scroll.x);
+                        crate::gui::scrollbar::draw_horizontal(fb, &g);
+                    }
                 }
             }
         }
@@ -566,16 +583,27 @@ pub extern "C" fn _start() -> ! {
                 let menu_y = tb_y.saturating_sub(menu_h + 4);
                 if gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) {
                     for i in 0..12 {
-                        let item_y = gui::MinGuiCompositor::start_menu_item_y(menu_y, i);
-                        if my >= item_y && my <= item_y + 26 {
+                        // Öğe dikdörtgeni çizimle birebir aynı kaynaktan gelir;
+                        // böylece görsel öğe ile tıklanan öğe her zaman eşleşir.
+                        let rect = gui::MinGuiCompositor::start_menu_item_rect(menu_y, i);
+                        if gui::in_rect(mx, my, rect) {
                             if i == 11 {
-                                serial_print("[MinOS] System Shutdown requested via Start Menu!\n");
-                                unsafe {
-                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-                                    core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
-                                    core::arch::asm!("cli; hlt");
+                                // Sistem kapatma yıkıcı bir işlemdir: yanlışlıkla
+                                // tetiklenmemesi için iki aşamalı onay istenir.
+                                if compositor.confirm_shutdown {
+                                    serial_print("[MinOS] System Shutdown confirmed via Start Menu!\n");
+                                    unsafe {
+                                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+                                        core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
+                                        core::arch::asm!("cli; hlt");
+                                    }
+                                } else {
+                                    // İlk tıklama: onay bekle (menü açık kalsın).
+                                    compositor.confirm_shutdown = true;
                                 }
+                                break;
                             }
+                            compositor.confirm_shutdown = false;
                             if i < 11 { open_app(&mut compositor, i); }
                             compositor.is_start_menu_open = false;
                             break;
@@ -583,6 +611,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 } else {
                     compositor.is_start_menu_open = false;
+                    compositor.confirm_shutdown = false;
                 }
                 consumed = true;
             }
@@ -591,6 +620,7 @@ pub extern "C" fn _start() -> ! {
             if !consumed {
                 if gui::in_rect(mx, my, l.start) {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
+                    if !compositor.is_start_menu_open { compositor.confirm_shutdown = false; }
                     consumed = true;
                 } else if gui::in_rect(mx, my, l.clock) {
                     compositor.is_calendar_open = !compositor.is_calendar_open;
@@ -687,45 +717,40 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_top_window();
                         break;
                     }
-                    // Tüm kenarlardan/köşelerden yeniden boyutlandırma (modern
-                    // kenar tutamaçları) — içerik tıklamalarından ÖNCE kontrol edilir.
+                    // Sağ-alt köşe yeniden boyutlandırma tutamacı (tek resize noktası).
+                    // Scrollbar'dan ÖNCE denenir ki köşe bölgesinde resize öncelikli
+                    // olsun; scrollbar o bölgede zaten çizilmez.
                     if !win.is_maximized {
-                        if let Some(edge) = win.resize_edge_at(mx, my) {
+                        if gui::in_rect(mx, my, win.resize_grip_rect()) {
                             compositor.focus_window(idx);
                             resizing_win = Some(idx);
-                            resize_edge = Some(edge);
+                            resize_edge = Some(gui::ResizeEdge::BottomRight);
                             resize_orig = (wx, wy, ww, wh);
                             break;
                         }
-                    }
-                    // Geriye dönük uyumluluk: sağ alt köşe görsel tutamacı
-                    if gui::in_rect(mx, my, win.resize_grip_rect()) {
-                        resizing_win = Some(idx);
-                        resize_edge = Some(gui::ResizeEdge::BottomRight);
-                        resize_orig = (wx, wy, ww, wh);
-                        compositor.focus_window(idx);
-                        break;
                     }
                     // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
                         let c_h = window_content_h(idx, wh, ww, &filemanager_app, &notepad_app);
-                        if c_h > cch {
+                        let grip = gui::RESIZE_GRIP;
+                        let view_h = cch.saturating_sub(grip);
+                        if c_h > view_h {
                             let t = gui::scrollbar::SCROLLBAR_THICKNESS;
-                            let track = (ccx + ccw - t, ccy, t, cch);
+                            let track = (ccx + ccw - t, ccy, t, view_h);
                             if gui::in_rect(mx, my, track) {
-                                let g = gui::scrollbar::v_geom(track, c_h, cch, win.scroll.y);
+                                let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
                                 // Tutamaç yakınındaysa tutamacın üstünü koru, değilse anında zıpla.
                                 if gui::in_rect(mx, my, g.thumb) {
-                                    vscroll_drag = Some((idx, g.thumb.1.saturating_sub(my), g.thumb.3, track.3, c_h, cch));
+                                    vscroll_drag = Some((idx, g.thumb.1.saturating_sub(my), g.thumb.3, track.3, c_h, view_h));
                                 } else {
                                     // Track üzerinde tıklanan konumdan kaydırmayı hesapla.
                                     let ratio = (my.saturating_sub(track.1)) as f32 / track.3.max(1) as f32;
-                                    let max_off = c_h.saturating_sub(cch);
+                                    let max_off = c_h.saturating_sub(view_h);
                                     if let Some(wm) = compositor.windows[idx].as_mut() {
                                         wm.scroll.y = ((ratio * max_off as f32) as usize).min(max_off);
                                     }
-                                    vscroll_drag = Some((idx, g.thumb.3 / 2, g.thumb.3, track.3, c_h, cch));
+                                    vscroll_drag = Some((idx, g.thumb.3 / 2, g.thumb.3, track.3, c_h, view_h));
                                 }
                                 compositor.focus_window(idx);
                                 break;
@@ -820,7 +845,7 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
                                         let track=apps::settings::SystemSettings::volume_track_rect(wx,wy); settings_app.set_volume_from_range(mx,track.0,track.2);
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
-                                        settings_app.save_all(&compositor);
+                                        settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
                                         settings_app.restore_windows(&mut compositor);
                                         settings_app.reset_defaults();
@@ -915,15 +940,20 @@ pub extern "C" fn _start() -> ! {
             match action {
                 drivers::keyboard::KeyAction::ToggleStartMenu => {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
+                    if !compositor.is_start_menu_open { compositor.confirm_shutdown = false; }
                 }
                 drivers::keyboard::KeyAction::CloseActiveWindow => {
                     if let Some(idx) = compositor.active_window_idx {
-                        if let Some(w) = compositor.windows[idx].as_mut() {
-                            if w.is_open {
-                                w.is_open = false;
+                        if compositor.windows[idx].map_or(false, |w| w.is_open) {
+                            compositor.is_context_menu_open = true;
+                            compositor.is_start_menu_open = false;
+                            compositor.context_kind = gui::ContextKind::Window;
+                            compositor.context_window = Some(idx);
+                            if let Some(w) = compositor.windows[idx] {
+                                compositor.context_menu_x = w.x + w.width.saturating_sub(230);
+                                compositor.context_menu_y = w.y + gui::TITLEBAR_H;
                             }
                         }
-                        compositor.focus_top_window();
                     }
                 }
                 drivers::keyboard::KeyAction::CycleWindowFocus => {

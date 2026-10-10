@@ -8,6 +8,10 @@
 
 **MinOS (Sarman Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi çekirdeğidir.
 
+### 📏 Kod İstatistikleri
+
+Depodaki Rust kaynaklarında **4.379 satır kod** bulunmaktadır. Bu sayı `src/` altındaki tüm `.rs` dosyalarının satır toplamıdır; derleme çıktıları (`target/`) dahil değildir.
+
 ---
 
 ## 📥 Hazır ISO İndirme (Download)

@@ -49,22 +49,43 @@ impl TaskManagerApp {
         
         let mut row_y = win_y + 55;
         for proc in self.processes.iter() {
-            let mut line = [0u8; 64]; let mut p=0; for c in proc.name.bytes(){line[p]=c;p+=1;} line[p]=0;
-            if let Ok(s)=core::str::from_utf8(&line[..p]) { MinGuiCompositor::draw_string(fb, win_x + 10, row_y, s, Color::TEXT_MAIN); }
-            let mut nums=[0u8;16]; let mut n=0; let mut v=proc.memory_kb; if v==0{nums[0]=b'0';n=1;} while v>0{nums[n]=b'0'+(v%10)as u8;n+=1;v/=10;} for i in 0..n/2{nums.swap(i,n-1-i);} if let Ok(s)=core::str::from_utf8(&nums[..n]){MinGuiCompositor::draw_string(fb,win_x+190,row_y,s,Color::TEXT_MUTED);}
-            
+            // Süreç adı — sabit boyutlu metin tamponu ile güvenli biçimde çizilir
+            // (taşma/indeks paniklerini önler).
+            let mut name = TextBuf::new();
+            name.push_u2(proc.pid as u32);
+            name.push_byte(b' ');
+            name.push_str(proc.name);
+            MinGuiCompositor::draw_string(fb, win_x + 10, row_y, name.as_str(), Color::TEXT_MAIN);
+
+            // RAM (KB) değeri
+            let mut ram = TextBuf::new();
+            ram.push_usize(proc.memory_kb);
+            MinGuiCompositor::draw_string(fb, win_x + 190, row_y, ram.as_str(), Color::TEXT_MUTED);
+
             // CPU kullanım çubuğu
             let bar_w = (proc.cpu_usage_pct as usize) * 20;
             fb.draw_rect(win_x + 280, row_y + 2, bar_w.max(6), 6, Color::ACCENT_GREEN);
-            
+
             row_y += 20;
         }
 
         // Alt Durum Bilgisi (Toplam RAM ve CPU)
         fb.draw_rect(win_x + 10, win_y + 160, 360, 2, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 170, crate::gui::ui_text("RAM / VFS durumu","RAM / VFS status"), Color::ACCENT_BLUE);
-        let mut info=[0u8;64]; let label=b"RAM KB free/total: "; let mut n=0; for b in label{info[n]=*b;n+=1;} let mut v=self.free_memory_kb; let start=n; if v==0{info[n]=b'0';n+=1;}while v>0{info[n]=b'0'+(v%10)as u8;n+=1;v/=10;}for i in 0..(n-start)/2{info.swap(start+i,n-1-i);}info[n]=b'/';n+=1;v=self.total_memory_kb;let s=n;while v>0{info[n]=b'0'+(v%10)as u8;n+=1;}for i in 0..(n-s)/2{info.swap(s+i,n-1-i);}if let Ok(t)=core::str::from_utf8(&info[..n]){MinGuiCompositor::draw_string(fb,win_x+10,win_y+188,t,Color::TEXT_MAIN);}
-        let mut disk = TextBuf::new(); disk.push_str("RAM Disk: "); disk.push_usize(self.ramdisk_used); disk.push_str(" B / "); disk.push_usize(self.ramdisk_files); disk.push_str(" dosya");
+
+        let mut info = TextBuf::new();
+        info.push_str("RAM KB free/total: ");
+        info.push_usize(self.free_memory_kb);
+        info.push_byte(b'/');
+        info.push_usize(self.total_memory_kb);
+        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 188, info.as_str(), Color::TEXT_MAIN);
+
+        let mut disk = TextBuf::new();
+        disk.push_str("RAM Disk: ");
+        disk.push_usize(self.ramdisk_used);
+        disk.push_str(" B / ");
+        disk.push_usize(self.ramdisk_files);
+        disk.push_str(" dosya");
         MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 206, disk.as_str(), Color::TEXT_MUTED);
     }
 }

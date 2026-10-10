@@ -1,5 +1,6 @@
 pub mod font;
 pub mod theme;
+pub mod scrollbar;
 
 use crate::drivers::video::Framebuffer;
 use crate::drivers::mouse::MouseState;

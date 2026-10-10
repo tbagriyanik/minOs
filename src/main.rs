@@ -735,9 +735,9 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
                                         settings_app.set_volume_from_click(mx);
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy)) {
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
                                         settings_app.save_all(&compositor);
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy)) {
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
                                         settings_app.restore_windows(&mut compositor);
                                         settings_app.reset_defaults();
                                     }

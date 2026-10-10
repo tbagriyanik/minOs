@@ -1,0 +1,17 @@
+[package]
+name = "minos-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Temel font render ve gömülü yazı tipleri
+embedded-graphics = "0.8.1"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = 3
+

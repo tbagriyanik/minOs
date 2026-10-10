@@ -1,0 +1,6 @@
+$ mkdir -p "F:\\minos\\target\\x86_64-minos\\release\\build\\az/6d580b64c1748c52\\out\\try_track_caller"
+$ cd "F:\\minos\\target\\x86_64-minos\\release\\build\\az/6d580b64c1748c52\\out\\try_track_caller"
+$ printf '%s' "// try_tra"... > "F:\\minos\\target\\x86_64-minos\\release\\build\\az/6d580b64c1748c52\\out\\try_track_caller\\try_track_caller.rs"
+$ "C:\\Users\\ocak26\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\bin\\rustc.exe" "try_track_caller.rs" "--emit=dep-info,metadata" >& /dev/null
+cargo:rustc-cfg=track_caller
+$ rm -r "F:\\minos\\target\\x86_64-minos\\release\\build\\az/6d580b64c1748c52\\out\\try_track_caller"

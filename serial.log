@@ -1,0 +1,20 @@
+[MinOS] Kernel _start reached!
+[MinOS] SSE enabled & PIC IRQs masked!
+[MinOS] Base revision[2]: 0x0000000000000000
+[MinOS] FB Request addr: 0xFFFFFFFF80005038
+[MinOS] FB Request response ptr: 0xFFFF800007FB4000
+[MinOS] Step 1: IDT & PMM
+[MinOS] Step 2: VFS
+[MinOS] Step 3: Drivers
+[MinOS] Step 4: Framebuffer
+[MinOS] Limine Framebuffer response OK!
+[MinOS] FB Address: 0xFFFF8000FD000000
+[MinOS] FB Width: 0x0000000000000500
+[MinOS] FB Height: 0x00000000000002D0
+[MinOS] FB Pitch: 0x0000000000001400
+[MinOS] Step 5: Compositor
+[MinOS] Step 5.1: Mouse & Kbd (PS/2 Init)
+[MinOS] Step 5.2: MinGuiCompositor
+[MinOS] Step 5.3: Add windows
+[MinOS] Step 6: Rendering Initial Frame
+[MinOS] MinOS GUI Desktop is now running with full interaction!

@@ -422,20 +422,20 @@ impl MinGuiCompositor {
     }
     pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
         let tb_y = height.saturating_sub(TASKBAR_H);
-        let by = tb_y + 6;
-        let h = 24;
-        let pad = 10;
-        let clock_x = width.saturating_sub(pad + 62);
-        let vol_x = clock_x.saturating_sub(10 + 44);
-        let theme_x = vol_x.saturating_sub(8 + 66);
-        let kbd_x = theme_x.saturating_sub(8 + 46);
+        let by = tb_y + 5;
+        let h = 26;
+        let pad = 8;
+        let clock_x = width.saturating_sub(pad + 74);
+        let vol_x = clock_x.saturating_sub(6 + 56);
+        let theme_x = vol_x.saturating_sub(6 + 64);
+        let kbd_x = theme_x.saturating_sub(6 + 54);
         TrayLayout {
             tb_y,
             start: (6, tb_y + 5, 104, 26),
-            clock: (clock_x, by, 62, h),
-            volume: (vol_x, by, 44, h),
-            theme: (theme_x, by, 66, h),
-            kbd: (kbd_x, by, 46, h),
+            clock: (clock_x, by, 74, h),
+            volume: (vol_x, by, 56, h),
+            theme: (theme_x, by, 64, h),
+            kbd: (kbd_x, by, 54, h),
         }
     }
 }
@@ -828,7 +828,7 @@ impl MinGuiCompositor {
         }
     }
 
-    /// Etiketli, hover durumuna duyarlı düğme.
+    /// Etiketli, hover durumuna duyarlı düğme (Yuvarlatılmış köşeli).
     pub fn draw_button(
         fb: &mut Framebuffer,
         r: (usize, usize, usize, usize),
@@ -838,7 +838,8 @@ impl MinGuiCompositor {
         hovered: bool,
     ) {
         let bg = if hovered { Self::shade(bg, 26) } else { bg };
-        fb.draw_rect(r.0, r.1, r.2, r.3, bg);
+        fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg);
+        fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::BORDER);
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = r.0 + r.2.saturating_sub(tw) / 2;
         let ty = r.1 + r.3.saturating_sub(8) / 2;
@@ -874,7 +875,6 @@ impl MinGuiCompositor {
                     } else if row == 8 && (col == 7 || col == 8) {
                         Color::ACCENT_PINK
                     } else if theme::current() == theme::ThemeId::Daylight {
-                        // Açık temada logo kontrastı için kedi gövdesi turuncu.
                         0xE67E22
                     } else if row <= 1 {
                         Color::ACCENT_CAT_EARS
@@ -884,6 +884,192 @@ impl MinGuiCompositor {
                     fb.put_pixel(x + col, y + row, pixel_color);
                 }
             }
+        }
+    }
+
+    /// Bilgisayarım / Dosya Yöneticisi Simgesi (16x16)
+    pub fn draw_computer_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        const ICON_MAP: [u16; 16] = [
+            0b0111111111111100,
+            0b1000000000000010,
+            0b1011111111111010,
+            0b1010000000001010,
+            0b1010111011101010,
+            0b1010000000001010,
+            0b1011111111111010,
+            0b1000000000000010,
+            0b0111111111111100,
+            0b0000011110000000,
+            0b0000001100000000,
+            0b0000111111000000,
+            0b0000000000000000,
+            0b0000000000000000,
+            0b0000000000000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if row >= 2 && row <= 6 && col >= 2 && col <= 13 {
+                        Color::ACCENT_BLUE
+                    } else if row >= 9 {
+                        Color::TEXT_MUTED
+                    } else {
+                        Color::TEXT_MAIN
+                    };
+                    fb.put_pixel(x + col, y + row, c);
+                }
+            }
+        }
+    }
+
+    /// Notlar / Not Defteri Simgesi (16x16)
+    pub fn draw_notepad_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        const ICON_MAP: [u16; 16] = [
+            0b0011111111000000,
+            0b0010000001100000,
+            0b0010000001010000,
+            0b0010111111110000,
+            0b0010000000010000,
+            0b0010111111010000,
+            0b0010000000010000,
+            0b0010111111010000,
+            0b0010000000010000,
+            0b0010111110010000,
+            0b0010000000010000,
+            0b0010111111010000,
+            0b0010000000010000,
+            0b0011111111110000,
+            0b0000000000000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if (row == 5 || row == 7 || row == 9 || row == 11) && col >= 4 && col <= 10 {
+                        Color::ACCENT_BLUE
+                    } else if row <= 2 && col >= 9 {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::TEXT_MAIN
+                    };
+                    fb.put_pixel(x + col, y + row, c);
+                }
+            }
+        }
+    }
+
+    /// Web Tarayıcısı / Ağ Simgesi (16x16)
+    pub fn draw_browser_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        const ICON_MAP: [u16; 16] = [
+            0b0000011110000000,
+            0b0001111111100000,
+            0b0011001100110000,
+            0b0110001100011000,
+            0b0111111111111000,
+            0b1100001100001100,
+            0b1100001100001100,
+            0b1111111111111100,
+            0b1100001100001100,
+            0b1100001100001100,
+            0b0111111111111000,
+            0b0110001100011000,
+            0b0011001100110000,
+            0b0001111111100000,
+            0b0000011110000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if row == 4 || row == 7 || row == 10 {
+                        Color::ACCENT_GREEN
+                    } else {
+                        Color::ACCENT_BLUE
+                    };
+                    fb.put_pixel(x + col, y + row, c);
+                }
+            }
+        }
+    }
+
+    /// Müzik Çalar / Çalma Listesi Simgesi (16x16)
+    pub fn draw_music_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        const ICON_MAP: [u16; 16] = [
+            0b0000011111110000,
+            0b0000011111110000,
+            0b0000010000010000,
+            0b0000010000010000,
+            0b0000010000010000,
+            0b0000010000010000,
+            0b0000010000010000,
+            0b0000010000010000,
+            0b0001110001110000,
+            0b0011111001111100,
+            0b0011111001111100,
+            0b0001110001110000,
+            0b0000000000000000,
+            0b0000000000000000,
+            0b0000000000000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if row >= 8 {
+                        Color::ACCENT_PINK
+                    } else {
+                        Color::ACCENT_YELLOW
+                    };
+                    fb.put_pixel(x + col, y + row, c);
+                }
+            }
+        }
+    }
+
+    /// Sistem Ayarları / Dişli Çark Simgesi (16x16)
+    pub fn draw_gear_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        const ICON_MAP: [u16; 16] = [
+            0b0000011001100000,
+            0b0000011001100000,
+            0b0011001111001100,
+            0b0011011111101100,
+            0b0001110000111000,
+            0b1111100000011111,
+            0b1111000110001111,
+            0b0011001111001100,
+            0b0011001111001100,
+            0b1111000110001111,
+            0b1111100000011111,
+            0b0001110000111000,
+            0b0011011111101100,
+            0b0011001111001100,
+            0b0000011001100000,
+            0b0000011001100000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if row >= 6 && row <= 9 && col >= 6 && col <= 9 {
+                        Color::ACCENT_BLUE
+                    } else {
+                        Color::TEXT_MAIN
+                    };
+                    fb.put_pixel(x + col, y + row, c);
+                }
+            }
+        }
+    }
+
+    /// İndekse göre ilgili simgeyi çizer.
+    pub fn draw_icon_by_index(fb: &mut Framebuffer, x: usize, y: usize, index: usize) {
+        match index {
+            0 => Self::draw_computer_icon(fb, x, y),
+            1 => Self::draw_notepad_icon(fb, x, y),
+            2 => Self::draw_browser_icon(fb, x, y),
+            3 => Self::draw_music_icon(fb, x, y),
+            4 => Self::draw_gear_icon(fb, x, y),
+            _ => Self::draw_cat_icon(fb, x, y),
         }
     }
 
@@ -910,19 +1096,19 @@ impl MinGuiCompositor {
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
         let desk_icons = [
-            ("Bilgisayarim", Color::ACCENT_BLUE),
-            ("Notlar", Color::TEXT_MAIN),
-            ("SarmanNet", Color::ACCENT_GREEN),
-            ("Calma Listesi", Color::ACCENT_YELLOW),
-            ("Ayarlar", Color::ACCENT_PINK),
+            ("Bilgisayarım", Color::ACCENT_BLUE, 0),
+            ("Notlar", Color::TEXT_MAIN, 1),
+            ("SarmanNet", Color::ACCENT_GREEN, 2),
+            ("Çalma Listesi", Color::ACCENT_YELLOW, 3),
+            ("Sistem Ayarları", Color::ACCENT_PINK, 4),
         ];
 
-        for (i, (lbl, col)) in desk_icons.iter().enumerate() {
+        for (i, (lbl, col, icon_idx)) in desk_icons.iter().enumerate() {
             let dy = 30 + i * 54;
-            // İkon kartı (gölgeli)
-            fb.draw_rect(20, dy, 34, 30, Self::shade(Color::WINDOW_BG, 8));
-            fb.draw_rect_outline(20, dy, 34, 30, Color::BORDER);
-            Self::draw_cat_icon(fb, 29, dy + 7);
+            // İkon kartı (gölgeli, yuvarlatılmış 6px)
+            fb.draw_rounded_rect(20, dy, 34, 30, 6, Self::shade(Color::WINDOW_BG, 8));
+            fb.draw_rounded_rect_outline(20, dy, 34, 30, 6, Color::BORDER);
+            Self::draw_icon_by_index(fb, 29, dy + 7, *icon_idx);
             Self::draw_string_shadow(fb, 62, dy + 12, lbl, *col, Color::SHADOW, 1);
         }
     }
@@ -930,7 +1116,24 @@ impl MinGuiCompositor {
     // -----------------------------------------------------------------------
     // 2. Pencere Çerçevesi ve Başlık Çubuğu
     // -----------------------------------------------------------------------
-    pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window, mouse: &MouseState) {
+    pub fn window_icon_index(win_idx: usize) -> usize {
+        match win_idx {
+            0 => 0, // Dosya Yöneticisi -> Bilgisayarım
+            1 => 4, // Ayarlar -> Dişli
+            2 => 1, // Not Defteri -> Notlar
+            3 => 2, // Web Tarayıcısı -> SarmanNet
+            4 => 1, // Resim Gösterici -> Görsel
+            5 => 3, // Müzik Çalar -> Çalma Listesi
+            6 => 3, // Video Oynatıcı -> Medya
+            7 => 0, // Görev Yöneticisi -> Bilgisayarım
+            8 => 4, // Hesap Makinesi -> Dişli
+            9 => 1, // Çizim Tahtası -> Çizim
+            10 => 0,// Terminal -> Komut İstemi
+            _ => 0,
+        }
+    }
+
+    pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window, mouse: &MouseState, win_idx: usize) {
         if !win.is_open || win.is_minimized {
             return;
         }
@@ -940,49 +1143,38 @@ impl MinGuiCompositor {
         // Gölge (pencere arkasına derinlik)
         fb.draw_shadow(win.x, win.y, win.width, win.height, Color::SHADOW);
 
-        // Çerçeve (border) — önce dış, sonra gövde üstüne
+        // Çerçeve (border) ve Pencere Gövdesi (Yuvarlatılmış 6px)
         let border = if win.is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
-        fb.draw_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, border);
-        // Pencere Gövdesi
-        fb.draw_rect(win.x, win.y, win.width, win.height, Color::WINDOW_BG);
+        fb.draw_rounded_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, 6, border);
+        fb.draw_rounded_rect(win.x, win.y, win.width, win.height, 6, Color::WINDOW_BG);
 
-        // Başlık Çubuğu (dikey gradyan — aktifse vurgulu)
+        // Başlık Çubuğu (dikey gradyan — yuvarlatılmış)
         let (t_top, t_bottom) = if win.is_focused {
             (Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14))
         } else {
             (Color::TITLE_BAR_INACTIVE, Self::shade(Color::TITLE_BAR_INACTIVE, -10))
         };
-        fb.draw_vgradient(win.x, win.y, win.width, TITLEBAR_H, t_top, t_bottom);
-        // Başlık çubuğu alt çizgisi
+        fb.draw_rounded_vgradient(win.x, win.y, win.width, TITLEBAR_H, 6, t_top, t_bottom);
         fb.draw_rect(win.x, win.y + TITLEBAR_H - 1, win.width, 1, border);
-        // Hafif yuvarlatılmış pencere köşeleri (4px yarıçap).
-        let corners = [(win.x, win.y), (win.x + win.width.saturating_sub(1), win.y),
-            (win.x, win.y + win.height.saturating_sub(1)),
-            (win.x + win.width.saturating_sub(1), win.y + win.height.saturating_sub(1))];
-        for &(cx, cy) in corners.iter() {
-            for &(dx, dy) in &[(0usize,0usize),(1,0),(0,1)] {
-                let px = if cx == win.x { cx.saturating_add(dx) } else { cx.saturating_sub(dx) };
-                let py = if cy == win.y { cy.saturating_add(dy) } else { cy.saturating_sub(dy) };
-                if dx + dy < 2 { fb.put_pixel(px, py, Color::DARK_BG); }
-            }
-        }
 
-        // Mini kedi ikonu ve başlık
-        Self::draw_cat_icon(fb, win.x + 6, win.y + 4);
+        // Pencereye özel ilgili program simgesi ve başlık
+        let icon_idx = Self::window_icon_index(win_idx);
+        Self::draw_icon_by_index(fb, win.x + 6, win.y + 4, icon_idx);
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
         Self::draw_string_shadow(fb, win.x + 28, win.y + 8, win.title, title_col, Color::SHADOW, 1);
 
-        // Kontrol Butonları (hover'da parlama)
+        // Kontrol Butonları (hover'da parlama — 4px yuvarlatılmış)
         let (cx, cy) = (win.close_rect().0, win.close_rect().1);
         let hover_close = in_rect(mx, my, win.close_rect());
-        fb.draw_rect(cx, cy, 14, 14, if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED });
+        let close_bg = if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED };
+        fb.draw_rounded_rect(cx, cy, 14, 14, 4, close_bg);
         Self::draw_string(fb, cx + 4, cy + 3, "x", Color::DARK_BG);
 
         let (mxr, myr) = (win.max_rect().0, win.max_rect().1);
         let hover_max = in_rect(mx, my, win.max_rect());
-        fb.draw_rect(mxr, myr, 14, 14, if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN });
+        let max_bg = if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN };
+        fb.draw_rounded_rect(mxr, myr, 14, 14, 4, max_bg);
         if win.is_maximized {
-            // Geri yükle simgesi (üst üste iki kare)
             fb.draw_rect_outline(mxr + 3, myr + 3, 7, 7, Color::DARK_BG);
             fb.draw_rect_outline(mxr + 5, myr + 5, 6, 6, Color::DARK_BG);
         } else {
@@ -991,25 +1183,9 @@ impl MinGuiCompositor {
 
         let (nx, ny) = (win.min_rect().0, win.min_rect().1);
         let hover_min = in_rect(mx, my, win.min_rect());
-        fb.draw_rect(nx, ny, 14, 14, if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW });
+        let min_bg = if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW };
+        fb.draw_rounded_rect(nx, ny, 14, 14, 4, min_bg);
         fb.draw_rect(nx + 4, ny + 9, 6, 2, Color::DARK_BG);
-
-        // Kenar ve köşelerde resize tutamaçları.
-        if !win.is_maximized {
-            let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
-            let mid_x = win.x + win.width / 2;
-            let mid_y = win.y + win.height / 2;
-            fb.draw_rect(win.x + 2, mid_y - 6, 3, 12, grip_color);
-            fb.draw_rect(win.x + win.width - 5, mid_y - 6, 3, 12, grip_color);
-            fb.draw_rect(mid_x - 6, win.y + 2, 12, 3, grip_color);
-            fb.draw_rect(mid_x - 6, win.y + win.height - 5, 12, 3, grip_color);
-            // Alt sağda sade, köşeyi çerçevelemeyen üç noktalı boyutlandırma işareti.
-            let gx = win.x + win.width - 13;
-            let gy = win.y + win.height - 13;
-            fb.draw_rect(gx + 7, gy + 7, 2, 2, grip_color);
-            fb.draw_rect(gx + 3, gy + 7, 2, 2, grip_color);
-            fb.draw_rect(gx + 7, gy + 3, 2, 2, grip_color);
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -1041,7 +1217,7 @@ impl MinGuiCompositor {
         Self::draw_cat_icon(fb, 12, tb_y + 10);
         Self::draw_string_shadow(fb, 36, tb_y + 14, "MinOS", Color::TASKBAR_BG, Color::SHADOW, 1);
 
-        // Uygulama Sekmeleri (z-sırasına göre değil, sabit sırayla)
+        // Uygulama Sekmeleri (Yuvarlatılmış 5px)
         let mut tab_x = 118;
         for opt_win in self.windows.iter() {
             if let Some(win) = opt_win {
@@ -1050,9 +1226,11 @@ impl MinGuiCompositor {
                     let active = win.is_focused && !win.is_minimized;
                     let base = if active { Color::TITLE_BAR } else { Color::TITLE_BAR_INACTIVE };
                     let hovered = in_rect(mx, my, rect);
-                    fb.draw_rect(rect.0, rect.1, rect.2, rect.3, if hovered { Self::shade(base, 20) } else { base });
+                    let bg = if hovered { Self::shade(base, 20) } else { base };
+                    fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+                    fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
                     if active {
-                        fb.draw_rect(rect.0, rect.1, 3, rect.3, Color::ACCENT_BLUE);
+                        fb.draw_rounded_rect(rect.0 + 2, rect.1 + 2, 3, rect.3 - 4, 1, Color::ACCENT_BLUE);
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
                     Self::draw_string(fb, tab_x + 10, tb_y + 14, win.tab_title, tab_text_color);
@@ -1061,40 +1239,58 @@ impl MinGuiCompositor {
             }
         }
 
-        // Sistem Tepsisi (sağdan sola): saat, ses, tema, klavye
-        // Klavye rozeti
+        // Sistem Tepsisi (sağdan sola 4 düğme): saat, ses, tema, klavye
+        // 1. Klavye / Dil Düğmesi (l.kbd)
         let kbd_tag = kbd.layout_tag();
         let kbd_col = match kbd.layout {
             crate::drivers::keyboard::KeyboardLayout::TurkishQ => Color::ACCENT_RED,
             crate::drivers::keyboard::KeyboardLayout::EnglishUS => Color::ACCENT_BLUE,
         };
         let kbd_hover = in_rect(mx, my, l.kbd);
-        fb.draw_rect(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, if kbd_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
-        Self::draw_string(fb, l.kbd.0 + 9, tb_y + 14, kbd_tag, kbd_col);
+        let kbd_bg = if kbd_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
+        fb.draw_rounded_rect(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, kbd_bg);
+        fb.draw_rounded_rect_outline(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, Color::BORDER);
+        Self::draw_string(fb, l.kbd.0 + 6, tb_y + 14, "KBD", Color::TEXT_MUTED);
+        Self::draw_string(fb, l.kbd.0 + 30, tb_y + 14, kbd_tag, kbd_col);
 
-        // Tema butonu (renk örneği + kısa ad)
+        // 2. Tema Düğmesi (l.theme)
         let theme_hover = in_rect(mx, my, l.theme);
-        fb.draw_rect(l.theme.0, l.theme.1, l.theme.2, l.theme.3, if theme_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
-        fb.draw_rect(l.theme.0 + 5, l.theme.1 + 6, 12, 12, Color::ACCENT_PINK);
-        fb.draw_rect_outline(l.theme.0 + 5, l.theme.1 + 6, 12, 12, Color::BORDER);
-        Self::draw_string(fb, l.theme.0 + 22, tb_y + 14, theme::current().short_name(), Color::TEXT_MAIN);
+        let theme_bg = if theme_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
+        fb.draw_rounded_rect(l.theme.0, l.theme.1, l.theme.2, l.theme.3, 5, theme_bg);
+        fb.draw_rounded_rect_outline(l.theme.0, l.theme.1, l.theme.2, l.theme.3, 5, Color::BORDER);
+        fb.draw_rounded_rect(l.theme.0 + 6, l.theme.1 + 8, 10, 10, 3, Color::ACCENT_PINK);
+        fb.draw_rounded_rect_outline(l.theme.0 + 6, l.theme.1 + 8, 10, 10, 3, Color::BORDER);
+        let t_name = theme::current().short_name();
+        Self::draw_string(fb, l.theme.0 + 20, tb_y + 14, t_name, Color::TEXT_MAIN);
 
-        // Ses butonu
+        // 3. Ses Düğmesi (l.volume)
         let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
-        fb.draw_rect(l.volume.0, l.volume.1, l.volume.2, l.volume.3, if vol_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
-        let vol_col = if is_muted { Color::TEXT_MUTED } else { Color::ACCENT_GREEN };
-        Self::draw_string(fb, l.volume.0 + 8, tb_y + 14, if is_muted { "SESX" } else { "SES" }, vol_col);
+        let vol_bg = if vol_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
+        fb.draw_rounded_rect(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, vol_bg);
+        fb.draw_rounded_rect_outline(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, Color::BORDER);
+        if is_muted {
+            Self::draw_string(fb, l.volume.0 + 12, tb_y + 14, "SESX", Color::ACCENT_RED);
+        } else {
+            Self::draw_string(fb, l.volume.0 + 6, tb_y + 14, "SES", Color::ACCENT_GREEN);
+            let level_w = ((volume as usize) * 16) / 100;
+            fb.draw_rect(l.volume.0 + 34, l.volume.1 + 16, 16, 3, Color::TEXT_MUTED);
+            if level_w > 0 {
+                fb.draw_rect(l.volume.0 + 34, l.volume.1 + 16, level_w, 3, Color::ACCENT_GREEN);
+            }
+        }
 
-        // Saat (canlı) — saat tıklanınca takvim açılır
+        // 4. Saat Düğmesi (l.clock)
         let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
-        fb.draw_rect(l.clock.0, l.clock.1, l.clock.2, l.clock.3, if clock_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR });
+        let clock_bg = if clock_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
+        fb.draw_rounded_rect(l.clock.0, l.clock.1, l.clock.2, l.clock.3, 5, clock_bg);
+        fb.draw_rounded_rect_outline(l.clock.0, l.clock.1, l.clock.2, l.clock.3, 5, Color::BORDER);
         let mut clock = TextBuf::new();
         clock.push_u2(now.hour as u32);
         clock.push_byte(b':');
         clock.push_u2(now.minute as u32);
         clock.push_byte(b':');
         clock.push_u2(now.second as u32);
-        Self::draw_string(fb, l.clock.0 + 6, tb_y + 14, clock.as_str(), Color::TEXT_MAIN);
+        Self::draw_string(fb, l.clock.0 + 8, tb_y + 14, clock.as_str(), Color::TEXT_MAIN);
 
         // Akıllı tepsi ağı simgesi
         Self::draw_string(fb, l.kbd.0.saturating_sub(58), tb_y + 14, "ETH0", Color::ACCENT_GREEN);
@@ -1139,7 +1335,7 @@ impl MinGuiCompositor {
         let mut app_count = 0;
         let mut active_app_title = "Pencere Seçilmedi";
 
-        for opt_win in self.windows.iter() {
+        for (win_idx, opt_win) in self.windows.iter().enumerate() {
             if let Some(win) = opt_win {
                 if win.is_open && !win.is_minimized {
                     let card_x = box_x + 12 + app_count * 58;
@@ -1151,11 +1347,12 @@ impl MinGuiCompositor {
                         active_app_title = win.title;
                     }
 
-                    fb.draw_rect(card_x, card_y, 50, 58, card_bg);
+                    fb.draw_rounded_rect(card_x, card_y, 50, 58, 6, card_bg);
                     if is_sel {
-                        fb.draw_rect_outline(card_x.saturating_sub(1), card_y.saturating_sub(1), 52, 60, Color::ACCENT_PINK);
+                        fb.draw_rounded_rect_outline(card_x.saturating_sub(1), card_y.saturating_sub(1), 52, 60, 6, Color::ACCENT_PINK);
                     }
-                    Self::draw_cat_icon(fb, card_x + 17, card_y + 12);
+                    let icon_idx = Self::window_icon_index(win_idx);
+                    Self::draw_icon_by_index(fb, card_x + 17, card_y + 12, icon_idx);
                     let tab_col = if is_sel { Color::DARK_BG } else { Color::TEXT_MAIN };
                     Self::draw_string(fb, card_x + 8, card_y + 38, win.tab_title, tab_col);
                     app_count += 1;
@@ -1254,13 +1451,13 @@ impl MinGuiCompositor {
         // Profil Şeridi (gradyan)
         fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, 34, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_cat_icon(fb, menu_x + 8, menu_y + 10);
-        Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS Baslat", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS Başlat", Color::TEXT_MAIN, Color::SHADOW, 1);
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {
-            ["Sistem", "Uretkenlik", "Medya", "Guc"]
+            ["System", "Productivity", "Media", "Power"]
         } else {
-            ["Sistem", "Uretkenlik", "Medya", "Guc"]
+            ["Sistem", "Üretkenlik", "Medya", "Güç"]
         };
 
         let active_g = self.active_start_group.min(3);
@@ -1284,9 +1481,9 @@ impl MinGuiCompositor {
                 Color::TEXT_MAIN
             };
 
-            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg_col);
             if is_active {
-                fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_PINK);
+                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::ACCENT_PINK);
             }
 
             Self::draw_string(fb, r.0 + 8, r.1 + 10, title, fg_col);
@@ -1295,7 +1492,7 @@ impl MinGuiCompositor {
 
         // Alt Bilgi Şeridi
         fb.draw_rect(menu_x + 1, menu_y + menu_h - 24, menu_w - 2, 23, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Core v1.1", Color::TEXT_MUTED);
+        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Çekirdeği v1.1", Color::TEXT_MUTED);
 
         // Yana Açılır Alt Menü
         self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
@@ -1305,14 +1502,14 @@ impl MinGuiCompositor {
         let (sub_x, sub_y, sub_w, sub_h) = Self::start_menu_submenu_rect(menu_y, group_idx, tb_y);
 
         fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
-        fb.draw_rect(sub_x, sub_y, sub_w, sub_h, Color::TASKBAR_BG);
-        fb.draw_rect_outline(sub_x, sub_y, sub_w, sub_h, Color::BORDER);
+        fb.draw_rounded_rect(sub_x, sub_y, sub_w, sub_h, 8, Color::TASKBAR_BG);
+        fb.draw_rounded_rect_outline(sub_x, sub_y, sub_w, sub_h, 8, Color::BORDER);
 
         let sub_header_title = match group_idx {
-            0 => crate::gui::ui_text("Sistem Uygulamalari", "System Apps"),
-            1 => crate::gui::ui_text("Uretkenlik Araclar", "Productivity Tools"),
-            2 => crate::gui::ui_text("Medya ve Eglence", "Media & Entertainment"),
-            _ => crate::gui::ui_text("Guc Secenekleri", "Power Options"),
+            0 => crate::gui::ui_text("Sistem Uygulamaları", "System Apps"),
+            1 => crate::gui::ui_text("Üretkenlik Araçları", "Productivity Tools"),
+            2 => crate::gui::ui_text("Medya ve Eğlence", "Media & Entertainment"),
+            _ => crate::gui::ui_text("Güç Seçenekleri", "Power Options"),
         };
         fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
@@ -1344,7 +1541,7 @@ impl MinGuiCompositor {
             ("A. Müzik Çalar", Color::ACCENT_YELLOW, 5),
             ("B. Video Oynatıcı", Color::ACCENT_RED, 6),
             ("0. Sistemi Kapat", Color::ACCENT_RED, 255),
-            ("R. Yeniden Baslat", Color::ACCENT_YELLOW, 254),
+            ("R. Yeniden Başlat", Color::ACCENT_YELLOW, 254),
         ] };
 
         let (_, first, count) = MENU_GROUPS[group_idx];
@@ -1365,15 +1562,15 @@ impl MinGuiCompositor {
                 Color::WINDOW_BG
             };
 
-            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
             if is_hovered {
-                fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_PINK);
+                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::ACCENT_PINK);
             }
 
             let label = if i == 11 && self.confirm_shutdown {
-                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tikla)", "0. CONFIRM SHUTDOWN (click again)")
+                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tıkla)", "0. CONFIRM SHUTDOWN (click again)")
             } else if i == 12 && self.confirm_restart {
-                crate::gui::ui_text("R. YENIDEN BASLAT? TEKRAR TIKLA", "R. CONFIRM RESTART (click again)")
+                crate::gui::ui_text("R. YENİDEN BAŞLAT? TEKRAR TIKLA", "R. CONFIRM RESTART (click again)")
             } else {
                 name
             };

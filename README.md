@@ -43,9 +43,9 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
 | **⚙️ Sistem Ayarları** | Tema seçimi/değiştirme, canlı saat & tarih, ses düzeyi kaydırıcısı, ağ durumu (IP/DNS/Gateway), dil/klavye ve pencere düzeni kaydetme paneli. |
 | **📝 Not Defteri** | Doğrudan klavye ile yazı yazılabilen metin editörü. Türkçe karakter desteği (`ç`, `ğ`, `ı`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları (01-09) ve yanıp sönen imleç. Sağ tık menüsüyle **Kes / Kopyala / Yapıştır / Sil / Tümünü Seç**. |
-| **🌐 Web Tarayıcısı (SarmanNet)** | Sekmeler, URL çubuğu (`https://catnet.os/portal`), SSL rozeti ve stilize edilmiş kart görünümleri. |
+| **🌐 Web Tarayıcısı (SarmanNet)** | Yerel minos://help ve minos://cats sayfaları. Harici internet erişimi henüz desteklenmiyor; NIC ve TCP/IP yığını uygulanmadı. |
 | **🖼️ Resim Gösterici (MinViewer)** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
-| **🎵 Müzik Çalar (SarmanBeats)** | Müzik ritmine göre dalgalanan dinamik 18 bantlı renkli spektrum ekolayzerı (yeşil/sarı/pembe), tepe ışıkları, parça scrubber'ı ve çalma listesi. |
+| **🎵 Müzik Çalar (SarmanBeats)** | PC hoparlöründen basit nota melodileri ve animasyonlu ekolayzer. WAV/FLAC/PCM dosya oynatımı henüz desteklenmiyor. |
 | **🎬 Video Player (MinPlayer)** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU durumu, görev tablosu ve çalışma süresi. |
 | **🧮 Hesap Makinesi (MinCalc)** | Klavyeyle giriş yapılabilen basit ifade hesaplayıcı (`+`, `-`), `Backspace` ve `Esc` ile temizleme. |

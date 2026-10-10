@@ -76,6 +76,30 @@ static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
     0xadc0e0531bb10d03, 0x9572709f31764c62,
 ];
 
+// --- Limine HHDM (Higher-Half Direct Map) istegi: fiziksel<->sanal donusum ---
+#[repr(C, align(8))]
+pub struct LimineHhdmResponse {
+    pub revision: u64,
+    pub offset: u64,
+}
+
+#[repr(C, align(8))]
+pub struct LimineHhdmRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineHhdmResponse,
+}
+
+unsafe impl Sync for LimineHhdmRequest {}
+
+#[used]
+#[link_section = ".requests"]
+static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x48dcf1cb8ad2b852, 0x63984e959a98244b],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
 #[inline(never)]
 fn serial_print(s: &str) {
     for b in s.bytes() {
@@ -171,8 +195,25 @@ pub extern "C" fn _start() -> ! {
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
 
-    // 3. Ağ ve Ses Sürücülerinin Başlatımı
-    let net_dev = drivers::net::NetworkInterface::new();
+    // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
+    // Önce HHDM ofsetini al (fiziksel MMIO'ya sanal erişim için).
+    let hhdm_offset = unsafe {
+        let resp = core::ptr::read_volatile(core::ptr::addr_of!(HHDM_REQUEST.response));
+        if !resp.is_null() {
+            let off = (*resp).offset;
+            serial_print("[MinOS] HHDM offset okundu (0 yoksa gecerli).\n");
+            off
+        } else {
+            serial_print("[MinOS] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
+            0xFFFF_8000_0000_0000
+        }
+    };
+    serial_print("[MinOS] HHDM offset alindi.\n");
+    drivers::set_hhdm_offset(hhdm_offset);
+    drivers::hda::init();
+    drivers::e1000::init();
+    drivers::netstack::init();
+    let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
     // 4. Limine Framebuffer Alımı
@@ -291,7 +332,6 @@ pub extern "C" fn _start() -> ! {
                              br: &apps::browser::BrowserApp,
                              iv: &apps::imageviewer::ImageViewerApp,
                              mp: &apps::musicplayer::MusicPlayerApp,
-                             network_ready: bool,
                              vp: &apps::videoplayer::VideoPlayerApp,
                              tm: &apps::taskmgr::TaskManagerApp,
                              calc: &apps::calculator::CalculatorApp,
@@ -312,7 +352,7 @@ pub extern "C" fn _start() -> ! {
                 if !win.is_open || win.is_minimized {
                     continue;
                 }
-                compositor.render_window_frame(fb, &win, mouse);
+                compositor.render_window_frame(fb, &win, mouse, idx);
 
                 // İçerik alanını pencere çerçevesine kırp (taşma önleme).
                 let (cx, cy, cw, ch) = win.content_rect();
@@ -1337,13 +1377,44 @@ pub extern "C" fn _start() -> ! {
             anim_tick = anim_tick.wrapping_add(1);
         }
 
-        // Beş parçalı, PIT/PC speaker tabanlı basit melodi yürütücüsü.
+        // Ağ kartından gelen paketleri işle (ARP cevapları, ICMP vs.).
+        drivers::e1000::poll();
+
+        // Beş parçalı, HDA PCM tabanlı melodi yürütücüsü. (HDA yoksa PIT/PC speaker fallback).
         audio_dev.set_volume(settings_app.volume.min(musicplayer_app.volume as u8));
         if musicplayer_app.is_playing {
             if anim_tick.wrapping_sub(last_music_beat) >= 24 {
                 const NOTES: [u32; 8] = [440, 523, 587, 659, 587, 523, 494, 392];
                 let track_offset = musicplayer_app.current_track as u32 * 22;
-            audio_dev.set_pc_speaker_tone(NOTES[music_note % NOTES.len()] + track_offset);
+                let freq = NOTES[music_note % NOTES.len()] + track_offset;
+                // HDA hazır ise gerçek PCM örneği üret ve gönder.
+                if drivers::hda::is_ready() {
+                    // 48kHz, 16-bit stereo: 1 beat = ~40ms = 1920 sample = 3840 byte
+                    // Bir nota periyodu için basit sine dalgası üret (Taylor serisi sin).
+                    let sample_count = 1920; // 40 ms
+                    let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R çifti
+                    let volume_scale = (audio_dev.volume_left as i32).min(100) as i16;
+                    let mut idx = 0;
+                    while idx < sample_count {
+                        let n = (sample_count - idx).min(pcm.len() / 2);
+                        for k in 0..n {
+                            let t = (idx + k) as f32 / 48_000.0;
+                            let angle = 6.28318f32 * freq as f32 * t;
+                            // Taylor serisi sin (±PI aralığında yeterli doğruluk)
+                            let x = angle - 6.28318 * ((angle / 6.28318) as i32) as f32;
+                            let x2 = x * x;
+                            let v = x - x2 * x / 6.0 + x2 * x2 * x / 120.0 - x2 * x2 * x2 * x / 5040.0;
+                            let sample = (v * 0.3 * volume_scale as f32 / 100.0 * 32767.0) as i16;
+                            pcm[k * 2] = sample;
+                            pcm[k * 2 + 1] = sample; // stereo aynı örnek
+                        }
+                        drivers::hda::push_pcm(&pcm[..n * 2]);
+                        idx += n;
+                    }
+                } else {
+                    // HDA yok: PC speaker fallback
+                    audio_dev.set_pc_speaker_tone(freq);
+                }
                 speaker_on = true;
                 music_note = (music_note + 1) % NOTES.len();
                 musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;

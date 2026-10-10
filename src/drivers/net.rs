@@ -12,7 +12,6 @@ pub struct EthernetPacket<'a> {
 }
 
 pub struct NetworkInterface {
-    pub initialized: bool,
     pub mac: MacAddress,
     pub ip: Ipv4Address,
     pub subnet: Ipv4Address,
@@ -24,7 +23,6 @@ pub struct NetworkInterface {
 impl NetworkInterface {
     pub const fn new() -> Self {
         Self {
-            initialized: false,
             mac: MacAddress([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]), // QEMU standart MAC
             ip: Ipv4Address([192, 168, 1, 100]),
             subnet: Ipv4Address([255, 255, 255, 0]),

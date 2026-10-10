@@ -74,12 +74,13 @@ Write-Host "[3/3] QEMU Baslatiliyor..." -ForegroundColor Yellow
 Write-Host "=========================================" -ForegroundColor Cyan
 
 $qemuArgs = @(
-    "-m", "128M",
+    "-m", "512M",
     "-boot", "d",
     "-serial", "stdio",
     "-vga", "std",
-    "-audiodev", "dsound,id=snd0",
-    "-machine", "pcspk-audiodev=snd0"
+    # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
+    "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
+    "-device", "e1000,netdev=n0"
 )
 
 if (Test-Path ".\build_iso.ps1") {

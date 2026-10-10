@@ -172,6 +172,182 @@ impl Framebuffer {
         }
     }
 
+    /// Yuvarlatılmış köşeli dolu dikdörtgen.
+    pub fn draw_rounded_rect(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let r = r.min(w / 2).min(h / 2);
+        if r == 0 {
+            self.draw_rect(x, y, w, h, color);
+            return;
+        }
+        let c = rgb(color);
+        let r_sq = (r * r) as isize;
+
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end || y0 >= y_end {
+            return;
+        }
+
+        for cy in y0..y_end {
+            let dy = if cy < y + r {
+                (y + r - 1) as isize - cy as isize
+            } else if cy >= y + h - r {
+                cy as isize - (y + h - r) as isize
+            } else {
+                0
+            };
+
+            let row_offset = cy * self.width;
+            for cx in x0..x_end {
+                let dx = if cx < x + r {
+                    (x + r - 1) as isize - cx as isize
+                } else if cx >= x + w - r {
+                    cx as isize - (x + w - r) as isize
+                } else {
+                    0
+                };
+
+                if dx * dx + dy * dy > r_sq {
+                    continue;
+                }
+
+                let offset = row_offset + cx;
+                unsafe {
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = c;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Yuvarlatılmış köşeli 1px çerçeve.
+    pub fn draw_rounded_rect_outline(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let r = r.min(w / 2).min(h / 2);
+        if r == 0 {
+            self.draw_rect_outline(x, y, w, h, color);
+            return;
+        }
+        let c = rgb(color);
+        let r_outer_sq = (r * r) as isize;
+        let r_inner = if r > 1 { r - 1 } else { 0 };
+        let r_inner_sq = (r_inner * r_inner) as isize;
+
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end || y0 >= y_end {
+            return;
+        }
+
+        for cy in y0..y_end {
+            let is_edge_y = cy == y || cy == y + h - 1;
+            let dy = if cy < y + r {
+                (y + r - 1) as isize - cy as isize
+            } else if cy >= y + h - r {
+                cy as isize - (y + h - r) as isize
+            } else {
+                0
+            };
+
+            let row_offset = cy * self.width;
+            for cx in x0..x_end {
+                let is_edge_x = cx == x || cx == x + w - 1;
+
+                let dx = if cx < x + r {
+                    (x + r - 1) as isize - cx as isize
+                } else if cx >= x + w - r {
+                    cx as isize - (x + w - r) as isize
+                } else {
+                    0
+                };
+
+                let d_sq = dx * dx + dy * dy;
+                let is_stroke = if dx > 0 || dy > 0 {
+                    d_sq <= r_outer_sq && d_sq >= r_inner_sq
+                } else {
+                    is_edge_x || is_edge_y
+                };
+
+                if is_stroke {
+                    let offset = row_offset + cx;
+                    unsafe {
+                        if offset < BACKBUFFER_LEN {
+                            BACKBUFFER[offset] = c;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Yuvarlatılmış köşeli dikey gradyan.
+    pub fn draw_rounded_vgradient(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, top: u32, bottom: u32) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let r = r.min(w / 2).min(h / 2);
+        if r == 0 {
+            self.draw_vgradient(x, y, w, h, top, bottom);
+            return;
+        }
+        let ct = rgb(top);
+        let cb = rgb(bottom);
+        let r_sq = (r * r) as isize;
+
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end || y0 >= y_end {
+            return;
+        }
+
+        for cy in y0..y_end {
+            let dy = if cy < y + r {
+                (y + r - 1) as isize - cy as isize
+            } else if cy >= y + h - r {
+                cy as isize - (y + h - r) as isize
+            } else {
+                0
+            };
+
+            let t = cy - y;
+            let c = lerp_color(ct, cb, t, h.saturating_sub(1).max(1));
+            let row_offset = cy * self.width;
+
+            for cx in x0..x_end {
+                let dx = if cx < x + r {
+                    (x + r - 1) as isize - cx as isize
+                } else if cx >= x + w - r {
+                    cx as isize - (x + w - r) as isize
+                } else {
+                    0
+                };
+
+                if dx * dx + dy * dy > r_sq {
+                    continue;
+                }
+
+                let offset = row_offset + cx;
+                unsafe {
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = c;
+                    }
+                }
+            }
+        }
+    }
+
     /// Yumuşak gölge (cast shadow) çizer: pencere alt/sağ kenarına saydamlaşan koyu halka.
     pub fn draw_shadow(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         let cx = rgb(color);

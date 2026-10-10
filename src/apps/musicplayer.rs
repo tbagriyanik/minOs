@@ -19,14 +19,14 @@ impl MusicPlayerApp {
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
-        let tracks = ["Ring0 Beats", "IRQ Lullaby", "Cyber Meow", "Paging Groove", "Limine Chill"];
+        let tracks = ["Melodi 1", "Melodi 2", "Melodi 3", "Melodi 4", "Melodi 5"];
         // Üst Şarkı Bilgi Alanı
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 42, Color::TITLE_BAR);
         let mut track_title = crate::gui::TextBuf::new();
-        track_title.push_str("Now Playing: ");
+        track_title.push_str("Şimdi çalıyor: ");
         track_title.push_str(tracks[self.current_track.min(4)]);
         MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, track_title.as_str(), Color::ACCENT_PINK);
-        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 50, "DJ Purr & The Microkernel | 44.1 kHz 16-bit FLAC", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 50, "PC hoparlörü melodi çıkışı", Color::TEXT_MUTED);
 
         // Dinamik Animasyonlu Ekolayzer / Spektrum Çubukları
         let eq_x = win_x + 10;
@@ -115,6 +115,6 @@ impl MusicPlayerApp {
 
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 218, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, if self.is_playing { "Oynatiliyor | SarmanBeats" } else { "Duraklatildi | SarmanBeats" }, Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, if self.is_playing { "Melodi çalıyor | SarmanBeats" } else { "Duraklatıldı | SarmanBeats" }, Color::TEXT_MUTED);
     }
 }

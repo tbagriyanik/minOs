@@ -31,3 +31,35 @@ pub fn disable_pic() {
     }
 }
 
+/// Cihaz MMIO bölgesini (2MB hizalı) mevcut sayfa tablosuna HHDM üzerinden
+/// 2MB huge page olarak ekler. Limine HHDM yalnızca RAM'i map'lediğinden
+/// PCI MMIO bölgesi için bu elle eşleme gerekir.
+pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
+    unsafe {
+        let hhdm = crate::drivers::phys_to_virt(0);
+        let v = hhdm + phys_2mb_aligned;
+
+        let mut cr3: u64;
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
+        let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
+        let pml4 = (hhdm + pml4_phys) as *const u64;
+
+        let i4 = ((v >> 39) & 511) as usize;
+        let pml4e = pml4.add(i4).read_volatile();
+        let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
+        let pdpt = (hhdm + pdpt_phys) as *const u64;
+
+        let i3 = ((v >> 30) & 511) as usize;
+        let pdpte = pdpt.add(i3).read_volatile();
+        let pd_phys = pdpte & 0x000F_FFFF_FFFF_F000;
+        let pd = (hhdm + pd_phys) as *mut u64;
+
+        let i2 = ((v >> 21) & 511) as usize;
+        // 2MB page: Present | RW | PS(1<<7)
+        pd.add(i2).write_volatile(phys_2mb_aligned | 0x83);
+
+        // TLB temizle (CR3 yeniden yükle)
+        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
+    }
+}
+

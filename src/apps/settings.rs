@@ -334,7 +334,7 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "VFS Surucusu: RamFS TarFS v1.0", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Donanim Hizlandirma: SSE2 Aktif", Color::ACCENT_PINK);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Önyükleme: Limine Stivale2", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, "RTC / CMOS Saat: Calisiyor", Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, "Ses çıkışı: PC hoparlörü (PCM desteklenmiyor)", Color::ACCENT_BLUE);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazir tema hazir", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 176,
                     if self.language.is_english() { "Target resolution:" } else { "Hedef cozunurluk:" }, Color::ACCENT_YELLOW);
@@ -343,10 +343,8 @@ impl SystemSettings {
                 MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Aç" }, Color::DARK_BG, false);
             }
             2 => {
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ağ Arayüzü: RTL8139 / e1000", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "IP Adresi: 192.168.1.100 (DHCP OK)", Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Alt Ağ Maskesi: 255.255.255.0", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Varsayılan Ağ Geçidi: 192.168.1.1", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ağ: Henüz bir ağ sürücüsü başlatılmadı", Color::ACCENT_RED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "İnternet tarayıcısı yerel sayfaları açabilir", Color::TEXT_MUTED);
             }
             _ => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);

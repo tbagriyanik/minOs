@@ -8,6 +8,8 @@ pub struct BrowserApp {
     pub active_tab: usize,
     pub page_loaded: bool,
     pub status: &'static str,
+    pub net_online: bool,
+    pub ping_ok: bool,
 }
 
 impl BrowserApp {
@@ -15,6 +17,7 @@ impl BrowserApp {
         let mut app = Self {
             url: [0; 128], url_len: 0, address_focused: false,
             active_tab: 0, page_loaded: true, status: "MinOS yerel yardim sayfasi",
+            net_online: false, ping_ok: false,
         };
         app.set_url(b"minos://help");
         app
@@ -48,16 +51,32 @@ impl BrowserApp {
             "minos://help" | "https://github.com/tbagriyanik/minos" => {
                 self.active_tab = 0;
                 self.page_loaded = true;
-                self.status = "Yerel MinOS yardim sayfasi acildi.";
+                self.status = "Yerel MinOS yardım sayfası açıldı.";
             }
             "minos://cats" => {
                 self.active_tab = 1;
                 self.page_loaded = true;
-                self.status = "Yerel KediWiki sayfasi acildi.";
+                self.status = "Yerel KediWiki sayfası açıldı.";
+            }
+            "minos://net" | "net://status" => {
+                // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi
+                self.active_tab = 2;
+                self.net_online = crate::drivers::e1000::is_ready();
+                if self.net_online {
+                    // Gateway'e ARP çözümlemesi için ping gönder (ICMP Echo)
+                    self.ping_ok = crate::drivers::netstack::ping(
+                        crate::drivers::netstack::GATEWAY_IP,
+                    );
+                    self.page_loaded = true;
+                    self.status = "Ağ durumu sayfası açıldı (sınama gönderildi).";
+                } else {
+                    self.page_loaded = false;
+                    self.status = "e1000 ağ kartı bulunamadı; ağ yığını pasif.";
+                }
             }
             _ => {
                 self.page_loaded = false;
-                self.status = "İnternet erişimi için NIC, DNS ve TCP/IP sürücüsü gerekli.";
+                self.status = "Bu adres açılamadı; desteklenen: minos://help, minos://cats, minos://net";
             }
         }
         self.address_focused = false;
@@ -107,16 +126,34 @@ impl BrowserApp {
         let page_h = 170;
         fb.draw_rect(page_x, page_y, page_w, page_h, Color::DARK_BG);
         if self.page_loaded {
-            fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-            let heading = if self.active_tab == 0 { "MinOS | Yerel Yardim ve Belgeler" } else { "KediWiki | Yerel Sayfa" };
-            MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, heading, Color::ACCENT_PINK);
-            MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "Adres cubuguna minos://cats veya minos://help yazin.", Color::ACCENT_BLUE);
-            fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-            MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, "Dosya > ag, DNS ve TCP/IP bilesenleri henuz bagli degil.", Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, "Yerel sayfalar ve adres cubugu kullanilabilir.", Color::TEXT_MUTED);
+            if self.active_tab == 2 {
+                // Ağ durumu paneli
+                fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "MinOS | Ağ Durumu (e1000)", Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "ICMP / ARP tabanlı sınama paneli", Color::ACCENT_BLUE);
+                fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
+                let net_str = if self.net_online { "e1000: ÇEVRIMICI (MMIO aktif)" } else { "e1000: CEVHRIMDISI" };
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, net_str, Color::ACCENT_GREEN);
+                let ping_str = if self.ping_ok { "Gateway ARP: BULUNDU (10.0.2.2)" } else { "Gateway ARP: BEKLIYOR / YANIT YOK" };
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, ping_str, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, "IP: 10.0.2.15/24 GW: 10.0.2.2", Color::TEXT_MUTED);
+            } else if self.active_tab == 0 {
+                fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "MinOS | Yerel Yardim ve Belgeler", Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "Yerel adresler: minos://cats, minos://help, minos://net", Color::ACCENT_BLUE);
+                fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, "minos://net ile ağ durumunu sınayın.", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, "Yerel sayfalar adres çubuğundan açılabilir.", Color::TEXT_MUTED);
+            } else {
+                fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "KediWiki | Yerel Sayfa", Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "Yerel adresler: minos://cats ve minos://help", Color::ACCENT_BLUE);
+                fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, "Kediler ve MinOS!", Color::TEXT_MAIN);
+            }
         } else {
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, "Bu adres acilamadi.", Color::ACCENT_RED);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, "MinOS ag surucusu su anda yalnizca taslak.", Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, "Bu adres açılamadı.", Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, "Desteklenenler: minos://help, minos://cats, minos://net", Color::TEXT_MAIN);
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, "Yerel sayfa: minos://help", Color::TEXT_MUTED);
         }
         fb.draw_rect(win_x + 6, win_y + 256, win_w - 12, 18, Color::TASKBAR_BG);

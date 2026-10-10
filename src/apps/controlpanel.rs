@@ -72,11 +72,10 @@ impl ControlPanelApp {
             }
             _ => {
                 // Ağ & Bağlantı
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 75, "Ağ Arayüzü: eth0 (Realtek RTL8139 / VirtIO)", Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 95, "IP Adresi        : 192.168.1.100 (DHCP Aktif)", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 115, "Ağ Geçidi: 192.168.1.1", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 135, "DNS Sunucusu: 1.1.1.1 (Cloudflare)", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 155, "Bağlantı Hızı: 1000 Mbps, tam çift yönlü", Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 75, "Ağ: Sürücü başlatılmadı", Color::ACCENT_RED);
+                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 95, "Tarayıcı: Yerel sayfalar kullanılabilir", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 115, "Ağ yığını: DHCP / DNS / TCP yok", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 135, "İnternet erişimi kullanılamıyor", Color::ACCENT_RED);
                 MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 185, "Durum: Bağlı - internet erişimi hazır", Color::ACCENT_GREEN);
             }
         }

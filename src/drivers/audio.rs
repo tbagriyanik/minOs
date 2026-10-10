@@ -6,9 +6,9 @@ pub struct AudioDevice {
 }
 
 impl AudioDevice {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            is_hda: true,
+            is_hda: crate::drivers::hda::is_ready(),
             volume_left: 80,
             volume_right: 80,
             is_muted: false,

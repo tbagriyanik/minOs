@@ -669,6 +669,20 @@ impl MinGuiCompositor {
         (order, count)
     }
 
+    /// Verilen `(x, y)` noktasının açık ve küçültülmemiş herhangi bir pencere alanında olup olmadığını kontrol eder.
+    pub fn is_point_covered_by_window(&self, x: usize, y: usize) -> bool {
+        for slot in self.windows.iter() {
+            if let Some(w) = slot {
+                if w.is_open && !w.is_minimized {
+                    if in_rect(x, y, (w.x, w.y, w.width, w.height)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
     pub fn toggle_maximize(&mut self, idx: usize, screen_w: usize, screen_h: usize) {
         if let Some(ref mut win) = self.windows[idx] {
             if win.is_maximized {

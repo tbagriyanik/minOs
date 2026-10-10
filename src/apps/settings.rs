@@ -62,6 +62,7 @@ pub struct SystemSettings {
     pub is_muted: bool,
     pub mouse_speed: u8,
     pub screen_res: (usize, usize),
+    pub display_res: (usize, usize),
     pub night_light: bool,
 
     // Saklanan Pencere Konum ve Durumları (8 Pencere)
@@ -87,6 +88,7 @@ impl SystemSettings {
             is_muted: false,
             mouse_speed: 5,
             screen_res: (1280, 720),
+            display_res: (1280, 720),
             night_light: false,
             saved_window_states: [None; 11],
             dhcp_enabled: true,
@@ -222,6 +224,9 @@ impl SystemSettings {
         win_h: usize,
         kbd_layout: KeyboardLayout,
         now: &DateTime,
+        audio_driver: &'static str,
+        network_driver: &'static str,
+        network_status: &'static str,
     ) {
         // Sol Menü / Sekmeler
         fb.draw_rect(win_x + 6, win_y + 32, TAB_W + 8, win_h.saturating_sub(62), Color::TITLE_BAR_INACTIVE);
@@ -334,7 +339,10 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "VFS Surucusu: RamFS TarFS v1.0", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Donanim Hizlandirma: SSE2 Aktif", Color::ACCENT_PINK);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Önyükleme: Limine Stivale2", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, "Ses çıkışı: PC hoparlörü (PCM desteklenmiyor)", Color::ACCENT_BLUE);
+                let mut audio_status = TextBuf::new();
+                audio_status.push_str("Ses surucusu: ");
+                audio_status.push_str(audio_driver);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, audio_status.as_str(), Color::ACCENT_BLUE);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazir tema hazir", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 176,
                     if self.language.is_english() { "Target resolution:" } else { "Hedef cozunurluk:" }, Color::ACCENT_YELLOW);
@@ -343,8 +351,15 @@ impl SystemSettings {
                 MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Aç" }, Color::DARK_BG, false);
             }
             2 => {
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ağ: Henüz bir ağ sürücüsü başlatılmadı", Color::ACCENT_RED);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "İnternet tarayıcısı yerel sayfaları açabilir", Color::TEXT_MUTED);
+                let mut driver = TextBuf::new();
+                driver.push_str("Ag surucusu: ");
+                driver.push_str(network_driver);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, driver.as_str(), Color::ACCENT_BLUE);
+                let mut status = TextBuf::new();
+                status.push_str("Durum: ");
+                status.push_str(network_status);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, status.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Ag yigin: IPv4 / ARP / ICMP", Color::TEXT_MUTED);
             }
             _ => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);

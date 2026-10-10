@@ -253,6 +253,7 @@ pub extern "C" fn _start() -> ! {
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     let mut settings_app = apps::settings::SystemSettings::default();
+    settings_app.display_res = (width, height);
     settings_app.load_from_vfs(&fs_mgr.vfs);
     settings_app.font.apply();
     gui::theme::set_theme(settings_app.theme);
@@ -371,7 +372,10 @@ pub extern "C" fn _start() -> ! {
 
                 match idx {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
-                    1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now),
+                    1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now,
+                        if drivers::hda::is_ready() { "Intel HDA (PCM aktif)" } else { "Ses aygiti bulunamadi" },
+                        if drivers::e1000::is_ready() { "Intel e1000" } else { "Bulunamadi" },
+                        if drivers::e1000::is_ready() { "Hazir" } else { "Baslatilamadi / aygit yok" }),
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
                     3 => br.render_content(fb, win.x, win.y, win.width, win.height),
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
@@ -774,7 +778,7 @@ pub extern "C" fn _start() -> ! {
             }
 
             // G) Masaüstü simgeleri
-            if !consumed && mx >= 20 && mx <= 220 {
+            if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
                 let desk_icons = [0, 2, 3, 5, 1];
                 for (i, &app_idx) in desk_icons.iter().enumerate() {
                     let dy = 30 + i * 54;
@@ -958,7 +962,19 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                                 if settings_app.active_tab == 1 {
-                                    for i in 0..4 { if gui::in_rect(mx,my,apps::settings::SystemSettings::resolution_btn_rect(wx,wy,i)) { settings_app.screen_res=match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; settings_app.status_msg="Cozunurluk hedefi secildi."; } }
+                                    for i in 0..4 {
+                                        if gui::in_rect(mx,my,apps::settings::SystemSettings::resolution_btn_rect(wx,wy,i)) {
+                                            let requested = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), _ => (1920,1080) };
+                                            if requested == (fb.width, fb.height) {
+                                                settings_app.screen_res = requested;
+                                                settings_app.display_res = requested;
+                                                settings_app.status_msg = "Bu cozunurluk zaten etkin.";
+                                            } else {
+                                                settings_app.screen_res = (fb.width, fb.height);
+                                                settings_app.status_msg = "Cozunurluk acilista Limine tarafindan belirlenir.";
+                                            }
+                                        }
+                                    }
                                     if gui::in_rect(mx,my,apps::settings::SystemSettings::night_light_rect(wx,wy)) { settings_app.night_light=!settings_app.night_light; settings_app.status_msg=if settings_app.night_light { "Gece isigi acildi." } else { "Gece isigi kapatildi." }; }
                                 }
                             }

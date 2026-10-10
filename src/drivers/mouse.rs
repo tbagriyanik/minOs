@@ -4,6 +4,7 @@ pub struct MouseState {
     pub left_button: bool,
     pub right_button: bool,
     pub middle_button: bool,
+    pub scroll_delta: i8,
 }
 
 impl MouseState {
@@ -14,6 +15,7 @@ impl MouseState {
             left_button: false,
             right_button: false,
             middle_button: false,
+            scroll_delta: 0,
         }
     }
 
@@ -29,5 +31,11 @@ impl MouseState {
         if self.y < 0 { self.y = 0; }
         if self.x >= max_w { self.x = max_w - 1; }
         if self.y >= max_h { self.y = max_h - 1; }
+    }
+
+    pub fn take_scroll_delta(&mut self) -> i8 {
+        let val = self.scroll_delta;
+        self.scroll_delta = 0;
+        val
     }
 }

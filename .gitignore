@@ -1,5 +1,5 @@
 # Rust target directory
-target/
+target
 
 # Temporary and test ISOs
 *.tmp

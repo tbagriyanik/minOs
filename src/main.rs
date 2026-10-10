@@ -144,11 +144,12 @@ pub extern "C" fn _start() -> ! {
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     let controlpanel_app = apps::controlpanel::ControlPanelApp::new();
+    let mut settings_app = apps::settings::SystemSettings::default();
     let mut notepad_app = apps::notepad::NotepadApp::new();
-    let browser_app = apps::browser::BrowserApp::new();
-    let imageviewer_app = apps::imageviewer::ImageViewerApp::new();
-    let musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
-    let videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
+    let mut browser_app = apps::browser::BrowserApp::new();
+    let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
+    let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
+    let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
     let taskmgr_app = apps::taskmgr::TaskManagerApp::new();
 
     // 8 Uygulama Penceresini Kaydet
@@ -178,6 +179,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_mouse_y = mouse.y;
     let mut last_buttons = (mouse.left_button, mouse.right_button);
     let mut dragging_win: Option<usize> = None;
+    let mut resizing_win: Option<usize> = None;
     let mut drag_offset_x = 0;
     let mut drag_offset_y = 0;
     let mut anim_tick: usize = 0;
@@ -186,7 +188,8 @@ pub extern "C" fn _start() -> ! {
     let render_full_frame = |fb: &mut drivers::video::Framebuffer,
                              compositor: &gui::MinGuiCompositor,
                              fm: &apps::filemanager::FileManagerApp,
-                             cp: &apps::controlpanel::ControlPanelApp,
+                             _cp: &apps::controlpanel::ControlPanelApp,
+                             st: &apps::settings::SystemSettings,
                              np: &apps::notepad::NotepadApp,
                              br: &apps::browser::BrowserApp,
                              iv: &apps::imageviewer::ImageViewerApp,
@@ -210,7 +213,7 @@ pub extern "C" fn _start() -> ! {
                 // Uygulama Özel İçerik Render
                 match idx {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height),
-                    1 => cp.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout),
+                    1 => st.render_content(fb, win.x, win.y),
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick),
                     3 => br.render_content(fb, win.x, win.y, win.width, win.height),
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
@@ -231,7 +234,7 @@ pub extern "C" fn _start() -> ! {
 
     // İlk kareyi çiz
     render_full_frame(
-        &mut fb, &compositor, &filemanager_app, &controlpanel_app,
+        &mut fb, &compositor, &filemanager_app, &controlpanel_app, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
         &videoplayer_app, &taskmgr_app, &mouse, &keyboard, anim_tick,
     );
@@ -340,6 +343,17 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 compositor.is_context_menu_open = false;
+// Scroll handling for Notepad
+let scroll = mouse.take_scroll_delta();
+if scroll != 0 {
+    if let Some(ref mut win) = compositor.windows[2] {
+        if win.is_open && !win.is_minimized {
+            let max_offset = if notepad_app.len > 0 { (notepad_app.len / 16) } else { 0 };
+            let new_offset = (notepad_app.scroll_offset as i32 + scroll as i32).max(0).min(max_offset as i32) as usize;
+            notepad_app.scroll_offset = new_offset;
+        }
+    }
+}
             }
             // A) Başlat Butonuna Tıklama (x: 6..96, y: tb_y + 4..tb_y + 32)
             else if mx >= 6 && mx <= 96 && my >= tb_y + 4 && my <= tb_y + 32 {
@@ -459,6 +473,16 @@ pub extern "C" fn _start() -> ! {
                         break;
                     }
 
+                    // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) Algılama
+                    if mx >= win_x + win_w - 18 && mx <= win_x + win_w && my >= win_y + win_h - 18 && my <= win_y + win_h {
+                        resizing_win = Some(idx);
+                        if let Some(ref mut win) = compositor.windows[idx] {
+                            win.is_focused = true;
+                        }
+                        hit_window = true;
+                        break;
+                    }
+
                     // Başlık Çubuğunu Tutma (Sürükleme)
                     if mx >= win_x && mx <= win_x + win_w - 40 && my >= win_y && my <= win_y + 24 {
                         dragging_win = Some(idx);
@@ -471,29 +495,27 @@ pub extern "C" fn _start() -> ! {
                         break;
                     }
 
-                    // Dosya Yöneticisinde Çift Tıklayarak veya Seçerek İlişkili Programda Açma
-                    if idx == 0 && mx >= win_x + 124 && mx <= win_x + win_w - 10 && my >= win_y + 84 && my <= win_y + 250 {
-                        let list_x = win_x + 124;
-                        let row_y_base = win_y + 86;
-                        for i in 0..filemanager_app.files.len() {
-                            let item_y = row_y_base + i * 24;
-                            if my >= item_y.saturating_sub(2) && my <= item_y + 20 {
-                                filemanager_app.selected_idx = i;
-                                let selected_file = &filemanager_app.files[i];
-
+                    // --- PENCERE İÇİ İNTERAKTİF DÜĞME VE EYLEM HANDLER'LARI ---
+                    match idx {
+                        0 => {
+                            // Dosya Yöneticisi: Çift Tıklama / Aç Butonu / Yenile Butonu
+                            if mx >= win_x + win_w - 120 && mx <= win_x + win_w - 70 && my >= win_y + 32 && my <= win_y + 54 {
+                                // [Yenile]
+                                filemanager_app.selected_idx = 0;
+                                hit_window = true;
+                            } else if mx >= win_x + win_w - 62 && mx <= win_x + win_w - 12 && my >= win_y + 32 && my <= win_y + 54 {
+                                // [Aç]
+                                let selected_file = &filemanager_app.files[filemanager_app.selected_idx];
                                 let target_app_idx = match selected_file.icon_tag {
-                                    "[TXT]" | "[LOG]" | "[CFG]" => 2, // Not Defteri
-                                    "[IMG]" => 4, // Resim Gösterici
-                                    "[SND]" => 5, // Müzik Çalar
-                                    "[VID]" => 6, // Video Oynatıcı
-                                    "[WEB]" => 3, // Web Tarayıcı
+                                    "[TXT]" | "[LOG]" | "[CFG]" => 2,
+                                    "[IMG]" => 4,
+                                    "[SND]" => 5,
+                                    "[VID]" => 6,
+                                    "[WEB]" => 3,
                                     _ => 2,
                                 };
-
                                 for j in 0..8 {
-                                    if let Some(ref mut w) = compositor.windows[j] {
-                                        w.is_focused = j == target_app_idx;
-                                    }
+                                    if let Some(ref mut w) = compositor.windows[j] { w.is_focused = j == target_app_idx; }
                                 }
                                 if let Some(ref mut target_win) = compositor.windows[target_app_idx] {
                                     target_win.is_open = true;
@@ -501,9 +523,121 @@ pub extern "C" fn _start() -> ! {
                                     target_win.is_focused = true;
                                 }
                                 hit_window = true;
-                                break;
+                            } else if mx >= win_x + 124 && mx <= win_x + win_w - 10 && my >= win_y + 84 && my <= win_y + 250 {
+                                let row_y_base = win_y + 86;
+                                for i in 0..filemanager_app.files.len() {
+                                    let item_y = row_y_base + i * 24;
+                                    if my >= item_y.saturating_sub(2) && my <= item_y + 20 {
+                                        filemanager_app.selected_idx = i;
+                                        let selected_file = &filemanager_app.files[i];
+                                        let target_app_idx = match selected_file.icon_tag {
+                                            "[TXT]" | "[LOG]" | "[CFG]" => 2,
+                                            "[IMG]" => 4,
+                                            "[SND]" => 5,
+                                            "[VID]" => 6,
+                                            "[WEB]" => 3,
+                                            _ => 2,
+                                        };
+                                        for j in 0..8 {
+                                            if let Some(ref mut w) = compositor.windows[j] { w.is_focused = j == target_app_idx; }
+                                        }
+                                        if let Some(ref mut target_win) = compositor.windows[target_app_idx] {
+                                            target_win.is_open = true;
+                                            target_win.is_minimized = false;
+                                            target_win.is_focused = true;
+                                        }
+                                        hit_window = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
+                        1 => {
+                            // Ayarlar Penceresi: Sekmeler, Kaydet ve Sıfırla Düğmeleri
+                            if mx >= win_x + 10 && mx <= win_x + 100 {
+                                if my >= win_y + 40 && my <= win_y + 60 { settings_app.active_tab = 0; hit_window = true; }
+                                else if my >= win_y + 65 && my <= win_y + 85 { settings_app.active_tab = 1; hit_window = true; }
+                                else if my >= win_y + 90 && my <= win_y + 110 { settings_app.active_tab = 2; hit_window = true; }
+                                else if my >= win_y + 115 && my <= win_y + 135 { settings_app.active_tab = 3; hit_window = true; }
+                            }
+
+                            // Kaydet Butonu (Tüm pencere boyutları, konumları ve açık/kapalı durumları saklanır)
+                            if mx >= win_x + 115 && mx <= win_x + 205 && my >= win_y + 160 && my <= win_y + 182 {
+                                settings_app.save_all(&compositor);
+                                hit_window = true;
+                            }
+                            // Sıfırla Butonu
+                            else if mx >= win_x + 215 && mx <= win_x + 310 && my >= win_y + 160 && my <= win_y + 182 {
+                                settings_app.reset_defaults();
+                                hit_window = true;
+                            }
+                        }
+                        2 => {
+                            // Not Defteri: Temizle ve Kaydet Butonları
+                            if mx >= win_x + win_w - 130 && mx <= win_x + win_w - 74 && my >= win_y + 32 && my <= win_y + 52 {
+                                notepad_app.clear();
+                                hit_window = true;
+                            } else if mx >= win_x + win_w - 68 && mx <= win_x + win_w - 12 && my >= win_y + 32 && my <= win_y + 52 {
+                                // Notu Kaydet (Simüle)
+                                notepad_app.insert_char(' ');
+                                hit_window = true;
+                            }
+                        }
+                        3 => {
+                            // Web Tarayıcı: Sekmeler ve Gezinti Butonları
+                            if my >= win_y + 30 && my <= win_y + 50 {
+                                if mx >= win_x + 8 && mx <= win_x + 168 { browser_app.active_tab = 0; hit_window = true; }
+                                else if mx >= win_x + 172 && mx <= win_x + 272 { browser_app.active_tab = 1; hit_window = true; }
+                            }
+                            if my >= win_y + 56 && my <= win_y + 76 {
+                                if mx >= win_x + 12 && mx <= win_x + 34 { browser_app.current_url = "https://minos.internal/home"; hit_window = true; }
+                                else if mx >= win_x + 64 && mx <= win_x + 86 { hit_window = true; } // Yenile
+                                else if mx >= win_x + win_w - 60 && mx <= win_x + win_w - 10 { browser_app.current_url = "https://github.com/tbagriyanik/minos"; hit_window = true; }
+                            }
+                        }
+                        4 => {
+                            // Resim Gösterici: Yakınlaştır / Uzaklaştır / Oran Düğmeleri
+                            if my >= win_y + 32 && my <= win_y + 52 {
+                                if mx >= win_x + win_w - 180 && mx <= win_x + win_w - 130 {
+                                    imageviewer_app.zoom_level = (imageviewer_app.zoom_level + 1).min(8);
+                                    hit_window = true;
+                                } else if mx >= win_x + win_w - 124 && mx <= win_x + win_w - 74 {
+                                    imageviewer_app.zoom_level = (imageviewer_app.zoom_level.saturating_sub(1)).max(1);
+                                    hit_window = true;
+                                }
+                            }
+                        }
+                        5 => {
+                            // Müzik Çalar: Oynat / Duraklat ve Parça Değiştirme
+                            let ctrl_y = win_y + 180;
+                            if my >= ctrl_y && my <= ctrl_y + 24 {
+                                if mx >= win_x + 10 && mx <= win_x + 46 {
+                                    musicplayer_app.current_track = musicplayer_app.current_track.saturating_sub(1);
+                                    hit_window = true;
+                                } else if mx >= win_x + 52 && mx <= win_x + 98 {
+                                    musicplayer_app.is_playing = !musicplayer_app.is_playing;
+                                    hit_window = true;
+                                } else if mx >= win_x + 104 && mx <= win_x + 140 {
+                                    musicplayer_app.current_track = (musicplayer_app.current_track + 1) % 5;
+                                    hit_window = true;
+                                }
+                            }
+                        }
+                        6 => {
+                            // Video Oynatıcı: Oynat / Duraklat / Durdur
+                            let ctrl_y = win_y + 178;
+                            if my >= ctrl_y && my <= ctrl_y + 24 {
+                                if mx >= win_x + 12 && mx <= win_x + 54 {
+                                    videoplayer_app.is_playing = !videoplayer_app.is_playing;
+                                    hit_window = true;
+                                } else if mx >= win_x + 58 && mx <= win_x + 98 {
+                                    videoplayer_app.is_playing = false;
+                                    videoplayer_app.frame = 0;
+                                    hit_window = true;
+                                }
+                            }
+                        }
+                        _ => {}
                     }
 
                     // Pencere Gövdesine Tıklayarak Odaklama
@@ -618,22 +752,67 @@ pub extern "C" fn _start() -> ! {
                         core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                         core::arch::asm!("cli; hlt");
                     }
+                },
+                // Clipboard and edit actions (placeholders)
+                drivers::keyboard::KeyAction::CopyText => { /* TODO: copy selected text to clipboard */ },
+                drivers::keyboard::KeyAction::PasteText => { /* TODO: paste clipboard text */ },
+                drivers::keyboard::KeyAction::CutText => { /* TODO: cut selected text */ },
+                drivers::keyboard::KeyAction::SelectAllText => { /* TODO: select all text */ },
+                drivers::keyboard::KeyAction::Delete => { /* TODO: delete selected text or character */ },
+                drivers::keyboard::KeyAction::Refresh => { /* TODO: refresh UI or buffer */ }
+            }
+        }
+
+        // Fare Scroll (Tekerlek) Girişi ile Listelerde Gezinti
+        let scroll_val = mouse.take_scroll_delta();
+        if scroll_val != 0 {
+            if let Some(ref win) = compositor.windows[0] {
+                if win.is_open && win.is_focused && !win.is_minimized {
+                    if scroll_val > 0 {
+                        if filemanager_app.selected_idx > 0 {
+                            filemanager_app.selected_idx -= 1;
+                        }
+                    } else {
+                        if filemanager_app.selected_idx + 1 < filemanager_app.files.len() {
+                            filemanager_app.selected_idx += 1;
+                        }
+                    }
                 }
             }
         }
 
-        // 3. Pencere Sürükleme (Drag & Drop)
+        // 3. Pencere Sürükleme ve Yeniden Boyutlandırma (Drag & Resize)
         if mouse.left_button {
             if let Some(idx) = dragging_win {
                 if let Some(ref mut win) = compositor.windows[idx] {
                     win.x = mx.saturating_sub(drag_offset_x).min(width.saturating_sub(win.width));
                     win.y = my.saturating_sub(drag_offset_y).min(height.saturating_sub(win.height));
                 }
+            } else if let Some(idx) = resizing_win {
+                if let Some(ref mut win) = compositor.windows[idx] {
+                    let new_w = mx.saturating_sub(win.x).max(win.min_width);
+                    let new_h = my.saturating_sub(win.y).max(win.min_height);
+                    win.width = new_w.min(width.saturating_sub(win.x));
+                    win.height = new_h.min(height.saturating_sub(win.y));
+                }
             }
         }
 
         if mouse_released {
             dragging_win = None;
+            resizing_win = None;
+        }
+
+        // Alt Tuşu Bırakıldığında Alt+Tab Penceresini Otomatik Kapat ve Seçilen Pencereyi Öne Getir
+        if !keyboard.alt && compositor.is_alt_tab_open {
+            compositor.is_alt_tab_open = false;
+            for opt_win in compositor.windows.iter_mut() {
+                if let Some(ref mut win) = opt_win {
+                    if win.is_open && win.is_focused {
+                        win.is_minimized = false;
+                    }
+                }
+            }
         }
 
         // 4. Klavye Girişlerinin İlgili Uygulamaya Gönderimi
@@ -682,7 +861,7 @@ pub extern "C" fn _start() -> ! {
             last_buttons = (mouse.left_button, mouse.right_button);
 
             render_full_frame(
-                &mut fb, &compositor, &filemanager_app, &controlpanel_app,
+                &mut fb, &compositor, &filemanager_app, &controlpanel_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &mouse, &keyboard, anim_tick,
             );

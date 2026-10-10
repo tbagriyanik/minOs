@@ -1,16 +1,17 @@
-# MinOS Derle ve QEMU ile Çalıştır (PowerShell)
-$OutputEncoding = [System.Text.Encoding]::UTF8
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
 param(
-    [switch]$BuildOnly = $false,
-    [switch]$Debug = $false
+    [switch]$BuildOnly,
+    [switch]$Debug
 )
+
+# MinOS Derle ve QEMU ile Çalistir (PowerShell)
+chcp 65001 | Out-Null
+$PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; $PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8';
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host "       MinOS Derleyici & Başlatıcı       " -ForegroundColor Cyan
+Write-Host "       MinOS Derleyici & Baslatici       " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 # 1. QEMU Yolunu Bul
@@ -32,13 +33,13 @@ foreach ($path in $qemuCandidates) {
 }
 
 if (-not $qemuExe) {
-    Write-Host "[HATA] QEMU bulunamadı! Lütfen QEMU'nun kurulu olduğundan emin olun." -ForegroundColor Red
+    Write-Host "[HATA] QEMU bulunamadi! Lütfen QEMU'nun kurulu olduğundan emin olun." -ForegroundColor Red
     exit 1
 }
 
 Write-Host "[1/3] QEMU Tespit Edildi: $qemuExe" -ForegroundColor Green
 
-# 2. Kernel'ı Derle
+# 2. Kernel'i Derle
 Write-Host "[2/3] MinOS Çekirdeği Derleniyor (cargo build)..." -ForegroundColor Yellow
 $cargoArgs = @("build", "-Zjson-target-spec", "--target", "x86_64-minos.json", "-Zbuild-std=core,alloc", "-Zbuild-std-features=compiler-builtins-mem")
 if (-not $Debug) {
@@ -48,28 +49,28 @@ if (-not $Debug) {
 try {
     & cargo $cargoArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "[HATA] Derleme başarısız oldu." -ForegroundColor Red
+        Write-Host "[HATA] Derleme basarisiz oldu." -ForegroundColor Red
         exit $LASTEXITCODE
     }
 } catch {
-    Write-Host "Derleme sırasında standart kütüphane derleme bayrakları denetleniyor..." -ForegroundColor Yellow
+    Write-Host "Derleme sirasinda standart kütüphane derleme bayraklari denetleniyor..." -ForegroundColor Yellow
     & cargo build -Zjson-target-spec --target x86_64-minos.json --release
 }
 
 $kernelBin = if ($Debug) { "target\x86_64-minos\debug\minos-kernel" } else { "target\x86_64-minos\release\minos-kernel" }
 
 if (-not (Test-Path $kernelBin)) {
-    # Alternatif hedef dosya adı kontrolü
+    # Alternatif hedef dosya adi kontrolü
     $kernelBin = if ($Debug) { "target\x86_64-minos\debug\minos" } else { "target\x86_64-minos\release\minos" }
 }
 
 if ($BuildOnly) {
-    Write-Host "[BAŞARILI] Derleme tamamlandı: $kernelBin" -ForegroundColor Green
+    Write-Host "[BASARILI] Derleme tamamlandi: $kernelBin" -ForegroundColor Green
     exit 0
 }
 
-# 3. QEMU İle Başlat
-Write-Host "[3/3] QEMU Başlatılıyor..." -ForegroundColor Yellow
+# 3. QEMU İle Baslat
+Write-Host "[3/3] QEMU Baslatiliyor..." -ForegroundColor Yellow
 Write-Host "=========================================" -ForegroundColor Cyan
 
 $qemuArgs = @(
@@ -90,7 +91,7 @@ if (Test-Path "minos.iso") {
 } elseif (Test-Path $kernelBin) {
     $qemuArgs += @("-kernel", $kernelBin)
 } else {
-    Write-Host "[HATA] Çalıştırılacak kernel ikilisi veya minos.iso bulunamadı!" -ForegroundColor Red
+    Write-Host "[HATA] Calistirilacak kernel ikilisi veya minos.iso bulunamadi!" -ForegroundColor Red
     exit 1
 }
 

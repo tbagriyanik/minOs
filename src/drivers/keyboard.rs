@@ -9,6 +9,12 @@ pub enum KeyAction {
     ArrowLeft,
     ArrowRight,
     ShutdownOS,
+    CopyText,
+    PasteText,
+    CutText,
+    SelectAllText,
+    Delete,
+    Refresh,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]

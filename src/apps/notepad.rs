@@ -5,6 +5,75 @@ pub struct NotepadApp {
     pub buffer: [char; 512],
     pub len: usize,
     pub cursor: usize,
+    // Selection range (inclusive start, exclusive end)
+    pub selection_start: Option<usize>,
+    pub selection_end: Option<usize>,
+    // Show right‑click context menu
+    pub show_context_menu: bool,
+    // Scroll offset for content rendering
+    pub scroll_offset: usize,
+    // For double‑click detection
+    pub last_click_tick: usize,
+    pub last_click_pos: (usize, usize),
+}
+
+// Simple clipboard for copy / paste (static mutable, unsafe)
+static mut CLIPBOARD: [char; 512] = [' '; 512];
+static mut CLIPBOARD_LEN: usize = 0;
+
+impl NotepadApp {
+    // Copy selected text to the clipboard
+    pub fn copy_selection(&self) {
+        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+            let range = start.min(end)..start.max(end);
+            let len = (range.end - range.start).min(512);
+            unsafe {
+                for (i, &c) in self.buffer[range.clone()].iter().take(len).enumerate() {
+                    CLIPBOARD[i] = c;
+                }
+                CLIPBOARD_LEN = len;
+            }
+        }
+    }
+
+    // Cut selected text (copy then delete)
+    pub fn cut_selection(&mut self) {
+        self.copy_selection();
+        self.delete_selection();
+    }
+
+    // Paste clipboard content at cursor
+    pub fn paste_clipboard(&mut self) {
+        unsafe {
+            for i in 0..CLIPBOARD_LEN {
+                if self.len >= 512 { break; }
+                self.buffer[self.len] = CLIPBOARD[i];
+                self.len += 1;
+                self.cursor = self.len;
+            }
+        }
+    }
+
+    // Delete selected text
+    pub fn delete_selection(&mut self) {
+        if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
+            let (s, e) = (start.min(end), start.max(end));
+            let del_len = e - s;
+            if del_len == 0 { return; }
+            // Shift remaining characters left
+            for i in s..self.len - del_len {
+                self.buffer[i] = self.buffer[i + del_len];
+            }
+            // Clear tail
+            for i in (self.len - del_len)..self.len {
+                self.buffer[i] = ' ';
+            }
+            self.len -= del_len;
+            self.cursor = s.min(self.len);
+            self.selection_start = None;
+            self.selection_end = None;
+        }
+    }
 }
 
 impl NotepadApp {
@@ -13,6 +82,12 @@ impl NotepadApp {
             buffer: [' '; 512],
             len: 0,
             cursor: 0,
+            selection_start: None,
+            selection_end: None,
+            show_context_menu: false,
+            scroll_offset: 0,
+            last_click_tick: 0,
+            last_click_pos: (0, 0),
         };
         
         let initial_text = "MinOS Not Defteri v1.0 (Sarman Edition)\n---------------------------------------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
@@ -64,6 +139,15 @@ impl NotepadApp {
         MinGuiCompositor::draw_string(fb, win_x + win_w - 124, win_y + 36, "Temizle", Color::ACCENT_RED);
         fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "Kaydet", Color::DARK_BG);
+        // Context menu (right‑click) placeholder
+        if self.show_context_menu {
+            // Simple box
+            fb.draw_rect(win_x + 100, win_y + 100, 80, 60, Color::TITLE_BAR);
+            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 112, "Kopyala", Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 132, "Kes", Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, win_x + 108, win_y + 152, "Sil", Color::TEXT_MAIN);
+        }
+
 
         // Metin Editör Alanı (Beyazımsı / Koyu Arka Plan)
         let text_bg = 0x11111B;
@@ -87,7 +171,7 @@ impl NotepadApp {
 
         // Metin İçeriği ve İmleç
         let mut cur_x = area_x + 36;
-        let mut cur_y = area_y + 8;
+        let mut cur_y = area_y + 8 + self.scroll_offset * 16;
 
         for i in 0..self.len {
             let ch = self.buffer[i];
@@ -103,7 +187,7 @@ impl NotepadApp {
             let mut char_buf = [0u8; 4];
             let s = ch.encode_utf8(&mut char_buf);
             MinGuiCompositor::draw_string(fb, cur_x, cur_y, s, Color::TEXT_MAIN);
-            cur_x += 8;
+            cur_x += 7;
 
             if cur_x + 16 > area_x + area_w {
                 cur_y += 16;

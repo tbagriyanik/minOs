@@ -1,4 +1,4 @@
-# MinOS Boot Edilebilir ISO Oluşturma Betiği (PowerShell)
+# MinOS Boot Edilebilir ISO Olusturma Betiği (PowerShell)
 param(
     [string]$IsoName = "minos.iso",
     [string]$OutputDir = "target\iso_root"
@@ -10,11 +10,11 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host "       MinOS ISO Oluşturucu             " -ForegroundColor Cyan
+Write-Host "       MinOS ISO Olusturucu             " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
-# 1. ISO Kök Dizinini Hazırla
-Write-Host "[1/4] ISO Dizin Yapısı Hazırlanıyor..." -ForegroundColor Yellow
+# 1. ISO Kök Dizinini Hazirla
+Write-Host "[1/4] ISO Dizin Yapisi Hazirlaniyor..." -ForegroundColor Yellow
 if (Test-Path $OutputDir) {
     try {
         Remove-Item -Recurse -Force $OutputDir -ErrorAction SilentlyContinue
@@ -23,8 +23,8 @@ if (Test-Path $OutputDir) {
 New-Item -ItemType Directory -Force -Path "$OutputDir\boot\limine" | Out-Null
 New-Item -ItemType Directory -Force -Path "$OutputDir\EFI\BOOT" | Out-Null
 
-# 2. Bootloader ve Konfigürasyon Dosyalarını Kopyala
-Write-Host "[2/4] Limine Önyükleyici Dosyaları Yerleştiriliyor..." -ForegroundColor Yellow
+# 2. Bootloader ve Konfigürasyon Dosyalarini Kopyala
+Write-Host "[2/4] Limine Onyukleyici Dosyalari Yerlestiriliyor..." -ForegroundColor Yellow
 if (Test-Path "boot\limine.cfg") {
     Copy-Item -Force "boot\limine.cfg" -Destination "$OutputDir\boot\limine\limine.cfg"
     Copy-Item -Force "boot\limine.cfg" -Destination "$OutputDir\limine.cfg"
@@ -49,15 +49,15 @@ if (Test-Path "boot\EFI\BOOT\BOOTX64.EFI") {
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala
-Write-Host "[3/4] MinOS Çekirdeği Paketleniyor..." -ForegroundColor Yellow
+Write-Host "[3/4] MinOS Cekirdegi Paketleniyor..." -ForegroundColor Yellow
 if (Test-Path "target\x86_64-minos\release\minos-kernel") {
     Copy-Item "target\x86_64-minos\release\minos-kernel" -Destination "$OutputDir\boot\minos-kernel"
 } else {
-    Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy çekirdek dosyası yerleştiriliyor." -ForegroundColor Magenta
+    Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy çekirdek dosyasi yerlestiriliyor." -ForegroundColor Magenta
     Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "MinOS Kernel Binary"
 }
 
-# Limine Boot Information Table Yamalayıcı (C#)
+# Limine Boot Information Table Yamalayici (C#)
 $patcherCode = @"
 using System;
 using System.IO;
@@ -110,7 +110,7 @@ if (-not ([System.Management.Automation.PSTypeName]'LimineIsoPatcher').Type) {
 }
 
 # 4. ISO Üretimi Komutu (xorriso / oscdimg / mkisofs / Native IMAPI2FS)
-Write-Host "[4/4] ISO İmajı Üretiliyor..." -ForegroundColor Yellow
+Write-Host "[4/4] ISO Imaji Uretiliyor..." -ForegroundColor Yellow
 $oscdimg = Get-Command "oscdimg.exe" -ErrorAction SilentlyContinue
 $xorriso = Get-Command "xorriso.exe" -ErrorAction SilentlyContinue
 $mkisofs = Get-Command "mkisofs.exe" -ErrorAction SilentlyContinue
@@ -131,7 +131,7 @@ if ($oscdimg) {
     if (Test-Path $bootBin) {
         $patched = [LimineIsoPatcher]::Patch((Resolve-Path $tempIso).Path, (Resolve-Path $bootBin).Path)
         if ($patched) {
-            Write-Host "[BİLGİ] Limine El Torito Boot Information Table başarıyla yamalandı." -ForegroundColor Cyan
+            Write-Host "[BILGI] Limine El Torito Boot Information Table basariyla yamalandi." -ForegroundColor Cyan
         }
     }
     try {
@@ -147,7 +147,7 @@ if ($oscdimg) {
     Copy-Item -Force $IsoName "target\release\minos.iso"
     Copy-Item -Force $IsoName "target\x86_64-minos\release\minos.iso"
 
-    Write-Host "[BAŞARILI] $IsoName oscdimg & Limine ile boot edilebilir oluşturuldu!" -ForegroundColor Green
+    Write-Host "[BASARILI] $IsoName oscdimg & Limine ile boot edilebilir olusturuldu!" -ForegroundColor Green
 } elseif ($xorriso) {
     if (Test-Path "$OutputDir\EFI\BOOT\BOOTX64.EFI") {
         & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot EFI/BOOT/BOOTX64.EFI -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
@@ -159,15 +159,15 @@ if ($oscdimg) {
         & "tools\limine.exe" bios-install $IsoName
     }
 
-    Write-Host "[BAŞARILI] $IsoName xorriso & Limine ile boot edilebilir oluşturuldu!" -ForegroundColor Green
+    Write-Host "[BASARILI] $IsoName xorriso & Limine ile boot edilebilir olusturuldu!" -ForegroundColor Green
 } elseif ($mkisofs) {
     & $mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
     if (Test-Path "tools\limine.exe") {
         & "tools\limine.exe" bios-install $IsoName
     }
-    Write-Host "[BAŞARILI] $IsoName mkisofs ile oluşturuldu!" -ForegroundColor Green
+    Write-Host "[BASARILI] $IsoName mkisofs ile olusturuldu!" -ForegroundColor Green
 } else {
-    Write-Host "Bilgi: xorriso/oscdimg bulunamadı. Yerel Windows IMAPI2FS bileşeni kullanılıyor..." -ForegroundColor Cyan
+    Write-Host "Bilgi: xorriso/oscdimg bulunamadi. Yerel Windows IMAPI2FS bileseni kullaniliyor..." -ForegroundColor Cyan
     try {
         $absSource = (Get-Item $OutputDir).FullName
         $absIso = [System.IO.Path]::GetFullPath($IsoName)
@@ -218,14 +218,14 @@ public class MinOsIsoWriter {
         $stream = $result.ImageStream
 
         [MinOsIsoWriter]::SaveIStream($stream, $absIso)
-        Write-Host "[BAŞARILI] $IsoName Windows IMAPI2FS ile otomatik oluşturuldu!" -ForegroundColor Green
+        Write-Host "[BASARILI] $IsoName Windows IMAPI2FS ile otomatik olusturuldu!" -ForegroundColor Green
     } catch {
-        Write-Host "UYARI: ISO otomatik üretilemedi. ISO dizini '$OutputDir' içinde hazırlandı." -ForegroundColor Magenta
+        Write-Host "UYARI: ISO otomatik uretilemedi. ISO dizini '$OutputDir' icinde hazirlandi." -ForegroundColor Magenta
         Write-Host "Hata: $_" -ForegroundColor Red
     }
 }
 
-Write-Host "`nİşlem Tamamlandı!" -ForegroundColor Green
-Write-Host "ISO Dosyası: $(Resolve-Path $IsoName)" -ForegroundColor Green
-Write-Host "ISO Kök Dizini: $(Resolve-Path $OutputDir)" -ForegroundColor Gray
+Write-Host "`nIslem Tamamlandi!" -ForegroundColor Green
+Write-Host "ISO Dosyasi: $(Resolve-Path $IsoName)" -ForegroundColor Green
+Write-Host "ISO Kok Dizini: $(Resolve-Path $OutputDir)" -ForegroundColor Gray
 

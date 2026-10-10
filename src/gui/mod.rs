@@ -23,6 +23,16 @@ impl Color {
     pub const WINDOW_BG: u32 = 0x1E1E2E;
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct WindowState {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+    pub is_open: bool,
+}
+
+#[derive(Copy, Clone, Debug)]
 pub struct Window {
     pub title: &'static str,
     pub tab_title: &'static str,
@@ -30,6 +40,8 @@ pub struct Window {
     pub y: usize,
     pub width: usize,
     pub height: usize,
+    pub min_width: usize,
+    pub min_height: usize,
     pub is_focused: bool,
     pub is_minimized: bool,
     pub is_open: bool,
@@ -44,10 +56,30 @@ impl Window {
             y,
             width,
             height,
+            min_width: 200,
+            min_height: 120,
             is_focused: false,
             is_minimized: false,
             is_open,
         }
+    }
+
+    pub fn get_state(&self) -> WindowState {
+        WindowState {
+            x: self.x,
+            y: self.y,
+            width: self.width,
+            height: self.height,
+            is_open: self.is_open,
+        }
+    }
+
+    pub fn apply_state(&mut self, state: WindowState) {
+        self.x = state.x;
+        self.y = state.y;
+        self.width = state.width;
+        self.height = state.height;
+        self.is_open = state.is_open;
     }
 }
 
@@ -87,6 +119,10 @@ impl MinGuiCompositor {
     }
 
     pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
+        Self::draw_string_narrow(fb, x, y, text, color, 7);
+    }
+
+    pub fn draw_string_narrow(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, spacing: usize) {
         let mut cur_x = x;
         for c in text.chars() {
             if let Some(tr_glyph) = font::get_turkish_glyph(c) {
@@ -110,7 +146,7 @@ impl MinGuiCompositor {
                     }
                 }
             }
-            cur_x += 8;
+            cur_x += spacing;
         }
     }
 
@@ -199,6 +235,13 @@ impl MinGuiCompositor {
 
         fb.draw_rect(win.x + win.width - 38, win.y + 5, 14, 14, Color::ACCENT_YELLOW);
         Self::draw_string(fb, win.x + win.width - 34, win.y + 8, "-", Color::DARK_BG);
+
+        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) İkonu
+        let grip_x = win.x + win.width - 12;
+        let grip_y = win.y + win.height - 12;
+        let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
+        fb.draw_rect(grip_x + 6, grip_y + 2, 4, 4, grip_color);
+        fb.draw_rect(grip_x + 2, grip_y + 6, 8, 4, grip_color);
     }
 
     /// 3. Görev Çubuğu, Başlat Menüsü ve Donanım Fare İmleci
@@ -272,8 +315,8 @@ impl MinGuiCompositor {
     }
 
     pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {
-        let box_w = 420;
-        let box_h = 100;
+        let box_w = 460;
+        let box_h = 160;
         let box_x = (fb.width - box_w) / 2;
         let box_y = (fb.height - box_h) / 2;
 
@@ -283,24 +326,34 @@ impl MinGuiCompositor {
         Self::draw_string(fb, box_x + 12, box_y + 8, "Uygulama Geçişi (Alt + Tab)", Color::TEXT_MAIN);
 
         let mut app_count = 0;
-        for (i, opt_win) in self.windows.iter().enumerate() {
+        let mut active_app_title = "Pencere Seçilmedi";
+
+        for (_i, opt_win) in self.windows.iter().enumerate() {
             if let Some(win) = opt_win {
                 if win.is_open {
-                    let card_x = box_x + 12 + app_count * 48;
+                    let card_x = box_x + 12 + app_count * 54;
                     let card_y = box_y + 36;
-                    let card_bg = if win.is_focused { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-                    fb.draw_rect(card_x, card_y, 42, 50, card_bg);
-                    Self::draw_cat_icon(fb, card_x + 13, card_y + 8);
-                    let num_str = match i {
-                        0 => "1", 1 => "2", 2 => "3", 3 => "4",
-                        4 => "5", 5 => "6", 6 => "7", _ => "8",
-                    };
-                    let num_col = if win.is_focused { Color::DARK_BG } else { Color::TEXT_MAIN };
-                    Self::draw_string(fb, card_x + 18, card_y + 32, num_str, num_col);
+                    let is_sel = win.is_focused;
+                    let card_bg = if is_sel { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                    
+                    if is_sel {
+                        active_app_title = win.title;
+                    }
+
+                    fb.draw_rect(card_x, card_y, 48, 54, card_bg);
+                    Self::draw_cat_icon(fb, card_x + 16, card_y + 10);
+                    let tab_col = if is_sel { Color::DARK_BG } else { Color::TEXT_MAIN };
+                    Self::draw_string(fb, card_x + 6, card_y + 34, win.tab_title, tab_col);
                     app_count += 1;
                 }
             }
         }
+
+        // Seçili Programın Tam İsmi ve Kısayol İpucu
+        fb.draw_rect(box_x + 12, box_y + 104, box_w - 24, 42, Color::TITLE_BAR_INACTIVE);
+        Self::draw_string(fb, box_x + 20, box_y + 112, "Aktif Pencere:", Color::TEXT_MUTED);
+        Self::draw_string(fb, box_x + 130, box_y + 112, active_app_title, Color::ACCENT_GREEN);
+        Self::draw_string(fb, box_x + 20, box_y + 130, "Alt tuşunu bıraktığınızda pencere otomatik açılır.", Color::TEXT_MUTED);
     }
 
     pub fn render_context_menu(&self, fb: &mut Framebuffer) {

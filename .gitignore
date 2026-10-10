@@ -1,0 +1,17 @@
+# Rust target directory
+target/
+
+# Temporary and test ISOs
+*.tmp
+minos_boot.iso
+
+# Temporary test scripts and logs
+convert*.ps1
+inspect*.ps1
+*.log
+
+# Screen captures and PPM files (Keep docs/screenshots)
+*.ppm
+fresh_screen.png
+screenshot.png
+startmenu.png

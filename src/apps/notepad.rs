@@ -195,10 +195,10 @@ impl NotepadApp {
     ) {
         // Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, TOOLBAR_H, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, "[Dosya]", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, "[Düzen]", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, "[Biçim]", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, "[Yardım]", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, "Dosya", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, "Düzen", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, "Biçim", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, "Yardım", Color::TEXT_MUTED);
         // Hızlı Aksiyon Düğmeleri (sağa hizalı)
         fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, "Temizle", Color::ACCENT_RED);
@@ -300,7 +300,7 @@ impl NotepadApp {
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
             let mx = win_x + match self.menu { 1=>8, 2=>68, 3=>128, _=>188 };
-            let items = match self.menu { 1=>["Yeni", "Ac", "Kaydet", "Kapat"], 2=>["Geri Al", "Kes", "Kopyala", "Yapistir"], 3=>["Tumunu Sec", "Sil", "Temizle", ""] , _=>["Not Defteri Yardim", "MinOS v1.0", "", ""] };
+            let items = match self.menu { 1=>["Yeni", "Aç", "Kaydet", "Kapat"], 2=>["Geri Al", "Kes", "Kopyala", "Yapıştır"], 3=>["Tümünü Seç", "Sil", "Temizle", ""] , _=>["Not Defteri Yardımı", "MinOS v1.0", "", ""] };
             fb.draw_shadow(mx, win_y+54, 142, 94, Color::SHADOW);
             fb.draw_rect(mx,win_y+54,142,94,Color::WINDOW_BG);
             fb.draw_rect_outline(mx,win_y+54,142,94,Color::BORDER);

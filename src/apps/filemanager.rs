@@ -28,13 +28,13 @@ impl FileManagerApp {
             current_path: "/root/home/minos",
             selected_idx: 0,
             files: [
-                FileItem { name: "kernel.log", size_str: "1.2 KB", file_type: "Sistem Günlüğü", icon_tag: "[LOG]" },
-                FileItem { name: "readme.txt", size_str: "2.4 KB", file_type: "Metin Belgesi", icon_tag: "[TXT]" },
-                FileItem { name: "settings.cfg", size_str: "512 B", file_type: "Ayar Dosyası", icon_tag: "[CFG]" },
-                FileItem { name: "kedi_maskotu.bmp", size_str: "64.0 KB", file_type: "Resim İmajı", icon_tag: "[IMG]" },
-                FileItem { name: "lofi_ring0.wav", size_str: "3.2 MB", file_type: "Ses Dosyası", icon_tag: "[SND]" },
-                FileItem { name: "retro_drive.mp4", size_str: "12.8 MB", file_type: "Video Kaydı", icon_tag: "[VID]" },
-                FileItem { name: "github_minos.url", size_str: "128 B", file_type: "GitHub Yardım", icon_tag: "[WEB]" },
+                FileItem { name: "kernel.log", size_str: "1.2 KB", file_type: "Sistem Günlüğü", icon_tag: "LOG" },
+                FileItem { name: "readme.txt", size_str: "2.4 KB", file_type: "Metin Belgesi", icon_tag: "TXT" },
+                FileItem { name: "settings.cfg", size_str: "512 B", file_type: "Ayar Dosyası", icon_tag: "CFG" },
+                FileItem { name: "kedi_maskotu.bmp", size_str: "64.0 KB", file_type: "Resim İmajı", icon_tag: "IMG" },
+                FileItem { name: "lofi_ring0.wav", size_str: "3.2 MB", file_type: "Ses Dosyası", icon_tag: "SND" },
+                FileItem { name: "retro_drive.mp4", size_str: "12.8 MB", file_type: "Video Kaydı", icon_tag: "VID" },
+                FileItem { name: "github_minos.url", size_str: "128 B", file_type: "GitHub Yardım", icon_tag: "WEB" },
             ],
         }
     }
@@ -62,7 +62,7 @@ impl FileManagerApp {
 
         // Hızlı Butonlar
         fb.draw_rect(win_x + win_w.saturating_sub(120), win_y + 32, 50, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, "[Yenile]", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, "Yenile", Color::TEXT_MAIN);
         fb.draw_rect(win_x + win_w.saturating_sub(62), win_y + 32, 50, 22, Color::ACCENT_GREEN);
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, "Aç", Color::DARK_BG);
 
@@ -101,10 +101,10 @@ impl FileManagerApp {
             }
 
             let icon_color = match file.icon_tag {
-                "[IMG]" => Color::ACCENT_YELLOW,
-                "[SND]" => Color::ACCENT_GREEN,
-                "[VID]" => Color::ACCENT_RED,
-                "[WEB]" => Color::ACCENT_BLUE,
+                "IMG" => Color::ACCENT_YELLOW,
+                "SND" => Color::ACCENT_GREEN,
+                "VID" => Color::ACCENT_RED,
+                "WEB" => Color::ACCENT_BLUE,
                 _ => Color::TEXT_MAIN,
             };
             MinGuiCompositor::draw_string(fb, list_x + 4, draw_y + 4, file.icon_tag, icon_color);

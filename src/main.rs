@@ -85,6 +85,17 @@ fn serial_print(s: &str) {
     }
 }
 
+fn restart_system() -> ! {
+    serial_print("[MinOS] Restart requested from Start Menu.\n");
+    unsafe {
+        // QEMU/PC reset control register, then legacy 8042 fallback.
+        core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);
+        core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8);
+        core::arch::asm!("cli");
+    }
+    loop { core::hint::spin_loop(); }
+}
+
 /// Verilen uygulama penceresini açar, küçültme durumunu kaldırır ve odaklar.
 fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     if let Some(win) = compositor.windows[idx].as_mut() {
@@ -115,6 +126,8 @@ fn window_content_h(
             let (lines, _) = np.text_extent(wrap_cols);
             lines * 16 + 58 + 22
         }
+        // Görev Yöneticisi: başlık + süreç satırları + bellek grafiği + durum.
+        7 => 30 + 6 * 20 + 110,
         // Diğer uygulamalar sabit düzenlidir: kaydırma gerekmez, içerik pencereye
         // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
         _ => 0,
@@ -159,7 +172,7 @@ pub extern "C" fn _start() -> ! {
     let mut fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı
-    let _net_dev = drivers::net::NetworkInterface::new();
+    let net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
     // 4. Limine Framebuffer Alımı
@@ -203,7 +216,7 @@ pub extern "C" fn _start() -> ! {
     settings_app.font.apply();
     gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
-    let browser_app = apps::browser::BrowserApp::new();
+    let mut browser_app = apps::browser::BrowserApp::new();
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
@@ -211,29 +224,30 @@ pub extern "C" fn _start() -> ! {
     let mut calculator_app = apps::calculator::CalculatorApp::new();
     let mut paint_app = apps::paint::PaintApp::new();
     let mut terminal_app = apps::terminal::TerminalApp::new();
+    terminal_app.init_banner();
 
     // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
     // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
     // 0: Dosya Yöneticisi
-    compositor.add_window(gui::Window::new("Dosya Yöneticisi - [VFS / Home]", "[Dosya]", 30, 30, 480, 290, false));
+    compositor.add_window(gui::Window::new("Dosya Yöneticisi - VFS / Ev", "Dosyalar", 30, 30, 480, 290, false));
     // 1: Sistem Ayarları
-    compositor.add_window(gui::Window::new("Sistem Ayarları - [Tema, Ses, Saat]", "[Ayarlar]", 530, 30, 480, 290, false));
+    compositor.add_window(gui::Window::new("Sistem Ayarları - Tema, Ses, Saat", "Ayarlar", 160, 30, 480, 390, false));
     // 2: Not Defteri
-    compositor.add_window(gui::Window::new("Not Defteri - [adsiz.txt]", "[Not]", 80, 70, 460, 270, false));
+    compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 460, 270, false));
     // 3: Web Tarayıcısı (SarmanNet)
-    compositor.add_window(gui::Window::new("SarmanNet Web Gezgini - [v1.1]", "[Web]", 550, 60, 480, 280, false));
+    compositor.add_window(gui::Window::new("SarmanNet Web Gezgini - 1.1", "Web", 550, 60, 480, 280, false));
     // 4: Resim Gösterici (MinViewer)
-    compositor.add_window(gui::Window::new("Resim Gösterici - [kedi_maskotu.bmp]", "[Resim]", 120, 90, 450, 270, false));
+    compositor.add_window(gui::Window::new("Resim Gösterici - kedi_maskotu.bmp", "Resim", 120, 90, 450, 270, false));
     // 5: Müzik Çalar (SarmanBeats)
-    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - [Ring 0]", "[Müzik]", 560, 80, 460, 245, false));
+    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - Ring 0", "Müzik", 560, 80, 460, 245, false));
     // 6: Video Oynatıcı (MinPlayer)
-    compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - [retro_drive.mp4]", "[Video]", 150, 110, 460, 275, false));
+    compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 460, 275, false));
     // 7: Görev Yöneticisi
-    compositor.add_window(gui::Window::new("Görev Yöneticisi - [MinOS]", "[Görev]", 220, 80, 400, 220, false));
-    compositor.add_window(gui::Window::new("Hesap Makinesi - [MinCalc]", "[Hesap]", 260, 120, 360, 220, false));
-    compositor.add_window(gui::Window::new("Çizim Tahtası - [MinPaint]", "[Çizim]", 180, 80, 520, 360, false));
-    compositor.add_window(gui::Window::new("Komut İstemi - [MinShell]", "[Komut]", 220, 100, 560, 300, false));
+    compositor.add_window(gui::Window::new("Görev Yöneticisi - MinOS", "Görevler", 220, 60, 420, 300, false));
+    compositor.add_window(gui::Window::new("Hesap Makinesi - MinCalc", "Hesap", 260, 120, 360, 220, false));
+    compositor.add_window(gui::Window::new("Çizim Tahtası - MinPaint", "Çizim", 180, 80, 520, 360, false));
+    compositor.add_window(gui::Window::new("Komut İstemi - MinShell", "Komut", 220, 100, 560, 300, false));
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
@@ -261,6 +275,9 @@ pub extern "C" fn _start() -> ! {
     let mut spin_counter: usize = 0;
     let mut loop_counter: u64 = 0;
     let mut clock_spin: usize = 0;
+    let mut last_music_beat: usize = 0;
+    let mut music_note: usize = 0;
+    let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
     let mut last_title_click: u64 = 0;
     
@@ -274,6 +291,7 @@ pub extern "C" fn _start() -> ! {
                              br: &apps::browser::BrowserApp,
                              iv: &apps::imageviewer::ImageViewerApp,
                              mp: &apps::musicplayer::MusicPlayerApp,
+                             network_ready: bool,
                              vp: &apps::videoplayer::VideoPlayerApp,
                              tm: &apps::taskmgr::TaskManagerApp,
                              calc: &apps::calculator::CalculatorApp,
@@ -319,7 +337,7 @@ pub extern "C" fn _start() -> ! {
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
                     5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
                     6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),
-                    7 => tm.render_content(fb, win.x, win.y),
+                    7 => tm.render_content(fb, win.x, win.y, win.width),
                     8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
                     9 => paint.render_content(fb, win.x, win.y, win.width, win.height),
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height),
@@ -514,11 +532,11 @@ pub extern "C" fn _start() -> ! {
                                 let tag = filemanager_app.files[file_idx].icon_tag;
                                 let target_app_idx = match clicked_item {
                                     0 => match tag {
-                                        "[TXT]" | "[LOG]" | "[CFG]" => 2,
-                                        "[IMG]" => 4,
-                                        "[SND]" => 5,
-                                        "[VID]" => 6,
-                                        "[WEB]" => 3,
+                                        "TXT" | "LOG" | "CFG" => 2,
+                                        "IMG" => 4,
+                                        "SND" => 5,
+                                        "VID" => 6,
+                                        "WEB" => 3,
                                         _ => 2,
                                     },
                                     1 => 2,
@@ -575,53 +593,100 @@ pub extern "C" fn _start() -> ! {
                 consumed = true;
             }
 
-            // D) Başlat menüsü açıkken
-            if !consumed && compositor.is_start_menu_open {
-                let menu_w = 240;
-                let menu_h = 430;
-                let menu_x = 6;
-                let menu_y = tb_y.saturating_sub(menu_h + 4);
-                if gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) {
-                    for i in 0..12 {
-                        // Öğe dikdörtgeni çizimle birebir aynı kaynaktan gelir;
-                        // böylece görsel öğe ile tıklanan öğe her zaman eşleşir.
-                        let rect = gui::MinGuiCompositor::start_menu_item_rect(menu_y, i);
-                        if gui::in_rect(mx, my, rect) {
-                            if i == 11 {
-                                // Sistem kapatma yıkıcı bir işlemdir: yanlışlıkla
-                                // tetiklenmemesi için iki aşamalı onay istenir.
-                                if compositor.confirm_shutdown {
-                                    serial_print("[MinOS] System Shutdown confirmed via Start Menu!\n");
-                                    unsafe {
-                                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
-                                        core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
-                                        core::arch::asm!("cli; hlt");
-                                    }
-                                } else {
-                                    // İlk tıklama: onay bekle (menü açık kalsın).
-                                    compositor.confirm_shutdown = true;
-                                }
-                                break;
-                            }
-                            compositor.confirm_shutdown = false;
-                            if i < 11 { open_app(&mut compositor, i); }
-                            compositor.is_start_menu_open = false;
-                            break;
-                        }
-                    }
-                } else {
-                    compositor.is_start_menu_open = false;
-                    compositor.confirm_shutdown = false;
+        if compositor.is_start_menu_open {
+            let (_, menu_y, _, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+            for g in 0..4 {
+                let cat_r = gui::MinGuiCompositor::start_menu_category_rect(menu_y, g);
+                if gui::in_rect(mx, my, cat_r) {
+                    compositor.active_start_group = g;
+                    break;
                 }
-                consumed = true;
+            }
+        }
+
+        // D) Başlat menüsü açıkken
+        if !consumed && compositor.is_start_menu_open {
+            let (menu_x, menu_y, menu_w, menu_h) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+            let active_g = compositor.active_start_group;
+            let sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
+
+            let mut cat_clicked = false;
+            for g in 0..4 {
+                let cat_r = gui::MinGuiCompositor::start_menu_category_rect(menu_y, g);
+                if gui::in_rect(mx, my, cat_r) {
+                    compositor.active_start_group = g;
+                    cat_clicked = true;
+                    consumed = true;
+                    break;
+                }
             }
 
-            // E) Sistem tepsisi düğmeleri
-            if !consumed {
-                if gui::in_rect(mx, my, l.start) {
-                    compositor.is_start_menu_open = !compositor.is_start_menu_open;
-                    if !compositor.is_start_menu_open { compositor.confirm_shutdown = false; }
+            if !cat_clicked {
+                let (_, first, count) = gui::MENU_GROUPS[active_g];
+                let mut item_clicked = false;
+                for k in 0..count {
+                    let i = first + k;
+                    let rect = gui::MinGuiCompositor::start_menu_subitem_rect(menu_y, active_g, k, tb_y);
+                    if gui::in_rect(mx, my, rect) {
+                        item_clicked = true;
+                        if i == 11 {
+                            if compositor.confirm_shutdown {
+                                serial_print("[MinOS] System Shutdown confirmed via Start Menu!\n");
+                                unsafe {
+                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+                                    core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
+                                    core::arch::asm!("cli; hlt");
+                                }
+                            } else {
+                                compositor.confirm_shutdown = true;
+                                compositor.confirm_restart = false;
+                            }
+                            break;
+                        }
+                        if i == 12 {
+                            if compositor.confirm_restart {
+                                restart_system();
+                            }
+                            compositor.confirm_restart = true;
+                            compositor.confirm_shutdown = false;
+                            break;
+                        }
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
+                        if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
+                            open_app(&mut compositor, app_idx);
+                        }
+                        compositor.is_start_menu_open = false;
+                        break;
+                    }
+                }
+
+                if !item_clicked {
+                    if gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) || gui::in_rect(mx, my, sub_rect) {
+                        consumed = true;
+                    } else {
+                        compositor.is_start_menu_open = false;
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
+                        consumed = true;
+                    }
+                } else {
                     consumed = true;
+                }
+            }
+        }
+
+        // E) Sistem tepsisi düğmeleri
+        if !consumed {
+            if gui::in_rect(mx, my, l.start) {
+                compositor.is_start_menu_open = !compositor.is_start_menu_open;
+                if compositor.is_start_menu_open {
+                    compositor.active_start_group = 0;
+                } else {
+                    compositor.confirm_shutdown = false;
+                    compositor.confirm_restart = false;
+                }
+                consumed = true;
                 } else if gui::in_rect(mx, my, l.clock) {
                     compositor.is_calendar_open = !compositor.is_calendar_open;
                     if compositor.is_calendar_open {
@@ -717,16 +782,17 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_top_window();
                         break;
                     }
-                    // Sağ-alt köşe yeniden boyutlandırma tutamacı (tek resize noktası).
-                    // Scrollbar'dan ÖNCE denenir ki köşe bölgesinde resize öncelikli
-                    // olsun; scrollbar o bölgede zaten çizilmez.
+                    // Pencerenin kenar ve köşelerinden boyutlandırma.
                     if !win.is_maximized {
-                        if gui::in_rect(mx, my, win.resize_grip_rect()) {
-                            compositor.focus_window(idx);
-                            resizing_win = Some(idx);
-                            resize_edge = Some(gui::ResizeEdge::BottomRight);
-                            resize_orig = (wx, wy, ww, wh);
-                            break;
+                        if let Some(edge) = win.resize_edge_at(mx, my) {
+                            // Sağ kenardaki scrollbar için kendi tutma alanını bırak.
+                            if edge != gui::ResizeEdge::Right || mx >= wx + ww - 6 {
+                                compositor.focus_window(idx);
+                                resizing_win = Some(idx);
+                                resize_edge = Some(edge);
+                                resize_orig = (wx, wy, ww, wh);
+                                break;
+                            }
                         }
                     }
                     // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
@@ -784,11 +850,11 @@ pub extern "C" fn _start() -> ! {
                                 } else if mx >= wx + ww - 62 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 54 {
                                     let selected_file = &filemanager_app.files[filemanager_app.selected_idx];
                                     let target = match selected_file.icon_tag {
-                                        "[TXT]" | "[LOG]" | "[CFG]" => 2,
-                                        "[IMG]" => 4,
-                                        "[SND]" => 5,
-                                        "[VID]" => 6,
-                                        "[WEB]" => 3,
+                                        "TXT" | "LOG" | "CFG" => 2,
+                                        "IMG" => 4,
+                                        "SND" => 5,
+                                        "VID" => 6,
+                                        "WEB" => 3,
                                         _ => 2,
                                     };
                                     open_app(&mut compositor, target);
@@ -800,11 +866,11 @@ pub extern "C" fn _start() -> ! {
                                             filemanager_app.selected_idx = i;
                                             let selected_file = &filemanager_app.files[i];
                                             let target = match selected_file.icon_tag {
-                                                "[TXT]" | "[LOG]" | "[CFG]" => 2,
-                                                "[IMG]" => 4,
-                                                "[SND]" => 5,
-                                                "[VID]" => 6,
-                                                "[WEB]" => 3,
+                                                "TXT" | "LOG" | "CFG" => 2,
+                                                "IMG" => 4,
+                                                "SND" => 5,
+                                                "VID" => 6,
+                                                "WEB" => 3,
                                                 _ => 2,
                                             };
                                             open_app(&mut compositor, target);
@@ -872,11 +938,27 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             3 => {
-                                // Web Tarayıcı: sekme/gezinti
-                                if my >= wy + 30 && my <= wy + 50 {
-                                    if mx >= wx + 8 && mx <= wx + 168 {
-                                        // aktif sekme (immutable app) - atla
-                                    }
+                                if gui::in_rect(mx, my, (wx + 8, wy + 30, 160, 20)) {
+                                    browser_app.active_tab = 0;
+                                    browser_app.set_url(b"minos://help");
+                                    browser_app.navigate();
+                                } else if gui::in_rect(mx, my, (wx + 172, wy + 30, 100, 20)) {
+                                    browser_app.active_tab = 1;
+                                    browser_app.set_url(b"minos://cats");
+                                    browser_app.navigate();
+                                } else if gui::in_rect(mx, my, (wx + 12, wy + 56, 22, 20)) {
+                                    browser_app.back();
+                                } else if gui::in_rect(mx, my, (wx + 38, wy + 56, 22, 20)) {
+                                    browser_app.forward();
+                                } else if gui::in_rect(mx, my, (wx + 64, wy + 56, 22, 20)) {
+                                    browser_app.navigate();
+                                } else if gui::in_rect(mx, my, (wx + 94, wy + 56, ww.saturating_sub(160), 20)) {
+                                    browser_app.address_focused = true;
+                                    browser_app.set_url(b"");
+                                } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 56, 50, 20)) {
+                                    browser_app.navigate();
+                                } else {
+                                    browser_app.address_focused = false;
                                 }
                             }
                             4 => {
@@ -895,11 +977,21 @@ pub extern "C" fn _start() -> ! {
                                 if my >= ctrl_y && my <= ctrl_y + 24 {
                                     if mx >= wx + 10 && mx <= wx + 46 {
                                         musicplayer_app.current_track = musicplayer_app.current_track.saturating_sub(1);
+                                        musicplayer_app.progress = 0;
                                     } else if mx >= wx + 52 && mx <= wx + 98 {
                                         musicplayer_app.is_playing = !musicplayer_app.is_playing;
                                     } else if mx >= wx + 104 && mx <= wx + 140 {
                                         musicplayer_app.current_track = (musicplayer_app.current_track + 1) % 5;
+                                        musicplayer_app.progress = 0;
+                                    } else if mx >= wx + 146 && mx < wx + 230 {
+                                        musicplayer_app.volume = (((mx - (wx + 146)) * 100) / 84).min(100);
                                     }
+                                } else if mx >= wx + 250 && mx < wx + ww - 8 && my >= wy + 96 && my < wy + 194 {
+                                    musicplayer_app.current_track = ((my - (wy + 96)) / 18).min(4);
+                                    musicplayer_app.progress = 0;
+                                    musicplayer_app.is_playing = true;
+                                } else if my >= wy + 156 && my <= wy + 170 && mx >= wx + 54 && mx <= wx + 190 {
+                                    musicplayer_app.progress = (((mx - (wx + 54)) * 100) / 136).min(100);
                                 }
                             }
                             6 => {
@@ -912,6 +1004,14 @@ pub extern "C" fn _start() -> ! {
                                         videoplayer_app.is_playing = false;
                                         videoplayer_app.frame = 0;
                                     }
+                                }
+                            }
+                            7 => {
+                                // Görev Yöneticisi: "Sonlandir" düğmesi veya süreç satırı seçimi.
+                                if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww)) {
+                                    taskmgr_app.kill_selected();
+                                } else if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy) {
+                                    taskmgr_app.selected = i;
                                 }
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy) { calculator_app.press(key); } }
@@ -940,7 +1040,12 @@ pub extern "C" fn _start() -> ! {
             match action {
                 drivers::keyboard::KeyAction::ToggleStartMenu => {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
-                    if !compositor.is_start_menu_open { compositor.confirm_shutdown = false; }
+                    if compositor.is_start_menu_open {
+                        compositor.active_start_group = 0;
+                    } else {
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
+                    }
                 }
                 drivers::keyboard::KeyAction::CloseActiveWindow => {
                     if let Some(idx) = compositor.active_window_idx {
@@ -965,14 +1070,21 @@ pub extern "C" fn _start() -> ! {
                     compositor.is_start_menu_open = false;
                 }
                 drivers::keyboard::KeyAction::ArrowUp => {
-                    if let Some(w) = compositor.windows[0] {
+                    // Görev Yöneticisi odaklıysa süreç seçimi, değilse dosya listesi.
+                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if tm_focused {
+                        taskmgr_app.select_up();
+                    } else if let Some(w) = compositor.windows[0] {
                         if w.is_open && w.is_focused && !w.is_minimized && filemanager_app.selected_idx > 0 {
                             filemanager_app.selected_idx -= 1;
                         }
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowDown => {
-                    if let Some(w) = compositor.windows[0] {
+                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if tm_focused {
+                        taskmgr_app.select_down();
+                    } else if let Some(w) = compositor.windows[0] {
                         if w.is_open && w.is_focused && !w.is_minimized
                             && filemanager_app.selected_idx + 1 < filemanager_app.files.len()
                         {
@@ -991,9 +1103,28 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::CopyText => { notepad_app.copy_selection(); }
                 drivers::keyboard::KeyAction::PasteText => { notepad_app.paste_clipboard(); }
                 drivers::keyboard::KeyAction::CutText => { notepad_app.cut_selection(); }
-                drivers::keyboard::KeyAction::SelectAllText => { /* TODO */ }
-                drivers::keyboard::KeyAction::Delete => { notepad_app.delete_forward(); }
+                drivers::keyboard::KeyAction::SelectAllText => {
+                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { notepad_app.select_all(); }
+                }
+                drivers::keyboard::KeyAction::Delete => {
+                    // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
+                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if tm_focused {
+                        taskmgr_app.kill_selected();
+                    } else {
+                        notepad_app.delete_forward();
+                    }
+                }
                 drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
+                drivers::keyboard::KeyAction::BrowserAddress => {
+                    let focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { browser_app.address_focused = true; browser_app.set_url(b""); }
+                }
+                drivers::keyboard::KeyAction::BrowserRefresh => {
+                    let focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { browser_app.navigate(); }
+                }
             }
         }
 
@@ -1092,8 +1223,8 @@ pub extern "C" fn _start() -> ! {
                     // Sol kenar sürükleniyor
                     if matches!(edge, Left | TopLeft | BottomLeft) {
                         let desired = mx.min(left);
-                        nw = left.saturating_sub(desired).max(w.min_width);
-                        nx = left.saturating_sub(nw);
+                        nw = left.saturating_sub(desired).max(w.min_width).min(w.max_width).min(left);
+                        nx = left.saturating_sub(nw).min(width.saturating_sub(nw));
                     }
                     // Alt kenar sürükleniyor
                     if matches!(edge, Bottom | BottomLeft | BottomRight) {
@@ -1103,7 +1234,7 @@ pub extern "C" fn _start() -> ! {
                     // Üst kenar sürükleniyor
                     if matches!(edge, Top | TopLeft | TopRight) {
                         let desired = my.min(top);
-                        nh = top.saturating_sub(desired).max(w.min_height);
+                        nh = top.saturating_sub(desired).max(w.min_height).min(w.max_height).min(top);
                         ny = top.saturating_sub(nh);
                     }
 
@@ -1139,14 +1270,38 @@ pub extern "C" fn _start() -> ! {
 
         // 6. Klavye karakter girişleri
         while let Some(ch) = keyboard.take_last_char() {
-            if compositor.is_start_menu_open && ch >= '1' && ch <= '9' {
-                let app_idx = (ch as usize) - ('1' as usize);
-                open_app(&mut compositor, app_idx);
-                compositor.is_start_menu_open = false;
+            // Başlat menüsü açıkken klavye kısayolları menü SIRASINI kullanır
+            // (pencere indeksini değil) — start_menu_app_idx ile eşlenir.
+            if compositor.is_start_menu_open && (ch >= '1' && ch <= '9') {
+                let menu_index = (ch as usize) - ('1' as usize);
+                if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
+                    open_app(&mut compositor, app_idx);
+                    compositor.is_start_menu_open = false;
+                }
             } else if compositor.is_start_menu_open && (ch == 'a' || ch == 'A' || ch == 'b' || ch == 'B') {
-                open_app(&mut compositor, if ch == 'a' || ch == 'A' { 9 } else { 10 });
-                compositor.is_start_menu_open = false;
+                let menu_index = if ch == 'a' || ch == 'A' { 9 } else { 10 };
+                if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
+                    open_app(&mut compositor, app_idx);
+                    compositor.is_start_menu_open = false;
+                }
+            } else if compositor.is_start_menu_open && (ch == 'r' || ch == 'R') {
+                if compositor.confirm_restart { restart_system(); }
+                compositor.confirm_restart = true;
+                compositor.confirm_shutdown = false;
+            } else if compositor.is_start_menu_open && ch == '0' {
+                if compositor.confirm_shutdown {
+                    unsafe { core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16); core::arch::asm!("cli; hlt"); }
+                }
+                compositor.confirm_shutdown = true;
+                compositor.confirm_restart = false;
             } else {
+                let browser_focused = compositor.windows[3]
+                    .as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                if browser_focused && browser_app.address_focused {
+                    if ch == '\x08' { browser_app.address_backspace(); }
+                    else if ch == '\n' { browser_app.navigate(); }
+                    else if ch >= ' ' { browser_app.address_char(ch); }
+                }
                 let notepad_focused = compositor.windows[2]
                     .as_ref()
                     .map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
@@ -1158,9 +1313,15 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 let calc_focused = compositor.windows[8].as_ref().map_or(false, |w| w.is_focused);
-                let term_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_focused);
+                let term_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                 if calc_focused { if ch == '\x08' { calculator_app.backspace(); } else if ch == '\x1b' { calculator_app.clear(); } else if ch >= '0' && ch <= '9' || ch == '+' || ch == '-' { calculator_app.insert(ch); } }
-                if term_focused { if ch == '\x08' { terminal_app.backspace(); } else if ch >= ' ' { terminal_app.insert(ch); } }
+                if term_focused { if ch == '\x08' { terminal_app.backspace(); } else if ch == '\n' { terminal_app.submit(); } else if ch >= ' ' { terminal_app.insert(ch); } }
+                // Terminalde Enter'a basıldıysa bekleyen komutu VFS/PMM bağlamında yürüt.
+                if let Some(cmd) = terminal_app.take_pending() {
+                    let n = terminal_app.pending_len();
+                    let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
+                    terminal_app.execute(line, &fs_mgr.vfs, &memory_mgr.pmm, &now);
+                }
                 let paint_focused = compositor.windows[9].as_ref().map_or(false, |w| w.is_focused);
                 if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }
             }
@@ -1174,6 +1335,24 @@ pub extern "C" fn _start() -> ! {
         if timer_tick_fired {
             spin_counter = 0;
             anim_tick = anim_tick.wrapping_add(1);
+        }
+
+        // Beş parçalı, PIT/PC speaker tabanlı basit melodi yürütücüsü.
+        audio_dev.set_volume(settings_app.volume.min(musicplayer_app.volume as u8));
+        if musicplayer_app.is_playing {
+            if anim_tick.wrapping_sub(last_music_beat) >= 24 {
+                const NOTES: [u32; 8] = [440, 523, 587, 659, 587, 523, 494, 392];
+                let track_offset = musicplayer_app.current_track as u32 * 22;
+            audio_dev.set_pc_speaker_tone(NOTES[music_note % NOTES.len()] + track_offset);
+                speaker_on = true;
+                music_note = (music_note + 1) % NOTES.len();
+                musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
+                last_music_beat = anim_tick;
+            }
+        } else if speaker_on {
+            audio_dev.set_pc_speaker_tone(0);
+            speaker_on = false;
+            last_music_beat = anim_tick;
         }
 
         if input_occurred || mouse_moved || buttons_changed || timer_tick_fired || force_render {

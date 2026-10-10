@@ -26,7 +26,7 @@ impl FontChoice {
 
     pub fn label(self, english: bool) -> &'static str {
         match (self, english) {
-            (FontChoice::TurkishPixel, false) => "Font: Turkce Piksel",
+            (FontChoice::TurkishPixel, false) => "Yazı tipi: Türkçe Piksel",
             (FontChoice::TurkishPixel, true) => "Font: Turkish Pixel",
             (FontChoice::Compact, false) => "Font: Sikistirilmis",
             (FontChoice::Compact, true) => "Font: Compact",
@@ -126,13 +126,13 @@ impl SystemSettings {
         (win_x + win_w.saturating_sub(100), win_y + 60, 88, 20)
     }
     pub fn font_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 84, 88, 20)
+        (win_x + win_w.saturating_sub(100), win_y + 90, 88, 20)
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + 146, 200, 10)
+        (win_x + CONTENT_X, win_y + 190, 200, 10)
     }
     pub fn mute_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 210, win_y + 142, 66, 18)
+        (win_x + CONTENT_X + 210, win_y + 186, 66, 18)
     }
     pub fn save_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + win_h.saturating_sub(44), 90, 22)
@@ -141,13 +141,13 @@ impl SystemSettings {
         (win_x + CONTENT_X + 100, win_y + win_h.saturating_sub(44), 95, 22)
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + i * 82, win_y + 188, 76, 22)
+        (win_x + CONTENT_X + i * 82, win_y + 198, 76, 22)
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
-    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+250,y+214,110,22) }
+    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+250,y+232,110,22) }
     /// Tema palet şeridi: her tema için bir renk örneği kutusu.
     pub fn theme_swatch_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + i * 24, win_y + 152, 20, 16)
+        (win_x + CONTENT_X + i * 24, win_y + 232, 20, 16)
     }
     /// Tema adı etiketi (örneklerin altında).
     pub fn theme_swatch_count() -> usize {
@@ -163,7 +163,7 @@ impl SystemSettings {
         *self = Self::default();
         self.volume = vol;
         self.theme = theme_id;
-        self.status_msg = "Varsayilan Ayarlara Donuldu!";
+        self.status_msg = "Varsayılan ayarlara dönüldü!";
     }
 
     pub fn cycle_theme(&mut self) {
@@ -250,17 +250,17 @@ impl SystemSettings {
                     fb,
                     Self::theme_btn_rect(win_x, win_y, win_w),
                     Color::ACCENT_BLUE,
-                    "Degistir",
+                    "Değiştir",
                     Color::DARK_BG,
                     false,
                 );
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 128,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 94,
                     self.font.label(self.language.is_english()), Color::ACCENT_YELLOW);
                 MinGuiCompositor::draw_button(fb, Self::font_btn_rect(win_x, win_y, win_w), Color::ACCENT_YELLOW,
-                    if self.language.is_english() { "Change" } else { "Degistir" }, Color::DARK_BG, false);
+                    if self.language.is_english() { "Change" } else { "Değiştir" }, Color::DARK_BG, false);
 
                 // --- Tema Palet Seridi (dogrudan secim icin renk ornekleri) ---
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 148,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 218,
                     if self.language.is_english() { "Palette:" } else { "Palet:" }, Color::TEXT_MUTED);
                 for (i, tid) in ThemeId::ALL.iter().enumerate() {
                     let r = Self::theme_swatch_rect(win_x, win_y, i);
@@ -273,7 +273,7 @@ impl SystemSettings {
 
                 // --- Klavye / Dil ---
                 let kbd_str = match kbd_layout {
-                    KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard: Turkish (TR-Q)" } else { "Klavye / Dil: Turkce (TR-Q)" },
+                    KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard: Turkish (TR-Q)" } else { "Klavye / Dil: Türkçe (TR-Q)" },
                     KeyboardLayout::EnglishUS => "Keyboard: English (EN-US)",
                 };
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 64, kbd_str, Color::ACCENT_PINK);
@@ -281,7 +281,7 @@ impl SystemSettings {
                     fb,
                     Self::kbd_btn_rect(win_x, win_y, win_w),
                     Color::ACCENT_PINK,
-                    if self.language.is_english() { "Change" } else { "Degistir" },
+                    if self.language.is_english() { "Change" } else { "Değiştir" },
                     Color::DARK_BG,
                     false,
                 );
@@ -294,7 +294,7 @@ impl SystemSettings {
                 clock.push_u2(now.minute as u32);
                 clock.push_byte(b':');
                 clock.push_u2(now.second as u32);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 88, clock.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 122, clock.as_str(), Color::ACCENT_GREEN);
 
                 // --- Tarih ---
                 let mut date = TextBuf::new();
@@ -306,7 +306,7 @@ impl SystemSettings {
                 date.push_u4(now.year as u32);
                 date.push_str(", ");
                 date.push_str(DateTime::weekday_name(DateTime::weekday(now.year, now.month, now.day)));
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 108, date.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 144, date.as_str(), Color::TEXT_MAIN);
 
                 // --- Ses ---
                 let mut vol = TextBuf::new();
@@ -315,7 +315,7 @@ impl SystemSettings {
                 if self.is_muted {
                     vol.push_str(" (SUSTURULDU)");
                 }
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 130, vol.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 168, vol.as_str(), Color::TEXT_MAIN);
 
                 let track = Self::volume_track_rect(win_x, win_y);
                 fb.draw_rect(track.0, track.1, track.2, track.3, Color::TITLE_BAR_INACTIVE);
@@ -326,27 +326,27 @@ impl SystemSettings {
 
                 let mute_r = Self::mute_btn_rect(win_x, win_y);
                 let mute_bg = if self.is_muted { Color::ACCENT_RED } else { Color::TITLE_BAR };
-                let mute_lbl = if self.is_muted { "Sesi Ac" } else { "Sustur" };
+                let mute_lbl = if self.is_muted { "Sesi Aç" } else { "Sustur" };
                 MinGuiCompositor::draw_button(fb, mute_r, mute_bg, mute_lbl, Color::TEXT_MAIN, false);
             }
             1 => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Cekirdek Gunlugu: Aktif (/dev/klog)", Color::ACCENT_GREEN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "VFS Surucusu: RamFS TarFS v1.0", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Donanim Hizlandirma: SSE2 Aktif", Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Onyukleme: Limine Stivale2", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Önyükleme: Limine Stivale2", Color::TEXT_MUTED);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, "RTC / CMOS Saat: Calisiyor", Color::ACCENT_BLUE);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazir tema hazir", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 182,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 176,
                     if self.language.is_english() { "Target resolution:" } else { "Hedef cozunurluk:" }, Color::ACCENT_YELLOW);
                 for i in 0..4 { let r=Self::resolution_btn_rect(win_x,win_y,i); let active=self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; MinGuiCompositor::draw_button(fb,r,if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR},Self::resolution_name(i),Color::TEXT_MAIN,false); }
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+218, if self.night_light { "Gece isigi: Acik" } else { "Gece isigi: Kapali" }, Color::ACCENT_YELLOW);
-                MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Ac" }, Color::DARK_BG, false);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, if self.night_light { "Gece isigi: Acik" } else { "Gece isigi: Kapali" }, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Aç" }, Color::DARK_BG, false);
             }
             2 => {
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ag Arayuzu: RTL8139 / e1000", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Ağ Arayüzü: RTL8139 / e1000", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "IP Adresi: 192.168.1.100 (DHCP OK)", Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Alt Ag Maskesi: 255.255.255.0", Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Varsayilan Ag Gecidi: 192.168.1.1", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Alt Ağ Maskesi: 255.255.255.0", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Varsayılan Ağ Geçidi: 192.168.1.1", Color::TEXT_MUTED);
             }
             _ => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);

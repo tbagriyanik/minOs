@@ -5,21 +5,27 @@ pub struct MusicPlayerApp {
     pub is_playing: bool,
     pub volume: usize,
     pub current_track: usize,
+    pub progress: usize,
 }
 
 impl MusicPlayerApp {
     pub const fn new() -> Self {
         Self {
-            is_playing: true,
+            is_playing: false,
             volume: 85,
             current_track: 0,
+            progress: 0,
         }
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
+        let tracks = ["Ring0 Beats", "IRQ Lullaby", "Cyber Meow", "Paging Groove", "Limine Chill"];
         // Üst Şarkı Bilgi Alanı
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 42, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, "🎵 Lofi Cat Beats - Ring 0 Chill Hop", Color::ACCENT_PINK);
+        let mut track_title = crate::gui::TextBuf::new();
+        track_title.push_str("Now Playing: ");
+        track_title.push_str(tracks[self.current_track.min(4)]);
+        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, track_title.as_str(), Color::ACCENT_PINK);
         MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 50, "DJ Purr & The Microkernel | 44.1 kHz 16-bit FLAC", Color::TEXT_MUTED);
 
         // Dinamik Animasyonlu Ekolayzer / Spektrum Çubukları
@@ -74,11 +80,12 @@ impl MusicPlayerApp {
         let pl_w = win_w - eq_w - 24;
         fb.draw_rect(pl_x, pl_y, pl_w, eq_h + 38, Color::TITLE_BAR_INACTIVE);
         MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 6, "ÇALMA LİSTESİ", Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 24, "▶ 1. Ring0 Beats", Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 42, "  2. IRQ Lullaby", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 60, "  3. Cyber Meow", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 78, "  4. Paging Groove", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 96, "  5. Limine Chill", Color::TEXT_MUTED);
+        for (i, title) in tracks.iter().enumerate() {
+            let mut row = crate::gui::TextBuf::new();
+            if i == self.current_track { row.push_str("> "); } else { row.push_str("  "); }
+            row.push_u2((i + 1) as u32); row.push_str(". "); row.push_str(title);
+            MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 24 + i * 18, row.as_str(), if i == self.current_track { Color::ACCENT_GREEN } else { Color::TEXT_MAIN });
+        }
 
         // İlerleme Çubuğu (Timeline Scrubber)
         let prog_y = win_y + 158;
@@ -86,8 +93,9 @@ impl MusicPlayerApp {
         let bar_bg_x = eq_x + 44;
         let bar_bg_w = eq_w - 94;
         fb.draw_rect(bar_bg_x, prog_y + 2, bar_bg_w, 6, Color::DARK_BG);
-        fb.draw_rect(bar_bg_x, prog_y + 2, (bar_bg_w * 48) / 100, 6, Color::ACCENT_BLUE);
-        fb.draw_rect(bar_bg_x + (bar_bg_w * 48) / 100 - 2, prog_y, 5, 10, Color::WHITE);
+        let progress_w = (bar_bg_w * self.progress.min(100)) / 100;
+        fb.draw_rect(bar_bg_x, prog_y + 2, progress_w, 6, Color::ACCENT_BLUE);
+        fb.draw_rect(bar_bg_x + progress_w.saturating_sub(2), prog_y, 5, 10, Color::WHITE);
         MinGuiCompositor::draw_string(fb, bar_bg_x + bar_bg_w + 8, prog_y, "03:30", Color::TEXT_MUTED);
 
         // Kontrol Düğmeleri
@@ -96,16 +104,17 @@ impl MusicPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 16, ctrl_y + 8, "|<<", Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + 52, ctrl_y, 46, 24, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + 58, ctrl_y + 8, "|| >", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 58, ctrl_y + 8, if self.is_playing { "||" } else { ">" }, Color::DARK_BG);
 
         fb.draw_rect(win_x + 104, ctrl_y, 36, 24, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 110, ctrl_y + 8, ">>|", Color::TEXT_MAIN);
 
         // Ses Düzeyi Göstergesi
-        MinGuiCompositor::draw_string(fb, win_x + 150, ctrl_y + 8, "Ses: %85", Color::TEXT_MAIN);
+        let mut volume = crate::gui::TextBuf::new(); volume.push_str("Ses: %"); volume.push_u2(self.volume as u32);
+        MinGuiCompositor::draw_string(fb, win_x + 150, ctrl_y + 8, volume.as_str(), Color::TEXT_MAIN);
 
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 218, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, "AC97 / HD Audio | 320 kbps Çalma Modu | SarmanBeats v1", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, if self.is_playing { "Oynatiliyor | SarmanBeats" } else { "Duraklatildi | SarmanBeats" }, Color::TEXT_MUTED);
     }
 }

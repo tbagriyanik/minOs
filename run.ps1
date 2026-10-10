@@ -77,7 +77,9 @@ $qemuArgs = @(
     "-m", "128M",
     "-boot", "d",
     "-serial", "stdio",
-    "-vga", "std"
+    "-vga", "std",
+    "-audiodev", "dsound,id=snd0",
+    "-machine", "pcspk-audiodev=snd0"
 )
 
 if (Test-Path ".\build_iso.ps1") {

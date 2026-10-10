@@ -15,6 +15,8 @@ pub enum KeyAction {
     SelectAllText,
     Delete,
     Refresh,
+    BrowserAddress,
+    BrowserRefresh,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -66,8 +68,8 @@ impl KeyboardState {
 
     pub fn layout_tag(&self) -> &'static str {
         match self.layout {
-            KeyboardLayout::TurkishQ => "[TR]",
-            KeyboardLayout::EnglishUS => "[EN]",
+            KeyboardLayout::TurkishQ => "TR",
+            KeyboardLayout::EnglishUS => "EN",
         }
     }
 
@@ -141,6 +143,12 @@ impl KeyboardState {
                     return None;
                 }
             }
+            0x2E if self.ctrl => { self.last_action = Some(KeyAction::CopyText); return None; } // Ctrl+C
+            0x2F if self.ctrl => { self.last_action = Some(KeyAction::PasteText); return None; } // Ctrl+V
+            0x2D if self.ctrl => { self.last_action = Some(KeyAction::CutText); return None; } // Ctrl+X
+            0x1E if self.ctrl => { self.last_action = Some(KeyAction::SelectAllText); return None; } // Ctrl+A
+            0x26 if self.ctrl => { self.last_action = Some(KeyAction::BrowserAddress); return None; } // Ctrl+L
+            0x13 if self.ctrl => { self.last_action = Some(KeyAction::BrowserRefresh); return None; } // Ctrl+R
             0x48 => { // Arrow Up
                 self.last_action = Some(KeyAction::ArrowUp);
                 return None;

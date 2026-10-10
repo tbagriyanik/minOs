@@ -260,8 +260,7 @@ impl Window {
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         (self.x + self.width.saturating_sub(60), self.y + 5, 14, 14)
     }
-    /// Sağ-alt köşe yeniden boyutlandırma tutamacı (tek resize noktası).
-    /// Fare ile tutması kolay olsun diye pencerenin içine doğru genişletilmiştir.
+    /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
         let g = RESIZE_GRIP;
         (
@@ -276,7 +275,7 @@ impl Window {
     }
 }
 
-/// Yeniden boyutlandırma yönü. Şu an yalnızca sağ-alt köşe etkindir.
+/// Yeniden boyutlandırma yönü.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ResizeEdge {
     Left,
@@ -289,32 +288,36 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
-/// Sağ-alt köşe resize tutamacının kenar uzunluğu (px).
-/// Fareyle yakalamayı kolaylaştırmak için kalın tutulur.
-pub const RESIZE_GRIP: usize = 22;
+/// Kenar tutamaçlarının kalınlığı.
+pub const RESIZE_GRIP: usize = 8;
 
 impl Window {
-    /// Verilen fare konumunun yeniden boyutlandırma tutamacına denk gelip
-    /// gelmediğini döndürür. Resize yalnızca **sağ-alt köşeye** sabitlenmiştir;
-    /// tutamaç, pencerenin sınırlarının biraz dışına taşan kalın bir bölgedir.
+    /// Fare konumundaki kenar/köşe resize yönünü bulur. Başlık düğmeleri,
+    /// pencere gövdesi ve maximize edilmiş pencereler resize edilmez.
     pub fn resize_edge_at(&self, mx: usize, my: usize) -> Option<ResizeEdge> {
         if !self.is_open || self.is_minimized || self.is_maximized {
             return None;
         }
         let g = RESIZE_GRIP;
-        let (x1, y1) = (self.x + self.width, self.y + self.height);
-        // Sağ-alt bölge: sağ kenardan `g` içeride başlar, alt kenardan `g` yukarıda;
-        // pencere dışına da `g / 2` kadar tolerans tanır.
-        let in_right = mx + g / 2 >= x1 && mx >= x1.saturating_sub(g);
-        let in_bottom = my + g / 2 >= y1 && my >= y1.saturating_sub(g);
-        // Sağ kenarın hemen dışına da izin ver (tutamağı yakalamak kolaylaşsın).
-        let near_x = mx + g / 2 >= x1 && mx <= x1 + g / 2;
-        let near_y = my + g / 2 >= y1 && my <= y1 + g / 2;
-        if (in_right || near_x) && (in_bottom || near_y) {
-            Some(ResizeEdge::BottomRight)
-        } else {
-            None
-        }
+        let right = self.x + self.width;
+        let bottom = self.y + self.height;
+        let in_x = mx >= self.x && mx < right;
+        let in_y = my >= self.y && my < bottom;
+        if !in_x || !in_y { return None; }
+
+        let left = mx - self.x < g;
+        let edge_right = right - mx <= g;
+        let top = my - self.y < g;
+        let edge_bottom = bottom - my <= g;
+        if top && left { Some(ResizeEdge::TopLeft) }
+        else if top && edge_right { Some(ResizeEdge::TopRight) }
+        else if edge_bottom && left { Some(ResizeEdge::BottomLeft) }
+        else if edge_bottom && edge_right { Some(ResizeEdge::BottomRight) }
+        else if left { Some(ResizeEdge::Left) }
+        else if edge_right { Some(ResizeEdge::Right) }
+        else if top { Some(ResizeEdge::Top) }
+        else if edge_bottom { Some(ResizeEdge::Bottom) }
+        else { None }
     }
 }
 
@@ -331,24 +334,91 @@ pub struct TrayLayout {
     pub kbd: (usize, usize, usize, usize),
 }
 
-/// Başlat menüsü öğe adımı (satır aralığı) ve öğe yüksekliği (px).
-/// Çizim ve tıklama testi ortak kullanır.
-pub const MENU_ITEM_STEP: usize = 23;
-pub const MENU_ITEM_H: usize = 21;
+/// Başlat menüsü yerleşimi — TEK kanonik kaynak.
+///
+/// Grup başlıkları ve öğeler aynı sıralı düzende yerleştirilir; hem çizim hem
+/// tıklama testi bu fonksiyonları kullanır, böylece görsel öğe ile tıklanan öğe
+/// matematiksel olarak birebir örtüşür (yanlış öğe tetiklenmez).
+///
+/// Düzen: profil şeridi (40px) → her grup için bir başlık (GRP_H) + öğeler (ITEM_H).
+
+/// Başlat menüsünün toplam yüksekliği.
+pub const MENU_H: usize = 200;
+/// Menü içerik başlangıcı (profil şeridinden sonra).
+pub const MENU_CONTENT_TOP: usize = 40;
+/// Grup başlığı yüksekliği.
+pub const MENU_GROUP_H: usize = 18;
+/// Menü öğesi yüksekliği (satır aralığı).
+pub const MENU_ITEM_H: usize = 20;
+/// Menü öğesi yüksekliği (tıklanabilir alan) — eski adlarla uyumluluk için.
+pub const MENU_ITEM_STEP: usize = 20;
+
+/// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
+/// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
+pub const MENU_GROUPS: [(&str, usize, usize); 4] =
+    [("Sistem", 0, 4), ("Üretkenlik", 4, 3), ("Medya", 7, 4), ("Güç", 11, 2)];
 
 impl MinGuiCompositor {
-    pub fn start_menu_item_y(menu_y: usize, index: usize) -> usize {
-        let mut y = menu_y + 42;
-        for i in 0..index { y += MENU_ITEM_STEP; if i == 1 || i == 3 || i == 7 || i == 10 { y += 17; } }
-        y
+    /// Bir grubun başlığının Y konumu.
+    pub fn start_menu_group_y(menu_y: usize, group_index: usize) -> usize {
+        menu_y + MENU_CONTENT_TOP + group_index * 32
     }
 
-    /// Başlat menüsü öğesinin tıklanabilir/çizilebilir dikdörtgeni.
-    /// Çizim ve tıklama testi bu tek kaynağı kullanır; böylece görsel öğe ile
-    /// tıklanan öğe her zaman birebir örtüşür (yanlış öğe tetiklenmez).
-    pub fn start_menu_item_rect(menu_y: usize, index: usize) -> (usize, usize, usize, usize) {
-        let y = Self::start_menu_item_y(menu_y, index);
-        (6, y, 228, MENU_ITEM_H)
+    /// Bir menü ÖĞESİNİN Y konumu.
+    pub fn start_menu_item_y(menu_y: usize, item_index: usize) -> usize {
+        let (g, k) = Self::item_group_and_index(item_index);
+        let (_, sub_y, _, _) = Self::start_menu_submenu_rect(menu_y, g, menu_y + MENU_H + 4);
+        sub_y + 28 + k * 24
+    }
+
+    pub fn item_group_and_index(index: usize) -> (usize, usize) {
+        let mut remaining = index;
+        for (g, (_, _, count)) in MENU_GROUPS.iter().enumerate() {
+            if remaining < *count {
+                return (g, remaining);
+            }
+            remaining -= *count;
+        }
+        (3, 0)
+    }
+
+    pub fn start_menu_category_rect(menu_y: usize, group_index: usize) -> (usize, usize, usize, usize) {
+        let x = 6 + 6;
+        let y = menu_y + 40 + group_index * 32 + 4;
+        let w = 190 - 12;
+        let h = 28;
+        (x, y, w, h)
+    }
+
+    pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+        let sub_w = 230;
+        let count = MENU_GROUPS[group_index.min(3)].2;
+        let sub_h = 28 + count * 24 + 6;
+        let sub_x = 6 + 190 + 4;
+        let cat_y = menu_y + 40 + group_index * 32 + 4;
+        let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
+        (sub_x, sub_y, sub_w, sub_h)
+    }
+
+    pub fn start_menu_subitem_rect(menu_y: usize, group_index: usize, item_in_group: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+        let (sub_x, sub_y, sub_w, _) = Self::start_menu_submenu_rect(menu_y, group_index, tb_y);
+        let x = sub_x + 6;
+        let y = sub_y + 28 + item_in_group * 24;
+        let w = sub_w - 12;
+        let h = 22;
+        (x, y, w, h)
+    }
+
+    /// Başlat menüsü öğesinin tıklanabilir dikdörtgeni.
+    pub fn start_menu_item_rect(menu_y: usize, index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+        let (g, k) = Self::item_group_and_index(index);
+        Self::start_menu_subitem_rect(menu_y, g, k, tb_y)
+    }
+
+    /// Menü öğesinin hedef uygulama indeksini döndürür.
+    pub fn start_menu_app_idx(index: usize) -> Option<usize> {
+        const APP_IDX: [usize; 11] = [0, 1, 7, 10, 2, 8, 9, 3, 4, 5, 6];
+        APP_IDX.get(index).copied()
     }
     pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
         let tb_y = height.saturating_sub(TASKBAR_H);
@@ -438,6 +508,7 @@ pub struct MinGuiCompositor {
     pub windows: [Option<Window>; 11],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
+    pub active_start_group: usize,
     pub is_context_menu_open: bool,
     pub is_alt_tab_open: bool,
     pub is_calendar_open: bool,
@@ -454,6 +525,7 @@ pub struct MinGuiCompositor {
     pub cal_month: u8,
     /// Sistem kapatma onayı bekleniyor mu? (Yanlış tetiklenmeyi önler.)
     pub confirm_shutdown: bool,
+    pub confirm_restart: bool,
     z_counter: u8,
 }
 
@@ -463,6 +535,7 @@ impl MinGuiCompositor {
             windows: [None, None, None, None, None, None, None, None, None, None, None],
             active_window_idx: None,
             is_start_menu_open: true,
+            active_start_group: 0,
             is_context_menu_open: false,
             is_alt_tab_open: false,
             is_calendar_open: false,
@@ -475,6 +548,7 @@ impl MinGuiCompositor {
             cal_year: 2026,
             cal_month: 1,
             confirm_shutdown: false,
+            confirm_restart: false,
             z_counter: 0,
         }
     }
@@ -920,14 +994,22 @@ impl MinGuiCompositor {
         fb.draw_rect(nx, ny, 14, 14, if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW });
         fb.draw_rect(nx + 4, ny + 9, 6, 2, Color::DARK_BG);
 
-        // Sağ Alt Köşe Yeniden Boyutlandırma (Resize Grip) — üç kademeli çizgi.
-        // Kalın tutma bölgesiyle (RESIZE_GRIP) hizalı, belirgin bir tutamaç gösterir.
-        let grip_x = win.x + win.width - 16;
-        let grip_y = win.y + win.height - 16;
-        let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
-        fb.draw_rect(grip_x + 10, grip_y + 2, 4, 4, grip_color);
-        fb.draw_rect(grip_x + 6, grip_y + 6, 8, 4, grip_color);
-        fb.draw_rect(grip_x + 2, grip_y + 10, 12, 4, grip_color);
+        // Kenar ve köşelerde resize tutamaçları.
+        if !win.is_maximized {
+            let grip_color = if win.is_focused { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
+            let mid_x = win.x + win.width / 2;
+            let mid_y = win.y + win.height / 2;
+            fb.draw_rect(win.x + 2, mid_y - 6, 3, 12, grip_color);
+            fb.draw_rect(win.x + win.width - 5, mid_y - 6, 3, 12, grip_color);
+            fb.draw_rect(mid_x - 6, win.y + 2, 12, 3, grip_color);
+            fb.draw_rect(mid_x - 6, win.y + win.height - 5, 12, 3, grip_color);
+            // Alt sağda sade, köşeyi çerçevelemeyen üç noktalı boyutlandırma işareti.
+            let gx = win.x + win.width - 13;
+            let gy = win.y + win.height - 13;
+            fb.draw_rect(gx + 7, gy + 7, 2, 2, grip_color);
+            fb.draw_rect(gx + 3, gy + 7, 2, 2, grip_color);
+            fb.draw_rect(gx + 7, gy + 3, 2, 2, grip_color);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1019,7 +1101,7 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü
         if self.is_start_menu_open {
-            self.render_start_menu(fb, tb_y, english);
+            self.render_start_menu(fb, tb_y, english, mx, my);
         }
         // Bağlam Menüsü
         if self.is_context_menu_open {
@@ -1153,11 +1235,17 @@ impl MinGuiCompositor {
         }
     }
 
-    pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize, english: bool) {
-        let menu_w = 240;
-        let menu_h = 430;
+    /// Başlat menüsünün ekran üzerindeki dikdörtgeni (x, y, w, h).
+    pub fn start_menu_rect(tb_y: usize) -> (usize, usize, usize, usize) {
+        let menu_w = 190;
+        let menu_h = MENU_H;
         let menu_x = 6;
         let menu_y = tb_y.saturating_sub(menu_h + 4);
+        (menu_x, menu_y, menu_w, menu_h)
+    }
+
+    pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize, english: bool, mx: usize, my: usize) {
+        let (menu_x, menu_y, menu_w, menu_h) = Self::start_menu_rect(tb_y);
 
         fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
@@ -1165,55 +1253,134 @@ impl MinGuiCompositor {
 
         // Profil Şeridi (gradyan)
         fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, 34, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
-        Self::draw_cat_icon(fb, menu_x + 10, menu_y + 10);
-        Self::draw_string_shadow(fb, menu_x + 32, menu_y + 13, "MinOS Başlat Menüsü", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_cat_icon(fb, menu_x + 8, menu_y + 10);
+        Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS Baslat", Color::TEXT_MAIN, Color::SHADOW, 1);
 
-        let menu_items = if english { [
-            ("1. File Manager", Color::ACCENT_YELLOW), ("2. Settings", Color::ACCENT_BLUE), ("3. Notepad", Color::TEXT_MAIN),
-            ("4. Web Browser", Color::ACCENT_GREEN), ("5. Image Viewer", Color::ACCENT_PINK), ("6. Music Player", Color::ACCENT_YELLOW),
-            ("7. Video Player", Color::ACCENT_RED), ("8. Task Manager", Color::ACCENT_BLUE), ("9. Calculator", Color::ACCENT_GREEN),
-            ("A. Paint", Color::ACCENT_PINK), ("B. Terminal", Color::ACCENT_YELLOW), ("0. Shut Down", Color::ACCENT_RED),
-        ] } else { [
-            ("1. Dosya Yöneticisi", Color::ACCENT_YELLOW),
-            ("2. Sistem Ayarları", Color::ACCENT_BLUE),
-            ("3. Not Defteri", Color::TEXT_MAIN),
-            ("4. Web Tarayıcısı", Color::ACCENT_GREEN),
-            ("5. Resim Gösterici", Color::ACCENT_PINK),
-            ("6. Müzik Çalar", Color::ACCENT_YELLOW),
-            ("7. Video Oynatıcı", Color::ACCENT_RED),
-            ("8. Görev Yöneticisi", Color::ACCENT_BLUE),
-            ("9. Hesap Makinesi", Color::ACCENT_GREEN),
-            ("A. Çizim Tahtası", Color::ACCENT_PINK),
-            ("B. Komut İstemi", Color::ACCENT_YELLOW),
-            ("0. Sistemi Kapat", Color::ACCENT_RED),
-        ] };
+        // Ana Menü Alt Başlıkları (Kategoriler)
+        let category_titles = if english {
+            ["Sistem", "Uretkenlik", "Medya", "Guc"]
+        } else {
+            ["Sistem", "Uretkenlik", "Medya", "Guc"]
+        };
 
-        let groups = [("Sistem", 0usize), ("Üretkenlik", 2), ("Medya", 4), ("Geliştirici", 8)];
-        for (title, first) in groups.iter() {
-            let gy = Self::start_menu_item_y(menu_y, *first).saturating_sub(17);
-            Self::draw_string(fb, menu_x + 12, gy, title, Color::TEXT_MUTED);
-        }
-        for (i, (name, col)) in menu_items.iter().enumerate() {
-            let r = Self::start_menu_item_rect(menu_y, i);
-            let bg_col = if i == 11 {
-                // Kapatma onayı beklenirken kırmızı vurgu göster.
-                if self.confirm_shutdown { Color::ACCENT_RED } else { Color::TITLE_BAR }
+        let active_g = self.active_start_group.min(3);
+
+        for (g, title) in category_titles.iter().enumerate() {
+            let r = Self::start_menu_category_rect(menu_y, g);
+            let is_hovered = in_rect(mx, my, r);
+            let is_active = g == active_g;
+
+            let bg_col = if is_active {
+                Color::ACCENT_BLUE
+            } else if is_hovered {
+                Color::TITLE_BAR
             } else {
                 Color::WINDOW_BG
             };
-            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
-            // Kapatma onayı beklenirken düğme metni netleştirilir.
-            let label = if i == 11 && self.confirm_shutdown {
-                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tikla)", "0. CONFIRM SHUTDOWN (click again)")
+
+            let fg_col = if is_active {
+                Color::WHITE
             } else {
-                name
+                Color::TEXT_MAIN
             };
-            Self::draw_string(fb, r.0 + 8, r.1 + 6, label, *col);
+
+            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
+            if is_active {
+                fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_PINK);
+            }
+
+            Self::draw_string(fb, r.0 + 8, r.1 + 10, title, fg_col);
+            Self::draw_string(fb, r.0 + r.2 - 16, r.1 + 10, ">", fg_col);
         }
 
         // Alt Bilgi Şeridi
         fb.draw_rect(menu_x + 1, menu_y + menu_h - 24, menu_w - 2, 23, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 12, menu_y + menu_h - 18, "Sarman Çekirdeği v1.1 | 64-Bit", Color::TEXT_MUTED);
+        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Core v1.1", Color::TEXT_MUTED);
+
+        // Yana Açılır Alt Menü
+        self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
+    }
+
+    pub fn render_start_submenu(&self, fb: &mut Framebuffer, menu_y: usize, group_idx: usize, tb_y: usize, english: bool, mx: usize, my: usize) {
+        let (sub_x, sub_y, sub_w, sub_h) = Self::start_menu_submenu_rect(menu_y, group_idx, tb_y);
+
+        fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
+        fb.draw_rect(sub_x, sub_y, sub_w, sub_h, Color::TASKBAR_BG);
+        fb.draw_rect_outline(sub_x, sub_y, sub_w, sub_h, Color::BORDER);
+
+        let sub_header_title = match group_idx {
+            0 => crate::gui::ui_text("Sistem Uygulamalari", "System Apps"),
+            1 => crate::gui::ui_text("Uretkenlik Araclar", "Productivity Tools"),
+            2 => crate::gui::ui_text("Medya ve Eglence", "Media & Entertainment"),
+            _ => crate::gui::ui_text("Guc Secenekleri", "Power Options"),
+        };
+        fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
+        Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
+
+        let menu_items = if english { [
+            ("1. File Manager", Color::ACCENT_YELLOW, 0usize),
+            ("2. Settings", Color::ACCENT_BLUE, 1),
+            ("3. Task Manager", Color::ACCENT_BLUE, 7),
+            ("4. Terminal", Color::ACCENT_GREEN, 10),
+            ("5. Notepad", Color::TEXT_MAIN, 2),
+            ("6. Calculator", Color::ACCENT_GREEN, 8),
+            ("7. Paint", Color::ACCENT_PINK, 9),
+            ("8. Web Browser", Color::ACCENT_GREEN, 3),
+            ("9. Image Viewer", Color::ACCENT_PINK, 4),
+            ("A. Music Player", Color::ACCENT_YELLOW, 5),
+            ("B. Video Player", Color::ACCENT_RED, 6),
+            ("0. Shut Down", Color::ACCENT_RED, 255),
+            ("R. Restart", Color::ACCENT_YELLOW, 254),
+        ] } else { [
+            ("1. Dosya Yöneticisi", Color::ACCENT_YELLOW, 0usize),
+            ("2. Sistem Ayarları", Color::ACCENT_BLUE, 1),
+            ("3. Görev Yöneticisi", Color::ACCENT_BLUE, 7),
+            ("4. Komut İstemi", Color::ACCENT_GREEN, 10),
+            ("5. Not Defteri", Color::TEXT_MAIN, 2),
+            ("6. Hesap Makinesi", Color::ACCENT_GREEN, 8),
+            ("7. Çizim Tahtası", Color::ACCENT_PINK, 9),
+            ("8. Web Tarayıcısı", Color::ACCENT_GREEN, 3),
+            ("9. Resim Gösterici", Color::ACCENT_PINK, 4),
+            ("A. Müzik Çalar", Color::ACCENT_YELLOW, 5),
+            ("B. Video Oynatıcı", Color::ACCENT_RED, 6),
+            ("0. Sistemi Kapat", Color::ACCENT_RED, 255),
+            ("R. Yeniden Baslat", Color::ACCENT_YELLOW, 254),
+        ] };
+
+        let (_, first, count) = MENU_GROUPS[group_idx];
+
+        for k in 0..count {
+            let i = first + k;
+            let (name, col, _) = menu_items[i];
+            let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
+
+            let is_hovered = in_rect(mx, my, r);
+            let bg_col = if (i == 11 && self.confirm_shutdown) || (i == 12 && self.confirm_restart) {
+                Color::ACCENT_RED
+            } else if is_hovered {
+                Color::ACCENT_BLUE
+            } else if i >= 11 {
+                Color::TITLE_BAR
+            } else {
+                Color::WINDOW_BG
+            };
+
+            fb.draw_rect(r.0, r.1, r.2, r.3, bg_col);
+            if is_hovered {
+                fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_PINK);
+            }
+
+            let label = if i == 11 && self.confirm_shutdown {
+                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tikla)", "0. CONFIRM SHUTDOWN (click again)")
+            } else if i == 12 && self.confirm_restart {
+                crate::gui::ui_text("R. YENIDEN BASLAT? TEKRAR TIKLA", "R. CONFIRM RESTART (click again)")
+            } else {
+                name
+            };
+
+            let text_col = if is_hovered { Color::WHITE } else { col };
+            Self::draw_string(fb, r.0 + 8, r.1 + 5, label, text_col);
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -300,11 +300,21 @@ impl NotepadApp {
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
             let mx = win_x + match self.menu { 1=>8, 2=>68, 3=>128, _=>188 };
-            let items = match self.menu { 1=>["Yeni", "Aç", "Kaydet", "Kapat"], 2=>["Geri Al", "Kes", "Kopyala", "Yapıştır"], 3=>["Tümünü Seç", "Sil", "Temizle", ""] , _=>["Not Defteri Yardımı", "MinOS v1.0", "", ""] };
-            fb.draw_shadow(mx, win_y+54, 142, 94, Color::SHADOW);
-            fb.draw_rect(mx,win_y+54,142,94,Color::WINDOW_BG);
-            fb.draw_rect_outline(mx,win_y+54,142,94,Color::BORDER);
-            for i in 0..4 { if !items[i].is_empty() { MinGuiCompositor::draw_string(fb,mx+10,win_y+64+i*20,items[i],Color::TEXT_MAIN); } }
+            let items = match self.menu {
+                1 => ["Yeni Belge", "Kaydet", "Temizle", ""],
+                2 => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
+                3 => ["Piksel Font", "Sıkıştırılmış", "ClearType Font", ""],
+                _ => ["Not Defteri Hakkında", "", "", ""],
+            };
+            fb.draw_shadow(mx, win_y + 54, 150, 94, Color::SHADOW);
+            fb.draw_rect(mx, win_y + 54, 150, 94, Color::WINDOW_BG);
+            fb.draw_rect_outline(mx, win_y + 54, 150, 94, Color::BORDER);
+            for i in 0..4 {
+                if !items[i].is_empty() {
+                    fb.draw_rect(mx + 4, win_y + 60 + i * 20, 142, 18, Color::TITLE_BAR_INACTIVE);
+                    MinGuiCompositor::draw_string(fb, mx + 10, win_y + 64 + i * 20, items[i], Color::TEXT_MAIN);
+                }
+            }
         }
     }
 }

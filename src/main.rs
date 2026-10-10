@@ -979,18 +979,40 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             2 => {
-                                // Not Defteri: Dosya/Düzen araç çubuğu ve hızlı düğmeler
+                                // Not Defteri: Dosya/Düzen/Biçim/Yardım araç çubuğu ve menü aksiyonları
                                 if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 60 { notepad_app.menu = 1; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 68 && mx < wx + 128 { notepad_app.menu = 2; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 188 { notepad_app.menu = 3; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 188 && mx < wx + 250 { notepad_app.menu = 4; }
-                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 230 && my >= wy + 54 && my < wy + 150 {
-                                    let item=(my-wy-54)/20; match (notepad_app.menu,item) { (1,0)=>notepad_app.clear(), (1,2)=>notepad_app.insert_char(' '), (2,0)=>{}, (2,1)=>notepad_app.cut_selection(), (2,2)=>notepad_app.copy_selection(), (2,3)=>notepad_app.paste_clipboard(), (3,0)=>notepad_app.select_all(), (3,1)=>notepad_app.delete_forward(), (3,2)=>notepad_app.clear(), _=>{} } notepad_app.menu=0;
+                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 340 && my >= wy + 54 && my < wy + 150 {
+                                    let item = (my.saturating_sub(wy + 54)) / 20;
+                                    match (notepad_app.menu, item) {
+                                        // Dosya Menüsü: 0: Yeni, 1: Kaydet, 2: Temizle
+                                        (1, 0) => notepad_app.clear(),
+                                        (1, 1) => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                        (1, 2) => notepad_app.clear(),
+                                        // Düzen Menüsü: 0: Kes, 1: Kopyala, 2: Yapıştır, 3: Tümünü Seç
+                                        (2, 0) => notepad_app.cut_selection(),
+                                        (2, 1) => notepad_app.copy_selection(),
+                                        (2, 2) => notepad_app.paste_clipboard(),
+                                        (2, 3) => notepad_app.select_all(),
+                                        // Biçim Menüsü: Font seçenekleri
+                                        (3, 0) => { settings_app.font = apps::settings::FontChoice::TurkishPixel; settings_app.font.apply(); },
+                                        (3, 1) => { settings_app.font = apps::settings::FontChoice::Compact; settings_app.font.apply(); },
+                                        (3, 2) => { settings_app.font = apps::settings::FontChoice::ClearType; settings_app.font.apply(); },
+                                        // Yardım Menüsü: Hakkında sekmesini aç
+                                        (4, 0) => {
+                                            open_app(&mut compositor, 1);
+                                            settings_app.active_tab = 3;
+                                        },
+                                        _ => {}
+                                    }
+                                    notepad_app.menu = 0;
                                 }
                                 if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
                                 } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
-                                    notepad_app.insert_char(' ');
+                                    settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                                 }
                             }
                             3 => {

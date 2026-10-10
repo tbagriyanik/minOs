@@ -82,8 +82,8 @@ impl TerminalApp {
 
     /// Başlangıç banner'ı.
     pub fn init_banner(&mut self) {
-        self.push_line("MinOS MinShell v2.0 (Sarman Edition)", Color::ACCENT_PINK);
-        self.push_line("Yardim icin 'help' yazin.", Color::TEXT_MUTED);
+        self.push_line("Komut İstemi", Color::ACCENT_PINK);
+        self.push_line("Yardım için 'help' yazın.", Color::TEXT_MUTED);
     }
 
     /// Çıktıya yeni bir satır ekler; tampon dolarsa en eskisini kaydırır.

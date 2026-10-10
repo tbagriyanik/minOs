@@ -28,9 +28,9 @@ impl FontChoice {
         match (self, english) {
             (FontChoice::TurkishPixel, false) => "Yazı tipi: Türkçe Piksel",
             (FontChoice::TurkishPixel, true) => "Font: Turkish Pixel",
-            (FontChoice::Compact, false) => "Font: Sikistirilmis",
+            (FontChoice::Compact, false) => "Yazı tipi: Sıkıştırılmış",
             (FontChoice::Compact, true) => "Font: Compact",
-            (FontChoice::ClearType, false) => "Font: ClearType",
+            (FontChoice::ClearType, false) => "Yazı tipi: ClearType",
             (FontChoice::ClearType, true) => "Font: ClearType",
         }
     }
@@ -95,7 +95,7 @@ impl SystemSettings {
             static_ip: [192, 168, 1, 100],
             vfs_mounted: true,
             kernel_debug_log: true,
-            status_msg: "Live CD Persist Store: Hazir",
+            status_msg: "Canlı CD Kalıcı Depolama: Hazır",
         }
     }
 
@@ -112,7 +112,7 @@ impl SystemSettings {
                 _ => {}
             }
         }
-        self.status_msg="Ayarlar kalici depolamadan yuklendi.";
+        self.status_msg="Ayarlar kalıcı depolamadan yüklendi.";
     }
 
     // -----------------------------------------------------------------
@@ -170,7 +170,7 @@ impl SystemSettings {
 
     pub fn cycle_theme(&mut self) {
         self.theme = theme::cycle();
-        self.status_msg = "Tema degistirildi: Sarman temayi sever!";
+        self.status_msg = "Tema değiştirildi: Sarman temayı sever!";
     }
 
     pub fn set_volume_from_click(&mut self, x: usize) {
@@ -183,7 +183,7 @@ impl SystemSettings {
         if self.is_muted && self.volume > 0 {
             self.is_muted = false;
         }
-        self.status_msg = "Ses duzeyi guncellendi.";
+        self.status_msg = "Ses düzeyi güncellendi.";
     }
 
     pub fn save_all(&mut self, compositor: &MinGuiCompositor, vfs: &mut VirtualFileSystem) {
@@ -199,7 +199,7 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";muted="); put(&mut cfg,&mut n,if self.is_muted{b"1"}else{b"0"}); put(&mut cfg,&mut n,b";res=");
         if w==800 {put(&mut cfg,&mut n,b"800x600")} else if w==1024 {put(&mut cfg,&mut n,b"1024x768")} else if w==1920 {put(&mut cfg,&mut n,b"1920x1080")} else {put(&mut cfg,&mut n,b"1280x720")};
         put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"}); vfs.write_file("settings.cfg",&cfg[..n]);
-        self.status_msg = "Ayarlar ve pencere duzeni kalici olarak kaydedildi.";
+        self.status_msg = "Ayarlar ve pencere düzeni kalıcı olarak kaydedildi.";
     }
 
     pub fn restore_windows(&self, compositor: &mut MinGuiCompositor) {
@@ -230,7 +230,7 @@ impl SystemSettings {
     ) {
         // Sol Menü / Sekmeler
         fb.draw_rect(win_x + 6, win_y + 32, TAB_W + 8, win_h.saturating_sub(62), Color::TITLE_BAR_INACTIVE);
-        let tabs = if self.language.is_english() { ["Basic", "Advanced", "Network", "About"] } else { ["Temel", "Ileri", "Ag", "Hakkinda"] };
+        let tabs = if self.language.is_english() { ["Basic", "Advanced", "Network", "About"] } else { ["Temel", "İleri", "Ağ", "Hakkında"] };
         for (i, t) in tabs.iter().enumerate() {
             let r = Self::tab_rect(win_x, win_y, i);
             let is_cur = i == self.active_tab;
@@ -315,7 +315,7 @@ impl SystemSettings {
 
                 // --- Ses ---
                 let mut vol = TextBuf::new();
-                vol.push_str("Ses Duzeyi: %");
+                vol.push_str("Ses Düzeyi: %");
                 vol.push_u2(self.volume as u32);
                 if self.is_muted {
                     vol.push_str(" (SUSTURULDU)");
@@ -335,43 +335,43 @@ impl SystemSettings {
                 MinGuiCompositor::draw_button(fb, mute_r, mute_bg, mute_lbl, Color::TEXT_MAIN, false);
             }
             1 => {
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Cekirdek Gunlugu: Aktif (/dev/klog)", Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "VFS Surucusu: RamFS TarFS v1.0", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Donanim Hizlandirma: SSE2 Aktif", Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "Çekirdek Günlüğü: Aktif (/dev/klog)", Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "VFS Sürücüsü: RamFS TarFS v1.0", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Donanım Hızlandırma: SSE2 Aktif", Color::ACCENT_PINK);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "Önyükleme: Limine Stivale2", Color::TEXT_MUTED);
                 let mut audio_status = TextBuf::new();
-                audio_status.push_str("Ses surucusu: ");
+                audio_status.push_str("Ses sürücüsü: ");
                 audio_status.push_str(audio_driver);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, audio_status.as_str(), Color::ACCENT_BLUE);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazir tema hazir", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, "Tema Motoru: 3 hazır tema hazır", Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 176,
-                    if self.language.is_english() { "Target resolution:" } else { "Hedef cozunurluk:" }, Color::ACCENT_YELLOW);
+                    if self.language.is_english() { "Target resolution:" } else { "Hedef çözünürlük:" }, Color::ACCENT_YELLOW);
                 for i in 0..4 { let r=Self::resolution_btn_rect(win_x,win_y,i); let active=self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; MinGuiCompositor::draw_button(fb,r,if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR},Self::resolution_name(i),Color::TEXT_MAIN,false); }
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, if self.night_light { "Gece isigi: Acik" } else { "Gece isigi: Kapali" }, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, if self.night_light { "Gece ışığı: Açık" } else { "Gece ışığı: Kapalı" }, Color::ACCENT_YELLOW);
                 MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Aç" }, Color::DARK_BG, false);
             }
             2 => {
                 let mut driver = TextBuf::new();
-                driver.push_str("Ag surucusu: ");
+                driver.push_str("Ağ sürücüsü: ");
                 driver.push_str(network_driver);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, driver.as_str(), Color::ACCENT_BLUE);
                 let mut status = TextBuf::new();
                 status.push_str("Durum: ");
                 status.push_str(network_status);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, status.as_str(), Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Ag yigin: IPv4 / ARP / ICMP", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Ağ yığını: IPv4 / ARP / ICMP", Color::TEXT_MUTED);
             }
             _ => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "Gelistirici: Sarman Cekirdek Ekibi", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Ozel Surum: Live CD Persist Store", Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, "Geliştirici: Sarman Çekirdek Ekibi", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, "Özel Sürüm: Live CD Persist Store", Color::ACCENT_GREEN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "github.com/tbagriyanik/minos", Color::ACCENT_PINK);
             }
         }
 
         // Alt Aksiyon Butonları (Kaydet & Sıfırla)
         MinGuiCompositor::draw_button(fb, Self::save_btn_rect(win_x, win_y, win_h), Color::ACCENT_GREEN, "Kaydet", Color::DARK_BG, false);
-        MinGuiCompositor::draw_button(fb, Self::reset_btn_rect(win_x, win_y, win_h), Color::ACCENT_RED, "Sifirla", Color::WHITE, false);
+        MinGuiCompositor::draw_button(fb, Self::reset_btn_rect(win_x, win_y, win_h), Color::ACCENT_RED, "Sıfırla", Color::WHITE, false);
 
         // Durum Çubuğu
         let bar_y = win_y + win_h.saturating_sub(26);

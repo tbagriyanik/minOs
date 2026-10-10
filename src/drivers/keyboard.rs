@@ -8,6 +8,7 @@ pub enum KeyAction {
     ArrowDown,
     ArrowLeft,
     ArrowRight,
+    EnterKey,
     ShutdownOS,
     CopyText,
     PasteText,
@@ -164,6 +165,9 @@ impl KeyboardState {
             0x4D => { // Arrow Right
                 self.last_action = Some(KeyAction::ArrowRight);
                 return None;
+            }
+            0x1C => { // Enter key
+                self.last_action = Some(KeyAction::EnterKey);
             }
             _ => {}
         }

@@ -48,7 +48,7 @@ impl BrowserApp {
     pub fn navigate(&mut self) {
         let value = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
         match value {
-            "minos://help" | "https://github.com/tbagriyanik/minos" => {
+            "minos://help" => {
                 self.active_tab = 0;
                 self.page_loaded = true;
                 self.status = "Yerel MinOS yardım sayfası açıldı.";
@@ -76,7 +76,7 @@ impl BrowserApp {
             }
             _ => {
                 self.page_loaded = false;
-                self.status = "Bu adres açılamadı; desteklenen: minos://help, minos://cats, minos://net";
+                self.status = "Web erisimi yok: TCP/HTTP/TLS ve DNS henuz desteklenmiyor.";
             }
         }
         self.address_focused = false;
@@ -154,7 +154,7 @@ impl BrowserApp {
         } else {
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, "Bu adres açılamadı.", Color::ACCENT_RED);
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, "Desteklenenler: minos://help, minos://cats, minos://net", Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, "Yerel sayfa: minos://help", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, "Yerel: minos://help | Ag: minos://net", Color::TEXT_MUTED);
         }
         fb.draw_rect(win_x + 6, win_y + 256, win_w - 12, 18, Color::TASKBAR_BG);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 260, self.status, Color::TEXT_MUTED);

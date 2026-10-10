@@ -288,8 +288,8 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
-/// Kenar tutamaçlarının kalınlığı.
-pub const RESIZE_GRIP: usize = 8;
+/// Kenar tutamaçlarının kalınlığı (kolay tutulabilmesi için 12px).
+pub const RESIZE_GRIP: usize = 12;
 
 impl Window {
     /// Fare konumundaki kenar/köşe resize yönünü bulur. Başlık düğmeleri,
@@ -509,6 +509,7 @@ pub struct MinGuiCompositor {
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
     pub active_start_group: usize,
+    pub selected_start_item: usize,
     pub is_context_menu_open: bool,
     pub is_alt_tab_open: bool,
     pub is_calendar_open: bool,
@@ -536,6 +537,7 @@ impl MinGuiCompositor {
             active_window_idx: None,
             is_start_menu_open: true,
             active_start_group: 0,
+            selected_start_item: 0,
             is_context_menu_open: false,
             is_alt_tab_open: false,
             is_calendar_open: false,
@@ -1506,7 +1508,7 @@ impl MinGuiCompositor {
 
         // Alt Bilgi Şeridi
         fb.draw_rect(menu_x + 1, menu_y + menu_h - 24, menu_w - 2, 23, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Çekirdeği v1.1", Color::TEXT_MUTED);
+        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Çekirdeği", Color::TEXT_MUTED);
 
         // Yana Açılır Alt Menü
         self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
@@ -1529,43 +1531,43 @@ impl MinGuiCompositor {
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
         let menu_items = if english { [
-            ("1. File Manager", Color::ACCENT_YELLOW, 0usize),
-            ("2. Settings", Color::ACCENT_BLUE, 1),
-            ("3. Task Manager", Color::ACCENT_BLUE, 7),
-            ("4. Terminal", Color::ACCENT_GREEN, 10),
-            ("5. Notepad", Color::TEXT_MAIN, 2),
-            ("6. Calculator", Color::ACCENT_GREEN, 8),
-            ("7. Paint", Color::ACCENT_PINK, 9),
-            ("8. Web Browser", Color::ACCENT_GREEN, 3),
-            ("9. Image Viewer", Color::ACCENT_PINK, 4),
-            ("A. Music Player", Color::ACCENT_YELLOW, 5),
-            ("B. Video Player", Color::ACCENT_RED, 6),
-            ("0. Shut Down", Color::ACCENT_RED, 255),
-            ("R. Restart", Color::ACCENT_YELLOW, 254),
+            ("File Manager", Color::ACCENT_YELLOW, 0usize),
+            ("Settings", Color::ACCENT_BLUE, 1),
+            ("Task Manager", Color::ACCENT_BLUE, 7),
+            ("Terminal", Color::ACCENT_GREEN, 10),
+            ("Notepad", Color::TEXT_MAIN, 2),
+            ("Calculator", Color::ACCENT_GREEN, 8),
+            ("Paint", Color::ACCENT_PINK, 9),
+            ("Web Browser", Color::ACCENT_GREEN, 3),
+            ("Image Viewer", Color::ACCENT_PINK, 4),
+            ("Music Player", Color::ACCENT_YELLOW, 5),
+            ("Video Player", Color::ACCENT_RED, 6),
+            ("Shut Down", Color::ACCENT_RED, 255),
+            ("Restart", Color::ACCENT_YELLOW, 254),
         ] } else { [
-            ("1. Dosya Yöneticisi", Color::ACCENT_YELLOW, 0usize),
-            ("2. Sistem Ayarları", Color::ACCENT_BLUE, 1),
-            ("3. Görev Yöneticisi", Color::ACCENT_BLUE, 7),
-            ("4. Komut İstemi", Color::ACCENT_GREEN, 10),
-            ("5. Not Defteri", Color::TEXT_MAIN, 2),
-            ("6. Hesap Makinesi", Color::ACCENT_GREEN, 8),
-            ("7. Çizim Tahtası", Color::ACCENT_PINK, 9),
-            ("8. Web Tarayıcısı", Color::ACCENT_GREEN, 3),
-            ("9. Resim Gösterici", Color::ACCENT_PINK, 4),
-            ("A. Müzik Çalar", Color::ACCENT_YELLOW, 5),
-            ("B. Video Oynatıcı", Color::ACCENT_RED, 6),
-            ("0. Sistemi Kapat", Color::ACCENT_RED, 255),
-            ("R. Yeniden Başlat", Color::ACCENT_YELLOW, 254),
+            ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0usize),
+            ("Sistem Ayarları", Color::ACCENT_BLUE, 1),
+            ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
+            ("Komut İstemi", Color::ACCENT_GREEN, 10),
+            ("Not Defteri", Color::TEXT_MAIN, 2),
+            ("Hesap Makinesi", Color::ACCENT_GREEN, 8),
+            ("Çizim Tahtası", Color::ACCENT_PINK, 9),
+            ("Web Tarayıcısı", Color::ACCENT_GREEN, 3),
+            ("Resim Gösterici", Color::ACCENT_PINK, 4),
+            ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
+            ("Video Oynatıcı", Color::ACCENT_RED, 6),
+            ("Sistemi Kapat", Color::ACCENT_RED, 255),
+            ("Yeniden Başlat", Color::ACCENT_YELLOW, 254),
         ] };
 
         let (_, first, count) = MENU_GROUPS[group_idx];
 
         for k in 0..count {
             let i = first + k;
-            let (name, col, _) = menu_items[i];
+            let (name, col, app_or_code) = menu_items[i];
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
-            let is_hovered = in_rect(mx, my, r);
+            let is_hovered = in_rect(mx, my, r) || (self.selected_start_item == k);
             let bg_col = if (i == 11 && self.confirm_shutdown) || (i == 12 && self.confirm_restart) {
                 Color::ACCENT_RED
             } else if is_hovered {
@@ -1581,16 +1583,25 @@ impl MinGuiCompositor {
                 fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::ACCENT_PINK);
             }
 
+            // Çizim: Simgeler (İkonlar)
+            if app_or_code < 11 {
+                let icon_idx = Self::window_icon_index(app_or_code);
+                Self::draw_icon_by_index(fb, r.0 + 6, r.1 + 3, icon_idx);
+            } else {
+                // Güç simgeleri (kedi veya varsayılan simge)
+                Self::draw_cat_icon(fb, r.0 + 6, r.1 + 3);
+            }
+
             let label = if i == 11 && self.confirm_shutdown {
-                crate::gui::ui_text("0. KAPATMAYI ONAYLA (tekrar tıkla)", "0. CONFIRM SHUTDOWN (click again)")
+                crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
             } else if i == 12 && self.confirm_restart {
-                crate::gui::ui_text("R. YENİDEN BAŞLAT? TEKRAR TIKLA", "R. CONFIRM RESTART (click again)")
+                crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
             } else {
                 name
             };
 
             let text_col = if is_hovered { Color::WHITE } else { col };
-            Self::draw_string(fb, r.0 + 8, r.1 + 5, label, text_col);
+            Self::draw_string(fb, r.0 + 26, r.1 + 5, label, text_col);
         }
     }
 

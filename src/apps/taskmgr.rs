@@ -53,7 +53,7 @@ impl TaskManagerApp {
             total_memory_kb: 0, free_memory_kb: 0, used_memory_kb: 0,
             ramdisk_used: 0, ramdisk_files: 0,
             tick: 0, total_cpu_pct: 0, trend: 1,
-            status: "Hazir",
+            status: "Hazır",
         }
     }
 
@@ -120,15 +120,15 @@ impl TaskManagerApp {
             return;
         }
         if self.processes[i].pid == 1 {
-            self.status = "kernel_core sonlandirilamaz (korumali)";
+            self.status = "kernel_core sonlandırılamaz (korumalı)";
             return;
         }
         if self.processes[i].alive {
             self.processes[i].alive = false;
             self.processes[i].cpu_usage_pct = 0;
-            self.status = "Surec sonlandirildi.";
+            self.status = "Süreç sonlandırıldı.";
         } else {
-            self.status = "Surec zaten kapali.";
+            self.status = "Süreç zaten kapalı.";
         }
     }
 
@@ -148,7 +148,7 @@ impl TaskManagerApp {
         None
     }
 
-    /// "Sonlandir" düğmesinin dikdörtgeni (pencerenin sağ-alt bölümü).
+    /// "Sonlandır" düğmesinin dikdörtgeni (pencerenin sağ-alt bölümü).
     pub fn kill_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(96), win_y + 30, 86, 18)
     }
@@ -162,13 +162,13 @@ impl TaskManagerApp {
         header.push_u2(self.total_cpu_pct as u32);
         MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 30, header.as_str(), Color::ACCENT_PINK);
 
-        // "Sonlandir" düğmesi
+        // "Sonlandır" düğmesi
         let br = Self::kill_btn_rect(win_x, win_y, win_w);
         fb.draw_rect(br.0, br.1, br.2, br.3, Color::ACCENT_RED);
-        MinGuiCompositor::draw_string(fb, br.0 + 8, br.1 + 5, "Sonlandir", Color::WHITE);
+        MinGuiCompositor::draw_string(fb, br.0 + 8, br.1 + 5, "Sonlandır", Color::WHITE);
 
         // Tablo Başlıkları
-        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 48, "PID  ISIM               RAM(KB)  CPU", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 48, "PID  İSİM               RAM(KB)  CPU", Color::TEXT_MUTED);
         fb.draw_rect(win_x + 10, win_y + 60, 370, 1, Color::BORDER);
 
         let mut row_y = win_y + 66;
@@ -209,7 +209,7 @@ impl TaskManagerApp {
         // RAM kullanım grafiği (çubuk)
         let graph_y = win_y + 160;
         fb.draw_rect(win_x + 10, graph_y, 370, 1, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 10, graph_y + 6, crate::gui::ui_text("Bellek Kullanimi","Memory Usage"), Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, win_x + 10, graph_y + 6, crate::gui::ui_text("Bellek Kullanımı","Memory Usage"), Color::ACCENT_BLUE);
         let gfx = win_x + 10;
         let gfy = graph_y + 20;
         let gw = 370usize;

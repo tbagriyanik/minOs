@@ -274,22 +274,22 @@ pub extern "C" fn _start() -> ! {
     // 0: Dosya Yöneticisi
     compositor.add_window(gui::Window::new("Dosya Yöneticisi - VFS / Ev", "Dosyalar", 30, 30, 480, 290, false));
     // 1: Sistem Ayarları
-    compositor.add_window(gui::Window::new("Sistem Ayarları - Tema, Ses, Saat", "Ayarlar", 160, 30, 480, 390, false));
+    compositor.add_window(gui::Window::new("Sistem Ayarları", "Ayarlar", 160, 30, 480, 390, false));
     // 2: Not Defteri
     compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 460, 270, false));
-    // 3: Web Tarayıcısı (SarmanNet)
-    compositor.add_window(gui::Window::new("SarmanNet Web Gezgini - 1.1", "Web", 550, 60, 480, 280, false));
-    // 4: Resim Gösterici (MinViewer)
+    // 3: Web Tarayıcısı
+    compositor.add_window(gui::Window::new("Web Gezgini", "Web", 550, 60, 480, 280, false));
+    // 4: Resim Gösterici
     compositor.add_window(gui::Window::new("Resim Gösterici - kedi_maskotu.bmp", "Resim", 120, 90, 450, 270, false));
-    // 5: Müzik Çalar (SarmanBeats)
-    compositor.add_window(gui::Window::new("SarmanBeats Müzik Çalar - Ring 0", "Müzik", 560, 80, 460, 245, false));
-    // 6: Video Oynatıcı (MinPlayer)
-    compositor.add_window(gui::Window::new("MinPlayer Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 460, 275, false));
+    // 5: Müzik Çalar
+    compositor.add_window(gui::Window::new("Müzik Çalar", "Müzik", 560, 80, 460, 245, false));
+    // 6: Video Oynatıcı
+    compositor.add_window(gui::Window::new("Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 460, 275, false));
     // 7: Görev Yöneticisi
-    compositor.add_window(gui::Window::new("Görev Yöneticisi - MinOS", "Görevler", 220, 60, 420, 300, false));
-    compositor.add_window(gui::Window::new("Hesap Makinesi - MinCalc", "Hesap", 260, 120, 360, 220, false));
-    compositor.add_window(gui::Window::new("Çizim Tahtası - MinPaint", "Çizim", 180, 80, 520, 360, false));
-    compositor.add_window(gui::Window::new("Komut İstemi - MinShell", "Komut", 220, 100, 560, 300, false));
+    compositor.add_window(gui::Window::new("Görev Yöneticisi", "Görevler", 220, 60, 420, 300, false));
+    compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 220, false));
+    compositor.add_window(gui::Window::new("Çizim Tahtası", "Çizim", 180, 80, 520, 360, false));
+    compositor.add_window(gui::Window::new("Komut İstemi", "Komut", 220, 100, 560, 300, false));
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
@@ -1126,29 +1126,100 @@ pub extern "C" fn _start() -> ! {
                     compositor.is_start_menu_open = false;
                 }
                 drivers::keyboard::KeyAction::ArrowUp => {
-                    // Görev Yöneticisi odaklıysa süreç seçimi, değilse dosya listesi.
-                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                    if tm_focused {
-                        taskmgr_app.select_up();
-                    } else if let Some(w) = compositor.windows[0] {
-                        if w.is_open && w.is_focused && !w.is_minimized && filemanager_app.selected_idx > 0 {
-                            filemanager_app.selected_idx -= 1;
+                    if compositor.is_start_menu_open {
+                        if compositor.selected_start_item > 0 {
+                            compositor.selected_start_item -= 1;
+                        }
+                    } else if compositor.is_context_menu_open {
+                        // Sağ tık / Bağlam menüsü gezintisi
+                        if compositor.context_file_idx.unwrap_or(0) > 0 {
+                            compositor.context_file_idx = Some(compositor.context_file_idx.unwrap() - 1);
+                        }
+                    } else {
+                        let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        if tm_focused {
+                            taskmgr_app.select_up();
+                        } else if let Some(w) = compositor.windows[0] {
+                            if w.is_open && w.is_focused && !w.is_minimized && filemanager_app.selected_idx > 0 {
+                                filemanager_app.selected_idx -= 1;
+                            }
                         }
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowDown => {
-                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                    if tm_focused {
-                        taskmgr_app.select_down();
-                    } else if let Some(w) = compositor.windows[0] {
-                        if w.is_open && w.is_focused && !w.is_minimized
-                            && filemanager_app.selected_idx + 1 < filemanager_app.files.len()
-                        {
-                            filemanager_app.selected_idx += 1;
+                    if compositor.is_start_menu_open {
+                        let active_g = compositor.active_start_group;
+                        let count = gui::MENU_GROUPS[active_g].2;
+                        if compositor.selected_start_item + 1 < count {
+                            compositor.selected_start_item += 1;
+                        }
+                    } else if compositor.is_context_menu_open {
+                        let items_len = compositor.context_items().len();
+                        let cur = compositor.context_file_idx.unwrap_or(0);
+                        if cur + 1 < items_len {
+                            compositor.context_file_idx = Some(cur + 1);
+                        }
+                    } else {
+                        let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        if tm_focused {
+                            taskmgr_app.select_down();
+                        } else if let Some(w) = compositor.windows[0] {
+                            if w.is_open && w.is_focused && !w.is_minimized
+                                && filemanager_app.selected_idx + 1 < filemanager_app.files.len()
+                            {
+                                filemanager_app.selected_idx += 1;
+                            }
                         }
                     }
                 }
-                drivers::keyboard::KeyAction::ArrowLeft | drivers::keyboard::KeyAction::ArrowRight => {}
+                drivers::keyboard::KeyAction::ArrowLeft => {
+                    if compositor.is_start_menu_open {
+                        compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
+                        compositor.selected_start_item = 0;
+                    }
+                }
+                drivers::keyboard::KeyAction::ArrowRight => {
+                    if compositor.is_start_menu_open {
+                        if compositor.active_start_group + 1 < 4 {
+                            compositor.active_start_group += 1;
+                            compositor.selected_start_item = 0;
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::EnterKey => {
+                    if compositor.is_start_menu_open {
+                        let active_g = compositor.active_start_group;
+                        let (_, first, count) = gui::MENU_GROUPS[active_g];
+                        let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
+                        let i = first + item_k;
+                        if i == 11 {
+                            if compositor.confirm_shutdown {
+                                serial_print("[MinOS] System Shutdown confirmed via Keyboard!\n");
+                                unsafe {
+                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+                                    core::arch::asm!("cli; hlt");
+                                }
+                            } else {
+                                compositor.confirm_shutdown = true;
+                            }
+                        } else if i == 12 {
+                            if compositor.confirm_restart {
+                                restart_system();
+                            }
+                            compositor.confirm_restart = true;
+                        } else {
+                            if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
+                                open_app(&mut compositor, app_idx);
+                            }
+                            compositor.is_start_menu_open = false;
+                        }
+                    } else if compositor.is_context_menu_open {
+                        if let Some(_clicked_item) = compositor.context_file_idx {
+                            // Bağlam menüsü öğesini çalıştır
+                            compositor.is_context_menu_open = false;
+                        }
+                    }
+                }
                 drivers::keyboard::KeyAction::ShutdownOS => {
                     serial_print("[MinOS] System Shutdown requested!\n");
                     unsafe {
@@ -1187,6 +1258,16 @@ pub extern "C" fn _start() -> ! {
         // 4. Fare Tekerlek (Scroll)
         let scroll_val = mouse.take_scroll_delta();
         if scroll_val != 0 {
+            // Başlat menüsü açıkken scroll wheel desteği
+            if compositor.is_start_menu_open {
+                let active_g = compositor.active_start_group;
+                let count = gui::MENU_GROUPS[active_g].2;
+                if scroll_val > 0 {
+                    compositor.selected_start_item = compositor.selected_start_item.saturating_sub(1);
+                } else if compositor.selected_start_item + 1 < count {
+                    compositor.selected_start_item += 1;
+                }
+            }
             // Dosya Yöneticisi (pencere 0): listeyi kaydır ve imleci de taşı.
             if let Some(w) = compositor.windows[0] {
                 if w.is_open && w.is_focused && !w.is_minimized {

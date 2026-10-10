@@ -137,6 +137,13 @@ if ($oscdimg) {
         Copy-Item -Force $tempIso "minos_boot.iso"
         $IsoName = "minos_boot.iso"
     }
+
+    # Release dizinlerine de kopyala
+    New-Item -ItemType Directory -Force -Path "target\release" | Out-Null
+    New-Item -ItemType Directory -Force -Path "target\x86_64-minos\release" | Out-Null
+    Copy-Item -Force $IsoName "target\release\minos.iso"
+    Copy-Item -Force $IsoName "target\x86_64-minos\release\minos.iso"
+
     Write-Host "[BAŞARILI] $IsoName oscdimg & Limine ile boot edilebilir oluşturuldu!" -ForegroundColor Green
 } elseif ($xorriso) {
     if (Test-Path "$OutputDir\EFI\BOOT\BOOTX64.EFI") {

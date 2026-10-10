@@ -224,6 +224,9 @@ pub extern "C" fn _start() -> ! {
 
         // 3. Görev Çubuğu, Başlat Menüsü ve Donanım İmleci
         compositor.render_taskbar_and_overlays(fb, mouse, kbd);
+
+        // 4. Backbuffer'ı VRAM'e Tek Seferde Kopyala (Flicker-Free Double Buffering)
+        fb.flush();
     };
 
     // İlk kareyi çiz

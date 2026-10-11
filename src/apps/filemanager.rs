@@ -57,19 +57,21 @@ impl FileManagerApp {
 
         // Üst Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 26, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, "Konum: ", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, crate::gui::ui_text("Konum: ", "Location: "), Color::TEXT_MUTED);
         MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.current_path, Color::ACCENT_BLUE);
 
         // Hızlı Butonlar
         fb.draw_rect(win_x + win_w.saturating_sub(120), win_y + 32, 50, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, "Yenile", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, crate::gui::ui_text("Yenile", "Refresh"), Color::TEXT_MAIN);
         fb.draw_rect(win_x + win_w.saturating_sub(62), win_y + 32, 50, 22, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, "Aç", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, crate::gui::ui_text("Aç", "Open"), Color::DARK_BG);
 
         // Sol Gezinti Paneli (Sidebar) — pencere yüksekliğine göre uyarlanır
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
         fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
-        let nav = ["> Kök (/)", "  Belgeler", "  Medyalar", "  İndirilenler", "  Sistem (Limine)"];
+        let nav = if crate::gui::ui_english() {
+            ["> Root (/)", "  Documents", "  Media", "  Downloads", "  System (Limine)"]
+        } else { ["> Kök (/)", "  Belgeler", "  Medyalar", "  İndirilenler", "  Sistem (Limine)"] };
         for (i, item) in nav.iter().enumerate() {
             let iy = win_y + 68 + i * 22;
             if iy + 8 > win_y + 60 + sidebar_h { break; }
@@ -79,12 +81,12 @@ impl FileManagerApp {
 
         // Sağ Liste Başlıkları
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, list_x + 6, win_y + 66, "DOSYA ADI", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, list_x + 6, win_y + 66, crate::gui::ui_text("DOSYA ADI", "FILE NAME"), Color::TEXT_MUTED);
         if list_w > 200 {
-            MinGuiCompositor::draw_string(fb, list_x + 160, win_y + 66, "TÜR", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, list_x + 160, win_y + 66, crate::gui::ui_text("TÜR", "TYPE"), Color::TEXT_MUTED);
         }
         if list_w > 330 {
-            MinGuiCompositor::draw_string(fb, list_x + 290, win_y + 66, "BOYUT", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, list_x + 290, win_y + 66, crate::gui::ui_text("BOYUT", "SIZE"), Color::TEXT_MUTED);
         }
 
         // Dosya Listesi — scroll ofsetine göre çizilir; satırlar list_view_h'ye kırpılır.
@@ -122,7 +124,7 @@ impl FileManagerApp {
         let status_y = win_y + win_h - STATUS_H + 6;
         fb.draw_rect(win_x + 6, status_y, win_w - 12, 18, Color::TASKBAR_BG);
         let mut sb = crate::gui::TextBuf::new();
-        sb.push_str("7 Dosya | ");
+        sb.push_str(crate::gui::ui_text("7 Dosya | ", "7 Files | "));
         sb.push_str(self.current_path);
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);
     }

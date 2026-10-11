@@ -154,8 +154,8 @@ impl TerminalApp {
 
     /// Başlangıç banner'ı.
     pub fn init_banner(&mut self) {
-        self.push_line("Komut İstemi", Color::ACCENT_PINK);
-        self.push_line("Yardım için 'help' yazın.", Color::TEXT_MUTED);
+        self.push_line(crate::gui::ui_text("Komut İstemi", "Command Prompt"), Color::ACCENT_PINK);
+        self.push_line(crate::gui::ui_text("Yardım için 'help' yazın.", "Type 'help' for commands."), Color::TEXT_MUTED);
     }
 
     /// Çıktıya yeni bir satır ekler; tampon dolarsa en eskisini kaydırır.
@@ -387,12 +387,12 @@ impl TerminalApp {
                     any = true;
                 }
                 if !any {
-                    self.push_line("(bos dizin)", Color::TEXT_MUTED);
+                    self.push_line(crate::gui::ui_text("(boş dizin)", "(empty directory)"), Color::TEXT_MUTED);
                 }
             }
             "cat" => {
                 if arg.is_empty() {
-                    self.push_line("Kullanim: cat <dosya>", Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"), Color::ACCENT_YELLOW);
                 } else {
                     match vfs.read_file(arg) {
                         Some(data) => {
@@ -403,7 +403,7 @@ impl TerminalApp {
                         }
                         None => {
                             let mut b = TextBuf::new();
-                            b.push_str("Bulunamadi: ");
+                            b.push_str(crate::gui::ui_text("Bulunamadı: ", "Not found: "));
                             b.push_str(arg);
                             self.push_line(b.as_str(), Color::ACCENT_RED);
                         }
@@ -418,15 +418,15 @@ impl TerminalApp {
             }
             "mem" => {
                 let mut b = TextBuf::new();
-                b.push_str("Toplam: ");
+                b.push_str(crate::gui::ui_text("Toplam: ", "Total: "));
                 b.push_usize((pmm.total_memory_bytes / 1024) as usize);
-                b.push_str(" KB  Bos: ");
+                b.push_str(crate::gui::ui_text(" KB  Boş: ", " KB  Free: "));
                 b.push_usize((pmm.free_memory_bytes / 1024) as usize);
                 b.push_str(" KB");
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
             }
             "ps" => {
-                self.push_line("PID  ISIM", Color::TEXT_MUTED);
+                self.push_line(crate::gui::ui_text("PID  İSİM", "PID  NAME"), Color::TEXT_MUTED);
                 self.push_line("1    kernel_core", Color::TEXT_MAIN);
                 self.push_line("2    mingui_compositor", Color::TEXT_MAIN);
                 self.push_line("3    net_stack", Color::TEXT_MAIN);
@@ -476,7 +476,7 @@ impl TerminalApp {
                 let mut b = TextBuf::new();
                 b.push_u2(now.day as u32);
                 b.push_byte(b' ');
-                b.push_str(DateTime::month_name(now.month));
+                b.push_str(if crate::gui::ui_english() { DateTime::month_name_en(now.month) } else { DateTime::month_name(now.month) });
                 b.push_byte(b' ');
                 b.push_u4(now.year as u32);
                 b.push_str("  ");
@@ -496,16 +496,16 @@ impl TerminalApp {
             "theme" => {
                 let t = theme::cycle();
                 let mut b = TextBuf::new();
-                b.push_str("Tema: ");
+                b.push_str(crate::gui::ui_text("Tema: ", "Theme: "));
                 b.push_str(t.name());
                 self.push_line(b.as_str(), Color::ACCENT_PINK);
             }
             _ => {
                 let mut b = TextBuf::new();
-                b.push_str("Bilinmeyen komut: ");
+                b.push_str(crate::gui::ui_text("Bilinmeyen komut: ", "Unknown command: "));
                 b.push_str(cmd);
                 self.push_line(b.as_str(), Color::ACCENT_RED);
-                self.push_line("'help' yazin.", Color::TEXT_MUTED);
+                self.push_line(crate::gui::ui_text("'help' yazın.", "Type 'help'."), Color::TEXT_MUTED);
             }
         }
         None
@@ -523,7 +523,7 @@ impl TerminalApp {
         fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BLACK);
 
         // Başlık
-        MinGuiCompositor::draw_string(fb, x + 16, y + 44, "MinOS Komut Istemi v2.0 (MinShell)", Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, x + 16, y + 44, crate::gui::ui_text("MinOS Komut İstemi v2.0 (MinShell)", "MinOS Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
 
         // Çıktı satırları
         let mut ly = y + 60;
@@ -540,9 +540,9 @@ impl TerminalApp {
 
         // Durum satırı
         let mut status = TextBuf::new();
-        status.push_str("gecmis: ");
+        status.push_str(crate::gui::ui_text("geçmiş: ", "history: "));
         status.push_usize(self.history_count);
-        status.push_str(" komut | UTF-8 / TR-Q");
+        status.push_str(crate::gui::ui_text(" komut | UTF-8 / TR-Q", " commands | UTF-8 / TR-Q"));
         MinGuiCompositor::draw_string(fb, x + 16, y + h.saturating_sub(12), status.as_str(), Color::TEXT_MUTED);
     }
 }

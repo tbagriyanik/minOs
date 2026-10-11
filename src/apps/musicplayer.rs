@@ -19,14 +19,15 @@ impl MusicPlayerApp {
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, tick: usize) {
-        let tracks = ["Melodi 1", "Melodi 2", "Melodi 3", "Melodi 4", "Melodi 5"];
+        let tracks = if crate::gui::ui_english() { ["Melody 1", "Melody 2", "Melody 3", "Melody 4", "Melody 5"] }
+            else { ["Melodi 1", "Melodi 2", "Melodi 3", "Melodi 4", "Melodi 5"] };
         // Üst Şarkı Bilgi Alanı
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 42, Color::TITLE_BAR);
         let mut track_title = crate::gui::TextBuf::new();
-        track_title.push_str("Şimdi çalıyor: ");
+        track_title.push_str(crate::gui::ui_text("Şimdi çalıyor: ", "Now playing: "));
         track_title.push_str(tracks[self.current_track.min(4)]);
         MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, track_title.as_str(), Color::ACCENT_PINK);
-        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 50, "PC hoparlörü melodi çıkışı", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 50, crate::gui::ui_text("PC hoparlörü melodi çıkışı", "PC speaker audio output"), Color::TEXT_MUTED);
 
         // Dinamik Animasyonlu Ekolayzer / Spektrum Çubukları
         let eq_x = win_x + 10;
@@ -79,7 +80,7 @@ impl MusicPlayerApp {
         let pl_y = win_y + 74;
         let pl_w = win_w - eq_w - 24;
         fb.draw_rect(pl_x, pl_y, pl_w, eq_h + 38, Color::TITLE_BAR_INACTIVE);
-        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 6, "ÇALMA LİSTESİ", Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, pl_x + 8, pl_y + 6, crate::gui::ui_text("ÇALMA LİSTESİ", "PLAYLIST"), Color::ACCENT_BLUE);
         for (i, title) in tracks.iter().enumerate() {
             let mut row = crate::gui::TextBuf::new();
             if i == self.current_track { row.push_str("> "); } else { row.push_str("  "); }
@@ -110,11 +111,14 @@ impl MusicPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 110, ctrl_y + 8, ">>|", Color::TEXT_MAIN);
 
         // Ses Düzeyi Göstergesi
-        let mut volume = crate::gui::TextBuf::new(); volume.push_str("Ses: %"); volume.push_u2(self.volume as u32);
+        let mut volume = crate::gui::TextBuf::new(); volume.push_str(crate::gui::ui_text("Ses: %", "Volume: %")); volume.push_u2(self.volume as u32);
         MinGuiCompositor::draw_string(fb, win_x + 150, ctrl_y + 8, volume.as_str(), Color::TEXT_MAIN);
 
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 218, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, if self.is_playing { "Melodi çalıyor | SarmanBeats" } else { "Duraklatıldı | SarmanBeats" }, Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, match (self.is_playing, crate::gui::ui_english()) {
+            (true, true) => "Playing | SarmanBeats", (false, true) => "Paused | SarmanBeats",
+            (true, false) => "Melodi çalıyor | SarmanBeats", (false, false) => "Duraklatıldı | SarmanBeats",
+        }, Color::TEXT_MUTED);
     }
 }

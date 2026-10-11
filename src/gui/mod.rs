@@ -501,6 +501,25 @@ pub const CTX_WINDOW: [(&str, u32); 4] = [
     ("Kapat", Color::ACCENT_RED),
 ];
 
+const CTX_DESKTOP_EN: [(&str, u32); 6] = [
+    ("Open File Manager", Color::ACCENT_BLUE), ("New Note", Color::TEXT_MAIN),
+    ("System Settings", Color::ACCENT_PINK), ("Task Manager", Color::ACCENT_YELLOW),
+    ("Change Theme", Color::ACCENT_GREEN), ("Refresh Desktop", Color::TEXT_MUTED),
+];
+const CTX_FILE_EN: [(&str, u32); 6] = [
+    ("Open With", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
+    ("View Image", Color::ACCENT_PINK), ("Play Music", Color::ACCENT_YELLOW),
+    ("Play Video", Color::ACCENT_RED), ("File Properties", Color::ACCENT_BLUE),
+];
+const CTX_NOTEPAD_EN: [(&str, u32); 6] = [
+    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
+    ("Delete", Color::ACCENT_YELLOW), ("Select All", Color::ACCENT_PINK), ("Clear All", Color::TEXT_MUTED),
+];
+const CTX_WINDOW_EN: [(&str, u32); 4] = [
+    ("Minimize", Color::ACCENT_YELLOW), ("Maximize / Restore", Color::ACCENT_GREEN),
+    ("Center Window", Color::ACCENT_BLUE), ("Close", Color::ACCENT_RED),
+];
+
 pub const CONTEXT_MENU_W: usize = 226;
 pub const CONTEXT_MENU_ITEM_H: usize = 26;
 
@@ -1127,13 +1146,15 @@ impl MinGuiCompositor {
         );
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
-        let desk_icons = [
-            ("Bilgisayarım", Color::ACCENT_BLUE, 0),
-            ("Notlar", Color::TEXT_MAIN, 1),
-            ("SarmanNet", Color::ACCENT_GREEN, 2),
-            ("Çalma Listesi", Color::ACCENT_YELLOW, 3),
+        let desk_icons = if ui_english() { [
+            ("Computer", Color::ACCENT_BLUE, 0), ("Notes", Color::TEXT_MAIN, 1),
+            ("SarmanNet", Color::ACCENT_GREEN, 2), ("Playlist", Color::ACCENT_YELLOW, 3),
+            ("Settings", Color::ACCENT_PINK, 4),
+        ] } else { [
+            ("Bilgisayarım", Color::ACCENT_BLUE, 0), ("Notlar", Color::TEXT_MAIN, 1),
+            ("SarmanNet", Color::ACCENT_GREEN, 2), ("Çalma Listesi", Color::ACCENT_YELLOW, 3),
             ("Sistem Ayarları", Color::ACCENT_PINK, 4),
-        ];
+        ] };
 
         for (i, (lbl, col, icon_idx)) in desk_icons.iter().enumerate() {
             let dy = 30 + i * 54;
@@ -1165,6 +1186,26 @@ impl MinGuiCompositor {
         }
     }
 
+    fn window_title(win_idx: usize, english: bool) -> &'static str {
+        match (win_idx, english) {
+            (0, true) => "File Manager - VFS / Home", (1, true) => "System Settings",
+            (2, true) => "Notepad - untitled.txt", (3, true) => "Web Browser",
+            (4, true) => "Image Viewer - kedi_maskotu.bmp", (5, true) => "Music Player",
+            (6, true) => "Video Player - retro_drive.mp4", (7, true) => "Task Manager",
+            (8, true) => "Calculator", (9, true) => "Paint", (10, true) => "Command Prompt",
+            _ => "",
+        }
+    }
+
+    fn window_tab_title(win_idx: usize, english: bool) -> &'static str {
+        match (win_idx, english) {
+            (0, true) => "Files", (1, true) => "Settings", (2, true) => "Notes",
+            (3, true) => "Web", (4, true) => "Image", (5, true) => "Music",
+            (6, true) => "Video", (7, true) => "Tasks", (8, true) => "Calc",
+            (9, true) => "Paint", (10, true) => "CMD", _ => "",
+        }
+    }
+
     pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window, mouse: &MouseState, win_idx: usize) {
         if !win.is_open || win.is_minimized {
             return;
@@ -1193,7 +1234,8 @@ impl MinGuiCompositor {
         let icon_idx = Self::window_icon_index(win_idx);
         Self::draw_icon_by_index(fb, win.x + 6, win.y + 4, icon_idx);
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
-        Self::draw_string_shadow(fb, win.x + 28, win.y + 8, win.title, title_col, Color::SHADOW, 1);
+        let title = if ui_english() { Self::window_title(win_idx, true) } else { win.title };
+        Self::draw_string_shadow(fb, win.x + 28, win.y + 8, title, title_col, Color::SHADOW, 1);
 
         // Kontrol Butonları (hover'da parlama — 4px yuvarlatılmış)
         let (cx, cy) = (win.close_rect().0, win.close_rect().1);
@@ -1252,7 +1294,7 @@ impl MinGuiCompositor {
 
         // Uygulama Sekmeleri (Yuvarlatılmış 5px)
         let mut tab_x = 118;
-        for opt_win in self.windows.iter() {
+        for (win_idx, opt_win) in self.windows.iter().enumerate() {
             if let Some(win) = opt_win {
                 if win.is_open {
                     let rect = (tab_x, tb_y + 5, 84, 26);
@@ -1266,7 +1308,8 @@ impl MinGuiCompositor {
                         fb.draw_rounded_rect(rect.0 + 2, rect.1 + 2, 3, rect.3 - 4, 1, Color::ACCENT_BLUE);
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
-                    Self::draw_string(fb, tab_x + 10, tb_y + 14, win.tab_title, tab_text_color);
+                    let tab_title = if ui_english() { Self::window_tab_title(win_idx, true) } else { win.tab_title };
+                    Self::draw_string(fb, tab_x + 10, tb_y + 14, tab_title, tab_text_color);
                     tab_x += 88;
                 }
             }
@@ -1373,10 +1416,12 @@ impl MinGuiCompositor {
         fb.draw_rect(box_x, box_y, box_w, box_h, Color::TASKBAR_BG);
         fb.draw_rect_outline(box_x, box_y, box_w, box_h, Color::BORDER);
         fb.draw_rect(box_x, box_y, box_w, 26, Color::TITLE_BAR);
-        Self::draw_string_shadow(fb, box_x + 12, box_y + 9, "Uygulama Geçişi (Alt + Tab)", Color::TEXT_MAIN, Color::SHADOW, 1);
+        let english = ui_english();
+        Self::draw_string_shadow(fb, box_x + 12, box_y + 9,
+            ui_text("Uygulama Geçişi (Alt + Tab)", "Window Switcher (Alt + Tab)"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
         let mut app_count = 0;
-        let mut active_app_title = "Pencere Seçilmedi";
+        let mut active_app_title = ui_text("Pencere Seçilmedi", "No Window Selected");
 
         for (win_idx, opt_win) in self.windows.iter().enumerate() {
             if let Some(win) = opt_win {
@@ -1387,7 +1432,7 @@ impl MinGuiCompositor {
                     let card_bg = if is_sel { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
 
                     if is_sel {
-                        active_app_title = win.title;
+                    active_app_title = if english { Self::window_title(win_idx, true) } else { win.title };
                     }
 
                     fb.draw_rounded_rect(card_x, card_y, 50, 58, 6, card_bg);
@@ -1397,25 +1442,30 @@ impl MinGuiCompositor {
                     let icon_idx = Self::window_icon_index(win_idx);
                     Self::draw_icon_by_index(fb, card_x + 17, card_y + 12, icon_idx);
                     let tab_col = if is_sel { Color::DARK_BG } else { Color::TEXT_MAIN };
-                    Self::draw_string(fb, card_x + 8, card_y + 38, win.tab_title, tab_col);
+                    let tab_title = if english { Self::window_tab_title(win_idx, true) } else { win.tab_title };
+                    Self::draw_string(fb, card_x + 8, card_y + 38, tab_title, tab_col);
                     app_count += 1;
                 }
             }
         }
 
         fb.draw_rect(box_x + 12, box_y + 110, box_w - 24, 46, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, box_x + 20, box_y + 118, "Aktif Pencere:", Color::TEXT_MUTED);
+        Self::draw_string(fb, box_x + 20, box_y + 118, ui_text("Aktif Pencere:", "Active Window:"), Color::TEXT_MUTED);
         Self::draw_string(fb, box_x + 130, box_y + 118, active_app_title, Color::ACCENT_GREEN);
-        Self::draw_string(fb, box_x + 20, box_y + 138, "Alt tuşunu bıraktığınızda pencere öne gelir.", Color::TEXT_MUTED);
+        Self::draw_string(fb, box_x + 20, box_y + 138, ui_text("Alt tuşunu bıraktığınızda pencere öne gelir.", "Release Alt to bring the window forward."), Color::TEXT_MUTED);
     }
 
     /// Aktif bağlam menüsünün öğe listesi.
     pub fn context_items(&self) -> &'static [(&'static str, u32)] {
-        match self.context_kind {
-            ContextKind::Desktop => &CTX_DESKTOP,
-            ContextKind::FileManager => &CTX_FILE,
-            ContextKind::Notepad => &CTX_NOTEPAD,
-            ContextKind::Window => &CTX_WINDOW,
+        match (self.context_kind, ui_english()) {
+            (ContextKind::Desktop, false) => &CTX_DESKTOP,
+            (ContextKind::FileManager, false) => &CTX_FILE,
+            (ContextKind::Notepad, false) => &CTX_NOTEPAD,
+            (ContextKind::Window, false) => &CTX_WINDOW,
+            (ContextKind::Desktop, true) => &CTX_DESKTOP_EN,
+            (ContextKind::FileManager, true) => &CTX_FILE_EN,
+            (ContextKind::Notepad, true) => &CTX_NOTEPAD_EN,
+            (ContextKind::Window, true) => &CTX_WINDOW_EN,
         }
     }
 
@@ -1440,10 +1490,10 @@ impl MinGuiCompositor {
 
         // Menü başlığı (tür)
         let header = match self.context_kind {
-            ContextKind::Desktop => "Masaüstü",
-            ContextKind::FileManager => "Dosya İşlemleri",
-            ContextKind::Notepad => "Düzen",
-            ContextKind::Window => "Pencere",
+            ContextKind::Desktop => ui_text("Masaüstü", "Desktop"),
+            ContextKind::FileManager => ui_text("Dosya İşlemleri", "File Actions"),
+            ContextKind::Notepad => ui_text("Düzen", "Edit"),
+            ContextKind::Window => ui_text("Pencere", "Window"),
         };
         Self::draw_string(fb, menu_x + 8, menu_y + 6, header, Color::TEXT_MUTED);
         fb.draw_rect(menu_x + 4, menu_y + 18, menu_w - 8, 1, Color::BORDER);
@@ -1650,7 +1700,7 @@ impl MinGuiCompositor {
         fb.draw_vgradient(x + 1, y + 1, w - 2, 30, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
         Self::draw_string(fb, x + 10, y + 11, "<", Color::ACCENT_BLUE);
         let mut title = TextBuf::new();
-        title.push_str(DateTime::month_name(self.cal_month));
+        title.push_str(if ui_english() { DateTime::month_name_en(self.cal_month) } else { DateTime::month_name(self.cal_month) });
         title.push_byte(b' ');
         title.push_u4(self.cal_year as u32);
         let tw = Self::text_width(title.as_str(), 1);
@@ -1662,7 +1712,7 @@ impl MinGuiCompositor {
         let grid_y = y + 40;
         let cell_w = (w - 20) / 7;
         for d in 0..7usize {
-            let label = DateTime::weekday_short(d as u8);
+            let label = if ui_english() { DateTime::weekday_short_en(d as u8) } else { DateTime::weekday_short(d as u8) };
             let tw = Self::text_width(label, 1);
             Self::draw_string(fb, grid_x + d * cell_w + cell_w.saturating_sub(tw) / 2, grid_y, label, Color::TEXT_MUTED);
         }
@@ -1701,7 +1751,8 @@ impl MinGuiCompositor {
         foot.push_byte(b':');
         foot.push_u2(now.second as u32);
         foot.push_str("  ");
-        foot.push_str(DateTime::weekday_name(DateTime::weekday(now.year, now.month, now.day)));
+        let weekday = DateTime::weekday(now.year, now.month, now.day);
+        foot.push_str(if ui_english() { DateTime::weekday_name_en(weekday) } else { DateTime::weekday_name(weekday) });
         Self::draw_string(fb, x + 12, y + h - 20, foot.as_str(), Color::ACCENT_GREEN);
     }
 
@@ -1733,7 +1784,7 @@ impl MinGuiCompositor {
         fb.draw_rect(x, y, w, h, Color::TASKBAR_BG);
         fb.draw_rect_outline(x, y, w, h, Color::BORDER);
         fb.draw_vgradient(x + 1, y + 1, w - 2, 26, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
-        Self::draw_string_shadow(fb, x + 12, y + 10, "Ses Düzeyi", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(fb, x + 12, y + 10, ui_text("Ses Düzeyi", "Volume"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
         // Yüzde
         let mut pct = TextBuf::new();
@@ -1756,7 +1807,10 @@ impl MinGuiCompositor {
         // Sessiz düğmesi
         let mute = self.volume_mute_rect(layout);
         let bg = if is_muted { Color::ACCENT_RED } else { Color::TITLE_BAR };
-        let label = if is_muted { "Sesi Ac" } else { "Sustur" };
+        let label = match (is_muted, ui_english()) {
+            (true, true) => "Unmute", (false, true) => "Mute",
+            (true, false) => "Sesi Aç", (false, false) => "Sustur",
+        };
         Self::draw_button(fb, mute, bg, label, Color::TEXT_MAIN, false);
     }
 

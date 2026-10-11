@@ -17,10 +17,10 @@ impl ImageViewerApp {
 
         // Yakınlaştırma ve Düğmeler
         fb.draw_rect(win_x + win_w - 180, win_y + 32, 50, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 170, win_y + 36, "Yakın+", Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 170, win_y + 36, crate::gui::ui_text("Yakın+", "Zoom+"), Color::ACCENT_GREEN);
 
         fb.draw_rect(win_x + win_w - 124, win_y + 32, 50, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 116, win_y + 36, "Uzak-", Color::ACCENT_YELLOW);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 116, win_y + 36, crate::gui::ui_text("Uzak-", "Zoom-"), Color::ACCENT_YELLOW);
 
         fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "%400", Color::DARK_BG);
@@ -90,16 +90,16 @@ impl ImageViewerApp {
         let info_y = win_y + 60;
         fb.draw_rect(info_x, info_y, win_w - canvas_w - 34, canvas_h, Color::TITLE_BAR_INACTIVE);
 
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 10, "RESİM METADATA", Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 32, "Çözünürlük: 32x32", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 10, crate::gui::ui_text("RESİM BİLGİSİ", "IMAGE INFO"), Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 32, crate::gui::ui_text("Çözünürlük: 32x32", "Resolution: 32x32"), Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 52, "Format: BMP (RGB32)", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 72, "Boyut: 4.096 B", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 92, "Renk Paleti: 16 Renk", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 112, "Yakınlaştırma: aktif", Color::ACCENT_YELLOW);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 132, "Durum: Başarılı", Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 72, crate::gui::ui_text("Boyut: 4.096 B", "Size: 4,096 B"), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 92, crate::gui::ui_text("Renk Paleti: 16 Renk", "Color Palette: 16 Colors"), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 112, crate::gui::ui_text("Yakınlaştırma: aktif", "Zoom: active"), Color::ACCENT_YELLOW);
+        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 132, crate::gui::ui_text("Durum: Başarılı", "Status: Ready"), Color::ACCENT_GREEN);
 
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 246, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 250, "Görüntüleyici: MinViewer v1.0 | 60 FPS Render", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 250, crate::gui::ui_text("Görüntüleyici: MinViewer v1.0 | 60 FPS Render", "Viewer: MinViewer v1.0 | 60 FPS Render"), Color::TEXT_MUTED);
     }
 }

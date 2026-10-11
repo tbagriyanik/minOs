@@ -12,6 +12,10 @@ const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi",
     "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi",
 ];
+const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
+    "File Manager", "Settings", "Notepad", "Browser", "Image Viewer", "Music Player",
+    "Video Player", "Task Manager", "Calculator", "Paint", "Command Prompt",
+];
 const CPU_USAGE_PCT: usize = 100;
 
 #[derive(Copy, Clone, Default)]
@@ -50,7 +54,7 @@ impl TaskManagerApp {
             selected: 0,
             total_memory_kb: 0, free_memory_kb: 0, used_memory_kb: 0,
             ramdisk_used: 0, ramdisk_files: 0,
-            status: "Hazır",
+            status: "Ready",
             launch_menu_open: false,
             launch_selected: 0,
             active_tab: 0,
@@ -223,45 +227,47 @@ impl TaskManagerApp {
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {
+        let english = crate::gui::ui_english();
         // Başlık ve süreç eylemleri
         let mut header = TextBuf::new();
-        header.push_str("Uygulamalar: ");
+        header.push_str(crate::gui::ui_text("Uygulamalar: ", "Applications: "));
         header.push_u2((self.alive_count().min(99)) as u32);
         MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 30, header.as_str(), Color::ACCENT_PINK);
 
         // "Sonlandır" düğmesi
         let br = Self::kill_btn_rect(win_x, win_y, win_w);
         fb.draw_rect(br.0, br.1, br.2, br.3, Color::ACCENT_RED);
-        MinGuiCompositor::draw_string(fb, br.0 + 8, br.1 + 5, "Sonlandır", Color::WHITE);
+        MinGuiCompositor::draw_string(fb, br.0 + 8, br.1 + 5, crate::gui::ui_text("Sonlandır", "End Task"), Color::WHITE);
 
         let launch_button = Self::launch_button_rect(win_x, win_y, win_w);
         fb.draw_rect(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, launch_button.0 + 8, launch_button.1 + 5, "Program Aç", Color::WHITE);
+        MinGuiCompositor::draw_string(fb, launch_button.0 + 8, launch_button.1 + 5, crate::gui::ui_text("Program Aç", "Run Program"), Color::WHITE);
 
         let applications_tab = Self::applications_tab_rect(win_x, win_y);
         let performance_tab = Self::performance_tab_rect(win_x, win_y);
         fb.draw_rect(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3,
             if self.active_tab == 0 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
-        MinGuiCompositor::draw_string(fb, applications_tab.0 + 12, applications_tab.1 + 7, "Uygulamalar", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, applications_tab.0 + 12, applications_tab.1 + 7, crate::gui::ui_text("Uygulamalar", "Applications"), Color::TEXT_MAIN);
         fb.draw_rect(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3,
             if self.active_tab == 1 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
-        MinGuiCompositor::draw_string(fb, performance_tab.0 + 12, performance_tab.1 + 7, "Performans", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, performance_tab.0 + 12, performance_tab.1 + 7, crate::gui::ui_text("Performans", "Performance"), Color::TEXT_MAIN);
         if self.focused_control == 0 { fb.draw_rect_outline(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3, Color::ACCENT_YELLOW); }
         if self.focused_control == 1 { fb.draw_rect_outline(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3, Color::ACCENT_YELLOW); }
         if self.focused_control == 2 { fb.draw_rect_outline(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_YELLOW); }
         if self.focused_control == 3 { fb.draw_rect_outline(br.0, br.1, br.2, br.3, Color::ACCENT_YELLOW); }
 
         if self.active_tab == 0 {
-            MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 82, "Uygulama", Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, win_x + 205, win_y + 82, "Çizim CPU", Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, win_x + 278, win_y + 82, "RAM durumu", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 82, crate::gui::ui_text("Uygulama", "App"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 205, win_y + 82, crate::gui::ui_text("Çizim CPU", "Render CPU"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 278, win_y + 82, crate::gui::ui_text("RAM durumu", "Memory"), Color::TEXT_MUTED);
             fb.draw_rect(win_x + 10, win_y + 94, win_w.saturating_sub(20), 1, Color::BORDER);
 
             for (i, proc) in self.processes.iter().take(self.proc_count).enumerate() {
                 let row = Self::row_rect(win_x, win_y, win_w, i);
                 if i == self.selected { fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR); }
                 if self.focused_control == 4 + i { fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW); }
-                MinGuiCompositor::draw_string(fb, row.0 + 4, row.1 + 4, proc.name,
+                let app_name = if english { LAUNCH_APP_LABELS_EN[proc.app_idx.min(LAUNCH_APP_COUNT - 1)] } else { proc.name };
+                MinGuiCompositor::draw_string(fb, row.0 + 4, row.1 + 4, app_name,
                     if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
                 let mut cpu = TextBuf::new();
                 cpu.push_usize(proc.cpu_pct);
@@ -272,7 +278,7 @@ impl TaskManagerApp {
                 ram.push_str(" KB");
                 MinGuiCompositor::draw_string(fb, win_x + 278, row.1 + 4, ram.as_str(), Color::TEXT_MUTED);
                 MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(76), row.1 + 4,
-                    if proc.is_minimized { "Beklemede" } else { "Açık" }, Color::ACCENT_GREEN);
+                    match (proc.is_minimized, english) { (true, true) => "Minimized", (false, true) => "Running", (true, false) => "Beklemede", (false, false) => "Açık" }, Color::ACCENT_GREEN);
             }
         } else {
             let bar_x = win_x + 132;
@@ -284,9 +290,9 @@ impl TaskManagerApp {
             fb.draw_rect(bar_x, win_y + 100, bar_w, 12, Color::TITLE_BAR_INACTIVE);
             fb.draw_rect(bar_x, win_y + 100, bar_w.saturating_mul(CPU_USAGE_PCT) / 100, 12, Color::ACCENT_RED);
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 120,
-                "Uygulama payı son ekran çizim süresine göre hesaplanır.", Color::TEXT_MUTED);
+                crate::gui::ui_text("Uygulama payı son ekran çizim süresine göre hesaplanır.", "App share is estimated from the last frame render time."), Color::TEXT_MUTED);
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 136,
-                "Çekirdek boşta döngüsü olmadığı için toplam CPU %100.", Color::TEXT_MUTED);
+                crate::gui::ui_text("Çekirdek boşta döngüsü olmadığı için toplam CPU %100.", "Total CPU is 100% because the kernel has no idle loop."), Color::TEXT_MUTED);
 
             let memory_pct = if self.total_memory_kb == 0 { 0 }
                 else { self.used_memory_kb.saturating_mul(100) / self.total_memory_kb };
@@ -300,7 +306,7 @@ impl TaskManagerApp {
             fb.draw_rect(bar_x, win_y + 170, bar_w, 12, Color::TITLE_BAR_INACTIVE);
             fb.draw_rect(bar_x, win_y + 170, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
             let mut free_label = TextBuf::new();
-            free_label.push_str("Boş RAM: ");
+            free_label.push_str(crate::gui::ui_text("Boş RAM: ", "Free RAM: "));
             free_label.push_usize(self.free_memory_kb);
             free_label.push_str(" KB");
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 190, free_label.as_str(), Color::TEXT_MUTED);
@@ -308,22 +314,27 @@ impl TaskManagerApp {
             let mut storage_label = TextBuf::new();
             storage_label.push_str("VFS: ");
             storage_label.push_usize(self.ramdisk_files);
-            storage_label.push_str(" dosya, ");
+            storage_label.push_str(crate::gui::ui_text(" dosya, ", " files, "));
             storage_label.push_usize(self.ramdisk_used);
             storage_label.push_str(" B");
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 230, storage_label.as_str(), Color::TEXT_MAIN);
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 260,
-                "Uygulama RAM değeri uygulama durum yapısının yaklaşık boyutudur.", Color::TEXT_MUTED);
+                crate::gui::ui_text("Uygulama RAM değeri uygulama durum yapısının yaklaşık boyutudur.", "App memory is an estimate of its state structure size."), Color::TEXT_MUTED);
         }
 
         fb.draw_rect(win_x + 8, win_y + 350, win_w.saturating_sub(16), 1, Color::BORDER);
         let mut resources = TextBuf::new();
         resources.push_str("VFS: ");
         resources.push_usize(self.ramdisk_files);
-        resources.push_str(" dosya / ");
+        resources.push_str(crate::gui::ui_text(" dosya / ", " files / "));
         resources.push_usize(self.ramdisk_used);
         resources.push_str(" B  |  ");
-        resources.push_str(self.status);
+        let status = match self.status {
+            "Ready" | "Hazır" => crate::gui::ui_text("Hazır", "Ready"),
+            "Uygulama sonlandırıldı." | "Application terminated." => crate::gui::ui_text("Uygulama sonlandırıldı.", "Application terminated."),
+            other => other,
+        };
+        resources.push_str(status);
         MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 358, resources.as_str(), Color::TEXT_MUTED);
 
         if self.launch_menu_open {
@@ -334,7 +345,8 @@ impl TaskManagerApp {
                 let item = Self::launch_item_rect(win_x, win_y, win_w, index);
                 let color = if index == self.launch_selected { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
                 fb.draw_rect(item.0, item.1, item.2, item.3, color);
-                MinGuiCompositor::draw_string(fb, item.0 + 5, item.1 + 5, LAUNCH_APP_LABELS[index], Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, item.0 + 5, item.1 + 5,
+                    if english { LAUNCH_APP_LABELS_EN[index] } else { LAUNCH_APP_LABELS[index] }, Color::TEXT_MAIN);
             }
         }
     }

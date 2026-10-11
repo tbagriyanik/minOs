@@ -18,7 +18,7 @@ impl VideoPlayerApp {
         // Araç Çubuğu / Başlık Bilgisi
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 22, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 34, "retro_drive.mp4 - 30 FPS MinVideo Engine", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 90, win_y + 34, "● CANLI", Color::ACCENT_RED);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 90, win_y + 34, crate::gui::ui_text("● CANLI", "● LIVE"), Color::ACCENT_RED);
 
         // Video Ekranı (Viewport)
         let vp_x = win_x + 8;
@@ -119,7 +119,7 @@ impl VideoPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 18, ctrl_y + 6, "|| >", Color::DARK_BG);
 
         fb.draw_rect(win_x + 58, ctrl_y, 40, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, "Durdur", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, crate::gui::ui_text("Durdur", "Stop"), Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + 102, ctrl_y, 48, 22, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 108, ctrl_y + 6, "-10s", Color::TEXT_MUTED);
@@ -128,10 +128,10 @@ impl VideoPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MUTED);
 
         fb.draw_rect(win_x + win_w - 76, ctrl_y, 64, 22, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, "Tam Ekran", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, crate::gui::ui_text("Tam Ekran", "Full Screen"), Color::DARK_BG);
 
         // Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 250, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 254, "Donanım Çözücü: SSE2 Optimize | YUV to RGB Framebuffer", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 254, crate::gui::ui_text("Donanım Çözücü: SSE2 Optimize | YUV to RGB Framebuffer", "Hardware Decoder: SSE2 Optimized | YUV to RGB Framebuffer"), Color::TEXT_MUTED);
     }
 }

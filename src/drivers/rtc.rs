@@ -164,6 +164,10 @@ impl DateTime {
         }
     }
 
+    pub fn weekday_name_en(w: u8) -> &'static str {
+        match w { 0 => "Monday", 1 => "Tuesday", 2 => "Wednesday", 3 => "Thursday", 4 => "Friday", 5 => "Saturday", _ => "Sunday" }
+    }
+
     /// "Ocak" gibi tam ay adı (1..=12).
     pub fn month_name(month: u8) -> &'static str {
         match month {
@@ -182,6 +186,10 @@ impl DateTime {
         }
     }
 
+    pub fn month_name_en(month: u8) -> &'static str {
+        match month { 1 => "January", 2 => "February", 3 => "March", 4 => "April", 5 => "May", 6 => "June", 7 => "July", 8 => "August", 9 => "September", 10 => "October", 11 => "November", _ => "December" }
+    }
+
     /// Kısa gün adı (Pzt, Sal ...), takvim başlıkları için.
     pub fn weekday_short(w: u8) -> &'static str {
         match w {
@@ -193,5 +201,9 @@ impl DateTime {
             5 => "Ct",
             _ => "Pz",
         }
+    }
+
+    pub fn weekday_short_en(w: u8) -> &'static str {
+        match w { 0 => "Mo", 1 => "Tu", 2 => "We", 3 => "Th", 4 => "Fr", 5 => "Sa", _ => "Su" }
     }
 }

@@ -260,7 +260,7 @@ pub extern "C" fn _start() -> ! {
     let hhdm_offset = unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(HHDM_REQUEST.response));
         if !resp.is_null() {
-            let off = (*resp).offset;
+            let off = core::ptr::read_volatile((resp as *const u8).add(8) as *const u64);
             serial_print("[MinOS] HHDM offset okundu (0 yoksa gecerli).\n");
             off
         } else {
@@ -279,9 +279,20 @@ pub extern "C" fn _start() -> ! {
     // 4. Limine Framebuffer Alımı
     let (fb_ptr, width, height, pitch) = unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response));
-        if !resp.is_null() && (*resp).framebuffer_count > 0 {
-            let fb_ptr_ptr = (*resp).framebuffers;
-            let fb_info = **fb_ptr_ptr;
+        if !resp.is_null() {
+            let response_bytes = resp as *const u8;
+            let framebuffer_count = core::ptr::read_volatile(response_bytes.add(8) as *const u64);
+            let fb_ptr_ptr = core::ptr::read_volatile(response_bytes.add(16) as *const *const *const LimineFramebuffer);
+            if framebuffer_count == 0 || fb_ptr_ptr.is_null() {
+                serial_print("[MinOS] ERROR: Limine framebuffer list is NULL!\n");
+                loop { core::hint::spin_loop(); }
+            }
+            let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
+            if fb_info_ptr.is_null() {
+                serial_print("[MinOS] ERROR: Limine framebuffer entry is NULL!\n");
+                loop { core::hint::spin_loop(); }
+            }
+            let fb_info = core::ptr::read_volatile(fb_info_ptr);
             (
                 fb_info.address as *mut u32,
                 fb_info.width as usize,
@@ -437,9 +448,9 @@ pub extern "C" fn _start() -> ! {
                 match idx {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now,
-                        if drivers::hda::is_ready() { "Intel HDA (PCM aktif)" } else { "Ses aygiti bulunamadi" },
-                        if drivers::e1000::is_ready() { "Intel e1000" } else { "Bulunamadi" },
-                        if drivers::e1000::is_ready() { "Hazir" } else { "Baslatilamadi / aygit yok" }),
+                        if drivers::hda::is_ready() { gui::ui_text("Intel HDA (PCM aktif)", "Intel HDA (PCM active)") } else { gui::ui_text("Ses aygıtı bulunamadı", "Audio device unavailable") },
+                        if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
+                        if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
                     3 => br.render_content(fb, win.x, win.y, win.width, win.height),
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
@@ -1027,6 +1038,7 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.keyboard_layout = keyboard.layout;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::language_btn_rect(wx, wy, ww)) {
                                         settings_app.language.toggle();
+                                        settings_app.status_msg = gui::ui_text("Arayüz dili Türkçe olarak ayarlandı.", "Interface language set to English.");
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::font_btn_rect(wx, wy, ww)) {
                                         settings_app.font.cycle();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
@@ -1054,14 +1066,19 @@ pub extern "C" fn _start() -> ! {
                                             if requested == (fb.width, fb.height) {
                                                 settings_app.screen_res = requested;
                                                 settings_app.display_res = requested;
-                                                settings_app.status_msg = "Bu cozunurluk zaten etkin.";
+                                                settings_app.status_msg = gui::ui_text("Bu çözünürlük zaten etkin.", "This resolution is already active.");
                                             } else {
                                                 settings_app.screen_res = (fb.width, fb.height);
-                                                settings_app.status_msg = "Cozunurluk acilista Limine tarafindan belirlenir.";
+                                                settings_app.status_msg = gui::ui_text("Çözünürlük açılışta Limine tarafından belirlenir.", "Resolution is set by Limine at boot.");
                                             }
                                         }
                                     }
-                                    if gui::in_rect(mx,my,apps::settings::SystemSettings::night_light_rect(wx,wy)) { settings_app.night_light=!settings_app.night_light; settings_app.status_msg=if settings_app.night_light { "Gece isigi acildi." } else { "Gece isigi kapatildi." }; }
+                                    if gui::in_rect(mx,my,apps::settings::SystemSettings::night_light_rect(wx,wy)) {
+                                        settings_app.night_light = !settings_app.night_light;
+                                        settings_app.status_msg = if settings_app.night_light {
+                                            gui::ui_text("Mavi ışık filtresi açıldı.", "Blue light filter enabled.")
+                                        } else { gui::ui_text("Mavi ışık filtresi kapatıldı.", "Blue light filter disabled.") };
+                                    }
                                     let nl_track = apps::settings::SystemSettings::night_light_track_rect(wx,wy);
                                     if gui::in_rect(mx,my,nl_track) {
                                         let span=nl_track.2.saturating_sub(1).max(1);
@@ -1073,7 +1090,7 @@ pub extern "C" fn _start() -> ! {
                                         now=drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
                                         compositor.cal_year=now.year;
                                         compositor.cal_month=now.month;
-                                        settings_app.status_msg="Bolge ve saat dilimi degistirildi.";
+                                        settings_app.status_msg=gui::ui_text("Bölge ve saat dilimi değiştirildi.", "Region and time zone updated.");
                                     }
                                 }
                             }
@@ -1216,7 +1233,7 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww)) {
                                     taskmgr_app.focused_control = 3;
                                     if let Some(target) = taskmgr_app.selected_app_idx() {
-                                        taskmgr_app.status = "Uygulama sonlandırıldı.";
+                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                                         terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
@@ -1426,7 +1443,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             3 => {
                                 if let Some(target) = taskmgr_app.selected_app_idx() {
-                                    taskmgr_app.status = "Uygulama sonlandırıldı.";
+                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                         &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                         &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
@@ -1471,7 +1488,7 @@ pub extern "C" fn _start() -> ! {
                     let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                     if tm_focused {
                         if let Some(target) = taskmgr_app.selected_app_idx() {
-                            taskmgr_app.status = "Uygulama sonlandırıldı.";
+                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,

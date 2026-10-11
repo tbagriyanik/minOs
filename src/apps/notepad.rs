@@ -255,15 +255,16 @@ impl NotepadApp {
     ) {
         // Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, TOOLBAR_H, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, "Dosya", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, "Düzen", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, "Biçim", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, "Yardım", Color::TEXT_MUTED);
+        let english = crate::gui::ui_english();
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, crate::gui::ui_text("Dosya", "File"), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, crate::gui::ui_text("Düzen", "Edit"), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, crate::gui::ui_text("Biçim", "Format"), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, crate::gui::ui_text("Yardım", "Help"), Color::TEXT_MUTED);
         // Hızlı Aksiyon Düğmeleri (sağa hizalı)
         fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, "Temizle", Color::ACCENT_RED);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
         fb.draw_rect(win_x + win_w.saturating_sub(68), win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, "Kaydet", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, crate::gui::ui_text("Kaydet", "Save"), Color::DARK_BG);
 
         // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         let area_x = win_x + 6;
@@ -351,23 +352,27 @@ impl NotepadApp {
         let status_y = win_y + win_h - STATUS_H + 4;
         fb.draw_rect(win_x + 6, status_y, win_w - 12, STATUS_H - 4, Color::TASKBAR_BG);
         let mut status = TextBuf::new();
-        status.push_str("Satir: ");
+        status.push_str(crate::gui::ui_text("Satir: ", "Line: "));
         status.push_u2(((sy + 1).min(total_lines)) as u32);
         status.push_byte(b'/');
         status.push_u2(total_lines.min(99) as u32);
         status.push_str("  |  " );
         status.push_u2(self.len.min(99) as u32);
-        status.push_str(" karakter  |  UTF-8 / TR-Q");
+        status.push_str(crate::gui::ui_text(" karakter  |  UTF-8 / TR-Q", " chars  |  UTF-8 / TR-Q"));
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, status.as_str(), Color::TEXT_MUTED);
 
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
             let mx = win_x + match self.menu { 1=>8, 2=>68, 3=>128, _=>188 };
-            let items = match self.menu {
-                1 => ["Yeni Belge", "Kaydet", "Temizle", ""],
-                2 => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
-                3 => ["Piksel Font", "Sıkıştırılmış", "ClearType Font", ""],
+            let items = match (self.menu, english) {
+                (1, true) => ["New Document", "Save", "Clear", ""],
+                (2, true) => ["Cut", "Copy", "Paste", "Select All"],
+                (3, true) => ["Pixel Font", "Compact", "ClearType Font", ""],
+                (_, true) => ["About Notepad", "", "", ""],
+                (1, false) => ["Yeni Belge", "Kaydet", "Temizle", ""],
+                (2, false) => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
+                (3, false) => ["Piksel Font", "Sıkıştırılmış", "ClearType Font", ""],
                 _ => ["Not Defteri Hakkında", "", "", ""],
             };
             fb.draw_shadow(mx, win_y + 54, 150, 94, Color::SHADOW);

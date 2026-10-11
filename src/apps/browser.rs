@@ -16,7 +16,7 @@ impl BrowserApp {
     pub fn new() -> Self {
         let mut app = Self {
             url: [0; 128], url_len: 0, address_focused: false,
-            active_tab: 0, page_loaded: true, status: "MinOS yerel yardim sayfasi",
+            active_tab: 0, page_loaded: true, status: crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
             net_online: false, ping_ok: false,
         };
         app.set_url(b"minos://help");
@@ -51,12 +51,12 @@ impl BrowserApp {
             "minos://help" => {
                 self.active_tab = 0;
                 self.page_loaded = true;
-                self.status = "Yerel MinOS yardım sayfası açıldı.";
+                self.status = crate::gui::ui_text("Yerel MinOS yardım sayfası açıldı.", "Local MinOS help page opened.");
             }
             "minos://cats" => {
                 self.active_tab = 1;
                 self.page_loaded = true;
-                self.status = "Yerel KediWiki sayfası açıldı.";
+                self.status = crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened.");
             }
             "minos://net" | "net://status" => {
                 // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi
@@ -68,15 +68,15 @@ impl BrowserApp {
                         crate::drivers::netstack::GATEWAY_IP,
                     );
                     self.page_loaded = true;
-                    self.status = "Ağ durumu sayfası açıldı (sınama gönderildi).";
+                    self.status = crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent).");
                 } else {
                     self.page_loaded = false;
-                    self.status = "e1000 ağ kartı bulunamadı; ağ yığını pasif.";
+                    self.status = crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive.");
                 }
             }
             _ => {
                 self.page_loaded = false;
-                self.status = "Web erisimi yok: TCP/HTTP/TLS ve DNS henuz desteklenmiyor.";
+                self.status = crate::gui::ui_text("Web erişimi yok: TCP/HTTP/TLS ve DNS henüz desteklenmiyor.", "Web access unavailable: TCP/HTTP/TLS and DNS are not supported yet.");
             }
         }
         self.address_focused = false;
@@ -93,10 +93,11 @@ impl BrowserApp {
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize) {
+        let english = crate::gui::ui_english();
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 22, Color::TITLE_BAR_INACTIVE);
         let tab0_bg = if self.active_tab == 0 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
         fb.draw_rect(win_x + 8, win_y + 30, 160, 20, tab0_bg);
-        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, "MinOS Yardim", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, crate::gui::ui_text("MinOS Yardım", "MinOS Help"), Color::TEXT_MAIN);
         let tab1_bg = if self.active_tab == 1 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
         fb.draw_rect(win_x + 172, win_y + 30, 100, 20, tab1_bg);
         MinGuiCompositor::draw_string(fb, win_x + 178, win_y + 34, "KediWiki", Color::TEXT_MAIN);
@@ -129,34 +130,42 @@ impl BrowserApp {
             if self.active_tab == 2 {
                 // Ağ durumu paneli
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "MinOS | Ağ Durumu (e1000)", Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "ICMP / ARP tabanlı sınama paneli", Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("MinOS | Ağ Durumu (e1000)", "MinOS | Network Status (e1000)"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("ICMP / ARP tabanlı sınama paneli", "ICMP / ARP test panel"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                let net_str = if self.net_online { "e1000: ÇEVRIMICI (MMIO aktif)" } else { "e1000: CEVHRIMDISI" };
+                let net_str = match (self.net_online, english) { (true,true) => "e1000: ONLINE (MMIO active)", (false,true) => "e1000: OFFLINE", (true,false) => "e1000: ÇEVRIMICI (MMIO aktif)", (false,false) => "e1000: ÇEVRIMDIŞI" };
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, net_str, Color::ACCENT_GREEN);
-                let ping_str = if self.ping_ok { "Gateway ARP: BULUNDU (10.0.2.2)" } else { "Gateway ARP: BEKLIYOR / YANIT YOK" };
+                let ping_str = match (self.ping_ok, english) { (true,true) => "Gateway ARP: FOUND (10.0.2.2)", (false,true) => "Gateway ARP: WAITING / NO REPLY", (true,false) => "Gateway ARP: BULUNDU (10.0.2.2)", (false,false) => "Gateway ARP: BEKLIYOR / YANIT YOK" };
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, ping_str, Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, "IP: 10.0.2.15/24 GW: 10.0.2.2", Color::TEXT_MUTED);
             } else if self.active_tab == 0 {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "MinOS | Yerel Yardim ve Belgeler", Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "Yerel adresler: minos://cats, minos://help, minos://net", Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("MinOS | Yerel Yardım ve Belgeler", "MinOS | Local Help and Documents"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats, minos://help, minos://net", "Local addresses: minos://cats, minos://help, minos://net"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, "minos://net ile ağ durumunu sınayın.", Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, "Yerel sayfalar adres çubuğundan açılabilir.", Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("minos://net ile ağ durumunu sınayın.", "Check network status at minos://net."), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("Yerel sayfalar adres çubuğundan açılabilir.", "Open local pages from the address bar."), Color::TEXT_MUTED);
             } else {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, "KediWiki | Yerel Sayfa", Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, "Yerel adresler: minos://cats ve minos://help", Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("KediWiki | Yerel Sayfa", "KediWiki | Local Page"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats ve minos://help", "Local addresses: minos://cats and minos://help"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, "Kediler ve MinOS!", Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("Kediler ve MinOS!", "Cats and MinOS!"), Color::TEXT_MAIN);
             }
         } else {
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, "Bu adres açılamadı.", Color::ACCENT_RED);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, "Desteklenenler: minos://help, minos://cats, minos://net", Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, "Yerel: minos://help | Ag: minos://net", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, crate::gui::ui_text("Bu adres açılamadı.", "This address could not be opened."), Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, crate::gui::ui_text("Desteklenen adresler: minos://help, minos://cats, minos://net", "Supported: minos://help, minos://cats, minos://net"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, crate::gui::ui_text("Yerel: minos://help | Ağ: minos://net", "Local: minos://help | Network: minos://net"), Color::TEXT_MUTED);
         }
         fb.draw_rect(win_x + 6, win_y + 256, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 260, self.status, Color::TEXT_MUTED);
+        let status = match self.status {
+            "MinOS yerel yardım sayfası" | "MinOS local help page" => crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
+            "Yerel MinOS yardım sayfası açıldı." | "Local MinOS help page opened." => crate::gui::ui_text("Yerel MinOS yardım sayfası açıldı.", "Local MinOS help page opened."),
+            "Yerel KediWiki sayfası açıldı." | "Local KediWiki page opened." => crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened."),
+            "Ağ durumu sayfası açıldı (sınama gönderildi)." | "Network status page opened (test sent)." => crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent)."),
+            "e1000 ağ kartı bulunamadı; ağ yığını pasif." | "e1000 adapter unavailable; network stack is inactive." => crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive."),
+            _ => crate::gui::ui_text("Web erişimi yok: TCP/HTTP/TLS ve DNS henüz desteklenmiyor.", "Web access unavailable: TCP/HTTP/TLS and DNS are not supported yet."),
+        };
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 260, status, Color::TEXT_MUTED);
     }
 }

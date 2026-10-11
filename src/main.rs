@@ -319,6 +319,18 @@ pub extern "C" fn _start() -> ! {
     gui::theme::init();
     serial_print("[MinOS] Theme engine initialized.\n");
 
+    // İlk açılış ekranı: kedi logosu ve ilerleme animasyonu.
+    fb.draw_rect(0, 0, width, height, gui::Color::DARK_BG);
+    let cx = width.saturating_sub(32) / 2;
+    let cy = height.saturating_sub(32) / 2;
+    gui::MinGuiCompositor::draw_cat_icon(&mut fb, cx, cy.saturating_sub(18));
+    gui::MinGuiCompositor::draw_string(&mut fb, cx.saturating_sub(8), cy + 8, "MinOS", gui::Color::TEXT_MAIN);
+    for phase in 0..3 {
+        let dots = match phase { 0 => ".  ", 1 => ".. ", _ => "..." };
+        gui::MinGuiCompositor::draw_string(&mut fb, cx + 34, cy + 8, dots, gui::Color::ACCENT_BLUE);
+        for _ in 0..180_000 { core::hint::spin_loop(); }
+    }
+
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
@@ -743,7 +755,15 @@ pub extern "C" fn _start() -> ! {
             let sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
 
             let mut cat_clicked = false;
+            if gui::in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22)) {
+                open_app(&mut compositor, 1);
+                settings_app.active_tab = 0;
+                compositor.is_start_menu_open = false;
+                consumed = true;
+                cat_clicked = true;
+            }
             for g in 0..4 {
+                if cat_clicked { break; }
                 let cat_r = gui::MinGuiCompositor::start_menu_category_rect(menu_y, g);
                 if gui::in_rect(mx, my, cat_r) {
                     compositor.active_start_group = g;

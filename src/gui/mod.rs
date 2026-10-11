@@ -1287,8 +1287,8 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü Butonu
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
-        let start_bg = if self.is_start_menu_open { Color::ACCENT_PINK } else { Color::ACCENT_BLUE };
-        Self::draw_button(fb, l.start, start_bg, "", Color::TASKBAR_BG, start_hover);
+        let start_bg = if self.is_start_menu_open { Color::ACCENT_BLUE } else { Color::ACCENT_BLUE };
+        Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
         Self::draw_cat_icon(fb, 12, tb_y + 10);
         Self::draw_string_shadow(fb, 36, tb_y + 14, "MinOS", Color::TASKBAR_BG, Color::SHADOW, 1);
 
@@ -1309,7 +1309,8 @@ impl MinGuiCompositor {
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
                     let tab_title = if ui_english() { Self::window_tab_title(win_idx, true) } else { win.tab_title };
-                    Self::draw_string(fb, tab_x + 10, tb_y + 14, tab_title, tab_text_color);
+                    Self::draw_icon_by_index(fb, tab_x + 5, tb_y + 9, Self::window_icon_index(win_idx));
+                    Self::draw_string(fb, tab_x + 27, tb_y + 14, tab_title, tab_text_color);
                     tab_x += 88;
                 }
             }
@@ -1545,6 +1546,10 @@ impl MinGuiCompositor {
         fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, 34, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_cat_icon(fb, menu_x + 8, menu_y + 10);
         Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS", Color::TEXT_MAIN, Color::SHADOW, 1);
+        let settings_hover = in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22));
+        if settings_hover { fb.draw_rounded_rect(menu_x + menu_w - 34, menu_y + 6, 26, 22, 4, Color::ACCENT_BLUE); }
+        // Ayarlar menü öğesinde kullanılan mevcut uygulama simgesini yeniden kullan.
+        Self::draw_icon_by_index(fb, menu_x + menu_w - 28, menu_y + 9, Self::window_icon_index(1));
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {
@@ -1576,7 +1581,7 @@ impl MinGuiCompositor {
 
             fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg_col);
             if is_active {
-                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::ACCENT_PINK);
+                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::WHITE);
             }
 
             Self::draw_string(fb, r.0 + 8, r.1 + 10, title, fg_col);
@@ -1604,8 +1609,8 @@ impl MinGuiCompositor {
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
         let menu_items = if english { [
-            ("File Manager", Color::ACCENT_YELLOW, 0usize),
-            ("Settings", Color::ACCENT_BLUE, 1),
+            ("Settings", Color::ACCENT_BLUE, 1usize),
+            ("File Manager", Color::ACCENT_YELLOW, 0),
             ("Task Manager", Color::ACCENT_BLUE, 7),
             ("Terminal", Color::ACCENT_GREEN, 10),
             ("Notepad", Color::TEXT_MAIN, 2),
@@ -1618,8 +1623,8 @@ impl MinGuiCompositor {
             ("Shut Down", Color::ACCENT_RED, 255),
             ("Restart", Color::ACCENT_YELLOW, 254),
         ] } else { [
-            ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0usize),
-            ("Sistem Ayarları", Color::ACCENT_BLUE, 1),
+            ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
+            ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
             ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
             ("Komut İstemi", Color::ACCENT_GREEN, 10),
             ("Not Defteri", Color::TEXT_MAIN, 2),
@@ -1653,7 +1658,7 @@ impl MinGuiCompositor {
 
             fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
             if is_hovered {
-                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::ACCENT_PINK);
+                fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
             }
 
             // Çizim: Simgeler (İkonlar)
@@ -1673,7 +1678,7 @@ impl MinGuiCompositor {
                 name
             };
 
-            let text_col = if is_hovered { Color::WHITE } else { col };
+            let text_col = if is_hovered { Color::WHITE } else if bg_col == Color::WINDOW_BG && col == Color::ACCENT_PINK { Color::ACCENT_BLUE } else { col };
             Self::draw_string(fb, r.0 + 26, r.1 + 5, label, text_col);
         }
     }

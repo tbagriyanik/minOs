@@ -72,6 +72,16 @@ pub fn init() {
             outb(0x60, status);
         }
 
+        // Klavye LED'leri: Scroll Lock=0, Num Lock=1, Caps Lock=0.
+        // ACK (0xFA) ve RESEND (0xFE) yanıtlarını kısa timeout ile tüket.
+        wait_write();
+        outb(0x60, 0xED);
+        if wait_read() && inb(0x60) == 0xFA {
+            wait_write();
+            outb(0x60, 0x02);
+            if wait_read() { let _ = inb(0x60); }
+        }
+
         // 5. Fareyi varsayılan ayarlara al
         mouse_write(0xF6);
 

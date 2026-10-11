@@ -30,12 +30,14 @@ pub struct KeyboardState {
     pub layout: KeyboardLayout,
     pub shift: bool,
     pub caps_lock: bool,
+    pub num_lock: bool,
     pub alt_gr: bool,
     pub ctrl: bool,
     pub alt: bool,
     pub super_key: bool,
     pub last_char: Option<char>,
     pub last_action: Option<KeyAction>,
+    extended_scancode: bool,
 }
 
 impl KeyboardState {
@@ -44,12 +46,14 @@ impl KeyboardState {
             layout: KeyboardLayout::TurkishQ,
             shift: false,
             caps_lock: false,
+            num_lock: true,
             alt_gr: false,
             ctrl: false,
             alt: false,
             super_key: false,
             last_char: None,
             last_action: None,
+            extended_scancode: false,
         }
     }
 
@@ -83,6 +87,16 @@ impl KeyboardState {
     }
 
     pub fn handle_scancode(&mut self, scancode: u8) -> Option<char> {
+        if scancode == 0xE0 {
+            self.extended_scancode = true;
+            return None;
+        }
+
+        let extended = core::mem::replace(&mut self.extended_scancode, false);
+        if extended {
+            return self.handle_extended_scancode(scancode);
+        }
+
         // Tuş bırakma (Release / Break code) kontrolü
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
@@ -112,6 +126,10 @@ impl KeyboardState {
                 self.caps_lock = !self.caps_lock;
                 return None;
             }
+            0x45 => {
+                self.num_lock = !self.num_lock;
+                return None;
+            }
             0x1D => {
                 self.ctrl = true;
                 return None;
@@ -138,7 +156,7 @@ impl KeyboardState {
                     return None;
                 }
             }
-            0x53 => { // Delete key
+            0x53 if !self.num_lock => { // Delete key / keypad decimal
                 if self.ctrl && self.alt {
                     self.last_action = Some(KeyAction::OpenTaskManager);
                     return None;
@@ -152,19 +170,19 @@ impl KeyboardState {
             0x1E if self.ctrl => { self.last_action = Some(KeyAction::SelectAllText); return None; } // Ctrl+A
             0x26 if self.ctrl => { self.last_action = Some(KeyAction::BrowserAddress); return None; } // Ctrl+L
             0x13 if self.ctrl => { self.last_action = Some(KeyAction::BrowserRefresh); return None; } // Ctrl+R
-            0x48 => { // Arrow Up
+            0x48 if !self.num_lock => { // Arrow Up / keypad 8
                 self.last_action = Some(KeyAction::ArrowUp);
                 return None;
             }
-            0x50 => { // Arrow Down
+            0x50 if !self.num_lock => { // Arrow Down / keypad 2
                 self.last_action = Some(KeyAction::ArrowDown);
                 return None;
             }
-            0x4B => { // Arrow Left
+            0x4B if !self.num_lock => { // Arrow Left / keypad 4
                 self.last_action = Some(KeyAction::ArrowLeft);
                 return None;
             }
-            0x4D => { // Arrow Right
+            0x4D if !self.num_lock => { // Arrow Right / keypad 6
                 self.last_action = Some(KeyAction::ArrowRight);
                 return None;
             }
@@ -176,6 +194,20 @@ impl KeyboardState {
 
         // Layout'a göre harf/karakter çevirisi
         let uppercase = self.shift ^ self.caps_lock;
+        if self.num_lock {
+            let keypad_char = match scancode {
+                0x47 => Some('7'), 0x48 => Some('8'), 0x49 => Some('9'),
+                0x4B => Some('4'), 0x4C => Some('5'), 0x4D => Some('6'),
+                0x4F => Some('1'), 0x50 => Some('2'), 0x51 => Some('3'),
+                0x52 => Some('0'), 0x53 => Some('.'),
+                0x37 => Some('*'), 0x4A => Some('-'), 0x4E => Some('+'),
+                _ => None,
+            };
+            if let Some(ch) = keypad_char {
+                self.last_char = Some(ch);
+                return Some(ch);
+            }
+        }
         let ch = match self.layout {
             KeyboardLayout::TurkishQ => Self::scancode_to_tr(scancode, uppercase, self.shift, self.alt_gr),
             KeyboardLayout::EnglishUS => Self::scancode_to_us(scancode, uppercase, self.shift),
@@ -185,6 +217,54 @@ impl KeyboardState {
             self.last_char = ch;
         }
         ch
+    }
+
+    fn handle_extended_scancode(&mut self, scancode: u8) -> Option<char> {
+        if scancode & 0x80 != 0 {
+            let released = scancode & 0x7F;
+            if released == 0x1D { self.ctrl = false; }
+            if released == 0x38 { self.alt = false; self.alt_gr = false; }
+            if released == 0x5B || released == 0x5C { self.super_key = false; }
+            return None;
+        }
+
+        match scancode {
+            0x1D => { self.ctrl = true; return None; }
+            0x38 => { self.alt = true; self.alt_gr = true; return None; }
+            0x5B | 0x5C => {
+                self.super_key = true;
+                self.last_action = Some(KeyAction::ToggleStartMenu);
+                return None;
+            }
+            0x53 if self.ctrl && self.alt => {
+                self.last_action = Some(KeyAction::OpenTaskManager);
+                return None;
+            }
+            0x53 => { self.last_action = Some(KeyAction::Delete); return None; }
+            0x48 => { self.last_action = Some(KeyAction::ArrowUp); return None; }
+            0x50 => { self.last_action = Some(KeyAction::ArrowDown); return None; }
+            0x4B => { self.last_action = Some(KeyAction::ArrowLeft); return None; }
+            0x4D => { self.last_action = Some(KeyAction::ArrowRight); return None; }
+            0x1C => { self.last_action = Some(KeyAction::EnterKey); return Some('\n'); }
+            0x35 if self.num_lock => { self.last_char = Some('/'); return Some('/'); }
+            0x37 if self.num_lock => { self.last_char = Some('*'); return Some('*'); }
+            0x4A if self.num_lock => { self.last_char = Some('-'); return Some('-'); }
+            0x4E if self.num_lock => { self.last_char = Some('+'); return Some('+'); }
+            0x53 if self.num_lock => { self.last_char = Some('.'); return Some('.'); }
+            0x47..=0x49 | 0x4B..=0x4D | 0x4F..=0x51 if self.num_lock => {
+                let ch = match scancode {
+                    0x47 => '7', 0x48 => '8', 0x49 => '9',
+                    0x4B => '4', 0x4C => '5', 0x4D => '6',
+                    0x4F => '1', 0x50 => '2', 0x51 => '3',
+                    _ => return None,
+                };
+                self.last_char = Some(ch);
+                return Some(ch);
+            }
+            0x52 if self.num_lock => { self.last_char = Some('0'); return Some('0'); }
+            _ => {}
+        }
+        None
     }
 
     fn scancode_to_tr(scancode: u8, uppercase: bool, shift: bool, _alt_gr: bool) -> Option<char> {

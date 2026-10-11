@@ -13,3 +13,8 @@ target/temp_build.iso
 target/iso_root/boot/minos-kernel
 target/x86_64-minos/release/minos-kernel
 target/x86_64-minos/release/minos-kernel.d
+
+# Virtual Disks
+disk.qcow2
+*.qcow2
+*.img

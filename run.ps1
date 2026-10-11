@@ -85,6 +85,22 @@ $qemuArgs = @(
     "-device", "e1000,netdev=n0"
 )
 
+# 512MB Sanal Sabit Disk (Kurulum ve Diskten Boot için)
+$diskPath = "disk.qcow2"
+if (-not (Test-Path $diskPath)) {
+    $qemuImg = "C:\Program Files\qemu\qemu-img.exe"
+    if (Test-Path $qemuImg) {
+        Write-Host "512MB Sanal Sabit Disk olusturuluyor ($diskPath)..." -ForegroundColor Cyan
+        & $qemuImg create -f qcow2 $diskPath 512M | Out-Null
+    }
+}
+if (Test-Path $diskPath) {
+    $qemuArgs += @(
+        "-drive", "file=$diskPath,if=none,id=hd0,format=qcow2",
+        "-device", "virtio-blk-pci,drive=hd0"
+    )
+}
+
 if ($UsbDisks -or $UsbDiskReadWrite) {
     try {
         $usbDisks = Get-Disk | Where-Object {

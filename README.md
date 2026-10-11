@@ -1,6 +1,7 @@
 # 🐱 MinOS - Sarman Edition
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20Nightly-orange.svg)](https://www.rust-lang.org/)
+[![Kernel](https://img.shields.io/badge/Linux_Kernel-7.2.9_Stable_(2026--10--03)-blue.svg)](https://kernel.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
@@ -8,7 +9,7 @@
 
 **MinOS (Sarman Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi ve masaüstü ortamıdır. 
 
-MinOS, donanım uyumluluğu ve sürücü desteği için **Linux Çekirdeği Donanım Motoru (Linux Hardware Engine)** ve **Limine Bootloader** altyapısını kullanır. Ses (ALSA/HDA), USB çevre birimleri (evdev), tam ekran sürücüleri (DRM/Framebuffer) ve TCP/IP ağ stack'i (Intel e1000 & Linux soketleri) Linux çekirdeğinin gücüyle desteklenir.
+MinOS, donanım uyumluluğu ve sürücü desteği için resmi **Linux 7.2.9 Stable (2026-10-03)** çekirdeği donanım motorunu ve **Limine Bootloader** altyapısını kullanır. Ses (ALSA/HDA), USB çevre birimleri (evdev), tam ekran sürücüleri (DRM/Framebuffer) ve TCP/IP ağ stack'i (Intel e1000 & Linux soketleri) Linux çekirdeğinin gücüyle desteklenir.
 
 Sistem iki temel çalışma moduna sahiptir:
 1. **MinOS Live CD (Grafik Masaüstü):** Doğrudan grafik masaüstüne anında boot eden tak-çalıştır Live CD modu (Varsayılan).
@@ -65,10 +66,10 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
 
 ### 🆕 Modern Arayüz ve Sistem Mimarisi
  
-- **🐧 Linux Çekirdeği Donanım Motoru (Linux Hardware Engine):** MinOS, tüm donanım sürücüsü gereksinimlerinde Linux çekirdeğinin sürücü ekosistemini (USB fare/klavyeler için `evdev`, ses için ALSA/Intel HDA, modern ekran kartları ve ağ bağdaştırıcıları) temel alır.
+- **🐧 Linux Çekirdeği Donanım Motoru (Linux 7.2 Hardware Engine):** MinOS, tüm donanım sürücüsü gereksinimlerinde güncel **Linux 7.2** çekirdeğinin sürücü ekosistemini (USB fare/klavyeler için `evdev`, ses için ALSA/Intel HDA, modern ekran kartları ve ağ bağdaştırıcıları) temel alır.
 - **📀 İki Aşamalı Boot Menüsü:**
   - **1. MinOS Live CD (Grafik Masaüstü):** Doğrudan grafik arayüzüne giriş yapar, konsol ekranında takılmaz.
-  - **2. Install MinOS to Disk:** Linux çekirdeği ortamında çalışan MinOS kurulum yöneticisidir.
+  - **2. Install MinOS to Disk (Linux 7.2):** Linux 7.2 çekirdeği ortamında çalışan MinOS donanım kurulum yöneticisidir.
 - **🖥️ Çoklu Çözünürlük Desteği (Full HD Ready):** Açılış menüsünden ve donanımdan **1920x1080 (Full HD)**, **1280x720**, **1024x768** ve **800x600** çözünürlükleri tam arka tampon (backbuffer) uyumluluğuyla çalışır.
 - **🌐 Çift Ağ Yığını (Intel e1000 & Linux TCP/IP):** Intel e1000 ve Linux soket arayüzü desteğiyle canlı HTML DOM Web Gezgini, HTTP istemcisi, `ping` ve `dns` araçları.
 - **🇹🇷 Tam Türkçe Karakter Desteği:** Sistem Ayarları, Görev Yöneticisi, Not Defteri, Dosya Yöneticisi, Başlat menüsü ve durum çubukları dahil arayüzdeki tüm metinler Türkçe karakterlerle (`ç`, `Ç`, `ğ`, `Ğ`, `ı`, `I`, `İ`, `ö`, `Ö`, `ş`, `Ş`, `ü`, `Ü`) işlenir.

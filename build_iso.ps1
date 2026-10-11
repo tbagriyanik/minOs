@@ -63,6 +63,16 @@ if (Test-Path "boot\linux\vmlinuz") {
     if (Test-Path "boot\linux\initramfs.img") {
         Copy-Item "boot\linux\initramfs.img" -Destination "$OutputDir\boot\linux\initramfs.img"
     }
+    if (Test-Path "boot\linux\modloop-virt") {
+        Copy-Item "boot\linux\modloop-virt" -Destination "$OutputDir\boot\linux\modloop-virt"
+        Copy-Item "boot\linux\modloop-virt" -Destination "$OutputDir\boot\modloop-virt"
+    }
+    if (Test-Path "boot\linux\localhost.apkovl.tar.gz") {
+        Copy-Item "boot\linux\localhost.apkovl.tar.gz" -Destination "$OutputDir\localhost.apkovl.tar.gz"
+        Copy-Item "boot\linux\localhost.apkovl.tar.gz" -Destination "$OutputDir\boot\linux\localhost.apkovl.tar.gz"
+    }
+    # Alpine boot media mount etiketleri
+    Set-Content -Path "$OutputDir\.alpine-release" -Value "3.20.0"
 }
 
 # Limine Boot Information Table Yamalayici (C#)

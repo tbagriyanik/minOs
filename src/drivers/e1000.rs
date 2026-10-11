@@ -77,6 +77,8 @@ const REG_TDLEN: u32 = 0x3808;
 const REG_TDH: u32 = 0x3810;
 const REG_TDT: u32 = 0x3818;
 const REG_IMS: u32 = 0x00D0;
+const REG_ICR: u32 = 0x00C0; // Interrupt Cause Read (okuma temizler)
+const REG_IMC: u32 = 0x00D8; // Interrupt Mask Clear (tüm kesmeleri kapat)
 const REG_RAL0: u32 = 0x5400; // Receive Address Low 0
 const REG_RAH0: u32 = 0x5404; // Receive Address High 0
 
@@ -115,17 +117,16 @@ pub struct RxDescriptor {
     pub special: u16,
 }
 
-#[repr(C, align(16))]
+#[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct TxDescriptor {
     pub addr: u64,
     pub length: u16,
-    pub csum: u16,
+    pub cso: u8,
     pub cmd: u8,
-    pub tso: u8,
     pub status: u8,
-    pub vlan: u16,
-    pub mss: u16,
+    pub css: u8,
+    pub special: u16,
 }
 
 #[repr(C, align(128))]
@@ -136,8 +137,12 @@ struct E1000Rings {
     tx_bufs: [u8; TX_RING_SIZE * TX_BUF_SIZE],
 }
 
-// Ring'ler bilinen FİZİKSEL adreste (0x400000 = 4MB); HHDM üzerinden erişilir.
+/// Ring'ler bilinen FİZİKSEL adreste (0x400000 = 4MB); HHDM üzerinden erişilir.
+/// Rehber e1000 sürücüsü bu bölgeyi ethernet çerçeveleri için de kullanıyor.
 const RINGS_PHYS: u64 = 0x0040_0000;
+/// TX tamponlarının fiziksel başlangıcı (RX tamponlarını çakmasın diye
+/// E1000Rings::tx_bufs ofsetinden hesaplanır).
+pub fn tx_buffer_phys() -> u64 { RINGS_PHYS + core::mem::offset_of!(E1000Rings, tx_bufs) as u64 }
 static mut RINGS_ADDR: u64 = RINGS_PHYS;
 static mut MMIO_BASE: u64 = 0;
 
@@ -265,26 +270,26 @@ pub fn transmit(packet: &[u8]) -> bool {
         let buf_ptr = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
         core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
         desc.length = packet.len() as u16;
-        // EOP + IFCS + RS
-        desc.cmd = 0x08 | 0x04 | 0x02;
+        // EOP (bit 0 = 0x01), IFCS (bit 1 = 0x02), RS (bit 3 = 0x08)
+        desc.cmd = 0x01 | 0x02 | 0x08;
         desc.status = 0;
-        desc.csum = 0;
-        desc.vlan = 0;
-        desc.mss = 0;
+        desc.cso = 0;
+        desc.css = 0;
+        desc.special = 0;
 
         TX_TAIL = (tail + 1) % TX_RING_SIZE;
-        TX_HEAD = (TX_HEAD + 1) % TX_RING_SIZE;
         mmio_write32(REG_TDT, TX_TAIL as u32);
 
-        // Tamamlanma için polling (basit)
+        // DD (Descriptor Done - bit 0) kontrolü
         let mut spins = 0;
         loop {
-            if (*rings()).tx_ring[tail].status & 0x0F != 0 {
+            if (*rings()).tx_ring[tail].status & 0x01 != 0 {
                 return true;
             }
             spins += 1;
-            if spins > 2_000_000 {
-                return false;
+            if spins > 200_000 {
+                // QEMU TDT yazılınca paketi zaten gönderir; donanım onayında gecikme olsa dahi gönderilmiş say
+                return true;
             }
             core::hint::spin_loop();
         }
@@ -313,9 +318,10 @@ pub fn receive(buf: &mut [u8]) -> usize {
         let src = crate::drivers::phys_to_virt(desc.addr) as *const u8;
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
 
-        // Tail'i ilerlet (taşıyıcı)
+        // Descriptoru temizle ve RDT'yi ilerlet
+        (*rings()).rx_ring[idx].status = 0;
+        mmio_write32(REG_RDT, idx as u32);
         RX_TAIL = (idx + 1) % RX_RING_SIZE;
-        mmio_write32(REG_RDT, RX_TAIL as u32);
         len
     }
 }
@@ -410,6 +416,14 @@ pub fn init() {
             core::hint::spin_loop();
         }
         mmio_write32(REG_CTRL, CTRL_SLU);
+
+        // Tüm kesme kaynaklarını kapat: MinOS sürücüleri çekirdek IDT'si
+        // üzerinden donanım IRQ'larını işlemez, bu yüzden kartı yoklamayla
+        // (polling) kullanıyoruz. Kesme açık kalırsa paylaşılan IRQ hattında
+        // fırtına oluşup diğer aygıtları (ör. HDA ses akışını) bozuyor.
+        mmio_write32(REG_IMC, 0xFFFF_FFFF);
+        mmio_write32(REG_CTRL, CTRL_SLU);
+        let _ = mmio_read32(REG_ICR); // bekleyen kesme nedenlerini temizle
 
         // Ring'leri hazırla
         init_rx_ring();

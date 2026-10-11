@@ -98,6 +98,7 @@ fn cell_width(scale: usize) -> usize {
 // ---------------------------------------------------------------------------
 // Metin tamponu (no_std, sabit boyutlu) — sayı/tarih biçimlendirme için.
 // ---------------------------------------------------------------------------
+#[derive(Clone, Copy)]
 pub struct TextBuf {
     buf: [u8; 32],
     len: usize,
@@ -106,6 +107,20 @@ pub struct TextBuf {
 impl TextBuf {
     pub const fn new() -> Self {
         Self { buf: [0; 32], len: 0 }
+    }
+
+    /// Sabit metinden hücreler arası (const) tampon oluşturur.
+    /// Metin `buf`'a sığmazsa 32 baytta kırpılır.
+    pub const fn from_str(s: &str) -> Self {
+        let mut buf = [0u8; 32];
+        let bytes = s.as_bytes();
+        let n = if bytes.len() < 32 { bytes.len() } else { 32 };
+        let mut i = 0;
+        while i < n {
+            buf[i] = bytes[i];
+            i += 1;
+        }
+        Self { buf, len: n }
     }
 
     pub fn clear(&mut self) {

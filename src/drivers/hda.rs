@@ -362,6 +362,14 @@ pub fn init() {
 
         HDA_MMIO_BASE = mmio_base;
 
+        // 1b. Kesme hattını kapat: MinOS IRQ'ları maskeli çalıştığı için HDA'nın
+        // IRQ üretmesi istenmez. QEMU'da paylaşılan IRQ hattına RTE'siz donanım
+        // bağlanması IRQ fırtınasına ve DMA akışının durmasına yol açıyor.
+        if let Some(rte_off) = pci_interrupt_line(dev, func).checked_mul(2) {
+            mmio_write16(mmio_base, 0x20 + rte_off as u32, 0x0000_0000);
+            serial_print("[HDA] IRQ hattı kapatıldı (RTE yazildi).\n");
+        }
+
         // 2. DMA pool'u hazırla (bilinen fiziksel adres, HHDM ile erişilir)
         let pool_phys = DMA_POOL_PHYS;
         DMA_POOL_ADDR = pool_phys;
@@ -383,7 +391,9 @@ pub fn init() {
         mmio_write32(mmio_base, RIRB_BASE_HI, (rirb_phys >> 32) as u32);
         // CORB/RIRB boyut yazımı QEMU'da r/o uyarısı verir; yalnız kontrol bitleri:
         mmio_write8(mmio_base, CORB_CTL, 0x02); // CORB Run (DMA engelini kaldır)
-        mmio_write8(mmio_base, RIRB_INTCTL, 0x05); // RIRB int enable, DMA enable
+        // RIRB: DMA enable, ama RIRB kesmesi kapalı (0x04). IRQ'lar maskeli olduğu
+        // için kesme açmak "UR" durumuna ve gecikmelerine neden oluyordu.
+        mmio_write8(mmio_base, RIRB_INTCTL, 0x06);
 
         // 4. Codec Komutları — QEMU hda-duplex için kod mux'u
         serial_print("[HDA] codec verb'leri gonderiliyor\n");
@@ -433,8 +443,8 @@ pub fn init() {
         mmio_write32(mmio_base, sd + SD_BDPL, bdl_phys as u32);
         mmio_write32(mmio_base, sd + SD_BDPU, (bdl_phys >> 32) as u32);
 
-        // Stream Run: 1 stripe, RUN biti açılır — taşınabilir
-        mmio_write8(mmio_base, sd + SD_CTL, 0x1C); // 4 stripe, RUN=0
+        // Stream Run: 2 stripe, RUN biti açılır — taşınabilir
+        mmio_write8(mmio_base, sd + SD_CTL, 0x18); // 2 stripe, RUN=0
         mmio_write8(mmio_base, sd + SD_CTL, 0x02); // RUN=1
 
         serial_print("[HDA] HDA denetleyicisi hazir. Codec konfigurasyonu tamam.\n");
@@ -467,6 +477,11 @@ pub fn push_pcm(samples: &[i16]) {
 // ---------------------------------------------------------------------------
 // Yardımcı: Serial hex yazdırma
 // ---------------------------------------------------------------------------
+
+/// PCI interrupt line (config offset 0x3C) — HDA RTE tabanını hesaplamak için.
+fn pci_interrupt_line(dev: u8, func: u8) -> u16 {
+    ((pci_read32(0, dev, func, 0x3C) >> 8) & 0xFF) as u16
+}
 
 fn print_hex8(v: u8) {
     let hex = b"0123456789ABCDEF";

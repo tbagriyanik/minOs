@@ -8,6 +8,8 @@ pub mod netstack;
 pub mod keyboard;
 pub mod ps2;
 pub mod rtc;
+pub mod ata;
+pub mod usb;
 
 // --- HHDM ofset yönetimi: fiziksel adresleri sanal adrese çevirir ---
 static mut HHDM_OFFSET: u64 = 0;

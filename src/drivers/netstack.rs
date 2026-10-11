@@ -57,7 +57,7 @@ static mut ARP_TABLE: [ArpEntry; 4] = [
     ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
 ];
 
-fn arp_lookup(ip: Ipv4Address) -> Option<MacAddress> {
+pub fn arp_lookup(ip: Ipv4Address) -> Option<MacAddress> {
     unsafe {
         for e in ARP_TABLE.iter_mut() {
             if e.used && e.ip == ip {
@@ -136,10 +136,26 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
         None => {
             // ARP request gönder
             send_arp_request(next_hop);
-            // QEMU SLIRP cevap verir, tekrar bak (poll arkasından)
-            match arp_lookup(next_hop) {
+            // QEMU SLIRP'in yanıt vermesi için kartı yokla (poll)
+            let mut resolved = None;
+            for _ in 0..10_000 {
+                e1000::poll();
+                if let Some(m) = arp_lookup(next_hop) {
+                    resolved = Some(m);
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            match resolved {
                 Some(m) => m,
-                None => return false,
+                None => {
+                    // Gateway veya broadcast için fallback
+                    if next_hop == GATEWAY_IP {
+                        MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02])
+                    } else {
+                        MAC_BROADCAST
+                    }
+                }
             }
         }
     };
@@ -449,6 +465,9 @@ pub fn ping(target: Ipv4Address) -> bool {
 // ---------------------------------------------------------------------------
 
 pub fn init() {
-    // Gateway için ARP request gönder (SLIRP cevaplar)
+    // QEMU SLIRP varsayılan gateway ve DNS MAC eşleştirmesini önceden kaydet
+    arp_insert(GATEWAY_IP, MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]));
+    arp_insert(DNS_SERVER, MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x03]));
+    // Canlı ARP güncellemesi için gateway'e request gönder
     send_arp_request(GATEWAY_IP);
 }

@@ -1,4 +1,5 @@
 pub mod vfs;
+pub mod diskfs;
 
 pub struct FileSystemManager {
     pub vfs: vfs::VirtualFileSystem,

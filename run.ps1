@@ -1,6 +1,8 @@
 param(
     [switch]$BuildOnly,
-    [switch]$Debug
+    [switch]$Debug,
+    [switch]$UsbDisks,
+    [switch]$UsbDiskReadWrite
 )
 
 # MinOS Derle ve QEMU ile Çalistir (PowerShell)
@@ -82,6 +84,33 @@ $qemuArgs = @(
     "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
     "-device", "e1000,netdev=n0"
 )
+
+if ($UsbDisks -or $UsbDiskReadWrite) {
+    try {
+        $usbDisks = Get-Disk | Where-Object {
+            $_.BusType -eq "USB" -and -not $_.IsBoot -and -not $_.IsSystem
+        }
+
+        foreach ($disk in $usbDisks) {
+            $driveId = "usbDisk$($disk.Number)"
+            $driveArg = "file=\\.\PhysicalDrive$($disk.Number),format=raw,if=none,id=$driveId"
+            if (-not $UsbDiskReadWrite) {
+                $driveArg += ",readonly=on"
+            }
+
+            $qemuArgs += @("-drive", $driveArg, "-device", "usb-storage,drive=$driveId")
+            $accessMode = if ($UsbDiskReadWrite) { "yazma izniyle" } else { "salt okunur" }
+            Write-Host "USB disk eklendi: Disk $($disk.Number) - $($disk.FriendlyName) ($accessMode)" -ForegroundColor Yellow
+        }
+
+        if (-not $usbDisks) {
+            Write-Host "USB disk bulunamadi; USB disk argümani eklenmedi." -ForegroundColor DarkYellow
+        }
+    } catch {
+        Write-Host "[HATA] USB diskleri listelenemedi: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+}
 
 if (Test-Path ".\build_iso.ps1") {
     & powershell -ExecutionPolicy Bypass -File ".\build_iso.ps1"

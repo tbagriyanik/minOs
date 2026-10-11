@@ -273,6 +273,7 @@ pub extern "C" fn _start() -> ! {
     drivers::hda::init();
     drivers::e1000::init();
     drivers::netstack::init();
+    drivers::usb::init();
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
@@ -1021,6 +1022,17 @@ pub extern "C" fn _start() -> ! {
                                         _ => 2,
                                     };
                                     open_app(&mut compositor, target);
+                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 68 && my < wy + 68 + 6 * 22 {
+                                    let nav = ((my - (wy + 68)) / 22).min(5);
+                                    filemanager_app.current_path = match nav {
+                                        0 => "/",
+                                        1 => "/root/home/minos/Documents",
+                                        2 => "/root/home/minos/Media",
+                                        3 => "/root/home/minos/Downloads",
+                                        4 => "/boot",
+                                        _ => "/media/usb0",
+                                    };
+                                    filemanager_app.selected_idx = 0;
                                 } else if mx >= wx + 124 && mx <= wx + ww - 10 && my >= wy + 84 && my <= wy + 250 {
                                     let row_y_base = wy + 86;
                                     for i in 0..filemanager_app.files.len() {
@@ -1172,14 +1184,17 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             3 => {
-                                if gui::in_rect(mx, my, (wx + 8, wy + 30, 160, 20)) {
+                                if gui::in_rect(mx, my, (wx + 8, wy + 30, 140, 20)) {
                                     browser_app.active_tab = 0;
                                     browser_app.set_url(b"minos://help");
                                     browser_app.navigate();
-                                } else if gui::in_rect(mx, my, (wx + 172, wy + 30, 100, 20)) {
+                                } else if gui::in_rect(mx, my, (wx + 152, wy + 30, 85, 20)) {
                                     browser_app.active_tab = 1;
                                     browser_app.set_url(b"minos://cats");
                                     browser_app.navigate();
+                                } else if gui::in_rect(mx, my, (wx + 241, wy + 30, 100, 20)) {
+                                    browser_app.active_tab = 3;
+                                    browser_app.page_loaded = true;
                                 } else if gui::in_rect(mx, my, (wx + 12, wy + 56, 22, 20)) {
                                     browser_app.back();
                                 } else if gui::in_rect(mx, my, (wx + 38, wy + 56, 22, 20)) {

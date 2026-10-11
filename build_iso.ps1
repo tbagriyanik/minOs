@@ -49,12 +49,20 @@ if (Test-Path "boot\EFI\BOOT\BOOTX64.EFI") {
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala
-Write-Host "[3/4] MinOS Cekirdegi Paketleniyor..." -ForegroundColor Yellow
+Write-Host "[3/4] MinOS ve Linux Cekirdekleri Paketleniyor..." -ForegroundColor Yellow
 if (Test-Path "target\x86_64-minos\release\minos-kernel") {
     Copy-Item "target\x86_64-minos\release\minos-kernel" -Destination "$OutputDir\boot\minos-kernel"
 } else {
     Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy çekirdek dosyasi yerlestiriliyor." -ForegroundColor Magenta
     Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "MinOS Kernel Binary"
+}
+
+if (Test-Path "boot\linux\vmlinuz") {
+    New-Item -ItemType Directory -Force -Path "$OutputDir\boot\linux" | Out-Null
+    Copy-Item "boot\linux\vmlinuz" -Destination "$OutputDir\boot\linux\vmlinuz"
+    if (Test-Path "boot\linux\initramfs.img") {
+        Copy-Item "boot\linux\initramfs.img" -Destination "$OutputDir\boot\linux\initramfs.img"
+    }
 }
 
 # Limine Boot Information Table Yamalayici (C#)

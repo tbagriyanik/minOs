@@ -1,7 +1,7 @@
 use crate::gui::theme;
 
-static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
-const BACKBUFFER_LEN: usize = 1280 * 720;
+static mut BACKBUFFER: [u32; 1920 * 1080] = [0; 1920 * 1080];
+const BACKBUFFER_LEN: usize = 1920 * 1080;
 
 /// Dikdörtgen kırpma (clip) bölgesi. Tüm çizimler bu sınırların içinde kalır.
 #[derive(Copy, Clone)]

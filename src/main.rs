@@ -9,6 +9,7 @@ pub mod fs;
 pub mod drivers;
 pub mod gui;
 pub mod apps;
+pub mod platform;
 
 // Limine Protokolü İstek Yapıları (Sıfır Dış Bağımlılık)
 #[repr(C, align(8))]

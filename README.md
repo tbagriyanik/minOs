@@ -48,22 +48,24 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
 | **⚙️ Sistem Ayarları** | Tema seçimi/değiştirme, canlı saat & tarih, ses düzeyi kaydırıcısı, ağ durumu (IP/DNS/Gateway), dil/klavye ve pencere düzeni kaydetme paneli. |
 | **📝 Not Defteri** | İşlevsel üst menü çubuğu (`Dosya`, `Düzen`, `Biçim`, `Yardım`). Metin temizleme, dosya kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, dinamik font modları (`Piksel`, `Sıkıştırılmış`, `ClearType`). Tam Türkçe karakter desteği (`ç`, `ğ`, `ı`, `İ`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları ve yanıp sönen imleç. |
-| **🌐 Web Tarayıcısı** | Yerel minos://help ve minos://cats sayfaları, e1000 ağ kartı ARP/ping test paneli. |
+| **🌐 Web Tarayıcısı** | Yerel `minos://help`, `minos://cats` ve donanım test paneli `minos://net`. `http://` protokolü üzerinden canlı HTML DOM/sayfa render motoru, DNS ve TCP/IP istek desteği. |
 | **🖼️ Resim Gösterici** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
-| **🎵 Müzik Çalar** | PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
+| **🎵 Müzik Çalar** | PC hoparlöründen ve Intel HDA PCM üzerinden melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve silgi aracı. |
-| **⌨️ Komut İstemi** | Klavyeyle komut ve metin girişi kabul eden retro terminal görünümü. |
+| **⌨️ Komut İstemi** | Klavyeyle komut ve metin girişi kabul eden retro terminal görünümü (`ipconfig`, `ping`, `dns`, `mem`, `ls`, `cat`, `open` vb.). |
 
-### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
+### 🆕 Modern Arayüz ve Sistem Yenilikleri
 
+- **🐧 Çift Çekirdekli Açılış Menüsü (Dual-Boot Limine Menüsü):** Limine v8 açılış menüsü ile hem **MinOS Grafik Masaüstü** hem de resmi **Linux (Alpine Minimal Shell - vmlinuz + initramfs)** doğrudan seçilip çalıştırılabilir. ISO boyutu şişirilmeden (~26 MB) tam donanımlı Linux kabuğu sunar.
+- **🖥️ Çoklu Çözünürlük Desteği (Full HD Ready):** Açılış menüsünden ve donanımdan **1920x1080 (Full HD)**, **1280x720**, **1024x768** ve **800x600** çözünürlükleri tam arka tampon (backbuffer) uyumluluğuyla çalışır.
+- **🌐 Intel e1000 Ağ Yığını (TCP/IP & Web Gezgini):** MMIO tabanlı Intel 82540EM ağ kartı sürücüsü, ARP önbelleği, ICMP (Ping), UDP/DNS sorguları ve Web Gezgini üzerinde canlı HTTP HTML sayfa renderı.
 - **🇹🇷 Tam Türkçe Karakter Desteği:** Sistem Ayarları, Görev Yöneticisi, Not Defteri, Dosya Yöneticisi, Başlat menüsü ve durum çubukları dahil arayüzdeki tüm metinler Türkçe karakterlerle (`ç`, `Ç`, `ğ`, `Ğ`, `ı`, `I`, `İ`, `ö`, `Ö`, `ş`, `Ş`, `ü`, `Ü`) işlenir.
 - **⌨️ Klavyeyle Menü Gezintisi (Ok Tuşları & Enter):** Başlat menüsü ve bağlam menülerinde **Yukarı/Aşağı/Sol/Sağ ok tuşları** ile gezinebilir, **Enter** tuşuna basarak seçili uygulamayı veya komutu çalıştırabilirsiniz.
-- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Tüm pencere içerikleri (Not Defteri, Dosya Yöneticisi listeleri) dikey olarak yumuşak şekilde kaydırılır.
-- **📐 Daha Geniş Kenar Tutamaçları (12px Resize Grip):** Pencereleri kenarlarından tutup boyutlandırma alanı 8 pikselden **12 piksele** çıkarıldı. Artık pencerelerin kenar ve köşelerinden tutulması ve boyutlandırılması çok daha kolaydır.
-- **🖼️ Masaüstü Simgesi Tıklama Koruması:** Açık ve görünür bir pencere masaüstü simgelerinin üzerine geldiğinde, pencereye tıklanıldığında altındaki masaüstü simgelerinin istemeden açılması engellendi.
+- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Tüm pencere içerikleri (Not Defteri, Dosya Yöneticisi listeleri, Terminal geçmişi) dikey olarak yumuşak şekilde kaydırılır.
+- **📐 Daha Geniş Kenar Tutamaçları (12px Resize Grip):** Pencereleri kenarlarından tutup boyutlandırma alanı 8 pikselden **12 piksele** çıkarıldı.
 - **🎨 Dinamik Tema Motoru (5 Tema):** Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal ve Gün Batımı temaları arasında tek tıkla canlı geçiş.
 - **🪟 Akıllı Pencere Yönetimi:** Çift tıkla maksimize etme, ekranın en üstüne sürükleyerek otomatik maksimize (snap) etme, pencere ortalama, simge durumuna küçültme ve yumuşak z-sırası odak yönetimi.
 - **📋 Not Defteri Açılır Menü Komutları:**
@@ -153,6 +155,9 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 - **Pencere Yerleştirme (Snap):** Başlık çubuğunu ekranın en üstüne sürükleyip bırakırsanız pencere otomatik olarak maksimize edilir.
 - **Sistem Tepsisi (Sağ Alt):** Sırasıyla **klavye rozeti (`TR`/`EN`)**, **tema düğmesi**, **SES** düğmesi ve **canlı saat** bulunur. Saate tıklayınca canlı takvim, **SES**'e tıklayınca ses paneli açılır.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine, **tema palet şeridindeki renk örneklerine** veya masaüstü sağ tık > **Tema Değiştir**'e tıklayın.
+- **Ağ Komutları ve İnternet Gezgini:**
+  - **Komut İstemi (CMD):** `ipconfig` (IP/MAC/Gateway bilgileri), `ping 10.0.2.2` (ICMP Echo testi), `dns <host>` (DNS sorgusu), `open browser` (CMD içinden tarayıcı başlatma).
+  - **Web Gezgini:** `minos://net` (donanım/ağ tanı paneli), `http://<alan-adı>` (canlı HTML web belgesi ve HTTP GET isteği). F6 tuşu ile doğrudan adres çubuğuna odaklanma, F5 ile sayfayı yenileme.
 - **Bağlama Duyarlı Sağ Tık:** Masaüstünde, Not Defteri'nde, Dosya Yöneticisi'nde veya pencere başlığında özel sağ tık menüleri açılır.
 
 ---

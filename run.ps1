@@ -2,7 +2,8 @@ param(
     [switch]$BuildOnly,
     [switch]$Debug,
     [switch]$UsbDisks,
-    [switch]$UsbDiskReadWrite
+    [switch]$UsbDiskReadWrite,
+    [string]$DiskSize = "10G"
 )
 
 # MinOS Derle ve QEMU ile Çalistir (PowerShell)
@@ -85,13 +86,13 @@ $qemuArgs = @(
     "-device", "e1000,netdev=n0"
 )
 
-# 512MB Sanal Sabit Disk (Kurulum ve Diskten Boot için)
+# Dinamik Büyüyen (Sparse/Thin-Provisioned) Sabit Disk
 $diskPath = "disk.qcow2"
 if (-not (Test-Path $diskPath)) {
     $qemuImg = "C:\Program Files\qemu\qemu-img.exe"
     if (Test-Path $qemuImg) {
-        Write-Host "512MB Sanal Sabit Disk olusturuluyor ($diskPath)..." -ForegroundColor Cyan
-        & $qemuImg create -f qcow2 $diskPath 512M | Out-Null
+        Write-Host "Dinamik Sabit Disk olusturuluyor ($diskPath, maks: $DiskSize)..." -ForegroundColor Cyan
+        & $qemuImg create -f qcow2 $diskPath $DiskSize | Out-Null
     }
 }
 if (Test-Path $diskPath) {

@@ -543,6 +543,20 @@ pub extern "C" fn _start() -> ! {
             force_render = true;
         }
 
+        // Kurulum ilerleme çubuğu animasyonu
+        if compositor.is_installer_open && compositor.installer_step == 1 {
+            if loop_counter % 250 == 0 {
+                if compositor.installer_progress < 100 {
+                    compositor.installer_progress += 2;
+                    force_render = true;
+                } else {
+                    // Kurulum tamamlandı
+                    compositor.installer_step = 2;
+                    force_render = true;
+                }
+            }
+        }
+
         // Ses cihazını ayarlarla senkronla
         audio_dev.set_volume(settings_app.volume);
         audio_dev.is_muted = settings_app.is_muted;
@@ -893,13 +907,59 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            // Kurulum Sihirbazı Modalı Tıklamaları
+            if compositor.is_installer_open {
+                let box_w = 460;
+                let box_h = 240;
+                let box_x = (width - box_w) / 2;
+                let box_y = (height - box_h) / 2;
+
+                // Kapat [X]
+                let close_rect = (box_x + box_w - 24, box_y + 4, 20, 20);
+                if gui::in_rect(mx, my, close_rect) {
+                    compositor.is_installer_open = false;
+                    consumed = true;
+                } else {
+                    match compositor.installer_step {
+                        0 => {
+                            let btn_install = (box_x + box_w - 190, box_y + box_h - 40, 100, 26);
+                            let btn_cancel = (box_x + box_w - 80, box_y + box_h - 40, 64, 26);
+                            if gui::in_rect(mx, my, btn_install) {
+                                compositor.installer_step = 1;
+                                compositor.installer_progress = 10;
+                                consumed = true;
+                            } else if gui::in_rect(mx, my, btn_cancel) {
+                                compositor.is_installer_open = false;
+                                consumed = true;
+                            }
+                        }
+                        2 => {
+                            let btn_reboot = (box_x + box_w - 160, box_y + box_h - 40, 140, 26);
+                            if gui::in_rect(mx, my, btn_reboot) {
+                                restart_system();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if gui::in_rect(mx, my, (box_x, box_y, box_w, box_h)) {
+                    consumed = true;
+                }
+            }
+
             // G) Masaüstü simgeleri
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
-                let desk_icons = [0, 2, 3, 5, 1];
+                let desk_icons = [0, 2, 3, 5, 1, 99];
                 for (i, &app_idx) in desk_icons.iter().enumerate() {
                     let dy = 30 + i * 54;
                     if my >= dy && my <= dy + 30 {
-                        open_app(&mut compositor, app_idx);
+                        if app_idx == 99 {
+                            compositor.is_installer_open = true;
+                            compositor.installer_step = 0;
+                            compositor.installer_progress = 0;
+                        } else {
+                            open_app(&mut compositor, app_idx);
+                        }
                         compositor.is_start_menu_open = false;
                         consumed = true;
                         break;

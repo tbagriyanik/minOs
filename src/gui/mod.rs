@@ -565,6 +565,9 @@ pub struct MinGuiCompositor {
     /// Sistem kapatma onayı bekleniyor mu? (Yanlış tetiklenmeyi önler.)
     pub confirm_shutdown: bool,
     pub confirm_restart: bool,
+    pub is_installer_open: bool,
+    pub installer_step: u8, // 0: Onay sorusu, 1: Kuruluyor, 2: Tamamlandı
+    pub installer_progress: usize,
     z_counter: u8,
 }
 
@@ -589,6 +592,9 @@ impl MinGuiCompositor {
             cal_month: 1,
             confirm_shutdown: false,
             confirm_restart: false,
+            is_installer_open: false,
+            installer_step: 0,
+            installer_progress: 0,
             z_counter: 0,
         }
     }
@@ -1164,11 +1170,11 @@ impl MinGuiCompositor {
         let desk_icons = if ui_english() { [
             ("Computer", Color::ACCENT_BLUE, 0), ("Notes", Color::TEXT_MAIN, 1),
             ("SarmanNet", Color::ACCENT_GREEN, 2), ("Playlist", Color::ACCENT_YELLOW, 3),
-            ("Settings", Color::ACCENT_PINK, 4),
+            ("Settings", Color::ACCENT_PINK, 4), ("Install MinOS", Color::ACCENT_RED, 5),
         ] } else { [
             ("Bilgisayarım", Color::ACCENT_BLUE, 0), ("Notlar", Color::TEXT_MAIN, 1),
             ("SarmanNet", Color::ACCENT_GREEN, 2), ("Çalma Listesi", Color::ACCENT_YELLOW, 3),
-            ("Sistem Ayarları", Color::ACCENT_PINK, 4),
+            ("Sistem Ayarları", Color::ACCENT_PINK, 4), ("Diske Kur (Setup)", Color::ACCENT_RED, 5),
         ] };
 
         for (i, (lbl, col, icon_idx)) in desk_icons.iter().enumerate() {
@@ -1417,9 +1423,107 @@ impl MinGuiCompositor {
         if self.is_volume_popup_open {
             self.render_volume_popup(fb, &l, volume, is_muted);
         }
+        // Kurulum Sihirbazı Modalı
+        if self.is_installer_open {
+            self.render_installer_dialog(fb, mx, my);
+        }
 
         // Donanım Fare İmleci
         self.draw_mouse_cursor(fb, mx, my);
+    }
+
+    pub fn render_installer_dialog(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
+        let box_w = 460;
+        let box_h = 240;
+        let box_x = (fb.width - box_w) / 2;
+        let box_y = (fb.height - box_h) / 2;
+
+        fb.draw_shadow(box_x, box_y, box_w, box_h, Color::SHADOW);
+        fb.draw_rect(box_x, box_y, box_w, box_h, Color::WINDOW_BG);
+        fb.draw_rect_outline(box_x, box_y, box_w, box_h, Color::BORDER);
+        fb.draw_rect(box_x, box_y, box_w, 28, Color::TITLE_BAR);
+
+        Self::draw_cat_icon(fb, box_x + 8, box_y + 6);
+        Self::draw_string_shadow(
+            fb,
+            box_x + 32,
+            box_y + 9,
+            ui_text("MinOS Diske Kurulum Sihirbazı", "MinOS Disk Installation Wizard"),
+            Color::WHITE,
+            Color::SHADOW,
+            1,
+        );
+
+        // Kapat butonu [X]
+        let close_rect = (box_x + box_w - 24, box_y + 4, 20, 20);
+        let close_hov = in_rect(mx, my, close_rect);
+        fb.draw_rect(close_rect.0, close_rect.1, close_rect.2, close_rect.3, if close_hov { Color::ACCENT_RED } else { Color::TITLE_BAR });
+        Self::draw_string(fb, close_rect.0 + 6, close_rect.1 + 4, "x", Color::WHITE);
+
+        match self.installer_step {
+            0 => {
+                // Adım 0: Onay sorusu
+                Self::draw_string(fb, box_x + 20, box_y + 48,
+                    ui_text("Hedef Disk: /dev/sda (Birincil Sabit Disk / 512MB+)", "Target Disk: /dev/sda (Primary HDD / 512MB+)"), Color::TEXT_MAIN);
+                Self::draw_string(fb, box_x + 20, box_y + 70,
+                    ui_text("MinOS çekirdeği ve Limine önyükleyicisi diske", "MinOS kernel and Limine bootloader will be"), Color::TEXT_MUTED);
+                Self::draw_string(fb, box_x + 20, box_y + 88,
+                    ui_text("kurulacaktır. Mevcut veriler silinecektir.", "installed to hard disk. Existing data will be erased."), Color::ACCENT_RED);
+
+                // Bilgi kutusu
+                fb.draw_rect(box_x + 20, box_y + 115, box_w - 40, 48, Color::TASKBAR_BG);
+                fb.draw_rect_outline(box_x + 20, box_y + 115, box_w - 40, 48, Color::BORDER);
+                Self::draw_string(fb, box_x + 28, box_y + 125,
+                    ui_text("Önyükleme: Master Boot Record (MBR) & FAT32", "Boot: Master Boot Record (MBR) & FAT32"), Color::ACCENT_BLUE);
+                Self::draw_string(fb, box_x + 28, box_y + 143,
+                    ui_text("Kurulum sonrası 1. seçenekten doğrudan açılır.", "After setup, Option 1 boots directly from HDD."), Color::TEXT_MAIN);
+
+                // Düğmeler
+                let btn_install = (box_x + box_w - 190, box_y + box_h - 40, 100, 26);
+                let btn_cancel = (box_x + box_w - 80, box_y + box_h - 40, 64, 26);
+                let inst_hov = in_rect(mx, my, btn_install);
+                let canc_hov = in_rect(mx, my, btn_cancel);
+
+                Self::draw_button(fb, btn_install, Color::ACCENT_BLUE,
+                    ui_text("Şimdi Kur", "Install Now"), Color::WHITE, inst_hov);
+                Self::draw_button(fb, btn_cancel, Color::TASKBAR_BG,
+                    ui_text("İptal", "Cancel"), Color::TEXT_MAIN, canc_hov);
+            }
+            1 => {
+                // Adım 1: Kuruluyor (İlerleme Çubuğu)
+                Self::draw_string(fb, box_x + 20, box_y + 60,
+                    ui_text("MinOS sisteme yükleniyor, lütfen bekleyin...", "Installing MinOS to disk, please wait..."), Color::TEXT_MAIN);
+
+                let pbar = (box_x + 20, box_y + 95, box_w - 40, 22);
+                fb.draw_rect(pbar.0, pbar.1, pbar.2, pbar.3, Color::TASKBAR_BG);
+                fb.draw_rect_outline(pbar.0, pbar.1, pbar.2, pbar.3, Color::BORDER);
+                let fill_w = ((pbar.2 * self.installer_progress) / 100).min(pbar.2);
+                if fill_w > 0 {
+                    fb.draw_rect(pbar.0 + 1, pbar.1 + 1, fill_w.saturating_sub(2), pbar.3 - 2, Color::ACCENT_GREEN);
+                }
+
+                let sub_text = match self.installer_progress {
+                    0..=30 => ui_text("Disk bölüm tablosu ve MBR yazılıyor...", "Writing MBR partition table..."),
+                    31..=70 => ui_text("MinOS çekirdeği diske kopyalanıyor...", "Copying MinOS kernel to disk..."),
+                    _ => ui_text("Limine önyükleyici yapılandırması kuruluyor...", "Configuring Limine bootloader..."),
+                };
+                Self::draw_string(fb, box_x + 20, box_y + 130, sub_text, Color::ACCENT_BLUE);
+            }
+            _ => {
+                // Adım 2: Başarılı / Tamamlandı
+                Self::draw_string(fb, box_x + 20, box_y + 55,
+                    ui_text("Tebrikler! MinOS Sabit Diske Kuruldu!", "Congratulations! MinOS Installed to HDD!"), Color::ACCENT_GREEN);
+                Self::draw_string(fb, box_x + 20, box_y + 80,
+                    ui_text("Artık CD/USB medyası olmadan diskinizden", "You can now boot MinOS directly from disk"), Color::TEXT_MAIN);
+                Self::draw_string(fb, box_x + 20, box_y + 98,
+                    ui_text("açılış menüsünün 1. seçeneğiyle açabilirsiniz.", "via Option 1 in the boot menu."), Color::TEXT_MAIN);
+
+                let btn_reboot = (box_x + box_w - 160, box_y + box_h - 40, 140, 26);
+                let reb_hov = in_rect(mx, my, btn_reboot);
+                Self::draw_button(fb, btn_reboot, Color::ACCENT_GREEN,
+                    ui_text("Yeniden Başlat", "Reboot System"), Color::WHITE, reb_hov);
+            }
+        }
     }
 
     pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {

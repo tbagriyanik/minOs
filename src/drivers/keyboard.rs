@@ -187,6 +187,7 @@ impl KeyboardState {
 
     fn scancode_to_tr(scancode: u8, uppercase: bool, shift: bool, _alt_gr: bool) -> Option<char> {
         match scancode {
+            0x01 => Some('\x1b'), // Escape
             0x02 => Some(if shift { '\'' } else { '1' }),
             0x03 => Some(if shift { '"' } else { '2' }),
             0x04 => Some(if shift { '^' } else { '3' }),
@@ -244,6 +245,7 @@ impl KeyboardState {
 
     fn scancode_to_us(scancode: u8, uppercase: bool, shift: bool) -> Option<char> {
         match scancode {
+            0x01 => Some('\x1b'),
             0x02 => Some(if shift { '!' } else { '1' }),
             0x03 => Some(if shift { '@' } else { '2' }),
             0x04 => Some(if shift { '#' } else { '3' }),

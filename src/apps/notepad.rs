@@ -57,13 +57,15 @@ impl NotepadApp {
 
     // Paste clipboard content at cursor
     pub fn paste_clipboard(&mut self) {
+        self.delete_selection();
         unsafe {
-            for i in 0..CLIPBOARD_LEN {
-                if self.len >= 512 { break; }
-                self.buffer[self.len] = CLIPBOARD[i];
-                self.len += 1;
-                self.cursor = self.len;
+            let amount = CLIPBOARD_LEN.min(512 - self.len);
+            for i in (self.cursor..self.len).rev() {
+                self.buffer[i + amount] = self.buffer[i];
             }
+            for i in 0..amount { self.buffer[self.cursor + i] = CLIPBOARD[i]; }
+            self.len += amount;
+            self.cursor += amount;
         }
     }
 
@@ -72,7 +74,11 @@ impl NotepadApp {
         if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
             let (s, e) = (start.min(end), start.max(end));
             let del_len = e - s;
-            if del_len == 0 { return; }
+            if del_len == 0 {
+                self.selection_start = None;
+                self.selection_end = None;
+                return;
+            }
             // Shift remaining characters left
             for i in s..self.len - del_len {
                 self.buffer[i] = self.buffer[i + del_len];
@@ -117,23 +123,77 @@ impl NotepadApp {
 
     pub fn insert_char(&mut self, c: char) {
         self.delete_selection();
-        if self.len < 500 {
-            // Sona ekle
-            self.buffer[self.len] = c;
+        if self.len < self.buffer.len() {
+            for i in (self.cursor..self.len).rev() {
+                self.buffer[i + 1] = self.buffer[i];
+            }
+            self.buffer[self.cursor] = c;
             self.len += 1;
-            self.cursor = self.len;
+            self.cursor += 1;
         }
     }
 
     pub fn backspace(&mut self) {
         if self.selection_start != self.selection_end && self.selection_start.is_some() { self.delete_selection(); return; }
-        if self.len > 0 {
+        if self.cursor > 0 {
+            let deleted = self.cursor - 1;
+            for i in deleted..self.len.saturating_sub(1) {
+                self.buffer[i] = self.buffer[i + 1];
+            }
             self.len -= 1;
             self.buffer[self.len] = ' ';
-            self.cursor = self.len;
+            self.cursor -= 1;
         }
     }
     pub fn delete_forward(&mut self) { if self.selection_start.is_some() && self.selection_start != self.selection_end { self.delete_selection(); } else if self.cursor < self.len { self.selection_start=Some(self.cursor); self.selection_end=Some(self.cursor+1); self.delete_selection(); } }
+
+    pub fn move_left(&mut self) {
+        self.cursor = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end => start.min(end),
+            _ => self.cursor.saturating_sub(1),
+        };
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    pub fn move_right(&mut self) {
+        self.cursor = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end => start.max(end),
+            _ => (self.cursor + 1).min(self.len),
+        };
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    pub fn move_vertical(&mut self, up: bool) {
+        let mut line_start = self.cursor;
+        while line_start > 0 && self.buffer[line_start - 1] != '\n' { line_start -= 1; }
+        let column = self.cursor - line_start;
+        let target = if up {
+            if line_start == 0 {
+                0
+            } else {
+                let previous_end = line_start - 1;
+                let mut previous_start = previous_end;
+                while previous_start > 0 && self.buffer[previous_start - 1] != '\n' { previous_start -= 1; }
+                (previous_start + column).min(previous_end)
+            }
+        } else {
+            let mut line_end = self.cursor;
+            while line_end < self.len && self.buffer[line_end] != '\n' { line_end += 1; }
+            if line_end == self.len {
+                self.len
+            } else {
+                let next_start = line_end + 1;
+                let mut next_end = next_start;
+                while next_end < self.len && self.buffer[next_end] != '\n' { next_end += 1; }
+                (next_start + column).min(next_end)
+            }
+        };
+        self.cursor = target;
+        self.selection_start = None;
+        self.selection_end = None;
+    }
 
     pub fn clear(&mut self) {
         self.len = 0;
@@ -241,7 +301,11 @@ impl NotepadApp {
         let first_line = sy;
         let mut line = 0usize;
         let mut col = 0usize;
-        let mut cursor_screen: Option<(usize, usize)> = None;
+        let mut cursor_screen: Option<(usize, usize)> = if self.cursor == 0 {
+            Some((text_x, area_y + 4))
+        } else {
+            None
+        };
         for i in 0..self.len {
             let ch = self.buffer[i];
             if line >= first_line && line < first_line + view_lines {

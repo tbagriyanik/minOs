@@ -1,35 +1,243 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
 
-pub struct CalculatorApp { pub input: [char; 64], pub len: usize }
+const SCALE: i32 = 1000;
+const BUTTONS: [[char; 4]; 5] = [
+    ['%', 'E', 'C', 'B'],
+    ['7', '8', '9', '/'],
+    ['4', '5', '6', '*'],
+    ['1', '2', '3', '-'],
+    ['0', '.', '=', '+'],
+];
+const BUTTON_TOP: usize = 100;
+const BUTTON_GAP_X: usize = 6;
+const BUTTON_GAP_Y: usize = 6;
+const BUTTON_HEIGHT: usize = 32;
+
+pub struct CalculatorApp {
+    pub input: [char; 64],
+    pub len: usize,
+}
+
 impl CalculatorApp {
-    pub const fn new() -> Self { Self { input: [' '; 64], len: 0 } }
-    pub fn insert(&mut self, c: char) { if self.len < 63 { self.input[self.len] = c; self.len += 1; } }
-    pub fn backspace(&mut self) { if self.len > 0 { self.len -= 1; } }
-    pub fn clear(&mut self) { self.len = 0; }
-    pub fn press(&mut self, label: char) { if label == 'C' { self.clear(); } else if label == '=' { let v=self.value(); self.clear(); let mut n=v; if n<0 {self.insert('-'); n=-n;} let mut d=[0u8;12]; let mut k=0; if n==0 {d[0]=b'0';k=1;} while n>0 {d[k]=b'0'+(n%10) as u8;k+=1;n/=10;} for i in (0..k).rev(){self.insert(d[i] as char);} } else { self.insert(label); } }
-    fn value(&self) -> i32 {
-        let mut total=0i32; let mut term=0i32; let mut sign=1i32; let mut op=b'+'; let mut n=0i32; let mut has=false;
-        for i in 0..=self.len { let c=if i==self.len {'+'} else {self.input[i]};
-            if c>='0' && c<='9' { n=n.saturating_mul(10).saturating_add(c as i32-48); has=true; }
-            else if c=='+' || c=='-' || c=='*' || c=='/' {
-                if !has { continue; }
-                match op { b'*' => term=term.saturating_mul(n), b'/' => if n!=0 { term/=n }, _ => term=n }
-                if c=='+' || c=='-' { total=total.saturating_add(sign.saturating_mul(term)); term=0; sign=if c=='-' {-1} else {1}; }
-                op=c as u8; n=0; has=false;
+    pub const fn new() -> Self {
+        Self { input: [' '; 64], len: 0 }
+    }
+
+    pub fn insert(&mut self, c: char) {
+        if self.len < self.input.len() - 1 {
+            if c == '.' {
+                let mut i = self.len;
+                while i > 0 && !Self::is_operator(self.input[i - 1]) {
+                    if self.input[i - 1] == '.' { return; }
+                    i -= 1;
+                }
             }
-        } total.saturating_add(sign.saturating_mul(term))
+            if Self::is_operator(c) && self.len > 0 && Self::is_operator(self.input[self.len - 1]) {
+                self.input[self.len - 1] = c;
+                return;
+            }
+            self.input[self.len] = c;
+            self.len += 1;
+        }
     }
+
+    pub fn backspace(&mut self) {
+        if self.len > 0 { self.len -= 1; }
+    }
+
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn press(&mut self, key: char) {
+        match key {
+            'C' => self.clear(),
+            'B' | '\x08' => self.backspace(),
+            'E' => {
+                while self.len > 0 && !Self::is_operator(self.input[self.len - 1]) {
+                    self.len -= 1;
+                }
+            }
+            '%' => {
+                let value = self.value() / 100;
+                self.set_value(value);
+            }
+            '=' => self.set_value(self.value()),
+            '0'..='9' | '.' | '+' | '-' | '*' | '/' => self.insert(key),
+            _ => {}
+        }
+    }
+
+    fn is_operator(c: char) -> bool {
+        matches!(c, '+' | '-' | '*' | '/')
+    }
+
+    fn value(&self) -> i32 {
+        let mut total = 0i32;
+        let mut term = 0i32;
+        let mut sign = 1i32;
+        let mut op = '+';
+        let mut number = 0i32;
+        let mut number_sign = 1i32;
+        let mut fraction_scale = 0i32;
+        let mut has_digit = false;
+
+        for index in 0..=self.len {
+            let c = if index == self.len { '+' } else { self.input[index] };
+            if c.is_ascii_digit() {
+                let digit = c as i32 - '0' as i32;
+                if fraction_scale == 0 {
+                    number = number.saturating_mul(10).saturating_add(digit.saturating_mul(SCALE));
+                } else if fraction_scale > 1 {
+                    number = number.saturating_add(digit.saturating_mul(fraction_scale / 10));
+                    fraction_scale /= 10;
+                }
+                has_digit = true;
+            } else if c == '.' {
+                if fraction_scale == 0 { fraction_scale = SCALE; }
+            } else if Self::is_operator(c) {
+                if !has_digit {
+                    if c == '-' { number_sign = -number_sign; }
+                    continue;
+                }
+                number = number.saturating_mul(number_sign);
+                term = match op {
+                    '*' => term.saturating_mul(number) / SCALE,
+                    '/' if number != 0 => term.saturating_mul(SCALE) / number,
+                    '/' => term,
+                    _ => number,
+                };
+                if c == '+' || c == '-' {
+                    total = total.saturating_add(sign.saturating_mul(term));
+                    term = 0;
+                    sign = if c == '-' { -1 } else { 1 };
+                }
+                op = c;
+                number = 0;
+                number_sign = 1;
+                fraction_scale = 0;
+                has_digit = false;
+            }
+        }
+        total.saturating_add(sign.saturating_mul(term))
+    }
+
+    fn set_value(&mut self, value: i32) {
+        self.len = 0;
+        let mut output = [0u8; 24];
+        let mut len = 0;
+        let magnitude = value.saturating_abs();
+        if value < 0 { output[len] = b'-'; len += 1; }
+        Self::append_unsigned(&mut output, &mut len, (magnitude / SCALE) as u32);
+        let mut fraction = (magnitude % SCALE) as u32;
+        if fraction != 0 {
+            output[len] = b'.'; len += 1;
+            output[len] = b'0' + (fraction / 100) as u8; len += 1;
+            fraction %= 100;
+            output[len] = b'0' + (fraction / 10) as u8; len += 1;
+            output[len] = b'0' + (fraction % 10) as u8; len += 1;
+            while output[len - 1] == b'0' { len -= 1; }
+        }
+        for byte in &output[..len] {
+            self.input[self.len] = *byte as char;
+            self.len += 1;
+        }
+    }
+
+    fn append_unsigned(output: &mut [u8; 24], len: &mut usize, mut value: u32) {
+        let mut digits = [0u8; 12];
+        let mut count = 0;
+        if value == 0 { digits[count] = b'0'; count += 1; }
+        while value > 0 {
+            digits[count] = b'0' + (value % 10) as u8;
+            count += 1;
+            value /= 10;
+        }
+        for index in (0..count).rev() {
+            output[*len] = digits[index];
+            *len += 1;
+        }
+    }
+
     pub fn render_content(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
-        fb.draw_rect(x+8,y+34,w-16,42,Color::DARK_BG);
-        let mut s=[0u8;80]; let mut n=0; for i in 0..self.len { s[n]=self.input[i] as u8; n+=1; }
-        if let Ok(text)=core::str::from_utf8(&s[..n]) { MinGuiCompositor::draw_string(fb,x+16,y+42,text,Color::TEXT_MAIN); }
-        let v=self.value(); let mut digits=[0u8;16]; let mut dn=0; let mut q=if v<0 {-v} else {v}; if q==0 {digits[0]=b'0';dn=1;} while q>0 {digits[dn]=b'0'+(q%10) as u8;dn+=1;q/=10;} if v<0 {digits[dn]=b'-';dn+=1;}
-        for i in 0..dn/2 { digits.swap(i,dn-1-i); } for i in 0..dn {s[i]=digits[i];} if let Ok(text)=core::str::from_utf8(&s[..dn]) { MinGuiCompositor::draw_string(fb,x+16,y+60,text,Color::ACCENT_GREEN); }
-        MinGuiCompositor::draw_string(fb,x+16,y+92,crate::gui::ui_text("Ornek: 12+3*4 / Backspace / Esc","Example: 12+3*4 / Backspace / Esc"),Color::TEXT_MUTED);
-        let keys = [['7','8','9','/'],['4','5','6','*'],['1','2','3','-'],['C','0','=','+']];
-        for row in 0..4 { for col in 0..4 { let bx=x+16+col*48; let by=y+112+row*24; fb.draw_rect(bx,by,40,20,if keys[row][col]=='=' {Color::ACCENT_GREEN} else {Color::TITLE_BAR}); let mut b=[0u8;1]; b[0]=keys[row][col] as u8; if let Ok(s)=core::str::from_utf8(&b){MinGuiCompositor::draw_string(fb,bx+16,by+6,s,Color::TEXT_MAIN);} } }
-        MinGuiCompositor::draw_string(fb,x+16,y+h.saturating_sub(24),crate::gui::ui_text("Backspace: sil   Esc: temizle","Backspace: delete   Esc: clear"),Color::TEXT_MUTED);
+        let display_x = x + 10;
+        let display_y = y + 32;
+        let display_w = w.saturating_sub(20);
+        fb.draw_rect(display_x, display_y, display_w, 58, Color::DARK_BG);
+
+        let mut expression = [0u8; 64];
+        for (index, c) in self.input[..self.len].iter().enumerate() {
+            expression[index] = *c as u8;
+        }
+        if let Ok(text) = core::str::from_utf8(&expression[..self.len]) {
+            MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 7, text, Color::TEXT_MUTED);
+        }
+        let mut result = [0u8; 24];
+        let mut result_len = 0;
+        Self::append_unsigned(&mut result, &mut result_len, self.value().saturating_abs() as u32 / SCALE as u32);
+        let fraction = self.value().saturating_abs() as u32 % SCALE as u32;
+        if fraction != 0 {
+            result[result_len] = b'.'; result_len += 1;
+            result[result_len] = b'0' + (fraction / 100) as u8; result_len += 1;
+            let mut rest = fraction % 100;
+            result[result_len] = b'0' + (rest / 10) as u8; result_len += 1;
+            rest %= 10;
+            result[result_len] = b'0' + rest as u8; result_len += 1;
+            while result[result_len - 1] == b'0' { result_len -= 1; }
+        }
+        if self.value() < 0 {
+            for index in (0..result_len).rev() { result[index + 1] = result[index]; }
+            result[0] = b'-'; result_len += 1;
+        }
+        if let Ok(text) = core::str::from_utf8(&result[..result_len]) {
+            MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 32, text, Color::ACCENT_GREEN);
+        }
+
+        let gap_x = BUTTON_GAP_X;
+        let button_w = display_w.saturating_sub(gap_x * 3) / 4;
+        let button_y = y + BUTTON_TOP;
+        for row in 0..BUTTONS.len() {
+            for col in 0..4 {
+                let key = BUTTONS[row][col];
+                let bx = display_x + col * (button_w + gap_x);
+                let by = button_y + row * (BUTTON_HEIGHT + BUTTON_GAP_Y);
+                let color = match key {
+                    '=' => Color::ACCENT_GREEN,
+                    'C' | 'E' | 'B' | '%' => Color::TITLE_BAR_INACTIVE,
+                    '+' | '-' | '*' | '/' => Color::ACCENT_BLUE,
+                    _ => Color::TITLE_BAR,
+                };
+                fb.draw_rect(bx, by, button_w, BUTTON_HEIGHT, color);
+                let label = match key {
+                    'E' => "CE",
+                    'B' => "BS",
+                    _ => {
+                        expression[0] = key as u8;
+                        core::str::from_utf8(&expression[..1]).unwrap_or("")
+                    }
+                };
+                let label_x = bx + button_w.saturating_sub(label.len() * 7) / 2;
+                MinGuiCompositor::draw_string(fb, label_x, by + 11, label, Color::TEXT_MAIN);
+            }
+        }
+        let _ = h;
     }
-    pub fn key_at(x: usize, y: usize, wx: usize, wy: usize) -> Option<char> { if x<wx+16 || y<wy+112 {return None;} let col=(x-wx-16)/48; let row=(y-wy-112)/24; if col>=4||row>=4{return None;} Some([['7','8','9','/'],['4','5','6','*'],['1','2','3','-'],['C','0','=','+']][row][col]) }
+
+    pub fn key_at(x: usize, y: usize, wx: usize, wy: usize, ww: usize) -> Option<char> {
+        let display_x = wx + 10;
+        let display_w = ww.saturating_sub(20);
+        let gap_x = BUTTON_GAP_X;
+        let button_w = display_w.saturating_sub(gap_x * 3) / 4;
+        let button_y = wy + BUTTON_TOP;
+        if x < display_x || y < button_y { return None; }
+        let row = (y - button_y) / (BUTTON_HEIGHT + BUTTON_GAP_Y);
+        if row >= BUTTONS.len() || (y - button_y) % (BUTTON_HEIGHT + BUTTON_GAP_Y) >= BUTTON_HEIGHT {
+            return None;
+        }
+        let rel_x = x - display_x;
+        let col = rel_x / (button_w + gap_x);
+        if col >= 4 || rel_x % (button_w + gap_x) >= button_w { return None; }
+        Some(BUTTONS[row][col])
+    }
 }

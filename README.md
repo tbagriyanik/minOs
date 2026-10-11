@@ -6,7 +6,13 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
-**MinOS (Sarman Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi çekirdeğidir.
+**MinOS (Sarman Edition)**, Rust dili ile sıfır dış bağımlılık (`no_std`, `no_main`) prensibiyle geliştirilmiş, modern grafik arayüzüne (GUI) ve zengin masaüstü uygulama ekosistemine sahip bağımsız bir 64-bit (`x86_64`) işletim sistemi ve masaüstü ortamıdır. 
+
+MinOS, donanım uyumluluğu ve sürücü desteği için **Linux Çekirdeği Donanım Motoru (Linux Hardware Engine)** ve **Limine Bootloader** altyapısını kullanır. Ses (ALSA/HDA), USB çevre birimleri (evdev), tam ekran sürücüleri (DRM/Framebuffer) ve TCP/IP ağ stack'i (Intel e1000 & Linux soketleri) Linux çekirdeğinin gücüyle desteklenir.
+
+Sistem iki temel çalışma moduna sahiptir:
+1. **MinOS Live CD (Grafik Masaüstü):** Doğrudan grafik masaüstüne anında boot eden tak-çalıştır Live CD modu (Varsayılan).
+2. **Install MinOS to Disk (Linux Donanım Yükleyicisi):** MinOS'u sabit diske kurmak için Linux çekirdeği tabanlı yükleyici modu.
 
 ---
 
@@ -57,11 +63,14 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve silgi aracı. |
 | **⌨️ Komut İstemi** | Klavyeyle komut ve metin girişi kabul eden retro terminal görünümü (`ipconfig`, `ping`, `dns`, `mem`, `ls`, `cat`, `open` vb.). |
 
-### 🆕 Modern Arayüz ve Sistem Yenilikleri
-
-- **🐧 Çift Çekirdekli Açılış Menüsü (Dual-Boot Limine Menüsü):** Limine v8 açılış menüsü ile hem **MinOS Grafik Masaüstü** hem de resmi **Linux (Alpine Minimal Shell - vmlinuz + initramfs)** doğrudan seçilip çalıştırılabilir. ISO boyutu şişirilmeden (~26 MB) tam donanımlı Linux kabuğu sunar.
+### 🆕 Modern Arayüz ve Sistem Mimarisi
+ 
+- **🐧 Linux Çekirdeği Donanım Motoru (Linux Hardware Engine):** MinOS, tüm donanım sürücüsü gereksinimlerinde Linux çekirdeğinin sürücü ekosistemini (USB fare/klavyeler için `evdev`, ses için ALSA/Intel HDA, modern ekran kartları ve ağ bağdaştırıcıları) temel alır.
+- **📀 İki Aşamalı Boot Menüsü:**
+  - **1. MinOS Live CD (Grafik Masaüstü):** Doğrudan grafik arayüzüne giriş yapar, konsol ekranında takılmaz.
+  - **2. Install MinOS to Disk:** Linux çekirdeği ortamında çalışan MinOS kurulum yöneticisidir.
 - **🖥️ Çoklu Çözünürlük Desteği (Full HD Ready):** Açılış menüsünden ve donanımdan **1920x1080 (Full HD)**, **1280x720**, **1024x768** ve **800x600** çözünürlükleri tam arka tampon (backbuffer) uyumluluğuyla çalışır.
-- **🌐 Intel e1000 Ağ Yığını (TCP/IP & Web Gezgini):** MMIO tabanlı Intel 82540EM ağ kartı sürücüsü, ARP önbelleği, ICMP (Ping), UDP/DNS sorguları ve Web Gezgini üzerinde canlı HTTP HTML sayfa renderı.
+- **🌐 Çift Ağ Yığını (Intel e1000 & Linux TCP/IP):** Intel e1000 ve Linux soket arayüzü desteğiyle canlı HTML DOM Web Gezgini, HTTP istemcisi, `ping` ve `dns` araçları.
 - **🇹🇷 Tam Türkçe Karakter Desteği:** Sistem Ayarları, Görev Yöneticisi, Not Defteri, Dosya Yöneticisi, Başlat menüsü ve durum çubukları dahil arayüzdeki tüm metinler Türkçe karakterlerle (`ç`, `Ç`, `ğ`, `Ğ`, `ı`, `I`, `İ`, `ö`, `Ö`, `ş`, `Ş`, `ü`, `Ü`) işlenir.
 - **⌨️ Klavyeyle Menü Gezintisi (Ok Tuşları & Enter):** Başlat menüsü ve bağlam menülerinde **Yukarı/Aşağı/Sol/Sağ ok tuşları** ile gezinebilir, **Enter** tuşuna basarak seçili uygulamayı veya komutu çalıştırabilirsiniz.
 - **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Tüm pencere içerikleri (Not Defteri, Dosya Yöneticisi listeleri, Terminal geçmişi) dikey olarak yumuşak şekilde kaydırılır.
@@ -168,13 +177,14 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 minos/
 ├── src/
 │   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
+│   ├── platform/linux/      # Linux donanım köprüsü (DRM/fb0, evdev, sockets, ALSA)
 │   ├── drivers/             # PS/2 fare, klavye, framebuffer video, RTC (CMOS) saat ve e1000/HDA donanım sürücüleri
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs) ve masaüstü kompozitörü
 │   ├── apps/                # 11 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Görev Yöneticisi...)
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM)
 │   ├── fs/                  # Sanal dosya sistemi (VFS / TarFS)
 │   └── main.rs              # Çekirdek giriş noktası (_start) ve ana olay döngüsü
-├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
+├── boot/                    # Limine bootloader dosyaları (limine.cfg) ve Linux çekirdeği (vmlinuz/initramfs)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
 ├── build_iso.ps1            # El Torito yamalı hibrit ISO oluşturucu
 ├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği

@@ -121,6 +121,40 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 ---
 
+## 💿 Kolay Kurulum ve Kullanım Adımları (Easy Setup Guide)
+
+MinOS ISO'su açıldığında boot menüsünde sunulan seçenekler ve kullanım adımları:
+
+```
++-------------------------------------------------------------+
+| 1. MinOS Live CD (Graphical Desktop)      [Varsayılan]      |
+| 2. Install MinOS to Disk (Linux Hardware Installer)         |
+| 3. Boot Installed MinOS from Hard Disk (HDD/SSD)            |
+| 4. MinOS Live CD - 1920x1080 (Full HD)                      |
++-------------------------------------------------------------+
+```
+
+### 1. Canlı Masaüstünü Başlatma (Live CD Modu - Sıfır Kurulum)
+- ISO boot ettiğinde hiçbir tuşa basmazsanız (veya 1. seçenekte **Enter**'a basarsanız), doğrudan **MinOS grafiksel masaüstü** açılır.
+- Herhangi bir disk alanı veya kurulum gerektirmez, doğrudan RAM üzerinde çalışır.
+
+### 2. Sabit Diske Tek Tıkla Kurulum (Install to Disk)
+MinOS'u sanal makineye (QEMU/VirtualBox) veya gerçek bir sabit diske kurmak için:
+1. Boot menüsünden **`Install MinOS to Disk (Linux Hardware Installer)`** seçeneğini seçin.
+2. Otomatik kurulum sihirbazı hedef diski (`/dev/vda` veya `/dev/sda`) tespit eder:
+   ```text
+   [*] Hedef Disk: /dev/vda
+   MinOS /dev/vda diskine kurulsun mu? (E/h):
+   ```
+3. Klavyeden **Enter**'a basmanız yeterlidir.
+4. Sihirbaz diski otomatik biçimlendirir, boot bayrağını ayarlar ve MinOS sistem dosyalarını diske yükler.
+5. Kurulum tamamlandığında tek tuşla sistemi yeniden başlatın.
+
+### 3. Kurulu Sistemden Başlatma (Boot from Hard Disk)
+- Kurulum tamamlandıktan sonra boot menüsünden **`Boot Installed MinOS from Hard Disk (HDD/SSD)`** seçeneğini seçerek işletim sistemini doğrudan sabit diskinizden başlatabilirsiniz.
+
+---
+
 ### Adım Adım Manuel Derleme (Manual Steps)
 
 #### 1. Çekirdeği Derleme (Kernel Build)

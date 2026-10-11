@@ -16,6 +16,69 @@ pub const OUT_LINES: usize = 22;
 /// Tek satırın azami uzunluğu.
 pub const LINE_MAX: usize = 64;
 
+const COMPLETION_COMMANDS: &[&str] = &[
+    "help", "ls", "cat", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping",
+    "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
+    "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
+];
+const COMPLETION_APPS: &[&str] = &[
+    "files", "settings", "notepad", "browser", "image", "music", "video", "taskmgr",
+    "calc", "paint", "cmd",
+];
+
+fn app_index(name: &str) -> Option<usize> {
+    match name {
+        "files" | "filemanager" | "explorer" | "dosyalar" => Some(0),
+        "settings" | "ayarlar" | "config" => Some(1),
+        "notepad" | "notes" | "editor" | "notdefteri" => Some(2),
+        "browser" | "web" | "internet" => Some(3),
+        "image" | "imageviewer" | "photos" | "resim" => Some(4),
+        "music" | "musicplayer" | "muzik" => Some(5),
+        "video" | "videoplayer" => Some(6),
+        "taskmgr" | "taskmanager" | "tasks" | "gorev" => Some(7),
+        "calc" | "calculator" | "hesap" => Some(8),
+        "paint" | "draw" | "cizim" => Some(9),
+        "cmd" | "terminal" | "shell" => Some(10),
+        _ => None,
+    }
+}
+
+fn app_name(index: usize) -> &'static str {
+    match (index, crate::gui::ui_english()) {
+        (0,false) => "Dosya Yöneticisi", (1,false) => "Ayarlar", (2,false) => "Not Defteri",
+        (3,false) => "Web Gezgini", (4,false) => "Resim Gösterici", (5,false) => "Müzik Çalar",
+        (6,false) => "Video Oynatıcı", (7,false) => "Görev Yöneticisi", (8,false) => "Hesap Makinesi",
+        (9,false) => "Çizim Tahtası", (10,false) => "Komut İstemi",
+        (0,true) => "File Manager", (1,true) => "Settings", (2,true) => "Notepad", (3,true) => "Browser",
+        (4,true) => "Image Viewer", (5,true) => "Music Player", (6,true) => "Video Player",
+        (7,true) => "Task Manager", (8,true) => "Calculator", (9,true) => "Paint", _ => "Terminal",
+    }
+}
+
+fn parse_ipv4(text: &str) -> Option<[u8; 4]> {
+    let mut parts = text.split('.');
+    let mut address = [0u8; 4];
+    for octet in &mut address {
+        *octet = parts.next()?.parse::<u8>().ok()?;
+    }
+    if parts.next().is_some() { return None; }
+    Some(address)
+}
+
+fn push_ipv4(text: &mut TextBuf, address: [u8; 4]) {
+    for (i, octet) in address.iter().enumerate() {
+        if i > 0 { text.push_byte(b'.'); }
+        text.push_usize(*octet as usize);
+    }
+}
+
+fn push_ipv4_line(terminal: &mut TerminalApp, label: &str, address: [u8; 4]) {
+    let mut line = TextBuf::new();
+    line.push_str(label);
+    push_ipv4(&mut line, address);
+    terminal.push_line(line.as_str(), Color::TEXT_MAIN);
+}
+
 #[derive(Copy, Clone)]
 pub struct OutLine {
     pub text: [u8; LINE_MAX],
@@ -57,6 +120,11 @@ pub struct TerminalApp {
     pub history_count: usize,
     /// Geçmişte gezinme imleci.
     pub hist_cursor: usize,
+    /// Tab ile aynı kısmi girdinin eşleşmeleri arasında gezinme durumu.
+    completion_base: [u8; LINE_MAX],
+    completion_base_len: usize,
+    completion_index: usize,
+    completion_active: bool,
     /// Yürütülmeyi bekleyen komut (Enter'a basılınca).
     pub pending: [u8; LINE_MAX],
     pub pending_len: usize,
@@ -74,6 +142,10 @@ impl TerminalApp {
             history_len: [0; 8],
             history_count: 0,
             hist_cursor: 0,
+            completion_base: [0; LINE_MAX],
+            completion_base_len: 0,
+            completion_index: 0,
+            completion_active: false,
             pending: [0; LINE_MAX],
             pending_len: 0,
             has_pending: false,
@@ -101,6 +173,7 @@ impl TerminalApp {
     }
 
     pub fn insert(&mut self, c: char) {
+        self.completion_active = false;
         if c == '\n' {
             self.submit();
             return;
@@ -119,6 +192,7 @@ impl TerminalApp {
     }
 
     pub fn backspace(&mut self) {
+        self.completion_active = false;
         if self.input_len > 0 {
             self.input_len -= 1;
         }
@@ -126,6 +200,7 @@ impl TerminalApp {
 
     /// Enter'a basılınca: istemi yaz, komutu `pending`'e al (yürütme ana döngüde).
     pub fn submit(&mut self) {
+        self.completion_active = false;
         let n = self.input_len;
         let mut prompt = TextBuf::new();
         prompt.push_str("> ");
@@ -161,6 +236,7 @@ impl TerminalApp {
     }
 
     pub fn history_up(&mut self) {
+        self.completion_active = false;
         if self.history_count == 0 {
             return;
         }
@@ -171,6 +247,7 @@ impl TerminalApp {
     }
 
     pub fn history_down(&mut self) {
+        self.completion_active = false;
         if self.history_count == 0 {
             return;
         }
@@ -189,6 +266,57 @@ impl TerminalApp {
             self.input[..n].copy_from_slice(&self.history[idx][..n]);
             self.input_len = n;
         }
+    }
+
+    /// Tamamlar komut/uygulama adını. Tekrarlanan Tab eşleşmeler arasında gezinir.
+    pub fn complete(&mut self) {
+        if !self.completion_active {
+            self.completion_base[..self.input_len].copy_from_slice(&self.input[..self.input_len]);
+            self.completion_base_len = self.input_len;
+            self.completion_index = 0;
+            self.completion_active = true;
+        }
+
+        let base = &self.completion_base[..self.completion_base_len];
+        let token_start = base.iter().rposition(|b| *b == b' ').map_or(0, |i| i + 1);
+        let prefix = &base[token_start..];
+        let app_arg = token_start > 0 && {
+            let command = &base[..token_start - 1];
+            command.eq_ignore_ascii_case(b"open") || command.eq_ignore_ascii_case(b"run")
+        };
+        let candidates = if app_arg { COMPLETION_APPS } else { COMPLETION_COMMANDS };
+        let mut match_count = 0usize;
+        let mut selected = "";
+        for candidate in candidates.iter().copied() {
+            if candidate.as_bytes().len() >= prefix.len()
+                && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
+            {
+                if match_count == self.completion_index { selected = candidate; }
+                match_count += 1;
+            }
+        }
+        if match_count == 0 {
+            self.completion_active = false;
+            return;
+        }
+        if self.completion_index >= match_count {
+            self.completion_index = 0;
+            selected = "";
+            for candidate in candidates.iter().copied() {
+                if candidate.as_bytes().len() >= prefix.len()
+                    && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
+                {
+                    selected = candidate;
+                    break;
+                }
+            }
+        }
+        let new_len = token_start + selected.len();
+        if new_len >= LINE_MAX { return; }
+        self.input[..token_start].copy_from_slice(&base[..token_start]);
+        self.input[token_start..new_len].copy_from_slice(selected.as_bytes());
+        self.input_len = new_len;
+        self.completion_index = (self.completion_index + 1) % match_count;
     }
 
     fn record_history(&mut self) {
@@ -214,18 +342,40 @@ impl TerminalApp {
     }
 
     /// Verilen komut satırını VFS/PMM/DateTime bağlamında yürütür.
-    pub fn execute(&mut self, line: &str, vfs: &VirtualFileSystem, pmm: &PhysicalMemoryManager, now: &DateTime) {
+    pub fn execute(&mut self, line: &str, vfs: &VirtualFileSystem, pmm: &PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
-            return;
+            return None;
         }
         let mut parts = line.splitn(2, ' ');
         let cmd = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("").trim();
 
+        if cmd == "open" || cmd == "run" {
+            if let Some(app_idx) = app_index(arg) {
+                let mut msg = TextBuf::new();
+                msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
+                msg.push_str(app_name(app_idx));
+                self.push_line(msg.as_str(), Color::ACCENT_GREEN);
+                return Some(app_idx);
+            }
+            self.push_line(crate::gui::ui_text("Kullanım: open <uygulama>", "Usage: open <app>"), Color::ACCENT_YELLOW);
+            return None;
+        }
+        if let Some(app_idx) = app_index(cmd) {
+            let mut msg = TextBuf::new();
+            msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
+            msg.push_str(app_name(app_idx));
+            self.push_line(msg.as_str(), Color::ACCENT_GREEN);
+            return Some(app_idx);
+        }
+
         match cmd {
             "help" => {
-                self.push_line("Komutlar: help ls cat echo clear mem ps date uname theme whoami", Color::TEXT_MAIN);
+                self.push_line("help ls cat echo clear mem ps date uname theme whoami", Color::TEXT_MAIN);
+                self.push_line("ping <IPv4> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
+                self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
+                self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "ls" => {
                 let mut any = false;
@@ -282,6 +432,46 @@ impl TerminalApp {
                 self.push_line("3    net_stack", Color::TEXT_MAIN);
                 self.push_line("4    minshell", Color::TEXT_MAIN);
             }
+            "apps" => {
+                self.push_line("0 files       1 settings    2 notepad", Color::ACCENT_BLUE);
+                self.push_line("3 browser     4 image      5 music", Color::ACCENT_BLUE);
+                self.push_line("6 video       7 taskmgr    8 calc", Color::ACCENT_BLUE);
+                self.push_line("9 paint      10 cmd", Color::ACCENT_BLUE);
+            }
+            "ipconfig" => {
+                use crate::drivers::netstack::{GATEWAY_IP, LOCAL_IP, SUBNET_MASK};
+                self.push_line(crate::gui::ui_text("Ethernet bağdaştırıcısı eth0:", "Ethernet adapter eth0:"), Color::ACCENT_GREEN);
+                push_ipv4_line(self, "IPv4: ", LOCAL_IP.0);
+                push_ipv4_line(self, crate::gui::ui_text("Maske: ", "Mask: "), SUBNET_MASK.0);
+                push_ipv4_line(self, crate::gui::ui_text("Ağ geçidi: ", "Gateway: "), GATEWAY_IP.0);
+                let mac = unsafe { crate::drivers::e1000::MAC_ADDR };
+                let mut b = TextBuf::new();
+                b.push_str("MAC: ");
+                for (i, octet) in mac.iter().enumerate() {
+                    if i > 0 { b.push_byte(b':'); }
+                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                    b.push_byte(HEX[(octet >> 4) as usize]);
+                    b.push_byte(HEX[(octet & 0x0F) as usize]);
+                }
+                self.push_line(b.as_str(), Color::TEXT_MAIN);
+                self.push_line(if crate::drivers::e1000::is_ready() { "Link: ready" } else { "Link: unavailable" }, Color::ACCENT_YELLOW);
+            }
+            "ping" => {
+                match parse_ipv4(arg) {
+                    Some(_) if !crate::drivers::e1000::is_ready() => {
+                        self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                    }
+                    Some(ip) => {
+                        let sent = crate::drivers::netstack::ping(crate::drivers::netstack::Ipv4Address(ip));
+                        let mut b = TextBuf::new();
+                        b.push_str(if sent { "Ping tx: " } else { "Ping failed: " });
+                        push_ipv4(&mut b, ip);
+                        self.push_line(b.as_str(), if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                        if sent { self.push_line(crate::gui::ui_text("Echo isteği gönderildi; yanıt bekleme henüz yok.", "Echo request transmitted; reply wait is unavailable."), Color::TEXT_MUTED); }
+                    }
+                    None => self.push_line(crate::gui::ui_text("Kullanım: ping <IPv4 adresi>", "Usage: ping <IPv4 address>"), Color::ACCENT_YELLOW),
+                }
+            }
             "date" => {
                 let mut b = TextBuf::new();
                 b.push_u2(now.day as u32);
@@ -318,6 +508,7 @@ impl TerminalApp {
                 self.push_line("'help' yazin.", Color::TEXT_MUTED);
             }
         }
+        None
     }
 
     pub fn render_content(

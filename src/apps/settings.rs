@@ -58,12 +58,14 @@ pub struct SystemSettings {
     pub keyboard_layout: KeyboardLayout,
     pub language: UiLanguage,
     pub font: FontChoice,
+    pub region: u8,
     pub volume: u8,
     pub is_muted: bool,
     pub mouse_speed: u8,
     pub screen_res: (usize, usize),
     pub display_res: (usize, usize),
     pub night_light: bool,
+    pub night_light_level: u8,
 
     // Saklanan Pencere Konum ve Durumları (8 Pencere)
     pub saved_window_states: [Option<WindowState>; 11],
@@ -82,14 +84,16 @@ impl SystemSettings {
             active_tab: 0,
             theme: ThemeId::VelvetDark,
             keyboard_layout: KeyboardLayout::TurkishQ,
-            language: UiLanguage::Turkish,
+            language: UiLanguage::English,
             font: FontChoice::TurkishPixel,
+            region: 0,
             volume: 75,
             is_muted: false,
             mouse_speed: 5,
             screen_res: (1280, 720),
             display_res: (1280, 720),
             night_light: false,
+            night_light_level: 55,
             saved_window_states: [None; 11],
             dhcp_enabled: true,
             static_ip: [192, 168, 1, 100],
@@ -108,6 +112,11 @@ impl SystemSettings {
                 "volume" => if let Ok(v)=val.parse::<u8>() { self.volume=v.min(100); },
                 "muted" => self.is_muted=val=="1",
                 "night" => self.night_light=val=="1",
+                "night_level" => if let Ok(v)=val.parse::<u8>() { self.night_light_level=v.min(100); },
+                "keyboard" => self.keyboard_layout=if val=="en" { KeyboardLayout::EnglishUS } else { KeyboardLayout::TurkishQ },
+                "language" => { self.language=if val=="en" { UiLanguage::English } else { UiLanguage::Turkish }; crate::gui::set_ui_language_english(self.language.is_english()); },
+                "font" => { self.font=match val { "compact"=>FontChoice::Compact, "cleartype"=>FontChoice::ClearType, _=>FontChoice::TurkishPixel }; self.font.apply(); },
+                "region" => if let Ok(v)=val.parse::<u8>() { self.region=v.min(2); },
                 "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
                 _ => {}
             }
@@ -128,13 +137,16 @@ impl SystemSettings {
         (win_x + win_w.saturating_sub(100), win_y + 60, 88, 20)
     }
     pub fn font_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 90, 88, 20)
+        (win_x + win_w.saturating_sub(100), win_y + 112, 88, 20)
+    }
+    pub fn language_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(100), win_y + 84, 88, 20)
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + 190, 200, 10)
+        (win_x + CONTENT_X, win_y + 210, 200, 10)
     }
     pub fn mute_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 210, win_y + 186, 66, 18)
+        (win_x + CONTENT_X + 210, win_y + 206, 66, 18)
     }
     pub fn save_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + win_h.saturating_sub(44), 90, 22)
@@ -147,9 +159,15 @@ impl SystemSettings {
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
     pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+250,y+232,110,22) }
+    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+272,200,10) }
+    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+160,y+296,190,22) }
+    pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
+    pub fn region_name(&self, english: bool) -> &'static str {
+        match (self.region, english) { (1,true)=>"UTC", (1,false)=>"UTC", (2,true)=>"US Eastern (UTC-5)", (2,false)=>"ABD Doğu (UTC-5)", (_,true)=>"Türkiye (UTC+3)", (_,false)=>"Türkiye (UTC+3)" }
+    }
     /// Tema palet şeridi: her tema için bir renk örneği kutusu.
     pub fn theme_swatch_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + i * 24, win_y + 232, 20, 16)
+        (win_x + CONTENT_X + i * 24, win_y + 264, 20, 16)
     }
     /// Tema adı etiketi (örneklerin altında).
     pub fn theme_swatch_count() -> usize {
@@ -160,11 +178,8 @@ impl SystemSettings {
     // Aksiyonlar
     // -----------------------------------------------------------------
     pub fn reset_defaults(&mut self) {
-        let vol = self.volume;
-        let theme_id = self.theme;
         *self = Self::default();
-        self.volume = vol;
-        self.theme = theme_id;
+        self.theme = theme::current();
         self.status_msg = "Varsayılan ayarlara dönüldü!";
     }
 
@@ -178,7 +193,9 @@ impl SystemSettings {
         self.set_volume_from_range(x, t.0, t.2);
     }
     pub fn set_volume_from_range(&mut self, x: usize, start: usize, width: usize) {
-        let ratio = (x.saturating_sub(start) * 100 / width.max(1)).min(100);
+        let span = width.saturating_sub(1).max(1);
+        let position = x.saturating_sub(start).min(span);
+        let ratio = (position * 100 / span).min(100);
         self.volume = ratio as u8;
         if self.is_muted && self.volume > 0 {
             self.is_muted = false;
@@ -193,12 +210,23 @@ impl SystemSettings {
             }
         }
         let (w,_h)=self.screen_res;
-        let mut cfg=[0u8;96]; let mut n=0usize;
+        let mut cfg=[0u8;192]; let mut n=0usize;
         fn put(d:&mut [u8], n:&mut usize, s:&[u8]) { let l=core::cmp::min(s.len(),d.len()-*n); d[*n..*n+l].copy_from_slice(&s[..l]); *n+=l; }
-        put(&mut cfg,&mut n,b"volume="); let digits=[b'0'+self.volume/10,b'0'+self.volume%10]; put(&mut cfg,&mut n,&digits);
+        fn put_num(d:&mut [u8], n:&mut usize, value:u8) {
+            if value >= 100 { put(d,n,&[b'1',b'0'+(value-100)/10,b'0'+(value-100)%10]); }
+            else if value >= 10 { put(d,n,&[b'0'+value/10,b'0'+value%10]); }
+            else { put(d,n,&[b'0'+value]); }
+        }
+        put(&mut cfg,&mut n,b"volume="); put_num(&mut cfg,&mut n,self.volume);
         put(&mut cfg,&mut n,b";muted="); put(&mut cfg,&mut n,if self.is_muted{b"1"}else{b"0"}); put(&mut cfg,&mut n,b";res=");
         if w==800 {put(&mut cfg,&mut n,b"800x600")} else if w==1024 {put(&mut cfg,&mut n,b"1024x768")} else if w==1920 {put(&mut cfg,&mut n,b"1920x1080")} else {put(&mut cfg,&mut n,b"1280x720")};
-        put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"}); vfs.write_file("settings.cfg",&cfg[..n]);
+        put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"});
+        put(&mut cfg,&mut n,b";night_level="); put_num(&mut cfg,&mut n,self.night_light_level);
+        put(&mut cfg,&mut n,b";keyboard="); put(&mut cfg,&mut n,if self.keyboard_layout==KeyboardLayout::EnglishUS{b"en"}else{b"tr"});
+        put(&mut cfg,&mut n,b";language="); put(&mut cfg,&mut n,if self.language.is_english(){b"en"}else{b"tr"});
+        put(&mut cfg,&mut n,b";font="); put(&mut cfg,&mut n,match self.font{FontChoice::TurkishPixel=>&b"pixel"[..],FontChoice::Compact=>&b"compact"[..],FontChoice::ClearType=>&b"cleartype"[..]});
+        put(&mut cfg,&mut n,b";region="); put(&mut cfg,&mut n,&[b'0'+self.region.min(2)]);
+        vfs.write_file("settings.cfg",&cfg[..n]);
         self.status_msg = "Ayarlar ve pencere düzeni kalıcı olarak kaydedildi.";
     }
 
@@ -255,17 +283,17 @@ impl SystemSettings {
                     fb,
                     Self::theme_btn_rect(win_x, win_y, win_w),
                     Color::ACCENT_BLUE,
-                    "Değiştir",
+                    if self.language.is_english() { "Change" } else { "Değiştir" },
                     Color::DARK_BG,
                     false,
                 );
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 94,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 116,
                     self.font.label(self.language.is_english()), Color::ACCENT_YELLOW);
                 MinGuiCompositor::draw_button(fb, Self::font_btn_rect(win_x, win_y, win_w), Color::ACCENT_YELLOW,
                     if self.language.is_english() { "Change" } else { "Değiştir" }, Color::DARK_BG, false);
 
                 // --- Tema Palet Seridi (dogrudan secim icin renk ornekleri) ---
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 218,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 250,
                     if self.language.is_english() { "Palette:" } else { "Palet:" }, Color::TEXT_MUTED);
                 for (i, tid) in ThemeId::ALL.iter().enumerate() {
                     let r = Self::theme_swatch_rect(win_x, win_y, i);
@@ -278,7 +306,7 @@ impl SystemSettings {
 
                 // --- Klavye / Dil ---
                 let kbd_str = match kbd_layout {
-                    KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard: Turkish (TR-Q)" } else { "Klavye / Dil: Türkçe (TR-Q)" },
+                    KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard layout: Turkish (TR-Q)" } else { "Klavye düzeni: Türkçe (TR-Q)" },
                     KeyboardLayout::EnglishUS => "Keyboard: English (EN-US)",
                 };
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 64, kbd_str, Color::ACCENT_PINK);
@@ -286,24 +314,28 @@ impl SystemSettings {
                     fb,
                     Self::kbd_btn_rect(win_x, win_y, win_w),
                     Color::ACCENT_PINK,
-                    if self.language.is_english() { "Change" } else { "Değiştir" },
+                    if self.language.is_english() { "Layout" } else { "Düzen" },
                     Color::DARK_BG,
                     false,
                 );
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 88,
+                    if self.language.is_english() { "Interface language" } else { "Arayüz dili" }, Color::ACCENT_PINK);
+                MinGuiCompositor::draw_button(fb, Self::language_btn_rect(win_x, win_y, win_w), Color::ACCENT_PINK,
+                    if self.language.is_english() { "Turkish" } else { "English" }, Color::DARK_BG, false);
 
                 // --- Canlı Saat ---
                 let mut clock = TextBuf::new();
-                clock.push_str("Saat: ");
+                clock.push_str(if self.language.is_english() { "Time: " } else { "Saat: " });
                 clock.push_u2(now.hour as u32);
                 clock.push_byte(b':');
                 clock.push_u2(now.minute as u32);
                 clock.push_byte(b':');
                 clock.push_u2(now.second as u32);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 122, clock.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 142, clock.as_str(), Color::ACCENT_GREEN);
 
                 // --- Tarih ---
                 let mut date = TextBuf::new();
-                date.push_str("Tarih: ");
+                date.push_str(if self.language.is_english() { "Date: " } else { "Tarih: " });
                 date.push_u2(now.day as u32);
                 date.push_byte(b' ');
                 date.push_str(DateTime::month_name(now.month));
@@ -311,16 +343,16 @@ impl SystemSettings {
                 date.push_u4(now.year as u32);
                 date.push_str(", ");
                 date.push_str(DateTime::weekday_name(DateTime::weekday(now.year, now.month, now.day)));
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 144, date.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 164, date.as_str(), Color::TEXT_MAIN);
 
                 // --- Ses ---
                 let mut vol = TextBuf::new();
-                vol.push_str("Ses Düzeyi: %");
-                vol.push_u2(self.volume as u32);
+                vol.push_str(if self.language.is_english() { "Volume: %" } else { "Ses Düzeyi: %" });
+                vol.push_usize(self.volume as usize);
                 if self.is_muted {
-                    vol.push_str(" (SUSTURULDU)");
+                    vol.push_str(if self.language.is_english() { " (MUTED)" } else { " (SUSTURULDU)" });
                 }
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 168, vol.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 188, vol.as_str(), Color::TEXT_MAIN);
 
                 let track = Self::volume_track_rect(win_x, win_y);
                 fb.draw_rect(track.0, track.1, track.2, track.3, Color::TITLE_BAR_INACTIVE);
@@ -331,7 +363,7 @@ impl SystemSettings {
 
                 let mute_r = Self::mute_btn_rect(win_x, win_y);
                 let mute_bg = if self.is_muted { Color::ACCENT_RED } else { Color::TITLE_BAR };
-                let mute_lbl = if self.is_muted { "Sesi Aç" } else { "Sustur" };
+                let mute_lbl = match (self.is_muted, self.language.is_english()) { (true,true)=>"Unmute", (false,true)=>"Mute", (true,false)=>"Sesi Aç", (false,false)=>"Sustur" };
                 MinGuiCompositor::draw_button(fb, mute_r, mute_bg, mute_lbl, Color::TEXT_MAIN, false);
             }
             1 => {
@@ -347,8 +379,18 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 176,
                     if self.language.is_english() { "Target resolution:" } else { "Hedef çözünürlük:" }, Color::ACCENT_YELLOW);
                 for i in 0..4 { let r=Self::resolution_btn_rect(win_x,win_y,i); let active=self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)}; MinGuiCompositor::draw_button(fb,r,if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR},Self::resolution_name(i),Color::TEXT_MAIN,false); }
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, if self.night_light { "Gece ışığı: Açık" } else { "Gece ışığı: Kapalı" }, Color::ACCENT_YELLOW);
-                MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, if self.night_light { "Kapat" } else { "Aç" }, Color::DARK_BG, false);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, match (self.night_light,self.language.is_english()) { (true,true)=>"Blue light: On", (false,true)=>"Blue light: Off", (true,false)=>"Mavi ışık: Açık", (false,false)=>"Mavi ışık: Kapalı" }, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_button(fb, Self::night_light_rect(win_x,win_y), Color::ACCENT_YELLOW, match (self.night_light,self.language.is_english()) { (true,true)=>"Off", (false,true)=>"On", (true,false)=>"Kapat", (false,false)=>"Aç" }, Color::DARK_BG, false);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+260, if self.language.is_english() { "Blue light strength:" } else { "Mavi ışık şiddeti:" }, Color::TEXT_MAIN);
+                let nl = Self::night_light_track_rect(win_x,win_y);
+                fb.draw_rect(nl.0,nl.1,nl.2,nl.3,Color::TITLE_BAR_INACTIVE);
+                let fill = nl.2*self.night_light_level as usize/100;
+                fb.draw_rect(nl.0,nl.1,fill,nl.3,Color::ACCENT_YELLOW);
+                fb.draw_rect(nl.0+fill.saturating_sub(4),nl.1.saturating_sub(4),8,nl.3+8,Color::TEXT_MAIN);
+                let mut level_text = TextBuf::new(); level_text.push_usize(self.night_light_level as usize); level_text.push_byte(b'%');
+                MinGuiCompositor::draw_string(fb,nl.0+nl.2+8,nl.1+1,level_text.as_str(),Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+296, if self.language.is_english() { "Region:" } else { "Bölge:" }, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_button(fb, Self::region_btn_rect(win_x,win_y), Color::ACCENT_BLUE, self.region_name(self.language.is_english()), Color::TEXT_MAIN, false);
             }
             2 => {
                 let mut driver = TextBuf::new();

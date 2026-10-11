@@ -68,7 +68,7 @@ pub fn font_mode() -> FontMode {
     match FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) { 1 => FontMode::Compact, 2 => FontMode::ClearType, _ => FontMode::Pixel }
 }
 
-static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::sync::atomic::Ordering::Relaxed); }
 pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
@@ -429,7 +429,7 @@ impl MinGuiCompositor {
         let pad = 8;
         let clock_x = width.saturating_sub(pad + 74);
         let vol_x = clock_x.saturating_sub(6 + 56);
-        let net_x = vol_x.saturating_sub(6 + 34);
+        let net_x = vol_x.saturating_sub(6 + 52);
         let theme_x = net_x.saturating_sub(6 + 64);
         let kbd_x = theme_x.saturating_sub(6 + 54);
         TrayLayout {
@@ -437,7 +437,7 @@ impl MinGuiCompositor {
             start: (6, tb_y + 5, 104, 26),
             clock: (clock_x, by, 74, h),
             volume: (vol_x, by, 56, h),
-            network: (net_x, by, 34, h),
+            network: (net_x, by, 52, h),
             theme: (theme_x, by, 64, h),
             kbd: (kbd_x, by, 54, h),
         }
@@ -777,16 +777,28 @@ impl MinGuiCompositor {
             if bits == 0 {
                 continue;
             }
-            for col in 0..8 {
-                if (bits & (1 << (7 - col))) != 0 {
-                    if scale <= 1 && font_mode() == FontMode::ClearType {
-                        if col > 0 { fb.put_pixel(x + col - 1, y + row, 0x604040); }
-                        if col + 1 < 8 { fb.put_pixel(x + col + 1, y + row, 0x404060); }
+            if scale <= 1 && font_mode() == FontMode::ClearType {
+                for col in 0..8 {
+                    let current = if (bits & (1 << (7 - col))) != 0 { 255u16 } else { 0 };
+                    let left = if col > 0 && (bits & (1 << (8 - col))) != 0 { 255u16 } else { 0 };
+                    let right = if col + 1 < 8 && (bits & (1 << (6 - col))) != 0 { 255u16 } else { 0 };
+                    let coverage = [
+                        ((current * 2 + left) / 3) as u8,
+                        current as u8,
+                        ((current * 2 + right) / 3) as u8,
+                    ];
+                    if coverage.iter().any(|amount| *amount > 0) {
+                        fb.put_subpixel_text(x + col, y + row, color, coverage);
                     }
-                    if scale <= 1 {
-                        fb.put_pixel(x + col, y + row, color);
-                    } else {
-                        fb.draw_rect(x + col * scale, y + row * scale, scale, scale, color);
+                }
+            } else {
+                for col in 0..8 {
+                    if (bits & (1 << (7 - col))) != 0 {
+                        if scale <= 1 {
+                            fb.put_pixel(x + col, y + row, color);
+                        } else {
+                            fb.draw_rect(x + col * scale, y + row * scale, scale, scale, color);
+                        }
                     }
                 }
             }
@@ -1268,11 +1280,9 @@ impl MinGuiCompositor {
             crate::drivers::keyboard::KeyboardLayout::EnglishUS => Color::ACCENT_BLUE,
         };
         let kbd_hover = in_rect(mx, my, l.kbd);
-        let kbd_bg = if kbd_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
-        fb.draw_rounded_rect(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, kbd_bg);
-        fb.draw_rounded_rect_outline(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, Color::BORDER);
         // Klavye resmi: kısa etiket yerine sade bir klavye simgesi.
-        fb.draw_rounded_rect(l.kbd.0 + 6, l.kbd.1 + 6, 18, 14, 2, Color::TEXT_MUTED);
+        let keyboard_icon = if kbd_hover { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
+        fb.draw_rounded_rect(l.kbd.0 + 6, l.kbd.1 + 6, 18, 14, 2, keyboard_icon);
         for row in 0..2 {
             for col in 0..5 {
                 fb.draw_rect(l.kbd.0 + 9 + col * 3, l.kbd.1 + 9 + row * 3, 2, 1, Color::TASKBAR_BG);
@@ -1283,20 +1293,13 @@ impl MinGuiCompositor {
 
         // 2. Tema Düğmesi (l.theme)
         let theme_hover = in_rect(mx, my, l.theme);
-        let theme_bg = if theme_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
-        fb.draw_rounded_rect(l.theme.0, l.theme.1, l.theme.2, l.theme.3, 5, theme_bg);
-        fb.draw_rounded_rect_outline(l.theme.0, l.theme.1, l.theme.2, l.theme.3, 5, Color::BORDER);
         fb.draw_rounded_rect(l.theme.0 + 6, l.theme.1 + 8, 10, 10, 3, Color::ACCENT_PINK);
-        fb.draw_rounded_rect_outline(l.theme.0 + 6, l.theme.1 + 8, 10, 10, 3, Color::BORDER);
         let t_name = theme::current().short_name();
-        Self::draw_string(fb, l.theme.0 + 20, tb_y + 14, t_name, Color::TEXT_MAIN);
+        Self::draw_string(fb, l.theme.0 + 20, tb_y + 14, t_name, if theme_hover { Color::ACCENT_PINK } else { Color::TEXT_MAIN });
 
         // 3. Ses Düğmesi (l.volume)
         let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
-        let vol_bg = if vol_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
-        fb.draw_rounded_rect(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, vol_bg);
-        fb.draw_rounded_rect_outline(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, Color::BORDER);
-        let icon_color = if is_muted { Color::ACCENT_RED } else { Color::ACCENT_GREEN };
+        let icon_color = if is_muted { Color::ACCENT_RED } else if vol_hover { Color::TEXT_MAIN } else { Color::ACCENT_GREEN };
         // Hoparlör gövdesi ve ses dalgaları.
         fb.draw_rect(l.volume.0 + 8, l.volume.1 + 11, 4, 6, icon_color);
         fb.draw_rect(l.volume.0 + 12, l.volume.1 + 8, 3, 12, icon_color);
@@ -1308,38 +1311,30 @@ impl MinGuiCompositor {
             fb.draw_rect(l.volume.0 + 17, l.volume.1 + 9, 2, 2, icon_color);
             fb.draw_rect(l.volume.0 + 20, l.volume.1 + 16, 2, 2, icon_color);
         }
-        let level_w = ((volume as usize) * 22) / 100;
-        fb.draw_rect(l.volume.0 + 30, l.volume.1 + 17, 22, 3, Color::TEXT_MUTED);
-        if !is_muted && level_w > 0 {
-            fb.draw_rect(l.volume.0 + 30, l.volume.1 + 17, level_w, 3, Color::ACCENT_GREEN);
-        }
-
         // Ethernet simgesi yalnızca e1000 aygıtı başarıyla başlatıldıysa görünür.
         if ethernet_available {
             let net_hover = in_rect(mx, my, l.network);
-            let net_bg = if net_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
-            fb.draw_rounded_rect(l.network.0, l.network.1, l.network.2, l.network.3, 5, net_bg);
-            fb.draw_rounded_rect_outline(l.network.0, l.network.1, l.network.2, l.network.3, 5, Color::BORDER);
-            let c = Color::ACCENT_GREEN;
-            // Kablo/port simgesi ve kısa ad tek düğmenin içine sığar.
-            fb.draw_rect(l.network.0 + 3, l.network.1 + 10, 5, 6, c);
-            fb.draw_rect(l.network.0 + 4, l.network.1 + 7, 1, 3, c);
-            fb.draw_rect(l.network.0 + 7, l.network.1 + 7, 1, 3, c);
-            Self::draw_string(fb, l.network.0 + 10, tb_y + 14, "eth0", c);
+            let linked = crate::drivers::e1000::link_up();
+            let c = if linked { if net_hover { Color::TEXT_MAIN } else { Color::ACCENT_GREEN } } else { Color::TEXT_MUTED };
+            // Ethernet jakı: gövde, pinler, kablo ve bağlantı durumu ışığı.
+            fb.draw_rounded_rect_outline(l.network.0 + 3, l.network.1 + 6, 14, 14, 2, c);
+            fb.draw_rect(l.network.0 + 6, l.network.1 + 12, 8, 6, c);
+            fb.draw_rect(l.network.0 + 7, l.network.1 + 9, 2, 4, c);
+            fb.draw_rect(l.network.0 + 11, l.network.1 + 9, 2, 4, c);
+            fb.draw_rect(l.network.0 + 9, l.network.1 + 19, 2, 2, c);
+            fb.draw_rect(l.network.0 + 20, l.network.1 + 7, 3, 3, c);
+            Self::draw_string(fb, l.network.0 + 22, tb_y + 14, "eth0", c);
         }
 
         // 4. Saat Düğmesi (l.clock)
         let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
-        let clock_bg = if clock_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
-        fb.draw_rounded_rect(l.clock.0, l.clock.1, l.clock.2, l.clock.3, 5, clock_bg);
-        fb.draw_rounded_rect_outline(l.clock.0, l.clock.1, l.clock.2, l.clock.3, 5, Color::BORDER);
         let mut clock = TextBuf::new();
         clock.push_u2(now.hour as u32);
         clock.push_byte(b':');
         clock.push_u2(now.minute as u32);
         clock.push_byte(b':');
         clock.push_u2(now.second as u32);
-        Self::draw_string(fb, l.clock.0 + 8, tb_y + 14, clock.as_str(), Color::TEXT_MAIN);
+        Self::draw_string(fb, l.clock.0 + 8, tb_y + 14, clock.as_str(), if clock_hover { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
 
         // Akıllı tepsi ağı simgesi
 
@@ -1499,7 +1494,7 @@ impl MinGuiCompositor {
         // Profil Şeridi (gradyan)
         fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, 34, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_cat_icon(fb, menu_x + 8, menu_y + 10);
-        Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS Başlat", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(fb, menu_x + 28, menu_y + 13, "MinOS", Color::TEXT_MAIN, Color::SHADOW, 1);
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {
@@ -1537,10 +1532,6 @@ impl MinGuiCompositor {
             Self::draw_string(fb, r.0 + 8, r.1 + 10, title, fg_col);
             Self::draw_string(fb, r.0 + r.2 - 16, r.1 + 10, ">", fg_col);
         }
-
-        // Alt Bilgi Şeridi
-        fb.draw_rect(menu_x + 1, menu_y + menu_h - 24, menu_w - 2, 23, Color::TITLE_BAR_INACTIVE);
-        Self::draw_string(fb, menu_x + 8, menu_y + menu_h - 18, "Sarman Çekirdeği", Color::TEXT_MUTED);
 
         // Yana Açılır Alt Menü
         self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);

@@ -96,6 +96,27 @@ impl Framebuffer {
         }
     }
 
+    /// RGB alt piksel kapsamıyla mevcut arka plan üzerine metin pikseli karıştırır.
+    /// `coverage` her kanal için 0..255 aralığında örtüşme miktarıdır.
+    pub fn put_subpixel_text(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3]) {
+        if !self.in_clip(x, y) { return; }
+        let fg = rgb(color);
+        let offset = y * self.width + x;
+        unsafe {
+            if offset >= BACKBUFFER_LEN { return; }
+            let bg = BACKBUFFER[offset];
+            let mut out = 0u32;
+            for channel in 0..3 {
+                let shift = 16 - channel * 8;
+                let f = (fg >> shift) & 0xFF;
+                let b = (bg >> shift) & 0xFF;
+                let a = coverage[channel] as u32;
+                out |= (b * (255 - a) + f * a + 127) / 255 << shift;
+            }
+            BACKBUFFER[offset] = out;
+        }
+    }
+
     pub fn clear(&mut self, color: u32) {
         let c = rgb(color);
         unsafe {
@@ -415,10 +436,11 @@ impl Framebuffer {
         }
     }
 
-    /// Gece ışığı: mavi kanalı azaltıp kırmızı/yeşili sıcaklaştırır.
-    pub fn apply_night_light(&mut self, enabled: bool) {
-        if !enabled { return; }
+    /// Mavi ışık filtresini seçilen yüzdeyle uygular (0 kapalı, 100 en sıcak).
+    pub fn apply_night_light(&mut self, strength: u8) {
+        let strength = strength.min(100) as u32;
+        if strength == 0 { return; }
         let limit=(self.width*self.height).min(BACKBUFFER_LEN);
-        unsafe { for i in 0..limit { let c=BACKBUFFER[i]; let r=((c>>16)&255).min(255); let g=((c>>8)&255).min(255); let b=c&255; let nr=(r+((255-r)*12/100)).min(255); let ng=(g+((255-g)*4/100)).min(255); let nb=b*55/100; BACKBUFFER[i]=(nr<<16)|(ng<<8)|nb; } }
+        unsafe { for i in 0..limit { let c=BACKBUFFER[i]; let r=(c>>16)&255; let g=(c>>8)&255; let b=c&255; let nr=(r+((255-r)*12*strength/10_000)).min(255); let ng=(g+((255-g)*4*strength/10_000)).min(255); let nb=b*(100-45*strength/100)/100; BACKBUFFER[i]=(nr<<16)|(ng<<8)|nb; } }
     }
 }

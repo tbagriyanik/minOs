@@ -124,14 +124,16 @@ fn checksum(data: &[u8]) -> u16 {
 
 /// IPv4 paketi kurar ve Ethernet'e sarmalar, ardından e1000'den iletir.
 fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
+    let on_subnet = (0..4).all(|i| (dst_ip.0[i] & SUBNET_MASK.0[i]) == (LOCAL_IP.0[i] & SUBNET_MASK.0[i]));
+    let next_hop = if on_subnet { dst_ip } else { GATEWAY_IP };
     // MAC'i ARP ile çöz
-    let dst_mac = match arp_lookup(dst_ip) {
+    let dst_mac = match arp_lookup(next_hop) {
         Some(m) => m,
         None => {
             // ARP request gönder
-            send_arp_request(dst_ip);
+            send_arp_request(next_hop);
             // QEMU SLIRP cevap verir, tekrar bak (poll arkasından)
-            match arp_lookup(dst_ip) {
+            match arp_lookup(next_hop) {
                 Some(m) => m,
                 None => return false,
             }

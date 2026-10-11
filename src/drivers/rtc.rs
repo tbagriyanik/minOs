@@ -47,6 +47,25 @@ pub struct DateTime {
 }
 
 impl DateTime {
+    /// RTC zamanını seçilen saat dilimi farkına göre takvim taşmalarını koruyarak kaydırır.
+    pub fn with_hour_offset(mut self, offset: i8) -> Self {
+        let mut hour = self.hour as i16 + offset as i16;
+        while hour < 0 {
+            hour += 24;
+            if self.day > 1 { self.day -= 1; }
+            else if self.month > 1 { self.month -= 1; self.day = Self::days_in_month(self.year, self.month); }
+            else { self.year = self.year.saturating_sub(1); self.month = 12; self.day = 31; }
+        }
+        while hour >= 24 {
+            hour -= 24;
+            if self.day < Self::days_in_month(self.year, self.month) { self.day += 1; }
+            else if self.month < 12 { self.month += 1; self.day = 1; }
+            else { self.year = self.year.saturating_add(1); self.month = 1; self.day = 1; }
+        }
+        self.hour = hour as u8;
+        self
+    }
+
     /// CMOS RTC'ten anlık zamanı okur ve ikili (binary) forma çevirir.
     pub fn read() -> Self {
         wait_not_updating();

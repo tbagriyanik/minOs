@@ -170,6 +170,11 @@ pub fn is_ready() -> bool {
     E1000_READY.load(Ordering::Relaxed)
 }
 
+/// Reports physical Ethernet link state (STATUS.LU).
+pub fn link_up() -> bool {
+    is_ready() && unsafe { mmio_read32(REG_STATUS) & (1 << 1) != 0 }
+}
+
 // ---------------------------------------------------------------------------
 // EEPROM'dan MAC okuma
 // ---------------------------------------------------------------------------

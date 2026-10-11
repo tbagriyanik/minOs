@@ -316,6 +316,7 @@ pub extern "C" fn _start() -> ! {
     settings_app.display_res = (width, height);
     settings_app.load_from_vfs(&fs_mgr.vfs);
     settings_app.font.apply();
+    keyboard.layout = settings_app.keyboard_layout;
     gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
     let mut browser_app = apps::browser::BrowserApp::new();
@@ -355,7 +356,7 @@ pub extern "C" fn _start() -> ! {
     compositor.active_window_idx = None;
 
     // RTC - gerçek zamanlı saat
-    let mut now = drivers::rtc::DateTime::read();
+    let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
     compositor.cal_year = now.year;
     compositor.cal_month = now.month;
     serial_print("[MinOS] RTC clock online.\n");
@@ -485,7 +486,7 @@ pub extern "C" fn _start() -> ! {
         );
 
         // 4. Backbuffer'ı VRAM'e tek seferde kopyala (flicker-free)
-        fb.apply_night_light(st.night_light);
+        fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
         fb.flush();
     };
 
@@ -514,7 +515,7 @@ pub extern "C" fn _start() -> ! {
         clock_spin += 1;
         if clock_spin >= 3_000 {
             clock_spin = 0;
-            now = drivers::rtc::DateTime::read();
+            now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
             force_render = true;
         }
 
@@ -1023,8 +1024,9 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.cycle_theme();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::kbd_btn_rect(wx, wy, ww)) {
                                         keyboard.toggle_layout();
-                                        settings_app.language.toggle();
                                         settings_app.keyboard_layout = keyboard.layout;
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::language_btn_rect(wx, wy, ww)) {
+                                        settings_app.language.toggle();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::font_btn_rect(wx, wy, ww)) {
                                         settings_app.font.cycle();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
@@ -1036,6 +1038,13 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
                                         settings_app.restore_windows(&mut compositor);
                                         settings_app.reset_defaults();
+                                        settings_app.font.apply();
+                                        gui::theme::set_theme(settings_app.theme);
+                                        keyboard.layout = settings_app.keyboard_layout;
+                                        gui::set_ui_language_english(settings_app.language.is_english());
+                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
                                     }
                                 }
                                 if settings_app.active_tab == 1 {
@@ -1053,6 +1062,19 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
                                     if gui::in_rect(mx,my,apps::settings::SystemSettings::night_light_rect(wx,wy)) { settings_app.night_light=!settings_app.night_light; settings_app.status_msg=if settings_app.night_light { "Gece isigi acildi." } else { "Gece isigi kapatildi." }; }
+                                    let nl_track = apps::settings::SystemSettings::night_light_track_rect(wx,wy);
+                                    if gui::in_rect(mx,my,nl_track) {
+                                        let span=nl_track.2.saturating_sub(1).max(1);
+                                        settings_app.night_light_level=((mx-nl_track.0).min(span)*100/span).min(100) as u8;
+                                        settings_app.night_light=true;
+                                    }
+                                    if gui::in_rect(mx,my,apps::settings::SystemSettings::region_btn_rect(wx,wy)) {
+                                        settings_app.region=(settings_app.region+1)%3;
+                                        now=drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+                                        compositor.cal_year=now.year;
+                                        compositor.cal_month=now.month;
+                                        settings_app.status_msg="Bolge ve saat dilimi degistirildi.";
+                                    }
                                 }
                             }
                             2 => {
@@ -1245,17 +1267,21 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::CloseActiveWindow => {
-                    if let Some(idx) = compositor.active_window_idx {
-                        if compositor.windows[idx].map_or(false, |w| w.is_open) {
-                            compositor.is_context_menu_open = true;
-                            compositor.is_start_menu_open = false;
-                            compositor.context_kind = gui::ContextKind::Window;
-                            compositor.context_window = Some(idx);
-                            if let Some(w) = compositor.windows[idx] {
-                                compositor.context_menu_x = w.x + w.width.saturating_sub(230);
-                                compositor.context_menu_y = w.y + gui::TITLEBAR_H;
-                            }
-                        }
+                    let active_window = compositor.active_window_idx.filter(|&idx| {
+                        compositor.windows[idx].map_or(false, |w| w.is_open && !w.is_minimized)
+                    });
+                    if let Some(idx) = active_window {
+                        terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
+                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                            &mut terminal_app);
+                    } else {
+                        compositor.is_start_menu_open = true;
+                        compositor.is_context_menu_open = false;
+                        compositor.active_start_group = 3;
+                        compositor.selected_start_item = 0;
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
                     }
                 }
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
@@ -1278,8 +1304,11 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else {
                         let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        if tm_focused && taskmgr_app.launch_menu_open {
+                        if terminal_focused {
+                            terminal_app.history_up();
+                        } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_prev();
                         } else if np_focused {
                             notepad_app.move_vertical(true);
@@ -1307,8 +1336,11 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else {
                         let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        if tm_focused && taskmgr_app.launch_menu_open {
+                        if terminal_focused {
+                            terminal_app.history_down();
+                        } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_next();
                         } else if np_focused {
                             notepad_app.move_vertical(false);
@@ -1514,6 +1546,23 @@ pub extern "C" fn _start() -> ! {
 
         // 5. Pencere Sürükleme ve Yeniden Boyutlandırma
         if mouse.left_button {
+            if let Some(w) = compositor.windows[1] {
+                if w.is_open && w.is_focused && !w.is_minimized {
+                    if settings_app.active_tab == 0 {
+                        let track = apps::settings::SystemSettings::volume_track_rect(w.x, w.y);
+                        if gui::in_rect(mx, my, (track.0, track.1.saturating_sub(5), track.2, track.3 + 10)) {
+                            settings_app.set_volume_from_range(mx, track.0, track.2);
+                        }
+                    } else if settings_app.active_tab == 1 {
+                        let track = apps::settings::SystemSettings::night_light_track_rect(w.x, w.y);
+                        if gui::in_rect(mx, my, (track.0, track.1.saturating_sub(5), track.2, track.3 + 10)) {
+                            let span=track.2.saturating_sub(1).max(1);
+                            settings_app.night_light_level = ((mx-track.0).min(span)*100/span).min(100) as u8;
+                            settings_app.night_light = true;
+                        }
+                    }
+                }
+            }
             if let Some(w) = compositor.windows[9] {
                 if w.is_focused && mx >= w.x + 8 && mx < w.x + w.width - 8
                     && my >= w.y + 58 && my < w.y + w.height - 10
@@ -1657,6 +1706,8 @@ pub extern "C" fn _start() -> ! {
                 }
                 compositor.confirm_shutdown = true;
                 compositor.confirm_restart = false;
+            } else if ch == '\t' && compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                terminal_app.complete();
             } else if ch == '\t' && compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
                 taskmgr_app.focus_next_control();
             } else {
@@ -1690,7 +1741,9 @@ pub extern "C" fn _start() -> ! {
                 if let Some(cmd) = terminal_app.take_pending() {
                     let n = terminal_app.pending_len();
                     let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
-                    terminal_app.execute(line, &fs_mgr.vfs, &memory_mgr.pmm, &now);
+                    if let Some(app_idx) = terminal_app.execute(line, &fs_mgr.vfs, &memory_mgr.pmm, &now) {
+                        open_app(&mut compositor, app_idx);
+                    }
                 }
                 let paint_focused = compositor.windows[9].as_ref().map_or(false, |w| w.is_focused);
                 if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }

@@ -260,7 +260,7 @@ pub extern "C" fn _start() -> ! {
     let hhdm_offset = unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(HHDM_REQUEST.response));
         if !resp.is_null() {
-            let off = core::ptr::read_volatile((resp as *const u8).add(8) as *const u64);
+            let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
             serial_print("[MinOS] HHDM offset okundu (0 yoksa gecerli).\n");
             off
         } else {
@@ -280,9 +280,8 @@ pub extern "C" fn _start() -> ! {
     let (fb_ptr, width, height, pitch) = unsafe {
         let resp = core::ptr::read_volatile(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response));
         if !resp.is_null() {
-            let response_bytes = resp as *const u8;
-            let framebuffer_count = core::ptr::read_volatile(response_bytes.add(8) as *const u64);
-            let fb_ptr_ptr = core::ptr::read_volatile(response_bytes.add(16) as *const *const *const LimineFramebuffer);
+            let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
+            let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
             if framebuffer_count == 0 || fb_ptr_ptr.is_null() {
                 serial_print("[MinOS] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
@@ -972,12 +971,14 @@ pub extern "C" fn _start() -> ! {
                             // Çift tık tüketildikten sonra eşleşmeyi temizle;
                             // üçüncü kısa tık yeni bir çift tık başlatabilsin.
                             last_title_idx = None;
-                        } else if !win.is_maximized {
+                        } else {
                             last_title_idx = Some(idx);
                             last_title_click = loop_counter;
-                            dragging_win = Some(idx);
-                            drag_offset_x = mx.saturating_sub(wx);
-                            drag_offset_y = my.saturating_sub(wy);
+                            if !win.is_maximized {
+                                dragging_win = Some(idx);
+                                drag_offset_x = mx.saturating_sub(wx);
+                                drag_offset_y = my.saturating_sub(wy);
+                            }
                         }
                         break;
                     }

@@ -1,9 +1,12 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
 
-const MAX_POINTS: usize = 8192;
+const MAX_POINTS: usize = 512;
 const BRUSH_SIZE: usize = 7;
 const ERASER_RADIUS: usize = 10;
+const EMPTY_POINT: PaintPoint = PaintPoint { x: 0, y: 0, color: Color::ACCENT_BLUE };
+
+static mut POINTS: [PaintPoint; MAX_POINTS] = [EMPTY_POINT; MAX_POINTS];
 
 #[derive(Clone, Copy)]
 pub struct PaintPoint {
@@ -13,7 +16,6 @@ pub struct PaintPoint {
 }
 
 pub struct PaintApp {
-    pub points: [PaintPoint; MAX_POINTS],
     pub len: usize,
     pub color: u32,
     pub eraser: bool,
@@ -23,7 +25,6 @@ pub struct PaintApp {
 impl PaintApp {
     pub const fn new() -> Self {
         Self {
-            points: [PaintPoint { x: 0, y: 0, color: Color::ACCENT_BLUE }; MAX_POINTS],
             len: 0,
             color: Color::ACCENT_BLUE,
             eraser: false,
@@ -34,10 +35,11 @@ impl PaintApp {
     pub fn paint(&mut self, x: usize, y: usize) {
         if self.eraser {
             let mut out = 0;
+            let points = core::ptr::addr_of_mut!(POINTS);
             for i in 0..self.len {
-                let point = self.points[i];
+                let point = unsafe { (*points)[i] };
                 if point.x.abs_diff(x) > ERASER_RADIUS || point.y.abs_diff(y) > ERASER_RADIUS {
-                    self.points[out] = point;
+                    unsafe { (*points)[out] = point; }
                     out += 1;
                 }
             }
@@ -56,7 +58,7 @@ impl PaintApp {
             }
             let px = (sx as isize + dx * i as isize / steps as isize).max(0) as usize;
             let py = (sy as isize + dy * i as isize / steps as isize).max(0) as usize;
-            self.points[self.len] = PaintPoint { x: px, y: py, color: self.color };
+            unsafe { (*core::ptr::addr_of_mut!(POINTS))[self.len] = PaintPoint { x: px, y: py, color: self.color }; }
             self.len += 1;
         }
         self.last = Some((x, y));
@@ -77,8 +79,9 @@ impl PaintApp {
         let canvas_w = w.saturating_sub(16);
         let canvas_h = h.saturating_sub(68);
         fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, Color::WHITE);
+        let points = core::ptr::addr_of!(POINTS);
         for i in 0..self.len {
-            let point = self.points[i];
+            let point = unsafe { (*points)[i] };
             if point.x < canvas_w && point.y < canvas_h {
                 fb.draw_rect(canvas_x + point.x, canvas_y + point.y, BRUSH_SIZE, BRUSH_SIZE, point.color);
             }

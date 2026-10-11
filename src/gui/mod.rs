@@ -288,8 +288,9 @@ pub enum ResizeEdge {
     BottomRight,
 }
 
-/// Kenar tutamaçlarının kalınlığı (kolay tutulabilmesi için 12px).
+/// Yan/alt resize alanı 12px; başlık çakışmasını önlemek için üst alan 4px.
 pub const RESIZE_GRIP: usize = 12;
+const TOP_RESIZE_GRIP: usize = 4;
 
 impl Window {
     /// Fare konumundaki kenar/köşe resize yönünü bulur. Başlık düğmeleri,
@@ -307,7 +308,7 @@ impl Window {
 
         let left = mx - self.x < g;
         let edge_right = right - mx <= g;
-        let top = my - self.y < g;
+        let top = my - self.y < TOP_RESIZE_GRIP;
         let edge_bottom = bottom - my <= g;
         if top && left { Some(ResizeEdge::TopLeft) }
         else if top && edge_right { Some(ResizeEdge::TopRight) }

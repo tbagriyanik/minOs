@@ -143,6 +143,8 @@ impl KeyboardState {
                     self.last_action = Some(KeyAction::OpenTaskManager);
                     return None;
                 }
+                self.last_action = Some(KeyAction::Delete);
+                return None;
             }
             0x2E if self.ctrl => { self.last_action = Some(KeyAction::CopyText); return None; } // Ctrl+C
             0x2F if self.ctrl => { self.last_action = Some(KeyAction::PasteText); return None; } // Ctrl+V

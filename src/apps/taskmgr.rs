@@ -12,12 +12,15 @@ const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi",
     "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi",
 ];
+const CPU_USAGE_PCT: usize = 100;
 
 #[derive(Copy, Clone, Default)]
 pub struct ProcessInfo {
     pub app_idx: usize,
     pub name: &'static str,
     pub is_minimized: bool,
+    pub cpu_pct: usize,
+    pub memory_kb: usize,
 }
 
 pub struct TaskManagerApp {
@@ -35,12 +38,14 @@ pub struct TaskManagerApp {
     pub status: &'static str,
     pub launch_menu_open: bool,
     pub launch_selected: usize,
+    pub active_tab: usize,
+    pub focused_control: usize,
 }
 
 impl TaskManagerApp {
     pub const fn new() -> Self {
         Self {
-            processes: [ProcessInfo { app_idx: 0, name: "", is_minimized: false }; MAX_PROC],
+            processes: [ProcessInfo { app_idx: 0, name: "", is_minimized: false, cpu_pct: 0, memory_kb: 0 }; MAX_PROC],
             proc_count: 0,
             selected: 0,
             total_memory_kb: 0, free_memory_kb: 0, used_memory_kb: 0,
@@ -48,7 +53,26 @@ impl TaskManagerApp {
             status: "Hazır",
             launch_menu_open: false,
             launch_selected: 0,
+            active_tab: 0,
+            focused_control: 0,
         }
+    }
+
+    pub fn focus_next_control(&mut self) {
+        let focusable_count = 4 + if self.active_tab == 0 { self.proc_count } else { 0 };
+        self.focused_control = (self.focused_control + 1) % focusable_count.max(1);
+        self.launch_menu_open = false;
+        if self.focused_control >= 4 {
+            self.selected = self.focused_control - 4;
+        }
+    }
+
+    pub fn applications_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + 10, win_y + 52, 100, 22)
+    }
+
+    pub fn performance_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + 114, win_y + 52, 100, 22)
     }
 
     pub fn launch_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -92,6 +116,7 @@ impl TaskManagerApp {
         pmm: &PhysicalMemoryManager,
         vfs: &VirtualFileSystem,
         windows: &[Option<crate::gui::Window>; MAX_PROC],
+        render_cycles: &[u64; MAX_PROC],
     ) {
         self.total_memory_kb = (pmm.total_memory_bytes / 1024) as usize;
         self.free_memory_kb = (pmm.free_memory_bytes / 1024) as usize;
@@ -103,14 +128,25 @@ impl TaskManagerApp {
             self.ramdisk_files += 1;
         }
         let selected_app = self.processes.get(self.selected).map(|entry| entry.app_idx);
+        let total_render_cycles = windows.iter().enumerate().fold(0u64, |total, (app_idx, window)| {
+            if window.map_or(false, |window| window.is_open && !window.is_minimized) {
+                total.saturating_add(render_cycles[app_idx])
+            } else {
+                total
+            }
+        });
         let mut count = 0;
         for (app_idx, window) in windows.iter().enumerate() {
             if let Some(window) = window {
                 if window.is_open {
+                    let state_bytes = Self::app_state_bytes(app_idx);
                     self.processes[count] = ProcessInfo {
                         app_idx,
                         name: LAUNCH_APP_LABELS[app_idx],
                         is_minimized: window.is_minimized,
+                        cpu_pct: if window.is_minimized || total_render_cycles == 0 { 0 }
+                            else { (render_cycles[app_idx].saturating_mul(100) / total_render_cycles).min(100) as usize },
+                        memory_kb: state_bytes.saturating_add(1023) / 1024,
                     };
                     count += 1;
                 }
@@ -123,6 +159,23 @@ impl TaskManagerApp {
         self.selected = selected_app
             .and_then(|app_idx| self.processes[..count].iter().position(|entry| entry.app_idx == app_idx))
             .unwrap_or_else(|| self.selected.min(count.saturating_sub(1)));
+    }
+
+    fn app_state_bytes(app_idx: usize) -> usize {
+        match app_idx {
+            0 => core::mem::size_of::<crate::apps::filemanager::FileManagerApp>(),
+            1 => core::mem::size_of::<crate::apps::settings::SystemSettings>(),
+            2 => core::mem::size_of::<crate::apps::notepad::NotepadApp>(),
+            3 => core::mem::size_of::<crate::apps::browser::BrowserApp>(),
+            4 => core::mem::size_of::<crate::apps::imageviewer::ImageViewerApp>(),
+            5 => core::mem::size_of::<crate::apps::musicplayer::MusicPlayerApp>(),
+            6 => core::mem::size_of::<crate::apps::videoplayer::VideoPlayerApp>(),
+            7 => core::mem::size_of::<crate::apps::taskmgr::TaskManagerApp>(),
+            8 => core::mem::size_of::<crate::apps::calculator::CalculatorApp>(),
+            9 => core::mem::size_of::<crate::apps::paint::PaintApp>(),
+            10 => core::mem::size_of::<crate::apps::terminal::TerminalApp>(),
+            _ => 0,
+        }
     }
 
     /// Canlı (alive) süreç sayısı.
@@ -150,7 +203,7 @@ impl TaskManagerApp {
 
     /// i. süreç satırının tıklanabilir dikdörtgeni (çizim ile birebir aynı).
     pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + 8, win_y + 66 + i * 18, win_w.saturating_sub(16), 16)
+        (win_x + 8, win_y + 100 + i * 18, win_w.saturating_sub(16), 16)
     }
 
     /// Fare konumunun denk geldiği süreç satırı indeksi.
@@ -185,28 +238,93 @@ impl TaskManagerApp {
         fb.draw_rect(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, launch_button.0 + 8, launch_button.1 + 5, "Program Aç", Color::WHITE);
 
-        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 50, "Uygulama", Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 50, "Durum", Color::TEXT_MUTED);
-        fb.draw_rect(win_x + 10, win_y + 62, win_w.saturating_sub(20), 1, Color::BORDER);
+        let applications_tab = Self::applications_tab_rect(win_x, win_y);
+        let performance_tab = Self::performance_tab_rect(win_x, win_y);
+        fb.draw_rect(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3,
+            if self.active_tab == 0 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
+        MinGuiCompositor::draw_string(fb, applications_tab.0 + 12, applications_tab.1 + 7, "Uygulamalar", Color::TEXT_MAIN);
+        fb.draw_rect(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3,
+            if self.active_tab == 1 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
+        MinGuiCompositor::draw_string(fb, performance_tab.0 + 12, performance_tab.1 + 7, "Performans", Color::TEXT_MAIN);
+        if self.focused_control == 0 { fb.draw_rect_outline(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3, Color::ACCENT_YELLOW); }
+        if self.focused_control == 1 { fb.draw_rect_outline(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3, Color::ACCENT_YELLOW); }
+        if self.focused_control == 2 { fb.draw_rect_outline(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_YELLOW); }
+        if self.focused_control == 3 { fb.draw_rect_outline(br.0, br.1, br.2, br.3, Color::ACCENT_YELLOW); }
 
-        for (i, proc) in self.processes.iter().take(self.proc_count).enumerate() {
-            let row = Self::row_rect(win_x, win_y, win_w, i);
-            if i == self.selected { fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR); }
-            MinGuiCompositor::draw_string(fb, row.0 + 4, row.1 + 4, proc.name,
-                if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
-            MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), row.1 + 4,
-                if proc.is_minimized { "Küçültüldü" } else { "Çalışıyor" }, Color::ACCENT_GREEN);
+        if self.active_tab == 0 {
+            MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 82, "Uygulama", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 205, win_y + 82, "Çizim CPU", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 278, win_y + 82, "RAM durumu", Color::TEXT_MUTED);
+            fb.draw_rect(win_x + 10, win_y + 94, win_w.saturating_sub(20), 1, Color::BORDER);
+
+            for (i, proc) in self.processes.iter().take(self.proc_count).enumerate() {
+                let row = Self::row_rect(win_x, win_y, win_w, i);
+                if i == self.selected { fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR); }
+                if self.focused_control == 4 + i { fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW); }
+                MinGuiCompositor::draw_string(fb, row.0 + 4, row.1 + 4, proc.name,
+                    if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
+                let mut cpu = TextBuf::new();
+                cpu.push_usize(proc.cpu_pct);
+                cpu.push_byte(b'%');
+                MinGuiCompositor::draw_string(fb, win_x + 212, row.1 + 4, cpu.as_str(), Color::ACCENT_YELLOW);
+                let mut ram = TextBuf::new();
+                ram.push_usize(proc.memory_kb);
+                ram.push_str(" KB");
+                MinGuiCompositor::draw_string(fb, win_x + 278, row.1 + 4, ram.as_str(), Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(76), row.1 + 4,
+                    if proc.is_minimized { "Beklemede" } else { "Açık" }, Color::ACCENT_GREEN);
+            }
+        } else {
+            let bar_x = win_x + 132;
+            let bar_w = win_w.saturating_sub(152);
+            let mut cpu_label = TextBuf::new();
+            cpu_label.push_str("CPU %");
+            cpu_label.push_usize(CPU_USAGE_PCT);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 100, cpu_label.as_str(), Color::TEXT_MAIN);
+            fb.draw_rect(bar_x, win_y + 100, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + 100, bar_w.saturating_mul(CPU_USAGE_PCT) / 100, 12, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 120,
+                "Uygulama payı son ekran çizim süresine göre hesaplanır.", Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 136,
+                "Çekirdek boşta döngüsü olmadığı için toplam CPU %100.", Color::TEXT_MUTED);
+
+            let memory_pct = if self.total_memory_kb == 0 { 0 }
+                else { self.used_memory_kb.saturating_mul(100) / self.total_memory_kb };
+            let mut memory_label = TextBuf::new();
+            memory_label.push_str("RAM ");
+            memory_label.push_usize(self.used_memory_kb);
+            memory_label.push_str(" / ");
+            memory_label.push_usize(self.total_memory_kb);
+            memory_label.push_str(" KB");
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 170, memory_label.as_str(), Color::TEXT_MAIN);
+            fb.draw_rect(bar_x, win_y + 170, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + 170, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
+            let mut free_label = TextBuf::new();
+            free_label.push_str("Boş RAM: ");
+            free_label.push_usize(self.free_memory_kb);
+            free_label.push_str(" KB");
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 190, free_label.as_str(), Color::TEXT_MUTED);
+
+            let mut storage_label = TextBuf::new();
+            storage_label.push_str("VFS: ");
+            storage_label.push_usize(self.ramdisk_files);
+            storage_label.push_str(" dosya, ");
+            storage_label.push_usize(self.ramdisk_used);
+            storage_label.push_str(" B");
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 230, storage_label.as_str(), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 260,
+                "Uygulama RAM değeri uygulama durum yapısının yaklaşık boyutudur.", Color::TEXT_MUTED);
         }
 
-        fb.draw_rect(win_x + 8, win_y + 270, win_w.saturating_sub(16), 1, Color::BORDER);
-        let mut memory = TextBuf::new();
-        memory.push_str("RAM: ");
-        memory.push_usize(self.used_memory_kb);
-        memory.push_str(" / ");
-        memory.push_usize(self.total_memory_kb);
-        memory.push_str(" KB  |  ");
-        memory.push_str(self.status);
-        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 278, memory.as_str(), Color::TEXT_MUTED);
+        fb.draw_rect(win_x + 8, win_y + 350, win_w.saturating_sub(16), 1, Color::BORDER);
+        let mut resources = TextBuf::new();
+        resources.push_str("VFS: ");
+        resources.push_usize(self.ramdisk_files);
+        resources.push_str(" dosya / ");
+        resources.push_usize(self.ramdisk_used);
+        resources.push_str(" B  |  ");
+        resources.push_str(self.status);
+        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 358, resources.as_str(), Color::TEXT_MUTED);
 
         if self.launch_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = Self::launch_menu_rect(win_x, win_y, win_w);

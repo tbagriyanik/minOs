@@ -104,7 +104,11 @@ fn build_ethernet(dst: MacAddress, ethertype: u16, payload: &[u8], buf: &mut [u8
 // ---------------------------------------------------------------------------
 
 const IP_PROTO_ICMP: u8 = 1;
+pub const IP_PROTO_TCP: u8 = 6;
 const IP_PROTO_UDP: u8 = 17;
+pub const DNS_SERVER: Ipv4Address = Ipv4Address::new(10, 0, 2, 3);
+pub const DNS_PORT: u16 = 53;
+pub const HTTP_PORT: u16 = 80;
 
 fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
@@ -287,12 +291,30 @@ fn handle_ipv4(payload: &[u8]) {
     if dst_ip != LOCAL_IP {
         return;
     }
-    let l4 = &payload[ihl..];
+    let total = u16::from_be_bytes([payload[2], payload[3]]) as usize;
+    let end = total.min(payload.len());
+    if end < ihl { return; }
+    let l4 = &payload[ihl..end];
     match proto {
         IP_PROTO_ICMP => handle_icmp(src_ip, l4),
         IP_PROTO_UDP => handle_udp(src_ip, l4),
+        IP_PROTO_TCP => handle_tcp(src_ip, l4),
         _ => {}
     }
+}
+
+fn transport_checksum(src: Ipv4Address, dst: Ipv4Address, proto: u8, data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    for pair in src.0.chunks(2).chain(dst.0.chunks(2)) {
+        sum += ((pair[0] as u32) << 8) | pair[1] as u32;
+    }
+    sum += proto as u32;
+    sum += data.len() as u32;
+    let mut i = 0;
+    while i + 1 < data.len() { sum += ((data[i] as u32) << 8) | data[i + 1] as u32; i += 2; }
+    if i < data.len() { sum += (data[i] as u32) << 8; }
+    while sum >> 16 != 0 { sum = (sum & 0xffff) + (sum >> 16); }
+    !(sum as u16)
 }
 
 // ---------------------------------------------------------------------------
@@ -334,6 +356,72 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     }
     // Kaynağı da kaydedelim
     let _ = src_ip;
+}
+
+fn handle_tcp(_src_ip: Ipv4Address, payload: &[u8]) {
+    if payload.len() < 20 { return; }
+    let off = ((payload[12] >> 4) as usize) * 4;
+    if off < 20 || payload.len() < off { return; }
+    unsafe {
+        let n = payload[off..].len().min(UDP_LISTENER_DATA.len());
+        if n > 0 { UDP_LISTENER_DATA[..n].copy_from_slice(&payload[off..off+n]); UDP_LISTENER_LEN = n; }
+    }
+}
+
+/// UDP datagram gönderir. IPv4 UDP checksum'i isteğe bağlı olduğu için sıfır bırakılır.
+pub fn send_udp(dst: Ipv4Address, src_port: u16, dst_port: u16, data: &[u8]) -> bool {
+    if data.len() > 1400 { return false; }
+    let mut packet = [0u8; 1500 - 14 - 20];
+    let len = 8 + data.len();
+    packet[0..2].copy_from_slice(&src_port.to_be_bytes());
+    packet[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    packet[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+    packet[6..8].copy_from_slice(&0u16.to_be_bytes());
+    packet[8..len].copy_from_slice(data);
+    send_ipv4(dst, IP_PROTO_UDP, &packet[..len])
+}
+
+/// DNS A sorgusu oluşturup gönderir; yanıt `take_udp_data` ile okunabilir.
+pub fn dns_query(host: &str) -> bool {
+    let bytes = host.as_bytes();
+    if bytes.is_empty() || bytes.len() > 96 { return false; }
+    let mut q = [0u8; 256];
+    q[0..2].copy_from_slice(&0x4D4Du16.to_be_bytes());
+    q[2..4].copy_from_slice(&0x0100u16.to_be_bytes());
+    q[4..6].copy_from_slice(&1u16.to_be_bytes());
+    let mut p = 12; let mut start = 0;
+    for i in 0..=bytes.len() { if i == bytes.len() || bytes[i] == b'.' { let n=i-start; if n==0 || n>63 { return false; } q[p]=n as u8; p+=1; q[p..p+n].copy_from_slice(&bytes[start..i]); p+=n; start=i+1; } }
+    q[p]=0; p+=1; q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p+=2; q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p+=2;
+    send_udp(DNS_SERVER, 49152, DNS_PORT, &q[..p])
+}
+
+/// TCP SYN gönderir; gelen TCP yükleri `take_udp_data` üzerinden alınabilir.
+pub fn tcp_connect(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
+    let mut seg = [0u8; 20];
+    seg[0..2].copy_from_slice(&src_port.to_be_bytes()); seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    seg[4..8].copy_from_slice(&0x1000u32.to_be_bytes()); seg[12] = 0x50; seg[13] = 0x02;
+    seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
+    let c = transport_checksum(LOCAL_IP, dst, IP_PROTO_TCP, &seg); seg[16..18].copy_from_slice(&c.to_be_bytes());
+    send_ipv4(dst, IP_PROTO_TCP, &seg)
+}
+
+/// Bağlantı kurulmuş bir TCP akışına HTTP/1.0 GET isteği hazırlayıp gönderir.
+/// `seq` ve `ack` çağıranın takip ettiği TCP sıra numaralarıdır.
+pub fn http_get(dst: Ipv4Address, host: &str, path: &str, seq: u32, ack: u32) -> bool {
+    let hb = host.as_bytes(); let pb = path.as_bytes();
+    if hb.len() > 96 || pb.len() > 180 { return false; }
+    let mut seg = [0u8; 620];
+    let req = b"GET "; let mut n = 0;
+    seg[20..24].copy_from_slice(req); n += 4;
+    seg[20+n..20+n+pb.len()].copy_from_slice(pb); n += pb.len();
+    let tail = b" HTTP/1.0\r\nHost: "; seg[20+n..20+n+tail.len()].copy_from_slice(tail); n += tail.len();
+    seg[20+n..20+n+hb.len()].copy_from_slice(hb); n += hb.len();
+    let end = b"\r\nConnection: close\r\n\r\n"; seg[20+n..20+n+end.len()].copy_from_slice(end); n += end.len();
+    seg[0..2].copy_from_slice(&49153u16.to_be_bytes()); seg[2..4].copy_from_slice(&HTTP_PORT.to_be_bytes());
+    seg[4..8].copy_from_slice(&seq.to_be_bytes()); seg[8..12].copy_from_slice(&ack.to_be_bytes());
+    seg[12] = 0x50; seg[13] = 0x18; seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
+    let total = 20+n; let c = transport_checksum(LOCAL_IP, dst, IP_PROTO_TCP, &seg[..total]); seg[16..18].copy_from_slice(&c.to_be_bytes());
+    send_ipv4(dst, IP_PROTO_TCP, &seg[..total])
 }
 
 // ---------------------------------------------------------------------------

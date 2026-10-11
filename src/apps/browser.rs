@@ -10,6 +10,7 @@ pub struct BrowserApp {
     pub status: &'static str,
     pub net_online: bool,
     pub ping_ok: bool,
+    pub web_request_sent: bool,
 }
 
 impl BrowserApp {
@@ -18,6 +19,7 @@ impl BrowserApp {
             url: [0; 128], url_len: 0, address_focused: false,
             active_tab: 0, page_loaded: true, status: crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
             net_online: false, ping_ok: false,
+            web_request_sent: false,
         };
         app.set_url(b"minos://help");
         app
@@ -47,6 +49,28 @@ impl BrowserApp {
 
     pub fn navigate(&mut self) {
         let value = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        self.web_request_sent = false;
+        if let Some(rest) = value.strip_prefix("http://") {
+            let host_end = rest.find('/').unwrap_or(rest.len());
+            let host = &rest[..host_end];
+            if host.is_empty() || host.len() > 96 {
+                self.page_loaded = false;
+                self.status = crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.");
+            } else if !crate::drivers::e1000::is_ready() {
+                self.page_loaded = false;
+                self.status = crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable.");
+            } else {
+                self.web_request_sent = crate::drivers::netstack::dns_query(host);
+                self.page_loaded = false;
+                self.status = if self.web_request_sent {
+                    crate::gui::ui_text("DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor.", "DNS query sent; preparing HTTP connection.")
+                } else {
+                    crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent.")
+                };
+            }
+            self.address_focused = false;
+            return;
+        }
         match value {
             "minos://help" => {
                 self.active_tab = 0;
@@ -164,7 +188,11 @@ impl BrowserApp {
             "Yerel KediWiki sayfası açıldı." | "Local KediWiki page opened." => crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened."),
             "Ağ durumu sayfası açıldı (sınama gönderildi)." | "Network status page opened (test sent)." => crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent)."),
             "e1000 ağ kartı bulunamadı; ağ yığını pasif." | "e1000 adapter unavailable; network stack is inactive." => crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive."),
-            _ => crate::gui::ui_text("Web erişimi yok: TCP/HTTP/TLS ve DNS henüz desteklenmiyor.", "Web access unavailable: TCP/HTTP/TLS and DNS are not supported yet."),
+            "Geçersiz web adresi." | "Invalid web address." => crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address."),
+            "Ağ kartı kullanılamıyor." | "Network adapter unavailable." => crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable."),
+            "DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor." | "DNS query sent; preparing HTTP connection." => crate::gui::ui_text("DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor.", "DNS query sent; preparing HTTP connection."),
+            "DNS sorgusu gönderilemedi." | "DNS query could not be sent." => crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent."),
+            _ => crate::gui::ui_text("Web isteği bekliyor.", "Web request pending."),
         };
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 260, status, Color::TEXT_MUTED);
     }

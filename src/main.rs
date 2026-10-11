@@ -830,6 +830,12 @@ pub extern "C" fn _start() -> ! {
                 } else if gui::in_rect(mx, my, l.volume) {
                     compositor.is_volume_popup_open = !compositor.is_volume_popup_open;
                     consumed = true;
+                } else if gui::in_rect(mx, my, l.network) {
+                    // Ethernet simgesi ağ ayarları sekmesini açar.
+                    open_app(&mut compositor, 1);
+                    settings_app.active_tab = 2;
+                    settings_app.status_msg = gui::ui_text("Ağ ayarları açıldı.", "Network settings opened.");
+                    consumed = true;
                 } else if gui::in_rect(mx, my, l.theme) {
                     settings_app.cycle_theme();
                     consumed = true;
@@ -959,13 +965,16 @@ pub extern "C" fn _start() -> ! {
                     // Başlık çubuğu — sürükle / çift tık ile maksimize
                     if gui::in_rect(mx, my, win.title_drag_rect()) {
                         let dbl = last_title_idx == Some(idx)
-                            && loop_counter.wrapping_sub(last_title_click) < 300_000;
-                        last_title_idx = Some(idx);
-                        last_title_click = loop_counter;
+                            && loop_counter.wrapping_sub(last_title_click) < 180_000;
                         compositor.focus_window(idx);
                         if dbl {
                             compositor.toggle_maximize(idx, width, height);
+                            // Çift tık tüketildikten sonra eşleşmeyi temizle;
+                            // üçüncü kısa tık yeni bir çift tık başlatabilsin.
+                            last_title_idx = None;
                         } else if !win.is_maximized {
+                            last_title_idx = Some(idx);
+                            last_title_click = loop_counter;
                             dragging_win = Some(idx);
                             drag_offset_x = mx.saturating_sub(wx);
                             drag_offset_y = my.saturating_sub(wy);
@@ -1019,7 +1028,10 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.active_tab = t;
                                     }
                                 }
-                                if settings_app.active_tab == 0 {
+                                if settings_app.active_tab == 2 && gui::in_rect(mx, my, (wx + 115, wy + 178, 130, 22)) {
+                                    settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
+                                    settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
+                                } else if settings_app.active_tab == 0 {
                                     let mut swatch_hit = false;
                                     for i in 0..apps::settings::SystemSettings::theme_swatch_count() {
                                         if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_swatch_rect(wx, wy, i)) {
@@ -1531,6 +1543,14 @@ pub extern "C" fn _start() -> ! {
                     } else if filemanager_app.selected_idx + 1 < filemanager_app.files.len() {
                         filemanager_app.selected_idx += 1;
                     }
+                }
+            }
+            // CMD geçmişi: yalnızca çıktı panelini kaydır; giriş satırı sabit kalır.
+            if let Some(w) = compositor.windows[10] {
+                if w.is_open && w.is_focused && !w.is_minimized
+                    && gui::in_rect(mouse.x as usize, mouse.y as usize, (w.x, w.y + gui::TITLEBAR_H, w.width, w.height.saturating_sub(gui::TITLEBAR_H + 28))) {
+                    let view_lines = w.height.saturating_sub(86) / 13;
+                    terminal_app.scroll_output(scroll_val as isize, view_lines);
                 }
             }
             // Not Defteri (pencere 2): satır bazlı dikey kaydırma.

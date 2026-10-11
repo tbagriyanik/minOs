@@ -17,7 +17,7 @@ pub const OUT_LINES: usize = 22;
 pub const LINE_MAX: usize = 64;
 
 const COMPLETION_COMMANDS: &[&str] = &[
-    "help", "ls", "cat", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping",
+    "help", "ls", "cat", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns",
     "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
@@ -114,6 +114,8 @@ pub struct TerminalApp {
     /// Çıktı satırları (kayan pencere).
     pub out: [OutLine; OUT_LINES],
     pub out_count: usize,
+    /// Çıktı geçmişinin alt kenardan geriye doğru kaydırma miktarı (satır).
+    pub output_scroll: usize,
     /// Komut geçmişi.
     pub history: [[u8; LINE_MAX]; 8],
     pub history_len: [usize; 8],
@@ -138,6 +140,7 @@ impl TerminalApp {
             input_len: 0,
             out: [OutLine::new(); OUT_LINES],
             out_count: 0,
+            output_scroll: 0,
             history: [[0; LINE_MAX]; 8],
             history_len: [0; 8],
             history_count: 0,
@@ -170,6 +173,13 @@ impl TerminalApp {
             self.out[OUT_LINES - 1].set(s, color);
             self.out_count = OUT_LINES;
         }
+        self.output_scroll = 0;
+    }
+
+    /// Terminal çıktı geçmişini fare tekeriyle kaydırır; giriş satırına dokunmaz.
+    pub fn scroll_output(&mut self, delta: isize, view_lines: usize) {
+        let max_scroll = self.out_count.saturating_sub(view_lines.max(1));
+        self.output_scroll = ((self.output_scroll as isize + delta).max(0) as usize).min(max_scroll);
     }
 
     pub fn insert(&mut self, c: char) {
@@ -373,7 +383,7 @@ impl TerminalApp {
         match cmd {
             "help" => {
                 self.push_line("help ls cat echo clear mem ps date uname theme whoami", Color::TEXT_MAIN);
-                self.push_line("ping <IPv4> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
+                self.push_line("ping <IPv4> | dns <host> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
                 self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
@@ -472,6 +482,14 @@ impl TerminalApp {
                     None => self.push_line(crate::gui::ui_text("Kullanım: ping <IPv4 adresi>", "Usage: ping <IPv4 address>"), Color::ACCENT_YELLOW),
                 }
             }
+            "dns" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: dns <alan adı>", "Usage: dns <hostname>"), Color::ACCENT_YELLOW);
+                } else {
+                    let sent = crate::drivers::netstack::dns_query(arg);
+                    self.push_line(if sent { "DNS query transmitted" } else { "DNS query failed" }, if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                }
+            }
             "date" => {
                 let mut b = TextBuf::new();
                 b.push_u2(now.day as u32);
@@ -525,15 +543,18 @@ impl TerminalApp {
         // Başlık
         MinGuiCompositor::draw_string(fb, x + 16, y + 44, crate::gui::ui_text("MinOS Komut İstemi v2.0 (MinShell)", "MinOS Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
 
-        // Çıktı satırları
+        // Çıktı geçmişi: giriş satırı ve durum satırından ayrı bir bölgede çizilir.
+        let prompt_y = y + h.saturating_sub(26);
+        let view_lines = h.saturating_sub(86) / 13;
+        let first = self.out_count.saturating_sub(view_lines).saturating_sub(self.output_scroll);
+        let last = (first + view_lines).min(self.out_count);
         let mut ly = y + 60;
-        for i in 0..self.out_count {
+        for i in first..last {
             MinGuiCompositor::draw_string(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color);
             ly += 13;
         }
 
         // Aktif Istem + Girdi
-        let prompt_y = y + h.saturating_sub(26);
         MinGuiCompositor::draw_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
         MinGuiCompositor::draw_string(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN);

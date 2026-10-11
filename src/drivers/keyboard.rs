@@ -240,6 +240,7 @@ impl KeyboardState {
                 self.last_action = Some(KeyAction::OpenTaskManager);
                 return None;
             }
+            0x53 if self.num_lock => { self.last_char = Some('.'); return Some('.'); }
             0x53 => { self.last_action = Some(KeyAction::Delete); return None; }
             0x48 => { self.last_action = Some(KeyAction::ArrowUp); return None; }
             0x50 => { self.last_action = Some(KeyAction::ArrowDown); return None; }
@@ -250,7 +251,6 @@ impl KeyboardState {
             0x37 if self.num_lock => { self.last_char = Some('*'); return Some('*'); }
             0x4A if self.num_lock => { self.last_char = Some('-'); return Some('-'); }
             0x4E if self.num_lock => { self.last_char = Some('+'); return Some('+'); }
-            0x53 if self.num_lock => { self.last_char = Some('.'); return Some('.'); }
             0x47..=0x49 | 0x4B..=0x4D | 0x4F..=0x51 if self.num_lock => {
                 let ch = match scancode {
                     0x47 => '7', 0x48 => '8', 0x49 => '9',

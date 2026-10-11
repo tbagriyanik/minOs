@@ -331,6 +331,7 @@ pub struct TrayLayout {
     pub start: (usize, usize, usize, usize),
     pub clock: (usize, usize, usize, usize),
     pub volume: (usize, usize, usize, usize),
+    pub network: (usize, usize, usize, usize),
     pub theme: (usize, usize, usize, usize),
     pub kbd: (usize, usize, usize, usize),
 }
@@ -428,13 +429,15 @@ impl MinGuiCompositor {
         let pad = 8;
         let clock_x = width.saturating_sub(pad + 74);
         let vol_x = clock_x.saturating_sub(6 + 56);
-        let theme_x = vol_x.saturating_sub(6 + 64);
+        let net_x = vol_x.saturating_sub(6 + 34);
+        let theme_x = net_x.saturating_sub(6 + 64);
         let kbd_x = theme_x.saturating_sub(6 + 54);
         TrayLayout {
             tb_y,
             start: (6, tb_y + 5, 104, 26),
             clock: (clock_x, by, 74, h),
             volume: (vol_x, by, 56, h),
+            network: (net_x, by, 34, h),
             theme: (theme_x, by, 64, h),
             kbd: (kbd_x, by, 54, h),
         }
@@ -1217,6 +1220,7 @@ impl MinGuiCompositor {
         volume: u8,
         is_muted: bool,
         english: bool,
+        ethernet_available: bool,
     ) {
         let l = Self::tray_layout(fb.width, fb.height);
         let tb_y = l.tb_y;
@@ -1256,7 +1260,7 @@ impl MinGuiCompositor {
             }
         }
 
-        // Sistem Tepsisi (sağdan sola 4 düğme): saat, ses, tema, klavye
+        // Sistem Tepsisi: saat, ses, Ethernet, tema ve klavye düzeni.
         // 1. Klavye / Dil Düğmesi (l.kbd)
         let kbd_tag = kbd.layout_tag();
         let kbd_col = match kbd.layout {
@@ -1267,8 +1271,15 @@ impl MinGuiCompositor {
         let kbd_bg = if kbd_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
         fb.draw_rounded_rect(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, kbd_bg);
         fb.draw_rounded_rect_outline(l.kbd.0, l.kbd.1, l.kbd.2, l.kbd.3, 5, Color::BORDER);
-        Self::draw_string(fb, l.kbd.0 + 6, tb_y + 14, "KBD", Color::TEXT_MUTED);
-        Self::draw_string(fb, l.kbd.0 + 30, tb_y + 14, kbd_tag, kbd_col);
+        // Klavye resmi: kısa etiket yerine sade bir klavye simgesi.
+        fb.draw_rounded_rect(l.kbd.0 + 6, l.kbd.1 + 6, 18, 14, 2, Color::TEXT_MUTED);
+        for row in 0..2 {
+            for col in 0..5 {
+                fb.draw_rect(l.kbd.0 + 9 + col * 3, l.kbd.1 + 9 + row * 3, 2, 1, Color::TASKBAR_BG);
+            }
+        }
+        fb.draw_rect(l.kbd.0 + 11, l.kbd.1 + 17, 8, 1, Color::TASKBAR_BG);
+        Self::draw_string(fb, l.kbd.0 + 28, tb_y + 14, kbd_tag, kbd_col);
 
         // 2. Tema Düğmesi (l.theme)
         let theme_hover = in_rect(mx, my, l.theme);
@@ -1285,15 +1296,36 @@ impl MinGuiCompositor {
         let vol_bg = if vol_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
         fb.draw_rounded_rect(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, vol_bg);
         fb.draw_rounded_rect_outline(l.volume.0, l.volume.1, l.volume.2, l.volume.3, 5, Color::BORDER);
-        if is_muted {
-            Self::draw_string(fb, l.volume.0 + 12, tb_y + 14, "SESX", Color::ACCENT_RED);
+        let icon_color = if is_muted { Color::ACCENT_RED } else { Color::ACCENT_GREEN };
+        // Hoparlör gövdesi ve ses dalgaları.
+        fb.draw_rect(l.volume.0 + 8, l.volume.1 + 11, 4, 6, icon_color);
+        fb.draw_rect(l.volume.0 + 12, l.volume.1 + 8, 3, 12, icon_color);
+        if !is_muted && volume > 0 {
+            fb.draw_rect(l.volume.0 + 17, l.volume.1 + 10, 1, 8, icon_color);
+            if volume > 35 { fb.draw_rect(l.volume.0 + 20, l.volume.1 + 8, 1, 12, icon_color); }
+            if volume > 70 { fb.draw_rect(l.volume.0 + 23, l.volume.1 + 6, 1, 16, icon_color); }
         } else {
-            Self::draw_string(fb, l.volume.0 + 6, tb_y + 14, "SES", Color::ACCENT_GREEN);
-            let level_w = ((volume as usize) * 16) / 100;
-            fb.draw_rect(l.volume.0 + 34, l.volume.1 + 16, 16, 3, Color::TEXT_MUTED);
-            if level_w > 0 {
-                fb.draw_rect(l.volume.0 + 34, l.volume.1 + 16, level_w, 3, Color::ACCENT_GREEN);
-            }
+            fb.draw_rect(l.volume.0 + 17, l.volume.1 + 9, 2, 2, icon_color);
+            fb.draw_rect(l.volume.0 + 20, l.volume.1 + 16, 2, 2, icon_color);
+        }
+        let level_w = ((volume as usize) * 22) / 100;
+        fb.draw_rect(l.volume.0 + 30, l.volume.1 + 17, 22, 3, Color::TEXT_MUTED);
+        if !is_muted && level_w > 0 {
+            fb.draw_rect(l.volume.0 + 30, l.volume.1 + 17, level_w, 3, Color::ACCENT_GREEN);
+        }
+
+        // Ethernet simgesi yalnızca e1000 aygıtı başarıyla başlatıldıysa görünür.
+        if ethernet_available {
+            let net_hover = in_rect(mx, my, l.network);
+            let net_bg = if net_hover { Self::shade(Color::TITLE_BAR, 22) } else { Color::TITLE_BAR };
+            fb.draw_rounded_rect(l.network.0, l.network.1, l.network.2, l.network.3, 5, net_bg);
+            fb.draw_rounded_rect_outline(l.network.0, l.network.1, l.network.2, l.network.3, 5, Color::BORDER);
+            let c = Color::ACCENT_GREEN;
+            // Kablo/port simgesi ve kısa ad tek düğmenin içine sığar.
+            fb.draw_rect(l.network.0 + 3, l.network.1 + 10, 5, 6, c);
+            fb.draw_rect(l.network.0 + 4, l.network.1 + 7, 1, 3, c);
+            fb.draw_rect(l.network.0 + 7, l.network.1 + 7, 1, 3, c);
+            Self::draw_string(fb, l.network.0 + 10, tb_y + 14, "eth0", c);
         }
 
         // 4. Saat Düğmesi (l.clock)
@@ -1310,7 +1342,6 @@ impl MinGuiCompositor {
         Self::draw_string(fb, l.clock.0 + 8, tb_y + 14, clock.as_str(), Color::TEXT_MAIN);
 
         // Akıllı tepsi ağı simgesi
-        Self::draw_string(fb, l.kbd.0.saturating_sub(58), tb_y + 14, "ETH0", Color::ACCENT_GREEN);
 
         // Başlat Menüsü
         if self.is_start_menu_open {

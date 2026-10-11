@@ -479,7 +479,10 @@ pub extern "C" fn _start() -> ! {
         fb.reset_clip();
 
         // 3. Görev Çubuğu, sistem tepsisi, popup'lar ve fare imleci
-        compositor.render_taskbar_and_overlays(fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english());
+        compositor.render_taskbar_and_overlays(
+            fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english(),
+            drivers::e1000::is_ready(),
+        );
 
         // 4. Backbuffer'ı VRAM'e tek seferde kopyala (flicker-free)
         fb.apply_night_light(st.night_light);

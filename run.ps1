@@ -83,24 +83,32 @@ $qemuArgs = @(
     "-vga", "std",
     # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
     "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
-    "-device", "e1000,netdev=n0"
+    "-device", "e1000,netdev=n0",
+    # --- Ses: Intel HDA PCM + Host Audio Backend ---
+    "-audiodev", "dsound,id=snd0",
+    "-device", "intel-hda",
+    "-device", "hda-duplex,audiodev=snd0",
+    # --- USB: USB Denetleyici & USB Tablet/Fare ---
+    "-device", "qemu-xhci",
+    "-device", "usb-tablet"
 )
 
-# Dinamik Büyüyen (Sparse/Thin-Provisioned) Sabit Disk
-$diskPath = "disk.qcow2"
-if (-not (Test-Path $diskPath)) {
-    $qemuImg = "C:\Program Files\qemu\qemu-img.exe"
-    if (Test-Path $qemuImg) {
-        Write-Host "Dinamik Sabit Disk olusturuluyor ($diskPath, maks: $DiskSize)..." -ForegroundColor Cyan
-        & $qemuImg create -f qcow2 $diskPath $DiskSize | Out-Null
-    }
+# Kurulmuş MinOS Sabit Disk Dizini (target\hdd_root)
+$hddRoot = "target\hdd_root"
+New-Item -ItemType Directory -Force -Path "$hddRoot\boot" | Out-Null
+if (Test-Path $kernelBin) {
+    Copy-Item -Force $kernelBin "$hddRoot\boot\minos-kernel"
 }
-if (Test-Path $diskPath) {
-    $qemuArgs += @(
-        "-drive", "file=$diskPath,if=none,id=hd0,format=qcow2",
-        "-device", "virtio-blk-pci,drive=hd0"
-    )
+Copy-Item -Force "boot\limine.cfg" "$hddRoot\limine.cfg"
+Copy-Item -Force "boot\limine.conf" "$hddRoot\limine.conf"
+if (Test-Path "boot\limine\limine-bios.sys") {
+    Copy-Item -Force "boot\limine\limine-bios.sys" "$hddRoot\limine-bios.sys"
 }
+
+# Sabit Disk Sürücüsü: Kurulu MinOS FAT32 sürücüsü olarak bağlanır
+$qemuArgs += @(
+    "-drive", "file=fat:rw:$hddRoot,format=raw,media=disk"
+)
 
 if ($UsbDisks -or $UsbDiskReadWrite) {
     try {

@@ -275,7 +275,6 @@ pub extern "C" fn _start() -> ! {
     drivers::e1000::init();
     drivers::netstack::init();
     drivers::usb::init();
-    let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
     // 4. Limine Framebuffer Alımı

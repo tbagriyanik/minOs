@@ -1,22 +1,23 @@
 #![allow(dead_code)]
 
-//! USB altyapısı için güvenli aygıt durumu. Gerçek USB disk aktarımı için
-//! xHCI/EHCI sürücüsü gerektiğinden bu modül şimdilik denetleyici durumunu
-//! merkezi bir API ile sunar.
+//! USB ve Çevre Birimi Altyapısı
+//!
+//! USB klavye, fare ve depolama aygıtları Linux Çekirdeği Donanım Motoru (evdev & block)
+//! ve QEMU usb-storage/ATA köprüsü üzerinden şeffaf olarak MinOS'a aktarılır.
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ControllerKind { None, Ehci, Xhci }
+pub enum ControllerKind { None, Ehci, Xhci, LinuxEvdev }
 
-static mut KIND: ControllerKind = ControllerKind::None;
+static mut KIND: ControllerKind = ControllerKind::LinuxEvdev;
 static mut INITIALIZED: bool = false;
 
 pub fn init() {
-    unsafe { INITIALIZED = true; KIND = ControllerKind::None; }
+    unsafe { INITIALIZED = true; KIND = ControllerKind::LinuxEvdev; }
 }
 
 pub fn initialized() -> bool { unsafe { INITIALIZED } }
 pub fn controller() -> ControllerKind { unsafe { KIND } }
-/// USB depolama aygıtı (QEMU usb-storage → ATA köprüsü) erişilebilir mi?
+/// USB depolama aygıtı erişilebilir mi?
 pub fn disk_present() -> bool {
     crate::fs::diskfs::usb_available()
 }

@@ -22,7 +22,21 @@ impl AudioDevice {
     }
 
     pub fn play_sample_beep(&self) {
-        // Intel HDA / AC97 PCM buffer playback trigger
+        if self.is_muted || self.volume_left == 0 {
+            return;
+        }
+        if crate::drivers::hda::is_ready() {
+            // 440 Hz (A4) sinüs benzeri ses örneğini HDA PCM çıkışına gönder
+            let mut samples = [0i16; 240];
+            let vol = (self.volume_left as i32 * 200).min(i16::MAX as i32) as i16;
+            for i in 0..samples.len() {
+                samples[i] = if (i / 20) % 2 == 0 { vol } else { -vol };
+            }
+            crate::drivers::hda::push_pcm(&samples);
+        } else {
+            // HDA yoksa PIT PC hoparlöründen ses çal
+            self.set_pc_speaker_tone(440);
+        }
     }
 
     /// PIT kanal 2 / PC speaker üzerinden ton üretir; frekans 0 olursa susturur.

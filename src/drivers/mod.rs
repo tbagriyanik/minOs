@@ -1,6 +1,5 @@
 pub mod video;
 pub mod mouse;
-pub mod net;
 pub mod audio;
 pub mod hda;
 pub mod e1000;

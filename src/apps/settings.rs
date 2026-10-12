@@ -287,6 +287,8 @@ impl SystemSettings {
         kbd_layout: KeyboardLayout,
         now: &DateTime,
         total_ram_bytes: u64,
+        cpu_vendor: &'static str,
+        cpu_logical_count: u32,
         audio_driver: &'static str,
         network_driver: &'static str,
         network_status: &'static str,
@@ -481,15 +483,34 @@ impl SystemSettings {
             }
             _ => {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, crate::gui::ui_text("Geliştirici: Sarman Çekirdek Ekibi", "Developer: Sarman Kernel Team"), Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, crate::gui::ui_text("Özel Sürüm: Live CD Persist Store", "Edition: Live CD Persistent Storage"), Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "github.com/tbagriyanik/minos", Color::ACCENT_PINK);
+                let mut cpu = TextBuf::new();
+                cpu.push_str("CPU: "); cpu.push_str(cpu_vendor); cpu.push_str(" x86_64 | CPUID ");
+                cpu.push_u2(cpu_logical_count); cpu.push_str(crate::gui::ui_text(" mantıksal işlemci", " logical CPU(s)"));
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, cpu.as_str(), Color::TEXT_MAIN);
                 let mut ram_info = TextBuf::new();
-                ram_info.push_str(crate::gui::ui_text("Kullanılabilir fiziksel RAM: ", "Usable physical RAM: "));
+                ram_info.push_str(crate::gui::ui_text("Çekirdeğe kullanılabilir RAM: ", "RAM usable by kernel: "));
                 ram_info.push_usize((total_ram_bytes / (1024 * 1024)) as usize);
                 ram_info.push_str(" MB");
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 142, ram_info.as_str(), Color::ACCENT_YELLOW);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 166, crate::gui::ui_text("CPU mimarisi: x86_64 | SMP zamanlayıcısı yok", "CPU architecture: x86_64 | no SMP scheduler"), Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, ram_info.as_str(), Color::ACCENT_YELLOW);
+                let mut display = TextBuf::new();
+                display.push_str(crate::gui::ui_text("Ekran: ", "Display: "));
+                display.push_usize(self.display_res.0); display.push_byte(b'x'); display.push_usize(self.display_res.1);
+                display.push_str(" | 32 bpp");
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, display.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138,
+                    crate::gui::ui_text("Fare: PS/2 | 3 düğme desteği", "Mouse: PS/2 | 3-button support"), Color::ACCENT_PINK);
+                let keyboard = match kbd_layout {
+                    KeyboardLayout::TurkishQ => crate::gui::ui_text("Klavye: PS/2 | Türkçe Q", "Keyboard: PS/2 | Turkish Q"),
+                    KeyboardLayout::EnglishUS => crate::gui::ui_text("Klavye: PS/2 | English US", "Keyboard: PS/2 | English US"),
+                };
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, keyboard, Color::ACCENT_GREEN);
+                let mut network = TextBuf::new();
+                network.push_str(crate::gui::ui_text("Ağ: ", "Network: "));
+                network.push_str(network_driver); network.push_str(" | "); network.push_str(network_status);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 186, network.as_str(), Color::ACCENT_BLUE,
+                    (win_x + CONTENT_X, win_y + 184, win_w.saturating_sub(CONTENT_X + 12), 18));
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 214,
+                    crate::gui::ui_text("SMP: çok çekirdekli iş planlaması etkin değil", "SMP: multi-core scheduling is not enabled"), Color::TEXT_MUTED);
             }
         }
 

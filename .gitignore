@@ -5,6 +5,10 @@ target
 *.tmp
 minos_boot.iso
 
+# Generated build and emulator output
+build_output*.txt
+qemu_err.txt
+
 # Temporary test scripts and logs
 convert*.ps1
 inspect*.ps1

@@ -216,6 +216,32 @@ fn monotonic_ms() -> u64 {
     read_cpu_cycles() / cycles_per_us / 1_000
 }
 
+fn cpu_vendor() -> &'static str {
+    let result = core::arch::x86_64::__cpuid(0);
+    let ebx = result.ebx;
+    let edx = result.edx;
+    let ecx = result.ecx;
+    if ebx == u32::from_le_bytes(*b"Genu") && edx == u32::from_le_bytes(*b"ineI") && ecx == u32::from_le_bytes(*b"ntel") {
+        "Intel"
+    } else if ebx == u32::from_le_bytes(*b"Auth") && edx == u32::from_le_bytes(*b"enti") && ecx == u32::from_le_bytes(*b"cAMD") {
+        "AMD"
+    } else {
+        "x86_64 uyumlu"
+    }
+}
+
+fn cpu_logical_count() -> u32 {
+    let result = core::arch::x86_64::__cpuid(1);
+    ((result.ebx >> 16) & 0xFF).max(1)
+}
+
+#[inline]
+fn is_canonical_ptr<T>(ptr: *const T) -> bool {
+    let addr = ptr as usize as u64;
+    let upper = addr >> 47;
+    (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
+}
+
 /// Verilen uygulama penceresini açar, küçültme durumunu kaldırır ve odaklar.
 fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     if let Some(win) = compositor.windows[idx].as_mut() {
@@ -339,15 +365,32 @@ pub extern "C" fn _start() -> ! {
     let mut memory_mgr = mm::MemoryManager::new();
     unsafe {
         let response = core::ptr::read_volatile(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response));
-        if !response.is_null() {
-            let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count)).min(256) as usize;
+        if is_canonical_ptr(response) {
+            // SAFETY: pointer comes from Limine's response slot and passed null,
+            // alignment and canonical-address checks above.
+            let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count));
             let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
-            if !entries.is_null() {
+            let count = count.min(256) as usize;
+            let array_bytes = count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
+            if count > 0 && is_canonical_ptr(entries) && array_bytes.is_some() {
+                let array_end = (entries as usize).checked_add(array_bytes.unwrap());
+                if array_end.map_or(false, |end| is_canonical_ptr(end as *const LimineMemoryMapEntry)) {
                 for i in 0..count {
-                    let entry_ptr = core::ptr::read_volatile(entries.add(i));
-                    if entry_ptr.is_null() { continue; }
-                    let entry = &*entry_ptr;
-                    let kind = match entry.entry_type {
+                    let slot_addr = match (entries as usize).checked_add(i * core::mem::size_of::<*const LimineMemoryMapEntry>()) {
+                        Some(addr) => addr,
+                        None => break,
+                    };
+                    let slot = slot_addr as *const *const LimineMemoryMapEntry;
+                    if !is_canonical_ptr(slot) { break; }
+                    let entry_ptr = core::ptr::read_volatile(slot);
+                    if !is_canonical_ptr(entry_ptr) { continue; }
+                    // SAFETY: entry pointer is supplied by Limine and checked
+                    // for null, alignment and canonical address before reads.
+                    let base = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).base));
+                    let length = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).length));
+                    let entry_type = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).entry_type));
+                    if length == 0 || base.checked_add(length).is_none() { continue; }
+                    let kind = match entry_type {
                         0 => mm::pmm::MemoryEntryType::Usable,
                         1 => mm::pmm::MemoryEntryType::Reserved,
                         2 => mm::pmm::MemoryEntryType::AcpiReclaimable,
@@ -358,7 +401,8 @@ pub extern "C" fn _start() -> ! {
                         7 => mm::pmm::MemoryEntryType::Framebuffer,
                         _ => continue,
                     };
-                    memory_mgr.pmm.add_region(entry.base, entry.length, kind);
+                    memory_mgr.pmm.add_region(base, length, kind);
+                }
                 }
             }
         }
@@ -528,6 +572,9 @@ pub extern "C" fn _start() -> ! {
     let mut loop_counter: u64 = 0;
     let mut clock_spin: usize = 0;
     let mut last_music_beat: usize = 0;
+    let mut cpu_sample_start = read_cpu_cycles();
+    let mut cpu_sample_total_cycles = 0u64;
+    let mut cpu_sample_active_cycles = 0u64;
     let mut music_note: usize = 0;
     let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
@@ -589,6 +636,7 @@ pub extern "C" fn _start() -> ! {
                 match idx {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now, total_ram_bytes,
+                        cpu_vendor(), cpu_logical_count(),
                         if drivers::hda::is_ready() { gui::ui_text("Intel HDA (PCM aktif)", "Intel HDA (PCM active)") } else { gui::ui_text("Ses aygıtı bulunamadı", "Audio device unavailable") },
                         if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
                         if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
@@ -652,6 +700,7 @@ pub extern "C" fn _start() -> ! {
 
     // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
     loop {
+        let loop_start_cycles = read_cpu_cycles();
         let input_occurred = drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
         loop_counter = loop_counter.wrapping_add(1);
         let mx = mouse.x as usize;
@@ -2218,8 +2267,27 @@ pub extern "C" fn _start() -> ! {
                 unsafe { core::arch::asm!("in al, 0x80", options(nomem, nostack, preserves_flags)); }
                 core::hint::spin_loop();
             }
+            let loop_end_cycles = read_cpu_cycles();
+            let elapsed = loop_end_cycles.wrapping_sub(loop_start_cycles);
+            let idle_elapsed = loop_end_cycles.wrapping_sub(wait_start).min(elapsed);
+            cpu_sample_total_cycles = cpu_sample_total_cycles.saturating_add(elapsed);
+            cpu_sample_active_cycles = cpu_sample_active_cycles.saturating_add(elapsed.saturating_sub(idle_elapsed));
         } else {
             core::hint::spin_loop();
+            let elapsed = read_cpu_cycles().wrapping_sub(loop_start_cycles);
+            cpu_sample_total_cycles = cpu_sample_total_cycles.saturating_add(elapsed);
+            cpu_sample_active_cycles = cpu_sample_active_cycles.saturating_add(elapsed);
+        }
+
+        let now_cycles = read_cpu_cycles();
+        let sample_window = unsafe { TSC_CYCLES_PER_US }.saturating_mul(250_000);
+        if now_cycles.wrapping_sub(cpu_sample_start) >= sample_window {
+            taskmgr_app.cpu_usage_pct = if cpu_sample_total_cycles == 0 { 0 } else {
+                (cpu_sample_active_cycles.saturating_mul(100) / cpu_sample_total_cycles).min(100) as usize
+            };
+            cpu_sample_start = now_cycles;
+            cpu_sample_total_cycles = 0;
+            cpu_sample_active_cycles = 0;
         }
     }
 }

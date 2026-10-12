@@ -38,6 +38,7 @@ pub struct TaskManagerApp {
     pub total_memory_kb: usize,
     pub free_memory_kb: usize,
     pub used_memory_kb: usize,
+    pub cpu_usage_pct: usize,
     pub ramdisk_used: usize,
     pub ramdisk_files: usize,
     /// Sonlandırma ve liste durumu mesajı.
@@ -55,6 +56,7 @@ impl TaskManagerApp {
             proc_count: 0,
             selected: 0,
             total_memory_kb: 0, free_memory_kb: 0, used_memory_kb: 0,
+            cpu_usage_pct: 0,
             ramdisk_used: 0, ramdisk_files: 0,
             status: "Ready",
             launch_menu_open: false,
@@ -298,12 +300,16 @@ impl TaskManagerApp {
         } else {
             let bar_x = win_x + 132;
             let bar_w = win_w.saturating_sub(152);
-            let cpu_text = crate::gui::ui_text("CPU kullanımı: ölçüm desteklenmiyor", "CPU usage: measurement unavailable");
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 100, cpu_text, Color::TEXT_MAIN,
+            let mut cpu_text = TextBuf::new();
+            cpu_text.push_str(crate::gui::ui_text("CPU etkin: %", "CPU active: %"));
+            cpu_text.push_usize(self.cpu_usage_pct.min(100));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 100, cpu_text.as_str(), Color::TEXT_MAIN,
                 (win_x + 12, win_y + 98, win_w.saturating_sub(24), 16));
-            fb.draw_rect(bar_x, win_y + 122, bar_w, 8, Color::TITLE_BAR_INACTIVE);
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 120,
-                crate::gui::ui_text("Uygulama CPU payı: son çizim süresine göre yaklaşık.", "App CPU share: estimated from recent render time."), Color::TEXT_MUTED);
+            fb.draw_rect(bar_x, win_y + 100, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + 100, bar_w.saturating_mul(self.cpu_usage_pct.min(100)) / 100, 12, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 120,
+                crate::gui::ui_text("Ana döngü ölçümü; boşta bekleme hariç, tek çekirdek.", "Main-loop estimate; idle wait excluded, one core."), Color::TEXT_MUTED,
+                (win_x + 12, win_y + 118, win_w.saturating_sub(24), 16));
 
             let memory_pct = if self.total_memory_kb == 0 { 0 }
                 else { self.used_memory_kb.saturating_mul(100) / self.total_memory_kb };

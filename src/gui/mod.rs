@@ -47,9 +47,10 @@ pub enum FontMode {
     Pixel,
     Compact,
     ClearType,
+    Proportional,
 }
 
-static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(2);
+static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(3);
 static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(100);
 
 #[inline(always)]
@@ -60,6 +61,23 @@ pub fn set_font_zoom(percent: u8) {
 #[inline(always)]
 pub fn font_zoom() -> u8 { FONT_ZOOM.load(core::sync::atomic::Ordering::Relaxed) }
 
+/// Aktif UI ölçek yüzdesi (100 = temel 12px font hücresi). Menü, liste ve
+/// düğme boyutları bu değerle otomatik ölçeklenir.
+#[inline(always)]
+pub fn ui_scale_percent() -> usize { font_zoom() as usize }
+
+/// Temel bir piksel ölçüsünü aktif font ölçeğine göre büyütür.
+/// Font büyüdükçe menü, liste satırı ve düğme boyutları da orantılı büyür.
+#[inline(always)]
+pub fn sp(base: usize) -> usize {
+    let z = ui_scale_percent();
+    if z == 100 { base } else { (base * z + 50) / 100 }
+}
+
+/// Aktif font ölçeğine göre satır yüksekliği/öğe adımı (px).
+#[inline(always)]
+pub fn item_step(base: usize) -> usize { sp(base) }
+
 #[inline(always)]
 pub fn set_font_mode(mode: FontMode) {
     FONT_MODE.store(
@@ -67,6 +85,7 @@ pub fn set_font_mode(mode: FontMode) {
             FontMode::Pixel => 0,
             FontMode::Compact => 1,
             FontMode::ClearType => 2,
+            FontMode::Proportional => 3,
         },
         core::sync::atomic::Ordering::Relaxed,
     );
@@ -74,7 +93,12 @@ pub fn set_font_mode(mode: FontMode) {
 
 #[inline(always)]
 pub fn font_mode() -> FontMode {
-    match FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) { 1 => FontMode::Compact, 2 => FontMode::ClearType, _ => FontMode::Pixel }
+    match FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) {
+        1 => FontMode::Compact,
+        2 => FontMode::ClearType,
+        3 => FontMode::Proportional,
+        _ => FontMode::Pixel,
+    }
 }
 
 static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
@@ -85,23 +109,13 @@ pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en }
 /// Bir karakter hücresi için yatay ilerleme (px).
 #[inline(always)]
 fn cell_advance(scale: usize) -> usize {
-    let base = match font_mode() {
-        FontMode::Pixel => 7,
-        FontMode::Compact => 6,
-        FontMode::ClearType => 7,
-    };
-    base * scale.max(1)
+    12 * scale.max(1)
 }
 
 /// Bir karakter hücresi için görsel genişlik (px).
 #[inline(always)]
 fn cell_width(scale: usize) -> usize {
-    let base = match font_mode() {
-        FontMode::Pixel => 8,
-        FontMode::Compact => 6,
-        FontMode::ClearType => 8,
-    };
-    base * scale.max(1)
+    12 * scale.max(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -187,8 +201,18 @@ pub struct WindowState {
     pub is_open: bool,
 }
 
-pub const TITLEBAR_H: usize = 24;
-pub const TASKBAR_H: usize = 36;
+/// Temel pencere başlık çubuğu yüksekliği (100% ölçekte).
+pub const TITLEBAR_BASE: usize = 24;
+/// Temel görev çubuğu yüksekliği (100% ölçekte).
+pub const TASKBAR_BASE: usize = 36;
+
+/// Aktif font ölçeğine göre başlık çubuğu yüksekliği (px).
+#[inline(always)]
+pub fn titlebar_h() -> usize { sp(TITLEBAR_BASE) }
+
+/// Aktif font ölçeğine göre görev çubuğu yüksekliği (px).
+#[inline(always)]
+pub fn taskbar_h() -> usize { sp(TASKBAR_BASE) }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Window {
@@ -223,9 +247,9 @@ impl Window {
     /// Sağ altta durum çubuğu için ayrılan alan çağıran tarafından düşülür.
     pub fn content_rect(&self) -> (usize, usize, usize, usize) {
         let x = self.x + 1;
-        let y = self.y + TITLEBAR_H;
+        let y = self.y + titlebar_h();
         let w = self.width.saturating_sub(2);
-        let h = self.height.saturating_sub(TITLEBAR_H + 1);
+        let h = self.height.saturating_sub(titlebar_h() + 1);
         (x, y, w, h)
     }
 
@@ -249,7 +273,7 @@ impl Window {
             z: 0,
             scroll: scrollbar::ScrollState::new(),
             content_w: width,
-            content_h: height.saturating_sub(TITLEBAR_H),
+            content_h: height.saturating_sub(titlebar_h()),
         }
     }
 
@@ -275,14 +299,18 @@ impl Window {
     }
 
     /// Başlık çubuğu kontrol düğmesi dikdörtgenleri.
+    /// Boyutlar aktif font ölçeğine göre büyür; başlık çubuğunda dikey ortalanır.
     pub fn close_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x + self.width.saturating_sub(20), self.y + 5, 14, 14)
+        let b = sp(14);
+        (self.x + self.width.saturating_sub(sp(20)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x + self.width.saturating_sub(40), self.y + 5, 14, 14)
+        let b = sp(14);
+        (self.x + self.width.saturating_sub(sp(40)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x + self.width.saturating_sub(60), self.y + 5, 14, 14)
+        let b = sp(14);
+        (self.x + self.width.saturating_sub(sp(60)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
@@ -295,7 +323,7 @@ impl Window {
         )
     }
     pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x, self.y, self.width.saturating_sub(66), TITLEBAR_H)
+        (self.x, self.y, self.width.saturating_sub(sp(66)), titlebar_h())
     }
 }
 
@@ -387,14 +415,14 @@ pub const MENU_GROUPS: [(&str, usize, usize); 4] =
 impl MinGuiCompositor {
     /// Bir grubun başlığının Y konumu.
     pub fn start_menu_group_y(menu_y: usize, group_index: usize) -> usize {
-        menu_y + MENU_CONTENT_TOP + group_index * 32
+        menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32)
     }
 
     /// Bir menü ÖĞESİNİN Y konumu.
     pub fn start_menu_item_y(menu_y: usize, item_index: usize) -> usize {
         let (g, k) = Self::item_group_and_index(item_index);
         let (_, sub_y, _, _) = Self::start_menu_submenu_rect(menu_y, g, menu_y + MENU_H + 4);
-        sub_y + 28 + k * 24
+        sub_y + sp(28) + k * sp(24)
     }
 
     pub fn item_group_and_index(index: usize) -> (usize, usize) {
@@ -410,18 +438,18 @@ impl MinGuiCompositor {
 
     pub fn start_menu_category_rect(menu_y: usize, group_index: usize) -> (usize, usize, usize, usize) {
         let x = 6 + 6;
-        let y = menu_y + 40 + group_index * 32 + 4;
-        let w = 190 - 12;
-        let h = 28;
+        let y = menu_y + sp(40) + group_index * sp(32) + sp(4);
+        let w = sp(190) - 12;
+        let h = sp(28);
         (x, y, w, h)
     }
 
     pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
-        let sub_w = 230;
+        let sub_w = sp(230);
         let count = MENU_GROUPS[group_index.min(3)].2;
-        let sub_h = 28 + count * 24 + 6;
-        let sub_x = 6 + 190 + 4;
-        let cat_y = menu_y + 40 + group_index * 32 + 4;
+        let sub_h = sp(28) + count * sp(24) + sp(6);
+        let sub_x = 6 + sp(190) + 4;
+        let cat_y = menu_y + sp(40) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
         (sub_x, sub_y, sub_w, sub_h)
     }
@@ -429,9 +457,9 @@ impl MinGuiCompositor {
     pub fn start_menu_subitem_rect(menu_y: usize, group_index: usize, item_in_group: usize, tb_y: usize) -> (usize, usize, usize, usize) {
         let (sub_x, sub_y, sub_w, _) = Self::start_menu_submenu_rect(menu_y, group_index, tb_y);
         let x = sub_x + 6;
-        let y = sub_y + 28 + item_in_group * 24;
+        let y = sub_y + sp(28) + item_in_group * sp(24);
         let w = sub_w - 12;
-        let h = 22;
+        let h = sp(22);
         (x, y, w, h)
     }
 
@@ -446,24 +474,43 @@ impl MinGuiCompositor {
         const APP_IDX: [usize; 11] = [0, 1, 7, 10, 2, 8, 9, 3, 4, 5, 6];
         APP_IDX.get(index).copied()
     }
+    /// Görev çubuğu ilk uygulama sekmesinin X konumu (font ölçeğine duyarlı).
+    pub fn taskbar_tab_start() -> usize { sp(118) }
+    /// Görev çubuğu sekmesinin genişliği (font ölçeğine duyarlı).
+    pub fn taskbar_tab_width() -> usize { sp(84) }
+    /// Ardışık sekmeler arası adım (font ölçeğine duyarlı).
+    pub fn taskbar_tab_step() -> usize { sp(88) }
+    /// Verilen X konumundaki görev çubuğu sekmesinin dikdörtgeni.
+    pub fn taskbar_tab_rect_at(tab_x: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+        let h = sp(26).min(taskbar_h().saturating_sub(8));
+        (tab_x, tb_y + 5, Self::taskbar_tab_width(), h)
+    }
+
     pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
-        let tb_y = height.saturating_sub(TASKBAR_H);
+        let tb_y = height.saturating_sub(taskbar_h());
         let by = tb_y + 5;
-        let h = 26;
+        // Tray düğmeleri aktif font ölçeğine göre büyür.
+        let h = sp(26).min(taskbar_h().saturating_sub(8));
         let pad = 8;
-        let clock_x = width.saturating_sub(pad + 74);
-        let vol_x = clock_x.saturating_sub(6 + 56);
-        let net_x = vol_x.saturating_sub(6 + 52);
-        let theme_x = net_x.saturating_sub(6 + 64);
-        let kbd_x = theme_x.saturating_sub(6 + 54);
+        let clock_w = sp(74);
+        let vol_w = sp(56);
+        let net_w = sp(52);
+        let theme_w = sp(64);
+        let kbd_w = sp(54);
+        let gap = sp(6);
+        let clock_x = width.saturating_sub(pad + clock_w);
+        let vol_x = clock_x.saturating_sub(gap + vol_w);
+        let net_x = vol_x.saturating_sub(gap + net_w);
+        let theme_x = net_x.saturating_sub(gap + theme_w);
+        let kbd_x = theme_x.saturating_sub(gap + kbd_w);
         TrayLayout {
             tb_y,
-            start: (6, tb_y + 5, 104, 26),
-            clock: (clock_x, by, 74, h),
-            volume: (vol_x, by, 56, h),
-            network: (net_x, by, 52, h),
-            theme: (theme_x, by, 64, h),
-            kbd: (kbd_x, by, 54, h),
+            start: (6, by, sp(104), h),
+            clock: (clock_x, by, clock_w, h),
+            volume: (vol_x, by, vol_w, h),
+            network: (net_x, by, net_w, h),
+            theme: (theme_x, by, theme_w, h),
+            kbd: (kbd_x, by, kbd_w, h),
         }
     }
 }
@@ -546,6 +593,14 @@ const CTX_WINDOW_EN: [(&str, u32); 4] = [
 
 pub const CONTEXT_MENU_W: usize = 226;
 pub const CONTEXT_MENU_ITEM_H: usize = 26;
+
+/// Bağlam menüsü başlık (header) yüksekliği — aktif font ölçeğine göre.
+#[inline(always)]
+pub fn context_header_h() -> usize { crate::gui::sp(CONTEXT_MENU_ITEM_H - 4) }
+
+/// Bağlam menüsü öğe yüksekliği — aktif font ölçeğine göre.
+#[inline(always)]
+pub fn context_item_h() -> usize { crate::gui::sp(CONTEXT_MENU_ITEM_H) }
 
 
 // ---------------------------------------------------------------------------
@@ -747,7 +802,7 @@ impl MinGuiCompositor {
                 win.x = 0;
                 win.y = 0;
                 win.width = screen_w;
-                win.height = screen_h.saturating_sub(TASKBAR_H);
+                win.height = screen_h.saturating_sub(taskbar_h());
                 win.is_maximized = true;
             }
         }
@@ -800,32 +855,41 @@ impl MinGuiCompositor {
         (r << 16) | (g << 8) | b
     }
 
-    /// Bir karakterin 8x8 bitmap glyph'ini döndürür.
+    /// Bir karakterin 12x16 bitmap glyph'ini döndürür.
     #[inline(always)]
-    fn glyph_for(c: char) -> Option<[u8; 8]> {
+    fn glyph_for(c: char) -> Option<[u16; 16]> {
         if let Some(g) = font::get_turkish_glyph(c) {
-            return Some(g);
+            let mut expanded = [0u16; 16];
+            for row in 0..16 {
+                for col in 0..12 {
+                    let source_col = col * 8 / 12;
+                    if (g[row / 2] & (1 << (7 - source_col))) != 0 {
+                        expanded[row] |= 1 << (11 - col);
+                    }
+                }
+            }
+            return Some(expanded);
         }
         let b = c as u32;
         if (32..=126).contains(&b) {
-            Some(font::FONT_8X8_BASIC[(b - 32) as usize])
+            Some(font::FONT_12X16_BASIC[(b - 32) as usize])
         } else {
             None
         }
     }
 
-    fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [u8; 8], color: u32, scale: usize) {
+    fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [u16; 16], color: u32, scale: usize) {
         let zoom = font_zoom() as usize;
-        for row in 0..8 {
+        for row in 0..16 {
             let bits = glyph[row];
             if bits == 0 {
                 continue;
             }
             if scale <= 1 && zoom == 100 && font_mode() == FontMode::ClearType {
-                for col in 0..8 {
-                    let current = if (bits & (1 << (7 - col))) != 0 { 255u16 } else { 0 };
-                    let left = if col > 0 && (bits & (1 << (8 - col))) != 0 { 255u16 } else { 0 };
-                    let right = if col + 1 < 8 && (bits & (1 << (6 - col))) != 0 { 255u16 } else { 0 };
+                for col in 0..12 {
+                    let current = if (bits & (1 << (11 - col))) != 0 { 255u16 } else { 0 };
+                    let left = if col > 0 && (bits & (1 << (12 - col))) != 0 { 255u16 } else { 0 };
+                    let right = if col + 1 < 12 && (bits & (1 << (10 - col))) != 0 { 255u16 } else { 0 };
                     let r_cov = ((left * 77 + current * 179) / 256).min(255) as u8;
                     let g_cov = current as u8;
                     let b_cov = ((right * 77 + current * 179) / 256).min(255) as u8;
@@ -834,8 +898,8 @@ impl MinGuiCompositor {
                     }
                 }
             } else {
-                for col in 0..8 {
-                    if (bits & (1 << (7 - col))) != 0 {
+                for col in 0..12 {
+                    if (bits & (1 << (11 - col))) != 0 {
                         if scale <= 1 && zoom == 100 {
                             fb.put_pixel(x + col, y + row, color);
                         } else {
@@ -851,7 +915,7 @@ impl MinGuiCompositor {
         }
     }
 
-    /// Standart metin (1x ölçek, 7px ilerleme — fontun dahili boşluğu kullanılır).
+    /// Standart metin (1x ölçek, 12px hücre ilerlemesi).
     pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
         Self::draw_string_scaled(fb, x, y, text, color, 1);
     }
@@ -863,22 +927,30 @@ impl MinGuiCompositor {
             if let Some(g) = Self::glyph_for(c) {
                 Self::blit_glyph(fb, cur_x, y, g, color, 1);
             }
-            cur_x += (spacing * font_zoom() as usize + 50) / 100;
+            cur_x += (spacing * font_zoom() as usize + 50) / 100 + 1;
         }
     }
 
     /// Ölçeklenebilir metin. `scale` = 1..3 (piksel büyütme).
     /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır.
+    /// Karakterlerin birbirine yapışmaması için harfler arasına en az 1 piksel boşluk eklenir.
     pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
         let scale = scale.max(1);
         let zoom = font_zoom() as usize;
-        let advance = ((cell_advance(scale) * zoom + 50) / 100).max(1);
+        let is_prop = font_mode() == FontMode::Proportional;
+        let letter_spacing = 1 * scale; // En az 1 piksel harf aralığı boşluğu
+        let fixed_advance = ((cell_advance(scale) * zoom + 50) / 100).max(1) + letter_spacing;
         let mut cur_x = x;
         for c in text.chars() {
             if let Some(g) = Self::glyph_for(c) {
                 Self::blit_glyph(fb, cur_x, y, g, color, scale);
             }
-            cur_x += advance;
+            if is_prop {
+                let char_adv = (font::glyph_advance_width(c) * scale * zoom + 50) / 100 + letter_spacing;
+                cur_x += char_adv.max(2 + letter_spacing);
+            } else {
+                cur_x += fixed_advance;
+            }
         }
     }
 
@@ -904,8 +976,21 @@ impl MinGuiCompositor {
             0
         } else {
             let zoom = font_zoom() as usize;
-            (n - 1) * ((cell_advance(scale) * zoom + 50) / 100).max(1)
-                + ((cell_width(scale) * zoom + 50) / 100).max(1)
+            let letter_spacing = 1 * scale; // En az 1 piksel harf aralığı boşluğu
+            if font_mode() == FontMode::Proportional {
+                let mut total = 0;
+                for (i, c) in text.chars().enumerate() {
+                    let char_adv = (font::glyph_advance_width(c) * scale * zoom + 50) / 100;
+                    total += char_adv.max(2);
+                    if i + 1 < n {
+                        total += letter_spacing;
+                    }
+                }
+                total
+            } else {
+                (n - 1) * (((cell_advance(scale) * zoom + 50) / 100).max(1) + letter_spacing)
+                    + ((cell_width(scale) * zoom + 50) / 100).max(1)
+            }
         }
     }
 
@@ -923,7 +1008,7 @@ impl MinGuiCompositor {
         fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::BORDER);
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = r.0 + r.2.saturating_sub(tw) / 2;
-        let text_h = (8 * font_zoom() as usize + 50) / 100;
+        let text_h = (16 * font_zoom() as usize + 50) / 100;
         let ty = r.1 + r.3.saturating_sub(text_h) / 2;
         Self::draw_string_clipped(fb, tx, ty, label, label_color,
             (r.0 + 2, r.1 + 1, r.2.saturating_sub(4), r.3.saturating_sub(2)));
@@ -1278,39 +1363,46 @@ impl MinGuiCompositor {
         } else {
             (Color::TITLE_BAR_INACTIVE, Self::shade(Color::TITLE_BAR_INACTIVE, -10))
         };
-        fb.draw_rounded_vgradient(win.x, win.y, win.width, TITLEBAR_H, 6, t_top, t_bottom);
-        fb.draw_rect(win.x, win.y + TITLEBAR_H - 1, win.width, 1, border);
+        fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 6, t_top, t_bottom);
+        fb.draw_rect(win.x, win.y + titlebar_h() - 1, win.width, 1, border);
 
         // Pencereye özel ilgili program simgesi ve başlık
         let icon_idx = Self::window_icon_index(win_idx);
         Self::draw_icon_by_index(fb, win.x + 6, win.y + 4, icon_idx);
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
         let title = if ui_english() { Self::window_title(win_idx, true) } else { win.title };
-        Self::draw_string_shadow(fb, win.x + 28, win.y + 8, title, title_col, Color::SHADOW, 1);
+        // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
+        let text_h = (16 * font_zoom() as usize + 50) / 100;
+        let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
+        Self::draw_string_shadow(fb, win.x + sp(28), title_y, title, title_col, Color::SHADOW, 1);
 
-        // Kontrol Butonları (hover'da parlama — 4px yuvarlatılmış)
-        let (cx, cy) = (win.close_rect().0, win.close_rect().1);
+        // Kontrol Butonları (hover'da parlama — yuvarlatılmış)
+        // Boyut, scale'li rect'ten türetilir; bu sayede font büyüdükçe düğmeler de büyür.
+        let (cx, cy, cb, _) = win.close_rect();
         let hover_close = in_rect(mx, my, win.close_rect());
         let close_bg = if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED };
-        fb.draw_rounded_rect(cx, cy, 14, 14, 4, close_bg);
-        Self::draw_string(fb, cx + 4, cy + 3, "x", Color::DARK_BG);
+        fb.draw_rounded_rect(cx, cy, cb, cb, 4, close_bg);
+        Self::draw_string(fb, cx + cb / 4, cy + cb / 2 - text_h.min(cb) / 2, "x", Color::DARK_BG);
 
-        let (mxr, myr) = (win.max_rect().0, win.max_rect().1);
+        let (mxr, myr, mb, _) = win.max_rect();
         let hover_max = in_rect(mx, my, win.max_rect());
         let max_bg = if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN };
-        fb.draw_rounded_rect(mxr, myr, 14, 14, 4, max_bg);
+        fb.draw_rounded_rect(mxr, myr, mb, mb, 4, max_bg);
+        let inset = mb / 5;
+        let box_sz = mb.saturating_sub(inset * 2).max(3);
         if win.is_maximized {
-            fb.draw_rect_outline(mxr + 3, myr + 3, 7, 7, Color::DARK_BG);
-            fb.draw_rect_outline(mxr + 5, myr + 5, 6, 6, Color::DARK_BG);
+            fb.draw_rect_outline(mxr + inset, myr + inset, box_sz.saturating_sub(1), box_sz.saturating_sub(1), Color::DARK_BG);
+            fb.draw_rect_outline(mxr + inset + 2, myr + inset + 2, box_sz.saturating_sub(1), box_sz.saturating_sub(1), Color::DARK_BG);
         } else {
-            fb.draw_rect_outline(mxr + 3, myr + 3, 8, 8, Color::DARK_BG);
+            fb.draw_rect_outline(mxr + inset, myr + inset, box_sz, box_sz, Color::DARK_BG);
         }
 
-        let (nx, ny) = (win.min_rect().0, win.min_rect().1);
+        let (nx, ny, nb, _) = win.min_rect();
         let hover_min = in_rect(mx, my, win.min_rect());
         let min_bg = if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW };
-        fb.draw_rounded_rect(nx, ny, 14, 14, 4, min_bg);
-        fb.draw_rect(nx + 4, ny + 9, 6, 2, Color::DARK_BG);
+        fb.draw_rounded_rect(nx, ny, nb, nb, 4, min_bg);
+        let bar_w = nb.saturating_sub(nb / 3).max(4);
+        fb.draw_rect(nx + nb / 6, ny + nb / 2 - 1, bar_w, 2, Color::DARK_BG);
     }
 
     // -----------------------------------------------------------------------
@@ -1333,7 +1425,7 @@ impl MinGuiCompositor {
         let my = mouse.y as usize;
 
         // Görev Çubuğu Zemin (gradyan)
-        fb.draw_vgradient(0, tb_y, fb.width, TASKBAR_H, Color::TASKBAR_BG, Self::shade(Color::TASKBAR_BG, 8));
+        fb.draw_vgradient(0, tb_y, fb.width, taskbar_h(), Color::TASKBAR_BG, Self::shade(Color::TASKBAR_BG, 8));
         fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
         // Başlat Menüsü Butonu
@@ -1343,12 +1435,13 @@ impl MinGuiCompositor {
         Self::draw_cat_icon(fb, 12, tb_y + 10);
         Self::draw_string_shadow(fb, 36, tb_y + 14, "MinOS", Color::TASKBAR_BG, Color::SHADOW, 1);
 
-        // Uygulama Sekmeleri (Yuvarlatılmış 5px)
-        let mut tab_x = 118;
+        // Uygulama Sekmeleri (Yuvarlatılmış 5px) — font ölçeğine göre büyür.
+        let mut tab_x = Self::taskbar_tab_start();
         for (win_idx, opt_win) in self.windows.iter().enumerate() {
             if let Some(win) = opt_win {
                 if win.is_open {
-                    let rect = (tab_x, tb_y + 5, 84, 26);
+                    let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
+                    let rect = (tab_x, tb_y + 5, tw, th);
                     let active = win.is_focused && !win.is_minimized;
                     let base = if active { Color::TITLE_BAR } else { Color::TITLE_BAR_INACTIVE };
                     let hovered = in_rect(mx, my, rect);
@@ -1360,9 +1453,12 @@ impl MinGuiCompositor {
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
                     let tab_title = if ui_english() { Self::window_tab_title(win_idx, true) } else { win.tab_title };
-                    Self::draw_icon_by_index(fb, tab_x + 5, tb_y + 9, Self::window_icon_index(win_idx));
-                    Self::draw_string(fb, tab_x + 27, tb_y + 14, tab_title, tab_text_color);
-                    tab_x += 88;
+                    let text_h = (16 * font_zoom() as usize + 50) / 100;
+                    let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
+                    Self::draw_icon_by_index(fb, tab_x + 5, text_y, Self::window_icon_index(win_idx));
+                    Self::draw_string_clipped(fb, tab_x + sp(27), text_y, tab_title, tab_text_color,
+                        (tab_x + sp(24), rect.1, rect.2.saturating_sub(sp(28)), rect.3));
+                    tab_x += Self::taskbar_tab_step();
                 }
             }
         }
@@ -1522,11 +1618,13 @@ impl MinGuiCompositor {
     }
 
     /// Bağlam menüsünün ekran üzerindeki dikdörtgeni (çizim ve tıklama ortak).
+    /// Öğe yüksekliği aktif font ölçeğine göre otomatik büyür.
     pub fn context_menu_geom(&self, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
         let items = self.context_items();
-        let w = CONTEXT_MENU_W;
-        // 22px başlık + öğeler (26px) + 4px alt boşluk
-        let h = 26 + items.len() * CONTEXT_MENU_ITEM_H;
+        let widest_item = items.iter().map(|(label, _)| Self::text_width(label, 1)).max().unwrap_or(0);
+        let w = sp(CONTEXT_MENU_W).max(widest_item + sp(24)).min(fb_w);
+        // Başlık + öğeler (ölçekli) + alt boşluk
+        let h = context_header_h() + items.len() * context_item_h();
         let x = self.context_menu_x.min(fb_w.saturating_sub(w));
         let y = self.context_menu_y.min(fb_h.saturating_sub(h));
         (x, y, w, h)
@@ -1547,13 +1645,17 @@ impl MinGuiCompositor {
             ContextKind::Notepad => ui_text("Düzen", "Edit"),
             ContextKind::Window => ui_text("Pencere", "Window"),
         };
-        Self::draw_string(fb, menu_x + 8, menu_y + 6, header, Color::TEXT_MUTED);
-        fb.draw_rect(menu_x + 4, menu_y + 18, menu_w - 8, 1, Color::BORDER);
+        let hdr_h = context_header_h();
+        let item_h = context_item_h();
+        Self::draw_string_clipped(fb, menu_x + 8, menu_y + sp(6), header, Color::TEXT_MUTED,
+            (menu_x + 6, menu_y + 2, menu_w.saturating_sub(12), hdr_h.saturating_sub(3)));
+        fb.draw_rect(menu_x + 4, menu_y + hdr_h - sp(4), menu_w - 8, 1, Color::BORDER);
 
         for (i, (label, color)) in self.context_items().iter().enumerate() {
-            let item_y = menu_y + 22 + i * CONTEXT_MENU_ITEM_H;
-            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, 22, Color::WINDOW_BG);
-            Self::draw_string(fb, menu_x + 10, item_y + 7, label, *color);
+            let item_y = menu_y + hdr_h + i * item_h;
+            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, item_h.saturating_sub(sp(4)), Color::WINDOW_BG);
+            Self::draw_string_clipped(fb, menu_x + sp(10), item_y + sp(5), label, *color,
+                (menu_x + 8, item_y + 2, menu_w.saturating_sub(16), item_h.saturating_sub(4)));
         }
     }
 
@@ -1563,13 +1665,14 @@ impl MinGuiCompositor {
         if !in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) {
             return None;
         }
-        if my < menu_y + 22 {
+        let hdr_h = context_header_h();
+        if my < menu_y + hdr_h {
             // Başlık satırı — öğe yok
             return None;
         }
         let items = self.context_items();
-        let rel = my - (menu_y + 22);
-        let idx = rel / CONTEXT_MENU_ITEM_H;
+        let rel = my - (menu_y + hdr_h);
+        let idx = rel / context_item_h();
         if idx < items.len() {
             Some(idx)
         } else {
@@ -1578,9 +1681,10 @@ impl MinGuiCompositor {
     }
 
     /// Başlat menüsünün ekran üzerindeki dikdörtgeni (x, y, w, h).
+    /// Genişlik ve yükseklik aktif font ölçeğine göre otomatik büyür.
     pub fn start_menu_rect(tb_y: usize) -> (usize, usize, usize, usize) {
-        let menu_w = 190;
-        let menu_h = MENU_H;
+        let menu_w = sp(190);
+        let menu_h = sp(MENU_H);
         let menu_x = 6;
         let menu_y = tb_y.saturating_sub(menu_h + 4);
         (menu_x, menu_y, menu_w, menu_h)

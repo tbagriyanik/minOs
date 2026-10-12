@@ -2,16 +2,21 @@ use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use crate::gui::scrollbar::{self, ScrollState};
 
-/// Metin satır yüksekliği (px).
-const LINE_H: usize = 16;
-/// Karakter hücre ilerlemesi (px).
-const CHAR_W: usize = 7;
-/// Satır numarası şeridi (gutter) genişliği.
-const GUTTER_W: usize = 32;
-/// Araç çubuğu yüksekliği (px).
-const TOOLBAR_H: usize = 24;
-/// Alt durum çubuğu yüksekliği (px).
-const STATUS_H: usize = 22;
+/// Metin satır yüksekliği (px) — aktif font ölçeğine göre büyür.
+#[inline(always)]
+fn line_h() -> usize { crate::gui::sp(16) }
+/// Karakter hücre ilerlemesi (px) — aktif font ölçeğine göre büyür.
+#[inline(always)]
+fn char_w() -> usize { crate::gui::sp(12) }
+/// Satır numarası şeridi (gutter) genişliği — font ölçeğine göre.
+#[inline(always)]
+fn gutter_w() -> usize { crate::gui::sp(32) }
+/// Araç çubuğu yüksekliği (px) — font ölçeğine göre.
+#[inline(always)]
+fn toolbar_h() -> usize { crate::gui::sp(24) }
+/// Alt durum çubuğu yüksekliği (px) — font ölçeğine göre.
+#[inline(always)]
+fn status_h() -> usize { crate::gui::sp(22) }
 
 pub struct NotepadApp {
     pub buffer: [char; 512],
@@ -390,9 +395,11 @@ impl NotepadApp {
         self.selection_end = Some(self.len);
     }
     /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
-    pub const TEXT_X: usize = GUTTER_W + 12;
+    #[inline(always)]
+    pub fn text_x() -> usize { gutter_w() + crate::gui::sp(12) }
     /// Metin alanı başlangıcının pencere içi Y koordinatı (araç çubuğu + boşluk).
-    pub const TEXT_Y: usize = 62;
+    #[inline(always)]
+    pub fn text_y() -> usize { crate::gui::sp(62) }
 
     /// Pencere içi fare (x, y) koordinatını metin indeksine çevirir.
     /// `win_w` satır kaydırma (wrap) hesabı için, `scroll_y` dikey kaydırma
@@ -407,13 +414,13 @@ impl NotepadApp {
     ) -> usize {
         // Metin alanı genişliği ve satır başına düşen karakter sayısı.
         let text_w = win_w
-            .saturating_sub(12 + GUTTER_W + 16 + crate::gui::scrollbar::SCROLLBAR_THICKNESS);
-        let wrap_cols = (text_w / CHAR_W).max(1);
+            .saturating_sub(crate::gui::sp(12) + gutter_w() + crate::gui::sp(16) + crate::gui::scrollbar::SCROLLBAR_THICKNESS);
+        let wrap_cols = (text_w / char_w()).max(1);
 
-        let click_col = x.saturating_sub(Self::TEXT_X) / CHAR_W;
+        let click_col = x.saturating_sub(Self::text_x()) / char_w();
         // Kaydırma ofseti satır cinsindendir.
-        let scroll_lines = scroll_y / LINE_H;
-        let click_row = scroll_lines + (y.saturating_sub(Self::TEXT_Y)) / LINE_H;
+        let scroll_lines = scroll_y / line_h();
+        let click_row = scroll_lines + (y.saturating_sub(Self::text_y())) / line_h();
 
         // Satır kaydırmayı (wrap) hesaba katarak istenen satır/sütuna ulaş.
         let mut line = 0usize;
@@ -481,7 +488,7 @@ impl NotepadApp {
         scroll: &ScrollState,
     ) {
         // Araç Çubuğu (Toolbar)
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, TOOLBAR_H, Color::TITLE_BAR);
+        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, toolbar_h(), Color::TITLE_BAR);
         let english = crate::gui::ui_english();
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, crate::gui::ui_text("Dosya", "File"), Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, crate::gui::ui_text("Düzen", "Edit"), Color::TEXT_MUTED);
@@ -499,24 +506,24 @@ impl NotepadApp {
         // İçerik alanı, kaydırma çubuğu ve durum çubuğu düşülerek hesaplanır.
         let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
         let area_h = win_h
-            .saturating_sub((area_y - win_y) + STATUS_H + scrollbar::SCROLLBAR_THICKNESS);
+            .saturating_sub((area_y - win_y) + status_h() + scrollbar::SCROLLBAR_THICKNESS);
         fb.draw_rect(area_x, area_y, area_w, area_h, Color::DARK_BG);
 
         // Kaydırılabilir metin alanı sınırları.
-        let text_x = area_x + GUTTER_W + 6;
-        let text_w = area_w.saturating_sub(GUTTER_W + 10);
-        let wrap_cols = (text_w / CHAR_W).max(1);
+        let text_x = area_x + gutter_w() + 6;
+        let text_w = area_w.saturating_sub(gutter_w() + 10);
+        let wrap_cols = (text_w / char_w()).max(1);
         let (total_lines, _max_cols) = self.text_extent(wrap_cols);
-        let view_lines = (area_h / LINE_H).max(1);
-        let sy = scroll.y / LINE_H; // satır cinsinden kaydırma
+        let view_lines = (area_h / line_h()).max(1);
+        let sy = scroll.y / line_h(); // satır cinsinden kaydırma
 
         // Satır Numaraları Şeridi (Gutter) — görünür satırlara göre dinamik
-        fb.draw_rect(area_x, area_y, GUTTER_W, area_h, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(area_x, area_y, gutter_w(), area_h, Color::TITLE_BAR_INACTIVE);
         let last_visible = (sy + view_lines).min(total_lines);
         let mut gutter = TextBuf::new();
         for ln in sy..last_visible {
             let row = ln - sy;
-            let gy = area_y + row * LINE_H + 4;
+            let gy = area_y + row * line_h() + 4;
             gutter.clear();
             let n = ln + 1;
             if n < 10 { gutter.push_byte(b'0'); }
@@ -538,8 +545,8 @@ impl NotepadApp {
             let ch = self.buffer[i];
             if line >= first_line && line < first_line + view_lines {
                 let row = line - first_line;
-                let cx = text_x + col * CHAR_W;
-                let cy = area_y + row * LINE_H + 4;
+                let cx = text_x + col * char_w();
+                let cy = area_y + row * line_h() + 4;
                 if ch != '\n' {
                     let mut char_buf = [0u8; 4];
                     let s = ch.encode_utf8(&mut char_buf);
@@ -547,13 +554,14 @@ impl NotepadApp {
                         (Some(a), Some(b)) => i >= a.min(b) && i < a.max(b),
                         _ => false,
                     };
-                    if selected { fb.draw_rect(cx, cy, CHAR_W, 12, Color::ACCENT_BLUE); }
+                    let sel_h = line_h().saturating_sub(4).max(8);
+                    if selected { fb.draw_rect(cx, cy, char_w(), sel_h, Color::ACCENT_BLUE); }
                     MinGuiCompositor::draw_string(fb, cx, cy, s, if selected { Color::DARK_BG } else { Color::TEXT_MAIN });
                 }
             }
             if i == self.cursor.saturating_sub(1) {
                 let row = line.saturating_sub(first_line);
-                cursor_screen = Some((text_x + (col + 1) * CHAR_W, area_y + row * LINE_H + 4));
+                cursor_screen = Some((text_x + (col + 1) * char_w(), area_y + row * line_h() + 4));
             }
             // İlerleme (satır kaydırma dahil)
             if ch == '\n' {
@@ -570,14 +578,15 @@ impl NotepadApp {
 
         // Yanıp Sönen İmleç (Blinking Cursor) — imleç görünür aralıktaysa çiz
         if let Some((cx, cy)) = cursor_screen {
-            if (tick / 20) % 2 == 0 && cy >= area_y && cy + 12 <= area_y + area_h {
-                fb.draw_rect(cx, cy, 2, 12, Color::ACCENT_YELLOW);
+            let cur_h = line_h().saturating_sub(4).max(8);
+            if (tick / 20) % 2 == 0 && cy >= area_y && cy + cur_h <= area_y + area_h {
+                fb.draw_rect(cx, cy, crate::gui::sp(2).max(1), cur_h, Color::ACCENT_YELLOW);
             }
         }
 
         // Alt Durum Çubuğu — pencerenin en altına sabitlenir
-        let status_y = win_y + win_h - STATUS_H + 4;
-        fb.draw_rect(win_x + 6, status_y, win_w - 12, STATUS_H - 4, Color::TASKBAR_BG);
+        let status_y = win_y + win_h - status_h() + 4;
+        fb.draw_rect(win_x + 6, status_y, win_w - 12, status_h() - 4, Color::TASKBAR_BG);
         let mut status = TextBuf::new();
         status.push_str(crate::gui::ui_text("Satir: ", "Line: "));
         status.push_u2(((sy + 1).min(total_lines)) as u32);

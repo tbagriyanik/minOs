@@ -208,13 +208,16 @@ fn window_content_h(
 ) -> usize {
     match idx {
         // Dosya Yöneticisi: liste içeriği (üst araç çubuğu + satırlar + durum çubuğu).
-        0 => apps::filemanager::LIST_TOP + fm.list_content_h() + 30,
+        0 => apps::filemanager::list_top() + fm.list_content_h() + 30,
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
+        // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
         2 => {
-            let text_w = win_w.saturating_sub(12 + 32 + 16);
-            let wrap_cols = (text_w / 7).max(1);
+            let char_w = gui::sp(12);
+            let line_h = gui::sp(16);
+            let text_w = win_w.saturating_sub(gui::sp(12) + gui::sp(32) + gui::sp(16));
+            let wrap_cols = (text_w / char_w.max(1)).max(1);
             let (lines, _) = np.text_extent(wrap_cols);
-            lines * 16 + 58 + 22
+            lines * line_h + gui::sp(58) + gui::sp(22)
         }
         // Görev Yöneticisi: başlık + süreç satırları + bellek grafiği + durum.
         7 => 275,
@@ -577,7 +580,7 @@ pub extern "C" fn _start() -> ! {
                         continue;
                     }
                     compositor.context_window = Some(idx);
-                    if my < win.y + gui::TITLEBAR_H {
+                    if my < win.y + gui::titlebar_h() {
                         // Başlık çubuğu → pencere menüsü
                         kind = gui::ContextKind::Window;
                     } else if idx == 2 {
@@ -749,7 +752,7 @@ pub extern "C" fn _start() -> ! {
                                         if let Some(w) = compositor.windows[wi].as_mut() {
                                             w.x = width.saturating_sub(w.width) / 2;
                                             w.y = height
-                                                .saturating_sub(gui::TASKBAR_H)
+                                                .saturating_sub(gui::taskbar_h())
                                                 .saturating_sub(w.height)
                                                 / 2;
                                         }
@@ -897,13 +900,14 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
-            // F) Görev çubuğu uygulama sekmeleri
-            if !consumed && my >= tb_y + 5 && my < tb_y + 31 {
-                let mut tab_x = 118;
+            // F) Görev çubuğu uygulama sekmeleri (font ölçeğine duyarlı)
+            let tab_h = gui::MinGuiCompositor::taskbar_tab_rect_at(0, tb_y).3;
+            if !consumed && my >= tb_y + 5 && my < tb_y + 5 + tab_h {
+                let mut tab_x = gui::MinGuiCompositor::taskbar_tab_start();
                 for idx in 0..11 {
                     if let Some(win) = compositor.windows[idx] {
                         if win.is_open {
-                            if mx >= tab_x && mx < tab_x + 84 {
+                            if mx >= tab_x && mx < tab_x + gui::MinGuiCompositor::taskbar_tab_width() {
                                 if win.is_minimized {
                                     open_app(&mut compositor, idx);
                                 } else if win.is_focused {
@@ -917,7 +921,7 @@ pub extern "C" fn _start() -> ! {
                                 consumed = true;
                                 break;
                             }
-                            tab_x += 88;
+                            tab_x += gui::MinGuiCompositor::taskbar_tab_step();
                         }
                     }
                 }
@@ -1040,9 +1044,9 @@ pub extern "C" fn _start() -> ! {
                         match idx {
                             0 => {
                                 // Dosya Yöneticisi: [Yenile], [Aç], liste
-                                if mx >= wx + ww - 120 && mx <= wx + ww - 70 && my >= wy + 32 && my <= wy + 54 {
+                                if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
                                     filemanager_app.selected_idx = 0;
-                                } else if mx >= wx + ww - 62 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 54 {
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::open_button_rect(wx, wy, ww)) {
                                     let selected_file = &filemanager_app.files[filemanager_app.selected_idx];
                                     let target = match selected_file.icon_tag {
                                         "TXT" | "LOG" | "CFG" => 2,
@@ -1065,10 +1069,8 @@ pub extern "C" fn _start() -> ! {
                                     };
                                     filemanager_app.selected_idx = 0;
                                 } else if mx >= wx + 124 && mx <= wx + ww - 10 && my >= wy + 84 && my <= wy + 250 {
-                                    let row_y_base = wy + 86;
                                     for i in 0..filemanager_app.files.len() {
-                                        let item_y = row_y_base + i * 24;
-                                        if my >= item_y.saturating_sub(2) && my <= item_y + 20 {
+                                        if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect(wx, wy, ww, i)) {
                                             filemanager_app.selected_idx = i;
                                             let selected_file = &filemanager_app.files[i];
                                             let target = match selected_file.icon_tag {
@@ -1406,6 +1408,10 @@ pub extern "C" fn _start() -> ! {
                         let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let fm_focused = compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let set_focused = compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let br_focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+
                         if terminal_focused {
                             terminal_app.history_up();
                         } else if tm_focused && taskmgr_app.launch_menu_open {
@@ -1414,10 +1420,12 @@ pub extern "C" fn _start() -> ! {
                             notepad_app.move_vertical_ext(true, keyboard.shift);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_up();
-                        } else if let Some(w) = compositor.windows[0] {
-                            if w.is_open && w.is_focused && !w.is_minimized && filemanager_app.selected_idx > 0 {
-                                filemanager_app.selected_idx -= 1;
-                            }
+                        } else if fm_focused {
+                            filemanager_app.select_prev();
+                        } else if set_focused && settings_app.focused_control < 4 {
+                            settings_app.select_tab_prev();
+                        } else if br_focused && browser_app.focused_control < 3 {
+                            browser_app.select_tab_prev();
                         }
                     }
                 }
@@ -1438,6 +1446,10 @@ pub extern "C" fn _start() -> ! {
                         let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                         let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let fm_focused = compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let set_focused = compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let br_focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+
                         if terminal_focused {
                             terminal_app.history_down();
                         } else if tm_focused && taskmgr_app.launch_menu_open {
@@ -1446,12 +1458,12 @@ pub extern "C" fn _start() -> ! {
                             notepad_app.move_vertical_ext(false, keyboard.shift);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_down();
-                        } else if let Some(w) = compositor.windows[0] {
-                            if w.is_open && w.is_focused && !w.is_minimized
-                                && filemanager_app.selected_idx + 1 < filemanager_app.files.len()
-                            {
-                                filemanager_app.selected_idx += 1;
-                            }
+                        } else if fm_focused {
+                            filemanager_app.select_next();
+                        } else if set_focused && settings_app.focused_control < 4 {
+                            settings_app.select_tab_next();
+                        } else if br_focused && browser_app.focused_control < 3 {
+                            browser_app.select_tab_next();
                         }
                     }
                 }
@@ -1464,6 +1476,10 @@ pub extern "C" fn _start() -> ! {
                     } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 0;
                         taskmgr_app.focused_control = 0;
+                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        settings_app.select_tab_prev();
+                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        browser_app.select_tab_prev();
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowRight => {
@@ -1477,6 +1493,10 @@ pub extern "C" fn _start() -> ! {
                     } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
                         taskmgr_app.focused_control = 1;
+                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        settings_app.select_tab_next();
+                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        browser_app.select_tab_next();
                     }
                 }
                 drivers::keyboard::KeyAction::EnterKey => {
@@ -1533,6 +1553,106 @@ pub extern "C" fn _start() -> ! {
                                         &mut terminal_app);
                                 }
                             }
+                            _ => {}
+                        }
+                    } else if compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        enter_char_consumed = true;
+                        match filemanager_app.focused_control {
+                            0 => {
+                                filemanager_app.selected_idx = 0;
+                            }
+                            1 | 2 => {
+                                if let Some(selected_file) = filemanager_app.row(filemanager_app.selected_idx) {
+                                    let target = match selected_file.icon_tag {
+                                        "TXT" | "LOG" | "CFG" => 2,
+                                        "IMG" => 4,
+                                        "SND" => 5,
+                                        "VID" => 6,
+                                        "WEB" => 3,
+                                        _ => 2,
+                                    };
+                                    open_app(&mut compositor, target);
+                                }
+                            }
+                            _ => {}
+                        }
+                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        enter_char_consumed = true;
+                        if settings_app.focused_control < 4 {
+                            settings_app.active_tab = settings_app.focused_control;
+                        } else {
+                            match settings_app.active_tab {
+                                0 => match settings_app.focused_control {
+                                    4 => settings_app.cycle_theme(),
+                                    5 => {
+                                        keyboard.toggle_layout();
+                                        settings_app.keyboard_layout = keyboard.layout;
+                                    }
+                                    6 => {
+                                        settings_app.language.toggle();
+                                        settings_app.status_msg = gui::ui_text("Arayüz dili değiştirildi.", "Interface language changed.");
+                                    }
+                                    7 => settings_app.font.cycle(),
+                                    8 => settings_app.is_muted = !settings_app.is_muted,
+                                    9 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    10 => {
+                                        settings_app.restore_windows(&mut compositor);
+                                        settings_app.reset_defaults();
+                                        settings_app.font.apply();
+                                        gui::theme::set_theme(settings_app.theme);
+                                        keyboard.layout = settings_app.keyboard_layout;
+                                        gui::set_ui_language_english(settings_app.language.is_english());
+                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
+                                    }
+                                    _ => {}
+                                },
+                                1 => match settings_app.focused_control {
+                                    4..=7 => {
+                                        let i = settings_app.focused_control - 4;
+                                        settings_app.screen_res = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), _ => (1920,1080) };
+                                    }
+                                    8..=10 => {
+                                        let i = settings_app.focused_control - 8;
+                                        settings_app.zoom = [100, 125, 150][i];
+                                        gui::set_font_zoom(settings_app.zoom);
+                                    }
+                                    11 => settings_app.night_light = !settings_app.night_light,
+                                    12 => {
+                                        settings_app.region = (settings_app.region + 1) % 3;
+                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+                                    }
+                                    13 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    14 => settings_app.reset_defaults(),
+                                    _ => {}
+                                },
+                                2 => match settings_app.focused_control {
+                                    4 => {
+                                        settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
+                                        settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
+                                    }
+                                    5 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    6 => settings_app.reset_defaults(),
+                                    _ => {}
+                                },
+                                _ => match settings_app.focused_control {
+                                    4 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    5 => settings_app.reset_defaults(),
+                                    _ => {}
+                                },
+                            }
+                        }
+                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                        enter_char_consumed = true;
+                        match browser_app.focused_control {
+                            0 => { browser_app.active_tab = 0; browser_app.set_url(b"minos://help"); browser_app.navigate(); }
+                            1 => { browser_app.active_tab = 1; browser_app.set_url(b"minos://cats"); browser_app.navigate(); }
+                            2 => { browser_app.active_tab = 3; browser_app.page_loaded = true; }
+                            3 => browser_app.back(),
+                            4 => browser_app.forward(),
+                            5 | 7 => browser_app.navigate(),
+                            6 => browser_app.navigate(),
                             _ => {}
                         }
                     } else if compositor.windows[8].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
@@ -1635,7 +1755,7 @@ pub extern "C" fn _start() -> ! {
             // CMD geçmişi: yalnızca çıktı panelini kaydır; giriş satırı sabit kalır.
             if let Some(w) = compositor.windows[10] {
                 if w.is_open && w.is_focused && !w.is_minimized
-                    && gui::in_rect(mouse.x as usize, mouse.y as usize, (w.x, w.y + gui::TITLEBAR_H, w.width, w.height.saturating_sub(gui::TITLEBAR_H + 28))) {
+                    && gui::in_rect(mouse.x as usize, mouse.y as usize, (w.x, w.y + gui::titlebar_h(), w.width, w.height.saturating_sub(gui::titlebar_h() + 28))) {
                     let view_lines = w.height.saturating_sub(86) / 13;
                     terminal_app.scroll_output(scroll_val as isize, view_lines);
                 }
@@ -1727,7 +1847,7 @@ pub extern "C" fn _start() -> ! {
             } else if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     let max_x = width.saturating_sub(w.width);
-                    let max_y = height.saturating_sub(w.height + gui::TASKBAR_H);
+                    let max_y = height.saturating_sub(w.height + gui::taskbar_h());
                     w.x = mx.saturating_sub(drag_offset_x).min(max_x);
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
                 }
@@ -1759,7 +1879,7 @@ pub extern "C" fn _start() -> ! {
                     }
                     // Alt kenar sürükleniyor
                     if matches!(edge, Bottom | BottomLeft | BottomRight) {
-                        let max_h = height.saturating_sub(gui::TASKBAR_H).saturating_sub(w.y);
+                        let max_h = height.saturating_sub(gui::taskbar_h()).saturating_sub(w.y);
                         nh = my.saturating_sub(bottom).max(w.min_height).min(w.max_height).min(max_h);
                     }
                     // Üst kenar sürükleniyor
@@ -1842,6 +1962,12 @@ pub extern "C" fn _start() -> ! {
                 terminal_app.complete();
             } else if ch == '\t' && compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
                 taskmgr_app.focus_next_control();
+            } else if ch == '\t' && compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                settings_app.focus_next_control();
+            } else if ch == '\t' && compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                browser_app.focus_next_control();
+            } else if ch == '\t' && compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                filemanager_app.focus_next_control();
             } else {
                 let browser_focused = compositor.windows[3]
                     .as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
@@ -1956,7 +2082,24 @@ pub extern "C" fn _start() -> ! {
             );
         }
 
-        core::hint::spin_loop();
+        if !input_occurred && !mouse_moved && !buttons_changed && !force_render {
+            // Sistem boşta (idle): CPU'yu %100 yakmak yerine kontrollü G/Ç beklemesi (I/O relaxation)
+            // uygulayarak CPU kullanımını düşür. Müzik çalıyorsa veya PS/2 girişi geldiğinde anında uyanır.
+            let idle_cycles = if musicplayer_app.is_playing { 15 } else { 120 };
+            for _ in 0..idle_cycles {
+                if drivers::ps2::has_input() {
+                    break;
+                }
+                unsafe {
+                    // Port 0x80 POST portuna okuma yazma ~1 mikrosaniye veri yolu gecikmesi sağlar,
+                    // sanal makinelerin (QEMU/VMware/VirtualBox) hypervisor'e CPU zaman dilimini bırakmasını (yield) tetikler.
+                    core::arch::asm!("in al, 0x80", options(nomem, nostack, preserves_flags));
+                }
+                core::hint::spin_loop();
+            }
+        } else {
+            core::hint::spin_loop();
+        }
     }
 }
 

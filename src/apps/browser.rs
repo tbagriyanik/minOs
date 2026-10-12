@@ -6,6 +6,7 @@ pub struct BrowserApp {
     pub url_len: usize,
     pub address_focused: bool,
     pub active_tab: usize,
+    pub focused_control: usize,
     pub page_loaded: bool,
     pub status: &'static str,
     pub net_online: bool,
@@ -22,7 +23,7 @@ impl BrowserApp {
     pub fn new() -> Self {
         let mut app = Self {
             url: [0; 128], url_len: 0, address_focused: false,
-            active_tab: 0, page_loaded: true, status: crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
+            active_tab: 0, focused_control: 0, page_loaded: true, status: crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
             net_online: false, ping_ok: false,
             web_request_sent: false,
             page_title: [0; 64], page_title_len: 0,
@@ -30,6 +31,53 @@ impl BrowserApp {
         };
         app.set_url(b"minos://help");
         app
+    }
+
+    pub fn focus_next_control(&mut self) {
+        // 0..2: Tabs (Help, Cats, Web), 3: Back, 4: Fwd, 5: Refresh, 6: Address bar, 7: Go button
+        self.focused_control = (self.focused_control + 1) % 8;
+        if self.focused_control == 6 {
+            self.address_focused = true;
+        } else {
+            self.address_focused = false;
+        }
+        if self.focused_control < 3 {
+            match self.focused_control {
+                0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
+                1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
+                _ => { self.active_tab = 3; self.page_loaded = true; },
+            }
+        }
+    }
+
+    pub fn select_tab_prev(&mut self) {
+        let cur = match self.active_tab {
+            0 => 0,
+            1 => 1,
+            _ => 2,
+        };
+        let next = (cur + 2) % 3;
+        self.focused_control = next;
+        match next {
+            0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
+            1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
+            _ => { self.active_tab = 3; self.page_loaded = true; },
+        }
+    }
+
+    pub fn select_tab_next(&mut self) {
+        let cur = match self.active_tab {
+            0 => 0,
+            1 => 1,
+            _ => 2,
+        };
+        let next = (cur + 1) % 3;
+        self.focused_control = next;
+        match next {
+            0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
+            1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
+            _ => { self.active_tab = 3; self.page_loaded = true; },
+        }
     }
 
     pub fn set_url(&mut self, value: &[u8]) {
@@ -162,20 +210,30 @@ impl BrowserApp {
         let tab0_bg = if self.active_tab == 0 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
         fb.draw_rect(win_x + 8, win_y + 30, 140, 20, tab0_bg);
         MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, crate::gui::ui_text("MinOS Yardım", "MinOS Help"), Color::TEXT_MAIN);
+        if self.focused_control == 0 { fb.draw_rect_outline(win_x + 8, win_y + 30, 140, 20, Color::ACCENT_YELLOW); }
+
         let tab1_bg = if self.active_tab == 1 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
         fb.draw_rect(win_x + 152, win_y + 30, 85, 20, tab1_bg);
         MinGuiCompositor::draw_string(fb, win_x + 158, win_y + 34, "KediWiki", Color::TEXT_MAIN);
+        if self.focused_control == 1 { fb.draw_rect_outline(win_x + 152, win_y + 30, 85, 20, Color::ACCENT_YELLOW); }
+
         let tab3_bg = if self.active_tab == 3 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
         fb.draw_rect(win_x + 241, win_y + 30, 100, 20, tab3_bg);
         MinGuiCompositor::draw_string(fb, win_x + 247, win_y + 34, "Web Sayfasi", Color::ACCENT_GREEN);
+        if self.focused_control == 2 { fb.draw_rect_outline(win_x + 241, win_y + 30, 100, 20, Color::ACCENT_YELLOW); }
 
         fb.draw_rect(win_x + 6, win_y + 52, win_w - 12, 28, Color::TITLE_BAR);
         fb.draw_rect(win_x + 12, win_y + 56, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 60, "<", Color::TEXT_MAIN);
+        if self.focused_control == 3 { fb.draw_rect_outline(win_x + 12, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
+
         fb.draw_rect(win_x + 38, win_y + 56, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 44, win_y + 60, ">", Color::TEXT_MAIN);
+        if self.focused_control == 4 { fb.draw_rect_outline(win_x + 38, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
+
         fb.draw_rect(win_x + 64, win_y + 56, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 60, "R", Color::ACCENT_GREEN);
+        if self.focused_control == 5 { fb.draw_rect_outline(win_x + 64, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
 
         let url_x = win_x + 94;
         let url_w = win_w.saturating_sub(160);
@@ -185,8 +243,12 @@ impl BrowserApp {
         address.push_str(shown);
         if self.address_focused { address.push_byte(b'_'); }
         MinGuiCompositor::draw_string(fb, url_x + 6, win_y + 60, address.as_str(), Color::TEXT_MAIN);
-        fb.draw_rect(win_x + win_w - 60, win_y + 56, 50, 20, Color::ACCENT_BLUE);
+        if self.focused_control == 6 { fb.draw_rect_outline(url_x, win_y + 56, url_w, 20, Color::ACCENT_YELLOW); }
+
+        let git_r = (win_x + win_w - 60, win_y + 56, 50, 20);
+        fb.draw_rect(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 60, "GIT", Color::DARK_BG);
+        if self.focused_control == 7 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
 
         let page_x = win_x + 6;
         let page_y = win_y + 82;

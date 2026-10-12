@@ -124,6 +124,31 @@ pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     [0x00, 0x32, 0x4C, 0x00, 0x00, 0x00, 0x00, 0x00], // ~
 ];
 
+/// Convert the legacy 8×8 atlas to a 12×16 cell atlas.
+pub const fn expand_8x8_font() -> [[u16; 16]; 95] {
+    let mut out = [[0u16; 16]; 95];
+    let mut glyph = 0;
+    while glyph < 95 {
+        let mut row = 0;
+        while row < 16 {
+            let source_row = row / 2;
+            let mut col = 0;
+            while col < 12 {
+                let source_col = col * 8 / 12;
+                if (FONT_8X8_BASIC[glyph][source_row] & (1 << (7 - source_col))) != 0 {
+                    out[glyph][row] |= 1 << (11 - col);
+                }
+                col += 1;
+            }
+            row += 1;
+        }
+        glyph += 1;
+    }
+    out
+}
+
+pub const FONT_12X16_BASIC: [[u16; 16]; 95] = expand_8x8_font();
+
 /// Türkçe özel karakterler ve yaygın semboller (ç, Ç, ğ, Ğ, ı, İ, ö, Ö, ş, Ş, ü, Ü,
 /// artı ek ok/para/kesir işaretleri).
 pub fn get_turkish_glyph(c: char) -> Option<[u8; 8]> {
@@ -159,3 +184,20 @@ pub fn get_turkish_glyph(c: char) -> Option<[u8; 8]> {
         _ => None,
     }
 }
+
+/// Orantılı yazı tipi (proportional font) için her karakterin gerçek genişliğini (piksel cinsinden) hesaplar.
+/// İnce harfler (i, l, 1, nokta, virgül) daha az yer kaplarken, geniş harfler (M, W, @) daha geniş yer kaplar.
+pub fn glyph_advance_width(c: char) -> usize {
+    match c {
+        ' ' => 4,
+        '.' | ',' | ':' | ';' | '!' | '|' | '\'' | '`' => 3,
+        'i' | 'l' | 'ı' | 'İ' | 'î' => 4,
+        '[' | ']' | '(' | ')' | '{' | '}' | '"' | '*' | 't' | 'f' | 'r' | 'I' => 5,
+        'j' | 'k' | 's' | 'z' | 'x' | 'v' | 'y' | 'c' | 'ç' | 'ş' | '-' => 6,
+        'a' | 'b' | 'd' | 'e' | 'g' | 'ğ' | 'h' | 'n' | 'o' | 'ö' | 'p' | 'q' | 'u' | 'ü' | 'â' | 'û' | '0'..='9' | '+' | '=' | '<' | '>' | '?' => 7,
+        'A'..='H' | 'J' | 'K' | 'L' | 'N' | 'O'..='V' | 'X' | 'Y' | 'Z' | 'Ç' | 'Ğ' | 'Ö' | 'Ş' | 'Ü' | '$' | '%' | '&' | '#' => 8,
+        'M' | 'W' | 'm' | 'w' | '@' | '₺' | '€' | '£' => 9,
+        _ => 7,
+    }
+}
+

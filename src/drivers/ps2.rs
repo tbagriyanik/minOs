@@ -183,3 +183,9 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
 
     updated
 }
+
+/// PS/2 denetleyicisinde okunmayı bekleyen veri olup olmadığını bildirir (port 0x64 status bit 0).
+#[inline(always)]
+pub fn has_input() -> bool {
+    unsafe { inb(0x64) & 0x01 != 0 }
+}

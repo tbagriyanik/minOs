@@ -5,6 +5,9 @@ use crate::fs::vfs::VirtualFileSystem;
 
 /// Pencere yöneticisindeki uygulama yuvası sayısı.
 pub const MAX_PROC: usize = 11;
+const PROCESS_ROW_STEP: usize = 22;
+const PROCESS_ROW_H: usize = 20;
+const LAUNCH_ITEM_H: usize = 22;
 pub const LAUNCH_APP_COUNT: usize = 11;
 const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
@@ -72,24 +75,24 @@ impl TaskManagerApp {
     }
 
     pub fn applications_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + 10, win_y + 52, 100, 22)
+        (win_x + 10, win_y + 52, 142, 24)
     }
 
     pub fn performance_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + 114, win_y + 52, 100, 22)
+        (win_x + 158, win_y + 52, 142, 24)
     }
 
     pub fn launch_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(206), win_y + 30, 100, 18)
+        (win_x + win_w.saturating_sub(286), win_y + 30, 142, 22)
     }
 
     pub fn launch_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(180), win_y + 52, 170, 228)
+        (win_x + win_w.saturating_sub(270), win_y + 52, 260, 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H)
     }
 
     pub fn launch_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
         let (x, y, w, _) = Self::launch_menu_rect(win_x, win_y, win_w);
-        (x + 4, y + 4 + index * 20, w - 8, 20)
+        (x + 4, y + 4 + index * LAUNCH_ITEM_H, w - 8, LAUNCH_ITEM_H)
     }
 
     pub fn launch_item_at(mx: usize, my: usize, win_x: usize, win_y: usize, win_w: usize) -> Option<usize> {
@@ -207,7 +210,7 @@ impl TaskManagerApp {
 
     /// i. süreç satırının tıklanabilir dikdörtgeni (çizim ile birebir aynı).
     pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + 8, win_y + 100 + i * 18, win_w.saturating_sub(16), 16)
+        (win_x + 8, win_y + 100 + i * PROCESS_ROW_STEP, win_w.saturating_sub(16), PROCESS_ROW_H)
     }
 
     /// Fare konumunun denk geldiği süreç satırı indeksi.
@@ -223,7 +226,7 @@ impl TaskManagerApp {
 
     /// "Sonlandır" düğmesinin dikdörtgeni (pencerenin sağ-alt bölümü).
     pub fn kill_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(96), win_y + 30, 86, 18)
+        (win_x + win_w.saturating_sub(132), win_y + 30, 122, 22)
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {
@@ -261,9 +264,14 @@ impl TaskManagerApp {
         if self.focused_control == 3 { fb.draw_rect_outline(br.0, br.1, br.2, br.3, Color::ACCENT_YELLOW); }
 
         if self.active_tab == 0 {
-            MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 82, crate::gui::ui_text("Uygulama", "App"), Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, win_x + 205, win_y + 82, crate::gui::ui_text("Çizim CPU", "Render CPU"), Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, win_x + 278, win_y + 82, crate::gui::ui_text("RAM durumu", "Memory"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 12, win_y + 82, crate::gui::ui_text("Uygulama", "Application"), Color::TEXT_MUTED,
+                (win_x + 10, win_y + 80, 154, 20));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 170, win_y + 82, "CPU", Color::TEXT_MUTED,
+                (win_x + 168, win_y + 80, 54, 20));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 230, win_y + 82, "RAM", Color::TEXT_MUTED,
+                (win_x + 228, win_y + 80, 68, 20));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 304, win_y + 82, crate::gui::ui_text("Durum", "Status"), Color::TEXT_MUTED,
+                (win_x + 302, win_y + 80, 106, 20));
             fb.draw_rect(win_x + 10, win_y + 94, win_w.saturating_sub(20), 1, Color::BORDER);
 
             for (i, proc) in self.processes.iter().take(self.proc_count).enumerate() {
@@ -271,18 +279,22 @@ impl TaskManagerApp {
                 if i == self.selected { fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR); }
                 if self.focused_control == 4 + i { fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW); }
                 let app_name = if english { LAUNCH_APP_LABELS_EN[proc.app_idx.min(LAUNCH_APP_COUNT - 1)] } else { proc.name };
-                MinGuiCompositor::draw_string(fb, row.0 + 4, row.1 + 4, app_name,
-                    if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 12, row.1 + 2, app_name,
+                    if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN },
+                    (win_x + 10, row.1, 154, row.3));
                 let mut cpu = TextBuf::new();
                 cpu.push_usize(proc.cpu_pct);
                 cpu.push_byte(b'%');
-                MinGuiCompositor::draw_string(fb, win_x + 212, row.1 + 4, cpu.as_str(), Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 170, row.1 + 2, cpu.as_str(), Color::ACCENT_YELLOW,
+                    (win_x + 168, row.1, 54, row.3));
                 let mut ram = TextBuf::new();
                 ram.push_usize(proc.memory_kb);
                 ram.push_str(" KB");
-                MinGuiCompositor::draw_string(fb, win_x + 278, row.1 + 4, ram.as_str(), Color::TEXT_MUTED);
-                MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(76), row.1 + 4,
-                    match (proc.is_minimized, english) { (true, true) => "Minimized", (false, true) => "Running", (true, false) => "Beklemede", (false, false) => "Açık" }, Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 230, row.1 + 2, ram.as_str(), Color::TEXT_MUTED,
+                    (win_x + 228, row.1, 68, row.3));
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 304, row.1 + 2,
+                    match (proc.is_minimized, english) { (true, true) => "Paused", (false, true) => "Running", (true, false) => "Bekl.", (false, false) => "Açık" }, Color::ACCENT_GREEN,
+                    (win_x + 302, row.1, 106, row.3));
             }
         } else {
             let bar_x = win_x + 132;

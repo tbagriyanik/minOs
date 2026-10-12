@@ -47,14 +47,14 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter ve fare tekerleği gezintisi. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
 | **⚙️ Sistem Ayarları** | Tema seçimi/değiştirme, canlı saat & tarih, ses düzeyi kaydırıcısı, ağ durumu (IP/DNS/Gateway), dil/klavye ve pencere düzeni kaydetme paneli. |
-| **📝 Not Defteri** | İşlevsel üst menü çubuğu (`Dosya`, `Düzen`, `Biçim`, `Yardım`). Metin temizleme, dosya kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, dinamik font modları (`Piksel`, `Sıkıştırılmış`, `ClearType`). Tam Türkçe karakter desteği (`ç`, `ğ`, `ı`, `İ`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, satır numaraları ve yanıp sönen imleç. |
+| **📝 Not Defteri** | İşlevsel üst menü çubuğu (`Dosya`, `Düzen`, `Biçim`, `Yardım`). Metin temizleme, dosya kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y), dinamik font modları (`Piksel`, `Sıkıştırılmış`, `ClearType`). Tam Türkçe karakter desteği (`ç`, `ğ`, `ı`, `İ`, `ö`, `ş`, `ü`), `Backspace`, `Enter`, **Home / End** ve **Shift+ok tuşlarıyla seçim**, satır numaraları ve yanıp sönen imleç. |
 | **🌐 Web Tarayıcısı** | Yerel minos://help ve minos://cats sayfaları, e1000 ağ kartı ARP/ping test paneli. |
 | **🖼️ Resim Gösterici** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
 | **🎵 Müzik Çalar** | PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
-| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve silgi aracı. |
+| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim** (Windows Paint benzeri), fırça kenarının otomatik kırpılması ve 4096 noktalık tuval geçmişi. |
 | **⌨️ Komut İstemi** | Klavyeyle komut ve metin girişi kabul eden retro terminal görünümü. |
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
@@ -71,6 +71,16 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulam
   - **Düzen:** Kes, Kopyala, Yapıştır, Tümünü Seç
   - **Biçim:** Piksel Font, Sıkıştırılmış Font, ClearType Font
   - **Yardım:** Not Defteri Hakkında
+- **📝 Windows Notepad Benzeri Metin Düzenleme:**
+  - **Çift tıkla kelime seçimi:** Herhangi bir kelimeye çift tıklayarak o kelimeyi seçin.
+  - **Sürükleyerek seçim:** Sol tuşu basılı tutup fareyi sürükleyerek metin seçin; tıklanan karaktere doğru imleç konumlanır (satır kaydırma ve dikey kaydırma hesaba katılır).
+  - **Home / End:** İmleci satır başına/sonuna taşır.
+  - **Shift + Ok Tuşları:** Yukarı/Aşağı/Sol/Sağ ile seçimi genişletir.
+  - **Geri Al / İleri Al:** `Ctrl+Z` (Geri Al) ve `Ctrl+Y` (İleri Al) — 32 seviyelik düzenleme geçmişi.
+- **🎨 Windows Paint Benzeri Çizim:**
+  - **Basılı Tutup Çizme:** Sol tuşu basılı tuttukça fare hareketi sürekli çizer; hızlı hareketlerde iki nokta arası enterpolasyonla doldurulup kesik çizgi oluşmaz.
+  - **Otomatik Vuruş Bittiği:** Tuval dışına çıkıldığında veya tuş bırakıldığında kalem yolu otomatik sonlanır.
+  - **Renk Paleti ve Silgi:** Mavi/Kırmızı/Yeşil/Siyah renk örnekleri, dairesel **Silgi** ve **Temizle** düğmeleri.
 
 ---
 
@@ -107,15 +117,39 @@ cd minos
 powershell -ExecutionPolicy Bypass -File .\run.ps1
 ```
 
+#### `run.ps1` Seçenekleri (Switches)
+
+`run.ps1`, çekirdeği `cargo build` ile derledikten sonra ISO'yu paketler ve QEMU'yu başlatır. Aşağıdaki anahtarlar ile davranışı özelleştirebilirsiniz:
+
+| Anahtar | Açıklama |
+| :--- | :--- |
+| `-BuildOnly` | Yalnızca derler; QEMU'yu başlatmadan çıkar. Hızlı derleme kontrolü için idealdir. |
+| `-Debug` | Debug profilinde derler (`target\x86_64-minos\debug\minos-kernel`). Varsayılan **release**'dir. |
+| `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
+| `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
+
+```powershell
+# Yalnızca derle (QEMU başlatma)
+powershell -ExecutionPolicy Bypass -File .\run.ps1 -BuildOnly
+
+# Debug profili + USB diskleri salt okunur ekle
+powershell -ExecutionPolicy Bypass -File .\run.ps1 -Debug -UsbDisks
+```
+
+> **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
+
+> **Ağ:** QEMU kullanıcı modu (SLIRP) ve `e1000` ile ARP/ping/TCP çalışır; `8080` portu konuk makinenin `80` portuna yönlendirilir (`hostfwd=tcp::8080-:80`).
+
 ---
 
 ### Adım Adım Manuel Derleme (Manual Steps)
 
 #### 1. Çekirdeği Derleme (Kernel Build)
-MinOS çekirdeği, özel hedef mimarisi ve sıfır bağımlılık bayraklarıyla derlenir:
+MinOS çekirdeği, özel hedef mimarisi, `-Zbuild-std` çekirdek kütüphaneleri ve sıfır dış bağımlılık bayraklarıyla derlenir:
 
 ```powershell
-cargo build --release --target x86_64-minos.json
+cargo build --release -Zjson-target-spec --target x86_64-minos.json `
+  -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem
 ```
 
 #### 2. Boot Edilebilir ISO İmajını Paketleme (ISO Creation)
@@ -129,7 +163,8 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 #### 3. QEMU ile Test Etme (Run in QEMU)
 ```powershell
 & 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std `
-  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0
+  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 `
+  -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0
 ```
 
 #### 4. VirtualBox Kurulumu & Ayarları (VirtualBox Setup)
@@ -156,6 +191,8 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 - **Sistem Tepsisi (Sağ Alt):** Sırasıyla **klavye rozeti (`TR`/`EN`)**, **tema düğmesi**, **SES** düğmesi ve **canlı saat** bulunur. Saate tıklayınca canlı takvim, **SES**'e tıklayınca ses paneli açılır.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine, **tema palet şeridindeki renk örneklerine** veya masaüstü sağ tık > **Tema Değiştir**'e tıklayın.
 - **Bağlama Duyarlı Sağ Tık:** Masaüstünde, Not Defteri'nde, Dosya Yöneticisi'nde veya pencere başlığında özel sağ tık menüleri açılır.
+- **Not Defteri Düzenleme Kısayolları:** `Ctrl+C` (Kopyala), `Ctrl+X` (Kes), `Ctrl+V` (Yapıştır), `Ctrl+A` (Tümünü Seç), `Ctrl+Z` (Geri Al), `Ctrl+Y` (İleri Al), `Delete` (İleri sil), `Home`/`End` (satır başı/sonu) ve `Shift+Ok tuşları` (seçim genişletme).
+- **Çizim Tahtası Kullanımı:** Araç çubuğundan renk veya **Silgi** seçin; tuval üzerinde sol tuşu basılı tutarak çizin. `C` tuşu veya **Temizle** düğmesi tuvali temizler.
 
 ---
 
@@ -174,7 +211,7 @@ minos/
 ├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
 ├── build_iso.ps1            # El Torito yamalı hibrit ISO oluşturucu
-├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği
+├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği (-Debug, -BuildOnly, -UsbDisks, -UsbDiskReadWrite)
 └── x86_64-minos.json        # Hedef x86_64 Long Mode tanımlama dosyası
 ```
 

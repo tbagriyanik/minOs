@@ -7,6 +7,10 @@ use crate::fs::diskfs::{self, FsKind};
 const ROW_H: usize = 24;
 /// Listenin başladığı Y ofseti (pencere içine göre).
 pub const LIST_TOP: usize = 86;
+
+pub fn list_top() -> usize {
+    LIST_TOP
+}
 /// Durum çubuğu için ayrılan alt alan (px).
 const STATUS_H: usize = 30;
 
@@ -68,9 +72,43 @@ pub struct FileManagerApp {
     pub disk_kind: FsKind,
     /// Ortam okunamadıysa gösterilecek durum mesajı.
     pub status: &'static str,
+    pub focused_control: usize, // 0: Refresh, 1: Open, 2: File list
 }
 
 impl FileManagerApp {
+    pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, idx: usize) -> (usize, usize, usize, usize) {
+        let sidebar_w = 110;
+        let list_x = win_x + sidebar_w + 14;
+        let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        let row_y = win_y + LIST_TOP + idx * ROW_H;
+        (list_x, row_y, list_w, ROW_H)
+    }
+
+    pub fn refresh_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(120), win_y + 32, 50, 22)
+    }
+
+    pub fn open_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(62), win_y + 32, 50, 22)
+    }
+
+    pub fn focus_next_control(&mut self) {
+        self.focused_control = (self.focused_control + 1) % 3;
+    }
+
+    pub fn select_prev(&mut self) {
+        if self.selected_idx > 0 {
+            self.selected_idx -= 1;
+        }
+    }
+
+    pub fn select_next(&mut self) {
+        let count = self.row_count();
+        if self.selected_idx + 1 < count {
+            self.selected_idx += 1;
+        }
+    }
+
     pub const fn new() -> Self {
         Self {
             current_path: "/root/home/minos",
@@ -89,6 +127,7 @@ impl FileManagerApp {
             source: Source::Vfs,
             disk_kind: FsKind::None,
             status: "",
+            focused_control: 2,
         }
     }
 
@@ -202,9 +241,18 @@ impl FileManagerApp {
         MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.current_path, Color::ACCENT_BLUE);
 
         // Hızlı Butonlar
-        fb.draw_rect(win_x + win_w.saturating_sub(120), win_y + 32, 50, 22, Color::WINDOW_BG);
+        let ref_x = win_x + win_w.saturating_sub(120);
+        fb.draw_rect(ref_x, win_y + 32, 50, 22, Color::WINDOW_BG);
+        if self.focused_control == 0 {
+            fb.draw_rect_outline(ref_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW);
+        }
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(112), win_y + 38, crate::gui::ui_text("Yenile", "Refresh"), Color::TEXT_MAIN);
-        fb.draw_rect(win_x + win_w.saturating_sub(62), win_y + 32, 50, 22, Color::ACCENT_GREEN);
+
+        let open_x = win_x + win_w.saturating_sub(62);
+        fb.draw_rect(open_x, win_y + 32, 50, 22, Color::ACCENT_GREEN);
+        if self.focused_control == 1 {
+            fb.draw_rect_outline(open_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW);
+        }
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, crate::gui::ui_text("Aç", "Open"), Color::DARK_BG);
 
         // Sol Gezinti Paneli (Sidebar) — pencere yüksekliğine göre uyarlanır
@@ -248,6 +296,9 @@ impl FileManagerApp {
             let is_sel = i == self.selected_idx;
             if is_sel {
                 fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
+                if self.focused_control == 2 {
+                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_YELLOW);
+                }
             }
 
             let icon_color = match file.icon_tag {

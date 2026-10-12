@@ -35,12 +35,14 @@ impl PhysicalMemoryManager {
 
     pub fn init(&mut self, entries: &[MemoryMapEntry]) {
         for entry in entries {
-            self.total_memory_bytes += entry.length;
-            if entry.entry_type == MemoryEntryType::Usable {
-                self.free_memory_bytes += entry.length;
-            } else {
-                self.used_memory_bytes += entry.length;
-            }
+            self.add_region(entry.base, entry.length, entry.entry_type);
+        }
+    }
+
+    pub fn add_region(&mut self, _base: u64, length: u64, entry_type: MemoryEntryType) {
+        if entry_type == MemoryEntryType::Usable {
+            self.total_memory_bytes = self.total_memory_bytes.saturating_add(length);
+            self.free_memory_bytes = self.free_memory_bytes.saturating_add(length);
         }
     }
 

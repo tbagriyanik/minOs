@@ -109,12 +109,44 @@ pub struct LimineHhdmRequest {
     pub response: *const LimineHhdmResponse,
 }
 
+#[repr(C, align(8))]
+pub struct LimineMemoryMapEntry {
+    pub base: u64,
+    pub length: u64,
+    pub entry_type: u64,
+    pub unused: [u64; 4],
+}
+
+#[repr(C, align(8))]
+pub struct LimineMemoryMapResponse {
+    pub revision: u64,
+    pub entry_count: u64,
+    pub entries: *const *const LimineMemoryMapEntry,
+}
+
+#[repr(C, align(8))]
+pub struct LimineMemoryMapRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineMemoryMapResponse,
+}
+
+unsafe impl Sync for LimineMemoryMapRequest {}
+
 unsafe impl Sync for LimineHhdmRequest {}
 
 #[used]
 #[link_section = ".requests"]
 static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x48dcf1cb8ad2b852, 0x63984e959a98244b],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
+#[used]
+#[link_section = ".requests"]
+static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
+    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x67cf3d9d378a806f, 0xe304acdfc50c3c62],
     revision: 0,
     response: core::ptr::null(),
 };
@@ -305,14 +337,32 @@ pub extern "C" fn _start() -> ! {
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
     arch::x86_64::init_interrupts();
     let mut memory_mgr = mm::MemoryManager::new();
-    let sample_memory_map = [
-        mm::pmm::MemoryMapEntry {
-            base: 0x100000,
-            length: 128 * 1024 * 1024,
-            entry_type: mm::pmm::MemoryEntryType::Usable,
+    unsafe {
+        let response = core::ptr::read_volatile(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response));
+        if !response.is_null() {
+            let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count)).min(256) as usize;
+            let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
+            if !entries.is_null() {
+                for i in 0..count {
+                    let entry_ptr = core::ptr::read_volatile(entries.add(i));
+                    if entry_ptr.is_null() { continue; }
+                    let entry = &*entry_ptr;
+                    let kind = match entry.entry_type {
+                        0 => mm::pmm::MemoryEntryType::Usable,
+                        1 => mm::pmm::MemoryEntryType::Reserved,
+                        2 => mm::pmm::MemoryEntryType::AcpiReclaimable,
+                        3 => mm::pmm::MemoryEntryType::AcpiNvs,
+                        4 => mm::pmm::MemoryEntryType::BadMemory,
+                        5 => mm::pmm::MemoryEntryType::BootloaderReclaimable,
+                        6 => mm::pmm::MemoryEntryType::KernelAndModules,
+                        7 => mm::pmm::MemoryEntryType::Framebuffer,
+                        _ => continue,
+                    };
+                    memory_mgr.pmm.add_region(entry.base, entry.length, kind);
+                }
+            }
         }
-    ];
-    memory_mgr.pmm.init(&sample_memory_map);
+    }
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
@@ -474,7 +524,7 @@ pub extern "C" fn _start() -> ! {
     // Kaydırma çubuğu sürükleme: (idx, thumb_üst_ofset, thumb_h, track_h, content_h, view_h)
     let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
     let mut anim_tick: usize = 0;
-    let mut spin_counter: usize = 0;
+    let mut last_frame_ms = monotonic_ms();
     let mut loop_counter: u64 = 0;
     let mut clock_spin: usize = 0;
     let mut last_music_beat: usize = 0;
@@ -504,6 +554,7 @@ pub extern "C" fn _start() -> ! {
                              now: &drivers::rtc::DateTime,
                              mouse: &drivers::mouse::MouseState,
                              kbd: &drivers::keyboard::KeyboardState,
+                             total_ram_bytes: u64,
                              tick: usize,
                              app_render_cycles: &mut [u64; 11]| {
         // 1. Masaüstü Arka Planı
@@ -537,7 +588,7 @@ pub extern "C" fn _start() -> ! {
                 let render_start = read_cpu_cycles();
                 match idx {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
-                    1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now,
+                    1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now, total_ram_bytes,
                         if drivers::hda::is_ready() { gui::ui_text("Intel HDA (PCM aktif)", "Intel HDA (PCM active)") } else { gui::ui_text("Ses aygıtı bulunamadı", "Audio device unavailable") },
                         if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
                         if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
@@ -595,7 +646,7 @@ pub extern "C" fn _start() -> ! {
     render_full_frame(
         &mut fb, &compositor, &filemanager_app, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app, &now, &mouse, &keyboard, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
     );
 
@@ -2084,10 +2135,10 @@ pub extern "C" fn _start() -> ! {
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        spin_counter += 1;
-        let timer_tick_fired = spin_counter >= 15_000;
+        // Görsel animasyonlar için sınırlı kare hızı; RDTSC ile zamanlama.
+        let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= 33;
         if timer_tick_fired {
-            spin_counter = 0;
+            last_frame_ms = monotonic_ms();
             anim_tick = anim_tick.wrapping_add(1);
         }
 
@@ -2153,23 +2204,18 @@ pub extern "C" fn _start() -> ! {
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app,
-                &now, &mouse, &keyboard, anim_tick, &mut app_render_cycles,
+                &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
             );
         }
 
         if !input_occurred && !mouse_moved && !buttons_changed && !force_render {
-            // Sistem boşta (idle): CPU'yu %100 yakmak yerine kontrollü G/Ç beklemesi (I/O relaxation)
-            // uygulayarak CPU kullanımını düşür. Müzik çalıyorsa veya PS/2 girişi geldiğinde anında uyanır.
-            let idle_cycles = if musicplayer_app.is_playing { 15 } else { 120 };
-            for _ in 0..idle_cycles {
-                if drivers::ps2::has_input() {
-                    break;
-                }
-                unsafe {
-                    // Port 0x80 POST portuna okuma yazma ~1 mikrosaniye veri yolu gecikmesi sağlar,
-                    // sanal makinelerin (QEMU/VMware/VirtualBox) hypervisor'e CPU zaman dilimini bırakmasını (yield) tetikler.
-                    core::arch::asm!("in al, 0x80", options(nomem, nostack, preserves_flags));
-                }
+            // PIC/IRQ zamanlayıcısı kurulmadığı için HLT kullanılamaz. Kısa
+            // kalibre edilmiş I/O beklemesi CPU'ya/QEMU'ya zaman bırakır;
+            // giriş en geç 1 ms içinde yeniden yoklanır.
+            let wait_start = read_cpu_cycles();
+            let wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(1_000);
+            while read_cpu_cycles().wrapping_sub(wait_start) < wait_cycles {
+                unsafe { core::arch::asm!("in al, 0x80", options(nomem, nostack, preserves_flags)); }
                 core::hint::spin_loop();
             }
         } else {

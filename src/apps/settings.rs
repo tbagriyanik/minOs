@@ -286,6 +286,7 @@ impl SystemSettings {
         win_h: usize,
         kbd_layout: KeyboardLayout,
         now: &DateTime,
+        total_ram_bytes: u64,
         audio_driver: &'static str,
         network_driver: &'static str,
         network_status: &'static str,
@@ -483,6 +484,12 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, crate::gui::ui_text("Geliştirici: Sarman Çekirdek Ekibi", "Developer: Sarman Kernel Team"), Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, crate::gui::ui_text("Özel Sürüm: Live CD Persist Store", "Edition: Live CD Persistent Storage"), Color::ACCENT_GREEN);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, "github.com/tbagriyanik/minos", Color::ACCENT_PINK);
+                let mut ram_info = TextBuf::new();
+                ram_info.push_str(crate::gui::ui_text("Kullanılabilir fiziksel RAM: ", "Usable physical RAM: "));
+                ram_info.push_usize((total_ram_bytes / (1024 * 1024)) as usize);
+                ram_info.push_str(" MB");
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 142, ram_info.as_str(), Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 166, crate::gui::ui_text("CPU mimarisi: x86_64 | SMP zamanlayıcısı yok", "CPU architecture: x86_64 | no SMP scheduler"), Color::TEXT_MUTED);
             }
         }
 

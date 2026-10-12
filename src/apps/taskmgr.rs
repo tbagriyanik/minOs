@@ -19,7 +19,6 @@ const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
     "File Manager", "Settings", "Notepad", "Browser", "Image Viewer", "Music Player",
     "Video Player", "Task Manager", "Calculator", "Paint", "Command Prompt",
 ];
-const CPU_USAGE_PCT: usize = 100;
 
 #[derive(Copy, Clone, Default)]
 pub struct ProcessInfo {
@@ -268,7 +267,7 @@ impl TaskManagerApp {
                 (win_x + 10, win_y + 80, 154, 20));
             MinGuiCompositor::draw_string_clipped(fb, win_x + 170, win_y + 82, "CPU", Color::TEXT_MUTED,
                 (win_x + 168, win_y + 80, 54, 20));
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 230, win_y + 82, "RAM", Color::TEXT_MUTED,
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 230, win_y + 82, crate::gui::ui_text("Yapı", "State"), Color::TEXT_MUTED,
                 (win_x + 228, win_y + 80, 68, 20));
             MinGuiCompositor::draw_string_clipped(fb, win_x + 304, win_y + 82, crate::gui::ui_text("Durum", "Status"), Color::TEXT_MUTED,
                 (win_x + 302, win_y + 80, 106, 20));
@@ -287,10 +286,10 @@ impl TaskManagerApp {
                 cpu.push_byte(b'%');
                 MinGuiCompositor::draw_string_clipped(fb, win_x + 170, row.1 + 2, cpu.as_str(), Color::ACCENT_YELLOW,
                     (win_x + 168, row.1, 54, row.3));
-                let mut ram = TextBuf::new();
-                ram.push_usize(proc.memory_kb);
-                ram.push_str(" KB");
-                MinGuiCompositor::draw_string_clipped(fb, win_x + 230, row.1 + 2, ram.as_str(), Color::TEXT_MUTED,
+                let mut state_size = TextBuf::new();
+                state_size.push_usize(proc.memory_kb);
+                state_size.push_str(" KB");
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 230, row.1 + 2, state_size.as_str(), Color::TEXT_MUTED,
                     (win_x + 228, row.1, 68, row.3));
                 MinGuiCompositor::draw_string_clipped(fb, win_x + 304, row.1 + 2,
                     match (proc.is_minimized, english) { (true, true) => "Paused", (false, true) => "Running", (true, false) => "Bekl.", (false, false) => "Açık" }, Color::ACCENT_GREEN,
@@ -299,33 +298,29 @@ impl TaskManagerApp {
         } else {
             let bar_x = win_x + 132;
             let bar_w = win_w.saturating_sub(152);
-            let mut cpu_label = TextBuf::new();
-            cpu_label.push_str("CPU %");
-            cpu_label.push_usize(CPU_USAGE_PCT);
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 100, cpu_label.as_str(), Color::TEXT_MAIN);
-            fb.draw_rect(bar_x, win_y + 100, bar_w, 12, Color::TITLE_BAR_INACTIVE);
-            fb.draw_rect(bar_x, win_y + 100, bar_w.saturating_mul(CPU_USAGE_PCT) / 100, 12, Color::ACCENT_RED);
+            let cpu_text = crate::gui::ui_text("CPU kullanımı: ölçüm desteklenmiyor", "CPU usage: measurement unavailable");
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 100, cpu_text, Color::TEXT_MAIN,
+                (win_x + 12, win_y + 98, win_w.saturating_sub(24), 16));
+            fb.draw_rect(bar_x, win_y + 122, bar_w, 8, Color::TITLE_BAR_INACTIVE);
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 120,
-                crate::gui::ui_text("Uygulama payı son ekran çizim süresine göre hesaplanır.", "App share is estimated from the last frame render time."), Color::TEXT_MUTED);
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 136,
-                crate::gui::ui_text("Çekirdek boşta döngüsü olmadığı için toplam CPU %100.", "Total CPU is 100% because the kernel has no idle loop."), Color::TEXT_MUTED);
+                crate::gui::ui_text("Uygulama CPU payı: son çizim süresine göre yaklaşık.", "App CPU share: estimated from recent render time."), Color::TEXT_MUTED);
 
             let memory_pct = if self.total_memory_kb == 0 { 0 }
                 else { self.used_memory_kb.saturating_mul(100) / self.total_memory_kb };
             let mut memory_label = TextBuf::new();
-            memory_label.push_str("RAM ");
-            memory_label.push_usize(self.used_memory_kb);
+            memory_label.push_str(crate::gui::ui_text("Fiziksel RAM: ", "Physical RAM: "));
+            memory_label.push_usize(self.used_memory_kb / 1024);
             memory_label.push_str(" / ");
-            memory_label.push_usize(self.total_memory_kb);
-            memory_label.push_str(" KB");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 170, memory_label.as_str(), Color::TEXT_MAIN);
-            fb.draw_rect(bar_x, win_y + 170, bar_w, 12, Color::TITLE_BAR_INACTIVE);
-            fb.draw_rect(bar_x, win_y + 170, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
+            memory_label.push_usize(self.total_memory_kb / 1024);
+            memory_label.push_str(" MB");
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 154, memory_label.as_str(), Color::TEXT_MAIN);
+            fb.draw_rect(bar_x, win_y + 154, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + 154, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
             let mut free_label = TextBuf::new();
-            free_label.push_str(crate::gui::ui_text("Boş RAM: ", "Free RAM: "));
-            free_label.push_usize(self.free_memory_kb);
-            free_label.push_str(" KB");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 190, free_label.as_str(), Color::TEXT_MUTED);
+            free_label.push_str(crate::gui::ui_text("Kullanılabilir RAM: ", "Available RAM: "));
+            free_label.push_usize(self.free_memory_kb / 1024);
+            free_label.push_str(" MB");
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 174, free_label.as_str(), Color::TEXT_MUTED);
 
             let mut storage_label = TextBuf::new();
             storage_label.push_str("VFS: ");
@@ -335,7 +330,7 @@ impl TaskManagerApp {
             storage_label.push_str(" B");
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 230, storage_label.as_str(), Color::TEXT_MAIN);
             MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 260,
-                crate::gui::ui_text("Uygulama RAM değeri uygulama durum yapısının yaklaşık boyutudur.", "App memory is an estimate of its state structure size."), Color::TEXT_MUTED);
+                crate::gui::ui_text("Süreç başına RAM ölçümü çekirdekte henüz yok.", "Per-process RAM accounting is not available yet."), Color::TEXT_MUTED);
         }
 
         fb.draw_rect(win_x + 8, win_y + 350, win_w.saturating_sub(16), 1, Color::BORDER);

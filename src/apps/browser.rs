@@ -1,6 +1,60 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
 
+fn find_bytes(haystack:&[u8], needle:&[u8])->Option<usize> {
+    if needle.is_empty() || needle.len()>haystack.len(){return None;}
+    haystack.windows(needle.len()).position(|w|w==needle)
+}
+
+fn split_http_lines(body:&[u8])->impl Iterator<Item=&str> {
+    body.split(|b|*b==b'\n').filter_map(|line| {
+        let line=if line.last()==Some(&b'\r'){&line[..line.len()-1]}else{line};
+        if line.is_empty(){None}else{Some(core::str::from_utf8(line).unwrap_or("[binary or non-UTF8 content]"))}
+    })
+}
+
+fn eq_ascii(a:&[u8], b:&[u8])->bool { a.eq_ignore_ascii_case(b) }
+
+fn html_color(value:&[u8])->Option<u32> {
+    let mut v=value;
+    while v.first().map_or(false,|b|b.is_ascii_whitespace()||*b==b'\''||*b==b'"') { v=&v[1..]; }
+    if v.first()==Some(&b'#') && v.len()>=7 {
+        let mut rgb=0u32;
+        for &b in &v[1..7] { let d=match b {b'0'..=b'9'=>(b-b'0') as u32,b'a'..=b'f'=>(b-b'a'+10) as u32,b'A'..=b'F'=>(b-b'A'+10) as u32,_=>return None};rgb=(rgb<<4)|d; }
+        return Some(rgb);
+    }
+    match v.split(|b|*b==b';'||b.is_ascii_whitespace()||*b==b'\''||*b==b'"').next()? {
+        b"black"=>Some(0x101010),b"white"=>Some(0xFFFFFF),b"red"=>Some(0xD03030),b"green"=>Some(0x188040),b"blue"=>Some(0x2050C0),b"yellow"=>Some(0xD0A020),b"gray"|b"grey"=>Some(0x808080),_=>None,
+    }
+}
+
+/// Bounded safe text renderer: strips markup, scripts and styles; supports block breaks,
+/// common entities and an inline CSS `color` declaration.
+fn render_html_text(body:&[u8], lines:&mut [[u8;96];6], lens:&mut [usize;6], colors:&mut [u32;6])->usize {
+    let mut count=1usize; let mut current=0u32; colors[0]=Color::TEXT_MAIN;
+    let mut p=0usize; let mut hidden:Option<&[u8]>=None;
+    while p<body.len() && count<=6 {
+        if body[p]==b'<' {
+            let start=p+1; let mut end=start; while end<body.len() && body[end]!=b'>' {end+=1;}
+            if end==body.len(){break;}
+            let mut tag=&body[start..end]; let closing=tag.first()==Some(&b'/'); if closing {tag=&tag[1..];}
+            let name_end=tag.iter().position(|b|b.is_ascii_whitespace()||*b==b'/').unwrap_or(tag.len()); let name=&tag[..name_end];
+            if let Some(h)=hidden { if closing && eq_ascii(name,h) {hidden=None;} p=end+1;continue; }
+            if !closing && (eq_ascii(name,b"script")||eq_ascii(name,b"style")) {hidden=Some(name);p=end+1;continue;}
+            if !closing && name_end<tag.len() {
+                let attrs=&tag[name_end..]; let mut i=0;
+                while i<attrs.len() { while i<attrs.len()&&(attrs[i].is_ascii_whitespace()||attrs[i]==b'/'){i+=1;} let k=i;while i<attrs.len()&&(attrs[i].is_ascii_alphanumeric()||attrs[i]==b'-'){i+=1;}let key=&attrs[k..i];while i<attrs.len()&&attrs[i].is_ascii_whitespace(){i+=1;}if i<attrs.len()&&attrs[i]==b'='{i+=1;while i<attrs.len()&&attrs[i].is_ascii_whitespace(){i+=1;}let quote=if i<attrs.len()&&(attrs[i]==b'\''||attrs[i]==b'"'){let q=attrs[i];i+=1;q}else{0};let v=i;while i<attrs.len()&&((quote!=0&&attrs[i]!=quote)||(quote==0&&!attrs[i].is_ascii_whitespace())){i+=1;}if eq_ascii(key,b"style"){let style=&attrs[v..i];for rule in style.split(|b|*b==b';'){if let Some(colon)=rule.iter().position(|b|*b==b':'){if eq_ascii(rule[..colon].trim_ascii(),b"color"){if let Some(c)=html_color(&rule[colon+1..]){current=c;}}}}}if quote!=0&&i<attrs.len(){i+=1;}}else if i==k{i+=1;} }
+            }
+            let block=matches!(name,b"p"|b"div"|b"h1"|b"h2"|b"h3"|b"li"|b"br"|b"hr"|b"tr"|b"section"|b"article");
+            if block && lens[count-1]>0 && count<6 {count+=1;colors[count-1]=current;}
+            p=end+1;continue;
+        }
+        if body[p]==b'&' { if let Some(semi)=body[p..].iter().take(12).position(|b|*b==b';') { let entity=&body[p+1..p+semi]; let decoded=match entity {b"amp"=>Some(b'&'),b"lt"=>Some(b'<'),b"gt"=>Some(b'>'),b"quot"=>Some(b'"'),b"apos"=>Some(b'\''),b"nbsp"=>Some(b' '),_=>None};if let Some(ch)=decoded{let n=lens[count-1];if n<96{lines[count-1][n]=ch;lens[count-1]+=1;}p+=semi+1;continue;} } }
+        let b=body[p];p+=1;if b==b'\r'{continue;}if b==b'\n'||b==b'\t'{if lens[count-1]>0&&count<6{count+=1;colors[count-1]=current;}continue;}if b<0x20{continue;}let n=lens[count-1];if n<96{lines[count-1][n]=b;lens[count-1]+=1;}else if count<6{count+=1;colors[count-1]=current;lines[count-1][0]=b;lens[count-1]=1;}
+    }
+    while count>1&&lens[count-1]==0{count-=1;} count
+}
+
 pub struct BrowserApp {
     pub url: [u8; 128],
     pub url_len: usize,
@@ -16,7 +70,19 @@ pub struct BrowserApp {
     pub page_title_len: usize,
     pub page_lines: [[u8; 96]; 6],
     pub page_line_lens: [usize; 6],
+    pub page_line_colors: [u32; 6],
     pub page_line_count: usize,
+    pub request_pending: bool,
+    pub request_host: [u8; 96],
+    pub request_host_len: usize,
+    pub request_path: [u8; 180],
+    pub request_path_len: usize,
+    pub request_ip: crate::drivers::netstack::Ipv4Address,
+    pub request_port: u16,
+    pub request_deadline: usize,
+    pub request_state: u8,
+    pub response_data: [u8; 2048],
+    pub response_len: usize,
 }
 
 impl BrowserApp {
@@ -28,6 +94,10 @@ impl BrowserApp {
             web_request_sent: false,
             page_title: [0; 64], page_title_len: 0,
             page_lines: [[0; 96]; 6], page_line_lens: [0; 6], page_line_count: 0,
+            page_line_colors:[Color::TEXT_MAIN;6],
+            request_pending: false, request_host: [0;96], request_host_len:0,
+            request_path:[0;180], request_path_len:0, request_ip:crate::drivers::netstack::Ipv4Address([0;4]), request_port:80,
+            request_deadline:0, request_state:0, response_data:[0;2048], response_len:0,
         };
         app.set_url(b"minos://help");
         app
@@ -121,39 +191,35 @@ impl BrowserApp {
     pub fn navigate(&mut self) {
         let value = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
         self.web_request_sent = false;
+        if value.starts_with("https://") {
+            self.active_tab=3; self.page_loaded=false; self.request_pending=false;
+            self.status=crate::gui::ui_text("HTTPS/TLS bu çekirdek motorunda desteklenmiyor.","HTTPS/TLS is not supported by this kernel renderer.");
+            self.address_focused=false; return;
+        }
         if let Some(rest) = value.strip_prefix("http://") {
-            let host_end = rest.find('/').unwrap_or(rest.len());
-            let host = &rest[..host_end];
-            if host.is_empty() || host.len() > 96 {
+            let authority_end = rest.find('/').unwrap_or(rest.len());
+            let authority = &rest[..authority_end];
+            let mut path = if authority_end < rest.len() { &rest[authority_end..] } else { "/" };
+            if let Some(q) = path.strip_prefix('?') { path = q; }
+            let (host, port) = match authority.rsplit_once(':') {
+                Some((h,p)) if !h.contains(']') => match p.parse::<u16>() { Ok(n) if n>0 => (h,n), _ => ("",0) },
+                _ => (authority,80),
+            };
+            if host.is_empty() || host.len() > 96 || path.len()>180 || port==0 {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.");
             } else if !crate::drivers::e1000::is_ready() {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable.");
             } else {
-                // Canlı DNS sorgusu fırlat
-                let _ = crate::drivers::netstack::dns_query(host);
                 self.active_tab = 3;
-                self.page_loaded = true;
-                self.web_request_sent = true;
-
-                // Web Sayfası İçeriğini Render Et
-                let mut title_buf = TextBuf::new();
-                title_buf.push_str("HTTP: ");
-                title_buf.push_str(host);
-
-                self.set_web_content(
-                    title_buf.as_str(),
-                    &[
-                        "HTTP/1.1 200 OK - HTML Belgesi Yuklendi",
-                        "Host: QEMU Gateway (10.0.2.2) uzerinden baglanti acik",
-                        "<h1>MinOS Web Gezgini: Canli Internet Sayfasi</h1>",
-                        "<p>Arayuz: e1000 PCI bagdastiricisi ve TCP/IP ag yigini aktif.</p>",
-                        "<p>Status: HTTP GET ve DNS istek paketleri basariyla iletildi.</p>",
-                        "Sayfa icerigi HTML DOM agacina aktarildi.",
-                    ],
-                );
-                self.status = crate::gui::ui_text("Web sayfası yüklendi (HTTP 200 OK).", "Web page loaded (HTTP 200 OK).");
+                self.page_loaded = false;
+                self.web_request_sent = false;
+                self.request_host = [0;96]; self.request_host_len=host.len(); self.request_host[..host.len()].copy_from_slice(host.as_bytes());
+                self.request_path = [0;180]; self.request_path_len=path.len(); self.request_path[..path.len()].copy_from_slice(path.as_bytes());
+                self.request_port=port; self.request_state=0; self.request_pending=true; self.response_len=0;
+                self.status = crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...");
+                self.page_title=[0;64]; self.page_title_len=0; self.page_line_count=0;
             }
             self.address_focused = false;
             return;
@@ -175,10 +241,9 @@ impl BrowserApp {
                 self.net_online = crate::drivers::e1000::is_ready();
                 if self.net_online {
                     // Gateway'e ARP çözümlemesi ve ICMP Echo gönder
-                    let sent = crate::drivers::netstack::ping(
-                        crate::drivers::netstack::GATEWAY_IP,
-                    );
-                    self.ping_ok = sent || crate::drivers::netstack::arp_lookup(crate::drivers::netstack::GATEWAY_IP).is_some();
+                    let gateway=crate::drivers::netstack::gateway_ip();
+                    let sent = crate::drivers::netstack::ping(gateway);
+                    self.ping_ok = sent || crate::drivers::netstack::arp_lookup(gateway).is_some();
                     self.page_loaded = true;
                     self.status = crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent).");
                 } else {
@@ -188,11 +253,80 @@ impl BrowserApp {
             }
             _ => {
                 self.page_loaded = false;
-                self.status = crate::gui::ui_text("Web erişimi yok: TCP/HTTP/TLS ve DNS henüz desteklenmiyor.", "Web access unavailable: TCP/HTTP/TLS and DNS are not supported yet.");
+                self.status = crate::gui::ui_text("Desteklenen: http:// ve minos:// adresleri.", "Supported schemes: http:// and minos://.");
             }
         }
         self.address_focused = false;
     }
+
+    /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
+    pub fn poll_network(&mut self) {
+        if !self.request_pending { return; }
+        let now = crate::main_monotonic_ms();
+        if self.request_deadline==0 { self.request_deadline=now.wrapping_add(8000); }
+        if now.wrapping_sub(self.request_deadline) < usize::MAX/2 {
+            self.request_pending=false;
+            self.page_loaded=false;
+            self.status=crate::gui::ui_text("Ağ isteği zaman aşımına uğradı.", "Network request timed out.");
+            crate::drivers::netstack::tcp_clear_result();
+            self.request_state=0;
+            self.request_deadline=0;
+            return;
+        }
+        match self.request_state {
+            0 => {
+                let host=core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+                if let Some(ip)=crate::drivers::netstack::resolve_ipv4(host) {
+                    self.request_ip=ip;
+                    let port=self.request_port;
+                    if crate::drivers::netstack::tcp_begin(ip,port,49153) { self.request_state=1; self.status=crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP..."); }
+                    else { self.finish_network_error(crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection.")); }
+                } else {
+                    self.finish_network_error(crate::gui::ui_text("DNS adı çözümlenemedi.", "DNS lookup failed."));
+                }
+            }
+            1 => {
+                if crate::drivers::netstack::tcp_reset_received() { self.finish_network_error(crate::gui::ui_text("Sunucu bağlantıyı reddetti.", "Server rejected the connection.")); }
+                else if crate::drivers::netstack::tcp_syn_acked() {
+                    let host=core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+                    let path=core::str::from_utf8(&self.request_path[..self.request_path_len]).unwrap_or("/");
+                    let mut req=[0u8;512]; let mut n=0;
+                    let mut add=|s:&[u8]| { let k=s.len().min(req.len()-n); req[n..n+k].copy_from_slice(&s[..k]); n+=k; };
+                    add(b"GET "); add(path.as_bytes()); add(b" HTTP/1.0\r\nHost: "); add(host.as_bytes());
+                    add(b"\r\nUser-Agent: MinOS/1.0\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n");
+                    if crate::drivers::netstack::tcp_send(&req[..n]) { self.request_state=2; self.web_request_sent=true; self.status=crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response..."); }
+                }
+            }
+            2 => {
+                let room=self.response_data.len().saturating_sub(self.response_len);
+                if room>0 { self.response_len+=crate::drivers::netstack::take_tcp_data(&mut self.response_data[self.response_len..]); }
+                if self.response_len>0 {
+                    if let Some(end)=find_bytes(&self.response_data[..self.response_len],b"\r\n\r\n") {
+                        let status_end=find_bytes(&self.response_data[..end],b"\r\n").unwrap_or(end);
+                        self.page_title=[0;64];
+                        let title_len=self.request_host_len.min(64); self.page_title[..title_len].copy_from_slice(&self.request_host[..title_len]); self.page_title_len=title_len;
+                        let status_bytes=&self.response_data[..status_end]; let status_len=status_bytes.len().min(96);
+                        self.page_lines[0]=[0;96]; self.page_lines[0][..status_len].copy_from_slice(&status_bytes[..status_len]); self.page_line_lens[0]=status_len;
+                        self.page_lines[1]=[0;96]; self.page_lines[1][..24].copy_from_slice(b"HTTP response received."); self.page_line_lens[1]=24; self.page_line_count=2;
+                        let body_start=end+4;
+                        let body=&self.response_data[body_start..self.response_len];
+                        if body.iter().any(|b|*b==b'<') { self.page_line_count=render_html_text(body,&mut self.page_lines,&mut self.page_line_lens,&mut self.page_line_colors); }
+                        else { for line in split_http_lines(body).take(6) {let next=self.page_line_count;self.page_lines[next]=[0;96];let bytes=line.as_bytes();let n=bytes.len().min(96);self.page_lines[next][..n].copy_from_slice(&bytes[..n]);self.page_line_lens[next]=n;self.page_line_colors[next]=Color::TEXT_MAIN;self.page_line_count+=1;} }
+                        self.page_loaded=true;
+                    }
+                }
+                if crate::drivers::netstack::tcp_finished() || self.response_len>=self.response_data.len() {
+                    if self.response_len>0 && !self.page_loaded { self.finish_http_response(); }
+                    if self.page_loaded { self.status=crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received."); self.request_pending=false; self.request_state=0; self.request_deadline=0; crate::drivers::netstack::tcp_clear_result(); }
+                    else { self.finish_network_error(crate::gui::ui_text("HTTP yanıtı okunamadı.", "Could not parse HTTP response.")); }
+                }
+            }
+            _ => self.finish_network_error(crate::gui::ui_text("Ağ isteği başarısız.", "Network request failed.")),
+        }
+    }
+
+    fn finish_http_response(&mut self) { self.page_loaded=true; self.status=crate::gui::ui_text("HTTP yanıtı alındı.","HTTP response received."); }
+    fn finish_network_error(&mut self, status:&'static str) { self.request_pending=false; self.page_loaded=false; self.status=status; self.request_state=0; self.request_deadline=0; crate::drivers::netstack::tcp_clear_result(); }
 
     pub fn back(&mut self) {
         self.set_url(b"minos://help");
@@ -272,13 +406,7 @@ impl BrowserApp {
                 let mut cur_y = doc_y + 8;
                 for i in 0..self.page_line_count {
                     let line_str = core::str::from_utf8(&self.page_lines[i][..self.page_line_lens[i]]).unwrap_or("");
-                    let text_color = if line_str.starts_with('<') {
-                        Color::ACCENT_BLUE
-                    } else if line_str.starts_with("HTTP") {
-                        Color::ACCENT_GREEN
-                    } else {
-                        Color::TEXT_MAIN
-                    };
+                    let text_color = self.page_line_colors[i];
                     MinGuiCompositor::draw_string(fb, doc_x + 12, cur_y, line_str, text_color);
                     cur_y += 18;
                 }
@@ -321,9 +449,20 @@ impl BrowserApp {
             "e1000 ağ kartı bulunamadı; ağ yığını pasif." | "e1000 adapter unavailable; network stack is inactive." => crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive."),
             "Geçersiz web adresi." | "Invalid web address." => crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address."),
             "Ağ kartı kullanılamıyor." | "Network adapter unavailable." => crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable."),
+            "DNS çözümlemesi bekleniyor..." | "Resolving host..." => crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host..."),
+            "DNS adı çözümlenemedi." | "DNS lookup failed." => crate::gui::ui_text("DNS adı çözümlenemedi.", "DNS lookup failed."),
+            "TCP bağlantısı kuruluyor..." | "Connecting over TCP..." => crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP..."),
+            "TCP bağlantısı başlatılamadı." | "Could not start TCP connection." => crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection."),
+            "Sunucu bağlantıyı reddetti." | "Server rejected the connection." => crate::gui::ui_text("Sunucu bağlantıyı reddetti.", "Server rejected the connection."),
+            "HTTP yanıtı bekleniyor..." | "Waiting for HTTP response..." => crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response..."),
+            "HTTP yanıtı alındı." | "HTTP response received." => crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received."),
+            "HTTP yanıtı okunamadı." | "Could not parse HTTP response." => crate::gui::ui_text("HTTP yanıtı okunamadı.", "Could not parse HTTP response."),
+            "Ağ isteği zaman aşımına uğradı." | "Network request timed out." => crate::gui::ui_text("Ağ isteği zaman aşımına uğradı.", "Network request timed out."),
+            "Desteklenen: http:// ve minos:// adresleri." | "Supported schemes: http:// and minos://." => crate::gui::ui_text("Desteklenen: http:// ve minos:// adresleri.", "Supported schemes: http:// and minos://."),
+            "HTTPS/TLS bu çekirdek motorunda desteklenmiyor." | "HTTPS/TLS is not supported by this kernel renderer." => crate::gui::ui_text("HTTPS/TLS bu çekirdek motorunda desteklenmiyor.", "HTTPS/TLS is not supported by this kernel renderer."),
             "DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor." | "DNS query sent; preparing HTTP connection." => crate::gui::ui_text("DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor.", "DNS query sent; preparing HTTP connection."),
             "DNS sorgusu gönderilemedi." | "DNS query could not be sent." => crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent."),
-            _ => crate::gui::ui_text("Web isteği bekliyor.", "Web request pending."),
+            _ => self.status,
         };
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 260, status, Color::TEXT_MUTED);
     }

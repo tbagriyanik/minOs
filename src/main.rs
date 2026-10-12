@@ -216,6 +216,8 @@ fn monotonic_ms() -> u64 {
     read_cpu_cycles() / cycles_per_us / 1_000
 }
 
+pub(crate) fn main_monotonic_ms() -> usize { monotonic_ms() as usize }
+
 fn cpu_vendor() -> &'static str {
     let result = core::arch::x86_64::__cpuid(0);
     let ebx = result.ebx;
@@ -429,6 +431,7 @@ pub extern "C" fn _start() -> ! {
     drivers::hda::init();
     drivers::e1000::init();
     drivers::netstack::init();
+    let _ = drivers::netstack::dhcp_request();
     drivers::usb::init();
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
@@ -1265,7 +1268,12 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.active_tab = t;
                                     }
                                 }
-                                if settings_app.active_tab == 2 && gui::in_rect(mx, my, (wx + 115, wy + 178, 130, 22)) {
+                                if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
+                                    settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+                                } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
+                                    settings_app.reset_defaults();
+                                    settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now);
+                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, (wx + 115, wy + 178, 130, 22)) {
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
                                     settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
                                 } else if settings_app.active_tab == 0 {
@@ -1294,18 +1302,6 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
                                         let track=apps::settings::SystemSettings::volume_track_rect(wx,wy); settings_app.set_volume_from_range(mx,track.0,track.2);
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
-                                        settings_app.save_all(&compositor, &mut fs_mgr.vfs);
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
-                                        settings_app.restore_windows(&mut compositor);
-                                        settings_app.reset_defaults();
-                                        settings_app.font.apply();
-                                        gui::theme::set_theme(settings_app.theme);
-                                        keyboard.layout = settings_app.keyboard_layout;
-                                        gui::set_ui_language_english(settings_app.language.is_english());
-                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
-                                        compositor.cal_year = now.year;
-                                        compositor.cal_month = now.month;
                                     }
                                 }
                                 if settings_app.active_tab == 1 {
@@ -1768,17 +1764,7 @@ pub extern "C" fn _start() -> ! {
                                     7 => settings_app.font.cycle(),
                                     8 => settings_app.is_muted = !settings_app.is_muted,
                                     9 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    10 => {
-                                        settings_app.restore_windows(&mut compositor);
-                                        settings_app.reset_defaults();
-                                        settings_app.font.apply();
-                                        gui::theme::set_theme(settings_app.theme);
-                                        keyboard.layout = settings_app.keyboard_layout;
-                                        gui::set_ui_language_english(settings_app.language.is_english());
-                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
-                                        compositor.cal_year = now.year;
-                                        compositor.cal_month = now.month;
-                                    }
+                                    10 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); }
                                     _ => {}
                                 },
                                 1 => match settings_app.focused_control {
@@ -1797,7 +1783,7 @@ pub extern "C" fn _start() -> ! {
                                         now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
                                     }
                                     13 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    14 => settings_app.reset_defaults(),
+                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
                                     _ => {}
                                 },
                                 2 => match settings_app.focused_control {
@@ -1806,12 +1792,12 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
                                     }
                                     5 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    6 => settings_app.reset_defaults(),
+                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
                                     _ => {}
                                 },
                                 _ => match settings_app.focused_control {
                                     4 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    5 => settings_app.reset_defaults(),
+                                    5 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
                                     _ => {}
                                 },
                             }
@@ -2193,6 +2179,7 @@ pub extern "C" fn _start() -> ! {
 
         // Ağ kartından gelen paketleri işle (ARP cevapları, ICMP vs.).
         drivers::e1000::poll();
+        browser_app.poll_network();
 
         // Beş parçalı, HDA PCM tabanlı melodi yürütücüsü. (HDA yoksa PIT/PC speaker fallback).
         audio_dev.set_volume(settings_app.volume);

@@ -117,12 +117,14 @@ impl SystemSettings {
                 "muted" => self.is_muted=val=="1",
                 "night" => self.night_light=val=="1",
                 "night_level" => if let Ok(v)=val.parse::<u8>() { self.night_light_level=v.min(100); },
+                "dhcp" => self.dhcp_enabled=val!="0",
                 "keyboard" => self.keyboard_layout=if val=="en" { KeyboardLayout::EnglishUS } else { KeyboardLayout::TurkishQ },
                 "language" => { self.language=if val=="en" { UiLanguage::English } else { UiLanguage::Turkish }; crate::gui::set_ui_language_english(self.language.is_english()); },
                 "font" => { self.font=match val { "compact"=>FontChoice::Compact, "cleartype"=>FontChoice::ClearType, _=>FontChoice::Normal }; self.font.apply(); },
                 "zoom" => { self.zoom=match val { "125"=>125, "150"=>150, _=>100 }; crate::gui::set_font_zoom(self.zoom); },
                 "region" => if let Ok(v)=val.parse::<u8>() { self.region=v.min(2); },
                 "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
+                "theme" => { self.theme = match val { "daylight"=>ThemeId::Daylight, "nord"=>ThemeId::Nord, "terminal"=>ThemeId::TerminalGreen, "sunset"=>ThemeId::Sunset, _=>ThemeId::VelvetDark }; theme::set_theme(self.theme); },
                 _ => {}
             }
         }
@@ -184,9 +186,26 @@ impl SystemSettings {
     // Aksiyonlar
     // -----------------------------------------------------------------
     pub fn reset_defaults(&mut self) {
+        let display_res = self.display_res;
+        let saved_window_states = self.saved_window_states;
         *self = Self::default();
         self.theme = theme::current();
+        self.display_res = display_res;
+        self.screen_res = display_res;
+        self.saved_window_states = saved_window_states;
         self.status_msg = crate::gui::ui_text("Varsayılan ayarlara dönüldü!", "Settings restored to defaults!");
+    }
+
+    /// Ayarları aktif sistem bileşenlerine uygular.
+    pub fn apply_runtime(&self, keyboard: &mut crate::drivers::keyboard::KeyboardState, compositor: &mut MinGuiCompositor, now: &mut DateTime) {
+        self.font.apply();
+        crate::gui::set_font_zoom(self.zoom);
+        crate::gui::theme::set_theme(self.theme);
+        keyboard.layout = self.keyboard_layout;
+        crate::gui::set_ui_language_english(self.language.is_english());
+        *now = DateTime::read().with_hour_offset(self.region_offset());
+        compositor.cal_year = now.year;
+        compositor.cal_month = now.month;
     }
 
     pub fn cycle_theme(&mut self) {
@@ -215,17 +234,23 @@ impl SystemSettings {
                 self.saved_window_states[i] = Some(win.get_state());
             }
         }
-        let (w,_h)=self.screen_res;
-        let mut cfg=[0u8;224]; let mut n=0usize;
+        let mut cfg=[0u8;384]; let mut n=0usize;
         fn put(d:&mut [u8], n:&mut usize, s:&[u8]) { let l=core::cmp::min(s.len(),d.len()-*n); d[*n..*n+l].copy_from_slice(&s[..l]); *n+=l; }
         fn put_num(d:&mut [u8], n:&mut usize, value:u8) {
             if value >= 100 { put(d,n,&[b'1',b'0'+(value-100)/10,b'0'+(value-100)%10]); }
             else if value >= 10 { put(d,n,&[b'0'+value/10,b'0'+value%10]); }
             else { put(d,n,&[b'0'+value]); }
         }
+        let put_u16 = |d: &mut [u8], n: &mut usize, value: usize| {
+            let value = value.min(9999);
+            let mut digits = [0u8; 4]; let mut len = 0;
+            let mut v = value;
+            loop { digits[3-len] = b'0' + (v % 10) as u8; len += 1; v /= 10; if v == 0 || len == 4 { break; } }
+            put(d, n, &digits[4-len..]);
+        };
         put(&mut cfg,&mut n,b"volume="); put_num(&mut cfg,&mut n,self.volume);
         put(&mut cfg,&mut n,b";muted="); put(&mut cfg,&mut n,if self.is_muted{b"1"}else{b"0"}); put(&mut cfg,&mut n,b";res=");
-        if w==800 {put(&mut cfg,&mut n,b"800x600")} else if w==1024 {put(&mut cfg,&mut n,b"1024x768")} else if w==1920 {put(&mut cfg,&mut n,b"1920x1080")} else {put(&mut cfg,&mut n,b"1280x720")};
+        put_u16(&mut cfg,&mut n,self.screen_res.0); put(&mut cfg,&mut n,b"x"); put_u16(&mut cfg,&mut n,self.screen_res.1);
         put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"});
         put(&mut cfg,&mut n,b";night_level="); put_num(&mut cfg,&mut n,self.night_light_level);
         put(&mut cfg,&mut n,b";keyboard="); put(&mut cfg,&mut n,if self.keyboard_layout==KeyboardLayout::EnglishUS{b"en"}else{b"tr"});
@@ -233,6 +258,8 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";font="); put(&mut cfg,&mut n,match self.font{FontChoice::Normal=>&b"normal"[..],FontChoice::Compact=>&b"compact"[..],FontChoice::ClearType=>&b"cleartype"[..]});
         put(&mut cfg,&mut n,b";zoom="); put(&mut cfg,&mut n,match self.zoom { 125=>b"125" as &[u8], 150=>b"150", _=>b"100" });
         put(&mut cfg,&mut n,b";region="); put(&mut cfg,&mut n,&[b'0'+self.region.min(2)]);
+        put(&mut cfg,&mut n,b";dhcp="); put(&mut cfg,&mut n,if self.dhcp_enabled{b"1"}else{b"0"});
+        put(&mut cfg,&mut n,b";theme="); put(&mut cfg,&mut n,match self.theme { ThemeId::VelvetDark=>b"velvet" as &[u8], ThemeId::Daylight=>b"daylight", ThemeId::Nord=>b"nord", ThemeId::TerminalGreen=>b"terminal", ThemeId::Sunset=>b"sunset" });
         vfs.write_file("settings.cfg",&cfg[..n]);
         self.status_msg = crate::gui::ui_text("Ayarlar ve pencere düzeni kalıcı olarak kaydedildi.", "Settings and window layout saved.");
     }

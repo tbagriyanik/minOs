@@ -2,8 +2,8 @@
 $q = 'C:\Program Files\qemu\qemu-system-x86_64.exe'
 $p = Start-Process -FilePath $q -ArgumentList @(
     '-cdrom', 'F:\minos\minos.iso', '-m', '512M', '-vga', 'std', '-display', 'none',
-    '-audiodev', 'driver=dsound,id=snd0',
-    '-device', 'intel-hda', '-device', 'hda-duplex,audiodev=snd0',
+    '-audiodev', 'driver=sdl,id=snd0',
+    '-device', 'intel-hda', '-device', 'hda-output,audiodev=snd0',
     '-netdev', 'user,id=n0', '-device', 'e1000,netdev=n0',
     '-serial', 'file:F:/minos/serial.log',
     '-monitor', 'tcp:127.0.0.1:45496,server,nowait', '-no-reboot'

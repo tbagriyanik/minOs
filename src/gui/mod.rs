@@ -49,7 +49,16 @@ pub enum FontMode {
     ClearType,
 }
 
-static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(2);
+static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(100);
+
+#[inline(always)]
+pub fn set_font_zoom(percent: u8) {
+    FONT_ZOOM.store(match percent { 125 => 125, 150 => 150, _ => 100 }, core::sync::atomic::Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn font_zoom() -> u8 { FONT_ZOOM.load(core::sync::atomic::Ordering::Relaxed) }
 
 #[inline(always)]
 pub fn set_font_mode(mode: FontMode) {
@@ -806,32 +815,35 @@ impl MinGuiCompositor {
     }
 
     fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [u8; 8], color: u32, scale: usize) {
+        let zoom = font_zoom() as usize;
         for row in 0..8 {
             let bits = glyph[row];
             if bits == 0 {
                 continue;
             }
-            if scale <= 1 && font_mode() == FontMode::ClearType {
+            if scale <= 1 && zoom == 100 && font_mode() == FontMode::ClearType {
                 for col in 0..8 {
                     let current = if (bits & (1 << (7 - col))) != 0 { 255u16 } else { 0 };
                     let left = if col > 0 && (bits & (1 << (8 - col))) != 0 { 255u16 } else { 0 };
                     let right = if col + 1 < 8 && (bits & (1 << (6 - col))) != 0 { 255u16 } else { 0 };
-                    let coverage = [
-                        ((current * 2 + left) / 3) as u8,
-                        current as u8,
-                        ((current * 2 + right) / 3) as u8,
-                    ];
-                    if coverage.iter().any(|amount| *amount > 0) {
-                        fb.put_subpixel_text(x + col, y + row, color, coverage);
+                    let r_cov = ((left * 77 + current * 179) / 256).min(255) as u8;
+                    let g_cov = current as u8;
+                    let b_cov = ((right * 77 + current * 179) / 256).min(255) as u8;
+                    if r_cov > 0 || g_cov > 0 || b_cov > 0 {
+                        fb.put_subpixel_text(x + col, y + row, color, [r_cov, g_cov, b_cov]);
                     }
                 }
             } else {
                 for col in 0..8 {
                     if (bits & (1 << (7 - col))) != 0 {
-                        if scale <= 1 {
+                        if scale <= 1 && zoom == 100 {
                             fb.put_pixel(x + col, y + row, color);
                         } else {
-                            fb.draw_rect(x + col * scale, y + row * scale, scale, scale, color);
+                            let left = col * scale * zoom / 100;
+                            let top = row * scale * zoom / 100;
+                            let right = ((col + 1) * scale * zoom / 100).max(left + 1);
+                            let bottom = ((row + 1) * scale * zoom / 100).max(top + 1);
+                            fb.draw_rect(x + left, y + top, right - left, bottom - top, color);
                         }
                     }
                 }
@@ -851,7 +863,7 @@ impl MinGuiCompositor {
             if let Some(g) = Self::glyph_for(c) {
                 Self::blit_glyph(fb, cur_x, y, g, color, 1);
             }
-            cur_x += spacing;
+            cur_x += (spacing * font_zoom() as usize + 50) / 100;
         }
     }
 
@@ -859,7 +871,8 @@ impl MinGuiCompositor {
     /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır.
     pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
         let scale = scale.max(1);
-        let advance = cell_advance(scale);
+        let zoom = font_zoom() as usize;
+        let advance = ((cell_advance(scale) * zoom + 50) / 100).max(1);
         let mut cur_x = x;
         for c in text.chars() {
             if let Some(g) = Self::glyph_for(c) {
@@ -890,7 +903,9 @@ impl MinGuiCompositor {
         if n == 0 {
             0
         } else {
-            (n - 1) * cell_advance(scale) + cell_width(scale)
+            let zoom = font_zoom() as usize;
+            (n - 1) * ((cell_advance(scale) * zoom + 50) / 100).max(1)
+                + ((cell_width(scale) * zoom + 50) / 100).max(1)
         }
     }
 
@@ -908,8 +923,29 @@ impl MinGuiCompositor {
         fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::BORDER);
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = r.0 + r.2.saturating_sub(tw) / 2;
-        let ty = r.1 + r.3.saturating_sub(8) / 2;
-        Self::draw_string(fb, tx, ty, label, label_color);
+        let text_h = (8 * font_zoom() as usize + 50) / 100;
+        let ty = r.1 + r.3.saturating_sub(text_h) / 2;
+        Self::draw_string_clipped(fb, tx, ty, label, label_color,
+            (r.0 + 2, r.1 + 1, r.2.saturating_sub(4), r.3.saturating_sub(2)));
+    }
+
+    /// Metni belirtilen dikdörtgenin içinde kırparak çizer.
+    pub fn draw_string_clipped(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+        rect: (usize, usize, usize, usize),
+    ) {
+        let old_clip = fb.clip();
+        let clip_x = old_clip.x0.max(rect.0);
+        let clip_y = old_clip.y0.max(rect.1);
+        let clip_right = old_clip.x1.min(rect.0.saturating_add(rect.2));
+        let clip_bottom = old_clip.y1.min(rect.1.saturating_add(rect.3));
+        fb.set_clip(clip_x, clip_y, clip_right.saturating_sub(clip_x), clip_bottom.saturating_sub(clip_y));
+        Self::draw_string(fb, x, y, text, color);
+        fb.set_clip(old_clip.x0, old_clip.y0, old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
     }
 
     /// MinOS Özel Kedi (Cat) Logosu ve Simgesi Çizici (16x16)

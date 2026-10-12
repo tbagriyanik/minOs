@@ -1,9 +1,9 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
-//! Intel High Definition Audio (HDA) sürücüsü — QEMU `intel-hda` + `hda-duplex`
+//! Intel High Definition Audio (HDA) sürücüsü — QEMU `intel-hda` + `hda-output`
 //! cihazıyla çalışacak şekilde yazılmıştır.
 //!
-//! QEMU tarafında: `-device intel-hda -device hda-duplex,audiodev=snd0`
+//! QEMU tarafında: `-device intel-hda -device hda-output,audiodev=snd0`
 //!
 //! Bu sürücü:
 //!   * PCI Konfigürasyon Alanı üzerinden (bus 0, slot herhangi) HDA denetleyicisini bulur
@@ -291,7 +291,13 @@ fn mmio_read16(base: u64, off: u32) -> u16 {
 /// Codec verb'i paketler (32-bit CORB girişi).
 #[inline]
 fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
-    ((cad as u32) << 28) | (nid << 20) | (verb << 8) | (payload & 0xFFFF)
+    if verb < 0x10 {
+        // 4-bit verbs carry a 16-bit parameter in bits 15:0.
+        ((cad as u32) << 28) | (nid << 20) | (verb << 16) | (payload & 0xFFFF)
+    } else {
+        // 12-bit verbs carry an 8-bit parameter in bits 7:0.
+        ((cad as u32) << 28) | (nid << 20) | (verb << 8) | (payload & 0xFF)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,25 +401,17 @@ pub fn init() {
         // için kesme açmak "UR" durumuna ve gecikmelerine neden oluyordu.
         mmio_write8(mmio_base, RIRB_INTCTL, 0x06);
 
-        // 4. Codec Komutları — QEMU hda-duplex için kod mux'u
+        // 4. Codec Komutları — QEMU hda-output codec'i
         serial_print("[HDA] codec verb'leri gonderiliyor\n");
-        // DAC D0 conversion format: 48kHz, 16-bit stereo (0x0011)
-        send_verb(make_verb(0, HDA_DAC_NID, 0x2, 0)); // set power state D0
-        send_verb(make_verb(0, HDA_DAC_NID, 0x412, OUT_STREAM_NUM as u32)); // converter format stream num
-        send_verb(make_verb(0, HDA_DAC_NID, 0x413, 0)); // stream channel
-        // Converter format 0x0011: 48kHz (0x41 << 14 ...) 16-bit, 2 chan
-        // QEMU sadece format demeti: 0x0011 = 48k? Aslında AC_FMT değeri
-        // 16-bit stereo 48kHz: 0xC011 = (48k=0x41<<14)|(16-bit)|(2 ch)
-        send_verb(make_verb(0, HDA_DAC_NID, 0x2, 0xC011));
+        // 48kHz, 16-bit stereo: stream and converter formats must match.
+        send_verb(make_verb(0, HDA_DAC_NID, 0x705, 0)); // D0 power state
+        send_verb(make_verb(0, HDA_DAC_NID, 0x706, (OUT_STREAM_NUM as u32) << 4)); // stream/channel ID
+        send_verb(make_verb(0, HDA_DAC_NID, 0x2, 0x0011)); // 48kHz, 16-bit, 2 channels
 
-        // Pin widget konfigüre (jeton: enable output, unmute)
-        send_verb(make_verb(0, HDA_OUT_PIN_NID, 0x3, 0xE000)); // amp mute off, gain max
-        send_verb(make_verb(0, HDA_OUT_PIN_NID, 0x707, 0)); // pin ctrl — unset
-        send_verb(make_verb(0, HDA_OUT_PIN_NID, 0x707, 0xC0)); // out enable + HP out
-
-        // DAC ampı aç
-        send_verb(make_verb(0, HDA_DAC_NID, 0x3, 0xB000 | (0x3F as u32))); // gain
-        send_verb(make_verb(0, HDA_DAC_NID, 0x35B, 0)); // amp left set
+        // Enable output on the headphone pin and unmute the DAC amplifier.
+        send_verb(make_verb(0, HDA_OUT_PIN_NID, 0x705, 0)); // D0 power state
+        send_verb(make_verb(0, HDA_OUT_PIN_NID, 0x707, 0xC0)); // output + headphone drive
+        send_verb(make_verb(0, HDA_DAC_NID, 0x3, 0xB03F)); // output amp, unmuted, gain
 
         // 5. Output Stream 0 DMA kurulumu
         let sd = OUT_STREAM_BASE;
@@ -471,6 +469,15 @@ pub fn push_pcm(samples: &[i16]) {
             (*pool).pcm[WRITE_POS * 2 + 1] = ((s >> 8) & 0xFF) as u8;
             WRITE_POS = (WRITE_POS + 1) % ring_len;
         }
+    }
+}
+
+/// Çalma durduğunda DMA halkasını sessiz örneklerle doldurur.
+pub fn silence() {
+    if !is_ready() { return; }
+    unsafe {
+        let pool = dma_pool_virt() as *mut HdaDmaPool;
+        core::ptr::write_bytes((*pool).pcm.as_mut_ptr(), 0, (*pool).pcm.len());
     }
 }
 

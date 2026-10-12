@@ -80,6 +80,11 @@ $qemuArgs = @(
     "-boot", "d",
     "-serial", "stdio",
     "-vga", "std",
+    # SDL ses çıkışı DirectSound'un zorunlu capture/mikrofon açma hatasını önler.
+    "-audiodev", "driver=sdl,id=snd0",
+    "-device", "intel-hda",
+    # Yalnızca çıkış codec'i: DirectSoundCapture / mikrofon başlatılmaz.
+    "-device", "hda-output,audiodev=snd0",
     # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
     "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
     "-device", "e1000,netdev=n0"

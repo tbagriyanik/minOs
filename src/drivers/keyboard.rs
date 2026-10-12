@@ -18,6 +18,10 @@ pub enum KeyAction {
     Refresh,
     BrowserAddress,
     BrowserRefresh,
+    HomeKey,
+    EndKey,
+    Undo,
+    Redo,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -164,10 +168,14 @@ impl KeyboardState {
                 self.last_action = Some(KeyAction::Delete);
                 return None;
             }
+            0x47 if !self.num_lock => { self.last_action = Some(KeyAction::HomeKey); return None; } // Home
+            0x4F if !self.num_lock => { self.last_action = Some(KeyAction::EndKey); return None; }  // End
             0x2E if self.ctrl => { self.last_action = Some(KeyAction::CopyText); return None; } // Ctrl+C
             0x2F if self.ctrl => { self.last_action = Some(KeyAction::PasteText); return None; } // Ctrl+V
             0x2D if self.ctrl => { self.last_action = Some(KeyAction::CutText); return None; } // Ctrl+X
             0x1E if self.ctrl => { self.last_action = Some(KeyAction::SelectAllText); return None; } // Ctrl+A
+            0x2C if self.ctrl => { self.last_action = Some(KeyAction::Undo); return None; } // Ctrl+Z
+            0x15 if self.ctrl => { self.last_action = Some(KeyAction::Redo); return None; } // Ctrl+Y
             0x26 if self.ctrl => { self.last_action = Some(KeyAction::BrowserAddress); return None; } // Ctrl+L
             0x13 if self.ctrl => { self.last_action = Some(KeyAction::BrowserRefresh); return None; } // Ctrl+R
             0x48 if !self.num_lock => { // Arrow Up / keypad 8
@@ -246,6 +254,8 @@ impl KeyboardState {
             0x50 => { self.last_action = Some(KeyAction::ArrowDown); return None; }
             0x4B => { self.last_action = Some(KeyAction::ArrowLeft); return None; }
             0x4D => { self.last_action = Some(KeyAction::ArrowRight); return None; }
+            0x47 => { self.last_action = Some(KeyAction::HomeKey); return None; }
+            0x4F => { self.last_action = Some(KeyAction::EndKey); return None; }
             0x1C => { self.last_action = Some(KeyAction::EnterKey); return Some('\n'); }
             0x35 if self.num_lock => { self.last_char = Some('/'); return Some('/'); }
             0x37 if self.num_lock => { self.last_char = Some('*'); return Some('*'); }

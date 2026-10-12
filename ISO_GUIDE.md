@@ -56,7 +56,10 @@ Oluşan `minos.iso` dosyasını test etmek için:
 
 ```powershell
 # QEMU ile doğrudan test:
-qemu-system-x86_64 -cdrom minos.iso -m 128M -vga std -audiodev dsound,id=snd0 -machine pcspk-audiodev=snd0
+qemu-system-x86_64 -cdrom minos.iso -m 512M -vga std `
+  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 ```
+
+VirtualBox'ta VM Ayarları > Ses bölümünde sesi etkinleştirip **Intel HD Audio** denetleyicisini seçin.
 
 - **Gerçek Donanımda Çalıştırma:** Oluşturduğunuz `minos.iso` dosyasını **Rufus** veya **Ventoy** kullanarak bir USB belleğe yazdırıp doğrudan bilgisayarınızı MinOS ile başlatabilirsiniz.

@@ -128,7 +128,8 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 #### 3. QEMU ile Test Etme (Run in QEMU)
 ```powershell
-& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std
+& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std `
+  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 ```
 
 #### 4. VirtualBox Kurulumu & Ayarları (VirtualBox Setup)
@@ -138,6 +139,7 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 2. **Sanal Donanım İvmelendirmesi (VT-x / AMD-V):**
    - Windows kullanıyorsanız ve VirtualBox 64-bit seçeneği çıkmıyorsa, **Hyper-V**'nin açık olmadığından ve BIOS'ta **Intel VT-x / AMD-V** donanım sanallaştırmasının aktif olduğundan emin olun.
    - VM Ayarları -> **Sistem** -> **Hızlandırma** sekmesinde **Sanallaştırma Arabirimi** varsayılan/KVM olarak ayarlanmalıdır.
+3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **Ses Denetleyicisi** olarak **Intel HD Audio** seçin. MinOS'un HDA sürücüsü bu denetleyiciyi kullanır.
 
 ---
 

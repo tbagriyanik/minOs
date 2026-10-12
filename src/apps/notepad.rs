@@ -28,7 +28,28 @@ pub struct NotepadApp {
     pub last_click_tick: usize,
     pub last_click_pos: (usize, usize),
     pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Biçim, 4 Yardım
+    // Geri al / ileri al (undo/redo) yığın sayacı. Gerçek anlık görüntüler
+    // büyük bellek kapladığı için global `UNDO_STACK`/`REDO_STACK` içinde tutulur.
+    undo_len: u8,
+    redo_len: u8,
 }
+
+/// Undo/redo anlık görüntü yığını derinliği.
+const HISTORY_DEPTH: usize = 32;
+
+/// Metin anlık görüntüsü (undo/redo için).
+#[derive(Clone, Copy)]
+struct Snapshot {
+    chars: [char; 512],
+    len: usize,
+    cursor: usize,
+}
+
+const EMPTY_SNAPSHOT: Snapshot = Snapshot { chars: [' '; 512], len: 0, cursor: 0 };
+
+// Undo/redo yığınları: kernel yığınını şişirmemek için `static mut` olarak tutulur.
+static mut UNDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
+static mut REDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
 
 // Simple clipboard for copy / paste (static mutable, unsafe)
 static mut CLIPBOARD: [char; 512] = [' '; 512];
@@ -58,6 +79,7 @@ impl NotepadApp {
     // Paste clipboard content at cursor
     pub fn paste_clipboard(&mut self) {
         self.delete_selection();
+        self.push_history();
         unsafe {
             let amount = CLIPBOARD_LEN.min(512 - self.len);
             for i in (self.cursor..self.len).rev() {
@@ -79,6 +101,7 @@ impl NotepadApp {
                 self.selection_end = None;
                 return;
             }
+            self.push_history();
             // Shift remaining characters left
             for i in s..self.len - del_len {
                 self.buffer[i] = self.buffer[i + del_len];
@@ -108,6 +131,8 @@ impl NotepadApp {
             last_click_tick: 0,
             last_click_pos: (0, 0),
             menu: 0,
+            undo_len: 0,
+            redo_len: 0,
         };
 
         let initial_text = "Not Defteri\n-----------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
@@ -121,7 +146,81 @@ impl NotepadApp {
         app
     }
 
+    /// Değişiklikten önce mevcut durumu geri al yığınına iter ve
+    /// ileri al (redo) yığınını temizler.
+    fn push_history(&mut self) {
+        unsafe {
+            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
+            let depth = (self.undo_len as usize).min(HISTORY_DEPTH);
+            // Yığın doluysa en eski kaydı düşürerek yer aç (kayan pencere).
+            if depth >= HISTORY_DEPTH {
+                for i in 1..HISTORY_DEPTH {
+                    (*undo)[i - 1] = (*undo)[i];
+                }
+                (*undo)[HISTORY_DEPTH - 1] = self.snapshot();
+                self.undo_len = HISTORY_DEPTH as u8;
+            } else {
+                (*undo)[depth] = self.snapshot();
+                self.undo_len = (depth + 1) as u8;
+            }
+        }
+        self.redo_len = 0;
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let mut chars = [' '; 512];
+        chars.copy_from_slice(&self.buffer);
+        Snapshot { chars, len: self.len, cursor: self.cursor }
+    }
+
+    fn restore(&mut self, s: &Snapshot) {
+        self.buffer = s.chars;
+        self.len = s.len;
+        self.cursor = s.cursor.min(s.len);
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    /// Son düzenlemeyi geri alır (Ctrl+Z).
+    pub fn undo(&mut self) {
+        if self.undo_len == 0 {
+            return;
+        }
+        unsafe {
+            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
+            let redo = core::ptr::addr_of_mut!(REDO_STACK);
+            let u = self.undo_len as usize;
+            let cur = self.snapshot();
+            let prev = (*undo)[u - 1];
+            let r = (self.redo_len as usize).min(HISTORY_DEPTH - 1);
+            (*redo)[r] = cur;
+            self.redo_len = (r + 1) as u8;
+            self.undo_len -= 1;
+            self.restore(&prev);
+        }
+    }
+
+    /// Geri alınan düzenlemeyi yeniden uygular (Ctrl+Y).
+    pub fn redo(&mut self) {
+        if self.redo_len == 0 {
+            return;
+        }
+        unsafe {
+            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
+            let redo = core::ptr::addr_of_mut!(REDO_STACK);
+            let r = self.redo_len as usize;
+            let cur = self.snapshot();
+            let next = (*redo)[r - 1];
+            let u = (self.undo_len as usize).min(HISTORY_DEPTH - 1);
+            (*undo)[u] = cur;
+            self.undo_len = (u + 1) as u8;
+            self.redo_len -= 1;
+            self.restore(&next);
+        }
+    }
+
     pub fn insert_char(&mut self, c: char) {
+        self.push_history();
         self.delete_selection();
         if self.len < self.buffer.len() {
             for i in (self.cursor..self.len).rev() {
@@ -136,6 +235,7 @@ impl NotepadApp {
     pub fn backspace(&mut self) {
         if self.selection_start != self.selection_end && self.selection_start.is_some() { self.delete_selection(); return; }
         if self.cursor > 0 {
+            self.push_history();
             let deleted = self.cursor - 1;
             for i in deleted..self.len.saturating_sub(1) {
                 self.buffer[i] = self.buffer[i + 1];
@@ -147,25 +247,96 @@ impl NotepadApp {
     }
     pub fn delete_forward(&mut self) { if self.selection_start.is_some() && self.selection_start != self.selection_end { self.delete_selection(); } else if self.cursor < self.len { self.selection_start=Some(self.cursor); self.selection_end=Some(self.cursor+1); self.delete_selection(); } }
 
-    pub fn move_left(&mut self) {
-        self.cursor = match (self.selection_start, self.selection_end) {
-            (Some(start), Some(end)) if start != end => start.min(end),
+    /// İmleci satır başına taşır (Home tuşu).
+    pub fn move_home(&mut self) {
+        let mut start = self.cursor;
+        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        self.cursor = start;
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    /// İmleci satır sonuna taşır (End tuşu).
+    pub fn move_end(&mut self) {
+        let mut end = self.cursor;
+        while end < self.len && self.buffer[end] != '\n' { end += 1; }
+        self.cursor = end;
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    /// Bir kelimenin (harf/rakam/alt çizgi dizisi) başlangıç ve bitiş
+    /// dizinini döndürür (çift tık kelime seçimi için).
+    pub fn word_range_at(&self, idx: usize) -> (usize, usize) {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let idx = idx.min(self.len);
+        // İmleç bir kelimenin sonundaysa o kelimeyi seç.
+        let mut start = idx;
+        while start > 0 && is_word(self.buffer[start - 1]) { start -= 1; }
+        let mut end = idx;
+        while end < self.len && is_word(self.buffer[end]) { end += 1; }
+        (start, end)
+    }
+
+    /// Bir kelimeyi seçer (çift tık davranışı).
+    pub fn select_word_at(&mut self, idx: usize) {
+        let (s, e) = self.word_range_at(idx);
+        if s == e {
+            self.cursor = idx.min(self.len);
+            self.selection_start = None;
+            self.selection_end = None;
+        } else {
+            self.selection_start = Some(s);
+            self.selection_end = Some(e);
+            self.cursor = e;
+        }
+    }
+
+    /// Seçim çapasını (anchor) ayarlar; Shift+ok ile seçim genişletmek için.
+    fn anchor(&mut self) -> usize {
+        match (self.selection_start, self.selection_end) {
+            (Some(a), Some(b)) => if self.cursor == b { a } else { b },
+            _ => self.cursor,
+        }
+    }
+
+    /// İmleci bir sonraki konuma taşır; `select` true ise seçimi genişletir.
+    fn move_to(&mut self, target: usize, select: bool) {
+        if select {
+            let a = self.anchor();
+            self.cursor = target;
+            self.selection_start = Some(a.min(target));
+            self.selection_end = Some(a.max(target));
+        } else {
+            self.cursor = target;
+            self.selection_start = None;
+            self.selection_end = None;
+        }
+    }
+
+    pub fn move_left_ext(&mut self, select: bool) {
+        let target = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end && !select => start.min(end),
             _ => self.cursor.saturating_sub(1),
         };
-        self.selection_start = None;
-        self.selection_end = None;
+        self.move_to(target, select);
     }
 
-    pub fn move_right(&mut self) {
-        self.cursor = match (self.selection_start, self.selection_end) {
-            (Some(start), Some(end)) if start != end => start.max(end),
+    pub fn move_right_ext(&mut self, select: bool) {
+        let target = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end && !select => start.max(end),
             _ => (self.cursor + 1).min(self.len),
         };
-        self.selection_start = None;
-        self.selection_end = None;
+        self.move_to(target, select);
     }
 
-    pub fn move_vertical(&mut self, up: bool) {
+    pub fn move_left(&mut self) { self.move_left_ext(false); }
+
+    pub fn move_right(&mut self) { self.move_right_ext(false); }
+
+    pub fn move_vertical(&mut self, up: bool) { self.move_vertical_ext(up, false); }
+
+    pub fn move_vertical_ext(&mut self, up: bool, select: bool) {
         let mut line_start = self.cursor;
         while line_start > 0 && self.buffer[line_start - 1] != '\n' { line_start -= 1; }
         let column = self.cursor - line_start;
@@ -190,12 +361,20 @@ impl NotepadApp {
                 (next_start + column).min(next_end)
             }
         };
-        self.cursor = target;
-        self.selection_start = None;
-        self.selection_end = None;
+        if select {
+            let a = self.anchor();
+            self.cursor = target;
+            self.selection_start = Some(a.min(target));
+            self.selection_end = Some(a.max(target));
+        } else {
+            self.cursor = target;
+            self.selection_start = None;
+            self.selection_end = None;
+        }
     }
 
     pub fn clear(&mut self) {
+        self.push_history();
         self.len = 0;
         self.cursor = 0;
         for c in self.buffer.iter_mut() {
@@ -210,12 +389,60 @@ impl NotepadApp {
         self.selection_start = Some(0);
         self.selection_end = Some(self.len);
     }
+    /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
+    pub const TEXT_X: usize = GUTTER_W + 12;
+    /// Metin alanı başlangıcının pencere içi Y koordinatı (araç çubuğu + boşluk).
+    pub const TEXT_Y: usize = 62;
+
+    /// Pencere içi fare (x, y) koordinatını metin indeksine çevirir.
+    /// `win_w` satır kaydırma (wrap) hesabı için, `scroll_y` dikey kaydırma
+    /// ofseti için kullanılır. Windows Notepad gibi tıklanan karaktere imleci
+    /// konumlandırır.
+    pub fn index_at_scrolled(
+        &self,
+        x: usize,
+        y: usize,
+        win_w: usize,
+        scroll_y: usize,
+    ) -> usize {
+        // Metin alanı genişliği ve satır başına düşen karakter sayısı.
+        let text_w = win_w
+            .saturating_sub(12 + GUTTER_W + 16 + crate::gui::scrollbar::SCROLLBAR_THICKNESS);
+        let wrap_cols = (text_w / CHAR_W).max(1);
+
+        let click_col = x.saturating_sub(Self::TEXT_X) / CHAR_W;
+        // Kaydırma ofseti satır cinsindendir.
+        let scroll_lines = scroll_y / LINE_H;
+        let click_row = scroll_lines + (y.saturating_sub(Self::TEXT_Y)) / LINE_H;
+
+        // Satır kaydırmayı (wrap) hesaba katarak istenen satır/sütuna ulaş.
+        let mut line = 0usize;
+        let mut col = 0usize;
+        let mut idx = 0usize;
+        while idx < self.len {
+            if line == click_row && col >= click_col { break; }
+            let ch = self.buffer[idx];
+            if ch == '\n' {
+                if line == click_row { break; }
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if col >= wrap_cols {
+                    if line == click_row { idx += 1; break; }
+                    line += 1;
+                    col = 0;
+                }
+            }
+            idx += 1;
+        }
+        idx.min(self.len)
+    }
+
+    /// Eski imza (kaydırma/wrap bilgisi olmadan). Geriye dönük uyumluluk için.
     pub fn index_at(&self, x: usize, y: usize, win_x: usize, win_y: usize) -> usize {
-        let col = x.saturating_sub(win_x + 42) / 7;
-        let row = y.saturating_sub(win_y + 66) / 16;
-        let mut line = 0; let mut idx = 0;
-        while idx < self.len && line < row { if self.buffer[idx] == '\n' { line += 1; } idx += 1; }
-        let mut pos = 0; while idx < self.len && pos < col && self.buffer[idx] != '\n' { idx += 1; pos += 1; } idx.min(self.len)
+        let _ = win_y;
+        self.index_at_scrolled(x.saturating_sub(win_x), y.saturating_sub(win_y), 460, 0)
     }
 
     /// Metnin kapladığı toplam satır sayısı ve en uzun satır uzunluğu (px).

@@ -1,9 +1,14 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
 
-const MAX_POINTS: usize = 512;
+/// Tuval üzerinde tutulabilecek en fazla nokta.
+const MAX_POINTS: usize = 4096;
+/// Fırça karesinin kenar uzunluğu (px) — kalemin merkezi bu kareye ortalanır.
 const BRUSH_SIZE: usize = 7;
-const ERASER_RADIUS: usize = 10;
+/// Silginin yarıçapı (px).
+const ERASER_RADIUS: usize = 14;
+/// Araç çubuğu yüksekliği (px). Pencere içi tuvalin üst boşluğu buradan gelir.
+const TOOLBAR_H: usize = 58;
 const EMPTY_POINT: PaintPoint = PaintPoint { x: 0, y: 0, color: Color::ACCENT_BLUE };
 
 static mut POINTS: [PaintPoint; MAX_POINTS] = [EMPTY_POINT; MAX_POINTS];
@@ -32,18 +37,36 @@ impl PaintApp {
         }
     }
 
+    /// Tuvalin başlangıç X koordinatı (pencere içi).
+    pub fn canvas_x() -> usize { 8 }
+    /// Tuvalin başlangıç Y koordinatı (pencere içi, araç çubuğunun altı).
+    pub fn canvas_y() -> usize { TOOLBAR_H }
+
+    /// Tuval alanının (x, y, w, h) pencere içi ölçülerini hesaplar.
+    pub fn canvas_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
+        let x = Self::canvas_x();
+        let y = Self::canvas_y();
+        let cw = w.saturating_sub(16);
+        let ch = h.saturating_sub(TOOLBAR_H + 10);
+        (x, y, cw, ch)
+    }
+
+    /// Pencere içi (px, py) koordinatını tuval koordinatına çevirir.
+    /// Tuval dışındaysa `None` döner.
+    pub fn to_canvas(&self, w: usize, h: usize, px: usize, py: usize) -> Option<(usize, usize)> {
+        let (cx, cy, cw, ch) = Self::canvas_rect(w, h);
+        if cw == 0 || ch == 0 || px < cx || py < cy || px >= cx + cw || py >= cy + ch {
+            return None;
+        }
+        Some((px - cx, py - cy))
+    }
+
+    /// Verilen tuval noktasına fırça uygular. Windows Paint gibi: hızlı fare
+    /// hareketlerinde iki nokta arasını enterpolasyonla doldurarak sürekli ve
+    /// akıcı bir çizgi üretir (noktalı/kesik çizgi oluşmaz).
     pub fn paint(&mut self, x: usize, y: usize) {
         if self.eraser {
-            let mut out = 0;
-            let points = core::ptr::addr_of_mut!(POINTS);
-            for i in 0..self.len {
-                let point = unsafe { (*points)[i] };
-                if point.x.abs_diff(x) > ERASER_RADIUS || point.y.abs_diff(y) > ERASER_RADIUS {
-                    unsafe { (*points)[out] = point; }
-                    out += 1;
-                }
-            }
-            self.len = out;
+            self.erase(x, y);
             self.last = Some((x, y));
             return;
         }
@@ -64,6 +87,23 @@ impl PaintApp {
         self.last = Some((x, y));
     }
 
+    /// Silgi: merkez çevresindeki noktaları dairesel olarak kaldırır.
+    pub fn erase(&mut self, x: usize, y: usize) {
+        let points = core::ptr::addr_of_mut!(POINTS);
+        let mut out = 0;
+        for i in 0..self.len {
+            let point = unsafe { (*points)[i] };
+            let ddx = point.x.abs_diff(x) as isize;
+            let ddy = point.y.abs_diff(y) as isize;
+            let remove = ddx * ddx + ddy * ddy <= (ERASER_RADIUS * ERASER_RADIUS) as isize;
+            if !remove {
+                unsafe { (*points)[out] = point; }
+                out += 1;
+            }
+        }
+        self.len = out;
+    }
+
     pub fn end_stroke(&mut self) {
         self.last = None;
     }
@@ -74,16 +114,21 @@ impl PaintApp {
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
-        let canvas_x = x + 8;
-        let canvas_y = y + 58;
-        let canvas_w = w.saturating_sub(16);
-        let canvas_h = h.saturating_sub(68);
+        let (cx, cy, cw, ch) = Self::canvas_rect(w, h);
+        let canvas_x = x + cx;
+        let canvas_y = y + cy;
+        let canvas_w = cw;
+        let canvas_h = ch;
         fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, Color::WHITE);
+        fb.draw_rect_outline(canvas_x, canvas_y, canvas_w, canvas_h, Color::BORDER);
         let points = core::ptr::addr_of!(POINTS);
         for i in 0..self.len {
             let point = unsafe { (*points)[i] };
             if point.x < canvas_w && point.y < canvas_h {
-                fb.draw_rect(canvas_x + point.x, canvas_y + point.y, BRUSH_SIZE, BRUSH_SIZE, point.color);
+                // Noktayı fırça boyutuna göre ortala (kalem merkezli çizim).
+                let px = canvas_x + point.x.saturating_sub(BRUSH_SIZE / 2);
+                let py = canvas_y + point.y.saturating_sub(BRUSH_SIZE / 2);
+                fb.draw_rect(px, py, BRUSH_SIZE, BRUSH_SIZE, point.color);
             }
         }
 

@@ -176,7 +176,13 @@ fn terminate_app(
         2 => notepad.clear(),
         3 => *browser = apps::browser::BrowserApp::new(),
         4 => *imageviewer = apps::imageviewer::ImageViewerApp::new(),
-        5 => *musicplayer = apps::musicplayer::MusicPlayerApp::new(),
+        5 => {
+            *musicplayer = apps::musicplayer::MusicPlayerApp::new();
+            drivers::hda::silence();
+            // PC speaker çıkışını da kapat.
+            let audio = drivers::audio::AudioDevice::new();
+            audio.set_pc_speaker_tone(0);
+        }
         6 => *videoplayer = apps::videoplayer::VideoPlayerApp::new(),
         7 => *taskmgr = apps::taskmgr::TaskManagerApp::new(),
         8 => *calculator = apps::calculator::CalculatorApp::new(),
@@ -406,7 +412,9 @@ pub extern "C" fn _start() -> ! {
     let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
     let mut last_title_click: u64 = 0;
-    
+        // Not Defteri metin seçimi sürükleme durumu.
+    let mut notepad_dragging = false;
+
 
     let mut app_render_cycles = [0u64; 11];
     taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
@@ -620,7 +628,30 @@ pub extern "C" fn _start() -> ! {
                 if !in_menu && !in_button { taskmgr_app.launch_menu_open = false; }
             }
             let mut consumed = false;
-            if let Some(w) = compositor.windows[2] { if w.is_focused && gui::in_rect(mx, my, (w.x+6,w.y+58,w.width-12,180)) { let at=notepad_app.index_at(mx,my,w.x,w.y); notepad_app.selection_start=Some(at); notepad_app.selection_end=Some(at); consumed=true; } }
+            // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
+            // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
+            if let Some(w) = compositor.windows[2] {
+                if w.is_focused
+                    && gui::in_rect(mx, my, (w.x + 6, w.y + 58, w.width.saturating_sub(12), w.height.saturating_sub(90)))
+                {
+                    let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
+                    // Çift tık algılama: aynı konuma kısa sürede ikinci tık.
+                    let dbl = notepad_app.last_click_tick.abs_diff(loop_counter as usize) < 400_000
+                        && notepad_app.last_click_pos.0.abs_diff(mx) < 4
+                        && notepad_app.last_click_pos.1.abs_diff(my) < 4;
+                    if dbl {
+                        notepad_app.select_word_at(at);
+                    } else {
+                        notepad_app.cursor = at;
+                        notepad_app.selection_start = Some(at);
+                        notepad_app.selection_end = Some(at);
+                        notepad_dragging = true;
+                    }
+                    notepad_app.last_click_tick = loop_counter as usize;
+                    notepad_app.last_click_pos = (mx, my);
+                    consumed = true;
+                }
+            }
 
             // A) Takvim açıkken
             if compositor.is_calendar_open {
@@ -921,10 +952,10 @@ pub extern "C" fn _start() -> ! {
 
                     // Kapat [X]
                     if gui::in_rect(mx, my, win.close_rect()) {
-                        if let Some(w) = compositor.windows[idx].as_mut() {
-                            w.is_open = false;
-                        }
-                        compositor.focus_top_window();
+                        terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
+                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                            &mut terminal_app);
                         break;
                     }
                     // Maksimize / Geri Yükle
@@ -1105,6 +1136,13 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                                 if settings_app.active_tab == 1 {
+                                    for i in 0..3 {
+                                        if gui::in_rect(mx,my,apps::settings::SystemSettings::zoom_btn_rect(wx,wy,i)) {
+                                            settings_app.zoom = [100,125,150][i];
+                                            gui::set_font_zoom(settings_app.zoom);
+                                            settings_app.status_msg = gui::ui_text("Yazı yakınlaştırması değiştirildi.", "Font zoom changed.");
+                                        }
+                                    }
                                     for i in 0..4 {
                                         if gui::in_rect(mx,my,apps::settings::SystemSettings::resolution_btn_rect(wx,wy,i)) {
                                             let requested = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), _ => (1920,1080) };
@@ -1176,7 +1214,7 @@ pub extern "C" fn _start() -> ! {
                                     settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                                 }
                                 if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
-                                    let at = notepad_app.index_at(mx, my, wx, wy);
+                                    let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[2].map(|w| w.scroll.y).unwrap_or(0));
                                     notepad_app.cursor = at;
                                     notepad_app.selection_start = Some(at);
                                     notepad_app.selection_end = Some(at);
@@ -1298,15 +1336,19 @@ pub extern "C" fn _start() -> ! {
                             9 => {
                                 let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
                                 if my >= wy + 34 && my < wy + 56 {
+                                    // Araç çubuğu: renk paleti, silgi ve temizle düğmeleri.
                                     if mx >= palette_start && mx < palette_start + 16 { paint_app.color=gui::Color::ACCENT_BLUE; paint_app.eraser=false; }
                                     else if mx >= palette_start + 22 && mx < palette_start + 38 { paint_app.color=gui::Color::ACCENT_RED; paint_app.eraser=false; }
                                     else if mx >= palette_start + 44 && mx < palette_start + 60 { paint_app.color=gui::Color::ACCENT_GREEN; paint_app.eraser=false; }
                                     else if mx >= palette_start + 66 && mx < palette_start + 82 { paint_app.color=gui::Color::BLACK; paint_app.eraser=false; }
                                     else if mx >= palette_start + 92 && mx < palette_start + 150 { paint_app.eraser=true; }
                                     else if mx >= wx + ww.saturating_sub(66) && mx < wx + ww.saturating_sub(8) { paint_app.clear(); }
-                                } else if my >= wy + 58 && my < wy + wh.saturating_sub(10)
-                                    && mx >= wx + 8 && mx < wx + ww - 8 {
-                                    paint_app.paint(mx - (wx + 8), my - (wy + 58));
+                                } else if let Some((cxp, cyp)) = paint_app.to_canvas(ww, wh, mx - wx, my - wy) {
+                                    // İlk tıklama noktası (last=None iken tek nokta başlangıcı).
+                                    paint_app.paint(cxp, cyp);
+                                } else {
+                                    // Tuval dışına tıklandı: kalem yolunu bitir.
+                                    paint_app.end_stroke();
                                 }
                             }
                             _ => {}
@@ -1340,13 +1382,6 @@ pub extern "C" fn _start() -> ! {
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
                             &mut terminal_app);
-                    } else {
-                        compositor.is_start_menu_open = true;
-                        compositor.is_context_menu_open = false;
-                        compositor.active_start_group = 3;
-                        compositor.selected_start_item = 0;
-                        compositor.confirm_shutdown = false;
-                        compositor.confirm_restart = false;
                     }
                 }
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
@@ -1376,7 +1411,7 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_prev();
                         } else if np_focused {
-                            notepad_app.move_vertical(true);
+                            notepad_app.move_vertical_ext(true, keyboard.shift);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_up();
                         } else if let Some(w) = compositor.windows[0] {
@@ -1408,7 +1443,7 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_next();
                         } else if np_focused {
-                            notepad_app.move_vertical(false);
+                            notepad_app.move_vertical_ext(false, keyboard.shift);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_down();
                         } else if let Some(w) = compositor.windows[0] {
@@ -1425,7 +1460,7 @@ pub extern "C" fn _start() -> ! {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
                     } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
-                        notepad_app.move_left();
+                        notepad_app.move_left_ext(keyboard.shift);
                     } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 0;
                         taskmgr_app.focused_control = 0;
@@ -1438,7 +1473,7 @@ pub extern "C" fn _start() -> ! {
                             compositor.selected_start_item = 0;
                         }
                     } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
-                        notepad_app.move_right();
+                        notepad_app.move_right_ext(keyboard.shift);
                     } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
                         taskmgr_app.focused_control = 1;
@@ -1530,6 +1565,22 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::SelectAllText => {
                     let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
                     if focused { notepad_app.select_all(); }
+                }
+                drivers::keyboard::KeyAction::Undo => {
+                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { notepad_app.undo(); }
+                }
+                drivers::keyboard::KeyAction::Redo => {
+                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { notepad_app.redo(); }
+                }
+                drivers::keyboard::KeyAction::HomeKey => {
+                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { notepad_app.move_home(); }
+                }
+                drivers::keyboard::KeyAction::EndKey => {
+                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    if focused { notepad_app.move_end(); }
                 }
                 drivers::keyboard::KeyAction::Delete => {
                     // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
@@ -1637,12 +1688,14 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if let Some(w) = compositor.windows[9] {
-                if w.is_focused && mx >= w.x + 8 && mx < w.x + w.width - 8
-                    && my >= w.y + 58 && my < w.y + w.height - 10
-                {
-                    paint_app.paint(mx - (w.x + 8), my - (w.y + 58));
-                } else if w.is_focused {
-                    paint_app.end_stroke();
+                if w.is_focused {
+                    // Windows Paint davranışı: sol tuş basılı tutuldukça fare
+                    // hareketi sürekli çizer. Tuval dışına çıkınca vuruşu bitir.
+                    if let Some((cxp, cyp)) = paint_app.to_canvas(w.width, w.height, mx - w.x, my - w.y) {
+                        paint_app.paint(cxp, cyp);
+                    } else {
+                        paint_app.end_stroke();
+                    }
                 }
             }
             if compositor.is_volume_popup_open {
@@ -1651,7 +1704,12 @@ pub extern "C" fn _start() -> ! {
                     settings_app.set_volume_from_range(mx, track.0, track.2);
                 }
             }
-            if let Some(w) = compositor.windows[2] { if w.is_focused && notepad_app.selection_start.is_some() { let at=notepad_app.index_at(mx,my,w.x,w.y); notepad_app.selection_end=Some(at); } }
+            if notepad_dragging {
+                if let Some(w) = compositor.windows[2] {
+                    let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
+                    notepad_app.selection_end = Some(at);
+                }
+            }
             if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
                 // Tutamacı fare ile sürükle → kaydırma ofseti.
                 let track_top = compositor.windows[idx]
@@ -1722,6 +1780,7 @@ pub extern "C" fn _start() -> ! {
 
         if mouse_released {
             paint_app.end_stroke();
+            notepad_dragging = false;
             // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
             // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
             if let Some(idx) = dragging_win {
@@ -1877,6 +1936,7 @@ pub extern "C" fn _start() -> ! {
                 last_music_beat = anim_tick;
             }
         } else if speaker_on {
+            drivers::hda::silence();
             audio_dev.set_pc_speaker_tone(0);
             speaker_on = false;
             last_music_beat = anim_tick;

@@ -26,8 +26,17 @@ fn rgb(color: u32) -> u32 {
     theme::resolve(color)
 }
 
+/// 4x4 Bayer dither matrisi - renk geçişlerinde kademelenmeyi (color banding) tamamen ortadan kaldırır.
+const BAYER_4X4: [[i32; 4]; 4] = [
+    [-8,  0, -6,  2],
+    [ 4, -4,  6, -2],
+    [-5,  3, -7,  1],
+    [ 7, -1,  5, -3],
+];
+
 /// İki RGB rengini doğrusal olarak karıştırır (`t` / `n` oranında).
 #[inline(always)]
+#[allow(dead_code)]
 fn lerp_color(a: u32, b: u32, t: usize, n: usize) -> u32 {
     if n == 0 {
         return a;
@@ -39,9 +48,30 @@ fn lerp_color(a: u32, b: u32, t: usize, n: usize) -> u32 {
     let br = (b >> 16) & 0xFF;
     let bg = (b >> 8) & 0xFF;
     let bb = b & 0xFF;
-    let r = (ar * inv as u32 + br * t as u32) / n as u32;
-    let g = (ag * inv as u32 + bg * t as u32) / n as u32;
-    let bl = (ab * inv as u32 + bb * t as u32) / n as u32;
+    let r = (ar * inv as u32 + br * t as u32 + (n as u32 / 2)) / n as u32;
+    let g = (ag * inv as u32 + bg * t as u32 + (n as u32 / 2)) / n as u32;
+    let bl = (ab * inv as u32 + bb * t as u32 + (n as u32 / 2)) / n as u32;
+    (r << 16) | (g << 8) | bl
+}
+
+/// Dithering destekli pürüzsüz renk geçişi (kademelenmeyi yok eder).
+#[inline(always)]
+fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -> u32 {
+    if n == 0 {
+        return a;
+    }
+    let d = BAYER_4X4[cy & 3][cx & 3];
+    let inv = n - t;
+    let ar = (a >> 16) & 0xFF;
+    let ag = (a >> 8) & 0xFF;
+    let ab = a & 0xFF;
+    let br = (b >> 16) & 0xFF;
+    let bg = (b >> 8) & 0xFF;
+    let bb = b & 0xFF;
+
+    let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+    let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+    let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
     (r << 16) | (g << 8) | bl
 }
 
@@ -178,11 +208,12 @@ impl Framebuffer {
         if x0 >= x_end {
             return;
         }
+        let n = h.saturating_sub(1).max(1);
         for cy in y0..y_end {
             let t = cy - y;
-            let c = lerp_color(ct, cb, t, h.saturating_sub(1).max(1));
             let row_offset = cy * self.width;
             for cx in x0..x_end {
+                let c = lerp_color_dither(ct, cb, t, n, cx, cy);
                 let offset = row_offset + cx;
                 unsafe {
                     if offset < BACKBUFFER_LEN {
@@ -333,6 +364,7 @@ impl Framebuffer {
             return;
         }
 
+        let n = h.saturating_sub(1).max(1);
         for cy in y0..y_end {
             let dy = if cy < y + r {
                 (y + r - 1) as isize - cy as isize
@@ -343,7 +375,6 @@ impl Framebuffer {
             };
 
             let t = cy - y;
-            let c = lerp_color(ct, cb, t, h.saturating_sub(1).max(1));
             let row_offset = cy * self.width;
 
             for cx in x0..x_end {
@@ -359,6 +390,7 @@ impl Framebuffer {
                     continue;
                 }
 
+                let c = lerp_color_dither(ct, cb, t, n, cx, cy);
                 let offset = row_offset + cx;
                 unsafe {
                     if offset < BACKBUFFER_LEN {

@@ -604,11 +604,11 @@ impl NotepadApp {
             let items = match (self.menu, english) {
                 (1, true) => ["New Document", "Save", "Clear", ""],
                 (2, true) => ["Cut", "Copy", "Paste", "Select All"],
-                (3, true) => ["Pixel Font", "Compact", "ClearType Font", ""],
+                (3, true) => ["Normal Font (Sharp)", "Compact", "ClearType Font", ""],
                 (_, true) => ["About Notepad", "", "", ""],
                 (1, false) => ["Yeni Belge", "Kaydet", "Temizle", ""],
                 (2, false) => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
-                (3, false) => ["Piksel Font", "Sıkıştırılmış", "ClearType Font", ""],
+                (3, false) => ["Normal Font (Keskin)", "Sıkıştırılmış", "ClearType Font", ""],
                 _ => ["Not Defteri Hakkında", "", "", ""],
             };
             fb.draw_shadow(mx, win_y + 54, 150, 94, Color::SHADOW);

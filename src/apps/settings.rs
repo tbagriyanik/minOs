@@ -11,39 +11,35 @@ use crate::fs::vfs::VirtualFileSystem;
 pub enum UiLanguage { Turkish, English }
 impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish => Self::English, Self::English => Self::Turkish }; crate::gui::set_ui_language_english(self.is_english()); } pub fn is_english(&self) -> bool { matches!(self, Self::English) } }
 #[derive(Copy, Clone, PartialEq, Eq)]
-pub enum FontChoice { TurkishPixel, Compact, ClearType, Proportional }
+pub enum FontChoice { Normal, Compact, ClearType }
 
 impl FontChoice {
     /// Seçimi GUI font motoruna uygular (tek gerçek kaynak).
     pub fn apply(self) {
         let mode = match self {
-            FontChoice::TurkishPixel => crate::gui::FontMode::Pixel,
+            FontChoice::Normal => crate::gui::FontMode::Normal,
             FontChoice::Compact => crate::gui::FontMode::Compact,
             FontChoice::ClearType => crate::gui::FontMode::ClearType,
-            FontChoice::Proportional => crate::gui::FontMode::Proportional,
         };
         crate::gui::set_font_mode(mode);
     }
 
     pub fn label(self, english: bool) -> &'static str {
         match (self, english) {
-            (FontChoice::TurkishPixel, false) => "Yazı tipi: Türkçe Piksel",
-            (FontChoice::TurkishPixel, true) => "Font: Turkish Pixel",
+            (FontChoice::Normal, false) => "Yazı tipi: Normal (Keskin)",
+            (FontChoice::Normal, true) => "Font: Normal (Sharp)",
             (FontChoice::Compact, false) => "Yazı tipi: Sıkıştırılmış",
             (FontChoice::Compact, true) => "Font: Compact",
             (FontChoice::ClearType, false) => "Yazı tipi: ClearType",
             (FontChoice::ClearType, true) => "Font: ClearType",
-            (FontChoice::Proportional, false) => "Yazı tipi: Orantılı (Vektör)",
-            (FontChoice::Proportional, true) => "Font: Proportional (Vector)",
         }
     }
 
     pub fn cycle(&mut self) {
         *self = match self {
-            FontChoice::TurkishPixel => FontChoice::Compact,
+            FontChoice::Normal => FontChoice::Compact,
             FontChoice::Compact => FontChoice::ClearType,
-            FontChoice::ClearType => FontChoice::Proportional,
-            FontChoice::Proportional => FontChoice::TurkishPixel,
+            FontChoice::ClearType => FontChoice::Normal,
         };
         self.apply();
     }
@@ -92,7 +88,7 @@ impl SystemSettings {
             theme: ThemeId::VelvetDark,
             keyboard_layout: KeyboardLayout::TurkishQ,
             language: UiLanguage::English,
-            font: FontChoice::Proportional,
+            font: FontChoice::Normal,
             region: 0,
             volume: 75,
             is_muted: false,
@@ -123,7 +119,7 @@ impl SystemSettings {
                 "night_level" => if let Ok(v)=val.parse::<u8>() { self.night_light_level=v.min(100); },
                 "keyboard" => self.keyboard_layout=if val=="en" { KeyboardLayout::EnglishUS } else { KeyboardLayout::TurkishQ },
                 "language" => { self.language=if val=="en" { UiLanguage::English } else { UiLanguage::Turkish }; crate::gui::set_ui_language_english(self.language.is_english()); },
-                "font" => { self.font=match val { "compact"=>FontChoice::Compact, "cleartype"=>FontChoice::ClearType, "proportional"=>FontChoice::Proportional, _=>FontChoice::Proportional }; self.font.apply(); },
+                "font" => { self.font=match val { "compact"=>FontChoice::Compact, "cleartype"=>FontChoice::ClearType, _=>FontChoice::Normal }; self.font.apply(); },
                 "zoom" => { self.zoom=match val { "125"=>125, "150"=>150, _=>100 }; crate::gui::set_font_zoom(self.zoom); },
                 "region" => if let Ok(v)=val.parse::<u8>() { self.region=v.min(2); },
                 "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
@@ -234,7 +230,7 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";night_level="); put_num(&mut cfg,&mut n,self.night_light_level);
         put(&mut cfg,&mut n,b";keyboard="); put(&mut cfg,&mut n,if self.keyboard_layout==KeyboardLayout::EnglishUS{b"en"}else{b"tr"});
         put(&mut cfg,&mut n,b";language="); put(&mut cfg,&mut n,if self.language.is_english(){b"en"}else{b"tr"});
-        put(&mut cfg,&mut n,b";font="); put(&mut cfg,&mut n,match self.font{FontChoice::TurkishPixel=>&b"pixel"[..],FontChoice::Compact=>&b"compact"[..],FontChoice::ClearType=>&b"cleartype"[..],FontChoice::Proportional=>&b"proportional"[..]});
+        put(&mut cfg,&mut n,b";font="); put(&mut cfg,&mut n,match self.font{FontChoice::Normal=>&b"normal"[..],FontChoice::Compact=>&b"compact"[..],FontChoice::ClearType=>&b"cleartype"[..]});
         put(&mut cfg,&mut n,b";zoom="); put(&mut cfg,&mut n,match self.zoom { 125=>b"125" as &[u8], 150=>b"150", _=>b"100" });
         put(&mut cfg,&mut n,b";region="); put(&mut cfg,&mut n,&[b'0'+self.region.min(2)]);
         vfs.write_file("settings.cfg",&cfg[..n]);

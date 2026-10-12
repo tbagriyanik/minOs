@@ -1219,7 +1219,7 @@ pub extern "C" fn _start() -> ! {
                                         (2, 2) => notepad_app.paste_clipboard(),
                                         (2, 3) => notepad_app.select_all(),
                                         // Biçim Menüsü: Font seçenekleri
-                                        (3, 0) => { settings_app.font = apps::settings::FontChoice::TurkishPixel; settings_app.font.apply(); },
+                                        (3, 0) => { settings_app.font = apps::settings::FontChoice::Normal; settings_app.font.apply(); },
                                         (3, 1) => { settings_app.font = apps::settings::FontChoice::Compact; settings_app.font.apply(); },
                                         (3, 2) => { settings_app.font = apps::settings::FontChoice::ClearType; settings_app.font.apply(); },
                                         // Yardım Menüsü: Hakkında sekmesini aç

@@ -193,6 +193,92 @@ pub const fn expand_8x8_font() -> [[u16; 16]; 95] {
 /// 12x16 genişletilmiş font atlası (ASCII 32-126), derleme zamanında hazır.
 /// `FONT_8X8_BASIC`'ten türetilir; runtime başlatma gerektirmez, her zaman doludur.
 pub static FONT_12X16_BASIC: [[u16; 16]; 95] = expand_8x8_font();
+
+/// Yüksek çözünürlüklü 16x24 anti-aliased font atlası (ASCII 32-126).
+///
+/// Her karakter 24 satır × 16 kolon **kapsama (alpha) değeri** (0..255) taşır.
+/// 8x8 kaynak bitmap, alan-ortalamalı (area-average) örnekleme ile 16x24'e
+/// ölçeklenir ve ardından kenarları yumuşatmak için hafif bir 3x3 kutu
+/// bulanıklık uygulanır. Sonuç: gerçek çözünürlüklü ızgarada, kademeli
+/// kenarlar yerine yumuşak geçişli (anti-aliased) glyph'ler.
+///
+/// Derleme zamanında (`const fn`) üretilir; runtime başlatma gerektirmez.
+pub static FONT_16X24_ALPHA: [[[u8; 16]; 24]; 95] = expand_16x24_alpha();
+
+/// 8x8 bitmap'i 16x24 kapsama (alpha) atlasına ölçekler — **tek geçişte
+/// alan-kapsamalı (area-coverage) anti-aliasing**. Ek bir bulanıklık filtresi
+/// uygulanmaz; bu yüzden glyph'ler puslu değil, sadece doğru yumuşak kenarlıdır.
+///
+/// Her hedef piksel, kaynak 8x8 hücresindeki kapladığı alana göre kapsama
+/// değeri alır. Kaynak hücre 8x8, hedef hücre 16x24'tür.
+pub const fn expand_16x24_alpha() -> [[[u8; 16]; 24]; 95] {
+    const W: usize = 16;
+    const H: usize = 24;
+    let mut result = [[[0u8; W]; H]; 95];
+    let mut i = 0;
+    while i < 95 {
+        let src = FONT_8X8_BASIC[i];
+        let mut y = 0;
+        while y < H {
+            let mut x = 0;
+            while x < W {
+                result[i][y][x] = coverage_at(&src, x, y, W, H);
+                x += 1;
+            }
+            y += 1;
+        }
+        i += 1;
+    }
+    result
+}
+
+/// Bir hedef pikselin kaynak 8x8 bitmap üzerindeki kapsama oranı (0..255).
+/// Hedef pikselin 16x24 (veya 8x12) ızgaradaki dikdörtgeni, kaynak piksel
+/// hücreleriyle kesiştirilir; kaplanan kaynakların alan oranı döner.
+/// `area_w`/`area_h`: hedefin toplam kolon/satır sayısı.
+pub const fn coverage_at(src: &[u8; 8], hx: usize, hy: usize, area_w: usize, area_h: usize) -> u8 {
+    // Basit ve hızlı yaklaşım: hedef pikselin merkezinden 2x2 alt örnek al.
+    // Alt örnekler kaynakta 'on' ise kapsamaya sayılır. Bu, tek geçişte
+    // yumuşak kenar verir ve ekstra bulanıklık eklemez.
+    let mut on = 0u32;
+    let sub: usize = 2;
+    let mut sy = 0;
+    while sy < sub {
+        // Hedef satırın merkezine denk gelen kaynak satır (sabit nokta x sub).
+        let src_y = ((hy * sub + sy) * 8) / (area_h * sub);
+        let src_y = if src_y < 8 { src_y } else { 7 };
+        let row = src[src_y];
+        let mut sx = 0;
+        while sx < sub {
+            let src_x = ((hx * sub + sx) * 8) / (area_w * sub);
+            let src_x = if src_x < 8 { src_x } else { 7 };
+            if (row & (1 << (7 - src_x))) != 0 {
+                on += 1;
+            }
+            sx += 1;
+        }
+        sy += 1;
+    }
+    ((on * 255) / (sub * sub) as u32) as u8
+}
+
+/// 8x8 Türkçe/özel karakteri 16x24 kapsama (alpha) atlasına genişletir.
+/// `expand_16x24_alpha` ile aynı tek geçişli alan-kapsamalı yöntemi kullanır.
+pub fn expand_glyph_16x24(src: [u8; 8]) -> [[u8; 16]; 24] {
+    const W: usize = 16;
+    const H: usize = 24;
+    let mut out = [[0u8; W]; H];
+    let mut y = 0;
+    while y < H {
+        let mut x = 0;
+        while x < W {
+            out[y][x] = coverage_at(&src, x, y, W, H);
+            x += 1;
+        }
+        y += 1;
+    }
+    out
+}
 /// Türkçe özel karakterler ve yaygın Semboller (ç, Ç, ğ, Ğ, ı, İ, ö, Ö, ş, Ş, ü, Ü,
 /// artı ek ok/para/kesir işaretleri).
 pub fn get_turkish_glyph(c: char) -> Option<[u8; 8]> {

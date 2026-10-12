@@ -50,12 +50,14 @@ pub enum FontMode {
     Proportional,
 }
 
-static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(3);
-static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(100);
+static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0); // Pixel (default for consistent sizing)
+static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(100); // 100% baseline
 
 #[inline(always)]
 pub fn set_font_zoom(percent: u8) {
-    FONT_ZOOM.store(match percent { 125 => 125, 150 => 150, _ => 100 }, core::sync::atomic::Ordering::Relaxed);
+    // Clamp to valid range: 100 (default), 125, or 150
+    let p = match percent { 125 => 125, 150 => 150, _ => 100 };
+    FONT_ZOOM.store(p, core::sync::atomic::Ordering::Relaxed);
 }
 
 #[inline(always)]
@@ -93,11 +95,13 @@ pub fn set_font_mode(mode: FontMode) {
 
 #[inline(always)]
 pub fn font_mode() -> FontMode {
-    match FONT_MODE.load(core::sync::atomic::Ordering::Relaxed) {
-        1 => FontMode::Compact,
-        2 => FontMode::ClearType,
-        3 => FontMode::Proportional,
-        _ => FontMode::Pixel,
+    let m = FONT_MODE.load(core::sync::atomic::Ordering::Relaxed);
+    match m {
+        0 => FontMode::Pixel,    // Default: consistent pixel font
+        1 => FontMode::Compact,  // Condensed spacing
+        2 => FontMode::ClearType,|  // ClearType-style rendering
+        3 => FontMode::Proportional, // Variable width
+        _ => FontMode::Pixel,     // Fallback to Pixel for consistency
     }
 }
 
@@ -106,16 +110,29 @@ pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::
 pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
 
+/// Glyph atlasının kaynak hücre boyutu (expand_8x8_font çıktısı), 12x16.
+const SRC_CELL_W: usize = 12;
+const SRC_CELL_H: usize = 16;
+
+/// Bir karakter hücresinin temel hücre boyutu (100% zoom, 1x ölçek, px).
+/// Kaynak 12x16 atlasın varsayılan çizim boyutudur; önceki 12x16'ya göre
+/// 2px küçültülmüştür (10x14) — okunaklılık korunurken metin daha derli
+/// toplu yerleşir. Sağdaki/soldaki sütunlar nefes payıdır.
+const CELL_W: usize = 10;
+const CELL_H: usize = 14;
+
 /// Bir karakter hücresi için yatay ilerleme (px).
 #[inline(always)]
+#[allow(dead_code)]
 fn cell_advance(scale: usize) -> usize {
-    12 * scale.max(1)
+    CELL_W * scale.max(1)
 }
 
 /// Bir karakter hücresi için görsel genişlik (px).
 #[inline(always)]
+#[allow(dead_code)]
 fn cell_width(scale: usize) -> usize {
-    12 * scale.max(1)
+    CELL_W * scale.max(1)
 }
 
 // ---------------------------------------------------------------------------
@@ -492,12 +509,19 @@ impl MinGuiCompositor {
         // Tray düğmeleri aktif font ölçeğine göre büyür.
         let h = sp(26).min(taskbar_h().saturating_sub(8));
         let pad = 8;
-        let clock_w = sp(74);
-        let vol_w = sp(56);
-        let net_w = sp(52);
-        let theme_w = sp(64);
-        let kbd_w = sp(54);
-        let gap = sp(6);
+        // Genişlikler, çizilen ikon + metnin gerçek piksel genişliğine göre
+        // seçilir; hiçbir tepsi öğesi metni yanındaki öğeye taşmaz.
+        //   saat:  "HH:MM:SS" = 8 hücre = 96px (+ sol boşluk) -> 108px
+        //   ses:   ikon ~26px -> 56px
+        //   ağ:    ikon 22px + "eth0" 48px -> 76px
+        //   tema:  örnek 16px + etiket ("Gece"/"Daylight" ~48-96px) -> 104px
+        //   klavye:ikon 28px + "TR"/"EN" 24px -> 58px
+        let clock_w = sp(108);
+        let vol_w = sp(58);
+        let net_w = sp(80);
+        let theme_w = sp(104);
+        let kbd_w = sp(60);
+        let gap = sp(10);
         let clock_x = width.saturating_sub(pad + clock_w);
         let vol_x = clock_x.saturating_sub(gap + vol_w);
         let net_x = vol_x.saturating_sub(gap + net_w);
@@ -505,7 +529,7 @@ impl MinGuiCompositor {
         let kbd_x = theme_x.saturating_sub(gap + kbd_w);
         TrayLayout {
             tb_y,
-            start: (6, by, sp(104), h),
+            start: (6, by, sp(112), h),
             clock: (clock_x, by, clock_w, h),
             volume: (vol_x, by, vol_w, h),
             network: (net_x, by, net_w, h),
@@ -856,15 +880,26 @@ impl MinGuiCompositor {
     }
 
     /// Bir karakterin 12x16 bitmap glyph'ini döndürür.
+    /// Türkçe/özel karakterler 8x8 tabandan `expand_8x8_font` ile birebir aynı
+    /// blok-ölçek (8→12 yatay, 8→16 dikey) yöntemiyle genişletilir; böylece
+    /// ASCII atlası ile aynı kalınlık/konum korunur (taşma ve kayma olmaz).
     #[inline(always)]
     fn glyph_for(c: char) -> Option<[u16; 16]> {
         if let Some(g) = font::get_turkish_glyph(c) {
             let mut expanded = [0u16; 16];
             for row in 0..16 {
-                for col in 0..12 {
-                    let source_col = col * 8 / 12;
-                    if (g[row / 2] & (1 << (7 - source_col))) != 0 {
-                        expanded[row] |= 1 << (11 - col);
+                let src_row = row / 2; // 8 kaynak satır -> 16 hedef satır (çiftleme)
+                for col in 0..8 {
+                    if (g[src_row] & (1 << (7 - col))) == 0 {
+                        continue;
+                    }
+                    // Her kaynak kolonun kapsadığı hedef kolonları doldur (blok ölçek).
+                    let start = col * 12 / 8;
+                    let end = ((col + 1) * 12 / 8).min(12);
+                    let mut tc = start;
+                    while tc < end {
+                        expanded[row] |= 1 << (11 - tc);
+                        tc += 1;
                     }
                 }
             }
@@ -878,38 +913,85 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Bir glyph bitmap'ini hedef piksele ölçekleyerek çizer.
+    ///
+    /// Anti-aliased (yumuşak kenarlı) çizim yapar: her hedef piksel için kaynak
+    /// bitmap'teki kapsama (coverage) oranı hesaplanır ve mevcut arka plan rengi
+    /// ile karıştırılır. Böylece font ölçeklendiğinde/zoom yapıldığında kenarlar
+    /// keskin kalır ve hiçbir hedef piksel dışarı taşmaz (blok doldurma yoktur).
+    ///
+    /// `top_shift`: dikey yerleşimde ince ayar için alt-piksel kaydırma (16'lık
+    /// birimde). Şimdilik 0 kullanılır.
     fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [u16; 16], color: u32, scale: usize) {
         let zoom = font_zoom() as usize;
-        for row in 0..16 {
-            let bits = glyph[row];
-            if bits == 0 {
-                continue;
-            }
-            if scale <= 1 && zoom == 100 && font_mode() == FontMode::ClearType {
-                for col in 0..12 {
-                    let current = if (bits & (1 << (11 - col))) != 0 { 255u16 } else { 0 };
-                    let left = if col > 0 && (bits & (1 << (12 - col))) != 0 { 255u16 } else { 0 };
-                    let right = if col + 1 < 12 && (bits & (1 << (10 - col))) != 0 { 255u16 } else { 0 };
-                    let r_cov = ((left * 77 + current * 179) / 256).min(255) as u8;
-                    let g_cov = current as u8;
-                    let b_cov = ((right * 77 + current * 179) / 256).min(255) as u8;
-                    if r_cov > 0 || g_cov > 0 || b_cov > 0 {
-                        fb.put_subpixel_text(x + col, y + row, color, [r_cov, g_cov, b_cov]);
+        let scale = scale.max(1);
+        // Kaynak atlas her zaman SRC_CELL_W x SRC_CELL_H (12x16). Hedef hücre
+        // boyutu ise aktif UI ölçeğine göre hesaplanır; böylece atlas
+        // küçültülmeden yalnızca ekrana çizilen font küçülür.
+        let dst_w = ((CELL_W * scale * zoom) + 50) / 100;
+        let dst_h = ((CELL_H * scale * zoom) + 50) / 100;
+        if dst_w == 0 || dst_h == 0 {
+            return;
+        }
+
+        // Hedef hücre ile kaynak hücre boyutları eşitse (ör. zoom arttırılmış
+        // hesaplarda 12x16'ya denk gelirse) pikselleri doğrudan kopyala.
+        if dst_w == SRC_CELL_W && dst_h == SRC_CELL_H {
+            let cleartype = font_mode() == FontMode::ClearType;
+            for row in 0..SRC_CELL_H {
+                let bits = glyph[row];
+                if bits == 0 {
+                    continue;
+                }
+                for col in 0..SRC_CELL_W {
+                    if (bits & (1 << (11 - col))) == 0 {
+                        continue;
+                    }
+                    if cleartype {
+                        // ClearType: yatay alt-piksel kapsaması hesapla.
+                        let current = 255u16;
+                        let left = if col > 0 && (bits & (1 << (12 - col))) != 0 { 255u16 } else { 0 };
+                        let right = if col + 1 < SRC_CELL_W && (bits & (1 << (10 - col))) != 0 { 255u16 } else { 0 };
+                        let r_cov = ((left * 77 + current * 179) / 256).min(255) as u8;
+                        let b_cov = ((right * 77 + current * 179) / 256).min(255) as u8;
+                        fb.put_subpixel_text(x + col, y + row, color, [r_cov, current as u8, b_cov]);
+                    } else {
+                        fb.put_pixel(x + col, y + row, color);
                     }
                 }
-            } else {
-                for col in 0..12 {
-                    if (bits & (1 << (11 - col))) != 0 {
-                        if scale <= 1 && zoom == 100 {
-                            fb.put_pixel(x + col, y + row, color);
-                        } else {
-                            let left = col * scale * zoom / 100;
-                            let top = row * scale * zoom / 100;
-                            let right = ((col + 1) * scale * zoom / 100).max(left + 1);
-                            let bottom = ((row + 1) * scale * zoom / 100).max(top + 1);
-                            fb.draw_rect(x + left, y + top, right - left, bottom - top, color);
+            }
+            return;
+        }
+
+        // Ölçekli/gölgeli çizim: her hedef piksel için kaynak kapsama oranını
+        // hesapla ve alt örneklerle anti-aliasing uygula. Hem küçültme hem
+        // büyütme durumunda kaynak hücre SRC_CELL_W x SRC_CELL_H'dir.
+        for dy in 0..dst_h {
+            for dx in 0..dst_w {
+                let mut hits = 0u32;
+                const SUB: usize = 3; // her boyutta 3x3 alt örnek
+                let total = (SUB * SUB) as u32;
+                for sub_y in 0..SUB {
+                    // Kaynak dikey koordinat (0..SRC_CELL_H).
+                    let src_y_num = (dy * SUB + sub_y) * SRC_CELL_H / (dst_h * SUB);
+                    let src_y = src_y_num.min(SRC_CELL_H - 1);
+                    let bits = glyph[src_y];
+                    for sub_x in 0..SUB {
+                        let src_x_num = (dx * SUB + sub_x) * SRC_CELL_W / (dst_w * SUB);
+                        let src_x = src_x_num.min(SRC_CELL_W - 1);
+                        if (bits & (1 << (11 - src_x))) != 0 {
+                            hits += 1;
                         }
                     }
+                }
+                if hits == 0 {
+                    continue;
+                }
+                let cov = ((hits * 255) / total) as u8;
+                if cov >= 250 {
+                    fb.put_pixel(x + dx, y + dy, color);
+                } else {
+                    fb.put_subpixel_text(x + dx, y + dy, color, [cov, cov, cov]);
                 }
             }
         }
@@ -931,23 +1013,43 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Bir hücrenin ölçek/zoom uygulanmış hedef yatay ilerlemesi (px).
+    /// `blit_glyph` içindeki hedef genişlik formülüyle BİREBİR aynıdır; böylece
+    /// `text_width` ile gerçek çizim asla tutarsız olmaz ve metin taşmaz.
+    #[inline(always)]
+    fn scaled_advance(scale: usize) -> usize {
+        let zoom = font_zoom() as usize;
+        (((CELL_W * scale.max(1) * zoom) + 50) / 100).max(1)
+    }
+
+    /// Aktif ölçekte bir metin satırının görsel yüksekliği (px).
+    /// `blit_glyph` hedef yüksekliğiyle ve dikey ortalama hesaplarıyla tutarlıdır.
+    #[inline(always)]
+    fn text_height() -> usize {
+        let zoom = font_zoom() as usize;
+        ((CELL_H * zoom) + 50) / 100
+    }
+
     /// Ölçeklenebilir metin. `scale` = 1..3 (piksel büyütme).
-    /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır.
-    /// Karakterlerin birbirine yapışmaması için harfler arasına en az 1 piksel boşluk eklenir.
+    /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır. Glyph
+    /// hücresi sağda zaten nefes payı bıraktığı için ekstra harf aralığı
+    /// eklenmez; bu, metnin hesaplanan genişlikle birebir eşleşmesini sağlar.
     pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
         let scale = scale.max(1);
-        let zoom = font_zoom() as usize;
         let is_prop = font_mode() == FontMode::Proportional;
-        let letter_spacing = 1 * scale; // En az 1 piksel harf aralığı boşluğu
-        let fixed_advance = ((cell_advance(scale) * zoom + 50) / 100).max(1) + letter_spacing;
+        let fixed_advance = Self::scaled_advance(scale);
         let mut cur_x = x;
         for c in text.chars() {
             if let Some(g) = Self::glyph_for(c) {
                 Self::blit_glyph(fb, cur_x, y, g, color, scale);
             }
             if is_prop {
-                let char_adv = (font::glyph_advance_width(c) * scale * zoom + 50) / 100 + letter_spacing;
-                cur_x += char_adv.max(2 + letter_spacing);
+                // Orantılı mod: dar karakterler daha az yer kaplar.
+                let adv = match c {
+                    'i' | 'l' | 'ı' | 'İ' | 'î' | '.' | ',' | ':' | ';' | '!' | '|' | '\'' | '`' | ' ' => (fixed_advance * 5) / 10,
+                    _ => fixed_advance,
+                };
+                cur_x += adv.max(2);
             } else {
                 cur_x += fixed_advance;
             }
@@ -969,27 +1071,33 @@ impl MinGuiCompositor {
     }
 
     /// Merkezlenmiş metin genişliğini hesaplar (px). Aktif font moduna duyarlı.
+    /// `draw_string_scaled` ile birebir tutarlıdır: son karakterin ilerlemesi
+    /// hariç, her karakter tam bir hücre ilerlemesi kadar yer kaplar.
     pub fn text_width(text: &str, scale: usize) -> usize {
         let scale = scale.max(1);
         let n = text.chars().count();
         if n == 0 {
             0
         } else {
-            let zoom = font_zoom() as usize;
-            let letter_spacing = 1 * scale; // En az 1 piksel harf aralığı boşluğu
+            let step = Self::scaled_advance(scale);
             if font_mode() == FontMode::Proportional {
                 let mut total = 0;
                 for (i, c) in text.chars().enumerate() {
-                    let char_adv = (font::glyph_advance_width(c) * scale * zoom + 50) / 100;
-                    total += char_adv.max(2);
+                    let adv = match c {
+                        'i' | 'l' | 'ı' | 'İ' | 'î' | '.' | ',' | ':' | ';' | '!' | '|' | '\'' | '`' | ' ' => (step * 5) / 10,
+                        _ => step,
+                    }
+                    .max(2);
                     if i + 1 < n {
-                        total += letter_spacing;
+                        total += adv;
+                    } else {
+                        // Son karakter: gerçek glyph genişliği ilerlemeden küçük olabilir.
+                        total += step;
                     }
                 }
                 total
             } else {
-                (n - 1) * (((cell_advance(scale) * zoom + 50) / 100).max(1) + letter_spacing)
-                    + ((cell_width(scale) * zoom + 50) / 100).max(1)
+                n * step
             }
         }
     }
@@ -1008,7 +1116,7 @@ impl MinGuiCompositor {
         fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::BORDER);
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = r.0 + r.2.saturating_sub(tw) / 2;
-        let text_h = (16 * font_zoom() as usize + 50) / 100;
+        let text_h = Self::text_height();
         let ty = r.1 + r.3.saturating_sub(text_h) / 2;
         Self::draw_string_clipped(fb, tx, ty, label, label_color,
             (r.0 + 2, r.1 + 1, r.2.saturating_sub(4), r.3.saturating_sub(2)));
@@ -1270,12 +1378,20 @@ impl MinGuiCompositor {
         fb.draw_vgradient(0, 0, fb.width, fb.height, top, bottom);
 
         // Masaüstü Sağ Üst MinOS Kedi Logosu ve Başlığı (Watermark)
-        Self::draw_cat_icon(fb, fb.width.saturating_sub(210), 30);
+        // Metin genişliğine göre sağa hizalanır; sağ kenardan taşmaz.
+        let title = "MinOS Sarman Edition";
+        let title_w = Self::text_width(title, 1);
+        let icon_w = 16;
+        let gap = 8;
+        let margin_right = 16;
+        let block_w = icon_w + gap + title_w;
+        let block_x = fb.width.saturating_sub(margin_right + block_w);
+        Self::draw_cat_icon(fb, block_x, 30);
         Self::draw_string_shadow(
             fb,
-            fb.width.saturating_sub(185),
+            block_x + icon_w + gap,
             35,
-            "MinOS Sarman Edition",
+            title,
             Color::ACCENT_PINK,
             Color::SHADOW,
             1,
@@ -1372,9 +1488,19 @@ impl MinGuiCompositor {
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
         let title = if ui_english() { Self::window_title(win_idx, true) } else { win.title };
         // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
-        let text_h = (16 * font_zoom() as usize + 50) / 100;
+        // Başlık alanı, simge ile kontrol düğmeleri arasına kırpılır; uzun
+        // başlıklar pencere dışına veya düğmelerin üzerine taşmaz.
+        let text_h = Self::text_height();
         let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
-        Self::draw_string_shadow(fb, win.x + sp(28), title_y, title, title_col, Color::SHADOW, 1);
+        let title_x = win.x + sp(28);
+        let title_area_w = win.width.saturating_sub(sp(28) + sp(64));
+        if title_area_w > 0 {
+            let old_clip = fb.clip();
+            fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
+            Self::draw_string_shadow(fb, title_x, title_y, title, title_col, Color::SHADOW, 1);
+            fb.set_clip(old_clip.x0, old_clip.y0,
+                old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
+        }
 
         // Kontrol Butonları (hover'da parlama — yuvarlatılmış)
         // Boyut, scale'li rect'ten türetilir; bu sayede font büyüdükçe düğmeler de büyür.
@@ -1432,8 +1558,21 @@ impl MinGuiCompositor {
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
         let start_bg = if self.is_start_menu_open { Color::ACCENT_BLUE } else { Color::ACCENT_BLUE };
         Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
-        Self::draw_cat_icon(fb, 12, tb_y + 10);
-        Self::draw_string_shadow(fb, 36, tb_y + 14, "MinOS", Color::TASKBAR_BG, Color::SHADOW, 1);
+        // Kedi ikonu + "MinOS" metni buton içinde yatay olarak ortalanır;
+        // metin buton kenarlarına yapışmaz veya taşmaz.
+        {
+            let label = "MinOS";
+            let text_w = Self::text_width(label, 1);
+            let icon_w = 16;
+            let inner_gap = 8;
+            let block_w = icon_w + inner_gap + text_w;
+            let block_x = l.start.0 + l.start.2.saturating_sub(block_w) / 2;
+            let icon_y = tb_y + taskbar_h().saturating_sub(16) / 2;
+            let text_h = Self::text_height();
+            let text_y = tb_y + taskbar_h().saturating_sub(text_h) / 2;
+            Self::draw_cat_icon(fb, block_x, icon_y);
+            Self::draw_string_shadow(fb, block_x + icon_w + inner_gap, text_y, label, Color::TASKBAR_BG, Color::SHADOW, 1);
+        }
 
         // Uygulama Sekmeleri (Yuvarlatılmış 5px) — font ölçeğine göre büyür.
         let mut tab_x = Self::taskbar_tab_start();
@@ -1453,7 +1592,7 @@ impl MinGuiCompositor {
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
                     let tab_title = if ui_english() { Self::window_tab_title(win_idx, true) } else { win.tab_title };
-                    let text_h = (16 * font_zoom() as usize + 50) / 100;
+                    let text_h = Self::text_height();
                     let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
                     Self::draw_icon_by_index(fb, tab_x + 5, text_y, Self::window_icon_index(win_idx));
                     Self::draw_string_clipped(fb, tab_x + sp(27), text_y, tab_title, tab_text_color,
@@ -1480,13 +1619,13 @@ impl MinGuiCompositor {
             }
         }
         fb.draw_rect(l.kbd.0 + 11, l.kbd.1 + 17, 8, 1, Color::TASKBAR_BG);
-        Self::draw_string(fb, l.kbd.0 + 28, tb_y + 14, kbd_tag, kbd_col);
+        Self::draw_string(fb, l.kbd.0 + 30, tb_y + 14, kbd_tag, kbd_col);
 
         // 2. Tema Düğmesi (l.theme)
         let theme_hover = in_rect(mx, my, l.theme);
         fb.draw_rounded_rect(l.theme.0 + 6, l.theme.1 + 8, 10, 10, 3, Color::ACCENT_PINK);
         let t_name = theme::current().short_name();
-        Self::draw_string(fb, l.theme.0 + 20, tb_y + 14, t_name, if theme_hover { Color::ACCENT_PINK } else { Color::TEXT_MAIN });
+        Self::draw_string(fb, l.theme.0 + 22, tb_y + 14, t_name, if theme_hover { Color::ACCENT_PINK } else { Color::TEXT_MAIN });
 
         // 3. Ses Düğmesi (l.volume)
         let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
@@ -1514,7 +1653,7 @@ impl MinGuiCompositor {
             fb.draw_rect(l.network.0 + 11, l.network.1 + 9, 2, 4, c);
             fb.draw_rect(l.network.0 + 9, l.network.1 + 19, 2, 2, c);
             fb.draw_rect(l.network.0 + 20, l.network.1 + 7, 3, 3, c);
-            Self::draw_string(fb, l.network.0 + 22, tb_y + 14, "eth0", c);
+            Self::draw_string(fb, l.network.0 + 28, tb_y + 14, "eth0", c);
         }
 
         // 4. Saat Düğmesi (l.clock)
@@ -1834,7 +1973,11 @@ impl MinGuiCompositor {
             };
 
             let text_col = if is_hovered { Color::WHITE } else if bg_col == Color::WINDOW_BG && col == Color::ACCENT_PINK { Color::ACCENT_BLUE } else { col };
-            Self::draw_string(fb, r.0 + 26, r.1 + 5, label, text_col);
+            // İkon (16px) + 8px nefes payı; metin ikonun üzerine binmez ve
+            // öğe genişliğini aşarsa sağdan kırpılır.
+            let text_x = r.0 + sp(30);
+            Self::draw_string_clipped(fb, text_x, r.1 + 5, label, text_col,
+                (r.0 + sp(28), r.1, r.2.saturating_sub(sp(30)), r.3));
         }
     }
 

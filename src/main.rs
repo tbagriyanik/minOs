@@ -1,8 +1,27 @@
 #![no_std]
 #![no_main]
-
+#![feature(alloc_error_handler)]
+extern crate alloc;
 use core::panic::PanicInfo;
+use linked_list_allocator::LockedHeap;
 
+#[allow(dead_code)]
+const HEAP_SIZE: usize = 1024 * 1024;
+#[allow(dead_code)]
+static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+
+#[global_allocator]
+static ALLOCATOR: LockedHeap = LockedHeap::empty();
+
+#[alloc_error_handler]
+fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
+    panic!("Allocation error: {:?}", layout);
+}
+
+#[allow(static_mut_refs)]
+fn init_heap() {
+    unsafe { ALLOCATOR.lock().init(HEAP_MEMORY.as_mut_ptr(), HEAP_SIZE); }
+}
 pub mod arch;
 pub mod mm;
 pub mod fs;
@@ -244,6 +263,8 @@ fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // Initialize heap for dynamic allocations
+    init_heap();
     serial_print("[MinOS] Kernel _start reached!\n");
     arch::x86_64::enable_sse();
     arch::x86_64::disable_pic();

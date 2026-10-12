@@ -1,3 +1,31 @@
+// Removed #[no_std] attribute; the crate root already sets it.
+extern crate alloc;
+use alloc::vec::Vec;
+use alloc::string::String;
+use alloc::string::ToString;
+// String import merged above
+/// Font metrics for a single glyph.
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphMetrics {
+    /// Glyph width in pixels (advance width).
+    pub width: usize,
+    /// Glyph height in pixels.
+    pub height: usize,
+    /// Left bearing (pixels from baseline start to glyph start).
+    pub left_bearing: usize,
+    /// Right bearing (pixels from glyph end to baseline end).
+    pub right_bearing: usize,
+    /// Bounding box x-min (leftmost pixel).
+    pub bbox_x_min: usize,
+    /// Bounding box x-max (rightmost pixel).
+    pub bbox_x_max: usize,
+    /// Bounding box y-min (topmost pixel, from baseline).
+    pub bbox_y_min: usize,
+    /// Bounding box y-max (bottommost pixel, from baseline).
+    pub bbox_y_max: usize,
+}
+/// 8x8 pixel font basic atlas (ASCII 32-126).
+/// Her karakter 8 piksel genisliinde 8 satırdır.
 pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     // 32 (Space)
     [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -33,7 +61,7 @@ pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     [0x00, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x00],
     // 48-57 ('0'-'9')
     [0x00, 0x3C, 0x46, 0x4A, 0x52, 0x62, 0x3C, 0x00], // 0
-    [0x00, 0x18, 0x28, 0x48, 0x08, 0x08, 0x3E, 0x00], // 1 (serifli taban — okunaklı)
+    [0x00, 0x18, 0x28, 0x48, 0x08, 0x08, 0x3E, 0x00], // 1 (daha okunaklı)
     [0x00, 0x3C, 0x42, 0x04, 0x18, 0x20, 0x7E, 0x00], // 2
     [0x00, 0x3C, 0x42, 0x1C, 0x02, 0x42, 0x3C, 0x00], // 3
     [0x00, 0x0C, 0x14, 0x24, 0x44, 0x7E, 0x04, 0x00], // 4
@@ -65,16 +93,16 @@ pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     [0x00, 0x7E, 0x40, 0x7C, 0x40, 0x40, 0x40, 0x00], // F
     [0x00, 0x3C, 0x42, 0x40, 0x4E, 0x42, 0x3C, 0x00], // G
     [0x00, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x42, 0x00], // H
-    [0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00], // I (Clean Sans-Serif)
+    [0x00, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00], // I (temiz sans-serif)
     [0x00, 0x06, 0x06, 0x06, 0x06, 0x46, 0x3C, 0x00], // J
     [0x00, 0x44, 0x48, 0x70, 0x48, 0x44, 0x42, 0x00], // K
     [0x00, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7E, 0x00], // L
     [0x00, 0x42, 0x66, 0x5A, 0x42, 0x42, 0x42, 0x00], // M
     [0x00, 0x42, 0x62, 0x52, 0x4A, 0x46, 0x42, 0x00], // N
     [0x00, 0x3C, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00], // O
-    [0x00, 0x7C, 0x42, 0x7C, 0x40, 0x40, 0x40, 0x00], // P
-    [0x00, 0x3C, 0x42, 0x42, 0x4A, 0x44, 0x3A, 0x00], // Q (kuyruk içeri taşmaz)
-    [0x00, 0x7C, 0x42, 0x7C, 0x48, 0x44, 0x42, 0x00], // R
+    [0x00, 0x7C, 0x42, 0x42, 0x7C, 0x40, 0x40, 0x00], // P (üst göbek + dikey çizgi)
+    [0x00, 0x3C, 0x42, 0x42, 0x4A, 0x44, 0x3A, 0x00], // Q (içeri taşma önlendi)
+    [0x00, 0x7C, 0x42, 0x42, 0x7C, 0x48, 0x44, 0x00], // R
     [0x00, 0x3E, 0x40, 0x3C, 0x02, 0x42, 0x3C, 0x00], // S
     [0x00, 0x7E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00], // T
     [0x00, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00], // U
@@ -97,10 +125,10 @@ pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     [0x00, 0x02, 0x02, 0x3E, 0x42, 0x42, 0x3E, 0x00], // d
     [0x00, 0x00, 0x3C, 0x42, 0x7E, 0x40, 0x3C, 0x00], // e
     [0x00, 0x0C, 0x12, 0x10, 0x3E, 0x10, 0x10, 0x00], // f
-    [0x00, 0x00, 0x3C, 0x42, 0x42, 0x3E, 0x02, 0x3C], // g: descender sits below the x-height
+    [0x00, 0x00, 0x3C, 0x42, 0x42, 0x3E, 0x02, 0x3C], // g: descender below baseline
     [0x00, 0x40, 0x40, 0x7C, 0x42, 0x42, 0x42, 0x00], // h
-    [0x10, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00], // i: x-height gövde, sabit taban çizgisi
-    [0x04, 0x00, 0x04, 0x04, 0x04, 0x04, 0x44, 0x38], // j: taban çizgisinin altına inen kuyruk
+    [0x10, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00], // i: x-height only, fixed base line
+    [0x04, 0x00, 0x04, 0x04, 0x04, 0x04, 0x44, 0x38], // j: descender below baseline
     [0x00, 0x40, 0x40, 0x44, 0x48, 0x70, 0x48, 0x00], // k
     [0x00, 0x20, 0x20, 0x20, 0x20, 0x20, 0x18, 0x00], // l
     [0x00, 0x00, 0x6C, 0x54, 0x54, 0x44, 0x44, 0x00], // m
@@ -115,41 +143,57 @@ pub const FONT_8X8_BASIC: [[u8; 8]; 95] = [
     [0x00, 0x00, 0x42, 0x42, 0x24, 0x24, 0x18, 0x00], // v
     [0x00, 0x00, 0x42, 0x42, 0x5A, 0x66, 0x42, 0x00], // w
     [0x00, 0x00, 0x42, 0x24, 0x18, 0x24, 0x42, 0x00], // x
-    [0x00, 0x00, 0x42, 0x42, 0x42, 0x3E, 0x02, 0x3C], // y: descender extends to the baseline
+    [0x00, 0x00, 0x42, 0x42, 0x42, 0x3E, 0x02, 0x3C], // y: descender to baseline
     [0x00, 0x00, 0x7E, 0x08, 0x10, 0x20, 0x7E, 0x00], // z
     // 123-126
     [0x00, 0x0E, 0x10, 0x30, 0x10, 0x10, 0x0E, 0x00], // {
-    [0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00], // |
+    [0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10], // |
     [0x00, 0x70, 0x08, 0x0C, 0x08, 0x08, 0x70, 0x00], // }
     [0x00, 0x32, 0x4C, 0x00, 0x00, 0x00, 0x00, 0x00], // ~
 ];
-
-/// Convert the legacy 8×8 atlas to a 12×16 cell atlas.
+/// 8x8 taban fontu 12x16 ızgarasına genişletir (derleme zamanında, `const fn`).
+///
+/// Yatay: her 8px genişlik blok-örnekleme ile 12px'e ölçeklenir
+/// (`start = col * 12 / 8`, `end = (col+1) * 12 / 8`), böylece 8 kaynak kolon
+/// 12 hedef kolona tam otur ve hiçbir kolon çakışmaz/kaybolmaz. Dikey: 8
+/// kaynak satır 16 satıra çiftlenir. Bu, ölçeklenmiş atlasın orijinal 8x8 ile
+/// birebir aynı harf şeklini korumasını sağlar (taşma ve kayma olmaz).
 pub const fn expand_8x8_font() -> [[u16; 16]; 95] {
-    let mut out = [[0u16; 16]; 95];
-    let mut glyph = 0;
-    while glyph < 95 {
+    let mut result = [[0u16; 16]; 95];
+    let mut i = 0;
+    while i < 95 {
+        let font_row_data = FONT_8X8_BASIC[i];
         let mut row = 0;
-        while row < 16 {
-            let source_row = row / 2;
+        while row < 8 {
+            let mut expanded_row: u16 = 0;
             let mut col = 0;
-            while col < 12 {
-                let source_col = col * 8 / 12;
-                if (FONT_8X8_BASIC[glyph][source_row] & (1 << (7 - source_col))) != 0 {
-                    out[glyph][row] |= 1 << (11 - col);
+            while col < 8 {
+                let bit = ((font_row_data[row] >> (7 - col)) & 1) != 0;
+                if bit {
+                    let start = col * 12 / 8;
+                    let end = (col + 1) * 12 / 8;
+                    let mut tc = start;
+                    while tc < end && tc < 12 {
+                        expanded_row |= 1 << (11 - tc);
+                        tc += 1;
+                    }
                 }
                 col += 1;
             }
+            // Dikey: her kaynak satır, hedefin iki ardışık satırına çiftlenir.
+            result[i][row * 2] = expanded_row;
+            result[i][row * 2 + 1] = expanded_row;
             row += 1;
         }
-        glyph += 1;
+        i += 1;
     }
-    out
+    result
 }
 
-pub const FONT_12X16_BASIC: [[u16; 16]; 95] = expand_8x8_font();
-
-/// Türkçe özel karakterler ve yaygın semboller (ç, Ç, ğ, Ğ, ı, İ, ö, Ö, ş, Ş, ü, Ü,
+/// 12x16 genişletilmiş font atlası (ASCII 32-126), derleme zamanında hazır.
+/// `FONT_8X8_BASIC`'ten türetilir; runtime başlatma gerektirmez, her zaman doludur.
+pub static FONT_12X16_BASIC: [[u16; 16]; 95] = expand_8x8_font();
+/// Türkçe özel karakterler ve yaygın Semboller (ç, Ç, ğ, Ğ, ı, İ, ö, Ö, ş, Ş, ü, Ü,
 /// artı ek ok/para/kesir işaretleri).
 pub fn get_turkish_glyph(c: char) -> Option<[u8; 8]> {
     match c {
@@ -184,20 +228,145 @@ pub fn get_turkish_glyph(c: char) -> Option<[u8; 8]> {
         _ => None,
     }
 }
-
-/// Orantılı yazı tipi (proportional font) için her karakterin gerçek genişliğini (piksel cinsinden) hesaplar.
-/// İnce harfler (i, l, 1, nokta, virgül) daha az yer kaplarken, geniş harfler (M, W, @) daha geniş yer kaplar.
-pub fn glyph_advance_width(c: char) -> usize {
+/// Karakter için ölçeklenmiş bitmap verisi döner.
+/// `scale` faktörü 1 (orijinal 8x8), 2 (12x16 ölçeklendirilmiş) olabilir.
+pub fn get_scaled_glyph(c: char, _scale: usize) -> Option<&'static [u8]> {
+    // ASCII printable range (space = 0x20) maps directly into FONT_8X8_BASIC.
+    if (c as u32) >= 0x20 && (c as u32) <= 0x7E {
+        let idx = (c as u8) - b' ';
+        return Some(&FONT_8X8_BASIC[idx as usize]);
+    }
+    // Turkish specific glyphs and a few extra symbols.
     match c {
-        ' ' => 4,
-        '.' | ',' | ':' | ';' | '!' | '|' | '\'' | '`' => 3,
-        'i' | 'l' | 'ı' | 'İ' | 'î' => 4,
-        '[' | ']' | '(' | ')' | '{' | '}' | '"' | '*' | 't' | 'f' | 'r' | 'I' => 5,
-        'j' | 'k' | 's' | 'z' | 'x' | 'v' | 'y' | 'c' | 'ç' | 'ş' | '-' => 6,
-        'a' | 'b' | 'd' | 'e' | 'g' | 'ğ' | 'h' | 'n' | 'o' | 'ö' | 'p' | 'q' | 'u' | 'ü' | 'â' | 'û' | '0'..='9' | '+' | '=' | '<' | '>' | '?' => 7,
-        'A'..='H' | 'J' | 'K' | 'L' | 'N' | 'O'..='V' | 'X' | 'Y' | 'Z' | 'Ç' | 'Ğ' | 'Ö' | 'Ş' | 'Ü' | '$' | '%' | '&' | '#' => 8,
-        'M' | 'W' | 'm' | 'w' | '@' | '₺' | '€' | '£' => 9,
-        _ => 7,
+        'ç' => Some(&[0x00, 0x00, 0x3C, 0x40, 0x40, 0x42, 0x3C, 0x18]),
+        'Ç' => Some(&[0x00, 0x3C, 0x42, 0x40, 0x40, 0x42, 0x3C, 0x10]),
+        'ğ' => Some(&[0x24, 0x00, 0x3C, 0x42, 0x42, 0x3E, 0x02, 0x3C]),
+        'Ğ' => Some(&[0x24, 0x3C, 0x42, 0x40, 0x4E, 0x42, 0x3C, 0x00]),
+        'ı' => Some(&[0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00]),
+        'I' => Some(&[0x00, 0x38, 0x10, 0x10, 0x10, 0x10, 0x38, 0x00]),
+        'İ' => Some(&[0x10, 0x00, 0x38, 0x10, 0x10, 0x10, 0x38, 0x00]),
+        'ö' => Some(&[0x24, 0x00, 0x3C, 0x42, 0x42, 0x42, 0x3C, 0x00]),
+        'Ö' => Some(&[0x24, 0x00, 0x3C, 0x42, 0x42, 0x42, 0x3C, 0x00]),
+        'ş' => Some(&[0x00, 0x00, 0x3E, 0x40, 0x3C, 0x02, 0x7C, 0x18]),
+        'Ş' => Some(&[0x00, 0x3C, 0x42, 0x40, 0x3C, 0x02, 0x3C, 0x18]),
+        'ü' => Some(&[0x24, 0x00, 0x42, 0x42, 0x42, 0x42, 0x3E, 0x00]),
+        'Ü' => Some(&[0x24, 0x00, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00]),
+        'â' => Some(&[0x24, 0x18, 0x3C, 0x02, 0x3E, 0x42, 0x3E, 0x00]),
+        'î' => Some(&[0x24, 0x18, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00]),
+        'û' => Some(&[0x24, 0x18, 0x42, 0x42, 0x42, 0x42, 0x3E, 0x00]),
+        '₺' => Some(&[0x18, 0x24, 0x40, 0x7C, 0x40, 0x7C, 0x40, 0x00]),
+        '€' => Some(&[0x1C, 0x22, 0x78, 0x20, 0x78, 0x22, 0x1C, 0x00]),
+        '£' => Some(&[0x0C, 0x12, 0x10, 0x38, 0x10, 0x10, 0x3E, 0x00]),
+        '→' => Some(&[0x00, 0x08, 0x04, 0x7E, 0x04, 0x08, 0x00, 0x00]),
+        '←' => Some(&[0x00, 0x10, 0x20, 0x7E, 0x20, 0x10, 0x00, 0x00]),
+        '↑' => Some(&[0x10, 0x38, 0x54, 0x10, 0x10, 0x10, 0x00, 0x00]),
+        '↓' => Some(&[0x00, 0x10, 0x10, 0x10, 0x54, 0x38, 0x10, 0x00]),
+        '•' => Some(&[0x00, 0x00, 0x18, 0x3C, 0x3C, 0x18, 0x00, 0x00]),
+        '✓' => Some(&[0x00, 0x02, 0x04, 0x08, 0x50, 0x20, 0x00, 0x00]),
+        _ => None,
     }
 }
-
+/// Glyph metrics (genişlik, yükseklik, bearing'lar) hesaplar.
+/// Bu, metin laidout'unda satır aralığı ve karakter aralığını hesaplamak için kullanılır.
+pub fn compute_glyph_metrics(c: char) -> GlyphMetrics {
+    // Use a simple fixed advance width for now.
+    // This avoids recursion with glyph_advance_width.
+    // Advance width is defined separately.
+    let width = glyph_advance_width(c);
+    let height = 8; // 8x8 font
+    let left_bearing = if matches!(c, 'i' | 'l' | 'ı' | 'İ' | 'î') { 2 } else if matches!(c, '.' | ',' | ':' | ';' | '!' | '|' | '\'' | '`') { 1 } else { 0 };
+    let right_bearing = width - left_bearing;
+    let bbox_x_min = left_bearing;
+    let bbox_x_max = bbox_x_min + width;
+    let bbox_y_min = 0;
+    let bbox_y_max = height - 1;
+    GlyphMetrics {
+        width,
+        height,
+        left_bearing,
+        right_bearing,
+        bbox_x_min,
+        bbox_x_max,
+        bbox_y_min,
+        bbox_y_max,
+    }
+}
+/// Returns the advance width (in pixels) for a glyph.
+/// Currently a placeholder returning a constant width.
+pub fn glyph_advance_width(_c: char) -> usize {
+    8usize
+}
+/// Placeholder advance width, could be refined per glyph.
+/// Tüm bir dizge için total width hesaplar (karakter aralıkları ile).
+pub fn compute_text_width(text: &str) -> usize {
+    let mut total = 0usize;
+    let mut prev_char: Option<char> = None;
+    for c in text.chars() {
+        let advance = glyph_advance_width(c);
+        // Karakter aralığı: arka arkaya boşluk 2 piksel, diğerleri 1 piksel
+        let spacing = if Some(c) == prev_char { 0 } else { 1 };
+        total += advance + spacing;
+        prev_char = Some(c);
+    }
+    // Son boşluğu çıkar (sona boşluk eklenmemeli)
+    if !text.is_empty() && text.ends_with(' ') {
+        total -= 1;
+    }
+    total
+}
+/// Metni belirtilen genişlikte satırlara böler (word wrap).
+/// Metin, satır sonu karakterleri (\n) ile bölünür; uzunluk kontrolü genişlik ile yapılır.
+/// NOT: Bu fonksiyon alloc gerektirdiği için no_std ortamda kullanım sınırlıdır.
+#[allow(unused)]
+pub fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    if text.is_empty() {
+        return lines;
+    }
+    let mut current_line = String::new();
+    let mut current_width = 0usize;
+    for c in text.chars() {
+        let advance = glyph_advance_width(c);
+        // Karakter aralığı: arka arkaya boşluk 2 piksel, diğerleri 1 piksel
+        let would_wrap = current_line.is_empty() && advance > max_width;
+        let new_width = current_width + advance + 1;
+        if !current_line.is_empty() && new_width > max_width {
+            lines.push(current_line);
+            current_line = String::new();
+            current_width = 0;
+        }
+        if !current_line.is_empty() {
+            current_line.push(' ');
+            current_width += 1;
+        }
+        current_line.push(c);
+        current_width += advance;
+    }
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+    lines
+}
+/// Buton içine sığacak şekilde metni küçültür.
+/// NOT: Bu fonksiyon alloc gerektirdiği için no_std ortamda kullanım sınırlıdır.
+#[allow(unused)]
+pub fn fit_text_to_width(text: &str, available_width: usize) -> String {
+    let text_width = compute_text_width(text);
+    if text_width <= available_width {
+        return text.to_string();
+    }
+    // Karakterleri birer birer kaldırarak suitable bir kısaltma bul
+    let mut result = text.to_string();
+    while compute_text_width(&result) > available_width && result.len() > 3 {
+        if result.ends_with("...") {
+            result.pop();
+        } else {
+            result.push_str(".");
+        }
+    }
+    if result.len() > 3 && !result.ends_with("...") {
+        result.truncate(result.len() - 3);
+        result.push_str("...");
+    }
+    result
+}

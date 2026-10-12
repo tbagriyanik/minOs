@@ -160,13 +160,13 @@ impl SystemSettings {
         (win_x + CONTENT_X + 100, win_y + win_h.saturating_sub(44), 95, 22)
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + (i % 2) * 158, win_y + 182 + (i / 2) * 26, 150, 24)
+        (win_x + CONTENT_X + (i % 2) * 158, win_y + 198 + (i / 2) * 30, 150, 24)
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
-    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+i*72,y+254,66,22) }
-    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+230,y+274,100,24) }
-    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+324,200,10) }
-    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+84,y+338,220,24) }
+    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+i*72,y+270,66,22) }
+    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+230,y+294,100,24) }
+    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+344,200,10) }
+    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+84,y+360,220,24) }
     pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
     pub fn region_name(&self, english: bool) -> &'static str {
         match (self.region, english) { (1,true)=>"UTC", (1,false)=>"UTC", (2,true)=>"US Eastern (UTC-5)", (2,false)=>"ABD Doğu (UTC-5)", (_,true)=>"Türkiye (UTC+3)", (_,false)=>"Türkiye (UTC+3)" }
@@ -426,7 +426,7 @@ impl SystemSettings {
                 audio_status.push_str(audio_driver);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, audio_status.as_str(), Color::ACCENT_BLUE);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, crate::gui::ui_text("Tema Motoru: 3 hazır tema", "Theme Engine: 3 available themes"), Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 164,
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 178,
                     if self.language.is_english() { "Target resolution:" } else { "Hedef çözünürlük:" }, Color::ACCENT_YELLOW);
                 for i in 0..4 {
                     let r = Self::resolution_btn_rect(win_x,win_y,i);
@@ -434,19 +434,19 @@ impl SystemSettings {
                     MinGuiCompositor::draw_button(fb, r, if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR}, Self::resolution_name(i), Color::TEXT_MAIN, false);
                     if self.focused_control == 4 + i { fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_YELLOW); }
                 }
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+236, if self.language.is_english() { "Font zoom:" } else { "Yazı yakınlaştırma:" }, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+250, if self.language.is_english() { "Font zoom:" } else { "Yazı yakınlaştırma:" }, Color::TEXT_MAIN);
                 for (i, value) in [100u8,125,150].iter().enumerate() {
                     let label = match value { 125=>"125%", 150=>"150%", _=>"100%" };
                     let r = Self::zoom_btn_rect(win_x,win_y,i);
                     MinGuiCompositor::draw_button(fb, r, if self.zoom==*value{Color::ACCENT_GREEN}else{Color::TITLE_BAR}, label, Color::TEXT_MAIN, false);
                     if self.focused_control == 8 + i { fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_YELLOW); }
                 }
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+278, match (self.night_light,self.language.is_english()) { (true,true)=>"Blue light: On", (false,true)=>"Blue light: Off", (true,false)=>"Mavi ışık: Açık", (false,false)=>"Mavi ışık: Kapalı" }, Color::ACCENT_YELLOW);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+294, match (self.night_light,self.language.is_english()) { (true,true)=>"Blue light: On", (false,true)=>"Blue light: Off", (true,false)=>"Mavi ışık: Açık", (false,false)=>"Mavi ışık: Kapalı" }, Color::ACCENT_YELLOW);
                 let nl_btn = Self::night_light_rect(win_x,win_y);
                 MinGuiCompositor::draw_button(fb, nl_btn, Color::ACCENT_YELLOW, match (self.night_light,self.language.is_english()) { (true,true)=>"Off", (false,true)=>"On", (true,false)=>"Kapat", (false,false)=>"Aç" }, Color::DARK_BG, false);
                 if self.focused_control == 11 { fb.draw_rect_outline(nl_btn.0, nl_btn.1, nl_btn.2, nl_btn.3, Color::ACCENT_YELLOW); }
 
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+302, if self.language.is_english() { "Blue light strength:" } else { "Mavi ışık şiddeti:" }, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+324, if self.language.is_english() { "Blue light strength:" } else { "Mavi ışık şiddeti:" }, Color::TEXT_MAIN);
                 let nl = Self::night_light_track_rect(win_x,win_y);
                 fb.draw_rect(nl.0,nl.1,nl.2,nl.3,Color::TITLE_BAR_INACTIVE);
                 let fill = nl.2*self.night_light_level as usize/100;
@@ -455,7 +455,7 @@ impl SystemSettings {
                 let mut level_text = TextBuf::new(); level_text.push_usize(self.night_light_level as usize); level_text.push_byte(b'%');
                 MinGuiCompositor::draw_string(fb,nl.0+nl.2+8,nl.1+1,level_text.as_str(),Color::TEXT_MAIN);
 
-                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+342, if self.language.is_english() { "Region:" } else { "Bölge:" }, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x+CONTENT_X, win_y+362, if self.language.is_english() { "Region:" } else { "Bölge:" }, Color::TEXT_MAIN);
                 let reg_r = Self::region_btn_rect(win_x,win_y);
                 MinGuiCompositor::draw_button(fb, reg_r, Color::ACCENT_BLUE, self.region_name(self.language.is_english()), Color::TEXT_MAIN, false);
                 if self.focused_control == 12 { fb.draw_rect_outline(reg_r.0, reg_r.1, reg_r.2, reg_r.3, Color::ACCENT_YELLOW); }

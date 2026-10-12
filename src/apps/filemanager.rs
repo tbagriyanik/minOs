@@ -275,12 +275,16 @@ impl FileManagerApp {
 
         // Sağ Liste Başlıkları
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, list_x + 6, win_y + 66, crate::gui::ui_text("DOSYA ADI", "FILE NAME"), Color::TEXT_MUTED);
+        let name_end = if list_w > 330 { 150 } else if list_w > 200 { 150 } else { list_w.saturating_sub(12) };
+        MinGuiCompositor::draw_string_clipped(fb, list_x + 6, win_y + 66, crate::gui::ui_text("DOSYA ADI", "FILE NAME"), Color::TEXT_MUTED,
+            (list_x + 4, win_y + 60, name_end.saturating_sub(4), 20));
         if list_w > 200 {
-            MinGuiCompositor::draw_string(fb, list_x + 160, win_y + 66, crate::gui::ui_text("TÜR", "TYPE"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string_clipped(fb, list_x + 160, win_y + 66, crate::gui::ui_text("TÜR", "TYPE"), Color::TEXT_MUTED,
+                (list_x + 154, win_y + 60, 124, 20));
         }
         if list_w > 330 {
-            MinGuiCompositor::draw_string(fb, list_x + 290, win_y + 66, crate::gui::ui_text("BOYUT", "SIZE"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string_clipped(fb, list_x + 290, win_y + 66, crate::gui::ui_text("BOYUT", "SIZE"), Color::TEXT_MUTED,
+                (list_x + 284, win_y + 60, list_w.saturating_sub(290), 20));
         }
 
         // Dosya Listesi — scroll ofsetine göre çizilir; satırlar list_view_h'ye kırpılır.
@@ -310,13 +314,17 @@ impl FileManagerApp {
                 _ => Color::TEXT_MAIN,
             };
             MinGuiCompositor::draw_string(fb, list_x + 4, draw_y + 4, file.icon_tag, icon_color);
-            MinGuiCompositor::draw_string(fb, list_x + 48, draw_y + 4, file.display_name(), if is_sel { Color::ACCENT_BLUE } else { Color::TEXT_MAIN });
+            let name_width = if list_w > 330 { 104 } else if list_w > 200 { 104 } else { list_w.saturating_sub(56) };
+            MinGuiCompositor::draw_string_clipped(fb, list_x + 48, draw_y + 4, file.display_name(), if is_sel { Color::ACCENT_BLUE } else { Color::TEXT_MAIN },
+                (list_x + 48, draw_y + 2, name_width, ROW_H - 4));
 
             if list_w > 200 {
-                MinGuiCompositor::draw_string(fb, list_x + 160, draw_y + 4, file.file_type, Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string_clipped(fb, list_x + 160, draw_y + 4, file.file_type, Color::TEXT_MUTED,
+                    (list_x + 160, draw_y + 2, 118, ROW_H - 4));
             }
             if list_w > 330 {
-                MinGuiCompositor::draw_string(fb, list_x + 290, draw_y + 4, file.size_str.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string_clipped(fb, list_x + 290, draw_y + 4, file.size_str.as_str(), Color::TEXT_MAIN,
+                    (list_x + 290, draw_y + 2, list_w.saturating_sub(294), ROW_H - 4));
             }
         }
 

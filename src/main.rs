@@ -386,9 +386,23 @@ pub extern "C" fn _start() -> ! {
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
     // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
     // 0: Dosya Yöneticisi
-    compositor.add_window(gui::Window::new("Dosya Yöneticisi - VFS / Ev", "Dosyalar", 30, 30, 480, 290, false));
+    let files_width = 620.min(width.saturating_sub(20)).max(200);
+    let files_height = 440.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    compositor.add_window(gui::Window::new(
+        "Dosya Yöneticisi - VFS / Ev", "Dosyalar",
+        width.saturating_sub(files_width) / 2,
+        height.saturating_sub(files_height + gui::taskbar_h()) / 2,
+        files_width, files_height, false,
+    ));
     // 1: Sistem Ayarları
-    compositor.add_window(gui::Window::new("Sistem Ayarları", "Ayarlar", 160, 30, 480, 390, false));
+    let settings_width = 620.min(width.saturating_sub(20)).max(200);
+    let settings_height = 500.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    compositor.add_window(gui::Window::new(
+        "Sistem Ayarları", "Ayarlar",
+        width.saturating_sub(settings_width) / 2,
+        height.saturating_sub(settings_height + gui::taskbar_h()) / 2,
+        settings_width, settings_height, false,
+    ));
     // 2: Not Defteri
     compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 460, 270, false));
     // 3: Web Tarayıcısı
@@ -577,6 +591,7 @@ pub extern "C" fn _start() -> ! {
         // Ses cihazını ayarlarla senkronla
         audio_dev.set_volume(settings_app.volume);
         audio_dev.is_muted = settings_app.is_muted;
+        musicplayer_app.volume = settings_app.volume as usize;
 
         // 1. Fare Sağ Tık — tıklanan yere göre bağlam menüsü
         if right_clicked {
@@ -1294,7 +1309,9 @@ pub extern "C" fn _start() -> ! {
                                         musicplayer_app.current_track = (musicplayer_app.current_track + 1) % 5;
                                         musicplayer_app.progress = 0;
                                     } else if mx >= wx + 146 && mx < wx + 230 {
-                                        musicplayer_app.volume = (((mx - (wx + 146)) * 100) / 84).min(100);
+                                        let player_volume = (((mx - (wx + 146)) * 100) / 84).min(100) as u8;
+                                        settings_app.volume = player_volume;
+                                        musicplayer_app.volume = player_volume as usize;
                                     }
                                 } else if mx >= wx + 250 && mx < wx + ww - 8 && my >= wy + 96 && my < wy + 194 {
                                     musicplayer_app.current_track = ((my - (wy + 96)) / 18).min(4);
@@ -2043,8 +2060,10 @@ pub extern "C" fn _start() -> ! {
         drivers::e1000::poll();
 
         // Beş parçalı, HDA PCM tabanlı melodi yürütücüsü. (HDA yoksa PIT/PC speaker fallback).
-        audio_dev.set_volume(settings_app.volume.min(musicplayer_app.volume as u8));
-        if musicplayer_app.is_playing {
+        audio_dev.set_volume(settings_app.volume);
+        audio_dev.is_muted = settings_app.is_muted;
+        musicplayer_app.volume = settings_app.volume as usize;
+        if musicplayer_app.is_playing && !audio_dev.is_muted && audio_dev.volume_left > 0 {
             if anim_tick.wrapping_sub(last_music_beat) >= 24 {
                 const NOTES: [u32; 8] = [440, 523, 587, 659, 587, 523, 494, 392];
                 let track_offset = musicplayer_app.current_track as u32 * 22;
@@ -2082,7 +2101,7 @@ pub extern "C" fn _start() -> ! {
                 musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
                 last_music_beat = anim_tick;
             }
-        } else if speaker_on {
+        } else if speaker_on || audio_dev.is_muted || audio_dev.volume_left == 0 {
             drivers::hda::silence();
             audio_dev.set_pc_speaker_tone(0);
             speaker_on = false;

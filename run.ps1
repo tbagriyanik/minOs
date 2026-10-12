@@ -2,7 +2,10 @@ param(
     [switch]$BuildOnly,
     [switch]$Debug,
     [switch]$UsbDisks,
-    [switch]$UsbDiskReadWrite
+    [switch]$UsbDiskReadWrite,
+    [ValidateRange(1, 64)][int]$CpuCount = 2,
+    [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
+    [string]$DiskImage
 )
 
 # MinOS Derle ve QEMU ile Çalistir (PowerShell)
@@ -76,7 +79,8 @@ Write-Host "[3/3] QEMU Baslatiliyor..." -ForegroundColor Yellow
 Write-Host "=========================================" -ForegroundColor Cyan
 
 $qemuArgs = @(
-    "-m", "512M",
+    "-m", $Memory,
+    "-smp", "$CpuCount",
     "-boot", "d",
     "-serial", "stdio",
     "-vga", "std",
@@ -89,6 +93,14 @@ $qemuArgs = @(
     "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
     "-device", "e1000,netdev=n0"
 )
+
+if ($DiskImage) {
+    if (-not (Test-Path -LiteralPath $DiskImage -PathType Leaf)) {
+        Write-Host "[HATA] Disk imajı bulunamadi: $DiskImage" -ForegroundColor Red
+        exit 1
+    }
+    $qemuArgs += @("-drive", "file=$DiskImage,format=qcow2,if=ide")
+}
 
 if ($UsbDisks -or $UsbDiskReadWrite) {
     try {

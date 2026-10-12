@@ -350,6 +350,12 @@ impl Window {
             g,
         )
     }
+    /// Kontrol düğmelerinin bulunduğu başlık bölgesini resize hit-testinden çıkarır.
+    fn title_controls_rect(&self) -> (usize, usize, usize, usize) {
+        let left = self.min_rect().0;
+        let right = self.x + self.width;
+        (left, self.y, right.saturating_sub(left), titlebar_h())
+    }
     pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
         (self.x, self.y, self.width.saturating_sub(sp(66)), titlebar_h())
     }
@@ -385,6 +391,11 @@ impl Window {
         let in_x = mx >= self.x && mx < right;
         let in_y = my >= self.y && my < bottom;
         if !in_x || !in_y { return None; }
+        // Başlık düğmeleri sağ üst köşeye yakın olsa da tıklama her zaman
+        // düğmelere ait olsun; köşe resize alanı bu bölgeye taşmasın.
+        if in_rect(mx, my, self.title_controls_rect()) {
+            return None;
+        }
 
         let left = mx - self.x < g;
         let edge_right = right - mx <= g;
@@ -2116,9 +2127,14 @@ impl MinGuiCompositor {
 
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
+        let over_control = self.windows.iter().flatten().any(|win| {
+            win.is_open && !win.is_minimized && in_rect(mx, my, win.close_rect())
+        });
+        if !over_control {
         if let Some((_, edge)) = self.topmost_resize_edge(mx, my) {
             self.draw_resize_cursor(fb, mx, my, edge);
             return;
+        }
         }
 
         const CURSOR_PATTERN: [u8; 12] = [

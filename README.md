@@ -127,6 +127,9 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-Debug` | Debug profilinde derler (`target\x86_64-minos\debug\minos-kernel`). Varsayılan **release**'dir. |
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
+| `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`). |
+| `-Memory 1G` | Konuk RAM miktarı (`512M`, `1G` gibi; varsayılan `512M`). |
+| `-DiskImage dosya.qcow2` | Mevcut qcow2 sanal disk imajını IDE disk olarak bağlar. Oluşturma gerekiyorsa `qemu-img create -f qcow2 disk.qcow2 8G` kullanın. |
 
 ```powershell
 # Yalnızca derle (QEMU başlatma)
@@ -134,7 +137,12 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1 -BuildOnly
 
 # Debug profili + USB diskleri salt okunur ekle
 powershell -ExecutionPolicy Bypass -File .\run.ps1 -Debug -UsbDisks
+
+# 4 sanal çekirdek, 2 GB RAM ve 8 GB qcow2 diskle çalıştır
+powershell -ExecutionPolicy Bypass -File .\run.ps1 -CpuCount 4 -Memory 2G -DiskImage .\disk.qcow2
 ```
+
+`-CpuCount` QEMU'nun SMP ayarını yapar. MinOS çekirdeği şu anda çok çekirdekli (SMP) iş planlaması uygulamıyor; ek çekirdekler konukta paralel uygulama çalıştırma sağlamaz. RAM değeri QEMU'ya ayrılan miktardır. Disk imajı ayrıca oluşturulur ve `-DiskImage` ile bağlanır; USB disk seçenekleri fiziksel USB aygıtları içindir.
 
 > **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
 

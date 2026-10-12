@@ -153,6 +153,37 @@ fn read_cpu_cycles() -> u64 {
     ((high as u64) << 32) | low as u64
 }
 
+static mut TSC_CYCLES_PER_US: u64 = 1;
+
+/// TSC frekansını PIT kanal 2 ile kalibre eder.
+fn init_timebase() {
+    unsafe {
+        let mut port61: u8;
+        core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
+        let saved = port61;
+        port61 = (port61 & !0x03) | 0x01;
+        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") port61, options(nomem, nostack, preserves_flags));
+        // PIT kanal 2 mode 0, 65536 sayım ≈ 54.9 ms.
+        core::arch::asm!("out dx, al", in("dx") 0x43u16, in("al") 0xB0u8, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
+        let start = read_cpu_cycles();
+        loop {
+            core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
+            if port61 & 0x20 != 0 { break; }
+            core::hint::spin_loop();
+        }
+        let elapsed = read_cpu_cycles().wrapping_sub(start).max(1);
+        TSC_CYCLES_PER_US = (elapsed / 54_925).max(1);
+        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") saved, options(nomem, nostack, preserves_flags));
+    }
+}
+
+fn monotonic_ms() -> u64 {
+    let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);
+    read_cpu_cycles() / cycles_per_us / 1_000
+}
+
 /// Verilen uygulama penceresini açar, küçültme durumunu kaldırır ve odaklar.
 fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     if let Some(win) = compositor.windows[idx].as_mut() {
@@ -263,6 +294,7 @@ fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
     serial_print("[MinOS] Kernel _start reached!\n");
@@ -449,7 +481,7 @@ pub extern "C" fn _start() -> ! {
     let mut music_note: usize = 0;
     let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
-    let mut last_title_click: u64 = 0;
+    let mut last_title_click_ms: u64 = 0;
         // Not Defteri metin seçimi sürükleme durumu.
     let mut notepad_dragging = false;
 
@@ -671,11 +703,12 @@ pub extern "C" fn _start() -> ! {
             // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
             if let Some(w) = compositor.windows[2] {
                 if w.is_focused
-                    && gui::in_rect(mx, my, (w.x + 6, w.y + 58, w.width.saturating_sub(12), w.height.saturating_sub(90)))
+                    && gui::in_rect(mx, my, (w.x + 6, w.y + 58, w.width.saturating_sub(12), w.height.saturating_sub(86)))
                 {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
                     // Çift tık algılama: aynı konuma kısa sürede ikinci tık.
-                    let dbl = notepad_app.last_click_tick.abs_diff(loop_counter as usize) < 400_000
+                    let now_ms = monotonic_ms() as usize;
+                    let dbl = now_ms.abs_diff(notepad_app.last_click_tick) <= 300
                         && notepad_app.last_click_pos.0.abs_diff(mx) < 4
                         && notepad_app.last_click_pos.1.abs_diff(my) < 4;
                     if dbl {
@@ -686,7 +719,7 @@ pub extern "C" fn _start() -> ! {
                         notepad_app.selection_end = Some(at);
                         notepad_dragging = true;
                     }
-                    notepad_app.last_click_tick = loop_counter as usize;
+                    notepad_app.last_click_tick = now_ms;
                     notepad_app.last_click_pos = (mx, my);
                     consumed = true;
                 }
@@ -1055,17 +1088,19 @@ pub extern "C" fn _start() -> ! {
                     }
                     // Başlık çubuğu — sürükle / çift tık ile maksimize
                     if gui::in_rect(mx, my, win.title_drag_rect()) {
+                        let now_ms = monotonic_ms();
                         let dbl = last_title_idx == Some(idx)
-                            && loop_counter.wrapping_sub(last_title_click) < 180_000;
+                            && now_ms.wrapping_sub(last_title_click_ms) <= 300;
                         compositor.focus_window(idx);
                         if dbl {
                             compositor.toggle_maximize(idx, width, height);
+                            dragging_win = None;
                             // Çift tık tüketildikten sonra eşleşmeyi temizle;
                             // üçüncü kısa tık yeni bir çift tık başlatabilsin.
                             last_title_idx = None;
                         } else {
                             last_title_idx = Some(idx);
-                            last_title_click = loop_counter;
+                            last_title_click_ms = now_ms;
                             if !win.is_maximized {
                                 dragging_win = Some(idx);
                                 drag_offset_x = mx.saturating_sub(wx);

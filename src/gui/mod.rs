@@ -538,6 +538,39 @@ impl MinGuiCompositor {
         const APP_IDX: [usize; 11] = [0, 1, 7, 10, 2, 8, 9, 3, 4, 5, 6];
         APP_IDX.get(index).copied()
     }
+    /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
+    /// konumun puanını döner. Küçük puan daha iyi eşleşmedir:
+    /// `0` = ad başında, `1` = kelime başında, `2` = ad içinde herhangi bir yerde.
+    /// Eşleşme yoksa `None`.
+    fn start_search_score(name: &[u8], query: &[u8]) -> Option<u8> {
+        if query.is_empty() || name.len() < query.len() {
+            return None;
+        }
+        let first = query[0];
+        let mut i = 0usize;
+        let limit = name.len() - query.len();
+        while i <= limit {
+            // Ad içinde sorgunun ilk harfini ara.
+            if !name[i].eq_ignore_ascii_case(&first) {
+                i += 1;
+                continue;
+            }
+            if name[i..i + query.len()].eq_ignore_ascii_case(query) {
+                // Sıralama: ad başı (0), kelime başı (1), diğer (2).
+                let score = if i == 0 {
+                    0
+                } else if name[i - 1] == b' ' {
+                    1
+                } else {
+                    2
+                };
+                return Some(score);
+            }
+            i += 1;
+        }
+        None
+    }
+
     pub fn start_search_matches(&self, english: bool, results: &mut [usize; 11]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() { return 0; }
@@ -549,16 +582,34 @@ impl MinGuiCompositor {
             ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
             ["Komut İstemi", "Terminal"],
         ];
+        // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
+        let mut scored: [(usize, u8); 11] = [(0, 0); 11];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
-            let localized_name = names[english as usize].as_bytes();
-            let english_name = names[1].as_bytes();
-            if (localized_name.len() >= query.len() && localized_name[..query.len()].eq_ignore_ascii_case(query))
-                || (english_name.len() >= query.len() && english_name[..query.len()].eq_ignore_ascii_case(query))
-            {
-                results[count] = app_id;
+            let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
+            let english_hit = Self::start_search_score(names[1].as_bytes(), query);
+            let score = match (localized, english_hit) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            };
+            if let Some(s) = score {
+                scored[count] = (app_id, s);
                 count += 1;
             }
+        }
+        // Puanı küçük olan (daha iyi eşleşen) önce gelecek şekilde sırala;
+        // eşit puanda orijinal uygulama sırası korunur (kararlı sıralama).
+        for i in 1..count {
+            let mut j = i;
+            while j > 0 && scored[j - 1].1 > scored[j].1 {
+                scored.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        for i in 0..count {
+            results[i] = scored[i].0;
         }
         count
     }

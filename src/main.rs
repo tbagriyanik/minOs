@@ -244,6 +244,25 @@ fn is_canonical_ptr<T>(ptr: *const T) -> bool {
     (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
 }
 
+/// Limine yanıt yuvasını (`&REQUEST.response`) güvenli biçimde okur.
+///
+/// Okuma yapıldıktan sonra dönen işaretçi null olmamalı, doğru hizalanmalı ve
+/// canonical bir adres olmalıdır. Tüm bu koşullar sağlandığında `Some` döner;
+/// aksi halde `None` döner ve çağıran taraf yanıtı hiç dereference etmez.
+/// Böylece tek bir noktada doğrulanan işaretçi CodeQL için de temiz kalır.
+///
+/// # Safety
+/// `slot`, `&REQUEST.response` gibi geçerli ve okunabilir bir yuvaya işaret
+/// etmelidir.
+#[inline]
+unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
+    if !is_canonical_ptr(slot) {
+        return None;
+    }
+    let ptr = core::ptr::read_volatile(slot);
+    if is_canonical_ptr(ptr) { Some(ptr) } else { None }
+}
+
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
 fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
     if let Some(idx) = compositor.launch_app_window(app_id) {
@@ -395,10 +414,9 @@ pub extern "C" fn _start() -> ! {
     arch::x86_64::init_interrupts();
     let mut memory_mgr = mm::MemoryManager::new();
     unsafe {
-        let response = core::ptr::read_volatile(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response));
-        if is_canonical_ptr(response) {
-            // SAFETY: pointer comes from Limine's response slot and passed null,
-            // alignment and canonical-address checks above.
+        // SAFETY: `response` is validated (non-null, aligned, canonical) by
+        // `valid_limine_response` before the response object is dereferenced.
+        if let Some(response) = valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response)) {
             let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count));
             let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
             let count = count.min(256) as usize;
@@ -445,8 +463,8 @@ pub extern "C" fn _start() -> ! {
     // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
     // Önce HHDM ofsetini al (fiziksel MMIO'ya sanal erişim için).
     let hhdm_offset = unsafe {
-        let resp = core::ptr::read_volatile(core::ptr::addr_of!(HHDM_REQUEST.response));
-        if !resp.is_null() {
+        // SAFETY: the response pointer is validated before being dereferenced.
+        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response)) {
             let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
             serial_print("[MinOS] HHDM offset okundu (0 yoksa gecerli).\n");
             off
@@ -467,16 +485,18 @@ pub extern "C" fn _start() -> ! {
 
     // 4. Limine Framebuffer Alımı
     let (fb_ptr, width, height, pitch) = unsafe {
-        let resp = core::ptr::read_volatile(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response));
-        if !resp.is_null() {
+        // SAFETY: the response pointer is validated before being dereferenced.
+        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response)) {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
-            if framebuffer_count == 0 || fb_ptr_ptr.is_null() {
+            if framebuffer_count == 0 || !is_canonical_ptr(fb_ptr_ptr) {
                 serial_print("[MinOS] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
+            // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
+            // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
-            if fb_info_ptr.is_null() {
+            if !is_canonical_ptr(fb_info_ptr) {
                 serial_print("[MinOS] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }

@@ -34,22 +34,24 @@ MinOS'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 
 ## ✨ Özellikler ve Uygulama Paketi
 
-MinOS, tam teşekküllü bir masaüstü deneyimi sunan 11 adet yerleşik uygulama ve pencere yöneticisi içerir:
+MinOS, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygulama** ve pencere yöneticisi içerir:
 
 | Uygulama | Açıklama |
 | :--- | :--- |
-| **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter ve fare tekerleği gezintisi. |
-| **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS) gezgini, dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. |
-| **⚙️ Sistem Ayarları** | Beş tema arasında geçiş, canlı saat & tarih, ses düzeyi kaydırıcısı, ağ durumu (IP/DNS/Gateway), dil/klavye, yazı yakınlaştırma ve pencere düzeni kaydetme paneli. |
+| **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
+| **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. |
+| **⚙️ Sistem Ayarları** | Dört sekme (Temel / İleri / Ağ / Hakkında): beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
-| **🌐 Web Tarayıcısı** | Yerel minos://help ve minos://cats sayfaları, e1000 ağ kartı ARP/ping test paneli. |
+| **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
 | **🖼️ Resim Gösterici** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
-| **🎵 Müzik Çalar** | PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
+| **🎵 Müzik Çalar** | HDA sürücüsü üzerinden PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim** (Windows Paint benzeri), fırça kenarının otomatik kırpılması ve 4096 noktalık tuval geçmişi. |
-| **⌨️ Komut İstemi** | Klavyeyle komut ve metin girişi kabul eden retro terminal görünümü. |
+| **⌨️ Komut İstemi (MinShell)** | `help`, `ls`, `cat`, `echo`, `clear`, `mem`, `ps`, `apps`, `ipconfig`, `ping`, `dns`, `date`, `uname`, `whoami`, `theme`, `open`/`run` komutları; Tab ile otomatik tamamlama ve yukarı/aşağı oklarla komut geçmişi. |
+
+> **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) tanımlıdır ancak şu anda Başlat menüsünde kayıtlı olmadığı için çalıştırılamaz.
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
@@ -208,16 +210,19 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 minos/
 ├── src/
 │   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
-│   ├── drivers/             # PS/2 fare, klavye, framebuffer video, RTC (CMOS) saat ve e1000/HDA donanım sürücüleri
-│   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs) ve masaüstü kompozitörü
+│   ├── drivers/             # video (framebuffer), PS/2 fare & klavye, RTC (CMOS) saat,
+│   │                        #   e1000 + TCP/IP yığını, HDA ses, ATA/ATAPI (PIO) ve USB durum katmanı
+│   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
+│   │                        #   kaydırma çubuğu ve pano (clipboard)
 │   ├── apps/                # 11 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Görev Yöneticisi...)
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM)
-│   ├── fs/                  # Sanal dosya sistemi (VFS / TarFS)
-│   └── main.rs              # Çekirdek giriş noktası (_start) ve ana olay döngüsü
+│   ├── fs/                  # Sanal dosya sistemi (vfs.rs / TarFS) ve disk okuyucuları (diskfs.rs: FAT32 + ISO9660)
+│   └── main.rs              # Çekirdek giriş noktası (_start), Limine istekleri ve ana olay döngüsü
 ├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
 ├── build_iso.ps1            # El Torito yamalı hibrit ISO oluşturucu
-├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği (-Debug, -BuildOnly, -UsbDisks, -UsbDiskReadWrite)
+├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği (-Debug, -BuildOnly, -UsbDisks, -UsbDiskReadWrite, -CpuCount, -Memory, -DiskImage)
+├── build.rs                 # fontdue ile TTF → bitmap font atlası üretimi
 └── x86_64-minos.json        # Hedef x86_64 Long Mode tanımlama dosyası
 ```
 

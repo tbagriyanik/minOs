@@ -289,12 +289,17 @@ impl TaskManagerApp {
                 let mut cpu = TextBuf::new();
                 cpu.push_usize(proc.cpu_pct);
                 cpu.push_byte(b'%');
-                MinGuiCompositor::draw_string_clipped(fb, win_x + 170, row.1 + 2, cpu.as_str(), Color::ACCENT_YELLOW,
+                // Sayıları sütunun sağ kenarına dayalı hizala.
+                let cpu_right = win_x + 222;
+                let cpu_x = cpu_right.saturating_sub(MinGuiCompositor::text_width(cpu.as_str(), 1));
+                MinGuiCompositor::draw_string_clipped(fb, cpu_x, row.1 + 2, cpu.as_str(), Color::ACCENT_YELLOW,
                     (win_x + 168, row.1, 54, row.3));
                 let mut state_size = TextBuf::new();
                 state_size.push_usize(proc.memory_kb);
                 state_size.push_str(" KB");
-                MinGuiCompositor::draw_string_clipped(fb, win_x + 230, row.1 + 2, state_size.as_str(), Color::TEXT_MUTED,
+                let mem_right = win_x + 296;
+                let mem_x = mem_right.saturating_sub(MinGuiCompositor::text_width(state_size.as_str(), 1));
+                MinGuiCompositor::draw_string_clipped(fb, mem_x, row.1 + 2, state_size.as_str(), Color::TEXT_MUTED,
                     (win_x + 228, row.1, 68, row.3));
                 MinGuiCompositor::draw_string_clipped(fb, win_x + 304, row.1 + 2,
                     match (proc.is_minimized, english) { (true, true) => "Paused", (false, true) => "Running", (true, false) => "Bekl.", (false, false) => "Açık" }, Color::ACCENT_GREEN,
@@ -316,20 +321,22 @@ impl TaskManagerApp {
 
             let memory_pct = if self.total_memory_kb == 0 { 0 }
                 else { self.used_memory_kb.saturating_mul(100) / self.total_memory_kb };
+            // Etiket ve dolum çubuğu ayrı satırlarda; metin çubuğun üzerine binmez.
             let mut memory_label = TextBuf::new();
             memory_label.push_str(crate::gui::ui_text("Fiziksel RAM: ", "Physical RAM: "));
             memory_label.push_usize(self.used_memory_kb / 1024);
             memory_label.push_str(" / ");
             memory_label.push_usize(self.total_memory_kb / 1024);
             memory_label.push_str(" MB");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 154, memory_label.as_str(), Color::TEXT_MAIN);
-            fb.draw_rect(bar_x, win_y + 154, bar_w, 12, Color::TITLE_BAR_INACTIVE);
-            fb.draw_rect(bar_x, win_y + 154, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 142, memory_label.as_str(), Color::TEXT_MAIN,
+                (win_x + 12, win_y + 140, win_w.saturating_sub(24), 16));
+            fb.draw_rect(bar_x, win_y + 158, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + 158, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
             let mut free_label = TextBuf::new();
             free_label.push_str(crate::gui::ui_text("Kullanılabilir RAM: ", "Available RAM: "));
             free_label.push_usize(self.free_memory_kb / 1024);
             free_label.push_str(" MB");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 174, free_label.as_str(), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 176, free_label.as_str(), Color::TEXT_MUTED);
 
             let mut storage_label = TextBuf::new();
             storage_label.push_str("VFS: ");

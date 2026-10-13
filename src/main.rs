@@ -583,12 +583,30 @@ pub extern "C" fn _start() -> ! {
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
+    let mut welcome_accepted = false;
     loop {
         if welcome_dirty {
             gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
             welcome_dirty = false;
         }
         drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+
+        // Enter veya Escape ile hoş geldin ekranını geç.
+        while let Some(action) = keyboard.take_last_action() {
+            if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
+                welcome_accepted = true;
+            }
+        }
+        while let Some(ch) = keyboard.take_last_char() {
+            if ch == '\x1b' {
+                welcome_accepted = true;
+            }
+        }
+        if welcome_accepted {
+            settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+            break;
+        }
+
         if welcome_mouse_pos != (mouse.x, mouse.y) {
             welcome_mouse_pos = (mouse.x, mouse.y);
             welcome_dirty = true;
@@ -811,7 +829,7 @@ pub extern "C" fn _start() -> ! {
         if right_clicked {
             compositor.is_calendar_open = false;
             compositor.is_volume_popup_open = false;
-            compositor.is_start_menu_open = false;
+            compositor.close_start_menu();
             compositor.is_context_menu_open = true;
             compositor.context_menu_x = mx;
             compositor.context_menu_y = my;
@@ -883,9 +901,7 @@ pub extern "C" fn _start() -> ! {
                 if !gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h))
                     && !gui::in_rect(mx, my, submenu)
                 {
-                    compositor.is_start_menu_open = false;
-                    compositor.confirm_shutdown = false;
-                    compositor.confirm_restart = false;
+                    compositor.close_start_menu();
                 }
             }
             if compositor.is_context_menu_open
@@ -1068,7 +1084,7 @@ pub extern "C" fn _start() -> ! {
         // D) Başlat menüsü açıkken
         if !consumed && compositor.is_start_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = gui::MinGuiCompositor::start_menu_rect(tb_y);
-            let search_rect = (menu_x + gui::sp(8), menu_y + gui::sp(48), menu_w - gui::sp(16), gui::sp(24));
+            let search_rect = gui::MinGuiCompositor::start_search_rect(menu_x, menu_y, menu_w);
             let active_g = compositor.active_start_group;
             let mut sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
             if compositor.start_search_len > 0 {
@@ -1083,8 +1099,7 @@ pub extern "C" fn _start() -> ! {
                     let row_rect = (sub_rect.0 + 6, sub_rect.1 + gui::sp(30) + row * gui::sp(24), sub_rect.2 - 12, gui::sp(22));
                     if gui::in_rect(mx, my, row_rect) {
                         open_app(&mut compositor, *app_id);
-                        compositor.is_start_menu_open = false;
-                        compositor.clear_start_search();
+                        compositor.close_start_menu();
                         break;
                     }
                 }
@@ -1094,9 +1109,7 @@ pub extern "C" fn _start() -> ! {
                 if menu_inside && !gui::in_rect(mx, my, search_rect) {
                     consumed = true;
                 } else if !menu_inside {
-                    compositor.is_start_menu_open = false;
-                    compositor.confirm_shutdown = false;
-                    compositor.confirm_restart = false;
+                    compositor.close_start_menu();
                     consumed = true;
                 }
             }
@@ -1109,7 +1122,7 @@ pub extern "C" fn _start() -> ! {
             if gui::in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22)) {
                 open_app(&mut compositor, 1);
                 settings_app.active_tab = 0;
-                compositor.is_start_menu_open = false;
+                compositor.close_start_menu();
                 consumed = true;
                 cat_clicked = true;
             }
@@ -1159,7 +1172,7 @@ pub extern "C" fn _start() -> ! {
                         if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
                             open_app(&mut compositor, app_idx);
                         }
-                        compositor.is_start_menu_open = false;
+                        compositor.close_start_menu();
                         break;
                     }
                 }
@@ -1168,9 +1181,7 @@ pub extern "C" fn _start() -> ! {
                     if gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h)) || gui::in_rect(mx, my, sub_rect) {
                         consumed = true;
                     } else {
-                        compositor.is_start_menu_open = false;
-                        compositor.confirm_shutdown = false;
-                        compositor.confirm_restart = false;
+                        compositor.close_start_menu();
                         consumed = true;
                     }
                 } else {
@@ -1185,9 +1196,9 @@ pub extern "C" fn _start() -> ! {
                 compositor.is_start_menu_open = !compositor.is_start_menu_open;
                 if compositor.is_start_menu_open {
                     compositor.active_start_group = 0;
+                    compositor.clear_start_search();
                 } else {
-                    compositor.confirm_shutdown = false;
-                    compositor.confirm_restart = false;
+                    compositor.close_start_menu();
                 }
                 consumed = true;
                 } else if gui::in_rect(mx, my, l.clock) {
@@ -1293,7 +1304,7 @@ pub extern "C" fn _start() -> ! {
                     let dy = 30 + i * 54;
                     if my >= dy && my <= dy + 30 {
                         open_app(&mut compositor, app_idx);
-                        compositor.is_start_menu_open = false;
+                        compositor.close_start_menu();
                         consumed = true;
                         break;
                     }
@@ -1719,9 +1730,9 @@ pub extern "C" fn _start() -> ! {
                     compositor.is_start_menu_open = !compositor.is_start_menu_open;
                     if compositor.is_start_menu_open {
                         compositor.active_start_group = 0;
+                        compositor.clear_start_search();
                     } else {
-                        compositor.confirm_shutdown = false;
-                        compositor.confirm_restart = false;
+                        compositor.close_start_menu();
                     }
                 }
                 drivers::keyboard::KeyAction::CloseActiveWindow => {
@@ -1751,7 +1762,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::OpenTaskManager => {
                     open_app(&mut compositor, 7);
-                    compositor.is_start_menu_open = false;
+                    compositor.close_start_menu();
                 }
                 drivers::keyboard::KeyAction::ArrowUp => {
                     if compositor.is_start_menu_open {
@@ -1876,8 +1887,7 @@ pub extern "C" fn _start() -> ! {
                         if compositor.start_search_len > 0 {
                             if let Some(app_idx) = compositor.selected_start_search_result(settings_app.language.is_english()) {
                                 open_app(&mut compositor, app_idx);
-                                compositor.is_start_menu_open = false;
-                                compositor.clear_start_search();
+                                compositor.close_start_menu();
                             }
                             continue;
                         }
@@ -1904,7 +1914,7 @@ pub extern "C" fn _start() -> ! {
                             if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
                                 open_app(&mut compositor, app_idx);
                             }
-                            compositor.is_start_menu_open = false;
+                            compositor.close_start_menu();
                         }
                     } else if compositor.is_context_menu_open {
                         enter_char_consumed = true;
@@ -2310,7 +2320,7 @@ pub extern "C" fn _start() -> ! {
             // Başlat menüsü açıkken klavye kısayolları menü SIRASINI kullanır
             // (pencere indeksini değil) — start_menu_app_idx ile eşlenir.
             if ch == '\x1b' && compositor.is_start_menu_open {
-                compositor.is_start_menu_open = false;
+                compositor.close_start_menu();
             } else if ch == '\x1b' && compositor.is_context_menu_open {
                 compositor.is_context_menu_open = false;
             } else if ch == '\x1b' && taskmgr_app.launch_menu_open {
@@ -2330,13 +2340,13 @@ pub extern "C" fn _start() -> ! {
                 let menu_index = (ch as usize) - ('1' as usize);
                 if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
                     open_app(&mut compositor, app_idx);
-                    compositor.is_start_menu_open = false;
+                    compositor.close_start_menu();
                 }
             } else if compositor.is_start_menu_open && (ch == 'a' || ch == 'A' || ch == 'b' || ch == 'B') {
                 let menu_index = if ch == 'a' || ch == 'A' { 9 } else { 10 };
                 if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
                     open_app(&mut compositor, app_idx);
-                    compositor.is_start_menu_open = false;
+                    compositor.close_start_menu();
                 }
             } else if compositor.is_start_menu_open && (ch == 'r' || ch == 'R') {
                 if compositor.confirm_restart { restart_system(); }

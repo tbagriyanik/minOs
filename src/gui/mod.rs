@@ -576,6 +576,15 @@ impl MinGuiCompositor {
         self.selected_start_item = 0;
     }
 
+    /// Başlat menüsünü kapatır ve arama durumunu sıfırlar. Menü her kapandığında
+    /// kullanılmalı; böylece bir sonraki açılış temiz başlar.
+    pub fn close_start_menu(&mut self) {
+        self.is_start_menu_open = false;
+        self.confirm_shutdown = false;
+        self.confirm_restart = false;
+        self.clear_start_search();
+    }
+
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
         let mut results = [0; 11];
         let count = self.start_search_matches(english, &mut results);
@@ -2030,9 +2039,18 @@ impl MinGuiCompositor {
         (menu_x, menu_y, menu_w, menu_h)
     }
 
+    /// Başlat menüsündeki arama kutusunun dikdörtgeni (x, y, w, h).
+    /// Profil şeridinin hemen altına yerleşir; çizim ve tıklama testi bunu kullanır.
+    pub fn start_search_rect(menu_x: usize, menu_y: usize, menu_w: usize) -> (usize, usize, usize, usize) {
+        let strip_h = sp(34) + Self::icon_size();
+        let search_h = sp(22);
+        // Şeridin biraz içine bindirip yukarı çekerek kategorilerle çakışmayı önle.
+        let search_y = menu_y + strip_h.saturating_sub(sp(4));
+        (menu_x + sp(8), search_y, menu_w.saturating_sub(sp(16)), search_h)
+    }
+
     pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize, english: bool, mx: usize, my: usize) {
         let (menu_x, menu_y, menu_w, menu_h) = Self::start_menu_rect(tb_y);
-
         fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
         fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
@@ -2050,12 +2068,12 @@ impl MinGuiCompositor {
         if settings_hover { fb.draw_rounded_rect(menu_x + menu_w - 34, menu_y + 6, 26, 22, 4, Color::ACCENT_BLUE); }
         // Ayarlar menü öğesinde kullanılan mevcut uygulama simgesini yeniden kullan.
         Self::draw_icon_by_index(fb, menu_x + menu_w - 28, menu_y + 9, Self::window_icon_index(1));
-        let search_rect = (menu_x + sp(8), menu_y + strip_h + sp(4), menu_w - sp(16), sp(24));
+        let search_rect = Self::start_search_rect(menu_x, menu_y, menu_w);
         fb.draw_rounded_rect(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::WINDOW_BG);
         fb.draw_rounded_rect_outline(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::BORDER);
         let search_text = if self.start_search_len == 0 { ui_text("Uygulama ara...", "Search apps...") }
             else { core::str::from_utf8(&self.start_search[..self.start_search_len]).unwrap_or("") };
-        Self::draw_string(fb, search_rect.0 + 6, search_rect.1 + 6, search_text, Color::TEXT_MAIN);
+        Self::draw_string(fb, search_rect.0 + 6, search_rect.1 + 4, search_text, Color::TEXT_MAIN);
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {

@@ -21,20 +21,14 @@ MinOS'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 
 ## 📸 Ekran Görüntüleri (Screenshots)
 
-### 1. Başlat Menüsü & Çoklu Pencere Ortamı
-![MinOS Başlat Menüsü](docs/screenshots/minos_startmenu.png)
+### Welcome Ekranı
+![Welcome](docs/screenshots/welcome.png)
 
-### 2. Etkileşimli Not Defteri, Müzik Çalar Ekolayzerı & Dosya Yöneticisi
-![MinOS Masaüstü](docs/screenshots/minos_desktop.png)
+### Tema 1
+![Tema 1](docs/screenshots/tema1.png)
 
-### 3. Sistem Ayarları, Görev Yöneticisi & Uygulama Ekosistemi
-![MinOS Uygulamalar ve Ayarlar](docs/screenshots/minos_apps.png)
-
-### 4. Açık Tema (Daylight Theme)
-![MinOS Açık Tema](docs/screenshots/acikTema.png)
-
-### 5. Mor / Kadife Gece Teması (Velvet Dark Theme)
-![MinOS Mor Tema](docs/screenshots/morTema.png)
+### Tema 2
+![Tema 2](docs/screenshots/tema2.png)
 
 ---
 

@@ -244,9 +244,21 @@ fn is_canonical_ptr<T>(ptr: *const T) -> bool {
     (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
 }
 
-/// Verilen uygulama penceresini açar, küçültme durumunu kaldırır ve odaklar.
-fn open_app(compositor: &mut gui::MinGuiCompositor, idx: usize) {
-    if let Some(win) = compositor.windows[idx].as_mut() {
+/// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
+fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+    if let Some(idx) = compositor.launch_app_window(app_id) {
+        if let Some(win) = compositor.windows[idx].as_mut() {
+            win.is_open = true;
+            win.is_minimized = false;
+            win.is_maximized = false;
+        }
+        compositor.focus_window(idx);
+    }
+}
+
+/// Belirli bir pencere örneğini açar ve odaklar.
+fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
+    if let Some(win) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
         win.is_open = true;
         win.is_minimized = false;
         win.is_maximized = false;
@@ -269,6 +281,7 @@ fn terminate_app(
     paint: &mut apps::paint::PaintApp,
     terminal: &mut apps::terminal::TerminalApp,
 ) {
+    let app_id = compositor.app_id_for_window(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
         window.is_open = false;
         window.is_minimized = false;
@@ -280,7 +293,10 @@ fn terminate_app(
         return;
     }
 
-    match idx {
+    let another_instance_open = compositor.windows.iter().any(|slot| {
+        slot.map_or(false, |window| window.app_id as usize == app_id && window.is_open)
+    });
+    if !another_instance_open { match app_id {
         0 => *fm = apps::filemanager::FileManagerApp::new(),
         1 => settings.active_tab = 0,
         2 => notepad.clear(),
@@ -302,21 +318,34 @@ fn terminate_app(
             terminal.init_banner();
         }
         _ => return,
-    }
+    } }
     compositor.focus_top_window();
+}
+
+fn app_is_focused(compositor: &gui::MinGuiCompositor, app_id: usize) -> bool {
+    compositor.windows.iter().any(|slot| {
+        slot.map_or(false, |window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
+    })
+}
+
+fn focused_window_for_app(compositor: &gui::MinGuiCompositor, app_id: usize) -> Option<(usize, gui::Window)> {
+    compositor.windows.iter().enumerate().find_map(|(idx, slot)| {
+        slot.filter(|window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
+            .map(|window| (idx, window))
+    })
 }
 
 /// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
 /// Kaydırma çubuğunun gerekip gerekmediğini ve tutamaç boyutunu belirlemek için
 /// hem çizim hem de tıklama kod yollarında ortak kullanılır.
 fn window_content_h(
-    idx: usize,
+    app_id: usize,
     _win_h: usize,
     win_w: usize,
     fm: &apps::filemanager::FileManagerApp,
     np: &apps::notepad::NotepadApp,
 ) -> usize {
-    match idx {
+    match app_id {
         // Dosya Yöneticisi: liste içeriği (üst araç çubuğu + satırlar + durum çubuğu).
         0 => apps::filemanager::list_top() + fm.list_content_h() + 30,
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
@@ -550,6 +579,56 @@ pub extern "C" fn _start() -> ! {
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
 
+    // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
+    let mut welcome_was_left_down = false;
+    let mut welcome_dirty = true;
+    let mut welcome_mouse_pos = (mouse.x, mouse.y);
+    loop {
+        if welcome_dirty {
+            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
+            welcome_dirty = false;
+        }
+        drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+        if welcome_mouse_pos != (mouse.x, mouse.y) {
+            welcome_mouse_pos = (mouse.x, mouse.y);
+            welcome_dirty = true;
+        }
+        let clicked = mouse.left_button && !welcome_was_left_down;
+        welcome_was_left_down = mouse.left_button;
+        if !clicked { continue; }
+
+        let mx = mouse.x.max(0) as usize;
+        let my = mouse.y.max(0) as usize;
+        let point_in = |rect: (usize, usize, usize, usize)| {
+            mx >= rect.0 && my >= rect.1 && mx < rect.0 + rect.2 && my < rect.1 + rect.3
+        };
+        let mut selection_changed = false;
+        for i in 0..2 {
+            if point_in(gui::welcome_language_rect(width, height, i)) {
+                settings_app.language = if i == 0 { apps::settings::UiLanguage::Turkish } else { apps::settings::UiLanguage::English };
+                gui::set_ui_language_english(settings_app.language.is_english());
+                selection_changed = true;
+                break;
+            }
+        }
+        if !selection_changed {
+            for (i, id) in gui::theme::ThemeId::ALL.iter().enumerate() {
+                if point_in(gui::welcome_theme_rect(width, height, i)) {
+                    settings_app.theme = *id;
+                    gui::theme::set_theme(*id);
+                    selection_changed = true;
+                    break;
+                }
+            }
+        }
+        if selection_changed {
+            welcome_dirty = true;
+        } else if point_in(gui::welcome_continue_rect(width, height)) {
+            settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+            break;
+        }
+    }
+
     // RTC - gerçek zamanlı saat
     let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
     compositor.cal_year = now.year;
@@ -585,7 +664,7 @@ pub extern "C" fn _start() -> ! {
     let mut notepad_dragging = false;
 
 
-    let mut app_render_cycles = [0u64; 11];
+    let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
     taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
     let render_full_frame = |fb: &mut drivers::video::Framebuffer,
                              compositor: &gui::MinGuiCompositor,
@@ -605,7 +684,7 @@ pub extern "C" fn _start() -> ! {
                              kbd: &drivers::keyboard::KeyboardState,
                              total_ram_bytes: u64,
                              tick: usize,
-                             app_render_cycles: &mut [u64; 11]| {
+                             app_render_cycles: &mut [u64; gui::MAX_WINDOWS]| {
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
 
@@ -624,7 +703,8 @@ pub extern "C" fn _start() -> ! {
                 fb.set_clip(cx, cy, cw, ch);
 
                 // Uygulamaya göre ölçülen içerik boyutu (kaydırma çubuğu gerekli mi?).
-                let content_h = window_content_h(idx, win.height, win.width, fm, np);
+                let app_id = compositor.app_id_for_window(idx);
+                let content_h = window_content_h(app_id, win.height, win.width, fm, np);
                 let content_w = cw;
                 let want_v = content_h > ch;
                 let want_h = content_w > cw;
@@ -635,7 +715,7 @@ pub extern "C" fn _start() -> ! {
                 fb.set_clip(content_area.0, content_area.1, content_area.2.max(1), content_area.3.max(1));
 
                 let render_start = read_cpu_cycles();
-                match idx {
+                match app_id {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now, total_ram_bytes,
                         cpu_vendor(), cpu_logical_count(),
@@ -791,6 +871,38 @@ pub extern "C" fn _start() -> ! {
         // 2. Fare Sol Tıklama Olayları (Mouse Down)
         if mouse_clicked {
             compositor.is_alt_tab_open = false;
+            let mut consumed = false;
+
+            // Açık menü/popup dışına tıklanınca kapat; tıklamayı tüketmeden
+            // bırak ki aynı tıklama alttaki pencere veya görev çubuğuna ulaşsın.
+            if compositor.is_start_menu_open {
+                let (menu_x, menu_y, menu_w, menu_h) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+                let submenu = gui::MinGuiCompositor::start_menu_submenu_rect(
+                    menu_y, compositor.active_start_group, tb_y,
+                );
+                if !gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h))
+                    && !gui::in_rect(mx, my, submenu)
+                {
+                    compositor.is_start_menu_open = false;
+                    compositor.confirm_shutdown = false;
+                    compositor.confirm_restart = false;
+                }
+            }
+            if compositor.is_context_menu_open
+                && compositor.context_hit(width, height, mx, my).is_none()
+            {
+                compositor.is_context_menu_open = false;
+            }
+            if compositor.is_volume_popup_open
+                && !gui::in_rect(mx, my, compositor.volume_slider_rect(&l))
+            {
+                compositor.is_volume_popup_open = false;
+            }
+            if compositor.is_calendar_open
+                && !gui::in_rect(mx, my, gui::MinGuiCompositor::calendar_rect(width, &l))
+            {
+                compositor.is_calendar_open = false;
+            }
             if taskmgr_app.launch_menu_open {
                 let in_menu = compositor.windows[7].map_or(false, |w| {
                     gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::launch_menu_rect(w.x, w.y, w.width))
@@ -800,10 +912,9 @@ pub extern "C" fn _start() -> ! {
                 });
                 if !in_menu && !in_button { taskmgr_app.launch_menu_open = false; }
             }
-            let mut consumed = false;
             // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
             // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
-            if let Some(w) = compositor.windows[2] {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
                 if w.is_focused
                     && gui::in_rect(mx, my, (w.x + 6, w.y + 58, w.width.saturating_sub(12), w.height.saturating_sub(86)))
                 {
@@ -1075,12 +1186,13 @@ pub extern "C" fn _start() -> ! {
             let tab_h = gui::MinGuiCompositor::taskbar_tab_rect_at(0, tb_y).3;
             if !consumed && my >= tb_y + 5 && my < tb_y + 5 + tab_h {
                 let mut tab_x = gui::MinGuiCompositor::taskbar_tab_start();
-                for idx in 0..11 {
+                for idx in 0..gui::MAX_WINDOWS {
+                    if tab_x + gui::MinGuiCompositor::taskbar_tab_width() > gui::MinGuiCompositor::tray_layout(width, height).kbd.0.saturating_sub(gui::sp(4)) { break; }
                     if let Some(win) = compositor.windows[idx] {
                         if win.is_open {
                             if mx >= tab_x && mx < tab_x + gui::MinGuiCompositor::taskbar_tab_width() {
                                 if win.is_minimized {
-                                    open_app(&mut compositor, idx);
+                                    focus_app_window(&mut compositor, idx);
                                 } else if win.is_focused {
                                     if let Some(w) = compositor.windows[idx].as_mut() {
                                         w.is_minimized = true;
@@ -1163,7 +1275,7 @@ pub extern "C" fn _start() -> ! {
                     // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
-                        let c_h = window_content_h(idx, wh, ww, &filemanager_app, &notepad_app);
+                        let c_h = window_content_h(win.app_id as usize, wh, ww, &filemanager_app, &notepad_app);
                         let grip = gui::RESIZE_GRIP;
                         let view_h = cch.saturating_sub(grip);
                         if c_h > view_h {
@@ -1214,7 +1326,8 @@ pub extern "C" fn _start() -> ! {
 
                     // Pencere gövdesi içindeki uygulama düğmeleri
                     if mx >= wx && mx < wx + ww && my >= wy && my < wy + wh {
-                        match idx {
+                        let app_id = compositor.app_id_for_window(idx);
+                        match app_id {
                             0 => {
                                 // Dosya Yöneticisi: [Yenile], [Aç], liste
                                 if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
@@ -1375,7 +1488,7 @@ pub extern "C" fn _start() -> ! {
                                     settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                                 }
                                 if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
-                                    let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[2].map(|w| w.scroll.y).unwrap_or(0));
+                                    let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
                                     notepad_app.cursor = at;
                                     notepad_app.selection_start = Some(at);
                                     notepad_app.selection_end = Some(at);
@@ -1566,12 +1679,12 @@ pub extern "C" fn _start() -> ! {
                             compositor.context_file_idx = Some(compositor.context_file_idx.unwrap() - 1);
                         }
                     } else {
-                        let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let fm_focused = compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let set_focused = compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let br_focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let np_focused = app_is_focused(&compositor, 2);
+                        let terminal_focused = app_is_focused(&compositor, 10);
+                        let tm_focused = app_is_focused(&compositor, 7);
+                        let fm_focused = app_is_focused(&compositor, 0);
+                        let set_focused = app_is_focused(&compositor, 1);
+                        let br_focused = app_is_focused(&compositor, 3);
 
                         if terminal_focused {
                             terminal_app.history_up();
@@ -1604,12 +1717,12 @@ pub extern "C" fn _start() -> ! {
                             compositor.context_file_idx = Some(cur + 1);
                         }
                     } else {
-                        let np_focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let terminal_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let fm_focused = compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let set_focused = compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                        let br_focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                        let np_focused = app_is_focused(&compositor, 2);
+                        let terminal_focused = app_is_focused(&compositor, 10);
+                        let tm_focused = app_is_focused(&compositor, 7);
+                        let fm_focused = app_is_focused(&compositor, 0);
+                        let set_focused = app_is_focused(&compositor, 1);
+                        let br_focused = app_is_focused(&compositor, 3);
 
                         if terminal_focused {
                             terminal_app.history_down();
@@ -1632,14 +1745,14 @@ pub extern "C" fn _start() -> ! {
                     if compositor.is_start_menu_open {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
-                    } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 2) {
                         notepad_app.move_left_ext(keyboard.shift);
-                    } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
+                    } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 0;
                         taskmgr_app.focused_control = 0;
-                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_prev();
-                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 3) {
                         browser_app.select_tab_prev();
                     }
                 }
@@ -1649,14 +1762,14 @@ pub extern "C" fn _start() -> ! {
                             compositor.active_start_group += 1;
                             compositor.selected_start_item = 0;
                         }
-                    } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 2) {
                         notepad_app.move_right_ext(keyboard.shift);
-                    } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && !taskmgr_app.launch_menu_open {
+                    } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
                         taskmgr_app.focused_control = 1;
-                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_next();
-                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 3) {
                         browser_app.select_tab_next();
                     }
                 }
@@ -1691,12 +1804,12 @@ pub extern "C" fn _start() -> ! {
                     } else if compositor.is_context_menu_open {
                         enter_char_consumed = true;
                         compositor.is_context_menu_open = false;
-                    } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && taskmgr_app.launch_menu_open {
+                    } else if app_is_focused(&compositor, 7) && taskmgr_app.launch_menu_open {
                         enter_char_consumed = true;
                         let target = taskmgr_app.launch_app_id();
                         taskmgr_app.launch_menu_open = false;
                         open_app(&mut compositor, target);
-                    } else if compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 7) {
                         enter_char_consumed = true;
                         match taskmgr_app.focused_control {
                             0 => taskmgr_app.active_tab = 0,
@@ -1716,7 +1829,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             _ => {}
                         }
-                    } else if compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 0) {
                         enter_char_consumed = true;
                         match filemanager_app.focused_control {
                             0 => {
@@ -1737,7 +1850,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             _ => {}
                         }
-                    } else if compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 1) {
                         enter_char_consumed = true;
                         if settings_app.focused_control < 4 {
                             settings_app.active_tab = settings_app.focused_control;
@@ -1793,7 +1906,7 @@ pub extern "C" fn _start() -> ! {
                                 },
                             }
                         }
-                    } else if compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 3) {
                         enter_char_consumed = true;
                         match browser_app.focused_control {
                             0 => { browser_app.active_tab = 0; browser_app.set_url(b"minos://help"); browser_app.navigate(); }
@@ -1805,13 +1918,13 @@ pub extern "C" fn _start() -> ! {
                             6 => browser_app.navigate(),
                             _ => {}
                         }
-                    } else if compositor.windows[8].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 8) {
                         enter_char_consumed = true;
                         calculator_app.press('=');
-                    } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) && notepad_app.menu == 0 {
+                    } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         enter_char_consumed = true;
                         notepad_app.insert_char('\n');
-                    } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 2) {
                         enter_char_consumed = true;
                         notepad_app.menu = 0;
                     }
@@ -1824,37 +1937,37 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::CopyText => {
-                    if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) { notepad_app.copy_selection(); }
+                    if app_is_focused(&compositor, 2) { notepad_app.copy_selection(); }
                 }
                 drivers::keyboard::KeyAction::PasteText => {
-                    if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) { notepad_app.paste_clipboard(); }
+                    if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
-                    if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) { notepad_app.cut_selection(); }
+                    if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
                 }
                 drivers::keyboard::KeyAction::SelectAllText => {
-                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.select_all(); }
                 }
                 drivers::keyboard::KeyAction::Undo => {
-                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.undo(); }
                 }
                 drivers::keyboard::KeyAction::Redo => {
-                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.redo(); }
                 }
                 drivers::keyboard::KeyAction::HomeKey => {
-                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.move_home(); }
                 }
                 drivers::keyboard::KeyAction::EndKey => {
-                    let focused = compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.move_end(); }
                 }
                 drivers::keyboard::KeyAction::Delete => {
                     // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
-                    let tm_focused = compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let tm_focused = app_is_focused(&compositor, 7);
                     if tm_focused {
                         if let Some(target) = taskmgr_app.selected_app_idx() {
                             taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
@@ -1863,17 +1976,17 @@ pub extern "C" fn _start() -> ! {
                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
                                 &mut terminal_app);
                         }
-                    } else if compositor.windows[2].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+                    } else if app_is_focused(&compositor, 2) {
                         notepad_app.delete_forward();
                     }
                 }
                 drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
                 drivers::keyboard::KeyAction::BrowserAddress => {
-                    let focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 3);
                     if focused { browser_app.address_focused = true; browser_app.set_url(b""); }
                 }
                 drivers::keyboard::KeyAction::BrowserRefresh => {
-                    let focused = compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                    let focused = app_is_focused(&compositor, 3);
                     if focused { browser_app.navigate(); }
                 }
             }
@@ -1893,7 +2006,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // Dosya Yöneticisi (pencere 0): listeyi kaydır ve imleci de taşı.
-            if let Some(w) = compositor.windows[0] {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 0) {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     if scroll_val > 0 {
                         if filemanager_app.selected_idx > 0 { filemanager_app.selected_idx -= 1; }
@@ -1903,7 +2016,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // CMD geçmişi: yalnızca çıktı panelini kaydır; giriş satırı sabit kalır.
-            if let Some(w) = compositor.windows[10] {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
                 if w.is_open && w.is_focused && !w.is_minimized
                     && gui::in_rect(mouse.x as usize, mouse.y as usize, (w.x, w.y + gui::titlebar_h(), w.width, w.height.saturating_sub(gui::titlebar_h() + 28))) {
                     let view_lines = w.height.saturating_sub(86) / 13;
@@ -1911,27 +2024,27 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // Not Defteri (pencere 2): satır bazlı dikey kaydırma.
-            if let Some(w) = compositor.windows[2] {
+            if let Some((idx, w)) = focused_window_for_app(&compositor, 2) {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     let c_h = window_content_h(2, w.height, w.width, &filemanager_app, &notepad_app);
                     let view_h = w.content_rect().3;
                     let max_y = c_h.saturating_sub(view_h);
                     let delta = (scroll_val as isize) * 16; // 1 satır = 16px
                     let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
-                    if let Some(wm) = compositor.windows[2].as_mut() {
+                    if let Some(wm) = compositor.windows[idx].as_mut() {
                         wm.scroll.y = new_off;
                     }
                 }
             }
             // Dosya Yöneticisi listesi de kaydırılabilir (içerik sığmıyorsa).
-            if let Some(w) = compositor.windows[0] {
+            if let Some((idx, w)) = focused_window_for_app(&compositor, 0) {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     let c_h = window_content_h(0, w.height, w.width, &filemanager_app, &notepad_app);
                     let view_h = w.content_rect().3;
                     let max_y = c_h.saturating_sub(view_h);
                     let delta = (scroll_val as isize) * 24;
                     let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
-                    if let Some(wm) = compositor.windows[0].as_mut() {
+                    if let Some(wm) = compositor.windows[idx].as_mut() {
                         wm.scroll.y = new_off;
                     }
                 }
@@ -1957,7 +2070,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
-            if let Some(w) = compositor.windows[9] {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 9) {
                 if w.is_focused {
                     // Windows Paint davranışı: sol tuş basılı tutuldukça fare
                     // hareketi sürekli çizer. Tuval dışına çıkınca vuruşu bitir.
@@ -1975,7 +2088,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if notepad_dragging {
-                if let Some(w) = compositor.windows[2] {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
                     notepad_app.selection_end = Some(at);
                 }
@@ -2108,27 +2221,24 @@ pub extern "C" fn _start() -> ! {
                 }
                 compositor.confirm_shutdown = true;
                 compositor.confirm_restart = false;
-            } else if ch == '\t' && compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+            } else if ch == '\t' && app_is_focused(&compositor, 10) {
                 terminal_app.complete();
-            } else if ch == '\t' && compositor.windows[7].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+            } else if ch == '\t' && app_is_focused(&compositor, 7) {
                 taskmgr_app.focus_next_control();
-            } else if ch == '\t' && compositor.windows[1].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+            } else if ch == '\t' && app_is_focused(&compositor, 1) {
                 settings_app.focus_next_control();
-            } else if ch == '\t' && compositor.windows[3].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+            } else if ch == '\t' && app_is_focused(&compositor, 3) {
                 browser_app.focus_next_control();
-            } else if ch == '\t' && compositor.windows[0].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused) {
+            } else if ch == '\t' && app_is_focused(&compositor, 0) {
                 filemanager_app.focus_next_control();
             } else {
-                let browser_focused = compositor.windows[3]
-                    .as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                let browser_focused = app_is_focused(&compositor, 3);
                 if browser_focused && browser_app.address_focused {
                     if ch == '\x08' { browser_app.address_backspace(); }
                     else if ch == '\n' { browser_app.navigate(); }
                     else if ch >= ' ' { browser_app.address_char(ch); }
                 }
-                let notepad_focused = compositor.windows[2]
-                    .as_ref()
-                    .map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                let notepad_focused = app_is_focused(&compositor, 2);
                 if notepad_focused {
                     if ch == '\x08' {
                         notepad_app.backspace();
@@ -2136,8 +2246,8 @@ pub extern "C" fn _start() -> ! {
                         notepad_app.insert_char(ch);
                     }
                 }
-                let calc_focused = compositor.windows[8].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
-                let term_focused = compositor.windows[10].as_ref().map_or(false, |w| w.is_open && !w.is_minimized && w.is_focused);
+                let calc_focused = app_is_focused(&compositor, 8);
+                let term_focused = app_is_focused(&compositor, 10);
                 if calc_focused {
                     if ch == '\x08' { calculator_app.backspace(); }
                     else if ch == '\x1b' { calculator_app.clear(); }
@@ -2153,7 +2263,7 @@ pub extern "C" fn _start() -> ! {
                         open_app(&mut compositor, app_idx);
                     }
                 }
-                let paint_focused = compositor.windows[9].as_ref().map_or(false, |w| w.is_focused);
+                let paint_focused = app_is_focused(&compositor, 9);
                 if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }
             }
         }

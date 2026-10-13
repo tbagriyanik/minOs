@@ -187,7 +187,7 @@ impl SystemSettings {
     }
 
     pub fn save_all(&mut self, compositor: &MinGuiCompositor, vfs: &mut VirtualFileSystem) {
-        for (i, opt_win) in compositor.windows.iter().enumerate() {
+        for (i, opt_win) in compositor.windows.iter().take(self.saved_window_states.len()).enumerate() {
             if let Some(ref win) = opt_win {
                 self.saved_window_states[i] = Some(win.get_state());
             }

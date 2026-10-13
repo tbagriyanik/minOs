@@ -70,6 +70,82 @@ pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::
 pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
 
+/// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
+fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let w = 600.min(width.saturating_sub(24)).max(1);
+    let h = 300.min(height.saturating_sub(24)).max(1);
+    ((width.saturating_sub(w)) / 2, (height.saturating_sub(h)) / 2, w, h)
+}
+
+pub fn welcome_language_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
+    let (x, y, _, _) = welcome_panel(width, height);
+    (x + 24 + index * 132, y + 104, 120, 34)
+}
+
+pub fn welcome_theme_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
+    let (x, y, _, _) = welcome_panel(width, height);
+    (x + 24 + index * 108, y + 174, 96, 58)
+}
+
+pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
+    let (x, y, w, h) = welcome_panel(width, height);
+    (x + w.saturating_sub(152), y + h.saturating_sub(48), 128, 32)
+}
+
+pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, mouse: &MouseState) {
+    let (x, y, w, h) = welcome_panel(width, height);
+    fb.draw_rect(0, 0, width, height, Color::DARK_BG);
+    fb.draw_shadow(x, y, w, h, Color::SHADOW);
+    fb.draw_rounded_rect(x, y, w, h, 10, Color::WINDOW_BG);
+    fb.draw_rounded_vgradient(x, y, w, 52, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
+    MinGuiCompositor::draw_cat_icon_scaled(fb, x + 18, y + 13);
+    MinGuiCompositor::draw_string(fb, x + 48, y + 18, if english { "Welcome to MinOS" } else { "MinOS'a hoş geldiniz" }, Color::TEXT_MAIN);
+    MinGuiCompositor::draw_string(fb, x + 24, y + 72,
+        if english { "Choose your interface language" } else { "Arayüz dilini seçin" }, Color::TEXT_MAIN);
+
+    for i in 0..2 {
+        let rect = welcome_language_rect(width, height, i);
+        let active = (i == 0 && !english) || (i == 1 && english);
+        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6,
+            if active { Color::ACCENT_BLUE } else { Color::BORDER });
+        MinGuiCompositor::draw_string(fb, rect.0 + 18, rect.1 + 10,
+            if i == 0 { "Türkçe" } else { "English" }, Color::TEXT_MAIN);
+    }
+
+    MinGuiCompositor::draw_string(fb, x + 24, y + 148,
+        if english { "Choose a desktop theme" } else { "Masaüstü temasını seçin" }, Color::TEXT_MAIN);
+    for (i, id) in theme::ThemeId::ALL.iter().enumerate() {
+        let rect = welcome_theme_rect(width, height, i);
+        let (background, accent) = theme::preview_colors(*id);
+        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6, background);
+        fb.draw_rounded_rect(rect.0 + 8, rect.1 + 8, rect.2.saturating_sub(16), 8, 3, accent);
+        let name = if english {
+            match id {
+                theme::ThemeId::VelvetDark => "Velvet",
+                theme::ThemeId::Daylight => "Daylight",
+                theme::ThemeId::Nord => "Nord",
+                theme::ThemeId::TerminalGreen => "Terminal",
+                theme::ThemeId::Sunset => "Sunset",
+            }
+        } else { id.short_name() };
+        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 28, name, Color::TEXT_MAIN);
+        if *id == selected {
+            fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::ACCENT_BLUE);
+        } else {
+            fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::BORDER);
+        }
+    }
+    let button = welcome_continue_rect(width, height);
+    fb.draw_rounded_rect(button.0, button.1, button.2, button.3, 6, Color::ACCENT_GREEN);
+    MinGuiCompositor::draw_string(fb, button.0 + 18, button.1 + 10,
+        if english { "Get started" } else { "Başla" }, Color::DARK_BG);
+    let pointer_x = mouse.x.max(0) as usize;
+    let pointer_y = mouse.y.max(0) as usize;
+    fb.draw_rect(pointer_x, pointer_y, 5, 5, Color::WHITE);
+    fb.draw_rect_outline(pointer_x, pointer_y, 5, 5, Color::BLACK);
+    fb.flush();
+}
+
 const BASE_FONT_SIZE: f32 = 14.0;
 
 // ---------------------------------------------------------------------------
@@ -159,6 +235,7 @@ pub struct WindowState {
 pub const TITLEBAR_BASE: usize = 24;
 /// Temel görev çubuğu yüksekliği (100% ölçekte).
 pub const TASKBAR_BASE: usize = 36;
+pub const MAX_WINDOWS: usize = 32;
 
 /// Aktif font ölçeğine göre başlık çubuğu yüksekliği (px).
 #[inline(always)]
@@ -170,6 +247,8 @@ pub fn taskbar_h() -> usize { sp(TASKBAR_BASE) }
 
 #[derive(Copy, Clone, Debug)]
 pub struct Window {
+    /// Uygulama türü; aynı uygulamanın birden çok pencere örneğini tanımlar.
+    pub app_id: u8,
     pub title: &'static str,
     pub tab_title: &'static str,
     pub x: usize,
@@ -209,6 +288,7 @@ impl Window {
 
     pub fn new(title: &'static str, tab_title: &'static str, x: usize, y: usize, width: usize, height: usize, is_open: bool) -> Self {
         Self {
+            app_id: u8::MAX,
             title,
             tab_title,
             x,
@@ -580,7 +660,7 @@ pub fn context_item_h() -> usize { crate::gui::sp(CONTEXT_MENU_ITEM_H) }
 // Pencere Yöneticisi / Kompozitör
 // ---------------------------------------------------------------------------
 pub struct MinGuiCompositor {
-    pub windows: [Option<Window>; 11],
+    pub windows: [Option<Window>; MAX_WINDOWS],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
     pub active_start_group: usize,
@@ -608,7 +688,7 @@ pub struct MinGuiCompositor {
 impl MinGuiCompositor {
     pub const fn new() -> Self {
         Self {
-            windows: [None, None, None, None, None, None, None, None, None, None, None],
+            windows: [None; MAX_WINDOWS],
             active_window_idx: None,
             is_start_menu_open: true,
             active_start_group: 0,
@@ -633,6 +713,7 @@ impl MinGuiCompositor {
     pub fn add_window(&mut self, mut win: Window) -> bool {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
+                if win.app_id == u8::MAX && idx < 11 { win.app_id = idx as u8; }
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
@@ -640,6 +721,55 @@ impl MinGuiCompositor {
             }
         }
         false
+    }
+
+    /// Ayarlar ve Görev Yöneticisi tek örnektir; diğer uygulamalar yeni pencere açabilir.
+    pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
+        if app_id >= 11 { return None; }
+        let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
+            slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
+        });
+        if app_id == 1 || app_id == 7 {
+            if let Some(idx) = existing {
+                if let Some(win) = self.windows[idx].as_mut() { win.is_minimized = false; }
+                self.focus_window(idx);
+                return Some(idx);
+            }
+        }
+
+        let source_idx = existing.or_else(|| self.windows.iter().position(|slot| {
+            slot.map_or(false, |w| w.app_id as usize == app_id)
+        }))?;
+        if existing.is_none() {
+            if let Some(win) = self.windows[source_idx].as_mut() {
+                win.is_open = true;
+                win.is_minimized = false;
+                win.is_maximized = false;
+            }
+            self.focus_window(source_idx);
+            return Some(source_idx);
+        }
+        let mut win = self.windows[source_idx]?;
+        let instances = self.windows.iter().filter(|slot| slot.map_or(false, |w| w.app_id as usize == app_id)).count();
+        let offset = (instances % 8) * 24;
+        win.x = win.x.saturating_add(offset);
+        win.y = win.y.saturating_add(offset);
+        win.is_open = true;
+        win.is_minimized = false;
+        win.is_focused = false;
+        win.is_maximized = false;
+        win.restore = None;
+        win.scroll.x = 0;
+        win.scroll.y = 0;
+        let idx = self.windows.iter().position(Option::is_none)?;
+        if !self.add_window(win) { return None; }
+        self.focus_window(idx);
+        Some(idx)
+    }
+
+    #[inline(always)]
+    pub fn app_id_for_window(&self, idx: usize) -> usize {
+        self.windows.get(idx).and_then(|slot| *slot).map_or(idx, |win| win.app_id as usize)
     }
 
     /// Belirtilen pencereyi odaklar ve z-sırasında en öne taşır.
@@ -687,7 +817,7 @@ impl MinGuiCompositor {
 
     /// Sıradaki açık pencereye geçer (Alt+Tab).
     pub fn cycle_focus(&mut self) {
-        let mut order: [usize; 8] = [0; 8];
+        let mut order: [usize; MAX_WINDOWS] = [0; MAX_WINDOWS];
         let mut count = 0usize;
         for (i, slot) in self.windows.iter().enumerate() {
             if let Some(w) = slot {
@@ -723,8 +853,8 @@ impl MinGuiCompositor {
     }
 
     /// Açık pencereleri z-sırasına göre (arkadan öne) indeks listesi olarak döndürür.
-    pub fn draw_order(&self) -> ([usize; 8], usize) {
-        let mut order: [usize; 8] = [0; 8];
+    pub fn draw_order(&self) -> ([usize; MAX_WINDOWS], usize) {
+        let mut order: [usize; MAX_WINDOWS] = [0; MAX_WINDOWS];
         let mut count = 0usize;
         for (i, slot) in self.windows.iter().enumerate() {
             if let Some(w) = slot {
@@ -1389,12 +1519,12 @@ impl MinGuiCompositor {
         fb.draw_rect(win.x, win.y + titlebar_h() - 1, win.width, 1, border);
 
         // Pencereye özel ilgili program simgesi ve başlık (aktif ölçekte).
-        let icon_idx = Self::window_icon_index(win_idx);
+        let icon_idx = Self::window_icon_index(win.app_id as usize);
         let icon_sz = Self::icon_size();
         let icon_y = win.y + titlebar_h().saturating_sub(icon_sz) / 2;
         Self::draw_icon_by_index(fb, win.x + sp(6), icon_y, icon_idx);
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
-        let title = if ui_english() { Self::window_title(win_idx, true) } else { win.title };
+        let title = if ui_english() { Self::window_title(win.app_id as usize, true) } else { win.title };
         // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
         // Başlık alanı, simge ile kontrol düğmeleri arasına kırpılır; uzun
         // başlıklar pencere dışına veya düğmelerin üzerine taşmaz.
@@ -1515,6 +1645,7 @@ impl MinGuiCompositor {
         // Uygulama Sekmeleri (Yuvarlatılmış 5px) — font ölçeğine göre büyür.
         let mut tab_x = Self::taskbar_tab_start();
         for (win_idx, opt_win) in self.windows.iter().enumerate() {
+            if tab_x + Self::taskbar_tab_width() > l.kbd.0.saturating_sub(sp(4)) { break; }
             if let Some(win) = opt_win {
                 if win.is_open {
                     let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
@@ -1529,10 +1660,10 @@ impl MinGuiCompositor {
                         fb.draw_rounded_rect(rect.0 + 2, rect.1 + 2, 3, rect.3 - 4, 1, Color::ACCENT_BLUE);
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
-                    let tab_title = if ui_english() { Self::window_tab_title(win_idx, true) } else { win.tab_title };
+                    let tab_title = if ui_english() { Self::window_tab_title(win.app_id as usize, true) } else { win.tab_title };
                     let text_h = Self::text_height();
                     let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
-                    Self::draw_icon_by_index(fb, tab_x + 5, text_y, Self::window_icon_index(win_idx));
+                    Self::draw_icon_by_index(fb, tab_x + 5, text_y, Self::window_icon_index(win.app_id as usize));
                     Self::draw_string_clipped(fb, tab_x + sp(30), text_y, tab_title, tab_text_color,
                         (tab_x + sp(28), rect.1, rect.2.saturating_sub(sp(32)), rect.3));
                     tab_x += Self::taskbar_tab_step();
@@ -1657,17 +1788,17 @@ impl MinGuiCompositor {
                     let card_bg = if is_sel { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
 
                     if is_sel {
-                    active_app_title = if english { Self::window_title(win_idx, true) } else { win.title };
+                    active_app_title = if english { Self::window_title(win.app_id as usize, true) } else { win.title };
                     }
 
                     fb.draw_rounded_rect(card_x, card_y, 50, 58, 6, card_bg);
                     if is_sel {
                         fb.draw_rounded_rect_outline(card_x.saturating_sub(1), card_y.saturating_sub(1), 52, 60, 6, Color::ACCENT_PINK);
                     }
-                    let icon_idx = Self::window_icon_index(win_idx);
+                    let icon_idx = Self::window_icon_index(win.app_id as usize);
                     Self::draw_icon_by_index(fb, card_x + 17, card_y + 12, icon_idx);
                     let tab_col = if is_sel { Color::DARK_BG } else { Color::TEXT_MAIN };
-                    let tab_title = if english { Self::window_tab_title(win_idx, true) } else { win.tab_title };
+                    let tab_title = if english { Self::window_tab_title(win.app_id as usize, true) } else { win.tab_title };
                     Self::draw_string(fb, card_x + 8, card_y + 38, tab_title, tab_col);
                     app_count += 1;
                 }

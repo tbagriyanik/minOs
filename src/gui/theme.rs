@@ -91,20 +91,20 @@ impl ThemeId {
     pub fn name(self) -> &'static str {
         match self {
             ThemeId::VelvetDark => "Kadife Gece (Velvet Dark)",
-            ThemeId::Daylight => "Gun Isigi (Daylight)",
+            ThemeId::Daylight => "Gün Işığı (Daylight)",
             ThemeId::Nord => "Kutup Mavisi (Nord)",
-            ThemeId::TerminalGreen => "Yesil Terminal (Terminal)",
-            ThemeId::Sunset => "Gun Batimi (Sunset)",
+            ThemeId::TerminalGreen => "Yeşil Terminal (Terminal)",
+            ThemeId::Sunset => "Gün Batımı (Sunset)",
         }
     }
 
     pub fn short_name(self) -> &'static str {
         match self {
             ThemeId::VelvetDark => "Gece",
-            ThemeId::Daylight => "Gunduz",
+            ThemeId::Daylight => "Gündüz",
             ThemeId::Nord => "Nord",
-            ThemeId::TerminalGreen => "Yesil",
-            ThemeId::Sunset => "Gunbatimi",
+            ThemeId::TerminalGreen => "Yeşil",
+            ThemeId::Sunset => "Günbatımı",
         }
     }
 

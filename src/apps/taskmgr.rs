@@ -4,7 +4,7 @@ use crate::mm::pmm::PhysicalMemoryManager;
 use crate::fs::vfs::VirtualFileSystem;
 
 /// Pencere yöneticisindeki uygulama yuvası sayısı.
-pub const MAX_PROC: usize = 11;
+pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
 const PROCESS_ROW_STEP: usize = 22;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
@@ -23,6 +23,7 @@ const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
 #[derive(Copy, Clone, Default)]
 pub struct ProcessInfo {
     pub app_idx: usize,
+    pub app_id: usize,
     pub name: &'static str,
     pub is_minimized: bool,
     pub cpu_pct: usize,
@@ -52,7 +53,7 @@ pub struct TaskManagerApp {
 impl TaskManagerApp {
     pub const fn new() -> Self {
         Self {
-            processes: [ProcessInfo { app_idx: 0, name: "", is_minimized: false, cpu_pct: 0, memory_kb: 0 }; MAX_PROC],
+            processes: [ProcessInfo { app_idx: 0, app_id: 0, name: "", is_minimized: false, cpu_pct: 0, memory_kb: 0 }; MAX_PROC],
             proc_count: 0,
             selected: 0,
             total_memory_kb: 0, free_memory_kb: 0, used_memory_kb: 0,
@@ -147,10 +148,12 @@ impl TaskManagerApp {
         for (app_idx, window) in windows.iter().enumerate() {
             if let Some(window) = window {
                 if window.is_open {
-                    let state_bytes = Self::app_state_bytes(app_idx);
+                    let app_id = window.app_id as usize;
+                    let state_bytes = Self::app_state_bytes(app_id);
                     self.processes[count] = ProcessInfo {
                         app_idx,
-                        name: LAUNCH_APP_LABELS[app_idx],
+                        app_id,
+                        name: LAUNCH_APP_LABELS[app_id.min(LAUNCH_APP_LABELS.len() - 1)],
                         is_minimized: window.is_minimized,
                         cpu_pct: if window.is_minimized || total_render_cycles == 0 { 0 }
                             else { (render_cycles[app_idx].saturating_mul(100) / total_render_cycles).min(100) as usize },
@@ -279,7 +282,7 @@ impl TaskManagerApp {
                 let row = Self::row_rect(win_x, win_y, win_w, i);
                 if i == self.selected { fb.draw_rect(row.0, row.1, row.2, row.3, Color::TITLE_BAR); }
                 if self.focused_control == 4 + i { fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW); }
-                let app_name = if english { LAUNCH_APP_LABELS_EN[proc.app_idx.min(LAUNCH_APP_COUNT - 1)] } else { proc.name };
+                let app_name = if english { LAUNCH_APP_LABELS_EN[proc.app_id.min(LAUNCH_APP_COUNT - 1)] } else { proc.name };
                 MinGuiCompositor::draw_string_clipped(fb, win_x + 12, row.1 + 2, app_name,
                     if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN },
                     (win_x + 10, row.1, 154, row.3));

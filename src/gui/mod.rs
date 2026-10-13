@@ -256,15 +256,15 @@ impl Window {
     /// Boyutlar aktif font ölçeğine göre büyür; başlık çubuğunda dikey ortalanır.
     pub fn close_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(14);
-        (self.x + self.width.saturating_sub(sp(20)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (self.x + self.width.saturating_sub(sp(26)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(14);
-        (self.x + self.width.saturating_sub(sp(40)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (self.x + self.width.saturating_sub(sp(46)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(14);
-        (self.x + self.width.saturating_sub(sp(60)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (self.x + self.width.saturating_sub(sp(66)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
@@ -918,27 +918,96 @@ impl MinGuiCompositor {
         fb.set_clip(old_clip.x0, old_clip.y0, old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
     }
 
-    /// MinOS Özel Kedi (Cat) Logosu ve Simgesi Çizici (16x16)
-    /// Ölçekli ikon pikseli çizer. 16x16 kaynak ikonu aktif UI ölçeğinde çizer;
-    /// her kaynak piksel, `sp(16)` boyutlu hedefte kapsadığı dikdörtgene yayılır
-    /// (en-yakın örnekleme). Böylece ikon boyutu `sp()` ile konumlanan metin ve
-    /// kartlarla birebir uyumlu kalır (100/125/150 oranlarında kayma olmaz).
-    #[inline(always)]
-    fn icon_px(fb: &mut Framebuffer, x: usize, y: usize, col: usize, row: usize, size: usize, color: u32) {
-        let x0 = x + col * size / 16;
-        let x1 = x + (col + 1) * size / 16;
-        let y0 = y + row * size / 16;
-        let y1 = y + (row + 1) * size / 16;
-        if x1 > x0 && y1 > y0 {
-            fb.draw_rect(x0, y0, x1 - x0, y1 - y0, color);
+    /// MinOS kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
+    fn draw_icon_bitmap(fb: &mut Framebuffer, x: usize, y: usize, size: usize, source: &[u32; 256]) {
+        let mut resolved = [0u32; 256];
+        for (output, input) in resolved.iter_mut().zip(source.iter()) {
+            if *input != 0 { *output = theme::resolve(*input); }
+        }
+        for dy in 0..size {
+            let sy0 = dy * 16;
+            let sy1 = (dy + 1) * 16;
+            let row_start = sy0 / size;
+            let row_end = ((sy1 - 1) / size).min(15);
+            for dx in 0..size {
+                let sx0 = dx * 16;
+                let sx1 = (dx + 1) * 16;
+                let col_start = sx0 / size;
+                let col_end = ((sx1 - 1) / size).min(15);
+                let mut covered = 0u32;
+                let mut red = 0u32;
+                let mut green = 0u32;
+                let mut blue = 0u32;
+                for row in row_start..=row_end {
+                    let oy = sy1.min((row + 1) * size).saturating_sub(sy0.max(row * size));
+                    for col in col_start..=col_end {
+                        let color = resolved[row * 16 + col];
+                        if color == 0 { continue; }
+                        let ox = sx1.min((col + 1) * size).saturating_sub(sx0.max(col * size));
+                        let weight = (ox * oy) as u32;
+                        covered += weight;
+                        red += ((color >> 16) & 0xFF) * weight;
+                        green += ((color >> 8) & 0xFF) * weight;
+                        blue += (color & 0xFF) * weight;
+                    }
+                }
+                if covered == 0 { continue; }
+                let color = ((red / covered) << 16) | ((green / covered) << 8) | (blue / covered);
+                let alpha = ((covered * 255 + 128) / 256) as u8;
+                if alpha == 255 {
+                    fb.put_pixel(x + dx, y + dy, color);
+                } else {
+                    fb.put_subpixel_text(x + dx, y + dy, color, [alpha; 3]);
+                }
+            }
         }
     }
 
-    /// Aktif UI ölçeğinde bir ikonun kenar uzunluğu (px). 16px temel alınır ve
+    fn draw_antialiased_line(
+        fb: &mut Framebuffer,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        color: u32,
+        width: f32,
+    ) {
+        let radius = width / 2.0;
+        let min_x = (x0.min(x1) - radius - 1.0).max(0.0) as usize;
+        let min_y = (y0.min(y1) - radius - 1.0).max(0.0) as usize;
+        let max_x = (x0.max(x1) + radius + 1.0) as usize;
+        let max_y = (y0.max(y1) + radius + 1.0) as usize;
+        let vx = x1 - x0;
+        let vy = y1 - y0;
+        let length_sq = vx * vx + vy * vy;
+        let radius_sq = radius * radius;
+        for py in min_y..=max_y {
+            for px in min_x..=max_x {
+                let mut samples = 0u32;
+                for oy in 0..4 {
+                    for ox in 0..4 {
+                        let sx = px as f32 + (ox as f32 + 0.5) / 4.0;
+                        let sy = py as f32 + (oy as f32 + 0.5) / 4.0;
+                        let t = (((sx - x0) * vx + (sy - y0) * vy) / length_sq).clamp(0.0, 1.0);
+                        let dx = sx - (x0 + t * vx);
+                        let dy = sy - (y0 + t * vy);
+                        if dx * dx + dy * dy <= radius_sq { samples += 1; }
+                    }
+                }
+                if samples != 0 {
+                    let alpha = ((samples * 255 + 8) / 16) as u8;
+                    if alpha == 255 { fb.put_pixel(px, py, color); }
+                    else { fb.put_subpixel_text(px, py, color, [alpha; 3]); }
+                }
+            }
+        }
+    }
+
+    /// Aktif UI ölçeğinde bir ikonun kenar uzunluğu (px). 20px temel alınır ve
     /// `sp()` ile ölçeklenir; böylece ikon konumu ile boyutu tutarlıdır.
     #[inline(always)]
     fn icon_size() -> usize {
-        sp(16)
+        sp(20)
     }
 
     pub fn draw_cat_icon(fb: &mut Framebuffer, x: usize, y: usize) {
@@ -947,6 +1016,7 @@ impl MinGuiCompositor {
 
     pub fn draw_cat_icon_scaled(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const CAT_ICON_MAP: [u16; 16] = [
             0b0110000000000110,
             0b1111000000001111,
@@ -980,15 +1050,17 @@ impl MinGuiCompositor {
                     } else {
                         Color::TEXT_MAIN
                     };
-                    Self::icon_px(fb, x, y, col, row, s, pixel_color);
+                    bitmap[row * 16 + col] = pixel_color;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// Bilgisayarım / Dosya Yöneticisi Simgesi (16x16)
     pub fn draw_computer_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const ICON_MAP: [u16; 16] = [
             0b0111111111111100,
             0b1000000000000010,
@@ -1017,15 +1089,17 @@ impl MinGuiCompositor {
                     } else {
                         Color::TEXT_MAIN
                     };
-                    Self::icon_px(fb, x, y, col, row, s, c);
+                    bitmap[row * 16 + col] = c;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// Notlar / Not Defteri Simgesi (16x16)
     pub fn draw_notepad_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const ICON_MAP: [u16; 16] = [
             0b0011111111000000,
             0b0010000001100000,
@@ -1054,15 +1128,17 @@ impl MinGuiCompositor {
                     } else {
                         Color::TEXT_MAIN
                     };
-                    Self::icon_px(fb, x, y, col, row, s, c);
+                    bitmap[row * 16 + col] = c;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// Web Tarayıcısı / Ağ Simgesi (16x16)
     pub fn draw_browser_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const ICON_MAP: [u16; 16] = [
             0b0000011110000000,
             0b0001111111100000,
@@ -1089,15 +1165,17 @@ impl MinGuiCompositor {
                     } else {
                         Color::ACCENT_BLUE
                     };
-                    Self::icon_px(fb, x, y, col, row, s, c);
+                    bitmap[row * 16 + col] = c;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// Müzik Çalar / Çalma Listesi Simgesi (16x16)
     pub fn draw_music_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const ICON_MAP: [u16; 16] = [
             0b0000011111110000,
             0b0000011111110000,
@@ -1124,15 +1202,17 @@ impl MinGuiCompositor {
                     } else {
                         Color::ACCENT_YELLOW
                     };
-                    Self::icon_px(fb, x, y, col, row, s, c);
+                    bitmap[row * 16 + col] = c;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// Sistem Ayarları / Dişli Çark Simgesi (16x16)
     pub fn draw_gear_icon(fb: &mut Framebuffer, x: usize, y: usize) {
         let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
         const ICON_MAP: [u16; 16] = [
             0b0000011001100000,
             0b0000011001100000,
@@ -1159,10 +1239,11 @@ impl MinGuiCompositor {
                     } else {
                         Color::TEXT_MAIN
                     };
-                    Self::icon_px(fb, x, y, col, row, s, c);
+                    bitmap[row * 16 + col] = c;
                 }
             }
         }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
     /// İndekse göre ilgili simgeyi çizer (aktif UI ölçeğinde).
@@ -1320,7 +1401,7 @@ impl MinGuiCompositor {
         let text_h = Self::text_height();
         let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
         let title_x = win.x + sp(6) + icon_sz + sp(6);
-        let title_area_w = win.width.saturating_sub((title_x - win.x) + sp(64));
+        let title_area_w = win.width.saturating_sub((title_x - win.x) + sp(72));
         if title_area_w > 0 {
             let old_clip = fb.clip();
             fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
@@ -1335,27 +1416,57 @@ impl MinGuiCompositor {
         let hover_close = in_rect(mx, my, win.close_rect());
         let close_bg = if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED };
         fb.draw_rounded_rect(cx, cy, cb, cb, 4, close_bg);
-        Self::draw_string(fb, cx + cb / 4, cy + cb / 2 - text_h.min(cb) / 2, "x", Color::DARK_BG);
+        let mark_inset = cb as f32 * 0.29;
+        let mark_left = cx as f32 + mark_inset;
+        let mark_right = cx as f32 + cb as f32 - mark_inset;
+        let mark_top = cy as f32 + mark_inset;
+        let mark_bottom = cy as f32 + cb as f32 - mark_inset;
+        let mark_width = (sp(16) as f32 / 10.0).max(1.5);
+        Self::draw_antialiased_line(fb, mark_left, mark_top, mark_right, mark_bottom, Color::DARK_BG, mark_width);
+        Self::draw_antialiased_line(fb, mark_right, mark_top, mark_left, mark_bottom, Color::DARK_BG, mark_width);
 
         let (mxr, myr, mb, _) = win.max_rect();
         let hover_max = in_rect(mx, my, win.max_rect());
         let max_bg = if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN };
         fb.draw_rounded_rect(mxr, myr, mb, mb, 4, max_bg);
-        let inset = mb / 5;
-        let box_sz = mb.saturating_sub(inset * 2).max(3);
+        let inset = mb as f32 * 0.29;
+        let left = mxr as f32 + inset;
+        let right = mxr as f32 + mb as f32 - inset;
+        let top = myr as f32 + inset;
+        let bottom = myr as f32 + mb as f32 - inset;
+        let stroke = (sp(14) as f32 / 10.0).max(1.4);
         if win.is_maximized {
-            fb.draw_rect_outline(mxr + inset, myr + inset, box_sz.saturating_sub(1), box_sz.saturating_sub(1), Color::DARK_BG);
-            fb.draw_rect_outline(mxr + inset + 2, myr + inset + 2, box_sz.saturating_sub(1), box_sz.saturating_sub(1), Color::DARK_BG);
+            let offset = mb as f32 * 0.16;
+            Self::draw_antialiased_line(fb, left + offset, top + offset, right, top + offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right, top + offset, right, bottom - offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right, bottom - offset, left + offset, bottom - offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, left + offset, bottom - offset, left + offset, top + offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, left, top, right - offset, top, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right - offset, top, right - offset, bottom - offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right - offset, bottom - offset, left, bottom - offset, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, left, bottom - offset, left, top, Color::DARK_BG, stroke);
         } else {
-            fb.draw_rect_outline(mxr + inset, myr + inset, box_sz, box_sz, Color::DARK_BG);
+            Self::draw_antialiased_line(fb, left, top, right, top, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right, top, right, bottom, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, right, bottom, left, bottom, Color::DARK_BG, stroke);
+            Self::draw_antialiased_line(fb, left, bottom, left, top, Color::DARK_BG, stroke);
         }
 
         let (nx, ny, nb, _) = win.min_rect();
         let hover_min = in_rect(mx, my, win.min_rect());
         let min_bg = if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW };
         fb.draw_rounded_rect(nx, ny, nb, nb, 4, min_bg);
-        let bar_w = nb.saturating_sub(nb / 3).max(4);
-        fb.draw_rect(nx + nb / 6, ny + nb / 2 - 1, bar_w, 2, Color::DARK_BG);
+        let bar_inset = nb as f32 * 0.24;
+        let bar_y = ny as f32 + nb as f32 * 0.67;
+        Self::draw_antialiased_line(
+            fb,
+            nx as f32 + bar_inset,
+            bar_y,
+            nx as f32 + nb as f32 - bar_inset,
+            bar_y,
+            Color::DARK_BG,
+            (sp(14) as f32 / 10.0).max(1.4),
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1422,8 +1533,8 @@ impl MinGuiCompositor {
                     let text_h = Self::text_height();
                     let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
                     Self::draw_icon_by_index(fb, tab_x + 5, text_y, Self::window_icon_index(win_idx));
-                    Self::draw_string_clipped(fb, tab_x + sp(27), text_y, tab_title, tab_text_color,
-                        (tab_x + sp(24), rect.1, rect.2.saturating_sub(sp(28)), rect.3));
+                    Self::draw_string_clipped(fb, tab_x + sp(30), text_y, tab_title, tab_text_color,
+                        (tab_x + sp(28), rect.1, rect.2.saturating_sub(sp(32)), rect.3));
                     tab_x += Self::taskbar_tab_step();
                 }
             }

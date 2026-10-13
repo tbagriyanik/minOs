@@ -59,7 +59,7 @@ pub fn draw(
     color: u32,
     size: f32,
 ) {
-    let (glyphs, bitmap, ascent, line_height) = data(face);
+    let (_, bitmap, ascent, line_height) = data(face);
     let factor = size / 14.0;
     let mut pen_x = x as f32;
     let mut baseline = y as f32 + ascent * factor;

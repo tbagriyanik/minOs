@@ -230,6 +230,11 @@ fn handle_arp(payload: &[u8]) {
     if payload.len() < 28 {
         return;
     }
+    if payload[0..2] != [0, 1] || payload[2..4] != ETHERTYPE_IPV4.to_be_bytes()
+        || payload[4] != 6 || payload[5] != 4
+    {
+        return;
+    }
     let op = ((payload[6] as u16) << 8) | payload[7] as u16;
     let sender_ip = Ipv4Address([payload[14], payload[15], payload[16], payload[17]]);
     let sender_mac = MacAddress([payload[8], payload[9], payload[10], payload[11], payload[12], payload[13]]);
@@ -266,7 +271,7 @@ const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 
 fn handle_icmp(src_ip: Ipv4Address, payload: &[u8]) {
-    if payload.len() < 8 {
+    if payload.len() < 8 || checksum(payload) != 0 {
         return;
     }
     let icmp_type = payload[0];
@@ -307,16 +312,22 @@ fn handle_ipv4(payload: &[u8]) {
     if payload.len() < 20 {
         return;
     }
+    if payload[0] >> 4 != 4 {
+        return;
+    }
     let ihl = ((payload[0] & 0x0F) as usize) * 4;
-    if ihl < 20 || payload.len() < ihl {
+    if ihl < 20 || payload.len() < ihl || checksum(&payload[..ihl]) != 0 {
         return;
     }
     let proto = payload[9];
     let src_ip = Ipv4Address([payload[12], payload[13], payload[14], payload[15]]);
     let dst_ip = Ipv4Address([payload[16], payload[17], payload[18], payload[19]]);
     let total = u16::from_be_bytes([payload[2], payload[3]]) as usize;
-    let end = total.min(payload.len());
-    if end < ihl { return; }
+    if total < ihl || total > payload.len() { return; }
+    // IP fragment birleştirmesi yok; bozuk kısmi TCP/UDP datagramlarını işlemeden bırak.
+    let fragment = u16::from_be_bytes([payload[6], payload[7]]);
+    if fragment & 0x3FFF != 0 { return; }
+    let end = total;
     let is_dhcp = proto == IP_PROTO_UDP && end >= ihl + 4 && u16::from_be_bytes([payload[ihl+2],payload[ihl+3]]) == 68;
     if dst_ip != local_ip() && !is_dhcp {
         return;
@@ -324,7 +335,17 @@ fn handle_ipv4(payload: &[u8]) {
     let l4 = &payload[ihl..end];
     match proto {
         IP_PROTO_ICMP => handle_icmp(src_ip, l4),
-        IP_PROTO_UDP => handle_udp(src_ip, l4),
+        IP_PROTO_UDP => {
+            if l4.len() < 8 { return; }
+            let udp_len = u16::from_be_bytes([l4[4], l4[5]]) as usize;
+            if udp_len < 8 || udp_len > l4.len() { return; }
+            if (l4[6] != 0 || l4[7] != 0)
+                && transport_checksum(src_ip, dst_ip, IP_PROTO_UDP, &l4[..udp_len]) != 0
+            {
+                return;
+            }
+            handle_udp(src_ip, &l4[..udp_len]);
+        }
         IP_PROTO_TCP => handle_tcp(src_ip, l4),
         _ => {}
     }
@@ -392,15 +413,17 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     let src_port = u16::from_be_bytes([payload[0], payload[1]]);
     let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
     if dst_port==68 && src_port==67 { handle_dhcp(src_ip,data); return; }
-    if src_port == DNS_PORT && data.len() >= 12 {
+    if src_port == DNS_PORT && src_ip == dns_server() && data.len() >= 12 {
         let id = u16::from_be_bytes([data[0], data[1]]);
         let flags = u16::from_be_bytes([data[2], data[3]]);
         if id == 0x4D4D && flags & 0x8000 != 0 && flags & 0x000F == 0 {
             unsafe {
-                let n = data.len().min(DNS_REPLY_DATA.len());
-                DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
-                DNS_REPLY_LEN = n;
-                if let Some(ip) = dns_parse_a(&data[..n], id) { DNS_REPLY_IP = ip.0; }
+                if let Some(ip) = dns_parse_a(data, id) {
+                    let n = data.len().min(DNS_REPLY_DATA.len());
+                    DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
+                    DNS_REPLY_IP = ip.0;
+                    DNS_REPLY_LEN = n;
+                }
             }
         }
     }
@@ -416,6 +439,7 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
 
 fn handle_tcp(src_ip: Ipv4Address, payload: &[u8]) {
     if payload.len() < 20 { return; }
+    if transport_checksum(src_ip, local_ip(), IP_PROTO_TCP, payload) != 0 { return; }
     let off = ((payload[12] >> 4) as usize) * 4;
     if off < 20 || payload.len() < off { return; }
     let src_port = u16::from_be_bytes([payload[0], payload[1]]);
@@ -531,7 +555,7 @@ pub fn resolve_ipv4(host: &str) -> Option<Ipv4Address> {
     }
 }
 
-fn parse_ipv4(host: &str) -> Option<Ipv4Address> {
+pub fn parse_ipv4(host: &str) -> Option<Ipv4Address> {
     let mut parts=host.split('.'); let mut ip=[0u8;4];
     for octet in &mut ip { *octet=parts.next()?.parse().ok()?; }
     if parts.next().is_some(){None}else{Some(Ipv4Address(ip))}

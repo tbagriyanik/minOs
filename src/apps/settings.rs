@@ -449,7 +449,9 @@ impl SystemSettings {
                 status.push_str(crate::gui::ui_text("Durum: ", "Status: "));
                 status.push_str(network_status);
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, status.as_str(), Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, crate::gui::ui_text("Ağ yığını: IPv4 / ARP / ICMP / TCP / DNS", "Network stack: IPv4 / ARP / ICMP / TCP / DNS"), Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 90,
+                    crate::gui::ui_text("Yığın: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS", "Stack: Ethernet / IPv4 / ARP / ICMP / UDP / TCP / DHCP / DNS"),
+                    Color::TEXT_MUTED, (win_x + CONTENT_X, win_y + 88, win_w.saturating_sub(CONTENT_X + 12), 18));
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 116, if self.dhcp_enabled { crate::gui::ui_text("IP yöntemi: DHCP", "IP mode: DHCP") } else { crate::gui::ui_text("IP yöntemi: Statik", "IP mode: Static") }, Color::ACCENT_YELLOW);
                 let mut ip = TextBuf::new(); ip.push_str("IP: "); for (i, b) in self.static_ip.iter().enumerate() { if i > 0 { ip.push_byte(b'.'); } ip.push_usize(*b as usize); }
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138, ip.as_str(), Color::TEXT_MAIN);

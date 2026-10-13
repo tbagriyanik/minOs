@@ -651,7 +651,7 @@ pub extern "C" fn _start() -> ! {
     let mut anim_tick: usize = 0;
     let mut last_frame_ms = monotonic_ms();
     let mut loop_counter: u64 = 0;
-    let mut clock_spin: usize = 0;
+    let mut last_clock_update_ms = monotonic_ms();
     let mut last_music_beat: usize = 0;
     let mut cpu_sample_start = read_cpu_cycles();
     let mut cpu_sample_total_cycles = 0u64;
@@ -793,11 +793,11 @@ pub extern "C" fn _start() -> ! {
         let l = gui::MinGuiCompositor::tray_layout(width, height);
         let tb_y = l.tb_y;
 
-        // Saati periyodik olarak yenile
+        // RTC saatini işlem döngüsü sayısına göre değil, geçen gerçek zamana göre yenile.
         let mut force_render = false;
-        clock_spin += 1;
-        if clock_spin >= 3_000 {
-            clock_spin = 0;
+        let clock_now_ms = monotonic_ms();
+        if clock_now_ms.wrapping_sub(last_clock_update_ms) >= 1_000 {
+            last_clock_update_ms = clock_now_ms;
             now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
             force_render = true;
         }
@@ -1556,8 +1556,7 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, (wx + 64, wy + 56, 22, 20)) {
                                     browser_app.navigate();
                                 } else if gui::in_rect(mx, my, (wx + 94, wy + 56, ww.saturating_sub(160), 20)) {
-                                    browser_app.address_focused = true;
-                                    browser_app.set_url(b"");
+                                    browser_app.focus_address_at(mx, wx + 100);
                                 } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 56, 50, 20)) {
                                     browser_app.navigate();
                                 } else {
@@ -1797,6 +1796,8 @@ pub extern "C" fn _start() -> ! {
                     if compositor.is_start_menu_open {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_move_left();
                     } else if app_is_focused(&compositor, 2) {
                         notepad_app.move_left_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
@@ -1805,7 +1806,8 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_prev();
                     } else if app_is_focused(&compositor, 3) {
-                        browser_app.select_tab_prev();
+                        if browser_app.address_focused { browser_app.address_move_left(); }
+                        else { browser_app.select_tab_prev(); }
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowRight => {
@@ -1814,6 +1816,8 @@ pub extern "C" fn _start() -> ! {
                             compositor.active_start_group += 1;
                             compositor.selected_start_item = 0;
                         }
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_move_right();
                     } else if app_is_focused(&compositor, 2) {
                         notepad_app.move_right_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
@@ -1822,7 +1826,8 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_next();
                     } else if app_is_focused(&compositor, 3) {
-                        browser_app.select_tab_next();
+                        if browser_app.address_focused { browser_app.address_move_right(); }
+                        else { browser_app.select_tab_next(); }
                     }
                 }
                 drivers::keyboard::KeyAction::EnterKey => {
@@ -1990,32 +1995,43 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::CopyText => {
                     if app_is_focused(&compositor, 2) { notepad_app.copy_selection(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_copy(); }
+                    else if app_is_focused(&compositor, 8) { calculator_app.copy_result(); }
                 }
                 drivers::keyboard::KeyAction::PasteText => {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_paste(); }
+                    else if app_is_focused(&compositor, 8) { calculator_app.paste_expression(); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
                     if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_cut(); }
+                    else if app_is_focused(&compositor, 8) { calculator_app.cut_expression(); }
                 }
                 drivers::keyboard::KeyAction::SelectAllText => {
                     let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.select_all(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_select_all(); }
                 }
                 drivers::keyboard::KeyAction::Undo => {
                     let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.undo(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_undo_edit(); }
                 }
                 drivers::keyboard::KeyAction::Redo => {
                     let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.redo(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_redo_edit(); }
                 }
                 drivers::keyboard::KeyAction::HomeKey => {
                     let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.move_home(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_home(); }
                 }
                 drivers::keyboard::KeyAction::EndKey => {
                     let focused = app_is_focused(&compositor, 2);
                     if focused { notepad_app.move_end(); }
+                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_end(); }
                 }
                 drivers::keyboard::KeyAction::Delete => {
                     // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
@@ -2030,12 +2046,14 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 2) {
                         notepad_app.delete_forward();
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_delete();
                     }
                 }
                 drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
                 drivers::keyboard::KeyAction::BrowserAddress => {
                     let focused = app_is_focused(&compositor, 3);
-                    if focused { browser_app.address_focused = true; browser_app.set_url(b""); }
+                    if focused { browser_app.focus_address_end(); }
                 }
                 drivers::keyboard::KeyAction::BrowserRefresh => {
                     let focused = app_is_focused(&compositor, 3);

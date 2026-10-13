@@ -1,5 +1,6 @@
 pub mod font_render;
 pub mod theme;
+pub mod clipboard;
 pub mod scrollbar;
 
 pub use scrollbar::{ScrollState, ScrollbarGeom};

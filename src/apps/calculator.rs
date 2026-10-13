@@ -50,6 +50,41 @@ impl CalculatorApp {
         self.len = 0;
     }
 
+    /// Copy the currently displayed calculation result to the shared clipboard.
+    pub fn copy_result(&self) {
+        let value = self.value();
+        let mut output = [0u8; 24];
+        let len = Self::format_value(value, &mut output);
+        let text = core::str::from_utf8(&output[..len]).unwrap_or("");
+        crate::gui::clipboard::set_str(text);
+    }
+
+    /// Copy the current expression and clear it, matching the usual Ctrl+X behavior.
+    pub fn cut_expression(&mut self) {
+        crate::gui::clipboard::set_chars(&self.input[..self.len]);
+        self.clear();
+    }
+
+    /// Replace the expression with a sanitized numeric expression from the shared clipboard.
+    pub fn paste_expression(&mut self) {
+        let mut clipboard = [' '; crate::gui::clipboard::CAPACITY];
+        let len = crate::gui::clipboard::copy_chars(&mut clipboard);
+        let mut expression = [' '; 64];
+        let mut expression_len = 0;
+        for ch in clipboard[..len].iter().copied() {
+            if ch.is_ascii_whitespace() { continue; }
+            if !(ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-' | '*' | '/')) { return; }
+            if expression_len >= expression.len() - 1 { break; }
+            expression[expression_len] = ch;
+            expression_len += 1;
+        }
+        if expression_len == 0 { return; }
+        self.clear();
+        for ch in expression[..expression_len].iter().copied() {
+            self.insert(ch);
+        }
+    }
+
     pub fn press(&mut self, key: char) {
         match key {
             'C' => self.clear(),
@@ -126,10 +161,18 @@ impl CalculatorApp {
     fn set_value(&mut self, value: i32) {
         self.len = 0;
         let mut output = [0u8; 24];
+        let len = Self::format_value(value, &mut output);
+        for byte in &output[..len] {
+            self.input[self.len] = *byte as char;
+            self.len += 1;
+        }
+    }
+
+    fn format_value(value: i32, output: &mut [u8; 24]) -> usize {
         let mut len = 0;
         let magnitude = value.saturating_abs();
         if value < 0 { output[len] = b'-'; len += 1; }
-        Self::append_unsigned(&mut output, &mut len, (magnitude / SCALE) as u32);
+        Self::append_unsigned(output, &mut len, (magnitude / SCALE) as u32);
         let mut fraction = (magnitude % SCALE) as u32;
         if fraction != 0 {
             output[len] = b'.'; len += 1;
@@ -139,10 +182,7 @@ impl CalculatorApp {
             output[len] = b'0' + (fraction % 10) as u8; len += 1;
             while output[len - 1] == b'0' { len -= 1; }
         }
-        for byte in &output[..len] {
-            self.input[self.len] = *byte as char;
-            self.len += 1;
-        }
+        len
     }
 
     fn append_unsigned(output: &mut [u8; 24], len: &mut usize, mut value: u32) {
@@ -174,22 +214,7 @@ impl CalculatorApp {
             MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 7, text, Color::TEXT_MUTED);
         }
         let mut result = [0u8; 24];
-        let mut result_len = 0;
-        Self::append_unsigned(&mut result, &mut result_len, self.value().saturating_abs() as u32 / SCALE as u32);
-        let fraction = self.value().saturating_abs() as u32 % SCALE as u32;
-        if fraction != 0 {
-            result[result_len] = b'.'; result_len += 1;
-            result[result_len] = b'0' + (fraction / 100) as u8; result_len += 1;
-            let mut rest = fraction % 100;
-            result[result_len] = b'0' + (rest / 10) as u8; result_len += 1;
-            rest %= 10;
-            result[result_len] = b'0' + rest as u8; result_len += 1;
-            while result[result_len - 1] == b'0' { result_len -= 1; }
-        }
-        if self.value() < 0 {
-            for index in (0..result_len).rev() { result[index + 1] = result[index]; }
-            result[0] = b'-'; result_len += 1;
-        }
+        let result_len = Self::format_value(self.value(), &mut result);
         if let Ok(text) = core::str::from_utf8(&result[..result_len]) {
             MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 32, text, Color::ACCENT_GREEN);
         }

@@ -56,22 +56,13 @@ const EMPTY_SNAPSHOT: Snapshot = Snapshot { chars: [' '; 512], len: 0, cursor: 0
 static mut UNDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
 static mut REDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
 
-// Simple clipboard for copy / paste (static mutable, unsafe)
-static mut CLIPBOARD: [char; 512] = [' '; 512];
-static mut CLIPBOARD_LEN: usize = 0;
-
 impl NotepadApp {
     // Copy selected text to the clipboard
     pub fn copy_selection(&self) {
         if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
             let range = start.min(end)..start.max(end);
             let len = (range.end - range.start).min(512);
-            unsafe {
-                for (i, &c) in self.buffer[range.clone()].iter().take(len).enumerate() {
-                    CLIPBOARD[i] = c;
-                }
-                CLIPBOARD_LEN = len;
-            }
+            crate::gui::clipboard::set_chars(&self.buffer[range.start..range.start + len]);
         }
     }
 
@@ -85,15 +76,15 @@ impl NotepadApp {
     pub fn paste_clipboard(&mut self) {
         self.delete_selection();
         self.push_history();
-        unsafe {
-            let amount = CLIPBOARD_LEN.min(512 - self.len);
-            for i in (self.cursor..self.len).rev() {
-                self.buffer[i + amount] = self.buffer[i];
-            }
-            for i in 0..amount { self.buffer[self.cursor + i] = CLIPBOARD[i]; }
-            self.len += amount;
-            self.cursor += amount;
+        let mut pasted = ['\0'; 512];
+        let clipboard_len = crate::gui::clipboard::copy_chars(&mut pasted);
+        let amount = clipboard_len.min(512 - self.len);
+        for i in (self.cursor..self.len).rev() {
+            self.buffer[i + amount] = self.buffer[i];
         }
+        self.buffer[self.cursor..self.cursor + amount].copy_from_slice(&pasted[..amount]);
+        self.len += amount;
+        self.cursor += amount;
     }
 
     // Delete selected text

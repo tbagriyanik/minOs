@@ -1,5 +1,5 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
+use crate::gui::{Color, MinGuiCompositor};
 
 fn find_bytes(haystack:&[u8], needle:&[u8])->Option<usize> {
     if needle.is_empty() || needle.len()>haystack.len(){return None;}
@@ -59,6 +59,15 @@ pub struct BrowserApp {
     pub url: [u8; 128],
     pub url_len: usize,
     pub address_focused: bool,
+    pub address_cursor: usize,
+    pub address_scroll: usize,
+    pub address_selection: Option<(usize, usize)>,
+    address_undo: [[u8; 128]; 16],
+    address_undo_len: [usize; 16],
+    address_undo_count: usize,
+    address_redo: [[u8; 128]; 16],
+    address_redo_len: [usize; 16],
+    address_redo_count: usize,
     pub active_tab: usize,
     pub focused_control: usize,
     pub page_loaded: bool,
@@ -88,7 +97,9 @@ pub struct BrowserApp {
 impl BrowserApp {
     pub fn new() -> Self {
         let mut app = Self {
-            url: [0; 128], url_len: 0, address_focused: false,
+            url: [0; 128], url_len: 0, address_focused: false, address_cursor: 0, address_scroll: 0, address_selection: None,
+            address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
+            address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
             active_tab: 0, focused_control: 0, page_loaded: true, status: crate::gui::ui_text("MinOS yerel yardım sayfası", "MinOS local help page"),
             net_online: false, ping_ok: false,
             web_request_sent: false,
@@ -154,6 +165,34 @@ impl BrowserApp {
         self.url = [0; 128];
         self.url_len = value.len().min(self.url.len());
         self.url[..self.url_len].copy_from_slice(&value[..self.url_len]);
+        self.address_cursor = self.url_len;
+        self.address_scroll = self.url_len.saturating_sub(40);
+        self.address_selection = None;
+    }
+
+    pub fn focus_address_at(&mut self, x: usize, field_x: usize) {
+        self.address_focused = true;
+        self.focused_control = 6;
+        let column = x.saturating_sub(field_x) / 10;
+        self.address_cursor = (self.address_scroll + column).min(self.url_len);
+        self.address_selection = None;
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn focus_address_end(&mut self) {
+        self.address_focused = true;
+        self.focused_control = 6;
+        self.address_selection = None;
+        self.address_cursor = self.url_len;
+        self.keep_address_cursor_visible();
+    }
+
+    fn keep_address_cursor_visible(&mut self) {
+        if self.address_cursor < self.address_scroll {
+            self.address_scroll = self.address_cursor;
+        } else if self.address_cursor >= self.address_scroll + 40 {
+            self.address_scroll = self.address_cursor + 1 - 40;
+        }
     }
 
     pub fn set_web_content(&mut self, title: &str, lines: &[&str]) {
@@ -174,22 +213,194 @@ impl BrowserApp {
 
     pub fn address_char(&mut self, ch: char) {
         if ch.is_ascii_graphic() || ch == ' ' {
+            if self.url_len < self.url.len() { self.address_push_undo(); }
+            self.address_delete_selection();
             if self.url_len < self.url.len() {
-                self.url[self.url_len] = ch as u8;
+                self.url.copy_within(self.address_cursor..self.url_len, self.address_cursor + 1);
+                self.url[self.address_cursor] = ch as u8;
                 self.url_len += 1;
+                self.address_cursor += 1;
+                self.keep_address_cursor_visible();
             }
         }
     }
 
     pub fn address_backspace(&mut self) {
-        if self.url_len > 0 {
+        if self.address_selection.is_some() || self.address_cursor > 0 { self.address_push_undo(); }
+        if self.address_delete_selection() { return; }
+        if self.address_cursor > 0 {
+            self.address_cursor -= 1;
+            self.url.copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
             self.url_len -= 1;
             self.url[self.url_len] = 0;
+            self.keep_address_cursor_visible();
+        }
+    }
+
+    pub fn address_delete(&mut self) {
+        if self.address_selection.is_some() || self.address_cursor < self.url_len { self.address_push_undo(); }
+        if self.address_delete_selection() { return; }
+        if self.address_cursor < self.url_len {
+            self.url.copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
+            self.url_len -= 1;
+            self.url[self.url_len] = 0;
+            self.keep_address_cursor_visible();
+        }
+    }
+
+    pub fn address_move_left(&mut self) {
+        if let Some((a, b)) = self.address_selection.take() {
+            self.address_cursor = a.min(b);
+        } else {
+            self.address_cursor = self.address_cursor.saturating_sub(1);
+        }
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_move_right(&mut self) {
+        if let Some((a, b)) = self.address_selection.take() {
+            self.address_cursor = a.max(b);
+        } else {
+            self.address_cursor = (self.address_cursor + 1).min(self.url_len);
+        }
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_home(&mut self) {
+        self.address_selection = None;
+        self.address_cursor = 0;
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_end(&mut self) {
+        self.address_selection = None;
+        self.address_cursor = self.url_len;
+        self.keep_address_cursor_visible();
+    }
+
+    fn address_delete_selection(&mut self) -> bool {
+        if let Some((a, b)) = self.address_selection.take() {
+            let start = a.min(b).min(self.url_len);
+            let end = a.max(b).min(self.url_len);
+            if start < end {
+                self.url.copy_within(end..self.url_len, start);
+                self.url_len -= end - start;
+                self.url[self.url_len] = 0;
+                self.address_cursor = start;
+                self.keep_address_cursor_visible();
+            }
+            return start < end;
+        }
+        false
+    }
+
+    fn address_push_undo(&mut self) {
+        self.address_record_undo();
+        self.address_redo_count = 0;
+    }
+
+    fn address_record_undo(&mut self) {
+        if self.address_undo_count == self.address_undo.len() {
+            self.address_undo.copy_within(1.., 0);
+            self.address_undo_len.copy_within(1.., 0);
+            self.address_undo_count -= 1;
+        }
+        let i = self.address_undo_count;
+        self.address_undo[i] = self.url;
+        self.address_undo_len[i] = self.url_len;
+        self.address_undo_count += 1;
+    }
+
+    fn address_save_redo(&mut self) {
+        if self.address_redo_count == self.address_redo.len() {
+            self.address_redo.copy_within(1.., 0);
+            self.address_redo_len.copy_within(1.., 0);
+            self.address_redo_count -= 1;
+        }
+        let i = self.address_redo_count;
+        self.address_redo[i] = self.url;
+        self.address_redo_len[i] = self.url_len;
+        self.address_redo_count += 1;
+    }
+
+    pub fn address_undo_edit(&mut self) {
+        if self.address_undo_count == 0 { return; }
+        self.address_save_redo();
+        self.address_undo_count -= 1;
+        self.url = self.address_undo[self.address_undo_count];
+        self.url_len = self.address_undo_len[self.address_undo_count];
+        self.address_cursor = self.address_cursor.min(self.url_len);
+        self.address_selection = None;
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_redo_edit(&mut self) {
+        if self.address_redo_count == 0 { return; }
+        self.address_record_undo();
+        self.address_redo_count -= 1;
+        self.url = self.address_redo[self.address_redo_count];
+        self.url_len = self.address_redo_len[self.address_redo_count];
+        self.address_cursor = self.address_cursor.min(self.url_len);
+        self.address_selection = None;
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_select_all(&mut self) {
+        self.address_focused = true;
+        self.focused_control = 6;
+        if self.url_len > 0 {
+            self.address_selection = Some((0, self.url_len));
+            self.address_cursor = self.url_len;
+            self.keep_address_cursor_visible();
+        }
+    }
+
+    pub fn address_copy(&self) {
+        if let Some((a, b)) = self.address_selection {
+            let start = a.min(b).min(self.url_len);
+            let end = a.max(b).min(self.url_len);
+            if start < end {
+                if let Ok(text) = core::str::from_utf8(&self.url[start..end]) {
+                    crate::gui::clipboard::set_str(text);
+                }
+            }
+        }
+    }
+
+    pub fn address_cut(&mut self) {
+        self.address_copy();
+        if self.address_selection.is_some() { self.address_push_undo(); }
+        self.address_delete_selection();
+    }
+
+    pub fn address_paste(&mut self) {
+        if self.address_selection.is_some() { self.address_push_undo(); }
+        self.address_delete_selection();
+        let mut pasted = ['\0'; crate::gui::clipboard::CAPACITY];
+        let len = crate::gui::clipboard::copy_chars(&mut pasted);
+        for ch in pasted[..len].iter().copied() {
+            if ch.is_ascii_graphic() || ch == ' ' { self.address_char(ch); }
         }
     }
 
     pub fn navigate(&mut self) {
-        let value = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        let mut input = [0u8; 128];
+        input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
+        let entered = core::str::from_utf8(&input[..self.url_len]).unwrap_or("").trim();
+        let mut normalized = [0u8; 128];
+        let mut normalized_len = entered.len().min(normalized.len());
+        if !entered.is_empty() && !entered.contains("://") && !entered.starts_with("minos:") {
+            let n = entered.len().min(normalized.len().saturating_sub(7));
+            normalized[..7].copy_from_slice(b"http://");
+            normalized[7..7 + n].copy_from_slice(&entered.as_bytes()[..n]);
+            normalized_len = 7 + n;
+        } else {
+            normalized[..normalized_len].copy_from_slice(&entered.as_bytes()[..normalized_len]);
+        }
+        let value = core::str::from_utf8(&normalized[..normalized_len]).unwrap_or("");
+        if value.as_bytes() != &self.url[..self.url_len] {
+            self.set_url(value.as_bytes());
+        }
         self.web_request_sent = false;
         if value.starts_with("https://") {
             self.active_tab=3; self.page_loaded=false; self.request_pending=false;
@@ -197,15 +408,20 @@ impl BrowserApp {
             self.address_focused=false; return;
         }
         if let Some(rest) = value.strip_prefix("http://") {
-            let authority_end = rest.find('/').unwrap_or(rest.len());
+            let authority_end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
             let authority = &rest[..authority_end];
-            let mut path = if authority_end < rest.len() { &rest[authority_end..] } else { "/" };
-            if let Some(q) = path.strip_prefix('?') { path = q; }
-            let (host, port) = match authority.rsplit_once(':') {
-                Some((h,p)) if !h.contains(']') => match p.parse::<u16>() { Ok(n) if n>0 => (h,n), _ => ("",0) },
-                _ => (authority,80),
+            let suffix = &rest[authority_end..];
+            let suffix = suffix.split('#').next().unwrap_or("");
+            let (host, port) = if authority.starts_with('[') {
+                ("", 0) // Bu ağ yığını şu an yalnızca IPv4 hedeflerini destekliyor.
+            } else {
+                match authority.rsplit_once(':') {
+                    Some((h,p)) => match p.parse::<u16>() { Ok(n) if n>0 => (h,n), _ => ("",0) },
+                    _ => (authority,80),
+                }
             };
-            if host.is_empty() || host.len() > 96 || path.len()>180 || port==0 {
+            let path_len = if suffix.is_empty() { 1 } else if suffix.starts_with('?') { suffix.len() + 1 } else { suffix.len() };
+            if host.is_empty() || host.len() > 96 || path_len>180 || port==0 {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.");
             } else if !crate::drivers::e1000::is_ready() {
@@ -216,7 +432,14 @@ impl BrowserApp {
                 self.page_loaded = false;
                 self.web_request_sent = false;
                 self.request_host = [0;96]; self.request_host_len=host.len(); self.request_host[..host.len()].copy_from_slice(host.as_bytes());
-                self.request_path = [0;180]; self.request_path_len=path.len(); self.request_path[..path.len()].copy_from_slice(path.as_bytes());
+                self.request_path = [0;180]; self.request_path_len=path_len;
+                if suffix.is_empty() { self.request_path[0] = b'/'; }
+                else if suffix.starts_with('?') {
+                    self.request_path[0] = b'/';
+                    self.request_path[1..path_len].copy_from_slice(suffix.as_bytes());
+                } else {
+                    self.request_path[..path_len].copy_from_slice(suffix.as_bytes());
+                }
                 self.request_port=port; self.request_state=0; self.request_pending=true; self.response_len=0;
                 self.status = crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...");
                 self.page_title=[0;64]; self.page_title_len=0; self.page_line_count=0;
@@ -276,13 +499,29 @@ impl BrowserApp {
         match self.request_state {
             0 => {
                 let host=core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
-                if let Some(ip)=crate::drivers::netstack::resolve_ipv4(host) {
+                if let Some(ip)=crate::drivers::netstack::parse_ipv4(host) {
                     self.request_ip=ip;
                     let port=self.request_port;
                     if crate::drivers::netstack::tcp_begin(ip,port,49153) { self.request_state=1; self.status=crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP..."); }
                     else { self.finish_network_error(crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection.")); }
+                } else if crate::drivers::netstack::dns_query(host) {
+                    // DNS yanıtını ana olay döngüsündeki poll_network alır;
+                    // ağ yanıtı beklenirken fare ve pencere sistemi çalışmayı sürdürür.
+                    self.request_state=4;
+                    self.status=crate::gui::ui_text("DNS yanıtı bekleniyor...", "Waiting for DNS response...");
                 } else {
-                    self.finish_network_error(crate::gui::ui_text("DNS adı çözümlenemedi.", "DNS lookup failed."));
+                    self.finish_network_error(crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent."));
+                }
+            }
+            4 => {
+                if let Some(ip)=crate::drivers::netstack::take_dns_result() {
+                    self.request_ip=ip;
+                    if crate::drivers::netstack::tcp_begin(ip,self.request_port,49153) {
+                        self.request_state=1;
+                        self.status=crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP...");
+                    } else {
+                        self.finish_network_error(crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection."));
+                    }
                 }
             }
             1 => {
@@ -372,11 +611,39 @@ impl BrowserApp {
         let url_x = win_x + 94;
         let url_w = win_w.saturating_sub(160);
         fb.draw_rect(url_x, win_y + 56, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
-        let shown = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
-        let mut address = TextBuf::new();
-        address.push_str(shown);
-        if self.address_focused { address.push_byte(b'_'); }
-        MinGuiCompositor::draw_string(fb, url_x + 6, win_y + 60, address.as_str(), Color::TEXT_MAIN);
+        let char_width = MinGuiCompositor::text_width("M", 1).max(1);
+        let visible_chars = url_w.saturating_sub(12).checked_div(char_width).unwrap_or(1).max(1);
+        let mut scroll = self.address_scroll.min(self.url_len);
+        if self.address_focused && self.address_cursor < scroll { scroll = self.address_cursor; }
+        if self.address_focused && self.address_cursor >= scroll + visible_chars {
+            scroll = self.address_cursor + 1 - visible_chars;
+        }
+        let visible_end = (scroll + visible_chars).min(self.url_len);
+        let clip = (url_x + 4, win_y + 56, url_w.saturating_sub(8), 20);
+        let text_x = url_x + 6;
+        let selection = self.address_selection.map(|(a,b)| (a.min(b).max(scroll), a.max(b).min(visible_end)))
+            .filter(|(a,b)| a < b);
+        if let Some((sel_start, sel_end)) = selection {
+            let prefix = core::str::from_utf8(&self.url[scroll..sel_start]).unwrap_or("");
+            let selected = core::str::from_utf8(&self.url[sel_start..sel_end]).unwrap_or("");
+            let suffix = core::str::from_utf8(&self.url[sel_end..visible_end]).unwrap_or("");
+            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 60, prefix, Color::TEXT_MAIN, clip);
+            let selection_x = text_x + MinGuiCompositor::text_width(prefix, 1);
+            let selection_w = MinGuiCompositor::text_width(selected, 1);
+            fb.draw_rect(selection_x, win_y + 56, selection_w, 20, Color::ACCENT_BLUE);
+            MinGuiCompositor::draw_string_clipped(fb, selection_x, win_y + 60, selected,
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE), clip);
+            MinGuiCompositor::draw_string_clipped(fb, selection_x + selection_w, win_y + 60, suffix, Color::TEXT_MAIN, clip);
+        } else {
+            let shown = core::str::from_utf8(&self.url[scroll..visible_end]).unwrap_or("");
+            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 60, shown, Color::TEXT_MAIN, clip);
+        }
+        if self.address_focused && selection.is_none() {
+            let caret_x = url_x + 6 + self.address_cursor.saturating_sub(scroll) * char_width;
+            if caret_x < url_x + url_w.saturating_sub(2) {
+                fb.draw_rect(caret_x, win_y + 59, 1, 14, Color::ACCENT_YELLOW);
+            }
+        }
         if self.focused_control == 6 { fb.draw_rect_outline(url_x, win_y + 56, url_w, 20, Color::ACCENT_YELLOW); }
 
         let git_r = (win_x + win_w - 60, win_y + 56, 50, 20);

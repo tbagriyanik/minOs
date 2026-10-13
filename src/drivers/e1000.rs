@@ -53,7 +53,8 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
 
 /// Intel 82540EM / e1000 PCI kimliği
 const E1000_VENDOR: u32 = 0x8086;
-const E1000_DEVICE: u32 = 0x100E; // 82540EM
+// Aynı descriptor/MMIO düzenini kullanan klasik 8254x denetleyicileri.
+const E1000_DEVICES: [u32; 5] = [0x100E, 0x100F, 0x1010, 0x1011, 0x1012];
 
 // ---------------------------------------------------------------------------
 // MMIO kayıt ofsetleri
@@ -288,8 +289,8 @@ pub fn transmit(packet: &[u8]) -> bool {
             }
             spins += 1;
             if spins > 200_000 {
-                // QEMU TDT yazılınca paketi zaten gönderir; donanım onayında gecikme olsa dahi gönderilmiş say
-                return true;
+                // Descriptor tamamlanmadı; çağırana başarılı iletim bildirme.
+                return false;
             }
             core::hint::spin_loop();
         }
@@ -308,7 +309,9 @@ pub fn receive(buf: &mut [u8]) -> usize {
             return 0; // DD biti ayarlanmadı
         }
         let len = desc.length as usize;
-        if len == 0 || len > buf.len() {
+        // Çok descriptor'lı çerçeveler henüz birleştirilmiyor; hatalı veya
+        // EOP olmadan biten parçaları üst katmana Ethernet paketi diye verme.
+        if len == 0 || len > buf.len() || desc.errors != 0 || desc.status & 0x02 == 0 {
             // Bu buffer'ı yeniden kullan
             (*rings()).rx_ring[idx].status = 0;
             mmio_write32(REG_RDT, idx as u32);
@@ -350,7 +353,7 @@ pub fn init() {
             for func in 0..8u8 {
                 let vid = pci_read32(0, dev, func, 0x00) & 0xFFFF;
                 let did = (pci_read32(0, dev, func, 0x00) >> 16) & 0xFFFF;
-                if vid == E1000_VENDOR && did == E1000_DEVICE {
+                if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
                     // BAR0'ı oku (32-bit MMIO BAR)
                     let bar0_lo = pci_read32(0, dev, func, 0x10);
                     let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;

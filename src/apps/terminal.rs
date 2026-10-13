@@ -449,11 +449,17 @@ impl TerminalApp {
                 self.push_line("9 paint      10 cmd", Color::ACCENT_BLUE);
             }
             "ipconfig" => {
-                use crate::drivers::netstack::{gateway_ip, local_ip, subnet_mask};
+                use crate::drivers::netstack::{dns_server, gateway_ip, local_ip, subnet_mask};
                 self.push_line(crate::gui::ui_text("Ethernet bağdaştırıcısı eth0:", "Ethernet adapter eth0:"), Color::ACCENT_GREEN);
                 push_ipv4_line(self, "IPv4: ", local_ip().0);
                 push_ipv4_line(self, crate::gui::ui_text("Maske: ", "Mask: "), subnet_mask().0);
                 push_ipv4_line(self, crate::gui::ui_text("Ağ geçidi: ", "Gateway: "), gateway_ip().0);
+                push_ipv4_line(self, "DNS: ", dns_server().0);
+                self.push_line(if crate::drivers::netstack::dhcp_ready() {
+                    crate::gui::ui_text("DHCP: adres alındı", "DHCP: lease active")
+                } else {
+                    crate::gui::ui_text("DHCP: bekleniyor (yedek adres etkin)", "DHCP: waiting (fallback address active)")
+                }, Color::ACCENT_YELLOW);
                 let mac = unsafe { crate::drivers::e1000::MAC_ADDR };
                 let mut b = TextBuf::new();
                 b.push_str("MAC: ");

@@ -23,7 +23,7 @@ impl ImageViewerApp {
         MinGuiCompositor::draw_string(fb, win_x + win_w - 116, win_y + 36, crate::gui::ui_text("Uzak-", "Zoom-"), Color::ACCENT_YELLOW);
 
         fb.draw_rect(win_x + win_w - 68, win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "%400", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, "%400", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
         // Resim Tuvali Alanı (Canvas Area with checkerboard background)
         let canvas_x = win_x + 10;

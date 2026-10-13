@@ -1,6 +1,12 @@
 use crate::drivers::mouse::MouseState;
 use crate::drivers::keyboard::KeyboardState;
 
+#[derive(Copy, Clone, Default)]
+pub struct InputUpdate {
+    pub mouse: bool,
+    pub keyboard: bool,
+}
+
 #[inline(always)]
 unsafe fn inb(port: u16) -> u8 {
     let val: u8;
@@ -113,8 +119,8 @@ pub fn init() {
     }
 }
 
-pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w: i32, screen_h: i32) -> bool {
-    let mut updated = false;
+pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w: i32, screen_h: i32) -> InputUpdate {
+    let mut updated = InputUpdate::default();
 
     unsafe {
         while inb(0x64) & 0x01 != 0 {
@@ -147,7 +153,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                             let dy = if flags & 0x20 != 0 { (raw_y | !0xFF) as i8 } else { raw_y as i8 };
                             if flags & 0xC0 == 0 {
                                 mouse.update_packet(flags, dx, dy, screen_w, screen_h);
-                                updated = true;
+                                updated.mouse = true;
                             }
                         }
                     }
@@ -166,7 +172,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                         if flags & 0xC0 == 0 {
                             mouse.update_packet(flags, dx, dy, screen_w, screen_h);
                             mouse.scroll_delta = scroll;
-                            updated = true;
+                            updated.mouse = true;
                         }
                     }
                     _ => {
@@ -176,7 +182,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
             } else {
                 // PS/2 Klavye Tarama Kodu (Scancode)
                 keyboard.handle_scancode(data);
-                updated = true;
+                updated.keyboard = true;
             }
         }
     }

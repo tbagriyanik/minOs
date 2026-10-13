@@ -497,7 +497,7 @@ impl NotepadApp {
         fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
         fb.draw_rect(win_x + win_w.saturating_sub(68), win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, crate::gui::ui_text("Kaydet", "Save"), Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, crate::gui::ui_text("Kaydet", "Save"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
         // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         let area_x = win_x + 6;
@@ -555,7 +555,7 @@ impl NotepadApp {
                     };
                     let sel_h = line_h().saturating_sub(4).max(8);
                     if selected { fb.draw_rect(cx, cy, char_w(), sel_h, Color::ACCENT_BLUE); }
-                    MinGuiCompositor::draw_string(fb, cx, cy, s, if selected { Color::DARK_BG } else { Color::TEXT_MAIN });
+                    MinGuiCompositor::draw_string(fb, cx, cy, s, if selected { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
                 }
             }
             if i == self.cursor.saturating_sub(1) {

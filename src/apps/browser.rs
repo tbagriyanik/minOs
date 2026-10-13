@@ -381,7 +381,7 @@ impl BrowserApp {
 
         let git_r = (win_x + win_w - 60, win_y + 56, 50, 20);
         fb.draw_rect(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 60, "GIT", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 60, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
         if self.focused_control == 7 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
 
         let page_x = win_x + 6;

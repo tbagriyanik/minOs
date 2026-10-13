@@ -2,6 +2,8 @@ use crate::gui::theme;
 
 static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
 const BACKBUFFER_LEN: usize = 1280 * 720;
+const CURSOR_SAVE_W: usize = 16;
+const CURSOR_SAVE_H: usize = 16;
 
 /// Dikdörtgen kırpma (clip) bölgesi. Tüm çizimler bu sınırların içinde kalır.
 #[derive(Copy, Clone)]
@@ -19,6 +21,12 @@ pub struct Framebuffer {
     pub pitch: usize,
     /// Aktif kırpma bölgesi. Varsayılan: tüm ekran.
     clip: ClipRect,
+    cursor_under: [u32; CURSOR_SAVE_W * CURSOR_SAVE_H],
+    cursor_x: usize,
+    cursor_y: usize,
+    cursor_w: usize,
+    cursor_h: usize,
+    cursor_saved: bool,
 }
 
 #[inline(always)]
@@ -83,6 +91,76 @@ impl Framebuffer {
             height,
             pitch,
             clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
+            cursor_under: [0; CURSOR_SAVE_W * CURSOR_SAVE_H],
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_w: 0,
+            cursor_h: 0,
+            cursor_saved: false,
+        }
+    }
+
+    /// İmlecin kaplayacağı arka planı, kısmi imleç çizimleri için saklar.
+    pub fn save_cursor_background(&mut self, x: usize, y: usize) {
+        // Yeniden boyutlandırma imleci fare noktasının 3 piksel üst/soluna taşar.
+        self.cursor_x = x.saturating_sub(3).min(self.width);
+        self.cursor_y = y.saturating_sub(3).min(self.height);
+        self.cursor_w = CURSOR_SAVE_W.min(self.width.saturating_sub(self.cursor_x));
+        self.cursor_h = CURSOR_SAVE_H.min(self.height.saturating_sub(self.cursor_y));
+        for row in 0..self.cursor_h {
+            for col in 0..self.cursor_w {
+                let offset = (self.cursor_y + row) * self.width + self.cursor_x + col;
+                self.cursor_under[row * CURSOR_SAVE_W + col] = unsafe {
+                    if offset < BACKBUFFER_LEN { BACKBUFFER[offset] } else { 0 }
+                };
+            }
+        }
+        self.cursor_saved = true;
+    }
+
+    /// Önceki imlecin arka planını geri yükler ve güncellenmesi gereken alanı döndürür.
+    pub fn restore_cursor_background(&mut self) -> Option<(usize, usize, usize, usize)> {
+        if !self.cursor_saved { return None; }
+        for row in 0..self.cursor_h {
+            for col in 0..self.cursor_w {
+                let offset = (self.cursor_y + row) * self.width + self.cursor_x + col;
+                unsafe {
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = self.cursor_under[row * CURSOR_SAVE_W + col];
+                    }
+                }
+            }
+        }
+        self.cursor_saved = false;
+        Some((self.cursor_x, self.cursor_y, self.cursor_w, self.cursor_h))
+    }
+
+    pub fn cursor_rect(&self) -> Option<(usize, usize, usize, usize)> {
+        if self.cursor_saved {
+            Some((self.cursor_x, self.cursor_y, self.cursor_w, self.cursor_h))
+        } else {
+            None
+        }
+    }
+
+    /// Yalnızca verilen dikdörtgeni framebuffer'a kopyalar.
+    pub fn flush_rect(&mut self, rect: (usize, usize, usize, usize)) {
+        let (x, y, w, h) = rect;
+        let x_end = x.saturating_add(w).min(self.width);
+        let y_end = y.saturating_add(h).min(self.height);
+        if x >= x_end || y >= y_end { return; }
+        let pitch_words = self.pitch / 4;
+        for row in y..y_end {
+            let src_offset = row * self.width + x;
+            if src_offset >= BACKBUFFER_LEN { continue; }
+            let len = (x_end - x).min(BACKBUFFER_LEN - src_offset);
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(src_offset),
+                    self.address.add(row * pitch_words + x),
+                    len,
+                );
+            }
         }
     }
 

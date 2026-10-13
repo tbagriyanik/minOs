@@ -105,7 +105,7 @@ impl MusicPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 16, ctrl_y + 8, "|<<", Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + 52, ctrl_y, 46, 24, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + 58, ctrl_y + 8, if self.is_playing { "||" } else { ">" }, Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 58, ctrl_y + 8, if self.is_playing { "||" } else { ">" }, MinGuiCompositor::text_on(Color::ACCENT_GREEN));
 
         fb.draw_rect(win_x + 104, ctrl_y, 36, 24, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 110, ctrl_y + 8, ">>|", Color::TEXT_MAIN);

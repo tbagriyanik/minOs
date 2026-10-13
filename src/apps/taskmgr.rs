@@ -284,7 +284,7 @@ impl TaskManagerApp {
                 if self.focused_control == 4 + i { fb.draw_rect_outline(row.0, row.1, row.2, row.3, Color::ACCENT_YELLOW); }
                 let app_name = if english { LAUNCH_APP_LABELS_EN[proc.app_id.min(LAUNCH_APP_COUNT - 1)] } else { proc.name };
                 MinGuiCompositor::draw_string_clipped(fb, win_x + 12, row.1 + 2, app_name,
-                    if i == self.selected { Color::ACCENT_BLUE } else { Color::TEXT_MAIN },
+                    if i == self.selected { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN },
                     (win_x + 10, row.1, 154, row.3));
                 let mut cpu = TextBuf::new();
                 cpu.push_usize(proc.cpu_pct);

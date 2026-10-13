@@ -783,7 +783,7 @@ pub extern "C" fn _start() -> ! {
     // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
     loop {
         let loop_start_cycles = read_cpu_cycles();
-        let input_occurred = drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+        let input_update = drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
         loop_counter = loop_counter.wrapping_add(1);
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
@@ -870,7 +870,7 @@ pub extern "C" fn _start() -> ! {
 
         // 2. Fare Sol Tıklama Olayları (Mouse Down)
         if mouse_clicked {
-            compositor.is_alt_tab_open = false;
+            compositor.finish_alt_tab();
             let mut consumed = false;
 
             // Açık menü/popup dışına tıklanınca kapat; tıklamayı tüketmeden
@@ -1185,12 +1185,16 @@ pub extern "C" fn _start() -> ! {
             // F) Görev çubuğu uygulama sekmeleri (font ölçeğine duyarlı)
             let tab_h = gui::MinGuiCompositor::taskbar_tab_rect_at(0, tb_y).3;
             if !consumed && my >= tb_y + 5 && my < tb_y + 5 + tab_h {
-                let mut tab_x = gui::MinGuiCompositor::taskbar_tab_start();
+                let open_count = compositor.windows.iter().filter(|slot| slot.map_or(false, |win| win.is_open)).count();
+                let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
+                    gui::MinGuiCompositor::taskbar_tabs_layout(width, height, open_count);
+                let mut tab_slot = 0usize;
                 for idx in 0..gui::MAX_WINDOWS {
-                    if tab_x + gui::MinGuiCompositor::taskbar_tab_width() > gui::MinGuiCompositor::tray_layout(width, height).kbd.0.saturating_sub(gui::sp(4)) { break; }
                     if let Some(win) = compositor.windows[idx] {
                         if win.is_open {
-                            if mx >= tab_x && mx < tab_x + gui::MinGuiCompositor::taskbar_tab_width() {
+                            if tab_slot >= shown_tabs { break; }
+                            let tab_x = tab_start + tab_slot * tab_step;
+                            if mx >= tab_x && mx < tab_x + tab_width {
                                 if win.is_minimized {
                                     focus_app_window(&mut compositor, idx);
                                 } else if win.is_focused {
@@ -1204,8 +1208,46 @@ pub extern "C" fn _start() -> ! {
                                 consumed = true;
                                 break;
                             }
-                            tab_x += gui::MinGuiCompositor::taskbar_tab_step();
+                            tab_slot += 1;
                         }
+                    }
+                }
+                if !consumed && tab_slots > shown_tabs {
+                    let badge_x = tab_start + shown_tabs * tab_step;
+                    let badge_w = tab_width.min(gui::MinGuiCompositor::tray_layout(width, height).kbd.0
+                        .saturating_sub(gui::sp(4)).saturating_sub(badge_x));
+                    if mx >= badge_x && mx < badge_x + badge_w {
+                        // +N alanı gizli sekmeler arasında sırayla dolaşır.
+                        let mut ordinal = 0usize;
+                        let mut first_hidden = None;
+                        let mut focused_hidden_ordinal = None;
+                        for hidden_idx in 0..gui::MAX_WINDOWS {
+                            if let Some(hidden) = compositor.windows[hidden_idx] {
+                                if hidden.is_open {
+                                    if ordinal >= shown_tabs {
+                                        if first_hidden.is_none() { first_hidden = Some(hidden_idx); }
+                                        if hidden.is_focused { focused_hidden_ordinal = Some(ordinal); }
+                                    }
+                                    ordinal += 1;
+                                }
+                            }
+                        }
+                        let mut next_hidden = None;
+                        if let Some(active_ordinal) = focused_hidden_ordinal {
+                            let mut ordinal = 0usize;
+                            for hidden_idx in 0..gui::MAX_WINDOWS {
+                                if let Some(hidden) = compositor.windows[hidden_idx] {
+                                    if hidden.is_open {
+                                        if ordinal > active_ordinal { next_hidden = Some(hidden_idx); break; }
+                                        ordinal += 1;
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(target) = next_hidden.or(first_hidden) {
+                            focus_app_window(&mut compositor, target);
+                        }
+                        consumed = true;
                     }
                 }
             }
@@ -1658,11 +1700,21 @@ pub extern "C" fn _start() -> ! {
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
                             &mut terminal_app);
+                    } else {
+                        // Masaüstündeyken Alt+F4 güç menüsünü açar.
+                        compositor.is_start_menu_open = true;
+                        compositor.active_start_group = 3;
+                        compositor.selected_start_item = 0;
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
+                        compositor.is_context_menu_open = false;
+                        compositor.is_calendar_open = false;
+                        compositor.is_volume_popup_open = false;
                     }
                 }
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
                     compositor.is_alt_tab_open = true;
-                    compositor.cycle_focus();
+                    compositor.cycle_focus(keyboard.shift);
                 }
                 drivers::keyboard::KeyAction::OpenTaskManager => {
                     open_app(&mut compositor, 7);
@@ -2180,7 +2232,7 @@ pub extern "C" fn _start() -> ! {
 
         // Alt tuşu bırakıldığında Alt+Tab penceresini kapat
         if !keyboard.alt && compositor.is_alt_tab_open {
-            compositor.is_alt_tab_open = false;
+            compositor.finish_alt_tab();
         }
 
         // 6. Klavye karakter girişleri
@@ -2271,8 +2323,12 @@ pub extern "C" fn _start() -> ! {
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        // Görsel animasyonlar için sınırlı kare hızı; RDTSC ile zamanlama.
-        let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= 33;
+        // Sürükleme ve yeniden boyutlandırmada 60 FPS'e yaklaş; diğer
+        // animasyonlar için gereksiz tam ekran çizimini 30 FPS'te tut.
+        let dragging = mouse.left_button || mouse.right_button
+            || dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some();
+        let frame_interval_ms = if dragging { 16 } else { 33 };
+        let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
         if timer_tick_fired {
             last_frame_ms = monotonic_ms();
             anim_tick = anim_tick.wrapping_add(1);
@@ -2331,11 +2387,11 @@ pub extern "C" fn _start() -> ! {
             last_music_beat = anim_tick;
         }
 
-        if input_occurred || mouse_moved || buttons_changed || timer_tick_fired || force_render {
-            last_mouse_x = mouse.x;
-            last_mouse_y = mouse.y;
-            last_buttons = (mouse.left_button, mouse.right_button);
+        let night_light_active = settings_app.night_light;
+        let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
+            || timer_tick_fired || force_render || (mouse_moved && night_light_active);
 
+        if full_redraw {
             taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &settings_app,
@@ -2343,9 +2399,23 @@ pub extern "C" fn _start() -> ! {
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
             );
+        } else if mouse_moved {
+            // İmleç hareketinde uygulamaları ve tüm ekranı yeniden çizmek yerine
+            // sadece önceki ve yeni imleç alanlarını güncelle.
+            if let Some(old_rect) = fb.restore_cursor_background() {
+                fb.flush_rect(old_rect);
+            }
+            compositor.draw_mouse_cursor(&mut fb, mx, my);
+            if let Some(new_rect) = fb.cursor_rect() {
+                fb.flush_rect(new_rect);
+            }
         }
 
-        if !input_occurred && !mouse_moved && !buttons_changed && !force_render {
+        last_mouse_x = mouse.x;
+        last_mouse_y = mouse.y;
+        last_buttons = (mouse.left_button, mouse.right_button);
+
+        if !input_update.mouse && !input_update.keyboard && !mouse_moved && !buttons_changed && !force_render {
             // PIC/IRQ zamanlayıcısı kurulmadığı için HLT kullanılamaz. Kısa
             // kalibre edilmiş I/O beklemesi CPU'ya/QEMU'ya zaman bırakır;
             // giriş en geç 1 ms içinde yeniden yoklanır.

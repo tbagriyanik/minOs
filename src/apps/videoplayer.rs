@@ -116,7 +116,7 @@ impl VideoPlayerApp {
         // Oynatıcı Kontrolleri
         let ctrl_y = scrub_y + 18;
         fb.draw_rect(win_x + 12, ctrl_y, 42, 22, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + 18, ctrl_y + 6, "|| >", Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 18, ctrl_y + 6, "|| >", MinGuiCompositor::text_on(Color::ACCENT_GREEN));
 
         fb.draw_rect(win_x + 58, ctrl_y, 40, 22, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, crate::gui::ui_text("Durdur", "Stop"), Color::TEXT_MAIN);
@@ -128,7 +128,7 @@ impl VideoPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MUTED);
 
         fb.draw_rect(win_x + win_w - 76, ctrl_y, 64, 22, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, crate::gui::ui_text("Tam Ekran", "Full Screen"), Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, crate::gui::ui_text("Tam Ekran", "Full Screen"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
         // Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 250, win_w - 12, 18, Color::TASKBAR_BG);

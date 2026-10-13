@@ -253,7 +253,7 @@ impl FileManagerApp {
         if self.focused_control == 1 {
             fb.draw_rect_outline(open_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW);
         }
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, crate::gui::ui_text("Aç", "Open"), Color::DARK_BG);
+        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(52), win_y + 38, crate::gui::ui_text("Aç", "Open"), MinGuiCompositor::text_on(Color::ACCENT_GREEN));
 
         // Sol Gezinti Paneli (Sidebar) — pencere yüksekliğine göre uyarlanır
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
@@ -315,7 +315,7 @@ impl FileManagerApp {
             };
             MinGuiCompositor::draw_string(fb, list_x + 4, draw_y + 4, file.icon_tag, icon_color);
             let name_width = if list_w > 330 { 104 } else if list_w > 200 { 104 } else { list_w.saturating_sub(56) };
-            MinGuiCompositor::draw_string_clipped(fb, list_x + 48, draw_y + 4, file.display_name(), if is_sel { Color::ACCENT_BLUE } else { Color::TEXT_MAIN },
+            MinGuiCompositor::draw_string_clipped(fb, list_x + 48, draw_y + 4, file.display_name(), if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN },
                 (list_x + 48, draw_y + 2, name_width, ROW_H - 4));
 
             if list_w > 200 {

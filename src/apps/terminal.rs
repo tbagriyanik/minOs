@@ -541,29 +541,34 @@ impl TerminalApp {
         fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BLACK);
 
         // Başlık
-        MinGuiCompositor::draw_string(fb, x + 16, y + 44, crate::gui::ui_text("MinOS Komut İstemi v2.0 (MinShell)", "MinOS Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("MinOS Komut İstemi v2.0 (MinShell)", "MinOS Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
 
         // Çıktı geçmişi: giriş satırı ve durum satırından ayrı bir bölgede çizilir.
         let prompt_y = y + h.saturating_sub(26);
-        let view_lines = h.saturating_sub(86) / 13;
+        let line_height = crate::gui::font_render::text_height(
+            crate::gui::font_render::Face::Geist,
+            14.0 * crate::gui::font_zoom() as f32 / 100.0,
+        ).max(1);
+        let view_lines = h.saturating_sub(86) / (line_height + 1);
         let first = self.out_count.saturating_sub(view_lines).saturating_sub(self.output_scroll);
         let last = (first + view_lines).min(self.out_count);
         let mut ly = y + 60;
         for i in first..last {
-            MinGuiCompositor::draw_string(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color);
-            ly += 13;
+            MinGuiCompositor::draw_terminal_string(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color);
+            ly += line_height + 1;
         }
 
         // Aktif Istem + Girdi
-        MinGuiCompositor::draw_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
-        MinGuiCompositor::draw_string(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN);
 
         // Durum satırı
         let mut status = TextBuf::new();
         status.push_str(crate::gui::ui_text("geçmiş: ", "history: "));
         status.push_usize(self.history_count);
         status.push_str(crate::gui::ui_text(" komut | UTF-8 / TR-Q", " commands | UTF-8 / TR-Q"));
-        MinGuiCompositor::draw_string(fb, x + 16, y + h.saturating_sub(12), status.as_str(), Color::TEXT_MUTED);
+        let status_y = y + h.saturating_sub(line_height + 2);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), Color::TEXT_MUTED);
     }
 }

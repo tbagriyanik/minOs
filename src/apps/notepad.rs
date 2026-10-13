@@ -32,7 +32,7 @@ pub struct NotepadApp {
     // For double‑click detection
     pub last_click_tick: usize,
     pub last_click_pos: (usize, usize),
-    pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Biçim, 4 Yardım
+    pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Yardım
     // Geri al / ileri al (undo/redo) yığın sayacı. Gerçek anlık görüntüler
     // büyük bellek kapladığı için global `UNDO_STACK`/`REDO_STACK` içinde tutulur.
     undo_len: u8,
@@ -492,8 +492,7 @@ impl NotepadApp {
         let english = crate::gui::ui_english();
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, crate::gui::ui_text("Dosya", "File"), Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, crate::gui::ui_text("Düzen", "Edit"), Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, crate::gui::ui_text("Biçim", "Format"), Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 192, win_y + 36, crate::gui::ui_text("Yardım", "Help"), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, crate::gui::ui_text("Yardım", "Help"), Color::TEXT_MUTED);
         // Hızlı Aksiyon Düğmeleri (sağa hizalı)
         fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
@@ -600,15 +599,13 @@ impl NotepadApp {
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
-            let mx = win_x + match self.menu { 1=>8, 2=>68, 3=>128, _=>188 };
+            let mx = win_x + match self.menu { 1=>8, 2=>68, _=>128 };
             let items = match (self.menu, english) {
                 (1, true) => ["New Document", "Save", "Clear", ""],
                 (2, true) => ["Cut", "Copy", "Paste", "Select All"],
-                (3, true) => ["Normal Font (Sharp)", "Compact", "ClearType Font", ""],
                 (_, true) => ["About Notepad", "", "", ""],
                 (1, false) => ["Yeni Belge", "Kaydet", "Temizle", ""],
                 (2, false) => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
-                (3, false) => ["Normal Font (Keskin)", "Sıkıştırılmış", "ClearType Font", ""],
                 _ => ["Not Defteri Hakkında", "", "", ""],
             };
             fb.draw_shadow(mx, win_y + 54, 150, 94, Color::SHADOW);

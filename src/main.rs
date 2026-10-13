@@ -497,7 +497,6 @@ pub extern "C" fn _start() -> ! {
     let mut settings_app = apps::settings::SystemSettings::default();
     settings_app.display_res = (width, height);
     settings_app.load_from_vfs(&fs_mgr.vfs);
-    settings_app.font.apply();
     keyboard.layout = settings_app.keyboard_layout;
     gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
@@ -1296,8 +1295,6 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::language_btn_rect(wx, wy, ww)) {
                                         settings_app.language.toggle();
                                         settings_app.status_msg = gui::ui_text("Arayüz dili Türkçe olarak ayarlandı.", "Interface language set to English.");
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::font_btn_rect(wx, wy, ww)) {
-                                        settings_app.font.cycle();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
@@ -1347,11 +1344,10 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             2 => {
-                                // Not Defteri: Dosya/Düzen/Biçim/Yardım araç çubuğu ve menü aksiyonları
+                                // Not Defteri: Dosya/Düzen/Yardım araç çubuğu ve menü aksiyonları
                                 if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 60 { notepad_app.menu = 1; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 68 && mx < wx + 128 { notepad_app.menu = 2; }
-                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 188 { notepad_app.menu = 3; }
-                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 188 && mx < wx + 250 { notepad_app.menu = 4; }
+                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 190 { notepad_app.menu = 3; }
                                 else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 340 && my >= wy + 54 && my < wy + 150 {
                                     let item = (my.saturating_sub(wy + 54)) / 20;
                                     match (notepad_app.menu, item) {
@@ -1364,12 +1360,8 @@ pub extern "C" fn _start() -> ! {
                                         (2, 1) => notepad_app.copy_selection(),
                                         (2, 2) => notepad_app.paste_clipboard(),
                                         (2, 3) => notepad_app.select_all(),
-                                        // Biçim Menüsü: Font seçenekleri
-                                        (3, 0) => { settings_app.font = apps::settings::FontChoice::Normal; settings_app.font.apply(); },
-                                        (3, 1) => { settings_app.font = apps::settings::FontChoice::Compact; settings_app.font.apply(); },
-                                        (3, 2) => { settings_app.font = apps::settings::FontChoice::ClearType; settings_app.font.apply(); },
                                         // Yardım Menüsü: Hakkında sekmesini aç
-                                        (4, 0) => {
+                                        (3, 0) => {
                                             open_app(&mut compositor, 1);
                                             settings_app.active_tab = 3;
                                         },
@@ -1761,10 +1753,9 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.language.toggle();
                                         settings_app.status_msg = gui::ui_text("Arayüz dili değiştirildi.", "Interface language changed.");
                                     }
-                                    7 => settings_app.font.cycle(),
-                                    8 => settings_app.is_muted = !settings_app.is_muted,
-                                    9 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    10 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); }
+                                    7 => settings_app.is_muted = !settings_app.is_muted,
+                                    8 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); }
                                     _ => {}
                                 },
                                 1 => match settings_app.focused_control {

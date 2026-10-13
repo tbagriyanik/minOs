@@ -1,4 +1,4 @@
-pub mod font;
+pub mod font_render;
 pub mod theme;
 pub mod scrollbar;
 
@@ -36,25 +36,6 @@ impl Color {
     pub const BLACK: u32 = 0x000000;
 }
 
-// ---------------------------------------------------------------------------
-// Yazı Tipi Modu (Font Mode)
-// ---------------------------------------------------------------------------
-/// Aktif yazı tipi modu.
-///
-/// - `Normal` (varsayılan): **keskin** (anti-aliased olmayan) piksel kenarları.
-///   Her glyph pikseli eşikle opak/boş çizilir; net ve klasik görünüm.
-/// - `Compact`: `Normal` gibi keskin, ancak harf aralığı %20 daha dar; uzun
-///   satırların pencereye sığmasını kolaylaştırır.
-/// - `ClearType`: kenarları alt-piksel (subpixel) karışımıyla yumuşatan
-///   anti-aliased mod.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub enum FontMode {
-    Normal,
-    Compact,
-    ClearType,
-}
-
-static FONT_MODE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0); // Normal (default, sharp edges)
 static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(100); // TEST 100%
 
 #[inline(always)]
@@ -84,67 +65,12 @@ pub fn sp(base: usize) -> usize {
 #[inline(always)]
 pub fn item_step(base: usize) -> usize { sp(base) }
 
-#[inline(always)]
-pub fn set_font_mode(mode: FontMode) {
-    FONT_MODE.store(
-        match mode {
-            FontMode::Normal => 0,
-            FontMode::Compact => 1,
-            FontMode::ClearType => 2,
-        },
-        core::sync::atomic::Ordering::Relaxed,
-    );
-}
-
-#[inline(always)]
-pub fn font_mode() -> FontMode {
-    let m = FONT_MODE.load(core::sync::atomic::Ordering::Relaxed);
-    match m {
-        0 => FontMode::Normal,
-        1 => FontMode::Compact,
-        2 => FontMode::ClearType,
-        _ => FontMode::Normal,
-    }
-}
-
-/// Harf aralığı çarpanı (100 = normal). `Compact` modunda daraltılır.
-#[inline(always)]
-pub fn font_spacing_percent() -> usize {
-    match font_mode() {
-        FontMode::Compact => 80,
-        _ => 100,
-    }
-}
-
 static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::sync::atomic::Ordering::Relaxed); }
 pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
 
-/// Glyph atlasının kaynak hücre boyutu (FONT_16X24_ALPHA), 16x24.
-const SRC_CELL_W: usize = 16;
-const SRC_CELL_H: usize = 24;
-
-/// Bir karakter hücresinin temel hücre boyutu (100% zoom, 1x ölçek, px).
-/// Kaynak 12x16 atlasın varsayılan çizim boyutudur; önceki 12x16'ya göre
-/// 2px küçültülmüştür (10x14) — okunaklılık korunurken metin daha derli
-/// toplu yerleşir. Sağdaki/soldaki sütunlar nefes payıdır.
-const CELL_W: usize = 10;
-const CELL_H: usize = 14;
-
-/// Bir karakter hücresi için yatay ilerleme (px).
-#[inline(always)]
-#[allow(dead_code)]
-fn cell_advance(scale: usize) -> usize {
-    CELL_W * scale.max(1)
-}
-
-/// Bir karakter hücresi için görsel genişlik (px).
-#[inline(always)]
-#[allow(dead_code)]
-fn cell_width(scale: usize) -> usize {
-    CELL_W * scale.max(1)
-}
+const BASE_FONT_SIZE: f32 = 14.0;
 
 // ---------------------------------------------------------------------------
 // Metin tamponu (no_std, sabit boyutlu) — sayı/tarih biçimlendirme için.
@@ -902,100 +828,21 @@ impl MinGuiCompositor {
         (r << 16) | (g << 8) | b
     }
 
-    /// Bir karakterin 16x24 kapsama (alpha) glyph'ini döndürür.
-    /// ASCII karakterler önceden hazır `FONT_16X24_ALPHA` atlasından alınır;
-    /// Türkçe/özel karakterler 8x8 tabandan aynı ölçekleme + kenar yumuşatma
-    /// ile üretilir. Tüm glyph'ler anti-aliased olduğundan kenarlar düzgündür.
-    #[inline(always)]
-    fn glyph_for(c: char) -> Option<[[u8; 16]; 24]> {
-        let b = c as u32;
-        if (32..=126).contains(&b) {
-            return Some(font::FONT_16X24_ALPHA[(b - 32) as usize]);
-        }
-        if let Some(g) = font::get_turkish_glyph(c) {
-            return Some(font::expand_glyph_16x24(g));
-        }
-        None
-    }
-
-    /// Bir glyph kapsama (alpha) atlasını hedef piksele ölçekleyerek çizer.
-    ///
-    /// Kaynak atlas `FONT_16X24_ALPHA` (16x24 kapsama). Çizim biçimi aktif
-    /// yazı tipi moduna göre değişir:
-    /// - `Normal` / `Compact`: **keskin** kenarlar — kapsama eşiğe göre
-    ///   opak/boş çizilir (anti-aliasing yok).
-    /// - `ClearType`: yumuşak kenarlar — kapsama değeri arka planla karıştırılır
-    ///   (alt-piksel anti-aliasing).
-    fn blit_glyph(fb: &mut Framebuffer, x: usize, y: usize, glyph: [[u8; 16]; 24], color: u32, scale: usize) {
-        let zoom = font_zoom() as usize;
-        let scale = scale.max(1);
-        let dst_w = ((CELL_W * scale * zoom) + 50) / 100;
-        let dst_h = ((CELL_H * scale * zoom) + 50) / 100;
-        if dst_w == 0 || dst_h == 0 {
-            return;
-        }
-        // Normal ve Compact modlarında kenarlar keskin; yalnızca ClearType
-        // yumuşak (anti-aliased) çizer.
-        let smooth = font_mode() == FontMode::ClearType;
-
-        // Kaynak atlas zaten anti-aliased olduğu için burada ek alt-örnekleme
-        // ortalaması ALINMAZ (o, üst üste binip bulanıklık/pus yapıyordu).
-        // Tek geçişli en-yakın örnekleme kullanılır.
-        for dy in 0..dst_h {
-            let src_y = (dy * SRC_CELL_H / dst_h).min(SRC_CELL_H - 1);
-            for dx in 0..dst_w {
-                let src_x = (dx * SRC_CELL_W / dst_w).min(SRC_CELL_W - 1);
-                let cov_raw = glyph[src_y][src_x];
-                if cov_raw == 0 {
-                    continue;
-                }
-                if smooth {
-                    // ClearType: hafif kontrast uygula ki kenarlar yumuşak ama
-                    // puslu değil. Kapsamayı 128 etrafında genişlet.
-                    let c = cov_raw as i32;
-                    let boosted = ((c - 128) * 3 / 2 + 128).clamp(0, 255) as u8;
-                    let cov = (c as u8).max(boosted);
-                    if cov >= 255 {
-                        fb.put_pixel(x + dx, y + dy, color);
-                    } else {
-                        fb.put_subpixel_text(x + dx, y + dy, color, [cov, cov, cov]);
-                    }
-                } else if cov_raw >= 128 {
-                    // Normal/Compact: eşik üstü tamamen opak -> keskin kenar.
-                    fb.put_pixel(x + dx, y + dy, color);
-                }
-            }
-        }
-    }
-
-    /// Standart metin (1x ölçek, 16px hücre ilerlemesi).
+    /// Inria Sans ile genel arayüz metni.
     pub fn draw_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
-        Self::draw_string_scaled(fb, x, y, text, color, 1);
+        let size = BASE_FONT_SIZE * font_zoom() as f32 / 100.0;
+        font_render::draw(fb, font_render::Face::Inria, x, y, text, color, size);
     }
 
-    /// Geriye dönük uyumluluk: özel harf aralığı.
-    pub fn draw_string_narrow(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, spacing: usize) {
-        let mut cur_x = x;
-        for c in text.chars() {
-            if let Some(g) = Self::glyph_for(c) {
-                Self::blit_glyph(fb, cur_x, y, g, color, 1);
-            }
-            cur_x += (spacing * font_zoom() as usize + 50) / 100 + 1;
-        }
+    /// Monospace metni CMD ekranında Geist Mono ile çizer.
+    pub fn draw_terminal_string(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32) {
+        let size = BASE_FONT_SIZE * font_zoom() as f32 / 100.0;
+        font_render::draw(fb, font_render::Face::Geist, x, y, text, color, size);
     }
 
-    /// Bir hücrenin ölçek/zoom uygulanmış hedef yatay ilerlemesi (px).
-    /// `blit_glyph` içindeki hedef genişlik formülüyle BİREBİR aynıdır; böylece
-    /// `text_width` ile gerçek çizim asla tutarsız olmaz ve metin taşmaz.
-    #[inline(always)]
-    fn scaled_advance(scale: usize) -> usize {
-        let zoom = font_zoom() as usize;
-        // Harf ilerlemesi = hücre genişliği * zoom * mod aralık çarpanı.
-        // Compact modunda çarpan 80'dir; hem çizim hem ölçüm aynı değeri
-        // kullandığından metin genişliği ile çizim birebir tutarlı kalır.
-        let spacing = font_spacing_percent();
-        let base = CELL_W * scale.max(1) * zoom;
-        (((base * spacing) / 100 + 50) / 100).max(1)
+    pub fn terminal_text_width(text: &str) -> usize {
+        let size = BASE_FONT_SIZE * font_zoom() as f32 / 100.0;
+        font_render::text_width(font_render::Face::Geist, text, size)
     }
 
     /// Aktif ölçekte bir metin satırının görsel yüksekliği (px).
@@ -1003,25 +850,13 @@ impl MinGuiCompositor {
     #[inline(always)]
     fn text_height() -> usize {
         let zoom = font_zoom() as usize;
-        ((CELL_H * zoom) + 50) / 100
+        (font_render::text_height(font_render::Face::Inria, BASE_FONT_SIZE) * zoom + 50) / 100
     }
 
-    /// Ölçeklenebilir metin. `scale` = 1..3 (piksel büyütme).
-    /// Aktif yazı tipi moduna göre harf aralığı otomatik ayarlanır. Glyph
-    /// hücresi sağda zaten nefes payı bıraktığı için ekstra harf aralığı
-    /// eklenmez; bu, metnin hesaplanan genişlikle birebir eşleşmesini sağlar.
+    /// Ölçeklenebilir Inria Sans metni.
     pub fn draw_string_scaled(fb: &mut Framebuffer, x: usize, y: usize, text: &str, color: u32, scale: usize) {
-        let scale = scale.max(1);
-        // Tüm modlarda (Normal, Compact, ClearType) ilerleme aynı formülle
-        // hesaplanır; Compact yalnızca `scaled_advance` çarpanını küçültür.
-        let advance = Self::scaled_advance(scale);
-        let mut cur_x = x;
-        for c in text.chars() {
-            if let Some(g) = Self::glyph_for(c) {
-                Self::blit_glyph(fb, cur_x, y, g, color, scale);
-            }
-            cur_x += advance;
-        }
+        let size = BASE_FONT_SIZE * font_zoom() as f32 / 100.0 * scale.max(1) as f32;
+        font_render::draw(fb, font_render::Face::Inria, x, y, text, color, size);
     }
 
     /// Gölgeli metin — renkli başlık/buton zeminlerinde okunabilirliği artırır.
@@ -1038,18 +873,10 @@ impl MinGuiCompositor {
         Self::draw_string_scaled(fb, x, y, text, color, scale);
     }
 
-    /// Merkezlenmiş metin genişliğini hesaplar (px). Aktif font moduna duyarlı.
-    /// `draw_string_scaled` ile birebir tutarlıdır: son karakterin ilerlemesi
-    /// hariç, her karakter tam bir hücre ilerlemesi kadar yer kaplar.
+    /// Inria Sans kullanarak metin genişliğini hesaplar.
     pub fn text_width(text: &str, scale: usize) -> usize {
-        let scale = scale.max(1);
-        let n = text.chars().count();
-        if n == 0 {
-            0
-        } else {
-            // Her modda ilerleme sabittir (Compact yalnızca adımı daraltır).
-            n * Self::scaled_advance(scale)
-        }
+        let zoomed_size = BASE_FONT_SIZE * font_zoom() as f32 / 100.0 * scale.max(1) as f32;
+        font_render::text_width(font_render::Face::Inria, text, zoomed_size)
     }
 
     /// Etiketli, hover durumuna duyarlı düğme (Yuvarlatılmış köşeli).

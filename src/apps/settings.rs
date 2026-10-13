@@ -10,41 +10,6 @@ use crate::fs::vfs::VirtualFileSystem;
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum UiLanguage { Turkish, English }
 impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish => Self::English, Self::English => Self::Turkish }; crate::gui::set_ui_language_english(self.is_english()); } pub fn is_english(&self) -> bool { matches!(self, Self::English) } }
-#[derive(Copy, Clone, PartialEq, Eq)]
-pub enum FontChoice { Normal, Compact, ClearType }
-
-impl FontChoice {
-    /// Seçimi GUI font motoruna uygular (tek gerçek kaynak).
-    pub fn apply(self) {
-        let mode = match self {
-            FontChoice::Normal => crate::gui::FontMode::Normal,
-            FontChoice::Compact => crate::gui::FontMode::Compact,
-            FontChoice::ClearType => crate::gui::FontMode::ClearType,
-        };
-        crate::gui::set_font_mode(mode);
-    }
-
-    pub fn label(self, english: bool) -> &'static str {
-        match (self, english) {
-            (FontChoice::Normal, false) => "Yazı tipi: Normal (Keskin)",
-            (FontChoice::Normal, true) => "Font: Normal (Sharp)",
-            (FontChoice::Compact, false) => "Yazı tipi: Sıkıştırılmış",
-            (FontChoice::Compact, true) => "Font: Compact",
-            (FontChoice::ClearType, false) => "Yazı tipi: ClearType",
-            (FontChoice::ClearType, true) => "Font: ClearType",
-        }
-    }
-
-    pub fn cycle(&mut self) {
-        *self = match self {
-            FontChoice::Normal => FontChoice::Compact,
-            FontChoice::Compact => FontChoice::ClearType,
-            FontChoice::ClearType => FontChoice::Normal,
-        };
-        self.apply();
-    }
-}
-
 /// Yardımcı düğme/geometri tanımları (çizim ve tıklama testi ortak kullanır).
 const TAB_X: usize = 10;
 const TAB_W: usize = 116;
@@ -58,7 +23,6 @@ pub struct SystemSettings {
     pub theme: ThemeId,
     pub keyboard_layout: KeyboardLayout,
     pub language: UiLanguage,
-    pub font: FontChoice,
     pub region: u8,
     pub volume: u8,
     pub is_muted: bool,
@@ -88,7 +52,6 @@ impl SystemSettings {
             theme: ThemeId::VelvetDark,
             keyboard_layout: KeyboardLayout::TurkishQ,
             language: UiLanguage::English,
-            font: FontChoice::Normal,
             region: 0,
             volume: 75,
             is_muted: false,
@@ -120,7 +83,6 @@ impl SystemSettings {
                 "dhcp" => self.dhcp_enabled=val!="0",
                 "keyboard" => self.keyboard_layout=if val=="en" { KeyboardLayout::EnglishUS } else { KeyboardLayout::TurkishQ },
                 "language" => { self.language=if val=="en" { UiLanguage::English } else { UiLanguage::Turkish }; crate::gui::set_ui_language_english(self.language.is_english()); },
-                "font" => { self.font=match val { "compact"=>FontChoice::Compact, "cleartype"=>FontChoice::ClearType, _=>FontChoice::Normal }; self.font.apply(); },
                 "zoom" => { self.zoom=match val { "125"=>125, "150"=>150, _=>100 }; crate::gui::set_font_zoom(self.zoom); },
                 "region" => if let Ok(v)=val.parse::<u8>() { self.region=v.min(2); },
                 "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
@@ -142,9 +104,6 @@ impl SystemSettings {
     }
     pub fn kbd_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(100), win_y + 60, 88, 20)
-    }
-    pub fn font_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 112, 88, 20)
     }
     pub fn language_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(100), win_y + 84, 88, 20)
@@ -198,7 +157,6 @@ impl SystemSettings {
 
     /// Ayarları aktif sistem bileşenlerine uygular.
     pub fn apply_runtime(&self, keyboard: &mut crate::drivers::keyboard::KeyboardState, compositor: &mut MinGuiCompositor, now: &mut DateTime) {
-        self.font.apply();
         crate::gui::set_font_zoom(self.zoom);
         crate::gui::theme::set_theme(self.theme);
         keyboard.layout = self.keyboard_layout;
@@ -255,7 +213,6 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";night_level="); put_num(&mut cfg,&mut n,self.night_light_level);
         put(&mut cfg,&mut n,b";keyboard="); put(&mut cfg,&mut n,if self.keyboard_layout==KeyboardLayout::EnglishUS{b"en"}else{b"tr"});
         put(&mut cfg,&mut n,b";language="); put(&mut cfg,&mut n,if self.language.is_english(){b"en"}else{b"tr"});
-        put(&mut cfg,&mut n,b";font="); put(&mut cfg,&mut n,match self.font{FontChoice::Normal=>&b"normal"[..],FontChoice::Compact=>&b"compact"[..],FontChoice::ClearType=>&b"cleartype"[..]});
         put(&mut cfg,&mut n,b";zoom="); put(&mut cfg,&mut n,match self.zoom { 125=>b"125" as &[u8], 150=>b"150", _=>b"100" });
         put(&mut cfg,&mut n,b";region="); put(&mut cfg,&mut n,&[b'0'+self.region.min(2)]);
         put(&mut cfg,&mut n,b";dhcp="); put(&mut cfg,&mut n,if self.dhcp_enabled{b"1"}else{b"0"});
@@ -275,12 +232,12 @@ impl SystemSettings {
     }
 
     pub fn focus_next_control(&mut self) {
-        // Tab 0 has 11 controls (4 tabs + theme + kbd + lang + font + mute + save + reset)
+        // Tab 0 has 10 controls (4 tabs + theme + kbd + lang + mute + save + reset)
         // Tab 1 has 16 controls (4 tabs + 4 res + 3 zoom + night_light + region + save + reset)
         // Tab 2 has 7 controls (4 tabs + dhcp + save + reset)
         // Tab 3 has 6 controls (4 tabs + save + reset)
         let total = match self.active_tab {
-            0 => 11,
+            0 => 10,
             1 => 16,
             2 => 7,
             _ => 6,
@@ -357,13 +314,6 @@ impl SystemSettings {
                     false,
                 );
                 if self.focused_control == 4 { fb.draw_rect_outline(theme_r.0, theme_r.1, theme_r.2, theme_r.3, Color::ACCENT_YELLOW); }
-
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 116,
-                    self.font.label(self.language.is_english()), Color::ACCENT_YELLOW);
-                let font_r = Self::font_btn_rect(win_x, win_y, win_w);
-                MinGuiCompositor::draw_button(fb, font_r, Color::ACCENT_YELLOW,
-                    if self.language.is_english() { "Change" } else { "Değiştir" }, Color::DARK_BG, false);
-                if self.focused_control == 7 { fb.draw_rect_outline(font_r.0, font_r.1, font_r.2, font_r.3, Color::ACCENT_YELLOW); }
 
                 // --- Tema Palet Seridi (dogrudan secim icin renk ornekleri) ---
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 250,

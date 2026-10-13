@@ -1068,10 +1068,44 @@ pub extern "C" fn _start() -> ! {
         // D) Başlat menüsü açıkken
         if !consumed && compositor.is_start_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+            let search_rect = (menu_x + gui::sp(8), menu_y + gui::sp(48), menu_w - gui::sp(16), gui::sp(24));
             let active_g = compositor.active_start_group;
-            let sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
+            let mut sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
+            if compositor.start_search_len > 0 {
+                let mut matches = [0; 11];
+                let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
+                sub_rect = gui::MinGuiCompositor::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
+            }
+            if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
+                let mut matches = [0; 11];
+                let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
+                for (row, app_id) in matches[..count].iter().enumerate() {
+                    let row_rect = (sub_rect.0 + 6, sub_rect.1 + gui::sp(30) + row * gui::sp(24), sub_rect.2 - 12, gui::sp(22));
+                    if gui::in_rect(mx, my, row_rect) {
+                        open_app(&mut compositor, *app_id);
+                        compositor.is_start_menu_open = false;
+                        compositor.clear_start_search();
+                        break;
+                    }
+                }
+                consumed = true;
+            } else if compositor.start_search_len > 0 {
+                let menu_inside = gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h));
+                if menu_inside && !gui::in_rect(mx, my, search_rect) {
+                    consumed = true;
+                } else if !menu_inside {
+                    compositor.is_start_menu_open = false;
+                    compositor.confirm_shutdown = false;
+                    compositor.confirm_restart = false;
+                    consumed = true;
+                }
+            }
+            if gui::in_rect(mx, my, search_rect) {
+                compositor.clear_start_search();
+                consumed = true;
+            }
 
-            let mut cat_clicked = false;
+            let mut cat_clicked = consumed;
             if gui::in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22)) {
                 open_app(&mut compositor, 1);
                 settings_app.active_tab = 0;
@@ -1721,7 +1755,9 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::ArrowUp => {
                     if compositor.is_start_menu_open {
-                        if compositor.selected_start_item > 0 {
+                        if compositor.start_search_len > 0 {
+                            compositor.move_start_search_selection(settings_app.language.is_english(), false);
+                        } else if compositor.selected_start_item > 0 {
                             compositor.selected_start_item -= 1;
                         }
                     } else if compositor.is_context_menu_open {
@@ -1756,10 +1792,14 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::ArrowDown => {
                     if compositor.is_start_menu_open {
-                        let active_g = compositor.active_start_group;
-                        let count = gui::MENU_GROUPS[active_g].2;
-                        if compositor.selected_start_item + 1 < count {
-                            compositor.selected_start_item += 1;
+                        if compositor.start_search_len > 0 {
+                            compositor.move_start_search_selection(settings_app.language.is_english(), true);
+                        } else {
+                            let active_g = compositor.active_start_group;
+                            let count = gui::MENU_GROUPS[active_g].2;
+                            if compositor.selected_start_item + 1 < count {
+                                compositor.selected_start_item += 1;
+                            }
                         }
                     } else if compositor.is_context_menu_open {
                         let items_len = compositor.context_items().len();
@@ -1833,6 +1873,14 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::EnterKey => {
                     if compositor.is_start_menu_open {
                         enter_char_consumed = true;
+                        if compositor.start_search_len > 0 {
+                            if let Some(app_idx) = compositor.selected_start_search_result(settings_app.language.is_english()) {
+                                open_app(&mut compositor, app_idx);
+                                compositor.is_start_menu_open = false;
+                                compositor.clear_start_search();
+                            }
+                            continue;
+                        }
                         let active_g = compositor.active_start_group;
                         let (_, first, count) = gui::MENU_GROUPS[active_g];
                         let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
@@ -2269,6 +2317,15 @@ pub extern "C" fn _start() -> ! {
                 taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b' && notepad_app.menu != 0 {
                 notepad_app.menu = 0;
+            } else if compositor.is_start_menu_open && ch == '\x08' {
+                if compositor.start_search_len > 0 {
+                    compositor.start_search_len -= 1;
+                    compositor.start_search[compositor.start_search_len] = 0;
+                    compositor.selected_start_item = 0;
+                }
+            } else if compositor.is_start_menu_open && ch.is_ascii_alphanumeric() {
+                if compositor.start_search_len == 0 { compositor.selected_start_item = 0; }
+                compositor.push_start_search(ch);
             } else if compositor.is_start_menu_open && (ch >= '1' && ch <= '9') {
                 let menu_index = (ch as usize) - ('1' as usize);
                 if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {

@@ -445,7 +445,7 @@ pub struct TrayLayout {
 /// Başlat menüsünün toplam yüksekliği.
 pub const MENU_H: usize = 200;
 /// Menü içerik başlangıcı (profil şeridinden sonra).
-pub const MENU_CONTENT_TOP: usize = 40;
+pub const MENU_CONTENT_TOP: usize = 74;
 /// Grup başlığı yüksekliği.
 pub const MENU_GROUP_H: usize = 18;
 /// Menü öğesi yüksekliği (satır aralığı).
@@ -493,10 +493,19 @@ impl MinGuiCompositor {
 
     pub fn start_menu_category_rect(menu_y: usize, group_index: usize) -> (usize, usize, usize, usize) {
         let x = 6 + 6;
-        let y = menu_y + sp(40) + group_index * sp(32) + sp(4);
+        let y = menu_y + sp(74) + group_index * sp(32) + sp(4);
         let w = sp(190) - 12;
         let h = sp(28);
         (x, y, w, h)
+    }
+
+    pub fn start_search_results_rect(menu_y: usize, group_index: usize, tb_y: usize, count: usize) -> (usize, usize, usize, usize) {
+        let sub_w = sp(230);
+        let sub_h = sp(28) + count * sp(24) + sp(6);
+        let sub_x = 6 + sp(190) + 4;
+        let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
+        let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
+        (sub_x, sub_y, sub_w, sub_h)
     }
 
     pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
@@ -504,7 +513,7 @@ impl MinGuiCompositor {
         let count = MENU_GROUPS[group_index.min(3)].2;
         let sub_h = sp(28) + count * sp(24) + sp(6);
         let sub_x = 6 + sp(190) + 4;
-        let cat_y = menu_y + sp(40) + group_index * sp(32) + sp(4);
+        let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
         (sub_x, sub_y, sub_w, sub_h)
     }
@@ -528,6 +537,59 @@ impl MinGuiCompositor {
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
         const APP_IDX: [usize; 11] = [0, 1, 7, 10, 2, 8, 9, 3, 4, 5, 6];
         APP_IDX.get(index).copied()
+    }
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 11]) -> usize {
+        let query = &self.start_search[..self.start_search_len];
+        if query.is_empty() { return 0; }
+        const NAMES: [[&str; 2]; 11] = [
+            ["Dosya Yöneticisi", "File Manager"], ["Sistem Ayarları", "Settings"],
+            ["Not Defteri", "Notepad"], ["Web Tarayıcısı", "Web Browser"],
+            ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
+            ["Video Oynatıcı", "Video Player"], ["Görev Yöneticisi", "Task Manager"],
+            ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
+            ["Komut İstemi", "Terminal"],
+        ];
+        let mut count = 0;
+        for (app_id, names) in NAMES.iter().enumerate() {
+            let localized_name = names[english as usize].as_bytes();
+            let english_name = names[1].as_bytes();
+            if (localized_name.len() >= query.len() && localized_name[..query.len()].eq_ignore_ascii_case(query))
+                || (english_name.len() >= query.len() && english_name[..query.len()].eq_ignore_ascii_case(query))
+            {
+                results[count] = app_id;
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn push_start_search(&mut self, ch: char) {
+        if ch.is_ascii_alphanumeric() && self.start_search_len < self.start_search.len() {
+            self.start_search[self.start_search_len] = ch.to_ascii_lowercase() as u8;
+            self.start_search_len += 1;
+        }
+    }
+
+    pub fn clear_start_search(&mut self) {
+        self.start_search_len = 0;
+        self.start_search.fill(0);
+        self.selected_start_item = 0;
+    }
+
+    pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
+        let mut results = [0; 11];
+        let count = self.start_search_matches(english, &mut results);
+        if down {
+            if count > 0 { self.selected_start_item = (self.selected_start_item + 1).min(count - 1); }
+        } else {
+            self.selected_start_item = self.selected_start_item.saturating_sub(1);
+        }
+    }
+
+    pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
+        let mut results = [0; 11];
+        let count = self.start_search_matches(english, &mut results);
+        (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
     /// Görev çubuğu ilk uygulama sekmesinin X konumu (font ölçeğine duyarlı).
     pub fn taskbar_tab_start() -> usize { sp(118) }
@@ -691,6 +753,8 @@ pub struct MinGuiCompositor {
     pub is_start_menu_open: bool,
     pub active_start_group: usize,
     pub selected_start_item: usize,
+    pub start_search: [u8; 32],
+    pub start_search_len: usize,
     pub is_context_menu_open: bool,
     pub is_alt_tab_open: bool,
     pub is_calendar_open: bool,
@@ -722,6 +786,8 @@ impl MinGuiCompositor {
             is_start_menu_open: true,
             active_start_group: 0,
             selected_start_item: 0,
+            start_search: [0; 32],
+            start_search_len: 0,
             is_context_menu_open: false,
             is_alt_tab_open: false,
             is_calendar_open: false,
@@ -1958,7 +2024,7 @@ impl MinGuiCompositor {
     /// Genişlik ve yükseklik aktif font ölçeğine göre otomatik büyür.
     pub fn start_menu_rect(tb_y: usize) -> (usize, usize, usize, usize) {
         let menu_w = sp(190);
-        let menu_h = sp(MENU_H);
+        let menu_h = sp(MENU_H + 34);
         let menu_x = 6;
         let menu_y = tb_y.saturating_sub(menu_h + 4);
         (menu_x, menu_y, menu_w, menu_h)
@@ -1984,6 +2050,12 @@ impl MinGuiCompositor {
         if settings_hover { fb.draw_rounded_rect(menu_x + menu_w - 34, menu_y + 6, 26, 22, 4, Color::ACCENT_BLUE); }
         // Ayarlar menü öğesinde kullanılan mevcut uygulama simgesini yeniden kullan.
         Self::draw_icon_by_index(fb, menu_x + menu_w - 28, menu_y + 9, Self::window_icon_index(1));
+        let search_rect = (menu_x + sp(8), menu_y + strip_h + sp(4), menu_w - sp(16), sp(24));
+        fb.draw_rounded_rect(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::WINDOW_BG);
+        fb.draw_rounded_rect_outline(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::BORDER);
+        let search_text = if self.start_search_len == 0 { ui_text("Uygulama ara...", "Search apps...") }
+            else { core::str::from_utf8(&self.start_search[..self.start_search_len]).unwrap_or("") };
+        Self::draw_string(fb, search_rect.0 + 6, search_rect.1 + 6, search_text, Color::TEXT_MAIN);
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {
@@ -2023,7 +2095,36 @@ impl MinGuiCompositor {
         }
 
         // Yana Açılır Alt Menü
-        self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
+        if self.start_search_len == 0 {
+            self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
+        } else {
+            let mut results = [0; 11];
+            let count = self.start_search_matches(english, &mut results);
+            let (sub_x, sub_y, sub_w, sub_h) = Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
+            fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
+            fb.draw_rounded_rect(sub_x, sub_y, sub_w, sub_h, 8, Color::TASKBAR_BG);
+            fb.draw_rounded_rect_outline(sub_x, sub_y, sub_w, sub_h, 8, Color::BORDER);
+            fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
+            Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
+
+            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi"];
+            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal"];
+            if count == 0 {
+                Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
+            }
+            for row in 0..count {
+                let r = (sub_x + 6, sub_y + sp(30) + row * sp(24), sub_w - 12, sp(22));
+                let is_selected = row == self.selected_start_item;
+                let is_hovered = in_rect(mx, my, r);
+                if is_selected { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::ACCENT_BLUE); }
+                else if is_hovered { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR); }
+                let app_id = results[row];
+                let app_name = if english { en_names[app_id] } else { names[app_id] };
+                Self::draw_string_clipped(fb, r.0 + 8, r.1 + 5, app_name,
+                    if is_selected { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN },
+                    (r.0 + 4, r.1 + 2, r.2 - 8, r.3 - 4));
+            }
+        }
     }
 
     pub fn render_start_submenu(&self, fb: &mut Framebuffer, menu_y: usize, group_idx: usize, tb_y: usize, english: bool, mx: usize, my: usize) {

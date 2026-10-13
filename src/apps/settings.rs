@@ -461,7 +461,11 @@ impl SystemSettings {
                 if self.focused_control == 4 { fb.draw_rect_outline(dhcp_btn.0, dhcp_btn.1, dhcp_btn.2, dhcp_btn.3, Color::ACCENT_YELLOW); }
             }
             _ => {
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, "MinOS - Sarman Edition (v1.1)", Color::ACCENT_BLUE);
+                let mut version = TextBuf::new();
+                version.push_str("MinOS - Sarman Edition (v");
+                version.push_str(env!("CARGO_PKG_VERSION"));
+                version.push_byte(b')');
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, version.as_str(), Color::ACCENT_BLUE);
                 let mut cpu = TextBuf::new();
                 cpu.push_str("CPU: "); cpu.push_str(cpu_vendor); cpu.push_str(" x86_64 | CPUID ");
                 cpu.push_u2(cpu_logical_count); cpu.push_str(crate::gui::ui_text(" mantıksal işlemci", " logical CPU(s)"));

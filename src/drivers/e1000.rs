@@ -134,19 +134,21 @@ struct E1000Rings {
     tx_bufs: [u8; TX_RING_SIZE * TX_BUF_SIZE],
 }
 
-/// Ring'ler bilinen FİZİKSEL adreste (0x400000 = 4MB); HHDM üzerinden erişilir.
-/// Rehber e1000 sürücüsü bu bölgeyi ethernet çerçeveleri için de kullanıyor.
-const RINGS_PHYS: u64 = 0x0040_0000;
+/// Ring'ler için varsayılan fiziksel adres fallback (0x400000 = 4MB)
+const RINGS_PHYS_DEFAULT: u64 = 0x0040_0000;
+static mut RINGS_ADDR: u64 = RINGS_PHYS_DEFAULT;
+static mut MMIO_BASE: u64 = 0;
+
 /// TX tamponlarının fiziksel başlangıcı (RX tamponlarını çakmasın diye
 /// E1000Rings::tx_bufs ofsetinden hesaplanır).
-pub fn tx_buffer_phys() -> u64 { RINGS_PHYS + core::mem::offset_of!(E1000Rings, tx_bufs) as u64 }
-static mut RINGS_ADDR: u64 = RINGS_PHYS;
-static mut MMIO_BASE: u64 = 0;
+pub fn tx_buffer_phys() -> u64 {
+    unsafe { RINGS_ADDR + core::mem::offset_of!(E1000Rings, tx_bufs) as u64 }
+}
 
 /// Ring yapısına HHDM üzerinden erişim.
 #[inline(always)]
 unsafe fn rings() -> *mut E1000Rings {
-    crate::drivers::phys_to_virt(RINGS_PHYS) as *mut E1000Rings
+    crate::drivers::phys_to_virt(RINGS_ADDR) as *mut E1000Rings
 }
 static E1000_READY: AtomicBool = AtomicBool::new(false);
 
@@ -340,8 +342,12 @@ pub fn poll() {
 // e1000 Init
 // ---------------------------------------------------------------------------
 
-pub fn init() {
+pub fn init(pmm_dma_phys: Option<u64>) {
     unsafe {
+        if let Some(phys) = pmm_dma_phys {
+            RINGS_ADDR = phys;
+        }
+
         // PCI'da e1000'ı bul
         let mut found: Option<(u8, u8, u8, u64)> = None;
         for dev in 0..32u8 {

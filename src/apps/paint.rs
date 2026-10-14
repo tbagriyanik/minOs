@@ -132,18 +132,22 @@ impl PaintApp {
         header[26..28].copy_from_slice(&(1u16).to_le_bytes());
         header[28..30].copy_from_slice(&(24u16).to_le_bytes());
         header[34..38].copy_from_slice(&(image_size as u32).to_le_bytes());
-        let mut image = alloc::vec::Vec::new();
-        image.resize(image_size, 0xFF);
+        // Build the BMP in one buffer. Keeping separate `image` and `bmp`
+        // vectors temporarily needs nearly 3 MiB, larger than the kernel heap.
+        let mut bmp = alloc::vec::Vec::new();
+        if bmp.try_reserve_exact(file_size).is_err() {
+            self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
+            return false;
+        }
+        bmp.resize(file_size, 0xFF);
+        bmp[..54].copy_from_slice(&header);
         for i in 0..self.len {
             let p = self.points[i]; if p.x >= w || p.y >= h { continue; }
-            let base = (h - 1 - p.y) * row_bytes + p.x * 3;
-            image[base] = (p.color & 0xFF) as u8;
-            image[base + 1] = ((p.color >> 8) & 0xFF) as u8;
-            image[base + 2] = ((p.color >> 16) & 0xFF) as u8;
+            let base = 54 + (h - 1 - p.y) * row_bytes + p.x * 3;
+            bmp[base] = (p.color & 0xFF) as u8;
+            bmp[base + 1] = ((p.color >> 8) & 0xFF) as u8;
+            bmp[base + 2] = ((p.color >> 16) & 0xFF) as u8;
         }
-        let mut bmp = alloc::vec::Vec::with_capacity(file_size);
-        bmp.extend_from_slice(&header);
-        bmp.extend_from_slice(&image);
         let ok = vfs.write_file("/root/Documents/cizim.bmp", &bmp);
         self.status_msg = if ok { crate::gui::ui_text("Çizim kaydedildi", "Drawing saved") } else { crate::gui::ui_text("Kaydetme başarısız", "Save failed") };
         ok

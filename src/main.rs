@@ -595,8 +595,21 @@ pub extern "C" fn _start() -> ! {
     let mut fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
-    drivers::hda::init();
-    drivers::e1000::init();
+    // Sabit adresler (0x300000, 0x400000) yerine PMM'den güvenli, çakışmayan bitişik DMA çerçeveleri tahsis et.
+    // HDA DMA Havuzu: ~20 KB (~5 sayfa)
+    let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
+    if hda_dma_phys.is_some() {
+        serial_print("[DMA] HDA ses surucusu icin dinamik DMA havuzu tahsis edildi.\n");
+    }
+    drivers::hda::init(hda_dma_phys);
+
+    // e1000 RX/TX Ring ve Tampon Havuzu: ~132 KB (~33 sayfa)
+    let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
+    if e1000_dma_phys.is_some() {
+        serial_print("[DMA] e1000 ag karti icin dinamik DMA ring havuzu tahsis edildi.\n");
+    }
+    drivers::e1000::init(e1000_dma_phys);
+
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
     drivers::usb::init();

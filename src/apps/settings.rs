@@ -18,7 +18,7 @@ const CONTENT_X: usize = 140;
 
 pub struct SystemSettings {
     // Temel Ayarlar
-    pub active_tab: usize, // 0: Temel, 1: İleri, 2: Ağ, 3: Hakkında
+    pub active_tab: usize, // 0: Genel, 1: Aygıt, 2: Gelişmiş
     pub focused_control: usize,
     pub theme: ThemeId,
     pub keyboard_layout: KeyboardLayout,
@@ -121,13 +121,14 @@ impl SystemSettings {
         (win_x + CONTENT_X + 100, win_y + win_h.saturating_sub(44), 95, 22)
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + (i % 2) * 158, win_y + 198 + (i / 2) * 30, 150, 24)
+        (win_x + CONTENT_X + (i % 2) * 158, win_y + 244 + (i / 2) * 30, 150, 24)
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
-    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+i*72,y+270,66,22) }
-    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+230,y+294,100,24) }
-    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+344,200,10) }
-    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+84,y+360,220,24) }
+    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+i*72,y+314,66,22) }
+    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+230,y+342,100,24) }
+    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+392,200,10) }
+    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+84,y+414,220,24) }
+    pub fn dhcp_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) { (win_x + CONTENT_X, win_y + 244, 130, 22) }
     pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
     pub fn region_name(&self, english: bool) -> &'static str {
         match (self.region, english) { (1,true)=>"UTC", (1,false)=>"UTC", (2,true)=>"US Eastern (UTC-5)", (2,false)=>"ABD Doğu (UTC-5)", (_,true)=>"Türkiye (UTC+3)", (_,false)=>"Türkiye (UTC+3)" }
@@ -232,29 +233,27 @@ impl SystemSettings {
     }
 
     pub fn focus_next_control(&mut self) {
-        // Tab 0 has 10 controls (4 tabs + theme + kbd + lang + mute + save + reset)
-        // Tab 1 has 16 controls (4 tabs + 4 res + 3 zoom + night_light + region + save + reset)
-        // Tab 2 has 7 controls (4 tabs + dhcp + save + reset)
-        // Tab 3 has 6 controls (4 tabs + save + reset)
+        // Sekme 0 (Genel) 10 kontrol: 3 sekme + tema + kbd + dil + sustur + kaydet + sıfırla
+        // Sekme 1 (Aygıt) 19 kontrol: 3 sekme + 4 çözünürlük + 3 yakınlaştırma + 4 bölge + dhcp + kaydet + sıfırla
+        // Sekme 2 (Gelişmiş) 8 kontrol: 3 sekme + mavi ışık + şiddet + tema + kaydet + sıfırla
         let total = match self.active_tab {
             0 => 10,
-            1 => 16,
-            2 => 7,
-            _ => 6,
+            1 => 19,
+            _ => 8,
         };
         self.focused_control = (self.focused_control + 1) % total;
-        if self.focused_control < 4 {
+        if self.focused_control < 3 {
             self.active_tab = self.focused_control;
         }
     }
 
     pub fn select_tab_prev(&mut self) {
-        self.active_tab = (self.active_tab + 3) % 4;
+        self.active_tab = (self.active_tab + 2) % 3;
         self.focused_control = self.active_tab;
     }
 
     pub fn select_tab_next(&mut self) {
-        self.active_tab = (self.active_tab + 1) % 4;
+        self.active_tab = (self.active_tab + 1) % 3;
         self.focused_control = self.active_tab;
     }
 
@@ -505,9 +504,8 @@ impl SystemSettings {
 
         let (save_idx, reset_idx) = match self.active_tab {
             0 => (9, 10),
-            1 => (13, 14),
-            2 => (5, 6),
-            _ => (4, 5),
+            1 => (17, 18),
+            _ => (6, 7),
         };
         if self.focused_control == save_idx { fb.draw_rect_outline(save_r.0, save_r.1, save_r.2, save_r.3, Color::ACCENT_YELLOW); }
         if self.focused_control == reset_idx { fb.draw_rect_outline(reset_r.0, reset_r.1, reset_r.2, reset_r.3, Color::ACCENT_YELLOW); }

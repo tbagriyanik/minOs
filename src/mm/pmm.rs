@@ -165,7 +165,7 @@ impl PhysicalMemoryManager {
         None
     }
 
-    /// Tahsis edilmiş bir fiziksel sayfa çerçevesini geri serbest bırakır.
+    /// Daha önce tahsis edilmiş bir fiziksel çerçeveyi serbest bırakır.
     pub fn free_frame(&mut self, frame_addr: u64) {
         if let Some(frame_idx) = self.address_to_frame_index(frame_addr) {
             let word_idx = frame_idx / 64;
@@ -182,6 +182,74 @@ impl PhysicalMemoryManager {
                     }
                 }
             }
+        }
+    }
+
+    /// DMA aygıtları (ses, ağ kartı vb.) için bitişik (contiguous) fiziksel çerçeveler tahsis eder.
+    pub fn allocate_contiguous_frames(&mut self, count: usize) -> Option<u64> {
+        if count == 0 {
+            return None;
+        }
+        if count == 1 {
+            return self.allocate_frame();
+        }
+
+        let max = self.total_managed_frames;
+        if count > max {
+            return None;
+        }
+
+        // Bitişik boş çerçeve bloğu ara
+        let mut start_idx = 0usize;
+        'outer: while start_idx + count <= max {
+            // Bölge sınırını aşmamalı (aynı UsableRegion içinde kalmalı)
+            let start_addr = self.frame_index_to_address(start_idx)?;
+            let end_addr = start_addr + (count as u64) * PAGE_SIZE;
+
+            // start_addr ve end_addr aynı bölgede mi?
+            let in_same_region = self.usable_regions[..self.region_count].iter().any(|r| {
+                start_addr >= r.base && end_addr <= (r.base + r.length)
+            });
+
+            if !in_same_region {
+                start_idx += 1;
+                continue 'outer;
+            }
+
+            for offset in 0..count {
+                let idx = start_idx + offset;
+                let word_idx = idx / 64;
+                let bit_idx = idx % 64;
+                if word_idx >= BITMAP_WORDS || (self.bitmap[word_idx] & (1u64 << bit_idx)) != 0 {
+                    // Dolu çerçeveye denk gelindi, sonrasından aramaya devam et
+                    start_idx = idx + 1;
+                    continue 'outer;
+                }
+            }
+
+            // Bitişik blok bulundu, tüm bitleri işaretle
+            for offset in 0..count {
+                let idx = start_idx + offset;
+                let word_idx = idx / 64;
+                let bit_idx = idx % 64;
+                self.bitmap[word_idx] |= 1u64 << bit_idx;
+            }
+
+            let total_bytes = (count as u64) * PAGE_SIZE;
+            self.free_memory_bytes = self.free_memory_bytes.saturating_sub(total_bytes);
+            self.used_memory_bytes = self.used_memory_bytes.saturating_add(total_bytes);
+
+            return Some(start_addr);
+        }
+
+        None
+    }
+
+    /// Bitişik tahsis edilen fiziksel çerçeveleri serbest bırakır.
+    pub fn free_contiguous_frames(&mut self, start_addr: u64, count: usize) {
+        for offset in 0..count {
+            let addr = start_addr + (offset as u64) * PAGE_SIZE;
+            self.free_frame(addr);
         }
     }
 }

@@ -151,13 +151,13 @@ pub struct HdaDmaPool {
     pub rirb_wp: u16,
 }
 
-// DMA pool'u bilinen bir FİZİKSEL adrese koy: 0x300000 (3MB). HHDM üzerinden erişilir.
-const DMA_POOL_PHYS: u64 = 0x0030_0000;
-static mut DMA_POOL_ADDR: u64 = DMA_POOL_PHYS;
+// DMA pool fiziksel adresi (PMM tarafindan guvenli bicimde dinamik tahsis edilir, varsayilan 3MB fallback)
+const DMA_POOL_PHYS_DEFAULT: u64 = 0x0030_0000;
+static mut DMA_POOL_ADDR: u64 = DMA_POOL_PHYS_DEFAULT;
 
 // DMA pool'u HHDM sanal adresini döndürür.
 unsafe fn dma_pool_virt() -> u64 {
-    crate::drivers::phys_to_virt(DMA_POOL_PHYS)
+    crate::drivers::phys_to_virt(DMA_POOL_ADDR)
 }
 
 // ---------------------------------------------------------------------------
@@ -250,8 +250,12 @@ fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
 
 /// HDA denetleyicisini tespit eder, MMIO'yu açar, codec'ı konfigüre eder ve
 /// PCM çıkışını stream 4 üzerinde hazır hale getirir.
-pub fn init() {
+pub fn init(pmm_dma_phys: Option<u64>) {
     unsafe {
+        if let Some(phys) = pmm_dma_phys {
+            DMA_POOL_ADDR = phys;
+        }
+
         // 1. PCI'da HDA denetleyicisini ara (bus 0'da)
         let mut found: Option<(u8, u8, u8, u64)> = None;
         for dev in 0..32u8 {
@@ -320,9 +324,8 @@ pub fn init() {
             serial_print("[HDA] IRQ hattı kapatıldı (RTE yazildi).\n");
         }
 
-        // 2. DMA pool'u hazırla (bilinen fiziksel adres, HHDM ile erişilir)
-        let pool_phys = DMA_POOL_PHYS;
-        DMA_POOL_ADDR = pool_phys;
+        // 2. DMA pool'u hazırla (PMM'den tahsis edilmiş veya güvenli fallback fiziksel adres, HHDM ile erişilir)
+        let pool_phys = DMA_POOL_ADDR;
         let pool = dma_pool_virt() as *mut HdaDmaPool;
         (*pool).corb = [0; CORB_SIZE];
         (*pool).rirb = [0; RIRB_SIZE];

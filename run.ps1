@@ -45,7 +45,7 @@ if (-not $qemuExe) {
 Write-Host "[1/3] QEMU Tespit Edildi: $qemuExe" -ForegroundColor Green
 
 # 2. Kernel'i Derle
-Write-Host "[2/3] minOs Çekirdeği Derleniyor (cargo build)..." -ForegroundColor Yellow
+Write-Host "[2/3] minOs Cekirdegi Derleniyor (cargo build)..." -ForegroundColor Yellow
 $cargoArgs = @("build", "-Zjson-target-spec", "--target", "x86_64-minos.json", "-Zbuild-std=core,alloc", "-Zbuild-std-features=compiler-builtins-mem")
 if (-not $Debug) {
     $cargoArgs += "--release"
@@ -96,8 +96,23 @@ $qemuArgs = @(
 
 if ($DiskImage) {
     if (-not (Test-Path -LiteralPath $DiskImage -PathType Leaf)) {
-        Write-Host "[HATA] Disk imajı bulunamadi: $DiskImage" -ForegroundColor Red
-        exit 1
+        Write-Host "[BILGI] Disk imaji bulunamadi ($DiskImage), otomatik olusturuluyor..." -ForegroundColor Yellow
+        $qemuImgCandidates = @(
+            "qemu-img.exe",
+            (Join-Path (Split-Path $qemuExe -Parent) "qemu-img.exe"),
+            "C:\Program Files\qemu\qemu-img.exe"
+        )
+        $qemuImgExe = $null
+        foreach ($p in $qemuImgCandidates) {
+            if (Test-Path $p) { $qemuImgExe = $p; break }
+        }
+        if ($qemuImgExe) {
+            & $qemuImgExe create -f qcow2 $DiskImage 64M
+            Write-Host "[BASARILI] Yeni disk imaji olusturuldu (64MB qcow2): $DiskImage" -ForegroundColor Green
+        } else {
+            Write-Host "[HATA] Disk imaji bulunamadi ve qemu-img tespit edilemedi: $DiskImage" -ForegroundColor Red
+            exit 1
+        }
     }
     $qemuArgs += @("-drive", "file=$DiskImage,format=qcow2,if=ide")
 }

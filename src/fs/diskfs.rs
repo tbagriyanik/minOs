@@ -765,3 +765,126 @@ pub fn file_count() -> usize {
         n
     }
 }
+
+pub fn cd_available() -> bool {
+    unsafe { KIND1 != FsKind::None }
+}
+
+/// FAT32 ortamında dosya siler (dizin girdisini 0xE5 olarak işaretler).
+pub fn delete_file_by_name(name: &str) -> bool {
+    unsafe {
+        if KIND0 != FsKind::Fat32 {
+            return false;
+        }
+        let mut cluster = FAT.root_cluster;
+        let mut guard = 0;
+        while guard < 128 {
+            guard += 1;
+            let base_lba = cluster_to_lba(cluster);
+            for s in 0..FAT.sectors_per_cluster {
+                let sector_lba = base_lba + s;
+                let mut sec = [0u8; 512];
+                if !read_sector_cached(FAT.drive, sector_lba, &mut sec) {
+                    return false;
+                }
+                let mut modified = false;
+                for e in 0..16 {
+                    let off = e * 32;
+                    let first = sec[off];
+                    if first == 0x00 {
+                        return false;
+                    }
+                    if first == 0xE5 {
+                        continue;
+                    }
+                    let attr = sec[off + 11];
+                    if attr == FAT_ATTR_LFN || attr & FAT_ATTR_VOLUME_ID != 0 {
+                        continue;
+                    }
+                    let mut entry = DiskEntry::empty();
+                    push_short_name(&mut entry, &sec[off..off + 11]);
+                    if entry.as_str().eq_ignore_ascii_case(name) {
+                        sec[off] = 0xE5;
+                        modified = true;
+                        break;
+                    }
+                }
+                if modified {
+                    ata::write_sector(FAT.drive, sector_lba, &sec);
+                    refresh();
+                    return true;
+                }
+            }
+            match fat_next(cluster) {
+                Some(next) => cluster = next,
+                None => return false,
+            }
+        }
+        false
+    }
+}
+
+/// FAT32 ortamında dosya içeriğini kaydeder / yazar.
+pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
+    unsafe {
+        if KIND0 != FsKind::Fat32 {
+            return false;
+        }
+        let mut cluster = FAT.root_cluster;
+        let mut guard = 0;
+        while guard < 128 {
+            guard += 1;
+            let base_lba = cluster_to_lba(cluster);
+            for s in 0..FAT.sectors_per_cluster {
+                let sector_lba = base_lba + s;
+                let mut sec = [0u8; 512];
+                if !read_sector_cached(FAT.drive, sector_lba, &mut sec) {
+                    return false;
+                }
+                for e in 0..16 {
+                    let off = e * 32;
+                    let first = sec[off];
+                    if first == 0x00 {
+                        return false;
+                    }
+                    if first == 0xE5 {
+                        continue;
+                    }
+                    let attr = sec[off + 11];
+                    if attr == FAT_ATTR_LFN || attr & FAT_ATTR_VOLUME_ID != 0 {
+                        continue;
+                    }
+                    let mut entry = DiskEntry::empty();
+                    push_short_name(&mut entry, &sec[off..off + 11]);
+                    if entry.as_str().eq_ignore_ascii_case(name) {
+                        let high = le16(&sec, off + 20) as u32;
+                        let low = le16(&sec, off + 26) as u32;
+                        let start_cluster = (high << 16) | low;
+                        if start_cluster >= 2 {
+                            let file_base = cluster_to_lba(start_cluster);
+                            let take = data.len().min(512);
+                            let mut file_sec = [0u8; 512];
+                            file_sec[..take].copy_from_slice(&data[..take]);
+                            ata::write_sector(FAT.drive, file_base, &file_sec);
+
+                            let len_u32 = data.len() as u32;
+                            sec[off + 28] = (len_u32 & 0xFF) as u8;
+                            sec[off + 29] = ((len_u32 >> 8) & 0xFF) as u8;
+                            sec[off + 30] = ((len_u32 >> 16) & 0xFF) as u8;
+                            sec[off + 31] = ((len_u32 >> 24) & 0xFF) as u8;
+                            ata::write_sector(FAT.drive, sector_lba, &sec);
+                            refresh();
+                            return true;
+                        }
+                    }
+                }
+            }
+            match fat_next(cluster) {
+                Some(next) => cluster = next,
+                None => return false,
+            }
+        }
+        false
+    }
+}
+

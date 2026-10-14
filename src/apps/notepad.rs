@@ -33,6 +33,9 @@ pub struct NotepadApp {
     pub last_click_tick: usize,
     pub last_click_pos: (usize, usize),
     pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Yardım
+    pub file_path: [u8; 64],
+    pub file_path_len: usize,
+    pub status_msg: &'static str,
     // Geri al / ileri al (undo/redo) yığın sayacı. Gerçek anlık görüntüler
     // büyük bellek kapladığı için global `UNDO_STACK`/`REDO_STACK` içinde tutulur.
     undo_len: u8,
@@ -127,9 +130,20 @@ impl NotepadApp {
             last_click_tick: 0,
             last_click_pos: (0, 0),
             menu: 0,
+            file_path: [0; 64],
+            file_path_len: 0,
+            status_msg: "",
             undo_len: 0,
             redo_len: 0,
         };
+
+        let default_path = "/root/Documents/notlar.txt";
+        for b in default_path.bytes() {
+            if app.file_path_len < app.file_path.len() {
+                app.file_path[app.file_path_len] = b;
+                app.file_path_len += 1;
+            }
+        }
 
         let initial_text = "Not Defteri\n-----------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
         for c in initial_text.chars() {
@@ -378,6 +392,65 @@ impl NotepadApp {
         }
         self.selection_start = None;
         self.selection_end = None;
+        self.status_msg = "";
+    }
+
+    pub fn open_file(&mut self, path: &str, content: &[u8]) {
+        self.clear();
+        self.file_path_len = 0;
+        for b in path.bytes() {
+            if self.file_path_len < self.file_path.len() {
+                self.file_path[self.file_path_len] = b;
+                self.file_path_len += 1;
+            }
+        }
+        if let Ok(text) = core::str::from_utf8(content) {
+            for c in text.chars() {
+                if self.len < self.buffer.len() {
+                    self.buffer[self.len] = c;
+                    self.len += 1;
+                }
+            }
+        } else {
+            for &b in content.iter().take(self.buffer.len()) {
+                self.buffer[self.len] = b as char;
+                self.len += 1;
+            }
+        }
+        self.cursor = 0;
+        self.status_msg = crate::gui::ui_text("Dosya acildi", "File opened");
+    }
+
+    pub fn save_file(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
+        let path = self.file_path_str();
+        let mut utf8_buf = [0u8; 1024];
+        let mut out_len = 0usize;
+        for i in 0..self.len {
+            let mut char_buf = [0u8; 4];
+            let s = self.buffer[i].encode_utf8(&mut char_buf);
+            let s_bytes = s.as_bytes();
+            if out_len + s_bytes.len() <= utf8_buf.len() {
+                utf8_buf[out_len..out_len + s_bytes.len()].copy_from_slice(s_bytes);
+                out_len += s_bytes.len();
+            } else {
+                break;
+            }
+        }
+        let ok = vfs.write_file(path, &utf8_buf[..out_len]);
+        if ok {
+            self.status_msg = crate::gui::ui_text("Dosya basariyla kaydedildi!", "File saved successfully!");
+        } else {
+            self.status_msg = crate::gui::ui_text("Kaydetme basarisiz!", "Save failed!");
+        }
+        ok
+    }
+
+    pub fn file_path_str(&self) -> &str {
+        if self.file_path_len > 0 {
+            core::str::from_utf8(&self.file_path[..self.file_path_len]).unwrap_or("/root/Documents/notlar.txt")
+        } else {
+            "/root/Documents/notlar.txt"
+        }
     }
 
     /// Tüm metni seçer (Kopyala/Kes/Sil ile birlikte kullanılır).
@@ -578,13 +651,19 @@ impl NotepadApp {
         let status_y = win_y + win_h - status_h() + 4;
         fb.draw_rect(win_x + 6, status_y, win_w - 12, status_h() - 4, Color::TASKBAR_BG);
         let mut status = TextBuf::new();
+        if !self.status_msg.is_empty() {
+            status.push_str(self.status_msg);
+            status.push_str("  |  ");
+        }
+        status.push_str(self.file_path_str());
+        status.push_str("  |  ");
         status.push_str(crate::gui::ui_text("Satir: ", "Line: "));
         status.push_u2(((sy + 1).min(total_lines)) as u32);
         status.push_byte(b'/');
         status.push_u2(total_lines.min(99) as u32);
         status.push_str("  |  " );
         status.push_u2(self.len.min(99) as u32);
-        status.push_str(crate::gui::ui_text(" karakter  |  UTF-8 / TR-Q", " chars  |  UTF-8 / TR-Q"));
+        status.push_str(crate::gui::ui_text(" karakter", " chars"));
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, status.as_str(), Color::TEXT_MUTED);
 
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin

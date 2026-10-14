@@ -53,7 +53,7 @@ Write-Host "[3/4] minOs Cekirdegi Paketleniyor..." -ForegroundColor Yellow
 if (Test-Path "target\x86_64-minos\release\minos-kernel") {
     Copy-Item "target\x86_64-minos\release\minos-kernel" -Destination "$OutputDir\boot\minos-kernel"
 } else {
-    Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy çekirdek dosyasi yerlestiriliyor." -ForegroundColor Magenta
+    Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy Cekirdegi dosyasi yerlestiriliyor." -ForegroundColor Magenta
     Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "minOs Kernel Binary"
 }
 

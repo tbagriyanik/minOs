@@ -1,52 +1,52 @@
-#![allow(dead_code)]
+#![allow(dead_code, static_mut_refs)]
 
-//! Basit ATA/ATAPI (PATA) sürücüsü — PIO modunda 28-bit LBA okuma.
+//! ATA/ATAPI (PATA/IDE) ve Depolama Sürücüsü — PIO Modunda LBA28/LBA48 Okuma & Yazma.
 //!
-//! Amaç: birincil kanalda bulunan USB depolama aygıtını (QEMU `usb-storage`)
-//! ve ATAPI CD-ROM sürücüsünü okuyabilmek. Bu, minOs'a USB bellek içeriğini
-//! dosya listesinde gösterebilme yeteneği kazandırır.
+//! Bu sürücü Primary (0x1F0) ve Secondary (0x170) kanallarındaki tüm aygıtları tarar:
+//! - Sürücü 0: Primary Master   (HDD veya USB Mass Storage)
+//! - Sürücü 1: Primary Slave    (HDD veya ATAPI CD-ROM)
+//! - Sürücü 2: Secondary Master (HDD veya ATAPI CD-ROM)
+//! - Sürücü 3: Secondary Slave  (HDD veya ATAPI CD-ROM)
 //!
-//! * Master (sürücü 0) → USB bellek / FAT32 bölümü
-//! * Slave  (sürücü 1) → ATAPI CD-ROM
-//!
-//! Disk erişimi yalnızca PIO (polling) kullanır; DMA ve kesme yoktur.
+//! Desteklenen Özellikler:
+//! * Sektör Okuma (CMD_READ_SECTORS - 0x20)
+//! * Sektör Yazma (CMD_WRITE_SECTORS - 0x30)
+//! * Önbellek Boşaltma (CMD_FLUSH_CACHE - 0xE7)
+//! * ATAPI Paket Okuma (SFF-8020i / SCSI 10-byte READ - 0x28)
+//! * Aygıt Tanımlama (HDD, USB Flash, CD/DVD-ROM ayrımı)
 
 use core::arch::asm;
 
 // ---------------------------------------------------------------------------
-// I/O portları (birincil kanal)
+// Komut ve Durum Sabitleri
 // ---------------------------------------------------------------------------
-const IO_DATA: u16 = 0x1F0;
-const IO_ERROR: u16 = 0x1F1;
-const IO_SECCOUNT: u16 = 0x1F2;
-const IO_LBA_LO: u16 = 0x1F3;
-const IO_LBA_MID: u16 = 0x1F4;
-const IO_LBA_HI: u16 = 0x1F5;
-const IO_DRIVE: u16 = 0x1F6;
-const IO_STATUS: u16 = 0x1F7;
-const IO_COMMAND: u16 = 0x1F7;
-const IO_ALT_STATUS: u16 = 0x3F6;
-const IO_CONTROL: u16 = 0x3F6;
+pub const CMD_READ_SECTORS: u8 = 0x20;
+pub const CMD_WRITE_SECTORS: u8 = 0x30;
+pub const CMD_IDENTIFY: u8 = 0xEC;
+pub const CMD_PACKET: u8 = 0xA0;
+pub const CMD_IDENTIFY_PACKET: u8 = 0xA1;
+pub const CMD_FLUSH_CACHE: u8 = 0xE7;
 
-const CMD_READ_SECTORS: u8 = 0x20;
-const CMD_IDENTIFY: u8 = 0xEC;
-const CMD_PACKET: u8 = 0xA0;
-const CMD_IDENTIFY_PACKET: u8 = 0xA1;
+pub const ST_BSY: u8 = 0x80;
+pub const ST_DRDY: u8 = 0x40;
+pub const ST_DRQ: u8 = 0x08;
+pub const ST_ERR: u8 = 0x01;
 
-const ST_BSY: u8 = 0x80;
-const ST_DRDY: u8 = 0x40;
-const ST_DRQ: u8 = 0x08;
-const ST_ERR: u8 = 0x01;
-
-const SECTOR_SIZE: usize = 512;
-
-/// Bir LBA'nın MAC adresi gibi dönen "failed packet" durumunu engellemek için
-/// PIO döngülerinde üst sınır.
+pub const SECTOR_SIZE: usize = 512;
 const SPIN_LIMIT: usize = 2_000_000;
 
 // ---------------------------------------------------------------------------
-// Port yardımcıları
+// Port Seçimi (Primary ve Secondary Kanal Desteği)
 // ---------------------------------------------------------------------------
+
+#[inline]
+pub fn io_ports_for_drive(drive: u8) -> (u16, u16) {
+    if drive < 2 {
+        (0x1F0, 0x3F6)
+    } else {
+        (0x170, 0x376)
+    }
+}
 
 #[inline]
 fn inb(port: u16) -> u8 {
@@ -72,45 +72,67 @@ fn outw(port: u16, v: u16) {
     unsafe { asm!("out dx, ax", in("dx") port, in("ax") v, options(nomem, nostack, preserves_flags)); }
 }
 
-/// 400ns ATA gecikmesi: alternatif durum portunu 4 kez oku.
 #[inline]
-fn io_delay() {
+fn io_delay(ctrl: u16) {
     for _ in 0..4 {
-        let _ = inb(IO_ALT_STATUS);
+        let _ = inb(ctrl);
     }
 }
 
 // ---------------------------------------------------------------------------
-// Aygıt durumu
+// Aygıt Türleri ve Durumu
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DeviceKind {
     None,
     Ata,
     Atapi,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DriveRole {
+    Unknown,
+    HardDisk,
+    UsbStorage,
+    CdRom,
+}
+
 #[derive(Clone, Copy)]
 pub struct Device {
     pub kind: DeviceKind,
-    /// ATA için toplam sektör sayısı (512 B).
+    pub role: DriveRole,
     pub sectors: u64,
-    /// ATA için model adı (40 bayt, ASCII).
     pub model: [u8; 40],
     pub model_len: usize,
 }
 
 impl Device {
-    const fn empty() -> Self {
-        Self { kind: DeviceKind::None, sectors: 0, model: [0; 40], model_len: 0 }
+    pub const fn empty() -> Self {
+        Self {
+            kind: DeviceKind::None,
+            role: DriveRole::Unknown,
+            sectors: 0,
+            model: [0; 40],
+            model_len: 0,
+        }
+    }
+
+    pub fn model_str(&self) -> &str {
+        core::str::from_utf8(&self.model[..self.model_len]).unwrap_or("")
+    }
+
+    pub fn size_mb(&self) -> u64 {
+        if self.kind == DeviceKind::Atapi {
+            (self.sectors * 2048) / (1024 * 1024)
+        } else {
+            (self.sectors * 512) / (1024 * 1024)
+        }
     }
 }
 
-static mut DEV0: Device = Device::empty();
-static mut DEV1: Device = Device::empty();
+pub static mut DEVICES: [Device; 4] = [Device::empty(); 4];
 static mut INITIALIZED: bool = false;
-/// CD-ROM'dan okunan son ISOLINUX/El Torito sektör bilgisi (teşhis için).
 static mut LAST_DISK_ERROR: u8 = 0;
 
 fn serial(s: &str) {
@@ -119,7 +141,7 @@ fn serial(s: &str) {
     }
 }
 
-fn print_sectors(mut v: u64) {
+fn print_num(mut v: u64) {
     if v == 0 {
         serial("0");
         return;
@@ -139,20 +161,21 @@ fn print_sectors(mut v: u64) {
 }
 
 // ---------------------------------------------------------------------------
-// Aygıt seçimi ve yoklama
+// Aygıt Seçimi ve Yoklama
 // ---------------------------------------------------------------------------
 
 fn select(drive: u8) {
-    // LBA biti (0x40) + master/slave seçimi
-    outb(IO_DRIVE, 0xA0 | ((drive & 1) << 4));
-    io_delay();
+    let (base, ctrl) = io_ports_for_drive(drive);
+    let slave_bit = (drive & 1) << 4;
+    outb(base + 6, 0xA0 | slave_bit);
+    io_delay(ctrl);
 }
 
-/// Seçili aygıtın hazır olmasını bekler (BSY temiz + DRDY set).
-fn wait_ready() -> bool {
+fn wait_ready(drive: u8) -> bool {
+    let (base, _ctrl) = io_ports_for_drive(drive);
     let mut spins = 0;
     loop {
-        let status = inb(IO_STATUS);
+        let status = inb(base + 7);
         if status & ST_BSY == 0 && status & ST_DRDY != 0 {
             return true;
         }
@@ -167,17 +190,17 @@ fn wait_ready() -> bool {
     }
 }
 
-/// DRQ (veri hazır) bekler; hata durumunda son hata kodunu saklar.
-fn wait_drq() -> bool {
+fn wait_drq(drive: u8) -> bool {
+    let (base, _ctrl) = io_ports_for_drive(drive);
     let mut spins = 0;
     loop {
-        let status = inb(IO_STATUS);
+        let status = inb(base + 7);
         if status & ST_BSY == 0 {
             if status & ST_DRQ != 0 {
                 return true;
             }
             if status & ST_ERR != 0 {
-                unsafe { LAST_DISK_ERROR = inb(IO_ERROR); }
+                unsafe { LAST_DISK_ERROR = inb(base + 1); }
                 return false;
             }
         }
@@ -189,44 +212,56 @@ fn wait_drq() -> bool {
     }
 }
 
-/// ATA IDENTIFY komutu ile aygıt bilgisini doldurur.
+fn contains_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    let lower = |b: u8| if b.is_ascii_uppercase() { b + 32 } else { b };
+    for i in 0..=haystack.len() - needle.len() {
+        let mut matched = true;
+        for j in 0..needle.len() {
+            if lower(haystack[i + j]) != lower(needle[j]) {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            return true;
+        }
+    }
+    false
+}
+
 fn identify(drive: u8, packet: bool) -> Device {
     let mut dev = Device::empty();
+    let (base, ctrl) = io_ports_for_drive(drive);
     select(drive);
-    outb(IO_SECCOUNT, 0);
-    outb(IO_LBA_LO, 0);
-    outb(IO_LBA_MID, 0);
-    outb(IO_LBA_HI, 0);
-    outb(IO_COMMAND, if packet { CMD_IDENTIFY_PACKET } else { CMD_IDENTIFY });
-    io_delay();
+    outb(base + 2, 0);
+    outb(base + 3, 0);
+    outb(base + 4, 0);
+    outb(base + 5, 0);
+    outb(base + 7, if packet { CMD_IDENTIFY_PACKET } else { CMD_IDENTIFY });
+    io_delay(ctrl);
 
-    let status = inb(IO_STATUS);
-    // ATA/ATAPI ayrımı: hiç aygıt yoksa status 0 (ya da 0xFF) okunur.
+    let status = inb(base + 7);
     if status == 0 || status == 0xFF {
         return dev;
     }
-    if !wait_drq() {
+    if !wait_drq(drive) {
         return dev;
     }
 
     let mut data = [0u16; 256];
     for word in data.iter_mut() {
-        *word = inw(IO_DATA);
-    }
-
-    // Kelime 0: 0x8000 | 0xC33 olmalı (atanmış bir ATA/ATAPI aygıtı)
-    if data[0] != 0x8000 && data[0] != 0xC33 && data[0] != 0x848A {
-        // Bazı aygıtlar farklı imza verir; yine de devam et.
+        *word = inw(base + 0);
     }
 
     dev.kind = if packet { DeviceKind::Atapi } else { DeviceKind::Ata };
 
     if !packet {
-        // Kelime 60/61: 28-bit sektör sayısı (düşük/yüksek kelime)
         let lo = data[60] as u64;
         let hi = data[61] as u64;
         dev.sectors = (hi << 16) | lo;
-        // Kelime 83 bit 10 → 48-bit LBA desteği
         let caps = data[83];
         if caps & (1 << 10) != 0 {
             let lba48 = [
@@ -242,7 +277,6 @@ fn identify(drive: u8, packet: bool) -> Device {
         }
     }
 
-    // Kelime 27..46: model adı (byte-swap gerekir)
     let mut n = 0;
     for w in 27..47 {
         let word = data[w];
@@ -257,82 +291,116 @@ fn identify(drive: u8, packet: bool) -> Device {
             n += 1;
         }
     }
-    // Sondaki boşlukları kırp
     while n > 0 && dev.model[n - 1] == b' ' {
         n -= 1;
     }
     dev.model_len = n;
+
+    // Aygıt rolünü tespit et
+    let model_bytes = &dev.model[..dev.model_len];
+    if dev.kind == DeviceKind::Atapi || contains_case_insensitive(model_bytes, b"cd-rom") || contains_case_insensitive(model_bytes, b"dvd") {
+        dev.role = DriveRole::CdRom;
+    } else if contains_case_insensitive(model_bytes, b"usb") || contains_case_insensitive(model_bytes, b"flash") || contains_case_insensitive(model_bytes, b"sandisk") {
+        dev.role = DriveRole::UsbStorage;
+    } else if contains_case_insensitive(model_bytes, b"harddisk") || contains_case_insensitive(model_bytes, b"ata") || contains_case_insensitive(model_bytes, b"qemu") {
+        dev.role = DriveRole::HardDisk;
+    } else if dev.kind == DeviceKind::Ata {
+        dev.role = if drive == 0 { DriveRole::UsbStorage } else { DriveRole::HardDisk };
+    }
+
     dev
 }
 
 // ---------------------------------------------------------------------------
-// Genel API
+// Sürücü Başlatma ve Yönetim API
 // ---------------------------------------------------------------------------
 
 pub fn init() {
     unsafe {
-        // Kesmeleri kapat (polling kullanıyoruz)
-        outb(IO_CONTROL, 0x02); // nIEN
         if INITIALIZED {
             return;
         }
-        DEV0 = identify(0, false);
-        if DEV0.kind == DeviceKind::None {
-            // Master bir ATAPI (CD-ROM) olabilir
-            DEV0 = identify(0, true);
-        }
-        DEV1 = identify(1, false);
-        if DEV1.kind == DeviceKind::None {
-            DEV1 = identify(1, true);
-        }
+        // Kesmeleri kapat (polling kullanıyoruz)
+        outb(0x3F6, 0x02);
+        outb(0x376, 0x02);
 
-        serial("[ATA] kanal taramasi:\n");
-        serial("[ATA] master tur: ");
-        serial(match DEV0.kind {
-            DeviceKind::None => "yok",
-            DeviceKind::Ata => "ATA",
-            DeviceKind::Atapi => "ATAPI",
-        });
-        serial("  sektor: ");
-        print_sectors(DEV0.sectors);
-        serial("  model: ");
-        let m = core::str::from_utf8(&DEV0.model[..DEV0.model_len]).unwrap_or("");
-        serial(m);
-        serial("\n[ATA] slave tur: ");
-        serial(match DEV1.kind {
-            DeviceKind::None => "yok",
-            DeviceKind::Ata => "ATA",
-            DeviceKind::Atapi => "ATAPI",
-        });
-        serial("  model: ");
-        let m1 = core::str::from_utf8(&DEV1.model[..DEV1.model_len]).unwrap_or("");
-        serial(m1);
-        serial("\n");
+        serial("[ATA] 4 kanalli IDE/ATA/ATAPI veri yolu taramasi baslatildi...\n");
+
+        for drive in 0..4u8 {
+            let mut dev = identify(drive, false);
+            if dev.kind == DeviceKind::None {
+                dev = identify(drive, true);
+            }
+            DEVICES[drive as usize] = dev;
+
+            if dev.kind != DeviceKind::None {
+                serial("[ATA] Surucu ");
+                print_num(drive as u64);
+                serial(": ");
+                match dev.kind {
+                    DeviceKind::Ata => serial("ATA "),
+                    DeviceKind::Atapi => serial("ATAPI "),
+                    DeviceKind::None => {}
+                }
+                match dev.role {
+                    DriveRole::HardDisk => serial("[Sabit Disk] "),
+                    DriveRole::UsbStorage => serial("[USB Bellek] "),
+                    DriveRole::CdRom => serial("[CD-ROM] "),
+                    DriveRole::Unknown => serial("[Bilinmeyen] "),
+                }
+                serial("Model: ");
+                serial(dev.model_str());
+                serial("  Kapasite: ");
+                print_num(dev.size_mb());
+                serial(" MB\n");
+            }
+        }
 
         INITIALIZED = true;
     }
 }
 
-/// Master sürücünün türü.
 pub fn master_kind() -> DeviceKind {
-    unsafe { DEV0.kind }
+    unsafe { DEVICES[0].kind }
 }
 
-/// Slave sürücünün türü.
 pub fn slave_kind() -> DeviceKind {
-    unsafe { DEV1.kind }
+    unsafe { DEVICES[1].kind }
 }
 
-/// Master ATA aygıtının toplam sektör sayısı (512 B).
 pub fn master_sector_count() -> u64 {
-    unsafe { DEV0.sectors }
+    unsafe { DEVICES[0].sectors }
 }
 
-/// Bir aygıtın model adı (kesme olmadan güvenli erişim).
 pub fn model_of(drive: u8) -> &'static [u8] {
     unsafe {
-        let dev = if drive == 0 { &*(&raw const DEV0) } else { &*(&raw const DEV1) };
-        &dev.model[..dev.model_len]
+        if (drive as usize) < DEVICES.len() {
+            &DEVICES[drive as usize].model[..DEVICES[drive as usize].model_len]
+        } else {
+            &[]
+        }
+    }
+}
+
+pub fn device(drive: u8) -> Option<Device> {
+    unsafe {
+        if (drive as usize) < DEVICES.len() && DEVICES[drive as usize].kind != DeviceKind::None {
+            Some(DEVICES[drive as usize])
+        } else {
+            None
+        }
+    }
+}
+
+pub fn drive_count() -> usize {
+    unsafe {
+        let mut count = 0;
+        for d in DEVICES.iter() {
+            if d.kind != DeviceKind::None {
+                count += 1;
+            }
+        }
+        count
     }
 }
 
@@ -340,11 +408,16 @@ pub fn last_error() -> u8 {
     unsafe { LAST_DISK_ERROR }
 }
 
-/// `drive` aygıtından `lba` sektörünü `buf` (512 bayt) içine okur.
+// ---------------------------------------------------------------------------
+// Sektör Okuma (PIO Mode)
+// ---------------------------------------------------------------------------
+
 pub fn read_sector(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
+    if drive >= 4 {
+        return false;
+    }
     unsafe {
-        let dev = if drive == 0 { &*(&raw const DEV0) } else { &*(&raw const DEV1) };
-        if dev.kind != DeviceKind::Ata {
+        if DEVICES[drive as usize].kind != DeviceKind::Ata {
             return false;
         }
     }
@@ -353,40 +426,41 @@ pub fn read_sector(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
             return true;
         }
         if attempt < 2 {
-            // Yeniden dene: hata kaydını temizle ve 400ns bekle
-            let _ = inb(IO_ERROR);
-            io_delay();
+            let (base, ctrl) = io_ports_for_drive(drive);
+            let _ = inb(base + 1);
+            io_delay(ctrl);
         }
     }
     false
 }
 
 fn read_sector_once(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
+    let (base, ctrl) = io_ports_for_drive(drive);
     select(drive);
-    if !wait_ready() {
+    if !wait_ready(drive) {
         return false;
     }
-    outb(IO_SECCOUNT, 1);
-    outb(IO_LBA_LO, (lba & 0xFF) as u8);
-    outb(IO_LBA_MID, ((lba >> 8) & 0xFF) as u8);
-    outb(IO_LBA_HI, ((lba >> 16) & 0xFF) as u8);
-    outb(IO_DRIVE, 0xE0 | ((drive & 1) << 4) | (((lba >> 24) & 0x0F) as u8));
-    outb(IO_COMMAND, CMD_READ_SECTORS);
-    io_delay();
+    let slave_bit = (drive & 1) << 4;
+    outb(base + 2, 1);
+    outb(base + 3, (lba & 0xFF) as u8);
+    outb(base + 4, ((lba >> 8) & 0xFF) as u8);
+    outb(base + 5, ((lba >> 16) & 0xFF) as u8);
+    outb(base + 6, 0xE0 | slave_bit | (((lba >> 24) & 0x0F) as u8));
+    outb(base + 7, CMD_READ_SECTORS);
+    io_delay(ctrl);
 
-    if !wait_drq() {
+    if !wait_drq(drive) {
         return false;
     }
     for i in 0..SECTOR_SIZE / 2 {
-        let word = inw(IO_DATA);
+        let word = inw(base + 0);
         buf[i * 2] = (word & 0xFF) as u8;
         buf[i * 2 + 1] = (word >> 8) as u8;
     }
-    io_delay();
+    io_delay(ctrl);
     true
 }
 
-/// Arka arkaya `count` sektör okur; okunan sektör sayısını döner.
 pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize {
     let max = buf.len() / SECTOR_SIZE;
     let n = count.min(max);
@@ -401,59 +475,141 @@ pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize 
 }
 
 // ---------------------------------------------------------------------------
-// ATAPI (SFF-8020i) — 12 baytlık paket komutları
+// Sektör Yazma (PIO Mode - Dosya Kaydetme & Değiştirme)
+// ---------------------------------------------------------------------------
+
+pub fn write_sector(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
+    if drive >= 4 {
+        return false;
+    }
+    unsafe {
+        if DEVICES[drive as usize].kind != DeviceKind::Ata {
+            return false;
+        }
+    }
+    for attempt in 0..3 {
+        if write_sector_once(drive, lba, buf) {
+            return true;
+        }
+        if attempt < 2 {
+            let (base, ctrl) = io_ports_for_drive(drive);
+            let _ = inb(base + 1);
+            io_delay(ctrl);
+        }
+    }
+    false
+}
+
+fn write_sector_once(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
+    let (base, ctrl) = io_ports_for_drive(drive);
+    select(drive);
+    if !wait_ready(drive) {
+        return false;
+    }
+    let slave_bit = (drive & 1) << 4;
+    outb(base + 2, 1);
+    outb(base + 3, (lba & 0xFF) as u8);
+    outb(base + 4, ((lba >> 8) & 0xFF) as u8);
+    outb(base + 5, ((lba >> 16) & 0xFF) as u8);
+    outb(base + 6, 0xE0 | slave_bit | (((lba >> 24) & 0x0F) as u8));
+    outb(base + 7, CMD_WRITE_SECTORS);
+    io_delay(ctrl);
+
+    if !wait_drq(drive) {
+        return false;
+    }
+
+    // 256 kelime (512 bayt) yazımı
+    for i in 0..SECTOR_SIZE / 2 {
+        let word = (buf[i * 2] as u16) | ((buf[i * 2 + 1] as u16) << 8);
+        outw(base + 0, word);
+    }
+    io_delay(ctrl);
+
+    // Yazım tamamlanmasını bekle
+    let mut spins = 0;
+    while spins < SPIN_LIMIT {
+        let status = inb(base + 7);
+        if status & ST_BSY == 0 {
+            if status & ST_ERR != 0 {
+                return false;
+            }
+            break;
+        }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+
+    // Önbelleği diske temizle
+    outb(base + 7, CMD_FLUSH_CACHE);
+    io_delay(ctrl);
+    true
+}
+
+pub fn write_sectors(drive: u8, lba: u32, count: usize, buf: &[u8]) -> usize {
+    let max = buf.len() / SECTOR_SIZE;
+    let n = count.min(max);
+    let mut sector = [0u8; SECTOR_SIZE];
+    for i in 0..n {
+        sector.copy_from_slice(&buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE]);
+        if !write_sector(drive, lba + i as u32, &sector) {
+            return i;
+        }
+    }
+    n
+}
+
+// ---------------------------------------------------------------------------
+// ATAPI (SFF-8020i / SCSI 10-byte Packet) — CD/DVD-ROM Okuma
 // ---------------------------------------------------------------------------
 
 const CMD_READ_10: u8 = 0x28;
 const CMD_READ_CAPACITY: u8 = 0x25;
 
-/// ATAPI aygıta paket komut gönderir ve `buf` ile veri alır.
 fn atapi_packet(drive: u8, packet: &[u8; 12], buf: &mut [u8]) -> bool {
+    let (base, ctrl) = io_ports_for_drive(drive);
     select(drive);
-    if !wait_ready() {
+    if !wait_ready(drive) {
         return false;
     }
-    outb(IO_SECCOUNT, 0);
-    outb(IO_LBA_LO, (buf.len() & 0xFF) as u8);
-    outb(IO_LBA_MID, ((buf.len() >> 8) & 0xFF) as u8);
-    outb(IO_LBA_HI, 0);
-    outb(IO_COMMAND, CMD_PACKET);
-    io_delay();
+    outb(base + 2, 0);
+    outb(base + 3, (buf.len() & 0xFF) as u8);
+    outb(base + 4, ((buf.len() >> 8) & 0xFF) as u8);
+    outb(base + 5, 0);
+    outb(base + 7, CMD_PACKET);
+    io_delay(ctrl);
 
-    if !wait_drq() {
+    if !wait_drq(drive) {
         return false;
     }
     for i in 0..6 {
         let word = ((packet[i * 2] as u16) << 8) | packet[i * 2 + 1] as u16;
-        outw(IO_DATA, word);
+        outw(base + 0, word);
     }
-    io_delay();
+    io_delay(ctrl);
 
-    if !wait_drq() {
+    if !wait_drq(drive) {
         return false;
     }
     for i in 0..buf.len() / 2 {
-        let word = inw(IO_DATA);
+        let word = inw(base + 0);
         buf[i * 2] = (word & 0xFF) as u8;
         buf[i * 2 + 1] = (word >> 8) as u8;
     }
-    io_delay();
+    io_delay(ctrl);
     true
 }
 
-/// ATAPI aygıtın sektör sayısını (2048 B) döner; başarısızlıkta None.
 pub fn atapi_capacity(drive: u8) -> Option<u32> {
     let packet = [CMD_READ_CAPACITY, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
     let mut data = [0u8; 8];
     if !atapi_packet(drive, &packet, &mut data) {
         return None;
     }
-    // Son LBA (big-endian) + blok uzunluğu
     let last = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
     Some(last.saturating_add(1))
 }
 
-/// ATAPI aygıttan 2048 baytlık bir blok okur (ISO9660 için).
 pub fn atapi_read_block(drive: u8, lba: u32, buf: &mut [u8; 2048]) -> bool {
     let packet = [
         CMD_READ_10,
@@ -464,7 +620,7 @@ pub fn atapi_read_block(drive: u8, lba: u32, buf: &mut [u8; 2048]) -> bool {
         (lba & 0xFF) as u8,
         0,
         0,
-        1, // transfer length = 1 blok
+        1, // 1 blok = 2048 B
         0,
         0,
         0,
@@ -474,8 +630,9 @@ pub fn atapi_read_block(drive: u8, lba: u32, buf: &mut [u8; 2048]) -> bool {
             return true;
         }
         if attempt < 2 {
-            let _ = inb(IO_ERROR);
-            io_delay();
+            let (base, ctrl) = io_ports_for_drive(drive);
+            let _ = inb(base + 1);
+            io_delay(ctrl);
         }
     }
     false

@@ -745,14 +745,14 @@ pub const CTX_DESKTOP: [(&str, u32); 6] = [
     ("Masaüstünü Yenile", Color::TEXT_MUTED),
 ];
 
-/// Dosya Yöneticisi'nde bir dosyaya sağ tık menüsü.
+/// Dosya Yöneticisi'nde bir dosyaya veya klasöre sağ tık menüsü.
 pub const CTX_FILE: [(&str, u32); 6] = [
-    ("İlişkili Uygulama ile Aç", Color::ACCENT_GREEN),
+    ("Aç / Klasöre Gir", Color::ACCENT_GREEN),
     ("Not Defterinde Düzenle", Color::TEXT_MAIN),
-    ("Resim Gösterici ile Bak", Color::ACCENT_PINK),
-    ("Müzik Çalarda Çal", Color::ACCENT_YELLOW),
-    ("Video Oynatıcıda Oynat", Color::ACCENT_RED),
-    ("Dosya Özellikleri", Color::ACCENT_BLUE),
+    ("Yeni Dosya Oluştur", Color::ACCENT_BLUE),
+    ("Yeni Klasör Oluştur", Color::ACCENT_YELLOW),
+    ("Dosyayı / Klasörü Sil", Color::ACCENT_RED),
+    ("Özellikler", Color::TEXT_MUTED),
 ];
 
 /// Not Defteri metin alanına sağ tık menüsü.
@@ -779,9 +779,9 @@ const CTX_DESKTOP_EN: [(&str, u32); 6] = [
     ("Change Theme", Color::ACCENT_GREEN), ("Refresh Desktop", Color::TEXT_MUTED),
 ];
 const CTX_FILE_EN: [(&str, u32); 6] = [
-    ("Open With", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
-    ("View Image", Color::ACCENT_PINK), ("Play Music", Color::ACCENT_YELLOW),
-    ("Play Video", Color::ACCENT_RED), ("File Properties", Color::ACCENT_BLUE),
+    ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
+    ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW),
+    ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
 ];
 const CTX_NOTEPAD_EN: [(&str, u32); 6] = [
     ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),

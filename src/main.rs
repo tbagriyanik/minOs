@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+
+extern crate alloc;
+
 use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
@@ -287,6 +290,18 @@ fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     compositor.focus_window(idx);
 }
 
+fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usize, screen_h: usize) {
+    let screen_w = screen_w.max(1);
+    let usable_h = screen_h.saturating_sub(gui::taskbar_h()).max(1);
+    for window in compositor.windows.iter_mut().flatten() {
+        if !window.is_open { continue; }
+        window.width = window.width.min(screen_w).max(1);
+        window.height = window.height.min(usable_h).max(1);
+        window.x = window.x.min(screen_w.saturating_sub(window.width));
+        window.y = window.y.min(usable_h.saturating_sub(window.height));
+    }
+}
+
 fn terminate_app(
     idx: usize,
     compositor: &mut gui::MinGuiCompositor,
@@ -551,6 +566,7 @@ pub extern "C" fn _start() -> ! {
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
+    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
     let mut settings_app = apps::settings::SystemSettings::default();
     settings_app.display_res = (width, height);
     settings_app.load_from_vfs(&fs_mgr.vfs);
@@ -571,8 +587,8 @@ pub extern "C" fn _start() -> ! {
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
     // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
     // 0: Dosya Yöneticisi
-    let files_width = 620.min(width.saturating_sub(20)).max(200);
-    let files_height = 440.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    let files_width = 720.min(width.saturating_sub(20)).max(200);
+    let files_height = 500.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
     compositor.add_window(gui::Window::new(
         "Dosya Yöneticisi - VFS / Ev", "Dosyalar",
         width.saturating_sub(files_width) / 2,
@@ -580,8 +596,8 @@ pub extern "C" fn _start() -> ! {
         files_width, files_height, false,
     ));
     // 1: Sistem Ayarları
-    let settings_width = 620.min(width.saturating_sub(20)).max(200);
-    let settings_height = 500.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    let settings_width = 700.min(width.saturating_sub(20)).max(200);
+    let settings_height = 540.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
     compositor.add_window(gui::Window::new(
         "Sistem Ayarları", "Ayarlar",
         width.saturating_sub(settings_width) / 2,
@@ -589,17 +605,17 @@ pub extern "C" fn _start() -> ! {
         settings_width, settings_height, false,
     ));
     // 2: Not Defteri
-    compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 460, 270, false));
+    compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 520, 330, false));
     // 3: Web Tarayıcısı
-    compositor.add_window(gui::Window::new("Web Gezgini", "Web", 550, 60, 480, 280, false));
+    compositor.add_window(gui::Window::new("Web Gezgini", "Web", 550, 60, 600, 380, false));
     // 4: Resim Gösterici
-    compositor.add_window(gui::Window::new("Resim Gösterici - kedi_maskotu.bmp", "Resim", 120, 90, 450, 270, false));
+    compositor.add_window(gui::Window::new("Resim Gösterici - kedi_maskotu.bmp", "Resim", 120, 90, 500, 330, false));
     // 5: Müzik Çalar
     compositor.add_window(gui::Window::new("Müzik Çalar", "Müzik", 560, 80, 460, 245, false));
     // 6: Video Oynatıcı
-    compositor.add_window(gui::Window::new("Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 460, 275, false));
+    compositor.add_window(gui::Window::new("Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 540, 330, false));
     // 7: Görev Yöneticisi
-    compositor.add_window(gui::Window::new("Görev Yöneticisi", "Görevler", 220, 60, 420, 420, false));
+    compositor.add_window(gui::Window::new("Görev Yöneticisi", "Görevler", 220, 60, 480, 460, false));
     compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 340, false));
     compositor.add_window(gui::Window::new("Çizim Tahtası", "Çizim", 180, 80, 520, 360, false));
     compositor.add_window(gui::Window::new("Komut İstemi", "Komut", 220, 100, 560, 300, false));
@@ -777,7 +793,7 @@ pub extern "C" fn _start() -> ! {
                     7 => tm.render_content(fb, win.x, win.y, win.width),
                     8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
                     9 => paint.render_content(fb, win.x, win.y, win.width, win.height),
-                    10 => term.render_content(fb, win.x, win.y, win.width, win.height),
+                    10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
                     _ => {}
                 }
                 app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
@@ -897,7 +913,7 @@ pub extern "C" fn _start() -> ! {
                         let list_x = win.x + 124;
                         if mx >= list_x && mx <= win.x + win.width - 10 {
                             let row_y_base = win.y + 86;
-                            for i in 0..filemanager_app.files.len() {
+                            for i in 0..filemanager_app.file_count {
                                 let item_y = row_y_base + i * 24;
                                 if my >= item_y.saturating_sub(2) && my <= item_y + 20 {
                                     compositor.context_file_idx = Some(i);
@@ -906,11 +922,7 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                         }
-                        kind = if compositor.context_file_idx.is_some() {
-                            gui::ContextKind::FileManager
-                        } else {
-                            gui::ContextKind::Window
-                        };
+                        kind = gui::ContextKind::FileManager;
                         compositor.focus_window(idx);
                     } else {
                         // Diğer uygulamalar → pencere menüsü
@@ -1042,24 +1054,51 @@ pub extern "C" fn _start() -> ! {
                             _ => {}
                         },
                         gui::ContextKind::FileManager => {
-                            if let Some(file_idx) = compositor.context_file_idx {
-                                let tag = filemanager_app.files[file_idx].icon_tag;
-                                let target_app_idx = match clicked_item {
-                                    0 => match tag {
-                                        "TXT" | "LOG" | "CFG" => 2,
-                                        "IMG" => 4,
-                                        "SND" => 5,
-                                        "VID" => 6,
-                                        "WEB" => 3,
-                                        _ => 2,
-                                    },
-                                    1 => 2,
-                                    2 => 4,
-                                    3 => 5,
-                                    4 => 6,
-                                    _ => 0,
-                                };
-                                open_app(&mut compositor, target_app_idx);
+                            match clicked_item {
+                                0 => { // Aç / Klasöre Gir
+                                    if let Some(file_idx) = compositor.context_file_idx {
+                                        filemanager_app.selected_idx = file_idx;
+                                        if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                            if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                    notepad_app.open_file(&path, data);
+                                                }
+                                                open_app(&mut compositor, 2);
+                                            } else if tag == "IMG" {
+                                                open_app(&mut compositor, 4);
+                                            } else if tag == "SND" {
+                                                open_app(&mut compositor, 5);
+                                            } else if tag == "VID" {
+                                                open_app(&mut compositor, 6);
+                                            } else if tag == "WEB" {
+                                                open_app(&mut compositor, 3);
+                                            }
+                                        }
+                                    }
+                                }
+                                1 => { // Not Defterinde Düzenle
+                                    if let Some(file_idx) = compositor.context_file_idx {
+                                        filemanager_app.selected_idx = file_idx;
+                                        let path = filemanager_app.selected_full_path();
+                                        if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                            notepad_app.open_file(&path, data);
+                                        }
+                                        open_app(&mut compositor, 2);
+                                    }
+                                }
+                                2 => { // Yeni Dosya Oluştur
+                                    filemanager_app.new_file(&mut fs_mgr.vfs);
+                                }
+                                3 => { // Yeni Klasör Oluştur
+                                    filemanager_app.new_folder(&mut fs_mgr.vfs);
+                                }
+                                4 => { // Dosyayı / Klasörü Sil
+                                    if let Some(file_idx) = compositor.context_file_idx {
+                                        filemanager_app.selected_idx = file_idx;
+                                        filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                         gui::ContextKind::Notepad => match clicked_item {
@@ -1453,45 +1492,66 @@ pub extern "C" fn _start() -> ! {
                         let app_id = compositor.app_id_for_window(idx);
                         match app_id {
                             0 => {
-                                // Dosya Yöneticisi: [Yenile], [Aç], liste
+                                // Dosya Yöneticisi: [Yenile], [+Dosya], [+Klasör], [Sil], [Aç], gezinti, liste
                                 if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
-                                    filemanager_app.selected_idx = 0;
+                                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::new_file_button_rect(wx, wy, ww)) {
+                                    filemanager_app.new_file(&mut fs_mgr.vfs);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::new_folder_button_rect(wx, wy, ww)) {
+                                    filemanager_app.new_folder(&mut fs_mgr.vfs);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::delete_button_rect(wx, wy, ww)) {
+                                    filemanager_app.delete_selected(&mut fs_mgr.vfs);
                                 } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::open_button_rect(wx, wy, ww)) {
-                                    let selected_file = &filemanager_app.files[filemanager_app.selected_idx];
-                                    let target = match selected_file.icon_tag {
-                                        "TXT" | "LOG" | "CFG" => 2,
-                                        "IMG" => 4,
-                                        "SND" => 5,
-                                        "VID" => 6,
-                                        "WEB" => 3,
-                                        _ => 2,
-                                    };
-                                    open_app(&mut compositor, target);
-                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 68 && my < wy + 68 + 6 * 22 {
-                                    let nav = ((my - (wy + 68)) / 22).min(5);
-                                    filemanager_app.current_path = match nav {
+                                    if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                        if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                            if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                notepad_app.open_file(&path, data);
+                                            }
+                                            open_app(&mut compositor, 2);
+                                        } else if tag == "IMG" {
+                                            open_app(&mut compositor, 4);
+                                        } else if tag == "SND" {
+                                            open_app(&mut compositor, 5);
+                                        } else if tag == "VID" {
+                                            open_app(&mut compositor, 6);
+                                        } else if tag == "WEB" {
+                                            open_app(&mut compositor, 3);
+                                        }
+                                    }
+                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 8 * 20 {
+                                    let nav = (my.saturating_sub(wy + 66)) / 20;
+                                    let target_path = match nav {
                                         0 => "/",
-                                        1 => "/root/home/minos/Documents",
-                                        2 => "/root/home/minos/Media",
-                                        3 => "/root/home/minos/Downloads",
+                                        1 => "/root/Documents",
+                                        2 => "/root/Media",
+                                        3 => "/root/Downloads",
                                         4 => "/boot",
-                                        _ => "/media/usb0",
+                                        5 => "/media/usb0",
+                                        6 => "/media/hdd0",
+                                        _ => "/media/cdrom",
                                     };
-                                    filemanager_app.selected_idx = 0;
-                                } else if mx >= wx + 124 && mx <= wx + ww - 10 && my >= wy + 84 && my <= wy + 250 {
-                                    for i in 0..filemanager_app.files.len() {
+                                    filemanager_app.set_path(target_path);
+                                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                } else if mx >= wx + 124 && mx <= wx + ww - 10 && my >= wy + 84 {
+                                    for i in 0..filemanager_app.file_count {
                                         if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect(wx, wy, ww, i)) {
                                             filemanager_app.selected_idx = i;
-                                            let selected_file = &filemanager_app.files[i];
-                                            let target = match selected_file.icon_tag {
-                                                "TXT" | "LOG" | "CFG" => 2,
-                                                "IMG" => 4,
-                                                "SND" => 5,
-                                                "VID" => 6,
-                                                "WEB" => 3,
-                                                _ => 2,
-                                            };
-                                            open_app(&mut compositor, target);
+                                            if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                                if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                                    if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                        notepad_app.open_file(&path, data);
+                                                    }
+                                                    open_app(&mut compositor, 2);
+                                                } else if tag == "IMG" {
+                                                    open_app(&mut compositor, 4);
+                                                } else if tag == "SND" {
+                                                    open_app(&mut compositor, 5);
+                                                } else if tag == "VID" {
+                                                    open_app(&mut compositor, 6);
+                                                } else if tag == "WEB" {
+                                                    open_app(&mut compositor, 3);
+                                                }
+                                            }
                                             break;
                                         }
                                     }
@@ -1590,7 +1650,7 @@ pub extern "C" fn _start() -> ! {
                                     match (notepad_app.menu, item) {
                                         // Dosya Menüsü: 0: Yeni, 1: Kaydet, 2: Temizle
                                         (1, 0) => notepad_app.clear(),
-                                        (1, 1) => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                        (1, 1) => { notepad_app.save_file(&mut fs_mgr.vfs); },
                                         (1, 2) => notepad_app.clear(),
                                         // Düzen Menüsü: 0: Kes, 1: Kopyala, 2: Yapıştır, 3: Tümünü Seç
                                         (2, 0) => notepad_app.cut_selection(),
@@ -1609,7 +1669,7 @@ pub extern "C" fn _start() -> ! {
                                 if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
                                 } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
-                                    settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+                                    notepad_app.save_file(&mut fs_mgr.vfs);
                                 }
                                 if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
                                     let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
@@ -1984,23 +2044,28 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 0) {
                         enter_char_consumed = true;
                         match filemanager_app.focused_control {
-                            0 => {
-                                filemanager_app.selected_idx = 0;
-                            }
-                            1 | 2 => {
-                                if let Some(selected_file) = filemanager_app.row(filemanager_app.selected_idx) {
-                                    let target = match selected_file.icon_tag {
-                                        "TXT" | "LOG" | "CFG" => 2,
-                                        "IMG" => 4,
-                                        "SND" => 5,
-                                        "VID" => 6,
-                                        "WEB" => 3,
-                                        _ => 2,
-                                    };
-                                    open_app(&mut compositor, target);
+                            0 => filemanager_app.refresh_from_vfs(&fs_mgr.vfs),
+                            1 => filemanager_app.new_file(&mut fs_mgr.vfs),
+                            2 => filemanager_app.new_folder(&mut fs_mgr.vfs),
+                            3 => { filemanager_app.delete_selected(&mut fs_mgr.vfs); },
+                            _ => {
+                                if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                    if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                        if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                            notepad_app.open_file(&path, data);
+                                        }
+                                        open_app(&mut compositor, 2);
+                                    } else if tag == "IMG" {
+                                        open_app(&mut compositor, 4);
+                                    } else if tag == "SND" {
+                                        open_app(&mut compositor, 5);
+                                    } else if tag == "VID" {
+                                        open_app(&mut compositor, 6);
+                                    } else if tag == "WEB" {
+                                        open_app(&mut compositor, 3);
+                                    }
                                 }
                             }
-                            _ => {}
                         }
                     } else if app_is_focused(&compositor, 1) {
                         enter_char_consumed = true;
@@ -2175,7 +2240,7 @@ pub extern "C" fn _start() -> ! {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     if scroll_val > 0 {
                         if filemanager_app.selected_idx > 0 { filemanager_app.selected_idx -= 1; }
-                    } else if filemanager_app.selected_idx + 1 < filemanager_app.files.len() {
+                    } else if filemanager_app.selected_idx + 1 < filemanager_app.file_count {
                         filemanager_app.selected_idx += 1;
                     }
                 }
@@ -2451,9 +2516,10 @@ pub extern "C" fn _start() -> ! {
                 if let Some(cmd) = terminal_app.take_pending() {
                     let n = terminal_app.pending_len();
                     let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
-                    if let Some(app_idx) = terminal_app.execute(line, &fs_mgr.vfs, &memory_mgr.pmm, &now) {
+                    if let Some(app_idx) = terminal_app.execute(line, &mut fs_mgr.vfs, &memory_mgr.pmm, &now) {
                         open_app(&mut compositor, app_idx);
                     }
+                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                 }
                 let paint_focused = app_is_focused(&compositor, 9);
                 if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }
@@ -2534,6 +2600,7 @@ pub extern "C" fn _start() -> ! {
             if tm_open {
                 taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
             }
+            keep_windows_on_screen(&mut compositor, width, height);
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,

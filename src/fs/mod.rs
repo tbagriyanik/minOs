@@ -6,7 +6,9 @@ pub struct FileSystemManager {
 }
 
 impl FileSystemManager {
-    pub const fn new() -> Self {
+    pub fn new() -> Self {
+        diskfs::init();
+        crate::drivers::usb::init();
         Self {
             vfs: vfs::VirtualFileSystem::new(),
         }

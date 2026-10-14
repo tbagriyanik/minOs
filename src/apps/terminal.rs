@@ -17,7 +17,8 @@ pub const OUT_LINES: usize = 22;
 pub const LINE_MAX: usize = 64;
 
 const COMPLETION_COMMANDS: &[&str] = &[
-    "help", "ls", "cat", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns",
+    "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
+    "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns",
     "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
@@ -131,11 +132,14 @@ pub struct TerminalApp {
     pub pending: [u8; LINE_MAX],
     pub pending_len: usize,
     pub has_pending: bool,
+    /// Aktif çalışma dizini (Current Working Directory).
+    pub cwd: [u8; 64],
+    pub cwd_len: usize,
 }
 
 impl TerminalApp {
     pub const fn new() -> Self {
-        Self {
+        let mut app = Self {
             input: [0; LINE_MAX],
             input_len: 0,
             out: [OutLine::new(); OUT_LINES],
@@ -152,6 +156,28 @@ impl TerminalApp {
             pending: [0; LINE_MAX],
             pending_len: 0,
             has_pending: false,
+            cwd: [0; 64],
+            cwd_len: 1,
+        };
+        app.cwd[0] = b'/';
+        app
+    }
+
+    pub fn cwd_str(&self) -> &str {
+        if self.cwd_len > 0 {
+            core::str::from_utf8(&self.cwd[..self.cwd_len]).unwrap_or("/")
+        } else {
+            "/"
+        }
+    }
+
+    pub fn set_cwd(&mut self, path: &str) {
+        self.cwd_len = 0;
+        for b in path.bytes() {
+            if self.cwd_len < self.cwd.len() {
+                self.cwd[self.cwd_len] = b;
+                self.cwd_len += 1;
+            }
         }
     }
 
@@ -352,7 +378,7 @@ impl TerminalApp {
     }
 
     /// Verilen komut satırını VFS/PMM/DateTime bağlamında yürütür.
-    pub fn execute(&mut self, line: &str, vfs: &VirtualFileSystem, pmm: &PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
+    pub fn execute(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
             return None;
@@ -382,33 +408,193 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cat echo clear mem ps date uname theme whoami", Color::TEXT_MAIN);
+                self.push_line("help ls cd pwd mkdir touch rm cat write disks df echo clear mem ps", Color::TEXT_MAIN);
                 self.push_line("ping <IPv4> | dns <host> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
                 self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
+            "pwd" => {
+                let mut buf = TextBuf::new();
+                buf.push_str(self.cwd_str());
+                self.push_line(buf.as_str(), Color::ACCENT_BLUE);
+            }
+            "cd" => {
+                if arg.is_empty() || arg == "~" {
+                    self.set_cwd("/root/Documents");
+                } else if arg == "/" {
+                    self.set_cwd("/");
+                } else if arg == ".." {
+                    let cur = self.cwd_str();
+                    if let Some(pos) = cur.rfind('/') {
+                        let parent = if pos == 0 { "/" } else { &cur[..pos] };
+                        let parent_clone = alloc::string::String::from(parent);
+                        self.set_cwd(&parent_clone);
+                    } else {
+                        self.set_cwd("/");
+                    }
+                } else {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    if vfs.is_dir(&target) || target == "/media/usb0" || target == "/media/cdrom" || target == "/media/hdd0" {
+                        self.set_cwd(&target);
+                    } else {
+                        self.push_line(crate::gui::ui_text("Hata: Dizin bulunamadi.", "Error: Directory not found."), Color::ACCENT_RED);
+                    }
+                }
+            }
             "ls" => {
-                let mut any = false;
-                for node in vfs.nodes.iter().flatten() {
-                    let mut buf = TextBuf::new();
-                    buf.push_str(match node.node_type { NodeType::File => "[F] ", NodeType::Directory => "[D] " });
-                    buf.push_str(node.name);
-                    self.push_line(buf.as_str(), Color::ACCENT_BLUE);
-                    any = true;
+                let target = if arg.is_empty() { self.cwd_str() } else { arg };
+                let items = vfs.list_dir(target);
+                if items.is_empty() {
+                    self.push_line(crate::gui::ui_text("(bos dizin)", "(empty directory)"), Color::TEXT_MUTED);
+                } else {
+                    for it in &items {
+                        let mut buf = TextBuf::new();
+                        match it.node_type {
+                            NodeType::Directory => {
+                                buf.push_str("[D] ");
+                                buf.push_str(&it.name);
+                                self.push_line(buf.as_str(), Color::ACCENT_PINK);
+                            }
+                            NodeType::File => {
+                                buf.push_str("[F] ");
+                                buf.push_str(&it.name);
+                                buf.push_str("  (");
+                                buf.push_usize(it.size);
+                                buf.push_str(" B)");
+                                self.push_line(buf.as_str(), Color::ACCENT_BLUE);
+                            }
+                        }
+                    }
                 }
-                if !any {
-                    self.push_line(crate::gui::ui_text("(boş dizin)", "(empty directory)"), Color::TEXT_MUTED);
+            }
+            "mkdir" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanim: mkdir <klasor>", "Usage: mkdir <dir>"), Color::ACCENT_YELLOW);
+                } else {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    if vfs.create_dir(&target) {
+                        self.push_line(crate::gui::ui_text("Klasor olusturuldu.", "Directory created."), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(crate::gui::ui_text("Olusturulamadi.", "Failed to create directory."), Color::ACCENT_RED);
+                    }
                 }
+            }
+            "touch" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanim: touch <dosya>", "Usage: touch <file>"), Color::ACCENT_YELLOW);
+                } else {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    if vfs.create_file(&target, b"") {
+                        self.push_line(crate::gui::ui_text("Dosya olusturuldu.", "File created."), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(crate::gui::ui_text("Olusturulamadi.", "Failed to create file."), Color::ACCENT_RED);
+                    }
+                }
+            }
+            "rm" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanim: rm <dosya_veya_klasor>", "Usage: rm <file_or_dir>"), Color::ACCENT_YELLOW);
+                } else {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    if vfs.delete_file(&target) || vfs.delete_dir(&target) {
+                        self.push_line(crate::gui::ui_text("Silindi.", "Removed."), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(crate::gui::ui_text("Silinemedi.", "Remove failed."), Color::ACCENT_RED);
+                    }
+                }
+            }
+            "write" => {
+                let mut sp = arg.splitn(2, ' ');
+                let file_arg = sp.next().unwrap_or("");
+                let text_arg = sp.next().unwrap_or("");
+                if file_arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanim: write <dosya> <metin>", "Usage: write <file> <text>"), Color::ACCENT_YELLOW);
+                } else {
+                    let target = if file_arg.starts_with('/') {
+                        alloc::string::String::from(file_arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(file_arg);
+                        p
+                    };
+                    if vfs.write_file(&target, text_arg.as_bytes()) {
+                        self.push_line(crate::gui::ui_text("Dosyaya yazildi.", "Written to file."), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(crate::gui::ui_text("Yazilamadi.", "Write failed."), Color::ACCENT_RED);
+                    }
+                }
+            }
+            "disks" | "df" => {
+                self.push_line(crate::gui::ui_text("--- BAGLI DISKLER VE SURUCULER ---", "--- ATTACHED STORAGE DEVICES ---"), Color::ACCENT_PINK);
+                for drive in 0..4u8 {
+                    if let Some(dev) = crate::drivers::ata::device(drive) {
+                        let mut b = TextBuf::new();
+                        b.push_str("IDE ");
+                        b.push_usize(drive as usize);
+                        b.push_str(": ");
+                        match dev.role {
+                            crate::drivers::ata::DriveRole::UsbStorage => b.push_str("[USB / FAT32] "),
+                            crate::drivers::ata::DriveRole::HardDisk => b.push_str("[Sabit Disk] "),
+                            crate::drivers::ata::DriveRole::CdRom => b.push_str("[CD-ROM / ISO] "),
+                            _ => b.push_str("[Bilinmeyen] "),
+                        }
+                        b.push_str(dev.model_str());
+                        b.push_str(" (");
+                        b.push_usize(dev.size_mb() as usize);
+                        b.push_str(" MB)");
+                        self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                    }
+                }
+                self.push_line(crate::gui::ui_text("Baglanti: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
             }
             "cat" => {
                 if arg.is_empty() {
                     self.push_line(crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"), Color::ACCENT_YELLOW);
                 } else {
-                    match vfs.read_file(arg) {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    match vfs.read_file(&target) {
                         Some(data) => {
                             let s = core::str::from_utf8(data).unwrap_or("<ikili veri>");
                             for l in s.split('\n') {
-                                self.push_line(l, Color::TEXT_MAIN);
+                                if !l.is_empty() {
+                                    self.push_line(l, Color::TEXT_MAIN);
+                                }
                             }
                         }
                         None => {
@@ -542,6 +728,7 @@ impl TerminalApp {
         y: usize,
         w: usize,
         h: usize,
+        is_focused: bool,
     ) {
         // Terminal zemin
         fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BLACK);
@@ -549,32 +736,37 @@ impl TerminalApp {
         // Başlık
         MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("minOs Komut İstemi v2.0 (MinShell)", "minOs Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
 
-        // Çıktı geçmişi: giriş satırı ve durum satırından ayrı bir bölgede çizilir.
-        let prompt_y = y + h.saturating_sub(26);
         let line_height = crate::gui::font_render::text_height(
             crate::gui::font_render::Face::Geist,
             14.0 * crate::gui::font_zoom() as f32 / 100.0,
         ).max(1);
-        let view_lines = h.saturating_sub(86) / (line_height + 1);
+        let line_gap = 5;
+        let status_y = y + h.saturating_sub(line_height + 14);
+        let prompt_y = status_y.saturating_sub(line_height + 8);
+        let output_y = y + 60;
+        let view_lines = prompt_y.saturating_sub(output_y) / (line_height + line_gap);
         let first = self.out_count.saturating_sub(view_lines).saturating_sub(self.output_scroll);
         let last = (first + view_lines).min(self.out_count);
-        let mut ly = y + 60;
+        let mut ly = output_y;
         for i in first..last {
             MinGuiCompositor::draw_terminal_string(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color);
-            ly += line_height + 1;
+            ly += line_height + line_gap;
         }
 
         // Aktif Istem + Girdi
         MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
         MinGuiCompositor::draw_terminal_string(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN);
+        if is_focused {
+            let caret_x = x + 30 + MinGuiCompositor::terminal_text_width(input_str);
+            fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), Color::ACCENT_GREEN);
+        }
 
         // Durum satırı
         let mut status = TextBuf::new();
         status.push_str(crate::gui::ui_text("geçmiş: ", "history: "));
         status.push_usize(self.history_count);
         status.push_str(crate::gui::ui_text(" komut | UTF-8 / TR-Q", " commands | UTF-8 / TR-Q"));
-        let status_y = y + h.saturating_sub(line_height + 2);
         MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), Color::TEXT_MUTED);
     }
 }

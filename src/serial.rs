@@ -42,6 +42,19 @@ pub fn log_snapshot() -> alloc::vec::Vec<u8> {
     unsafe { LOG_BYTES.clone() }
 }
 
+/// Copies the newest portion of the transcript without allocating. The caller
+/// can render this tail while the boot screen is active.
+#[allow(static_mut_refs)]
+pub fn copy_log_tail(out: &mut [u8]) -> usize {
+    unsafe {
+        let len = LOG_BYTES.len().min(out.len());
+        if len == 0 { return 0; }
+        let start = LOG_BYTES.len() - len;
+        out[..len].copy_from_slice(&LOG_BYTES[start..]);
+        len
+    }
+}
+
 pub fn print_dec(mut v: u64) {
     if v == 0 {
         print("0");

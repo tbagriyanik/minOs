@@ -73,53 +73,66 @@ pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en }
 
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let w = 600.min(width.saturating_sub(24)).max(1);
-    let h = 300.min(height.saturating_sub(24)).max(1);
+    let w = 740.min(width.saturating_sub(24)).max(320);
+    let h = 480.min(height.saturating_sub(24)).max(280);
     ((width.saturating_sub(w)) / 2, (height.saturating_sub(h)) / 2, w, h)
 }
 
 pub fn welcome_language_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
-    (x + 24 + index * 132, y + 104, 120, 34)
+    (x + 28 + index * 140, y + 96, 126, 32)
 }
 
 pub fn welcome_theme_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
-    (x + 24 + index * 108, y + 174, 96, 58)
+    (x + 28 + index * 82, y + 172, 74, 52)
 }
 
 pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let (x, y, w, h) = welcome_panel(width, height);
-    (x + w.saturating_sub(152), y + h.saturating_sub(48), 128, 32)
+    (x + w.saturating_sub(168), y + h.saturating_sub(52), 140, 36)
 }
 
-pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, mouse: &MouseState) {
+pub fn welcome_resolution_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
+    let (x, y, _, _) = welcome_panel(width, height);
+    let col = index % 2;
+    let row = index / 2;
+    (x + 28 + col * 140, y + 268 + row * 38, 126, 30)
+}
+
+pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, resolution: (usize, usize), log: &[u8], log_scroll: usize, frame: usize, mouse: &MouseState) {
     let (x, y, w, h) = welcome_panel(width, height);
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
     fb.draw_shadow(x, y, w, h, Color::SHADOW);
     fb.draw_rounded_rect(x, y, w, h, 10, Color::WINDOW_BG);
     fb.draw_rounded_vgradient(x, y, w, 52, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
-    MinGuiCompositor::draw_cat_icon_scaled(fb, x + 18, y + 13);
-    MinGuiCompositor::draw_string(fb, x + 48, y + 18, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
-    MinGuiCompositor::draw_string(fb, x + 24, y + 72,
-        if english { "Choose your interface language" } else { "Arayüz dilini seçin" }, Color::TEXT_MAIN);
+    MinGuiCompositor::draw_cat_icon_scaled(fb, x + 20, y + 13);
+    MinGuiCompositor::draw_string(fb, x + 52, y + 18, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
+
+    // 1. Dil Seçimi Bölümü
+    MinGuiCompositor::draw_string(fb, x + 28, y + 72,
+        if english { "Interface Language" } else { "Arayüz Dili" }, Color::ACCENT_BLUE);
 
     for i in 0..2 {
         let rect = welcome_language_rect(width, height, i);
         let active = (i == 0 && !english) || (i == 1 && english);
         fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6,
+            if active { Color::ACCENT_BLUE } else { Color::TASKBAR_BG });
+        fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3,
             if active { Color::ACCENT_BLUE } else { Color::BORDER });
-        MinGuiCompositor::draw_string(fb, rect.0 + 18, rect.1 + 10,
-            if i == 0 { "Türkçe" } else { "English" }, Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, rect.0 + 26, rect.1 + 8,
+            if i == 0 { "Türkçe" } else { "English" },
+            if active { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
     }
 
-    MinGuiCompositor::draw_string(fb, x + 24, y + 148,
-        if english { "Choose a desktop theme" } else { "Masaüstü temasını seçin" }, Color::TEXT_MAIN);
+    // 2. Masaüstü Teması Bölümü
+    MinGuiCompositor::draw_string(fb, x + 28, y + 148,
+        if english { "Desktop Theme" } else { "Masaüstü Teması" }, Color::ACCENT_BLUE);
     for (i, id) in theme::ThemeId::ALL.iter().enumerate() {
         let rect = welcome_theme_rect(width, height, i);
         let (background, accent) = theme::preview_colors(*id);
         fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6, background);
-        fb.draw_rounded_rect(rect.0 + 8, rect.1 + 8, rect.2.saturating_sub(16), 8, 3, accent);
+        fb.draw_rounded_rect(rect.0 + 6, rect.1 + 6, rect.2.saturating_sub(12), 6, 2, accent);
         let name = if english {
             match id {
                 theme::ThemeId::VelvetDark => "Velvet",
@@ -129,17 +142,77 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
                 theme::ThemeId::Sunset => "Sunset",
             }
         } else { id.short_name() };
-        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 28, name, MinGuiCompositor::text_on(background));
+        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 26, name, MinGuiCompositor::text_on(background));
         if *id == selected {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::ACCENT_BLUE);
+            fb.draw_rect_outline(rect.0.saturating_sub(1), rect.1.saturating_sub(1), rect.2 + 2, rect.3 + 2, Color::ACCENT_BLUE);
         } else {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::BORDER);
         }
     }
+
+    // 3. Ekran Çözünürlüğü Bölümü
+    MinGuiCompositor::draw_string(fb, x + 28, y + 244,
+        if english { "Display Resolution (Next Boot)" } else { "Ekran Çözünürlüğü (Sonraki Açılış)" }, Color::ACCENT_BLUE);
+    let resolutions = [(800, 600), (1024, 768), (1280, 720), (1920, 1080)];
+    for (i, res) in resolutions.iter().enumerate() {
+        let rect = welcome_resolution_rect(width, height, i);
+        let active = *res == resolution;
+        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5,
+            if active { Color::ACCENT_BLUE } else { Color::TASKBAR_BG });
+        fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3,
+            if active { Color::ACCENT_BLUE } else { Color::BORDER });
+        let label = match i { 0 => "800x600", 1 => "1024x768", 2 => "1280x720", _ => "1920x1080" };
+        MinGuiCompositor::draw_string(fb, rect.0 + 20, rect.1 + 7, label,
+            if active { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
+    }
+
+    // 4. Sağ Bölüm: Açılış Kayıtları (Boot Log)
+    let log_w = 260.min(w.saturating_sub(460)).max(220);
+    let log_x = x + w.saturating_sub(log_w + 28);
+    let log_y = y + 72;
+    let log_h = h.saturating_sub(144);
+    fb.draw_rounded_rect(log_x, log_y, log_w, log_h, 6, Color::DARK_BG);
+    fb.draw_rect_outline(log_x, log_y, log_w, log_h, Color::BORDER);
+    MinGuiCompositor::draw_string(fb, log_x + 10, log_y + 8,
+        if english { "Boot Log" } else { "Açılış Kayıtları" }, Color::ACCENT_GREEN);
+    let log_text = core::str::from_utf8(log).unwrap_or("");
+    let mut lines: [&str; 256] = [""; 256];
+    let mut count = 0usize;
+    for line in log_text.lines() {
+        if count < lines.len() {
+            lines[count] = line;
+            count += 1;
+        }
+    }
+    let max_visible_lines = log_h.saturating_sub(36) / 16;
+    let max_scroll = count.saturating_sub(max_visible_lines);
+    let scroll = log_scroll.min(max_scroll);
+    let display_end = count.saturating_sub(scroll);
+    let display_start = display_end.saturating_sub(max_visible_lines);
+    for (i, line) in lines[display_start..display_end].iter().enumerate() {
+        let max_chars = log_w.saturating_sub(20) / 8;
+        let mut start = line.len().saturating_sub(max_chars);
+        while start < line.len() && !line.is_char_boundary(start) { start += 1; }
+        let clipped = &line[start..];
+        MinGuiCompositor::draw_string(fb, log_x + 10, log_y + 30 + i * 16, clipped, Color::TEXT_MUTED);
+    }
+    if max_scroll > 0 {
+        let hint = if english { "Wheel: scroll log" } else { "Tekerlek: kayıtları kaydır" };
+        MinGuiCompositor::draw_string(fb, log_x + 10, log_y + log_h.saturating_sub(18), hint, Color::ACCENT_YELLOW);
+    }
+
+    // 5. Alt Kısım: Animasyonlu Nokta & Başla Düğmesi
+    let dot_x = x + 28 + (frame % 16) * 10;
+    fb.draw_rounded_rect(dot_x, y + h - 34, 7, 7, 3, Color::ACCENT_BLUE);
+    MinGuiCompositor::draw_string(fb, x + 28, y + h - 52,
+        if english { "System ready. Press Enter or click below." } else { "Sistem hazır. Enter'a basın veya başlayın." }, Color::TEXT_MUTED);
+
     let button = welcome_continue_rect(width, height);
     fb.draw_rounded_rect(button.0, button.1, button.2, button.3, 6, Color::ACCENT_GREEN);
-    MinGuiCompositor::draw_string(fb, button.0 + 18, button.1 + 10,
-        if english { "Get started" } else { "Başla" }, MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+    MinGuiCompositor::draw_string(fb, button.0 + 24, button.1 + 10,
+        if english { "Get Started ->" } else { "Başla ->" }, MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+
     let pointer_x = mouse.x.max(0) as usize;
     let pointer_y = mouse.y.max(0) as usize;
     fb.draw_rect(pointer_x, pointer_y, 5, 5, Color::WHITE);

@@ -847,15 +847,32 @@ pub extern "C" fn _start() -> ! {
     // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
+    let mut welcome_frame: usize = 0;
+    let mut welcome_last_anim_ms = monotonic_ms();
+    let mut welcome_log = [0u8; 2048];
+    let mut welcome_log_scroll = 0usize;
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
     let mut welcome_accepted = false;
     serial_print("[minOs] Entering welcome screen.\n");
     loop {
         if welcome_dirty {
-            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
+            let log_len = serial::copy_log_tail(&mut welcome_log);
+            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, settings_app.screen_res, &welcome_log[..log_len], welcome_log_scroll, welcome_frame, &mouse);
             welcome_dirty = false;
         }
         drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+        let wheel = mouse.take_scroll_delta();
+        if wheel != 0 {
+            if wheel > 0 { welcome_log_scroll = welcome_log_scroll.saturating_add(wheel as usize * 3); }
+            else { welcome_log_scroll = welcome_log_scroll.saturating_sub(wheel.unsigned_abs() as usize * 3); }
+            welcome_dirty = true;
+        }
+        let anim_now = monotonic_ms();
+        if anim_now.wrapping_sub(welcome_last_anim_ms) >= 120 {
+            welcome_last_anim_ms = anim_now;
+            welcome_frame = welcome_frame.wrapping_add(1);
+            welcome_dirty = true;
+        }
 
         // Enter veya Escape ile hoş geldin ekranını geç.
         while let Some(action) = keyboard.take_last_action() {
@@ -900,6 +917,16 @@ pub extern "C" fn _start() -> ! {
                 if point_in(gui::welcome_theme_rect(width, height, i)) {
                     settings_app.theme = *id;
                     gui::theme::set_theme(*id);
+                    selection_changed = true;
+                    break;
+                }
+            }
+        }
+        if !selection_changed {
+            let resolutions = [(800, 600), (1024, 768), (1280, 720), (1920, 1080)];
+            for (i, resolution) in resolutions.iter().enumerate() {
+                if point_in(gui::welcome_resolution_rect(width, height, i)) {
+                    settings_app.screen_res = *resolution;
                     selection_changed = true;
                     break;
                 }
@@ -995,8 +1022,8 @@ pub extern "C" fn _start() -> ! {
                 let content_w = cw;
                 let want_v = content_h > ch;
                 let want_h = content_w > cw;
-                let v_gutter = if want_v { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
-                let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
+                let v_gutter = if want_v { crate::gui::scrollbar::SCROLLBAR_THICKNESS + gui::RESIZE_GRIP } else { 0 };
+                let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS + gui::RESIZE_GRIP } else { 0 };
                 // İçerik alanı (kaydırma çubukları kadar daraltılmış).
                 let content_area = (cx, cy, cw.saturating_sub(v_gutter), ch.saturating_sub(h_gutter));
                 fb.set_clip(content_area.0, content_area.1, content_area.2.max(1), content_area.3.max(1));
@@ -1024,22 +1051,22 @@ pub extern "C" fn _start() -> ! {
 
                 // Kırpmayı kaldır ve kaydırma çubuklarını pencerenin içinde çiz.
                 fb.reset_clip();
-                // Sağ-alt köşedeki resize tutamacıyla çakışmayı önle: kaydırma
-                // çubuklarının pencerenin son `RESIZE_GRIP` pikseline girmesini engelle.
+                // Kenar resize alanlarını scrollbars için ayır; çizim ve hit-test
+                // aynı içe alınmış track koordinatlarını kullanır.
                 let grip = crate::gui::RESIZE_GRIP;
                 let sb = crate::gui::scrollbar::SCROLLBAR_THICKNESS;
                 if want_v {
-                    let v_h = content_area.3.saturating_sub(grip);
+                    let v_h = ch.saturating_sub(grip);
                     if v_h > 0 {
-                        let track = (cx + cw - sb, cy, sb, v_h);
+                        let track = (cx + cw - sb - grip, cy, sb, v_h);
                         let g = crate::gui::scrollbar::v_geom(track, content_h, v_h, win.scroll.y);
                         crate::gui::scrollbar::draw_vertical(fb, &g);
                     }
                 }
                 if want_h {
-                    let h_w = content_area.2.saturating_sub(grip);
+                    let h_w = cw.saturating_sub(grip);
                     if h_w > 0 {
-                        let track = (cx, cy + ch - sb, h_w, sb);
+                        let track = (cx, cy + ch - sb - grip, h_w, sb);
                         let g = crate::gui::scrollbar::h_geom(track, content_w, h_w, win.scroll.x);
                         crate::gui::scrollbar::draw_horizontal(fb, &g);
                     }
@@ -1653,28 +1680,17 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_top_window();
                         break;
                     }
-                    // Pencerenin kenar ve köşelerinden boyutlandırma.
-                    if !win.is_maximized {
-                        if let Some(edge) = win.resize_edge_at(mx, my) {
-                            // Sağ kenardaki scrollbar için kendi tutma alanını bırak.
-                            if edge != gui::ResizeEdge::Right || mx >= wx + ww - 6 {
-                                compositor.focus_window(idx);
-                                resizing_win = Some(idx);
-                                resize_edge = Some(edge);
-                                resize_orig = (wx, wy, ww, wh);
-                                break;
-                            }
-                        }
-                    }
                     // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
                         let c_h = window_content_h(win.app_id as usize, wh, ww, &filemanager_app, &notepad_app);
-                        let grip = gui::RESIZE_GRIP;
-                        let view_h = cch.saturating_sub(grip);
+                        // Match the rendered scrollbar track exactly. Its right
+                        // edge stops before the resize grip; resize hit testing
+                        // below therefore owns the remaining corner area.
+                        let view_h = cch.saturating_sub(gui::RESIZE_GRIP);
                         if c_h > view_h {
                             let t = gui::scrollbar::SCROLLBAR_THICKNESS;
-                            let track = (ccx + ccw - t, ccy, t, view_h);
+                            let track = (ccx + ccw - t - gui::RESIZE_GRIP, ccy, t, view_h);
                             if gui::in_rect(mx, my, track) {
                                 let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
                                 // Tutamaç yakınındaysa tutamacın üstünü koru, değilse anında zıpla.
@@ -1692,6 +1708,17 @@ pub extern "C" fn _start() -> ! {
                                 compositor.focus_window(idx);
                                 break;
                             }
+                        }
+                    }
+                    // Pencere kenar ve köşelerinden boyutlandırma. Scrollbar
+                    // alanı yukarıda tüketildi; geri kalan kenar alanı resize'a ait.
+                    if !win.is_maximized {
+                        if let Some(edge) = win.resize_edge_at(mx, my) {
+                            compositor.focus_window(idx);
+                            resizing_win = Some(idx);
+                            resize_edge = Some(edge);
+                            resize_orig = (wx, wy, ww, wh);
+                            break;
                         }
                     }
                     // Başlık çubuğu — sürükle / çift tık ile maksimize

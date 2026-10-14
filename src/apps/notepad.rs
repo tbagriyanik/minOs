@@ -1,6 +1,10 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use crate::gui::scrollbar::{self, ScrollState};
+use alloc::vec::Vec;
+
+const INITIAL_BUFFER_CAPACITY: usize = 512;
+const HISTORY_DEPTH: usize = 4;
 
 /// Metin satır yüksekliği (px) — aktif font ölçeğine göre büyür.
 #[inline(always)]
@@ -19,7 +23,7 @@ fn toolbar_h() -> usize { crate::gui::sp(24) }
 fn status_h() -> usize { crate::gui::sp(22) }
 
 pub struct NotepadApp {
-    pub buffer: [char; 512],
+    pub buffer: Vec<char>,
     pub len: usize,
     pub cursor: usize,
     // Selection range (inclusive start, exclusive end)
@@ -44,21 +48,15 @@ pub struct NotepadApp {
 }
 
 /// Her not defteri penceresi için undo/redo geçmiş derinliği.
-const HISTORY_DEPTH: usize = 4;
-
 /// Metin anlık görüntüsü (undo/redo için).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Snapshot {
-    chars: [char; 512],
+    chars: Vec<char>,
     len: usize,
     cursor: usize,
 }
 
-const EMPTY_SNAPSHOT: Snapshot = Snapshot { chars: [' '; 512], len: 0, cursor: 0 };
-
-#[derive(Clone, Copy)]
-struct History { undo: [Snapshot; HISTORY_DEPTH], redo: [Snapshot; HISTORY_DEPTH] }
-const EMPTY_HISTORY: History = History { undo: [EMPTY_SNAPSHOT; HISTORY_DEPTH], redo: [EMPTY_SNAPSHOT; HISTORY_DEPTH] };
+struct History { undo: Vec<Snapshot>, redo: Vec<Snapshot> }
 
 impl NotepadApp {
     // Copy selected text to the clipboard
@@ -82,7 +80,12 @@ impl NotepadApp {
         self.push_history();
         let mut pasted = ['\0'; 512];
         let clipboard_len = crate::gui::clipboard::copy_chars(&mut pasted);
-        let amount = clipboard_len.min(512 - self.len);
+        let amount = clipboard_len;
+        if self.len + amount > self.buffer.len() {
+            let needed = self.len + amount - self.buffer.len();
+            if self.buffer.try_reserve(needed).is_err() { return; }
+            self.buffer.resize(self.len + amount, ' ');
+        }
         for i in (self.cursor..self.len).rev() {
             self.buffer[i + amount] = self.buffer[i];
         }
@@ -121,7 +124,7 @@ impl NotepadApp {
 impl NotepadApp {
     pub fn new() -> Self {
         let mut app = Self {
-            buffer: [' '; 512],
+            buffer: alloc::vec![ ' '; INITIAL_BUFFER_CAPACITY ],
             len: 0,
             cursor: 0,
             selection_start: None,
@@ -136,7 +139,7 @@ impl NotepadApp {
             status_msg: "",
             undo_len: 0,
             redo_len: 0,
-            history: EMPTY_HISTORY,
+            history: History { undo: Vec::new(), redo: Vec::new() },
         };
 
         let default_path = "/root/Documents/notlar.txt";
@@ -149,7 +152,7 @@ impl NotepadApp {
 
         let initial_text = "Not Defteri\n-----------\nYardım: https://github.com/tbagriyanik/minos\n\nKlavyenizle doğrudan metin yazabilirsiniz.\n(TR-Q ve EN-US düzenleri desteklenir)\n\nNotlarınızı buraya ekleyin:";
         for c in initial_text.chars() {
-            if app.len < 510 {
+            if app.len < app.buffer.len() {
                 app.buffer[app.len] = c;
                 app.len += 1;
             }
@@ -161,26 +164,23 @@ impl NotepadApp {
     /// Değişiklikten önce mevcut durumu geri al yığınına iter ve
     /// ileri al (redo) yığınını temizler.
     fn push_history(&mut self) {
-        let depth = (self.undo_len as usize).min(HISTORY_DEPTH);
-        if depth >= HISTORY_DEPTH {
-            self.history.undo.copy_within(1..HISTORY_DEPTH, 0);
-            self.history.undo[HISTORY_DEPTH - 1] = self.snapshot();
-            self.undo_len = HISTORY_DEPTH as u8;
-        } else {
-            self.history.undo[depth] = self.snapshot();
-            self.undo_len = (depth + 1) as u8;
-        }
+        if self.history.undo.len() == HISTORY_DEPTH { self.history.undo.remove(0); }
+        self.history.undo.push(self.snapshot());
+        self.undo_len = self.history.undo.len() as u8;
+        self.history.redo.clear();
         self.redo_len = 0;
     }
 
     fn snapshot(&self) -> Snapshot {
-        let mut chars = [' '; 512];
-        chars.copy_from_slice(&self.buffer);
+        let chars = self.buffer[..self.len].to_vec();
         Snapshot { chars, len: self.len, cursor: self.cursor }
     }
 
     fn restore(&mut self, s: &Snapshot) {
-        self.buffer = s.chars;
+        let capacity = self.buffer.len().max(INITIAL_BUFFER_CAPACITY).max(s.len);
+        self.buffer.resize(capacity, ' ');
+        self.buffer[..s.len].copy_from_slice(&s.chars[..s.len]);
+        self.buffer[s.len..].fill(' ');
         self.len = s.len;
         self.cursor = s.cursor.min(s.len);
         self.selection_start = None;
@@ -192,13 +192,12 @@ impl NotepadApp {
         if self.undo_len == 0 {
             return;
         }
-        let u = self.undo_len as usize;
         let cur = self.snapshot();
-        let prev = self.history.undo[u - 1];
-        let r = (self.redo_len as usize).min(HISTORY_DEPTH - 1);
-        self.history.redo[r] = cur;
-        self.redo_len = (r + 1) as u8;
-        self.undo_len -= 1;
+        let prev = self.history.undo.pop().unwrap();
+        if self.history.redo.len() == HISTORY_DEPTH { self.history.redo.remove(0); }
+        self.history.redo.push(cur);
+        self.undo_len = self.history.undo.len() as u8;
+        self.redo_len = self.history.redo.len() as u8;
         self.restore(&prev);
     }
 
@@ -207,27 +206,26 @@ impl NotepadApp {
         if self.redo_len == 0 {
             return;
         }
-        let r = self.redo_len as usize;
         let cur = self.snapshot();
-        let next = self.history.redo[r - 1];
-        let u = (self.undo_len as usize).min(HISTORY_DEPTH - 1);
-        self.history.undo[u] = cur;
-        self.undo_len = (u + 1) as u8;
-        self.redo_len -= 1;
+        let next = self.history.redo.pop().unwrap();
+        if self.history.undo.len() == HISTORY_DEPTH { self.history.undo.remove(0); }
+        self.history.undo.push(cur);
+        self.undo_len = self.history.undo.len() as u8;
+        self.redo_len = self.history.redo.len() as u8;
         self.restore(&next);
     }
 
     pub fn insert_char(&mut self, c: char) {
         self.push_history();
         self.delete_selection();
-        if self.len < self.buffer.len() {
-            for i in (self.cursor..self.len).rev() {
-                self.buffer[i + 1] = self.buffer[i];
-            }
-            self.buffer[self.cursor] = c;
-            self.len += 1;
-            self.cursor += 1;
+        if self.len == self.buffer.len() {
+            if self.buffer.try_reserve(1).is_err() { return; }
+            self.buffer.push(' ');
         }
+        for i in (self.cursor..self.len).rev() { self.buffer[i + 1] = self.buffer[i]; }
+        self.buffer[self.cursor] = c;
+        self.len += 1;
+        self.cursor += 1;
     }
 
     pub fn backspace(&mut self) {
@@ -393,14 +391,27 @@ impl NotepadApp {
             }
         }
         if let Ok(text) = core::str::from_utf8(content) {
-            for c in text.chars() {
-                if self.len < self.buffer.len() {
-                    self.buffer[self.len] = c;
-                    self.len += 1;
+            let needed = text.chars().count();
+            if needed > self.buffer.len() {
+                if self.buffer.try_reserve(needed - self.buffer.len()).is_err() {
+                    self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
+                    return;
                 }
+                self.buffer.resize(needed, ' ');
+            }
+            for c in text.chars() {
+                self.buffer[self.len] = c;
+                self.len += 1;
             }
         } else {
-            for &b in content.iter().take(self.buffer.len()) {
+            if content.len() > self.buffer.len() {
+                if self.buffer.try_reserve(content.len() - self.buffer.len()).is_err() {
+                    self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
+                    return;
+                }
+                self.buffer.resize(content.len(), ' ');
+            }
+            for &b in content {
                 self.buffer[self.len] = b as char;
                 self.len += 1;
             }
@@ -411,20 +422,17 @@ impl NotepadApp {
 
     pub fn save_file(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
         let path = self.file_path_str();
-        let mut utf8_buf = [0u8; 1024];
-        let mut out_len = 0usize;
+        let mut utf8_buf = Vec::new();
+        if utf8_buf.try_reserve(self.len.saturating_mul(4)).is_err() {
+            self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
+            return false;
+        }
         for i in 0..self.len {
             let mut char_buf = [0u8; 4];
             let s = self.buffer[i].encode_utf8(&mut char_buf);
-            let s_bytes = s.as_bytes();
-            if out_len + s_bytes.len() <= utf8_buf.len() {
-                utf8_buf[out_len..out_len + s_bytes.len()].copy_from_slice(s_bytes);
-                out_len += s_bytes.len();
-            } else {
-                break;
-            }
+            utf8_buf.extend_from_slice(s.as_bytes());
         }
-        let ok = vfs.write_file(path, &utf8_buf[..out_len]);
+        let ok = vfs.write_file(path, &utf8_buf);
         if ok {
             self.status_msg = crate::gui::ui_text("Dosya basariyla kaydedildi!", "File saved successfully!");
         } else {

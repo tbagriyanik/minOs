@@ -42,26 +42,6 @@ const BAYER_4X4: [[i32; 4]; 4] = [
     [ 7, -1,  5, -3],
 ];
 
-/// İki RGB rengini doğrusal olarak karıştırır (`t` / `n` oranında).
-#[inline(always)]
-#[allow(dead_code)]
-fn lerp_color(a: u32, b: u32, t: usize, n: usize) -> u32 {
-    if n == 0 {
-        return a;
-    }
-    let inv = n - t;
-    let ar = (a >> 16) & 0xFF;
-    let ag = (a >> 8) & 0xFF;
-    let ab = a & 0xFF;
-    let br = (b >> 16) & 0xFF;
-    let bg = (b >> 8) & 0xFF;
-    let bb = b & 0xFF;
-    let r = (ar * inv as u32 + br * t as u32 + (n as u32 / 2)) / n as u32;
-    let g = (ag * inv as u32 + bg * t as u32 + (n as u32 / 2)) / n as u32;
-    let bl = (ab * inv as u32 + bb * t as u32 + (n as u32 / 2)) / n as u32;
-    (r << 16) | (g << 8) | bl
-}
-
 /// Dithering destekli pürüzsüz renk geçişi (kademelenmeyi yok eder).
 #[inline(always)]
 fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -> u32 {

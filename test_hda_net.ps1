@@ -1,4 +1,4 @@
-# MinOS HDA + e1000 testi (QEMU, monitör üzerinden)
+# minOs HDA + e1000 testi (QEMU, monitör üzerinden)
 $q = 'C:\Program Files\qemu\qemu-system-x86_64.exe'
 $p = Start-Process -FilePath $q -ArgumentList @(
     '-cdrom', 'F:\minos\minos.iso', '-m', '512M', '-vga', 'std', '-display', 'none',

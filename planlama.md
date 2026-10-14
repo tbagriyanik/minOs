@@ -1,6 +1,6 @@
-# MinOS: Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs: Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
-**MinOS**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), donanım hızlandırmalı sade grafik arayüzü (GUI), ses, ağ ve depolama desteğine sahip açık kaynak bir işletim sistemidir.
+**minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), donanım hızlandırmalı sade grafik arayüzü (GUI), ses, ağ ve depolama desteğine sahip açık kaynak bir işletim sistemidir.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ## 2. Grafiksel Kullanıcı Arayüzü (MinGUI) & Pencere Yöneticisi
 
-MinOS grafik motoru, CPU ve bellek tasarrufu için optimize edilmiş **çift tamponlu (double-buffered)** bir bileşik pencere yöneticisi (compositor) ile çalışır.
+minOs grafik motoru, CPU ve bellek tasarrufu için optimize edilmiş **çift tamponlu (double-buffered)** bir bileşik pencere yöneticisi (compositor) ile çalışır.
 
 ### Temel Özellikler
 1. **Pencere Sistemi (Window Compositor):**

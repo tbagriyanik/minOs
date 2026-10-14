@@ -1,4 +1,4 @@
-//! MinShell — MinOS Komut İstemi (Command Prompt).
+//! MinShell — minOs Komut İstemi (Command Prompt).
 //!
 //! Gerçek bir komut satırı: girdi tamponu, komut geçmişi, çıktı satırları ve
 //! `help`, `ls`, `cat`, `echo`, `clear`, `mem`, `ps`, `date`, `uname`, `theme`,
@@ -512,7 +512,7 @@ impl TerminalApp {
                 self.push_line(b.as_str(), Color::ACCENT_BLUE);
             }
             "uname" => {
-                self.push_line("MinOS x86_64 Sarman Edition v2.0", Color::ACCENT_PINK);
+                self.push_line("minOs x86_64 Sarman Edition v2.0", Color::ACCENT_PINK);
             }
             "whoami" => {
                 self.push_line("sarman (root)", Color::ACCENT_YELLOW);
@@ -547,7 +547,7 @@ impl TerminalApp {
         fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BLACK);
 
         // Başlık
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("MinOS Komut İstemi v2.0 (MinShell)", "MinOS Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("minOs Komut İstemi v2.0 (MinShell)", "minOs Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
 
         // Çıktı geçmişi: giriş satırı ve durum satırından ayrı bir bölgede çizilir.
         let prompt_y = y + h.saturating_sub(26);

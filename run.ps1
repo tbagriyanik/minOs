@@ -8,7 +8,7 @@ param(
     [string]$DiskImage
 )
 
-# MinOS Derle ve QEMU ile Çalistir (PowerShell)
+# minOs Derle ve QEMU ile Çalistir (PowerShell)
 chcp 65001 | Out-Null
 $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; $PSDefaultParameterValues['Set-Content:Encoding'] = 'utf8';
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -16,7 +16,7 @@ $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8'; $PSDefaultParameterValu
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host "       MinOS Derleyici & Baslatici       " -ForegroundColor Cyan
+Write-Host "       minOs Derleyici & Baslatici       " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 # 1. QEMU Yolunu Bul
@@ -45,7 +45,7 @@ if (-not $qemuExe) {
 Write-Host "[1/3] QEMU Tespit Edildi: $qemuExe" -ForegroundColor Green
 
 # 2. Kernel'i Derle
-Write-Host "[2/3] MinOS Çekirdeği Derleniyor (cargo build)..." -ForegroundColor Yellow
+Write-Host "[2/3] minOs Çekirdeği Derleniyor (cargo build)..." -ForegroundColor Yellow
 $cargoArgs = @("build", "-Zjson-target-spec", "--target", "x86_64-minos.json", "-Zbuild-std=core,alloc", "-Zbuild-std-features=compiler-builtins-mem")
 if (-not $Debug) {
     $cargoArgs += "--release"

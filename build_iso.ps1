@@ -1,4 +1,4 @@
-# MinOS Boot Edilebilir ISO Olusturma Betiği (PowerShell)
+# minOs Boot Edilebilir ISO Olusturma Betiği (PowerShell)
 param(
     [string]$IsoName = "minos.iso",
     [string]$OutputDir = "target\iso_root"
@@ -10,7 +10,7 @@ $OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
 Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host "       MinOS ISO Olusturucu             " -ForegroundColor Cyan
+Write-Host "       minOs ISO Olusturucu             " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
 # 1. ISO Kök Dizinini Hazirla
@@ -49,12 +49,12 @@ if (Test-Path "boot\EFI\BOOT\BOOTX64.EFI") {
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala
-Write-Host "[3/4] MinOS Cekirdegi Paketleniyor..." -ForegroundColor Yellow
+Write-Host "[3/4] minOs Cekirdegi Paketleniyor..." -ForegroundColor Yellow
 if (Test-Path "target\x86_64-minos\release\minos-kernel") {
     Copy-Item "target\x86_64-minos\release\minos-kernel" -Destination "$OutputDir\boot\minos-kernel"
 } else {
     Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy çekirdek dosyasi yerlestiriliyor." -ForegroundColor Magenta
-    Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "MinOS Kernel Binary"
+    Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "minOs Kernel Binary"
 }
 
 # Limine Boot Information Table Yamalayici (C#)

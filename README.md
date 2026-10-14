@@ -1,4 +1,4 @@
-# 🐱 MinOS - Sarman Edition
+# 🐱 minOs - Sarman Edition
 
 [![Rust](https://img.shields.io/badge/Language-Rust%20Nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
@@ -6,13 +6,13 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
-**MinOS (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 ---
 
 ## 📥 Hazır ISO İndirme (Download)
 
-MinOS'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
+minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
 
 🔗 **Repo Üzerinden Doğrudan İndir:**  
 [https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
@@ -34,7 +34,7 @@ MinOS'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 
 ## ✨ Özellikler ve Uygulama Paketi
 
-MinOS, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygulama** ve pencere yöneticisi içerir:
+minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygulama** ve pencere yöneticisi içerir:
 
 | Uygulama | Açıklama |
 | :--- | :--- |
@@ -85,7 +85,7 @@ MinOS, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 
 ## 🛠️ Sistem Gereksinimleri (Prerequisites)
 
-MinOS'u kaynak kodundan derlemek ve çalıştırmak için aşağıdaki araçlar gereklidir:
+minOs'u kaynak kodundan derlemek ve çalıştırmak için aşağıdaki araçlar gereklidir:
 
 1. **Rust Nightly Toolchain:**
    ```powershell
@@ -105,7 +105,7 @@ MinOS'u kaynak kodundan derlemek ve çalıştırmak için aşağıdaki araçlar 
 ## 🚀 Derleme ve Çalıştırma Adımları (Build & Run)
 
 ### Tek Komutla Derle ve Başlat (Önerilen)
-MinOS, çekirdeği derleyen, ISO dosyasını paketleyen ve QEMU'yu başlatan hazır bir betik içerir:
+minOs, çekirdeği derleyen, ISO dosyasını paketleyen ve QEMU'yu başlatan hazır bir betik içerir:
 
 ```powershell
 # Depoyu klonlayın ve dizine girin
@@ -141,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1 -Debug -UsbDisks
 powershell -ExecutionPolicy Bypass -File .\run.ps1 -CpuCount 4 -Memory 2G -DiskImage .\disk.qcow2
 ```
 
-`-CpuCount` QEMU'nun SMP ayarını yapar. MinOS çekirdeği şu anda çok çekirdekli (SMP) iş planlaması uygulamıyor; ek çekirdekler konukta paralel uygulama çalıştırma sağlamaz. RAM değeri QEMU'ya ayrılan miktardır. Disk imajı ayrıca oluşturulur ve `-DiskImage` ile bağlanır; USB disk seçenekleri fiziksel USB aygıtları içindir.
+`-CpuCount` QEMU'nun SMP ayarını yapar. minOs çekirdeği şu anda çok çekirdekli (SMP) iş planlaması uygulamıyor; ek çekirdekler konukta paralel uygulama çalıştırma sağlamaz. RAM değeri QEMU'ya ayrılan miktardır. Disk imajı ayrıca oluşturulur ve `-DiskImage` ile bağlanır; USB disk seçenekleri fiziksel USB aygıtları içindir.
 
 > **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
 
@@ -152,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1 -CpuCount 4 -Memory 2G -DiskI
 ### Adım Adım Manuel Derleme (Manual Steps)
 
 #### 1. Çekirdeği Derleme (Kernel Build)
-MinOS çekirdeği, özel hedef mimarisi ve `-Zbuild-std` ile gereken çekirdek kütüphanelerini kaynak kodundan derleyerek oluşturulur:
+minOs çekirdeği, özel hedef mimarisi ve `-Zbuild-std` ile gereken çekirdek kütüphanelerini kaynak kodundan derleyerek oluşturulur:
 
 ```powershell
 cargo build --release -Zjson-target-spec --target x86_64-minos.json `
@@ -181,7 +181,7 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 2. **Sanal Donanım İvmelendirmesi (VT-x / AMD-V):**
    - Windows kullanıyorsanız ve VirtualBox 64-bit seçeneği çıkmıyorsa, **Hyper-V**'nin açık olmadığından ve BIOS'ta **Intel VT-x / AMD-V** donanım sanallaştırmasının aktif olduğundan emin olun.
    - VM Ayarları -> **Sistem** -> **Hızlandırma** sekmesinde **Sanallaştırma Arabirimi** varsayılan/KVM olarak ayarlanmalıdır.
-3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **Ses Denetleyicisi** olarak **Intel HD Audio** seçin. MinOS'un HDA sürücüsü bu denetleyiciyi kullanır.
+3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **Ses Denetleyicisi** olarak **Intel HD Audio** seçin. minOs'un HDA sürücüsü bu denetleyiciyi kullanır.
 
 ---
 

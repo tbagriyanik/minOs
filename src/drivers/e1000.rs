@@ -62,9 +62,7 @@ const E1000_DEVICES: [u32; 5] = [0x100E, 0x100F, 0x1010, 0x1011, 0x1012];
 
 const REG_CTRL: u32 = 0x0000;
 const REG_STATUS: u32 = 0x0008;
-const REG_EECD: u32 = 0x0010;
 const REG_EERD: u32 = 0x0014;
-const REG_MDIC: u32 = 0x0020;
 const REG_RCTL: u32 = 0x0100;
 const REG_TCTL: u32 = 0x0400;
 const REG_RDBAL: u32 = 0x2800;
@@ -77,7 +75,6 @@ const REG_TDBAH: u32 = 0x3804;
 const REG_TDLEN: u32 = 0x3808;
 const REG_TDH: u32 = 0x3810;
 const REG_TDT: u32 = 0x3818;
-const REG_IMS: u32 = 0x00D0;
 const REG_ICR: u32 = 0x00C0; // Interrupt Cause Read (okuma temizler)
 const REG_IMC: u32 = 0x00D8; // Interrupt Mask Clear (tüm kesmeleri kapat)
 const REG_RAL0: u32 = 0x5400; // Receive Address Low 0
@@ -91,7 +88,6 @@ const RCTL_MPE: u32 = 1 << 4;
 const RCTL_LPE: u32 = 1 << 5;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_BSIZE_2048: u32 = 0; // 0 << 16
-const RCTL_BSEX_2048: u32 = 0;
 
 const TCTL_EN: u32 = 1 << 1;
 const TCTL_PSP: u32 = 1 << 3;
@@ -156,7 +152,6 @@ static E1000_READY: AtomicBool = AtomicBool::new(false);
 
 // Ring index sayaçları
 static mut RX_TAIL: usize = 0;
-static mut TX_HEAD: usize = 0;
 static mut TX_TAIL: usize = 0;
 
 // MAC adresi karttan okunur
@@ -420,7 +415,7 @@ pub fn init() {
         }
         mmio_write32(REG_CTRL, CTRL_SLU);
 
-        // Tüm kesme kaynaklarını kapat: MinOS sürücüleri çekirdek IDT'si
+        // Tüm kesme kaynaklarını kapat: minOs sürücüleri çekirdek IDT'si
         // üzerinden donanım IRQ'larını işlemez, bu yüzden kartı yoklamayla
         // (polling) kullanıyoruz. Kesme açık kalırsa paylaşılan IRQ hattında
         // fırtına oluşup diğer aygıtları (ör. HDA ses akışını) bozuyor.

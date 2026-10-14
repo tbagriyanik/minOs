@@ -3,7 +3,7 @@
 //! Basit ATA/ATAPI (PATA) sürücüsü — PIO modunda 28-bit LBA okuma.
 //!
 //! Amaç: birincil kanalda bulunan USB depolama aygıtını (QEMU `usb-storage`)
-//! ve ATAPI CD-ROM sürücüsünü okuyabilmek. Bu, MinOS'a USB bellek içeriğini
+//! ve ATAPI CD-ROM sürücüsünü okuyabilmek. Bu, minOs'a USB bellek içeriğini
 //! dosya listesinde gösterebilme yeteneği kazandırır.
 //!
 //! * Master (sürücü 0) → USB bellek / FAT32 bölümü
@@ -29,7 +29,6 @@ const IO_ALT_STATUS: u16 = 0x3F6;
 const IO_CONTROL: u16 = 0x3F6;
 
 const CMD_READ_SECTORS: u8 = 0x20;
-const CMD_READ_SECTORS_EXT: u8 = 0x24;
 const CMD_IDENTIFY: u8 = 0xEC;
 const CMD_PACKET: u8 = 0xA0;
 const CMD_IDENTIFY_PACKET: u8 = 0xA1;

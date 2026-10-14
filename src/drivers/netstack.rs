@@ -404,7 +404,6 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     if payload.len() < 8 {
         return;
     }
-    let dst_port = ((payload[2] as u16) << 8) | payload[3] as u16;
     let udp_len = ((payload[4] as u16) << 8) | payload[5] as u16;
     if udp_len < 8 || payload.len() < udp_len as usize {
         return;

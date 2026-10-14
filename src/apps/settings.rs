@@ -462,7 +462,7 @@ impl SystemSettings {
             }
             _ => {
                 let mut version = TextBuf::new();
-                version.push_str("MinOS - Sarman Edition (v");
+                version.push_str("minOs - Sarman Edition (v");
                 version.push_str(env!("CARGO_PKG_VERSION"));
                 version.push_byte(b')');
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, version.as_str(), Color::ACCENT_BLUE);

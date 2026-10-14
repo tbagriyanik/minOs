@@ -1,4 +1,4 @@
-//! MinOS Dinamik Tema Motoru (Dynamic Theme Engine)
+//! minOs Dinamik Tema Motoru (Dynamic Theme Engine)
 //!
 //! Renkler artık sabit değerler değil; `Color::TEXT_MAIN` gibi sabitler bir
 //! *tema jetonu* (token) taşır. Gerçek RGB değeri, kare çizimi sırasında

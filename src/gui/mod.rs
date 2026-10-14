@@ -100,7 +100,7 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
     fb.draw_rounded_rect(x, y, w, h, 10, Color::WINDOW_BG);
     fb.draw_rounded_vgradient(x, y, w, 52, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
     MinGuiCompositor::draw_cat_icon_scaled(fb, x + 18, y + 13);
-    MinGuiCompositor::draw_string(fb, x + 48, y + 18, if english { "Welcome to MinOS" } else { "MinOS'a hoş geldiniz" }, Color::TEXT_MAIN);
+    MinGuiCompositor::draw_string(fb, x + 48, y + 18, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
     MinGuiCompositor::draw_string(fb, x + 24, y + 72,
         if english { "Choose your interface language" } else { "Arayüz dilini seçin" }, Color::TEXT_MAIN);
 
@@ -1197,7 +1197,7 @@ impl MinGuiCompositor {
         fb.set_clip(old_clip.x0, old_clip.y0, old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
     }
 
-    /// MinOS kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
+    /// minOs kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
     fn draw_icon_bitmap(fb: &mut Framebuffer, x: usize, y: usize, size: usize, source: &[u32; 256]) {
         let mut resolved = [0u32; 256];
         for (output, input) in resolved.iter_mut().zip(source.iter()) {
@@ -1552,9 +1552,9 @@ impl MinGuiCompositor {
         let bottom = Self::shade(Color::DARK_BG, -12);
         fb.draw_vgradient(0, 0, fb.width, fb.height, top, bottom);
 
-        // Masaüstü Sağ Üst MinOS Kedi Logosu ve Başlığı (Watermark)
+        // Masaüstü Sağ Üst minOs Kedi Logosu ve Başlığı (Watermark)
         // Metin genişliğine göre sağa hizalanır; sağ kenardan taşmaz.
-        let title = "MinOS Sarman Edition";
+        let title = "minOs Sarman Edition";
         let title_w = Self::text_width(title, 1);
         let icon_w = Self::icon_size();
         let gap = sp(8);
@@ -1777,10 +1777,10 @@ impl MinGuiCompositor {
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
         let start_bg = if self.is_start_menu_open { Color::ACCENT_BLUE } else { Color::ACCENT_BLUE };
         Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
-        // Kedi ikonu + "MinOS" metni buton içinde yatay olarak ortalanır;
+        // Kedi ikonu + "minOs" metni buton içinde yatay olarak ortalanır;
         // metin buton kenarlarına yapışmaz veya taşmaz.
         {
-            let label = "MinOS";
+            let label = "minOs";
             let text_w = Self::text_width(label, 1);
             let icon_w = Self::icon_size();
             let inner_gap = sp(8);
@@ -2114,7 +2114,7 @@ impl MinGuiCompositor {
         let title_x = menu_x + sp(8) + icon_sz + sp(6);
         let text_h2 = Self::text_height();
         let title_y = menu_y + (strip_h.saturating_sub(text_h2)) / 2;
-        Self::draw_string_shadow(fb, title_x, title_y, "MinOS", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(fb, title_x, title_y, "minOs", Color::TEXT_MAIN, Color::SHADOW, 1);
         let settings_hover = in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22));
         if settings_hover { fb.draw_rounded_rect(menu_x + menu_w - 34, menu_y + 6, 26, 22, 4, Color::ACCENT_BLUE); }
         // Ayarlar menü öğesinde kullanılan mevcut uygulama simgesini yeniden kullan.

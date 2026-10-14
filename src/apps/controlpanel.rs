@@ -37,7 +37,7 @@ impl ControlPanelApp {
         match self.active_tab {
             0 => {
                 // Sistem Bilgileri
-                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 75, crate::gui::ui_text("İşletim Sistemi: MinOS Cat Edition (x86_64)", "Operating System: MinOS Cat Edition (x86_64)"), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 75, crate::gui::ui_text("İşletim Sistemi: minOs Cat Edition (x86_64)", "Operating System: minOs Cat Edition (x86_64)"), Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 95, crate::gui::ui_text("Önyükleyici: Limine v8.7.0 (Temel Sürüm 3)", "Bootloader: Limine v8.7.0 (Base Revision 3)"), Color::ACCENT_PINK);
                 MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 115, crate::gui::ui_text("CPU Mimarisi: Intel/AMD 64-bit, SSE/SSE2", "CPU Architecture: Intel/AMD 64-bit, SSE/SSE2"), Color::ACCENT_GREEN);
                 MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 135, crate::gui::ui_text("Toplam RAM: 128 MB (Kullanılabilir: 112 MB)", "Total RAM: 128 MB (Available: 112 MB)"), Color::ACCENT_BLUE);

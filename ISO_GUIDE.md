@@ -1,6 +1,6 @@
-# MinOS Boot Edilebilir ISO Oluşturma Rehberi
+# minOs Boot Edilebilir ISO Oluşturma Rehberi
 
-MinOS'u hem **UEFI** hem de **Legacy BIOS** sistemlerde boot edilebilir tek bir `.iso` dosyası haline getirmek için aşağıdaki 3 adımı uygulayabilirsiniz.
+minOs'u hem **UEFI** hem de **Legacy BIOS** sistemlerde boot edilebilir tek bir `.iso` dosyası haline getirmek için aşağıdaki 3 adımı uygulayabilirsiniz.
 
 ---
 
@@ -27,7 +27,7 @@ iso_root/
 │   │   ├── limine.cfg              # Bootloader ayar dosyası
 │   │   ├── limine-bios.sys         # BIOS bootloader ikilisi
 │   │   └── limine-bios-cd.bin      # CD/ISO El Torito önyükleme kaydı
-│   └── minos-kernel                # Derlenen MinOS çekirdeğiniz
+│   └── minos-kernel                # Derlenen minOs çekirdeğiniz
 └── EFI/
     └── BOOT/
         └── BOOTX64.EFI             # UEFI 64-bit önyükleyici
@@ -62,4 +62,4 @@ qemu-system-x86_64 -cdrom minos.iso -m 512M -vga std `
 
 VirtualBox'ta VM Ayarları > Ses bölümünde sesi etkinleştirip **Intel HD Audio** denetleyicisini seçin.
 
-- **Gerçek Donanımda Çalıştırma:** Oluşturduğunuz `minos.iso` dosyasını **Rufus** veya **Ventoy** kullanarak bir USB belleğe yazdırıp doğrudan bilgisayarınızı MinOS ile başlatabilirsiniz.
+- **Gerçek Donanımda Çalıştırma:** Oluşturduğunuz `minos.iso` dosyasını **Rufus** veya **Ventoy** kullanarak bir USB belleğe yazdırıp doğrudan bilgisayarınızı minOs ile başlatabilirsiniz.

@@ -56,7 +56,6 @@ impl DiskEntry {
 
 /// USB (master ATA) aygıtı için önbellek penceresi: her sektör okuması PIO ile
 /// yapıldığı için yalnızca çok küçük bir pencere tutulur.
-const SECTOR_CACHE_FREE: usize = usize::MAX;
 
 static mut KIND0: FsKind = FsKind::None;
 static mut KIND1: FsKind = FsKind::None;
@@ -81,15 +80,7 @@ fn serial(s: &str) {
     }
 }
 
-fn push_name(entry: &mut DiskEntry, s: &[u8]) {
-    let n = s.len().min(NAME_MAX);
-    entry.name[..n].copy_from_slice(&s[..n]);
-    entry.name_len = n;
-}
-
-/// Sektör okuma hatasında çok kez deneme yapmamak için basit başarı önbelleği.
 fn read_sector_cached(drive: u8, lba: u32, out: &mut [u8; 512]) -> bool {
-    let _ = SECTOR_CACHE_FREE;
     ata::read_sector(drive, lba, out)
 }
 

@@ -1,7 +1,6 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
-extern crate alloc;
 use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
@@ -161,7 +160,7 @@ fn serial_print(s: &str) {
 }
 
 fn restart_system() -> ! {
-    serial_print("[MinOS] Restart requested from Start Menu.\n");
+    serial_print("[minOs] Restart requested from Start Menu.\n");
     unsafe {
         // QEMU/PC reset control register, then legacy 8042 fallback.
         core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);
@@ -405,10 +404,10 @@ pub extern "C" fn _start() -> ! {
     init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
-    serial_print("[MinOS] Kernel _start reached!\n");
+    serial_print("[minOs] Kernel _start reached!\n");
     arch::x86_64::enable_sse();
     arch::x86_64::disable_pic();
-    serial_print("[MinOS] SSE enabled & PIC IRQs masked!\n");
+    serial_print("[minOs] SSE enabled & PIC IRQs masked!\n");
 
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
     arch::x86_64::init_interrupts();
@@ -466,14 +465,14 @@ pub extern "C" fn _start() -> ! {
         // SAFETY: the response pointer is validated before being dereferenced.
         if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response)) {
             let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
-            serial_print("[MinOS] HHDM offset okundu (0 yoksa gecerli).\n");
+            serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
             off
         } else {
-            serial_print("[MinOS] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
+            serial_print("[minOs] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
             0xFFFF_8000_0000_0000
         }
     };
-    serial_print("[MinOS] HHDM offset alindi.\n");
+    serial_print("[minOs] HHDM offset alindi.\n");
     drivers::set_hhdm_offset(hhdm_offset);
     drivers::hda::init();
     drivers::e1000::init();
@@ -490,14 +489,14 @@ pub extern "C" fn _start() -> ! {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
             if framebuffer_count == 0 || !is_canonical_ptr(fb_ptr_ptr) {
-                serial_print("[MinOS] ERROR: Limine framebuffer list is NULL!\n");
+                serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
             // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
             if !is_canonical_ptr(fb_info_ptr) {
-                serial_print("[MinOS] ERROR: Limine framebuffer entry is NULL!\n");
+                serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             let fb_info = core::ptr::read_volatile(fb_info_ptr);
@@ -508,7 +507,7 @@ pub extern "C" fn _start() -> ! {
                 fb_info.pitch as usize,
             )
         } else {
-            serial_print("[MinOS] ERROR: Limine Framebuffer response is NULL!\n");
+            serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
             loop {
                 core::hint::spin_loop();
             }
@@ -526,14 +525,14 @@ pub extern "C" fn _start() -> ! {
 
     // 5b. Tema motorunu başlat
     gui::theme::init();
-    serial_print("[MinOS] Theme engine initialized.\n");
+    serial_print("[minOs] Theme engine initialized.\n");
 
     // İlk açılış ekranı: kedi logosu ve ilerleme animasyonu.
     fb.draw_rect(0, 0, width, height, gui::Color::DARK_BG);
     let cx = width.saturating_sub(32) / 2;
     let cy = height.saturating_sub(32) / 2;
     gui::MinGuiCompositor::draw_cat_icon(&mut fb, cx, cy.saturating_sub(18));
-    gui::MinGuiCompositor::draw_string(&mut fb, cx.saturating_sub(8), cy + 8, "MinOS", gui::Color::TEXT_MAIN);
+    gui::MinGuiCompositor::draw_string(&mut fb, cx.saturating_sub(8), cy + 8, "minOs", gui::Color::TEXT_MAIN);
     for phase in 0..3 {
         let dots = match phase { 0 => ".  ", 1 => ".. ", _ => "..." };
         gui::MinGuiCompositor::draw_string(&mut fb, cx + 34, cy + 8, dots, gui::Color::ACCENT_BLUE);
@@ -671,7 +670,7 @@ pub extern "C" fn _start() -> ! {
     let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
     compositor.cal_year = now.year;
     compositor.cal_month = now.month;
-    serial_print("[MinOS] RTC clock online.\n");
+    serial_print("[minOs] RTC clock online.\n");
 
     // Etkileşim durumu
     let mut last_mouse_x = mouse.x;
@@ -1167,7 +1166,7 @@ pub extern "C" fn _start() -> ! {
                         item_clicked = true;
                         if i == 11 {
                             if compositor.confirm_shutdown {
-                                serial_print("[MinOS] System Shutdown confirmed via Start Menu!\n");
+                                serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
                                 unsafe {
                                     core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                                     core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
@@ -1917,7 +1916,7 @@ pub extern "C" fn _start() -> ! {
                         let i = first + item_k;
                         if i == 11 {
                             if compositor.confirm_shutdown {
-                                serial_print("[MinOS] System Shutdown confirmed via Keyboard!\n");
+                                serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
                                 unsafe {
                                     core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                                     core::arch::asm!("cli; hlt");
@@ -2065,7 +2064,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::ShutdownOS => {
-                    serial_print("[MinOS] System Shutdown requested!\n");
+                    serial_print("[minOs] System Shutdown requested!\n");
                     unsafe {
                         core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                         core::arch::asm!("cli; hlt");

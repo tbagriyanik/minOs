@@ -277,7 +277,32 @@ impl KeyboardState {
         None
     }
 
-    fn scancode_to_tr(scancode: u8, uppercase: bool, shift: bool, _alt_gr: bool) -> Option<char> {
+    fn scancode_to_tr(scancode: u8, uppercase: bool, shift: bool, alt_gr: bool) -> Option<char> {
+        // Türkçe Q düzeninin AltGr karakterleri.
+        if alt_gr {
+            return match scancode {
+                0x02 => Some('¹'),
+                0x03 => Some('²'),
+                0x04 => Some('#'),
+                0x05 => Some('$'),
+                0x06 => Some('€'),
+                0x07 => Some('{'),
+                0x08 => Some('['),
+                0x09 => Some(']'),
+                0x0A => Some('}'),
+                0x0B => Some('\\'),
+                0x0C => Some('*'),
+                0x0D => Some('|'),
+                0x10 => Some('@'), // AltGr+Q
+                0x12 => Some('€'), // AltGr+E
+                0x14 => Some('₺'), // AltGr+T
+                0x33 => Some(';'),
+                0x34 => Some(':'),
+                0x35 => Some('.'),
+                0x39 => Some(' '),
+                _ => None,
+            };
+        }
         match scancode {
             0x01 => Some('\x1b'), // Escape
             0x02 => Some(if shift { '\'' } else { '1' }),

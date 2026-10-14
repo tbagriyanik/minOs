@@ -7,7 +7,7 @@ use crate::gui::scrollbar::{self, ScrollState};
 fn line_h() -> usize { crate::gui::sp(16) }
 /// Karakter hücre ilerlemesi (px) — aktif font ölçeğine göre büyür.
 #[inline(always)]
-fn char_w() -> usize { crate::gui::sp(12) }
+fn char_w() -> usize { MinGuiCompositor::terminal_text_width("M").max(1) }
 /// Satır numarası şeridi (gutter) genişliği — font ölçeğine göre.
 #[inline(always)]
 fn gutter_w() -> usize { crate::gui::sp(32) }
@@ -546,7 +546,7 @@ impl NotepadApp {
                     };
                     let sel_h = line_h().saturating_sub(4).max(8);
                     if selected { fb.draw_rect(cx, cy, char_w(), sel_h, Color::ACCENT_BLUE); }
-                    MinGuiCompositor::draw_string(fb, cx, cy, s, if selected { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
+                    MinGuiCompositor::draw_terminal_string(fb, cx, cy, s, if selected { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
                 }
             }
             if i == self.cursor.saturating_sub(1) {

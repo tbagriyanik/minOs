@@ -27,13 +27,13 @@ impl VirtualFileSystem {
                     name: "kernel.log",
                     node_type: NodeType::File,
                     size: 34,
-                    data: b"[MinOS] Kernel booted successfully\n",
+                    data: b"[minOs] Kernel booted successfully\n",
                 }),
                 Some(VfsNode {
                     name: "readme.txt",
                     node_type: NodeType::File,
                     size: 47,
-                    data: b"Welcome to MinOS - Fast & Lightweight x86_64 OS\n",
+                    data: b"Welcome to minOs - Fast & Lightweight x86_64 OS\n",
                 }),
                 Some(VfsNode {
                     name: "settings.cfg",

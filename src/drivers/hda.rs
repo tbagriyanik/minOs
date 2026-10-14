@@ -30,18 +30,6 @@ fn serial_print(s: &str) {
 // ---------------------------------------------------------------------------
 
 #[inline]
-fn io_out16(port: u16, val: u16) {
-    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
-}
-
-#[inline]
-fn io_in16(port: u16) -> u16 {
-    let ret: u16;
-    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
-    ret
-}
-
-#[inline]
 fn io_out32(port: u16, val: u32) {
     unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
 }
@@ -106,40 +94,17 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
 const HDA_VENDOR: u32 = 0x8086;
 const HDA_DEVICE: u32 = 0x2668; // 82801FB/FBM Intel HD Audio (QEMU'nun taklidi)
 
-pub struct HdaController {
-    /// MMIO temel adres (BAR0)
-    mmio_base: u64,
-    /// Bulunan PCI adres (bus, dev, func)
-    pci_bus: u8,
-    pci_dev: u8,
-    pci_func: u8,
-}
-
 /// HDA Register bloğunun ana ofsetleri (BAR0 üzerinden)
-const GCAP: u32 = 0x00; // Global Capabilities
-const GCMD: u32 = 0x08; // PCI Control
-const INTCTL: u32 = 0x0C;
-const INTSTS: u32 = 0x0D;
-const SSYNC: u32 = 0x38;
-
 const CORB_BASE_LO: u32 = 0x40;
 const CORB_BASE_HI: u32 = 0x44;
 const CORB_WP: u32 = 0x48;
 const CORB_RP: u32 = 0x4A;
 const CORB_CTL: u32 = 0x4C;
-const CORBSTS: u32 = 0x4D;
 
 const RIRB_BASE_LO: u32 = 0x50;
 const RIRB_BASE_HI: u32 = 0x54;
 const RIRB_WP: u32 = 0x58;
 const RIRB_INTCTL: u32 = 0x5C;
-
-const ICOI: u32 = 0x60;
-const ICII: u32 = 0x60;
-const ICIS: u32 = 0x64;
-
-const DPLBASE: u32 = 0x70;
-const DPUBASE: u32 = 0x74;
 
 // Output Stream 0 (CD) register blok taban ofseti.
 // HDA'da stream descriptor 3 tiptir (Input, Output, Bidirectional).
@@ -148,36 +113,22 @@ const DPUBASE: u32 = 0x74;
 const OUT_STREAM_BASE: u32 = 0x180 + 4 * 0x20;
 
 const SD_CTL: u32 = 0x00;
-const SD_STS: u32 = 0x03;
-const SD_LPIB: u32 = 0x04;
 const SD_CBL: u32 = 0x08;
 const SD_LVI: u32 = 0x0C;
-const SD_FIFOW: u32 = 0x0E;
-const SD_FIFOS: u32 = 0x10;
 const SD_FMT: u32 = 0x12;
 const SD_BDPL: u32 = 0x18;
 const SD_BDPU: u32 = 0x1C;
 
 // Codec Node ID'leri (QEMU hda-duplex için standart)
-const CODEC_ROOT_NID: u32 = 0x01; // AFG
 const HDA_DAC_NID: u32 = 0x02; // QEMU'da hda-duplex çıkış DAC
 const HDA_OUT_PIN_NID: u32 = 0x03; // QEMU'da hda-duplex çıkış pini (jack)
 
 // Çıkış stream değeri (stream 4)
 const OUT_STREAM_NUM: u8 = 4;
-const OUT_STREAM_FMT: u16 = 0; // stream numarası + format üst 4 bit
 
 // ---------------------------------------------------------------------------
 // DMA Bellek Yardımcıları (fiziksel adresler — HHDM / fiziksel eşleme gerekir)
 // ---------------------------------------------------------------------------
-
-// Kernel'da fiziksel = sanal eşleme. Kernel 0xFFFF_8000_0000_0000 (HHDM) altında
-// fiziksel alanın eşlenmesini varsayar. Kernel __map_1to1 yok, fiziksel == sanal
-// doğrudan adresler QEMU'da çalışır; şu an gerçek page tablosu yok.
-#[inline(always)]
-fn phys_to_virt(p: u64) -> u64 {
-    p // Basit eşleme — QEMU'da sayfa tablosu henüz yok
-}
 
 // ---------------------------------------------------------------------------
 // CORB / RIRB komut kuyruğu
@@ -204,9 +155,6 @@ pub struct HdaDmaPool {
     pub rirb_wp: u16,
 }
 
-const DMA_POOL_SIZE: usize = core::mem::size_of::<HdaDmaPool>();
-
-static mut DMA_POOL_BUF: () = ();
 // DMA pool'u bilinen bir FİZİKSEL adrese koy: 0x300000 (3MB). HHDM üzerinden erişilir.
 const DMA_POOL_PHYS: u64 = 0x0030_0000;
 static mut DMA_POOL_ADDR: u64 = DMA_POOL_PHYS;
@@ -368,7 +316,7 @@ pub fn init() {
 
         HDA_MMIO_BASE = mmio_base;
 
-        // 1b. Kesme hattını kapat: MinOS IRQ'ları maskeli çalıştığı için HDA'nın
+        // 1b. Kesme hattını kapat: minOs IRQ'ları maskeli çalıştığı için HDA'nın
         // IRQ üretmesi istenmez. QEMU'da paylaşılan IRQ hattına RTE'siz donanım
         // bağlanması IRQ fırtınasına ve DMA akışının durmasına yol açıyor.
         if let Some(rte_off) = pci_interrupt_line(dev, func).checked_mul(2) {

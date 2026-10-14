@@ -469,7 +469,124 @@ fn lower_iso(b: u8) -> u8 {
 // Genel API
 // ---------------------------------------------------------------------------
 
-/// ATA kanalını tarar, USB bellek (FAT32) ve CD-ROM (ISO9660) ortamlarını bağlar.
+/// Sürücüyü (HDD/QCOW2/USB) standart FAT32 dosya sistemiyle biçimlendirir.
+pub fn fat_format(drive: u8) -> bool {
+    let total_sectors = ata::drive_capacity_sectors(drive);
+    let sectors_u32 = if total_sectors > 0 && total_sectors <= 0xFFFF_FFFF {
+        total_sectors as u32
+    } else {
+        131072 // 64 MB varsayılan (64 * 1024 * 1024 / 512)
+    };
+
+    // 1. Sektör 0: FAT32 Volume Boot Record (BPB)
+    let mut bpb = [0u8; 512];
+    bpb[0] = 0xEB; bpb[1] = 0x58; bpb[2] = 0x90; // jmp boot
+    bpb[3..11].copy_from_slice(b"MINOSOS "); // OEM Name
+    bpb[11] = 0x00; bpb[12] = 0x02; // 512 bytes per sector (le16)
+    bpb[13] = 8; // 8 sectors per cluster (4KB)
+    bpb[14] = 32; bpb[15] = 0x00; // 32 reserved sectors (le16)
+    bpb[16] = 2; // 2 FATs
+    bpb[21] = 0xF8; // media descriptor: fixed disk
+    bpb[24] = 63; bpb[25] = 0; // sectors per track
+    bpb[26] = 255; bpb[27] = 0; // number of heads
+    // Total sectors 32:
+    bpb[32] = (sectors_u32 & 0xFF) as u8;
+    bpb[33] = ((sectors_u32 >> 8) & 0xFF) as u8;
+    bpb[34] = ((sectors_u32 >> 16) & 0xFF) as u8;
+    bpb[35] = ((sectors_u32 >> 24) & 0xFF) as u8;
+    // FAT size 32 (sectors per FAT): 512 sektör (256 KB)
+    let fat_size: u32 = 512;
+    bpb[36] = (fat_size & 0xFF) as u8;
+    bpb[37] = ((fat_size >> 8) & 0xFF) as u8;
+    bpb[38] = ((fat_size >> 16) & 0xFF) as u8;
+    bpb[39] = ((fat_size >> 24) & 0xFF) as u8;
+    // Root cluster: 2
+    bpb[44] = 2; bpb[45] = 0; bpb[46] = 0; bpb[47] = 0;
+    // FSInfo sector: 1
+    bpb[48] = 1; bpb[49] = 0;
+    // Backup boot sector: 6
+    bpb[50] = 6; bpb[51] = 0;
+    bpb[64] = 0x80; // drive number
+    bpb[66] = 0x29; // boot signature
+    bpb[67] = 0x78; bpb[68] = 0x56; bpb[69] = 0x34; bpb[70] = 0x12; // volume ID
+    bpb[71..82].copy_from_slice(b"MINOS DISK "); // Volume label
+    bpb[82..90].copy_from_slice(b"FAT32   "); // System ID
+    bpb[510] = 0x55; bpb[511] = 0xAA; // Signature
+
+    if !ata::write_sector(drive, 0, &bpb) {
+        return false;
+    }
+    // Yedek boot sektörü (LBA 6)
+    ata::write_sector(drive, 6, &bpb);
+
+    // 2. FSInfo Sektörü (LBA 1)
+    let mut fsinfo = [0u8; 512];
+    fsinfo[0..4].copy_from_slice(&0x41615252u32.to_le_bytes()); // Lead sig
+    fsinfo[484..488].copy_from_slice(&0x61417272u32.to_le_bytes()); // Struct sig
+    fsinfo[488..492].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // Free clusters
+    fsinfo[492..496].copy_from_slice(&3u32.to_le_bytes()); // Next free cluster: 3
+    fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes()); // Trail sig
+    ata::write_sector(drive, 1, &fsinfo);
+
+    // 3. FAT1 ve FAT2 Tabloları (LBA 32 ve LBA 32 + 512 = 544)
+    let fat1_lba = 32u32;
+    let fat2_lba = fat1_lba + fat_size;
+    let mut fat_sec = [0u8; 512];
+    // Cluster 0: 0x0FFFFFF8
+    fat_sec[0..4].copy_from_slice(&0x0FFFFFF8u32.to_le_bytes());
+    // Cluster 1: 0x0FFFFFFF
+    fat_sec[4..8].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+    // Cluster 2 (Kök dizin): 0x0FFFFFFF (zincir sonu)
+    fat_sec[8..12].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+    // Cluster 3 (Varsayılan benioku.txt): 0x0FFFFFFF
+    fat_sec[12..16].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+
+    ata::write_sector(drive, fat1_lba, &fat_sec);
+    ata::write_sector(drive, fat2_lba, &fat_sec);
+
+    let empty_sec = [0u8; 512];
+    for s in 1..4 {
+        ata::write_sector(drive, fat1_lba + s, &empty_sec);
+        ata::write_sector(drive, fat2_lba + s, &empty_sec);
+    }
+
+    // 4. Kök Dizin (Root Directory - Cluster 2)
+    // data_lba = fat1_lba + 2 * fat_size = 32 + 1024 = 1056
+    let root_lba = fat1_lba + 2 * fat_size;
+    let mut root_sec = [0u8; 512];
+
+    // Girdi 0: Ses etiketi (Volume Label)
+    root_sec[0..11].copy_from_slice(b"MINOS DISK ");
+    root_sec[11] = FAT_ATTR_VOLUME_ID;
+
+    // Girdi 1: BENIOKU.TXT
+    let default_msg = b"minOs Sabit Disk (QCOW2)\n========================\nDosya Yoneticisi ve Not Defteri ile bu diske dosya yazabilir, silebilir ve yeni klasorler olusturabilirsiniz.\n";
+    root_sec[32..43].copy_from_slice(b"BENIOKUTXT"); // 8.3 dosya adi
+    root_sec[32 + 11] = 0x20; // Normal dosya (Archive)
+    root_sec[32 + 20] = 0; root_sec[32 + 21] = 0; // High cluster
+    root_sec[32 + 26] = 3; root_sec[32 + 27] = 0; // Low cluster: 3
+    let msg_len = default_msg.len() as u32;
+    root_sec[32 + 28..32 + 32].copy_from_slice(&msg_len.to_le_bytes());
+
+    ata::write_sector(drive, root_lba, &root_sec);
+
+    // Kök dizinin kalan sektörlerini temizle
+    for s in 1..8 {
+        ata::write_sector(drive, root_lba + s, &empty_sec);
+    }
+
+    // 5. Cluster 3 Verisi: BENIOKU.TXT içeriğini yaz
+    let cluster3_lba = root_lba + 8;
+    let mut data_sec = [0u8; 512];
+    data_sec[..default_msg.len()].copy_from_slice(default_msg);
+    ata::write_sector(drive, cluster3_lba, &data_sec);
+
+    ata::flush_cache(drive);
+    serial("[FS] Sabit Disk FAT32 olarak bicimlendirildi!\n");
+    true
+}
+
+/// ATA kanalını tarar, Sabit Disk (FAT32), USB bellek ve CD-ROM (ISO9660) ortamlarını bağlar.
 pub fn init() {
     unsafe {
         if READY {
@@ -478,18 +595,24 @@ pub fn init() {
         ata::init();
         READY = true;
     }
-    // 1) Master → USB bellek (FAT32)
+    // 1) Master → Sabit Disk / USB bellek (FAT32)
     if ata::master_kind() == ata::DeviceKind::Ata {
         let part = find_partition_lba(0);
         let candidate = if part > 0 { part } else { 0 };
         if fat_mount(0, candidate) {
             unsafe { KIND0 = FsKind::Fat32; }
-            serial("[FS] USB bellek FAT32 olarak baglandi.\n");
+            serial("[FS] Sabit Disk / USB FAT32 olarak baglandi.\n");
         } else if fat_mount(0, 0) {
             unsafe { KIND0 = FsKind::Fat32; }
-            serial("[FS] USB bellek FAT32 (superfloppy) olarak baglandi.\n");
+            serial("[FS] Sabit Disk / USB FAT32 (superfloppy) olarak baglandi.\n");
+        } else if ata::drive_capacity_sectors(0) > 0 {
+            serial("[FS] Sabit Disk tespit edildi, FAT32 bicimlendiriliyor...\n");
+            if fat_format(0) && fat_mount(0, 0) {
+                unsafe { KIND0 = FsKind::Fat32; }
+                serial("[FS] Sabit Disk (qcow2) FAT32 olarak hazirlandi ve yazmaya acildi!\n");
+            }
         } else {
-            serial("[FS] USB bellek bulundu ancak FAT32 taninamadi.\n");
+            serial("[FS] Depolama aygiti bulundu ancak dosya sistemi taninamadi.\n");
         }
     } else if ata::master_kind() == ata::DeviceKind::Atapi {
         if iso_mount(0) {
@@ -824,7 +947,22 @@ pub fn delete_file_by_name(name: &str) -> bool {
     }
 }
 
-/// FAT32 ortamında dosya içeriğini kaydeder / yazar.
+fn to_8_3_name(name: &str) -> [u8; 11] {
+    let mut out = [b' '; 11];
+    let trimmed = name.trim();
+    let mut parts = trimmed.split('.');
+    let base = parts.next().unwrap_or("");
+    let ext = parts.next().unwrap_or("");
+    for (i, b) in base.bytes().take(8).enumerate() {
+        out[i] = b.to_ascii_uppercase();
+    }
+    for (i, b) in ext.bytes().take(3).enumerate() {
+        out[8 + i] = b.to_ascii_uppercase();
+    }
+    out
+}
+
+/// FAT32 ortamında dosya içeriğini kaydeder / yazar (mevcutsa günceller, yoksa yeni oluşturur).
 pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
     unsafe {
         if KIND0 != FsKind::Fat32 {
@@ -832,6 +970,8 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
         }
         let mut cluster = FAT.root_cluster;
         let mut guard = 0;
+        let mut free_slot: Option<(u32, usize)> = None;
+
         while guard < 128 {
             guard += 1;
             let base_lba = cluster_to_lba(cluster);
@@ -844,10 +984,13 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
                 for e in 0..16 {
                     let off = e * 32;
                     let first = sec[off];
-                    if first == 0x00 {
-                        return false;
-                    }
-                    if first == 0xE5 {
+                    if first == 0x00 || first == 0xE5 {
+                        if free_slot.is_none() {
+                            free_slot = Some((sector_lba, off));
+                        }
+                        if first == 0x00 {
+                            break;
+                        }
                         continue;
                     }
                     let attr = sec[off + 11];
@@ -873,6 +1016,7 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
                             sec[off + 30] = ((len_u32 >> 16) & 0xFF) as u8;
                             sec[off + 31] = ((len_u32 >> 24) & 0xFF) as u8;
                             ata::write_sector(FAT.drive, sector_lba, &sec);
+                            ata::flush_cache(FAT.drive);
                             refresh();
                             return true;
                         }
@@ -881,7 +1025,54 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
             }
             match fat_next(cluster) {
                 Some(next) => cluster = next,
-                None => return false,
+                None => break,
+            }
+        }
+
+        // Dosya mevcut değildi; ilk boş dizin yuvasına yeni dosya olarak yaz
+        if let Some((sec_lba, off)) = free_slot {
+            let mut new_cluster = 4u32;
+            let mut found_cluster = false;
+            let mut fat_buf = [0u8; 512];
+            if read_sector_cached(FAT.drive, FAT.fat_lba, &mut fat_buf) {
+                for c in 4..128u32 {
+                    let entry_off = (c as usize) * 4;
+                    let val = le32(&fat_buf, entry_off) & 0x0FFF_FFFF;
+                    if val == 0 {
+                        new_cluster = c;
+                        found_cluster = true;
+                        fat_buf[entry_off..entry_off + 4].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
+                        ata::write_sector(FAT.drive, FAT.fat_lba, &fat_buf);
+                        let fat2_lba = FAT.fat_lba + 512;
+                        ata::write_sector(FAT.drive, fat2_lba, &fat_buf);
+                        break;
+                    }
+                }
+            }
+
+            if found_cluster {
+                let file_base = cluster_to_lba(new_cluster);
+                let take = data.len().min(512);
+                let mut file_sec = [0u8; 512];
+                file_sec[..take].copy_from_slice(&data[..take]);
+                ata::write_sector(FAT.drive, file_base, &file_sec);
+
+                let mut dir_sec = [0u8; 512];
+                if read_sector_cached(FAT.drive, sec_lba, &mut dir_sec) {
+                    let s_name = to_8_3_name(name);
+                    dir_sec[off..off + 11].copy_from_slice(&s_name);
+                    dir_sec[off + 11] = 0x20; // Normal dosya (Archive)
+                    dir_sec[off + 20] = (new_cluster >> 16) as u8;
+                    dir_sec[off + 21] = ((new_cluster >> 24) & 0x0F) as u8;
+                    dir_sec[off + 26] = (new_cluster & 0xFF) as u8;
+                    dir_sec[off + 27] = ((new_cluster >> 8) & 0xFF) as u8;
+                    let len_u32 = data.len() as u32;
+                    dir_sec[off + 28..off + 32].copy_from_slice(&len_u32.to_le_bytes());
+                    ata::write_sector(FAT.drive, sec_lba, &dir_sec);
+                    ata::flush_cache(FAT.drive);
+                    refresh();
+                    return true;
+                }
             }
         }
         false

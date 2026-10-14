@@ -214,11 +214,11 @@ impl VirtualFileSystem {
     pub fn write_file(&mut self, path_or_name: &str, data: &[u8]) -> bool {
         let norm = Self::normalize_path(path_or_name);
 
-        // USB ortamına yazma kontrolü
-        if norm.starts_with("/media/usb0/") {
-            let disk_file = &norm["/media/usb0/".len()..];
-            // diskfs üzerinden de senkronize et
-            diskfs::save_file_by_name(disk_file, data);
+        // USB ve Sabit Disk ortamına yazma kontrolü
+        if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
+            let disk_file = Self::file_name_from_path(&norm);
+            // diskfs üzerinden de diske/qcow2'ye senkronize et
+            diskfs::save_file_by_name(&disk_file, data);
         }
 
         for it in &mut self.items {
@@ -247,8 +247,8 @@ impl VirtualFileSystem {
             }
         }
 
-        // USB veya CD-ROM ortamından okuma
-        if norm.starts_with("/media/usb0/") || norm.starts_with("/media/cdrom/") {
+        // Sabit Disk (HDD/QCOW2), USB veya CD-ROM ortamından okuma
+        if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") || norm.starts_with("/media/cdrom/") {
             let filename = Self::file_name_from_path(&norm);
             if diskfs::load_file(&filename) > 0 {
                 return Some(diskfs::content());
@@ -271,9 +271,9 @@ impl VirtualFileSystem {
     pub fn delete_file(&mut self, path_or_name: &str) -> bool {
         let norm = Self::normalize_path(path_or_name);
 
-        if norm.starts_with("/media/usb0/") {
-            let disk_file = &norm["/media/usb0/".len()..];
-            diskfs::delete_file_by_name(disk_file);
+        if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
+            let disk_file = Self::file_name_from_path(&norm);
+            diskfs::delete_file_by_name(&disk_file);
         }
 
         let mut found_idx = None;
@@ -321,8 +321,8 @@ impl VirtualFileSystem {
         let norm = Self::normalize_path(dir_path);
         let mut results = Vec::new();
 
-        // USB disk görünümü
-        if norm == "/media/usb0" && diskfs::usb_available() {
+        // Sabit Disk (HDD/QCOW2) ve USB disk görünümü
+        if (norm == "/media/usb0" || norm == "/media/hdd0") && diskfs::usb_available() {
             if !diskfs::listed() {
                 diskfs::refresh();
             }

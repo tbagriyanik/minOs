@@ -1137,17 +1137,16 @@ impl MinGuiCompositor {
         font_render::draw(fb, font_render::Face::Inria, x, y, text, color, size);
     }
 
-    /// Gölgeli metin — renkli başlık/buton zeminlerinde okunabilirliği artırır.
+    /// Gölgeli/vurgulu metin — tek geçişli temiz çizim yaparak font bulanıklığını ve gölge çakışmasını önler.
     pub fn draw_string_shadow(
         fb: &mut Framebuffer,
         x: usize,
         y: usize,
         text: &str,
         color: u32,
-        shadow: u32,
+        _shadow: u32,
         scale: usize,
     ) {
-        Self::draw_string_scaled(fb, x + 1, y + 1, text, shadow, scale);
         Self::draw_string_scaled(fb, x, y, text, color, scale);
     }
 
@@ -1591,18 +1590,18 @@ impl MinGuiCompositor {
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
         let desk_icons = if ui_english() { [
-            ("Computer", Color::ACCENT_BLUE, 0), ("Notes", Color::TEXT_MAIN, 1),
-            ("SarmanNet", Color::ACCENT_GREEN, 2), ("Playlist", Color::ACCENT_YELLOW, 3),
-            ("Settings", Color::ACCENT_PINK, 4),
+            ("Computer", 0), ("Notes", 1),
+            ("SarmanNet", 2), ("Playlist", 3),
+            ("Settings", 4),
         ] } else { [
-            ("Bilgisayarım", Color::ACCENT_BLUE, 0), ("Notlar", Color::TEXT_MAIN, 1),
-            ("SarmanNet", Color::ACCENT_GREEN, 2), ("Çalma Listesi", Color::ACCENT_YELLOW, 3),
-            ("Sistem Ayarları", Color::ACCENT_PINK, 4),
+            ("Bilgisayarım", 0), ("Notlar", 1),
+            ("SarmanNet", 2), ("Çalma Listesi", 3),
+            ("Sistem Ayarları", 4),
         ] };
 
         let card_w = sp(34);
         let card_h = sp(30);
-        for (i, (lbl, col, icon_idx)) in desk_icons.iter().enumerate() {
+        for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate() {
             let dy = sp(30) + i * sp(54);
             // İkon kartı (gölgeli, yuvarlatılmış 6px) — ölçekle büyür.
             let card_x = sp(20);
@@ -1612,10 +1611,10 @@ impl MinGuiCompositor {
             let inner_x = card_x + (card_w.saturating_sub(isz)) / 2;
             let inner_y = dy + (card_h.saturating_sub(isz)) / 2;
             Self::draw_icon_by_index(fb, inner_x, inner_y, *icon_idx);
-            // Etiket, ikon kartına dikey ortalı ve net boşlukla çizilir.
+            // Etiket, ikon kartına dikey ortalı ve net boşlukla çizilir (temiz, tekdüze yazı).
             let label_x = card_x + card_w + sp(10);
             let label_y = dy + card_h.saturating_sub(Self::text_height()) / 2;
-            Self::draw_string_shadow(fb, label_x, label_y, lbl, *col, Color::SHADOW, 1);
+            Self::draw_string(fb, label_x, label_y, lbl, Color::TEXT_MAIN);
         }
     }
 
@@ -1640,22 +1639,54 @@ impl MinGuiCompositor {
     }
 
     fn window_title(win_idx: usize, english: bool) -> &'static str {
-        match (win_idx, english) {
-            (0, true) => "File Manager - VFS / Home", (1, true) => "System Settings",
-            (2, true) => "Notepad - untitled.txt", (3, true) => "Web Browser",
-            (4, true) => "Image Viewer - kedi_maskotu.bmp", (5, true) => "Music Player",
-            (6, true) => "Video Player - retro_drive.mp4", (7, true) => "Task Manager",
-            (8, true) => "Calculator", (9, true) => "Paint", (10, true) => "Command Prompt",
-            _ => "",
+        if english {
+            match win_idx {
+                0 => "File Manager",
+                1 => "System Settings",
+                2 => "Notepad",
+                3 => "Web Browser",
+                4 => "Image Viewer",
+                5 => "Music Player",
+                6 => "Video Player",
+                7 => "Task Manager",
+                8 => "Calculator",
+                9 => "Paint",
+                10 => "Command Prompt",
+                _ => "Window",
+            }
+        } else {
+            match win_idx {
+                0 => "Dosya Yöneticisi",
+                1 => "Sistem Ayarları",
+                2 => "Not Defteri",
+                3 => "Web Gezgini",
+                4 => "Resim Gösterici",
+                5 => "Müzik Çalar",
+                6 => "Video Oynatıcı",
+                7 => "Görev Yöneticisi",
+                8 => "Hesap Makinesi",
+                9 => "Çizim Tahtası",
+                10 => "Komut İstemi",
+                _ => "Pencere",
+            }
         }
     }
 
     fn window_tab_title(win_idx: usize, english: bool) -> &'static str {
-        match (win_idx, english) {
-            (0, true) => "Files", (1, true) => "Settings", (2, true) => "Notes",
-            (3, true) => "Web", (4, true) => "Image", (5, true) => "Music",
-            (6, true) => "Video", (7, true) => "Tasks", (8, true) => "Calc",
-            (9, true) => "Paint", (10, true) => "CMD", _ => "",
+        if english {
+            match win_idx {
+                0 => "Files", 1 => "Settings", 2 => "Notes",
+                3 => "Web", 4 => "Image", 5 => "Music",
+                6 => "Video", 7 => "Tasks", 8 => "Calc",
+                9 => "Paint", 10 => "CMD", _ => "Win",
+            }
+        } else {
+            match win_idx {
+                0 => "Dosyalar", 1 => "Ayarlar", 2 => "Notlar",
+                3 => "Web", 4 => "Resim", 5 => "Müzik",
+                6 => "Video", 7 => "Görevler", 8 => "Hesap",
+                9 => "Çizim", 10 => "Komut", _ => "Pencere",
+            }
         }
     }
 
@@ -1687,20 +1718,21 @@ impl MinGuiCompositor {
         let icon_idx = Self::window_icon_index(win.app_id as usize);
         let icon_sz = Self::icon_size();
         let icon_y = win.y + titlebar_h().saturating_sub(icon_sz) / 2;
-        Self::draw_icon_by_index(fb, win.x + sp(6), icon_y, icon_idx);
+        Self::draw_icon_by_index(fb, win.x + sp(8), icon_y, icon_idx);
         let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
-        let title = if ui_english() { Self::window_title(win.app_id as usize, true) } else { win.title };
+        let localized_title = Self::window_title(win.app_id as usize, ui_english());
+        let title = if !localized_title.is_empty() { localized_title } else { win.title };
         // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
         // Başlık alanı, simge ile kontrol düğmeleri arasına kırpılır; uzun
         // başlıklar pencere dışına veya düğmelerin üzerine taşmaz.
         let text_h = Self::text_height();
         let title_y = win.y + titlebar_h().saturating_sub(text_h) / 2;
-        let title_x = win.x + sp(6) + icon_sz + sp(6);
-        let title_area_w = win.width.saturating_sub((title_x - win.x) + sp(72));
+        let title_x = win.x + sp(8) + icon_sz + sp(8);
+        let title_area_w = win.width.saturating_sub((title_x - win.x) + sp(76));
         if title_area_w > 0 {
             let old_clip = fb.clip();
             fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
-            Self::draw_string_shadow(fb, title_x, title_y, title, title_col, Color::SHADOW, 1);
+            Self::draw_string(fb, title_x, title_y, title, title_col);
             fb.set_clip(old_clip.x0, old_clip.y0,
                 old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
         }
@@ -1831,7 +1863,8 @@ impl MinGuiCompositor {
                         fb.draw_rounded_rect(rect.0 + 2, rect.1 + 2, 3, rect.3 - 4, 1, Color::ACCENT_BLUE);
                     }
                     let tab_text_color = if win.is_minimized { Color::TEXT_MUTED } else { Color::TEXT_MAIN };
-                    let tab_title = if ui_english() { Self::window_tab_title(win.app_id as usize, true) } else { win.tab_title };
+                    let loc_tab = Self::window_tab_title(win.app_id as usize, ui_english());
+                    let tab_title = if !loc_tab.is_empty() { loc_tab } else { win.tab_title };
                     let text_h = Self::text_height();
                     let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
                     if tw >= sp(58) {
@@ -2229,8 +2262,8 @@ impl MinGuiCompositor {
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
         let menu_items = if english { [
-            ("Settings", Color::ACCENT_BLUE, 1usize),
             ("File Manager", Color::ACCENT_YELLOW, 0),
+            ("Settings", Color::ACCENT_BLUE, 1usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
             ("Terminal", Color::ACCENT_GREEN, 10),
             ("Notepad", Color::TEXT_MAIN, 2),
@@ -2243,8 +2276,8 @@ impl MinGuiCompositor {
             ("Shut Down", Color::ACCENT_RED, 255),
             ("Restart", Color::ACCENT_YELLOW, 254),
         ] } else { [
-            ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
             ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
+            ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
             ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
             ("Komut İstemi", Color::ACCENT_GREEN, 10),
             ("Not Defteri", Color::TEXT_MAIN, 2),
@@ -2282,7 +2315,7 @@ impl MinGuiCompositor {
             }
 
             // Çizim: Simgeler (İkonlar) — öğe içinde dikey ortalanır.
-            let icon_y = r.1 + r.3.saturating_sub(sp(16)) / 2;
+            let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
             if app_or_code < 11 {
                 let icon_idx = Self::window_icon_index(app_or_code);
                 Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
@@ -2299,7 +2332,7 @@ impl MinGuiCompositor {
                 name
             };
 
-            let text_col = if is_hovered { Color::WHITE } else if bg_col == Color::WINDOW_BG && col == Color::ACCENT_PINK { Color::ACCENT_BLUE } else { col };
+            let text_col = if is_hovered { Color::WHITE } else { Color::TEXT_MAIN };
             // Metin konumu ikon boyutundan türetilir: sol boşluk + ikon + boşluk.
             // Böylece ikon büyüse de metin ikonun üzerine binmez (taşma/kayma yok).
             let text_off = sp(6) + Self::icon_size() + sp(8);

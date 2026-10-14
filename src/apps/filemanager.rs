@@ -237,7 +237,8 @@ impl FileManagerApp {
 
     /// Yeni dosya oluşturur.
     pub fn new_file(&mut self, vfs: &mut VirtualFileSystem) {
-        let mut name = String::from("yeni_belge_");
+        let is_fat = self.path().starts_with("/media/hdd0") || self.path().starts_with("/media/usb0");
+        let mut name = if is_fat { String::from("NOT_") } else { String::from("yeni_belge_") };
         let mut num_buf = [0u8; 10];
         let mut v = self.item_counter;
         let mut n = 0;
@@ -251,7 +252,7 @@ impl FileManagerApp {
         if let Ok(s) = core::str::from_utf8(&num_buf[..n]) {
             name.push_str(s);
         }
-        name.push_str(".txt");
+        if is_fat { name.push_str(".TXT"); } else { name.push_str(".txt"); }
         self.item_counter += 1;
 
         let mut full_path = String::from(self.path());
@@ -267,7 +268,8 @@ impl FileManagerApp {
 
     /// Yeni klasör oluşturur.
     pub fn new_folder(&mut self, vfs: &mut VirtualFileSystem) {
-        let mut name = String::from("Yeni_Klasor_");
+        let is_fat = self.path().starts_with("/media/hdd0") || self.path().starts_with("/media/usb0");
+        let mut name = if is_fat { String::from("KLASOR_") } else { String::from("Yeni_Klasor_") };
         let mut num_buf = [0u8; 10];
         let mut v = self.item_counter;
         let mut n = 0;
@@ -397,6 +399,49 @@ impl FileManagerApp {
         self.file_count * ROW_H
     }
 
+    /// Klasör Simgesi: Arka sekme, gövde, parlak sarı/amber kapak ve yukarı oku (..) desteği
+    pub fn draw_folder_icon(fb: &mut Framebuffer, x: usize, y: usize, is_up: bool) {
+        // Klasör Arka Sekmesi (Tab)
+        fb.draw_rect(x + 1, y, 6, 3, Color::ACCENT_YELLOW);
+        // Klasör Arka Gövdesi (Back Body)
+        fb.draw_rect(x + 1, y + 2, 14, 10, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -30));
+        // Klasör Ön Kapağı (Front Flap - canlı parlak sarı)
+        fb.draw_rect(x, y + 4, 16, 9, Color::ACCENT_YELLOW);
+        // Üst kenar parıltısı (Highlight)
+        fb.draw_line(x + 1, y + 4, x + 15, y + 4, 0xFFE082);
+        // İnce alt kenarlık / gölge
+        fb.draw_line(x, y + 12, x + 15, y + 12, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -50));
+
+        // Eğer üst klasör ise (..) içine beyaz yukarı oku çiz
+        if is_up {
+            fb.draw_line(x + 8, y + 6, x + 8, y + 10, Color::WHITE);
+            fb.draw_line(x + 7, y + 7, x + 9, y + 7, Color::WHITE);
+            fb.draw_line(x + 6, y + 8, x + 10, y + 8, Color::WHITE);
+        }
+    }
+
+    /// Belge / Dosya Simgesi: Katlanmış köşeli sayfa ve dosya türü vurgusu
+    pub fn draw_file_icon(fb: &mut Framebuffer, x: usize, y: usize, tag: &str) {
+        let accent = match tag {
+            "IMG" => Color::ACCENT_YELLOW,
+            "SND" => Color::ACCENT_GREEN,
+            "VID" => Color::ACCENT_RED,
+            "WEB" => Color::ACCENT_BLUE,
+            "CFG" => Color::ACCENT_PINK,
+            _ => Color::TEXT_MAIN,
+        };
+        // Sayfa beyaz kağıt gövdesi
+        fb.draw_rect(x + 2, y + 1, 11, 13, Color::WHITE);
+        // Sağ üst katlanmış köşe (Folded Corner)
+        fb.draw_rect(x + 9, y + 1, 4, 4, Color::TITLE_BAR);
+        // İçerik satır çizgileri
+        fb.draw_line(x + 4, y + 5, x + 10, y + 5, accent);
+        fb.draw_line(x + 4, y + 7, x + 10, y + 7, accent);
+        fb.draw_line(x + 4, y + 9, x + 8, y + 9, accent);
+        // İnce sayfa çerçevesi
+        fb.draw_rect_outline(x + 2, y + 1, 11, 13, Color::BORDER);
+    }
+
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState) {
         let sidebar_w = 110;
         let list_x = win_x + sidebar_w + 14;
@@ -443,13 +488,13 @@ impl FileManagerApp {
         fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
 
         let nav = if crate::gui::ui_english() {
-            ["> Root (/)", "  Documents", "  Media", "  Downloads", "  System", "  USB Drive", "  Hard Disk", "  CD-ROM"]
+            ["Root (/)", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM"]
         } else {
-            ["> Kok (/)", "  Belgeler", "  Medyalar", "  Indirilenler", "  Sistem", "  USB Disk", "  Sabit Disk", "  CD-ROM"]
+            ["Kok (/)", "Belgeler", "Medyalar", "Indirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM"]
         };
 
         for (i, item) in nav.iter().enumerate() {
-            let iy = win_y + 66 + i * 20;
+            let iy = win_y + 66 + i * 22;
             if iy + 8 > win_y + 60 + sidebar_h { break; }
             let cur = self.path();
             let is_active = match i {
@@ -463,25 +508,43 @@ impl FileManagerApp {
                 7 => cur == "/media/cdrom",
                 _ => false,
             };
+            if is_active {
+                fb.draw_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, Color::TITLE_BAR);
+            }
+            if i <= 4 {
+                Self::draw_folder_icon(fb, win_x + 9, iy + 2, false);
+            } else if i == 5 {
+                // USB Simgesi
+                fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_GREEN);
+                fb.draw_rect(win_x + 12, iy + 1, 8, 3, Color::WHITE);
+            } else if i == 6 {
+                // HDD Simgesi
+                fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_YELLOW);
+                fb.draw_line(win_x + 11, iy + 8, win_x + 21, iy + 8, Color::BLACK);
+            } else {
+                // CD Simgesi
+                fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_PINK);
+                fb.draw_rect(win_x + 14, iy + 6, 4, 4, Color::WHITE);
+            }
             let col = if is_active {
                 Color::ACCENT_BLUE
             } else if i == 5 {
                 if diskfs::usb_available() { Color::ACCENT_GREEN } else { Color::TEXT_MUTED }
             } else if i == 6 {
-                if crate::drivers::usb::hdd_available() { Color::ACCENT_YELLOW } else { Color::TEXT_MUTED }
+                if crate::drivers::usb::hdd_available() || diskfs::usb_available() { Color::ACCENT_YELLOW } else { Color::TEXT_MUTED }
             } else if i == 7 {
                 if diskfs::cd_available() { Color::ACCENT_PINK } else { Color::TEXT_MUTED }
             } else {
                 Color::TEXT_MAIN
             };
-            MinGuiCompositor::draw_string(fb, win_x + 10, iy, item, col);
+            MinGuiCompositor::draw_string(fb, win_x + 28, iy + 2, item, col);
         }
 
         // Sağ Liste Başlıkları
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
         let name_end = if list_w > 330 { 150 } else if list_w > 200 { 150 } else { list_w.saturating_sub(12) };
-        MinGuiCompositor::draw_string_clipped(fb, list_x + 6, win_y + 66, crate::gui::ui_text("DOSYA ADI", "FILE NAME"), Color::TEXT_MUTED,
-            (list_x + 4, win_y + 60, name_end.saturating_sub(4), 20));
+        MinGuiCompositor::draw_string_clipped(fb, list_x + 28, win_y + 66, crate::gui::ui_text("DOSYA / KLASOR ADI", "FILE / FOLDER NAME"), Color::TEXT_MUTED,
+            (list_x + 28, win_y + 60, name_end.saturating_sub(4), 20));
         if list_w > 200 {
             MinGuiCompositor::draw_string_clipped(fb, list_x + 160, win_y + 66, crate::gui::ui_text("TUR", "TYPE"), Color::TEXT_MUTED,
                 (list_x + 154, win_y + 60, 124, 20));
@@ -507,19 +570,17 @@ impl FileManagerApp {
                 }
             }
 
-            let icon_color = match file.icon_tag {
-                "DIR" => Color::ACCENT_PINK,
-                "IMG" => Color::ACCENT_YELLOW,
-                "SND" => Color::ACCENT_GREEN,
-                "VID" => Color::ACCENT_RED,
-                "WEB" => Color::ACCENT_BLUE,
-                "CFG" => Color::ACCENT_YELLOW,
-                _ => Color::TEXT_MAIN,
-            };
-            MinGuiCompositor::draw_string(fb, list_x + 4, draw_y + 4, file.icon_tag, icon_color);
-            let name_width = if list_w > 330 { 104 } else if list_w > 200 { 104 } else { list_w.saturating_sub(56) };
-            MinGuiCompositor::draw_string_clipped(fb, list_x + 48, draw_y + 4, file.display_name(), if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN },
-                (list_x + 48, draw_y + 2, name_width, ROW_H - 4));
+            let is_up = file.display_name() == "..";
+            if file.is_dir {
+                Self::draw_folder_icon(fb, list_x + 6, draw_y + 4, is_up);
+            } else {
+                Self::draw_file_icon(fb, list_x + 6, draw_y + 4, file.icon_tag);
+            }
+
+            let name_x = list_x + 28;
+            let name_width = if list_w > 330 { 124 } else if list_w > 200 { 124 } else { list_w.saturating_sub(36) };
+            MinGuiCompositor::draw_string_clipped(fb, name_x, draw_y + 4, file.display_name(), if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN },
+                (name_x, draw_y + 2, name_width, ROW_H - 4));
 
             if list_w > 200 {
                 MinGuiCompositor::draw_string_clipped(fb, list_x + 160, draw_y + 4, file.file_type, Color::TEXT_MUTED,

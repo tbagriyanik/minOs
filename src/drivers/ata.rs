@@ -392,6 +392,23 @@ pub fn device(drive: u8) -> Option<Device> {
     }
 }
 
+pub fn drive_capacity_sectors(drive: u8) -> u64 {
+    unsafe {
+        if (drive as usize) < DEVICES.len() {
+            DEVICES[drive as usize].sectors
+        } else {
+            0
+        }
+    }
+}
+
+pub fn flush_cache(drive: u8) {
+    let (base, ctrl) = io_ports_for_drive(drive);
+    select(drive);
+    outb(base + 7, CMD_FLUSH_CACHE);
+    io_delay(ctrl);
+}
+
 pub fn drive_count() -> usize {
     unsafe {
         let mut count = 0;

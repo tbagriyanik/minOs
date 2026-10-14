@@ -44,6 +44,27 @@ fn rgb(color: u32) -> u32 {
     theme::resolve(color)
 }
 
+#[inline(always)]
+fn readable_text_color(foreground: u32, background: u32) -> u32 {
+    let luminance = |color: u32| {
+        let red = (color >> 16) & 0xFF;
+        let green = (color >> 8) & 0xFF;
+        let blue = color & 0xFF;
+        (red * red * 299 + green * green * 587 + blue * blue * 114) / 1000
+    };
+    let fg_luma = luminance(foreground);
+    let bg_luma = luminance(background);
+    let high = fg_luma.max(bg_luma) + 3251;
+    let low = fg_luma.min(bg_luma) + 3251;
+    if high * 2 >= low * 9 {
+        return foreground;
+    }
+
+    let white_contrast = 68_276 * 100 / (bg_luma + 3251);
+    let black_contrast = (bg_luma + 3251) * 100 / 3251;
+    if white_contrast >= black_contrast { 0xFFFFFF } else { 0x000000 }
+}
+
 /// 4x4 Bayer dither matrisi - renk geçişlerinde kademelenmeyi (color banding) tamamen ortadan kaldırır.
 const BAYER_4X4: [[i32; 4]; 4] = [
     [-8,  0, -6,  2],
@@ -198,12 +219,21 @@ impl Framebuffer {
     /// RGB alt piksel kapsamıyla mevcut arka plan üzerine metin pikseli karıştırır.
     /// `coverage` her kanal için 0..255 aralığında örtüşme miktarıdır.
     pub fn put_subpixel_text(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3]) {
+        self.blend_subpixel_text(x, y, color, coverage, false);
+    }
+
+    pub fn put_subpixel_text_contrast(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3]) {
+        self.blend_subpixel_text(x, y, color, coverage, true);
+    }
+
+    fn blend_subpixel_text(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3], ensure_contrast: bool) {
         if !self.in_clip(x, y) { return; }
         let fg = rgb(color);
         let offset = y * self.width + x;
         unsafe {
             if offset >= BACKBUFFER_LEN { return; }
             let bg = BACKBUFFER[offset];
+            let fg = if ensure_contrast { readable_text_color(fg, bg) } else { fg };
             let mut out = 0u32;
             for channel in 0..3 {
                 let shift = 16 - channel * 8;
@@ -261,6 +291,45 @@ impl Framebuffer {
         self.draw_rect(x, y + h.saturating_sub(1), w, 1, color);
         self.draw_rect(x, y, 1, h, color);
         self.draw_rect(x + w.saturating_sub(1), y, 1, h, color);
+    }
+
+    /// İki nokta arasına 1px kalınlığında çizgi çizer.
+    pub fn draw_line(&mut self, x0: usize, y0: usize, x1: usize, y1: usize, color: u32) {
+        if y0 == y1 {
+            let (min_x, max_x) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+            self.draw_rect(min_x, y0, max_x - min_x + 1, 1, color);
+            return;
+        }
+        if x0 == x1 {
+            let (min_y, max_y) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+            self.draw_rect(x0, min_y, 1, max_y - min_y + 1, color);
+            return;
+        }
+        let mut x = x0 as isize;
+        let mut y = y0 as isize;
+        let dx = (x1 as isize - x0 as isize).abs();
+        let dy = -(y1 as isize - y0 as isize).abs();
+        let sx = if x0 < x1 { 1 } else { -1 };
+        let sy = if y0 < y1 { 1 } else { -1 };
+        let mut err = dx + dy;
+
+        loop {
+            if x >= 0 && y >= 0 {
+                self.draw_rect(x as usize, y as usize, 1, 1, color);
+            }
+            if x == x1 as isize && y == y1 as isize {
+                break;
+            }
+            let e2 = 2 * err;
+            if e2 >= dy {
+                err += dy;
+                x += sx;
+            }
+            if e2 <= dx {
+                err += dx;
+                y += sy;
+            }
+        }
     }
 
     /// Yukarıdan aşağıya doğrusal renk geçişi (dikey gradyan).

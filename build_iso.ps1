@@ -50,8 +50,15 @@ if (Test-Path "boot\EFI\BOOT\BOOTX64.EFI") {
 
 # 3. Çekirdek İkilisini Derle / Kopyala
 Write-Host "[3/4] minOs Cekirdegi Paketleniyor..." -ForegroundColor Yellow
-if (Test-Path "target\x86_64-minos\release\minos-kernel") {
-    Copy-Item "target\x86_64-minos\release\minos-kernel" -Destination "$OutputDir\boot\minos-kernel"
+$kernelCandidates = @(
+    (Get-Item "target\x86_64-minos\release\minos-kernel" -ErrorAction SilentlyContinue),
+    (Get-Item "target\x86_64-unknown-none\release\minos-kernel" -ErrorAction SilentlyContinue)
+) | Where-Object { $_ -ne $null } | Sort-Object LastWriteTime -Descending
+
+if ($kernelCandidates.Count -gt 0) {
+    $selectedKernel = $kernelCandidates[0].FullName
+    Write-Host "Kullanilan cekirdek: $selectedKernel" -ForegroundColor Cyan
+    Copy-Item $selectedKernel -Destination "$OutputDir\boot\minos-kernel"
 } else {
     Write-Host "UYARI: minos-kernel henüz derlenmedi. Dummy Cekirdegi dosyasi yerlestiriliyor." -ForegroundColor Magenta
     Set-Content -Path "$OutputDir\boot\minos-kernel" -Value "minOs Kernel Binary"
@@ -139,6 +146,10 @@ if ($oscdimg) {
     } catch {
         Copy-Item -Force $tempIso "minos_boot.iso"
         $IsoName = "minos_boot.iso"
+    }
+
+    if (Test-Path "tools\limine.exe") {
+        & "tools\limine.exe" bios-install $IsoName
     }
 
     # Release dizinlerine de kopyala

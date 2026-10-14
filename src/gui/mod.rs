@@ -746,11 +746,12 @@ pub const CTX_DESKTOP: [(&str, u32); 6] = [
 ];
 
 /// Dosya Yöneticisi'nde bir dosyaya veya klasöre sağ tık menüsü.
-pub const CTX_FILE: [(&str, u32); 6] = [
+pub const CTX_FILE: [(&str, u32); 7] = [
     ("Aç / Klasöre Gir", Color::ACCENT_GREEN),
     ("Not Defterinde Düzenle", Color::TEXT_MAIN),
     ("Yeni Dosya Oluştur", Color::ACCENT_BLUE),
     ("Yeni Klasör Oluştur", Color::ACCENT_YELLOW),
+    ("Adını Değiştir", Color::ACCENT_YELLOW),
     ("Dosyayı / Klasörü Sil", Color::ACCENT_RED),
     ("Özellikler", Color::TEXT_MUTED),
 ];
@@ -778,10 +779,10 @@ const CTX_DESKTOP_EN: [(&str, u32); 6] = [
     ("System Settings", Color::ACCENT_PINK), ("Task Manager", Color::ACCENT_YELLOW),
     ("Change Theme", Color::ACCENT_GREEN), ("Refresh Desktop", Color::TEXT_MUTED),
 ];
-const CTX_FILE_EN: [(&str, u32); 6] = [
+const CTX_FILE_EN: [(&str, u32); 7] = [
     ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
     ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW),
-    ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
+    ("Rename", Color::ACCENT_YELLOW), ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
 ];
 const CTX_NOTEPAD_EN: [(&str, u32); 6] = [
     ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
@@ -977,7 +978,7 @@ impl MinGuiCompositor {
     /// soldan sağa, satır sonunda bir alt satırın başına ilerler.
     pub fn cycle_focus(&mut self, reverse: bool) {
         if self.alt_tab_count == 0 {
-            let (order, count) = self.draw_order();
+            let (order, count) = self.switcher_order();
             if count == 0 { return; }
             self.alt_tab_order = order;
             self.alt_tab_count = count;
@@ -991,6 +992,7 @@ impl MinGuiCompositor {
             (self.alt_tab_selection + 1) % count
         };
         let next = self.alt_tab_order[self.alt_tab_selection];
+        if let Some(win) = self.windows[next].as_mut() { win.is_minimized = false; }
         self.focus_window(next);
     }
 
@@ -1021,6 +1023,21 @@ impl MinGuiCompositor {
                 }
             }
         }
+        (order, count)
+    }
+
+    /// Alt+Tab için açık tüm pencereleri, küçültülmüş olanlar dahil, z-sırasıyla döndürür.
+    pub fn switcher_order(&self) -> ([usize; MAX_WINDOWS], usize) {
+        let mut order = [0; MAX_WINDOWS];
+        let mut count = 0;
+        for (i, slot) in self.windows.iter().enumerate() {
+            if slot.map_or(false, |w| w.is_open) { order[count] = i; count += 1; }
+        }
+        for i in 0..count { for j in i + 1..count {
+            let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
+            let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
+            if zj < zi { order.swap(i, j); }
+        }}
         (order, count)
     }
 
@@ -1989,7 +2006,8 @@ impl MinGuiCompositor {
 
     pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {
         let box_w = 470.min(fb.width.saturating_sub(24)).max(1);
-        let open_count = self.windows.iter().filter(|slot| slot.map_or(false, |win| win.is_open && !win.is_minimized)).count();
+        let open_count = if self.is_alt_tab_open && self.alt_tab_count > 0 { self.alt_tab_count }
+            else { self.windows.iter().filter(|slot| slot.map_or(false, |win| win.is_open && !win.is_minimized)).count() };
         let columns = (box_w.saturating_sub(24) / 58).max(1);
         let rows = open_count.saturating_add(columns - 1) / columns;
         let grid_h = rows * 66;

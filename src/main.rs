@@ -17,7 +17,35 @@ static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 #[alloc_error_handler]
 fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    panic!("Allocation error: {:?}", layout);
+    serial_print("[PANIC] Kernel heap allocation failed: size=");
+    let mut v = layout.size() as u64;
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    if v == 0 {
+        serial_print("0");
+    } else {
+        while v > 0 && i > 0 {
+            i -= 1;
+            buf[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        if let Ok(s) = core::str::from_utf8(&buf[i..]) {
+            serial_print(s);
+        }
+    }
+    serial_print(" align=");
+    let mut a = layout.align() as u64;
+    let mut i2 = buf.len();
+    while a > 0 && i2 > 0 {
+        i2 -= 1;
+        buf[i2] = b'0' + (a % 10) as u8;
+        a /= 10;
+    }
+    if let Ok(s) = core::str::from_utf8(&buf[i2..]) {
+        serial_print(s);
+    }
+    serial_print("\n");
+    panic!("Allocation error");
 }
 
 #[allow(static_mut_refs)]
@@ -30,6 +58,7 @@ pub mod fs;
 pub mod drivers;
 pub mod gui;
 pub mod apps;
+pub mod serial;
 
 // Limine Protokolü İstek Yapıları (Sıfır Dış Bağımlılık)
 #[repr(C, align(8))]
@@ -145,6 +174,35 @@ static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     response: core::ptr::null(),
 };
 
+#[repr(C, align(8))]
+pub struct LimineStackSizeResponse {
+    pub revision: u64,
+}
+
+#[repr(C, align(8))]
+pub struct LimineStackSizeRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineStackSizeResponse,
+    pub stack_size: u64,
+}
+
+unsafe impl Sync for LimineStackSizeRequest {}
+
+#[used]
+#[link_section = ".requests"]
+static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x224ef0460a8e8926,
+        0xe1cb0fc25f46ea3d,
+    ],
+    revision: 0,
+    response: core::ptr::null(),
+    stack_size: 1024 * 1024, // 1 MiB kernel stack
+};
+
 #[used]
 #[link_section = ".requests"]
 static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
@@ -155,11 +213,7 @@ static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
 
 #[inline(never)]
 fn serial_print(s: &str) {
-    for b in s.bytes() {
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b);
-        }
-    }
+    serial::print(s);
 }
 
 fn restart_system() -> ! {
@@ -314,7 +368,7 @@ fn terminate_app(
     videoplayer: &mut apps::videoplayer::VideoPlayerApp,
     taskmgr: &mut apps::taskmgr::TaskManagerApp,
     calculator: &mut apps::calculator::CalculatorApp,
-    paint: &mut apps::paint::PaintApp,
+    paint: &mut Option<apps::paint::PaintApp>,
     terminal: &mut apps::terminal::TerminalApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
@@ -348,7 +402,7 @@ fn terminate_app(
         6 => *videoplayer = apps::videoplayer::VideoPlayerApp::new(),
         7 => *taskmgr = apps::taskmgr::TaskManagerApp::new(),
         8 => *calculator = apps::calculator::CalculatorApp::new(),
-        9 => *paint = apps::paint::PaintApp::new(),
+        9 => *paint = None,
         10 => {
             *terminal = apps::terminal::TerminalApp::new();
             terminal.init_banner();
@@ -419,12 +473,12 @@ fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    arch::x86_64::enable_sse();
+    arch::x86_64::disable_pic();
     init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
     serial_print("[minOs] Kernel _start reached!\n");
-    arch::x86_64::enable_sse();
-    arch::x86_64::disable_pic();
     serial_print("[minOs] SSE enabled & PIC IRQs masked!\n");
 
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
@@ -562,26 +616,43 @@ pub extern "C" fn _start() -> ! {
         gui::MinGuiCompositor::draw_string(&mut fb, cx + 34, cy + 8, dots, gui::Color::ACCENT_BLUE);
         for _ in 0..180_000 { core::hint::spin_loop(); }
     }
+    serial_print("[minOs] Splash rendered; initializing GUI state.\n");
 
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
     let mut compositor = gui::MinGuiCompositor::new();
+    serial_print("[minOs] Compositor initialized.\n");
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
+    serial_print("[minOs] File manager state initialized.\n");
     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+    serial_print("[minOs] File manager populated.\n");
     let mut settings_app = apps::settings::SystemSettings::default();
+    serial_print("[minOs] Settings state initialized.\n");
     settings_app.display_res = (width, height);
     settings_app.load_from_vfs(&fs_mgr.vfs);
     keyboard.layout = settings_app.keyboard_layout;
     gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
+    serial_print("[minOs] Notepad state initialized.\n");
     let mut browser_app = apps::browser::BrowserApp::new();
+    serial_print("[minOs] Browser state initialized.\n");
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
+    serial_print("[minOs] ImageViewer state initialized.\n");
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
+    serial_print("[minOs] MusicPlayer state initialized.\n");
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
+    serial_print("[minOs] VideoPlayer state initialized.\n");
     let mut taskmgr_app = apps::taskmgr::TaskManagerApp::new();
+    serial_print("[minOs] TaskManager state initialized.\n");
     let mut calculator_app = apps::calculator::CalculatorApp::new();
-    let mut paint_app = apps::paint::PaintApp::new();
+    serial_print("[minOs] Calculator state initialized.\n");
+    // Başlangıçta yalnızca sabit uygulama pencereleri için state oluştur.
+    // MAX_WINDOWS kadar 4096 noktalı tuval ayırmak 1 MiB kernel heap'ini aşar.
+    let mut paint_apps: alloc::vec::Vec<Option<apps::paint::PaintApp>> = (0..gui::MAX_WINDOWS).map(|_| None).collect();
+    serial_print("[minOs] Paint slots initialized.\n");
     let mut terminal_app = apps::terminal::TerminalApp::new();
+    serial_print("[minOs] Terminal state initialized.\n");
     terminal_app.init_banner();
+    serial_print("[minOs] App state initialized.\n");
 
     // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
@@ -622,12 +693,14 @@ pub extern "C" fn _start() -> ! {
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
+    serial_print("[minOs] Window list initialized.\n");
 
     // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
     let mut welcome_accepted = false;
+    serial_print("[minOs] Entering welcome screen.\n");
     loop {
         if welcome_dirty {
             gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
@@ -739,7 +812,7 @@ pub extern "C" fn _start() -> ! {
                              vp: &apps::videoplayer::VideoPlayerApp,
                              tm: &apps::taskmgr::TaskManagerApp,
                              calc: &apps::calculator::CalculatorApp,
-                             paint: &apps::paint::PaintApp,
+                             paint: &[Option<apps::paint::PaintApp>],
                              term: &apps::terminal::TerminalApp,
                              now: &drivers::rtc::DateTime,
                              mouse: &drivers::mouse::MouseState,
@@ -792,7 +865,7 @@ pub extern "C" fn _start() -> ! {
                     6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),
                     7 => tm.render_content(fb, win.x, win.y, win.width),
                     8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
-                    9 => paint.render_content(fb, win.x, win.y, win.width, win.height),
+                    9 => if let Some(app) = paint[idx].as_ref() { app.render_content(fb, win.x, win.y, win.width, win.height) },
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
                     _ => {}
                 }
@@ -843,7 +916,7 @@ pub extern "C" fn _start() -> ! {
     render_full_frame(
         &mut fb, &compositor, &filemanager_app, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
         None,
     );
@@ -1092,10 +1165,16 @@ pub extern "C" fn _start() -> ! {
                                 3 => { // Yeni Klasör Oluştur
                                     filemanager_app.new_folder(&mut fs_mgr.vfs);
                                 }
-                                4 => { // Dosyayı / Klasörü Sil
+                                5 => { // Dosyayı / Klasörü Sil
                                     if let Some(file_idx) = compositor.context_file_idx {
                                         filemanager_app.selected_idx = file_idx;
                                         filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                    }
+                                }
+                                4 => { // Adını değiştir
+                                    if let Some(file_idx) = compositor.context_file_idx {
+                                        filemanager_app.selected_idx = file_idx;
+                                        filemanager_app.begin_rename();
                                     }
                                 }
                                 _ => {}
@@ -1404,7 +1483,7 @@ pub extern "C" fn _start() -> ! {
                     if gui::in_rect(mx, my, win.close_rect()) {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
                             &mut terminal_app);
                         break;
                     }
@@ -1502,7 +1581,10 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::delete_button_rect(wx, wy, ww)) {
                                     filemanager_app.delete_selected(&mut fs_mgr.vfs);
                                 } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::open_button_rect(wx, wy, ww)) {
-                                    if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                    // Geri Dönüşüm Kutusu'ndayken "Aç" düğmesi öğeyi geri yükler.
+                                    if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
+                                        filemanager_app.restore_selected(&mut fs_mgr.vfs);
+                                    } else if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                         if tag == "TXT" || tag == "LOG" || tag == "CFG" {
                                             if let Some(data) = fs_mgr.vfs.read_file(&path) {
                                                 notepad_app.open_file(&path, data);
@@ -1518,8 +1600,8 @@ pub extern "C" fn _start() -> ! {
                                             open_app(&mut compositor, 3);
                                         }
                                     }
-                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 8 * 20 {
-                                    let nav = (my.saturating_sub(wy + 66)) / 20;
+                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 9 * 22 {
+                                    let nav = (my.saturating_sub(wy + 66)) / 22;
                                     let target_path = match nav {
                                         0 => "/",
                                         1 => "/root/Documents",
@@ -1528,7 +1610,8 @@ pub extern "C" fn _start() -> ! {
                                         4 => "/boot",
                                         5 => "/media/usb0",
                                         6 => "/media/hdd0",
-                                        _ => "/media/cdrom",
+                                        7 => "/media/cdrom",
+                                        _ => "/root/Trash",
                                     };
                                     filemanager_app.set_path(target_path);
                                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
@@ -1645,13 +1728,18 @@ pub extern "C" fn _start() -> ! {
                                 if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 60 { notepad_app.menu = 1; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 68 && mx < wx + 128 { notepad_app.menu = 2; }
                                 else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 190 { notepad_app.menu = 3; }
-                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 340 && my >= wy + 54 && my < wy + 150 {
+                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 340 && my >= wy + 54 && my < wy + 170 {
                                     let item = (my.saturating_sub(wy + 54)) / 20;
                                     match (notepad_app.menu, item) {
-                                        // Dosya Menüsü: 0: Yeni, 1: Kaydet, 2: Temizle
+                                        // Dosya Menüsü: Yeni, Aç, Kaydet, Temizle
                                         (1, 0) => notepad_app.clear(),
-                                        (1, 1) => { notepad_app.save_file(&mut fs_mgr.vfs); },
-                                        (1, 2) => notepad_app.clear(),
+                                        (1, 1) => {
+                                            if let Some(data) = fs_mgr.vfs.read_file("/root/Documents/notlar.txt") {
+                                                notepad_app.open_file("/root/Documents/notlar.txt", data);
+                                            }
+                                        },
+                                        (1, 2) => { notepad_app.save_file(&mut fs_mgr.vfs); },
+                                        (1, 3) => notepad_app.clear(),
                                         // Düzen Menüsü: 0: Kes, 1: Kopyala, 2: Yapıştır, 3: Tümünü Seç
                                         (2, 0) => notepad_app.cut_selection(),
                                         (2, 1) => notepad_app.copy_selection(),
@@ -1709,9 +1797,9 @@ pub extern "C" fn _start() -> ! {
                                 // Resim: yakınlaştır / uzaklaştır
                                 if my >= wy + 32 && my <= wy + 52 {
                                     if mx >= wx + ww - 180 && mx <= wx + ww - 130 {
-                                        imageviewer_app.zoom_level = (imageviewer_app.zoom_level + 1).min(8);
+                                        imageviewer_app.zoom_in();
                                     } else if mx >= wx + ww - 124 && mx <= wx + ww - 74 {
-                                        imageviewer_app.zoom_level = (imageviewer_app.zoom_level.saturating_sub(1)).max(1);
+                                        imageviewer_app.zoom_out();
                                     }
                                 }
                             }
@@ -1781,7 +1869,7 @@ pub extern "C" fn _start() -> ! {
                                         taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                                         terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
                                             &mut terminal_app);
                                     }
                                 } else if taskmgr_app.active_tab == 0 {
@@ -1796,18 +1884,29 @@ pub extern "C" fn _start() -> ! {
                                 let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
                                 if my >= wy + 34 && my < wy + 56 {
                                     // Araç çubuğu: renk paleti, silgi ve temizle düğmeleri.
-                                    if mx >= palette_start && mx < palette_start + 16 { paint_app.color=gui::Color::ACCENT_BLUE; paint_app.eraser=false; }
-                                    else if mx >= palette_start + 22 && mx < palette_start + 38 { paint_app.color=gui::Color::ACCENT_RED; paint_app.eraser=false; }
-                                    else if mx >= palette_start + 44 && mx < palette_start + 60 { paint_app.color=gui::Color::ACCENT_GREEN; paint_app.eraser=false; }
-                                    else if mx >= palette_start + 66 && mx < palette_start + 82 { paint_app.color=gui::Color::BLACK; paint_app.eraser=false; }
-                                    else if mx >= palette_start + 92 && mx < palette_start + 150 { paint_app.eraser=true; }
-                                    else if mx >= wx + ww.saturating_sub(66) && mx < wx + ww.saturating_sub(8) { paint_app.clear(); }
-                                } else if let Some((cxp, cyp)) = paint_app.to_canvas(ww, wh, mx - wx, my - wy) {
-                                    // İlk tıklama noktası (last=None iken tek nokta başlangıcı).
-                                    paint_app.paint(cxp, cyp);
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    let paint = paint_apps[idx].as_mut().unwrap();
+                                    if mx >= palette_start && mx < palette_start + 16 { paint.color=gui::Color::ACCENT_BLUE; paint.eraser=false; }
+                                    else if mx >= palette_start + 22 && mx < palette_start + 38 { paint.color=gui::Color::ACCENT_RED; paint.eraser=false; }
+                                    else if mx >= palette_start + 44 && mx < palette_start + 60 { paint.color=gui::Color::ACCENT_GREEN; paint.eraser=false; }
+                                    else if mx >= palette_start + 66 && mx < palette_start + 82 { paint.color=gui::Color::BLACK; paint.eraser=false; }
+                                    else if mx >= palette_start + 92 && mx < palette_start + 150 { paint.eraser=true; }
+                                    else if mx >= wx + ww.saturating_sub(198) && mx < wx + ww.saturating_sub(140) { paint.open_bmp(&fs_mgr.vfs); }
+                                    else if mx >= wx + ww.saturating_sub(132) && mx < wx + ww.saturating_sub(74) {
+                                        let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
+                                        paint.save_bmp(&mut fs_mgr.vfs, cw, ch);
+                                    }
+                                    else if mx >= wx + ww.saturating_sub(66) && mx < wx + ww.saturating_sub(8) { paint.clear(); }
                                 } else {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    let paint = paint_apps[idx].as_mut().unwrap();
+                                    if let Some((cxp, cyp)) = paint.to_canvas(ww, wh, mx - wx, my - wy) {
+                                    // İlk tıklama noktası (last=None iken tek nokta başlangıcı).
+                                    paint.paint(cxp, cyp);
+                                    } else {
                                     // Tuval dışına tıklandı: kalem yolunu bitir.
-                                    paint_app.end_stroke();
+                                    paint.end_stroke();
+                                    }
                                 }
                             }
                             _ => {}
@@ -1839,7 +1938,7 @@ pub extern "C" fn _start() -> ! {
                     if let Some(idx) = active_window {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
                             &mut terminal_app);
                     } else {
                         // Masaüstündeyken Alt+F4 güç menüsünü açar.
@@ -1856,6 +1955,51 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::CycleWindowFocus => {
                     compositor.is_alt_tab_open = true;
                     compositor.cycle_focus(keyboard.shift);
+                }
+                drivers::keyboard::KeyAction::WinShowDesktop => {
+                    let show_desktop = compositor.windows.iter().flatten().any(|w| w.is_open && !w.is_minimized);
+                    for slot in compositor.windows.iter_mut() {
+                        if let Some(w) = slot { if w.is_open { w.is_minimized = show_desktop; w.is_focused = false; } }
+                    }
+                    if show_desktop { compositor.active_window_idx = None; }
+                    else { compositor.focus_top_window(); }
+                }
+                drivers::keyboard::KeyAction::WinMinimizeAll => {
+                    for slot in compositor.windows.iter_mut() {
+                        if let Some(w) = slot { if w.is_open { w.is_minimized = true; w.is_focused = false; } }
+                    }
+                    compositor.active_window_idx = None;
+                }
+                drivers::keyboard::KeyAction::WinOpenFiles => {
+                    open_app(&mut compositor, 0);
+                    compositor.close_start_menu();
+                }
+                drivers::keyboard::KeyAction::RenameSelected => {
+                    if app_is_focused(&compositor, 0) { filemanager_app.begin_rename(); }
+                }
+                drivers::keyboard::KeyAction::VolumeUp => {
+                    settings_app.volume = settings_app.volume.saturating_add(5).min(100);
+                    settings_app.is_muted = false;
+                    settings_app.status_msg = gui::ui_text("Ses artırıldı.", "Volume increased.");
+                }
+                drivers::keyboard::KeyAction::VolumeDown => {
+                    settings_app.volume = settings_app.volume.saturating_sub(5);
+                    settings_app.status_msg = gui::ui_text("Ses azaltıldı.", "Volume decreased.");
+                }
+                drivers::keyboard::KeyAction::VolumeMute => {
+                    settings_app.is_muted = !settings_app.is_muted;
+                    settings_app.status_msg = if settings_app.is_muted { gui::ui_text("Ses kapatıldı.", "Muted.") } else { gui::ui_text("Ses açıldı.", "Unmuted.") };
+                }
+                drivers::keyboard::KeyAction::MediaPlayPause => {
+                    musicplayer_app.is_playing = !musicplayer_app.is_playing;
+                }
+                drivers::keyboard::KeyAction::MediaPrevious => {
+                    musicplayer_app.current_track = musicplayer_app.current_track.saturating_sub(1);
+                    musicplayer_app.progress = 0;
+                }
+                drivers::keyboard::KeyAction::MediaNext => {
+                    musicplayer_app.current_track = (musicplayer_app.current_track + 1) % 5;
+                    musicplayer_app.progress = 0;
                 }
                 drivers::keyboard::KeyAction::OpenTaskManager => {
                     open_app(&mut compositor, 7);
@@ -2035,7 +2179,7 @@ pub extern "C" fn _start() -> ! {
                                     taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                         &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                                        &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                                        &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
                                         &mut terminal_app);
                                 }
                             }
@@ -2049,7 +2193,9 @@ pub extern "C" fn _start() -> ! {
                             2 => filemanager_app.new_folder(&mut fs_mgr.vfs),
                             3 => { filemanager_app.delete_selected(&mut fs_mgr.vfs); },
                             _ => {
-                                if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
+                                    filemanager_app.restore_selected(&mut fs_mgr.vfs);
+                                } else if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
                                         if let Some(data) = fs_mgr.vfs.read_file(&path) {
                                             notepad_app.open_file(&path, data);
@@ -2201,7 +2347,7 @@ pub extern "C" fn _start() -> ! {
                             taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_app,
+                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
                                 &mut terminal_app);
                         }
                     } else if app_is_focused(&compositor, 2) {
@@ -2266,6 +2412,13 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            // Görüntüleyicide tekerlek zoom kısayoludur (yukarı yakınlaştırır).
+            if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
+                if w.is_open && w.is_focused && !w.is_minimized
+                    && gui::in_rect(mx, my, (w.x, w.y + gui::titlebar_h(), w.width, w.height.saturating_sub(gui::titlebar_h()))) {
+                    if scroll_val > 0 { imageviewer_app.zoom_in(); } else { imageviewer_app.zoom_out(); }
+                }
+            }
             // Dosya Yöneticisi listesi de kaydırılabilir (içerik sığmıyorsa).
             if let Some((idx, w)) = focused_window_for_app(&compositor, 0) {
                 if w.is_open && w.is_focused && !w.is_minimized {
@@ -2300,14 +2453,16 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
-            if let Some((_, w)) = focused_window_for_app(&compositor, 9) {
+            if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
                 if w.is_focused {
                     // Windows Paint davranışı: sol tuş basılı tutuldukça fare
                     // hareketi sürekli çizer. Tuval dışına çıkınca vuruşu bitir.
-                    if let Some((cxp, cyp)) = paint_app.to_canvas(w.width, w.height, mx - w.x, my - w.y) {
-                        paint_app.paint(cxp, cyp);
+                    if paint_apps[paint_idx].is_none() { paint_apps[paint_idx] = Some(apps::paint::PaintApp::new()); }
+                    let paint = paint_apps[paint_idx].as_mut().unwrap();
+                    if let Some((cxp, cyp)) = paint.to_canvas(w.width, w.height, mx - w.x, my - w.y) {
+                        paint.paint(cxp, cyp);
                     } else {
-                        paint_app.end_stroke();
+                        paint.end_stroke();
                     }
                 }
             }
@@ -2410,7 +2565,9 @@ pub extern "C" fn _start() -> ! {
         if mouse_released {
             drag_prev_box = None;
             drag_dirty_rect = None;
-            paint_app.end_stroke();
+            if let Some(paint_idx) = compositor.active_window_idx {
+                if let Some(paint) = paint_apps[paint_idx].as_mut() { paint.end_stroke(); }
+            }
             notepad_dragging = false;
             // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
             // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
@@ -2447,6 +2604,16 @@ pub extern "C" fn _start() -> ! {
                 taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b' && notepad_app.menu != 0 {
                 notepad_app.menu = 0;
+            } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                if ch == '\x1b' {
+                    filemanager_app.rename_active = false;
+                } else if ch == '\x08' {
+                    filemanager_app.rename_backspace();
+                } else if ch == '\n' {
+                    filemanager_app.commit_rename(&mut fs_mgr.vfs);
+                } else if ch >= ' ' {
+                    filemanager_app.rename_char(ch);
+                }
             } else if compositor.is_start_menu_open && ch == '\x08' {
                 if compositor.start_search_len > 0 {
                     compositor.start_search_len -= 1;
@@ -2521,8 +2688,18 @@ pub extern "C" fn _start() -> ! {
                     }
                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                 }
-                let paint_focused = app_is_focused(&compositor, 9);
-                if paint_focused && (ch == 'c' || ch == 'C') { paint_app.clear(); }
+                if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {
+                    if let Some(paint) = paint_apps[paint_idx].as_mut() {
+                        if ch == 'c' || ch == 'C' { paint.clear(); }
+                        else if ch == 'e' || ch == 'E' { paint.eraser = !paint.eraser; }
+                    }
+                }
+                let image_focused = app_is_focused(&compositor, 4);
+                if image_focused {
+                    if ch == '+' || ch == '=' { imageviewer_app.zoom_in(); }
+                    else if ch == '-' || ch == '_' { imageviewer_app.zoom_out(); }
+                    else if ch == '0' { imageviewer_app.zoom_level = 4; }
+                }
             }
         }
 
@@ -2604,7 +2781,7 @@ pub extern "C" fn _start() -> ! {
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-                &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app,
+                &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
                 drag_dirty_rect,
             );
@@ -2667,8 +2844,15 @@ pub extern "C" fn _start() -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    serial_print("[PANIC] Kernel panic: panic details unavailable\n");
+    let _ = info;
     loop {
         core::hint::spin_loop();
     }
 }
+
+
+
+
+

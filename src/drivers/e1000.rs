@@ -437,11 +437,7 @@ pub fn init() {
 // ---------------------------------------------------------------------------
 
 fn e1000_print(s: &str) {
-    for b in s.bytes() {
-        unsafe {
-            asm!("out dx, al", in("dx") 0x3F8u16, in("al") b, options(nomem, nostack, preserves_flags));
-        }
-    }
+    crate::serial::print(s);
 }
 
 fn e1000_print_hex(v: u8) {

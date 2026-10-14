@@ -51,7 +51,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
-| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim** (Windows Paint benzeri), fırça kenarının otomatik kırpılması ve 4096 noktalık tuval geçmişi. |
+| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, açma/kaydetme ve 4096 noktalık tuval geçmişi. |
 | **⌨️ Komut İstemi (MinShell)** | `help`, `ls`, `cat`, `echo`, `clear`, `mem`, `ps`, `apps`, `ipconfig`, `ping`, `dns`, `date`, `uname`, `whoami`, `theme`, `open`/`run` komutları; Tab ile otomatik tamamlama ve yukarı/aşağı oklarla komut geçmişi. |
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) tanımlıdır ancak şu anda Başlat menüsünde kayıtlı olmadığı için çalıştırılamaz.
@@ -73,13 +73,13 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
   - **Dosya:** Yeni Belge, Kaydet, Temizle
   - **Düzen:** Kes, Kopyala, Yapıştır, Tümünü Seç
   - **Yardım:** Not Defteri Hakkında
-- **📝 Windows Notepad Benzeri Metin Düzenleme:**
+- **📝 Gelişmiş Metin Düzenleme:**
   - **Çift tıkla kelime seçimi:** Herhangi bir kelimeye çift tıklayarak o kelimeyi seçin.
   - **Sürükleyerek seçim:** Sol tuşu basılı tutup fareyi sürükleyerek metin seçin; tıklanan karaktere doğru imleç konumlanır (satır kaydırma ve dikey kaydırma hesaba katılır).
   - **Home / End:** İmleci satır başına/sonuna taşır.
   - **Shift + Ok Tuşları:** Yukarı/Aşağı/Sol/Sağ ile seçimi genişletir.
   - **Geri Al / İleri Al:** `Ctrl+Z` (Geri Al) ve `Ctrl+Y` (İleri Al) — 32 seviyelik düzenleme geçmişi.
-- **🎨 Windows Paint Benzeri Çizim:**
+- **🎨 Piksel Tabanlı Çizim:**
   - **Basılı Tutup Çizme:** Sol tuşu basılı tuttukça fare hareketi sürekli çizer; hızlı hareketlerde iki nokta arası enterpolasyonla doldurulup kesik çizgi oluşmaz.
   - **Otomatik Vuruş Bittiği:** Tuval dışına çıkıldığında veya tuş bırakıldığında kalem yolu otomatik sonlanır.
   - **Renk Paleti ve Silgi:** Mavi/Kırmızı/Yeşil/Siyah renk örnekleri, dairesel **Silgi** ve **Temizle** düğmeleri.
@@ -94,8 +94,8 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 | **RAM** | **4 MB** | 32 MB – 64 MB |
 | **Depolama** | Yalnızca CD/ISO (RAM tabanlı) | 64 MB+ qcow2 disk |
 | **Ekran** | 1280×720 32-bit framebuffer | 1280×720 veya daha yüksek |
-| **Ses** | — (isteğe bağlı) | Intel HDA uyumlu |
-| **Ağ** | — (isteğe bağlı) | Intel e1000 uyumlu |
+| **Ses** | — (isteğe bağlı) | HDA uyumlu |
+| **Ağ** | — (isteğe bağlı) | e1000 uyumlu Ethernet |
 
 > **Not:** minOs 4 MB RAM ile stabil çalışır; grafik arayüzü, font atlasları ve çekirdek tamponları bu alanda sığar. QEMU'da test için `-Memory 4M` parametresi yeterlidir. FAT32 disk yazma gibi özellikler için 32+ MB önerilir.
 
@@ -197,9 +197,9 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 
 1. **Sanal Makine Türü:** Sanal makineyi oluştururken **İşletim Sistemi Türü** olarak **`Other / Other (64-bit)`** seçildiğinden emin olun.
 2. **Sanal Donanım İvmelendirmesi (VT-x / AMD-V):**
-   - Windows kullanıyorsanız ve VirtualBox 64-bit seçeneği çıkmıyorsa, **Hyper-V**'nin açık olmadığından ve BIOS'ta **Intel VT-x / AMD-V** donanım sanallaştırmasının aktif olduğundan emin olun.
+   - 64-bit seçeneği çıkmıyorsa, sistem sanallaştırmasının etkin olduğundan ve başka bir sanallaştırma katmanının sanal makineyi engellemediğinden emin olun.
    - VM Ayarları -> **Sistem** -> **Hızlandırma** sekmesinde **Sanallaştırma Arabirimi** varsayılan/KVM olarak ayarlanmalıdır.
-3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **Ses Denetleyicisi** olarak **Intel HD Audio** seçin. minOs'un HDA sürücüsü bu denetleyiciyi kullanır.
+3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **HDA uyumlu ses denetleyicisini** seçin. minOs'un HDA sürücüsü bu denetleyiciyi kullanır.
 
 ---
 
@@ -214,11 +214,15 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
   - Sarı `[-]` butonu: Pencereyi simge durumuna küçülterek görev çubuğuna indirir.
 - **Pencere Yerleştirme (Snap):** Başlık çubuğunu ekranın en üstüne sürükleyip bırakırsanız pencere otomatik olarak maksimize edilir.
 - **Pencere Değiştirme:** `Alt+Tab` pencereler arasında soldan sağa ilerler; `Shift+Alt+Tab` aynı sırada geriye gider. Alt tuşunu bırakınca seçili pencere öne gelir.
+- **Super Kısayolları:** `Super+D` masaüstünü gösterir/geri getirir, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi'ni açar. Küçültülmüş pencereler de `Alt+Tab` listesinde görünür ve seçilince geri açılır.
 - **Sistem Tepsisi (Sağ Alt):** Sırasıyla **klavye rozeti (`TR`/`EN`)**, **tema düğmesi**, **SES** düğmesi ve **canlı saat** bulunur. Saate tıklayınca canlı takvim, **SES**'e tıklayınca ses paneli açılır.
 - **Tema Değiştirme:** Görev çubuğundaki renk örneğine, Sistem Ayarları > **Değiştir** düğmesine, **tema palet şeridindeki renk örneklerine** veya masaüstü sağ tık > **Tema Değiştir**'e tıklayın.
 - **Bağlama Duyarlı Sağ Tık:** Masaüstünde, Not Defteri'nde, Dosya Yöneticisi'nde veya pencere başlığında özel sağ tık menüleri açılır.
 - **Not Defteri Düzenleme Kısayolları:** `Ctrl+C` (Kopyala), `Ctrl+X` (Kes), `Ctrl+V` (Yapıştır), `Ctrl+A` (Tümünü Seç), `Ctrl+Z` (Geri Al), `Ctrl+Y` (İleri Al), `Delete` (İleri sil), `Home`/`End` (satır başı/sonu) ve `Shift+Ok tuşları` (seçim genişletme).
-- **Çizim Tahtası Kullanımı:** Araç çubuğundan renk veya **Silgi** seçin; tuval üzerinde sol tuşu basılı tutarak çizin. `C` tuşu veya **Temizle** düğmesi tuvali temizler.
+- **Not Defteri Menüsü:** **Dosya** menüsünden yeni belge, açma, kaydetme ve temizleme; **Düzen** menüsünden kesme, kopyalama, yapıştırma ve tümünü seçme işlemleri yapılır.
+- **Çizim Tahtası Kullanımı:** Araç çubuğundan renk, **Silgi**, **Aç** veya **Kaydet** seçin; tuval üzerinde sol tuşu basılı tutarak çizin. `C` tuşu tuvali temizler, `E` tuşu silgiyi açıp kapatır. Çizimler 24-bit BMP olarak `/root/Documents/cizim.bmp` konumuna kaydedilir.
+- **Resim Görüntüleyici:** `+`/`=` yakınlaştırır, `-` uzaklaştırır, `0` varsayılan ölçeğe döner. Fare tekerleği de yakınlaştırma/uzaklaştırma için kullanılabilir; geçerli oran arayüzde gösterilir.
+- **Medya Tuşları:** Klavyedeki ses açma, ses kısma, susturma, oynat/duraklat, önceki parça ve sonraki parça tuşları çalışır. Ses düzeyi `%5` adımlarla değişir.
 
 ---
 

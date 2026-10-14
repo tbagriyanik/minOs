@@ -72,6 +72,9 @@ pub struct FileManagerApp {
     pub source: Source,
     pub disk_kind: FsKind,
     pub status: &'static str,
+    pub rename_active: bool,
+    pub rename_buf: [u8; diskfs::NAME_MAX],
+    pub rename_len: usize,
     pub focused_control: usize, // 0: Refresh, 1: New, 2: Folder, 3: Delete, 4: Open, 5: List
     item_counter: usize,
 }
@@ -132,6 +135,9 @@ impl FileManagerApp {
             source: Source::Vfs,
             disk_kind: FsKind::None,
             status: "",
+            rename_active: false,
+            rename_buf: [0; diskfs::NAME_MAX],
+            rename_len: 0,
             focused_control: 5,
             item_counter: 1,
         }
@@ -163,6 +169,7 @@ impl FileManagerApp {
             "/media/usb0" => "/media/usb0",
             "/media/hdd0" => "/media/hdd0",
             "/media/cdrom" => "/media/cdrom",
+            "/root/Trash" => "/root/Trash",
             _ => "/root/Documents",
         };
     }
@@ -296,7 +303,9 @@ impl FileManagerApp {
         self.status = crate::gui::ui_text("Yeni klasor olusturuldu.", "New folder created.");
     }
 
-    /// Seçili dosya veya klasörü siler.
+    /// Seçili dosya veya klasörü siler. Öğe kalıcı olarak silinmez; bunun yerine
+    /// Geri Dönüşüm Kutusu'na (`/root/Trash`) taşınır. Çöp kutusundayken yapılan
+    /// silme işlemi ise kalıcıdır (boşaltma davranışı).
     pub fn delete_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
         if self.selected_idx >= self.file_count {
             return false;
@@ -313,19 +322,97 @@ impl FileManagerApp {
         }
         full_path.push_str(name);
 
-        let ok = if item.is_dir {
-            vfs.delete_dir(&full_path)
+        // Çöp kutusu içinde silme = kalıcı silme; aksi halde geri dönüşüme taşı.
+        let ok = if self.path() == crate::fs::vfs::TRASH_DIR {
+            if item.is_dir {
+                vfs.delete_dir(&full_path)
+            } else {
+                vfs.delete_file(&full_path)
+            }
         } else {
-            vfs.delete_file(&full_path)
+            vfs.move_to_trash(&full_path)
         };
 
         if ok {
             self.refresh_from_vfs(vfs);
-            self.status = crate::gui::ui_text("Oge basariyla silindi.", "Item deleted successfully.");
+            self.status = if self.path() == crate::fs::vfs::TRASH_DIR {
+                crate::gui::ui_text("Oge kalici olarak silindi.", "Item permanently deleted.")
+            } else {
+                crate::gui::ui_text("Oge geri donusum kutusuna tasindi.", "Item moved to Recycle Bin.")
+            };
         } else {
             self.status = crate::gui::ui_text("Silinemedi (klasor dolu olabilir).", "Delete failed.");
         }
         ok
+    }
+
+    pub fn begin_rename(&mut self) {
+        if self.selected_idx >= self.file_count || self.files[self.selected_idx].display_name() == ".." { return; }
+        let name = self.files[self.selected_idx].display_name().as_bytes();
+        self.rename_len = name.len().min(self.rename_buf.len());
+        self.rename_buf[..self.rename_len].copy_from_slice(&name[..self.rename_len]);
+        self.rename_active = true;
+    }
+
+    pub fn rename_char(&mut self, c: char) {
+        let mut b = [0u8; 4]; let s = c.encode_utf8(&mut b);
+        for &ch in s.as_bytes() { if self.rename_len < self.rename_buf.len() { self.rename_buf[self.rename_len] = ch; self.rename_len += 1; } }
+    }
+
+    pub fn rename_backspace(&mut self) { if self.rename_len > 0 { self.rename_len -= 1; } }
+
+    pub fn commit_rename(&mut self, vfs: &mut VirtualFileSystem) {
+        if !self.rename_active { return; }
+        self.rename_active = false;
+        let name = core::str::from_utf8(&self.rename_buf[..self.rename_len]).unwrap_or("").trim();
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') { self.status = crate::gui::ui_text("Geçersiz ad.", "Invalid name."); return; }
+        if self.selected_idx >= self.file_count { return; }
+        let old_name = self.files[self.selected_idx].display_name();
+        let mut old_path = String::from(self.path()); if !old_path.ends_with('/') { old_path.push('/'); } old_path.push_str(old_name);
+        let mut new_path = String::from(self.path()); if !new_path.ends_with('/') { new_path.push('/'); } new_path.push_str(name);
+        if vfs.rename(&old_path, &new_path) { self.refresh_from_vfs(vfs); self.status = crate::gui::ui_text("Ad değiştirildi.", "Name changed."); }
+        else { self.status = crate::gui::ui_text("Ad değiştirilemedi.", "Rename failed."); }
+    }
+
+    /// Geri Dönüşüm Kutusu'nda seçili öğeyi önceki konumuna değil, `/root/Documents`
+    /// klasörüne geri yükler. Öğe adı çakışırsa numaralandırılır.
+    pub fn restore_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
+        if self.path() != crate::fs::vfs::TRASH_DIR {
+            return false;
+        }
+        if self.selected_idx >= self.file_count {
+            return false;
+        }
+        let item = &self.files[self.selected_idx];
+        let name = item.display_name();
+        if name == ".." {
+            return false;
+        }
+        let mut trash_path = String::from(crate::fs::vfs::TRASH_DIR);
+        trash_path.push('/');
+        trash_path.push_str(name);
+        let ok = vfs.restore_from_trash(&trash_path, "/root/Documents");
+        if ok {
+            self.refresh_from_vfs(vfs);
+            self.status = crate::gui::ui_text("Oge geri yuklendi.", "Item restored.");
+        } else {
+            self.status = crate::gui::ui_text("Geri yuklenemedi.", "Restore failed.");
+        }
+        ok
+    }
+
+    /// Geri Dönüşüm Kutusu'nu boşaltır.
+    pub fn empty_trash(&mut self, vfs: &mut VirtualFileSystem) -> usize {
+        let n = vfs.empty_trash();
+        if self.path() == crate::fs::vfs::TRASH_DIR {
+            self.refresh_from_vfs(vfs);
+        }
+        self.status = if n > 0 {
+            crate::gui::ui_text("Geri donusum kutusu bosaltildi.", "Recycle Bin emptied.")
+        } else {
+            crate::gui::ui_text("Geri donusum kutusu zaten bos.", "Recycle Bin already empty.")
+        };
+        n
     }
 
     /// Seçili öğeyi açar veya klasöre girer. Klasör ise `None` döner ve dizin değiştirir.
@@ -442,6 +529,21 @@ impl FileManagerApp {
         fb.draw_rect_outline(x + 2, y + 1, 11, 13, Color::BORDER);
     }
 
+    /// Geri Dönüşüm Kutusu Simgesi: Kapaklı, çizgili bir çöp kutusu.
+    pub fn draw_trash_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        // Kapak (üst yatay şerit)
+        fb.draw_rect(x + 2, y + 1, 12, 2, Color::ACCENT_GREEN);
+        // Kapak tutamacı (küçük çıkıntı)
+        fb.draw_rect(x + 6, y, 4, 1, Color::ACCENT_GREEN);
+        // Gövde (aşağı doğru daralan bir kutu)
+        fb.draw_rect(x + 3, y + 4, 10, 10, MinGuiCompositor::shade(Color::ACCENT_GREEN, -40));
+        // Gövde kenar çizgileri (dikey çizgiler)
+        fb.draw_line(x + 6, y + 5, x + 6, y + 12, Color::ACCENT_GREEN);
+        fb.draw_line(x + 10, y + 5, x + 10, y + 12, Color::ACCENT_GREEN);
+        // Alt kenar
+        fb.draw_line(x + 3, y + 13, x + 12, y + 13, Color::ACCENT_GREEN);
+    }
+
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState) {
         let sidebar_w = 110;
         let list_x = win_x + sidebar_w + 14;
@@ -486,9 +588,9 @@ impl FileManagerApp {
         fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
 
         let nav = if crate::gui::ui_english() {
-            ["Root (/)", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM"]
+            ["Root (/)", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM", "Recycle Bin"]
         } else {
-            ["Kok (/)", "Belgeler", "Medyalar", "Indirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM"]
+            ["Kok (/)", "Belgeler", "Medyalar", "Indirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Donusum"]
         };
 
         for (i, item) in nav.iter().enumerate() {
@@ -504,6 +606,7 @@ impl FileManagerApp {
                 5 => cur == "/media/usb0",
                 6 => cur == "/media/hdd0",
                 7 => cur == "/media/cdrom",
+                8 => cur == crate::fs::vfs::TRASH_DIR,
                 _ => false,
             };
             if is_active {
@@ -519,10 +622,13 @@ impl FileManagerApp {
                 // HDD Simgesi
                 fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_YELLOW);
                 fb.draw_line(win_x + 11, iy + 8, win_x + 21, iy + 8, Color::BLACK);
-            } else {
+            } else if i == 7 {
                 // CD Simgesi
                 fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_PINK);
                 fb.draw_rect(win_x + 14, iy + 6, 4, 4, Color::WHITE);
+            } else {
+                // Geri Dönüşüm Kutusu Simgesi (çöp kutusu)
+                Self::draw_trash_icon(fb, win_x + 9, iy + 2);
             }
             let col = if is_active {
                 Color::ACCENT_BLUE
@@ -596,7 +702,11 @@ impl FileManagerApp {
         let status_y = win_y + win_h - STATUS_H + 6;
         fb.draw_rect(win_x + 6, status_y, win_w - 12, 18, Color::TASKBAR_BG);
         let mut sb = TextBuf::new();
-        if !self.status.is_empty() {
+        if self.rename_active {
+            sb.push_str(crate::gui::ui_text("Yeni ad: ", "New name: "));
+            if let Ok(name) = core::str::from_utf8(&self.rename_buf[..self.rename_len]) { sb.push_str(name); }
+            sb.push_str(crate::gui::ui_text("  | Enter: kaydet  Esc: iptal", "  | Enter: save  Esc: cancel"));
+        } else if !self.status.is_empty() {
             sb.push_str(self.status);
         } else {
             sb.push_usize(self.file_count);

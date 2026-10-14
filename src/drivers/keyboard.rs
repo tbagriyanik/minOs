@@ -22,6 +22,16 @@ pub enum KeyAction {
     EndKey,
     Undo,
     Redo,
+    WinShowDesktop,
+    WinMinimizeAll,
+    WinOpenFiles,
+    VolumeUp,
+    VolumeDown,
+    VolumeMute,
+    MediaPlayPause,
+    MediaNext,
+    MediaPrevious,
+    RenameSelected,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -148,12 +158,16 @@ impl KeyboardState {
                 self.last_action = Some(KeyAction::ToggleStartMenu);
                 return None;
             }
+            0x20 if self.super_key => { self.last_action = Some(KeyAction::WinShowDesktop); return None; } // Win+D
+            0x32 if self.super_key => { self.last_action = Some(KeyAction::WinMinimizeAll); return None; } // Win+M
+            0x12 if self.super_key => { self.last_action = Some(KeyAction::WinOpenFiles); return None; } // Win+E
             0x3E => { // F4 key
                 if self.alt {
                     self.last_action = Some(KeyAction::CloseActiveWindow);
                     return None;
                 }
             }
+            0x3C => { self.last_action = Some(KeyAction::RenameSelected); return None; } // F2
             0x0F => { // Tab key
                 if self.alt {
                     self.last_action = Some(KeyAction::CycleWindowFocus);
@@ -248,6 +262,13 @@ impl KeyboardState {
                 self.last_action = Some(KeyAction::OpenTaskManager);
                 return None;
             }
+            // Yaygın PS/2 multimedia tuşları (E0 öneki ile gelir).
+            0x20 => { self.last_action = Some(KeyAction::VolumeMute); return None; }
+            0x2E => { self.last_action = Some(KeyAction::VolumeDown); return None; }
+            0x30 => { self.last_action = Some(KeyAction::VolumeUp); return None; }
+            0x22 => { self.last_action = Some(KeyAction::MediaPlayPause); return None; }
+            0x10 => { self.last_action = Some(KeyAction::MediaPrevious); return None; }
+            0x19 => { self.last_action = Some(KeyAction::MediaNext); return None; }
             0x53 if self.num_lock => { self.last_char = Some('.'); return Some('.'); }
             0x53 => { self.last_action = Some(KeyAction::Delete); return None; }
             0x48 => { self.last_action = Some(KeyAction::ArrowUp); return None; }

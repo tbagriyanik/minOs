@@ -17,6 +17,9 @@ pub enum NodeType {
     Directory,
 }
 
+/// Geri Dönüşüm Kutusu sanal dizin yolu. Silinen öğeler buraya taşınır.
+pub const TRASH_DIR: &str = "/root/Trash";
+
 pub struct VfsNode {
     pub name: &'static str,
     pub node_type: NodeType,
@@ -72,6 +75,8 @@ impl VirtualFileSystem {
         self.create_dir_internal("/media/usb0");
         self.create_dir_internal("/media/hdd0");
         self.create_dir_internal("/media/cdrom");
+        // Geri Dönüşüm Kutusu (Trash) — silinen öğeler buraya taşınır.
+        self.create_dir_internal(TRASH_DIR);
 
         // Örnek Belgeler ve Sistem Dosyaları
         self.create_file_internal(
@@ -236,6 +241,28 @@ impl VirtualFileSystem {
         self.create_file(&norm, data)
     }
 
+    pub fn rename(&mut self, old_path: &str, new_path: &str) -> bool {
+        let old = Self::normalize_path(old_path);
+        let new = Self::normalize_path(new_path);
+        if old == "/" || new == "/" || self.exists(&new) { return false; }
+        if !self.exists(&old) { return false; }
+        let prefix = if old.ends_with('/') { old.clone() } else { let mut p = old.clone(); p.push('/'); p };
+        let mut changed = false;
+        for item in &mut self.items {
+            if item.path == old {
+                item.path = new.clone();
+                item.name = Self::file_name_from_path(&new);
+                changed = true;
+            } else if item.path.starts_with(&prefix) {
+                let suffix = &item.path[prefix.len()..];
+                let mut child = new.clone(); child.push('/'); child.push_str(suffix);
+                item.path = child;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Dosya okur (tam yol veya dosya adı ile).
     pub fn read_file(&self, path_or_name: &str) -> Option<&[u8]> {
         let norm = Self::normalize_path(path_or_name);
@@ -316,7 +343,137 @@ impl VirtualFileSystem {
         false
     }
 
-    /// Verilen dizinin hemen altındaki dosya ve klasörleri listeler.
+    /// Silinen bir öğeyi kalıcı olarak silmek yerine Geri Dönüşüm Kutusu'na taşır.
+    /// Dosya veya (boş) klasör olabilir. Aynı isimde öğe varsa sonuna numara eklenir.
+    /// Başarılıysa `true` döner ve öğe artık `TRASH_DIR` altında yaşar.
+    pub fn move_to_trash(&mut self, path: &str) -> bool {
+        let norm = Self::normalize_path(path);
+        // Zaten çöp kutusunda olan ya da kök dizini taşımaya çalışmak anlamsız.
+        if norm == "/" || norm == TRASH_DIR || Self::is_in_trash_path(&norm) {
+            return false;
+        }
+        // Öğe var mı?
+        let src = match self.items.iter().find(|it| it.path == norm) {
+            Some(it) => it.clone(),
+            None => return false,
+        };
+        // Klasörse içi boş olmalı (iç içe taşıma karmaşıklığını önlemek için).
+        if src.node_type == NodeType::Directory {
+            for it in &self.items {
+                if it.path != norm && it.path.starts_with(&norm) {
+                    return false;
+                }
+            }
+        }
+        // Çöp kutusunda çakışmayan bir hedef isim üret.
+        let base_name = src.name.clone();
+        let mut target = String::from(TRASH_DIR);
+        target.push('/');
+        target.push_str(&base_name);
+        let mut counter = 1u32;
+        while self.items.iter().any(|it| it.path == target) {
+            target = String::from(TRASH_DIR);
+            target.push('/');
+            target.push_str(&base_name);
+            target.push('_');
+            Self::push_u32(&mut target, counter);
+            counter += 1;
+        }
+        // Öğeyi çöp kutusuna taşı (yol ve isim güncellenir).
+        for it in &mut self.items {
+            if it.path == norm {
+                it.path = target.clone();
+                it.name = Self::file_name_from_path(&target);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Geri Dönüşüm Kutusu içindeki öğeleri listeler.
+    pub fn list_trash(&self) -> Vec<VfsItem> {
+        self.list_dir(TRASH_DIR)
+    }
+
+    /// Geri Dönüşüm Kutusu'ndaki bir öğeyi hedef klasöre geri yükler.
+    /// `trash_path` çöp kutusundaki tam yoldur, `dest_dir` ise hedef klasör yoludur.
+    pub fn restore_from_trash(&mut self, trash_path: &str, dest_dir: &str) -> bool {
+        let src_norm = Self::normalize_path(trash_path);
+        if !src_norm.starts_with(TRASH_DIR) {
+            return false;
+        }
+        let name = Self::file_name_from_path(&src_norm);
+        let dest_norm = Self::normalize_path(dest_dir);
+        let mut target = dest_norm.clone();
+        if !target.ends_with('/') {
+            target.push('/');
+        }
+        target.push_str(&name);
+        // Hedefte aynı isim varsa numaralandır.
+        let mut counter = 1u32;
+        while self.items.iter().any(|it| it.path == target) {
+            target = dest_norm.clone();
+            if !target.ends_with('/') {
+                target.push('/');
+            }
+            target.push_str(&name);
+            target.push('_');
+            Self::push_u32(&mut target, counter);
+            counter += 1;
+        }
+        for it in &mut self.items {
+            if it.path == src_norm {
+                it.path = target.clone();
+                it.name = Self::file_name_from_path(&target);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Geri Dönüşüm Kutusu'nu tamamen boşaltır (kalıcı silme).
+    pub fn empty_trash(&mut self) -> usize {
+        let before = self.items.len();
+        self.items.retain(|it| !it.path.starts_with(TRASH_DIR));
+        before - self.items.len()
+    }
+
+    /// Geri Dönüşüm Kutusu'nda öğe olup olmadığını döndürür.
+    pub fn trash_has_items(&self) -> bool {
+        self.items.iter().any(|it| it.path.starts_with(TRASH_DIR) && it.path != TRASH_DIR)
+    }
+
+    /// Geri Dönüşüm Kutusu'ndaki öğe sayısı.
+    pub fn trash_count(&self) -> usize {
+        self.items.iter().filter(|it| it.path.starts_with(TRASH_DIR) && it.path != TRASH_DIR).count()
+    }
+
+    /// Verilen normalize edilmiş yolun çöp kutusu altında olup olmadığını döndürür.
+    fn is_in_trash_path(norm: &str) -> bool {
+        if let Some(rest) = norm.strip_prefix(TRASH_DIR) {
+            return rest.is_empty() || rest.starts_with('/');
+        }
+        false
+    }
+
+    /// `String`'e u32 değeri (ondalık) ekler.
+    fn push_u32(s: &mut String, mut v: u32) {
+        let mut buf = [0u8; 10];
+        let mut n = 0usize;
+        if v == 0 {
+            s.push('0');
+            return;
+        }
+        while v > 0 && n < buf.len() {
+            buf[n] = b'0' + (v % 10) as u8;
+            n += 1;
+            v /= 10;
+        }
+        while n > 0 {
+            n -= 1;
+            s.push(buf[n] as char);
+        }
+    }
     pub fn list_dir(&self, dir_path: &str) -> Vec<VfsItem> {
         let norm = Self::normalize_path(dir_path);
         let mut results = Vec::new();

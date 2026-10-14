@@ -40,10 +40,11 @@ pub struct NotepadApp {
     // büyük bellek kapladığı için global `UNDO_STACK`/`REDO_STACK` içinde tutulur.
     undo_len: u8,
     redo_len: u8,
+    history: History,
 }
 
-/// Undo/redo anlık görüntü yığını derinliği.
-const HISTORY_DEPTH: usize = 32;
+/// Her not defteri penceresi için undo/redo geçmiş derinliği.
+const HISTORY_DEPTH: usize = 4;
 
 /// Metin anlık görüntüsü (undo/redo için).
 #[derive(Clone, Copy)]
@@ -55,9 +56,9 @@ struct Snapshot {
 
 const EMPTY_SNAPSHOT: Snapshot = Snapshot { chars: [' '; 512], len: 0, cursor: 0 };
 
-// Undo/redo yığınları: kernel yığınını şişirmemek için `static mut` olarak tutulur.
-static mut UNDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
-static mut REDO_STACK: [Snapshot; HISTORY_DEPTH] = [EMPTY_SNAPSHOT; HISTORY_DEPTH];
+#[derive(Clone, Copy)]
+struct History { undo: [Snapshot; HISTORY_DEPTH], redo: [Snapshot; HISTORY_DEPTH] }
+const EMPTY_HISTORY: History = History { undo: [EMPTY_SNAPSHOT; HISTORY_DEPTH], redo: [EMPTY_SNAPSHOT; HISTORY_DEPTH] };
 
 impl NotepadApp {
     // Copy selected text to the clipboard
@@ -135,6 +136,7 @@ impl NotepadApp {
             status_msg: "",
             undo_len: 0,
             redo_len: 0,
+            history: EMPTY_HISTORY,
         };
 
         let default_path = "/root/Documents/notlar.txt";
@@ -159,20 +161,14 @@ impl NotepadApp {
     /// Değişiklikten önce mevcut durumu geri al yığınına iter ve
     /// ileri al (redo) yığınını temizler.
     fn push_history(&mut self) {
-        unsafe {
-            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
-            let depth = (self.undo_len as usize).min(HISTORY_DEPTH);
-            // Yığın doluysa en eski kaydı düşürerek yer aç (kayan pencere).
-            if depth >= HISTORY_DEPTH {
-                for i in 1..HISTORY_DEPTH {
-                    (*undo)[i - 1] = (*undo)[i];
-                }
-                (*undo)[HISTORY_DEPTH - 1] = self.snapshot();
-                self.undo_len = HISTORY_DEPTH as u8;
-            } else {
-                (*undo)[depth] = self.snapshot();
-                self.undo_len = (depth + 1) as u8;
-            }
+        let depth = (self.undo_len as usize).min(HISTORY_DEPTH);
+        if depth >= HISTORY_DEPTH {
+            self.history.undo.copy_within(1..HISTORY_DEPTH, 0);
+            self.history.undo[HISTORY_DEPTH - 1] = self.snapshot();
+            self.undo_len = HISTORY_DEPTH as u8;
+        } else {
+            self.history.undo[depth] = self.snapshot();
+            self.undo_len = (depth + 1) as u8;
         }
         self.redo_len = 0;
     }
@@ -196,18 +192,14 @@ impl NotepadApp {
         if self.undo_len == 0 {
             return;
         }
-        unsafe {
-            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
-            let redo = core::ptr::addr_of_mut!(REDO_STACK);
-            let u = self.undo_len as usize;
-            let cur = self.snapshot();
-            let prev = (*undo)[u - 1];
-            let r = (self.redo_len as usize).min(HISTORY_DEPTH - 1);
-            (*redo)[r] = cur;
-            self.redo_len = (r + 1) as u8;
-            self.undo_len -= 1;
-            self.restore(&prev);
-        }
+        let u = self.undo_len as usize;
+        let cur = self.snapshot();
+        let prev = self.history.undo[u - 1];
+        let r = (self.redo_len as usize).min(HISTORY_DEPTH - 1);
+        self.history.redo[r] = cur;
+        self.redo_len = (r + 1) as u8;
+        self.undo_len -= 1;
+        self.restore(&prev);
     }
 
     /// Geri alınan düzenlemeyi yeniden uygular (Ctrl+Y).
@@ -215,18 +207,14 @@ impl NotepadApp {
         if self.redo_len == 0 {
             return;
         }
-        unsafe {
-            let undo = core::ptr::addr_of_mut!(UNDO_STACK);
-            let redo = core::ptr::addr_of_mut!(REDO_STACK);
-            let r = self.redo_len as usize;
-            let cur = self.snapshot();
-            let next = (*redo)[r - 1];
-            let u = (self.undo_len as usize).min(HISTORY_DEPTH - 1);
-            (*undo)[u] = cur;
-            self.undo_len = (u + 1) as u8;
-            self.redo_len -= 1;
-            self.restore(&next);
-        }
+        let r = self.redo_len as usize;
+        let cur = self.snapshot();
+        let next = self.history.redo[r - 1];
+        let u = (self.undo_len as usize).min(HISTORY_DEPTH - 1);
+        self.history.undo[u] = cur;
+        self.undo_len = (u + 1) as u8;
+        self.redo_len -= 1;
+        self.restore(&next);
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -671,16 +659,18 @@ impl NotepadApp {
         if self.menu != 0 {
             let mx = win_x + match self.menu { 1=>8, 2=>68, _=>128 };
             let items = match (self.menu, english) {
-                (1, true) => ["New Document", "Save", "Clear", ""],
+                (1, true) => ["New Document", "Open", "Save", "Clear"],
                 (2, true) => ["Cut", "Copy", "Paste", "Select All"],
                 (_, true) => ["About Notepad", "", "", ""],
-                (1, false) => ["Yeni Belge", "Kaydet", "Temizle", ""],
+                (1, false) => ["Yeni Belge", "Aç", "Kaydet", "Temizle"],
                 (2, false) => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
                 _ => ["Not Defteri Hakkında", "", "", ""],
             };
-            fb.draw_shadow(mx, win_y + 54, 150, 94, Color::SHADOW);
-            fb.draw_rect(mx, win_y + 54, 150, 94, Color::WINDOW_BG);
-            fb.draw_rect_outline(mx, win_y + 54, 150, 94, Color::BORDER);
+            // Yardım menüsünde tek öğe olduğundan kutu yüksekliği ona göre küçülür.
+            let box_h = if items[1].is_empty() { 34 } else { 114 };
+            fb.draw_shadow(mx, win_y + 54, 150, box_h, Color::SHADOW);
+            fb.draw_rect(mx, win_y + 54, 150, box_h, Color::WINDOW_BG);
+            fb.draw_rect_outline(mx, win_y + 54, 150, box_h.saturating_sub(2), Color::BORDER);
             for i in 0..4 {
                 if !items[i].is_empty() {
                     fb.draw_rect(mx + 4, win_y + 60 + i * 20, 142, 18, Color::TITLE_BAR_INACTIVE);

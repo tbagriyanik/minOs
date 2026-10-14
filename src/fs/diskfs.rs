@@ -75,9 +75,7 @@ static mut CONTENT_NAME_LEN: usize = 0;
 // ---------------------------------------------------------------------------
 
 fn serial(s: &str) {
-    for b in s.bytes() {
-        unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b, options(nomem, nostack, preserves_flags)); }
-    }
+    crate::serial::print(s);
 }
 
 fn read_sector_cached(drive: u8, lba: u32, out: &mut [u8; 512]) -> bool {
@@ -203,16 +201,14 @@ fn print_num(mut v: u64) {
         return;
     }
     let mut buf = [0u8; 20];
-    let mut n = 0;
-    while v > 0 && n < buf.len() {
-        buf[n] = b'0' + (v % 10) as u8;
-        n += 1;
+    let mut i = buf.len();
+    while v > 0 && i > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
         v /= 10;
     }
-    while n > 0 {
-        n -= 1;
-        let b = buf[n];
-        serial(core::str::from_utf8(&[b]).unwrap_or("?"));
+    if let Ok(s) = core::str::from_utf8(&buf[i..]) {
+        serial(s);
     }
 }
 

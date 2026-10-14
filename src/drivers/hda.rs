@@ -18,11 +18,7 @@ use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 fn serial_print(s: &str) {
-    for b in s.bytes() {
-        unsafe {
-            asm!("out dx, al", in("dx") 0x3F8u16, in("al") b, options(nomem, nostack, preserves_flags));
-        }
-    }
+    crate::serial::print(s);
 }
 
 // ---------------------------------------------------------------------------

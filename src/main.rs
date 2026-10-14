@@ -216,6 +216,17 @@ fn serial_print(s: &str) {
     serial::print(s);
 }
 
+#[inline(never)]
+fn serial_print_dec(v: u64) {
+    serial::print_dec(v);
+}
+
+#[inline(never)]
+fn serial_print_hex(v: u64) {
+    serial::print_hex(v);
+}
+
+
 fn restart_system() -> ! {
     serial_print("[minOs] Restart requested from Start Menu.\n");
     unsafe {
@@ -617,7 +628,7 @@ pub extern "C" fn _start() -> ! {
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
     // 4. Limine Framebuffer Alımı
-    let (fb_ptr, width, height, pitch) = unsafe {
+    let (fb_ptr, width, height, pitch, bpp) = unsafe {
         // SAFETY: the response pointer is validated before being dereferenced.
         if let Some(resp) = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
             .filter(|resp| !resp.is_null())
@@ -636,11 +647,16 @@ pub extern "C" fn _start() -> ! {
                 loop { core::hint::spin_loop(); }
             }
             let fb_info = core::ptr::read_volatile(fb_info_ptr);
+            if fb_info.address.is_null() || !is_canonical_ptr(fb_info.address as *const u8) {
+                serial_print("[minOs] ERROR: Limine framebuffer buffer address is NULL or non-canonical!\n");
+                loop { core::hint::spin_loop(); }
+            }
             (
                 fb_info.address as *mut u32,
                 fb_info.width as usize,
                 fb_info.height as usize,
                 fb_info.pitch as usize,
+                fb_info.bpp as usize,
             )
         } else {
             serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
@@ -650,9 +666,29 @@ pub extern "C" fn _start() -> ! {
         }
     };
 
+    serial_print("[VIDEO] Limine Framebuffer alindi: ");
+    serial_print_dec(width as u64);
+    serial_print("x");
+    serial_print_dec(height as u64);
+    serial_print(" @ ");
+    serial_print_dec(bpp as u64);
+    serial_print(" bpp | Pitch: ");
+    serial_print_dec(pitch as u64);
+    serial_print(" byte (");
+    serial_print_dec((pitch / 4) as u64);
+    serial_print(" kelime) | Adres: ");
+    serial_print_hex(fb_ptr as u64);
+    serial_print("\n");
+
     let mut fb = unsafe {
         drivers::video::Framebuffer::new(fb_ptr, width, height, pitch)
     };
+
+    if fb.verify_bounds() {
+        serial_print("[VIDEO] Cizim sinirlari, kirpma ve pitch guvenligi dogrulandi.\n");
+    } else {
+        serial_print("[VIDEO] UYARI: Cizim sinirlari veya pitch dogrulamasi basarisiz!\n");
+    }
 
     // 5. PS/2 Donanım Sürücüleri
     let mut mouse = drivers::mouse::MouseState::new();

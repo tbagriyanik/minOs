@@ -85,7 +85,11 @@ impl TaskManagerApp {
     }
 
     pub fn launch_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(286), win_y + 30, 142, 22)
+        // Action buttons share a row without overlap, including narrow windows.
+        let kill = Self::kill_btn_rect(win_x, win_y, win_w);
+        let width = 122.min(win_w.saturating_sub(20) / 2).max(1);
+        let gap = 8;
+        (kill.0.saturating_sub(gap + width), kill.1, width, kill.3)
     }
 
     pub fn launch_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -230,7 +234,8 @@ impl TaskManagerApp {
 
     /// "Sonlandır" düğmesinin dikdörtgeni (pencerenin sağ-alt bölümü).
     pub fn kill_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(132), win_y + 30, 122, 22)
+        let width = 122.min(win_w.saturating_sub(20) / 2).max(1);
+        (win_x + win_w.saturating_sub(width + 10), win_y + 30, width, 22)
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {

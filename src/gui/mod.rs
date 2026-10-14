@@ -444,8 +444,8 @@ pub struct TrayLayout {
 
 /// Başlat menüsünün toplam yüksekliği.
 pub const MENU_H: usize = 200;
-/// Menü içerik başlangıcı (profil şeridinden sonra).
-pub const MENU_CONTENT_TOP: usize = 74;
+/// Menü içerik başlangıcı (profil ve arama alanından sonra).
+pub const MENU_CONTENT_TOP: usize = 82;
 /// Grup başlığı yüksekliği.
 pub const MENU_GROUP_H: usize = 18;
 /// Menü öğesi yüksekliği (satır aralığı).
@@ -493,7 +493,7 @@ impl MinGuiCompositor {
 
     pub fn start_menu_category_rect(menu_y: usize, group_index: usize) -> (usize, usize, usize, usize) {
         let x = 6 + 6;
-        let y = menu_y + sp(74) + group_index * sp(32) + sp(4);
+        let y = menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32) + sp(4);
         let w = sp(190) - 12;
         let h = sp(28);
         (x, y, w, h)
@@ -503,7 +503,7 @@ impl MinGuiCompositor {
         let sub_w = sp(230);
         let sub_h = sp(28) + count * sp(24) + sp(6);
         let sub_x = 6 + sp(190) + 4;
-        let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
+        let cat_y = menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
         (sub_x, sub_y, sub_w, sub_h)
     }
@@ -2162,8 +2162,9 @@ impl MinGuiCompositor {
     pub fn start_search_rect(menu_x: usize, menu_y: usize, menu_w: usize) -> (usize, usize, usize, usize) {
         let strip_h = sp(34) + Self::icon_size();
         let search_h = sp(22);
-        // Şeridin biraz içine bindirip yukarı çekerek kategorilerle çakışmayı önle.
-        let search_y = menu_y + strip_h.saturating_sub(sp(4));
+        // Arama alanını profil şeridinin altına ve kategori listesinin üstüne
+        // koy; iki alan ölçek değişse de üst üste binmesin.
+        let search_y = menu_y + strip_h + sp(4);
         (menu_x + sp(8), search_y, menu_w.saturating_sub(sp(16)), search_h)
     }
 
@@ -2191,7 +2192,8 @@ impl MinGuiCompositor {
         fb.draw_rounded_rect_outline(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::BORDER);
         let search_text = if self.start_search_len == 0 { ui_text("Uygulama ara...", "Search apps...") }
             else { core::str::from_utf8(&self.start_search[..self.start_search_len]).unwrap_or("") };
-        Self::draw_string(fb, search_rect.0 + 6, search_rect.1 + 4, search_text, Color::TEXT_MAIN);
+        Self::draw_string_clipped(fb, search_rect.0 + 6, search_rect.1 + 4, search_text, Color::TEXT_MAIN,
+            (search_rect.0 + 4, search_rect.1 + 2, search_rect.2.saturating_sub(8), search_rect.3.saturating_sub(4)));
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {

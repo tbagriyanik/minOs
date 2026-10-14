@@ -22,6 +22,43 @@ pub fn print(message: &str) {
     }
 }
 
+pub fn print_dec(mut v: u64) {
+    if v == 0 {
+        print("0");
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while v > 0 && i > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    if let Ok(s) = core::str::from_utf8(&buf[i..]) {
+        print(s);
+    }
+}
+
+pub fn print_hex(mut v: u64) {
+    print("0x");
+    if v == 0 {
+        print("0");
+        return;
+    }
+    let hex_chars = b"0123456789ABCDEF";
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    while v > 0 && i > 0 {
+        i -= 1;
+        buf[i] = hex_chars[(v & 0xF) as usize];
+        v >>= 4;
+    }
+    if let Ok(s) = core::str::from_utf8(&buf[i..]) {
+        print(s);
+    }
+}
+
+
 fn is_warning(message: &str) -> bool {
     message.contains("UYARI") || message.contains("WARNING")
 }

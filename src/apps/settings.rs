@@ -115,10 +115,10 @@ impl SystemSettings {
         (win_x + CONTENT_X + 200, win_y + 204, 96, 22)
     }
     pub fn save_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + win_h.saturating_sub(44), 90, 22)
+        (win_x + CONTENT_X, win_y + win_h.saturating_sub(48), 84, 22)
     }
     pub fn reset_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 100, win_y + win_h.saturating_sub(44), 95, 22)
+        (win_x + CONTENT_X + 96, win_y + win_h.saturating_sub(48), 84, 22)
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X + (i % 2) * 158, win_y + 244 + (i / 2) * 30, 150, 24)
@@ -511,7 +511,7 @@ impl SystemSettings {
         if self.focused_control == reset_idx { fb.draw_rect_outline(reset_r.0, reset_r.1, reset_r.2, reset_r.3, Color::ACCENT_YELLOW); }
 
         // Durum Çubuğu
-        let bar_y = win_y + win_h.saturating_sub(26);
+        let bar_y = win_y + win_h.saturating_sub(22);
         fb.draw_rect(win_x + 6, bar_y, win_w.saturating_sub(12), 20, Color::TASKBAR_BG);
         MinGuiCompositor::draw_string(fb, win_x + 12, bar_y + 6, self.status_msg, Color::ACCENT_YELLOW);
     }

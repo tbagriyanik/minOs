@@ -1,7 +1,9 @@
 use crate::gui::theme;
 
-static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
-const BACKBUFFER_LEN: usize = 1280 * 720;
+pub const MAX_SCREEN_WIDTH: usize = 1920;
+pub const MAX_SCREEN_HEIGHT: usize = 1080;
+pub const BACKBUFFER_LEN: usize = MAX_SCREEN_WIDTH * MAX_SCREEN_HEIGHT;
+static mut BACKBUFFER: [u32; BACKBUFFER_LEN] = [0; BACKBUFFER_LEN];
 const CURSOR_SAVE_W: usize = 24;
 const CURSOR_SAVE_H: usize = 24;
 
@@ -110,6 +112,39 @@ impl Framebuffer {
             cursor_h: 0,
             cursor_saved: false,
         }
+    }
+
+    /// Çizim sınırları, kırpma ve pitch güvenliğini doğrular.
+    pub fn verify_bounds(&mut self) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+        if self.width * self.height > BACKBUFFER_LEN {
+            return false;
+        }
+        let pitch_words = self.pitch / 4;
+        if pitch_words < self.width {
+            return false;
+        }
+
+        // Sınır aşımı testleri (ekran dışına çizim bellek bozulması veya çökme yaratmamalı)
+        self.put_pixel(self.width + 100, self.height + 100, 0xFFFFFF);
+        self.draw_rect(self.width, self.height, 50, 50, 0xFFFFFF);
+        self.draw_line(self.width + 10, self.height + 10, self.width + 100, self.height + 100, 0xFFFFFF);
+        self.draw_rounded_rect(self.width + 20, self.height + 20, 40, 40, 5, 0xFFFFFF);
+        self.draw_vgradient(self.width + 30, self.height + 30, 20, 20, 0xFF0000, 0x0000FF);
+        self.flush_rect((self.width + 10, self.height + 10, 50, 50));
+
+        // Kırpma (clipping) testi
+        self.set_clip(10, 10, 20, 20);
+        let clip = self.clip();
+        if clip.x0 != 10 || clip.y0 != 10 || clip.x1 != 30 || clip.y1 != 30 {
+            self.reset_clip();
+            return false;
+        }
+        self.reset_clip();
+
+        true
     }
 
     /// İmlecin kaplayacağı arka planı, kısmi imleç çizimleri için saklar.

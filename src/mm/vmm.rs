@@ -253,3 +253,113 @@ impl AddressSpace {
     }
 }
 
+/// Bellek yöneticisi, sayfalama ve kullanıcı kipi izolasyon doğrulama testi.
+pub fn test_memory_and_isolation(pmm: &mut PhysicalMemoryManager) -> bool {
+    crate::serial_print("[MM-TEST] --- Bellek Tahsisi ve Izolasyon Dogrulama Testi ---\n");
+
+    // 1. PMM Çerçeve Tahsis ve Serbest Bırakma Testi
+    let free_before = pmm.free_memory_bytes;
+    let frame1 = match pmm.allocate_frame() {
+        Some(f) => f,
+        None => {
+            crate::serial_print("[MM-TEST] PMM çerçeve tahsisi: BASARISIZ\n");
+            return false;
+        }
+    };
+    let frame2 = match pmm.allocate_frame() {
+        Some(f) => f,
+        None => {
+            crate::serial_print("[MM-TEST] PMM 2. çerçeve tahsisi: BASARISIZ\n");
+            pmm.free_frame(frame1);
+            return false;
+        }
+    };
+    if frame1 == frame2 || (frame1 % PAGE_SIZE != 0) || (frame2 % PAGE_SIZE != 0) {
+        crate::serial_print("[MM-TEST] PMM çerçeve çakışması veya hizalama hatası: BASARISIZ\n");
+        pmm.free_frame(frame1);
+        pmm.free_frame(frame2);
+        return false;
+    }
+    crate::serial_print("[MM-TEST] 1. PMM Tahsis (4KB hizalı, benzersiz çerçeveler): BASARILI\n");
+
+    pmm.free_frame(frame1);
+    pmm.free_frame(frame2);
+    if pmm.free_memory_bytes != free_before {
+        crate::serial_print("[MM-TEST] PMM serbest bırakma sonrası bellek sızıntısı: BASARISIZ\n");
+        return false;
+    }
+    crate::serial_print("[MM-TEST] 2. PMM Serbest Bırakma (Sızıntısız iade): BASARILI\n");
+
+    // 2. VMM Eşleme (Map) ve Çözümleme (Translate) Testi
+    let test_frame = match pmm.allocate_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+    let test_virt: u64 = 0x0000_7000_1000_0000; // Kullanıcı alanı sanal adresi
+    let mut current_as = AddressSpace::current();
+
+    // Kullanıcı kipi (Ring 3) veri sayfası bayraklarıyla eşle
+    let map_res = current_as.map_page(test_virt, test_frame, PageFlags::USER_DATA, pmm);
+    if map_res.is_err() {
+        crate::serial_print("[MM-TEST] VMM sayfa eşleme hatası: BASARISIZ\n");
+        pmm.free_frame(test_frame);
+        return false;
+    }
+
+    // Çözümlemeyi kontrol et
+    let translated = current_as.translate(test_virt);
+    if translated != Some(test_frame) {
+        crate::serial_print("[MM-TEST] VMM sanal->fiziksel çözümleme eşleşmedi: BASARISIZ\n");
+        let _ = current_as.unmap_page(test_virt);
+        pmm.free_frame(test_frame);
+        return false;
+    }
+    crate::serial_print("[MM-TEST] 3. VMM Sayfa Eşleme & Çözümleme (0x");
+    crate::serial::print_hex(test_virt);
+    crate::serial_print(" -> 0x");
+    crate::serial::print_hex(test_frame);
+    crate::serial_print("): BASARILI\n");
+
+    // 3. Kullanıcı Kipi ve İzolasyon Sınırları Kontrolü
+    // Eşlenen sayfanın PT girdisini doğrudan okuyarak USER, WRITABLE ve NO_EXECUTE bitlerini doğrula
+    let pml4_idx = ((test_virt >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((test_virt >> 30) & 0x1FF) as usize;
+    let pd_idx = ((test_virt >> 21) & 0x1FF) as usize;
+    let pt_idx = ((test_virt >> 12) & 0x1FF) as usize;
+
+    let flags_valid = unsafe {
+        let pml4 = &*AddressSpace::table_ptr(current_as.pml4_phys);
+        let pdpt_phys = pml4.entries[pml4_idx] & 0x000F_FFFF_FFFF_F000;
+        let pdpt = &*AddressSpace::table_ptr(pdpt_phys);
+        let pd_phys = pdpt.entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000;
+        let pd = &*AddressSpace::table_ptr(pd_phys);
+        let pt_phys = pd.entries[pd_idx] & 0x000F_FFFF_FFFF_F000;
+        let pt = &*AddressSpace::table_ptr(pt_phys);
+        let entry = pt.entries[pt_idx];
+
+        let is_user = (entry & PageFlags::USER) != 0;
+        let is_write = (entry & PageFlags::WRITABLE) != 0;
+        let is_nx = (entry & PageFlags::NO_EXECUTE) != 0;
+        is_user && is_write && is_nx
+    };
+
+    if flags_valid {
+        crate::serial_print("[MM-TEST] 4. Kullanıcı Kipi İzolasyon Bayrakları (USER | WRITABLE | NX): DOGRULANDI\n");
+    } else {
+        crate::serial_print("[MM-TEST] Kullanıcı kipi güvenlik bayrakları eksik: BASARISIZ\n");
+    }
+
+    // 4. Eşlemeyi Kaldırma (Unmap) ve Geçersiz Kılma (TLB Flush) Testi
+    let unmapped = current_as.unmap_page(test_virt);
+    let after_unmap_trans = current_as.translate(test_virt);
+    pmm.free_frame(test_frame);
+
+    if unmapped == Some(test_frame) && after_unmap_trans.is_none() {
+        crate::serial_print("[MM-TEST] 5. VMM Eşlemeyi Kaldırma (Unmap & TLB Invalidate): BASARILI\n");
+    } else {
+        crate::serial_print("[MM-TEST] VMM unmap işlemi başarısız: BASARISIZ\n");
+        return false;
+    }
+
+    flags_valid
+}

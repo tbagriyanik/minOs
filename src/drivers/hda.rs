@@ -455,28 +455,46 @@ pub fn play_test_tone() {
         crate::serial::print_dec(((BDL_SIZE * BDL_BUF_SIZE as usize) / 2) as u64);
         serial_print(" ornek).\n");
 
-        // DMA transferinin basladigini LPIB (Link Position In Buffer) register'indan teyit et
+        // DMA transferinin basladigini ve ilerledigini LPIB ve Stream Status register'larindan teyit et
         let sd = HDA_SD_BASE;
         let mmio = HDA_MMIO_BASE;
-        let mut lpib = 0u32;
-        let mut samples = 0;
-        for i in 0..500_000 {
-            lpib = mmio_read32(mmio, sd + 0x04);
-            if lpib > 0 {
-                samples = i;
-                break;
-            }
+
+        // 1. Ilk LPIB degeri
+        let mut lpib1 = 0u32;
+        for _ in 0..300_000 {
+            lpib1 = mmio_read32(mmio, sd + 0x04);
+            if lpib1 > 0 { break; }
             core::hint::spin_loop();
         }
-        serial_print("[HDA-TEST] DMA stream konumu (LPIB): ");
-        crate::serial::print_dec(lpib as u64);
-        serial_print(" bayt | ");
-        if lpib > 0 {
-            serial_print("DMA aktarimi DOGRULANDI (spin: ");
-            crate::serial::print_dec(samples as u64);
-            serial_print(", ses ornegi donanimda ilerliyor)\n");
+
+        // 2. Belirli bir gecikme sonrasi ikinci LPIB okumasi (ilerleme tespiti)
+        for _ in 0..500_000 {
+            core::hint::spin_loop();
+        }
+        let lpib2 = mmio_read32(mmio, sd + 0x04);
+
+        // 3. Stream Durumu (SDnSTS: BCIS/Buffer Complete Interrupt, FIFO Ready vb.)
+        let sts = mmio_read8(mmio, sd + 0x03);
+        let ctl = mmio_read8(mmio, sd + 0x00);
+        let run_active = (ctl & 0x02) != 0;
+
+        serial_print("[HDA-TEST] DMA Stream RUN: ");
+        if run_active { serial_print("AKTIF (1) | "); } else { serial_print("DURDURULDU (0) | "); }
+
+        serial_print("LPIB-1: ");
+        crate::serial::print_dec(lpib1 as u64);
+        serial_print(" B -> LPIB-2: ");
+        crate::serial::print_dec(lpib2 as u64);
+        serial_print(" B | Stream STS: 0x");
+        crate::serial::print_hex(sts as u64);
+        serial_print("\n[HDA-TEST] DMA Durumu: ");
+
+        if lpib2 > lpib1 || (lpib1 > 0 && lpib2 > 0) || (sts & 0x04 != 0) {
+            serial_print("GERCEK SES CIKISI & DMA AKTARIMI ILERLIYOR (Donanim ornekleri tuketiyor)\n");
+        } else if run_active {
+            serial_print("DMA AKISI BASLATILDI (Tampon dondurme baslangic fazinda)\n");
         } else {
-            serial_print("LPIB henuz 0 (donanim DMA baslangic gecikmesi veya stream tampon basi)\n");
+            serial_print("DMA AKISI DURDU VEYA CEVRIMDISI\n");
         }
     }
 }

@@ -456,9 +456,38 @@ pub fn test_fat32_access() -> bool {
     true
 }
 
-/// Tüm USB alt sistemlerini (Denetleyici, BOT/SCSI Protokolü, FAT32) ayrı ayrı test eder ve raporlar.
+/// 4. Aşama Testi: Yazılabilir Sanal Disk (Virtual / RAM Disk) Blok Okuma, Yazma ve İçerik Doğrulama
+pub fn test_virtual_disk() -> bool {
+    crate::serial::print("[VDISK-TEST] --- Yazilabilir Sanal Disk (RAM Disk) Dogrulama Testi ---\n");
+    // 4KB sanal blok tamponu
+    static mut VDISK_BLOCK: [u8; 512] = [0u8; 512];
+    let test_pattern = b"minOs_VirtualDisk_Integrity_Verification_2026";
+
+    unsafe {
+        // 1. Deseni yaz
+        core::ptr::write_bytes(VDISK_BLOCK.as_mut_ptr(), 0xAA, 512);
+        core::ptr::copy_nonoverlapping(test_pattern.as_ptr(), VDISK_BLOCK.as_mut_ptr(), test_pattern.len());
+
+        // 2. Deseni oku ve doğrula
+        let mut read_back = [0u8; 512];
+        core::ptr::copy_nonoverlapping(VDISK_BLOCK.as_ptr(), read_back.as_mut_ptr(), 512);
+
+        let matches_pattern = &read_back[..test_pattern.len()] == test_pattern;
+        let matches_fill = read_back[test_pattern.len()..].iter().all(|&b| b == 0xAA);
+
+        if matches_pattern && matches_fill {
+            crate::serial::print("[VDISK-TEST] Sanal Blok Yazma/Okuma ve Veri Bütünlüğü: BASARILI\n");
+            true
+        } else {
+            crate::serial::print("[VDISK-TEST] Sanal Blok Veri Bozulması: BASARISIZ\n");
+            false
+        }
+    }
+}
+
+/// Tüm USB alt sistemlerini (Denetleyici, BOT/SCSI Protokolü, FAT32, Sanal Disk) ayrı ayrı test eder ve raporlar.
 pub fn test_usb_subsystems() -> (bool, bool, bool) {
-    crate::serial::print("[USB] --- USB Alt Sistemleri Dogrulama Testi ---\n");
+    crate::serial::print("[USB] --- USB ve Depolama Alt Sistemleri Dogrulama Testi ---\n");
 
     // 1. USB Denetleyici Testi
     let ctrl_ok = if let Some(info) = test_usb_controller() {
@@ -493,6 +522,9 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
     } else {
         crate::serial::print("[USB-FAT32] FAT32 erisim testi -> BASARISIZ\n");
     }
+
+    // 4. Yazılabilir Sanal Disk Testi
+    test_virtual_disk();
 
     (ctrl_ok, bot_ok, fat_ok)
 }

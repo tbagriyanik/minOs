@@ -602,6 +602,9 @@ pub extern "C" fn _start() -> ! {
         serial_print("[PROC] Surec tablosu ve sistem cagrilar (syscalls) aktif.\n");
     }
 
+    // Bellek tahsisi, sayfalama ve kullanıcı kipi izolasyon doğrulama testi
+    mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
 
@@ -1237,6 +1240,9 @@ pub extern "C" fn _start() -> ! {
                                                 }
                                                 open_app(&mut compositor, 2);
                                             } else if tag == "IMG" {
+                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                    imageviewer_app.open_bmp(data);
+                                                }
                                                 open_app(&mut compositor, 4);
                                             } else if tag == "SND" {
                                                 open_app(&mut compositor, 5);
@@ -1690,6 +1696,13 @@ pub extern "C" fn _start() -> ! {
                                             }
                                             open_app(&mut compositor, 2);
                                         } else if tag == "IMG" {
+                                            if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                imageviewer_app.open_bmp(data);
+                                            } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
+                                                if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
+                                                    imageviewer_app.open_bmp(&paint.saved_bmp);
+                                                }
+                                            }
                                             open_app(&mut compositor, 4);
                                         } else if tag == "SND" {
                                             open_app(&mut compositor, 5);
@@ -1725,6 +1738,13 @@ pub extern "C" fn _start() -> ! {
                                                     }
                                                     open_app(&mut compositor, 2);
                                                 } else if tag == "IMG" {
+                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                    imageviewer_app.open_bmp(data);
+                                            } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
+                                                if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
+                                                    imageviewer_app.open_bmp(&paint.saved_bmp);
+                                                }
+                                                }
                                                     open_app(&mut compositor, 4);
                                                 } else if tag == "SND" {
                                                     open_app(&mut compositor, 5);
@@ -1980,8 +2000,20 @@ pub extern "C" fn _start() -> ! {
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy, ww) { calculator_app.press(key); } }
                             9 => {
+                                let open_rect = (wx + ww.saturating_sub(198), wy + 34, 58, 22);
+                                let save_rect = (wx + ww.saturating_sub(132), wy + 34, 58, 22);
+                                let clear_rect = (wx + ww.saturating_sub(66), wy + 34, 58, 22);
                                 let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
-                                if my >= wy + 34 && my < wy + 56 {
+                                if gui::in_rect(mx, my, open_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs);
+                                } else if gui::in_rect(mx, my, save_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
+                                    paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch);
+                                } else if gui::in_rect(mx, my, clear_rect) {
+                                    if let Some(paint) = paint_apps[idx].as_mut() { paint.clear(); }
+                                } else if my >= wy + 34 && my < wy + 56 {
                                     // Araç çubuğu: renk paleti, silgi ve temizle düğmeleri.
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let paint = paint_apps[idx].as_mut().unwrap();
@@ -1990,12 +2022,6 @@ pub extern "C" fn _start() -> ! {
                                     else if mx >= palette_start + 44 && mx < palette_start + 60 { paint.color=gui::Color::ACCENT_GREEN; paint.eraser=false; }
                                     else if mx >= palette_start + 66 && mx < palette_start + 82 { paint.color=gui::Color::BLACK; paint.eraser=false; }
                                     else if mx >= palette_start + 92 && mx < palette_start + 150 { paint.eraser=true; }
-                                    else if mx >= wx + ww.saturating_sub(198) && mx < wx + ww.saturating_sub(140) { paint.open_bmp(&fs_mgr.vfs); }
-                                    else if mx >= wx + ww.saturating_sub(132) && mx < wx + ww.saturating_sub(74) {
-                                        let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
-                                        paint.save_bmp(&mut fs_mgr.vfs, cw, ch);
-                                    }
-                                    else if mx >= wx + ww.saturating_sub(66) && mx < wx + ww.saturating_sub(8) { paint.clear(); }
                                 } else {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let paint = paint_apps[idx].as_mut().unwrap();
@@ -2301,6 +2327,13 @@ pub extern "C" fn _start() -> ! {
                                         }
                                         open_app(&mut compositor, 2);
                                     } else if tag == "IMG" {
+                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
+                                                    imageviewer_app.open_bmp(data);
+                                                } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
+                                                    if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
+                                                        imageviewer_app.open_bmp(&paint.saved_bmp);
+                                                    }
+                                                }
                                         open_app(&mut compositor, 4);
                                     } else if tag == "SND" {
                                         open_app(&mut compositor, 5);

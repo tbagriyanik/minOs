@@ -609,10 +609,11 @@ fn atapi_packet(drive: u8, packet: &[u8; 12], buf: &mut [u8]) -> bool {
     if !wait_ready(drive) {
         return false;
     }
+    outb(base + 1, 0); // Features: 0 (PIO mode, no DMA)
     outb(base + 2, 0);
-    outb(base + 3, (buf.len() & 0xFF) as u8);
-    outb(base + 4, ((buf.len() >> 8) & 0xFF) as u8);
-    outb(base + 5, 0);
+    outb(base + 3, 0);
+    outb(base + 4, (buf.len() & 0xFF) as u8);        // Byte Count Low (Cylinder Low port)
+    outb(base + 5, ((buf.len() >> 8) & 0xFF) as u8); // Byte Count High (Cylinder High port)
     outb(base + 7, CMD_PACKET);
     io_delay(ctrl);
 

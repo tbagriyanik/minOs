@@ -43,7 +43,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. |
-| **⚙️ Sistem Ayarları** | Dört sekme (Temel / İleri / Ağ / Hakkında): beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. |
+| **⚙️ Sistem Ayarları** | Dört sekme (Temel / İleri / Ağ / Hakkında): beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
@@ -144,11 +144,13 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
-- **👋 Hoş Geldin Ekranı:** İlk masaüstü kullanımından önce arayüz dilini (Türkçe/English) ve beş masaüstü temasından birini seçin. Seçimler kalıcı ayarlara kaydedilir.
+- **👋 Hoş Geldin Ekranı:** Masaüstü açılmadan önce arayüz dilini (Türkçe/English), beş masaüstü temasından birini ve hedef çözünürlük tercihini seçin. Tercihler kalıcı ayarlara kaydedilir.
+- **🖥️ Açılış Çözünürlüğü:** Gerçek framebuffer modu Limine tarafından açılış sırasında belirlenir. ISO'daki Limine menüsünde 800×600, 1024×768, 1280×720 ve 1920×1080 seçenekleri bulunur; hoş geldin ekranında veya ayarlarda yapılan tercih Limine menü seçimini değiştirmez. İstenen modu açılışta kullanmak için Limine menüsünden aynı çözünürlük girdisini seçin.
+- **📜 Açılış Günlüğü:** Hoş geldin ekranında çekirdek loglarının son bölümü gösterilir. Fare tekerleğiyle daha eski ve yeni log satırları arasında kaydırma yapılabilir; açılış göstergesi log akarken animasyonunu sürdürür.
 - **🇹🇷 Tam Türkçe Karakter Desteği:** Sistem Ayarları, Görev Yöneticisi, Not Defteri, Dosya Yöneticisi, Başlat menüsü ve durum çubukları dahil arayüzdeki tüm metinler Türkçe karakterlerle (`ç`, `Ç`, `ğ`, `Ğ`, `ı`, `I`, `İ`, `ö`, `Ö`, `ş`, `Ş`, `ü`, `Ü`) işlenir.
 - **🔤 TTF Tabanlı Fontlar:** Genel arayüz Inria Sans, komut istemi Geist Mono kullanır. Derleme betiği fontların sunduğu karakterlerden bitmap atlas oluşturur; yazı yakınlaştırma ayarı arayüzde uygulanır.
 - **⌨️ Klavyeyle Menü Gezintisi (Ok Tuşları & Enter):** Başlat menüsü ve bağlam menülerinde **Yukarı/Aşağı/Sol/Sağ ok tuşları** ile gezinebilir, **Enter** tuşuna basarak seçili uygulamayı veya komutu çalıştırabilirsiniz.
-- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Tüm pencere içerikleri (Not Defteri, Dosya Yöneticisi listeleri) dikey olarak yumuşak şekilde kaydırılır.
+- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Pencere içerikleri ve açılış logu dikey olarak kaydırılabilir. Pencere scrollbar'ları resize kenarlarından içeri alınır; kaydırma ve yeniden boyutlandırma alanları çakışmaz.
 - **📐 Daha Geniş Kenar Tutamaçları (12px Resize Grip):** Pencereleri kenarlarından tutup boyutlandırma alanı 8 pikselden **12 piksele** çıkarıldı. Artık pencerelerin kenar ve köşelerinden tutulması ve boyutlandırılması çok daha kolaydır.
 - **🖼️ Masaüstü Simgesi Tıklama Koruması:** Açık ve görünür bir pencere masaüstü simgelerinin üzerine geldiğinde, pencereye tıklanıldığında altındaki masaüstü simgelerinin istemeden açılması engellendi.
 - **🎨 Dinamik Tema ve Kontrast:** Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal ve Gün Batımı temaları arasında canlı geçiş. Düğme ve seçili öğe metinleri zemin rengine göre siyah veya beyaz seçilerek kontrast korunur.
@@ -292,6 +294,8 @@ VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası
 ## 🎮 Masaüstü Kullanımı ve Kısayollar
 
 - **Başlat Menüsünde Gezinme:** Klavye **Yukarı / Aşağı / Sol / Sağ ok tuşları** ile menüler arasında dolaşın, **Enter** ile seçili uygulamayı çalıştırın veya **fare tekerleğini** çevirerek kaydırın.
+- **Açılış Çözünürlüğü Seçimi:** Limine menüsünde minOs çözünürlük girdilerinden birini seçin. Hoş geldin ekranı ve Sistem Ayarları çözünürlük tercihini kaydeder; çalışan framebuffer modunu değiştirmez.
+- **Açılış Günlüğü Kaydırma:** Hoş geldin ekranındaki log paneli üzerinde fare tekerleğini kullanarak daha eski veya yeni satırlara gidin.
 - **Pencere Boyutlandırma:** Pencerelerin herhangi bir kenarından veya köşesinden basılı tutarak boyutlandırın (tutma alanı 12px'e çıkarılmıştır).
 - **Pencere Taşıma (Drag & Drop):** Herhangi bir pencerenin üst başlık çubuğuna sol tıklayıp basılı tutarak ekran üzerinde sürükleyin.
 - **Pencere Kontrolleri:**
@@ -338,13 +342,13 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: Ekim 2026
+> Son güncelleme: 14 Ekim 2026
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 40 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | ~16.400 satır |
-| **Etkin Kod Satırı** (boş/yorum hariç) | ~13.960 satır |
+| **Toplam Rust Kaynak Dosyası** | 44 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 19.565 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 16.499 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 11 masaüstü uygulaması |

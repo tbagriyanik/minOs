@@ -11,6 +11,9 @@ use linked_list_allocator::LockedHeap;
 const HEAP_SIZE: usize = 1024 * 1024;
 #[allow(dead_code)]
 static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+const BOOT_LOG_CAPACITY: usize = 16 * 1024;
+static mut BOOT_LOG: [u8; BOOT_LOG_CAPACITY] = [0; BOOT_LOG_CAPACITY];
+static mut BOOT_LOG_LEN: usize = 0;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -214,16 +217,56 @@ static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
 #[inline(never)]
 fn serial_print(s: &str) {
     serial::print(s);
+    append_boot_log(s.as_bytes());
+}
+
+fn append_boot_log(bytes: &[u8]) {
+    unsafe {
+        let remaining = BOOT_LOG_CAPACITY.saturating_sub(BOOT_LOG_LEN);
+        let take = bytes.len().min(remaining);
+        if take > 0 {
+            let start = BOOT_LOG_LEN;
+            BOOT_LOG[start..start + take].copy_from_slice(&bytes[..take]);
+            BOOT_LOG_LEN += take;
+        }
+    }
+}
+
+fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
+    unsafe {
+        let log = &BOOT_LOG[..BOOT_LOG_LEN];
+        let _ = vfs.write_file("/root/Documents/boot.log", log);
+    }
 }
 
 #[inline(never)]
 fn serial_print_dec(v: u64) {
-    serial::print_dec(v);
+    if v == 0 { serial_print("0"); return; }
+    let mut value = v;
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while value > 0 {
+        i -= 1;
+        buf[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
 }
 
 #[inline(never)]
 fn serial_print_hex(v: u64) {
-    serial::print_hex(v);
+    serial_print("0x");
+    if v == 0 { serial_print("0"); return; }
+    let mut value = v;
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    let hex = b"0123456789ABCDEF";
+    while value > 0 {
+        i -= 1;
+        buf[i] = hex[(value & 0xF) as usize];
+        value >>= 4;
+    }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
 }
 
 
@@ -353,6 +396,25 @@ fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
         win.is_maximized = false;
     }
     compositor.focus_window(idx);
+}
+
+fn open_image_file(
+    path: &str,
+    vfs: &fs::vfs::VirtualFileSystem,
+    _paints: &[Option<apps::paint::PaintApp>],
+    viewer: &mut apps::imageviewer::ImageViewerApp,
+) {
+    // Large VFS entries intentionally have an empty inline `data` vector;
+    // check the shared payload store before `read_file`, which can return that
+    // empty slice for the metadata row.
+    if let Some(data) = vfs.read_large_file(path) {
+        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
+    } else if let Some(data) = vfs.read_file(path).filter(|data| !data.is_empty()) {
+        let data: alloc::sync::Arc<[u8]> = alloc::sync::Arc::from(data);
+        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
+    } else {
+        viewer.clear_image(if path.ends_with("cizim.bmp") { "cizim.bmp" } else { "Image unavailable" });
+    }
 }
 
 fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usize, screen_h: usize) {
@@ -605,8 +667,12 @@ pub extern "C" fn _start() -> ! {
     // Bellek tahsisi, sayfalama ve kullanıcı kipi izolasyon doğrulama testi
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
 
+    // Süreç yaşam döngüsü, kaza, geçersiz syscall ve kaynak temizleme testi
+    mm::process::test_process_lifecycle_and_fault_recovery(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
+    save_boot_log(&mut fs_mgr.vfs);
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
     // Sabit adresler (0x300000, 0x400000) yerine PMM'den güvenli, çakışmayan bitişik DMA çerçeveleri tahsis et.
@@ -687,6 +753,7 @@ pub extern "C" fn _start() -> ! {
     serial_print(" kelime) | Adres: ");
     serial_print_hex(fb_ptr as u64);
     serial_print("\n");
+    save_boot_log(&mut fs_mgr.vfs);
 
     let mut fb = unsafe {
         drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp)
@@ -871,6 +938,8 @@ pub extern "C" fn _start() -> ! {
     compositor.cal_year = now.year;
     compositor.cal_month = now.month;
     serial_print("[minOs] RTC clock online.\n");
+    // Flush after the complete boot sequence (including numeric serial fields).
+    save_boot_log(&mut fs_mgr.vfs);
 
     // Etkileşim durumu
     let mut last_mouse_x = mouse.x;
@@ -1240,9 +1309,7 @@ pub extern "C" fn _start() -> ! {
                                                 }
                                                 open_app(&mut compositor, 2);
                                             } else if tag == "IMG" {
-                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
-                                                    imageviewer_app.open_bmp(data);
-                                                }
+                                                open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app);
                                                 open_app(&mut compositor, 4);
                                             } else if tag == "SND" {
                                                 open_app(&mut compositor, 5);
@@ -1696,13 +1763,7 @@ pub extern "C" fn _start() -> ! {
                                             }
                                             open_app(&mut compositor, 2);
                                         } else if tag == "IMG" {
-                                            if let Some(data) = fs_mgr.vfs.read_file(&path) {
-                                                imageviewer_app.open_bmp(data);
-                                            } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
-                                                if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
-                                                    imageviewer_app.open_bmp(&paint.saved_bmp);
-                                                }
-                                            }
+                                            open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app);
                                             open_app(&mut compositor, 4);
                                         } else if tag == "SND" {
                                             open_app(&mut compositor, 5);
@@ -1738,13 +1799,7 @@ pub extern "C" fn _start() -> ! {
                                                     }
                                                     open_app(&mut compositor, 2);
                                                 } else if tag == "IMG" {
-                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
-                                                    imageviewer_app.open_bmp(data);
-                                            } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
-                                                if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
-                                                    imageviewer_app.open_bmp(&paint.saved_bmp);
-                                                }
-                                                }
+                                                    open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app);
                                                     open_app(&mut compositor, 4);
                                                 } else if tag == "SND" {
                                                     open_app(&mut compositor, 5);
@@ -1857,7 +1912,11 @@ pub extern "C" fn _start() -> ! {
                                                 notepad_app.open_file("/root/Documents/notlar.txt", data);
                                             }
                                         },
-                                        (1, 2) => { notepad_app.save_file(&mut fs_mgr.vfs); },
+                                        (1, 2) => {
+                                            if notepad_app.save_file(&mut fs_mgr.vfs) {
+                                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                            }
+                                        },
                                         (1, 3) => notepad_app.clear(),
                                         // Düzen Menüsü: 0: Kes, 1: Kopyala, 2: Yapıştır, 3: Tümünü Seç
                                         (2, 0) => notepad_app.cut_selection(),
@@ -1876,7 +1935,9 @@ pub extern "C" fn _start() -> ! {
                                 if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
                                 } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
-                                    notepad_app.save_file(&mut fs_mgr.vfs);
+                                    if notepad_app.save_file(&mut fs_mgr.vfs) {
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
                                 }
                                 if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
                                     let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
@@ -2010,7 +2071,9 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, save_rect) {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
-                                    paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch);
+                                    if paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch) {
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
                                 } else if gui::in_rect(mx, my, clear_rect) {
                                     if let Some(paint) = paint_apps[idx].as_mut() { paint.clear(); }
                                 } else if my >= wy + 34 && my < wy + 56 {
@@ -2327,13 +2390,7 @@ pub extern "C" fn _start() -> ! {
                                         }
                                         open_app(&mut compositor, 2);
                                     } else if tag == "IMG" {
-                                                if let Some(data) = fs_mgr.vfs.read_file(&path) {
-                                                    imageviewer_app.open_bmp(data);
-                                                } else if fs_mgr.vfs.is_large_file_metadata(&path) && path.ends_with("cizim.bmp") {
-                                                    if let Some(paint) = paint_apps.iter().flatten().find(|paint| !paint.saved_bmp.is_empty()) {
-                                                        imageviewer_app.open_bmp(&paint.saved_bmp);
-                                                    }
-                                                }
+                                        open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app);
                                         open_app(&mut compositor, 4);
                                     } else if tag == "SND" {
                                         open_app(&mut compositor, 5);

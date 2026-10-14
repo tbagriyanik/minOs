@@ -349,3 +349,75 @@ pub fn syscall_dispatch(
         _ => u64::MAX, // Desteklenmeyen çağrı
     }
 }
+
+/// Süreç yaşam döngüsü, kaza (crash/termination), geçersiz sistem çağrısı ve kaynak temizleme testi.
+pub fn test_process_lifecycle_and_fault_recovery(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[PROC-TEST] --- Süreç Çökmesi, Syscall Hataları ve Kaynak Temizleme Testi ---\n");
+
+    let initial_free = pmm.free_memory_bytes;
+    let initial_active = proc_mgr.active_count;
+
+    // 1. Yeni bir test süreci başlat (spawn)
+    let pid = match proc_mgr.spawn("fault_test_proc", 0x1000, 0x7000_2000, 0x100000, 99, Some(99)) {
+        Ok(id) => id,
+        Err(_) => {
+            crate::serial_print("[PROC-TEST] Süreç başlatma: BASARISIZ\n");
+            return false;
+        }
+    };
+    crate::serial_print("[PROC-TEST] 1. Test süreci başlatıldı (PID ");
+    crate::serial::print_dec(pid as u64);
+    crate::serial_print("): BASARILI\n");
+
+    // 2. Sürece kaynak tahsis et (PMM çerçeveleri)
+    let frame1 = match pmm.allocate_frame() {
+        Some(f) => f,
+        None => return false,
+    };
+    let frame2 = match pmm.allocate_frame() {
+        Some(f) => f,
+        None => {
+            pmm.free_frame(frame1);
+            return false;
+        }
+    };
+    if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == pid) {
+        p.resources.record_frame(frame1);
+        p.resources.record_frame(frame2);
+    }
+    crate::serial_print("[PROC-TEST] 2. Sürece 2 sayfa çerçevesi tahsis edildi (Kaynak takibi aktif)\n");
+
+    // 3. Hatalı / Geçersiz Sistem Çağrısı Testi (Geçersiz Syscall No)
+    let invalid_res = syscall_dispatch(9999, 0, 0, 0, proc_mgr, pmm);
+    let null_ptr_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 100, 0, proc_mgr, pmm);
+    if invalid_res == u64::MAX && null_ptr_write == 100 {
+        crate::serial_print("[PROC-TEST] 3. Geçersiz syscall no ve NULL pointer sınır kontrolü: BASARILI\n");
+    } else {
+        crate::serial_print("[PROC-TEST] Hatalı sistem çağrısı sınır koruması: BASARISIZ\n");
+        return false;
+    }
+
+    // 4. Süreç Çökmesi / Hata Simülasyonu (SIGSEGV / Fault Exit Code -11)
+    let terminated = proc_mgr.terminate(pid, -11, pmm);
+    if terminated {
+        crate::serial_print("[PROC-TEST] 4. Süreç çökmesi simüle edildi (Exit Code: -11 / SIGSEGV)\n");
+    } else {
+        crate::serial_print("[PROC-TEST] Süreç sonlandırma: BASARISIZ\n");
+        return false;
+    }
+
+    // 5. Kaynak Temizliği ve Bellek Sızıntısı Kontrolü
+    let free_after = pmm.free_memory_bytes;
+    let active_after = proc_mgr.active_count;
+
+    if free_after == initial_free && active_after == initial_active {
+        crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (Sızıntı: 0 bayt): BASARILI\n");
+        true
+    } else {
+        crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BASARISIZ\n");
+        false
+    }
+}

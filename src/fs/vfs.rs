@@ -8,6 +8,7 @@
 
 extern crate alloc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use crate::fs::diskfs;
 
@@ -40,6 +41,7 @@ pub struct VfsItem {
 pub struct VirtualFileSystem {
     pub nodes: [Option<VfsNode>; 16],
     pub items: Vec<VfsItem>,
+    pub large_files: Vec<(String, Arc<[u8]>)>,
 }
 
 impl VirtualFileSystem {
@@ -53,6 +55,7 @@ impl VirtualFileSystem {
                 None, None, None, None, None, None, None, None,
             ],
             items: Vec::new(),
+            large_files: Vec::new(),
         };
 
         // Standart Kök Dizin Hiyerarşisi
@@ -243,8 +246,14 @@ impl VirtualFileSystem {
 
     /// Büyük dosyalar için baytları çağıran uygulamada tutup VFS'de yalnızca
     /// dosya kaydı oluşturur/günceller. Çağıran tekrar okuma için sahibi olur.
-    pub fn write_large_file_metadata(&mut self, path: &str, size: usize) -> bool {
+    pub fn write_large_file(&mut self, path: &str, data: Arc<[u8]>) -> bool {
         let norm = Self::normalize_path(path);
+        let size = data.len();
+        if let Some((_, existing)) = self.large_files.iter_mut().find(|(saved_path, _)| *saved_path == norm) {
+            *existing = data.clone();
+        } else {
+            self.large_files.push((norm.clone(), data.clone()));
+        }
         for item in &mut self.items {
             if item.path == norm {
                 if item.node_type == NodeType::Directory { return false; }
@@ -329,6 +338,11 @@ impl VirtualFileSystem {
                 && item.size > 0
                 && item.data.is_empty()
         })
+    }
+
+    pub fn read_large_file(&self, path: &str) -> Option<Arc<[u8]>> {
+        let norm = Self::normalize_path(path);
+        self.large_files.iter().find(|(saved_path, _)| *saved_path == norm).map(|(_, data)| data.clone())
     }
 
     /// Dosya siler.

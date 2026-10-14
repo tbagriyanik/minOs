@@ -3,50 +3,58 @@ use crate::gui::{Color, MinGuiCompositor};
 
 pub struct ImageViewerApp {
     pub zoom_level: usize,
-    pub image: alloc::vec::Vec<u8>,
+    pub image: alloc::sync::Arc<[u8]>,
     pub width: usize,
     pub height: usize,
     pub top_down: bool,
+    pub data_offset: usize,
     pub file_name: &'static str,
     pub status: &'static str,
 }
 
 impl ImageViewerApp {
-    pub const fn new() -> Self {
-        Self { zoom_level: 4, image: alloc::vec::Vec::new(), width: 0, height: 0, top_down: false, file_name: "kedi_maskotu.bmp", status: "Ready" }
+    pub fn new() -> Self {
+        Self { zoom_level: 4, image: alloc::sync::Arc::from([]), width: 0, height: 0, top_down: false, data_offset: 0, file_name: "kedi_maskotu.bmp", status: "Ready" }
     }
 
-    pub fn open_bmp(&mut self, data: &[u8]) -> bool {
-        if data.len() < 54 || &data[0..2] != b"BM" || u16::from_le_bytes([data[28], data[29]]) != 24 {
+    pub fn open_bmp(&mut self, data: alloc::sync::Arc<[u8]>) -> bool {
+        let bytes_data = &data[..];
+        if bytes_data.len() < 54 || &bytes_data[0..2] != b"BM" || u16::from_le_bytes([bytes_data[28], bytes_data[29]]) != 24 {
             self.status = crate::gui::ui_text("BMP açılamadı", "Could not open BMP");
             return false;
         }
-        let raw_w = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
-        let raw_h = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+        let raw_w = i32::from_le_bytes([bytes_data[18], bytes_data[19], bytes_data[20], bytes_data[21]]);
+        let raw_h = i32::from_le_bytes([bytes_data[22], bytes_data[23], bytes_data[24], bytes_data[25]]);
         if raw_w == 0 || raw_h == 0 { self.status = crate::gui::ui_text("Geçersiz BMP", "Invalid BMP"); return false; }
         let width = raw_w.unsigned_abs() as usize;
         let height = raw_h.unsigned_abs() as usize;
-        let offset = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+        let offset = u32::from_le_bytes([bytes_data[10], bytes_data[11], bytes_data[12], bytes_data[13]]) as usize;
         let row_bytes = match width.checked_mul(3).and_then(|n| n.checked_add(3)) {
             Some(n) => n & !3,
             None => { self.status = crate::gui::ui_text("Geçersiz BMP", "Invalid BMP"); return false; }
         };
         let bytes = match row_bytes.checked_mul(height) {
-            Some(n) if offset >= 54 && offset.checked_add(n).map_or(false, |end| end <= data.len()) => n,
+            Some(n) if offset >= 54 && offset.checked_add(n).map_or(false, |end| end <= bytes_data.len()) => n,
             _ => { self.status = crate::gui::ui_text("Eksik BMP verisi", "Incomplete BMP data"); return false; }
         };
-        if self.image.try_reserve_exact(bytes).is_err() {
-            self.status = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
-            return false;
-        }
-        self.image.clear();
-        self.image.extend_from_slice(&data[offset..offset + bytes]);
+        let _ = bytes;
+        self.image = data;
+        self.data_offset = offset;
         self.width = width;
         self.height = height;
         self.top_down = raw_h < 0;
         self.file_name = "cizim.bmp";
         self.status = crate::gui::ui_text("BMP açıldı", "BMP opened");
         true
+    }
+
+    pub fn clear_image(&mut self, file_name: &'static str) {
+        self.image = alloc::sync::Arc::from([]);
+        self.width = 0;
+        self.height = 0;
+        self.data_offset = 0;
+        self.file_name = file_name;
+        self.status = crate::gui::ui_text("Resim yüklenemedi", "Image could not be loaded");
     }
 
     pub fn zoom_percent(&self) -> usize { self.zoom_level.saturating_mul(100) / 4 }
@@ -110,13 +118,15 @@ impl ImageViewerApp {
                 let bmp_y = if self.top_down { sy } else { src_h - 1 - sy };
                 for dx in 0..draw_w {
                     let sx = dx / fit_scale;
-                    let i = bmp_y * row_bytes + sx * 3;
+                    let i = self.data_offset + bmp_y * row_bytes + sx * 3;
                     if i + 2 < self.image.len() {
                         let color = (self.image[i + 2] as u32) << 16 | (self.image[i + 1] as u32) << 8 | self.image[i] as u32;
                         fb.draw_rect(art_ox + dx, art_oy + dy, 1, 1, color);
                     }
                 }
             }
+        } else if self.width == 0 && self.status != crate::gui::ui_text("Ready", "Ready") {
+            MinGuiCompositor::draw_string(fb, canvas_x + 12, canvas_y + 12, self.status, Color::ACCENT_RED);
         } else {
         const ART_DATA: [u16; 16] = [
             0b0110000000000110,

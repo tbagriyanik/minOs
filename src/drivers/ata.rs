@@ -621,7 +621,7 @@ fn atapi_packet(drive: u8, packet: &[u8; 12], buf: &mut [u8]) -> bool {
         return false;
     }
     for i in 0..6 {
-        let word = ((packet[i * 2] as u16) << 8) | packet[i * 2 + 1] as u16;
+        let word = (packet[i * 2] as u16) | ((packet[i * 2 + 1] as u16) << 8);
         outw(base + 0, word);
     }
     io_delay(ctrl);

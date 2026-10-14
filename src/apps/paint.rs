@@ -29,7 +29,7 @@ pub struct PaintApp {
     pub last: Option<(usize, usize)>,
     pub status_msg: &'static str,
     /// Son üretilen BMP; VFS'nin RAM kopyası olmadan kaydedilip tekrar açılır.
-    pub saved_bmp: alloc::vec::Vec<u8>,
+    pub saved_bmp: alloc::sync::Arc<[u8]>,
 }
 
 impl PaintApp {
@@ -41,7 +41,7 @@ impl PaintApp {
             eraser: false,
             last: None,
             status_msg: "",
-            saved_bmp: alloc::vec::Vec::new(),
+            saved_bmp: alloc::sync::Arc::from([]),
         }
     }
 
@@ -153,20 +153,28 @@ impl PaintApp {
         }
         // Retain the bytes in the Paint instance and let VFS index them without
         // cloning a ~1.4 MiB file into the small kernel heap.
-        let ok = vfs.write_large_file_metadata("/root/Documents/cizim.bmp", bmp.len());
-        if ok { self.saved_bmp = bmp; }
+        let saved_bmp: alloc::sync::Arc<[u8]> = bmp.into();
+        let ok = vfs.write_large_file("/root/Documents/cizim.bmp", saved_bmp.clone());
+        if ok { self.saved_bmp = saved_bmp; }
         self.status_msg = if ok { crate::gui::ui_text("Çizim kaydedildi", "Drawing saved") } else { crate::gui::ui_text("Kaydetme başarısız", "Save failed") };
         ok
     }
 
     pub fn open_bmp(&mut self, vfs: &crate::fs::vfs::VirtualFileSystem) -> bool {
+        let stored;
         let data: &[u8] = if !self.saved_bmp.is_empty() {
             &self.saved_bmp
         } else {
-            match vfs.read_file("/root/Documents/cizim.bmp") {
+            stored = match vfs.read_large_file("/root/Documents/cizim.bmp") {
                 Some(d) => d,
-                None => { self.status_msg = crate::gui::ui_text("BMP bulunamadı", "BMP not found"); return false; }
-            }
+                None => {
+                    match vfs.read_file("/root/Documents/cizim.bmp") {
+                        Some(_) => { self.status_msg = crate::gui::ui_text("BMP açılamadı", "Could not open BMP"); return false; }
+                        None => { self.status_msg = crate::gui::ui_text("BMP bulunamadı", "BMP not found"); return false; }
+                    }
+                }
+            };
+            &stored
         };
         if data.len() < 54 || &data[0..2] != b"BM" || u16::from_le_bytes([data[28], data[29]]) != 24 { self.status_msg = crate::gui::ui_text("Geçersiz BMP", "Invalid BMP"); return false; }
         let w = (i32::from_le_bytes([data[18],data[19],data[20],data[21]])).unsigned_abs() as usize;

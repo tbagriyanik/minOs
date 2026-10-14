@@ -529,6 +529,16 @@ pub extern "C" fn _start() -> ! {
             }
         }
     }
+    serial_print("[PMM] Fiziksel bellek yoneticisi baslatildi.\n");
+
+    // PMM Kendi Kendini Test Etme (Tahsisat ve Geri Birakma Dogrulamasi)
+    if let (Some(f1), Some(f2)) = (memory_mgr.pmm.allocate_frame(), memory_mgr.pmm.allocate_frame()) {
+        if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
+            serial_print("[PMM] Cerceve tahsis testi basarili (cakismayan cerceveler dogrulandi).\n");
+        }
+        memory_mgr.pmm.free_frame(f2);
+        memory_mgr.pmm.free_frame(f1);
+    }
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();

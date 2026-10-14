@@ -590,7 +590,7 @@ pub extern "C" fn _start() -> ! {
     let files_width = 720.min(width.saturating_sub(20)).max(200);
     let files_height = 500.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
     compositor.add_window(gui::Window::new(
-        "Dosya Yöneticisi - VFS / Ev", "Dosyalar",
+        "Dosya Yöneticisi", "Dosyalar",
         width.saturating_sub(files_width) / 2,
         height.saturating_sub(files_height + gui::taskbar_h()) / 2,
         files_width, files_height, false,
@@ -605,15 +605,15 @@ pub extern "C" fn _start() -> ! {
         settings_width, settings_height, false,
     ));
     // 2: Not Defteri
-    compositor.add_window(gui::Window::new("Not Defteri - adsız.txt", "Notlar", 80, 70, 520, 330, false));
+    compositor.add_window(gui::Window::new("Not Defteri", "Notlar", 80, 70, 520, 330, false));
     // 3: Web Tarayıcısı
     compositor.add_window(gui::Window::new("Web Gezgini", "Web", 550, 60, 600, 380, false));
     // 4: Resim Gösterici
-    compositor.add_window(gui::Window::new("Resim Gösterici - kedi_maskotu.bmp", "Resim", 120, 90, 500, 330, false));
+    compositor.add_window(gui::Window::new("Resim Gösterici", "Resim", 120, 90, 500, 330, false));
     // 5: Müzik Çalar
     compositor.add_window(gui::Window::new("Müzik Çalar", "Müzik", 560, 80, 460, 245, false));
     // 6: Video Oynatıcı
-    compositor.add_window(gui::Window::new("Video Oynatıcı - retro_drive.mp4", "Video", 150, 110, 540, 330, false));
+    compositor.add_window(gui::Window::new("Video Oynatıcı", "Video", 150, 110, 540, 330, false));
     // 7: Görev Yöneticisi
     compositor.add_window(gui::Window::new("Görev Yöneticisi", "Görevler", 220, 60, 480, 460, false));
     compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 340, false));

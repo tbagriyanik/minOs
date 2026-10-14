@@ -1126,7 +1126,7 @@ impl MinGuiCompositor {
     /// Aktif ölçekte bir metin satırının görsel yüksekliği (px).
     /// `blit_glyph` hedef yüksekliğiyle ve dikey ortalama hesaplarıyla tutarlıdır.
     #[inline(always)]
-    fn text_height() -> usize {
+    pub fn text_height() -> usize {
         let zoom = font_zoom() as usize;
         (font_render::text_height(font_render::Face::Inria, BASE_FONT_SIZE) * zoom + 50) / 100
     }
@@ -2295,7 +2295,7 @@ impl MinGuiCompositor {
 
         for k in 0..count {
             let i = first + k;
-            let (name, col, app_or_code) = menu_items[i];
+            let (name, _col, app_or_code) = menu_items[i];
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
             let is_hovered = in_rect(mx, my, r) || (self.selected_start_item == k);

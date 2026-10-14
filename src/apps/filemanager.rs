@@ -457,31 +457,29 @@ impl FileManagerApp {
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, crate::gui::ui_text("Konum: ", "Location: "), Color::TEXT_MUTED);
         MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.path(), Color::ACCENT_BLUE);
 
-        // Aksiyon Butonları (Yenile, Yeni Dosya, Yeni Klasör, Sil, Aç)
-        let ref_x = win_x + win_w.saturating_sub(286);
-        fb.draw_rect(ref_x, win_y + 32, 50, 22, Color::WINDOW_BG);
-        if self.focused_control == 0 { fb.draw_rect_outline(ref_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW); }
-        MinGuiCompositor::draw_string(fb, ref_x + 8, win_y + 38, crate::gui::ui_text("Yenile", "Ref"), Color::TEXT_MAIN);
-
-        let nf_x = win_x + win_w.saturating_sub(230);
-        fb.draw_rect(nf_x, win_y + 32, 50, 22, Color::ACCENT_BLUE);
-        if self.focused_control == 1 { fb.draw_rect_outline(nf_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW); }
-        MinGuiCompositor::draw_string(fb, nf_x + 8, win_y + 38, crate::gui::ui_text("+Dosya", "+File"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
-
-        let nd_x = win_x + win_w.saturating_sub(174);
-        fb.draw_rect(nd_x, win_y + 32, 54, 22, Color::ACCENT_YELLOW);
-        if self.focused_control == 2 { fb.draw_rect_outline(nd_x, win_y + 32, 54, 22, Color::ACCENT_YELLOW); }
-        MinGuiCompositor::draw_string(fb, nd_x + 4, win_y + 38, crate::gui::ui_text("+Klasor", "+Dir"), Color::BLACK);
-
-        let del_x = win_x + win_w.saturating_sub(114);
-        fb.draw_rect(del_x, win_y + 32, 46, 22, Color::ACCENT_RED);
-        if self.focused_control == 3 { fb.draw_rect_outline(del_x, win_y + 32, 46, 22, Color::ACCENT_YELLOW); }
-        MinGuiCompositor::draw_string(fb, del_x + 10, win_y + 38, crate::gui::ui_text("Sil", "Del"), MinGuiCompositor::text_on(Color::ACCENT_RED));
-
-        let open_x = win_x + win_w.saturating_sub(62);
-        fb.draw_rect(open_x, win_y + 32, 50, 22, Color::ACCENT_GREEN);
-        if self.focused_control == 4 { fb.draw_rect_outline(open_x, win_y + 32, 50, 22, Color::ACCENT_YELLOW); }
-        MinGuiCompositor::draw_string(fb, open_x + 14, win_y + 38, crate::gui::ui_text("Ac", "Open"), MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+        // Aksiyon Butonları (Yenile, +Dosya, +Klasör, Sil, Aç)
+        let buttons = [
+            (Self::refresh_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Yenile", "Ref"), 0usize),
+            (Self::new_file_button_rect(win_x, win_y, win_w), crate::gui::ui_text("+Dosya", "+File"), 1usize),
+            (Self::new_folder_button_rect(win_x, win_y, win_w), crate::gui::ui_text("+Klasor", "+Dir"), 2usize),
+            (Self::delete_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Sil", "Del"), 3usize),
+            (Self::open_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Ac", "Open"), 4usize),
+        ];
+        for (r, label, ctrl_id) in buttons {
+            let is_focused = self.focused_control == ctrl_id;
+            let bg = if is_focused {
+                MinGuiCompositor::shade(Color::WINDOW_BG, 22)
+            } else {
+                MinGuiCompositor::shade(Color::WINDOW_BG, 8)
+            };
+            let border = if is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg);
+            fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, border);
+            let tw = MinGuiCompositor::text_width(label, 1);
+            let tx = r.0 + (r.2.saturating_sub(tw)) / 2;
+            let ty = r.1 + (r.3.saturating_sub(MinGuiCompositor::text_height())) / 2;
+            MinGuiCompositor::draw_string(fb, tx, ty, label, Color::TEXT_MAIN);
+        }
 
         // Sol Gezinti Paneli (Sidebar) — Sürücüler ve Hızlı Klasörler
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
@@ -542,16 +540,19 @@ impl FileManagerApp {
 
         // Sağ Liste Başlıkları
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
-        let name_end = if list_w > 330 { 150 } else if list_w > 200 { 150 } else { list_w.saturating_sub(12) };
-        MinGuiCompositor::draw_string_clipped(fb, list_x + 28, win_y + 66, crate::gui::ui_text("DOSYA / KLASOR ADI", "FILE / FOLDER NAME"), Color::TEXT_MUTED,
-            (list_x + 28, win_y + 60, name_end.saturating_sub(4), 20));
-        if list_w > 200 {
-            MinGuiCompositor::draw_string_clipped(fb, list_x + 160, win_y + 66, crate::gui::ui_text("TUR", "TYPE"), Color::TEXT_MUTED,
-                (list_x + 154, win_y + 60, 124, 20));
+        let col_name_x = list_x + 28;
+        let col_type_x = list_x + 180;
+        let col_size_x = list_x + 285;
+
+        MinGuiCompositor::draw_string_clipped(fb, col_name_x, win_y + 65, crate::gui::ui_text("Ad", "Name"), Color::TEXT_MUTED,
+            (col_name_x, win_y + 60, 145, 20));
+        if list_w > 210 {
+            MinGuiCompositor::draw_string_clipped(fb, col_type_x, win_y + 65, crate::gui::ui_text("Tür", "Type"), Color::TEXT_MUTED,
+                (col_type_x, win_y + 60, 95, 20));
         }
-        if list_w > 330 {
-            MinGuiCompositor::draw_string_clipped(fb, list_x + 290, win_y + 66, crate::gui::ui_text("BOYUT", "SIZE"), Color::TEXT_MUTED,
-                (list_x + 284, win_y + 60, list_w.saturating_sub(290), 20));
+        if list_w > 320 {
+            MinGuiCompositor::draw_string_clipped(fb, col_size_x, win_y + 65, crate::gui::ui_text("Boyut", "Size"), Color::TEXT_MUTED,
+                (col_size_x, win_y + 60, list_w.saturating_sub(285), 20));
         }
 
         // Dosya ve Klasör Listesi
@@ -566,29 +567,28 @@ impl FileManagerApp {
             if is_sel {
                 fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
                 if self.focused_control == 5 {
-                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_YELLOW);
+                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_BLUE);
                 }
             }
 
             let is_up = file.display_name() == "..";
             if file.is_dir {
-                Self::draw_folder_icon(fb, list_x + 6, draw_y + 4, is_up);
+                Self::draw_folder_icon(fb, list_x + 6, draw_y + 3, is_up);
             } else {
-                Self::draw_file_icon(fb, list_x + 6, draw_y + 4, file.icon_tag);
+                Self::draw_file_icon(fb, list_x + 6, draw_y + 3, file.icon_tag);
             }
 
-            let name_x = list_x + 28;
-            let name_width = if list_w > 330 { 124 } else if list_w > 200 { 124 } else { list_w.saturating_sub(36) };
-            MinGuiCompositor::draw_string_clipped(fb, name_x, draw_y + 4, file.display_name(), if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN },
-                (name_x, draw_y + 2, name_width, ROW_H - 4));
+            let name_col = if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN };
+            MinGuiCompositor::draw_string_clipped(fb, col_name_x, draw_y + 4, file.display_name(), name_col,
+                (col_name_x, draw_y + 2, 145, ROW_H - 4));
 
-            if list_w > 200 {
-                MinGuiCompositor::draw_string_clipped(fb, list_x + 160, draw_y + 4, file.file_type, Color::TEXT_MUTED,
-                    (list_x + 160, draw_y + 2, 118, ROW_H - 4));
+            if list_w > 210 {
+                MinGuiCompositor::draw_string_clipped(fb, col_type_x, draw_y + 4, file.file_type, Color::TEXT_MUTED,
+                    (col_type_x, draw_y + 2, 95, ROW_H - 4));
             }
-            if list_w > 330 {
-                MinGuiCompositor::draw_string_clipped(fb, list_x + 290, draw_y + 4, file.size_str.as_str(), Color::TEXT_MAIN,
-                    (list_x + 290, draw_y + 2, list_w.saturating_sub(294), ROW_H - 4));
+            if list_w > 320 {
+                MinGuiCompositor::draw_string_clipped(fb, col_size_x, draw_y + 4, file.size_str.as_str(), Color::TEXT_MAIN,
+                    (col_size_x, draw_y + 2, list_w.saturating_sub(285), ROW_H - 4));
             }
         }
 

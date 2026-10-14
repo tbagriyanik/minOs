@@ -481,6 +481,22 @@ pub extern "C" fn _start() -> ! {
     serial_print("[minOs] Kernel _start reached!\n");
     serial_print("[minOs] SSE enabled & PIC IRQs masked!\n");
 
+    // HHDM ofsetini al (fiziksel MMIO ve sayfa tablosu sanal erisimi icin).
+    let hhdm_offset = unsafe {
+        // SAFETY: the response pointer is validated before being dereferenced.
+        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response))
+            .filter(|resp| !resp.is_null())
+        {
+            let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
+            serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
+            off
+        } else {
+            serial_print("[minOs] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
+            0xFFFF_8000_0000_0000
+        }
+    };
+    drivers::set_hhdm_offset(hhdm_offset);
+
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
     arch::x86_64::init_interrupts();
     let mut memory_mgr = mm::MemoryManager::new();
@@ -540,26 +556,33 @@ pub extern "C" fn _start() -> ! {
         memory_mgr.pmm.free_frame(f1);
     }
 
+    // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi (Sanal Bellek Eşleme ve Yükleme Testi)
+    let mut address_space = memory_mgr.kernel_address_space();
+    let test_vaddr = mm::loader::USER_CODE_BASE;
+    if let Some(frame) = memory_mgr.pmm.allocate_frame() {
+        if address_space.map_page(test_vaddr, frame, mm::vmm::PageFlags::USER_CODE, &mut memory_mgr.pmm).is_ok() {
+            if let Some(translated_phys) = address_space.translate(test_vaddr) {
+                if translated_phys == frame {
+                    serial_print("[VMM] 4-seviyeli sanal bellek esleme ve adres cozümleme aktif.\n");
+                }
+            }
+            let _ = address_space.unmap_page(test_vaddr);
+        }
+        memory_mgr.pmm.free_frame(frame);
+    }
+
+    // Test amacli ornek kucuk uygulama bayt dizisi (ret / nop talimatlari)
+    let sample_app_code: [u8; 8] = [0x90, 0x90, 0x90, 0xC3, 0x00, 0x00, 0x00, 0x00];
+    if let Ok(loaded) = mm::loader::AppLoader::load_binary(&sample_app_code, &mut address_space, &mut memory_mgr.pmm) {
+        if loaded.entry_point == mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
+            serial_print("[LOADER] Uygulama kodu guvenli bellek izolasyonu ile yerlestirildi.\n");
+        }
+    }
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
-    // Önce HHDM ofsetini al (fiziksel MMIO'ya sanal erişim için).
-    let hhdm_offset = unsafe {
-        // SAFETY: the response pointer is validated before being dereferenced.
-        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response))
-            .filter(|resp| !resp.is_null())
-        {
-            let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
-            serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
-            off
-        } else {
-            serial_print("[minOs] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
-            0xFFFF_8000_0000_0000
-        }
-    };
-    serial_print("[minOs] HHDM offset alindi.\n");
-    drivers::set_hhdm_offset(hhdm_offset);
     drivers::hda::init();
     drivers::e1000::init();
     drivers::netstack::init();

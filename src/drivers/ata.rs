@@ -346,9 +346,33 @@ pub fn init() {
                 }
                 serial("Model: ");
                 serial(dev.model_str());
-                serial("  Kapasite: ");
-                print_num(dev.size_mb());
-                serial(" MB\n");
+
+                // ATAPI CD-ROM için READ CAPACITY ve test okuma işlemi
+                if dev.kind == DeviceKind::Atapi {
+                    if let Some(caps) = atapi_capacity(drive) {
+                        dev.sectors = caps as u64;
+                        DEVICES[drive as usize].sectors = dev.sectors;
+                        serial(" | Sektor: ");
+                        print_num(dev.sectors);
+                        serial(" x 2048 B | Kapasite: ");
+                        print_num(dev.size_mb());
+                        serial(" MB");
+
+                        let mut test_blk = [0u8; 2048];
+                        let read_ok = atapi_read_block(drive, 16, &mut test_blk);
+                        if read_ok {
+                            serial(" | Sektor 16 Okuma (ISO PVD): BASARILI\n");
+                        } else {
+                            serial(" | Sektor 16 Okuma: YANIT YOK / MEDYA BOS\n");
+                        }
+                    } else {
+                        serial(" | ATAPI READ CAPACITY: Medya takili degil veya yanit vermedi (0 MB)\n");
+                    }
+                } else {
+                    serial("  Kapasite: ");
+                    print_num(dev.size_mb());
+                    serial(" MB\n");
+                }
             }
         }
 

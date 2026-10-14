@@ -191,6 +191,16 @@ impl Framebuffer {
 
         // Ekran dışı flush_rect güvenliği: x >= width veya y >= height iken VRAM kopyası yapılmadan dönmeli
         self.flush_rect((self.width + 100, self.height + 100, 50, 50));
+        self.flush_rect((usize::MAX - 50, usize::MAX - 50, 100, 100));
+
+        // 5. Uç piksel çizim testi (Son geçerli piksel: width-1, height-1)
+        let last_x = self.width.saturating_sub(1);
+        let last_y = self.height.saturating_sub(1);
+        let last_pixel_idx = last_y * self.width + last_x;
+        let orig_last = unsafe { BACKBUFFER[last_pixel_idx] };
+        self.put_pixel(last_x, last_y, 0x00AABBCC);
+        let corner_written = unsafe { BACKBUFFER[last_pixel_idx] == 0x00AABBCC };
+        unsafe { BACKBUFFER[last_pixel_idx] = orig_last; }
 
         // Sentinel doğrulaması: Ekran dışı hiçbir çizim sentinelleri bozmamış olmalı
         let sentinels_intact = unsafe {
@@ -200,14 +210,13 @@ impl Framebuffer {
         };
 
         // Test tamamlandıktan sonra sentinel konumlarını orijinal haline geri yükle
-        // böylece kullanıcı arayüzü ve açılış ekranı test artıklarından tamamen arındırılır.
         unsafe {
             BACKBUFFER[head_idx] = orig_head;
             BACKBUFFER[mid_idx] = orig_mid;
             BACKBUFFER[tail_idx] = orig_tail;
         }
 
-        if !sentinels_intact {
+        if !sentinels_intact || !corner_written {
             return false;
         }
 
@@ -215,9 +224,16 @@ impl Framebuffer {
         self.set_clip(10, 10, 20, 20);
         let clip = self.clip();
         let clip_ok = clip.x0 == 10 && clip.y0 == 10 && clip.x1 == 30 && clip.y1 == 30;
+
+        // Kırpma dışına piksel çizilemediğini doğrula
+        let clip_out_idx = 5 * self.width + 5;
+        let orig_clip_out = unsafe { BACKBUFFER[clip_out_idx] };
+        self.put_pixel(5, 5, 0x00123456);
+        let clip_protected = unsafe { BACKBUFFER[clip_out_idx] == orig_clip_out };
+
         self.reset_clip();
 
-        clip_ok
+        clip_ok && clip_protected
     }
 
     /// İmlecin kaplayacağı arka planı, kısmi imleç çizimleri için saklar.

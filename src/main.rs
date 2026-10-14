@@ -626,6 +626,7 @@ pub extern "C" fn _start() -> ! {
 
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
+    drivers::netstack::run_network_self_test();
     drivers::usb::init();
     drivers::usb::test_usb_subsystems();
     let _net_dev = drivers::net::NetworkInterface::new();

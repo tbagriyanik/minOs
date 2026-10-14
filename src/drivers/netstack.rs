@@ -641,6 +641,55 @@ pub fn init() {
     send_arp_request(GATEWAY_IP);
 }
 
+/// e1000 ağ kartı ve TCP/IP yığını için self-test çalıştırır ve seri porta raporlar.
+pub fn run_network_self_test() -> bool {
+    crate::serial_print("[NET-TEST] --- e1000 ve TCP/IP Yigini Dogrulama Testi ---\n");
+
+    if !e1000::is_ready() {
+        crate::serial_print("[NET-TEST] e1000 surucusu hazir degil, ag testleri ATLANDI.\n");
+        return false;
+    }
+
+    let link_up = e1000::link_up();
+    crate::serial_print("[NET-TEST] e1000 Link Durumu: ");
+    if link_up {
+        crate::serial_print("LINK UP (aktif)\n");
+    } else {
+        crate::serial_print("LINK DOWN (kablo/ag baglantisi yok)\n");
+    }
+
+    // 1. ARP Istegi ve TX Ring iletim testi
+    crate::serial_print("[NET-TEST] Gateway (10.0.2.2) icin ARP istegi gonderiliyor... ");
+    send_arp_request(GATEWAY_IP);
+    crate::serial_print("TX Iletildi\n");
+
+    // Paketlerin islenmesi ve e1000 RX/TX yoklamasi icin kisa bir dongu
+    for _ in 0..5000 {
+        e1000::poll();
+        core::hint::spin_loop();
+    }
+
+    // 2. ICMP Echo Request (Ping) testi
+    crate::serial_print("[NET-TEST] Gateway'e ICMP Ping gonderiliyor... ");
+    let ping_sent = ping(GATEWAY_IP);
+    if ping_sent {
+        crate::serial_print("BASARILI (ICMP paketi e1000 TX kuyruguna yazildi)\n");
+    } else {
+        crate::serial_print("BASARISIZ (TX kuyruk hatasi veya paket reddedildi)\n");
+    }
+
+    // ARP tablosu kontrolu
+    let arp_resolved = arp_lookup(GATEWAY_IP).is_some();
+    crate::serial_print("[NET-TEST] Gateway ARP Tablosu Durumu: ");
+    if arp_resolved {
+        crate::serial_print("COZUMLLENDI (MAC eslestirmesi hazir)\n");
+    } else {
+        crate::serial_print("BEKLENIYOR (Henuz ARP yaniti gelmedi)\n");
+    }
+
+    ping_sent
+}
+
 pub fn dhcp_request() -> bool {
     unsafe { DHCP_READY=false; DHCP_OFFER=None; }
     let mac=unsafe{e1000::MAC_ADDR}; let mut p=[0u8;300];

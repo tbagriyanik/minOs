@@ -302,12 +302,9 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let mmio_base = crate::drivers::phys_to_virt(mmio_base_phys);
         // Limine HHDM MMIO'yu map'lemediği için elle 2MB huge page ekliyoruz.
         crate::arch::x86_64::mmio_map_2mb(mmio_base_phys & !0x1F_FFFF);
-        serial_print("[HDA] BAR0 fiziksel: ");
-        print_hex8((mmio_base_phys >> 28) as u8);
-        print_hex8((mmio_base_phys >> 24) as u8);
-        print_hex8((mmio_base_phys >> 20) as u8);
-        print_hex8((mmio_base_phys >> 16) as u8);
-        serial_print("\n");
+        serial_print("[HDA] BAR0 fiziksel: 0x");
+        crate::serial::print_hex(mmio_base_phys);
+        serial_print(" (32-bit MMIO, bayraklar maskelendi)\n");
 
         serial_print("[HDA] Intel HDA bulundu. PCI 00:");
         print_hex8(dev);
@@ -462,20 +459,24 @@ pub fn play_test_tone() {
         let sd = HDA_SD_BASE;
         let mmio = HDA_MMIO_BASE;
         let mut lpib = 0u32;
-        for _ in 0..50_000 {
+        let mut samples = 0;
+        for i in 0..500_000 {
             lpib = mmio_read32(mmio, sd + 0x04);
             if lpib > 0 {
+                samples = i;
                 break;
             }
             core::hint::spin_loop();
         }
-        serial_print("[HDA] DMA stream konumu (LPIB): ");
+        serial_print("[HDA-TEST] DMA stream konumu (LPIB): ");
         crate::serial::print_dec(lpib as u64);
-        serial_print(" bayt (DMA donanim aktarimi ");
+        serial_print(" bayt | ");
         if lpib > 0 {
-            serial_print("DOGRULANDI, ses ornegi caliniyor)\n");
+            serial_print("DMA aktarimi DOGRULANDI (spin: ");
+            crate::serial::print_dec(samples as u64);
+            serial_print(", ses ornegi donanimda ilerliyor)\n");
         } else {
-            serial_print("hazir, akis baslatildi)\n");
+            serial_print("LPIB henuz 0 (donanim DMA baslangic gecikmesi veya stream tampon basi)\n");
         }
     }
 }

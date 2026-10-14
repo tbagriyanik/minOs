@@ -478,12 +478,12 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
         true
     };
 
-    // 2. USB Mass Storage (BOT) Protokol Testi
+    // 2. USB Mass Storage (BOT) Protokol Birim Testi
     let bot_ok = test_mass_storage_protocol();
     if bot_ok {
-        crate::serial::print("[USB-BOT] USB Mass Storage (Bulk-Only Transport) & SCSI INQUIRY / READ_CAPACITY protokol testi -> BASARILI\n");
+        crate::serial::print("[USB-BOT] USB Mass Storage (BOT) & SCSI komut protokol dogrulamasi (Birim Testi) -> BASARILI\n");
     } else {
-        crate::serial::print("[USB-BOT] USB Mass Storage protokol testi -> BASARISIZ\n");
+        crate::serial::print("[USB-BOT] USB Mass Storage protokol dogrulamasi -> BASARISIZ\n");
     }
 
     // 3. FAT32 Dosya Sistemi Erişim Testi

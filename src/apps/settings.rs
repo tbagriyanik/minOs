@@ -104,14 +104,14 @@ impl SystemSettings {
     const CONTENT_W: usize = 400;
     #[allow(dead_code)]
     const BTN_X: usize = CONTENT_X + 180; // sağdaki kontrol butonlarının sol kenarı
-    pub fn theme_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 300, 52, 96, 22)
+    pub fn theme_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, win_y + 36, 96, 22)
     }
-    pub fn kbd_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 300, 80, 96, 22)
+    pub fn kbd_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, win_y + 60, 96, 22)
     }
-    pub fn language_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 300, 108, 96, 22)
+    pub fn language_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, win_y + 84, 96, 22)
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + 238, 200, 10)
@@ -307,7 +307,8 @@ impl SystemSettings {
                 let mut theme_str = TextBuf::new();
                 theme_str.push_str(if self.language.is_english() { "Theme: " } else { "Tema: " });
                 theme_str.push_str(self.theme.name());
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 40, theme_str.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 40, theme_str.as_str(), Color::TEXT_MAIN,
+                    (win_x + CONTENT_X, win_y + 36, 286, 22));
                 let theme_r = Self::theme_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(
                     fb,
@@ -336,7 +337,8 @@ impl SystemSettings {
                     KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard layout: Turkish (TR-Q)" } else { "Klavye düzeni: Türkçe (TR-Q)" },
                     KeyboardLayout::EnglishUS => "Keyboard: English (EN-US)",
                 };
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 64, kbd_str, Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 64, kbd_str, Color::ACCENT_PINK,
+                    (win_x + CONTENT_X, win_y + 60, 286, 22));
                 let kbd_r = Self::kbd_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(
                     fb,
@@ -348,8 +350,9 @@ impl SystemSettings {
                 );
                 if self.focused_control == 5 { fb.draw_rect_outline(kbd_r.0, kbd_r.1, kbd_r.2, kbd_r.3, Color::ACCENT_YELLOW); }
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 88,
-                    if self.language.is_english() { "Interface language" } else { "Arayüz dili" }, Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 88,
+                    if self.language.is_english() { "Interface language" } else { "Arayüz dili" }, Color::ACCENT_PINK,
+                    (win_x + CONTENT_X, win_y + 84, 286, 22));
                 let lang_r = Self::language_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(fb, lang_r, Color::ACCENT_PINK,
                     if self.language.is_english() { "Turkish" } else { "English" }, Color::DARK_BG, false);

@@ -579,6 +579,18 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
+    // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
+    memory_mgr.proc_mgr.init_kernel_process();
+    // Sistem cagrilarini test et (sys_getpid & sys_alloc_frame)
+    let test_pid = mm::process::syscall_dispatch(mm::process::sys_nos::SYS_GETPID, 0, 0, 0, &mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    let test_frame = mm::process::syscall_dispatch(mm::process::sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, &mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    if test_frame != 0 {
+        let _ = mm::process::syscall_dispatch(mm::process::sys_nos::SYS_FREE_FRAME, test_frame, 0, 0, &mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    }
+    if test_pid == 0 {
+        serial_print("[PROC] Surec tablosu ve sistem cagrilar (syscalls) aktif.\n");
+    }
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
 

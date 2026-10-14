@@ -4,6 +4,9 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
+[![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
+[![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~16.400%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
 **minOs (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
@@ -80,6 +83,21 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
   - **Basılı Tutup Çizme:** Sol tuşu basılı tuttukça fare hareketi sürekli çizer; hızlı hareketlerde iki nokta arası enterpolasyonla doldurulup kesik çizgi oluşmaz.
   - **Otomatik Vuruş Bittiği:** Tuval dışına çıkıldığında veya tuş bırakıldığında kalem yolu otomatik sonlanır.
   - **Renk Paleti ve Silgi:** Mavi/Kırmızı/Yeşil/Siyah renk örnekleri, dairesel **Silgi** ve **Temizle** düğmeleri.
+
+---
+
+## 🖥️ Minimum Donanım Gereksinimleri (Minimum Hardware Requirements)
+
+| Bileşen | Minimum | Önerilen |
+| :--- | :--- | :--- |
+| **CPU** | x86_64 (64-bit), SSE2 desteği | x86_64, SSE4.1+ |
+| **RAM** | **4 MB** | 32 MB – 64 MB |
+| **Depolama** | Yalnızca CD/ISO (RAM tabanlı) | 64 MB+ qcow2 disk |
+| **Ekran** | 1280×720 32-bit framebuffer | 1280×720 veya daha yüksek |
+| **Ses** | — (isteğe bağlı) | Intel HDA uyumlu |
+| **Ağ** | — (isteğe bağlı) | Intel e1000 uyumlu |
+
+> **Not:** minOs 4 MB RAM ile stabil çalışır; grafik arayüzü, font atlasları ve çekirdek tamponları bu alanda sığar. QEMU'da test için `-Memory 4M` parametresi yeterlidir. FAT32 disk yazma gibi özellikler için 32+ MB önerilir.
 
 ---
 
@@ -225,6 +243,22 @@ minos/
 ├── build.rs                 # fontdue ile TTF → bitmap font atlası üretimi
 └── x86_64-minos.json        # Hedef x86_64 Long Mode tanımlama dosyası
 ```
+
+---
+
+## 📊 Kod İstatistikleri (Code Statistics)
+
+> Son güncelleme: Ekim 2026
+
+| Ölçüt | Değer |
+| :--- | :--- |
+| **Toplam Rust Kaynak Dosyası** | 40 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | ~16.400 satır |
+| **Etkin Kod Satırı** (boş/yorum hariç) | ~13.960 satır |
+| **Dil** | Rust (Nightly, `no_std`) |
+| **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
+| **Yerleşik Uygulama Sayısı** | 11 masaüstü uygulaması |
+| **Kernel Boyutu (ISO)** | ~7.4 MB (fontlar dahil) |
 
 ---
 

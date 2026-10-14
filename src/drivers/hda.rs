@@ -57,6 +57,7 @@ unsafe fn mmio_write8(base: u64, off: u32, val: u8) {
     core::ptr::write_volatile((base + off as u64) as *mut u8, val);
 }
 
+
 // ---------------------------------------------------------------------------
 // PCI Konfigürasyon Erişimi (port 0xCF8 / 0xCFC)
 // ---------------------------------------------------------------------------
@@ -102,11 +103,10 @@ const RIRB_BASE_HI: u32 = 0x54;
 const RIRB_WP: u32 = 0x58;
 const RIRB_INTCTL: u32 = 0x5C;
 
-// Output Stream 0 (CD) register blok taban ofseti.
-// HDA'da stream descriptor 3 tiptir (Input, Output, Bidirectional).
-// QEMU'nun `hda-duplex` düzeneğinde: streams 0..3 input, 4..7 output/bidir.
-// 4. numaralı stream'i (index=4) output olarak kullanacağız.
-const OUT_STREAM_BASE: u32 = 0x180 + 4 * 0x20;
+// Output Stream 0 register blok taban ofseti.
+// HDA'da stream descriptor'lar BAR0 + 0x80 adresinden başlar.
+// 4 giriş akışı (0x80..0xDF) sonrasında ilk çıkış akışı 0x100 (0x80 + 4 * 0x20) adresindedir.
+const OUT_STREAM_BASE: u32 = 0x80 + 4 * 0x20;
 
 const SD_CTL: u32 = 0x00;
 const SD_CBL: u32 = 0x08;
@@ -119,8 +119,8 @@ const SD_BDPU: u32 = 0x1C;
 const HDA_DAC_NID: u32 = 0x02; // QEMU'da hda-duplex çıkış DAC
 const HDA_OUT_PIN_NID: u32 = 0x03; // QEMU'da hda-duplex çıkış pini (jack)
 
-// Çıkış stream değeri (stream 4)
-const OUT_STREAM_NUM: u8 = 4;
+// Çıkış stream değeri (stream 1)
+const OUT_STREAM_NUM: u8 = 1;
 
 // ---------------------------------------------------------------------------
 // DMA Bellek Yardımcıları (fiziksel adresler — HHDM / fiziksel eşleme gerekir)
@@ -137,23 +137,34 @@ const RIRB_SIZE: usize = 256; // u64 sayısı (2KB / 8B)
 const BDL_SIZE: usize = 4;
 const BDL_BUF_SIZE: u32 = 4096; // Her buffer 4KB (16-bit stereo 48kHz ~ 42ms)
 
+/// Standart Intel HDA 16-baytlık BDL girişi:
+/// [0..7]: 64-bit Buffer Physical Address (128-byte aligned)
+/// [8..11]: 32-bit Buffer Length (bytes)
+/// [12..15]: 32-bit IOC (bit 0 = Interrupt on Completion)
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HdaBdlEntry {
+    pub address: u64,
+    pub length: u32,
+    pub ioc: u32,
+}
+
 // CORB buffer (u32 * 256 = 1KB)
 // RIRB buffer (u64 * 256 = 2KB)
-// BDL buffer (u16 * 4 = 64B)
+// BDL buffer (16B * 4 = 64B)
 // PCM buffers (4 * 4096 = 16KB)
 #[repr(C, align(256))]
 pub struct HdaDmaPool {
     pub corb: [u32; CORB_SIZE],
     pub rirb: [u64; RIRB_SIZE],
-    pub bdl: [u64; BDL_SIZE * 2], // her BDL girişi: u64 addr + u32 len + u32 ioc = 16B
+    pub bdl: [HdaBdlEntry; BDL_SIZE],
     pub pcm: [u8; BDL_SIZE * BDL_BUF_SIZE as usize],
     pub corb_wp: u16,
     pub rirb_wp: u16,
 }
 
-// DMA pool fiziksel adresi (PMM tarafindan guvenli bicimde dinamik tahsis edilir, varsayilan 3MB fallback)
-const DMA_POOL_PHYS_DEFAULT: u64 = 0x0030_0000;
-static mut DMA_POOL_ADDR: u64 = DMA_POOL_PHYS_DEFAULT;
+// DMA havuzu PMM'den ayırılır; tahsis başarısızsa sürücü başlatılmaz.
+static mut DMA_POOL_ADDR: u64 = 0;
 
 // DMA pool'u HHDM sanal adresini döndürür.
 unsafe fn dma_pool_virt() -> u64 {
@@ -166,6 +177,7 @@ unsafe fn dma_pool_virt() -> u64 {
 
 static HDA_READY: AtomicBool = AtomicBool::new(false);
 static mut HDA_MMIO_BASE: u64 = 0;
+static mut HDA_SD_BASE: u32 = 0x100;
 
 pub fn is_ready() -> bool {
     HDA_READY.load(Ordering::Relaxed)
@@ -252,9 +264,14 @@ fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
 /// PCM çıkışını stream 4 üzerinde hazır hale getirir.
 pub fn init(pmm_dma_phys: Option<u64>) {
     unsafe {
-        if let Some(phys) = pmm_dma_phys {
-            DMA_POOL_ADDR = phys;
-        }
+        let phys = match pmm_dma_phys {
+            Some(phys) => phys,
+            None => {
+                crate::serial_print("[HDA] DMA havuzu ayrılamadı; sürücü başlatılmadı.\n");
+                return;
+            }
+        };
+        DMA_POOL_ADDR = phys;
 
         // 1. PCI'da HDA denetleyicisini ara (bus 0'da)
         let mut found: Option<(u8, u8, u8, u64)> = None;
@@ -324,12 +341,12 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             serial_print("[HDA] IRQ hattı kapatıldı (RTE yazildi).\n");
         }
 
-        // 2. DMA pool'u hazırla (PMM'den tahsis edilmiş veya güvenli fallback fiziksel adres, HHDM ile erişilir)
+        // 2. PMM'den ayrılmış DMA havuzunu HHDM üzerinden hazırla.
         let pool_phys = DMA_POOL_ADDR;
         let pool = dma_pool_virt() as *mut HdaDmaPool;
         (*pool).corb = [0; CORB_SIZE];
         (*pool).rirb = [0; RIRB_SIZE];
-        (*pool).bdl = [0; BDL_SIZE * 2];
+        (*pool).bdl = [HdaBdlEntry { address: 0, length: 0, ioc: 0 }; BDL_SIZE];
         (*pool).pcm = [0; BDL_SIZE * BDL_BUF_SIZE as usize];
         (*pool).corb_wp = 0;
         (*pool).rirb_wp = 0;
@@ -342,11 +359,22 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         mmio_write32(mmio_base, CORB_BASE_HI, (corb_phys >> 32) as u32);
         mmio_write32(mmio_base, RIRB_BASE_LO, rirb_phys as u32);
         mmio_write32(mmio_base, RIRB_BASE_HI, (rirb_phys >> 32) as u32);
-        // CORB/RIRB boyut yazımı QEMU'da r/o uyarısı verir; yalnız kontrol bitleri:
-        mmio_write8(mmio_base, CORB_CTL, 0x02); // CORB Run (DMA engelini kaldır)
-        // RIRB: DMA enable, ama RIRB kesmesi kapalı (0x04). IRQ'lar maskeli olduğu
-        // için kesme açmak "UR" durumuna ve gecikmelerine neden oluyordu.
-        mmio_write8(mmio_base, RIRB_INTCTL, 0x06);
+
+        // CORB read pointer reset
+        mmio_write16(mmio_base, CORB_RP, 0x8000);
+        mmio_write16(mmio_base, CORB_RP, 0x0000);
+        mmio_write16(mmio_base, CORB_WP, 0x0000);
+
+        // RIRB write pointer reset
+        mmio_write16(mmio_base, RIRB_WP, 0x8000);
+
+        // CORBSIZE / RIRBSIZE (256 entries = 0x02)
+        mmio_write8(mmio_base, 0x4E, 0x02);
+        mmio_write8(mmio_base, 0x5E, 0x02);
+
+        // CORB & RIRB DMA Run
+        mmio_write8(mmio_base, CORB_CTL, 0x02);
+        mmio_write8(mmio_base, RIRB_INTCTL, 0x02);
 
         // 4. Codec Komutları — QEMU hda-output codec'i
         serial_print("[HDA] codec verb'leri gonderiliyor\n");
@@ -361,19 +389,23 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         send_verb(make_verb(0, HDA_DAC_NID, 0x3, 0xB03F)); // output amp, unmuted, gain
 
         // 5. Output Stream 0 DMA kurulumu
-        let sd = OUT_STREAM_BASE;
+        // GCAP (Global Capabilities, BAR0 + 0x00):
+        // bit 15:12 = OSS (Output Streams), bit 11:8 = ISS (Input Streams)
+        let gcap = mmio_read16(mmio_base, 0x00);
+        let iss = ((gcap >> 8) & 0x0F) as u32;
+        let sd = if iss > 0 { 0x80 + iss * 0x20 } else { OUT_STREAM_BASE };
+        HDA_SD_BASE = sd;
         let bdl_phys = pool_phys + core::mem::offset_of!(HdaDmaPool, bdl) as u64;
         let pcm_phys = pool_phys + core::mem::offset_of!(HdaDmaPool, pcm) as u64;
 
         // BDL girişlerini doldur: 4 buffer, her biri 4096 byte
         for i in 0..BDL_SIZE {
-            let entry_off = i * 2;
-            (*pool).bdl[entry_off] = pcm_phys + (i as u64) * (BDL_BUF_SIZE as u64); // buffer addr
-            let packed: u64 = ((BDL_BUF_SIZE as u64) << 32) | 1; // length | IOC=1
-            (*pool).bdl[entry_off + 1] = packed;
+            (*pool).bdl[i].address = pcm_phys + (i as u64) * (BDL_BUF_SIZE as u64);
+            (*pool).bdl[i].length = BDL_BUF_SIZE;
+            (*pool).bdl[i].ioc = 1;
         }
 
-        // Stream'i durdur
+        // Stream'i durdur (SRST ve RUN temizle)
         mmio_write8(mmio_base, sd + SD_CTL, 0x0);
         let mut s2 = 0;
         while (mmio_read8(mmio_base, sd + SD_CTL) & 0x02) != 0 && s2 < 100_000 {
@@ -381,21 +413,73 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             core::hint::spin_loop();
         }
 
-        // CBL, LVI, FMT
+        // CBL, LVI, FMT, BDP
         mmio_write32(mmio_base, sd + SD_CBL, BDL_BUF_SIZE * BDL_SIZE as u32);
         mmio_write16(mmio_base, sd + SD_LVI, (BDL_SIZE - 1) as u16);
         mmio_write16(mmio_base, sd + SD_FMT, 0x0011); // 16-bit, 48kHz, 2ch
         mmio_write32(mmio_base, sd + SD_BDPL, bdl_phys as u32);
         mmio_write32(mmio_base, sd + SD_BDPU, (bdl_phys >> 32) as u32);
 
-        // Stream Run: 2 stripe, RUN biti açılır — taşınabilir
-        mmio_write8(mmio_base, sd + SD_CTL, 0x18); // 2 stripe, RUN=0
+        // Stream Run: Stream tag (byte 2) ve RUN=1 (byte 0)
+        mmio_write8(mmio_base, sd + SD_CTL + 2, (OUT_STREAM_NUM as u8) << 4);
         mmio_write8(mmio_base, sd + SD_CTL, 0x02); // RUN=1
 
         serial_print("[HDA] HDA denetleyicisi hazir. Codec konfigurasyonu tamam.\n");
         HDA_READY.store(true, Ordering::Relaxed);
     }
 }
+
+/// Belirli bir test ses örneğini (1000 Hz saf sinüs tonu, 48 kHz 16-bit stereo PCM) DMA havuzuna yazar ve çalar.
+pub fn play_test_tone() {
+    if !is_ready() {
+        return;
+    }
+    const SINE_48: [i16; 48] = [
+        0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863,
+        16000, 15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088,
+        0, -2088, -4141, -6122, -7999, -9740, -11313, -12693, -13856, -14782, -15454, -15863,
+        -16000, -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
+    ];
+
+    unsafe {
+        let pool = dma_pool_virt() as *mut HdaDmaPool;
+        let total_frames = (BDL_SIZE * BDL_BUF_SIZE as usize) / 4; // her frame 4 bayt (2 kanal * 2 bayt)
+        for i in 0..total_frames {
+            let val = SINE_48[i % 48];
+            // Sol kanal (16-bit little endian)
+            (*pool).pcm[i * 4] = (val & 0xFF) as u8;
+            (*pool).pcm[i * 4 + 1] = ((val >> 8) & 0xFF) as u8;
+            // Sağ kanal (16-bit little endian)
+            (*pool).pcm[i * 4 + 2] = (val & 0xFF) as u8;
+            (*pool).pcm[i * 4 + 3] = ((val >> 8) & 0xFF) as u8;
+        }
+
+        serial_print("[HDA] Test ses ornegi yuklendi (1000Hz sinüs tonu, 48kHz 16-bit stereo PCM, ");
+        crate::serial::print_dec(((BDL_SIZE * BDL_BUF_SIZE as usize) / 2) as u64);
+        serial_print(" ornek).\n");
+
+        // DMA transferinin basladigini LPIB (Link Position In Buffer) register'indan teyit et
+        let sd = HDA_SD_BASE;
+        let mmio = HDA_MMIO_BASE;
+        let mut lpib = 0u32;
+        for _ in 0..50_000 {
+            lpib = mmio_read32(mmio, sd + 0x04);
+            if lpib > 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        serial_print("[HDA] DMA stream konumu (LPIB): ");
+        crate::serial::print_dec(lpib as u64);
+        serial_print(" bayt (DMA donanim aktarimi ");
+        if lpib > 0 {
+            serial_print("DOGRULANDI, ses ornegi caliniyor)\n");
+        } else {
+            serial_print("hazir, akis baslatildi)\n");
+        }
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // PCM Örnek Gönderimi

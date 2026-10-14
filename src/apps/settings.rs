@@ -18,7 +18,7 @@ const CONTENT_X: usize = 140;
 
 pub struct SystemSettings {
     // Temel Ayarlar
-    pub active_tab: usize, // 0: Genel, 1: Aygıt, 2: Gelişmiş
+    pub active_tab: usize, // 0: Genel, 1: Aygıt, 2: Gelişmiş (Ağ ve Hakkında bilgileri Aygıt sekmesinde toplanmıştır)
     pub focused_control: usize,
     pub theme: ThemeId,
     pub keyboard_layout: KeyboardLayout,
@@ -99,20 +99,25 @@ impl SystemSettings {
     pub fn tab_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
         (win_x + TAB_X, win_y + 38 + i * 28, TAB_W, TAB_H)
     }
-    pub fn theme_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 36, 88, 20)
+    // Sağ içerik sütununun genişliği (metinlerin butonlarla çakışmaması için).
+    #[allow(dead_code)]
+    const CONTENT_W: usize = 400;
+    #[allow(dead_code)]
+    const BTN_X: usize = CONTENT_X + 180; // sağdaki kontrol butonlarının sol kenarı
+    pub fn theme_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, 52, 96, 22)
     }
-    pub fn kbd_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 60, 88, 20)
+    pub fn kbd_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, 80, 96, 22)
     }
-    pub fn language_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(100), win_y + 84, 88, 20)
+    pub fn language_btn_rect(win_x: usize, _win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + 300, 108, 96, 22)
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + 210, 200, 10)
+        (win_x + CONTENT_X, win_y + 238, 200, 10)
     }
     pub fn mute_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 200, win_y + 204, 96, 22)
+        (win_x + CONTENT_X + 300, win_y + 214, 96, 22)
     }
     pub fn save_btn_rect(win_x: usize, win_y: usize, win_h: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + win_h.saturating_sub(48), 84, 22)
@@ -121,14 +126,14 @@ impl SystemSettings {
         (win_x + CONTENT_X + 96, win_y + win_h.saturating_sub(48), 84, 22)
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + (i % 2) * 158, win_y + 244 + (i / 2) * 30, 150, 24)
+        (win_x + CONTENT_X + (i % 2) * 148, win_y + 188 + (i / 2) * 28, 140, 22)
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
-    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+i*72,y+314,66,22) }
-    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+230,y+342,100,24) }
-    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+392,200,10) }
-    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+84,y+414,220,24) }
-    pub fn dhcp_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) { (win_x + CONTENT_X, win_y + 244, 130, 22) }
+    pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+180+i*68,y+250,64,22) }
+    pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+300,y+280,96,22) }
+    pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+312,200,10) }
+    pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+180,y+342,216,22) }
+    pub fn dhcp_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) { (win_x + CONTENT_X, win_y + 300, 130, 22) }
     pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
     pub fn region_name(&self, english: bool) -> &'static str {
         match (self.region, english) { (1,true)=>"UTC", (1,false)=>"UTC", (2,true)=>"US Eastern (UTC-5)", (2,false)=>"ABD Doğu (UTC-5)", (_,true)=>"Türkiye (UTC+3)", (_,false)=>"Türkiye (UTC+3)" }
@@ -238,8 +243,8 @@ impl SystemSettings {
         // Sekme 2 (Gelişmiş) 8 kontrol: 3 sekme + mavi ışık + şiddet + tema + kaydet + sıfırla
         let total = match self.active_tab {
             0 => 10,
-            1 => 19,
-            _ => 8,
+            1 => 15,
+            _ => 7,
         };
         self.focused_control = (self.focused_control + 1) % total;
         if self.focused_control < 3 {
@@ -504,8 +509,8 @@ impl SystemSettings {
 
         let (save_idx, reset_idx) = match self.active_tab {
             0 => (9, 10),
-            1 => (17, 18),
-            _ => (6, 7),
+            1 => (13, 14),
+            _ => (5, 6),
         };
         if self.focused_control == save_idx { fb.draw_rect_outline(save_r.0, save_r.1, save_r.2, save_r.3, Color::ACCENT_YELLOW); }
         if self.focused_control == reset_idx { fb.draw_rect_outline(reset_r.0, reset_r.1, reset_r.2, reset_r.3, Color::ACCENT_YELLOW); }

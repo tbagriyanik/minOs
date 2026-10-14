@@ -76,38 +76,52 @@ impl PhysicalMemoryManager {
     /// Limine bellek haritasından gelen bölgeleri kaydeder.
     /// `Usable` bölgeler için çakışmayan 4KB hizalı gerçek çerçeveler indekslenir.
     pub fn add_region(&mut self, base: u64, length: u64, entry_type: MemoryEntryType) {
-        if entry_type == MemoryEntryType::Usable {
-            self.total_memory_bytes = self.total_memory_bytes.saturating_add(length);
-            self.free_memory_bytes = self.free_memory_bytes.saturating_add(length);
-
-            // 1MB altındaki legacy BIOS/real mode alanları ve hizasız adresleri filtrele
-            let start = base.max(0x100000);
-            let end = base.saturating_add(length);
-            if end > start && self.region_count < MAX_USABLE_REGIONS {
-                let aligned_start = (start + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-                let aligned_end = end & !(PAGE_SIZE - 1);
-                if aligned_end > aligned_start {
-                    let aligned_len = aligned_end - aligned_start;
-                    self.usable_regions[self.region_count] = UsableRegion {
-                        base: aligned_start,
-                        length: aligned_len,
-                    };
-                    self.region_count += 1;
-
-                    let frame_count = (aligned_len / PAGE_SIZE) as usize;
-                    self.total_managed_frames = self.total_managed_frames.saturating_add(frame_count).min(MAX_FRAMES);
-                }
-            }
+        if entry_type != MemoryEntryType::Usable || length == 0 || self.total_managed_frames >= MAX_FRAMES {
+            return;
         }
+
+        // Filter legacy memory and align without overflowing.
+        let start = base.max(0x100000);
+        let end = match base.checked_add(length) {
+            Some(end) => end,
+            None => return,
+        };
+        let aligned_start = match start.checked_add(PAGE_SIZE - 1) {
+            Some(start) => start & !(PAGE_SIZE - 1),
+            None => return,
+        };
+        let aligned_end = end & !(PAGE_SIZE - 1);
+        if aligned_end <= aligned_start || self.region_count >= MAX_USABLE_REGIONS {
+            return;
+        }
+
+        // Store only the prefix that fits the bitmap. Later regions are
+        // intentionally ignored once the managed frame limit is reached.
+        let remaining_frames = MAX_FRAMES - self.total_managed_frames;
+        let frame_count = ((aligned_end - aligned_start) / PAGE_SIZE).min(remaining_frames as u64) as usize;
+        if frame_count == 0 { return; }
+        let managed_len = (frame_count as u64) * PAGE_SIZE;
+        self.usable_regions[self.region_count] = UsableRegion { base: aligned_start, length: managed_len };
+        self.region_count += 1;
+        self.total_managed_frames += frame_count;
+
+        // Counters reflect pages the allocator can actually return, not raw
+        // firmware bytes or the unaligned edges of usable regions.
+        let managed_bytes = managed_len;
+        self.total_memory_bytes = self.total_memory_bytes.saturating_add(managed_bytes);
+        self.free_memory_bytes = self.free_memory_bytes.saturating_add(managed_bytes);
     }
 
     /// Verilen global çerçeve indeksini gerçek fiziksel adrese çevirir.
     pub fn frame_index_to_address(&self, mut index: usize) -> Option<u64> {
+        if index >= self.total_managed_frames || index >= MAX_FRAMES {
+            return None;
+        }
         for i in 0..self.region_count {
             let region = &self.usable_regions[i];
             let region_frames = (region.length / PAGE_SIZE) as usize;
             if index < region_frames {
-                return Some(region.base + (index as u64) * PAGE_SIZE);
+                return region.base.checked_add((index as u64).checked_mul(PAGE_SIZE)?);
             }
             index -= region_frames;
         }
@@ -122,12 +136,14 @@ impl PhysicalMemoryManager {
         let mut base_index = 0usize;
         for i in 0..self.region_count {
             let region = &self.usable_regions[i];
-            let region_end = region.base + region.length;
+            let region_end = region.base.saturating_add(region.length);
             if addr >= region.base && addr < region_end {
                 let offset_frames = ((addr - region.base) / PAGE_SIZE) as usize;
-                return Some(base_index + offset_frames);
+                let index = base_index.checked_add(offset_frames)?;
+                return (index < self.total_managed_frames && index < MAX_FRAMES).then_some(index);
             }
-            base_index += (region.length / PAGE_SIZE) as usize;
+            base_index = base_index.checked_add((region.length / PAGE_SIZE) as usize)?;
+            if base_index >= self.total_managed_frames { break; }
         }
         None
     }

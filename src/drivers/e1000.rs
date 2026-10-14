@@ -134,9 +134,8 @@ struct E1000Rings {
     tx_bufs: [u8; TX_RING_SIZE * TX_BUF_SIZE],
 }
 
-/// Ring'ler için varsayılan fiziksel adres fallback (0x400000 = 4MB)
-const RINGS_PHYS_DEFAULT: u64 = 0x0040_0000;
-static mut RINGS_ADDR: u64 = RINGS_PHYS_DEFAULT;
+/// Ring belleği PMM'den ayrılır; tahsis yoksa sürücü başlatılmaz.
+static mut RINGS_ADDR: u64 = 0;
 static mut MMIO_BASE: u64 = 0;
 
 /// TX tamponlarının fiziksel başlangıcı (RX tamponlarını çakmasın diye
@@ -344,9 +343,14 @@ pub fn poll() {
 
 pub fn init(pmm_dma_phys: Option<u64>) {
     unsafe {
-        if let Some(phys) = pmm_dma_phys {
-            RINGS_ADDR = phys;
-        }
+        let phys = match pmm_dma_phys {
+            Some(phys) => phys,
+            None => {
+                e1000_print("[NET] DMA ring havuzu ayrılamadı; e1000 başlatılmadı.\n");
+                return;
+            }
+        };
+        RINGS_ADDR = phys;
 
         // PCI'da e1000'ı bul
         let mut found: Option<(u8, u8, u8, u64)> = None;

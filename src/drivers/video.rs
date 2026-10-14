@@ -31,6 +31,7 @@ pub struct Framebuffer {
     pub width: usize,
     pub height: usize,
     pub pitch: usize,
+    pub bpp: usize,
     /// Aktif kırpma bölgesi. Varsayılan: tüm ekran.
     clip: ClipRect,
     cursor_under: [u32; CURSOR_SAVE_W * CURSOR_SAVE_H],
@@ -98,12 +99,13 @@ fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -
 }
 
 impl Framebuffer {
-    pub unsafe fn new(address: *mut u32, width: usize, height: usize, pitch: usize) -> Self {
+    pub unsafe fn new(address: *mut u32, width: usize, height: usize, pitch: usize, bpp: usize) -> Self {
         Self {
             address,
             width,
             height,
             pitch,
+            bpp,
             clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
             cursor_under: [0; CURSOR_SAVE_W * CURSOR_SAVE_H],
             cursor_x: 0,
@@ -114,37 +116,108 @@ impl Framebuffer {
         }
     }
 
-    /// Çizim sınırları, kırpma ve pitch güvenliğini doğrular.
+    /// Çizim sınırları, kırpma, taşma güvenliği, renk derinliği ve pitch hesaplamasını doğrular.
+    /// Gerçek ekran ve GUI çizimini bozmamak için sentinellerle izole çalışır ve test sonunda orijinal durumu korur.
     pub fn verify_bounds(&mut self) -> bool {
+        // 1. width * height çarpımını taşma güvenli (checked_mul) kontrol et
         if self.width == 0 || self.height == 0 {
             return false;
         }
-        if self.width * self.height > BACKBUFFER_LEN {
+        let total_pixels = match self.width.checked_mul(self.height) {
+            Some(p) => p,
+            None => return false,
+        };
+        if total_pixels > BACKBUFFER_LEN {
+            return false;
+        }
+
+        // 2. Desteklenen renk derinliği (bpp) ve pitch hesaplama doğrulaması
+        if self.bpp != 32 {
+            return false;
+        }
+        let bytes_per_pixel = self.bpp / 8; // 32 bpp = 4 bayt
+        let min_pitch = match self.width.checked_mul(bytes_per_pixel) {
+            Some(mp) => mp,
+            None => return false,
+        };
+        if self.pitch < min_pitch || self.pitch % 4 != 0 {
             return false;
         }
         let pitch_words = self.pitch / 4;
         if pitch_words < self.width {
             return false;
         }
-
-        // Sınır aşımı testleri (ekran dışına çizim bellek bozulması veya çökme yaratmamalı)
-        self.put_pixel(self.width + 100, self.height + 100, 0xFFFFFF);
-        self.draw_rect(self.width, self.height, 50, 50, 0xFFFFFF);
-        self.draw_line(self.width + 10, self.height + 10, self.width + 100, self.height + 100, 0xFFFFFF);
-        self.draw_rounded_rect(self.width + 20, self.height + 20, 40, 40, 5, 0xFFFFFF);
-        self.draw_vgradient(self.width + 30, self.height + 30, 20, 20, 0xFF0000, 0x0000FF);
-        self.flush_rect((self.width + 10, self.height + 10, 50, 50));
-
-        // Kırpma (clipping) testi
-        self.set_clip(10, 10, 20, 20);
-        let clip = self.clip();
-        if clip.x0 != 10 || clip.y0 != 10 || clip.x1 != 30 || clip.y1 != 30 {
-            self.reset_clip();
+        // Tüm framebuffer bellek gereksiniminin taşmadığını doğrula
+        let total_fb_bytes = match self.pitch.checked_mul(self.height) {
+            Some(tb) => tb,
+            None => return false,
+        };
+        if total_fb_bytes == 0 {
             return false;
         }
+
+        // 3. Testlerde ekran dışı çizim öncesi/sonrası sentinel (canary) değerleri karşılaştır
+        const SENTINEL_HEAD: u32 = 0xDEADBEEF;
+        const SENTINEL_MID: u32 = 0xCAFEBABE;
+        const SENTINEL_TAIL: u32 = 0x5A5AA5A5;
+
+        let head_idx = 0usize;
+        let mid_idx = total_pixels - 1;
+        let tail_idx = BACKBUFFER_LEN - 1;
+
+        let orig_head = unsafe { BACKBUFFER[head_idx] };
+        let orig_mid = unsafe { BACKBUFFER[mid_idx] };
+        let orig_tail = unsafe { BACKBUFFER[tail_idx] };
+
+        unsafe {
+            BACKBUFFER[head_idx] = SENTINEL_HEAD;
+            BACKBUFFER[mid_idx] = SENTINEL_MID;
+            BACKBUFFER[tail_idx] = SENTINEL_TAIL;
+        }
+
+        // 4. Sınır testlerini gerçek ekran çiziminden ayır:
+        // Ekran dışı koordinatlara kasıtlı çizim denemeleri yap
+        // (Bu çağrılar asla sentinelleri değiştirmemeli ve donanım VRAM'ine dokunmamalıdır)
+        self.put_pixel(self.width + 100, self.height + 100, 0x11223344);
+        self.put_pixel(self.width, self.height, 0x11223344);
+        self.put_pixel(usize::MAX - 10, usize::MAX - 10, 0x11223344);
+        self.draw_rect(self.width, self.height, 50, 50, 0x11223344);
+        self.draw_rect(self.width + 20, 0, 100, self.height, 0x11223344);
+        self.draw_rect(0, self.height + 20, self.width, 100, 0x11223344);
+        self.draw_line(self.width + 10, self.height + 10, self.width + 100, self.height + 100, 0x11223344);
+        self.draw_rounded_rect(self.width + 20, self.height + 20, 40, 40, 5, 0x11223344);
+        self.draw_vgradient(self.width + 30, self.height + 30, 20, 20, 0xFF0000, 0x0000FF);
+        self.draw_shadow(self.width + 10, self.height + 10, 50, 50, 0x000000);
+
+        // Ekran dışı flush_rect güvenliği: x >= width veya y >= height iken VRAM kopyası yapılmadan dönmeli
+        self.flush_rect((self.width + 100, self.height + 100, 50, 50));
+
+        // Sentinel doğrulaması: Ekran dışı hiçbir çizim sentinelleri bozmamış olmalı
+        let sentinels_intact = unsafe {
+            BACKBUFFER[head_idx] == SENTINEL_HEAD
+                && BACKBUFFER[mid_idx] == SENTINEL_MID
+                && BACKBUFFER[tail_idx] == SENTINEL_TAIL
+        };
+
+        // Test tamamlandıktan sonra sentinel konumlarını orijinal haline geri yükle
+        // böylece kullanıcı arayüzü ve açılış ekranı test artıklarından tamamen arındırılır.
+        unsafe {
+            BACKBUFFER[head_idx] = orig_head;
+            BACKBUFFER[mid_idx] = orig_mid;
+            BACKBUFFER[tail_idx] = orig_tail;
+        }
+
+        if !sentinels_intact {
+            return false;
+        }
+
+        // Kırpma (clipping) sınır testi
+        self.set_clip(10, 10, 20, 20);
+        let clip = self.clip();
+        let clip_ok = clip.x0 == 10 && clip.y0 == 10 && clip.x1 == 30 && clip.y1 == 30;
         self.reset_clip();
 
-        true
+        clip_ok
     }
 
     /// İmlecin kaplayacağı arka planı, kısmi imleç çizimleri için saklar.

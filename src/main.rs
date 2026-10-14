@@ -613,6 +613,9 @@ pub extern "C" fn _start() -> ! {
         serial_print("[DMA] HDA ses surucusu icin dinamik DMA havuzu tahsis edildi.\n");
     }
     drivers::hda::init(hda_dma_phys);
+    if drivers::hda::is_ready() {
+        drivers::hda::play_test_tone();
+    }
 
     // e1000 RX/TX Ring ve Tampon Havuzu: ~132 KB (~33 sayfa)
     let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
@@ -624,6 +627,7 @@ pub extern "C" fn _start() -> ! {
     drivers::netstack::init();
     let _ = drivers::netstack::dhcp_request();
     drivers::usb::init();
+    drivers::usb::test_usb_subsystems();
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
@@ -681,7 +685,7 @@ pub extern "C" fn _start() -> ! {
     serial_print("\n");
 
     let mut fb = unsafe {
-        drivers::video::Framebuffer::new(fb_ptr, width, height, pitch)
+        drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp)
     };
 
     if fb.verify_bounds() {

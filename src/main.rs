@@ -11,9 +11,6 @@ use linked_list_allocator::LockedHeap;
 const HEAP_SIZE: usize = 1024 * 1024;
 #[allow(dead_code)]
 static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
-const BOOT_LOG_CAPACITY: usize = 16 * 1024;
-static mut BOOT_LOG: [u8; BOOT_LOG_CAPACITY] = [0; BOOT_LOG_CAPACITY];
-static mut BOOT_LOG_LEN: usize = 0;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -217,26 +214,11 @@ static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
 #[inline(never)]
 fn serial_print(s: &str) {
     serial::print(s);
-    append_boot_log(s.as_bytes());
-}
-
-fn append_boot_log(bytes: &[u8]) {
-    unsafe {
-        let remaining = BOOT_LOG_CAPACITY.saturating_sub(BOOT_LOG_LEN);
-        let take = bytes.len().min(remaining);
-        if take > 0 {
-            let start = BOOT_LOG_LEN;
-            BOOT_LOG[start..start + take].copy_from_slice(&bytes[..take]);
-            BOOT_LOG_LEN += take;
-        }
-    }
 }
 
 fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
-    unsafe {
-        let log = &BOOT_LOG[..BOOT_LOG_LEN];
-        let _ = vfs.write_file("/root/Documents/boot.log", log);
-    }
+    let log = serial::log_snapshot();
+    let _ = vfs.write_file("/root/Documents/boot.log", &log);
 }
 
 #[inline(never)]
@@ -672,7 +654,6 @@ pub extern "C" fn _start() -> ! {
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
-    save_boot_log(&mut fs_mgr.vfs);
 
     // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
     // Sabit adresler (0x300000, 0x400000) yerine PMM'den güvenli, çakışmayan bitişik DMA çerçeveleri tahsis et.
@@ -753,7 +734,6 @@ pub extern "C" fn _start() -> ! {
     serial_print(" kelime) | Adres: ");
     serial_print_hex(fb_ptr as u64);
     serial_print("\n");
-    save_boot_log(&mut fs_mgr.vfs);
 
     let mut fb = unsafe {
         drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp)
@@ -938,7 +918,7 @@ pub extern "C" fn _start() -> ! {
     compositor.cal_year = now.year;
     compositor.cal_month = now.month;
     serial_print("[minOs] RTC clock online.\n");
-    // Flush after the complete boot sequence (including numeric serial fields).
+    // Save once the boot transcript is complete, including numeric fields.
     save_boot_log(&mut fs_mgr.vfs);
 
     // Etkileşim durumu

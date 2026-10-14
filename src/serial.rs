@@ -1,10 +1,14 @@
 use core::arch::asm;
+extern crate alloc;
+
+static mut LOG_BYTES: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 
 const RED: &[u8] = b"\x1b[31m";
 const YELLOW: &[u8] = b"\x1b[33m";
 const RESET: &[u8] = b"\x1b[0m";
 
 pub fn print(message: &str) {
+    append_log(message.as_bytes());
     let color = if is_warning(message) {
         Some(YELLOW)
     } else if is_error(message) {
@@ -20,6 +24,22 @@ pub fn print(message: &str) {
     if color.is_some() {
         write_bytes(RESET);
     }
+}
+
+#[allow(static_mut_refs)]
+fn append_log(bytes: &[u8]) {
+    unsafe {
+        // Log storage grows with the transcript; no fixed 4 KiB/16 KiB cap.
+        // try_reserve keeps logging failure from recursively panicking.
+        if LOG_BYTES.try_reserve(bytes.len()).is_ok() {
+            LOG_BYTES.extend_from_slice(bytes);
+        }
+    }
+}
+
+#[allow(static_mut_refs)]
+pub fn log_snapshot() -> alloc::vec::Vec<u8> {
+    unsafe { LOG_BYTES.clone() }
 }
 
 pub fn print_dec(mut v: u64) {

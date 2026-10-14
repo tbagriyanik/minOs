@@ -46,15 +46,101 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 | **⚙️ Sistem Ayarları** | Dört sekme (Temel / İleri / Ağ / Hakkında): beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
-| **🖼️ Resim Gösterici** | Şeffaf dama tahtası tuvali üzerinde 4x yakınlaştırmalı 32-bit renkli piksel sanatı kedi maskotu ve dosya meta verileri. |
+| **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
 | **🎵 Müzik Çalar** | HDA sürücüsü üzerinden PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
-| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, açma/kaydetme ve 4096 noktalık tuval geçmişi. |
-| **⌨️ Komut İstemi (MinShell)** | `help`, `ls`, `cat`, `echo`, `clear`, `mem`, `ps`, `apps`, `ipconfig`, `ping`, `dns`, `date`, `uname`, `whoami`, `theme`, `open`/`run` komutları; Tab ile otomatik tamamlama ve yukarı/aşağı oklarla komut geçmişi. |
+| **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
+| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
 
-> **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) tanımlıdır ancak şu anda Başlat menüsünde kayıtlı olmadığı için çalıştırılamaz.
+> **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.
+
+---
+
+## 💻 Komut İstemi (MinShell) Desteklenen Komutlar
+
+MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`Tab`) ve dinamik çıktı kaydırma desteğiyle aşağıdaki komutları destekler:
+
+### 1. Dosya ve Dizin Yönetimi
+| Komut | Kullanım | Açıklama |
+| :--- | :--- | :--- |
+| `pwd` | `pwd` | Geçerli çalışma dizinini (CWD) ekrana yazar. |
+| `cd` | `cd <dizin>` | Çalışma dizinini değiştirir (`cd ..`, `cd /`, `cd ~` veya göreceli/mutlak yollar). |
+| `ls` | `ls [dizin]` | Geçerli dizindeki veya hedefteki dosya ve klasörleri boyutlarıyla listeler. |
+| `cat` | `cat <dosya>` | Metin dosyasının içeriğini terminale yazdırır. |
+| `touch` | `touch <dosya>` | Sanal dosya sisteminde yeni ve boş bir dosya oluşturur. |
+| `write` | `write <dosya> <metin>` | Belirtilen dosyaya metin verisi yazar/üzerine kaydeder. |
+| `mkdir` | `mkdir <klasor>` | Yeni bir sanal klasör oluşturur. |
+| `rm` | `rm <hedef>` | Belirtilen dosya veya dizini siler. |
+| `disks` / `df` | `disks` veya `df` | Bağlı IDE/ATA kanallarını, USB (FAT32), Sabit Disk ve CD-ROM sürücülerini listeler. |
+
+### 2. Sistem Bilgisi ve Bellek
+| Komut | Kullanım | Açıklama |
+| :--- | :--- | :--- |
+| `mem` | `mem` | Fiziksel Bellek Yöneticisi (PMM) üzerinden toplam ve boş bellek miktarını (KB) gösterir. |
+| `ps` | `ps` | Çekirdek ve aktif sistem süreçlerini (PID, isim) listeler. |
+| `date` | `date` | Gerçek Zamanlı Saat (RTC / CMOS) üzerinden güncel tarih ve saati gösterir. |
+| `uname` | `uname` | minOs çekirdek sürümünü ve mimari bilgisini (`x86_64 Sarman Edition v2.0`) yazar. |
+| `whoami` | `whoami` | Aktif kullanıcı yetkisini gösterir (`sarman (root)`). |
+| `theme` | `theme` | Masaüstü temasını komut satırından anında sıradaki temaya geçirir. |
+| `clear` | `clear` | Terminal ekranını temizler. |
+| `help` | `help` | Kullanılabilir temel komutların özet listesini görüntüler. |
+
+### 3. Ağ Teşhisi ve Araçları
+| Komut | Kullanım | Açıklama |
+| :--- | :--- | :--- |
+| `ipconfig` | `ipconfig` | `eth0` arabiriminin yerel IP, ağ maskesi, ağ geçidi, DNS, MAC adresi ve DHCP durumunu raporlar. |
+| `ping` | `ping <IPv4>` | Belirtilen IPv4 hedefine ICMP Echo Request paketi gönderir. |
+| `dns` | `dns <alan_adi>` | Belirtilen sunucu adı için yapılandırılmış DNS sunucusuna UDP DNS sorgusu iletir. |
+
+### 4. Uygulama Başlatma
+| Komut | Alternatifler | Açıklama |
+| :--- | :--- | :--- |
+| `open <uygulama>` | `run <uygulama>` | İstenen masaüstü uygulamasını yeni veya mevcut pencerede açar. |
+| Doğrudan İsim | `files`, `notepad`, `calc`, `paint`, `browser`, `image`, `music`, `video`, `taskmgr`, `settings`, `cmd` | Uygulama adı doğrudan komut olarak yazıldığında ilgili grafik arayüz penceresi odaklanır/açılır. |
+
+---
+
+## ⚠️ Durum Raporu: Tam Çalışmayan / Kısmi Düzeydeki Özellikler
+
+minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileşenler protokol veya simülasyon düzeyinde hazır olup tam donanım/yığın entegrasyonu aşamasındadır:
+
+1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
+   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; ancak gelen ICMP Echo Reply paketinin asenkron olarak terminale bildirilmesi henüz tam olay döngüsüne bağlanmamıştır ("yanıt bekleme henüz yok" olarak raporlanır).
+   - DNS sorgu paketi gönderilir; fakat yanıt paketinin çözümlenip yerel IP eşlemesine kaydedilmesi kısmi durumdadır.
+2. **Çoklu Çekirdek (SMP) Görev Dağıtımı:**
+   - QEMU `-CpuCount N` parametresiyle çoklu sanal çekirdek tanımlanabilir; ancak minOs çekirdeği şimdilik tek çekirdekte iş planlaması yürütür (SMP AP çekirdekleri henüz uyandırılıp iş yükü paylaştırılmaz).
+3. **Fiziksel Blok Depolama Yazma (Write-through):**
+   - IDE/ATA sürücüsü ve FAT32 okuma desteği mevcuttur; `/root` dosya sistemi RamFS/VFS üzerinde çalışır. Fiziksel disk sektörlerine kalıcı blok düzeyinde yazma kısıtlıdır.
+4. **HDA Donanımsal DMA İlerlemesi (QEMU Emülasyon Sınırları):**
+   - Intel HDA ses sürücüsünde BDL ve DMA stream kurulumu tamdır; fakat bazı sanallaştırma ortamlarında DMA LPIB göstergesi ses çalarken donanım tarafında ilerlemeyebilir. Ses çıkışı için ayrıca PC Speaker PWM tonlama emülasyonu yedek olarak devrededir.
+5. **ATAPI CD-ROM READ CAPACITY:**
+   - QEMU DVD-ROM sürücüsü tespit edilir; ancak ISO medyası takılı olmadığında kapasite 0 MB olarak okunur.
+6. **Kullanıcı Modu (Ring 3) ve Syscall Ayrımı:**
+   - Çekirdek içi sanal bellek (VMM) eşlemelerinde kullanıcı ve süpervizör bayrakları (`USER`, `WRITABLE`, `NO_EXECUTE`) ayrılmış ve birim testleriyle doğrulanmıştır; ancak kullanıcı alanı ELF ikililerini çalıştıran bağımsız Ring 3 süreç yöneticisi henüz tam aktif değildir.
+
+---
+
+## 🗺️ Gelecek Planları ve Yol Haritası (Roadmap)
+
+Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
+
+- [ ] **Tam Ring 3 Kullanıcı Alanı & Syscall API:**
+  - `int 0x80` veya `syscall`/`sysret` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri.
+  - Bağımsız kullanıcı programları için dinamik bellek ve sayfa koruması.
+- [ ] **Gelişmiş TCP/IP Yığını & Socket API:**
+  - Tam TCP 3'lü el sıkışma (handshake), kayan pencere (sliding window) ve soket (`socket()`, `connect()`, `send()`, `recv()`) API'si.
+  - Komut satırından `curl` / `http` ile dosya indirme kabiliyeti.
+- [ ] **Kalıcı FAT32 / Ext2 Dosya Sistemi Desteği:**
+  - Salt okunur desteğin tam okuma/yazma (read-write) formatına kavuşturulması ve disk bölümleme (MBR/GPT) ayrıştırıcısı.
+- [ ] **SMP (Symmetric Multiprocessing) Desteği:**
+  - ACPI / MADT tablolarını okuyarak AP çekirdeklerini uyandırma (INIT-SIPI-SIPI).
+  - Çok çekirdekli kilit mekanizmaları ve çekirdekler arası görev zamanlayıcısı (Preemptive Round-Robin Scheduler).
+- [ ] **Paket Yöneticisi (`minpkg`):**
+  - Uzak sunucudan minimal kullanıcı uygulamalarını ve script'leri çekip kurabilen hafif bir paket yöneticisi.
+- [ ] **Gelişmiş Grafik Sürücüleri & 2D Hızlandırma:**
+  - Yazılımsal çift tamponlama (double buffering) üzerine donanım hızlandırmalı fare imleci ve VESA/BGA çözünürlük değiştirme desteği.
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 

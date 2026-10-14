@@ -61,7 +61,7 @@ impl ImageViewerApp {
     pub fn zoom_in(&mut self) { self.zoom_level = (self.zoom_level + 1).min(8); }
     pub fn zoom_out(&mut self) { self.zoom_level = self.zoom_level.saturating_sub(1).max(1); }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize) {
+    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
         // Araç Çubuğu
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 24, Color::TITLE_BAR);
         MinGuiCompositor::draw_string_clipped(fb, win_x + 12, win_y + 36,
@@ -81,11 +81,27 @@ impl ImageViewerApp {
         zoom.push_u2(self.zoom_percent() as u32);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 60, win_y + 36, zoom.as_str(), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
-        // Resim Tuvali Alanı (Canvas Area with checkerboard background)
-        let canvas_x = win_x + 10;
-        let canvas_y = win_y + 60;
-        let canvas_w = 210;
-        let canvas_h = 180;
+        // Responsive image and information panes. Narrow windows stack the
+        // panes; wider windows share the available content width.
+        let margin = 10usize;
+        let gap = 12usize;
+        let inner_x = win_x + margin;
+        let inner_w = win_w.saturating_sub(margin * 2).max(1);
+        let content_y = win_y + 60;
+        let status_y = win_y + win_h.saturating_sub(24);
+        let content_h = status_y.saturating_sub(content_y + 6).max(1);
+        let stacked = inner_w < 360;
+        let (canvas_x, canvas_y, canvas_w, canvas_h, info_x, info_y, info_w, info_h) = if stacked {
+            let canvas_h = (content_h * 2 / 3).max(1);
+            let info_y = content_y + canvas_h + gap.min(content_h.saturating_sub(canvas_h));
+            let info_h = status_y.saturating_sub(info_y + 4).max(1);
+            (inner_x, content_y, inner_w, canvas_h, inner_x, info_y, inner_w, info_h)
+        } else {
+            let panel_w = (inner_w / 3).clamp(130, 220).min(inner_w.saturating_sub(gap + 1));
+            let canvas_w = inner_w.saturating_sub(panel_w + gap).max(1);
+            (inner_x, content_y, canvas_w, content_h, inner_x + canvas_w + gap, content_y, panel_w, content_h)
+        };
+
         fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, Color::TASKBAR_BG);
 
         // Dama tahtası deseni (Şeffaflık / Tuval hissi)
@@ -105,24 +121,39 @@ impl ImageViewerApp {
         let art_oy = canvas_y + canvas_h.saturating_sub(art_size) / 2;
 
         if self.width > 0 && self.height > 0 {
-            let scale = self.zoom_level.max(1);
             let (src_w, src_h) = (self.width, self.height);
             let row_bytes = (src_w * 3 + 3) & !3;
-            let fit_scale = scale.min((canvas_w / src_w.max(1)).max(1)).min((canvas_h / src_h.max(1)).max(1));
-            let draw_w = src_w.saturating_mul(fit_scale).min(canvas_w);
-            let draw_h = src_h.saturating_mul(fit_scale).min(canvas_h);
-            let art_ox = canvas_x + canvas_w.saturating_sub(draw_w) / 2;
-            let art_oy = canvas_y + canvas_h.saturating_sub(draw_h) / 2;
-            for dy in 0..draw_h {
-                let sy = dy / fit_scale;
+            // Base scale fits large images to the canvas. The zoom buttons
+            // then apply 25%..200% of that base (100% at level 4).
+            const SCALE_UNIT: usize = 16;
+            let base_scale = if src_w > canvas_w || src_h > canvas_h {
+                (canvas_w.saturating_mul(SCALE_UNIT) / src_w.max(1))
+                    .min(canvas_h.saturating_mul(SCALE_UNIT) / src_h.max(1))
+                    .max(1)
+            } else {
+                SCALE_UNIT
+            };
+            let scale = (base_scale.saturating_mul(self.zoom_level.max(1)) / 4).max(1);
+            let scaled_w = src_w.saturating_mul(scale) / SCALE_UNIT;
+            let scaled_h = src_h.saturating_mul(scale) / SCALE_UNIT;
+            let left = (canvas_w as isize - scaled_w as isize) / 2;
+            let top = (canvas_h as isize - scaled_h as isize) / 2;
+
+            for dy in 0..canvas_h {
+                let image_y = dy as isize - top;
+                if image_y < 0 || image_y as usize >= scaled_h { continue; }
+                let sy = ((image_y as usize).saturating_mul(SCALE_UNIT) / scale).min(src_h - 1);
                 let bmp_y = if self.top_down { sy } else { src_h - 1 - sy };
-                for dx in 0..draw_w {
-                    let sx = dx / fit_scale;
+                for dx in 0..canvas_w {
+                    let image_x = dx as isize - left;
+                    if image_x < 0 || image_x as usize >= scaled_w { continue; }
+                    let sx = ((image_x as usize).saturating_mul(SCALE_UNIT) / scale).min(src_w - 1);
                     let i = self.data_offset + bmp_y * row_bytes + sx * 3;
-                    if i + 2 < self.image.len() {
-                        let color = (self.image[i + 2] as u32) << 16 | (self.image[i + 1] as u32) << 8 | self.image[i] as u32;
-                        fb.draw_rect(art_ox + dx, art_oy + dy, 1, 1, color);
-                    }
+                    if i + 2 >= self.image.len() { continue; }
+                    let color = (self.image[i + 2] as u32) << 16
+                        | (self.image[i + 1] as u32) << 8
+                        | self.image[i] as u32;
+                    fb.draw_rect(canvas_x + dx, canvas_y + dy, 1, 1, color);
                 }
             }
         } else if self.width == 0 && self.status != crate::gui::ui_text("Ready", "Ready") {
@@ -167,29 +198,43 @@ impl ImageViewerApp {
         }
         }
 
-        // Sağ Bilgi Paneli
-        let info_x = win_x + canvas_w + 24;
-        let info_y = win_y + 60;
-        fb.draw_rect(info_x, info_y, win_w - canvas_w - 34, canvas_h, Color::TITLE_BAR_INACTIVE);
+        // Sağ/alt bilgi paneli, kalan alanı tamamen doldurur.
+        fb.draw_rect(info_x, info_y, info_w, info_h, Color::TITLE_BAR_INACTIVE);
 
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 10, crate::gui::ui_text("RESİM BİLGİSİ", "IMAGE INFO"), Color::ACCENT_BLUE);
+        let row_step = (info_h.saturating_sub(8) / 6).clamp(14, 22);
+        let info_clip = (info_x + 8, info_y + 4, info_w.saturating_sub(16), info_h.saturating_sub(8));
+        MinGuiCompositor::draw_string_clipped(fb, info_x + 10, info_y + 6,
+            crate::gui::ui_text("RESİM BİLGİSİ", "IMAGE INFO"), Color::ACCENT_BLUE, info_clip);
         let (image_w, image_h) = if self.width > 0 { (self.width, self.height) } else { (16, 16) };
         let mut resolution = crate::gui::TextBuf::new();
         resolution.push_str(crate::gui::ui_text("Çözünürlük: ", "Resolution: "));
         resolution.push_usize(image_w); resolution.push_byte(b'x'); resolution.push_usize(image_h);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 32, resolution.as_str(), Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 52, "Format: BMP (RGB32)", Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 72, crate::gui::ui_text("Boyut: 1.024 B", "Size: 1,024 B"), Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 92, crate::gui::ui_text("Renk: 5 renk", "Colors: 5"), Color::TEXT_MAIN);
+        let info_lines = [
+            resolution.as_str(),
+            "Format: BMP (24-bit)",
+            crate::gui::ui_text("Boyut: RGB", "Data: RGB"),
+            crate::gui::ui_text("Renk: 24-bit", "Color: 24-bit"),
+        ];
+        for (i, line) in info_lines.iter().enumerate() {
+            let y = info_y + 6 + (i + 1) * row_step;
+            MinGuiCompositor::draw_string_clipped(fb, info_x + 10, y, line, Color::TEXT_MAIN,
+                info_clip);
+        }
         let mut zoom_info = crate::gui::TextBuf::new();
         zoom_info.push_str(crate::gui::ui_text("Yakınlaştırma: ", "Zoom: "));
         zoom_info.push_byte(b'%');
         zoom_info.push_u2(self.zoom_percent() as u32);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 112, zoom_info.as_str(), Color::ACCENT_YELLOW);
-        MinGuiCompositor::draw_string(fb, info_x + 10, info_y + 132, self.status, Color::ACCENT_GREEN);
+        let zoom_y = info_y + 6 + 5 * row_step;
+        MinGuiCompositor::draw_string_clipped(fb, info_x + 10, zoom_y, zoom_info.as_str(), Color::ACCENT_YELLOW,
+            info_clip);
+        let status_line_y = zoom_y + row_step;
+        MinGuiCompositor::draw_string_clipped(fb, info_x + 10, status_line_y, self.status, Color::ACCENT_GREEN,
+            info_clip);
 
         // Alt Durum Çubuğu
-        fb.draw_rect(win_x + 6, win_y + 246, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 250, crate::gui::ui_text("Görüntüleyici: MinViewer v1.0 | 60 FPS Render", "Viewer: MinViewer v1.0 | 60 FPS Render"), Color::TEXT_MUTED);
+        fb.draw_rect(win_x + 6, status_y, win_w.saturating_sub(12), 18, Color::TASKBAR_BG);
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 12, status_y + 4,
+            crate::gui::ui_text("Görüntüleyici: MinViewer v1.0", "Viewer: MinViewer v1.0"), Color::TEXT_MUTED,
+            (win_x + 8, status_y + 2, win_w.saturating_sub(16), 14));
     }
 }

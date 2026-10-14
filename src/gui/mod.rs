@@ -1252,31 +1252,47 @@ impl MinGuiCompositor {
         width: f32,
     ) {
         let radius = width / 2.0;
-        let min_x = (x0.min(x1) - radius - 1.0).max(0.0) as usize;
-        let min_y = (y0.min(y1) - radius - 1.0).max(0.0) as usize;
-        let max_x = (x0.max(x1) + radius + 1.0) as usize;
-        let max_y = (y0.max(y1) + radius + 1.0) as usize;
+        let radius_sq = radius * radius;
+        let feather = 0.5f32;
+        let max_r = radius + feather;
+        let max_r_sq = max_r * max_r;
+        let min_x = (x0.min(x1) - max_r).max(0.0) as usize;
+        let min_y = (y0.min(y1) - max_r).max(0.0) as usize;
+        let max_x = (x0.max(x1) + max_r) as usize;
+        let max_y = (y0.max(y1) + max_r) as usize;
         let vx = x1 - x0;
         let vy = y1 - y0;
-        let length_sq = vx * vx + vy * vy;
-        let radius_sq = radius * radius;
+        let length_sq = (vx * vx + vy * vy).max(0.0001);
+        let inv_len_sq = 1.0 / length_sq;
+
         for py in min_y..=max_y {
+            let sy = py as f32 + 0.5;
+            let dy0 = sy - y0;
             for px in min_x..=max_x {
-                let mut samples = 0u32;
-                for oy in 0..4 {
-                    for ox in 0..4 {
-                        let sx = px as f32 + (ox as f32 + 0.5) / 4.0;
-                        let sy = py as f32 + (oy as f32 + 0.5) / 4.0;
-                        let t = (((sx - x0) * vx + (sy - y0) * vy) / length_sq).clamp(0.0, 1.0);
-                        let dx = sx - (x0 + t * vx);
-                        let dy = sy - (y0 + t * vy);
-                        if dx * dx + dy * dy <= radius_sq { samples += 1; }
+                let sx = px as f32 + 0.5;
+                let dx0 = sx - x0;
+                let t = ((dx0 * vx + dy0 * vy) * inv_len_sq).clamp(0.0, 1.0);
+                let dx = sx - (x0 + t * vx);
+                let dy = sy - (y0 + t * vy);
+                let d_sq = dx * dx + dy * dy;
+                if d_sq <= max_r_sq {
+                    if d_sq <= radius_sq {
+                        fb.put_pixel(px, py, color);
+                    } else {
+                        // Fast inverse square root to avoid libm dependency in no_std
+                        let inv_d = {
+                            let i = d_sq.to_bits();
+                            let i = 0x5f3759df - (i >> 1);
+                            let y = f32::from_bits(i);
+                            let y = y * (1.5 - 0.5 * d_sq * y * y);
+                            y * (1.5 - 0.5 * d_sq * y * y)
+                        };
+                        let d = d_sq * inv_d;
+                        let alpha = (((max_r - d) / feather).clamp(0.0, 1.0) * 255.0) as u8;
+                        if alpha > 0 {
+                            fb.put_subpixel_text(px, py, color, [alpha; 3]);
+                        }
                     }
-                }
-                if samples != 0 {
-                    let alpha = ((samples * 255 + 8) / 16) as u8;
-                    if alpha == 255 { fb.put_pixel(px, py, color); }
-                    else { fb.put_subpixel_text(px, py, color, [alpha; 3]); }
                 }
             }
         }

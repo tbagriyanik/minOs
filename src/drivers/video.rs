@@ -2,8 +2,18 @@ use crate::gui::theme;
 
 static mut BACKBUFFER: [u32; 1280 * 720] = [0; 1280 * 720];
 const BACKBUFFER_LEN: usize = 1280 * 720;
-const CURSOR_SAVE_W: usize = 16;
-const CURSOR_SAVE_H: usize = 16;
+const CURSOR_SAVE_W: usize = 24;
+const CURSOR_SAVE_H: usize = 24;
+
+/// İki dikdörtgenin en küçük kapsayıcı birleşimini (bounding box) döndürür.
+#[inline(always)]
+pub fn rect_union(r1: (usize, usize, usize, usize), r2: (usize, usize, usize, usize)) -> (usize, usize, usize, usize) {
+    let x0 = r1.0.min(r2.0);
+    let y0 = r1.1.min(r2.1);
+    let x1 = (r1.0 + r1.2).max(r2.0 + r2.2);
+    let y1 = (r1.1 + r1.3).max(r2.1 + r2.3);
+    (x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
 
 /// Dikdörtgen kırpma (clip) bölgesi. Tüm çizimler bu sınırların içinde kalır.
 #[derive(Copy, Clone)]
@@ -43,6 +53,7 @@ const BAYER_4X4: [[i32; 4]; 4] = [
 ];
 
 /// Dithering destekli pürüzsüz renk geçişi (kademelenmeyi yok eder).
+#[allow(dead_code)]
 #[inline(always)]
 fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -> u32 {
     if n == 0 {
@@ -230,12 +241,12 @@ impl Framebuffer {
         }
         for cy in y0..y_end {
             let row_offset = cy * self.width;
-            for cx in x0..x_end {
-                let offset = row_offset + cx;
-                unsafe {
-                    if offset < BACKBUFFER_LEN {
-                        BACKBUFFER[offset] = c;
-                    }
+            let start = row_offset + x0;
+            let end = row_offset + x_end;
+            unsafe {
+                if start < BACKBUFFER_LEN {
+                    let real_end = end.min(BACKBUFFER_LEN);
+                    BACKBUFFER[start..real_end].fill(c);
                 }
             }
         }
@@ -263,19 +274,39 @@ impl Framebuffer {
         let y0 = y.max(self.clip.y0);
         let x_end = (x + w).min(self.width).min(self.clip.x1);
         let y_end = (y + h).min(self.height).min(self.clip.y1);
-        if x0 >= x_end {
+        if x0 >= x_end || y0 >= y_end {
             return;
         }
         let n = h.saturating_sub(1).max(1);
+        let ar = (ct >> 16) & 0xFF;
+        let ag = (ct >> 8) & 0xFF;
+        let ab = ct & 0xFF;
+        let br = (cb >> 16) & 0xFF;
+        let bg = (cb >> 8) & 0xFF;
+        let bb = cb & 0xFF;
+
         for cy in y0..y_end {
             let t = cy - y;
+            let inv = n - t;
+            let row_dither = BAYER_4X4[cy & 3];
+            let mut dither_pixels = [0u32; 4];
+            for i in 0..4 {
+                let d = row_dither[i];
+                let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                dither_pixels[i] = (r << 16) | (g << 8) | bl;
+            }
+
             let row_offset = cy * self.width;
-            for cx in x0..x_end {
-                let c = lerp_color_dither(ct, cb, t, n, cx, cy);
-                let offset = row_offset + cx;
-                unsafe {
-                    if offset < BACKBUFFER_LEN {
-                        BACKBUFFER[offset] = c;
+            let start = row_offset + x0;
+            let end = row_offset + x_end;
+            unsafe {
+                if start < BACKBUFFER_LEN {
+                    let real_end = end.min(BACKBUFFER_LEN);
+                    let slice = &mut BACKBUFFER[start..real_end];
+                    for (idx, p) in slice.iter_mut().enumerate() {
+                        *p = dither_pixels[(x0 + idx) & 3];
                     }
                 }
             }
@@ -303,33 +334,87 @@ impl Framebuffer {
             return;
         }
 
-        for cy in y0..y_end {
-            let dy = if cy < y + r {
-                (y + r - 1) as isize - cy as isize
-            } else if cy >= y + h - r {
-                cy as isize - (y + h - r) as isize
-            } else {
-                0
-            };
+        let mid_y0 = (y + r).max(y0);
+        let mid_y1 = (y + h.saturating_sub(r)).min(y_end);
 
+        // Üst köşe satırları
+        for cy in y0..mid_y0.min(y_end) {
+            let dy = (y + r - 1) as isize - cy as isize;
+            self.draw_rounded_row(x, w, x0, x_end, cy, r, dy, r_sq, c);
+        }
+
+        // Orta gövde satırları (doğrudan hızlı bellek dolgusu)
+        for cy in mid_y0..mid_y1 {
             let row_offset = cy * self.width;
-            for cx in x0..x_end {
-                let dx = if cx < x + r {
-                    (x + r - 1) as isize - cx as isize
-                } else if cx >= x + w - r {
-                    cx as isize - (x + w - r) as isize
-                } else {
-                    0
-                };
-
-                if dx * dx + dy * dy > r_sq {
-                    continue;
+            let start = row_offset + x0;
+            let end = row_offset + x_end;
+            unsafe {
+                if start < BACKBUFFER_LEN {
+                    let real_end = end.min(BACKBUFFER_LEN);
+                    BACKBUFFER[start..real_end].fill(c);
                 }
+            }
+        }
 
-                let offset = row_offset + cx;
+        // Alt köşe satırları
+        for cy in mid_y1.max(y0)..y_end {
+            let dy = cy as isize - (y + h - r) as isize;
+            self.draw_rounded_row(x, w, x0, x_end, cy, r, dy, r_sq, c);
+        }
+    }
+
+    #[inline(always)]
+    fn draw_rounded_row(
+        &mut self,
+        x: usize,
+        w: usize,
+        x0: usize,
+        x_end: usize,
+        cy: usize,
+        r: usize,
+        dy: isize,
+        r_sq: isize,
+        color: u32,
+    ) {
+        let row_offset = cy * self.width;
+        let left_corner_end = (x + r).min(x_end);
+        let right_corner_start = (x + w.saturating_sub(r)).max(x0);
+
+        // Sol köşe eğrisi
+        for cx in x0..left_corner_end {
+            let dx = (x + r - 1) as isize - cx as isize;
+            if dx * dx + dy * dy <= r_sq {
                 unsafe {
+                    let offset = row_offset + cx;
                     if offset < BACKBUFFER_LEN {
-                        BACKBUFFER[offset] = c;
+                        BACKBUFFER[offset] = color;
+                    }
+                }
+            }
+        }
+
+        // Satırın düz orta kısmı (hızlı dolgu)
+        let mid_start = left_corner_end.max(x0);
+        let mid_end = right_corner_start.min(x_end);
+        if mid_start < mid_end {
+            let start = row_offset + mid_start;
+            let end = row_offset + mid_end;
+            unsafe {
+                if start < BACKBUFFER_LEN {
+                    let real_end = end.min(BACKBUFFER_LEN);
+                    BACKBUFFER[start..real_end].fill(color);
+                }
+            }
+        }
+
+        // Sağ köşe eğrisi
+        for cx in right_corner_start..x_end {
+            let dx = cx as isize - (x + w - r) as isize;
+            if dx * dx + dy * dy <= r_sq {
+                unsafe {
+                    let offset = row_offset + cx;
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = color;
                     }
                 }
             }
@@ -423,36 +508,93 @@ impl Framebuffer {
         }
 
         let n = h.saturating_sub(1).max(1);
-        for cy in y0..y_end {
-            let dy = if cy < y + r {
-                (y + r - 1) as isize - cy as isize
-            } else if cy >= y + h - r {
-                cy as isize - (y + h - r) as isize
-            } else {
-                0
-            };
+        let ar = (ct >> 16) & 0xFF;
+        let ag = (ct >> 8) & 0xFF;
+        let ab = ct & 0xFF;
+        let br = (cb >> 16) & 0xFF;
+        let bg = (cb >> 8) & 0xFF;
+        let bb = cb & 0xFF;
 
+        let mid_y0 = (y + r).max(y0);
+        let mid_y1 = (y + h.saturating_sub(r)).min(y_end);
+        let left_corner_end = (x + r).min(x_end);
+        let right_corner_start = (x + w.saturating_sub(r)).max(x0);
+
+        for cy in y0..y_end {
             let t = cy - y;
+            let inv = n - t;
+            let row_dither = BAYER_4X4[cy & 3];
+            let mut dither_pixels = [0u32; 4];
+            for i in 0..4 {
+                let d = row_dither[i];
+                let r_val = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let g_val = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let b_val = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                dither_pixels[i] = (r_val << 16) | (g_val << 8) | b_val;
+            }
+
             let row_offset = cy * self.width;
 
-            for cx in x0..x_end {
-                let dx = if cx < x + r {
-                    (x + r - 1) as isize - cx as isize
-                } else if cx >= x + w - r {
-                    cx as isize - (x + w - r) as isize
+            // Orta gövde satırları: köşe testi yok, doğrudan satır dolgusu
+            if cy >= mid_y0 && cy < mid_y1 {
+                let start = row_offset + x0;
+                let end = row_offset + x_end;
+                unsafe {
+                    if start < BACKBUFFER_LEN {
+                        let real_end = end.min(BACKBUFFER_LEN);
+                        let slice = &mut BACKBUFFER[start..real_end];
+                        for (idx, p) in slice.iter_mut().enumerate() {
+                            *p = dither_pixels[(x0 + idx) & 3];
+                        }
+                    }
+                }
+            } else {
+                let dy = if cy < y + r {
+                    (y + r - 1) as isize - cy as isize
                 } else {
-                    0
+                    cy as isize - (y + h - r) as isize
                 };
 
-                if dx * dx + dy * dy > r_sq {
-                    continue;
+                // Sol köşe
+                for cx in x0..left_corner_end {
+                    let dx = (x + r - 1) as isize - cx as isize;
+                    if dx * dx + dy * dy <= r_sq {
+                        unsafe {
+                            let offset = row_offset + cx;
+                            if offset < BACKBUFFER_LEN {
+                                BACKBUFFER[offset] = dither_pixels[cx & 3];
+                            }
+                        }
+                    }
                 }
 
-                let c = lerp_color_dither(ct, cb, t, n, cx, cy);
-                let offset = row_offset + cx;
-                unsafe {
-                    if offset < BACKBUFFER_LEN {
-                        BACKBUFFER[offset] = c;
+                // Düz orta kısım
+                let mid_start = left_corner_end.max(x0);
+                let mid_end = right_corner_start.min(x_end);
+                if mid_start < mid_end {
+                    let start = row_offset + mid_start;
+                    let end = row_offset + mid_end;
+                    unsafe {
+                        if start < BACKBUFFER_LEN {
+                            let real_end = end.min(BACKBUFFER_LEN);
+                            let slice = &mut BACKBUFFER[start..real_end];
+                            for (idx, p) in slice.iter_mut().enumerate() {
+                                *p = dither_pixels[(mid_start + idx) & 3];
+                            }
+                        }
+                    }
+                }
+
+                // Sağ köşe
+                for cx in right_corner_start..x_end {
+                    let dx = cx as isize - (x + w - r) as isize;
+                    if dx * dx + dy * dy <= r_sq {
+                        unsafe {
+                            let offset = row_offset + cx;
+                            if offset < BACKBUFFER_LEN {
+                                BACKBUFFER[offset] = dither_pixels[cx & 3];
+                            }
+                        }
                     }
                 }
             }
@@ -465,42 +607,64 @@ impl Framebuffer {
         let br = (cx >> 16) & 0xFF;
         let bg = (cx >> 8) & 0xFF;
         let bb = cx & 0xFF;
-        // alpha: 256 = tamamen gölge
-        let blend_px = |fb: &mut Framebuffer, px: usize, py: usize, alpha: u32| {
-            if !fb.in_clip(px, py) {
-                return;
-            }
-            let off = py * fb.width + px;
-            if off >= BACKBUFFER_LEN {
-                return;
-            }
-            unsafe {
-                let base = BACKBUFFER[off];
-                let r = ((base >> 16) & 0xFF) as u32;
-                let g = ((base >> 8) & 0xFF) as u32;
-                let b = base & 0xFF;
-                let nr = (r * (256 - alpha) + br * alpha) >> 8;
-                let ng = (g * (256 - alpha) + bg * alpha) >> 8;
-                let nb = (b * (256 - alpha) + bb * alpha) >> 8;
-                BACKBUFFER[off] = (nr << 16) | (ng << 8) | nb;
-            }
-        };
         // Alt kenar (yumuşak katman)
         for i in 0..5 {
-            let alpha = 150 - i * 28;
+            let alpha = (150 - i * 28).max(0) as u32;
+            let inv_alpha = 256 - alpha;
+            let br_a = br * alpha;
+            let bg_a = bg * alpha;
+            let bb_a = bb * alpha;
             let yy = y + h + i;
-            let x0 = x.saturating_sub(2);
-            let x1 = (x + w + 3).min(self.width);
+            if yy < self.clip.y0 || yy >= self.clip.y1 || yy >= self.height {
+                continue;
+            }
+            let x0 = x.saturating_sub(2).max(self.clip.x0);
+            let x1 = (x + w + 3).min(self.width).min(self.clip.x1);
+            if x0 >= x1 { continue; }
+            let row_off = yy * self.width;
             for px in x0..x1 {
-                blend_px(self, px, yy, alpha.max(0) as u32);
+                let off = row_off + px;
+                unsafe {
+                    if off < BACKBUFFER_LEN {
+                        let base = BACKBUFFER[off];
+                        let r = ((base >> 16) & 0xFF) as u32;
+                        let g = ((base >> 8) & 0xFF) as u32;
+                        let b = base & 0xFF;
+                        let nr = (r * inv_alpha + br_a) >> 8;
+                        let ng = (g * inv_alpha + bg_a) >> 8;
+                        let nb = (b * inv_alpha + bb_a) >> 8;
+                        BACKBUFFER[off] = (nr << 16) | (ng << 8) | nb;
+                    }
+                }
             }
         }
         // Sağ kenar
         for i in 0..3 {
-            let alpha = 110 - i * 30;
+            let alpha = (110 - i * 30).max(0) as u32;
+            let inv_alpha = 256 - alpha;
+            let br_a = br * alpha;
+            let bg_a = bg * alpha;
+            let bb_a = bb * alpha;
             let xx = x + w + i;
-            for py in y + 2..(y + h).min(self.height) {
-                blend_px(self, xx, py, alpha.max(0) as u32);
+            if xx < self.clip.x0 || xx >= self.clip.x1 || xx >= self.width {
+                continue;
+            }
+            let y0 = (y + 2).max(self.clip.y0);
+            let y1 = (y + h).min(self.height).min(self.clip.y1);
+            for py in y0..y1 {
+                let off = py * self.width + xx;
+                unsafe {
+                    if off < BACKBUFFER_LEN {
+                        let base = BACKBUFFER[off];
+                        let r = ((base >> 16) & 0xFF) as u32;
+                        let g = ((base >> 8) & 0xFF) as u32;
+                        let b = base & 0xFF;
+                        let nr = (r * inv_alpha + br_a) >> 8;
+                        let ng = (g * inv_alpha + bg_a) >> 8;
+                        let nb = (b * inv_alpha + bb_a) >> 8;
+                        BACKBUFFER[off] = (nr << 16) | (ng << 8) | nb;
+                    }
+                }
             }
         }
     }

@@ -123,7 +123,29 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
     let mut updated = InputUpdate::default();
 
     unsafe {
-        while inb(0x64) & 0x01 != 0 {
+        loop {
+            if inb(0x64) & 0x01 == 0 {
+                // Çok baytlı fare paketinin ortasındaysak (~30µs aralıkla gelen)
+                // kalan baytları bekleyerek paketi tek seferde tamamla.
+                if MOUSE_CYCLE != 0 {
+                    let mut arrived = false;
+                    for _ in 0..1_500 {
+                        core::hint::spin_loop();
+                        if inb(0x64) & 0x01 != 0 {
+                            arrived = true;
+                            break;
+                        }
+                    }
+                    if !arrived {
+                        // Zaman aşımı: paket kopukluğunu önlemek için döngüyü sıfırla.
+                        MOUSE_CYCLE = 0;
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
             let status = inb(0x64);
             let data = inb(0x60);
 

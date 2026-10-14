@@ -238,6 +238,9 @@ fn cpu_logical_count() -> u32 {
 
 #[inline]
 fn is_canonical_ptr<T>(ptr: *const T) -> bool {
+    if ptr.is_null() {
+        return false;
+    }
     let addr = ptr as usize as u64;
     let upper = addr >> 47;
     (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
@@ -255,11 +258,11 @@ fn is_canonical_ptr<T>(ptr: *const T) -> bool {
 /// etmelidir.
 #[inline]
 unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
-    if !is_canonical_ptr(slot) {
+    if slot.is_null() || !is_canonical_ptr(slot) {
         return None;
     }
     let ptr = core::ptr::read_volatile(slot);
-    if is_canonical_ptr(ptr) { Some(ptr) } else { None }
+    if ptr.is_null() || !is_canonical_ptr(ptr) { None } else { Some(ptr) }
 }
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
@@ -415,12 +418,14 @@ pub extern "C" fn _start() -> ! {
     unsafe {
         // SAFETY: `response` is validated (non-null, aligned, canonical) by
         // `valid_limine_response` before the response object is dereferenced.
-        if let Some(response) = valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response)) {
+        if let Some(response) = valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response))
+            .filter(|response| !response.is_null())
+        {
             let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count));
             let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
             let count = count.min(256) as usize;
             let array_bytes = count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
-            if count > 0 && is_canonical_ptr(entries) && array_bytes.is_some() {
+            if count > 0 && !entries.is_null() && is_canonical_ptr(entries) && array_bytes.is_some() {
                 let array_end = (entries as usize).checked_add(array_bytes.unwrap());
                 if array_end.map_or(false, |end| is_canonical_ptr(end as *const LimineMemoryMapEntry)) {
                 for i in 0..count {
@@ -429,9 +434,9 @@ pub extern "C" fn _start() -> ! {
                         None => break,
                     };
                     let slot = slot_addr as *const *const LimineMemoryMapEntry;
-                    if !is_canonical_ptr(slot) { break; }
+                    if slot.is_null() || !is_canonical_ptr(slot) { break; }
                     let entry_ptr = core::ptr::read_volatile(slot);
-                    if !is_canonical_ptr(entry_ptr) { continue; }
+                    if entry_ptr.is_null() || !is_canonical_ptr(entry_ptr) { continue; }
                     // SAFETY: entry pointer is supplied by Limine and checked
                     // for null, alignment and canonical address before reads.
                     let base = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).base));
@@ -463,7 +468,9 @@ pub extern "C" fn _start() -> ! {
     // Önce HHDM ofsetini al (fiziksel MMIO'ya sanal erişim için).
     let hhdm_offset = unsafe {
         // SAFETY: the response pointer is validated before being dereferenced.
-        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response)) {
+        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response))
+            .filter(|resp| !resp.is_null())
+        {
             let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
             serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
             off
@@ -485,17 +492,19 @@ pub extern "C" fn _start() -> ! {
     // 4. Limine Framebuffer Alımı
     let (fb_ptr, width, height, pitch) = unsafe {
         // SAFETY: the response pointer is validated before being dereferenced.
-        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response)) {
+        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
+            .filter(|resp| !resp.is_null())
+        {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
-            if framebuffer_count == 0 || !is_canonical_ptr(fb_ptr_ptr) {
+            if framebuffer_count == 0 || fb_ptr_ptr.is_null() || !is_canonical_ptr(fb_ptr_ptr) {
                 serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
             // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
-            if !is_canonical_ptr(fb_info_ptr) {
+            if fb_info_ptr.is_null() || !is_canonical_ptr(fb_info_ptr) {
                 serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
@@ -721,7 +730,8 @@ pub extern "C" fn _start() -> ! {
                              kbd: &drivers::keyboard::KeyboardState,
                              total_ram_bytes: u64,
                              tick: usize,
-                             app_render_cycles: &mut [u64; gui::MAX_WINDOWS]| {
+                             app_render_cycles: &mut [u64; gui::MAX_WINDOWS],
+                             dirty_rect: Option<(usize, usize, usize, usize)>| {
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
 
@@ -804,18 +814,26 @@ pub extern "C" fn _start() -> ! {
             drivers::e1000::is_ready(),
         );
 
-        // 4. Backbuffer'ı VRAM'e tek seferde kopyala (flicker-free)
+        // 4. Backbuffer'ı VRAM'e kopyala (flicker-free; sürüklemede sadece değişen bölge)
         fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
-        fb.flush();
+        if let Some(r) = dirty_rect {
+            fb.flush_rect(r);
+        } else {
+            fb.flush();
+        }
     };
 
-    // İlk kareyi çiz
+    // İlk kareyi çiz (tüm ekran)
     render_full_frame(
         &mut fb, &compositor, &filemanager_app, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
         &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
+        None,
     );
+
+    let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
+    let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
 
     // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
     loop {
@@ -2258,8 +2276,16 @@ pub extern "C" fn _start() -> ! {
                 if let Some(w) = compositor.windows[idx].as_mut() {
                     let max_x = width.saturating_sub(w.width);
                     let max_y = height.saturating_sub(w.height + gui::taskbar_h());
+                    let prev_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
                     w.x = mx.saturating_sub(drag_offset_x).min(max_x);
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
+                    let new_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
+                    let dirty = match drag_prev_box {
+                        Some(p) => drivers::video::rect_union(p, new_box),
+                        None => drivers::video::rect_union(prev_box, new_box),
+                    };
+                    drag_dirty_rect = Some(drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24)));
+                    drag_prev_box = Some(new_box);
                 }
             } else if let Some(idx) = resizing_win {
                 let edge = resize_edge.unwrap_or(gui::ResizeEdge::BottomRight);
@@ -2299,16 +2325,26 @@ pub extern "C" fn _start() -> ! {
                         ny = top.saturating_sub(nh);
                     }
 
+                    let prev_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
                     w.x = nx;
                     w.y = ny;
                     w.width = nw;
                     w.height = nh;
                     w.is_maximized = false;
+                    let new_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
+                    let dirty = match drag_prev_box {
+                        Some(p) => drivers::video::rect_union(p, new_box),
+                        None => drivers::video::rect_union(prev_box, new_box),
+                    };
+                    drag_dirty_rect = Some(drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24)));
+                    drag_prev_box = Some(new_box);
                 }
             }
         }
 
         if mouse_released {
+            drag_prev_box = None;
+            drag_dirty_rect = None;
             paint_app.end_stroke();
             notepad_dragging = false;
             // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
@@ -2427,11 +2463,12 @@ pub extern "C" fn _start() -> ! {
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        // Sürükleme ve yeniden boyutlandırmada 60 FPS'e yaklaş; diğer
-        // animasyonlar için gereksiz tam ekran çizimini 30 FPS'te tut.
-        let dragging = mouse.left_button || mouse.right_button
-            || dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some();
-        let frame_interval_ms = if dragging { 16 } else { 33 };
+        let is_dragging = dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some() || notepad_dragging;
+        let paint_active = mouse.left_button && app_is_focused(&compositor, 9);
+        let is_interacting = is_dragging || paint_active;
+
+        let media_animating = (musicplayer_app.is_playing && !audio_dev.is_muted) || videoplayer_app.is_playing;
+        let frame_interval_ms = if is_interacting { 16 } else { 33 };
         let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
         if timer_tick_fired {
             last_frame_ms = monotonic_ms();
@@ -2453,8 +2490,6 @@ pub extern "C" fn _start() -> ! {
                 let freq = NOTES[music_note % NOTES.len()] + track_offset;
                 // HDA hazır ise gerçek PCM örneği üret ve gönder.
                 if drivers::hda::is_ready() {
-                    // 48kHz, 16-bit stereo: 1 beat = ~40ms = 1920 sample = 3840 byte
-                    // Bir nota periyodu için basit sine dalgası üret (Taylor serisi sin).
                     let sample_count = 1920; // 40 ms
                     let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R çifti
                     let volume_scale = (audio_dev.volume_left as i32).min(100) as i16;
@@ -2464,19 +2499,17 @@ pub extern "C" fn _start() -> ! {
                         for k in 0..n {
                             let t = (idx + k) as f32 / 48_000.0;
                             let angle = 6.28318f32 * freq as f32 * t;
-                            // Taylor serisi sin (±PI aralığında yeterli doğruluk)
                             let x = angle - 6.28318 * ((angle / 6.28318) as i32) as f32;
                             let x2 = x * x;
                             let v = x - x2 * x / 6.0 + x2 * x2 * x / 120.0 - x2 * x2 * x2 * x / 5040.0;
                             let sample = (v * 0.3 * volume_scale as f32 / 100.0 * 32767.0) as i16;
                             pcm[k * 2] = sample;
-                            pcm[k * 2 + 1] = sample; // stereo aynı örnek
+                            pcm[k * 2 + 1] = sample;
                         }
                         drivers::hda::push_pcm(&pcm[..n * 2]);
                         idx += n;
                     }
                 } else {
-                    // HDA yok: PC speaker fallback
                     audio_dev.set_pc_speaker_tone(freq);
                 }
                 speaker_on = true;
@@ -2493,25 +2526,36 @@ pub extern "C" fn _start() -> ! {
 
         let night_light_active = settings_app.night_light;
         let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
-            || timer_tick_fired || force_render || (mouse_moved && night_light_active);
+            || force_render || (mouse_moved && (is_interacting || night_light_active))
+            || (timer_tick_fired && media_animating);
 
         if full_redraw {
-            taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
+            let tm_open = compositor.windows.iter().flatten().any(|w| w.app_id == 7 && w.is_open && !w.is_minimized);
+            if tm_open {
+                taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
+            }
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_app, &terminal_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
+                drag_dirty_rect,
             );
+            drag_dirty_rect = None;
         } else if mouse_moved {
             // İmleç hareketinde uygulamaları ve tüm ekranı yeniden çizmek yerine
-            // sadece önceki ve yeni imleç alanlarını güncelle.
-            if let Some(old_rect) = fb.restore_cursor_background() {
-                fb.flush_rect(old_rect);
-            }
+            // sadece önceki ve yeni imleç alanlarını birleşik tek bir dikdörtgen olarak güncelle.
+            let old_rect = fb.restore_cursor_background();
             compositor.draw_mouse_cursor(&mut fb, mx, my);
-            if let Some(new_rect) = fb.cursor_rect() {
-                fb.flush_rect(new_rect);
+            let new_rect = fb.cursor_rect();
+            match (old_rect, new_rect) {
+                (Some(o), Some(n)) => {
+                    let u = drivers::video::rect_union(o, n);
+                    fb.flush_rect(u);
+                }
+                (Some(o), None) => fb.flush_rect(o),
+                (None, Some(n)) => fb.flush_rect(n),
+                _ => {}
             }
         }
 
@@ -2520,13 +2564,14 @@ pub extern "C" fn _start() -> ! {
         last_buttons = (mouse.left_button, mouse.right_button);
 
         if !input_update.mouse && !input_update.keyboard && !mouse_moved && !buttons_changed && !force_render {
-            // PIC/IRQ zamanlayıcısı kurulmadığı için HLT kullanılamaz. Kısa
-            // kalibre edilmiş I/O beklemesi CPU'ya/QEMU'ya zaman bırakır;
-            // giriş en geç 1 ms içinde yeniden yoklanır.
+            // Boşta bekleme: port 0x80 VM çıkışları olmadan spin_loop ile bekle.
+            // PS/2 giriş tamponunda veri algılandığı anda gecikmesiz döngüden çık.
             let wait_start = read_cpu_cycles();
-            let wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(1_000);
+            let wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
             while read_cpu_cycles().wrapping_sub(wait_start) < wait_cycles {
-                unsafe { core::arch::asm!("in al, 0x80", options(nomem, nostack, preserves_flags)); }
+                if drivers::ps2::has_input() {
+                    break;
+                }
                 core::hint::spin_loop();
             }
             let loop_end_cycles = read_cpu_cycles();

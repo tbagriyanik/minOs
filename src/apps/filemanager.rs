@@ -240,10 +240,10 @@ impl FileManagerApp {
             row.file_type = match row.icon_tag {
                 "TXT" => crate::gui::ui_text("Metin Belgesi", "Text Document"),
                 "IMG" => crate::gui::ui_text("Resim Imaji", "Image"),
-                "SND" => crate::gui::ui_text("Ses Dosyasi", "Audio"),
+                "SND" => crate::gui::ui_text("Ses Dosyası", "Audio"),
                 "VID" => crate::gui::ui_text("Video Kaydi", "Video"),
                 "WEB" => crate::gui::ui_text("Web Sayfasi", "Web Page"),
-                "CFG" => crate::gui::ui_text("Ayar Dosyasi", "Config"),
+                "CFG" => crate::gui::ui_text("Ayar Dosyası", "Config"),
                 "LOG" => crate::gui::ui_text("Sistem Gunlugu", "Log"),
                 _ => crate::gui::ui_text("Dosya", "File"),
             };
@@ -271,9 +271,9 @@ impl FileManagerApp {
         }
         full_path.push_str(&name);
 
-        let saved = vfs.write_file(&full_path, b"Yeni olusturulan dosya icerigi.\n");
+        let saved = vfs.write_file(&full_path, "Yeni oluşturulan dosya içeriği.\n".as_bytes());
         self.refresh_from_vfs(vfs);
-        self.status = if saved { crate::gui::ui_text("Yeni dosya olusturuldu.", "New file created.") }
+        self.status = if saved { crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.") }
             else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
     }
 
@@ -298,7 +298,7 @@ impl FileManagerApp {
         } else { false };
         vfs.create_dir(&full_path);
         self.refresh_from_vfs(vfs);
-        self.status = if saved { crate::gui::ui_text("Yeni klasor olusturuldu.", "New folder created.") }
+        self.status = if saved { crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.") }
             else { crate::gui::ui_text("Klasör RAM'de oluşturuldu; diske kaydedilemedi.", "Folder created in RAM; disk save failed.") };
     }
 
@@ -335,12 +335,12 @@ impl FileManagerApp {
         if ok {
             self.refresh_from_vfs(vfs);
             self.status = if self.path() == crate::fs::vfs::TRASH_DIR {
-                crate::gui::ui_text("Oge kalici olarak silindi.", "Item permanently deleted.")
+                crate::gui::ui_text("Öğe kalıcı olarak silindi.", "Item permanently deleted.")
             } else {
-                crate::gui::ui_text("Oge geri donusum kutusuna tasindi.", "Item moved to Recycle Bin.")
+                crate::gui::ui_text("Öğe geri dönüşüm kutusuna taşındı.", "Item moved to Recycle Bin.")
             };
         } else {
-            self.status = crate::gui::ui_text("Silinemedi (klasor dolu olabilir).", "Delete failed.");
+            self.status = crate::gui::ui_text("Silinemedi (klasör dolu olabilir).", "Delete failed.");
         }
         ok
     }
@@ -393,9 +393,9 @@ impl FileManagerApp {
         let ok = vfs.restore_from_trash(&trash_path, "/root/Documents");
         if ok {
             self.refresh_from_vfs(vfs);
-            self.status = crate::gui::ui_text("Oge geri yuklendi.", "Item restored.");
+            self.status = crate::gui::ui_text("Öğe geri yüklendi.", "Item restored.");
         } else {
-            self.status = crate::gui::ui_text("Geri yuklenemedi.", "Restore failed.");
+            self.status = crate::gui::ui_text("Geri yüklenemedi.", "Restore failed.");
         }
         ok
     }
@@ -407,9 +407,9 @@ impl FileManagerApp {
             self.refresh_from_vfs(vfs);
         }
         self.status = if n > 0 {
-            crate::gui::ui_text("Geri donusum kutusu bosaltildi.", "Recycle Bin emptied.")
+            crate::gui::ui_text("Geri dönüşüm kutusu boşaltıldı.", "Recycle Bin emptied.")
         } else {
-            crate::gui::ui_text("Geri donusum kutusu zaten bos.", "Recycle Bin already empty.")
+            crate::gui::ui_text("Geri dönüşüm kutusu zaten boş.", "Recycle Bin already empty.")
         };
         n
     }
@@ -589,7 +589,7 @@ impl FileManagerApp {
         let nav = if crate::gui::ui_english() {
             ["Root (/)", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM", "Recycle Bin"]
         } else {
-            ["Kok (/)", "Belgeler", "Medyalar", "Indirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Donusum"]
+            ["Kök (/)", "Belgeler", "Medyalar", "İndirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Dönüşüm"]
         };
 
         for (i, item) in nav.iter().enumerate() {
@@ -648,6 +648,7 @@ impl FileManagerApp {
         let col_name_x = list_x + 28;
         let col_type_x = list_x + 180;
         let col_size_x = list_x + 285;
+        let col_size_w = list_w.saturating_sub(285);
 
         MinGuiCompositor::draw_string_clipped(fb, col_name_x, win_y + 65, crate::gui::ui_text("Ad", "Name"), Color::TEXT_MUTED,
             (col_name_x, win_y + 60, 145, 20));
@@ -656,8 +657,10 @@ impl FileManagerApp {
                 (col_type_x, win_y + 60, 95, 20));
         }
         if list_w > 320 {
-            MinGuiCompositor::draw_string_clipped(fb, col_size_x, win_y + 65, crate::gui::ui_text("Boyut", "Size"), Color::TEXT_MUTED,
-                (col_size_x, win_y + 60, list_w.saturating_sub(285), 20));
+            let size_header = crate::gui::ui_text("Boyut", "Size");
+            let header_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_header, 1) + 6);
+            MinGuiCompositor::draw_string_clipped(fb, header_x, win_y + 65, size_header, Color::TEXT_MUTED,
+                (col_size_x, win_y + 60, col_size_w, 20));
         }
 
         // Dosya ve Klasör Listesi
@@ -692,8 +695,10 @@ impl FileManagerApp {
                     (col_type_x, draw_y + 2, 95, ROW_H - 4));
             }
             if list_w > 320 {
-                MinGuiCompositor::draw_string_clipped(fb, col_size_x, draw_y + 4, file.size_str.as_str(), Color::TEXT_MAIN,
-                    (col_size_x, draw_y + 2, list_w.saturating_sub(285), ROW_H - 4));
+                let size_text = file.size_str.as_str();
+                let size_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text, 1) + 6);
+                MinGuiCompositor::draw_string_clipped(fb, size_x, draw_y + 4, size_text, Color::TEXT_MAIN,
+                    (col_size_x, draw_y + 2, col_size_w, ROW_H - 4));
             }
         }
 
@@ -709,7 +714,7 @@ impl FileManagerApp {
             sb.push_str(self.status);
         } else {
             sb.push_usize(self.file_count);
-            sb.push_str(crate::gui::ui_text(" Oge | ", " Items | "));
+            sb.push_str(crate::gui::ui_text(" Öğe | ", " Items | "));
             sb.push_str(self.path());
         }
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);

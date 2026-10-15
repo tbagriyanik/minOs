@@ -60,6 +60,7 @@ impl DiskEntry {
 static mut KIND0: FsKind = FsKind::None;
 static mut KIND1: FsKind = FsKind::None;
 static mut READY: bool = false;
+static mut INSTALLED: bool = false;
 
 static mut ENTRIES: [DiskEntry; MAX_ENTRIES] = [DiskEntry::empty(); MAX_ENTRIES];
 static mut ENTRY_COUNT: usize = 0;
@@ -178,8 +179,18 @@ fn fat_mount(drive: u8, partition_lba: u32) -> bool {
         return false;
     }
     let root_cluster = le32(&bpb, 44);
+    let total_sectors_16 = le16(&bpb, 19) as u32;
+    let total_sectors = if total_sectors_16 != 0 { total_sectors_16 } else { le32(&bpb, 32) };
+    let data_lba = partition_lba.saturating_add(reserved).saturating_add(num_fats.saturating_mul(fat_size));
+    let fat_entries = fat_size as u64 * 512 / 4;
+    if total_sectors == 0 || data_lba <= partition_lba || data_lba >= partition_lba.saturating_add(total_sectors)
+        || root_cluster < 2 || root_cluster as u64 >= fat_entries
+    {
+        return false;
+    }
+    let capacity = ata::drive_capacity_sectors(drive);
+    if capacity > 0 && partition_lba as u64 + total_sectors as u64 > capacity { return false; }
     let fat_lba = partition_lba + reserved;
-    let data_lba = fat_lba + num_fats * fat_size;
 
     unsafe {
         FAT.drive = drive;
@@ -246,19 +257,9 @@ fn fat_set_next(cluster: u32, value: u32) -> bool {
             let mut buf = [0u8; 512];
             if !read_sector_cached(FAT.drive, sector + copy * FAT.fat_size, &mut buf) { return false; }
             buf[in_sector..in_sector + 4].copy_from_slice(&value.to_le_bytes());
-            if !ata::write_sector(FAT.drive, sector + copy * FAT.fat_size, &buf) { return false; }
+            if !ata::write_sector_unflushed(FAT.drive, sector + copy * FAT.fat_size, &buf) { return false; }
         }
         true
-    }
-}
-
-fn fat_is_free(cluster: u32) -> bool {
-    unsafe {
-        let off = cluster as u64 * 4;
-        let sector = FAT.fat_lba + (off / 512) as u32;
-        let in_sector = (off % 512) as usize;
-        let mut buf = [0u8; 512];
-        read_sector_cached(FAT.drive, sector, &mut buf) && le32(&buf, in_sector) & 0x0FFF_FFFF == 0
     }
 }
 
@@ -266,23 +267,52 @@ fn fat_allocate_chain(count: usize) -> Option<alloc::vec::Vec<u32>> {
     let mut chain = alloc::vec::Vec::new();
     if count == 0 { return Some(chain); }
     if chain.try_reserve_exact(count).is_err() { return None; }
+    let mut touched = alloc::vec::Vec::<(u32, [u8; 512])>::new();
     let max_cluster = unsafe {
         let sectors = ata::drive_capacity_sectors(FAT.drive).saturating_sub(FAT.data_lba as u64);
         (sectors / FAT.sectors_per_cluster as u64 + 1).min((FAT.fat_size as u64 * 512 / 4).saturating_sub(2)) as u32
     };
+    let mut sector_index = u32::MAX;
+    let mut fat_sector = [0u8; 512];
     for c in 2..=max_cluster {
-        if fat_is_free(c) {
-            if !fat_set_next(c, 0x0FFF_FFFF) { return None; }
+        let entry_offset = c as u64 * 4;
+        let current_sector = (entry_offset / 512) as u32;
+        if current_sector != sector_index {
+            sector_index = current_sector;
+            let lba = unsafe { FAT.fat_lba + current_sector };
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut fat_sector) { return None; }
+        }
+        let offset = (entry_offset % 512) as usize;
+        if le32(&fat_sector, offset) & 0x0FFF_FFFF == 0 {
             chain.push(c);
             if chain.len() == count { break; }
         }
     }
-    if chain.len() != count {
-        for c in chain { let _ = fat_set_next(c, 0); }
-        return None;
+    if chain.len() != count { return None; }
+    // Re-read only distinct FAT sectors and update them in memory, then write
+    // each sector once to both FAT copies.
+    for (i, &cluster) in chain.iter().enumerate() {
+        let value = chain.get(i + 1).copied().unwrap_or(0x0FFF_FFFF);
+        let entry_offset = cluster as u64 * 4;
+        let idx = (entry_offset / 512) as u32;
+        let pos = touched.iter().position(|(s, _)| *s == idx);
+        let slot = if let Some(p) = pos { p } else {
+            touched.try_reserve(1).ok()?;
+            let mut sec = [0u8; 512];
+            let lba = unsafe { FAT.fat_lba + idx };
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) { return None; }
+            touched.push((idx, sec));
+            touched.len() - 1
+        };
+        let offset = (entry_offset % 512) as usize;
+        let old = le32(&touched[slot].1, offset);
+        touched[slot].1[offset..offset + 4].copy_from_slice(&((old & 0xF000_0000) | value).to_le_bytes());
     }
-    for i in 0..chain.len().saturating_sub(1) {
-        if !fat_set_next(chain[i], chain[i + 1]) { return None; }
+    for (idx, sec) in touched.iter() {
+        for copy in 0..unsafe { FAT.num_fats } {
+            let lba = unsafe { FAT.fat_lba + *idx + copy * FAT.fat_size };
+            if !ata::write_sector_unflushed(unsafe { FAT.drive }, lba, sec) { return None; }
+        }
     }
     Some(chain)
 }
@@ -301,18 +331,35 @@ fn fat_write_data(chain: &[u32], data: &[u8]) -> bool {
     let sectors_per_cluster = unsafe { FAT.sectors_per_cluster as usize };
     let cluster_bytes = sectors_per_cluster * 512;
     let drive = unsafe { FAT.drive };
-    for (i, &cluster) in chain.iter().enumerate() {
-        let start = i * cluster_bytes;
-        let end = (start + cluster_bytes).min(data.len());
-        for s in 0..sectors_per_cluster {
-            let mut sec = [0u8; 512];
-            let sector_start = start + s * 512;
-            if sector_start < end {
-                let take = (end - sector_start).min(512);
-                sec[..take].copy_from_slice(&data[sector_start..sector_start + take]);
-            }
-            if !ata::write_sector(drive, cluster_to_lba(cluster) + s as u32, &sec) { return false; }
+    let mut first = 0usize;
+    while first < chain.len() {
+        let mut end_cluster = first + 1;
+        while end_cluster < chain.len() && chain[end_cluster] == chain[end_cluster - 1] + 1 { end_cluster += 1; }
+        let start_byte = first * cluster_bytes;
+        let run_sectors = (end_cluster - first) * sectors_per_cluster;
+        let available = data.len().saturating_sub(start_byte).min(run_sectors * 512);
+        let full_sectors = available / 512;
+        let lba = cluster_to_lba(chain[first]);
+        if full_sectors > 0 && ata::write_sectors_unflushed(drive, lba, full_sectors, &data[start_byte..start_byte + full_sectors * 512]) != full_sectors {
+            return false;
         }
+        let partial = available % 512;
+        let mut next_sector = full_sectors;
+        if partial > 0 {
+            let mut sector = [0u8; 512];
+            sector[..partial].copy_from_slice(&data[start_byte + full_sectors * 512..start_byte + available]);
+            if !ata::write_sector_unflushed(drive, lba + next_sector as u32, &sector) { return false; }
+            next_sector += 1;
+        }
+        let remaining_sectors = run_sectors.saturating_sub(next_sector);
+        if remaining_sectors > 0 {
+            let zero_bytes = remaining_sectors * 512;
+            let mut zeros = alloc::vec::Vec::new();
+            if zeros.try_reserve_exact(zero_bytes).is_err() { return false; }
+            zeros.resize(zero_bytes, 0);
+            if ata::write_sectors_unflushed(drive, lba + next_sector as u32, remaining_sectors, &zeros) != remaining_sectors { return false; }
+        }
+        first = end_cluster;
     }
     true
 }
@@ -553,21 +600,41 @@ fn lower_iso(b: u8) -> u8 {
 
 /// Sürücüyü (HDD/QCOW2/USB) standart FAT32 dosya sistemiyle biçimlendirir.
 pub fn fat_format(drive: u8) -> bool {
+    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
+        return false;
+    }
     let total_sectors = ata::drive_capacity_sectors(drive);
-    let sectors_u32 = if total_sectors > 0 && total_sectors <= 0xFFFF_FFFF {
-        total_sectors as u32
-    } else {
-        131072 // 64 MB varsayılan (64 * 1024 * 1024 / 512)
-    };
+    if total_sectors < 65_600 || total_sectors > 0xFFFF_FFFF {
+        serial("[FS] FAT32 bicimlendirme desteklenmeyen disk kapasitesi.\n");
+        return false;
+    }
+    let sectors_u32 = total_sectors as u32;
+    let sectors_per_cluster: u8 = if total_sectors < 600_000 { 1 } else { 8 };
+    let reserved_sectors: u32 = 32;
+    let num_fats: u32 = 2;
+    let mut fat_size = 1u32;
+    loop {
+        let clusters = sectors_u32.saturating_sub(reserved_sectors)
+            .saturating_sub(num_fats.saturating_mul(fat_size)) / sectors_per_cluster as u32;
+        let needed = (clusters.saturating_add(2).saturating_mul(4) + 511) / 512;
+        if needed <= fat_size { break; }
+        fat_size = needed;
+    }
+    let cluster_count = sectors_u32.saturating_sub(reserved_sectors)
+        .saturating_sub(num_fats.saturating_mul(fat_size)) / sectors_per_cluster as u32;
+    if cluster_count < 65_525 {
+        serial("[FS] Disk FAT32 icin yeterli kume sayisina sahip degil.\n");
+        return false;
+    }
 
     // 1. Sektör 0: FAT32 Volume Boot Record (BPB)
     let mut bpb = [0u8; 512];
     bpb[0] = 0xEB; bpb[1] = 0x58; bpb[2] = 0x90; // jmp boot
     bpb[3..11].copy_from_slice(b"MINOSOS "); // OEM Name
     bpb[11] = 0x00; bpb[12] = 0x02; // 512 bytes per sector (le16)
-    bpb[13] = 8; // 8 sectors per cluster (4KB)
-    bpb[14] = 32; bpb[15] = 0x00; // 32 reserved sectors (le16)
-    bpb[16] = 2; // 2 FATs
+    bpb[13] = sectors_per_cluster;
+    bpb[14] = reserved_sectors as u8; bpb[15] = 0x00;
+    bpb[16] = num_fats as u8;
     bpb[21] = 0xF8; // media descriptor: fixed disk
     bpb[24] = 63; bpb[25] = 0; // sectors per track
     bpb[26] = 255; bpb[27] = 0; // number of heads
@@ -576,8 +643,7 @@ pub fn fat_format(drive: u8) -> bool {
     bpb[33] = ((sectors_u32 >> 8) & 0xFF) as u8;
     bpb[34] = ((sectors_u32 >> 16) & 0xFF) as u8;
     bpb[35] = ((sectors_u32 >> 24) & 0xFF) as u8;
-    // FAT size 32 (sectors per FAT): 512 sektör (256 KB)
-    let fat_size: u32 = 512;
+    // FAT boyutu kapasite ve kume boyutuna gore hesaplandi.
     bpb[36] = (fat_size & 0xFF) as u8;
     bpb[37] = ((fat_size >> 8) & 0xFF) as u8;
     bpb[38] = ((fat_size >> 16) & 0xFF) as u8;
@@ -599,7 +665,7 @@ pub fn fat_format(drive: u8) -> bool {
         return false;
     }
     // Yedek boot sektörü (LBA 6)
-    ata::write_sector(drive, 6, &bpb);
+    if !ata::write_sector(drive, 6, &bpb) { return false; }
 
     // 2. FSInfo Sektörü (LBA 1)
     let mut fsinfo = [0u8; 512];
@@ -608,10 +674,10 @@ pub fn fat_format(drive: u8) -> bool {
     fsinfo[488..492].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // Free clusters
     fsinfo[492..496].copy_from_slice(&3u32.to_le_bytes()); // Next free cluster: 3
     fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes()); // Trail sig
-    ata::write_sector(drive, 1, &fsinfo);
+    if !ata::write_sector(drive, 1, &fsinfo) { return false; }
 
-    // 3. FAT1 ve FAT2 Tabloları (LBA 32 ve LBA 32 + 512 = 544)
-    let fat1_lba = 32u32;
+    // 3. FAT1 ve FAT2 Tablolari
+    let fat1_lba = reserved_sectors;
     let fat2_lba = fat1_lba + fat_size;
     let mut fat_sec = [0u8; 512];
     // Cluster 0: 0x0FFFFFF8
@@ -623,18 +689,17 @@ pub fn fat_format(drive: u8) -> bool {
     // Cluster 3 (Varsayılan benioku.txt): 0x0FFFFFFF
     fat_sec[12..16].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
 
-    ata::write_sector(drive, fat1_lba, &fat_sec);
-    ata::write_sector(drive, fat2_lba, &fat_sec);
+    if !ata::write_sector(drive, fat1_lba, &fat_sec) || !ata::write_sector(drive, fat2_lba, &fat_sec) { return false; }
 
     let empty_sec = [0u8; 512];
-    for s in 1..4 {
-        ata::write_sector(drive, fat1_lba + s, &empty_sec);
-        ata::write_sector(drive, fat2_lba + s, &empty_sec);
+    for s in 1..fat_size {
+        if !ata::write_sector(drive, fat1_lba + s, &empty_sec)
+            || !ata::write_sector(drive, fat2_lba + s, &empty_sec) { return false; }
     }
 
     // 4. Kök Dizin (Root Directory - Cluster 2)
     // data_lba = fat1_lba + 2 * fat_size = 32 + 1024 = 1056
-    let root_lba = fat1_lba + 2 * fat_size;
+    let root_lba = fat1_lba + num_fats * fat_size;
     let mut root_sec = [0u8; 512];
 
     // Girdi 0: Ses etiketi (Volume Label)
@@ -643,27 +708,38 @@ pub fn fat_format(drive: u8) -> bool {
 
     // Girdi 1: BENIOKU.TXT
     let default_msg = b"minOs Sabit Disk (QCOW2)\n========================\nDosya Yoneticisi ve Not Defteri ile bu diske dosya yazabilir, silebilir ve yeni klasorler olusturabilirsiniz.\n";
-    root_sec[32..43].copy_from_slice(b"BENIOKUTXT"); // 8.3 dosya adi
+    root_sec[32..43].copy_from_slice(b"BENIOKU TXT"); // 8.3: 7 karakter ad + boşluk + TXT
     root_sec[32 + 11] = 0x20; // Normal dosya (Archive)
     root_sec[32 + 20] = 0; root_sec[32 + 21] = 0; // High cluster
     root_sec[32 + 26] = 3; root_sec[32 + 27] = 0; // Low cluster: 3
     let msg_len = default_msg.len() as u32;
     root_sec[32 + 28..32 + 32].copy_from_slice(&msg_len.to_le_bytes());
 
-    ata::write_sector(drive, root_lba, &root_sec);
+    if !ata::write_sector(drive, root_lba, &root_sec) { return false; }
 
     // Kök dizinin kalan sektörlerini temizle
-    for s in 1..8 {
-        ata::write_sector(drive, root_lba + s, &empty_sec);
+    for s in 1..sectors_per_cluster as u32 {
+        if !ata::write_sector(drive, root_lba + s, &empty_sec) { return false; }
     }
 
     // 5. Cluster 3 Verisi: BENIOKU.TXT içeriğini yaz
-    let cluster3_lba = root_lba + 8;
+    let cluster3_lba = root_lba + 2 * sectors_per_cluster as u32;
     let mut data_sec = [0u8; 512];
     data_sec[..default_msg.len()].copy_from_slice(default_msg);
-    ata::write_sector(drive, cluster3_lba, &data_sec);
+    if !ata::write_sector(drive, cluster3_lba, &data_sec) { return false; }
+    for s in 1..sectors_per_cluster as u32 {
+        if !ata::write_sector(drive, cluster3_lba + s, &empty_sec) { return false; }
+    }
 
     ata::flush_cache(drive);
+    let mut verify = [0u8; 512];
+    if !ata::read_sector(drive, 0, &mut verify)
+        || verify[510] != 0x55 || verify[511] != 0xAA
+        || le32(&verify, 36) != fat_size || verify[13] != sectors_per_cluster
+    {
+        serial("[FS] FAT32 boot sektoru dogrulanamadi.\n");
+        return false;
+    }
     serial("[FS] Sabit Disk FAT32 olarak bicimlendirildi!\n");
     true
 }
@@ -712,10 +788,50 @@ pub fn init() {
             serial("[FS] CD-ROM ATAPI bulundu ancak ISO9660 taninamadi.\n");
         }
     }
+
+    // MINOS.SYS is the installer's persistent marker. Cache the result so
+    // desktop rendering never performs disk I/O.
+    if unsafe { KIND0 == FsKind::Fat32 } {
+        refresh();
+        unsafe {
+            INSTALLED = (0..ENTRY_COUNT).any(|i| {
+                ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS")
+            });
+        }
+    }
+}
+
+/// Mount and validate a FAT32 volume on the requested ATA drive after formatting.
+pub fn mount_fat32_drive(drive: u8) -> bool {
+    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
+    // Formatter writes a superfloppy FAT volume directly at LBA 0. Ignore any
+    // stale MBR partition-table bytes that may still exist on the device.
+    let mounted = fat_mount(drive, 0);
+    if !mounted { return false; }
+    unsafe {
+        KIND0 = FsKind::Fat32;
+        READY = true;
+        INSTALLED = false;
+        LISTED = false;
+        ENTRY_COUNT = 0;
+    }
+    refresh();
+    unsafe {
+        INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
+    }
+    true
+}
+
+pub fn fat32_mounted_on(drive: u8) -> bool {
+    unsafe { KIND0 == FsKind::Fat32 && FAT.drive == drive }
 }
 
 pub fn ready() -> bool {
     unsafe { READY }
+}
+
+pub fn is_installed() -> bool {
+    unsafe { INSTALLED }
 }
 
 /// USB (master) aygıtının dosya sistemi türü.
@@ -849,11 +965,18 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
     while written < meta.size && guard < 65536 {
         guard += 1;
         let base = cluster_to_lba(cluster);
-        for s in 0..unsafe { FAT.sectors_per_cluster } {
-            if written >= meta.size { break; }
+        let cluster_sector_count = unsafe { FAT.sectors_per_cluster as usize };
+        let full_count = ((meta.size - written) / 512).min(cluster_sector_count);
+        if full_count > 0 {
+            let end = written + full_count * 512;
+            if ata::read_sectors(unsafe { FAT.drive }, base, full_count, &mut out[written..end]) != full_count { return None; }
+            written = end;
+        }
+        let partial = meta.size - written;
+        if partial > 0 && full_count < cluster_sector_count {
             let mut sec = [0u8; 512];
-            if !read_sector_cached(unsafe { FAT.drive }, base + s, &mut sec) { return None; }
-            let take = (meta.size - written).min(512);
+            if ata::read_sectors(unsafe { FAT.drive }, base + full_count as u32, 1, &mut sec) != 1 { return None; }
+            let take = partial.min(512);
             out[written..written + take].copy_from_slice(&sec[..take]);
             written += take;
         }
@@ -1199,6 +1322,7 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
         let chain = match fat_allocate_chain(needed) { Some(c) => c, None => return false };
         if !fat_write_data(&chain, data) {
             for c in chain { let _ = fat_set_next(c, 0); }
+            ata::flush_cache(FAT.drive);
             return false;
         }
         let mut dir_sec = [0u8; 512];
@@ -1221,9 +1345,10 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
         dir_sec[off + 20..off + 22].copy_from_slice(&((start >> 16) as u16).to_le_bytes());
         dir_sec[off + 26..off + 28].copy_from_slice(&(start as u16).to_le_bytes());
         dir_sec[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        if !ata::write_sector(FAT.drive, dir_lba, &dir_sec) { return false; }
+        if !ata::write_sector_unflushed(FAT.drive, dir_lba, &dir_sec) { return false; }
         ata::flush_cache(FAT.drive);
         refresh();
+        if name.eq_ignore_ascii_case("MINOS.SYS") { INSTALLED = true; }
         true
     }
 }

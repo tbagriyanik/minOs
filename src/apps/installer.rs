@@ -21,7 +21,7 @@ pub struct InstallerApp {
     pub drive_count: usize,
     /// Secili disk FAT32 olarak bicimlendirildi mi? (Biçimlendir adımı)
     pub disk_formatted: bool,
-    /// Kullanicinin "Tek Tikla Kur" icin verdigi onay (2. tiklamada kurar).
+    /// Kullanicinin "Tek Tıkla Kur" icin verdigi onay (2. tiklamada kurar).
     pub confirm_install: bool,
 }
 
@@ -30,7 +30,7 @@ impl InstallerApp {
         Self {
             selected_drive: 0,
             state: InstallState::Selecting,
-            status_msg: "Hedef diski secip once 'Bicimlendir', sonra 'Tek Tikla Kur' basiniz.",
+            status_msg: "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basiniz.",
             progress_pct: 0,
             drive_count: 0,
             disk_formatted: false,
@@ -62,6 +62,20 @@ impl InstallerApp {
                 }
             }
         }
+        self.disk_formatted = diskfs::fat32_mounted_on(self.selected_drive);
+        if self.disk_formatted && diskfs::is_installed() {
+            self.state = InstallState::Complete;
+            self.progress_pct = 100;
+            self.status_msg = "minOs kurulumu diskte doğrulandı.";
+        } else if self.disk_formatted {
+            self.state = InstallState::Selecting;
+            self.progress_pct = 55;
+            self.status_msg = "Disk FAT32 biçimlendirilmiş. Kurulumu tamamlayabilirsiniz.";
+        } else {
+            self.state = InstallState::Selecting;
+            self.progress_pct = 0;
+            self.status_msg = "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basiniz.";
+        }
     }
 
     pub fn select_next_drive(&mut self) {
@@ -74,40 +88,37 @@ impl InstallerApp {
                 }
             }
         }
-        // Disk degisti: bicimlendirme ve kurulum durumu sifirlanir.
-        self.disk_formatted = false;
+        // Disk degisti: biçimlendirme ve kurulum durumu sifirlanir.
         self.confirm_install = false;
-        self.progress_pct = 0;
-        self.state = InstallState::Selecting;
-        self.status_msg = "Yeni hedef disk secildi. Once 'Bicimlendir' basiniz.";
+        self.refresh_drives();
     }
 
     /// Sadece hedef diski FAT32 olarak bicimlendirir (kurulum yapmaz).
-    /// "Tek Tikla Kur" akisinin 2. adimidir.
+    /// "Tek Tıkla Kur" akisinin 2. adimidir.
     pub fn format_selected_drive(&mut self) -> bool {
         self.state = InstallState::Formatting;
         self.progress_pct = 25;
-        self.status_msg = "Disk FAT32 olarak bicimlendiriliyor...";
+        self.status_msg = "Disk FAT32 olarak biçimlendiriliyor...";
 
         let drive = self.selected_drive;
         if !ata::device(drive).map(|d| d.kind == ata::DeviceKind::Ata).unwrap_or(false) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Secili surucude hedef disk yok!";
+            self.status_msg = "HATA: Seçili sürücüde hedef disk yok!";
             return false;
         }
 
-        if !diskfs::fat_format(drive) {
+        if !diskfs::fat_format(drive) || !diskfs::mount_fat32_drive(drive) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Disk bicimlendirilemedi!";
+            self.disk_formatted = false;
+            self.status_msg = "HATA: Disk biçimlendirilemedi veya FAT32 doğrulaması başarısız!";
             return false;
         }
 
-        diskfs::init();
         self.disk_formatted = true;
         self.confirm_install = false;
         self.progress_pct = 55;
         self.state = InstallState::Selecting;
-        self.status_msg = "Disk FAT32 bicimlendirildi. Simdi 'Tek Tikla Kur' basiniz.";
+        self.status_msg = "Disk FAT32 bicimlendirildi. Şimdi 'Tek Tıkla Kur' basınız.";
         true
     }
 
@@ -120,7 +131,7 @@ impl InstallerApp {
         let drive = self.selected_drive;
         if !ata::device(drive).map(|d| d.kind == ata::DeviceKind::Ata).unwrap_or(false) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Secili surucude hedef disk yok!";
+            self.status_msg = "HATA: Seçili sürücüde hedef disk yok!";
             return false;
         }
 
@@ -135,30 +146,60 @@ impl InstallerApp {
         self.progress_pct = 65;
         self.status_msg = "Sistem dosyalari ve bagimliliklar kopyalaniyor...";
 
-        // Disk dosya sistemini bağla
-        diskfs::init();
-
-        // 1. Kurulum işaretçisi (Marker) dosyasını oluştur
-        let marker_content = b"minOs Operating System Installed\nPersistent FAT32 Boot Partition\n";
-        diskfs::save_file_by_name("MINOS.SYS", marker_content);
+        // Biçimlendirme sonrası seçili hedefi açıkça bağla; init() daha önce
+        // çalıştıysa READY nedeniyle erken dönebilir.
+        if !diskfs::mount_fat32_drive(drive) {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: Hedef FAT32 diski bağlanamadı!";
+            return false;
+        }
 
         // 2. Kullanıcı benioku dosyasını yaz
-        let readme_content = b"minOs Kurulumu Basariyla Tamamlandi!\n====================================\nBu bolumde tam okuma ve yazma hakkiniz bulunmaktadir.\nSistem ayarlariniz ve yeni dosyalariniz otomatik olarak bu bolume kaydedilir.\n";
-        diskfs::save_file_by_name("BENIOKU.TXT", readme_content);
+        let readme_content = "minOs Kurulumu Başarıyla Tamamlandı!\n====================================\nBu bölümde tam okuma ve yazma hakkınız bulunmaktadır.\nSistem ayarlarınız ve yeni dosyalarınız otomatik olarak bu bölüme kaydedilir.\n".as_bytes();
+        if !diskfs::save_file_by_name("BENIOKU.TXT", readme_content) {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: BENIOKU.TXT diske yazılamadı!";
+            return false;
+        }
 
         // 3. Mevcut VFS ayarlarını (veya varsayılanları) diske settings.cfg olarak yaz
         if let Some(cfg_data) = vfs.read_file("settings.cfg") {
-            diskfs::save_file_by_name("settings.cfg", cfg_data);
+            if !diskfs::save_file_by_name("settings.cfg", cfg_data) {
+                self.state = InstallState::Failed;
+                self.status_msg = "HATA: settings.cfg diske yazılamadı!";
+                return false;
+            }
         } else {
             let default_cfg = b"volume=75;muted=0;res=1280x720;night=0;night_level=55;keyboard=tr;language=tr;zoom=100;region=0;dhcp=1;theme=velvet";
-            diskfs::save_file_by_name("settings.cfg", default_cfg);
+            if !diskfs::save_file_by_name("settings.cfg", default_cfg) {
+                self.state = InstallState::Failed;
+                self.status_msg = "HATA: varsayılan settings.cfg yazılamadı!";
+                return false;
+            }
+        }
+
+        // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla
+        // kaydedildiyse sonraki açılış bunu kurulum olarak tanısın.
+        let marker_content = b"minOs Persistent Install\nFAT32 data and settings installed\n";
+        if !diskfs::save_file_by_name("MINOS.SYS", marker_content) {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: MINOS.SYS kurulum işareti yazılamadı!";
+            return false;
+        }
+        let marker_verified = diskfs::load_file_alloc("MINOS.SYS")
+            .map(|bytes| bytes.as_slice() == marker_content)
+            .unwrap_or(false);
+        if !marker_verified {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: Kurulum diske yazıldı ancak geri okuma doğrulaması başarısız!";
+            return false;
         }
 
         self.progress_pct = 100;
         self.state = InstallState::Complete;
         self.confirm_install = false;
         self.disk_formatted = true;
-        self.status_msg = "Kurulum tamamlandi! Disk kalici yazmaya hazir.";
+        self.status_msg = "Kurulum tamamlandı! Disk kalıcı yazmaya hazır.";
         true
     }
 
@@ -187,8 +228,8 @@ impl InstallerApp {
         (x, y, btn_w, btn_h)
     }
 
-    pub fn drive_select_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + 30, win_y + 122, 340, 36)
+    pub fn drive_select_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + 20, win_y + 122, win_w.saturating_sub(40), 48)
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
@@ -196,18 +237,20 @@ impl InstallerApp {
 
         // 1. Üst Başlık Banner
         fb.draw_vgradient(win_x, win_y + 24, win_w, 42, Color::TITLE_BAR, MinGuiCompositor::shade(Color::TITLE_BAR, -15));
-        let header_title = if english { "minOs Quick Installation Wizard" } else { "minOs Hizli Kurulum Sihirbazi" };
-        MinGuiCompositor::draw_string(fb, win_x + 16, win_y + 36, header_title, Color::TEXT_MAIN);
+        let header_title = if english { "minOs Quick Installation Wizard" } else { "minOs Hızlı Kurulum Sihirbazı" };
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 16, win_y + 36, header_title, Color::TEXT_MAIN,
+            (win_x + 12, win_y + 28, win_w.saturating_sub(24), 30));
 
         // 2. Açıklama metni
         let intro_text = if english {
             "Select the target disk, format it as FAT32, then click 'One-Click Install':"
         } else {
-            "Hedef diski secin, FAT32 olarak bicimlendirin ve 'Tek Tikla Kur' basin:"
+            "Hedef diski seçin, FAT32 olarak biçimlendirin ve 'Tek Tıkla Kur' basın:"
         };
-        MinGuiCompositor::draw_string(fb, win_x + 20, win_y + 74, intro_text, Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 20, win_y + 74, intro_text, Color::TEXT_MUTED,
+            (win_x + 16, win_y + 68, win_w.saturating_sub(32), 20));
 
-        // 2b. Adim göstergesi (1. Disk Sec -> 2. Bicimlendir -> 3. Kur)
+        // 2b. Adim göstergesi (1. Disk Seç -> 2. Biçimlendir -> 3. Kur)
         let step_y = win_y + 94;
         let step_fmt_done = self.disk_formatted;
         let step_inst_done = self.state == InstallState::Complete;
@@ -219,15 +262,16 @@ impl InstallerApp {
             ]
         } else {
             [
-                ("1. Disk Sec", true),
-                ("2. Bicimlendir (FAT32)", step_fmt_done),
+                ("1. Disk Seç", true),
+                ("2. Biçimlendir (FAT32)", step_fmt_done),
                 ("3. Kur", step_inst_done),
             ]
         };
         let mut step_x = win_x + 20;
         for (label, done) in step_items.iter() {
             let col = if *done { Color::ACCENT_GREEN } else { Color::TEXT_MUTED };
-            MinGuiCompositor::draw_string(fb, step_x, step_y, label, col);
+            MinGuiCompositor::draw_string_clipped(fb, step_x, step_y, label, col,
+                (win_x + 16, step_y - 2, win_w.saturating_sub(32), 20));
             step_x += MinGuiCompositor::text_width(label, 1) + 10;
         }
 
@@ -239,7 +283,7 @@ impl InstallerApp {
         // Disk Simge & Bilgisi
         let disk_dev = ata::device(self.selected_drive);
         let mut disk_label = TextBuf::new();
-        disk_label.push_str(if english { "Drive " } else { "Surucu " });
+        disk_label.push_str(if english { "Drive " } else { "Sürücü " });
         disk_label.push_usize(self.selected_drive as usize);
         disk_label.push_str(": ");
         if let Some(dev) = disk_dev {
@@ -260,49 +304,57 @@ impl InstallerApp {
         } else {
             disk_label.push_str(if english { "No disk detected" } else { "Disk tespit edilemedi" });
         }
-        MinGuiCompositor::draw_string(fb, sel_rect.0 + 12, sel_rect.1 + 6, disk_label.as_str(), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string_clipped(fb, sel_rect.0 + 12, sel_rect.1 + 5, disk_label.as_str(), Color::TEXT_MAIN,
+            (sel_rect.0 + 10, sel_rect.1 + 2, sel_rect.2.saturating_sub(20), 20));
 
-        let switch_hint = if english { "(Click to switch drive)" } else { "(Diski degistirmek icin tiklayin)" };
-        MinGuiCompositor::draw_string(fb, sel_rect.0 + 12, sel_rect.1 + 20, switch_hint, Color::ACCENT_YELLOW);
-
+        let switch_hint = if english { "(Click to switch drive)" } else { "(Diski değiştirmek için tıklayın)" };
         // Seçili diskin biçimlendirme/kurulum durumu
         let fmt_state = if self.state == InstallState::Complete {
             if english { "[Installed]" } else { "[Kuruldu]" }
         } else if self.disk_formatted {
-            if english { "[Formatted FAT32]" } else { "[Bicimlendirildi FAT32]" }
+            if english { "[Formatted FAT32]" } else { "[Biçimlendirildi FAT32]" }
         } else {
-            if english { "[Not formatted]" } else { "[Bicimlendirilmedi]" }
+            if english { "[Not formatted]" } else { "[Biçimlendirilmedi]" }
         };
         let fmt_col = if self.disk_formatted { Color::ACCENT_GREEN } else { Color::ACCENT_RED };
-        MinGuiCompositor::draw_string(fb, sel_rect.0 + 12, sel_rect.1 + 22, fmt_state, fmt_col);
+        let state_y = sel_rect.1 + 27;
+        MinGuiCompositor::draw_string_clipped(fb, sel_rect.0 + 12, state_y, fmt_state, fmt_col,
+            (sel_rect.0 + 10, sel_rect.1 + 23, sel_rect.2 / 2, 20));
+        let hint_w = MinGuiCompositor::text_width(switch_hint, 1);
+        let hint_x = sel_rect.0 + sel_rect.2.saturating_sub(hint_w + 12);
+        MinGuiCompositor::draw_string_clipped(fb, hint_x, state_y, switch_hint, Color::ACCENT_YELLOW,
+            (sel_rect.0 + sel_rect.2 / 2, sel_rect.1 + 23, sel_rect.2 / 2 - 8, 20));
 
         // 4. Kurulum Özellikleri Bilgi Kutusu
-        let info_y = win_y + 168;
+        let info_y = win_y + 180;
         let info_w = win_w.saturating_sub(40);
         fb.draw_rounded_rect(win_x + 20, info_y, info_w, 82, 6, Color::WINDOW_BG);
         fb.draw_rounded_rect_outline(win_x + 20, info_y, info_w, 82, 6, Color::BORDER);
 
         let feature1 = if english {
-            "+ Otomatik FAT32 bicimlendirme (VBR, FAT1, FAT2, RootDir)"
+            "+ Otomatik FAT32 biçimlendirme (VBR, FAT1, FAT2, kök dizin)"
         } else {
-            "+ Otomatik FAT32 bicimlendirme (VBR, FAT1, FAT2, RootDir)"
+            "+ Otomatik FAT32 biçimlendirme (VBR, FAT1, FAT2, kök dizin)"
         };
         let feature2 = if english {
-            "+ Full Read/Write access (Kullanici ve sistem dosyalari yazilabilir)"
+            "+ Full Read/Write access (Kullanıcı ve sistem dosyaları yazilabilir)"
         } else {
-            "+ Tam Okuma/Yazma izni (Kullanici ve sistem dosyalari yazilabilir)"
+            "+ Tam Okuma/Yazma izni (Kullanıcı ve sistem dosyaları yazilabilir)"
         };
         let feature3 = if english {
-            "+ Kalici ayarlar: Tema, cozunurluk ve saat sonraki acilista yuklenir"
+            "+ Kalıcı ayarlar: Tema, çözünürlük ve saat sonraki açılışta yüklenir"
         } else {
-            "+ Kalici ayarlar: Tema, cozunurluk ve saat sonraki acilista yuklenir"
+            "+ Kalıcı ayarlar: Tema, çözünürlük ve saat sonraki açılışta yüklenir"
         };
-        MinGuiCompositor::draw_string(fb, win_x + 28, info_y + 10, feature1, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + 28, info_y + 32, feature2, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + 28, info_y + 54, feature3, Color::ACCENT_YELLOW);
+        let info_text = (win_x + 26, info_y + 6, info_w.saturating_sub(12), 20);
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 10, feature1, Color::ACCENT_GREEN, info_text);
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 32, feature2, Color::ACCENT_BLUE,
+            (info_text.0, info_y + 28, info_text.2, 20));
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 54, feature3, Color::ACCENT_YELLOW,
+            (info_text.0, info_y + 50, info_text.2, 20));
 
         // 5. İlerleme Çubuğu
-        let prog_y = win_y + 262;
+        let prog_y = win_y + 270;
         let prog_w = win_w.saturating_sub(40);
         fb.draw_rounded_rect(win_x + 20, prog_y, prog_w, 14, 4, Color::DARK_BG);
         fb.draw_rounded_rect_outline(win_x + 20, prog_y, prog_w, 14, 4, Color::BORDER);
@@ -317,11 +369,11 @@ impl InstallerApp {
         }
 
         // Durum Mesajı
-        MinGuiCompositor::draw_string(fb, win_x + 22, prog_y + 20, self.status_msg, match self.state {
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 22, prog_y + 20, self.status_msg, match self.state {
             InstallState::Complete => Color::ACCENT_GREEN,
             InstallState::Failed => Color::ACCENT_RED,
             _ => Color::TEXT_MAIN,
-        });
+        }, (win_x + 18, prog_y + 16, win_w.saturating_sub(36), 20));
 
         // 6. "Biçimlendir (FAT32)" Butonu (sol)
         let (fx, fy, fw, fh) = Self::format_btn_rect(win_x, win_y, win_w, win_h);
@@ -329,11 +381,11 @@ impl InstallerApp {
         fb.draw_rounded_rect(fx, fy, fw, fh, 6, fmt_bg);
         fb.draw_rounded_rect_outline(fx, fy, fw, fh, 6, Color::WHITE);
         let fmt_text = if self.disk_formatted {
-            if english { "Formatted (Redo)" } else { "Bicimlendirildi (Yeniden)" }
+            if english { "Formatted (Redo)" } else { "Biçimlendirildi (Yeniden)" }
         } else if english {
             "Format (FAT32)"
         } else {
-            "Bicimlendir (FAT32)"
+            "Biçimlendir (FAT32)"
         };
         let ftw = MinGuiCompositor::text_width(fmt_text, 1);
         let ftx = fx + (fw.saturating_sub(ftw)) / 2;
@@ -364,13 +416,13 @@ impl InstallerApp {
                 if english { "Retry" } else { "Tekrar Dene" }
             }
             _ if !self.disk_formatted => {
-                if english { "Format first" } else { "Once Bicimlendir" }
+                if english { "Format first" } else { "Once Biçimlendir" }
             }
             _ if self.confirm_install => {
                 if english { "Confirm Install" } else { "Kurulumu Onayla" }
             }
             _ => {
-                if english { "One-Click Install" } else { "Tek Tikla Kur" }
+                if english { "One-Click Install" } else { "Tek Tıkla Kur" }
             }
         };
         let tw = MinGuiCompositor::text_width(btn_text, 1);

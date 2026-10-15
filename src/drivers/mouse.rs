@@ -5,6 +5,9 @@ pub struct MouseState {
     pub right_button: bool,
     pub middle_button: bool,
     pub scroll_delta: i8,
+    /// 1..=10; 5 is the raw PS/2 speed.
+    pub speed: u8,
+    pub reverse_scroll: bool,
 }
 
 impl MouseState {
@@ -16,6 +19,8 @@ impl MouseState {
             right_button: false,
             middle_button: false,
             scroll_delta: 0,
+            speed: 5,
+            reverse_scroll: false,
         }
     }
 
@@ -24,8 +29,14 @@ impl MouseState {
         self.right_button = (flags & 0x02) != 0;
         self.middle_button = (flags & 0x04) != 0;
 
-        self.x += dx as i32;
-        self.y -= dy as i32; // PS/2 Y ekseni tersinedir
+        let speed = self.speed.clamp(1, 10) as i32;
+        let scale = |delta: i8| {
+            if delta == 0 { return 0; }
+            let scaled = delta as i32 * speed / 5;
+            if scaled == 0 { (delta as i32).signum() } else { scaled }
+        };
+        self.x += scale(dx);
+        self.y -= scale(dy); // PS/2 Y ekseni tersinedir
 
         if self.x < 0 { self.x = 0; }
         if self.y < 0 { self.y = 0; }
@@ -36,6 +47,6 @@ impl MouseState {
     pub fn take_scroll_delta(&mut self) -> i8 {
         let val = self.scroll_delta;
         self.scroll_delta = 0;
-        val
+        if self.reverse_scroll { val.saturating_neg() } else { val }
     }
 }

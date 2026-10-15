@@ -134,6 +134,24 @@ impl Device {
 pub static mut DEVICES: [Device; 4] = [Device::empty(); 4];
 static mut INITIALIZED: bool = false;
 static mut LAST_DISK_ERROR: u8 = 0;
+static mut IO_PROGRESS_HOOK: Option<fn(*mut (), usize, usize)> = None;
+static mut IO_PROGRESS_CONTEXT: *mut () = core::ptr::null_mut();
+
+/// Register a temporary UI progress callback for long multi-sector I/O.
+pub fn set_io_progress_hook(hook: Option<fn(*mut (), usize, usize)>, context: *mut ()) {
+    unsafe {
+        IO_PROGRESS_HOOK = hook;
+        IO_PROGRESS_CONTEXT = context;
+    }
+}
+
+fn report_io_progress(done: usize, total: usize) {
+    unsafe {
+        if let Some(hook) = IO_PROGRESS_HOOK {
+            hook(IO_PROGRESS_CONTEXT, done, total);
+        }
+    }
+}
 
 fn serial(s: &str) {
     crate::serial::print(s);
@@ -423,10 +441,18 @@ pub fn drive_capacity_sectors(drive: u8) -> u64 {
 }
 
 pub fn flush_cache(drive: u8) {
+    if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } { return; }
     let (base, ctrl) = io_ports_for_drive(drive);
     select(drive);
     outb(base + 7, CMD_FLUSH_CACHE);
     io_delay(ctrl);
+    let mut spins = 0;
+    while spins < SPIN_LIMIT {
+        let status = inb(base + 7);
+        if status & ST_BSY == 0 { break; }
+        spins += 1;
+        core::hint::spin_loop();
+    }
 }
 
 pub fn drive_count() -> usize {
@@ -495,20 +521,62 @@ fn read_sector_once(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
         buf[i * 2 + 1] = (word >> 8) as u8;
     }
     io_delay(ctrl);
-    true
+    false
 }
 
 pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize {
     let max = buf.len() / SECTOR_SIZE;
     let n = count.min(max);
-    let mut sector = [0u8; SECTOR_SIZE];
-    for i in 0..n {
-        if !read_sector(drive, lba + i as u32, &mut sector) {
-            return i;
+    if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } { return 0; }
+    let mut done = 0usize;
+    while done < n {
+        let batch = (n - done).min(u8::MAX as usize);
+        let mut ok = false;
+        for attempt in 0..3 {
+            if read_sectors_once(drive, lba + done as u32, batch, &mut buf[done * SECTOR_SIZE..(done + batch) * SECTOR_SIZE]) {
+                ok = true;
+                break;
+            }
+            if attempt < 2 { let (base, ctrl) = io_ports_for_drive(drive); let _ = inb(base + 1); io_delay(ctrl); }
         }
-        buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE].copy_from_slice(&sector);
+        if !ok { break; }
+        done += batch;
+        report_io_progress(done, n);
     }
-    n
+    done
+}
+
+fn read_sectors_once(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> bool {
+    if count == 0 || count > u8::MAX as usize { return false; }
+    let (base, ctrl) = io_ports_for_drive(drive);
+    select(drive);
+    if !wait_ready(drive) { return false; }
+    let slave_bit = (drive & 1) << 4;
+    outb(base + 2, count as u8);
+    outb(base + 3, (lba & 0xFF) as u8);
+    outb(base + 4, ((lba >> 8) & 0xFF) as u8);
+    outb(base + 5, ((lba >> 16) & 0xFF) as u8);
+    outb(base + 6, 0xE0 | slave_bit | (((lba >> 24) & 0x0F) as u8));
+    outb(base + 7, CMD_READ_SECTORS);
+    io_delay(ctrl);
+    for sector in 0..count {
+        if !wait_drq(drive) { return false; }
+        let at = sector * SECTOR_SIZE;
+        for i in 0..SECTOR_SIZE / 2 {
+            let word = inw(base);
+            buf[at + i * 2] = word as u8;
+            buf[at + i * 2 + 1] = (word >> 8) as u8;
+        }
+        io_delay(ctrl);
+    }
+    let mut spins = 0;
+    while spins < SPIN_LIMIT {
+        let status = inb(base + 7);
+        if status & ST_BSY == 0 { return status & ST_ERR == 0; }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +584,13 @@ pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize 
 // ---------------------------------------------------------------------------
 
 pub fn write_sector(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
+    if !write_sector_unflushed(drive, lba, buf) { return false; }
+    flush_cache(drive);
+    true
+}
+
+/// PIO single-sector write without cache flush. Call `flush_cache` after a batch.
+pub fn write_sector_unflushed(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
     if drive >= 4 {
         return false;
     }
@@ -577,23 +652,70 @@ fn write_sector_once(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
         core::hint::spin_loop();
     }
 
-    // Önbelleği diske temizle
-    outb(base + 7, CMD_FLUSH_CACHE);
-    io_delay(ctrl);
-    true
+    spins < SPIN_LIMIT
 }
 
 pub fn write_sectors(drive: u8, lba: u32, count: usize, buf: &[u8]) -> usize {
     let max = buf.len() / SECTOR_SIZE;
     let n = count.min(max);
-    let mut sector = [0u8; SECTOR_SIZE];
-    for i in 0..n {
-        sector.copy_from_slice(&buf[i * SECTOR_SIZE..(i + 1) * SECTOR_SIZE]);
-        if !write_sector(drive, lba + i as u32, &sector) {
-            return i;
+    let written = write_sectors_unflushed(drive, lba, n, buf);
+    if written > 0 { flush_cache(drive); }
+    written
+}
+
+/// Multi-sector PIO write without cache flush; useful for filesystem batches.
+pub fn write_sectors_unflushed(drive: u8, lba: u32, count: usize, buf: &[u8]) -> usize {
+    let n = count.min(buf.len() / SECTOR_SIZE);
+    if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } { return 0; }
+    let mut done = 0usize;
+    while done < n {
+        let batch = (n - done).min(u8::MAX as usize);
+        let mut ok = false;
+        for attempt in 0..3 {
+            if write_sectors_once(drive, lba + done as u32, batch,
+                &buf[done * SECTOR_SIZE..(done + batch) * SECTOR_SIZE]) {
+                ok = true;
+                break;
+            }
+            if attempt < 2 { let (base, ctrl) = io_ports_for_drive(drive); let _ = inb(base + 1); io_delay(ctrl); }
         }
+        if !ok { break; }
+        done += batch;
+        report_io_progress(done, n);
     }
-    n
+    done
+}
+
+fn write_sectors_once(drive: u8, lba: u32, count: usize, buf: &[u8]) -> bool {
+    if count == 0 || count > u8::MAX as usize { return false; }
+    let (base, ctrl) = io_ports_for_drive(drive);
+    select(drive);
+    if !wait_ready(drive) { return false; }
+    let slave_bit = (drive & 1) << 4;
+    outb(base + 2, count as u8);
+    outb(base + 3, (lba & 0xFF) as u8);
+    outb(base + 4, ((lba >> 8) & 0xFF) as u8);
+    outb(base + 5, ((lba >> 16) & 0xFF) as u8);
+    outb(base + 6, 0xE0 | slave_bit | (((lba >> 24) & 0x0F) as u8));
+    outb(base + 7, CMD_WRITE_SECTORS);
+    io_delay(ctrl);
+    for sector in 0..count {
+        if !wait_drq(drive) { return false; }
+        let at = sector * SECTOR_SIZE;
+        for i in 0..SECTOR_SIZE / 2 {
+            let word = (buf[at + i * 2] as u16) | ((buf[at + i * 2 + 1] as u16) << 8);
+            outw(base, word);
+        }
+        io_delay(ctrl);
+    }
+    let mut spins = 0;
+    while spins < SPIN_LIMIT {
+        let status = inb(base + 7);
+        if status & ST_BSY == 0 { return status & ST_ERR == 0; }
+        spins += 1;
+        core::hint::spin_loop();
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------

@@ -10,6 +10,131 @@ use crate::fs::vfs::VirtualFileSystem;
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum UiLanguage { Turkish, English }
 impl UiLanguage { pub fn toggle(&mut self) { *self = match *self { Self::Turkish => Self::English, Self::English => Self::Turkish }; crate::gui::set_ui_language_english(self.is_english()); } pub fn is_english(&self) -> bool { matches!(self, Self::English) } }
+
+struct DeviceLine { buf: [u8; 128], len: usize }
+impl DeviceLine {
+    fn new() -> Self { Self { buf: [0; 128], len: 0 } }
+    fn push(&mut self, s: &str) { for b in s.bytes() { if self.len < self.buf.len() { self.buf[self.len] = b; self.len += 1; } } }
+    fn number(&mut self, mut n: u64) {
+        let mut tmp = [0u8; 20]; let mut len = 0;
+        if n == 0 { self.push("0"); return; }
+        while n > 0 { tmp[len] = b'0' + (n % 10) as u8; len += 1; n /= 10; }
+        while len > 0 { len -= 1; if self.len < self.buf.len() { self.buf[self.len] = tmp[len]; self.len += 1; } }
+    }
+    fn hex_byte(&mut self, value: u8) {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        for digit in [value >> 4, value & 0x0F] {
+            if self.len < self.buf.len() { self.buf[self.len] = HEX[digit as usize]; self.len += 1; }
+        }
+    }
+    fn finish(&self) -> &str { core::str::from_utf8(&self.buf[..self.len]).unwrap_or("") }
+}
+
+fn draw_device_line(fb: &mut Framebuffer, x: usize, y: usize, width: usize, line: &DeviceLine, color: u32) {
+    MinGuiCompositor::draw_string_clipped(fb, x, y, line.finish(), color, (x, y, width, 20));
+}
+
+fn render_device_inventory(
+    fb: &mut Framebuffer, x: usize, y: usize, width: usize, language: UiLanguage,
+    layout: KeyboardLayout, cpu: &str, cores: u32, ram_bytes: u64,
+) {
+    let english = language.is_english();
+    let (fb_width, fb_height, fb_bpp, fb_pitch) = (fb.width, fb.height, fb.bpp, fb.pitch);
+    let mut row = 0usize;
+    let mut draw = |line: &DeviceLine, color| {
+        draw_device_line(fb, x, y + row * 24, width, line, color);
+        row += 1;
+    };
+
+    let mut line = DeviceLine::new();
+    line.push(if english { "CPU: " } else { "İşlemci: " }); line.push(cpu); line.push(" | x86_64 | "); line.number(cores as u64);
+    line.push(if english { " logical core(s) | SSE2" } else { " mantıksal çekirdek | SSE2" });
+    draw(&line, Color::ACCENT_BLUE);
+
+    let mut line = DeviceLine::new();
+    line.push(if english { "RAM usable by kernel: " } else { "Çekirdeğin kullanabildiği RAM: " });
+    line.number(ram_bytes / (1024 * 1024)); line.push(" MB");
+    draw(&line, Color::ACCENT_YELLOW);
+
+    let mut line = DeviceLine::new();
+    line.push(if english { "Display: Limine framebuffer | " } else { "Ekran: Limine framebuffer | " });
+    line.number(fb_width as u64); line.push("x"); line.number(fb_height as u64); line.push(" | ");
+    line.number(fb_bpp as u64); line.push(" bpp | "); line.number(fb_pitch as u64); line.push(" B pitch");
+    draw(&line, Color::TEXT_MAIN);
+
+    let mut line = DeviceLine::new();
+    line.push(if english { "Keyboard: PS/2 | " } else { "Klavye: PS/2 | " });
+    line.push(match layout { KeyboardLayout::TurkishQ => "TR-Q", KeyboardLayout::EnglishUS => "EN-US" });
+    line.push(if english { " | polling driver active" } else { " | yoklama sürücüsü etkin" });
+    draw(&line, Color::ACCENT_GREEN);
+
+    let mut line = DeviceLine::new();
+    line.push(if english { "Mouse: PS/2 | 3 buttons | " } else { "Fare: PS/2 | 3 düğme | " });
+    line.push(if crate::drivers::ps2::mouse_wheel_enabled() {
+        if english { "wheel detected" } else { "tekerlek algılandı" }
+    } else if english { "wheel not detected" } else { "tekerlek algılanmadı" });
+    draw(&line, Color::ACCENT_PINK);
+
+    if crate::drivers::hda::is_ready() {
+        let mut line = DeviceLine::new();
+        line.push("Audio: Intel 82801 HDA | PCM playback | 48 kHz | 16-bit | stereo");
+        draw(&line, Color::ACCENT_GREEN);
+    }
+
+    if crate::drivers::e1000::is_ready() {
+        let mut line = DeviceLine::new();
+        line.push("Ethernet: Intel e1000 82540EM | ");
+        line.push(if crate::drivers::e1000::link_up() { if english { "link up | MAC " } else { "bağlı | MAC " } }
+            else { if english { "link down | MAC " } else { "bağlantı yok | MAC " } });
+        let mac = unsafe { crate::drivers::e1000::MAC_ADDR };
+        for (i, byte) in mac.iter().enumerate() {
+            if i > 0 { line.push(":"); }
+            line.hex_byte(*byte);
+        }
+        draw(&line, Color::ACCENT_BLUE);
+    }
+
+    if let Some(controller) = crate::drivers::usb::controller_info() {
+        let mut line = DeviceLine::new();
+        line.push(if english { "USB host controller: " } else { "USB ana denetleyicisi: " });
+        line.push(match controller.controller_type {
+            crate::drivers::usb::UsbControllerType::Uhci => "UHCI (USB 1.1)",
+            crate::drivers::usb::UsbControllerType::Ohci => "OHCI (USB 1.1)",
+            crate::drivers::usb::UsbControllerType::Ehci => "EHCI (USB 2.0)",
+            crate::drivers::usb::UsbControllerType::Xhci => "xHCI (USB 3.x)",
+            crate::drivers::usb::UsbControllerType::Other(_) => "USB host controller",
+            crate::drivers::usb::UsbControllerType::None => "USB",
+        });
+        line.push(" | PCI "); line.number(controller.bus as u64); line.push(":"); line.number(controller.dev as u64);
+        line.push("."); line.number(controller.func as u64); line.push(" | ");
+        line.push(if controller.is_mmio { "MMIO base " } else { "I/O base " });
+        line.number(controller.base_addr);
+        draw(&line, Color::ACCENT_GREEN);
+    }
+
+    for drive in 0..4u8 {
+        let Some(device) = crate::drivers::ata::device(drive) else { continue; };
+        let mut line = DeviceLine::new();
+        line.push(if english { "Storage " } else { "Depolama " }); line.number(drive as u64); line.push(": ");
+        line.push(device.model_str()); line.push(" | ");
+        line.push(match device.kind {
+            crate::drivers::ata::DeviceKind::Ata => "ATA",
+            crate::drivers::ata::DeviceKind::Atapi => "ATAPI",
+            crate::drivers::ata::DeviceKind::None => "",
+        });
+        line.push(" | ");
+        line.number(device.size_mb()); line.push(" MB | "); line.number(device.sectors); line.push(" sectors x ");
+        line.number(if device.kind == crate::drivers::ata::DeviceKind::Atapi { 2048 } else { 512 }); line.push(" B");
+        draw(&line, Color::TEXT_MAIN);
+    }
+
+    drop(draw);
+    if row == 5 {
+        let mut line = DeviceLine::new();
+        line.push(if english { "No additional active devices detected." } else { "Başka etkin aygıt algılanmadı." });
+        draw_device_line(fb, x, y + row * 24, width, &line, Color::TEXT_MUTED);
+    }
+}
 /// Yardımcı düğme/geometri tanımları (çizim ve tıklama testi ortak kullanır).
 const TAB_X: usize = 10;
 const TAB_W: usize = 116;
@@ -27,6 +152,8 @@ pub struct SystemSettings {
     pub volume: u8,
     pub is_muted: bool,
     pub mouse_speed: u8,
+    pub double_click_ms: u16,
+    pub reverse_scroll: bool,
     pub screen_res: (usize, usize),
     pub display_res: (usize, usize),
     pub zoom: u8,
@@ -56,6 +183,8 @@ impl SystemSettings {
             volume: 75,
             is_muted: false,
             mouse_speed: 5,
+            double_click_ms: 300,
+            reverse_scroll: false,
             screen_res: (1280, 720),
             display_res: (1280, 720),
             zoom: 100,
@@ -77,6 +206,9 @@ impl SystemSettings {
             let mut p = item.split('='); let key=p.next().unwrap_or(""); let val=p.next().unwrap_or("");
             match key {
                 "volume" => if let Ok(v)=val.parse::<u8>() { self.volume=v.min(100); },
+                "mouse_speed" => if let Ok(v)=val.parse::<u8>() { self.mouse_speed=v.clamp(1,10); },
+                "double_click" => if let Ok(v)=val.parse::<u16>() { self.double_click_ms=v.clamp(150,600); },
+                "reverse_scroll" => self.reverse_scroll=val=="1",
                 "muted" => self.is_muted=val=="1",
                 "night" => self.night_light=val=="1",
                 "night_level" => if let Ok(v)=val.parse::<u8>() { self.night_light_level=v.min(100); },
@@ -132,6 +264,10 @@ impl SystemSettings {
     pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+180+i*68,y+250,64,22) }
     pub fn night_light_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+300,y+280,96,22) }
     pub fn night_light_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+312,200,10) }
+    pub fn mouse_speed_track_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X,y+338,180,10) }
+    pub fn double_click_dec_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+180,y+360,34,22) }
+    pub fn double_click_inc_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+290,y+360,34,22) }
+    pub fn reverse_scroll_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+260,y+390,136,22) }
     pub fn region_btn_rect(x: usize, y: usize) -> (usize,usize,usize,usize) { (x+CONTENT_X+180,y+342,216,22) }
     pub fn dhcp_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) { (win_x + CONTENT_X, win_y + 300, 130, 22) }
     pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
@@ -213,6 +349,9 @@ impl SystemSettings {
             put(d, n, &digits[4-len..]);
         };
         put(&mut cfg,&mut n,b"volume="); put_num(&mut cfg,&mut n,self.volume);
+        put(&mut cfg,&mut n,b";mouse_speed="); put_num(&mut cfg,&mut n,self.mouse_speed);
+        put(&mut cfg,&mut n,b";double_click="); put_u16(&mut cfg,&mut n,self.double_click_ms as usize);
+        put(&mut cfg,&mut n,b";reverse_scroll="); put(&mut cfg,&mut n,if self.reverse_scroll{b"1"}else{b"0"});
         put(&mut cfg,&mut n,b";muted="); put(&mut cfg,&mut n,if self.is_muted{b"1"}else{b"0"}); put(&mut cfg,&mut n,b";res=");
         put_u16(&mut cfg,&mut n,self.screen_res.0); put(&mut cfg,&mut n,b"x"); put_u16(&mut cfg,&mut n,self.screen_res.1);
         put(&mut cfg,&mut n,b";night="); put(&mut cfg,&mut n,if self.night_light{b"1"}else{b"0"});
@@ -258,18 +397,18 @@ impl SystemSettings {
             _ => 7,
         };
         self.focused_control = (self.focused_control + 1) % total;
-        if self.focused_control < 3 {
+        if self.focused_control < 4 {
             self.active_tab = self.focused_control;
         }
     }
 
     pub fn select_tab_prev(&mut self) {
-        self.active_tab = (self.active_tab + 2) % 3;
+        self.active_tab = (self.active_tab + 3) % 4;
         self.focused_control = self.active_tab;
     }
 
     pub fn select_tab_next(&mut self) {
-        self.active_tab = (self.active_tab + 1) % 3;
+        self.active_tab = (self.active_tab + 1) % 4;
         self.focused_control = self.active_tab;
     }
 
@@ -294,7 +433,7 @@ impl SystemSettings {
     ) {
         // Sol Menü / Sekmeler
         fb.draw_rect(win_x + 6, win_y + 32, TAB_W + 8, win_h.saturating_sub(62), Color::TITLE_BAR_INACTIVE);
-        let tabs = if self.language.is_english() { ["Basic", "Advanced", "Network", "About"] } else { ["Temel", "İleri", "Ağ", "Hakkında"] };
+        let tabs = if self.language.is_english() { ["Basic", "Advanced", "Network", "Devices"] } else { ["Temel", "İleri", "Ağ", "Aygıtlar"] };
         for (i, t) in tabs.iter().enumerate() {
             let r = Self::tab_rect(win_x, win_y, i);
             let is_cur = i == self.active_tab;
@@ -342,6 +481,36 @@ impl SystemSettings {
                     let border = if *tid == self.theme { Color::ACCENT_GREEN } else { Color::BORDER };
                     fb.draw_rect_outline(r.0, r.1, r.2, r.3, border);
                 }
+
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 310,
+                    crate::gui::ui_text("Fare ayarları", "Mouse settings"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 328,
+                    crate::gui::ui_text("İşaretçi hızı:", "Pointer speed:"), Color::TEXT_MAIN);
+                let speed_track = Self::mouse_speed_track_rect(win_x, win_y);
+                fb.draw_rect(speed_track.0, speed_track.1, speed_track.2, speed_track.3, Color::TITLE_BAR_INACTIVE);
+                let speed_fill = speed_track.2 * (self.mouse_speed.saturating_sub(1)) as usize / 9;
+                fb.draw_rect(speed_track.0, speed_track.1, speed_fill, speed_track.3, Color::ACCENT_BLUE);
+                fb.draw_rect(speed_track.0 + speed_fill.saturating_sub(4), speed_track.1.saturating_sub(4), 8, speed_track.3 + 8, Color::TEXT_MAIN);
+                let mut speed_label = TextBuf::new(); speed_label.push_usize(self.mouse_speed as usize);
+                MinGuiCompositor::draw_string(fb, speed_track.0 + speed_track.2 + 10, speed_track.1 + 1, speed_label.as_str(), Color::TEXT_MAIN);
+
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 372,
+                    crate::gui::ui_text("Çift tıklama (ms):", "Double-click (ms):"), Color::TEXT_MAIN);
+                let dec = Self::double_click_dec_rect(win_x, win_y);
+                let inc = Self::double_click_inc_rect(win_x, win_y);
+                MinGuiCompositor::draw_button(fb, dec, Color::TITLE_BAR, "-", Color::TEXT_MAIN, false);
+                MinGuiCompositor::draw_button(fb, inc, Color::TITLE_BAR, "+", Color::TEXT_MAIN, false);
+                let mut click_label = TextBuf::new(); click_label.push_usize(self.double_click_ms as usize);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 220, win_y + 372, click_label.as_str(), Color::ACCENT_GREEN);
+
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 402,
+                    crate::gui::ui_text("Tekerlek yönü:", "Scroll direction:"), Color::TEXT_MAIN);
+                let reverse = Self::reverse_scroll_rect(win_x, win_y);
+                MinGuiCompositor::draw_button(fb, reverse, if self.reverse_scroll { Color::ACCENT_GREEN } else { Color::TITLE_BAR },
+                    match (self.reverse_scroll, self.language.is_english()) {
+                        (true, true) => "Reversed", (false, true) => "Normal",
+                        (true, false) => "Ters", (false, false) => "Normal",
+                    }, Color::TEXT_MAIN, false);
 
                 // --- Klavye / Dil ---
                 let kbd_str = match kbd_layout {
@@ -479,39 +648,11 @@ impl SystemSettings {
                 if self.focused_control == 4 { fb.draw_rect_outline(dhcp_btn.0, dhcp_btn.1, dhcp_btn.2, dhcp_btn.3, Color::ACCENT_YELLOW); }
             }
             _ => {
-                let mut version = TextBuf::new();
-                version.push_str("minOs - Sarman Edition (v");
-                version.push_str(env!("CARGO_PKG_VERSION"));
-                version.push_byte(b')');
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 42, version.as_str(), Color::ACCENT_BLUE);
-                let mut cpu = TextBuf::new();
-                cpu.push_str("CPU: "); cpu.push_str(cpu_vendor); cpu.push_str(" x86_64 | CPUID ");
-                cpu.push_u2(cpu_logical_count); cpu.push_str(crate::gui::ui_text(" mantıksal işlemci", " logical CPU(s)"));
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 66, cpu.as_str(), Color::TEXT_MAIN);
-                let mut ram_info = TextBuf::new();
-                ram_info.push_str(crate::gui::ui_text("Çekirdeğe kullanılabilir RAM: ", "RAM usable by kernel: "));
-                ram_info.push_usize((total_ram_bytes / (1024 * 1024)) as usize);
-                ram_info.push_str(" MB");
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 90, ram_info.as_str(), Color::ACCENT_YELLOW);
-                let mut display = TextBuf::new();
-                display.push_str(crate::gui::ui_text("Ekran: ", "Display: "));
-                display.push_usize(self.display_res.0); display.push_byte(b'x'); display.push_usize(self.display_res.1);
-                display.push_str(" | 32 bpp");
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 114, display.as_str(), Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 138,
-                    crate::gui::ui_text("Fare: PS/2 | 3 düğme desteği", "Mouse: PS/2 | 3-button support"), Color::ACCENT_PINK);
-                let keyboard = match kbd_layout {
-                    KeyboardLayout::TurkishQ => crate::gui::ui_text("Klavye: PS/2 | Türkçe Q", "Keyboard: PS/2 | Turkish Q"),
-                    KeyboardLayout::EnglishUS => crate::gui::ui_text("Klavye: PS/2 | English US", "Keyboard: PS/2 | English US"),
-                };
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 162, keyboard, Color::ACCENT_GREEN);
-                let mut network = TextBuf::new();
-                network.push_str(crate::gui::ui_text("Ağ: ", "Network: "));
-                network.push_str(network_driver); network.push_str(" | "); network.push_str(network_status);
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + 186, network.as_str(), Color::ACCENT_BLUE,
-                    (win_x + CONTENT_X, win_y + 184, win_w.saturating_sub(CONTENT_X + 12), 18));
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + 214,
-                    crate::gui::ui_text("SMP: çok çekirdekli iş planlaması etkin değil", "SMP: multi-core scheduling is not enabled"), Color::TEXT_MUTED);
+                render_device_inventory(
+                    fb, win_x + CONTENT_X, win_y + 42,
+                    win_w.saturating_sub(CONTENT_X + 16), self.language,
+                    kbd_layout, cpu_vendor, cpu_logical_count, total_ram_bytes,
+                );
             }
         }
 

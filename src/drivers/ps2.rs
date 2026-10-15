@@ -40,6 +40,10 @@ static mut MOUSE_CYCLE: u8 = 0;
 static mut MOUSE_BYTE: [u8; 4] = [0; 4];
 static mut HAS_WHEEL: bool = false;
 
+pub fn mouse_wheel_enabled() -> bool {
+    unsafe { HAS_WHEEL }
+}
+
 fn mouse_write(cmd: u8) {
     wait_write();
     unsafe { outb(0x64, 0xD4); }

@@ -71,6 +71,69 @@ pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::
 pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
 pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
 
+/// Draw one frame of the centered minOs loading transition.
+pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usize, phase: usize, message: &str) {
+    fb.draw_rect(0, 0, width, height, Color::DARK_BG);
+    let cx = width / 2;
+    let cy = height / 2;
+    let icon_size = 48 + (phase % 7) * 4;
+    MinGuiCompositor::draw_cat_icon_at_size(fb, cx.saturating_sub(icon_size / 2), cy.saturating_sub(78), icon_size);
+
+    let brand = "minOs";
+    let brand_w = MinGuiCompositor::text_width(brand, 3);
+    MinGuiCompositor::draw_string_scaled(fb, cx.saturating_sub(brand_w / 2), cy.saturating_sub(10), brand, Color::TEXT_MAIN, 3);
+
+    let bar_w = 220.min(width.saturating_sub(48));
+    let bar_x = cx.saturating_sub(bar_w / 2);
+    let bar_y = cy + 34;
+    fb.draw_rounded_rect(bar_x, bar_y, bar_w, 8, 4, Color::TASKBAR_BG);
+    let sweep_w = (bar_w / 3).max(12);
+    let travel = bar_w.saturating_sub(sweep_w);
+    let sweep_x = bar_x + (phase * 19 % (travel + 1));
+    fb.draw_rounded_rect(sweep_x, bar_y + 1, sweep_w, 6, 3, Color::ACCENT_BLUE);
+
+    let dots = match phase % 4 { 0 => ".  ", 1 => ".. ", 2 => "...", _ => "   " };
+    let text_w = MinGuiCompositor::text_width(message, 1);
+    let dots_w = MinGuiCompositor::text_width(dots, 1);
+    let group_w = text_w + 4 + dots_w;
+    let text_x = cx.saturating_sub(group_w / 2);
+    MinGuiCompositor::draw_string(fb, text_x, bar_y + 20, message, Color::TEXT_MUTED);
+    let dots_x = text_x + text_w + 4;
+    MinGuiCompositor::draw_string(fb, dots_x, bar_y + 20, dots, Color::ACCENT_BLUE);
+    fb.flush();
+}
+
+/// Draw a short-lived busy panel before a synchronous operation begins.
+/// The static indicator remains visible until the current disk call returns.
+pub fn draw_busy_overlay(fb: &mut Framebuffer, mx: usize, my: usize, message: &str, progress: usize) {
+    let w = 340.min(fb.width.saturating_sub(24));
+    let h = 104;
+    let x = fb.width.saturating_sub(w) / 2;
+    let y = fb.height.saturating_sub(h) / 2;
+    fb.draw_rounded_rect(x, y, w, h, 8, Color::WINDOW_BG);
+    fb.draw_rounded_rect_outline(x, y, w, h, 8, Color::ACCENT_BLUE);
+    MinGuiCompositor::draw_string(fb, x + 18, y + 16, message, Color::TEXT_MAIN);
+    let bx = x + 18;
+    let by = y + 52;
+    let bw = w.saturating_sub(36);
+    fb.draw_rounded_rect(bx, by, bw, 14, 4, Color::DARK_BG);
+    fb.draw_rounded_rect(bx + 1, by + 1, bw.saturating_sub(2) * progress.min(100) / 100, 12, 3, Color::ACCENT_BLUE);
+    let label = if progress >= 100 { "100%" } else { "Calisiyor..." };
+    MinGuiCompositor::draw_string(fb, bx, by + 22, label, Color::TEXT_MUTED);
+
+    // Hourglass style busy pointer.
+    const HOURGLASS: [u8; 9] = [0b11111110, 0b01000100, 0b00101000, 0b00010000, 0b00101000, 0b01000100, 0b11111110, 0b00010000, 0b00101000];
+    for (row, bits) in HOURGLASS.iter().enumerate() {
+        for col in 0..8 {
+            if bits & (1 << (7 - col)) != 0 {
+                fb.put_pixel(mx + col, my + row, Color::ACCENT_YELLOW);
+            }
+        }
+    }
+    fb.flush_rect((x, y, w, h));
+    fb.flush_rect((mx, my, 10, 10));
+}
+
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let w = 480.min(width.saturating_sub(24)).max(320);
@@ -897,7 +960,7 @@ impl MinGuiCompositor {
     pub fn add_window(&mut self, mut win: Window) -> bool {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
-                if win.app_id == u8::MAX && idx < 11 { win.app_id = idx as u8; }
+                if win.app_id == u8::MAX && idx < 12 { win.app_id = idx as u8; }
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
@@ -1351,7 +1414,10 @@ impl MinGuiCompositor {
     }
 
     pub fn draw_cat_icon_scaled(fb: &mut Framebuffer, x: usize, y: usize) {
-        let s = Self::icon_size();
+        Self::draw_cat_icon_at_size(fb, x, y, Self::icon_size());
+    }
+
+    fn draw_cat_icon_at_size(fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
         let mut bitmap = [0u32; 256];
         const CAT_ICON_MAP: [u16; 16] = [
             0b0110000000000110,
@@ -1390,7 +1456,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap(fb, x, y, size, &bitmap);
     }
 
     /// Bilgisayarım / Dosya Yöneticisi Simgesi (16x16)
@@ -1611,7 +1677,11 @@ impl MinGuiCompositor {
 
         // Masaüstü Sağ Üst minOs Kedi Logosu ve Başlığı (Watermark)
         // Metin genişliğine göre sağa hizalanır; sağ kenardan taşmaz.
-        let title = "minOs Sarman Edition";
+        let title = if crate::fs::diskfs::is_installed() {
+            "minOs Sarman Edition *"
+        } else {
+            "minOs (Live)"
+        };
         let title_w = Self::text_width(title, 1);
         let icon_w = Self::icon_size();
         let gap = sp(8);
@@ -2535,7 +2605,7 @@ impl MinGuiCompositor {
 
             // Çizim: Simgeler (İkonlar) — öğe içinde dikey ortalanır.
             let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
-            if app_or_code < 11 {
+            if app_or_code < 12 {
                 let icon_idx = Self::window_icon_index(app_or_code);
                 Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
             } else {

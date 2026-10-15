@@ -270,6 +270,12 @@ pub struct UsbControllerInfo {
     pub is_mmio: bool,
 }
 
+static mut DETECTED_CONTROLLER: Option<UsbControllerInfo> = None;
+
+pub fn controller_info() -> Option<UsbControllerInfo> {
+    unsafe { DETECTED_CONTROLLER }
+}
+
 /// 1. Aşama Testi: PCI veri yolunda USB Host Denetleyicisini tespit ve test eder.
 pub fn test_usb_controller() -> Option<UsbControllerInfo> {
     for dev in 0..32u8 {
@@ -303,14 +309,16 @@ pub fn test_usb_controller() -> Option<UsbControllerInfo> {
                 let cmd = pci_read32(0, dev, func, 0x04);
                 pci_write32(0, dev, func, 0x04, (cmd & 0xFFFF_FFF8) | 0x07);
 
-                return Some(UsbControllerInfo {
+                let info = UsbControllerInfo {
                     controller_type: ctype,
                     bus: 0,
                     dev,
                     func,
                     base_addr,
                     is_mmio,
-                });
+                };
+                unsafe { DETECTED_CONTROLLER = Some(info); }
+                return Some(info);
             }
         }
     }

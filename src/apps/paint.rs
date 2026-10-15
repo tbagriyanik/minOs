@@ -10,7 +10,9 @@ const MAX_BRUSH_SIZE: usize = 24;
 const ERASER_RADIUS: usize = 14;
 /// Araç çubuğu yüksekliği (px). Pencere içi tuvalin üst boşluğu buradan gelir.
 const TOOLBAR_H: usize = 58;
-const EMPTY_POINT: PaintPoint = PaintPoint { x: 0, y: 0, color: Color::ACCENT_BLUE };
+/// Tuval renkleri tema jetonu değildir; seçilen RGB değerleri çizimde ve BMP'de sabit kalır.
+pub const PALETTE: [u32; 4] = [0x0078D7, 0xE53935, 0x2E8B57, 0x000000];
+const EMPTY_POINT: PaintPoint = PaintPoint { x: 0, y: 0, color: PALETTE[0] };
 
 const BMP_W: usize = 800;
 const BMP_H: usize = 600;
@@ -28,6 +30,7 @@ pub struct PaintApp {
     pub color: u32,
     pub eraser: bool,
     pub brush_size: usize,
+    pub zoom: usize,
     pub last: Option<(usize, usize)>,
     pub status_msg: &'static str,
     /// Son üretilen BMP; VFS'nin RAM kopyası olmadan kaydedilip tekrar açılır.
@@ -39,9 +42,10 @@ impl PaintApp {
         Self {
             len: 0,
             points: alloc::vec![EMPTY_POINT; MAX_POINTS].into_boxed_slice(),
-            color: Color::ACCENT_BLUE,
+            color: PALETTE[0],
             eraser: false,
             brush_size: 7,
+            zoom: 100,
             last: None,
             status_msg: "",
             saved_bmp: alloc::sync::Arc::from([]),
@@ -69,7 +73,13 @@ impl PaintApp {
         if cw == 0 || ch == 0 || px < cx || py < cy || px >= cx + cw || py >= cy + ch {
             return None;
         }
-        Some((px - cx, py - cy))
+        let zoom = self.zoom.max(1);
+        let logical_x = (((px - cx) as isize - (cw / 2) as isize) * 100 / zoom as isize
+            + (cw / 2) as isize).max(0) as usize;
+        let logical_y = (((py - cy) as isize - (ch / 2) as isize) * 100 / zoom as isize
+            + (ch / 2) as isize).max(0) as usize;
+        if logical_x >= cw || logical_y >= ch { return None; }
+        Some((logical_x, logical_y))
     }
 
     /// Verilen tuval noktasına fırça uygular. Windows Paint gibi: hızlı fare
@@ -92,7 +102,11 @@ impl PaintApp {
             }
             let px = (sx as isize + dx * i as isize / steps as isize).max(0) as usize;
             let py = (sy as isize + dy * i as isize / steps as isize).max(0) as usize;
-            self.points[self.len] = PaintPoint { x: px, y: py, color: self.color };
+            self.points[self.len] = PaintPoint {
+                x: px,
+                y: py,
+                color: crate::gui::theme::resolve(self.color),
+            };
             self.len += 1;
         }
         self.last = Some((x, y));
@@ -209,20 +223,26 @@ impl PaintApp {
         let canvas_h = ch;
         fb.draw_rect(canvas_x, canvas_y, canvas_w, canvas_h, Color::WHITE);
         fb.draw_rect_outline(canvas_x, canvas_y, canvas_w, canvas_h, Color::BORDER);
+        let zoom = self.zoom.max(1);
         for i in 0..self.len {
             let point = self.points[i];
             if point.x < canvas_w && point.y < canvas_h {
                 // Noktayı fırça boyutuna göre ortala (kalem merkezli çizim).
-                let px = canvas_x + point.x.saturating_sub(self.brush_size / 2);
-                let py = canvas_y + point.y.saturating_sub(self.brush_size / 2);
-                fb.draw_rect(px, py, self.brush_size, self.brush_size, point.color);
+                let px = (canvas_x as isize + canvas_w as isize / 2
+                    + (point.x as isize - canvas_w as isize / 2) * zoom as isize / 100).max(0) as usize;
+                let py = (canvas_y as isize + canvas_h as isize / 2
+                    + (point.y as isize - canvas_h as isize / 2) * zoom as isize / 100).max(0) as usize;
+                let brush = (self.brush_size * zoom / 100).max(1);
+                if px >= canvas_x && py >= canvas_y && px < canvas_x + canvas_w && py < canvas_y + canvas_h {
+                    fb.draw_rect(px.saturating_sub(brush / 2), py.saturating_sub(brush / 2), brush, brush, point.color);
+                }
             }
         }
 
         let toolbar_width = w.saturating_sub(16);
         let palette_start = if toolbar_width >= 258 { x + 58 } else { x + 40 };
         MinGuiCompositor::draw_string(fb, x + 14, y + 40, crate::gui::ui_text("Kalem:", "Pen:"), Color::TEXT_MAIN);
-        for (i, color) in [Color::ACCENT_BLUE, Color::ACCENT_RED, Color::ACCENT_GREEN, Color::BLACK]
+        for (i, color) in PALETTE
             .iter()
             .enumerate()
         {
@@ -275,6 +295,14 @@ impl PaintApp {
             self.brush_size = (self.brush_size + 1).min(MAX_BRUSH_SIZE);
         } else if delta < 0 {
             self.brush_size = self.brush_size.saturating_sub(1).max(MIN_BRUSH_SIZE);
+        }
+    }
+
+    pub fn adjust_zoom(&mut self, delta: i8) {
+        if delta > 0 {
+            self.zoom = (self.zoom + 10).min(300);
+        } else if delta < 0 {
+            self.zoom = self.zoom.saturating_sub(10).max(50);
         }
     }
 }

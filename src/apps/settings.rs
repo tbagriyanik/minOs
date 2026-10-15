@@ -1032,7 +1032,7 @@ impl SystemSettings {
         info.push_usize(if self.test_mouse_over { self.test_mouse_x } else { 0 });
         info.push_str("  Y: ");
         info.push_usize(if self.test_mouse_over { self.test_mouse_y } else { 0 });
-        MinGuiCompositor::draw_string(fb, pad.0, pad.1 + pad.3 + 4, info.as_str(), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, pad.0 + 8, pad.1 + pad.3.saturating_sub(18), info.as_str(), Color::TEXT_MUTED);
 
         let mut wheel = TextBuf::new();
         wheel.push_str(if english { "Wheel: " } else { "Tekerlek: " });

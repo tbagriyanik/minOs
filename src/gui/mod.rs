@@ -121,7 +121,7 @@ pub fn draw_busy_overlay(fb: &mut Framebuffer, _mx: usize, _my: usize, message: 
     fb.draw_rounded_rect(bx + 1, by + 1, bw.saturating_sub(2) * pct / 100, 12, 3, Color::ACCENT_BLUE);
     // Yüzde etiketi: çubukla tutarlı tek bir değer gösterir.
     let mut label = TextBuf::new();
-    label.push_u2(pct as u32);
+    label.push_usize(pct);
     label.push_str("%");
     MinGuiCompositor::draw_string(fb, bx, by + 22, label.as_str(), Color::TEXT_MUTED);
     fb.flush_rect((x, y, w, h));

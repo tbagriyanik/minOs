@@ -100,14 +100,17 @@ pub fn init() {
         mouse_write(0xF3); mouse_write(100);
         mouse_write(0xF3); mouse_write(80);
 
-        // Fare kimliğini (Device ID) kontrol et (0x03 ise scroll wheel destekli)
+        // Fare kimliğini (Device ID) kontrol et (0x03 / 0x04 ise scroll wheel destekli)
+        // Not: Kimlik sorgusundan hemen önce tamponu temizle; aksi halde artakalan
+        // bayt (ör. gecikmiş ACK) kimlik değerini bozar ve tekerlek hiç çalışmaz.
+        while inb(0x64) & 0x01 != 0 { let _ = inb(0x60); }
         wait_write(); outb(0x64, 0xD4);
         wait_write(); outb(0x60, 0xF2);
         if wait_read() {
             let _ = inb(0x60); // ACK
             if wait_read() {
                 let dev_id = inb(0x60);
-                if dev_id == 3 {
+                if dev_id == 3 || dev_id == 4 {
                     HAS_WHEEL = true;
                 }
             }

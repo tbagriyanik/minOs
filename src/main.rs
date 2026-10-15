@@ -401,6 +401,8 @@ struct BusyProgressContext {
 /// değişkenlerine işaretçiler. `main` başlangıcında bir kez ayarlanır.
 static mut BUSY_MOUSE: *mut drivers::mouse::MouseState = core::ptr::null_mut();
 static mut BUSY_KEYBOARD: *mut drivers::keyboard::KeyboardState = core::ptr::null_mut();
+/// Uzun işlem bittiğinde ana döngüyü tam yeniden çizmeye zorlar (panel temizliği).
+static mut BUSY_DIRTY: bool = false;
 
 /// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
 fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> usize {
@@ -414,21 +416,18 @@ fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> u
 fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     if context.is_null() { return; }
     let state = unsafe { &mut *(context as *mut BusyProgressContext) };
-    let fb = unsafe { &mut *state.fb };
 
     // 1. Girişi pompa'la: uzun işlem sürerken fare imleci donmasın.
     unsafe {
         if !BUSY_MOUSE.is_null() && !BUSY_KEYBOARD.is_null() {
-            drivers::ps2::poll_input(
-                &mut *BUSY_MOUSE,
-                &mut *BUSY_KEYBOARD,
-                fb.width as i32,
-                fb.height as i32,
-            );
+            let w = (*state.fb).width as i32;
+            let h = (*state.fb).height as i32;
+            drivers::ps2::poll_input(&mut *BUSY_MOUSE, &mut *BUSY_KEYBOARD, w, h);
             state.mx = (*BUSY_MOUSE).x.max(0) as usize;
             state.my = (*BUSY_MOUSE).y.max(0) as usize;
         }
     }
+    let fb = unsafe { &mut *state.fb };
 
     // 2. Önceki kum saati imlecini temizle.
     if state.cursor_shown {
@@ -467,6 +466,8 @@ fn with_busy_progress<T>(
     let fb = unsafe { &mut *state.fb };
     if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
     gui::draw_busy_overlay(fb, mx, my, message, 100);
+    // Panel bir sonraki tam yeniden çizimde kalksın.
+    unsafe { BUSY_DIRTY = true; }
     result
 }
 
@@ -3376,8 +3377,13 @@ pub extern "C" fn _start() -> ! {
                 settings_app.capture_mouse_test(mx, my, mouse.left_button, mouse.right_button, mouse.middle_button, w.x, w.y);
             }
         }
+        let busy_dirty = unsafe {
+            let dirty = BUSY_DIRTY;
+            BUSY_DIRTY = false;
+            dirty
+        };
         let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
-            || force_render || (mouse_moved && (is_interacting || night_light_active || settings_test_active))
+            || force_render || busy_dirty || (mouse_moved && (is_interacting || night_light_active || settings_test_active))
             || (timer_tick_fired && media_animating);
 
         if full_redraw {

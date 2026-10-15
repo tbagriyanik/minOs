@@ -2954,6 +2954,8 @@ impl MinGuiCompositor {
 
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
         fb.save_cursor_background(mx, my);
+        // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
+        // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
         let over_control = self.windows.iter().flatten().any(|win| {
             win.is_open && !win.is_minimized && in_rect(mx, my, win.close_rect())

@@ -40,6 +40,10 @@ pub struct Framebuffer {
     cursor_w: usize,
     cursor_h: usize,
     cursor_saved: bool,
+    /// Donanım imleci aktifse yazılım sprite'ı atlanır (yalnızca konum izlenir).
+    pub hw_cursor: bool,
+    /// Fiziksel mod değişemediğinde mantıksal ölçek (sanal çözünürlük).
+    pub scale: usize,
 }
 
 #[inline(always)]
@@ -113,7 +117,36 @@ impl Framebuffer {
             cursor_w: 0,
             cursor_h: 0,
             cursor_saved: false,
+            hw_cursor: false,
+            scale: 1,
         }
+    }
+
+    /// Donanım imlecini aç/kapat. Açıkken `save/restore_cursor_background`
+    /// no-op olur; konum `drivers::gpu` üzerinden izlenir.
+    pub fn set_hw_cursor(&mut self, enable: bool) {
+        self.hw_cursor = enable;
+        crate::drivers::gpu::hw_cursor_enable(enable);
+        if enable { self.cursor_saved = false; }
+    }
+
+    /// BGA/VESA mod değişimi sonrası geometriyi günceller.
+    /// Adres aynı kalır (BGA LFB sabittir); backbuffer sınırları korunur.
+    pub fn resize(&mut self, width: usize, height: usize, pitch: usize) -> bool {
+        if width == 0 || height == 0 { return false; }
+        let total = match width.checked_mul(height) {
+            Some(p) => p, None => return false,
+        };
+        if total > BACKBUFFER_LEN { return false; }
+        if pitch < width * 4 || pitch % 4 != 0 { return false; }
+        self.width = width;
+        self.height = height;
+        self.pitch = pitch;
+        self.reset_clip();
+        self.cursor_saved = false;
+        self.clear(0x000000);
+        self.flush();
+        true
     }
 
     /// Çizim sınırları, kırpma, taşma güvenliği, renk derinliği ve pitch hesaplamasını doğrular.
@@ -237,7 +270,10 @@ impl Framebuffer {
     }
 
     /// İmlecin kaplayacağı arka planı, kısmi imleç çizimleri için saklar.
+    /// Donanım imleci aktifse yalnızca konumu GPU'ya bildirir.
     pub fn save_cursor_background(&mut self, x: usize, y: usize) {
+        // Konumu her durumda GPU'ya bildir (VMware/VGA HW hazır olunca kullanılır).
+        crate::drivers::gpu::hw_cursor_move(x.min(32767) as u16, y.min(32767) as u16);
         // Yeniden boyutlandırma imleci fare noktasının 3 piksel üst/soluna taşar.
         self.cursor_x = x.saturating_sub(3).min(self.width);
         self.cursor_y = y.saturating_sub(3).min(self.height);

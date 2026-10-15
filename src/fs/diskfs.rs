@@ -8,6 +8,8 @@
 //! sayfa açabilmek.
 
 use crate::drivers::ata;
+extern crate alloc;
+use alloc::string::ToString;
 
 /// Listelenen azami girdi sayısı (giriş başına sabit alanlar).
 pub const MAX_ENTRIES: usize = 64;
@@ -20,6 +22,7 @@ pub const CONTENT_MAX: usize = 2048;
 pub enum FsKind {
     None,
     Fat32,
+    Ext2,
     Iso9660,
 }
 
@@ -28,6 +31,7 @@ impl FsKind {
         match (self, english) {
             (FsKind::Fat32, true) => "FAT32",
             (FsKind::Fat32, false) => "FAT32",
+            (FsKind::Ext2, _) => "Ext2",
             (FsKind::Iso9660, true) => "ISO9660",
             (FsKind::Iso9660, false) => "ISO9660",
             (FsKind::None, true) => "No medium",
@@ -753,11 +757,16 @@ pub fn init() {
         ata::init();
         READY = true;
     }
-    // 1) Master → Sabit Disk / USB bellek (FAT32)
+    // 1) Master → Sabit Disk / USB bellek (FAT32 veya Ext2)
     if ata::master_kind() == ata::DeviceKind::Ata {
+        let _ = crate::fs::part::probe(0);
         let part = find_partition_lba(0);
         let candidate = if part > 0 { part } else { 0 };
-        if fat_mount(0, candidate) {
+        // Önce Ext2 dene (kalıcı Linux bölümü), sonra FAT32
+        if crate::fs::ext2::mount(0, candidate) || (candidate != 0 && crate::fs::ext2::mount(0, 0)) {
+            unsafe { KIND0 = FsKind::Ext2; }
+            serial("[FS] Sabit Disk / USB Ext2 olarak baglandi.\n");
+        } else if fat_mount(0, candidate) {
             unsafe { KIND0 = FsKind::Fat32; }
             serial("[FS] Sabit Disk / USB FAT32 olarak baglandi.\n");
         } else if fat_mount(0, 0) {
@@ -858,6 +867,7 @@ pub fn refresh() -> usize {
     let ok = unsafe {
         match KIND0 {
             FsKind::Fat32 => fat_list_root(),
+            FsKind::Ext2 => ext2_list_root(),
             FsKind::Iso9660 => iso_list_root(),
             FsKind::None => {
                 // USB yoksa CD-ROM'u dene
@@ -990,11 +1000,74 @@ fn load_file_body(index: usize, size: usize) -> usize {
         let kind = if KIND0 != FsKind::None { KIND0 } else { KIND1 };
         match kind {
             FsKind::Fat32 => fat_load_file(index, size),
+            FsKind::Ext2 => ext2_load_file(index, size),
             FsKind::Iso9660 => iso_load_file(index, size),
             FsKind::None => 0,
         }
     }
 }
+
+/// Ext2 kök dizin listesini VFS DiskEntry tablosuna doldurur.
+fn ext2_list_root() -> bool {
+    if !crate::fs::ext2::mounted() { return false; }
+    let items = crate::fs::ext2::list_dir("/");
+    unsafe {
+        let mut count = 0usize;
+        for (name, is_dir, size) in items.iter() {
+            if count >= MAX_ENTRIES { break; }
+            let mut e = DiskEntry::empty();
+            let n = name.len().min(NAME_MAX);
+            e.name[..n].copy_from_slice(&name[..n]);
+            e.name_len = n;
+            e.is_dir = *is_dir;
+            e.size = *size as usize;
+            ENTRIES[count] = e;
+            count += 1;
+        }
+        ENTRY_COUNT = count;
+        true
+    }
+}
+
+fn ext2_load_file(index: usize, size: usize) -> usize {
+    let name = unsafe {
+        if index >= ENTRY_COUNT { return 0; }
+        ENTRIES[index].as_str().to_string()
+    };
+    let mut data = alloc::vec::Vec::new();
+    let path = alloc::format!("/{}", name);
+    if !crate::fs::ext2::read_file(&path, &mut data) { return 0; }
+    unsafe {
+        let take = data.len().min(size).min(CONTENT_MAX);
+        CONTENT[..take].copy_from_slice(&data[..take]);
+        CONTENT_LEN = take;
+        take
+    }
+}
+
+/// Bölümleme API'leri (MBR/GPT) — kalıcı disk hazırlığı için.
+pub use crate::fs::part::{probe as part_probe, table_kind, count as part_count, get as part_get};
+pub fn part_write_mbr(drive: u8, entries: &[(u64,u64,u8,bool)]) -> bool {
+    crate::fs::part::write_mbr(drive, entries)
+}
+pub fn part_write_gpt(drive: u8, entries: &[(u64,u64)]) -> bool {
+    crate::fs::part::write_gpt(drive, entries)
+}
+pub fn ext2_format_drive(drive: u8, start_lba: u64, sectors: u64) -> bool {
+    crate::fs::ext2::format(drive, start_lba as u32, sectors)
+}
+pub fn ext2_mounted() -> bool { crate::fs::ext2::mounted() }
+pub fn ext2_list(path: &str) -> alloc::vec::Vec<(alloc::vec::Vec<u8>, bool, u32)> {
+    crate::fs::ext2::list_dir(path)
+}
+pub fn ext2_read(path: &str) -> Option<alloc::vec::Vec<u8>> {
+    let mut out = alloc::vec::Vec::new();
+    if crate::fs::ext2::read_file(path, &mut out) { Some(out) } else { None }
+}
+pub fn ext2_write(path: &str, data: &[u8]) -> bool {
+    crate::fs::ext2::write_file(path, data)
+}
+pub fn ext2_mkdir(path: &str) -> bool { crate::fs::ext2::mkdir(path) }
 
 /// FAT32 kök dizinindeki `index`. girdinin içeriğini okur.
 fn fat_load_file(index: usize, size: usize) -> usize {
@@ -1158,6 +1231,12 @@ pub fn cd_available() -> bool {
 /// FAT32 ortamında dosya siler (dizin girdisini 0xE5 olarak işaretler).
 pub fn delete_file_by_name(name: &str) -> bool {
     unsafe {
+        if KIND0 == FsKind::Ext2 {
+            // Ext2: dosyayı sıfır baytla üzerine yaz (basit silme); dizin girdisi kalır
+            let path = alloc::format!("/{}", name);
+            if crate::fs::ext2::write_file(&path, &[]) { refresh(); return true; }
+            return false;
+        }
         if KIND0 != FsKind::Fat32 {
             return false;
         }
@@ -1266,6 +1345,13 @@ pub fn rename_by_name(old_name: &str, new_name: &str) -> bool {
 /// FAT32 ortamında dosya içeriğini kaydeder / yazar (mevcutsa günceller, yoksa yeni oluşturur).
 pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
     unsafe {
+        if KIND0 == FsKind::Ext2 {
+            // 8.3 kısıtı yok: Ext2 uzun isim destekler
+            let path = alloc::format!("/{}", name);
+            let ok = crate::fs::ext2::write_file(&path, data);
+            if ok { refresh(); if name.eq_ignore_ascii_case("MINOS.SYS") { INSTALLED = true; } }
+            return ok;
+        }
         if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) {
             return false;
         }

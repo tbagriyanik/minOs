@@ -363,7 +363,7 @@ fn handle_ipv4(payload: &[u8]) {
     }
 }
 
-fn transport_checksum(src: Ipv4Address, dst: Ipv4Address, proto: u8, data: &[u8]) -> u16 {
+pub(crate) fn transport_checksum(src: Ipv4Address, dst: Ipv4Address, proto: u8, data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     for pair in src.0.chunks(2).chain(dst.0.chunks(2)) {
         sum += ((pair[0] as u32) << 8) | pair[1] as u32;
@@ -424,6 +424,12 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     let src_port = u16::from_be_bytes([payload[0], payload[1]]);
     let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
     if dst_port==68 && src_port==67 { handle_dhcp(src_ip,data); return; }
+    // Soket UDP portuna gelen datagram soket tamponuna gider (DNS yolu korunur).
+    if dst_port != 68 && src_port != DNS_PORT
+        && crate::drivers::socket::on_udp_datagram(src_ip, src_port, dst_port, data)
+    {
+        return;
+    }
     if src_port == DNS_PORT && src_ip == dns_server() && data.len() >= 12 {
         let id = u16::from_be_bytes([data[0], data[1]]);
         let flags = u16::from_be_bytes([data[2], data[3]]);
@@ -449,6 +455,10 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
 }
 
 fn handle_tcp(src_ip: Ipv4Address, payload: &[u8]) {
+    // Önce soket tablosuna danış; eşleşme yoksa eski tek-bağlantılı yola düş.
+    if crate::drivers::socket::on_tcp_segment(src_ip, payload) {
+        return;
+    }
     if payload.len() < 20 { return; }
     if transport_checksum(src_ip, local_ip(), IP_PROTO_TCP, payload) != 0 { return; }
     let off = ((payload[12] >> 4) as usize) * 4;
@@ -572,7 +582,7 @@ pub fn parse_ipv4(host: &str) -> Option<Ipv4Address> {
     if parts.next().is_some(){None}else{Some(Ipv4Address(ip))}
 }
 
-fn send_tcp_segment(dst: Ipv4Address, dst_port:u16, src_port:u16, seq:u32, ack:u32, flags:u8, data:&[u8]) -> bool {
+pub(crate) fn send_tcp_segment(dst: Ipv4Address, dst_port:u16, src_port:u16, seq:u32, ack:u32, flags:u8, data:&[u8]) -> bool {
     if data.len()>1300{return false;}
     let mut seg=[0u8;1400];
     seg[0..2].copy_from_slice(&src_port.to_be_bytes()); seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
@@ -760,6 +770,15 @@ pub fn run_network_self_test() -> bool {
         }
     } else {
         crate::serial_print("TCP paketi iletilemedi\n");
+    }
+
+    // 4. Soket API + HTTP istemcisi mantık self-testleri (NIC gerektirmez).
+    let sock_ok = crate::drivers::socket::self_test();
+    let http_ok = crate::drivers::http::self_test();
+    if sock_ok && http_ok {
+        crate::serial_print("[NET-TEST] Soket + HTTP mantik testleri: BASARILI\n");
+    } else {
+        crate::serial_print("[NET-TEST] Soket/HTTP mantik testleri: BASARISIZ\n");
     }
 
     ping_sent

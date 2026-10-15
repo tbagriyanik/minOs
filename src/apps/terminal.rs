@@ -18,7 +18,7 @@ pub const LINE_MAX: usize = 64;
 
 const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
-    "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns",
+    "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "curl",
     "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
@@ -429,7 +429,7 @@ impl TerminalApp {
         match cmd {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df echo clear mem ps", Color::TEXT_MAIN);
-                self.push_line("ping <IPv4> | dns <host> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
+                self.push_line("ping <IPv4> | dns <host> | curl <url> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
                 self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
@@ -692,6 +692,65 @@ impl TerminalApp {
                         if sent { self.push_line(crate::gui::ui_text("Echo isteği gönderildi; yanıt bekleme henüz yok.", "Echo request transmitted; reply wait is unavailable."), Color::TEXT_MUTED); }
                     }
                     None => self.push_line(crate::gui::ui_text("Kullanım: ping <IPv4 adresi>", "Usage: ping <IPv4 address>"), Color::ACCENT_YELLOW),
+                }
+            }
+            "curl" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: curl http://<host>[:port][/yol]", "Usage: curl http://<host>[:port][/path]"), Color::ACCENT_YELLOW);
+                } else if !crate::drivers::e1000::is_ready() {
+                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                } else {
+                    self.push_line(crate::gui::ui_text("İndiriliyor...", "Downloading..."), Color::TEXT_MUTED);
+                    let mut buf = alloc::vec::Vec::new();
+                    buf.resize(24576, 0);
+                    match crate::drivers::http::http_get(arg, &mut buf) {
+                        Ok((status, hlen, total)) => {
+                            let mut b = TextBuf::new();
+                            b.push_str("HTTP ");
+                            b.push_usize(status as usize);
+                            b.push_str("  (");
+                            b.push_usize(total as usize);
+                            b.push_str(" bytes)");
+                            self.push_line(b.as_str(), if status < 400 { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                            // Gövdeyi metin satırları hâlinde dök (en fazla 60 satır).
+                            let body = &buf[hlen.min(total)..total];
+                            let mut line = TextBuf::new();
+                            let mut lines = 0usize;
+                            for &c in body {
+                                if c == b'\n' || line.len() >= 62 {
+                                    self.push_line(line.as_str(), Color::TEXT_MAIN);
+                                    line.clear();
+                                    lines += 1;
+                                    if lines >= 60 {
+                                        break;
+                                    }
+                                    if c == b'\n' {
+                                        continue;
+                                    }
+                                }
+                                if c == b'\r' {
+                                    continue;
+                                }
+                                line.push_byte(if c.is_ascii_graphic() || c == b' ' || c == b'\t' {
+                                    c
+                                } else {
+                                    b'?'
+                                });
+                            }
+                            if lines < 60 && (!line.is_empty() || lines == 0) {
+                                if line.is_empty() && lines == 0 {
+                                    self.push_line("(empty body)", Color::TEXT_MUTED);
+                                } else {
+                                    self.push_line(line.as_str(), Color::TEXT_MAIN);
+                                }
+                            } else if lines >= 60 {
+                                self.push_line("... (truncated)", Color::TEXT_MUTED);
+                            }
+                        }
+                        Err(_) => {
+                            self.push_line(crate::gui::ui_text("curl: indirme başarısız (ağ/DNS/HTTP hatası).", "curl: download failed (network/DNS/HTTP error)."), Color::ACCENT_RED);
+                        }
+                    }
                 }
             }
             "dns" => {

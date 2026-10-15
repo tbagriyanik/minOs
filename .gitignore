@@ -8,6 +8,9 @@ minos_boot.iso
 # Generated build and emulator output
 build_output*.txt
 qemu_err.txt
+*.sock
+qemu-mon.sock
+qmp.sock
 
 # Temporary test scripts and logs
 convert*.ps1

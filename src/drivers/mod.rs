@@ -1,10 +1,13 @@
 pub mod video;
+pub mod gpu;
 pub mod mouse;
 pub mod net;
 pub mod audio;
 pub mod hda;
 pub mod e1000;
 pub mod netstack;
+pub mod socket;
+pub mod http;
 pub mod keyboard;
 pub mod ps2;
 pub mod rtc;

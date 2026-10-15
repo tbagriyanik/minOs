@@ -1009,6 +1009,18 @@ pub extern "C" fn _start() -> ! {
         serial_print("[VIDEO] UYARI: Cizim sinirlari veya pitch dogrulamasi basarisiz!\n");
     }
 
+    // 4b. Gelişmiş grafik sürücüleri: BGA/VMware/VGA yetenek taraması.
+    let gpu_caps = drivers::gpu::init();
+    if gpu_caps.bga_present {
+        serial_print("[GPU] BGA algilandi, cozunurluk degisimi acik.\n");
+        // BGA grafik modda HW sprite yoktur; yazılım imleci çizilmeye devam
+        // edilir (görünürlük için şart). CRTC'ye konum bildirimi sürer.
+        fb.set_hw_cursor(false);
+        serial_print("[GPU] Hizlandirilmis yazilim imleci etkin.\n");
+    } else {
+        serial_print("[GPU] BGA yok; cozunurluk Limine ile sabit, yazilim imleci.\n");
+    }
+
     // 5. PS/2 Donanım Sürücüleri
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
@@ -1059,6 +1071,8 @@ pub extern "C" fn _start() -> ! {
         let _ = fs_mgr.vfs.write_file("settings.cfg", cfg_bytes);
     }
     settings_app.load_from_vfs(&fs_mgr.vfs);
+    // DEBUG-REPRO-HOOK: ayarlar penceresini Display sekmesinde açık başlat.
+    settings_app.active_tab = 1;
     mouse.speed = settings_app.mouse_speed;
     mouse.reverse_scroll = settings_app.reverse_scroll;
     keyboard.layout = settings_app.keyboard_layout;
@@ -1136,6 +1150,8 @@ pub extern "C" fn _start() -> ! {
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
+    // DEBUG-REPRO-HOOK: ayarlar penceresi açık başlasın.
+    open_app(&mut compositor, 1);
 
     // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
     if !fs::diskfs::is_installed() {
@@ -2017,7 +2033,13 @@ pub extern "C" fn _start() -> ! {
 
             // G) Masaüstü simgeleri
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
+                // Yenileme tıklama durumunu sıfırlar; çift tık tespiti için koru
+                // (yoksa her tıklama durumu siler ve çift tıklama hiç algılanamaz).
+                let saved_click_idx = desktop_files.last_click_idx;
+                let saved_click_ms = desktop_files.last_click_ms;
                 desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                desktop_files.last_click_idx = saved_click_idx;
+                desktop_files.last_click_ms = saved_click_ms;
                 if let Some((i, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                     desktop_files.select_row(i, keyboard.ctrl, keyboard.shift);
                     let now_ms = monotonic_ms();
@@ -2035,16 +2057,22 @@ pub extern "C" fn _start() -> ! {
                         } else {
                             let tag = desktop_files.files[i].icon_tag;
                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                if let Some(data) = fs_mgr.vfs.read_file(&p) { notepad_app.open_file(&p, data); open_app(&mut compositor, 2); }
-                            } else if tag == "IMG" { open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
+                                if let Some(data) = data { notepad_app.open_file(&p, data); }
+                                open_app(&mut compositor, 2);
+                            } else if tag == "IMG" {
+                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                open_app(&mut compositor, 4);
+                            }
                             else if tag == "SND" { open_app(&mut compositor, 5); }
                             else if tag == "VID" { open_app(&mut compositor, 6); }
                             else if tag == "WEB" { open_app(&mut compositor, 3); }
                             else if tag == "3D" {
-                                if let Some(data) = fs_mgr.vfs.read_file(&p) {
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
+                                if let Some(data) = data {
                                     viewer3d_app.load_file(&p, data);
-                                    open_app(&mut compositor, 12);
                                 }
+                                open_app(&mut compositor, 12);
                             }
                         }
                     } else {
@@ -2338,9 +2366,21 @@ pub extern "C" fn _start() -> ! {
                                                 settings_app.screen_res = requested;
                                                 settings_app.display_res = requested;
                                                 settings_app.status_msg = gui::ui_text("Bu çözünürlük zaten etkin.", "This resolution is already active.");
-                                            } else {
-                                                settings_app.screen_res = (fb.width, fb.height);
-                                                settings_app.status_msg = gui::ui_text("Çözünürlük açılışta Limine tarafından belirlenir.", "Resolution is set by Limine at boot.");
+                                            } else if drivers::gpu::mode_supported(requested.0, requested.1) {
+                                                let (switched, pitch) = drivers::gpu::try_set_resolution(requested.0, requested.1);
+                                                if switched {
+                                                    let p = pitch.unwrap_or(requested.0 * 4);
+                                                    if fb.resize(requested.0, requested.1, p) {
+                                                        settings_app.screen_res = requested;
+                                                        settings_app.display_res = requested;
+                                                        settings_app.status_msg = gui::ui_text("Çözünürlük değiştirildi (BGA).", "Resolution changed (BGA).");
+                                                    } else {
+                                                        settings_app.status_msg = gui::ui_text("Çözünürlük uygulanamadı (bellek sınırı).", "Resolution failed (memory limit).");
+                                                    }
+                                                } else {
+                                                    settings_app.screen_res = (fb.width, fb.height);
+                                                    settings_app.status_msg = gui::ui_text("Çözünürlük açılışta Limine tarafından belirlenir.", "Resolution is set by Limine at boot.");
+                                                }
                                             }
                                         }
                                     }
@@ -3099,6 +3139,9 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 0) {
                         enter_char_consumed = true;
+                        if filemanager_app.rename_active {
+                            filemanager_app.commit_rename(&mut fs_mgr.vfs);
+                        } else {
                         match filemanager_app.focused_control {
                             0 => filemanager_app.refresh_from_vfs(&fs_mgr.vfs),
                             1 => filemanager_app.new_file(&mut fs_mgr.vfs),
@@ -3132,6 +3175,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
+                        }
                         }
                     } else if app_is_focused(&compositor, 1) {
                         enter_char_consumed = true;
@@ -3889,6 +3933,7 @@ pub extern "C" fn _start() -> ! {
 
         // Ağ kartından gelen paketleri işle (ARP cevapları, ICMP vs.).
         drivers::e1000::poll();
+        drivers::socket::poll_timeouts();
         browser_app.poll_network();
 
         // Beş parçalı, HDA PCM tabanlı melodi yürütücüsü. (HDA yoksa PIT/PC speaker fallback).

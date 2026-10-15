@@ -397,8 +397,8 @@ struct BusyProgressContext {
     cursor_shown: bool,
 }
 
-static mut BUSY_MOUSE: *mut drivers::mouse::MouseState = core::ptr::null_mut();
-static mut BUSY_KEYBOARD: *mut drivers::keyboard::KeyboardState = core::ptr::null_mut();
+static mut GLOBAL_MOUSE: drivers::mouse::MouseState = drivers::mouse::MouseState::new();
+static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState = drivers::keyboard::KeyboardState::new();
 static mut BUSY_DIRTY: bool = false;
 
 /// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
@@ -416,13 +416,13 @@ fn draw_io_progress(context: *mut (), done: usize, total: usize) {
 
     // 1. Girişi pompa'la: uzun işlem sürerken fare imleci donmasın.
     unsafe {
-        if !BUSY_MOUSE.is_null() && !BUSY_KEYBOARD.is_null() {
-            let w = (*state.fb).width as i32;
-            let h = (*state.fb).height as i32;
-            drivers::ps2::poll_input(&mut *BUSY_MOUSE, &mut *BUSY_KEYBOARD, w, h);
-            state.mx = (*BUSY_MOUSE).x.max(0) as usize;
-            state.my = (*BUSY_MOUSE).y.max(0) as usize;
-        }
+        let w = (*state.fb).width as i32;
+        let h = (*state.fb).height as i32;
+        let mouse_ptr = core::ptr::addr_of_mut!(GLOBAL_MOUSE);
+        let kbd_ptr = core::ptr::addr_of_mut!(GLOBAL_KEYBOARD);
+        drivers::ps2::poll_input(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
+        state.mx = (*mouse_ptr).x.max(0) as usize;
+        state.my = (*mouse_ptr).y.max(0) as usize;
     }
     let fb = unsafe { &mut *state.fb };
 
@@ -975,12 +975,8 @@ pub extern "C" fn _start() -> ! {
     }
 
     // 5. PS/2 Donanım Sürücüleri
-    let mut mouse = drivers::mouse::MouseState::new();
-    let mut keyboard = drivers::keyboard::KeyboardState::new();
-    unsafe {
-        BUSY_MOUSE = &mut mouse;
-        BUSY_KEYBOARD = &mut keyboard;
-    }
+    let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
+    let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
 
     // 5b. Tema motorunu başlat
@@ -1105,7 +1101,7 @@ pub extern "C" fn _start() -> ! {
                 gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
                 welcome_dirty = false;
             }
-            drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+            drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
 
             // Enter veya Escape ile hoş geldin ekranını geç.
             while let Some(action) = keyboard.take_last_action() {
@@ -1348,7 +1344,7 @@ pub extern "C" fn _start() -> ! {
         let loop_start_cycles = read_cpu_cycles();
         mouse.speed = settings_app.mouse_speed;
         mouse.reverse_scroll = settings_app.reverse_scroll;
-        let input_update = drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+        let input_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
         loop_counter = loop_counter.wrapping_add(1);
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
@@ -2113,7 +2109,7 @@ pub extern "C" fn _start() -> ! {
                                     settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                                 } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
                                     settings_app.reset_defaults();
-                                    settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now);
+                                    settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now);
                                     settings_app.write_config(&mut fs_mgr.vfs);
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::dhcp_btn_rect(wx, wy)) {
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
@@ -2219,11 +2215,20 @@ pub extern "C" fn _start() -> ! {
                             }
                             2 => {
                                 // Not Defteri: Dosya/Düzen/Yardım araç çubuğu ve menü aksiyonları
-                                if my >= wy + 30 && my <= wy + 56 && mx >= wx + 8 && mx < wx + 60 { notepad_app.menu = 1; }
-                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 68 && mx < wx + 128 { notepad_app.menu = 2; }
-                                else if my >= wy + 30 && my <= wy + 56 && mx >= wx + 128 && mx < wx + 190 { notepad_app.menu = 3; }
-                                else if notepad_app.menu != 0 && mx >= wx + 8 && mx < wx + 340 && my >= wy + 54 && my < wy + 170 {
-                                    let item = (my.saturating_sub(wy + 54)) / 20;
+                                // Tıklama testleri, menü çizimiyle aynı geometri
+                                // yardımcılarını (apps::notepad) kullanır; böylece font
+                                // ölçeği 100'den farklıyken de koordinatlar örtüşür.
+                                let menu_tb_y = wy + 30;
+                                let menu_tb_h = crate::gui::sp(24);
+                                let tb_hit = my >= menu_tb_y && my < menu_tb_y + menu_tb_h;
+                                if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(1).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(1).1, menu_tb_h)) { notepad_app.menu = 1; }
+                                else if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(2).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(2).1, menu_tb_h)) { notepad_app.menu = 2; }
+                                else if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(3).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(3).1, menu_tb_h)) { notepad_app.menu = 3; }
+                                else if notepad_app.menu != 0
+                                    && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu), wy + crate::apps::notepad::NotepadApp::menu_box_y(), crate::apps::notepad::NotepadApp::menu_box_w(), crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu)))
+                                {
+                                    let rel_y = my.saturating_sub(wy + crate::apps::notepad::NotepadApp::menu_box_y() + crate::apps::notepad::NotepadApp::menu_pad());
+                                    let item = rel_y / crate::apps::notepad::NotepadApp::menu_item_h();
                                     match (notepad_app.menu, item) {
                                         // Dosya Menüsü: Yeni, Aç, Kaydet, Temizle
                                         (1, 0) => notepad_app.clear(),
@@ -2830,7 +2835,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     7 => settings_app.is_muted = !settings_app.is_muted,
                                     8 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); }
+                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); }
                                     _ => {}
                                 },
                                 1 => match settings_app.focused_control {
@@ -2849,7 +2854,7 @@ pub extern "C" fn _start() -> ! {
                                         now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
                                     }
                                     13 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
+                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                                 2 => match settings_app.focused_control {
@@ -2858,12 +2863,12 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
                                     }
                                     5 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
+                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                                 _ => match settings_app.focused_control {
                                     4 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    5 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
+                                    5 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                             }

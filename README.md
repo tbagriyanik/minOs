@@ -47,10 +47,10 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **12 adet yerleşik uygul
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
-| **🎵 Müzik Çalar** | HDA sürücüsü üzerinden PC hoparlöründen melodi çıkışı, animasyonlu spektrum ekolayzerı ve çalma listesi. |
+| **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`) ve RAM grafik çubuğu. |
-| **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
+| **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT` ve mevcut `settings.cfg` ayarlarını diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. |
@@ -257,7 +257,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1 -CpuCount 4 -Memory 2G -DiskI
 
 `-CpuCount` QEMU'nun SMP ayarını yapar. minOs çekirdeği şu anda çok çekirdekli (SMP) iş planlaması uygulamıyor; ek çekirdekler konukta paralel uygulama çalıştırma sağlamaz. RAM değeri QEMU'ya ayrılan miktardır. Disk imajı ayrıca oluşturulur ve `-DiskImage` ile bağlanır; USB disk seçenekleri fiziksel USB aygıtları içindir.
 
-> **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
+> **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. minOs açılışta test tonu çalmaz ve HDA akışını başlatmaz; ses, müzik veya video oynatımı kullanıcı tarafından başlatıldığında üretilir. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
 
 > **Ağ:** QEMU kullanıcı modu (SLIRP) ve `e1000` ile ARP/ping/TCP çalışır; `8080` portu konuk makinenin `80` portuna yönlendirilir (`hostfwd=tcp::8080-:80`).
 
@@ -355,8 +355,8 @@ minos/
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 45 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 21.982 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 18.591 satır |
+| **Toplam Kod Satırı (ham)** | 23.096 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 19.569 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 12 masaüstü uygulaması + Pencere Yöneticisi |

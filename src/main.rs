@@ -397,11 +397,8 @@ struct BusyProgressContext {
     cursor_shown: bool,
 }
 
-/// İşlem sürerken fare/klavye durumunu pompalayabilmek için ana döngü
-/// değişkenlerine işaretçiler. `main` başlangıcında bir kez ayarlanır.
 static mut BUSY_MOUSE: *mut drivers::mouse::MouseState = core::ptr::null_mut();
 static mut BUSY_KEYBOARD: *mut drivers::keyboard::KeyboardState = core::ptr::null_mut();
-/// Uzun işlem bittiğinde ana döngüyü tam yeniden çizmeye zorlar (panel temizliği).
 static mut BUSY_DIRTY: bool = false;
 
 /// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
@@ -975,11 +972,9 @@ pub extern "C" fn _start() -> ! {
     // 5. PS/2 Donanım Sürücüleri
     let mut mouse = drivers::mouse::MouseState::new();
     let mut keyboard = drivers::keyboard::KeyboardState::new();
-    // Uzun (bloklayıcı) işlemler sırasında girişi pompalayıp imleci
-    // hareket ettirebilmek için bu durumlara işaretçi sakla.
     unsafe {
-        BUSY_MOUSE = &mut mouse as *mut drivers::mouse::MouseState;
-        BUSY_KEYBOARD = &mut keyboard as *mut drivers::keyboard::KeyboardState;
+        BUSY_MOUSE = &mut mouse;
+        BUSY_KEYBOARD = &mut keyboard;
     }
     drivers::ps2::init();
 
@@ -997,10 +992,12 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    // 5d. Eğer diskte varsa (MINOS.SYS + fat32) ve live ortam için
+    // 5d. Eğer diskte varsa (MINOS.SYS + fat32) — kurulu sistem —
     // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
+    // Live ortam ise welcome ekranı gösterilir.
     if fs::diskfs::is_installed() {
         serial_print("[BOOT] Kurulu sistem tespit edildi; welcome atlandi.\n");
+        // Kurulu sistemse welcome ekranını tamamen atla, masaüstüne geç.
     } else {
         // İlk açılış geçişi: merkezde minOs + hareketli kedi ve yükleme çubuğu.
         for phase in 0..8 {
@@ -1091,79 +1088,85 @@ pub extern "C" fn _start() -> ! {
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
 
-    // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
-    let mut welcome_was_left_down = false;
-    let mut welcome_dirty = true;
-    let mut welcome_mouse_pos = (mouse.x, mouse.y);
-    let mut welcome_accepted = false;
-    loop {
-        if welcome_dirty {
-            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
-            welcome_dirty = false;
-        }
-        drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
-
-        // Enter veya Escape ile hoş geldin ekranını geç.
-        while let Some(action) = keyboard.take_last_action() {
-            if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
-                welcome_accepted = true;
+    // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
+    if !fs::diskfs::is_installed() {
+        // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
+        let mut welcome_was_left_down = false;
+        let mut welcome_dirty = true;
+        let mut welcome_mouse_pos = (mouse.x, mouse.y);
+        let mut welcome_accepted = false;
+        loop {
+            if welcome_dirty {
+                gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
+                welcome_dirty = false;
             }
-        }
-        while let Some(ch) = keyboard.take_last_char() {
-            if ch == '\x1b' {
-                welcome_accepted = true;
+            drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
+
+            // Enter veya Escape ile hoş geldin ekranını geç.
+            while let Some(action) = keyboard.take_last_action() {
+                if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
+                    welcome_accepted = true;
+                }
             }
-        }
-        if welcome_accepted {
-            settings_app.save_all(&compositor, &mut fs_mgr.vfs);
-            break;
-        }
-
-        if welcome_mouse_pos != (mouse.x, mouse.y) {
-            welcome_mouse_pos = (mouse.x, mouse.y);
-            welcome_dirty = true;
-        }
-        let clicked = mouse.left_button && !welcome_was_left_down;
-        welcome_was_left_down = mouse.left_button;
-        if !clicked { continue; }
-
-        let mx = mouse.x.max(0) as usize;
-        let my = mouse.y.max(0) as usize;
-        let point_in = |rect: (usize, usize, usize, usize)| {
-            mx >= rect.0 && my >= rect.1 && mx < rect.0 + rect.2 && my < rect.1 + rect.3
-        };
-        let mut selection_changed = false;
-        for i in 0..2 {
-            if point_in(gui::welcome_language_rect(width, height, i)) {
-                settings_app.language = if i == 0 { apps::settings::UiLanguage::Turkish } else { apps::settings::UiLanguage::English };
-                gui::set_ui_language_english(settings_app.language.is_english());
-                selection_changed = true;
+            while let Some(ch) = keyboard.take_last_char() {
+                if ch == '\x1b' {
+                    welcome_accepted = true;
+                }
+            }
+            if welcome_accepted {
+                settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                 break;
             }
-        }
-        if !selection_changed {
-            for (i, id) in gui::theme::ThemeId::ALL.iter().enumerate() {
-                if point_in(gui::welcome_theme_rect(width, height, i)) {
-                    settings_app.theme = *id;
-                    gui::theme::set_theme(*id);
+
+            if welcome_mouse_pos != (mouse.x, mouse.y) {
+                welcome_mouse_pos = (mouse.x, mouse.y);
+                welcome_dirty = true;
+            }
+            let clicked = mouse.left_button && !welcome_was_left_down;
+            welcome_was_left_down = mouse.left_button;
+            if !clicked { continue; }
+
+            let mx = mouse.x.max(0) as usize;
+            let my = mouse.y.max(0) as usize;
+            let point_in = |rect: (usize, usize, usize, usize)| {
+                mx >= rect.0 && my >= rect.1 && mx < rect.0 + rect.2 && my < rect.1 + rect.3
+            };
+            let mut selection_changed = false;
+            for i in 0..2 {
+                if point_in(gui::welcome_language_rect(width, height, i)) {
+                    settings_app.language = if i == 0 { apps::settings::UiLanguage::Turkish } else { apps::settings::UiLanguage::English };
+                    gui::set_ui_language_english(settings_app.language.is_english());
                     selection_changed = true;
                     break;
                 }
             }
-        }
-        if selection_changed {
-            welcome_dirty = true;
-        } else if point_in(gui::welcome_continue_rect(width, height)) {
-            settings_app.save_all(&compositor, &mut fs_mgr.vfs);
-            break;
+            if !selection_changed {
+                for (i, id) in gui::theme::ThemeId::ALL.iter().enumerate() {
+                    if point_in(gui::welcome_theme_rect(width, height, i)) {
+                        settings_app.theme = *id;
+                        gui::theme::set_theme(*id);
+                        selection_changed = true;
+                        break;
+                    }
+                }
+            }
+            if selection_changed {
+                welcome_dirty = true;
+            } else if point_in(gui::welcome_continue_rect(width, height)) {
+                settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+                break;
+            }
         }
     }
 
     // Welcome ekranından masaüstüne geçişi de aynı animasyonla yumuşat.
-    for phase in 0..6 {
-        gui::render_loading_transition(&mut fb, width, height, phase + 2, gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
-        let frame_start = monotonic_ms();
-        while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
+    // Sadece live ortamda göster; kurulu sistemde atla.
+    if !fs::diskfs::is_installed() {
+        for phase in 0..6 {
+            gui::render_loading_transition(&mut fb, width, height, phase + 2, gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
+            let frame_start = monotonic_ms();
+            while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
+        }
     }
 
     // RTC - gerçek zamanlı saat
@@ -1475,8 +1478,20 @@ pub extern "C" fn _start() -> ! {
                         notepad_app.select_word_at(at);
                     } else {
                         notepad_app.cursor = at;
-                        notepad_app.selection_start = Some(at);
-                        notepad_app.selection_end = Some(at);
+                        if keyboard.shift {
+                            let anchor = notepad_app.selection_anchor.unwrap_or(at);
+                            if anchor == at {
+                                notepad_app.selection_start = None;
+                                notepad_app.selection_end = None;
+                            } else {
+                                notepad_app.selection_start = Some(anchor.min(at));
+                                notepad_app.selection_end = Some(anchor.max(at));
+                            }
+                        } else {
+                            notepad_app.selection_anchor = Some(at);
+                            notepad_app.selection_start = None;
+                            notepad_app.selection_end = None;
+                        }
                         notepad_dragging = true;
                     }
                     notepad_app.last_click_tick = now_ms;
@@ -2218,8 +2233,20 @@ pub extern "C" fn _start() -> ! {
                                 if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
                                     let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
                                     notepad_app.cursor = at;
-                                    notepad_app.selection_start = Some(at);
-                                    notepad_app.selection_end = Some(at);
+                                    if keyboard.shift {
+                                        let anchor = notepad_app.selection_anchor.unwrap_or(at);
+                                        if anchor == at {
+                                            notepad_app.selection_start = None;
+                                            notepad_app.selection_end = None;
+                                        } else {
+                                            notepad_app.selection_start = Some(anchor.min(at));
+                                            notepad_app.selection_end = Some(anchor.max(at));
+                                        }
+                                    } else {
+                                        notepad_app.selection_anchor = Some(at);
+                                        notepad_app.selection_start = None;
+                                        notepad_app.selection_end = None;
+                                    }
                                     notepad_app.menu = 0;
                                 }
                             }
@@ -2597,17 +2624,33 @@ pub extern "C" fn _start() -> ! {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
-                        browser_app.address_move_left();
+                        if keyboard.ctrl {
+                            browser_app.address_move_word_left_ext(keyboard.shift);
+                        } else {
+                            browser_app.address_move_left_ext(keyboard.shift);
+                        }
                     } else if app_is_focused(&compositor, 2) {
-                        notepad_app.move_left_ext(keyboard.shift);
+                        if keyboard.ctrl {
+                            notepad_app.move_word_left_ext(keyboard.shift);
+                        } else {
+                            notepad_app.move_left_ext(keyboard.shift);
+                        }
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 0;
                         taskmgr_app.focused_control = 0;
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_prev();
                     } else if app_is_focused(&compositor, 3) {
-                        if browser_app.address_focused { browser_app.address_move_left(); }
-                        else { browser_app.select_tab_prev(); }
+                        if browser_app.address_focused {
+                            if keyboard.ctrl {
+                                browser_app.address_move_word_left_ext(keyboard.shift);
+                            } else {
+                                browser_app.address_move_left_ext(keyboard.shift);
+                            }
+                        } else {
+                            browser_app.select_tab_prev();
+                        }
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowRight => {
@@ -2617,17 +2660,33 @@ pub extern "C" fn _start() -> ! {
                             compositor.selected_start_item = 0;
                         }
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
-                        browser_app.address_move_right();
+                        if keyboard.ctrl {
+                            browser_app.address_move_word_right_ext(keyboard.shift);
+                        } else {
+                            browser_app.address_move_right_ext(keyboard.shift);
+                        }
                     } else if app_is_focused(&compositor, 2) {
-                        notepad_app.move_right_ext(keyboard.shift);
+                        if keyboard.ctrl {
+                            notepad_app.move_word_right_ext(keyboard.shift);
+                        } else {
+                            notepad_app.move_right_ext(keyboard.shift);
+                        }
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
                         taskmgr_app.focused_control = 1;
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_next();
                     } else if app_is_focused(&compositor, 3) {
-                        if browser_app.address_focused { browser_app.address_move_right(); }
-                        else { browser_app.select_tab_next(); }
+                        if browser_app.address_focused {
+                            if keyboard.ctrl {
+                                browser_app.address_move_word_right_ext(keyboard.shift);
+                            } else {
+                                browser_app.address_move_right_ext(keyboard.shift);
+                            }
+                        } else {
+                            browser_app.select_tab_next();
+                        }
                     }
                 }
                 drivers::keyboard::KeyAction::EnterKey => {
@@ -2847,7 +2906,7 @@ pub extern "C" fn _start() -> ! {
                         else { notepad_app.move_home_ext(keyboard.shift); }
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
-                        browser_app.address_home();
+                        browser_app.address_home_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_first();
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
@@ -2866,7 +2925,7 @@ pub extern "C" fn _start() -> ! {
                         else { notepad_app.move_end_ext(keyboard.shift); }
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
-                        browser_app.address_end();
+                        browser_app.address_end_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_last();
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
@@ -2928,8 +2987,29 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 2) {
                         notepad_app.delete_forward();
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         browser_app.address_delete();
+                    } else if app_is_focused(&compositor, 0) && !filemanager_app.rename_active {
+                        filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                    }
+                }
+                drivers::keyboard::KeyAction::DeleteWordBack => {
+                    if app_is_focused(&compositor, 2) {
+                        notepad_app.delete_word_backward();
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_delete_word_back();
+                    } else if app_is_focused(&compositor, 10) {
+                        terminal_app.delete_word();
+                    }
+                }
+                drivers::keyboard::KeyAction::DeleteWordForward => {
+                    if app_is_focused(&compositor, 2) {
+                        notepad_app.delete_word_forward();
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_delete_word_forward();
                     }
                 }
                 drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
@@ -3071,7 +3151,15 @@ pub extern "C" fn _start() -> ! {
             if notepad_dragging {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
-                    notepad_app.selection_end = Some(at);
+                    notepad_app.cursor = at;
+                    let anchor = notepad_app.selection_anchor.unwrap_or(at);
+                    if anchor == at {
+                        notepad_app.selection_start = None;
+                        notepad_app.selection_end = None;
+                    } else {
+                        notepad_app.selection_start = Some(anchor.min(at));
+                        notepad_app.selection_end = Some(anchor.max(at));
+                    }
                 }
             }
             if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {

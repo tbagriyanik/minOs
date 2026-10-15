@@ -27,6 +27,7 @@ pub struct NotepadApp {
     pub len: usize,
     pub cursor: usize,
     // Selection range (inclusive start, exclusive end)
+    pub selection_anchor: Option<usize>,
     pub selection_start: Option<usize>,
     pub selection_end: Option<usize>,
     // Show right‑click context menu
@@ -97,12 +98,21 @@ impl NotepadApp {
         self.cursor += amount;
     }
 
+    #[inline(always)]
+    pub fn has_selection(&self) -> bool {
+        match (self.selection_start, self.selection_end) {
+            (Some(s), Some(e)) => s != e,
+            _ => false,
+        }
+    }
+
     // Delete selected text
     pub fn delete_selection(&mut self) {
         if let (Some(start), Some(end)) = (self.selection_start, self.selection_end) {
             let (s, e) = (start.min(end), start.max(end));
             let del_len = e - s;
             if del_len == 0 {
+                self.selection_anchor = None;
                 self.selection_start = None;
                 self.selection_end = None;
                 return;
@@ -118,9 +128,11 @@ impl NotepadApp {
             }
             self.len -= del_len;
             self.cursor = s.min(self.len);
+            self.selection_anchor = None;
             self.selection_start = None;
             self.selection_end = None;
         }
+        self.selection_anchor = None;
     }
 }
 
@@ -130,6 +142,7 @@ impl NotepadApp {
             buffer: alloc::vec![ ' '; INITIAL_BUFFER_CAPACITY ],
             len: 0,
             cursor: 0,
+            selection_anchor: None,
             selection_start: None,
             selection_end: None,
             show_context_menu: false,
@@ -187,6 +200,7 @@ impl NotepadApp {
         self.buffer[s.len..].fill(' ');
         self.len = s.len;
         self.cursor = s.cursor.min(s.len);
+        self.selection_anchor = None;
         self.selection_start = None;
         self.selection_end = None;
     }
@@ -220,10 +234,14 @@ impl NotepadApp {
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.push_history();
-        self.delete_selection();
-        // Üzerine yaz modu: satır ortasında karakteri eklemek yerine değiştir.
-        if self.overwrite && c != '\n' && self.cursor < self.len && self.buffer[self.cursor] != '\n' {
+        let had_selection = self.has_selection();
+        if had_selection {
+            self.delete_selection();
+        } else {
+            self.push_history();
+        }
+        // Üzerine yaz modu: seçim yokken satır ortasında karakteri eklemek yerine değiştir.
+        if !had_selection && self.overwrite && c != '\n' && self.cursor < self.len && self.buffer[self.cursor] != '\n' {
             self.buffer[self.cursor] = c;
             self.cursor += 1;
             return;
@@ -270,6 +288,7 @@ impl NotepadApp {
         }
         if remove == 0 { return; }
         self.push_history();
+        self.selection_anchor = None;
         self.selection_start = None;
         self.selection_end = None;
         for i in start..self.len - remove {
@@ -283,7 +302,7 @@ impl NotepadApp {
     }
 
     pub fn backspace(&mut self) {
-        if self.selection_start != self.selection_end && self.selection_start.is_some() { self.delete_selection(); return; }
+        if self.has_selection() { self.delete_selection(); return; }
         if self.cursor > 0 {
             self.push_history();
             let deleted = self.cursor - 1;
@@ -295,7 +314,70 @@ impl NotepadApp {
             self.cursor -= 1;
         }
     }
-    pub fn delete_forward(&mut self) { if self.selection_start.is_some() && self.selection_start != self.selection_end { self.delete_selection(); } else if self.cursor < self.len { self.selection_start=Some(self.cursor); self.selection_end=Some(self.cursor+1); self.delete_selection(); } }
+
+    pub fn delete_forward(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+        } else if self.cursor < self.len {
+            self.selection_anchor = Some(self.cursor);
+            self.selection_start = Some(self.cursor);
+            self.selection_end = Some(self.cursor + 1);
+            self.delete_selection();
+        }
+    }
+
+    pub fn delete_word_backward(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        if self.cursor == 0 { return; }
+        let mut idx = self.cursor;
+        while idx > 0 && self.buffer[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        if idx > 0 {
+            let is_alnum = self.buffer[idx - 1].is_alphanumeric() || self.buffer[idx - 1] == '_';
+            while idx > 0 {
+                let prev = self.buffer[idx - 1];
+                if prev.is_whitespace() { break; }
+                if (prev.is_alphanumeric() || prev == '_') != is_alnum { break; }
+                idx -= 1;
+            }
+        }
+        self.selection_anchor = Some(self.cursor);
+        self.selection_start = Some(idx);
+        self.selection_end = Some(self.cursor);
+        self.delete_selection();
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
+        if self.cursor >= self.len { return; }
+        let mut idx = self.cursor;
+        if idx < self.len {
+            let is_alnum = self.buffer[idx].is_alphanumeric() || self.buffer[idx] == '_';
+            let is_ws = self.buffer[idx].is_whitespace();
+            if !is_ws {
+                while idx < self.len {
+                    let cur = self.buffer[idx];
+                    if cur.is_whitespace() { break; }
+                    if (cur.is_alphanumeric() || cur == '_') != is_alnum { break; }
+                    idx += 1;
+                }
+            }
+            while idx < self.len && self.buffer[idx].is_whitespace() && self.buffer[idx] != '\n' {
+                idx += 1;
+            }
+        }
+        self.selection_anchor = Some(self.cursor);
+        self.selection_start = Some(self.cursor);
+        self.selection_end = Some(idx);
+        self.delete_selection();
+    }
 
     /// İmleci satır başına taşır (Home tuşu). `select` true ise seçimi genişletir.
     pub fn move_home_ext(&mut self, select: bool) {
@@ -341,35 +423,87 @@ impl NotepadApp {
         let (s, e) = self.word_range_at(idx);
         if s == e {
             self.cursor = idx.min(self.len);
+            self.selection_anchor = None;
             self.selection_start = None;
             self.selection_end = None;
         } else {
+            self.selection_anchor = Some(s);
             self.selection_start = Some(s);
             self.selection_end = Some(e);
             self.cursor = e;
         }
     }
 
-    /// Seçim çapasını (anchor) ayarlar; Shift+ok ile seçim genişletmek için.
-    fn anchor(&mut self) -> usize {
-        match (self.selection_start, self.selection_end) {
-            (Some(a), Some(b)) => if self.cursor == b { a } else { b },
-            _ => self.cursor,
-        }
-    }
-
     /// İmleci bir sonraki konuma taşır; `select` true ise seçimi genişletir.
     fn move_to(&mut self, target: usize, select: bool) {
         if select {
-            let a = self.anchor();
+            let anchor = match self.selection_anchor {
+                Some(a) => a,
+                None => {
+                    let a = self.cursor;
+                    self.selection_anchor = Some(a);
+                    a
+                }
+            };
             self.cursor = target;
-            self.selection_start = Some(a.min(target));
-            self.selection_end = Some(a.max(target));
+            if anchor == target {
+                self.selection_start = None;
+                self.selection_end = None;
+            } else {
+                self.selection_start = Some(anchor.min(target));
+                self.selection_end = Some(anchor.max(target));
+            }
         } else {
             self.cursor = target;
+            self.selection_anchor = None;
             self.selection_start = None;
             self.selection_end = None;
         }
+    }
+
+    pub fn move_word_left_ext(&mut self, select: bool) {
+        let base = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end && !select => start.min(end),
+            _ => self.cursor,
+        };
+        let mut idx = base;
+        while idx > 0 && self.buffer[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        if idx > 0 {
+            let is_alnum = self.buffer[idx - 1].is_alphanumeric() || self.buffer[idx - 1] == '_';
+            while idx > 0 {
+                let prev = self.buffer[idx - 1];
+                if prev.is_whitespace() { break; }
+                if (prev.is_alphanumeric() || prev == '_') != is_alnum { break; }
+                idx -= 1;
+            }
+        }
+        self.move_to(idx, select);
+    }
+
+    pub fn move_word_right_ext(&mut self, select: bool) {
+        let base = match (self.selection_start, self.selection_end) {
+            (Some(start), Some(end)) if start != end && !select => start.max(end),
+            _ => self.cursor,
+        };
+        let mut idx = base;
+        if idx < self.len {
+            let is_alnum = self.buffer[idx].is_alphanumeric() || self.buffer[idx] == '_';
+            let is_ws = self.buffer[idx].is_whitespace();
+            if !is_ws {
+                while idx < self.len {
+                    let cur = self.buffer[idx];
+                    if cur.is_whitespace() { break; }
+                    if (cur.is_alphanumeric() || cur == '_') != is_alnum { break; }
+                    idx += 1;
+                }
+            }
+            while idx < self.len && self.buffer[idx].is_whitespace() && self.buffer[idx] != '\n' {
+                idx += 1;
+            }
+        }
+        self.move_to(idx, select);
     }
 
     pub fn move_left_ext(&mut self, select: bool) {
@@ -489,6 +623,7 @@ impl NotepadApp {
         for c in self.buffer.iter_mut() {
             *c = ' ';
         }
+        self.selection_anchor = None;
         self.selection_start = None;
         self.selection_end = None;
         self.status_msg = "";
@@ -564,8 +699,10 @@ impl NotepadApp {
 
     /// Tüm metni seçer (Kopyala/Kes/Sil ile birlikte kullanılır).
     pub fn select_all(&mut self) {
+        self.selection_anchor = Some(0);
         self.selection_start = Some(0);
         self.selection_end = Some(self.len);
+        self.cursor = self.len;
     }
     /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
     #[inline(always)]
@@ -756,7 +893,16 @@ impl NotepadApp {
         if let Some((cx, cy)) = cursor_screen {
             let cur_h = line_h().saturating_sub(4).max(8);
             if (tick / 20) % 2 == 0 && cy >= area_y && cy + cur_h <= area_y + area_h {
-                fb.draw_rect(cx, cy, crate::gui::sp(2).max(1), cur_h, Color::ACCENT_YELLOW);
+                if self.overwrite {
+                    fb.draw_rect(cx, cy, char_w(), cur_h, Color::ACCENT_YELLOW);
+                    if self.cursor < self.len && self.buffer[self.cursor] != '\n' {
+                        let mut char_buf = [0u8; 4];
+                        let s = self.buffer[self.cursor].encode_utf8(&mut char_buf);
+                        MinGuiCompositor::draw_terminal_string(fb, cx, cy, s, Color::BLACK);
+                    }
+                } else {
+                    fb.draw_rect(cx, cy, crate::gui::sp(2).max(1), cur_h, Color::ACCENT_YELLOW);
+                }
             }
         }
 

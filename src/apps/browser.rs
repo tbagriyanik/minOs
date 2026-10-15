@@ -248,34 +248,181 @@ impl BrowserApp {
         }
     }
 
-    pub fn address_move_left(&mut self) {
-        if let Some((a, b)) = self.address_selection.take() {
-            self.address_cursor = a.min(b);
+    fn address_move_to(&mut self, target: usize, select: bool) {
+        if select {
+            let anchor = match self.address_selection {
+                Some((a, b)) => if self.address_cursor == b { a } else { b },
+                None => self.address_cursor,
+            };
+            self.address_cursor = target.min(self.url_len);
+            if anchor == self.address_cursor {
+                self.address_selection = None;
+            } else {
+                self.address_selection = Some((anchor.min(self.address_cursor), anchor.max(self.address_cursor)));
+            }
         } else {
-            self.address_cursor = self.address_cursor.saturating_sub(1);
+            self.address_cursor = target.min(self.url_len);
+            self.address_selection = None;
         }
         self.keep_address_cursor_visible();
+    }
+
+    pub fn address_move_left(&mut self) {
+        self.address_move_left_ext(false);
+    }
+
+    pub fn address_move_left_ext(&mut self, select: bool) {
+        let target = if !select {
+            if let Some((a, b)) = self.address_selection.take() {
+                a.min(b)
+            } else {
+                self.address_cursor.saturating_sub(1)
+            }
+        } else {
+            self.address_cursor.saturating_sub(1)
+        };
+        self.address_move_to(target, select);
     }
 
     pub fn address_move_right(&mut self) {
-        if let Some((a, b)) = self.address_selection.take() {
-            self.address_cursor = a.max(b);
+        self.address_move_right_ext(false);
+    }
+
+    pub fn address_move_right_ext(&mut self, select: bool) {
+        let target = if !select {
+            if let Some((a, b)) = self.address_selection.take() {
+                a.max(b)
+            } else {
+                (self.address_cursor + 1).min(self.url_len)
+            }
         } else {
-            self.address_cursor = (self.address_cursor + 1).min(self.url_len);
-        }
-        self.keep_address_cursor_visible();
+            (self.address_cursor + 1).min(self.url_len)
+        };
+        self.address_move_to(target, select);
     }
 
     pub fn address_home(&mut self) {
-        self.address_selection = None;
-        self.address_cursor = 0;
-        self.keep_address_cursor_visible();
+        self.address_home_ext(false);
+    }
+
+    pub fn address_home_ext(&mut self, select: bool) {
+        self.address_move_to(0, select);
     }
 
     pub fn address_end(&mut self) {
-        self.address_selection = None;
-        self.address_cursor = self.url_len;
-        self.keep_address_cursor_visible();
+        self.address_end_ext(false);
+    }
+
+    pub fn address_end_ext(&mut self, select: bool) {
+        self.address_move_to(self.url_len, select);
+    }
+
+    pub fn address_move_word_left_ext(&mut self, select: bool) {
+        let base = if !select {
+            if let Some((a, b)) = self.address_selection.take() {
+                a.min(b)
+            } else {
+                self.address_cursor
+            }
+        } else {
+            self.address_cursor
+        };
+        let mut idx = base;
+        while idx > 0 && self.url[idx - 1] == b' ' {
+            idx -= 1;
+        }
+        if idx > 0 {
+            let is_alnum = self.url[idx - 1].is_ascii_alphanumeric() || self.url[idx - 1] == b'_';
+            while idx > 0 {
+                let prev = self.url[idx - 1];
+                if prev == b' ' { break; }
+                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum { break; }
+                idx -= 1;
+            }
+        }
+        self.address_move_to(idx, select);
+    }
+
+    pub fn address_move_word_right_ext(&mut self, select: bool) {
+        let base = if !select {
+            if let Some((a, b)) = self.address_selection.take() {
+                a.max(b)
+            } else {
+                self.address_cursor
+            }
+        } else {
+            self.address_cursor
+        };
+        let mut idx = base;
+        if idx < self.url_len {
+            let is_alnum = self.url[idx].is_ascii_alphanumeric() || self.url[idx] == b'_';
+            let is_space = self.url[idx] == b' ';
+            if !is_space {
+                while idx < self.url_len {
+                    let cur = self.url[idx];
+                    if cur == b' ' { break; }
+                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum { break; }
+                    idx += 1;
+                }
+            }
+            while idx < self.url_len && self.url[idx] == b' ' {
+                idx += 1;
+            }
+        }
+        self.address_move_to(idx, select);
+    }
+
+    pub fn address_delete_word_back(&mut self) {
+        if self.address_selection.is_some() {
+            self.address_push_undo();
+            self.address_delete_selection();
+            return;
+        }
+        if self.address_cursor == 0 { return; }
+        let mut idx = self.address_cursor;
+        while idx > 0 && self.url[idx - 1] == b' ' {
+            idx -= 1;
+        }
+        if idx > 0 {
+            let is_alnum = self.url[idx - 1].is_ascii_alphanumeric() || self.url[idx - 1] == b'_';
+            while idx > 0 {
+                let prev = self.url[idx - 1];
+                if prev == b' ' { break; }
+                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum { break; }
+                idx -= 1;
+            }
+        }
+        self.address_push_undo();
+        self.address_selection = Some((idx, self.address_cursor));
+        self.address_delete_selection();
+    }
+
+    pub fn address_delete_word_forward(&mut self) {
+        if self.address_selection.is_some() {
+            self.address_push_undo();
+            self.address_delete_selection();
+            return;
+        }
+        if self.address_cursor >= self.url_len { return; }
+        let mut idx = self.address_cursor;
+        if idx < self.url_len {
+            let is_alnum = self.url[idx].is_ascii_alphanumeric() || self.url[idx] == b'_';
+            let is_space = self.url[idx] == b' ';
+            if !is_space {
+                while idx < self.url_len {
+                    let cur = self.url[idx];
+                    if cur == b' ' { break; }
+                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum { break; }
+                    idx += 1;
+                }
+            }
+            while idx < self.url_len && self.url[idx] == b' ' {
+                idx += 1;
+            }
+        }
+        self.address_push_undo();
+        self.address_selection = Some((self.address_cursor, idx));
+        self.address_delete_selection();
     }
 
     fn address_delete_selection(&mut self) -> bool {

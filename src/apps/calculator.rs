@@ -1,7 +1,8 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
 
-const SCALE: i32 = 1000;
+// Six decimal places and a wide integer range, without relying on floating point.
+const SCALE: i128 = 1_000_000;
 const BUTTONS: [[char; 4]; 5] = [
     ['%', 'E', 'C', 'B'],
     ['7', '8', '9', '/'],
@@ -53,7 +54,7 @@ impl CalculatorApp {
     /// Copy the currently displayed calculation result to the shared clipboard.
     pub fn copy_result(&self) {
         let value = self.value();
-        let mut output = [0u8; 24];
+        let mut output = [0u8; 64];
         let len = Self::format_value(value, &mut output);
         let text = core::str::from_utf8(&output[..len]).unwrap_or("");
         crate::gui::clipboard::set_str(text);
@@ -108,20 +109,20 @@ impl CalculatorApp {
         matches!(c, '+' | '-' | '*' | '/')
     }
 
-    fn value(&self) -> i32 {
-        let mut total = 0i32;
-        let mut term = 0i32;
-        let mut sign = 1i32;
+    fn value(&self) -> i128 {
+        let mut total = 0i128;
+        let mut term = 0i128;
+        let mut sign = 1i128;
         let mut op = '+';
-        let mut number = 0i32;
-        let mut number_sign = 1i32;
-        let mut fraction_scale = 0i32;
+        let mut number = 0i128;
+        let mut number_sign = 1i128;
+        let mut fraction_scale = 0i128;
         let mut has_digit = false;
 
         for index in 0..=self.len {
             let c = if index == self.len { '+' } else { self.input[index] };
             if c.is_ascii_digit() {
-                let digit = c as i32 - '0' as i32;
+                let digit = c as i128 - '0' as i128;
                 if fraction_scale == 0 {
                     number = number.saturating_mul(10).saturating_add(digit.saturating_mul(SCALE));
                 } else if fraction_scale > 1 {
@@ -158,35 +159,40 @@ impl CalculatorApp {
         total.saturating_add(sign.saturating_mul(term))
     }
 
-    fn set_value(&mut self, value: i32) {
+    fn set_value(&mut self, value: i128) {
         self.len = 0;
-        let mut output = [0u8; 24];
+        let mut output = [0u8; 64];
         let len = Self::format_value(value, &mut output);
+        let len = len.min(self.input.len() - 1);
         for byte in &output[..len] {
             self.input[self.len] = *byte as char;
             self.len += 1;
         }
     }
 
-    fn format_value(value: i32, output: &mut [u8; 24]) -> usize {
+    fn format_value(value: i128, output: &mut [u8; 64]) -> usize {
         let mut len = 0;
-        let magnitude = value.saturating_abs();
+        let magnitude = value.saturating_abs() as u128;
         if value < 0 { output[len] = b'-'; len += 1; }
-        Self::append_unsigned(output, &mut len, (magnitude / SCALE) as u32);
-        let mut fraction = (magnitude % SCALE) as u32;
+        Self::append_unsigned(output, &mut len, magnitude / SCALE as u128);
+        let mut fraction = (magnitude % SCALE as u128) as u32;
         if fraction != 0 {
             output[len] = b'.'; len += 1;
-            output[len] = b'0' + (fraction / 100) as u8; len += 1;
-            fraction %= 100;
-            output[len] = b'0' + (fraction / 10) as u8; len += 1;
-            output[len] = b'0' + (fraction % 10) as u8; len += 1;
-            while output[len - 1] == b'0' { len -= 1; }
+            let mut divisor = 100_000;
+            while divisor > 0 {
+                output[len] = b'0' + (fraction / divisor) as u8;
+                len += 1;
+                fraction %= divisor;
+                divisor /= 10;
+            }
+            while len > 0 && output[len - 1] == b'0' { len -= 1; }
+            if len > 0 && output[len - 1] == b'.' { len -= 1; }
         }
         len
     }
 
-    fn append_unsigned(output: &mut [u8; 24], len: &mut usize, mut value: u32) {
-        let mut digits = [0u8; 12];
+    fn append_unsigned(output: &mut [u8; 64], len: &mut usize, mut value: u128) {
+        let mut digits = [0u8; 39];
         let mut count = 0;
         if value == 0 { digits[count] = b'0'; count += 1; }
         while value > 0 {
@@ -213,10 +219,19 @@ impl CalculatorApp {
         if let Ok(text) = core::str::from_utf8(&expression[..self.len]) {
             MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 7, text, Color::TEXT_MUTED);
         }
-        let mut result = [0u8; 24];
+        let mut result = [0u8; 64];
         let result_len = Self::format_value(self.value(), &mut result);
         if let Ok(text) = core::str::from_utf8(&result[..result_len]) {
-            MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 32, text, Color::ACCENT_GREEN);
+            let text_width = MinGuiCompositor::text_width(text, 1);
+            let result_x = display_x + display_w.saturating_sub(text_width + 8);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                result_x,
+                display_y + 32,
+                text,
+                Color::ACCENT_GREEN,
+                (display_x + 4, display_y + 28, display_w.saturating_sub(8), 24),
+            );
         }
 
         let gap_x = BUTTON_GAP_X;

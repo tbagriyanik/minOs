@@ -244,6 +244,16 @@ impl TerminalApp {
         }
     }
 
+    pub fn delete_word(&mut self) {
+        self.completion_active = false;
+        while self.input_len > 0 && self.input[self.input_len - 1] == b' ' {
+            self.input_len -= 1;
+        }
+        while self.input_len > 0 && self.input[self.input_len - 1] != b' ' {
+            self.input_len -= 1;
+        }
+    }
+
     /// Enter'a basılınca: istemi yaz, komutu `pending`'e al (yürütme ana döngüde).
     pub fn submit(&mut self) {
         self.completion_active = false;

@@ -20,5 +20,4 @@ target/x86_64-minos/release/minos-kernel.d
 
 # Personal disk images and ISO artifacts (not committed, not pushed)
 disk.qcow2
-disk.vhdx
-minos.iso
+

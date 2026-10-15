@@ -383,7 +383,7 @@ fn init_timebase() {
     }
 }
 
-fn monotonic_ms() -> u64 {
+pub fn monotonic_ms() -> u64 {
     let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);
     read_cpu_cycles() / cycles_per_us / 1_000
 }
@@ -393,19 +393,56 @@ struct BusyProgressContext {
     mx: usize,
     my: usize,
     message: &'static str,
-    phase: usize,
+    last_percent: usize,
+    cursor_shown: bool,
+}
+
+/// İşlem sürerken fare/klavye durumunu pompalayabilmek için ana döngü
+/// değişkenlerine işaretçiler. `main` başlangıcında bir kez ayarlanır.
+static mut BUSY_MOUSE: *mut drivers::mouse::MouseState = core::ptr::null_mut();
+static mut BUSY_KEYBOARD: *mut drivers::keyboard::KeyboardState = core::ptr::null_mut();
+
+/// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
+fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> usize {
+    let mut p = if total == 0 { 30 } else { 5 + done.saturating_mul(90) / total };
+    if p < state.last_percent { p = state.last_percent; }
+    if p > 99 { p = 99; }
+    state.last_percent = p;
+    p
 }
 
 fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     if context.is_null() { return; }
     let state = unsafe { &mut *(context as *mut BusyProgressContext) };
-    let percent = if total < 64 {
-        state.phase = (state.phase + 17) % 80;
-        10 + state.phase
-    } else {
-        10 + done.saturating_mul(85) / total.max(1)
-    };
-    unsafe { gui::draw_busy_overlay(&mut *state.fb, state.mx, state.my, state.message, percent); }
+    let fb = unsafe { &mut *state.fb };
+
+    // 1. Girişi pompa'la: uzun işlem sürerken fare imleci donmasın.
+    unsafe {
+        if !BUSY_MOUSE.is_null() && !BUSY_KEYBOARD.is_null() {
+            drivers::ps2::poll_input(
+                &mut *BUSY_MOUSE,
+                &mut *BUSY_KEYBOARD,
+                fb.width as i32,
+                fb.height as i32,
+            );
+            state.mx = (*BUSY_MOUSE).x.max(0) as usize;
+            state.my = (*BUSY_MOUSE).y.max(0) as usize;
+        }
+    }
+
+    // 2. Önceki kum saati imlecini temizle.
+    if state.cursor_shown {
+        if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+        state.cursor_shown = false;
+    }
+
+    // 3. Panel + ilerleme çubuğunu güncelle (tek, monotonik çubuk).
+    let percent = busy_percent(state, done, total);
+    gui::draw_busy_overlay(fb, state.mx, state.my, state.message, percent);
+
+    // 4. Kum saati imlecini yeni konuma çiz.
+    gui::draw_busy_hourglass(fb, state.mx, state.my);
+    state.cursor_shown = true;
 }
 
 fn with_busy_progress<T>(
@@ -415,11 +452,21 @@ fn with_busy_progress<T>(
     message: &'static str,
     operation: impl FnOnce() -> T,
 ) -> T {
-    gui::draw_busy_overlay(fb, mx, my, message, 10);
-    let mut state = BusyProgressContext { fb, mx, my, message, phase: 0 };
+    // Önceki karede çizilen ok imlecini kaldır (kum saati ile çakışmasın).
+    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+    gui::draw_busy_overlay(fb, mx, my, message, 5);
+    gui::draw_busy_hourglass(fb, mx, my);
+
+    // `fb` işaretçisi bağlama devredilir; bundan sonraki çizimler üzerinden yapılır.
+    let mut state = BusyProgressContext { fb, mx, my, message, last_percent: 5, cursor_shown: true };
     drivers::ata::set_io_progress_hook(Some(draw_io_progress), &mut state as *mut _ as *mut ());
     let result = operation();
     drivers::ata::set_io_progress_hook(None, core::ptr::null_mut());
+
+    // İşlem sonunda kum saatini temizle; ok imlecini ana döngü yeniden çizer.
+    let fb = unsafe { &mut *state.fb };
+    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+    gui::draw_busy_overlay(fb, mx, my, message, 100);
     result
 }
 
@@ -626,6 +673,46 @@ fn window_content_h(
         // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
         _ => 0,
     }
+}
+
+/// Defter imlecini her zaman görünür kılacak dikey kaydırmayı uygular.
+fn notepad_ensure_cursor_visible(compositor: &mut gui::MinGuiCompositor, np: &apps::notepad::NotepadApp) {
+    let Some((idx, w)) = focused_window_for_app(compositor, 2) else { return; };
+    let desired = np.ensure_cursor_visible(w.width, w.height, w.scroll.y);
+    if let Some(wm) = compositor.windows[idx].as_mut() {
+        wm.scroll.y = desired;
+    }
+}
+
+/// Dosya Yöneticisi listesinde seçili satırı görünür tutacak kaydırmayı uygular.
+fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps::filemanager::FileManagerApp) {
+    let Some((idx, w)) = focused_window_for_app(compositor, 0) else { return; };
+    let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
+    if view_h == 0 { return; }
+    let row_h = apps::filemanager::FileManagerApp::row_h();
+    let max_off = fm.list_content_h().saturating_sub(view_h);
+    let row_top = fm.selected_idx.saturating_mul(row_h);
+    let row_bottom = row_top + row_h;
+    let mut sy = w.scroll.y.min(max_off);
+    if row_top < sy {
+        sy = row_top;
+    } else if row_bottom > sy + view_h {
+        sy = row_bottom - view_h;
+    }
+    if let Some(wm) = compositor.windows[idx].as_mut() {
+        wm.scroll.y = sy.min(max_off);
+    }
+}
+
+/// Dosya Yöneticisi listesinde bir sayfaya sığan satır sayısı (PageUp/PageDown).
+fn fm_page_rows(w: &gui::Window) -> usize {
+    let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
+    (view_h / apps::filemanager::FileManagerApp::row_h()).max(1)
+}
+
+/// Terminal çıktı panelinde görünen satır sayısı (tekerlek ve sayfa gezinmesine ortak).
+fn terminal_view_lines(w: &gui::Window) -> usize {
+    (w.height.saturating_sub(86) / 13).max(1)
 }
 
 fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
@@ -887,6 +974,12 @@ pub extern "C" fn _start() -> ! {
     // 5. PS/2 Donanım Sürücüleri
     let mut mouse = drivers::mouse::MouseState::new();
     let mut keyboard = drivers::keyboard::KeyboardState::new();
+    // Uzun (bloklayıcı) işlemler sırasında girişi pompalayıp imleci
+    // hareket ettirebilmek için bu durumlara işaretçi sakla.
+    unsafe {
+        BUSY_MOUSE = &mut mouse as *mut drivers::mouse::MouseState;
+        BUSY_KEYBOARD = &mut keyboard as *mut drivers::keyboard::KeyboardState;
+    }
     drivers::ps2::init();
 
     // 5b. Tema motorunu başlat
@@ -1774,7 +1867,9 @@ pub extern "C" fn _start() -> ! {
             // G) Masaüstü simgeleri
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
                 let desk_icons = [0, 2, 3, 5, 1, 11];
-                for (i, &app_idx) in desk_icons.iter().enumerate() {
+                // Kurulu sistemde kaldırılan kurulum kısayolunu (app 11) atla.
+                let desk_icon_count = if crate::fs::diskfs::is_installed() { 5 } else { desk_icons.len() };
+                for (i, &app_idx) in desk_icons.iter().enumerate().take(desk_icon_count) {
                     let dy = 30 + i * 54;
                     if my >= dy && my <= dy + 30 {
                         open_app(&mut compositor, app_idx);
@@ -1963,7 +2058,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             1 => {
                                 // Sistem Ayarları
-                                for t in 0..4 {
+                                for t in 0..5 {
                                     if gui::in_rect(mx, my, apps::settings::SystemSettings::tab_rect(wx, wy, t)) {
                                         settings_app.active_tab = t;
                                     }
@@ -1974,7 +2069,7 @@ pub extern "C" fn _start() -> ! {
                                     settings_app.reset_defaults();
                                     settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now);
                                     settings_app.write_config(&mut fs_mgr.vfs);
-                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, (wx + 115, wy + 178, 130, 22)) {
+                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::dhcp_btn_rect(wx, wy)) {
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
                                     settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
                                 } else if settings_app.active_tab == 0 {
@@ -2061,6 +2156,18 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     if mouse_setting_changed {
                                         settings_app.status_msg = gui::ui_text("Fare ayarları değiştirildi. Kalıcı olması için Kaydet'e tıklayın.", "Mouse settings changed. Click Save to keep them.");
+                                    }
+                                }
+                                if settings_app.active_tab == 4 {
+                                    for i in 0..apps::settings::SystemSettings::test_screen_btn_count() {
+                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::test_screen_btn_rect(wx, wy, i)) {
+                                            settings_app.test_screen_pattern = i as u8;
+                                        }
+                                    }
+                                    if gui::in_rect(mx, my, apps::settings::SystemSettings::test_ram_btn_rect(wx, wy)) {
+                                        settings_app.run_ram_test();
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_disk_btn_rect(wx, wy)) {
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
                                     }
                                 }
                             }
@@ -2427,11 +2534,13 @@ pub extern "C" fn _start() -> ! {
                             taskmgr_app.select_launch_prev();
                         } else if np_focused {
                             notepad_app.move_vertical_ext(true, keyboard.shift);
+                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_up();
                         } else if fm_focused {
                             filemanager_app.select_prev();
-                        } else if set_focused && settings_app.focused_control < 4 {
+                            fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                        } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_prev();
                         } else if br_focused && browser_app.focused_control < 3 {
                             browser_app.select_tab_prev();
@@ -2469,11 +2578,13 @@ pub extern "C" fn _start() -> ! {
                             taskmgr_app.select_launch_next();
                         } else if np_focused {
                             notepad_app.move_vertical_ext(false, keyboard.shift);
+                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_down();
                         } else if fm_focused {
                             filemanager_app.select_next();
-                        } else if set_focused && settings_app.focused_control < 4 {
+                            fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                        } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_next();
                         } else if br_focused && browser_app.focused_control < 3 {
                             browser_app.select_tab_next();
@@ -2730,14 +2841,78 @@ pub extern "C" fn _start() -> ! {
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_redo_edit(); }
                 }
                 drivers::keyboard::KeyAction::HomeKey => {
-                    let focused = app_is_focused(&compositor, 2);
-                    if focused { notepad_app.move_home(); }
-                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_home(); }
+                    if app_is_focused(&compositor, 2) {
+                        if keyboard.ctrl { notepad_app.move_document_home(keyboard.shift); }
+                        else { notepad_app.move_home_ext(keyboard.shift); }
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_home();
+                    } else if app_is_focused(&compositor, 0) {
+                        filemanager_app.select_first();
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                    } else if app_is_focused(&compositor, 7) {
+                        taskmgr_app.select_first();
+                    } else if app_is_focused(&compositor, 10) {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
+                            let vl = terminal_view_lines(&w);
+                            terminal_app.scroll_top(vl);
+                        }
+                    }
                 }
                 drivers::keyboard::KeyAction::EndKey => {
-                    let focused = app_is_focused(&compositor, 2);
-                    if focused { notepad_app.move_end(); }
-                    else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_end(); }
+                    if app_is_focused(&compositor, 2) {
+                        if keyboard.ctrl { notepad_app.move_document_end(keyboard.shift); }
+                        else { notepad_app.move_end_ext(keyboard.shift); }
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        browser_app.address_end();
+                    } else if app_is_focused(&compositor, 0) {
+                        filemanager_app.select_last();
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                    } else if app_is_focused(&compositor, 7) {
+                        taskmgr_app.select_last();
+                    } else if app_is_focused(&compositor, 10) {
+                        terminal_app.scroll_bottom();
+                    }
+                }
+                drivers::keyboard::KeyAction::PageUpKey => {
+                    if app_is_focused(&compositor, 0) {
+                        let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
+                        filemanager_app.select_page(false, rows);
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                    } else if app_is_focused(&compositor, 2) {
+                        let lines = focused_window_for_app(&compositor, 2).map(|(_, w)| notepad_app.page_lines(w.height)).unwrap_or(10);
+                        notepad_app.move_page_ext(true, lines, keyboard.shift);
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 7) {
+                        taskmgr_app.select_page(false, 8);
+                    } else if app_is_focused(&compositor, 10) {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
+                            let vl = terminal_view_lines(&w);
+                            terminal_app.scroll_output(vl as isize, vl);
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::PageDownKey => {
+                    if app_is_focused(&compositor, 0) {
+                        let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
+                        filemanager_app.select_page(true, rows);
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                    } else if app_is_focused(&compositor, 2) {
+                        let lines = focused_window_for_app(&compositor, 2).map(|(_, w)| notepad_app.page_lines(w.height)).unwrap_or(10);
+                        notepad_app.move_page_ext(false, lines, keyboard.shift);
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 7) {
+                        taskmgr_app.select_page(true, 8);
+                    } else if app_is_focused(&compositor, 10) {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
+                            let vl = terminal_view_lines(&w);
+                            terminal_app.scroll_output(-(vl as isize), vl);
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::ToggleOverwrite => {
+                    if app_is_focused(&compositor, 2) { notepad_app.toggle_overwrite(); }
                 }
                 drivers::keyboard::KeyAction::Delete => {
                     // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
@@ -2771,6 +2946,15 @@ pub extern "C" fn _start() -> ! {
         // 4. Fare Tekerlek (Scroll)
         let scroll_val = mouse.take_scroll_delta();
         if scroll_val != 0 {
+            // Ayarlar > Testler: tekerlek sınaması sayacı.
+            if app_is_focused(&compositor, 1) && settings_app.active_tab == 4 {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 1) {
+                    let pad = apps::settings::SystemSettings::test_mouse_pad_rect(w.x, w.y);
+                    if gui::in_rect(mx, my, pad) {
+                        settings_app.note_scroll_test(scroll_val.unsigned_abs() as u32);
+                    }
+                }
+            }
             // Başlat menüsü açıkken scroll wheel desteği
             if compositor.is_start_menu_open {
                 let active_g = compositor.active_start_group;
@@ -3078,8 +3262,13 @@ pub extern "C" fn _start() -> ! {
                 if notepad_focused {
                     if ch == '\x08' {
                         notepad_app.backspace();
+                    } else if ch == '\t' {
+                        // Tab = girinti ekle, Shift+Tab = girintiyi geri al.
+                        if keyboard.shift { notepad_app.unindent(); } else { notepad_app.insert_indent(); }
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if ch == '\n' || ch >= ' ' {
                         notepad_app.insert_char(ch);
+                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     }
                 }
                 let calc_focused = app_is_focused(&compositor, 8);
@@ -3180,8 +3369,15 @@ pub extern "C" fn _start() -> ! {
         }
 
         let night_light_active = settings_app.night_light;
+        // Ayarlar > Testler: ekran deseni dışında fare test verisini canlı besle.
+        let settings_test_active = app_is_focused(&compositor, 1) && settings_app.active_tab == 4;
+        if settings_test_active {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 1) {
+                settings_app.capture_mouse_test(mx, my, mouse.left_button, mouse.right_button, mouse.middle_button, w.x, w.y);
+            }
+        }
         let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
-            || force_render || (mouse_moved && (is_interacting || night_light_active))
+            || force_render || (mouse_moved && (is_interacting || night_light_active || settings_test_active))
             || (timer_tick_fired && media_animating);
 
         if full_redraw {

@@ -40,6 +40,9 @@ pub struct NotepadApp {
     pub file_path: [u8; 64],
     pub file_path_len: usize,
     pub status_msg: &'static str,
+    /// Üzerine yaz modu (Insert tuşu ile değiştirilir). Açıkken yazılan
+    /// karakter imlecin altındaki karakteri eklemek yerine değiştirir.
+    pub overwrite: bool,
     // Geri al / ileri al (undo/redo) yığın sayacı. Gerçek anlık görüntüler
     // büyük bellek kapladığı için global `UNDO_STACK`/`REDO_STACK` içinde tutulur.
     undo_len: u8,
@@ -137,6 +140,7 @@ impl NotepadApp {
             file_path: [0; 64],
             file_path_len: 0,
             status_msg: "",
+            overwrite: false,
             undo_len: 0,
             redo_len: 0,
             history: History { undo: Vec::new(), redo: Vec::new() },
@@ -218,6 +222,17 @@ impl NotepadApp {
     pub fn insert_char(&mut self, c: char) {
         self.push_history();
         self.delete_selection();
+        // Üzerine yaz modu: satır ortasında karakteri eklemek yerine değiştir.
+        if self.overwrite && c != '\n' && self.cursor < self.len && self.buffer[self.cursor] != '\n' {
+            self.buffer[self.cursor] = c;
+            self.cursor += 1;
+            return;
+        }
+        self.insert_raw(c);
+    }
+
+    /// Geçmiş kaydı ve seçim silme yapmadan imlece tek karakter ekler (dahili).
+    fn insert_raw(&mut self, c: char) {
         if self.len == self.buffer.len() {
             if self.buffer.try_reserve(1).is_err() { return; }
             self.buffer.push(' ');
@@ -226,6 +241,45 @@ impl NotepadApp {
         self.buffer[self.cursor] = c;
         self.len += 1;
         self.cursor += 1;
+    }
+
+    /// Insert tuşu: üzerine yaz modunu aç/kapat.
+    pub fn toggle_overwrite(&mut self) {
+        self.overwrite = !self.overwrite;
+        self.status_msg = if self.overwrite {
+            crate::gui::ui_text("Üzerine yaz modu: AÇIK", "Overwrite mode: ON")
+        } else {
+            crate::gui::ui_text("Üzerine yaz modu: KAPALI", "Overwrite mode: OFF")
+        };
+    }
+
+    /// Tab: imlece 4 boşluk girintisi ekler.
+    pub fn insert_indent(&mut self) {
+        self.push_history();
+        self.delete_selection();
+        for _ in 0..4 { self.insert_raw(' '); }
+    }
+
+    /// Shift+Tab: geçerli satırın başındaki girintiyi (en çok 4 boşluk) kaldırır.
+    pub fn unindent(&mut self) {
+        let mut start = self.cursor.min(self.len);
+        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        let mut remove = 0usize;
+        while remove < 4 && start + remove < self.len && self.buffer[start + remove] == ' ' {
+            remove += 1;
+        }
+        if remove == 0 { return; }
+        self.push_history();
+        self.selection_start = None;
+        self.selection_end = None;
+        for i in start..self.len - remove {
+            self.buffer[i] = self.buffer[i + remove];
+        }
+        for i in (self.len - remove)..self.len {
+            self.buffer[i] = ' ';
+        }
+        self.len -= remove;
+        self.cursor = self.cursor.saturating_sub(remove).max(start.min(self.len));
     }
 
     pub fn backspace(&mut self) {
@@ -243,23 +297,31 @@ impl NotepadApp {
     }
     pub fn delete_forward(&mut self) { if self.selection_start.is_some() && self.selection_start != self.selection_end { self.delete_selection(); } else if self.cursor < self.len { self.selection_start=Some(self.cursor); self.selection_end=Some(self.cursor+1); self.delete_selection(); } }
 
-    /// İmleci satır başına taşır (Home tuşu).
-    pub fn move_home(&mut self) {
+    /// İmleci satır başına taşır (Home tuşu). `select` true ise seçimi genişletir.
+    pub fn move_home_ext(&mut self, select: bool) {
         let mut start = self.cursor;
         while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
-        self.cursor = start;
-        self.selection_start = None;
-        self.selection_end = None;
+        self.move_to(start, select);
     }
 
-    /// İmleci satır sonuna taşır (End tuşu).
-    pub fn move_end(&mut self) {
+    /// İmleci satır sonuna taşır (End tuşu). `select` true ise seçimi genişletir.
+    pub fn move_end_ext(&mut self, select: bool) {
         let mut end = self.cursor;
         while end < self.len && self.buffer[end] != '\n' { end += 1; }
-        self.cursor = end;
-        self.selection_start = None;
-        self.selection_end = None;
+        self.move_to(end, select);
     }
+
+    /// İmleci satır başına taşır (Home tuşu).
+    pub fn move_home(&mut self) { self.move_home_ext(false); }
+
+    /// İmleci satır sonuna taşır (End tuşu).
+    pub fn move_end(&mut self) { self.move_end_ext(false); }
+
+    /// Belgenin en başına taşır (Ctrl+Home).
+    pub fn move_document_home(&mut self, select: bool) { self.move_to(0, select); }
+
+    /// Belgenin en sonuna taşır (Ctrl+End).
+    pub fn move_document_end(&mut self, select: bool) { self.move_to(self.len, select); }
 
     /// Bir kelimenin (harf/rakam/alt çizgi dizisi) başlangıç ve bitiş
     /// dizinini döndürür (çift tık kelime seçimi için).
@@ -332,11 +394,13 @@ impl NotepadApp {
 
     pub fn move_vertical(&mut self, up: bool) { self.move_vertical_ext(up, false); }
 
-    pub fn move_vertical_ext(&mut self, up: bool, select: bool) {
-        let mut line_start = self.cursor;
+    /// Bir konumdan bir satır yukarı/aşağı gidilecek indeksi hesaplar
+    /// (sütun korunur, mutasyon yapmaz).
+    fn vertical_target(&self, from: usize, up: bool) -> usize {
+        let mut line_start = from;
         while line_start > 0 && self.buffer[line_start - 1] != '\n' { line_start -= 1; }
-        let column = self.cursor - line_start;
-        let target = if up {
+        let column = from - line_start;
+        if up {
             if line_start == 0 {
                 0
             } else {
@@ -346,7 +410,7 @@ impl NotepadApp {
                 (previous_start + column).min(previous_end)
             }
         } else {
-            let mut line_end = self.cursor;
+            let mut line_end = from;
             while line_end < self.len && self.buffer[line_end] != '\n' { line_end += 1; }
             if line_end == self.len {
                 self.len
@@ -356,17 +420,66 @@ impl NotepadApp {
                 while next_end < self.len && self.buffer[next_end] != '\n' { next_end += 1; }
                 (next_start + column).min(next_end)
             }
-        };
-        if select {
-            let a = self.anchor();
-            self.cursor = target;
-            self.selection_start = Some(a.min(target));
-            self.selection_end = Some(a.max(target));
-        } else {
-            self.cursor = target;
-            self.selection_start = None;
-            self.selection_end = None;
         }
+    }
+
+    pub fn move_vertical_ext(&mut self, up: bool, select: bool) {
+        let target = self.vertical_target(self.cursor, up);
+        self.move_to(target, select);
+    }
+
+    /// PageUp/PageDown: `lines` satır yukarı/aşağı (sütun korunur).
+    pub fn move_page_ext(&mut self, up: bool, lines: usize, select: bool) {
+        let mut target = self.cursor;
+        for _ in 0..lines.max(1) {
+            let next = self.vertical_target(target, up);
+            if next == target { break; }
+            target = next;
+        }
+        self.move_to(target, select);
+    }
+
+    /// İmlecin görsel (wrap'li) satır ve sütun konumunu döndürür.
+    pub fn cursor_row_col(&self, wrap_cols: usize) -> (usize, usize) {
+        let mut line = 0usize;
+        let mut col = 0usize;
+        for i in 0..self.cursor.min(self.len) {
+            let ch = self.buffer[i];
+            if ch == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if wrap_cols > 0 && col >= wrap_cols { line += 1; col = 0; }
+            }
+        }
+        (line, col)
+    }
+
+    /// İmleci görünür tutacak dikey kaydırma ofsetini (px) döndürür.
+    /// Render ile aynı geometriyi kullanır, böylece imleç her zaman ekranda kalır.
+    pub fn ensure_cursor_visible(&self, win_w: usize, win_h: usize, current_scroll_y: usize) -> usize {
+        let area_h = win_h.saturating_sub(58 + status_h() + scrollbar::SCROLLBAR_THICKNESS);
+        let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
+        let text_w = area_w.saturating_sub(gutter_w() + 10);
+        let wrap_cols = (text_w / char_w()).max(1);
+        let (total_lines, _) = self.text_extent(wrap_cols);
+        let (row, _) = self.cursor_row_col(wrap_cols);
+        let view_lines = (area_h / line_h()).max(1);
+        let max_line_off = total_lines.saturating_sub(view_lines);
+        let mut first = (current_scroll_y / line_h()).min(max_line_off);
+        if row < first {
+            first = row;
+        } else if row >= first + view_lines {
+            first = (row + 1).saturating_sub(view_lines);
+        }
+        first.min(max_line_off) * line_h()
+    }
+
+    /// Görünür (wrap'li) satır sayısı — PageUp/PageDown adımı bu kadar satır atlar.
+    pub fn page_lines(&self, win_h: usize) -> usize {
+        let area_h = win_h.saturating_sub(58 + status_h() + scrollbar::SCROLLBAR_THICKNESS);
+        (area_h / line_h()).max(1)
     }
 
     pub fn clear(&mut self) {
@@ -653,6 +766,11 @@ impl NotepadApp {
         let mut status = TextBuf::new();
         if !self.status_msg.is_empty() {
             status.push_str(self.status_msg);
+            status.push_str("  |  ");
+        }
+        // Üzerine yaz (overwrite) modu göstergesi.
+        if self.overwrite {
+            status.push_str(crate::gui::ui_text("ÜYZ", "OVR"));
             status.push_str("  |  ");
         }
         status.push_str(self.file_path_str());

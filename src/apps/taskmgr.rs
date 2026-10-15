@@ -212,6 +212,25 @@ impl TaskManagerApp {
         }
     }
 
+    /// İlk süreci seçer (Home).
+    pub fn select_first(&mut self) { self.selected = 0; }
+
+    /// Son süreci seçer (End).
+    pub fn select_last(&mut self) {
+        if self.proc_count > 0 { self.selected = self.proc_count - 1; }
+    }
+
+    /// Sayfa sayfa gezinme (PageUp / PageDown).
+    pub fn select_page(&mut self, down: bool, rows: usize) {
+        if self.proc_count == 0 { self.selected = 0; return; }
+        let step = rows.max(1);
+        if down {
+            self.selected = (self.selected + step).min(self.proc_count - 1);
+        } else {
+            self.selected = self.selected.saturating_sub(step);
+        }
+    }
+
     pub fn selected_app_idx(&self) -> Option<usize> {
         self.processes.get(self.selected).filter(|_| self.selected < self.proc_count).map(|entry| entry.app_idx)
     }

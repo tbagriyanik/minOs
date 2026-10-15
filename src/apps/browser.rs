@@ -532,7 +532,7 @@ impl BrowserApp {
                     let mut req=[0u8;512]; let mut n=0;
                     let mut add=|s:&[u8]| { let k=s.len().min(req.len()-n); req[n..n+k].copy_from_slice(&s[..k]); n+=k; };
                     add(b"GET "); add(path.as_bytes()); add(b" HTTP/1.0\r\nHost: "); add(host.as_bytes());
-                    add(b"\r\nUser-Agent: minOs/1.0\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n");
+                    add(b"\r\nUser-Agent: minOs/1.2\r\nAccept: text/html,text/plain\r\nConnection: close\r\n\r\n");
                     if crate::drivers::netstack::tcp_send(&req[..n]) { self.request_state=2; self.web_request_sent=true; self.status=crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response..."); }
                 }
             }

@@ -208,6 +208,16 @@ impl TerminalApp {
         self.output_scroll = ((self.output_scroll as isize + delta).max(0) as usize).min(max_scroll);
     }
 
+    /// Çıktının en eskisine (en üste) kaydırır (Home / Ctrl+Home).
+    pub fn scroll_top(&mut self, view_lines: usize) {
+        self.output_scroll = self.out_count.saturating_sub(view_lines.max(1));
+    }
+
+    /// Çıktının en yenisine (en alta) kaydırır (End / Ctrl+End).
+    pub fn scroll_bottom(&mut self) {
+        self.output_scroll = 0;
+    }
+
     pub fn insert(&mut self, c: char) {
         self.completion_active = false;
         if c == '\n' {

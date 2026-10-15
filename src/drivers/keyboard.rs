@@ -20,6 +20,8 @@ pub enum KeyAction {
     BrowserRefresh,
     HomeKey,
     EndKey,
+    PageUpKey,
+    PageDownKey,
     Undo,
     Redo,
     WinShowDesktop,
@@ -32,6 +34,7 @@ pub enum KeyAction {
     MediaNext,
     MediaPrevious,
     RenameSelected,
+    ToggleOverwrite,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -179,11 +182,17 @@ impl KeyboardState {
                     self.last_action = Some(KeyAction::OpenTaskManager);
                     return None;
                 }
+                if self.shift {
+                    self.last_action = Some(KeyAction::CutText);
+                    return None;
+                }
                 self.last_action = Some(KeyAction::Delete);
                 return None;
             }
             0x47 if !self.num_lock => { self.last_action = Some(KeyAction::HomeKey); return None; } // Home
             0x4F if !self.num_lock => { self.last_action = Some(KeyAction::EndKey); return None; }  // End
+            0x49 if !self.num_lock => { self.last_action = Some(KeyAction::PageUpKey); return None; }   // Page Up
+            0x51 if !self.num_lock => { self.last_action = Some(KeyAction::PageDownKey); return None; } // Page Down
             0x2E if self.ctrl => { self.last_action = Some(KeyAction::CopyText); return None; } // Ctrl+C
             0x2F if self.ctrl => { self.last_action = Some(KeyAction::PasteText); return None; } // Ctrl+V
             0x2D if self.ctrl => { self.last_action = Some(KeyAction::CutText); return None; } // Ctrl+X
@@ -269,14 +278,23 @@ impl KeyboardState {
             0x22 => { self.last_action = Some(KeyAction::MediaPlayPause); return None; }
             0x10 => { self.last_action = Some(KeyAction::MediaPrevious); return None; }
             0x19 => { self.last_action = Some(KeyAction::MediaNext); return None; }
+            // Insert / Delete tuşları (Windows kısayol alternatifleri dâhil):
+            // Ctrl+Insert = Kopyala, Shift+Insert = Yapıştır, Shift+Delete = Kes,
+            // Insert (num_lock kapalı) = üzerine yaz modu.
+            0x52 if self.ctrl => { self.last_action = Some(KeyAction::CopyText); return None; }
+            0x52 if self.shift => { self.last_action = Some(KeyAction::PasteText); return None; }
+            0x52 if !self.num_lock => { self.last_action = Some(KeyAction::ToggleOverwrite); return None; }
+            0x53 if self.shift => { self.last_action = Some(KeyAction::CutText); return None; }
             0x53 if self.num_lock => { self.last_char = Some('.'); return Some('.'); }
             0x53 => { self.last_action = Some(KeyAction::Delete); return None; }
-            0x48 => { self.last_action = Some(KeyAction::ArrowUp); return None; }
-            0x50 => { self.last_action = Some(KeyAction::ArrowDown); return None; }
-            0x4B => { self.last_action = Some(KeyAction::ArrowLeft); return None; }
-            0x4D => { self.last_action = Some(KeyAction::ArrowRight); return None; }
-            0x47 => { self.last_action = Some(KeyAction::HomeKey); return None; }
-            0x4F => { self.last_action = Some(KeyAction::EndKey); return None; }
+            0x48 if !self.num_lock => { self.last_action = Some(KeyAction::ArrowUp); return None; }
+            0x50 if !self.num_lock => { self.last_action = Some(KeyAction::ArrowDown); return None; }
+            0x4B if !self.num_lock => { self.last_action = Some(KeyAction::ArrowLeft); return None; }
+            0x4D if !self.num_lock => { self.last_action = Some(KeyAction::ArrowRight); return None; }
+            0x47 if !self.num_lock => { self.last_action = Some(KeyAction::HomeKey); return None; }
+            0x4F if !self.num_lock => { self.last_action = Some(KeyAction::EndKey); return None; }
+            0x49 if !self.num_lock => { self.last_action = Some(KeyAction::PageUpKey); return None; }
+            0x51 if !self.num_lock => { self.last_action = Some(KeyAction::PageDownKey); return None; }
             0x1C => { self.last_action = Some(KeyAction::EnterKey); return Some('\n'); }
             0x35 if self.num_lock => { self.last_char = Some('/'); return Some('/'); }
             0x37 if self.num_lock => { self.last_char = Some('*'); return Some('*'); }

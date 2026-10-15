@@ -190,14 +190,19 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                         let flags = MOUSE_BYTE[0];
                         let raw_x = MOUSE_BYTE[1] as i16;
                         let raw_y = MOUSE_BYTE[2] as i16;
-                        let scroll = MOUSE_BYTE[3] as i8;
+                        // Tekerlek verisi standart IntelliMouse paketinde alt 4 bittir
+                        // (işaretli). Bazı denetleyiciler tam bayt gönderir; 4 bitlik
+                        // işaret genişletme her ikisini de doğru yorumlar.
+                        let mut wheel = (MOUSE_BYTE[3] & 0x0F) as i8;
+                        if wheel & 0x08 != 0 { wheel -= 0x10; }
 
                         let dx = if flags & 0x10 != 0 { (raw_x | !0xFF) as i8 } else { raw_x as i8 };
                         let dy = if flags & 0x20 != 0 { (raw_y | !0xFF) as i8 } else { raw_y as i8 };
 
                         if flags & 0xC0 == 0 {
                             mouse.update_packet(flags, dx, dy, screen_w, screen_h);
-                            mouse.scroll_delta = scroll;
+                            // Aynı karede birden çok paket gelirse biriktir.
+                            mouse.scroll_delta = mouse.scroll_delta.saturating_add(wheel);
                             updated.mouse = true;
                         }
                     }

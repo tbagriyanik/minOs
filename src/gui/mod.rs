@@ -105,7 +105,7 @@ pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usi
 
 /// Draw a short-lived busy panel before a synchronous operation begins.
 /// The static indicator remains visible until the current disk call returns.
-pub fn draw_busy_overlay(fb: &mut Framebuffer, mx: usize, my: usize, message: &str, progress: usize) {
+pub fn draw_busy_overlay(fb: &mut Framebuffer, _mx: usize, _my: usize, message: &str, progress: usize) {
     let w = 340.min(fb.width.saturating_sub(24));
     let h = 104;
     let x = fb.width.saturating_sub(w) / 2;
@@ -116,13 +116,32 @@ pub fn draw_busy_overlay(fb: &mut Framebuffer, mx: usize, my: usize, message: &s
     let bx = x + 18;
     let by = y + 52;
     let bw = w.saturating_sub(36);
+    let pct = progress.min(100);
     fb.draw_rounded_rect(bx, by, bw, 14, 4, Color::DARK_BG);
-    fb.draw_rounded_rect(bx + 1, by + 1, bw.saturating_sub(2) * progress.min(100) / 100, 12, 3, Color::ACCENT_BLUE);
-    let label = if progress >= 100 { "100%" } else { "Calisiyor..." };
-    MinGuiCompositor::draw_string(fb, bx, by + 22, label, Color::TEXT_MUTED);
+    fb.draw_rounded_rect(bx + 1, by + 1, bw.saturating_sub(2) * pct / 100, 12, 3, Color::ACCENT_BLUE);
+    // Yüzde etiketi: çubukla tutarlı tek bir değer gösterir.
+    let mut label = TextBuf::new();
+    label.push_u2(pct as u32);
+    label.push_str("%");
+    MinGuiCompositor::draw_string(fb, bx, by + 22, label.as_str(), Color::TEXT_MUTED);
+    fb.flush_rect((x, y, w, h));
+}
 
-    // Hourglass style busy pointer.
-    const HOURGLASS: [u8; 9] = [0b11111110, 0b01000100, 0b00101000, 0b00010000, 0b00101000, 0b01000100, 0b11111110, 0b00010000, 0b00101000];
+/// Dolgulu kum saati işlem imleci. İmlecin altındaki arka planı saklar;
+/// böylece bir sonraki karede `restore_cursor_background` ile temizlenebilir.
+pub fn draw_busy_hourglass(fb: &mut Framebuffer, mx: usize, my: usize) {
+    fb.save_cursor_background(mx, my);
+    // 8x9 kum saati deseni (bit 7 = sol sütun).
+    const HOURGLASS: [u8; 8] = [
+        0b11111110,
+        0b01111100,
+        0b00111000,
+        0b00010000,
+        0b00111000,
+        0b01111100,
+        0b11111110,
+        0b00000000,
+    ];
     for (row, bits) in HOURGLASS.iter().enumerate() {
         for col in 0..8 {
             if bits & (1 << (7 - col)) != 0 {
@@ -130,7 +149,6 @@ pub fn draw_busy_overlay(fb: &mut Framebuffer, mx: usize, my: usize, message: &s
             }
         }
     }
-    fb.flush_rect((x, y, w, h));
     fb.flush_rect((mx, my, 10, 10));
 }
 
@@ -738,6 +756,8 @@ impl MinGuiCompositor {
         let mut scored: [(usize, u8); 12] = [(0, 0); 12];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
+            // Kurulu sistemde kurulum uygulaması arama sonuçlarında çıkmaz.
+            if app_id == 11 && crate::fs::diskfs::is_installed() { continue; }
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
             let english_hit = Self::start_search_score(names[1].as_bytes(), query);
             let score = match (localized, english_hit) {
@@ -1777,7 +1797,9 @@ impl MinGuiCompositor {
 
         let card_w = sp(34);
         let card_h = sp(30);
-        for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate() {
+        // Kurulu sistemde "minOs'u Kur" masaüstü kısayolu gösterilmez.
+        let desk_icon_count = if crate::fs::diskfs::is_installed() { 5 } else { desk_icons.len() };
+        for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate().take(desk_icon_count) {
             let dy = sp(30) + i * sp(54);
             // İkon kartı (gölgeli, yuvarlatılmış 6px) — ölçekle büyür.
             let card_x = sp(20);

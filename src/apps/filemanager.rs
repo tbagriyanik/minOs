@@ -137,6 +137,28 @@ impl FileManagerApp {
         }
     }
 
+    /// Satır yüksekliği (px) — kaydırma hesapları için.
+    pub fn row_h() -> usize { ROW_H }
+
+    /// Listenin ilk öğesini seçer (Home).
+    pub fn select_first(&mut self) { self.selected_idx = 0; }
+
+    /// Listenin son öğesini seçer (End).
+    pub fn select_last(&mut self) {
+        if self.file_count > 0 { self.selected_idx = self.file_count - 1; }
+    }
+
+    /// Sayfa sayfa gezinme (PageUp / PageDown).
+    pub fn select_page(&mut self, down: bool, rows: usize) {
+        if self.file_count == 0 { return; }
+        let step = rows.max(1);
+        if down {
+            self.selected_idx = (self.selected_idx + step).min(self.file_count - 1);
+        } else {
+            self.selected_idx = self.selected_idx.saturating_sub(step);
+        }
+    }
+
     pub const fn new() -> Self {
         Self {
             current_path: "/root/Documents",

@@ -6,7 +6,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~16.400%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~18.600%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
 **minOs (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
@@ -112,8 +112,9 @@ minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileş
    - DNS sorgu paketi gönderilir; fakat yanıt paketinin çözümlenip yerel IP eşlemesine kaydedilmesi kısmi durumdadır.
 2. **Çoklu Çekirdek (SMP) Görev Dağıtımı:**
    - QEMU `-CpuCount N` parametresiyle çoklu sanal çekirdek tanımlanabilir; ancak minOs çekirdeği şimdilik tek çekirdekte iş planlaması yürütür (SMP AP çekirdekleri henüz uyandırılıp iş yükü paylaştırılmaz).
-3. **Fiziksel Blok Depolama Yazma (Write-through):**
-   - IDE/ATA sürücüsü ve FAT32 okuma desteği mevcuttur; `/root` dosya sistemi RamFS/VFS üzerinde çalışır. Fiziksel disk sektörlerine kalıcı blok düzeyinde yazma kısıtlıdır.
+3. **Fiziksel Blok Depolama ve Kalıcı Yazma (FAT32 Persistence):**
+   - Sabit disk (IDE/ATA Master) ve USB depolama aygıtlarında **tam sektör okuma ve yazma (`write_sector`, `flush_cache`)** ile **FAT32 dosya formatlama ve dosya yazma/silme** yeteneği aktiftir.
+   - Kurulum Sihirbazı diski biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
 4. **HDA Donanımsal DMA İlerlemesi (QEMU Emülasyon Sınırları):**
    - Intel HDA ses sürücüsünde BDL ve DMA stream kurulumu tamdır; fakat bazı sanallaştırma ortamlarında DMA LPIB göstergesi ses çalarken donanım tarafında ilerlemeyebilir. Ses çıkışı için ayrıca PC Speaker PWM tonlama emülasyonu yedek olarak devrededir.
 5. **ATAPI CD-ROM READ CAPACITY:**
@@ -145,13 +146,19 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
-- **👋 Hoş Geldin Ekranı:** Masaüstü açılmadan önce arayüz dilini (Türkçe/English), beş masaüstü temasından birini ve hedef çözünürlük tercihini seçin. Tercihler kalıcı ayarlara kaydedilir.
-- **🖥️ Açılış Çözünürlüğü:** Gerçek framebuffer modu Limine tarafından açılış sırasında belirlenir. ISO'daki Limine menüsünde 800×600, 1024×768, 1280×720 ve 1920×1080 seçenekleri bulunur; hoş geldin ekranında veya ayarlarda yapılan tercih Limine menü seçimini değiştirmez. İstenen modu açılışta kullanmak için Limine menüsünden aynı çözünürlük girdisini seçin.
-- **📜 Açılış Günlüğü:** Hoş geldin ekranında çekirdek loglarının son bölümü gösterilir. Fare tekerleğiyle daha eski ve yeni log satırları arasında kaydırma yapılabilir; açılış göstergesi log akarken animasyonunu sürdürür.
+- **👋 Hoş Geldin Ekranı:** Masaüstü açılmadan önce arayüz dilini (Türkçe/English) ve beş masaüstü temasından birini seçin. Tercihler anında uygulanır ve kalıcı olarak diske kaydedilir.
+- **🚀 Limine Açılış Menüsü (Live & Kurulu Sistem Seçenekleri):**
+  - **`minOs Live Environment`**: Kurulum yapmadan doğrudan RAM üzerinden çalışan Live CD ortamı.
+  - **`minOs Installed System`**: Diske kurulmuş kalıcı minOs sistemine doğrudan giriş.
+  - **`Display Resolutions`**: 800×600 (SVGA), 1024×768 (XGA), 1280×720 (HD) ve 1920×1080 (FHD) seçenekleriyle açılış çözünürlüğü menüsü.
+- **💽 Tek Tıkla Kur & Kalıcı Depolama (Persistent Storage):** Masaüstündeki veya Başlat menüsündeki "minOs'u Kur" sihirbazı ile seçilen hedef sabit disk (ATA / QCOW2) tek tıkla FAT32 olarak biçimlendirilir, `MINOS.SYS` kurulum işaretçisi ve sistem yapılandırması diske yazılır. Kullanıcı dosyaları ve ayarlar (`settings.cfg`) sonraki açılışlarda otomatik olarak geri yüklenir.
+- **🖱️ Masaüstü ve Giriş Alanı Sağ Tık Simgeleri & Kısayol İpuçları:** Masaüstü sağ tık menüsünde ve metin kutusu/textarea sağ tık menülerinde görsel simgeler ile kısayol bilgileri (Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+O, Ctrl+S) gösterilir.
+- **📐 Sağ Kenara Dayalı Scrollbar ve Dıştan Resize:** Kaydırma çubukları pencere sağına tam yaslanır; pencere sağ resize tutamaçları pencere dışından da rahatça yakalanabilir.
+- **📜 Not Defteri Satır Numaraları:** Not Defteri satır numaralandırması netleştirildi; dikey kaydırma ve imleç takibiyle tam hizalı çalışır.
 - **🇹🇷 Tam Türkçe Karakter Desteği:** Sistem Ayarları, Görev Yöneticisi, Not Defteri, Dosya Yöneticisi, Başlat menüsü ve durum çubukları dahil arayüzdeki tüm metinler Türkçe karakterlerle (`ç`, `Ç`, `ğ`, `Ğ`, `ı`, `I`, `İ`, `ö`, `Ö`, `ş`, `Ş`, `ü`, `Ü`) işlenir.
 - **🔤 TTF Tabanlı Fontlar:** Genel arayüz Inria Sans, komut istemi Geist Mono kullanır. Derleme betiği fontların sunduğu karakterlerden bitmap atlas oluşturur; yazı yakınlaştırma ayarı arayüzde uygulanır.
 - **⌨️ Klavyeyle Menü Gezintisi (Ok Tuşları & Enter):** Başlat menüsü ve bağlam menülerinde **Yukarı/Aşağı/Sol/Sağ ok tuşları** ile gezinebilir, **Enter** tuşuna basarak seçili uygulamayı veya komutu çalıştırabilirsiniz.
-- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Pencere içerikleri ve açılış logu dikey olarak kaydırılabilir. Pencere scrollbar'ları resize kenarlarından içeri alınır; kaydırma ve yeniden boyutlandırma alanları çakışmaz.
+- **🖱️ Fare Tekerleği (Scroll Wheel) Desteği:** Başlat menüsü açıkken fare tekerleğiyle liste seçenekleri arasında geçiş yapılabilir. Pencere içerikleri ve açılış logu dikey olarak kaydırılabilir.
 - **📐 Daha Geniş Kenar Tutamaçları (12px Resize Grip):** Pencereleri kenarlarından tutup boyutlandırma alanı 8 pikselden **12 piksele** çıkarıldı. Artık pencerelerin kenar ve köşelerinden tutulması ve boyutlandırılması çok daha kolaydır.
 - **🖼️ Masaüstü Simgesi Tıklama Koruması:** Açık ve görünür bir pencere masaüstü simgelerinin üzerine geldiğinde, pencereye tıklanıldığında altındaki masaüstü simgelerinin istemeden açılması engellendi.
 - **🎨 Dinamik Tema ve Kontrast:** Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal ve Gün Batımı temaları arasında canlı geçiş. Düğme ve seçili öğe metinleri zemin rengine göre siyah veya beyaz seçilerek kontrast korunur.
@@ -343,17 +350,17 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 14 Ekim 2026
+> Son güncelleme: 15 Ekim 2026
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 44 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 19.565 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 16.499 satır |
+| **Toplam Rust Kaynak Dosyası** | 45 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 21.982 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 18.591 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Yerleşik Uygulama Sayısı** | 11 masaüstü uygulaması |
-| **Kernel Boyutu (ISO)** | ~7.4 MB (fontlar dahil) |
+| **Yerleşik Uygulama Sayısı** | 12 masaüstü uygulaması + Pencere Yöneticisi |
+| **Kernel / ISO Boyutu** | ~7.1 MB (fontlar ve Limine bootloader dahil) |
 
 ---
 

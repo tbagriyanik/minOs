@@ -37,6 +37,9 @@ pub enum KeyAction {
     ToggleOverwrite,
     DeleteWordBack,
     DeleteWordForward,
+    SaveDocument,
+    NewDocument,
+    OpenDocument,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -221,6 +224,9 @@ impl KeyboardState {
             0x1E if self.ctrl => { self.last_action = Some(KeyAction::SelectAllText); return None; } // Ctrl+A
             0x2C if self.ctrl => { self.last_action = Some(KeyAction::Undo); return None; } // Ctrl+Z
             0x15 if self.ctrl => { self.last_action = Some(KeyAction::Redo); return None; } // Ctrl+Y
+            0x1F if self.ctrl => { self.last_action = Some(KeyAction::SaveDocument); return None; } // Ctrl+S
+            0x31 if self.ctrl => { self.last_action = Some(KeyAction::NewDocument); return None; } // Ctrl+N
+            0x18 if self.ctrl => { self.last_action = Some(KeyAction::OpenDocument); return None; } // Ctrl+O
             0x26 if self.ctrl => { self.last_action = Some(KeyAction::BrowserAddress); return None; } // Ctrl+L
             0x13 if self.ctrl => { self.last_action = Some(KeyAction::BrowserRefresh); return None; } // Ctrl+R
             0x48 if !self.num_lock => { // Arrow Up / keypad 8

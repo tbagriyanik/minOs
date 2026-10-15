@@ -544,8 +544,8 @@ impl TerminalApp {
                         p.push_str(arg);
                         p
                     };
-                    if vfs.delete_file(&target) || vfs.delete_dir(&target) {
-                        self.push_line(crate::gui::ui_text("Silindi.", "Removed."), Color::ACCENT_GREEN);
+                    if vfs.move_to_trash(&target) {
+                        self.push_line(crate::gui::ui_text("Geri dönüşüm kutusuna taşındı.", "Moved to Recycle Bin."), Color::ACCENT_GREEN);
                     } else {
                         self.push_line(crate::gui::ui_text("Silinemedi.", "Remove failed."), Color::ACCENT_RED);
                     }

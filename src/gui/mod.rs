@@ -634,7 +634,7 @@ pub const MENU_ITEM_STEP: usize = 20;
 /// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
 /// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
 pub const MENU_GROUPS: [(&str, usize, usize); 4] =
-    [("Sistem", 0, 5), ("Üretkenlik", 5, 3), ("Medya", 8, 4), ("Güç", 12, 2)];
+    [("Sistem", 0, 5), ("Üretkenlik", 5, 3), ("Medya", 8, 5), ("Güç", 13, 2)];
 
 impl MinGuiCompositor {
     /// Siyah veya beyaz metinden, verilen zemin üzerinde daha okunaklı olanı seçer.
@@ -713,7 +713,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 12] = [0, 1, 7, 10, 11, 2, 8, 9, 3, 4, 5, 6];
+        const APP_IDX: [usize; 13] = [0, 1, 7, 10, 11, 2, 8, 9, 3, 4, 5, 6, 12];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -749,19 +749,20 @@ impl MinGuiCompositor {
         None
     }
 
-    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 12]) -> usize {
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 13]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() { return 0; }
-        const NAMES: [[&str; 2]; 12] = [
+        const NAMES: [[&str; 2]; 13] = [
             ["Dosya Yöneticisi", "File Manager"], ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"], ["Web Tarayıcısı", "Web Browser"],
             ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
             ["Video Oynatıcı", "Video Player"], ["Görev Yöneticisi", "Task Manager"],
             ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
             ["Komut İstemi", "Terminal"], ["Tek Tıkla Kur", "One-Click Install"],
+            ["3D Gösterici", "3D Viewer"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
-        let mut scored: [(usize, u8); 12] = [(0, 0); 12];
+        let mut scored: [(usize, u8); 13] = [(0, 0); 13];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
             // Kurulu sistemde kurulum uygulaması arama sonuçlarında çıkmaz.
@@ -817,7 +818,7 @@ impl MinGuiCompositor {
     }
 
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
-        let mut results = [0; 12];
+        let mut results = [0; 13];
         let count = self.start_search_matches(english, &mut results);
         if down {
             if count > 0 { self.selected_start_item = (self.selected_start_item + 1).min(count - 1); }
@@ -827,7 +828,7 @@ impl MinGuiCompositor {
     }
 
     pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
-        let mut results = [0; 12];
+        let mut results = [0; 13];
         let count = self.start_search_matches(english, &mut results);
         (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
@@ -916,9 +917,12 @@ pub enum ContextKind {
 }
 
 /// Masaüstü sağ tık menüsü.
-pub const CTX_DESKTOP: [(&str, u32); 6] = [
+pub const CTX_DESKTOP: [(&str, u32); 9] = [
     ("Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
     ("Yeni Not Oluştur", Color::TEXT_MAIN),
+    ("Yeni Dosya Oluştur", Color::ACCENT_BLUE),
+    ("Yeni Klasör Oluştur", Color::ACCENT_YELLOW),
+    ("Yapıştır", Color::ACCENT_GREEN),
     ("Sistem Ayarları", Color::ACCENT_PINK),
     ("Görev Yöneticisi", Color::ACCENT_YELLOW),
     ("Tema Değiştir", Color::ACCENT_GREEN),
@@ -926,9 +930,12 @@ pub const CTX_DESKTOP: [(&str, u32); 6] = [
 ];
 
 /// Dosya Yöneticisi'nde bir dosyaya veya klasöre sağ tık menüsü.
-pub const CTX_FILE: [(&str, u32); 7] = [
+pub const CTX_FILE: [(&str, u32); 10] = [
     ("Aç / Klasöre Gir", Color::ACCENT_GREEN),
     ("Not Defterinde Düzenle", Color::TEXT_MAIN),
+    ("Kes", Color::ACCENT_RED),
+    ("Kopyala", Color::ACCENT_BLUE),
+    ("Yapıştır", Color::ACCENT_GREEN),
     ("Yeni Dosya Oluştur", Color::ACCENT_BLUE),
     ("Yeni Klasör Oluştur", Color::ACCENT_YELLOW),
     ("Adını Değiştir", Color::ACCENT_YELLOW),
@@ -954,13 +961,15 @@ pub const CTX_WINDOW: [(&str, u32); 4] = [
     ("Kapat", Color::ACCENT_RED),
 ];
 
-const CTX_DESKTOP_EN: [(&str, u32); 6] = [
+const CTX_DESKTOP_EN: [(&str, u32); 9] = [
     ("Open File Manager", Color::ACCENT_BLUE), ("New Note", Color::TEXT_MAIN),
+    ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW), ("Paste", Color::ACCENT_GREEN),
     ("System Settings", Color::ACCENT_PINK), ("Task Manager", Color::ACCENT_YELLOW),
     ("Change Theme", Color::ACCENT_GREEN), ("Refresh Desktop", Color::TEXT_MUTED),
 ];
-const CTX_FILE_EN: [(&str, u32); 7] = [
+const CTX_FILE_EN: [(&str, u32); 10] = [
     ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
+    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
     ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW),
     ("Rename", Color::ACCENT_YELLOW), ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
 ];
@@ -1052,7 +1061,9 @@ impl MinGuiCompositor {
     pub fn add_window(&mut self, mut win: Window) -> bool {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
-                if win.app_id == u8::MAX && idx < 12 { win.app_id = idx as u8; }
+                // Sabit uygulama pencereleri 0..=12 arası slotlara eklenir (13 uygulama);
+                // 3D Gösterici (idx 12) dahil edilmezse app_id MAX kalır ve açılamaz.
+                if win.app_id == u8::MAX && idx < 13 { win.app_id = idx as u8; }
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
@@ -1064,7 +1075,7 @@ impl MinGuiCompositor {
 
     /// Çizim Tahtası (Paint) dışındaki uygulamalar tek örnektir; var olan pencereyi öne getirir.
     pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
-        if app_id >= 12 { return None; }
+        if app_id >= 13 { return None; }
         let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
             slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
         });
@@ -1850,6 +1861,7 @@ impl MinGuiCompositor {
             9 => 1, // Çizim Tahtası -> Çizim
             10 => 0,// Terminal -> Komut İstemi
             11 => 0,// Kurulum Sihirbazı -> Bilgisayarım / Disk
+            12 => 1,// 3D Gösterici -> Görsel/Çizim
             _ => 0,
         }
     }
@@ -1869,6 +1881,7 @@ impl MinGuiCompositor {
                 9 => "Paint",
                 10 => "Command Prompt",
                 11 => "One-Click Install",
+                12 => "3D Viewer",
                 _ => "Window",
             }
         } else {
@@ -1885,6 +1898,7 @@ impl MinGuiCompositor {
                 9 => "Çizim Tahtası",
                 10 => "Komut İstemi",
                 11 => "Tek Tıkla Kur",
+                12 => "3D Gösterici",
                 _ => "Pencere",
             }
         }
@@ -1896,14 +1910,14 @@ impl MinGuiCompositor {
                 0 => "Files", 1 => "Settings", 2 => "Notes",
                 3 => "Web", 4 => "Image", 5 => "Music",
                 6 => "Video", 7 => "Tasks", 8 => "Calc",
-                9 => "Paint", 10 => "CMD", 11 => "Install", _ => "Win",
+                9 => "Paint", 10 => "CMD", 11 => "Install", 12 => "3D", _ => "Win",
             }
         } else {
             match win_idx {
                 0 => "Dosyalar", 1 => "Ayarlar", 2 => "Notlar",
                 3 => "Web", 4 => "Resim", 5 => "Müzik",
                 6 => "Video", 7 => "Görevler", 8 => "Hesap",
-                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", _ => "Pencere",
+                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", 12 => "3D", _ => "Pencere",
             }
         }
     }
@@ -2606,7 +2620,7 @@ impl MinGuiCompositor {
         if self.start_search_len == 0 {
             self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
         } else {
-            let mut results = [0; 12];
+            let mut results = [0; 13];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) = Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
@@ -2615,8 +2629,8 @@ impl MinGuiCompositor {
             fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
             Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
-            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur"];
-            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install"];
+            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur", "3D Gösterici"];
+            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install", "3D Viewer"];
             if count == 0 {
                 Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
             }
@@ -2651,7 +2665,7 @@ impl MinGuiCompositor {
         fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
-        let menu_items = if english { [
+        let menu_items: [(&str, u32, usize); 15] = if english { [
             ("File Manager", Color::ACCENT_YELLOW, 0),
             ("Settings", Color::ACCENT_BLUE, 1usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
@@ -2664,6 +2678,7 @@ impl MinGuiCompositor {
             ("Image Viewer", Color::ACCENT_PINK, 4),
             ("Music Player", Color::ACCENT_YELLOW, 5),
             ("Video Player", Color::ACCENT_RED, 6),
+            ("3D Viewer", Color::ACCENT_BLUE, 12),
             ("Shut Down", Color::ACCENT_RED, 255),
             ("Restart", Color::ACCENT_YELLOW, 254),
         ] } else { [
@@ -2679,6 +2694,7 @@ impl MinGuiCompositor {
             ("Resim Gösterici", Color::ACCENT_PINK, 4),
             ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
             ("Video Oynatıcı", Color::ACCENT_RED, 6),
+            ("3D Gösterici", Color::ACCENT_BLUE, 12),
             ("Sistemi Kapat", Color::ACCENT_RED, 255),
             ("Yeniden Başlat", Color::ACCENT_YELLOW, 254),
         ] };
@@ -2691,11 +2707,11 @@ impl MinGuiCompositor {
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
             let is_hovered = in_rect(mx, my, r) || (self.selected_start_item == k);
-            let bg_col = if (i == 12 && self.confirm_shutdown) || (i == 13 && self.confirm_restart) {
+            let bg_col = if (i == 13 && self.confirm_shutdown) || (i == 14 && self.confirm_restart) {
                 Color::ACCENT_RED
             } else if is_hovered {
                 Color::ACCENT_BLUE
-            } else if i >= 11 {
+            } else if i >= 13 {
                 Color::TITLE_BAR
             } else {
                 Color::WINDOW_BG
@@ -2708,7 +2724,7 @@ impl MinGuiCompositor {
 
             // Çizim: Simgeler (İkonlar) — öğe içinde dikey ortalanır.
             let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
-            if app_or_code < 12 {
+            if app_or_code < 13 {
                 let icon_idx = Self::window_icon_index(app_or_code);
                 Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
             } else {
@@ -2716,9 +2732,9 @@ impl MinGuiCompositor {
                 Self::draw_cat_icon_scaled(fb, r.0 + sp(6), icon_y);
             }
 
-            let label = if i == 12 && self.confirm_shutdown {
+            let label = if i == 13 && self.confirm_shutdown {
                 crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
-            } else if i == 13 && self.confirm_restart {
+            } else if i == 14 && self.confirm_restart {
                 crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
             } else {
                 name

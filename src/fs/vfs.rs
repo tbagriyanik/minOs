@@ -95,6 +95,22 @@ impl VirtualFileSystem {
             b"Gelecek Surum Planlari:\n1. FAT32 kalici dizin agaci gelistirmesi\n2. TCP/IP istemci socket API\n3. Coklu gorev zamanlayici\n"
         );
         self.create_file_internal(
+            "/root/Documents/sekiller.3d",
+            b"# minOs 3D Sahne Testi\n# Desteklenen sekiller: cube, cylinder, sphere, pyramid\nshape=cube\nauto_rotate=true\nwireframe=false\n"
+        );
+        self.create_file_internal(
+            "/root/Documents/kup.3d",
+            b"# minOs 3D Kup Modeli\nshape=cube\nauto_rotate=true\nwireframe=false\n"
+        );
+        self.create_file_internal(
+            "/root/Documents/silindir.3d",
+            b"# minOs 3D Silindir Modeli\nshape=cylinder\nauto_rotate=true\nwireframe=false\n"
+        );
+        self.create_file_internal(
+            "/root/Documents/kure.3d",
+            b"# minOs 3D Kure Modeli\nshape=sphere\nauto_rotate=true\nwireframe=false\n"
+        );
+        self.create_file_internal(
             "/etc/settings.cfg",
             b"theme=velvet;volume=80;keyboard=tr;language=tr;res=1280x720;"
         );
@@ -423,7 +439,7 @@ impl VirtualFileSystem {
     }
 
     /// Silinen bir öğeyi kalıcı olarak silmek yerine Geri Dönüşüm Kutusu'na taşır.
-    /// Dosya veya (boş) klasör olabilir. Aynı isimde öğe varsa sonuna numara eklenir.
+    /// Dosya veya klasör ağacı olabilir. Aynı isimde öğe varsa sonuna numara eklenir.
     /// Başarılıysa `true` döner ve öğe artık `TRASH_DIR` altında yaşar.
     pub fn move_to_trash(&mut self, path: &str) -> bool {
         let norm = Self::normalize_path(path);
@@ -437,14 +453,6 @@ impl VirtualFileSystem {
             self.list_dir(&parent).into_iter().find(|it| it.path == norm)
         });
         let Some(src) = src else { return false; };
-        // Klasörse içi boş olmalı (iç içe taşıma karmaşıklığını önlemek için).
-        if src.node_type == NodeType::Directory {
-            for it in &self.items {
-                if it.path != norm && it.path.starts_with(&norm) {
-                    return false;
-                }
-            }
-        }
         // Çöp kutusunda çakışmayan bir hedef isim üret.
         let base_name = src.name.clone();
         let mut target = String::from(TRASH_DIR);
@@ -467,17 +475,22 @@ impl VirtualFileSystem {
                 let _ = diskfs::delete_file_by_name(&src.name);
             }
         }
-        // Öğeyi çöp kutusuna taşı (yol ve isim güncellenir).
-        let mut moved = false;
+        // Klasörün ve tüm alt öğelerinin yollarını birlikte güncelle.
+        let prefix = if norm.ends_with('/') { norm.clone() } else { let mut p = norm.clone(); p.push('/'); p };
+        let mut moved_root = false;
         for it in &mut self.items {
             if it.path == norm {
                 it.path = target.clone();
                 it.name = Self::file_name_from_path(&target);
-                moved = true;
-                break;
+                moved_root = true;
+            } else if src.node_type == NodeType::Directory && it.path.starts_with(&prefix) {
+                let suffix = String::from(&it.path[norm.len()..]);
+                let mut new_path = target.clone();
+                new_path.push_str(&suffix);
+                it.path = new_path;
             }
         }
-        if !moved {
+        if !moved_root {
             let mut copy = src;
             copy.path = target.clone();
             copy.name = Self::file_name_from_path(&target);
@@ -775,6 +788,9 @@ impl VirtualFileSystem {
             if it.path == norm {
                 continue;
             }
+            // Masaüstü, VFS'nin ayrı bir kullanıcı alanıdır; kök dizinde
+            // sıradan klasör olarak listelenmez.
+            if norm == "/" && it.path == "/desktop" { continue; }
             let parent = Self::parent_path_from_path(&it.path);
             if parent == norm && !results.iter().any(|existing| existing.name.eq_ignore_ascii_case(&it.name)) {
                 results.push(it.clone());

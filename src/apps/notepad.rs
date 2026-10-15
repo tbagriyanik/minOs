@@ -67,34 +67,92 @@ struct Snapshot {
 
 struct History { undo: Vec<Snapshot>, redo: Vec<Snapshot> }
 
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum NotepadMenuAction {
+    New,
+    Open,
+    Save,
+    Clear,
+    Undo,
+    Redo,
+    Cut,
+    Copy,
+    Paste,
+    Delete,
+    SelectAll,
+    About,
+    Shortcuts,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct MenuItemDef {
+    pub label_tr: &'static str,
+    pub label_en: &'static str,
+    pub shortcut: &'static str,
+    pub action: NotepadMenuAction,
+}
+
+const FILE_MENU_ITEMS: [MenuItemDef; 4] = [
+    MenuItemDef { label_tr: "Yeni Belge", label_en: "New Document", shortcut: "Ctrl+N", action: NotepadMenuAction::New },
+    MenuItemDef { label_tr: "Aç", label_en: "Open", shortcut: "Ctrl+O", action: NotepadMenuAction::Open },
+    MenuItemDef { label_tr: "Kaydet", label_en: "Save", shortcut: "Ctrl+S", action: NotepadMenuAction::Save },
+    MenuItemDef { label_tr: "Temizle", label_en: "Clear", shortcut: "", action: NotepadMenuAction::Clear },
+];
+
+const EDIT_MENU_ITEMS: [MenuItemDef; 7] = [
+    MenuItemDef { label_tr: "Geri Al", label_en: "Undo", shortcut: "Ctrl+Z", action: NotepadMenuAction::Undo },
+    MenuItemDef { label_tr: "Yinele", label_en: "Redo", shortcut: "Ctrl+Y", action: NotepadMenuAction::Redo },
+    MenuItemDef { label_tr: "Kes", label_en: "Cut", shortcut: "Ctrl+X", action: NotepadMenuAction::Cut },
+    MenuItemDef { label_tr: "Kopyala", label_en: "Copy", shortcut: "Ctrl+C", action: NotepadMenuAction::Copy },
+    MenuItemDef { label_tr: "Yapıştır", label_en: "Paste", shortcut: "Ctrl+V", action: NotepadMenuAction::Paste },
+    MenuItemDef { label_tr: "Sil", label_en: "Delete", shortcut: "Del", action: NotepadMenuAction::Delete },
+    MenuItemDef { label_tr: "Tümünü Seç", label_en: "Select All", shortcut: "Ctrl+A", action: NotepadMenuAction::SelectAll },
+];
+
+const HELP_MENU_ITEMS: [MenuItemDef; 2] = [
+    MenuItemDef { label_tr: "Not Defteri Hakkında", label_en: "About Notepad", shortcut: "", action: NotepadMenuAction::About },
+    MenuItemDef { label_tr: "Kısayol Tuşları", label_en: "Shortcuts", shortcut: "", action: NotepadMenuAction::Shortcuts },
+];
+
 impl NotepadApp {
     // --- Menü geometrisi ---
     // Çizim (render) ile fare tıklama testlerinin aynı koordinatları
     // kullanmasını sağlayan ortak yardımcılar.
 
+    pub fn menu_items(menu: u8) -> &'static [MenuItemDef] {
+        match menu {
+            1 => &FILE_MENU_ITEMS,
+            2 => &EDIT_MENU_ITEMS,
+            3 => &HELP_MENU_ITEMS,
+            _ => &[],
+        }
+    }
+
     /// Menü öğesi yüksekliği (px) — font ölçeğine göre.
     #[inline(always)]
-    pub fn menu_item_h() -> usize { crate::gui::sp(20) }
+    pub fn menu_item_h() -> usize { crate::gui::sp(22) }
     /// Menü kutusunun iç (dolgu) boşluğu (px).
     #[inline(always)]
-    pub fn menu_pad() -> usize { crate::gui::sp(6) }
+    pub fn menu_pad() -> usize { crate::gui::sp(4) }
     /// Menü kutusu genişliği (px).
     #[inline(always)]
-    pub fn menu_box_w() -> usize { crate::gui::sp(150) }
+    pub fn menu_box_w() -> usize { crate::gui::sp(180) }
 
     /// Menü kutusunun sol üst köşesinin pencere içi X koordinatı.
     #[inline(always)]
     pub fn menu_box_x(menu: u8) -> usize {
-        match menu { 1 => crate::gui::sp(8), 2 => crate::gui::sp(68), _ => crate::gui::sp(128) }
+        Self::menu_tab_rect(menu).0
     }
 
     /// Menü kutusunun sol üst köşesinin pencere içi Y koordinatı.
     #[inline(always)]
     pub fn menu_box_y() -> usize { crate::gui::sp(54) }
 
-    /// Menü öğesi sayısı (Dosya/Düzen 4, Yardım 1).
+    /// Menü öğesi sayısı.
     #[inline(always)]
-    pub fn menu_item_count(menu: u8) -> usize { if menu == 3 { 1 } else { 4 } }
+    pub fn menu_item_count(menu: u8) -> usize {
+        Self::menu_items(menu).len()
+    }
 
     /// Menü kutusunun yüksekliği (px).
     #[inline(always)]
@@ -107,9 +165,9 @@ impl NotepadApp {
     #[inline(always)]
     pub fn menu_tab_rect(menu: u8) -> (usize, usize) {
         match menu {
-            1 => (crate::gui::sp(8), crate::gui::sp(52)),
-            2 => (crate::gui::sp(68), crate::gui::sp(60)),
-            _ => (crate::gui::sp(128), crate::gui::sp(62)),
+            1 => (crate::gui::sp(8), crate::gui::sp(54)),
+            2 => (crate::gui::sp(66), crate::gui::sp(56)),
+            _ => (crate::gui::sp(126), crate::gui::sp(64)),
         }
     }
 
@@ -119,6 +177,83 @@ impl NotepadApp {
         let _ = menu;
         let top = Self::menu_box_y() + Self::menu_pad() + item * Self::menu_item_h();
         (top, top + Self::menu_item_h())
+    }
+
+    /// Menü öğesinin tıklanabilir / aktif olup olmadığını döndürür.
+    pub fn is_item_enabled(&self, action: NotepadMenuAction) -> bool {
+        match action {
+            NotepadMenuAction::Undo => self.undo_len > 0,
+            NotepadMenuAction::Redo => self.redo_len > 0,
+            NotepadMenuAction::Cut | NotepadMenuAction::Copy => self.has_selection(),
+            NotepadMenuAction::Paste => crate::gui::clipboard::len() > 0,
+            NotepadMenuAction::Delete => self.has_selection() || self.cursor < self.len,
+            _ => true,
+        }
+    }
+
+    /// Seçim varsa seçimi, yoksa imleç önündeki karakteri siler.
+    pub fn delete_action(&mut self) {
+        if self.has_selection() {
+            self.delete_selection();
+        } else {
+            self.delete_forward();
+        }
+    }
+
+    /// Menü aksiyonunu yürütür.
+    pub fn execute_action(&mut self, action: NotepadMenuAction, vfs: &mut crate::fs::vfs::VirtualFileSystem) {
+        match action {
+            NotepadMenuAction::New => {
+                self.clear();
+                self.status_msg = crate::gui::ui_text("Yeni belge oluşturuldu", "New document created");
+            }
+            NotepadMenuAction::Open => {
+                let path = self.file_path_str();
+                if let Some(data) = vfs.read_file(path) {
+                    let mut path_buf = [0u8; 64];
+                    let p_len = self.file_path_len;
+                    path_buf[..p_len].copy_from_slice(&self.file_path[..p_len]);
+                    if let Ok(p_str) = core::str::from_utf8(&path_buf[..p_len]) {
+                        self.open_file(p_str, &data);
+                    }
+                } else {
+                    self.status_msg = crate::gui::ui_text("Dosya açılamadı!", "Could not open file!");
+                }
+            }
+            NotepadMenuAction::Save => {
+                self.save_file(vfs);
+            }
+            NotepadMenuAction::Clear => {
+                self.clear();
+            }
+            NotepadMenuAction::Undo => {
+                self.undo();
+            }
+            NotepadMenuAction::Redo => {
+                self.redo();
+            }
+            NotepadMenuAction::Cut => {
+                self.cut_selection();
+            }
+            NotepadMenuAction::Copy => {
+                self.copy_selection();
+            }
+            NotepadMenuAction::Paste => {
+                self.paste_clipboard();
+            }
+            NotepadMenuAction::Delete => {
+                self.delete_action();
+            }
+            NotepadMenuAction::SelectAll => {
+                self.select_all();
+            }
+            NotepadMenuAction::About => {
+                self.status_msg = crate::gui::ui_text("minOs Not Defteri v1.2", "minOs Notepad v1.2");
+            }
+            NotepadMenuAction::Shortcuts => {
+                self.status_msg = crate::gui::ui_text("Ctrl+N Yeni, Ctrl+O Aç, Ctrl+S Kaydet, Ctrl+Z/Y Geri/İleri", "Ctrl+N New, Ctrl+O Open, Ctrl+S Save, Ctrl+Z/Y Undo/Redo");
+            }
+        }
     }
 
     // Copy selected text to the clipboard
@@ -858,9 +993,21 @@ impl NotepadApp {
         // Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, toolbar_h(), Color::TITLE_BAR);
         let english = crate::gui::ui_english();
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, crate::gui::ui_text("Dosya", "File"), Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, win_x + 72, win_y + 36, crate::gui::ui_text("Düzen", "Edit"), Color::TEXT_MUTED);
-        MinGuiCompositor::draw_string(fb, win_x + 132, win_y + 36, crate::gui::ui_text("Yardım", "Help"), Color::TEXT_MUTED);
+
+        let tab_defs = [
+            (1u8, crate::gui::ui_text("Dosya", "File")),
+            (2u8, crate::gui::ui_text("Düzen", "Edit")),
+            (3u8, crate::gui::ui_text("Yardım", "Help")),
+        ];
+        for &(m_id, label) in &tab_defs {
+            let (tx, tw) = Self::menu_tab_rect(m_id);
+            if self.menu == m_id {
+                fb.draw_rect(win_x + tx, win_y + 32, tw, toolbar_h().saturating_sub(4), Color::WINDOW_BG);
+                fb.draw_rect_outline(win_x + tx, win_y + 32, tw, toolbar_h().saturating_sub(4), Color::BORDER);
+            }
+            MinGuiCompositor::draw_string(fb, win_x + tx + crate::gui::sp(6), win_y + 36, label, Color::TEXT_MAIN);
+        }
+
         // Hızlı Aksiyon Düğmeleri (sağa hizalı)
         fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
@@ -991,31 +1138,37 @@ impl NotepadApp {
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
-            // Kutu ve öğe koordinatları, tıklama testleriyle aynı kaynaktan
-            // (menu_* yardımcıları) hesaplanır; aksi halde font ölçeği
-            // 100'den farklıyken menü öğeleri kayar ve tıklama yanlış öğeye gider.
             let mx = win_x + Self::menu_box_x(self.menu);
             let box_y = win_y + Self::menu_box_y();
             let box_w = Self::menu_box_w();
-            let items = match (self.menu, english) {
-                (1, true) => ["New Document", "Open", "Save", "Clear"],
-                (2, true) => ["Cut", "Copy", "Paste", "Select All"],
-                (_, true) => ["About Notepad", "", "", ""],
-                (1, false) => ["Yeni Belge", "Aç", "Kaydet", "Temizle"],
-                (2, false) => ["Kes", "Kopyala", "Yapıştır", "Tümünü Seç"],
-                _ => ["Not Defteri Hakkında", "", "", ""],
-            };
-            // Yardım menüsünde tek öğe olduğundan kutu yüksekliği ona göre küçülür.
             let box_h = Self::menu_box_h(self.menu);
+            let items = Self::menu_items(self.menu);
+
             fb.draw_shadow(mx, box_y, box_w, box_h, Color::SHADOW);
             fb.draw_rect(mx, box_y, box_w, box_h, Color::WINDOW_BG);
             fb.draw_rect_outline(mx, box_y, box_w, box_h.saturating_sub(2), Color::BORDER);
-            for i in 0..Self::menu_item_count(self.menu) {
-                if !items[i].is_empty() {
-                    let (top, _) = Self::menu_item_bounds(self.menu, i);
-                    let item_y = win_y + top;
-                    fb.draw_rect(mx + crate::gui::sp(4), item_y, box_w.saturating_sub(crate::gui::sp(8)), Self::menu_item_h().saturating_sub(crate::gui::sp(2)), Color::TITLE_BAR_INACTIVE);
-                    MinGuiCompositor::draw_string(fb, mx + crate::gui::sp(10), item_y + crate::gui::sp(4), items[i], Color::TEXT_MAIN);
+
+            let pad = Self::menu_pad();
+            let item_h = Self::menu_item_h();
+            for (i, def) in items.iter().enumerate() {
+                let item_y = box_y + pad + i * item_h;
+                let enabled = self.is_item_enabled(def.action);
+                let label = if english { def.label_en } else { def.label_tr };
+
+                let text_color = if enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
+                let sc_color = Color::TEXT_MUTED;
+
+                // Öğe satır zemini
+                fb.draw_rect(mx + crate::gui::sp(4), item_y, box_w.saturating_sub(crate::gui::sp(8)), item_h.saturating_sub(crate::gui::sp(2)), Color::TITLE_BAR_INACTIVE);
+
+                // Sol: Menü öğesi metni
+                MinGuiCompositor::draw_string(fb, mx + crate::gui::sp(10), item_y + crate::gui::sp(4), label, text_color);
+
+                // Sağ: Kısayol tuş bilgisi
+                if !def.shortcut.is_empty() {
+                    let sc_w = MinGuiCompositor::text_width(def.shortcut, 1);
+                    let sc_x = mx + box_w.saturating_sub(sc_w + crate::gui::sp(12));
+                    MinGuiCompositor::draw_string(fb, sc_x, item_y + crate::gui::sp(4), def.shortcut, sc_color);
                 }
             }
         }

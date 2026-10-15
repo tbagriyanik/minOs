@@ -538,6 +538,20 @@ fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
     }
 }
 
+fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
+    let col = idx / 12;
+    let row = idx % 12;
+    (20 + col * 150, 30 + row * 54, 138, 46)
+}
+
+fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize) -> Option<(usize, (usize, usize, usize, usize))> {
+    for i in 0..fm.file_count {
+        let rect = desktop_item_rect(i);
+        if rect.0 + rect.2 <= width && gui::in_rect(x, y, rect) { return Some((i, rect)); }
+    }
+    None
+}
+
 /// Belirli bir pencere örneğini açar ve odaklar.
 fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     if let Some(win) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
@@ -594,6 +608,7 @@ fn terminate_app(
     paint: &mut Option<apps::paint::PaintApp>,
     terminal: &mut apps::terminal::TerminalApp,
     installer: &mut apps::installer::InstallerApp,
+    viewer3d: &mut apps::viewer3d::Viewer3DApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
@@ -632,6 +647,7 @@ fn terminate_app(
             terminal.init_banner();
         }
         11 => *installer = apps::installer::InstallerApp::new(),
+        12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
         _ => return,
     } }
     compositor.focus_top_window();
@@ -1013,6 +1029,9 @@ pub extern "C" fn _start() -> ! {
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+    let mut desktop_files = apps::filemanager::FileManagerApp::new();
+    desktop_files.set_path("/desktop");
+    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
     let mut settings_app = apps::settings::SystemSettings::default();
     settings_app.display_res = (width, height);
     // Disk üzerinde önceden kaydedilmiş kalıcı ayarlar var mı kontrol et
@@ -1039,8 +1058,9 @@ pub extern "C" fn _start() -> ! {
     terminal_app.init_banner();
     let mut installer_app = apps::installer::InstallerApp::new();
     installer_app.refresh_drives();
+    let mut viewer3d_app = apps::viewer3d::Viewer3DApp::new();
 
-    // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
+    // 12 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
     // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
     // 0: Dosya Yöneticisi
@@ -1084,6 +1104,15 @@ pub extern "C" fn _start() -> ! {
         width.saturating_sub(inst_w) / 2,
         height.saturating_sub(inst_h + gui::taskbar_h()) / 2,
         inst_w, inst_h, false,
+    ));
+    // 12: 3D Gösterici
+    let v3d_w = 600.min(width.saturating_sub(20)).max(200);
+    let v3d_h = 440.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    compositor.add_window(gui::Window::new(
+        "3D Gösterici", "3D",
+        width.saturating_sub(v3d_w) / 2,
+        height.saturating_sub(v3d_h + gui::taskbar_h()) / 2,
+        v3d_w, v3d_h, false,
     ));
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
@@ -1214,6 +1243,7 @@ pub extern "C" fn _start() -> ! {
     let render_full_frame = |fb: &mut drivers::video::Framebuffer,
                              compositor: &gui::MinGuiCompositor,
                              fm: &apps::filemanager::FileManagerApp,
+                             desktop_fm: &apps::filemanager::FileManagerApp,
                              st: &apps::settings::SystemSettings,
                              np: &apps::notepad::NotepadApp,
                              br: &apps::browser::BrowserApp,
@@ -1225,6 +1255,7 @@ pub extern "C" fn _start() -> ! {
                              paint: &[Option<apps::paint::PaintApp>],
                              term: &apps::terminal::TerminalApp,
                              inst: &apps::installer::InstallerApp,
+                             v3d: &apps::viewer3d::Viewer3DApp,
                              now: &drivers::rtc::DateTime,
                              mouse: &drivers::mouse::MouseState,
                              kbd: &drivers::keyboard::KeyboardState,
@@ -1234,6 +1265,16 @@ pub extern "C" fn _start() -> ! {
                              dirty_rect: Option<(usize, usize, usize, usize)>| {
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
+        // /desktop içeriğini masaüstü simgeleri olarak çiz.
+        for i in 0..desktop_fm.file_count {
+            let item = &desktop_fm.files[i];
+            let (x, y, w, h) = desktop_item_rect(i);
+            if x + w > fb.width || y + h >= fb.height.saturating_sub(gui::taskbar_h()) { continue; }
+            if desktop_fm.is_row_selected(i) { fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28)); }
+            if item.is_dir { apps::filemanager::FileManagerApp::draw_folder_icon(fb, x + 5, y + 5, false); }
+            else { apps::filemanager::FileManagerApp::draw_file_icon(fb, x + 5, y + 5, item.icon_tag); }
+            gui::MinGuiCompositor::draw_string_clipped(fb, x + 30, y + 10, item.display_name(), gui::Color::TEXT_MAIN, (x + 30, y + 2, w - 34, h - 4));
+        }
 
         // 2. Açık pencereleri z-sırasına göre (arkadan öne) çiz
         let (order, count) = compositor.draw_order();
@@ -1279,6 +1320,7 @@ pub extern "C" fn _start() -> ! {
                     9 => if let Some(app) = paint[idx].as_ref() { app.render_content(fb, win.x, win.y, win.width, win.height) },
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
                     11 => inst.render_content(fb, win.x, win.y, win.width, win.height),
+                    12 => v3d.render_content(fb, win.x, win.y, win.width, win.height),
                     _ => {}
                 }
                 app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
@@ -1329,9 +1371,9 @@ pub extern "C" fn _start() -> ! {
 
     // İlk kareyi çiz (tüm ekran)
     render_full_frame(
-        &mut fb, &compositor, &filemanager_app, &settings_app,
+        &mut fb, &compositor, &filemanager_app, &desktop_files, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
         None,
     );
@@ -1414,6 +1456,15 @@ pub extern "C" fn _start() -> ! {
                         }
                         kind = gui::ContextKind::FileManager;
                         compositor.focus_window(idx);
+                    } else if my < tb_y {
+                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                        if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                            compositor.context_file_idx = Some(desk_idx);
+                            desktop_files.select_row(desk_idx, keyboard.ctrl, keyboard.shift);
+                            kind = gui::ContextKind::FileManager;
+                        } else {
+                            kind = gui::ContextKind::Desktop;
+                        }
                     } else {
                         // Diğer uygulamalar → pencere menüsü
                         kind = gui::ContextKind::Window;
@@ -1470,7 +1521,25 @@ pub extern "C" fn _start() -> ! {
             // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
             // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
             if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
-                if w.is_focused
+                if notepad_app.menu != 0 {
+                    let in_menu_box = gui::in_rect(
+                        mx, my,
+                        (
+                            w.x + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu),
+                            w.y + crate::apps::notepad::NotepadApp::menu_box_y(),
+                            crate::apps::notepad::NotepadApp::menu_box_w(),
+                            crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu),
+                        ),
+                    );
+                    let in_tabs = my >= w.y + 30 && my < w.y + 30 + crate::gui::sp(24);
+                    if !in_menu_box && !in_tabs {
+                        // Menü açıkken dışarı tıklandı -> menüyü kapat, alttaki metni tıklama
+                        notepad_app.menu = 0;
+                        notepad_dragging = false;
+                        consumed = true;
+                    }
+                    // Menü kutusu veya sekmeler tıklanmışsa pencere olay işleyicisi işleyecek
+                } else if w.is_focused
                     && gui::in_rect(mx, my, (w.x + 6, w.y + 58, w.width.saturating_sub(12), w.height.saturating_sub(86)))
                 {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
@@ -1548,11 +1617,15 @@ pub extern "C" fn _start() -> ! {
                 if let Some(clicked_item) = compositor.context_hit(width, height, mx, my) {
                     match compositor.context_kind {
                         gui::ContextKind::Desktop => match clicked_item {
-                            0 => open_app(&mut compositor, 0),
+                            0 => { filemanager_app.set_path("/root/Documents"); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
                             1 => open_app(&mut compositor, 2),
-                            2 => open_app(&mut compositor, 1),
-                            3 => open_app(&mut compositor, 7),
-                            4 => settings_app.cycle_theme(),
+                            2 => { desktop_files.new_file(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
+                            3 => { desktop_files.new_folder(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
+                            4 => { desktop_files.paste_selection(&mut fs_mgr.vfs); }
+                            5 => open_app(&mut compositor, 1),
+                            6 => open_app(&mut compositor, 7),
+                            7 => settings_app.cycle_theme(),
+                            8 => { desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                             _ => {}
                         },
                         gui::ContextKind::FileManager => {
@@ -1576,6 +1649,12 @@ pub extern "C" fn _start() -> ! {
                                                 open_app(&mut compositor, 6);
                                             } else if tag == "WEB" {
                                                 open_app(&mut compositor, 3);
+                                            } else if tag == "3D" {
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                if let Some(data) = data {
+                                                    viewer3d_app.load_file(&path, data);
+                                                }
+                                                open_app(&mut compositor, 12);
                                             }
                                         }
                                     }
@@ -1591,19 +1670,22 @@ pub extern "C" fn _start() -> ! {
                                         open_app(&mut compositor, 2);
                                     }
                                 }
-                                2 => { // Yeni Dosya Oluştur
+                                2 => { filemanager_app.copy_selection(true); }
+                                3 => { filemanager_app.copy_selection(false); }
+                                9 => { filemanager_app.paste_selection(&mut fs_mgr.vfs); }
+                                5 => { // Yeni Dosya Oluştur
                                     filemanager_app.new_file(&mut fs_mgr.vfs);
                                 }
-                                3 => { // Yeni Klasör Oluştur
+                                6 => { // Yeni Klasör Oluştur
                                     filemanager_app.new_folder(&mut fs_mgr.vfs);
                                 }
-                                5 => { // Dosyayı / Klasörü Sil
+                                8 => { // Dosyayı / Klasörü Sil
                                     if let Some(file_idx) = compositor.context_file_idx {
                                         filemanager_app.selected_idx = file_idx;
                                         filemanager_app.delete_selected(&mut fs_mgr.vfs);
                                     }
                                 }
-                                4 => { // Adını değiştir
+                                7 => { // Adını değiştir
                                     if let Some(file_idx) = compositor.context_file_idx {
                                         filemanager_app.selected_idx = file_idx;
                                         filemanager_app.begin_rename();
@@ -1675,12 +1757,12 @@ pub extern "C" fn _start() -> ! {
             let active_g = compositor.active_start_group;
             let mut sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
             if compositor.start_search_len > 0 {
-                let mut matches = [0; 12];
+                let mut matches = [0; 13];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 sub_rect = gui::MinGuiCompositor::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             }
             if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
-                let mut matches = [0; 12];
+                let mut matches = [0; 13];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 for (row, app_id) in matches[..count].iter().enumerate() {
                     let row_rect = (sub_rect.0 + 6, sub_rect.1 + gui::sp(30) + row * gui::sp(24), sub_rect.2 - 12, gui::sp(22));
@@ -1732,7 +1814,7 @@ pub extern "C" fn _start() -> ! {
                     let rect = gui::MinGuiCompositor::start_menu_subitem_rect(menu_y, active_g, k, tb_y);
                     if gui::in_rect(mx, my, rect) {
                         item_clicked = true;
-                        if i == 12 {
+                        if i == 13 {
                             if compositor.confirm_shutdown {
                                 #[cfg(minos_boot_log)]
     serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
@@ -1747,7 +1829,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             break;
                         }
-                        if i == 13 {
+                        if i == 14 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -1886,6 +1968,39 @@ pub extern "C" fn _start() -> ! {
             }
 
             // G) Masaüstü simgeleri
+            if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
+                desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                if let Some((i, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                    desktop_files.select_row(i, keyboard.ctrl, keyboard.shift);
+                    let now_ms = monotonic_ms();
+                    let is_double = filemanager_app.last_click_idx == Some(i)
+                        && now_ms.wrapping_sub(filemanager_app.last_click_ms) <= settings_app.double_click_ms as u64;
+                    if is_double {
+                        let mut p = alloc::string::String::from("/desktop/");
+                        p.push_str(desktop_files.files[i].display_name());
+                        if desktop_files.files[i].is_dir {
+                            filemanager_app.set_path(&p); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0);
+                        } else {
+                            let tag = desktop_files.files[i].icon_tag;
+                            if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                if let Some(data) = fs_mgr.vfs.read_file(&p) { notepad_app.open_file(&p, data); open_app(&mut compositor, 2); }
+                            } else if tag == "IMG" { open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
+                            else if tag == "3D" {
+                                if let Some(data) = fs_mgr.vfs.read_file(&p) {
+                                    viewer3d_app.load_file(&p, data);
+                                    open_app(&mut compositor, 12);
+                                }
+                            }
+                        }
+                    } else {
+                        desktop_files.last_click_idx = Some(i);
+                        desktop_files.last_click_ms = now_ms;
+                        desktop_files.drag_item = Some(i);
+                        desktop_files.drag_start = (mx, my);
+                    }
+                    consumed = true;
+                }
+            }
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
                 let desk_icons = [0, 2, 3, 5, 1, 11];
                 // Kurulu sistemde kaldırılan kurulum kısayolunu (app 11) atla.
@@ -1919,7 +2034,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app, &mut installer_app);
+                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
                         break;
                     }
                     // Maksimize / Geri Yükle
@@ -2033,6 +2148,12 @@ pub extern "C" fn _start() -> ! {
                                             open_app(&mut compositor, 6);
                                         } else if tag == "WEB" {
                                             open_app(&mut compositor, 3);
+                                        } else if tag == "3D" {
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                            if let Some(data) = data {
+                                                viewer3d_app.load_file(&path, data);
+                                            }
+                                            open_app(&mut compositor, 12);
                                         }
                                     }
                                 } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 9 * 22 {
@@ -2056,7 +2177,7 @@ pub extern "C" fn _start() -> ! {
                                     let list_bottom = wy + wh.saturating_sub(30);
                                     for i in 0..filemanager_app.file_count {
                                         if my >= list_top && my < list_bottom && gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect_scrolled(wx, wy, ww, i, sy)) {
-                                            filemanager_app.selected_idx = i;
+                                            filemanager_app.select_row(i, keyboard.ctrl, keyboard.shift);
                                             let now_ms = monotonic_ms();
                                             let is_double_click = filemanager_app.last_click_idx == Some(i)
                                                 && now_ms.wrapping_sub(filemanager_app.last_click_ms) <= settings_app.double_click_ms as u64;
@@ -2081,6 +2202,12 @@ pub extern "C" fn _start() -> ! {
                                                         open_app(&mut compositor, 6);
                                                     } else if tag == "WEB" {
                                                         open_app(&mut compositor, 3);
+                                                    } else if tag == "3D" {
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                        if let Some(data) = data {
+                                                            viewer3d_app.load_file(&path, data);
+                                                        }
+                                                        open_app(&mut compositor, 12);
                                                     }
                                                 }
                                             } else {
@@ -2221,51 +2348,57 @@ pub extern "C" fn _start() -> ! {
                                 let menu_tb_y = wy + 30;
                                 let menu_tb_h = crate::gui::sp(24);
                                 let tb_hit = my >= menu_tb_y && my < menu_tb_y + menu_tb_h;
-                                if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(1).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(1).1, menu_tb_h)) { notepad_app.menu = 1; }
-                                else if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(2).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(2).1, menu_tb_h)) { notepad_app.menu = 2; }
-                                else if tb_hit && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_tab_rect(3).0, menu_tb_y, crate::apps::notepad::NotepadApp::menu_tab_rect(3).1, menu_tb_h)) { notepad_app.menu = 3; }
-                                else if notepad_app.menu != 0
+                                let tab1 = crate::apps::notepad::NotepadApp::menu_tab_rect(1);
+                                let tab2 = crate::apps::notepad::NotepadApp::menu_tab_rect(2);
+                                let tab3 = crate::apps::notepad::NotepadApp::menu_tab_rect(3);
+
+                                if tb_hit && gui::in_rect(mx, my, (wx + tab1.0, menu_tb_y, tab1.1, menu_tb_h)) {
+                                    notepad_app.menu = if notepad_app.menu == 1 { 0 } else { 1 };
+                                } else if tb_hit && gui::in_rect(mx, my, (wx + tab2.0, menu_tb_y, tab2.1, menu_tb_h)) {
+                                    notepad_app.menu = if notepad_app.menu == 2 { 0 } else { 2 };
+                                } else if tb_hit && gui::in_rect(mx, my, (wx + tab3.0, menu_tb_y, tab3.1, menu_tb_h)) {
+                                    notepad_app.menu = if notepad_app.menu == 3 { 0 } else { 3 };
+                                } else if notepad_app.menu != 0
                                     && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu), wy + crate::apps::notepad::NotepadApp::menu_box_y(), crate::apps::notepad::NotepadApp::menu_box_w(), crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu)))
                                 {
                                     let rel_y = my.saturating_sub(wy + crate::apps::notepad::NotepadApp::menu_box_y() + crate::apps::notepad::NotepadApp::menu_pad());
-                                    let item = rel_y / crate::apps::notepad::NotepadApp::menu_item_h();
-                                    match (notepad_app.menu, item) {
-                                        // Dosya Menüsü: Yeni, Aç, Kaydet, Temizle
-                                        (1, 0) => notepad_app.clear(),
-                                        (1, 1) => {
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file("/root/Documents/notlar.txt"));
-                                            if let Some(data) = data {
-                                                notepad_app.open_file("/root/Documents/notlar.txt", data);
+                                    let item_idx = rel_y / crate::apps::notepad::NotepadApp::menu_item_h();
+                                    let items = crate::apps::notepad::NotepadApp::menu_items(notepad_app.menu);
+                                    if let Some(def) = items.get(item_idx) {
+                                        match def.action {
+                                            crate::apps::notepad::NotepadMenuAction::Open => {
+                                                let path = alloc::string::String::from(notepad_app.file_path_str());
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                if let Some(data) = data {
+                                                    notepad_app.open_file(&path, data);
+                                                }
                                             }
-                                        },
-                                        (1, 2) => {
-                                            if with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya kaydediliyor...", "Saving file..."), || notepad_app.save_file(&mut fs_mgr.vfs)) {
-                                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                            crate::apps::notepad::NotepadMenuAction::Save => {
+                                                if with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya kaydediliyor...", "Saving file..."), || notepad_app.save_file(&mut fs_mgr.vfs)) {
+                                                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                                }
                                             }
-                                        },
-                                        (1, 3) => notepad_app.clear(),
-                                        // Düzen Menüsü: 0: Kes, 1: Kopyala, 2: Yapıştır, 3: Tümünü Seç
-                                        (2, 0) => notepad_app.cut_selection(),
-                                        (2, 1) => notepad_app.copy_selection(),
-                                        (2, 2) => notepad_app.paste_clipboard(),
-                                        (2, 3) => notepad_app.select_all(),
-                                        // Yardım Menüsü: Hakkında sekmesini aç
-                                        (3, 0) => {
-                                            open_app(&mut compositor, 1);
-                                            settings_app.active_tab = 3;
-                                        },
-                                        _ => {}
+                                            crate::apps::notepad::NotepadMenuAction::About => {
+                                                notepad_app.execute_action(def.action, &mut fs_mgr.vfs);
+                                                open_app(&mut compositor, 1);
+                                                settings_app.active_tab = 3;
+                                            }
+                                            _ => {
+                                                notepad_app.execute_action(def.action, &mut fs_mgr.vfs);
+                                            }
+                                        }
                                     }
                                     notepad_app.menu = 0;
-                                }
-                                if mx >= wx + ww - 130 && mx <= wx + ww - 74 && my >= wy + 32 && my <= wy + 52 {
+                                } else if notepad_app.menu != 0 {
+                                    // Menü açıkken menü dışına tıklandığında menüyü kapat
+                                    notepad_app.menu = 0;
+                                } else if mx >= wx + ww.saturating_sub(130) && mx <= wx + ww.saturating_sub(74) && my >= wy + 32 && my <= wy + 52 {
                                     notepad_app.clear();
-                                } else if mx >= wx + ww - 68 && mx <= wx + ww - 12 && my >= wy + 32 && my <= wy + 52 {
+                                } else if mx >= wx + ww.saturating_sub(68) && mx <= wx + ww.saturating_sub(12) && my >= wy + 32 && my <= wy + 52 {
                                     if with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya kaydediliyor...", "Saving file..."), || notepad_app.save_file(&mut fs_mgr.vfs)) {
                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                     }
-                                }
-                                if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
+                                } else if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
                                     let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
                                     notepad_app.cursor = at;
                                     if keyboard.shift {
@@ -2388,7 +2521,7 @@ pub extern "C" fn _start() -> ! {
                                         terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                                            &mut terminal_app, &mut installer_app);
+                                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
                                     }
                                 } else if taskmgr_app.active_tab == 0 {
                                     if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
@@ -2399,11 +2532,72 @@ pub extern "C" fn _start() -> ! {
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy, ww) { calculator_app.press(key); } }
                             9 => {
-                                let open_rect = (wx + ww.saturating_sub(198), wy + 34, 58, 22);
-                                let save_rect = (wx + ww.saturating_sub(132), wy + 34, 58, 22);
-                                let clear_rect = (wx + ww.saturating_sub(66), wy + 34, 58, 22);
-                                let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
-                                if gui::in_rect(mx, my, open_rect) {
+                                // Tüm dikdörtgenler `PaintApp::*_rect` yardımcılarından gelir;
+                                // çizim (`render_content`) ile tıklama testi birebir örtüşür.
+                                let r = apps::paint::PaintApp::open_btn_rect(ww);
+                                let open_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::save_btn_rect(ww);
+                                let save_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::clear_btn_rect(ww);
+                                let clear_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::eraser_rect();
+                                let eraser_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::brush_minus_rect();
+                                let brush_minus_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::brush_plus_rect();
+                                let brush_plus_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::zoom_minus_rect(ww);
+                                let zoom_minus_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::zoom_plus_rect(ww);
+                                let zoom_plus_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let file_btn = apps::paint::PaintApp::file_menu_rect(ww);
+                                let file_btn_rect = (wx + file_btn.0, wy + file_btn.1, file_btn.2, file_btn.3);
+                                // Açılır menü öğesi seçiliyse önce onu işle ve menüyü kapat.
+                                let mut menu_handled = false;
+                                if paint_apps[idx].as_ref().map_or(false, |p| p.file_menu_open) {
+                                    for item in 0..apps::paint::PaintApp::FILE_MENU_COUNT {
+                                        let r = apps::paint::PaintApp::file_menu_item_rect(ww, item);
+                                        let item_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                        if gui::in_rect(mx, my, item_rect) {
+                                            if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                            paint_apps[idx].as_mut().unwrap().file_menu_open = false;
+                                            let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
+                                            match item {
+                                                0 => paint_apps[idx].as_mut().unwrap().new_document(),
+                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
+                                                2 => {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                                    }
+                                                }
+                                                _ => {
+                                                    // Farklı Kaydet: dosya adını türetip yeni dosyaya yaz.
+                                                    let name = {
+                                                        let cur = paint_apps[idx].as_ref().unwrap().current_name();
+                                                        apps::paint::PaintApp::derive_save_as_name(cur)
+                                                    };
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farkli kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
+                                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                                    }
+                                                }
+                                            }
+                                            menu_handled = true;
+                                            break;
+                                        }
+                                    }
+                                    // Menü açıkken dışına tıklandıysa sadece menüyü kapat.
+                                    if !menu_handled {
+                                        paint_apps[idx].as_mut().unwrap().file_menu_open = false;
+                                        menu_handled = true;
+                                    }
+                                }
+                                if menu_handled {
+                                    // Menü işlemi tamamlandı; diğer isabet testleri atlanır.
+                                } else if gui::in_rect(mx, my, file_btn_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    let p = paint_apps[idx].as_mut().unwrap();
+                                    p.file_menu_open = !p.file_menu_open;
+                                } else if gui::in_rect(mx, my, open_rect) {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
                                 } else if gui::in_rect(mx, my, save_rect) {
@@ -2414,15 +2608,40 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 } else if gui::in_rect(mx, my, clear_rect) {
                                     if let Some(paint) = paint_apps[idx].as_mut() { paint.clear(); }
-                                } else if my >= wy + 34 && my < wy + 56 {
-                                    // Araç çubuğu: renk paleti, silgi ve temizle düğmeleri.
+                                } else if gui::in_rect(mx, my, eraser_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().eraser = true;
+                                } else if gui::in_rect(mx, my, brush_minus_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().adjust_brush(-1);
+                                } else if gui::in_rect(mx, my, brush_plus_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().adjust_brush(1);
+                                } else if gui::in_rect(mx, my, zoom_minus_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().adjust_zoom(-1);
+                                } else if gui::in_rect(mx, my, zoom_plus_rect) {
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    paint_apps[idx].as_mut().unwrap().adjust_zoom(1);
+                                } else if {
+                                    // Renk kutularından birine basıldı mı?
+                                    let mut hit: Option<usize> = None;
+                                    for i in 0..4 {
+                                        let r = apps::paint::PaintApp::swatch_rect(i);
+                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) { hit = Some(i); break; }
+                                    }
+                                    hit.is_some()
+                                } {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let paint = paint_apps[idx].as_mut().unwrap();
-                                    if mx >= palette_start && mx < palette_start + 16 { paint.color=apps::paint::PALETTE[0]; paint.eraser=false; }
-                                    else if mx >= palette_start + 22 && mx < palette_start + 38 { paint.color=apps::paint::PALETTE[1]; paint.eraser=false; }
-                                    else if mx >= palette_start + 44 && mx < palette_start + 60 { paint.color=apps::paint::PALETTE[2]; paint.eraser=false; }
-                                    else if mx >= palette_start + 66 && mx < palette_start + 82 { paint.color=apps::paint::PALETTE[3]; paint.eraser=false; }
-                                    else if mx >= palette_start + 92 && mx < palette_start + 150 { paint.eraser=true; }
+                                    for i in 0..4 {
+                                        let r = apps::paint::PaintApp::swatch_rect(i);
+                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) {
+                                            paint.color = apps::paint::PALETTE[i];
+                                            paint.eraser = false;
+                                            break;
+                                        }
+                                    }
                                 } else {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let paint = paint_apps[idx].as_mut().unwrap();
@@ -2475,6 +2694,9 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
+                            12 => {
+                                viewer3d_app.handle_mouse_down(mx.saturating_sub(wx), my.saturating_sub(wy), ww, wh);
+                            }
                             _ => {}
                         }
                         break;
@@ -2504,7 +2726,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app, &mut installer_app);
+                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
                     } else {
                         // Masaüstündeyken Alt+F4 güç menüsünü açar.
                         compositor.is_start_menu_open = true;
@@ -2595,8 +2817,10 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_prev();
                         } else if np_focused {
-                            notepad_app.move_vertical_ext(true, keyboard.shift);
-                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                            if notepad_app.menu == 0 {
+                                notepad_app.move_vertical_ext(true, keyboard.shift);
+                                notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                            }
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_up();
                         } else if fm_focused {
@@ -2606,6 +2830,8 @@ pub extern "C" fn _start() -> ! {
                             settings_app.select_tab_prev();
                         } else if br_focused && browser_app.focused_control < 3 {
                             browser_app.select_tab_prev();
+                        } else if app_is_focused(&compositor, 12) {
+                            viewer3d_app.rot_x -= 0.1;
                         }
                     }
                 }
@@ -2639,8 +2865,10 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.launch_menu_open {
                             taskmgr_app.select_launch_next();
                         } else if np_focused {
-                            notepad_app.move_vertical_ext(false, keyboard.shift);
-                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                            if notepad_app.menu == 0 {
+                                notepad_app.move_vertical_ext(false, keyboard.shift);
+                                notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                            }
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_down();
                         } else if fm_focused {
@@ -2650,11 +2878,15 @@ pub extern "C" fn _start() -> ! {
                             settings_app.select_tab_next();
                         } else if br_focused && browser_app.focused_control < 3 {
                             browser_app.select_tab_next();
+                        } else if app_is_focused(&compositor, 12) {
+                            viewer3d_app.rot_x += 0.1;
                         }
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowLeft => {
-                    if compositor.is_start_menu_open {
+                    if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                        filemanager_app.rename_move_cursor(false);
+                    } else if compositor.is_start_menu_open {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
@@ -2664,12 +2896,20 @@ pub extern "C" fn _start() -> ! {
                             browser_app.address_move_left_ext(keyboard.shift);
                         }
                     } else if app_is_focused(&compositor, 2) {
-                        if keyboard.ctrl {
-                            notepad_app.move_word_left_ext(keyboard.shift);
+                        if notepad_app.menu != 0 {
+                            notepad_app.menu = match notepad_app.menu {
+                                1 => 3,
+                                2 => 1,
+                                _ => 2,
+                            };
                         } else {
-                            notepad_app.move_left_ext(keyboard.shift);
+                            if keyboard.ctrl {
+                                notepad_app.move_word_left_ext(keyboard.shift);
+                            } else {
+                                notepad_app.move_left_ext(keyboard.shift);
+                            }
+                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                         }
-                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 0;
                         taskmgr_app.focused_control = 0;
@@ -2685,10 +2925,14 @@ pub extern "C" fn _start() -> ! {
                         } else {
                             browser_app.select_tab_prev();
                         }
+                    } else if app_is_focused(&compositor, 12) {
+                        viewer3d_app.rot_y -= 0.1;
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowRight => {
-                    if compositor.is_start_menu_open {
+                    if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                        filemanager_app.rename_move_cursor(true);
+                    } else if compositor.is_start_menu_open {
                         if compositor.active_start_group + 1 < 4 {
                             compositor.active_start_group += 1;
                             compositor.selected_start_item = 0;
@@ -2700,12 +2944,22 @@ pub extern "C" fn _start() -> ! {
                             browser_app.address_move_right_ext(keyboard.shift);
                         }
                     } else if app_is_focused(&compositor, 2) {
-                        if keyboard.ctrl {
-                            notepad_app.move_word_right_ext(keyboard.shift);
+                        if notepad_app.menu != 0 {
+                            notepad_app.menu = match notepad_app.menu {
+                                1 => 2,
+                                2 => 3,
+                                _ => 1,
+                            };
                         } else {
-                            notepad_app.move_right_ext(keyboard.shift);
+                            if keyboard.ctrl {
+                                notepad_app.move_word_right_ext(keyboard.shift);
+                            } else {
+                                notepad_app.move_right_ext(keyboard.shift);
+                            }
+                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                         }
-                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 12) {
+                        viewer3d_app.rot_y += 0.1;
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
                         taskmgr_app.focused_control = 1;
@@ -2737,7 +2991,7 @@ pub extern "C" fn _start() -> ! {
                         let (_, first, count) = gui::MENU_GROUPS[active_g];
                         let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
                         let i = first + item_k;
-                        if i == 12 {
+                        if i == 13 {
                             if compositor.confirm_shutdown {
                                 #[cfg(minos_boot_log)]
     serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
@@ -2748,7 +3002,7 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 compositor.confirm_shutdown = true;
                             }
-                        } else if i == 13 {
+                        } else if i == 14 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -2782,7 +3036,7 @@ pub extern "C" fn _start() -> ! {
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                         &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                         &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                        &mut terminal_app, &mut installer_app);
+                                        &mut terminal_app, &mut installer_app, &mut viewer3d_app);
                                 }
                             }
                             _ => {}
@@ -2813,6 +3067,12 @@ pub extern "C" fn _start() -> ! {
                                         open_app(&mut compositor, 6);
                                     } else if tag == "WEB" {
                                         open_app(&mut compositor, 3);
+                                    } else if tag == "3D" {
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                        if let Some(data) = data {
+                                            viewer3d_app.load_file(&path, data);
+                                        }
+                                        open_app(&mut compositor, 12);
                                     }
                                 }
                             }
@@ -2907,16 +3167,19 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::CopyText => {
                     if app_is_focused(&compositor, 2) { notepad_app.copy_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_copy(); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(false); }
                     else if app_is_focused(&compositor, 8) { calculator_app.copy_result(); }
                 }
                 drivers::keyboard::KeyAction::PasteText => {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_paste(); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut fs_mgr.vfs); }
                     else if app_is_focused(&compositor, 8) { calculator_app.paste_expression(); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
                     if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_cut(); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(true); }
                     else if app_is_focused(&compositor, 8) { calculator_app.cut_expression(); }
                 }
                 drivers::keyboard::KeyAction::SelectAllText => {
@@ -2934,8 +3197,30 @@ pub extern "C" fn _start() -> ! {
                     if focused { notepad_app.redo(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_redo_edit(); }
                 }
-                drivers::keyboard::KeyAction::HomeKey => {
+                drivers::keyboard::KeyAction::SaveDocument => {
                     if app_is_focused(&compositor, 2) {
+                        if with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya kaydediliyor...", "Saving file..."), || notepad_app.save_file(&mut fs_mgr.vfs)) {
+                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::NewDocument => {
+                    if app_is_focused(&compositor, 2) {
+                        notepad_app.clear();
+                        notepad_app.status_msg = gui::ui_text("Yeni belge oluşturuldu", "New document created");
+                    }
+                }
+                drivers::keyboard::KeyAction::OpenDocument => {
+                    if app_is_focused(&compositor, 2) {
+                        let path = alloc::string::String::from(notepad_app.file_path_str());
+                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                        if let Some(data) = data {
+                            notepad_app.open_file(&path, data);
+                        }
+                    }
+                }
+                drivers::keyboard::KeyAction::HomeKey => {
+                    if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         if keyboard.ctrl { notepad_app.move_document_home(keyboard.shift); }
                         else { notepad_app.move_home_ext(keyboard.shift); }
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
@@ -2954,7 +3239,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::EndKey => {
-                    if app_is_focused(&compositor, 2) {
+                    if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         if keyboard.ctrl { notepad_app.move_document_end(keyboard.shift); }
                         else { notepad_app.move_end_ext(keyboard.shift); }
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
@@ -2974,7 +3259,7 @@ pub extern "C" fn _start() -> ! {
                         let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
                         filemanager_app.select_page(false, rows);
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-                    } else if app_is_focused(&compositor, 2) {
+                    } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         let lines = focused_window_for_app(&compositor, 2).map(|(_, w)| notepad_app.page_lines(w.height)).unwrap_or(10);
                         notepad_app.move_page_ext(true, lines, keyboard.shift);
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
@@ -2992,7 +3277,7 @@ pub extern "C" fn _start() -> ! {
                         let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
                         filemanager_app.select_page(true, rows);
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-                    } else if app_is_focused(&compositor, 2) {
+                    } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         let lines = focused_window_for_app(&compositor, 2).map(|(_, w)| notepad_app.page_lines(w.height)).unwrap_or(10);
                         notepad_app.move_page_ext(false, lines, keyboard.shift);
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
@@ -3006,7 +3291,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::ToggleOverwrite => {
-                    if app_is_focused(&compositor, 2) { notepad_app.toggle_overwrite(); }
+                    if app_is_focused(&compositor, 2) && notepad_app.menu == 0 { notepad_app.toggle_overwrite(); }
                 }
                 drivers::keyboard::KeyAction::Delete => {
                     // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
@@ -3017,19 +3302,21 @@ pub extern "C" fn _start() -> ! {
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                &mut terminal_app, &mut installer_app);
+                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
                         }
-                    } else if app_is_focused(&compositor, 2) {
-                        notepad_app.delete_forward();
+                    } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
+                        notepad_app.delete_action();
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         browser_app.address_delete();
                     } else if app_is_focused(&compositor, 0) && !filemanager_app.rename_active {
                         filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                        filemanager_app.rename_delete();
                     }
                 }
                 drivers::keyboard::KeyAction::DeleteWordBack => {
-                    if app_is_focused(&compositor, 2) {
+                    if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         notepad_app.delete_word_backward();
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
@@ -3039,7 +3326,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::DeleteWordForward => {
-                    if app_is_focused(&compositor, 2) {
+                    if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         notepad_app.delete_word_forward();
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
@@ -3121,6 +3408,11 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             // Çizim tuvalinde tekerlek yakınlaştırmayı ayarlar.
+            if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
+                if gui::in_rect(mx, my, (w.x, w.y, w.width, w.height)) {
+                    viewer3d_app.handle_scroll(scroll_val);
+                }
+            }
             if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() {
                     if paint.to_canvas(w.width, w.height, mx.saturating_sub(w.x), my.saturating_sub(w.y)).is_some() {
@@ -3163,6 +3455,11 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
+                if w.is_focused {
+                    viewer3d_app.handle_mouse_move(mx.saturating_sub(w.x), my.saturating_sub(w.y));
+                }
+            }
             if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
                 if w.is_focused {
                     // Windows Paint davranışı: sol tuş basılı tutuldukça fare
@@ -3182,7 +3479,7 @@ pub extern "C" fn _start() -> ! {
                     settings_app.set_volume_from_range(mx, track.0, track.2);
                 }
             }
-            if notepad_dragging {
+            if notepad_dragging && notepad_app.menu == 0 {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
                     notepad_app.cursor = at;
@@ -3202,6 +3499,10 @@ pub extern "C" fn _start() -> ! {
                     if mx.abs_diff(sx) > 4 || my.abs_diff(sy) > 4 {
                         filemanager_app.drag_active = true;
                         filemanager_app.last_click_idx = None;
+                        if !_src_idx < apps::filemanager::MAX_ITEMS && !filemanager_app.selected_items[_src_idx] {
+                            filemanager_app.selected_items = [false; apps::filemanager::MAX_ITEMS];
+                            filemanager_app.selected_items[_src_idx] = true;
+                        }
                     }
                 }
                 if filemanager_app.drag_active {
@@ -3301,6 +3602,7 @@ pub extern "C" fn _start() -> ! {
         if mouse_released {
             drag_prev_box = None;
             drag_dirty_rect = None;
+            viewer3d_app.handle_mouse_up();
             if let Some(paint_idx) = compositor.active_window_idx {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() { paint.end_stroke(); }
             }
@@ -3316,6 +3618,26 @@ pub extern "C" fn _start() -> ! {
                             Err(err) => {
                                 filemanager_app.set_status_text(err);
                             }
+                        }
+                    } else if !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
+                        if let Some((dest_idx, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                            if desktop_files.files[dest_idx].is_dir {
+                                let path = alloc::string::String::from("/desktop/");
+                                let src_name = desktop_files.files[src_idx].display_name();
+                                let mut src_path = alloc::string::String::from("/desktop/"); src_path.push_str(src_name);
+                                if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, &path); }
+                                else { let _ = fs_mgr.vfs.move_item(&src_path, &path); }
+                                desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                            }
+                        } else {
+                            let dst = alloc::string::String::from("/desktop");
+                            let src = desktop_files.files[src_idx].display_name();
+                            let mut src_path = alloc::string::String::from("/desktop");
+                            src_path.push('/');
+                            src_path.push_str(src);
+                            if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, &dst); }
+                            else { let _ = fs_mgr.vfs.move_item(&src_path, &dst); }
+                            desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                         }
                     }
                 }
@@ -3422,7 +3744,9 @@ pub extern "C" fn _start() -> ! {
                 }
                 let notepad_focused = app_is_focused(&compositor, 2);
                 if notepad_focused {
-                    if ch == '\x08' {
+                    if notepad_app.menu != 0 {
+                        notepad_app.menu = 0;
+                    } else if ch == '\x08' {
                         notepad_app.backspace();
                     } else if ch == '\t' {
                         // Tab = girinti ekle, Shift+Tab = girintiyi geri al.
@@ -3463,22 +3787,48 @@ pub extern "C" fn _start() -> ! {
                     else if ch == '-' || ch == '_' { imageviewer_app.zoom_out(); }
                     else if ch == '0' { imageviewer_app.zoom_level = 4; }
                 }
+                let v3d_focused = app_is_focused(&compositor, 12);
+                if v3d_focused {
+                    if ch == ' ' || ch == 'r' || ch == 'R' {
+                        viewer3d_app.toggle_auto_rotate();
+                    } else if ch == 'w' || ch == 'W' {
+                        viewer3d_app.toggle_wireframe();
+                    } else if ch == '+' || ch == '=' {
+                        viewer3d_app.zoom_in();
+                    } else if ch == '-' || ch == '_' {
+                        viewer3d_app.zoom_out();
+                    } else if ch == '1' {
+                        viewer3d_app.set_shape(apps::viewer3d::ShapeType::Cube);
+                    } else if ch == '2' {
+                        viewer3d_app.set_shape(apps::viewer3d::ShapeType::Cylinder);
+                    } else if ch == '3' {
+                        viewer3d_app.set_shape(apps::viewer3d::ShapeType::Sphere);
+                    } else if ch == '4' {
+                        viewer3d_app.set_shape(apps::viewer3d::ShapeType::Pyramid);
+                    }
+                }
             }
         }
 
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        let is_dragging = dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some() || notepad_dragging || filemanager_app.drag_active;
+        let v3d_dragging = mouse.left_button && viewer3d_app.drag_active;
+        let is_dragging = dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some() || notepad_dragging || filemanager_app.drag_active || v3d_dragging;
         let paint_active = mouse.left_button && app_is_focused(&compositor, 9);
         let is_interacting = is_dragging || paint_active;
 
-        let media_animating = (musicplayer_app.is_playing && !audio_dev.is_muted) || videoplayer_app.is_playing;
-        let frame_interval_ms = if is_interacting { 16 } else { 33 };
+        let viewer3d_open = compositor.windows.iter().flatten().any(|w| w.app_id == 12 && w.is_open && !w.is_minimized);
+        let viewer3d_animating = viewer3d_open && (viewer3d_app.auto_rotate || viewer3d_app.drag_active);
+        let media_animating = (musicplayer_app.is_playing && !audio_dev.is_muted) || videoplayer_app.is_playing || viewer3d_animating;
+        let frame_interval_ms = if is_interacting || viewer3d_animating { 16 } else { 33 };
         let timer_tick_fired = monotonic_ms().wrapping_sub(last_frame_ms) >= frame_interval_ms;
         if timer_tick_fired {
             last_frame_ms = monotonic_ms();
             anim_tick = anim_tick.wrapping_add(1);
+            if viewer3d_open {
+                viewer3d_app.tick();
+            }
         }
 
         // Ağ kartından gelen paketleri işle (ARP cevapları, ICMP vs.).
@@ -3554,10 +3904,10 @@ pub extern "C" fn _start() -> ! {
             }
             keep_windows_on_screen(&mut compositor, width, height);
             render_full_frame(
-                &mut fb, &compositor, &filemanager_app, &settings_app,
+                &mut fb, &compositor, &filemanager_app, &desktop_files, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app,
-                &installer_app,
+                &installer_app, &viewer3d_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
                 drag_dirty_rect,
             );

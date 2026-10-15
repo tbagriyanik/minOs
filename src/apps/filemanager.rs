@@ -86,6 +86,11 @@ pub struct FileManagerApp {
     pub path_buf: [u8; 96],
     pub path_len: usize,
     pub selected_idx: usize,
+    pub selected_items: [bool; MAX_ITEMS],
+    pub selection_anchor: usize,
+    pub clipboard_paths: [TextBuf; MAX_ITEMS],
+    pub clipboard_count: usize,
+    pub clipboard_cut: bool,
     pub files: [FileItem; MAX_ITEMS],
     pub file_count: usize,
     pub source: Source,
@@ -102,6 +107,8 @@ pub struct FileManagerApp {
     pub drag_start: (usize, usize),
     pub drag_active: bool,
     pub drag_target: Option<DropTarget>,
+    pub drag_items: [bool; MAX_ITEMS],
+    pub rename_cursor: usize,
     item_counter: usize,
 }
 
@@ -182,6 +189,11 @@ impl FileManagerApp {
             path_buf: [0; 96],
             path_len: 0,
             selected_idx: 0,
+            selected_items: [false; MAX_ITEMS],
+            selection_anchor: 0,
+            clipboard_paths: [TextBuf::new(); MAX_ITEMS],
+            clipboard_count: 0,
+            clipboard_cut: false,
             files: [FileItem::empty(); MAX_ITEMS],
             file_count: 0,
             source: Source::Vfs,
@@ -198,6 +210,8 @@ impl FileManagerApp {
             drag_start: (0, 0),
             drag_active: false,
             drag_target: None,
+            drag_items: [false; MAX_ITEMS],
+            rename_cursor: 0,
             item_counter: 1,
         }
     }
@@ -217,6 +231,7 @@ impl FileManagerApp {
     }
 
     pub fn set_path(&mut self, p: &str) {
+        self.selected_items = [false; MAX_ITEMS];
         self.last_click_idx = None;
         self.drag_item = None;
         self.drag_active = false;
@@ -247,6 +262,7 @@ impl FileManagerApp {
 
     /// VFS'ten mevcut dizinin içeriğini okur ve dosya listesini doldurur.
     pub fn refresh_from_vfs(&mut self, vfs: &VirtualFileSystem) {
+        self.selected_items = [false; MAX_ITEMS];
         self.last_click_idx = None;
         self.drag_item = None;
         self.drag_active = false;
@@ -301,6 +317,7 @@ impl FileManagerApp {
             row.icon_tag = file_kind(&it.name);
             row.file_type = match row.icon_tag {
                 "TXT" => crate::gui::ui_text("Metin Belgesi", "Text Document"),
+                "3D" => crate::gui::ui_text("3D Model", "3D Model"),
                 "IMG" => crate::gui::ui_text("Resim Imaji", "Image"),
                 "SND" => crate::gui::ui_text("Ses Dosyası", "Audio"),
                 "VID" => crate::gui::ui_text("Video Kaydi", "Video"),
@@ -315,6 +332,75 @@ impl FileManagerApp {
         }
 
         self.status = "";
+    }
+
+    pub fn select_row(&mut self, idx: usize, ctrl: bool, shift: bool) {
+        if idx >= self.file_count { return; }
+        if self.files[idx].display_name() == ".." {
+            self.selected_items = [false; MAX_ITEMS];
+            self.selected_idx = idx;
+            return;
+        }
+        if shift {
+            self.selected_items = [false; MAX_ITEMS];
+            let start = self.selection_anchor.min(idx);
+            let end = self.selection_anchor.max(idx);
+            for i in start..=end.min(self.file_count.saturating_sub(1)) {
+                if self.files[i].display_name() != ".." { self.selected_items[i] = true; }
+            }
+        } else if ctrl {
+            self.selected_items[idx] = !self.selected_items[idx];
+            self.selection_anchor = idx;
+        } else {
+            self.selected_items = [false; MAX_ITEMS];
+            self.selected_items[idx] = true;
+            self.selection_anchor = idx;
+        }
+        self.selected_idx = idx;
+    }
+
+    pub fn is_row_selected(&self, idx: usize) -> bool {
+        self.selected_items.get(idx).copied().unwrap_or(false) || idx == self.selected_idx
+    }
+
+    pub fn copy_selection(&mut self, cut: bool) {
+        if self.selected_idx >= self.file_count { return; }
+        if !self.selected_items[self.selected_idx] {
+            self.selected_items = [false; MAX_ITEMS];
+            self.selected_items[self.selected_idx] = true;
+        }
+        self.clipboard_count = 0;
+        let current = String::from(self.path());
+        for i in 0..self.file_count {
+            if !self.selected_items[i] || self.files[i].display_name() == ".." { continue; }
+            let mut path = current.clone();
+            if !path.ends_with('/') { path.push('/'); }
+            path.push_str(self.files[i].display_name());
+            let mut saved = TextBuf::new();
+            saved.push_str(path.as_str());
+            self.clipboard_paths[self.clipboard_count] = saved;
+            self.clipboard_count += 1;
+        }
+        self.clipboard_cut = cut;
+        self.status = if cut { crate::gui::ui_text("Taşımak için seçildi.", "Selected to move.") }
+            else { crate::gui::ui_text("Kopyalamak için seçildi.", "Selected to copy.") };
+    }
+
+    pub fn paste_selection(&mut self, vfs: &mut VirtualFileSystem) -> usize {
+        let dest = String::from(self.path());
+        if dest == "/media/cdrom" { self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."); return 0; }
+        let mut done = 0;
+        for i in 0..self.clipboard_count {
+            let src = String::from(self.clipboard_paths[i].as_str());
+            let result = if self.clipboard_cut { vfs.move_item(&src, &dest).map(|_| ()) }
+                else { vfs.copy_item(&src, &dest).map(|_| ()) };
+            if result.is_ok() { done += 1; }
+        }
+        if self.clipboard_cut && done > 0 { self.clipboard_count = 0; self.clipboard_cut = false; }
+        self.refresh_from_vfs(vfs);
+        self.status = if done > 0 { crate::gui::ui_text("Yapıştırma tamamlandı.", "Paste completed.") }
+            else { crate::gui::ui_text("Yapıştırılacak öğe yok.", "Nothing to paste.") };
+        done
     }
 
     /// Yeni dosya oluşturur.
@@ -371,56 +457,52 @@ impl FileManagerApp {
         if self.selected_idx >= self.file_count {
             return false;
         }
-        let item = &self.files[self.selected_idx];
-        let name = item.display_name();
-        if name == ".." {
-            return false;
+        if !self.selected_items[self.selected_idx] { self.selected_items = [false; MAX_ITEMS]; self.selected_items[self.selected_idx] = true; }
+        let mut any = false;
+        for i in (0..self.file_count).rev() {
+            if !self.selected_items[i] { continue; }
+            let item = self.files[i];
+            let name = item.display_name();
+            if name == ".." { continue; }
+            let mut full_path = String::from(self.path());
+            if !full_path.ends_with('/') { full_path.push('/'); }
+            full_path.push_str(name);
+            let ok = if self.path() == crate::fs::vfs::TRASH_DIR {
+                if item.is_dir { vfs.delete_tree(&full_path) } else { vfs.delete_file(&full_path) }
+            } else { vfs.move_to_trash(&full_path) };
+            any |= ok;
         }
-
-        let mut full_path = String::from(self.path());
-        if !full_path.ends_with('/') {
-            full_path.push('/');
-        }
-        full_path.push_str(name);
-
-        // Çöp kutusu içinde silme = kalıcı silme; aksi halde geri dönüşüme taşı.
-        let ok = if self.path() == crate::fs::vfs::TRASH_DIR {
-            if item.is_dir {
-                vfs.delete_dir(&full_path)
-            } else {
-                vfs.delete_file(&full_path)
-            }
-        } else {
-            vfs.move_to_trash(&full_path)
-        };
-
-        if ok {
+        if any {
             self.refresh_from_vfs(vfs);
             self.status = if self.path() == crate::fs::vfs::TRASH_DIR {
-                crate::gui::ui_text("Öğe kalıcı olarak silindi.", "Item permanently deleted.")
+                crate::gui::ui_text("Seçilen öğeler kalıcı olarak silindi.", "Selected items permanently deleted.")
             } else {
-                crate::gui::ui_text("Öğe geri dönüşüm kutusuna taşındı.", "Item moved to Recycle Bin.")
+                crate::gui::ui_text("Seçilen öğeler geri dönüşüm kutusuna taşındı.", "Selected items moved to Recycle Bin.")
             };
         } else {
             self.status = crate::gui::ui_text("Silinemedi (klasör dolu olabilir).", "Delete failed.");
         }
-        ok
+        any
     }
 
     pub fn begin_rename(&mut self) {
         if self.selected_idx >= self.file_count || self.files[self.selected_idx].display_name() == ".." { return; }
+        if !self.selected_items[self.selected_idx] { self.selected_items = [false; MAX_ITEMS]; self.selected_items[self.selected_idx] = true; }
         let name = self.files[self.selected_idx].display_name().as_bytes();
         self.rename_len = name.len().min(self.rename_buf.len());
         self.rename_buf[..self.rename_len].copy_from_slice(&name[..self.rename_len]);
+        self.rename_cursor = self.rename_len;
         self.rename_active = true;
     }
 
     pub fn rename_char(&mut self, c: char) {
         let mut b = [0u8; 4]; let s = c.encode_utf8(&mut b);
-        for &ch in s.as_bytes() { if self.rename_len < self.rename_buf.len() { self.rename_buf[self.rename_len] = ch; self.rename_len += 1; } }
+        for &ch in s.as_bytes() { if self.rename_len < self.rename_buf.len() { self.rename_buf.copy_within(self.rename_cursor..self.rename_len, self.rename_cursor + 1); self.rename_buf[self.rename_cursor] = ch; self.rename_cursor += 1; self.rename_len += 1; } }
     }
 
-    pub fn rename_backspace(&mut self) { if self.rename_len > 0 { self.rename_len -= 1; } }
+    pub fn rename_backspace(&mut self) { if self.rename_cursor > 0 { self.rename_cursor -= 1; self.rename_buf.copy_within(self.rename_cursor + 1..self.rename_len, self.rename_cursor); self.rename_len -= 1; } }
+    pub fn rename_delete(&mut self) { if self.rename_cursor < self.rename_len { self.rename_buf.copy_within(self.rename_cursor + 1..self.rename_len, self.rename_cursor); self.rename_len -= 1; } }
+    pub fn rename_move_cursor(&mut self, right: bool) { if right { self.rename_cursor = (self.rename_cursor + 1).min(self.rename_len); } else { self.rename_cursor = self.rename_cursor.saturating_sub(1); } }
 
     pub fn commit_rename(&mut self, vfs: &mut VirtualFileSystem) {
         if !self.rename_active { return; }
@@ -667,9 +749,7 @@ impl FileManagerApp {
         if src_idx >= self.file_count {
             return Err(crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found."));
         }
-        let src_item = &self.files[src_idx];
-        let src_name = src_item.display_name();
-        if src_name == ".." {
+        if self.files[src_idx].display_name() == ".." {
             return Err(crate::gui::ui_text("Üst klasör taşınamaz.", "Parent folder cannot be moved."));
         }
 
@@ -681,17 +761,23 @@ impl FileManagerApp {
             return Err(crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."));
         }
 
-        let mut src_path = alloc::string::String::from(self.path());
-        if !src_path.ends_with('/') { src_path.push('/'); }
-        src_path.push_str(src_name);
-
         let target_disp = self.target_display_name(target);
-
-        let final_dest = if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
-            vfs.copy_item(&src_path, &target_dir)?
-        } else {
-            vfs.move_item(&src_path, &target_dir)?
-        };
+        if self.selected_items[src_idx] { self.drag_items = self.selected_items; }
+        else { self.drag_items = [false; MAX_ITEMS]; self.drag_items[src_idx] = true; }
+        let mut count = 0;
+        let mut first_name = String::new();
+        for i in 0..self.file_count {
+            if !self.drag_items[i] || self.files[i].display_name() == ".." { continue; }
+            let src_name = self.files[i].display_name();
+            if first_name.is_empty() { first_name.push_str(src_name); }
+            let mut src_path = String::from(self.path());
+            if !src_path.ends_with('/') { src_path.push('/'); }
+            src_path.push_str(src_name);
+            if is_copy && target_dir != crate::fs::vfs::TRASH_DIR { vfs.copy_item(&src_path, &target_dir)?; }
+            else { vfs.move_item(&src_path, &target_dir)?; }
+            count += 1;
+        }
+        if count == 0 { return Err(crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found.")); }
 
         let mut msg = TextBuf::new();
         if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
@@ -701,12 +787,13 @@ impl FileManagerApp {
         } else {
             msg.push_str(crate::gui::ui_text("Taşındı: ", "Moved: "));
         }
-        msg.push_str(src_name);
+        msg.push_str(&first_name);
+        if count > 1 { msg.push_str(" + "); msg.push_usize(count - 1); }
         msg.push_str(" -> ");
         msg.push_str(&target_disp);
         self.set_status_text(msg.as_str());
 
-        Ok(final_dest)
+        Ok(target_dir)
     }
 
     pub fn draw_drag_badge(&self, fb: &mut Framebuffer, mx: usize, my: usize, is_copy: bool) {
@@ -774,6 +861,7 @@ impl FileManagerApp {
     /// Belge / Dosya Simgesi: Katlanmış köşeli sayfa ve dosya türü vurgusu
     pub fn draw_file_icon(fb: &mut Framebuffer, x: usize, y: usize, tag: &str) {
         let accent = match tag {
+            "3D" => Color::ACCENT_PINK,
             "IMG" => Color::ACCENT_YELLOW,
             "SND" => Color::ACCENT_GREEN,
             "VID" => Color::ACCENT_RED,
@@ -943,7 +1031,7 @@ impl FileManagerApp {
                 continue;
             }
             let file = &self.files[i];
-            let is_sel = i == self.selected_idx;
+            let is_sel = self.is_row_selected(i);
             let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
             let is_drag_source = self.drag_active && self.drag_item == Some(i);
 
@@ -1008,6 +1096,12 @@ impl FileManagerApp {
             sb.push_str(self.path());
         }
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);
+        if self.rename_active {
+            let prefix = core::str::from_utf8(&self.rename_buf[..self.rename_cursor]).unwrap_or("");
+            let cx = win_x + 12 + MinGuiCompositor::text_width(crate::gui::ui_text("Yeni ad: ", "New name: "), 1)
+                + MinGuiCompositor::text_width(prefix, 1);
+            fb.draw_rect(cx, status_y + 4, 1, 12, Color::ACCENT_BLUE);
+        }
     }
 }
 
@@ -1030,6 +1124,9 @@ pub fn file_kind(name: &str) -> &'static str {
             }
             if matches_ext(b"log") {
                 return "LOG";
+            }
+            if matches_ext(b"3d") || matches_ext(b"obj") {
+                return "3D";
             }
             if matches_ext(b"bmp") || matches_ext(b"png") || matches_ext(b"jpg") || matches_ext(b"jpeg") || matches_ext(b"gif") {
                 return "IMG";

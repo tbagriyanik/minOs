@@ -134,6 +134,70 @@ pub fn draw_busy_overlay(fb: &mut Framebuffer, mx: usize, my: usize, message: &s
     fb.flush_rect((mx, my, 10, 10));
 }
 
+/// Önyükleme hatası ekranı. Kernel `installed` modunda başlatılmak istendiğinde
+/// ancak diskte geçerli bir minOs kurulumu (MINOS.SYS) bulunamazsa gösterilir.
+/// Metin TR ve EN olarak birlikte çizilir; bu noktada ayarlar yüklenmemiş
+/// olduğundan dil tercihi bilinemez.
+pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
+    fb.draw_rect(0, 0, width, height, Color::DARK_BG);
+
+    // Üst hata şeridi
+    fb.draw_rect(0, 0, width, 52, Color::ACCENT_RED);
+    let title = "Önyükleme Hatası  /  Boot Error";
+    let title_w = MinGuiCompositor::text_width(title, 2);
+    MinGuiCompositor::draw_string_scaled(
+        fb,
+        width.saturating_sub(title_w) / 2,
+        14,
+        title,
+        Color::WHITE,
+        2,
+    );
+
+    // Bilgi kutusu
+    let box_w = 640.min(width.saturating_sub(48)).max(320);
+    let box_h = 300.min(height.saturating_sub(96)).max(180);
+    let box_x = width.saturating_sub(box_w) / 2;
+    let box_y = 52 + (height.saturating_sub(52 + box_h)) / 2;
+    fb.draw_rounded_rect(box_x, box_y, box_w, box_h, 10, Color::WINDOW_BG);
+    fb.draw_rounded_rect_outline(box_x, box_y, box_w, box_h, 10, Color::ACCENT_RED);
+
+    let lines: [(&str, u32); 8] = [
+        ("Diskte geçerli bir minOs kurulumu bulunamadı.", Color::TEXT_MAIN),
+        ("No valid minOs installation was found on disk.", Color::TEXT_MUTED),
+        ("", Color::TEXT_MUTED),
+        ("Bu önyükleme seçeneği yalnızca kurulu sistem içindir.", Color::TEXT_MAIN),
+        ("This boot option is only for the installed system.", Color::TEXT_MUTED),
+        ("", Color::TEXT_MUTED),
+        ("Kurulum için 'minOs Live Environment' ile açıp sihirbazı tamamlayın.", Color::ACCENT_YELLOW),
+        ("Boot 'minOs Live Environment' and complete the setup wizard.", Color::ACCENT_YELLOW),
+    ];
+
+    let mut y = box_y + 24;
+    for (text, color) in lines.iter() {
+        if !text.is_empty() {
+            MinGuiCompositor::draw_string(fb, box_x + 24, y, text, *color);
+        }
+        y += 26;
+    }
+
+    let footer = "Sistem bu ekranda bekleyecek. Çıkmak için sistemi kapatın.  /  System will stay here. Power off to exit.";
+    let footer_w = MinGuiCompositor::text_width(footer, 1);
+    if footer_w <= width.saturating_sub(24) {
+        MinGuiCompositor::draw_string(
+            fb,
+            width.saturating_sub(footer_w) / 2,
+            box_y + box_h + 18,
+            footer,
+            Color::TEXT_MUTED,
+        );
+    } else {
+        MinGuiCompositor::draw_string(fb, 24, box_y + box_h + 18, "Çıkmak için sistemi kapatın. / Power off to exit.", Color::TEXT_MUTED);
+    }
+
+    fb.flush();
+}
+
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let w = 480.min(width.saturating_sub(24)).max(320);

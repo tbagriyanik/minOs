@@ -521,7 +521,7 @@ fn read_sector_once(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
         buf[i * 2 + 1] = (word >> 8) as u8;
     }
     io_delay(ctrl);
-    false
+    true
 }
 
 pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize {

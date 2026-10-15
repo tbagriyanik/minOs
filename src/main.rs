@@ -212,6 +212,84 @@ static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
     response: core::ptr::null(),
 };
 
+// --- Limine Kernel File istegi: önyükleme komut satirini (cmdline) okur ---
+// Boot menüsündeki "live" / "installed" seçimi bu cmdline ile kernel'e bildirilir.
+#[repr(C, align(8))]
+pub struct LimineKernelFileRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineKernelFileResponse,
+}
+
+#[repr(C, align(8))]
+pub struct LimineKernelFileResponse {
+    pub revision: u64,
+    pub kernel_file: *const LimineFile,
+}
+
+/// `struct limine_file` başlangıcı. İlk alanlar (cmdline'a kadar) yeterlidir.
+#[repr(C, align(8))]
+pub struct LimineFile {
+    pub revision: u64,
+    pub address: *const u8,
+    pub size: u64,
+    pub path: *const u8,
+    pub cmdline: *const u8,
+}
+
+unsafe impl Sync for LimineKernelFileRequest {}
+
+#[used]
+#[link_section = ".requests"]
+static KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0xad97e90e83f1ed67,
+        0x31eb5d1c5ff23b69,
+    ],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
+/// Limine'in sağladığı önyükleme komut satirini (cmdline) döndürür.
+/// `None` ise cmdline alınamadı demektir (bu durumda canlı sistem kabul edilir).
+fn limine_boot_cmdline() -> Option<&'static str> {
+    unsafe {
+        let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
+        let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
+        if file.is_null() || !is_canonical_ptr(file) {
+            return None;
+        }
+        let cmdline = core::ptr::read_volatile(core::ptr::addr_of!((*file).cmdline));
+        if cmdline.is_null() || !is_canonical_ptr(cmdline) {
+            return None;
+        }
+        // NUL sonlandırıcıya kadar (en fazla 256 bayt) oku.
+        let mut len = 0usize;
+        while len < 256 {
+            let byte = core::ptr::read_volatile(cmdline.add(len));
+            if byte == 0 {
+                break;
+            }
+            len += 1;
+        }
+        core::str::from_utf8(core::slice::from_raw_parts(cmdline, len)).ok()
+    }
+}
+
+/// Önyükleme komut satirinda verilen token'i (kelime) arar.
+fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
+    cmdline
+        .split(|c: char| c.is_whitespace())
+        .any(|part| part == token)
+}
+
+/// Kernel'in kurulu sistem modunda baslatilmak istenip istenmedigini bildirir.
+fn boot_wants_installed() -> bool {
+    limine_boot_cmdline().map_or(false, |cmdline| cmdline_has_token(cmdline, "installed"))
+}
+
 #[inline(never)]
 fn serial_print(s: &str) {
     serial::print(s);
@@ -814,11 +892,29 @@ pub extern "C" fn _start() -> ! {
     // 5b. Tema motorunu başlat
     gui::theme::init();
 
-    // İlk açılış geçişi: merkezde minOs + hareketli kedi ve yükleme çubuğu.
-    for phase in 0..8 {
-        gui::render_loading_transition(&mut fb, width, height, phase, gui::ui_text("Sistem yukleniyor", "Loading system"));
-        let frame_start = monotonic_ms();
-        while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
+    // 5c. Önyükleme modu denetimi: Boot menüsünden "installed" seçildiyse ve
+    // diskte kurulu bir minOs (MINOS.SYS) yoksa canlı sisteme düşmeden hata
+    // verilir ve sistem bu ekranda bekler.
+    if boot_wants_installed() && !fs::diskfs::is_installed() {
+        serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
+        gui::render_boot_error(&mut fb, width, height);
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+
+    // 5d. Eğer diskte varsa (MINOS.SYS + fat32) ve live ortam için
+    // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
+    if fs::diskfs::is_installed() {
+        serial_print("[BOOT] Kurulu sistem tespit edildi; welcome atlandi.\n");
+    } else {
+        // İlk açılış geçişi: merkezde minOs + hareketli kedi ve yükleme çubuğu.
+        for phase in 0..8 {
+            gui::render_loading_transition(&mut fb, width, height, phase,
+                gui::ui_text("Sistem yukleniyor", "Loading system"));
+            let frame_start = monotonic_ms();
+            while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
+        }
     }
 
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar

@@ -539,15 +539,34 @@ fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
 }
 
 fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
+    // Dosya ızgarası sol şerit hızlı simgelerin sağından başlar; iki grup
+    // asla üst üste binmez (çizim + tıklama aynı kanonik konumu kullanır).
+    let origin_x = gui::MinGuiCompositor::desktop_strip_right();
     let col = idx / 12;
     let row = idx % 12;
-    (20 + col * 150, 30 + row * 54, 138, 46)
+    (origin_x + col * 150, 30 + row * 54, 138, 46)
 }
 
-fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize) -> Option<(usize, (usize, usize, usize, usize))> {
+fn rects_overlap(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
+/// Masaüstü simgesinin gerçekten çizildiği (görünür) alan mı?
+/// Çizim döngüsü ile tıklama testi bu kuralı paylaşır: ekran dışına taşan,
+/// görev çubuğuna gömülen veya sağ üst filigrana binen hücreler hem
+/// çizilmez hem tıklanamaz.
+fn desktop_item_visible(rect: (usize, usize, usize, usize), width: usize, height: usize) -> bool {
+    if rect.0 + rect.2 > width || rect.1 + rect.3 >= height.saturating_sub(gui::taskbar_h()) {
+        return false;
+    }
+    !rects_overlap(rect, gui::MinGuiCompositor::desktop_watermark_rect(width))
+}
+
+fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize, height: usize) -> Option<(usize, (usize, usize, usize, usize))> {
     for i in 0..fm.file_count {
         let rect = desktop_item_rect(i);
-        if rect.0 + rect.2 <= width && gui::in_rect(x, y, rect) { return Some((i, rect)); }
+        if !desktop_item_visible(rect, width, height) { continue; }
+        if gui::in_rect(x, y, rect) { return Some((i, rect)); }
     }
     None
 }
@@ -1269,7 +1288,7 @@ pub extern "C" fn _start() -> ! {
         for i in 0..desktop_fm.file_count {
             let item = &desktop_fm.files[i];
             let (x, y, w, h) = desktop_item_rect(i);
-            if x + w > fb.width || y + h >= fb.height.saturating_sub(gui::taskbar_h()) { continue; }
+            if !desktop_item_visible((x, y, w, h), fb.width, fb.height) { continue; }
             if desktop_fm.is_row_selected(i) { fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28)); }
             if item.is_dir { apps::filemanager::FileManagerApp::draw_folder_icon(fb, x + 5, y + 5, false); }
             else { apps::filemanager::FileManagerApp::draw_file_icon(fb, x + 5, y + 5, item.icon_tag); }
@@ -1458,7 +1477,7 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_window(idx);
                     } else if my < tb_y {
                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                        if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                        if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                             compositor.context_file_idx = Some(desk_idx);
                             desktop_files.select_row(desk_idx, keyboard.ctrl, keyboard.shift);
                             kind = gui::ContextKind::FileManager;
@@ -1970,12 +1989,16 @@ pub extern "C" fn _start() -> ! {
             // G) Masaüstü simgeleri
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
                 desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                if let Some((i, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                if let Some((i, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                     desktop_files.select_row(i, keyboard.ctrl, keyboard.shift);
                     let now_ms = monotonic_ms();
-                    let is_double = filemanager_app.last_click_idx == Some(i)
-                        && now_ms.wrapping_sub(filemanager_app.last_click_ms) <= settings_app.double_click_ms as u64;
+                    // Masaüstünün kendi tıklama durumu kullanılır (dosya yöneticisi
+                    // penceresinin durumu değil); aksi halde çift tık hiç tutmaz.
+                    let is_double = desktop_files.last_click_idx == Some(i)
+                        && now_ms.wrapping_sub(desktop_files.last_click_ms) <= settings_app.double_click_ms as u64;
                     if is_double {
+                        desktop_files.last_click_idx = None;
+                        desktop_files.drag_item = None;
                         let mut p = alloc::string::String::from("/desktop/");
                         p.push_str(desktop_files.files[i].display_name());
                         if desktop_files.files[i].is_dir {
@@ -1985,6 +2008,9 @@ pub extern "C" fn _start() -> ! {
                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
                                 if let Some(data) = fs_mgr.vfs.read_file(&p) { notepad_app.open_file(&p, data); open_app(&mut compositor, 2); }
                             } else if tag == "IMG" { open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
+                            else if tag == "SND" { open_app(&mut compositor, 5); }
+                            else if tag == "VID" { open_app(&mut compositor, 6); }
+                            else if tag == "WEB" { open_app(&mut compositor, 3); }
                             else if tag == "3D" {
                                 if let Some(data) = fs_mgr.vfs.read_file(&p) {
                                     viewer3d_app.load_file(&p, data);
@@ -2001,13 +2027,13 @@ pub extern "C" fn _start() -> ! {
                     consumed = true;
                 }
             }
-            if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
-                let desk_icons = [0, 2, 3, 5, 1, 11];
+            // Masaüstü sol şerit hızlı simgeleri (çizimle aynı kanonik geometri).
+            if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
+                let desk_apps = [0, 2, 3, 5, 1, 11];
                 // Kurulu sistemde kaldırılan kurulum kısayolunu (app 11) atla.
-                let desk_icon_count = if crate::fs::diskfs::is_installed() { 5 } else { desk_icons.len() };
-                for (i, &app_idx) in desk_icons.iter().enumerate().take(desk_icon_count) {
-                    let dy = 30 + i * 54;
-                    if my >= dy && my <= dy + 30 {
+                let desk_icon_count = gui::MinGuiCompositor::desktop_quick_count();
+                for (i, &app_idx) in desk_apps.iter().enumerate().take(desk_icon_count) {
+                    if gui::in_rect(mx, my, gui::MinGuiCompositor::desktop_quick_rect(i)) {
                         open_app(&mut compositor, app_idx);
                         compositor.close_start_menu();
                         consumed = true;
@@ -2156,17 +2182,18 @@ pub extern "C" fn _start() -> ! {
                                             open_app(&mut compositor, 12);
                                         }
                                     }
-                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 9 * 22 {
+                                } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 10 * 22 {
                                     let nav = (my.saturating_sub(wy + 66)) / 22;
                                     let target_path = match nav {
                                         0 => "/",
-                                        1 => "/root/Documents",
-                                        2 => "/root/Media",
-                                        3 => "/root/Downloads",
-                                        4 => "/boot",
-                                        5 => "/media/usb0",
-                                        6 => "/media/hdd0",
-                                        7 => "/media/cdrom",
+                                        1 => "/desktop",
+                                        2 => "/root/Documents",
+                                        3 => "/root/Media",
+                                        4 => "/root/Downloads",
+                                        5 => "/boot",
+                                        6 => "/media/usb0",
+                                        7 => "/media/hdd0",
+                                        8 => "/media/cdrom",
                                         _ => "/root/Trash",
                                     };
                                     filemanager_app.set_path(target_path);
@@ -3620,7 +3647,7 @@ pub extern "C" fn _start() -> ! {
                             }
                         }
                     } else if !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
-                        if let Some((dest_idx, _)) = desktop_item_at(mx, my, &desktop_files, width) {
+                        if let Some((dest_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                             if desktop_files.files[dest_idx].is_dir {
                                 let path = alloc::string::String::from("/desktop/");
                                 let src_name = desktop_files.files[src_idx].display_name();

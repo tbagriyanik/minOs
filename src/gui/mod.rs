@@ -895,6 +895,59 @@ impl MinGuiCompositor {
             kbd: (kbd_x, by, kbd_w, h),
         }
     }
+
+    // -------------------------------------------------------------------
+    // Masaüstü sol şerit hızlı simgeleri — TEK kanonik kaynak.
+    // Hem çizim (`render_desktop_bg`) hem tıklama testi bu fonksiyonları
+    // kullanır; /desktop dosya ızgarası da şeridin sağından başlar, böylece
+    // klasör simgeleri hızlı simgelerin üzerine binmez.
+    // -------------------------------------------------------------------
+    /// Hızlı simge etiketleri (TR + EN). Şerit genişliği dile göre değişmesin
+    /// diye her iki dilin en uzun etiketi ölçülür.
+    const DESKTOP_QUICK_LABELS: [&str; 12] = [
+        "Bilgisayarım", "Notlar", "SarmanNet", "Çalma Listesi", "Sistem Ayarları", "minOs'u Kur",
+        "Computer", "Notes", "SarmanNet", "Playlist", "Settings", "Install minOs",
+    ];
+
+    /// Kurulu sistemde "minOs'u Kur" kısayolu gösterilmez.
+    pub fn desktop_quick_count() -> usize {
+        if crate::fs::diskfs::is_installed() { 5 } else { Self::DESKTOP_QUICK_LABELS.len() / 2 }
+    }
+
+    /// Hızlı simge etiketlerinin ölçülen en uzun genişliği (aktif ölçekte).
+    fn desktop_quick_label_w() -> usize {
+        let mut m = 0;
+        for l in Self::DESKTOP_QUICK_LABELS {
+            m = m.max(Self::text_width(l, 1));
+        }
+        m
+    }
+
+    /// Hızlı simgenin tıklanabilir alanı (kart + etiket).
+    pub fn desktop_quick_rect(i: usize) -> (usize, usize, usize, usize) {
+        let card_w = sp(34);
+        let card_h = sp(30);
+        let w = card_w + sp(10) + Self::desktop_quick_label_w() + sp(12);
+        (sp(20), sp(30) + i * sp(54), w, card_h)
+    }
+
+    /// Hızlı simge şeridinin sağ kenarı. `/desktop` dosya ızgarası bu
+    /// konumun sağından başlar; iki simge grubu asla çakışmaz.
+    pub fn desktop_strip_right() -> usize {
+        sp(20) + sp(34) + sp(10) + Self::desktop_quick_label_w() + sp(16)
+    }
+
+    /// Sağ üst filigran (watermark) alanı. Dosya ızgarası bu köşeye taşmaz.
+    pub fn desktop_watermark_rect(width: usize) -> (usize, usize, usize, usize) {
+        let title = if crate::fs::diskfs::is_installed() {
+            "minOs Sarman Edition *"
+        } else {
+            "minOs (Live)"
+        };
+        let block_w = Self::icon_size() + sp(8) + Self::text_width(title, 1);
+        let x = width.saturating_sub(sp(16) + block_w);
+        (x, 0, block_w + sp(16), sp(70))
+    }
 }
 
 pub fn in_rect(mx: usize, my: usize, r: (usize, usize, usize, usize)) -> bool {
@@ -1824,13 +1877,11 @@ impl MinGuiCompositor {
         ] };
 
         let card_w = sp(34);
-        let card_h = sp(30);
         // Kurulu sistemde "minOs'u Kur" masaüstü kısayolu gösterilmez.
-        let desk_icon_count = if crate::fs::diskfs::is_installed() { 5 } else { desk_icons.len() };
+        let desk_icon_count = Self::desktop_quick_count();
         for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate().take(desk_icon_count) {
-            let dy = sp(30) + i * sp(54);
-            // İkon kartı (gölgeli, yuvarlatılmış 6px) — ölçekle büyür.
-            let card_x = sp(20);
+            // Tıklama testiyle aynı kanonik konum (kayma/çakışma olmaz).
+            let (card_x, dy, _hit_w, card_h) = Self::desktop_quick_rect(i);
             fb.draw_rounded_rect(card_x, dy, card_w, card_h, 6, Self::shade(Color::WINDOW_BG, 8));
             fb.draw_rounded_rect_outline(card_x, dy, card_w, card_h, 6, Color::BORDER);
             let isz = Self::icon_size();

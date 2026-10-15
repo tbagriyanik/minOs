@@ -22,6 +22,17 @@ pub fn cos(x: f32) -> f32 {
     sin(x + HALF_PI)
 }
 
+/// no_std ortamı için Newton-Raphson karekök yaklaşımı (SSE `sqrtss` yok).
+pub fn sqrt(x: f32) -> f32 {
+    if x <= 0.0 { return 0.0; }
+    // Başlangıç tahmini: 1.0 veya x'in kendisi (x>1 ise daha hızlı yakınsar).
+    let mut g = if x >= 1.0 { x * 0.5 + 0.5 } else { 1.0 };
+    for _ in 0..20 {
+        g = 0.5 * (g + x / g);
+    }
+    g
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Shape3D {
     Cube,
@@ -153,14 +164,14 @@ impl Viewer3DApp {
                     (4, 5), (5, 6), (6, 7), (7, 4),
                     (0, 4), (1, 5), (2, 6), (3, 7),
                 ];
-                // 6 Yüzey (Quad)
+                // 6 Yüzey (Quad) — dışa bakan normaller için saat yönünün tersi (CCW) sarım
                 self.faces = alloc::vec![
-                    alloc::vec![0, 1, 2, 3], // Arka (-Z)
-                    alloc::vec![5, 4, 7, 6], // Ön (+Z)
-                    alloc::vec![4, 0, 3, 7], // Sol (-X)
-                    alloc::vec![1, 5, 6, 2], // Sağ (+X)
-                    alloc::vec![3, 2, 6, 7], // Üst (+Y)
-                    alloc::vec![4, 5, 1, 0], // Alt (-Y)
+                    alloc::vec![0, 3, 2, 1], // Arka (-Z)
+                    alloc::vec![4, 5, 6, 7], // Ön (+Z)
+                    alloc::vec![0, 4, 7, 3], // Sol (-X)
+                    alloc::vec![1, 2, 6, 5], // Sağ (+X)
+                    alloc::vec![3, 7, 6, 2], // Üst (+Y)
+                    alloc::vec![0, 1, 5, 4], // Alt (-Y)
                 ];
             }
             Shape3D::Cylinder => {
@@ -195,12 +206,12 @@ impl Viewer3DApp {
                     let next = (i + 1) % SEGMENTS;
                     self.faces.push(alloc::vec![i, next, SEGMENTS + next, SEGMENTS + i]);
                 }
-                // Üst ve alt kapaklar
+                // Üst ve alt kapaklar — dışa bakan (+Y / -Y) CCW sarım
                 let mut top_cap = Vec::new();
                 let mut bottom_cap = Vec::new();
                 for i in 0..SEGMENTS {
-                    top_cap.push(i);
-                    bottom_cap.push(SEGMENTS + (SEGMENTS - 1 - i));
+                    top_cap.push(SEGMENTS - 1 - i);
+                    bottom_cap.push(SEGMENTS + i);
                 }
                 self.faces.push(top_cap);
                 self.faces.push(bottom_cap);
@@ -237,7 +248,8 @@ impl Viewer3DApp {
                         self.edges.push((i0, i1));
                         self.edges.push((i0, i3));
 
-                        self.faces.push(alloc::vec![i0, i1, i2, i3]);
+                        // Dışa bakan CCW sarım: i0 -> i3 -> i2 -> i1
+                        self.faces.push(alloc::vec![i0, i3, i2, i1]);
                     }
                 }
             }
@@ -257,12 +269,13 @@ impl Viewer3DApp {
                     (0, 4), (1, 4), (2, 4), (3, 4), // Kenarlar
                 ];
 
+                // Dışa bakan CCW sarımlar: taban -Y, yanlar tepeye doğru
                 self.faces = alloc::vec![
-                    alloc::vec![3, 2, 1, 0], // Taban
-                    alloc::vec![0, 1, 4],    // Ön
-                    alloc::vec![1, 2, 4],    // Sağ
-                    alloc::vec![2, 3, 4],    // Arka
-                    alloc::vec![3, 0, 4],    // Sol
+                    alloc::vec![0, 1, 2, 3], // Taban (-Y)
+                    alloc::vec![1, 0, 4],    // Ön (-Z)
+                    alloc::vec![2, 1, 4],    // Sağ (+X)
+                    alloc::vec![3, 2, 4],    // Arka (+Z)
+                    alloc::vec![0, 3, 4],    // Sol (-X)
                 ];
             }
         }
@@ -531,14 +544,19 @@ impl Viewer3DApp {
                 let nz = ux * vy - uy * vx;
 
                 // Normali döndür
-                let nx1 = nx * cos_y + nz * sin_y;
-                let nz1 = -nx * sin_y + nz * cos_y;
-                let ny2 = ny * cos_x - nz1 * sin_x;
-                let nz2 = ny * sin_x + nz1 * cos_x;
+                let nxr = nx * cos_y + nz * sin_y;
+                let nzr = -nx * sin_y + nz * cos_y;
+                let nyr = ny * cos_x - nzr * sin_x;
+                let nzr2 = ny * sin_x + nzr * cos_x;
 
-                let len = (nx1 * nx1 + ny2 * ny2 + nz2 * nz2).max(0.0001);
-                // Yaklaşık ters karekök veya normalize
-                let inv_len = 1.0 / len; // Basit yaklaşım
+                // Emniyet: Normal her zaman kameraya (+Z) baksın. Böylece bir yüzün
+                // sarım (winding) sırası ters olsa bile aydınlatma içeri değil dışarıyı gösterir.
+                let (nx1, ny2, nz2) = if nzr2 < 0.0 { (-nxr, -nyr, -nzr2) } else { (nxr, nyr, nzr2) };
+
+                // Normalize: uzunluk karekökü (Newton-Raphson) ile böl; önceki
+                // 1/|n|² yaklaşımı büyük yüzeylerde aydınlatmayı olduğundan karanlık yapıyordu.
+                let len_sq = nx1 * nx1 + ny2 * ny2 + nz2 * nz2;
+                let inv_len = 1.0 / sqrt(len_sq).max(0.0001);
                 let dot = (nx1 * inv_len * lx + ny2 * inv_len * ly + nz2 * inv_len * lz).max(0.0);
 
                 // Temel tema rengi (ACCENT_BLUE / ACCENT_CYAN tonları)

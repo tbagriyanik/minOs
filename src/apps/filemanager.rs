@@ -632,13 +632,14 @@ impl FileManagerApp {
     pub fn sidebar_path(index: usize) -> &'static str {
         match index {
             0 => "/",
-            1 => "/root/Documents",
-            2 => "/root/Media",
-            3 => "/root/Downloads",
-            4 => "/boot",
-            5 => "/media/usb0",
-            6 => "/media/hdd0",
-            7 => "/media/cdrom",
+            1 => "/desktop",
+            2 => "/root/Documents",
+            3 => "/root/Media",
+            4 => "/root/Downloads",
+            5 => "/boot",
+            6 => "/media/usb0",
+            7 => "/media/hdd0",
+            8 => "/media/cdrom",
             _ => crate::fs::vfs::TRASH_DIR,
         }
     }
@@ -647,25 +648,27 @@ impl FileManagerApp {
         if crate::gui::ui_english() {
             match index {
                 0 => "Root (/)",
-                1 => "Documents",
-                2 => "Media",
-                3 => "Downloads",
-                4 => "System",
-                5 => "USB Drive",
-                6 => "Hard Disk",
-                7 => "CD-ROM",
+                1 => "Desktop",
+                2 => "Documents",
+                3 => "Media",
+                4 => "Downloads",
+                5 => "System",
+                6 => "USB Drive",
+                7 => "Hard Disk",
+                8 => "CD-ROM",
                 _ => "Recycle Bin",
             }
         } else {
             match index {
                 0 => "Kök (/)",
-                1 => "Belgeler",
-                2 => "Medyalar",
-                3 => "İndirilenler",
-                4 => "Sistem",
-                5 => "USB Disk",
-                6 => "Sabit Disk",
-                7 => "CD-ROM",
+                1 => "Masaüstü",
+                2 => "Belgeler",
+                3 => "Medyalar",
+                4 => "İndirilenler",
+                5 => "Sistem",
+                6 => "USB Disk",
+                7 => "Sabit Disk",
+                8 => "CD-ROM",
                 _ => "Geri Dönüşüm",
             }
         }
@@ -676,9 +679,9 @@ impl FileManagerApp {
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
 
         // Sidebar drop target check
-        if mx >= win_x + 6 && mx < win_x + 6 + sidebar_w && my >= win_y + 66 && my < win_y + 66 + 9 * 22 {
+        if mx >= win_x + 6 && mx < win_x + 6 + sidebar_w && my >= win_y + 66 && my < win_y + 66 + 10 * 22 {
             let idx = (my.saturating_sub(win_y + 66)) / 22;
-            if idx < 9 && (win_y + 66 + idx * 22 + 8) <= win_y + 60 + sidebar_h {
+            if idx < 10 && (win_y + 66 + idx * 22 + 8) <= win_y + 60 + sidebar_h {
                 return Some(DropTarget::Sidebar(idx));
             }
         }
@@ -940,9 +943,9 @@ impl FileManagerApp {
         fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
 
         let nav = if crate::gui::ui_english() {
-            ["Root (/)", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM", "Recycle Bin"]
+            ["Root (/)", "Desktop", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM", "Recycle Bin"]
         } else {
-            ["Kök (/)", "Belgeler", "Medyalar", "İndirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Dönüşüm"]
+            ["Kök (/)", "Masaüstü", "Belgeler", "Medyalar", "İndirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Dönüşüm"]
         };
 
         for (i, item) in nav.iter().enumerate() {
@@ -951,14 +954,15 @@ impl FileManagerApp {
             let cur = self.path();
             let is_active = match i {
                 0 => cur == "/",
-                1 => cur == "/root/Documents",
-                2 => cur == "/root/Media",
-                3 => cur == "/root/Downloads",
-                4 => cur == "/boot",
-                5 => cur == "/media/usb0",
-                6 => cur == "/media/hdd0",
-                7 => cur == "/media/cdrom",
-                8 => cur == crate::fs::vfs::TRASH_DIR,
+                1 => cur == "/desktop",
+                2 => cur == "/root/Documents",
+                3 => cur == "/root/Media",
+                4 => cur == "/root/Downloads",
+                5 => cur == "/boot",
+                6 => cur == "/media/usb0",
+                7 => cur == "/media/hdd0",
+                8 => cur == "/media/cdrom",
+                9 => cur == crate::fs::vfs::TRASH_DIR,
                 _ => false,
             };
             let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Sidebar(i));
@@ -969,17 +973,17 @@ impl FileManagerApp {
             } else if is_active {
                 fb.draw_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, Color::TITLE_BAR);
             }
-            if i <= 4 {
+            if i <= 5 {
                 Self::draw_folder_icon(fb, win_x + 9, iy + 2, false);
-            } else if i == 5 {
+            } else if i == 6 {
                 // USB Simgesi
                 fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_GREEN);
                 fb.draw_rect(win_x + 12, iy + 1, 8, 3, Color::WHITE);
-            } else if i == 6 {
+            } else if i == 7 {
                 // HDD Simgesi
                 fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_YELLOW);
                 fb.draw_line(win_x + 11, iy + 8, win_x + 21, iy + 8, Color::BLACK);
-            } else if i == 7 {
+            } else if i == 8 {
                 // CD Simgesi
                 fb.draw_rect(win_x + 9, iy + 3, 14, 10, Color::ACCENT_PINK);
                 fb.draw_rect(win_x + 14, iy + 6, 4, 4, Color::WHITE);
@@ -991,11 +995,11 @@ impl FileManagerApp {
                 if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE }
             } else if is_active {
                 Color::ACCENT_BLUE
-            } else if i == 5 {
-                if diskfs::usb_available() { Color::ACCENT_GREEN } else { Color::TEXT_MUTED }
             } else if i == 6 {
-                if crate::drivers::usb::hdd_available() || diskfs::usb_available() { Color::ACCENT_YELLOW } else { Color::TEXT_MUTED }
+                if diskfs::usb_available() { Color::ACCENT_GREEN } else { Color::TEXT_MUTED }
             } else if i == 7 {
+                if crate::drivers::usb::hdd_available() || diskfs::usb_available() { Color::ACCENT_YELLOW } else { Color::TEXT_MUTED }
+            } else if i == 8 {
                 if diskfs::cd_available() { Color::ACCENT_PINK } else { Color::TEXT_MUTED }
             } else {
                 Color::TEXT_MAIN

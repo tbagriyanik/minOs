@@ -178,6 +178,12 @@ impl InstallerApp {
             }
         }
 
+        // 4. Mevcut VFS ağacının tamamını (dosyalar, klasörler, masaüstü,
+        // çöp kutusu) VFS.DAT anlık görüntüsü olarak diske yaz; böylece
+        // sonraki açılışta tüm dosya/klasör işlemleri geri gelir.
+        // Başarısız olursa kurulumu engellemez (en iyi çaba).
+        let snapshot_ok = vfs.persist_snapshot();
+
         // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla
         // kaydedildiyse sonraki açılış bunu kurulum olarak tanısın.
         let marker_content = b"minOs Persistent Install\nFAT32 data and settings installed\n";
@@ -199,7 +205,11 @@ impl InstallerApp {
         self.state = InstallState::Complete;
         self.confirm_install = false;
         self.disk_formatted = true;
-        self.status_msg = "Kurulum tamamlandı! Disk kalıcı yazmaya hazır.";
+        self.status_msg = if snapshot_ok {
+            "Kurulum tamamlandı! Disk kalıcı yazmaya hazır."
+        } else {
+            "Kurulum tamamlandı (UYARI: VFS.DAT yazılamadı)."
+        };
         true
     }
 

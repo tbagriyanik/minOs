@@ -1475,6 +1475,20 @@ pub extern "C" fn _start() -> ! {
                         }
                         kind = gui::ContextKind::FileManager;
                         compositor.focus_window(idx);
+                    } else if idx == 7 {
+                        // Görev Yöneticisi → süreç satırı üzerinde mi?
+                        if taskmgr_app.active_tab == 0 {
+                            if let Some(row) = taskmgr_app.row_at(mx, my, win.x, win.y, win.width) {
+                                taskmgr_app.selected = row;
+                                taskmgr_app.focused_control = 4 + row;
+                                kind = gui::ContextKind::TaskManager;
+                            } else {
+                                kind = gui::ContextKind::Window;
+                            }
+                        } else {
+                            kind = gui::ContextKind::Window;
+                        }
+                        compositor.focus_window(idx);
                     } else if my < tb_y {
                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                         if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
@@ -1720,6 +1734,21 @@ pub extern "C" fn _start() -> ! {
                             3 => notepad_app.delete_selection(),
                             4 => notepad_app.select_all(),
                             _ => notepad_app.clear(),
+                        },
+                        gui::ContextKind::TaskManager => match clicked_item {
+                            0 => {
+                                // Sonlandır (Del): seçili süreci kapat
+                                if let Some(target) = taskmgr_app.selected_app_idx() {
+                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                    if let Some(wi) = compositor.context_window {
+                                        terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
+                                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[wi],
+                                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                    }
+                                }
+                            }
+                            _ => {}
                         },
                         gui::ContextKind::Window => {
                             if let Some(wi) = compositor.context_window {

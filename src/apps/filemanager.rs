@@ -273,8 +273,10 @@ impl FileManagerApp {
         self.file_count = 0;
         self.selected_idx = 0;
 
-        // Kök dizinde değilsek üst dizine dönme girdisi ekle [..]
-        if is_not_root {
+        // Kök dizinde değilsek üst dizine dönme girdisi ekle [..].
+        // Masaüstünde (/desktop) üst klasör kavramı yoktur: ".." simgesi
+        // çizilmesin ve "/desktop/.." gibi geçersiz bir yol açılmasın.
+        if is_not_root && self.path() != "/desktop" {
             let mut up = FileItem::empty();
             let up_name = b"..";
             up.dyn_name[..2].copy_from_slice(up_name);

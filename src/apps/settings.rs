@@ -980,12 +980,14 @@ impl SystemSettings {
         }
 
         // ---- Fare testi ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + 174,
-            crate::gui::ui_text("Fare: imleci alana getirin, düğmeleri/tekerleği deneyin",
-                "Mouse: move into the pad, try buttons/wheel"), Color::TEXT_MAIN);
+        // Not: alan zemini önce boyanır, başlık sonra çizilir; böylece
+        // büyük yazı tipinde bile metnin altı alan zeminince kapanmaz.
         let pad = Self::test_mouse_pad_rect(win_x, win_y);
         fb.draw_rect(pad.0, pad.1, pad.2, pad.3, Color::DARK_BG);
         fb.draw_rect_outline(pad.0, pad.1, pad.2, pad.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, cx, win_y + 174,
+            crate::gui::ui_text("Fare: imleci alana getirin, düğmeleri/tekerleği deneyin",
+                "Mouse: move into the pad, try buttons/wheel"), Color::TEXT_MAIN);
         if self.test_trail_len > 0 {
             let len = self.test_trail.len();
             let count = self.test_trail_len as usize;

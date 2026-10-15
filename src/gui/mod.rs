@@ -965,6 +965,8 @@ pub enum ContextKind {
     FileManager,
     /// Not Defteri metin alanı (Kes/Kopyala/Yapıştır...)
     Notepad,
+    /// Görev Yöneticisi süreç satırı (Sonlandır...)
+    TaskManager,
     /// Pencere başlık çubuğu / gövdesi
     Window,
 }
@@ -1006,6 +1008,11 @@ pub const CTX_NOTEPAD: [(&str, u32); 6] = [
     ("Tümünü Temizle", Color::TEXT_MUTED),
 ];
 
+/// Görev Yöneticisi süreç satırına sağ tık menüsü.
+pub const CTX_TASKMANAGER: [(&str, u32); 1] = [
+    ("Sonlandır", Color::ACCENT_RED),
+];
+
 /// Pencere başlık çubuğuna sağ tık menüsü.
 pub const CTX_WINDOW: [(&str, u32); 4] = [
     ("Küçült", Color::ACCENT_YELLOW),
@@ -1029,6 +1036,9 @@ const CTX_FILE_EN: [(&str, u32); 10] = [
 const CTX_NOTEPAD_EN: [(&str, u32); 6] = [
     ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
     ("Delete", Color::ACCENT_YELLOW), ("Select All", Color::ACCENT_PINK), ("Clear All", Color::TEXT_MUTED),
+];
+const CTX_TASKMANAGER_EN: [(&str, u32); 1] = [
+    ("End Task", Color::ACCENT_RED),
 ];
 const CTX_WINDOW_EN: [(&str, u32); 4] = [
     ("Minimize", Color::ACCENT_YELLOW), ("Maximize / Restore", Color::ACCENT_GREEN),
@@ -2342,10 +2352,12 @@ impl MinGuiCompositor {
             (ContextKind::Desktop, false) => &CTX_DESKTOP,
             (ContextKind::FileManager, false) => &CTX_FILE,
             (ContextKind::Notepad, false) => &CTX_NOTEPAD,
+            (ContextKind::TaskManager, false) => &CTX_TASKMANAGER,
             (ContextKind::Window, false) => &CTX_WINDOW,
             (ContextKind::Desktop, true) => &CTX_DESKTOP_EN,
             (ContextKind::FileManager, true) => &CTX_FILE_EN,
             (ContextKind::Notepad, true) => &CTX_NOTEPAD_EN,
+            (ContextKind::TaskManager, true) => &CTX_TASKMANAGER_EN,
             (ContextKind::Window, true) => &CTX_WINDOW_EN,
         }
     }
@@ -2360,7 +2372,7 @@ impl MinGuiCompositor {
             _ => 0,
         };
         let shortcut_pad = match self.context_kind {
-            ContextKind::Notepad => sp(64),
+            ContextKind::Notepad | ContextKind::TaskManager => sp(64),
             _ => 0,
         };
         let w = sp(CONTEXT_MENU_W + 16).max(widest_item + sp(24) + icon_pad + shortcut_pad).min(fb_w);
@@ -2384,6 +2396,7 @@ impl MinGuiCompositor {
             ContextKind::Desktop => ui_text("Masaüstü", "Desktop"),
             ContextKind::FileManager => ui_text("Dosya İşlemleri", "File Actions"),
             ContextKind::Notepad => ui_text("Düzenleme", "Edit"),
+            ContextKind::TaskManager => ui_text("Görev", "Task"),
             ContextKind::Window => ui_text("Pencere", "Window"),
         };
         let hdr_h = context_header_h();
@@ -2414,14 +2427,15 @@ impl MinGuiCompositor {
             Self::draw_string_clipped(fb, text_x, item_y + sp(5), label, *color,
                 (text_x, item_y + 2, menu_w.saturating_sub(text_x - menu_x + sp(60)), item_h.saturating_sub(4)));
 
-            // Not Defteri için sağa hizalı kısayol etiketi (örn: Ctrl+X, Ctrl+C, Ctrl+V)
-            if self.context_kind == ContextKind::Notepad {
-                let shortcut = match i {
-                    0 => "Ctrl+X",
-                    1 => "Ctrl+C",
-                    2 => "Ctrl+V",
-                    3 => "Del",
-                    4 => "Ctrl+A",
+            // Not Defteri ve Görev Yöneticisi için sağa hizalı kısayol etiketi (örn: Ctrl+X, Del)
+            if self.context_kind == ContextKind::Notepad || self.context_kind == ContextKind::TaskManager {
+                let shortcut = match (self.context_kind, i) {
+                    (ContextKind::TaskManager, 0) => "Del",
+                    (_, 0) => "Ctrl+X",
+                    (_, 1) => "Ctrl+C",
+                    (_, 2) => "Ctrl+V",
+                    (_, 3) => "Del",
+                    (_, 4) => "Ctrl+A",
                     _ => "",
                 };
                 if !shortcut.is_empty() {

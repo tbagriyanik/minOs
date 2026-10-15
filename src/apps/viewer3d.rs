@@ -519,8 +519,9 @@ impl Viewer3DApp {
                 (idx, avg_z / (face.len() as f32))
             }).collect();
 
-            // Derinliğe göre arkadan öne sırala
-            face_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(core::cmp::Ordering::Equal));
+            // Derinliğe göre uzaktan yakına sırala (kamera -Z'de: büyük z = uzak).
+            // Uzak yüz önce boyanır, yakın yüz üstüne gelir; tersi iç-dış görüntü verir.
+            face_order.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
 
             // Işık vektörü (Normalize: [0.577, 0.577, 0.577])
             let lx = 0.577f32;
@@ -549,9 +550,10 @@ impl Viewer3DApp {
                 let nyr = ny * cos_x - nzr * sin_x;
                 let nzr2 = ny * sin_x + nzr * cos_x;
 
-                // Emniyet: Normal her zaman kameraya (+Z) baksın. Böylece bir yüzün
-                // sarım (winding) sırası ters olsa bile aydınlatma içeri değil dışarıyı gösterir.
-                let (nx1, ny2, nz2) = if nzr2 < 0.0 { (-nxr, -nyr, -nzr2) } else { (nxr, nyr, nzr2) };
+                // Arka-yüz eleme: kamera -Z yönünde baktığı için yalnızca
+                // normali kameraya dönen (nz < 0) yüzler çizilir.
+                if nzr2 >= 0.0 { continue; }
+                let (nx1, ny2, nz2) = (nxr, nyr, nzr2);
 
                 // Normalize: uzunluk karekökü (Newton-Raphson) ile böl; önceki
                 // 1/|n|² yaklaşımı büyük yüzeylerde aydınlatmayı olduğundan karanlık yapıyordu.

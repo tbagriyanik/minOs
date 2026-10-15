@@ -8,16 +8,18 @@ pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
 const PROCESS_ROW_STEP: usize = 22;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
-pub const LAUNCH_APP_COUNT: usize = 11;
-const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+pub const LAUNCH_APP_COUNT: usize = 13;
+const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Gezgini",
     "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi",
-    "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi",
+    "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Kurulum Sihirbazı",
+    "3D Gösterici",
 ];
 const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
     "File Manager", "Settings", "Notepad", "Browser", "Image Viewer", "Music Player",
     "Video Player", "Task Manager", "Calculator", "Paint", "Command Prompt",
+    "Installer", "3D Viewer",
 ];
 
 #[derive(Copy, Clone, Default)]
@@ -189,6 +191,8 @@ impl TaskManagerApp {
             8 => core::mem::size_of::<crate::apps::calculator::CalculatorApp>(),
             9 => core::mem::size_of::<crate::apps::paint::PaintApp>(),
             10 => core::mem::size_of::<crate::apps::terminal::TerminalApp>(),
+            11 => core::mem::size_of::<crate::apps::installer::InstallerApp>(),
+            12 => core::mem::size_of::<crate::apps::viewer3d::Viewer3DApp>(),
             _ => 0,
         }
     }

@@ -75,6 +75,12 @@ pub enum Source {
     Disk,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DropTarget {
+    Sidebar(usize),
+    Folder(usize),
+}
+
 pub struct FileManagerApp {
     pub current_path: &'static str,
     pub path_buf: [u8; 96],
@@ -85,19 +91,30 @@ pub struct FileManagerApp {
     pub source: Source,
     pub disk_kind: FsKind,
     pub status: &'static str,
+    pub status_buf: TextBuf,
     pub rename_active: bool,
     pub rename_buf: [u8; diskfs::NAME_MAX],
     pub rename_len: usize,
     pub focused_control: usize, // 0: Refresh, 1: New, 2: Folder, 3: Delete, 4: Open, 5: List
+    pub last_click_idx: Option<usize>,
+    pub last_click_ms: u64,
+    pub drag_item: Option<usize>,
+    pub drag_start: (usize, usize),
+    pub drag_active: bool,
+    pub drag_target: Option<DropTarget>,
     item_counter: usize,
 }
 
 impl FileManagerApp {
     pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, idx: usize) -> (usize, usize, usize, usize) {
+        Self::row_rect_scrolled(win_x, win_y, win_w, idx, 0)
+    }
+
+    pub fn row_rect_scrolled(win_x: usize, win_y: usize, win_w: usize, idx: usize, sy: usize) -> (usize, usize, usize, usize) {
         let sidebar_w = 110;
         let list_x = win_x + sidebar_w + 14;
         let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
-        let row_y = win_y + LIST_TOP + idx * ROW_H;
+        let row_y = (win_y + LIST_TOP + idx * ROW_H).saturating_sub(sy);
         (list_x, row_y, list_w, ROW_H)
     }
 
@@ -170,12 +187,25 @@ impl FileManagerApp {
             source: Source::Vfs,
             disk_kind: FsKind::None,
             status: "",
+            status_buf: TextBuf::new(),
             rename_active: false,
             rename_buf: [0; diskfs::NAME_MAX],
             rename_len: 0,
             focused_control: 5,
+            last_click_idx: None,
+            last_click_ms: 0,
+            drag_item: None,
+            drag_start: (0, 0),
+            drag_active: false,
+            drag_target: None,
             item_counter: 1,
         }
+    }
+
+    pub fn set_status_text(&mut self, text: &str) {
+        self.status = "";
+        self.status_buf.clear();
+        self.status_buf.push_str(text);
     }
 
     pub fn path(&self) -> &str {
@@ -187,6 +217,12 @@ impl FileManagerApp {
     }
 
     pub fn set_path(&mut self, p: &str) {
+        self.last_click_idx = None;
+        self.drag_item = None;
+        self.drag_active = false;
+        self.drag_target = None;
+        self.status = "";
+        self.status_buf.clear();
         self.path_len = 0;
         for b in p.bytes() {
             if self.path_len < self.path_buf.len() {
@@ -211,6 +247,10 @@ impl FileManagerApp {
 
     /// VFS'ten mevcut dizinin içeriğini okur ve dosya listesini doldurur.
     pub fn refresh_from_vfs(&mut self, vfs: &VirtualFileSystem) {
+        self.last_click_idx = None;
+        self.drag_item = None;
+        self.drag_active = false;
+        self.drag_target = None;
         let is_not_root = self.path() != "/";
         let items = vfs.list_dir(self.path());
 
@@ -507,6 +547,209 @@ impl FileManagerApp {
         self.file_count * ROW_H
     }
 
+    pub fn sidebar_path(index: usize) -> &'static str {
+        match index {
+            0 => "/",
+            1 => "/root/Documents",
+            2 => "/root/Media",
+            3 => "/root/Downloads",
+            4 => "/boot",
+            5 => "/media/usb0",
+            6 => "/media/hdd0",
+            7 => "/media/cdrom",
+            _ => crate::fs::vfs::TRASH_DIR,
+        }
+    }
+
+    pub fn sidebar_name(index: usize) -> &'static str {
+        if crate::gui::ui_english() {
+            match index {
+                0 => "Root (/)",
+                1 => "Documents",
+                2 => "Media",
+                3 => "Downloads",
+                4 => "System",
+                5 => "USB Drive",
+                6 => "Hard Disk",
+                7 => "CD-ROM",
+                _ => "Recycle Bin",
+            }
+        } else {
+            match index {
+                0 => "Kök (/)",
+                1 => "Belgeler",
+                2 => "Medyalar",
+                3 => "İndirilenler",
+                4 => "Sistem",
+                5 => "USB Disk",
+                6 => "Sabit Disk",
+                7 => "CD-ROM",
+                _ => "Geri Dönüşüm",
+            }
+        }
+    }
+
+    pub fn drop_target_at(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize, sy: usize, mx: usize, my: usize) -> Option<DropTarget> {
+        let sidebar_w = 110;
+        let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
+
+        // Sidebar drop target check
+        if mx >= win_x + 6 && mx < win_x + 6 + sidebar_w && my >= win_y + 66 && my < win_y + 66 + 9 * 22 {
+            let idx = (my.saturating_sub(win_y + 66)) / 22;
+            if idx < 9 && (win_y + 66 + idx * 22 + 8) <= win_y + 60 + sidebar_h {
+                return Some(DropTarget::Sidebar(idx));
+            }
+        }
+
+        // File list drop target check (must be a directory and not the item being dragged)
+        let list_top = win_y + LIST_TOP;
+        let list_bottom = win_y + win_h - STATUS_H;
+        for i in 0..self.file_count {
+            if self.files[i].is_dir && Some(i) != self.drag_item {
+                if my >= list_top && my < list_bottom {
+                    let r = Self::row_rect_scrolled(win_x, win_y, win_w, i, sy);
+                    if crate::gui::in_rect(mx, my, r) {
+                        return Some(DropTarget::Folder(i));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn target_directory(&self, target: DropTarget) -> Option<String> {
+        match target {
+            DropTarget::Sidebar(idx) => Some(String::from(Self::sidebar_path(idx))),
+            DropTarget::Folder(i) => {
+                if i >= self.file_count || !self.files[i].is_dir {
+                    return None;
+                }
+                let name = self.files[i].display_name();
+                if name == ".." {
+                    let cur = self.path();
+                    if let Some(pos) = cur.rfind('/') {
+                        let parent = if pos == 0 { "/" } else { &cur[..pos] };
+                        Some(String::from(parent))
+                    } else {
+                        Some(String::from("/"))
+                    }
+                } else {
+                    let mut path = String::from(self.path());
+                    if !path.ends_with('/') { path.push('/'); }
+                    path.push_str(name);
+                    Some(path)
+                }
+            }
+        }
+    }
+
+    pub fn target_display_name(&self, target: DropTarget) -> String {
+        match target {
+            DropTarget::Sidebar(idx) => String::from(Self::sidebar_name(idx)),
+            DropTarget::Folder(i) => {
+                if i < self.file_count {
+                    String::from(self.files[i].display_name())
+                } else {
+                    String::from("Klasör")
+                }
+            }
+        }
+    }
+
+    pub fn execute_drop(
+        &mut self,
+        src_idx: usize,
+        target: DropTarget,
+        is_copy: bool,
+        vfs: &mut crate::fs::vfs::VirtualFileSystem,
+    ) -> Result<String, &'static str> {
+        if src_idx >= self.file_count {
+            return Err(crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found."));
+        }
+        let src_item = &self.files[src_idx];
+        let src_name = src_item.display_name();
+        if src_name == ".." {
+            return Err(crate::gui::ui_text("Üst klasör taşınamaz.", "Parent folder cannot be moved."));
+        }
+
+        let Some(target_dir) = self.target_directory(target) else {
+            return Err(crate::gui::ui_text("Hedef klasör geçersiz.", "Invalid target folder."));
+        };
+
+        if target_dir == "/media/cdrom" {
+            return Err(crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."));
+        }
+
+        let mut src_path = alloc::string::String::from(self.path());
+        if !src_path.ends_with('/') { src_path.push('/'); }
+        src_path.push_str(src_name);
+
+        let target_disp = self.target_display_name(target);
+
+        let final_dest = if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
+            vfs.copy_item(&src_path, &target_dir)?
+        } else {
+            vfs.move_item(&src_path, &target_dir)?
+        };
+
+        let mut msg = TextBuf::new();
+        if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
+            msg.push_str(crate::gui::ui_text("Kopyalandı: ", "Copied: "));
+        } else if target_dir == crate::fs::vfs::TRASH_DIR {
+            msg.push_str(crate::gui::ui_text("Çöpe taşındı: ", "Moved to Trash: "));
+        } else {
+            msg.push_str(crate::gui::ui_text("Taşındı: ", "Moved: "));
+        }
+        msg.push_str(src_name);
+        msg.push_str(" -> ");
+        msg.push_str(&target_disp);
+        self.set_status_text(msg.as_str());
+
+        Ok(final_dest)
+    }
+
+    pub fn draw_drag_badge(&self, fb: &mut Framebuffer, mx: usize, my: usize, is_copy: bool) {
+        let Some(item_idx) = self.drag_item else { return; };
+        if item_idx >= self.file_count { return; }
+        let file = &self.files[item_idx];
+        let name = file.display_name();
+
+        let op_prefix = if is_copy {
+            crate::gui::ui_text("+ Kopyala: ", "+ Copy: ")
+        } else {
+            crate::gui::ui_text("-> Taşı: ", "-> Move: ")
+        };
+        let accent_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
+
+        let mut text = TextBuf::new();
+        text.push_str(op_prefix);
+        text.push_str(name);
+
+        if let Some(target) = self.drag_target {
+            text.push_str(" -> ");
+            let target_name = self.target_display_name(target);
+            text.push_str(&target_name);
+        }
+
+        let tw = MinGuiCompositor::text_width(text.as_str(), 1);
+        let badge_w = tw + 28;
+        let badge_h = 24;
+        let badge_x = (mx + 14).min(fb.width.saturating_sub(badge_w + 4));
+        let badge_y = (my + 14).min(fb.height.saturating_sub(badge_h + 4));
+
+        fb.draw_rounded_rect(badge_x, badge_y, badge_w, badge_h, 4, Color::WINDOW_BG);
+        fb.draw_rounded_rect_outline(badge_x, badge_y, badge_w, badge_h, 4, accent_color);
+
+        if file.is_dir {
+            Self::draw_folder_icon(fb, badge_x + 5, badge_y + 4, false);
+        } else {
+            Self::draw_file_icon(fb, badge_x + 5, badge_y + 4, file.icon_tag);
+        }
+
+        MinGuiCompositor::draw_string(fb, badge_x + 24, badge_y + 5, text.as_str(), Color::TEXT_MAIN);
+    }
+
     /// Klasör Simgesi: Arka sekme, gövde, parlak sarı/amber kapak ve yukarı oku (..) desteği
     pub fn draw_folder_icon(fb: &mut Framebuffer, x: usize, y: usize, is_up: bool) {
         // Klasör Arka Sekmesi (Tab)
@@ -565,7 +808,7 @@ impl FileManagerApp {
         fb.draw_line(x + 3, y + 13, x + 12, y + 13, Color::ACCENT_GREEN);
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState) {
+    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState, is_copy: bool) {
         let sidebar_w = 110;
         let list_x = win_x + sidebar_w + 14;
         let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
@@ -630,7 +873,12 @@ impl FileManagerApp {
                 8 => cur == crate::fs::vfs::TRASH_DIR,
                 _ => false,
             };
-            if is_active {
+            let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Sidebar(i));
+            if is_drag_target {
+                let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
+                fb.draw_rounded_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                fb.draw_rounded_rect_outline(win_x + 7, iy - 2, sidebar_w - 2, 20, 3, target_color);
+            } else if is_active {
                 fb.draw_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, Color::TITLE_BAR);
             }
             if i <= 4 {
@@ -651,7 +899,9 @@ impl FileManagerApp {
                 // Geri Dönüşüm Kutusu Simgesi (çöp kutusu)
                 Self::draw_trash_icon(fb, win_x + 9, iy + 2);
             }
-            let col = if is_active {
+            let col = if is_drag_target {
+                if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE }
+            } else if is_active {
                 Color::ACCENT_BLUE
             } else if i == 5 {
                 if diskfs::usb_available() { Color::ACCENT_GREEN } else { Color::TEXT_MUTED }
@@ -694,7 +944,17 @@ impl FileManagerApp {
             }
             let file = &self.files[i];
             let is_sel = i == self.selected_idx;
-            if is_sel {
+            let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
+            let is_drag_source = self.drag_active && self.drag_item == Some(i);
+
+            if is_drag_target {
+                let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
+                fb.draw_rounded_rect(list_x, draw_y, list_w, ROW_H - 2, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                fb.draw_rounded_rect_outline(list_x, draw_y, list_w, ROW_H - 2, 3, target_color);
+            } else if is_drag_source {
+                fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
+                fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::TEXT_MUTED);
+            } else if is_sel {
                 fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
                 if self.focused_control == 5 {
                     fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_BLUE);
@@ -708,7 +968,13 @@ impl FileManagerApp {
                 Self::draw_file_icon(fb, list_x + 6, draw_y + 3, file.icon_tag);
             }
 
-            let name_col = if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MAIN };
+            let name_col = if is_drag_target {
+                if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE }
+            } else if is_sel {
+                MinGuiCompositor::text_on(Color::TITLE_BAR)
+            } else {
+                Color::TEXT_MAIN
+            };
             MinGuiCompositor::draw_string_clipped(fb, col_name_x, draw_y + 4, file.display_name(), name_col,
                 (col_name_x, draw_y + 2, 145, ROW_H - 4));
 
@@ -732,6 +998,8 @@ impl FileManagerApp {
             sb.push_str(crate::gui::ui_text("Yeni ad: ", "New name: "));
             if let Ok(name) = core::str::from_utf8(&self.rename_buf[..self.rename_len]) { sb.push_str(name); }
             sb.push_str(crate::gui::ui_text("  | Enter: kaydet  Esc: iptal", "  | Enter: save  Esc: cancel"));
+        } else if !self.status_buf.is_empty() {
+            sb.push_str(self.status_buf.as_str());
         } else if !self.status.is_empty() {
             sb.push_str(self.status);
         } else {

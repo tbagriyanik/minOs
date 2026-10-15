@@ -258,11 +258,11 @@ fn limine_boot_cmdline() -> Option<&'static str> {
     unsafe {
         let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
         let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
-        if file.is_null() || !is_canonical_ptr(file) {
+        if !is_mapped_limine_ptr(file) {
             return None;
         }
         let cmdline = core::ptr::read_volatile(core::ptr::addr_of!((*file).cmdline));
-        if cmdline.is_null() || !is_canonical_ptr(cmdline) {
+        if !is_mapped_limine_ptr(cmdline) {
             return None;
         }
         // NUL sonlandırıcıya kadar (en fazla 256 bayt) oku.
@@ -499,6 +499,14 @@ fn is_canonical_ptr<T>(ptr: *const T) -> bool {
     (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
 }
 
+/// Limine response pointers are expected in the mapped higher half. Reject
+/// lower-half values so malformed boot data cannot direct these reads into an
+/// unmapped region.
+#[inline]
+fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
+    is_canonical_ptr(ptr) && ((ptr as usize as u64) >> 47) == 0x1_FFFF
+}
+
 /// Limine yanıt yuvasını (`&REQUEST.response`) güvenli biçimde okur.
 ///
 /// Okuma yapıldıktan sonra dönen işaretçi null olmamalı, doğru hizalanmalı ve
@@ -515,7 +523,7 @@ unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
         return None;
     }
     let ptr = core::ptr::read_volatile(slot);
-    if ptr.is_null() || !is_canonical_ptr(ptr) { None } else { Some(ptr) }
+    if !is_mapped_limine_ptr(ptr) { None } else { Some(ptr) }
 }
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
@@ -785,18 +793,18 @@ pub extern "C" fn _start() -> ! {
             let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
             let count = count.min(256) as usize;
             let array_bytes = count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
-            if count > 0 && !entries.is_null() && is_canonical_ptr(entries) && array_bytes.is_some() {
+            if count > 0 && is_mapped_limine_ptr(entries) && array_bytes.is_some() {
                 let array_end = (entries as usize).checked_add(array_bytes.unwrap());
-                if array_end.map_or(false, |end| is_canonical_ptr(end as *const LimineMemoryMapEntry)) {
+                if array_end.map_or(false, |end| is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)) {
                 for i in 0..count {
                     let slot_addr = match (entries as usize).checked_add(i * core::mem::size_of::<*const LimineMemoryMapEntry>()) {
                         Some(addr) => addr,
                         None => break,
                     };
                     let slot = slot_addr as *const *const LimineMemoryMapEntry;
-                    if slot.is_null() || !is_canonical_ptr(slot) { break; }
+                    if !is_mapped_limine_ptr(slot) { break; }
                     let entry_ptr = core::ptr::read_volatile(slot);
-                    if entry_ptr.is_null() || !is_canonical_ptr(entry_ptr) { continue; }
+                    if !is_mapped_limine_ptr(entry_ptr) { continue; }
                     // SAFETY: entry pointer is supplied by Limine and checked
                     // for null, alignment and canonical address before reads.
                     let base = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).base));
@@ -883,9 +891,6 @@ pub extern "C" fn _start() -> ! {
         serial_print("[DMA] HDA ses surucusu icin dinamik DMA havuzu tahsis edildi.\n");
     }
     drivers::hda::init(hda_dma_phys);
-    if drivers::hda::is_ready() {
-        drivers::hda::play_test_tone();
-    }
 
     // e1000 RX/TX Ring ve Tampon Havuzu: ~132 KB (~33 sayfa)
     let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
@@ -910,7 +915,7 @@ pub extern "C" fn _start() -> ! {
         {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
-            if framebuffer_count == 0 || fb_ptr_ptr.is_null() || !is_canonical_ptr(fb_ptr_ptr) {
+            if framebuffer_count == 0 || !is_mapped_limine_ptr(fb_ptr_ptr) {
                 #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
@@ -918,7 +923,7 @@ pub extern "C" fn _start() -> ! {
             // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
             // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
-            if fb_info_ptr.is_null() || !is_canonical_ptr(fb_info_ptr) {
+            if !is_mapped_limine_ptr(fb_info_ptr) {
                 #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
@@ -1262,7 +1267,7 @@ pub extern "C" fn _start() -> ! {
 
                 let render_start = read_cpu_cycles();
                 match app_id {
-                    0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
+                    0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll, kbd.ctrl),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now, total_ram_bytes,
                         cpu_vendor(), cpu_logical_count(),
                         if drivers::hda::is_ready() { gui::ui_text("Intel HDA (PCM aktif)", "Intel HDA (PCM active)") } else { gui::ui_text("Ses aygıtı bulunamadı", "Audio device unavailable") },
@@ -1312,6 +1317,10 @@ pub extern "C" fn _start() -> ! {
             fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english(),
             drivers::e1000::is_ready(),
         );
+
+        if fm.drag_active {
+            fm.draw_drag_badge(fb, mouse.x as usize, mouse.y as usize, kbd.ctrl);
+        }
 
         // 4. Backbuffer'ı VRAM'e kopyala (flicker-free; sürüklemede sadece değişen bölge)
         fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
@@ -2046,25 +2055,46 @@ pub extern "C" fn _start() -> ! {
                                     filemanager_app.set_path(target_path);
                                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                 } else if mx >= wx + 124 && mx <= wx + ww - 10 && my >= wy + 84 {
+                                    let sy = compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0);
+                                    let list_top = wy + apps::filemanager::LIST_TOP;
+                                    let list_bottom = wy + wh.saturating_sub(30);
                                     for i in 0..filemanager_app.file_count {
-                                        if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect(wx, wy, ww, i)) {
+                                        if my >= list_top && my < list_bottom && gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect_scrolled(wx, wy, ww, i, sy)) {
                                             filemanager_app.selected_idx = i;
-                                            if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
-                                                if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
-                                                    if let Some(data) = data {
-                                                        notepad_app.open_file(&path, data);
+                                            let now_ms = monotonic_ms();
+                                            let is_double_click = filemanager_app.last_click_idx == Some(i)
+                                                && now_ms.wrapping_sub(filemanager_app.last_click_ms) <= settings_app.double_click_ms as u64;
+                                            if is_double_click {
+                                                filemanager_app.last_click_idx = None;
+                                                filemanager_app.drag_item = None;
+                                                filemanager_app.drag_active = false;
+                                                filemanager_app.drag_target = None;
+                                                if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                                    if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                        if let Some(data) = data {
+                                                            notepad_app.open_file(&path, data);
+                                                        }
+                                                        open_app(&mut compositor, 2);
+                                                    } else if tag == "IMG" {
+                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                        open_app(&mut compositor, 4);
+                                                    } else if tag == "SND" {
+                                                        open_app(&mut compositor, 5);
+                                                    } else if tag == "VID" {
+                                                        open_app(&mut compositor, 6);
+                                                    } else if tag == "WEB" {
+                                                        open_app(&mut compositor, 3);
                                                     }
-                                                    open_app(&mut compositor, 2);
-                                                } else if tag == "IMG" {
-                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
-                                                    open_app(&mut compositor, 4);
-                                                } else if tag == "SND" {
-                                                    open_app(&mut compositor, 5);
-                                                } else if tag == "VID" {
-                                                    open_app(&mut compositor, 6);
-                                                } else if tag == "WEB" {
-                                                    open_app(&mut compositor, 3);
+                                                }
+                                            } else {
+                                                filemanager_app.last_click_idx = Some(i);
+                                                filemanager_app.last_click_ms = now_ms;
+                                                if filemanager_app.files[i].display_name() != ".." {
+                                                    filemanager_app.drag_item = Some(i);
+                                                    filemanager_app.drag_start = (mx, my);
+                                                    filemanager_app.drag_active = false;
+                                                    filemanager_app.drag_target = None;
                                                 }
                                             }
                                             break;
@@ -2442,7 +2472,6 @@ pub extern "C" fn _start() -> ! {
                             }
                             _ => {}
                         }
-                        compositor.focus_window(idx);
                         break;
                     }
                 }
@@ -3162,6 +3191,23 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
+            if let Some(_src_idx) = filemanager_app.drag_item {
+                if !filemanager_app.drag_active {
+                    let (sx, sy) = filemanager_app.drag_start;
+                    if mx.abs_diff(sx) > 4 || my.abs_diff(sy) > 4 {
+                        filemanager_app.drag_active = true;
+                        filemanager_app.last_click_idx = None;
+                    }
+                }
+                if filemanager_app.drag_active {
+                    if let Some((_, fm_win)) = focused_window_for_app(&compositor, 0) {
+                        let sy = fm_win.scroll.y;
+                        filemanager_app.drag_target = filemanager_app.drop_target_at(
+                            fm_win.x, fm_win.y, fm_win.width, fm_win.height, sy, mx, my,
+                        );
+                    }
+                }
+            }
             if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
                 // Tutamacı fare ile sürükle → kaydırma ofseti.
                 let track_top = compositor.windows[idx]
@@ -3254,6 +3300,24 @@ pub extern "C" fn _start() -> ! {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() { paint.end_stroke(); }
             }
             notepad_dragging = false;
+            if filemanager_app.drag_active {
+                if let Some(src_idx) = filemanager_app.drag_item {
+                    if let Some(target) = filemanager_app.drag_target {
+                        let is_copy = keyboard.ctrl;
+                        match filemanager_app.execute_drop(src_idx, target, is_copy, &mut fs_mgr.vfs) {
+                            Ok(_) => {
+                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            }
+                            Err(err) => {
+                                filemanager_app.set_status_text(err);
+                            }
+                        }
+                    }
+                }
+            }
+            filemanager_app.drag_item = None;
+            filemanager_app.drag_active = false;
+            filemanager_app.drag_target = None;
             // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
             // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
             if let Some(idx) = dragging_win {
@@ -3289,6 +3353,10 @@ pub extern "C" fn _start() -> ! {
                 taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b' && notepad_app.menu != 0 {
                 notepad_app.menu = 0;
+            } else if ch == '\x1b' && filemanager_app.drag_active {
+                filemanager_app.drag_item = None;
+                filemanager_app.drag_active = false;
+                filemanager_app.drag_target = None;
             } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
                 if ch == '\x1b' {
                     filemanager_app.rename_active = false;
@@ -3396,7 +3464,7 @@ pub extern "C" fn _start() -> ! {
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
-        let is_dragging = dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some() || notepad_dragging;
+        let is_dragging = dragging_win.is_some() || resizing_win.is_some() || vscroll_drag.is_some() || notepad_dragging || filemanager_app.drag_active;
         let paint_active = mouse.left_button && app_is_focused(&compositor, 9);
         let is_interacting = is_dragging || paint_active;
 

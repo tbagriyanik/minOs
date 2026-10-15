@@ -417,9 +417,8 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         mmio_write32(mmio_base, sd + SD_BDPL, bdl_phys as u32);
         mmio_write32(mmio_base, sd + SD_BDPU, (bdl_phys >> 32) as u32);
 
-        // Stream Run: Stream tag (byte 2) ve RUN=1 (byte 0)
+        // Configure the stream tag but leave DMA stopped until playback begins.
         mmio_write8(mmio_base, sd + SD_CTL + 2, (OUT_STREAM_NUM as u8) << 4);
-        mmio_write8(mmio_base, sd + SD_CTL, 0x02); // RUN=1
 
         serial_print("[HDA] HDA denetleyicisi hazir. Codec konfigurasyonu tamam.\n");
         HDA_READY.store(true, Ordering::Relaxed);

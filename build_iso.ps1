@@ -144,8 +144,9 @@ if ($oscdimg) {
     try {
         Copy-Item -Force $tempIso $IsoName
     } catch {
-        Copy-Item -Force $tempIso "minos_boot.iso"
-        $IsoName = "minos_boot.iso"
+        Write-Host "[HATA] $IsoName dosyasina kopyalanamadi: $_" -ForegroundColor Red
+        Write-Host "Dosya baskida olabilir, QEMU'yu kapatip tekrar deneyin." -ForegroundColor Yellow
+        throw
     }
 
     if (Test-Path "tools\limine.exe") {

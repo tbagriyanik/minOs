@@ -318,27 +318,35 @@ const BASE_FONT_SIZE: f32 = 14.0;
 // ---------------------------------------------------------------------------
 #[derive(Clone, Copy)]
 pub struct TextBuf {
-    buf: [u8; 32],
+    buf: [u8; 64],
     len: usize,
 }
 
 impl TextBuf {
     pub const fn new() -> Self {
-        Self { buf: [0; 32], len: 0 }
+        Self { buf: [0; 64], len: 0 }
     }
 
     /// Sabit metinden hücreler arası (const) tampon oluşturur.
-    /// Metin `buf`'a sığmazsa 32 baytta kırpılır.
+    /// Metin `buf`'a sığmazsa 64 baytta kırpılır.
     pub const fn from_str(s: &str) -> Self {
-        let mut buf = [0u8; 32];
+        let mut buf = [0u8; 64];
         let bytes = s.as_bytes();
-        let n = if bytes.len() < 32 { bytes.len() } else { 32 };
+        let n = if bytes.len() < 64 { bytes.len() } else { 64 };
         let mut i = 0;
         while i < n {
             buf[i] = bytes[i];
             i += 1;
         }
         Self { buf, len: n }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
 
     pub fn clear(&mut self) {
@@ -1054,13 +1062,13 @@ impl MinGuiCompositor {
         false
     }
 
-    /// Ayarlar ve Görev Yöneticisi tek örnektir; diğer uygulamalar yeni pencere açabilir.
+    /// Çizim Tahtası (Paint) dışındaki uygulamalar tek örnektir; var olan pencereyi öne getirir.
     pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
         if app_id >= 12 { return None; }
         let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
             slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
         });
-        if app_id == 1 || app_id == 7 || app_id == 11 {
+        if app_id != 9 {
             if let Some(idx) = existing {
                 if let Some(win) = self.windows[idx].as_mut() { win.is_minimized = false; }
                 self.focus_window(idx);
@@ -1108,7 +1116,16 @@ impl MinGuiCompositor {
         if idx >= self.windows.len() || self.windows[idx].is_none() {
             return;
         }
-        self.z_counter = self.z_counter.wrapping_add(1);
+        if self.z_counter >= 240 {
+            let (order, count) = self.draw_order();
+            for (new_z, &w_idx) in order[..count].iter().enumerate() {
+                if let Some(w) = self.windows[w_idx].as_mut() {
+                    w.z = new_z as u8;
+                }
+            }
+            self.z_counter = count as u8;
+        }
+        self.z_counter = self.z_counter.saturating_add(1);
         let z = self.z_counter;
         self.active_window_idx = Some(idx);
         for (i, slot) in self.windows.iter_mut().enumerate() {

@@ -22,6 +22,59 @@ fn toolbar_h() -> usize { crate::gui::sp(24) }
 #[inline(always)]
 fn status_h() -> usize { crate::gui::sp(22) }
 
+// --- Menü geometrisi ---
+// Aşağıdaki yardımcılar, menü kutusunun çizimi ile fare tıklama testlerinin
+// aynı koordinatları kullanmasını sağlar. Sabit (hard-coded) koordinatlar
+// font ölçeği 100'den farklı olduğunda çizimle örtüşmüyordu.
+
+/// Menü öğesi yüksekliği (px) — font ölçeğine göre.
+#[inline(always)]
+fn menu_item_h() -> usize { crate::gui::sp(20) }
+/// Menü kutusunun iç (dolgu) boşluğu (px).
+#[inline(always)]
+fn menu_pad() -> usize { crate::gui::sp(6) }
+/// Menü kutusu genişliği (px).
+#[inline(always)]
+fn menu_box_w() -> usize { crate::gui::sp(150) }
+
+/// Menü kutusunun sol üst köşesinin pencere içi X koordinatı.
+#[inline(always)]
+fn menu_box_x(menu: u8) -> usize {
+    match menu { 1 => crate::gui::sp(8), 2 => crate::gui::sp(68), _ => crate::gui::sp(128) }
+}
+
+/// Menü kutusunun sol üst köşesinin pencere içi Y koordinatı.
+#[inline(always)]
+fn menu_box_y() -> usize { crate::gui::sp(54) }
+
+/// Menü öğesi sayısı (Dosya/Düzen 4, Yardım 1).
+#[inline(always)]
+fn menu_item_count(menu: u8) -> usize { if menu == 3 { 1 } else { 4 } }
+
+/// Menü kutusunun yüksekliği (px).
+#[inline(always)]
+fn menu_box_h(menu: u8) -> usize {
+    menu_pad() * 2 + menu_item_count(menu) * menu_item_h()
+}
+
+/// Araç çubuğundaki Dosya/Düzen/Yardım başlık düğmelerinin
+/// (pencere içi x, genişlik) sınırları.
+#[inline(always)]
+fn menu_tab_rect(menu: u8) -> (usize, usize) {
+    match menu {
+        1 => (crate::gui::sp(8), crate::gui::sp(52)),
+        2 => (crate::gui::sp(68), crate::gui::sp(60)),
+        _ => (crate::gui::sp(128), crate::gui::sp(62)),
+    }
+}
+
+/// Menü açıkken bir öğenin pencere içi dikey aralığı (üst, alt).
+#[inline(always)]
+fn menu_item_bounds(menu: u8, item: usize) -> (usize, usize) {
+    let top = menu_box_y() + menu_pad() + item * menu_item_h();
+    (top, top + menu_item_h())
+}
+
 pub struct NotepadApp {
     pub buffer: Vec<char>,
     pub len: usize,
@@ -933,7 +986,12 @@ impl NotepadApp {
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
-            let mx = win_x + match self.menu { 1=>8, 2=>68, _=>128 };
+            // Kutu ve öğe koordinatları, tıklama testleriyle aynı kaynaktan
+            // (menu_* yardımcıları) hesaplanır; aksi halde font ölçeği
+            // 100'den farklıyken menü öğeleri kayar ve tıklama yanlış öğeye gider.
+            let mx = win_x + menu_box_x(self.menu);
+            let box_y = win_y + menu_box_y();
+            let box_w = menu_box_w();
             let items = match (self.menu, english) {
                 (1, true) => ["New Document", "Open", "Save", "Clear"],
                 (2, true) => ["Cut", "Copy", "Paste", "Select All"],
@@ -943,14 +1001,16 @@ impl NotepadApp {
                 _ => ["Not Defteri Hakkında", "", "", ""],
             };
             // Yardım menüsünde tek öğe olduğundan kutu yüksekliği ona göre küçülür.
-            let box_h = if items[1].is_empty() { 34 } else { 114 };
-            fb.draw_shadow(mx, win_y + 54, 150, box_h, Color::SHADOW);
-            fb.draw_rect(mx, win_y + 54, 150, box_h, Color::WINDOW_BG);
-            fb.draw_rect_outline(mx, win_y + 54, 150, box_h.saturating_sub(2), Color::BORDER);
-            for i in 0..4 {
+            let box_h = menu_box_h(self.menu);
+            fb.draw_shadow(mx, box_y, box_w, box_h, Color::SHADOW);
+            fb.draw_rect(mx, box_y, box_w, box_h, Color::WINDOW_BG);
+            fb.draw_rect_outline(mx, box_y, box_w, box_h.saturating_sub(2), Color::BORDER);
+            for i in 0..menu_item_count(self.menu) {
                 if !items[i].is_empty() {
-                    fb.draw_rect(mx + 4, win_y + 60 + i * 20, 142, 18, Color::TITLE_BAR_INACTIVE);
-                    MinGuiCompositor::draw_string(fb, mx + 10, win_y + 64 + i * 20, items[i], Color::TEXT_MAIN);
+                    let (top, _) = menu_item_bounds(self.menu, i);
+                    let item_y = win_y + top;
+                    fb.draw_rect(mx + crate::gui::sp(4), item_y, box_w.saturating_sub(crate::gui::sp(8)), menu_item_h().saturating_sub(crate::gui::sp(2)), Color::TITLE_BAR_INACTIVE);
+                    MinGuiCompositor::draw_string(fb, mx + crate::gui::sp(10), item_y + crate::gui::sp(4), items[i], Color::TEXT_MAIN);
                 }
             }
         }

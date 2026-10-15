@@ -527,6 +527,143 @@ impl VirtualFileSystem {
         false
     }
 
+    /// Bir dosya adını kök ve uzantı olarak ayırır (örn: ("notlar", ".txt") veya ("klasor", "")).
+    pub fn split_name_ext(name: &str) -> (&str, &str) {
+        if let Some(dot_idx) = name.rfind('.') {
+            if dot_idx > 0 {
+                return (&name[..dot_idx], &name[dot_idx..]);
+            }
+        }
+        (name, "")
+    }
+
+    /// Bir klasörü ve içindeki tüm alt öğeleri siler.
+    pub fn delete_tree(&mut self, path: &str) -> bool {
+        let norm = Self::normalize_path(path);
+        if norm == "/" { return false; }
+        let prefix = if norm.ends_with('/') { norm.clone() } else { let mut p = norm.clone(); p.push('/'); p };
+        self.items.retain(|it| it.path != norm && !it.path.starts_with(&prefix));
+        if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            let _ = diskfs::delete_dir_by_name(&Self::file_name_from_path(&norm));
+        }
+        true
+    }
+
+    /// Dosya veya klasörü belirtilen hedef dizine kopyalar.
+    /// Hedefte aynı isimde öğe varsa numaralandırılmış benzersiz bir isim üretilir.
+    pub fn copy_item(&mut self, src_path: &str, dest_dir: &str) -> Result<String, &'static str> {
+        let src_norm = Self::normalize_path(src_path);
+        let dest_norm = Self::normalize_path(dest_dir);
+        if src_norm == "/" || dest_norm.is_empty() {
+            return Err("Gecersiz yol / Invalid path");
+        }
+        if !self.is_dir(&dest_norm) && dest_norm != "/" {
+            return Err("Hedef klasor bulunamadi / Destination folder not found");
+        }
+        let src_is_dir = self.is_dir(&src_norm);
+        if src_is_dir {
+            if dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")) {
+                return Err("Hedef kaynak klasorun icinde / Destination is inside source");
+            }
+        }
+
+        let base_name = Self::file_name_from_path(&src_norm);
+        let (stem, ext) = Self::split_name_ext(&base_name);
+        let same_parent = Self::parent_path_from_path(&src_norm) == dest_norm;
+
+        let mut target = dest_norm.clone();
+        if !target.ends_with('/') { target.push('/'); }
+        if same_parent {
+            target.push_str(stem);
+            target.push_str("_kopya");
+            target.push_str(ext);
+        } else {
+            target.push_str(&base_name);
+        }
+
+        let mut counter = 1u32;
+        while self.exists(&target) {
+            target = dest_norm.clone();
+            if !target.ends_with('/') { target.push('/'); }
+            target.push_str(stem);
+            if same_parent { target.push_str("_kopya_"); } else { target.push('_'); }
+            Self::push_u32(&mut target, counter);
+            target.push_str(ext);
+            counter += 1;
+        }
+
+        if !src_is_dir {
+            if self.is_large_file_metadata(&src_norm) {
+                if let Some(arc) = self.read_large_file(&src_norm) {
+                    self.write_large_file(&target, arc);
+                    return Ok(target);
+                }
+            }
+            if let Some(data) = self.read_file(&src_norm).map(|b| b.to_vec()) {
+                self.write_file(&target, &data);
+                Ok(target)
+            } else {
+                Err("Dosya okunamadi / Could not read file")
+            }
+        } else {
+            self.create_dir(&target);
+            let src_prefix = if src_norm.ends_with('/') { src_norm.clone() } else { let mut p = src_norm.clone(); p.push('/'); p };
+            let items_to_copy: Vec<(String, bool)> = self.items.iter()
+                .filter(|it| it.path.starts_with(&src_prefix))
+                .map(|it| (it.path.clone(), it.node_type == NodeType::Directory))
+                .collect();
+
+            for (child_path, is_child_dir) in items_to_copy {
+                let rel = &child_path[src_prefix.len()..];
+                let mut child_target = target.clone();
+                child_target.push('/');
+                child_target.push_str(rel);
+                if is_child_dir {
+                    self.create_dir(&child_target);
+                } else if let Some(data) = self.read_file(&child_path).map(|b| b.to_vec()) {
+                    self.write_file(&child_target, &data);
+                }
+            }
+            Ok(target)
+        }
+    }
+
+    /// Dosya veya klasörü belirtilen hedef dizine taşır.
+    pub fn move_item(&mut self, src_path: &str, dest_dir: &str) -> Result<String, &'static str> {
+        let src_norm = Self::normalize_path(src_path);
+        let dest_norm = Self::normalize_path(dest_dir);
+        if src_norm == "/" || dest_norm.is_empty() {
+            return Err("Gecersiz yol / Invalid path");
+        }
+        if dest_norm == TRASH_DIR {
+            if self.move_to_trash(&src_norm) {
+                return Ok(String::from(TRASH_DIR));
+            } else {
+                return Err("Cop kutusuna tasinamadi / Could not move to trash");
+            }
+        }
+        if !self.is_dir(&dest_norm) && dest_norm != "/" {
+            return Err("Hedef klasor bulunamadi / Destination folder not found");
+        }
+        let src_is_dir = self.is_dir(&src_norm);
+        if src_is_dir {
+            if dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")) {
+                return Err("Hedef kaynak klasorun icinde / Destination is inside source");
+            }
+        }
+        if Self::parent_path_from_path(&src_norm) == dest_norm {
+            return Err("Zaten bu klasorde / Already in this folder");
+        }
+
+        let target = self.copy_item(&src_norm, &dest_norm)?;
+        if src_is_dir {
+            self.delete_tree(&src_norm);
+        } else {
+            self.delete_file(&src_norm);
+        }
+        Ok(target)
+    }
+
     /// Geri Dönüşüm Kutusu'nu tamamen boşaltır (kalıcı silme).
     pub fn empty_trash(&mut self) -> usize {
         let before = self.items.len();

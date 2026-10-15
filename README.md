@@ -21,6 +21,12 @@ minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 [https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
 
 ---
+## 🎥 Tanıtım Videosu
+
+[![minOs tanıtım videosunu izleyin](https://img.youtube.com/vi/fB1MQPZTMEg/hqdefault.jpg)](https://www.youtube.com/watch?v=fB1MQPZTMEg)
+
+▶️ [Videoyu YouTube'da izleyin](https://youtu.be/fB1MQPZTMEg)
+---
 
 ## 📸 Ekran Görüntüleri (Screenshots)
 

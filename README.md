@@ -137,6 +137,8 @@ minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileş
 
 ## 🗺️ Gelecek Planları ve Yol Haritası (Roadmap)
 
+> Detaylı mimari ve faz planı için: [`planlama.md`](planlama.md)
+
 Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 - [x] **Gelişmiş TCP/IP Yığını & Socket API:**

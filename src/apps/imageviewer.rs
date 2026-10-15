@@ -10,11 +10,13 @@ pub struct ImageViewerApp {
     pub data_offset: usize,
     pub file_name: &'static str,
     pub status: &'static str,
+    pub pan_x: isize,
+    pub pan_y: isize,
 }
 
 impl ImageViewerApp {
     pub fn new() -> Self {
-        Self { zoom_level: 4, image: alloc::sync::Arc::from([]), width: 0, height: 0, top_down: false, data_offset: 0, file_name: "kedi_maskotu.bmp", status: "Ready" }
+        Self { zoom_level: 4, image: alloc::sync::Arc::from([]), width: 0, height: 0, top_down: false, data_offset: 0, file_name: "kedi_maskotu.bmp", status: "Ready", pan_x: 0, pan_y: 0 }
     }
 
     pub fn open_bmp(&mut self, data: alloc::sync::Arc<[u8]>) -> bool {
@@ -39,6 +41,8 @@ impl ImageViewerApp {
         };
         let _ = bytes;
         self.image = data;
+        self.pan_x = 0;
+        self.pan_y = 0;
         self.data_offset = offset;
         self.width = width;
         self.height = height;
@@ -50,6 +54,8 @@ impl ImageViewerApp {
 
     pub fn clear_image(&mut self, file_name: &'static str) {
         self.image = alloc::sync::Arc::from([]);
+        self.pan_x = 0;
+        self.pan_y = 0;
         self.width = 0;
         self.height = 0;
         self.data_offset = 0;
@@ -136,8 +142,8 @@ impl ImageViewerApp {
             let scale = (base_scale.saturating_mul(self.zoom_level.max(1)) / 4).max(1);
             let scaled_w = src_w.saturating_mul(scale) / SCALE_UNIT;
             let scaled_h = src_h.saturating_mul(scale) / SCALE_UNIT;
-            let left = (canvas_w as isize - scaled_w as isize) / 2;
-            let top = (canvas_h as isize - scaled_h as isize) / 2;
+            let left = (canvas_w as isize - scaled_w as isize) / 2 + self.pan_x;
+            let top = (canvas_h as isize - scaled_h as isize) / 2 + self.pan_y;
 
             for dy in 0..canvas_h {
                 let image_y = dy as isize - top;

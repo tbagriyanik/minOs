@@ -425,6 +425,7 @@ fn terminate_app(
     calculator: &mut apps::calculator::CalculatorApp,
     paint: &mut Option<apps::paint::PaintApp>,
     terminal: &mut apps::terminal::TerminalApp,
+    installer: &mut apps::installer::InstallerApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
@@ -462,6 +463,7 @@ fn terminate_app(
             *terminal = apps::terminal::TerminalApp::new();
             terminal.init_banner();
         }
+        11 => *installer = apps::installer::InstallerApp::new(),
         _ => return,
     } }
     compositor.focus_top_window();
@@ -508,6 +510,20 @@ fn window_content_h(
         // Diğer uygulamalar sabit düzenlidir: kaydırma gerekmez, içerik pencereye
         // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
         _ => 0,
+    }
+}
+
+fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
+    let inner_x = w.x + 10;
+    let inner_w = w.width.saturating_sub(20).max(1);
+    let content_y = w.y + 60;
+    let status_y = w.y + w.height.saturating_sub(24);
+    let content_h = status_y.saturating_sub(content_y + 6).max(1);
+    if inner_w < 360 {
+        (inner_x, content_y, inner_w, (content_h * 2 / 3).max(1))
+    } else {
+        let panel_w = (inner_w / 3).clamp(130, 220).min(inner_w.saturating_sub(13));
+        (inner_x, content_y, inner_w.saturating_sub(panel_w + 12).max(1), content_h)
     }
 }
 
@@ -777,6 +793,12 @@ pub extern "C" fn _start() -> ! {
     let mut settings_app = apps::settings::SystemSettings::default();
     serial_print("[minOs] Settings state initialized.\n");
     settings_app.display_res = (width, height);
+    // Disk üzerinde önceden kaydedilmiş kalıcı ayarlar var mı kontrol et
+    if fs::diskfs::load_file("settings.cfg") > 0 {
+        let cfg_bytes = fs::diskfs::content();
+        let _ = fs_mgr.vfs.write_file("settings.cfg", cfg_bytes);
+        serial_print("[minOs] Kalici settings.cfg diskten VFS'e aktarildi.\n");
+    }
     settings_app.load_from_vfs(&fs_mgr.vfs);
     keyboard.layout = settings_app.keyboard_layout;
     gui::theme::set_theme(settings_app.theme);
@@ -801,6 +823,9 @@ pub extern "C" fn _start() -> ! {
     let mut terminal_app = apps::terminal::TerminalApp::new();
     serial_print("[minOs] Terminal state initialized.\n");
     terminal_app.init_banner();
+    let mut installer_app = apps::installer::InstallerApp::new();
+    installer_app.refresh_drives();
+    serial_print("[minOs] Installer state initialized.\n");
     serial_print("[minOs] App state initialized.\n");
 
     // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
@@ -839,6 +864,15 @@ pub extern "C" fn _start() -> ! {
     compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 340, false));
     compositor.add_window(gui::Window::new("Çizim Tahtası", "Çizim", 180, 80, 520, 360, false));
     compositor.add_window(gui::Window::new("Komut İstemi", "Komut", 220, 100, 560, 300, false));
+    // 11: minOs Kurulum Sihirbazı
+    let inst_w = 540.min(width.saturating_sub(20)).max(200);
+    let inst_h = 420.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    compositor.add_window(gui::Window::new(
+        "minOs Kurulumu", "Kurulum",
+        width.saturating_sub(inst_w) / 2,
+        height.saturating_sub(inst_h + gui::taskbar_h()) / 2,
+        inst_w, inst_h, false,
+    ));
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
@@ -847,32 +881,15 @@ pub extern "C" fn _start() -> ! {
     // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
-    let mut welcome_frame: usize = 0;
-    let mut welcome_last_anim_ms = monotonic_ms();
-    let mut welcome_log = [0u8; 2048];
-    let mut welcome_log_scroll = 0usize;
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
     let mut welcome_accepted = false;
     serial_print("[minOs] Entering welcome screen.\n");
     loop {
         if welcome_dirty {
-            let log_len = serial::copy_log_tail(&mut welcome_log);
-            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, settings_app.screen_res, &welcome_log[..log_len], welcome_log_scroll, welcome_frame, &mouse);
+            gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
             welcome_dirty = false;
         }
         drivers::ps2::poll_input(&mut mouse, &mut keyboard, width as i32, height as i32);
-        let wheel = mouse.take_scroll_delta();
-        if wheel != 0 {
-            if wheel > 0 { welcome_log_scroll = welcome_log_scroll.saturating_add(wheel as usize * 3); }
-            else { welcome_log_scroll = welcome_log_scroll.saturating_sub(wheel.unsigned_abs() as usize * 3); }
-            welcome_dirty = true;
-        }
-        let anim_now = monotonic_ms();
-        if anim_now.wrapping_sub(welcome_last_anim_ms) >= 120 {
-            welcome_last_anim_ms = anim_now;
-            welcome_frame = welcome_frame.wrapping_add(1);
-            welcome_dirty = true;
-        }
 
         // Enter veya Escape ile hoş geldin ekranını geç.
         while let Some(action) = keyboard.take_last_action() {
@@ -922,16 +939,6 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
-        if !selection_changed {
-            let resolutions = [(800, 600), (1024, 768), (1280, 720), (1920, 1080)];
-            for (i, resolution) in resolutions.iter().enumerate() {
-                if point_in(gui::welcome_resolution_rect(width, height, i)) {
-                    settings_app.screen_res = *resolution;
-                    selection_changed = true;
-                    break;
-                }
-            }
-        }
         if selection_changed {
             welcome_dirty = true;
         } else if point_in(gui::welcome_continue_rect(width, height)) {
@@ -975,6 +982,7 @@ pub extern "C" fn _start() -> ! {
     let mut last_title_click_ms: u64 = 0;
         // Not Defteri metin seçimi sürükleme durumu.
     let mut notepad_dragging = false;
+    let mut image_drag_last: Option<(usize, usize)> = None;
 
 
     let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
@@ -992,6 +1000,7 @@ pub extern "C" fn _start() -> ! {
                              calc: &apps::calculator::CalculatorApp,
                              paint: &[Option<apps::paint::PaintApp>],
                              term: &apps::terminal::TerminalApp,
+                             inst: &apps::installer::InstallerApp,
                              now: &drivers::rtc::DateTime,
                              mouse: &drivers::mouse::MouseState,
                              kbd: &drivers::keyboard::KeyboardState,
@@ -1022,8 +1031,8 @@ pub extern "C" fn _start() -> ! {
                 let content_w = cw;
                 let want_v = content_h > ch;
                 let want_h = content_w > cw;
-                let v_gutter = if want_v { crate::gui::scrollbar::SCROLLBAR_THICKNESS + gui::RESIZE_GRIP } else { 0 };
-                let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS + gui::RESIZE_GRIP } else { 0 };
+                let v_gutter = if want_v { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
+                let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
                 // İçerik alanı (kaydırma çubukları kadar daraltılmış).
                 let content_area = (cx, cy, cw.saturating_sub(v_gutter), ch.saturating_sub(h_gutter));
                 fb.set_clip(content_area.0, content_area.1, content_area.2.max(1), content_area.3.max(1));
@@ -1045,28 +1054,28 @@ pub extern "C" fn _start() -> ! {
                     8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
                     9 => if let Some(app) = paint[idx].as_ref() { app.render_content(fb, win.x, win.y, win.width, win.height) },
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
+                    11 => inst.render_content(fb, win.x, win.y, win.width, win.height),
                     _ => {}
                 }
                 app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
 
                 // Kırpmayı kaldır ve kaydırma çubuklarını pencerenin içinde çiz.
                 fb.reset_clip();
-                // Kenar resize alanlarını scrollbars için ayır; çizim ve hit-test
-                // aynı içe alınmış track koordinatlarını kullanır.
-                let grip = crate::gui::RESIZE_GRIP;
                 let sb = crate::gui::scrollbar::SCROLLBAR_THICKNESS;
                 if want_v {
-                    let v_h = ch.saturating_sub(grip);
+                    let v_h = ch.saturating_sub(if want_h { sb } else { 0 });
                     if v_h > 0 {
-                        let track = (cx + cw - sb - grip, cy, sb, v_h);
+                        // Sağa tam dayalı dikey kaydırma çubuğu
+                        let track = (cx + cw - sb, cy, sb, v_h);
                         let g = crate::gui::scrollbar::v_geom(track, content_h, v_h, win.scroll.y);
                         crate::gui::scrollbar::draw_vertical(fb, &g);
                     }
                 }
                 if want_h {
-                    let h_w = cw.saturating_sub(grip);
+                    let h_w = cw.saturating_sub(if want_v { sb } else { 0 });
                     if h_w > 0 {
-                        let track = (cx, cy + ch - sb - grip, h_w, sb);
+                        // Alta tam dayalı yatay kaydırma çubuğu
+                        let track = (cx, cy + ch - sb, h_w, sb);
                         let g = crate::gui::scrollbar::h_geom(track, content_w, h_w, win.scroll.x);
                         crate::gui::scrollbar::draw_horizontal(fb, &g);
                     }
@@ -1094,7 +1103,7 @@ pub extern "C" fn _start() -> ! {
     render_full_frame(
         &mut fb, &compositor, &filemanager_app, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
         None,
     );
@@ -1422,12 +1431,12 @@ pub extern "C" fn _start() -> ! {
             let active_g = compositor.active_start_group;
             let mut sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
             if compositor.start_search_len > 0 {
-                let mut matches = [0; 11];
+                let mut matches = [0; 12];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 sub_rect = gui::MinGuiCompositor::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             }
             if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
-                let mut matches = [0; 11];
+                let mut matches = [0; 12];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 for (row, app_id) in matches[..count].iter().enumerate() {
                     let row_rect = (sub_rect.0 + 6, sub_rect.1 + gui::sp(30) + row * gui::sp(24), sub_rect.2 - 12, gui::sp(22));
@@ -1633,7 +1642,7 @@ pub extern "C" fn _start() -> ! {
 
             // G) Masaüstü simgeleri
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && mx >= 20 && mx <= 220 {
-                let desk_icons = [0, 2, 3, 5, 1];
+                let desk_icons = [0, 2, 3, 5, 1, 11];
                 for (i, &app_idx) in desk_icons.iter().enumerate() {
                     let dy = 30 + i * 54;
                     if my >= dy && my <= dy + 30 {
@@ -1663,7 +1672,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app);
+                            &mut terminal_app, &mut installer_app);
                         break;
                     }
                     // Maksimize / Geri Yükle
@@ -1684,13 +1693,11 @@ pub extern "C" fn _start() -> ! {
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
                         let c_h = window_content_h(win.app_id as usize, wh, ww, &filemanager_app, &notepad_app);
-                        // Match the rendered scrollbar track exactly. Its right
-                        // edge stops before the resize grip; resize hit testing
-                        // below therefore owns the remaining corner area.
-                        let view_h = cch.saturating_sub(gui::RESIZE_GRIP);
+                        let view_h = cch;
                         if c_h > view_h {
                             let t = gui::scrollbar::SCROLLBAR_THICKNESS;
-                            let track = (ccx + ccw - t - gui::RESIZE_GRIP, ccy, t, view_h);
+                            // Sağa tam dayalı dikey scrollbar track'i
+                            let track = (ccx + ccw - t, ccy, t, view_h);
                             if gui::in_rect(mx, my, track) {
                                 let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
                                 // Tutamaç yakınındaysa tutamacın üstünü koru, değilse anında zıpla.
@@ -2057,7 +2064,7 @@ pub extern "C" fn _start() -> ! {
                                         terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                                            &mut terminal_app);
+                                            &mut terminal_app, &mut installer_app);
                                     }
                                 } else if taskmgr_app.active_tab == 0 {
                                     if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
@@ -2068,8 +2075,9 @@ pub extern "C" fn _start() -> ! {
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy, ww) { calculator_app.press(key); } }
                             9 => {
-                                let open_rect = (wx + ww.saturating_sub(198), wy + 34, 58, 22);
-                                let save_rect = (wx + ww.saturating_sub(132), wy + 34, 58, 22);
+                                let status_y = wy + wh.saturating_sub(22);
+                                let open_rect = (wx + 10, status_y + 1, 48, 16);
+                                let save_rect = (wx + 64, status_y + 1, 58, 16);
                                 let clear_rect = (wx + ww.saturating_sub(66), wy + 34, 58, 22);
                                 let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
                                 if gui::in_rect(mx, my, open_rect) {
@@ -2104,6 +2112,21 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
+                            11 => {
+                                // minOs Kurulum Sihirbazı
+                                let sel_rect = apps::installer::InstallerApp::drive_select_rect(wx, wy, ww);
+                                let btn_rect = apps::installer::InstallerApp::install_btn_rect(wx, wy, ww, wh);
+                                if gui::in_rect(mx, my, sel_rect) {
+                                    installer_app.select_next_drive();
+                                } else if gui::in_rect(mx, my, btn_rect) {
+                                    if installer_app.state == apps::installer::InstallState::Selecting
+                                        || installer_app.state == apps::installer::InstallState::Failed
+                                    {
+                                        installer_app.perform_install(&mut fs_mgr.vfs);
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                         compositor.focus_window(idx);
@@ -2134,7 +2157,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app);
+                            &mut terminal_app, &mut installer_app);
                     } else {
                         // Masaüstündeyken Alt+F4 güç menüsünü açar.
                         compositor.is_start_menu_open = true;
@@ -2375,7 +2398,7 @@ pub extern "C" fn _start() -> ! {
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                         &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                         &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                        &mut terminal_app);
+                                        &mut terminal_app, &mut installer_app);
                                 }
                             }
                             _ => {}
@@ -2544,7 +2567,7 @@ pub extern "C" fn _start() -> ! {
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                &mut terminal_app);
+                                &mut terminal_app, &mut installer_app);
                         }
                     } else if app_is_focused(&compositor, 2) {
                         notepad_app.delete_forward();
@@ -2595,36 +2618,43 @@ pub extern "C" fn _start() -> ! {
                     terminal_app.scroll_output(scroll_val as isize, view_lines);
                 }
             }
-            // Not Defteri (pencere 2): satır bazlı dikey kaydırma.
-            if let Some((idx, w)) = focused_window_for_app(&compositor, 2) {
-                if w.is_open && w.is_focused && !w.is_minimized {
-                    let c_h = window_content_h(2, w.height, w.width, &filemanager_app, &notepad_app);
-                    let view_h = w.content_rect().3;
-                    let max_y = c_h.saturating_sub(view_h);
-                    let delta = (scroll_val as isize) * 16; // 1 satır = 16px
-                    let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
-                    if let Some(wm) = compositor.windows[idx].as_mut() {
-                        wm.scroll.y = new_off;
+            // İmlecin altındaki en üst pencerede içerik kaydırmasını güncelle.
+            // Scrollbar aynı ScrollState üzerinden çizildiği için tutamaç da
+            // tekerlekle birlikte anında hareket eder.
+            let (window_order, window_count) = compositor.draw_order();
+            for k in (0..window_count).rev() {
+                let idx = window_order[k];
+                let Some(w) = compositor.windows[idx] else { continue; };
+                if !w.is_open || w.is_minimized || !gui::in_rect(mx, my, (w.x, w.y, w.width, w.height)) {
+                    continue;
+                }
+                let app_id = w.app_id as usize;
+                if app_id == 0 || app_id == 2 {
+                    let c_h = window_content_h(app_id, w.height, w.width, &filemanager_app, &notepad_app);
+                    let (cx, cy, cw, ch) = w.content_rect();
+                    if gui::in_rect(mx, my, (cx, cy, cw, ch)) {
+                        let max_y = c_h.saturating_sub(ch);
+                        let step = if app_id == 2 { 16 } else { 24 };
+                        let delta = (scroll_val as isize) * step;
+                        if let Some(wm) = compositor.windows[idx].as_mut() {
+                            wm.scroll.y = ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                        }
                     }
                 }
+                break;
             }
             // Görüntüleyicide tekerlek zoom kısayoludur (yukarı yakınlaştırır).
             if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
-                if w.is_open && w.is_focused && !w.is_minimized
-                    && gui::in_rect(mx, my, (w.x, w.y + gui::titlebar_h(), w.width, w.height.saturating_sub(gui::titlebar_h()))) {
-                    if scroll_val > 0 { imageviewer_app.zoom_in(); } else { imageviewer_app.zoom_out(); }
+                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
+                if gui::in_rect(mx, my, (cx, cy, cw, ch)) {
+                    imageviewer_app.pan_y = imageviewer_app.pan_y.saturating_add((scroll_val as isize) * 24);
                 }
             }
-            // Dosya Yöneticisi listesi de kaydırılabilir (içerik sığmıyorsa).
-            if let Some((idx, w)) = focused_window_for_app(&compositor, 0) {
-                if w.is_open && w.is_focused && !w.is_minimized {
-                    let c_h = window_content_h(0, w.height, w.width, &filemanager_app, &notepad_app);
-                    let view_h = w.content_rect().3;
-                    let max_y = c_h.saturating_sub(view_h);
-                    let delta = (scroll_val as isize) * 24;
-                    let new_off = ((w.scroll.y as isize - delta).max(0) as usize).min(max_y);
-                    if let Some(wm) = compositor.windows[idx].as_mut() {
-                        wm.scroll.y = new_off;
+            // Çizim tuvalinde tekerlek fırça boyutunu ayarlar.
+            if let Some((paint_idx, w)) = focused_window_for_app(&compositor, 9) {
+                if let Some(paint) = paint_apps[paint_idx].as_mut() {
+                    if paint.to_canvas(w.width, w.height, mx.saturating_sub(w.x), my.saturating_sub(w.y)).is_some() {
+                        paint.adjust_brush(scroll_val);
                     }
                 }
             }
@@ -2632,6 +2662,20 @@ pub extern "C" fn _start() -> ! {
 
         // 5. Pencere Sürükleme ve Yeniden Boyutlandırma
         if mouse.left_button {
+            if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
+                let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
+                if w.is_focused && gui::in_rect(mx, my, (cx, cy, cw, ch)) {
+                    if let Some((last_x, last_y)) = image_drag_last {
+                        imageviewer_app.pan_x = imageviewer_app.pan_x.saturating_add(mx as isize - last_x as isize);
+                        imageviewer_app.pan_y = imageviewer_app.pan_y.saturating_add(my as isize - last_y as isize);
+                    }
+                    image_drag_last = Some((mx, my));
+                } else {
+                    image_drag_last = None;
+                }
+            } else {
+                image_drag_last = None;
+            }
             if let Some(w) = compositor.windows[1] {
                 if w.is_open && w.is_focused && !w.is_minimized {
                     if settings_app.active_tab == 0 {
@@ -2757,6 +2801,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        if mouse_released { image_drag_last = None; }
 
         if mouse_released {
             drag_prev_box = None;
@@ -2978,6 +3023,7 @@ pub extern "C" fn _start() -> ! {
                 &mut fb, &compositor, &filemanager_app, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app,
+                &installer_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
                 drag_dirty_rect,
             );

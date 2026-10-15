@@ -10,3 +10,4 @@ pub mod videoplayer;
 pub mod calculator;
 pub mod paint;
 pub mod terminal;
+pub mod installer;

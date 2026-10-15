@@ -224,7 +224,9 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";dhcp="); put(&mut cfg,&mut n,if self.dhcp_enabled{b"1"}else{b"0"});
         put(&mut cfg,&mut n,b";theme="); put(&mut cfg,&mut n,match self.theme { ThemeId::VelvetDark=>b"velvet" as &[u8], ThemeId::Daylight=>b"daylight", ThemeId::Nord=>b"nord", ThemeId::TerminalGreen=>b"terminal", ThemeId::Sunset=>b"sunset" });
         vfs.write_file("settings.cfg",&cfg[..n]);
-        self.status_msg = crate::gui::ui_text("Ayarlar ve pencere düzeni kalıcı olarak kaydedildi.", "Settings and window layout saved.");
+        // Diske/FAT32 bolumune de fiziksel olarak kaydet (kalici ayarlar icin)
+        crate::fs::diskfs::save_file_by_name("settings.cfg", &cfg[..n]);
+        self.status_msg = crate::gui::ui_text("Ayarlar ve pencere düzeni diske kalıcı olarak kaydedildi.", "Settings and window layout saved to disk.");
     }
 
     pub fn restore_windows(&self, compositor: &mut MinGuiCompositor) {

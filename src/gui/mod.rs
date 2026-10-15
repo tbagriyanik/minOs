@@ -73,44 +73,37 @@ pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en }
 
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let w = 740.min(width.saturating_sub(24)).max(320);
-    let h = 480.min(height.saturating_sub(24)).max(280);
+    let w = 480.min(width.saturating_sub(24)).max(320);
+    let h = 290.min(height.saturating_sub(24)).max(240);
     ((width.saturating_sub(w)) / 2, (height.saturating_sub(h)) / 2, w, h)
 }
 
 pub fn welcome_language_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
-    (x + 28 + index * 140, y + 96, 126, 32)
+    (x + 28 + index * 140, y + 94, 126, 32)
 }
 
 pub fn welcome_theme_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
-    (x + 28 + index * 82, y + 172, 74, 52)
+    (x + 28 + index * 82, y + 164, 74, 50)
 }
 
 pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let (x, y, w, h) = welcome_panel(width, height);
-    (x + w.saturating_sub(168), y + h.saturating_sub(52), 140, 36)
+    (x + w.saturating_sub(168), y + h.saturating_sub(50), 140, 36)
 }
 
-pub fn welcome_resolution_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
-    let (x, y, _, _) = welcome_panel(width, height);
-    let col = index % 2;
-    let row = index / 2;
-    (x + 28 + col * 140, y + 268 + row * 38, 126, 30)
-}
-
-pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, resolution: (usize, usize), log: &[u8], log_scroll: usize, frame: usize, mouse: &MouseState) {
+pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, mouse: &MouseState) {
     let (x, y, w, h) = welcome_panel(width, height);
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
     fb.draw_shadow(x, y, w, h, Color::SHADOW);
     fb.draw_rounded_rect(x, y, w, h, 10, Color::WINDOW_BG);
-    fb.draw_rounded_vgradient(x, y, w, 52, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
-    MinGuiCompositor::draw_cat_icon_scaled(fb, x + 20, y + 13);
-    MinGuiCompositor::draw_string(fb, x + 52, y + 18, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
+    fb.draw_rounded_vgradient(x, y, w, 48, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
+    MinGuiCompositor::draw_cat_icon_scaled(fb, x + 18, y + 12);
+    MinGuiCompositor::draw_string(fb, x + 50, y + 16, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
 
     // 1. Dil Seçimi Bölümü
-    MinGuiCompositor::draw_string(fb, x + 28, y + 72,
+    MinGuiCompositor::draw_string(fb, x + 28, y + 70,
         if english { "Interface Language" } else { "Arayüz Dili" }, Color::ACCENT_BLUE);
 
     for i in 0..2 {
@@ -126,7 +119,7 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
     }
 
     // 2. Masaüstü Teması Bölümü
-    MinGuiCompositor::draw_string(fb, x + 28, y + 148,
+    MinGuiCompositor::draw_string(fb, x + 28, y + 140,
         if english { "Desktop Theme" } else { "Masaüstü Teması" }, Color::ACCENT_BLUE);
     for (i, id) in theme::ThemeId::ALL.iter().enumerate() {
         let rect = welcome_theme_rect(width, height, i);
@@ -142,7 +135,7 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
                 theme::ThemeId::Sunset => "Sunset",
             }
         } else { id.short_name() };
-        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 26, name, MinGuiCompositor::text_on(background));
+        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 25, name, MinGuiCompositor::text_on(background));
         if *id == selected {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::ACCENT_BLUE);
             fb.draw_rect_outline(rect.0.saturating_sub(1), rect.1.saturating_sub(1), rect.2 + 2, rect.3 + 2, Color::ACCENT_BLUE);
@@ -151,67 +144,20 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
         }
     }
 
-    // 3. Ekran Çözünürlüğü Bölümü
-    MinGuiCompositor::draw_string(fb, x + 28, y + 244,
-        if english { "Display Resolution (Next Boot)" } else { "Ekran Çözünürlüğü (Sonraki Açılış)" }, Color::ACCENT_BLUE);
-    let resolutions = [(800, 600), (1024, 768), (1280, 720), (1920, 1080)];
-    for (i, res) in resolutions.iter().enumerate() {
-        let rect = welcome_resolution_rect(width, height, i);
-        let active = *res == resolution;
-        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5,
-            if active { Color::ACCENT_BLUE } else { Color::TASKBAR_BG });
-        fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3,
-            if active { Color::ACCENT_BLUE } else { Color::BORDER });
-        let label = match i { 0 => "800x600", 1 => "1024x768", 2 => "1280x720", _ => "1920x1080" };
-        MinGuiCompositor::draw_string(fb, rect.0 + 20, rect.1 + 7, label,
-            if active { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
-    }
-
-    // 4. Sağ Bölüm: Açılış Kayıtları (Boot Log)
-    let log_w = 260.min(w.saturating_sub(460)).max(220);
-    let log_x = x + w.saturating_sub(log_w + 28);
-    let log_y = y + 72;
-    let log_h = h.saturating_sub(144);
-    fb.draw_rounded_rect(log_x, log_y, log_w, log_h, 6, Color::DARK_BG);
-    fb.draw_rect_outline(log_x, log_y, log_w, log_h, Color::BORDER);
-    MinGuiCompositor::draw_string(fb, log_x + 10, log_y + 8,
-        if english { "Boot Log" } else { "Açılış Kayıtları" }, Color::ACCENT_GREEN);
-    let log_text = core::str::from_utf8(log).unwrap_or("");
-    let mut lines: [&str; 256] = [""; 256];
-    let mut count = 0usize;
-    for line in log_text.lines() {
-        if count < lines.len() {
-            lines[count] = line;
-            count += 1;
-        }
-    }
-    let max_visible_lines = log_h.saturating_sub(36) / 16;
-    let max_scroll = count.saturating_sub(max_visible_lines);
-    let scroll = log_scroll.min(max_scroll);
-    let display_end = count.saturating_sub(scroll);
-    let display_start = display_end.saturating_sub(max_visible_lines);
-    for (i, line) in lines[display_start..display_end].iter().enumerate() {
-        let max_chars = log_w.saturating_sub(20) / 8;
-        let mut start = line.len().saturating_sub(max_chars);
-        while start < line.len() && !line.is_char_boundary(start) { start += 1; }
-        let clipped = &line[start..];
-        MinGuiCompositor::draw_string(fb, log_x + 10, log_y + 30 + i * 16, clipped, Color::TEXT_MUTED);
-    }
-    if max_scroll > 0 {
-        let hint = if english { "Wheel: scroll log" } else { "Tekerlek: kayıtları kaydır" };
-        MinGuiCompositor::draw_string(fb, log_x + 10, log_y + log_h.saturating_sub(18), hint, Color::ACCENT_YELLOW);
-    }
-
-    // 5. Alt Kısım: Animasyonlu Nokta & Başla Düğmesi
-    let dot_x = x + 28 + (frame % 16) * 10;
-    fb.draw_rounded_rect(dot_x, y + h - 34, 7, 7, 3, Color::ACCENT_BLUE);
-    MinGuiCompositor::draw_string(fb, x + 28, y + h - 52,
-        if english { "System ready. Press Enter or click below." } else { "Sistem hazır. Enter'a basın veya başlayın." }, Color::TEXT_MUTED);
+    // 3. Alt Kısım: Bilgi İpucu & Başla Düğmesi
+    MinGuiCompositor::draw_string(fb, x + 28, y + h.saturating_sub(40),
+        if english { "Press Enter to start" } else { "Başlamak için Enter'a basın" }, Color::TEXT_MUTED);
 
     let button = welcome_continue_rect(width, height);
     fb.draw_rounded_rect(button.0, button.1, button.2, button.3, 6, Color::ACCENT_GREEN);
-    MinGuiCompositor::draw_string(fb, button.0 + 24, button.1 + 10,
-        if english { "Get Started ->" } else { "Başla ->" }, MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+    let btn_text = if english { "Get Started" } else { "Başla" };
+    let text_col = MinGuiCompositor::text_on(Color::ACCENT_GREEN);
+    MinGuiCompositor::draw_string(fb, button.0 + 20, button.1 + 10, btn_text, text_col);
+    // Başlat menüsündeki gibi zarif antialiased sağ ok (chevron) simgesi
+    let arrow_x = (button.0 + button.2 - 20) as f32;
+    let arrow_y = (button.1 + button.3 / 2) as f32;
+    MinGuiCompositor::draw_antialiased_line(fb, arrow_x - 3.0, arrow_y - 4.5, arrow_x + 1.5, arrow_y, text_col, 2.0);
+    MinGuiCompositor::draw_antialiased_line(fb, arrow_x + 1.5, arrow_y, arrow_x - 3.0, arrow_y + 4.5, text_col, 2.0);
 
     let pointer_x = mouse.x.max(0) as usize;
     let pointer_y = mouse.y.max(0) as usize;
@@ -465,22 +411,28 @@ impl Window {
         if !self.is_open || self.is_minimized || self.is_maximized {
             return None;
         }
-        let g = RESIZE_GRIP;
-        let right = self.x + self.width;
-        let bottom = self.y + self.height;
-        let in_x = mx >= self.x && mx < right;
-        let in_y = my >= self.y && my < bottom;
-        if !in_x || !in_y { return None; }
         // Başlık düğmeleri sağ üst köşeye yakın olsa da tıklama her zaman
         // düğmelere ait olsun; köşe resize alanı bu bölgeye taşmasın.
         if in_rect(mx, my, self.title_controls_rect()) {
             return None;
         }
 
-        let left = mx - self.x < g;
-        let edge_right = right - mx <= g;
-        let top = my - self.y < TOP_RESIZE_GRIP;
-        let edge_bottom = bottom - my <= g;
+        let g = RESIZE_GRIP;
+        const OUTSIDE_MARGIN: usize = 4;
+        let left_bound = self.x.saturating_sub(OUTSIDE_MARGIN);
+        let right_bound = self.x + self.width + OUTSIDE_MARGIN;
+        let top_bound = self.y.saturating_sub(OUTSIDE_MARGIN);
+        let bottom_bound = self.y + self.height + OUTSIDE_MARGIN;
+
+        if mx < left_bound || mx >= right_bound || my < top_bound || my >= bottom_bound {
+            return None;
+        }
+
+        let left = mx <= self.x + g;
+        let edge_right = mx + g >= self.x + self.width;
+        let top = my <= self.y + TOP_RESIZE_GRIP;
+        let edge_bottom = my + g >= self.y + self.height;
+
         if top && left { Some(ResizeEdge::TopLeft) }
         else if top && edge_right { Some(ResizeEdge::TopRight) }
         else if edge_bottom && left { Some(ResizeEdge::BottomLeft) }
@@ -529,7 +481,7 @@ pub const MENU_ITEM_STEP: usize = 20;
 /// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
 /// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
 pub const MENU_GROUPS: [(&str, usize, usize); 4] =
-    [("Sistem", 0, 4), ("Üretkenlik", 4, 3), ("Medya", 7, 4), ("Güç", 11, 2)];
+    [("Sistem", 0, 5), ("Üretkenlik", 5, 3), ("Medya", 8, 4), ("Güç", 12, 2)];
 
 impl MinGuiCompositor {
     /// Siyah veya beyaz metinden, verilen zemin üzerinde daha okunaklı olanı seçer.
@@ -608,7 +560,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 11] = [0, 1, 7, 10, 2, 8, 9, 3, 4, 5, 6];
+        const APP_IDX: [usize; 12] = [0, 1, 7, 10, 11, 2, 8, 9, 3, 4, 5, 6];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -644,19 +596,19 @@ impl MinGuiCompositor {
         None
     }
 
-    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 11]) -> usize {
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 12]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() { return 0; }
-        const NAMES: [[&str; 2]; 11] = [
+        const NAMES: [[&str; 2]; 12] = [
             ["Dosya Yöneticisi", "File Manager"], ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"], ["Web Tarayıcısı", "Web Browser"],
             ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
             ["Video Oynatıcı", "Video Player"], ["Görev Yöneticisi", "Task Manager"],
             ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
-            ["Komut İstemi", "Terminal"],
+            ["Komut İstemi", "Terminal"], ["minOs Kurulumu", "minOs Installer"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
-        let mut scored: [(usize, u8); 11] = [(0, 0); 11];
+        let mut scored: [(usize, u8); 12] = [(0, 0); 12];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
@@ -710,7 +662,7 @@ impl MinGuiCompositor {
     }
 
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
-        let mut results = [0; 11];
+        let mut results = [0; 12];
         let count = self.start_search_matches(english, &mut results);
         if down {
             if count > 0 { self.selected_start_item = (self.selected_start_item + 1).min(count - 1); }
@@ -720,7 +672,7 @@ impl MinGuiCompositor {
     }
 
     pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
-        let mut results = [0; 11];
+        let mut results = [0; 12];
         let count = self.start_search_matches(english, &mut results);
         (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
@@ -957,11 +909,11 @@ impl MinGuiCompositor {
 
     /// Ayarlar ve Görev Yöneticisi tek örnektir; diğer uygulamalar yeni pencere açabilir.
     pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
-        if app_id >= 11 { return None; }
+        if app_id >= 12 { return None; }
         let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
             slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
         });
-        if app_id == 1 || app_id == 7 {
+        if app_id == 1 || app_id == 7 || app_id == 11 {
             if let Some(idx) = existing {
                 if let Some(win) = self.windows[idx].as_mut() { win.is_minimized = false; }
                 self.focus_window(idx);
@@ -1682,11 +1634,11 @@ impl MinGuiCompositor {
         let desk_icons = if ui_english() { [
             ("Computer", 0), ("Notes", 1),
             ("SarmanNet", 2), ("Playlist", 3),
-            ("Settings", 4),
+            ("Settings", 4), ("Install minOs", 0),
         ] } else { [
             ("Bilgisayarım", 0), ("Notlar", 1),
             ("SarmanNet", 2), ("Çalma Listesi", 3),
-            ("Sistem Ayarları", 4),
+            ("Sistem Ayarları", 4), ("minOs'u Kur", 0),
         ] };
 
         let card_w = sp(34);
@@ -1724,6 +1676,7 @@ impl MinGuiCompositor {
             8 => 4, // Hesap Makinesi -> Dişli
             9 => 1, // Çizim Tahtası -> Çizim
             10 => 0,// Terminal -> Komut İstemi
+            11 => 0,// Kurulum Sihirbazı -> Bilgisayarım / Disk
             _ => 0,
         }
     }
@@ -1742,6 +1695,7 @@ impl MinGuiCompositor {
                 8 => "Calculator",
                 9 => "Paint",
                 10 => "Command Prompt",
+                11 => "minOs Installer",
                 _ => "Window",
             }
         } else {
@@ -1757,6 +1711,7 @@ impl MinGuiCompositor {
                 8 => "Hesap Makinesi",
                 9 => "Çizim Tahtası",
                 10 => "Komut İstemi",
+                11 => "minOs Kurulumu",
                 _ => "Pencere",
             }
         }
@@ -1768,14 +1723,14 @@ impl MinGuiCompositor {
                 0 => "Files", 1 => "Settings", 2 => "Notes",
                 3 => "Web", 4 => "Image", 5 => "Music",
                 6 => "Video", 7 => "Tasks", 8 => "Calc",
-                9 => "Paint", 10 => "CMD", _ => "Win",
+                9 => "Paint", 10 => "CMD", 11 => "Install", _ => "Win",
             }
         } else {
             match win_idx {
                 0 => "Dosyalar", 1 => "Ayarlar", 2 => "Notlar",
                 3 => "Web", 4 => "Resim", 5 => "Müzik",
                 6 => "Video", 7 => "Görevler", 8 => "Hesap",
-                9 => "Çizim", 10 => "Komut", _ => "Pencere",
+                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", _ => "Pencere",
             }
         }
     }
@@ -2162,7 +2117,15 @@ impl MinGuiCompositor {
     pub fn context_menu_geom(&self, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
         let items = self.context_items();
         let widest_item = items.iter().map(|(label, _)| Self::text_width(label, 1)).max().unwrap_or(0);
-        let w = sp(CONTEXT_MENU_W).max(widest_item + sp(24)).min(fb_w);
+        let icon_pad = match self.context_kind {
+            ContextKind::Desktop | ContextKind::Notepad => sp(24),
+            _ => 0,
+        };
+        let shortcut_pad = match self.context_kind {
+            ContextKind::Notepad => sp(64),
+            _ => 0,
+        };
+        let w = sp(CONTEXT_MENU_W + 16).max(widest_item + sp(24) + icon_pad + shortcut_pad).min(fb_w);
         // Başlık + öğeler (ölçekli) + alt boşluk
         let h = context_header_h() + items.len() * context_item_h();
         let x = self.context_menu_x.min(fb_w.saturating_sub(w));
@@ -2182,7 +2145,7 @@ impl MinGuiCompositor {
         let header = match self.context_kind {
             ContextKind::Desktop => ui_text("Masaüstü", "Desktop"),
             ContextKind::FileManager => ui_text("Dosya İşlemleri", "File Actions"),
-            ContextKind::Notepad => ui_text("Düzen", "Edit"),
+            ContextKind::Notepad => ui_text("Düzenleme", "Edit"),
             ContextKind::Window => ui_text("Pencere", "Window"),
         };
         let hdr_h = context_header_h();
@@ -2194,8 +2157,169 @@ impl MinGuiCompositor {
         for (i, (label, color)) in self.context_items().iter().enumerate() {
             let item_y = menu_y + hdr_h + i * item_h;
             fb.draw_rect(menu_x + 4, item_y, menu_w - 8, item_h.saturating_sub(sp(4)), Color::WINDOW_BG);
-            Self::draw_string_clipped(fb, menu_x + sp(10), item_y + sp(5), label, *color,
-                (menu_x + 8, item_y + 2, menu_w.saturating_sub(16), item_h.saturating_sub(4)));
+
+            let mut text_x = menu_x + sp(10);
+            if self.context_kind == ContextKind::Desktop {
+                // Masaüstü sağ tık menüsü simgeleri (12x12 piksel)
+                let icon_x = menu_x + sp(10);
+                let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;
+                Self::draw_desktop_context_icon(fb, icon_x, icon_y, i, *color);
+                text_x += sp(20);
+            } else if self.context_kind == ContextKind::Notepad {
+                // Not Defteri / Textarea sağ tık menüsü simgeleri (12x12 piksel)
+                let icon_x = menu_x + sp(10);
+                let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;
+                Self::draw_notepad_context_icon(fb, icon_x, icon_y, i, *color);
+                text_x += sp(20);
+            }
+
+            Self::draw_string_clipped(fb, text_x, item_y + sp(5), label, *color,
+                (text_x, item_y + 2, menu_w.saturating_sub(text_x - menu_x + sp(60)), item_h.saturating_sub(4)));
+
+            // Not Defteri için sağa hizalı kısayol etiketi (örn: Ctrl+X, Ctrl+C, Ctrl+V)
+            if self.context_kind == ContextKind::Notepad {
+                let shortcut = match i {
+                    0 => "Ctrl+X",
+                    1 => "Ctrl+C",
+                    2 => "Ctrl+V",
+                    3 => "Del",
+                    4 => "Ctrl+A",
+                    _ => "",
+                };
+                if !shortcut.is_empty() {
+                    let sc_w = Self::text_width(shortcut, 1);
+                    let sc_x = menu_x + menu_w.saturating_sub(sc_w + sp(12));
+                    Self::draw_string_clipped(fb, sc_x, item_y + sp(5), shortcut, Color::TEXT_MUTED,
+                        (sc_x, item_y + 2, sc_w + sp(4), item_h.saturating_sub(4)));
+                }
+            }
+        }
+    }
+
+    /// Not Defteri / Textarea sağ tık bağlam menüsü için 12x12 piksel simgeler çizer.
+    fn draw_notepad_context_icon(fb: &mut Framebuffer, x: usize, y: usize, index: usize, color: u32) {
+        match index {
+            0 => {
+                // Kes (Makas simgesi)
+                let c = color;
+                // Sol halka & sağ halka
+                fb.draw_rect_outline(x + 1, y + 8, 3, 3, c);
+                fb.draw_rect_outline(x + 7, y + 8, 3, 3, c);
+                // Makas bıçakları
+                fb.draw_rect(x + 3, y + 6, 2, 2, c);
+                fb.draw_rect(x + 6, y + 6, 2, 2, c);
+                fb.draw_rect(x + 4, y + 4, 3, 2, c);
+                fb.draw_rect(x + 2, y + 1, 2, 3, c);
+                fb.draw_rect(x + 7, y + 1, 2, 3, c);
+            }
+            1 => {
+                // Kopyala (Üst üste iki sayfa simgesi)
+                let c = color;
+                // Arka sayfa
+                fb.draw_rect_outline(x + 3, y, 7, 8, Color::TEXT_MUTED);
+                // Ön sayfa
+                fb.draw_rect(x, y + 3, 8, 9, Color::WINDOW_BG);
+                fb.draw_rect_outline(x, y + 3, 8, 9, c);
+                fb.draw_rect(x + 2, y + 6, 4, 1, c);
+                fb.draw_rect(x + 2, y + 8, 4, 1, c);
+            }
+            2 => {
+                // Yapıştır (Pano ve belge simgesi)
+                let c = color;
+                // Pano tablası
+                fb.draw_rect(x + 1, y + 2, 10, 10, Color::ACCENT_YELLOW);
+                // Pano klipsi
+                fb.draw_rect(x + 4, y, 4, 3, Color::TEXT_MAIN);
+                // Üstündeki kağıt
+                fb.draw_rect(x + 3, y + 4, 6, 7, Color::WHITE);
+                fb.draw_rect(x + 4, y + 6, 4, 1, c);
+                fb.draw_rect(x + 4, y + 8, 3, 1, c);
+            }
+            3 => {
+                // Sil (Çöp kutusu / silme çarpısı)
+                let c = color;
+                fb.draw_rect(x + 2, y + 2, 8, 2, c);
+                fb.draw_rect(x + 4, y, 4, 2, c);
+                fb.draw_rect(x + 3, y + 4, 6, 7, c);
+                fb.draw_rect(x + 4, y + 5, 1, 5, Color::WINDOW_BG);
+                fb.draw_rect(x + 6, y + 5, 1, 5, Color::WINDOW_BG);
+            }
+            4 => {
+                // Tümünü Seç (Kesikli seçim çerçevesi ve dolu alan)
+                let c = color;
+                fb.draw_rect(x, y + 1, 11, 10, Color::DARK_BG);
+                fb.draw_rect(x + 2, y + 3, 7, 6, c);
+                // Köşe tutamaçları
+                fb.draw_rect(x, y + 1, 2, 2, Color::WHITE);
+                fb.draw_rect(x + 9, y + 1, 2, 2, Color::WHITE);
+                fb.draw_rect(x, y + 9, 2, 2, Color::WHITE);
+                fb.draw_rect(x + 9, y + 9, 2, 2, Color::WHITE);
+            }
+            _ => {
+                // Tümünü Temizle (Boş sayfa veya süpürge)
+                let c = color;
+                fb.draw_rect_outline(x + 1, y + 1, 9, 10, c);
+                fb.draw_rect(x + 3, y + 3, 5, 1, Color::ACCENT_RED);
+                fb.draw_rect(x + 3, y + 5, 5, 1, Color::ACCENT_RED);
+                fb.draw_rect(x + 3, y + 7, 5, 1, Color::ACCENT_RED);
+            }
+        }
+    }
+
+    /// Masaüstü sağ tık bağlam menüsü için 12x12 piksel simgeler çizer.
+    fn draw_desktop_context_icon(fb: &mut Framebuffer, x: usize, y: usize, index: usize, color: u32) {
+        match index {
+            0 => {
+                // Dosya Yöneticisi: Klasör simgesi
+                fb.draw_rect(x + 1, y + 2, 4, 2, Color::ACCENT_YELLOW);
+                fb.draw_rounded_rect(x, y + 3, 12, 8, 2, Color::ACCENT_BLUE);
+                fb.draw_rect(x + 2, y + 5, 8, 4, Color::WHITE);
+            }
+            1 => {
+                // Yeni Not / Not Defteri: Sayfa ve kalem
+                fb.draw_rounded_rect(x + 1, y + 1, 9, 10, 2, Color::TEXT_MAIN);
+                fb.draw_rect(x + 3, y + 3, 5, 1, Color::ACCENT_BLUE);
+                fb.draw_rect(x + 3, y + 5, 5, 1, Color::ACCENT_BLUE);
+                fb.draw_rect(x + 3, y + 7, 3, 1, Color::ACCENT_BLUE);
+                // Kalem ucu
+                fb.draw_rect(x + 8, y + 8, 3, 3, Color::ACCENT_YELLOW);
+            }
+            2 => {
+                // Sistem Ayarları: Dişli simgesi
+                fb.draw_rect(x + 4, y, 4, 12, Color::ACCENT_PINK);
+                fb.draw_rect(x, y + 4, 12, 4, Color::ACCENT_PINK);
+                fb.draw_rect(x + 2, y + 2, 8, 8, Color::ACCENT_PINK);
+                fb.draw_rect(x + 4, y + 4, 4, 4, Color::WINDOW_BG);
+            }
+            3 => {
+                // Görev Yöneticisi: Aktivite / Nabız grafiği
+                fb.draw_rect_outline(x, y + 1, 12, 10, Color::BORDER);
+                let pulse_col = Color::ACCENT_GREEN;
+                fb.draw_rect(x + 1, y + 6, 2, 1, pulse_col);
+                fb.draw_rect(x + 3, y + 4, 2, 4, pulse_col);
+                fb.draw_rect(x + 5, y + 2, 2, 7, pulse_col);
+                fb.draw_rect(x + 7, y + 7, 2, 3, pulse_col);
+                fb.draw_rect(x + 9, y + 5, 2, 2, pulse_col);
+            }
+            4 => {
+                // Tema Değiştir: Palet / Boya fırçası
+                fb.draw_rounded_rect(x, y + 1, 11, 10, 3, Color::ACCENT_GREEN);
+                fb.draw_rect(x + 2, y + 3, 2, 2, Color::ACCENT_RED);
+                fb.draw_rect(x + 6, y + 3, 2, 2, Color::ACCENT_BLUE);
+                fb.draw_rect(x + 3, y + 7, 2, 2, Color::ACCENT_YELLOW);
+                fb.draw_rect(x + 7, y + 7, 2, 2, Color::WINDOW_BG);
+            }
+            _ => {
+                // Masaüstünü Yenile: Dairesel yenileme okları (Refresh)
+                let c = color;
+                fb.draw_rect(x + 3, y + 1, 6, 1, c);
+                fb.draw_rect(x + 1, y + 3, 1, 4, c);
+                fb.draw_rect(x + 3, y + 9, 6, 1, c);
+                fb.draw_rect(x + 10, y + 4, 1, 4, c);
+                // Ok uçları
+                fb.draw_rect(x + 8, y, 2, 3, c);
+                fb.draw_rect(x + 2, y + 8, 2, 3, c);
+            }
         }
     }
 
@@ -2309,7 +2433,7 @@ impl MinGuiCompositor {
         if self.start_search_len == 0 {
             self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
         } else {
-            let mut results = [0; 11];
+            let mut results = [0; 12];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) = Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
@@ -2318,8 +2442,8 @@ impl MinGuiCompositor {
             fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
             Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
-            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi"];
-            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal"];
+            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "minOs Kurulumu"];
+            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "minOs Installer"];
             if count == 0 {
                 Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
             }
@@ -2359,6 +2483,7 @@ impl MinGuiCompositor {
             ("Settings", Color::ACCENT_BLUE, 1usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
             ("Terminal", Color::ACCENT_GREEN, 10),
+            ("Installer", Color::ACCENT_GREEN, 11),
             ("Notepad", Color::TEXT_MAIN, 2),
             ("Calculator", Color::ACCENT_GREEN, 8),
             ("Paint", Color::ACCENT_PINK, 9),
@@ -2373,6 +2498,7 @@ impl MinGuiCompositor {
             ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
             ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
             ("Komut İstemi", Color::ACCENT_GREEN, 10),
+            ("minOs Kurulumu", Color::ACCENT_GREEN, 11),
             ("Not Defteri", Color::TEXT_MAIN, 2),
             ("Hesap Makinesi", Color::ACCENT_GREEN, 8),
             ("Çizim Tahtası", Color::ACCENT_PINK, 9),

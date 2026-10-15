@@ -14,7 +14,7 @@ fn line_h() -> usize { crate::gui::sp(16) }
 fn char_w() -> usize { MinGuiCompositor::terminal_text_width("M").max(1) }
 /// Satır numarası şeridi (gutter) genişliği — font ölçeğine göre.
 #[inline(always)]
-fn gutter_w() -> usize { crate::gui::sp(32) }
+fn gutter_w() -> usize { crate::gui::sp(44) }
 /// Araç çubuğu yüksekliği (px) — font ölçeğine göre.
 #[inline(always)]
 fn toolbar_h() -> usize { crate::gui::sp(24) }
@@ -577,18 +577,22 @@ impl NotepadApp {
         let sy = scroll.y / line_h(); // satır cinsinden kaydırma
 
         // Satır Numaraları Şeridi (Gutter) — görünür satırlara göre dinamik
-        fb.draw_rect(area_x, area_y, gutter_w(), area_h, Color::TITLE_BAR_INACTIVE);
+        let gw = gutter_w();
+        fb.draw_rect(area_x, area_y, gw, area_h, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(area_x + gw - 1, area_y, 1, area_h, Color::BORDER);
         let last_visible = (sy + view_lines).min(total_lines);
         let mut gutter = TextBuf::new();
         for ln in sy..last_visible {
             let row = ln - sy;
             let gy = area_y + row * line_h() + 4;
             gutter.clear();
-            let n = ln + 1;
-            if n < 10 { gutter.push_byte(b'0'); }
-            if n < 100 { gutter.push_byte(b'0' + ((n / 10) % 10) as u8); }
-            gutter.push_byte(b'0' + (n % 10) as u8);
-            MinGuiCompositor::draw_string(fb, area_x + 8, gy, gutter.as_str(), Color::TEXT_MUTED);
+            let n = (ln + 1) as u32;
+            gutter.push_usize(n as usize);
+            let num_str = gutter.as_str();
+            let num_w = MinGuiCompositor::terminal_text_width(num_str);
+            // Satır numarasını şeridin sağına düzgün aralıkla (6px boşluk bırakarak) hizala
+            let num_x = area_x + gw.saturating_sub(num_w + 6);
+            MinGuiCompositor::draw_terminal_string(fb, num_x, gy, num_str, Color::TEXT_MUTED);
         }
 
         // Metin İçeriği ve İmleç — kaydırma ofseti uygulanır, satır kaydırmalı (wrap).

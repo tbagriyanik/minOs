@@ -4,7 +4,8 @@ use crate::gui::{Color, MinGuiCompositor};
 /// Tuval üzerinde tutulabilecek en fazla nokta.
 const MAX_POINTS: usize = 4096;
 /// Fırça karesinin kenar uzunluğu (px) — kalemin merkezi bu kareye ortalanır.
-const BRUSH_SIZE: usize = 7;
+const MIN_BRUSH_SIZE: usize = 1;
+const MAX_BRUSH_SIZE: usize = 24;
 /// Silginin yarıçapı (px).
 const ERASER_RADIUS: usize = 14;
 /// Araç çubuğu yüksekliği (px). Pencere içi tuvalin üst boşluğu buradan gelir.
@@ -26,6 +27,7 @@ pub struct PaintApp {
     pub points: alloc::boxed::Box<[PaintPoint]>,
     pub color: u32,
     pub eraser: bool,
+    pub brush_size: usize,
     pub last: Option<(usize, usize)>,
     pub status_msg: &'static str,
     /// Son üretilen BMP; VFS'nin RAM kopyası olmadan kaydedilip tekrar açılır.
@@ -39,6 +41,7 @@ impl PaintApp {
             points: alloc::vec![EMPTY_POINT; MAX_POINTS].into_boxed_slice(),
             color: Color::ACCENT_BLUE,
             eraser: false,
+            brush_size: 7,
             last: None,
             status_msg: "",
             saved_bmp: alloc::sync::Arc::from([]),
@@ -210,9 +213,9 @@ impl PaintApp {
             let point = self.points[i];
             if point.x < canvas_w && point.y < canvas_h {
                 // Noktayı fırça boyutuna göre ortala (kalem merkezli çizim).
-                let px = canvas_x + point.x.saturating_sub(BRUSH_SIZE / 2);
-                let py = canvas_y + point.y.saturating_sub(BRUSH_SIZE / 2);
-                fb.draw_rect(px, py, BRUSH_SIZE, BRUSH_SIZE, point.color);
+                let px = canvas_x + point.x.saturating_sub(self.brush_size / 2);
+                let py = canvas_y + point.y.saturating_sub(self.brush_size / 2);
+                fb.draw_rect(px, py, self.brush_size, self.brush_size, point.color);
             }
         }
 
@@ -259,6 +262,19 @@ impl PaintApp {
         let open_x = x + w.saturating_sub(198);
         fb.draw_rect(open_x, y + 34, 58, 22, Color::TITLE_BAR);
         MinGuiCompositor::draw_string(fb, open_x + 6, y + 40, crate::gui::ui_text("Aç", "Open"), Color::TEXT_MAIN);
-        if !self.status_msg.is_empty() { MinGuiCompositor::draw_string(fb, x + 14, y + h.saturating_sub(18), self.status_msg, Color::ACCENT_GREEN); }
+        let status_y = y + h.saturating_sub(22);
+        fb.draw_rect(x + 6, status_y, w.saturating_sub(12), 18, Color::TASKBAR_BG);
+        if !self.status_msg.is_empty() {
+            MinGuiCompositor::draw_string_clipped(fb, x + 14, status_y + 5, self.status_msg, Color::ACCENT_GREEN,
+                (x + 10, status_y + 2, w.saturating_sub(24), 14));
+        }
+    }
+
+    pub fn adjust_brush(&mut self, delta: i8) {
+        if delta > 0 {
+            self.brush_size = (self.brush_size + 1).min(MAX_BRUSH_SIZE);
+        } else if delta < 0 {
+            self.brush_size = self.brush_size.saturating_sub(1).max(MIN_BRUSH_SIZE);
+        }
     }
 }

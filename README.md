@@ -6,7 +6,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~18.600%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~23.300%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
 
 **minOs (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
@@ -58,7 +58,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **13 adet yerleşik uygul
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`), "Program Aç" başlatma menüsü ve RAM grafik çubuğu. 13 uygulamanın tamamı (Kurulum Sihirbazı ve 3D Gösterici dahil) listelenir. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
-| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
+| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
 
@@ -101,6 +101,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `ipconfig` | `ipconfig` | `eth0` arabiriminin yerel IP, ağ maskesi, ağ geçidi, DNS, MAC adresi ve DHCP durumunu raporlar. |
 | `ping` | `ping <IPv4>` | Belirtilen IPv4 hedefine ICMP Echo Request paketi gönderir. |
 | `dns` | `dns <alan_adi>` | Belirtilen sunucu adı için yapılandırılmış DNS sunucusuna UDP DNS sorgusu iletir. |
+| `curl` | `curl http://<host>[:port][/yol]` | Soket API üzerinden HTTP GET indirir: durum kodu + gövde; chunked kod çözme ve 3xx yönlendirme takibi desteklenir (`https` desteklenmez). |
 
 ### 4. Uygulama Başlatma
 | Komut | Alternatifler | Açıklama |
@@ -115,13 +116,15 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileşenler protokol veya simülasyon düzeyinde hazır olup tam donanım/yığın entegrasyonu aşamasındadır:
 
 1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
-   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; ancak gelen ICMP Echo Reply paketinin asenkron olarak terminale bildirilmesi henüz tam olay döngüsüne bağlanmamıştır ("yanıt bekleme henüz yok" olarak raporlanır).
-   - DNS sorgu paketi gönderilir; fakat yanıt paketinin çözümlenip yerel IP eşlemesine kaydedilmesi kısmi durumdadır.
+   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; ancak gelen ICMP Echo Reply paketinin asenkron olarak terminale bildirilmesi henüz tam olay döngüsüne bağlanmamıştır.
+   - DNS artık eşzamanlı çözümleniyor (`resolve_host()`: önbellek → dotted-quad → 5 sn zaman aşımlı UDP sorgusu) ve `curl`/HTTP yolu bunu kullanıyor; ham `dns` komutu sorguyu iletir, yanıt `take_dns_result()` ile alınır.
 2. **Çoklu Çekirdek (SMP) Görev Dağıtımı:**
    - QEMU `-CpuCount N` parametresiyle çoklu sanal çekirdek tanımlanabilir; ancak minOs çekirdeği şimdilik tek çekirdekte iş planlaması yürütür (SMP AP çekirdekleri henüz uyandırılıp iş yükü paylaştırılmaz).
-3. **Fiziksel Blok Depolama ve Kalıcı Yazma (FAT32 Persistence):**
+3. **Fiziksel Blok Depolama ve Kalıcı Yazma (FAT32 / Ext2 Persistence):**
    - Sabit disk (IDE/ATA Master) ve USB depolama aygıtlarında **tam sektör okuma ve yazma (`write_sector`, `flush_cache`)** ile **FAT32 dosya formatlama ve dosya yazma/silme** yeteneği aktiftir.
-   - Kurulum Sihirbazı diski biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
+   - **Ext2 okuma/yazma** (`src/fs/ext2.rs`): superblock + BGDT + inode tabanlı, direct + single-indirect blok destekli dosya okuma/yazma/oluşturma/silme ve `mkdir`; açılışta FAT32'den önce Ext2 bölümü denenir.
+   - **Bölümleme (`src/fs/part.rs`):** MBR (4 girdi) ve GPT (koruyucu MBR + 128 girdilik dizi, Linux GUID) tarama/listelme ve yazma.
+   - Kurulum Sihirbazı diski FAT32 olarak biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
    - **VFS anlık görüntüsü (`VFS.DAT`):** VFS ağacının tamamı (dosyalar, klasörler, masaüstü öğeleri, çöp kutusu içeriği) her dosya/klasör işleminde otomatik olarak FAT diske `VFS.DAT` olarak yazılır ve açılışta geri yüklenir. Böylece oluşturma, silme, taşıma, kopyalama, yeniden adlandırma ve geri dönüşüm kutusu işlemleri **yeniden başlatma sonrasında bile korunur**. Kurulum sırasında mevcut ağaç biçimlendirilen diske anında kaydedilir.
 4. **HDA Donanımsal DMA İlerlemesi (QEMU Emülasyon Sınırları):**
    - Intel HDA ses sürücüsünde BDL ve DMA stream kurulumu tamdır; fakat bazı sanallaştırma ortamlarında DMA LPIB göstergesi ses çalarken donanım tarafında ilerlemeyebilir. Ses çıkışı için ayrıca PC Speaker PWM tonlama emülasyonu yedek olarak devrededir.
@@ -136,14 +139,14 @@ minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileş
 
 Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
+- [x] **Gelişmiş TCP/IP Yığını & Socket API:**
+  - Soket başına durum makineli TCP (`src/drivers/socket.rs`): 3'lü el sıkışma, sıra/ack takibi, üssel geri çekilmeli yeniden iletim, 8 eşzamanlı soket; `socket()`, `connect()`, `send()`, `recv()`, `close()`, UDP `sendto()`/`recvfrom()`, önbellekli `resolve_host()`.
+  - Komut satırından `curl http://...` ile dosya indirme (`src/drivers/http.rs`: chunked çözümü, 3xx yönlendirme takibi).
+- [x] **Kalıcı FAT32 / Ext2 Dosya Sistemi Desteği:**
+  - Ext2 read-write ve MBR/GPT bölümleme (`src/fs/ext2.rs`, `src/fs/part.rs`) tamamlandı.
 - [ ] **Tam Ring 3 Kullanıcı Alanı & Syscall API:**
   - `int 0x80` veya `syscall`/`sysret` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri.
   - Bağımsız kullanıcı programları için dinamik bellek ve sayfa koruması.
-- [ ] **Gelişmiş TCP/IP Yığını & Socket API:**
-  - Tam TCP 3'lü el sıkışma (handshake), kayan pencere (sliding window) ve soket (`socket()`, `connect()`, `send()`, `recv()`) API'si.
-  - Komut satırından `curl` / `http` ile dosya indirme kabiliyeti.
-- [ ] **Kalıcı FAT32 / Ext2 Dosya Sistemi Desteği:**
-  - Salt okunur desteğin tam okuma/yazma (read-write) formatına kavuşturulması ve disk bölümleme (MBR/GPT) ayrıştırıcısı.
 - [ ] **SMP (Symmetric Multiprocessing) Desteği:**
   - ACPI / MADT tablolarını okuyarak AP çekirdeklerini uyandırma (INIT-SIPI-SIPI).
   - Çok çekirdekli kilit mekanizmaları ve çekirdekler arası görev zamanlayıcısı (Preemptive Round-Robin Scheduler).
@@ -154,6 +157,7 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
+- **🌐 Soket API & `curl`:** Çekirdekte BSD tarzı soketler (`socket`/`connect`/`send`/`recv`/`close`, UDP, DNS önbelleği) ve komut istemcisinden `curl http://...` ile HTTP indirme (chunked + yönlendirme destekli).
 - **👋 Hoş Geldin Ekranı:** Masaüstü açılmadan önce arayüz dilini (Türkçe/English) ve beş masaüstü temasından birini seçin. Tercihler anında uygulanır ve kalıcı olarak diske kaydedilir.
 - **🚀 Limine Açılış Menüsü (Live & Kurulu Sistem Seçenekleri):**
   - **`minOs Live Environment`**: Kurulum yapmadan doğrudan RAM üzerinden çalışan Live CD ortamı.
@@ -339,12 +343,14 @@ minos/
 ├── src/
 │   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
 │   ├── drivers/             # video (framebuffer), PS/2 fare & klavye, RTC (CMOS) saat,
-│   │                        #   e1000 + TCP/IP yığını, HDA ses, ATA/ATAPI (PIO) ve USB durum katmanı
+│   │                        #   e1000 + TCP/IP yığını (netstack) + soket API (socket.rs) + HTTP (http.rs),
+│   │                        #   HDA ses, ATA/ATAPI (PIO) ve USB durum katmanı
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
 │   ├── apps/                # 13 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM)
-│   ├── fs/                  # Sanal dosya sistemi (vfs.rs / TarFS) ve disk okuyucuları (diskfs.rs: FAT32 + ISO9660)
+│   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
+│   │                        #   Ext2 read-write (ext2.rs) + MBR/GPT bölümleme (part.rs)
 │   └── main.rs              # Çekirdek giriş noktası (_start), Limine istekleri ve ana olay döngüsü
 ├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
@@ -362,9 +368,9 @@ minos/
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 46 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 25.030 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 21.199 satır |
+| **Toplam Rust Kaynak Dosyası** | 51 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 27.435 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 23.297 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 13 masaüstü uygulaması + Pencere Yöneticisi |

@@ -8,7 +8,7 @@ use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
 #[allow(dead_code)]
-const HEAP_SIZE: usize = 1024 * 1024;
+const HEAP_SIZE: usize = 2 * 1024 * 1024;
 #[allow(dead_code)]
 static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
@@ -1831,6 +1831,7 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
                                     settings_app.reset_defaults();
                                     settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now);
+                                    settings_app.write_config(&mut fs_mgr.vfs);
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, (wx + 115, wy + 178, 130, 22)) {
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
                                     settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
@@ -2066,9 +2067,8 @@ pub extern "C" fn _start() -> ! {
                             }
                             8 => { if let Some(key) = apps::calculator::CalculatorApp::key_at(mx, my, wx, wy, ww) { calculator_app.press(key); } }
                             9 => {
-                                let status_y = wy + wh.saturating_sub(22);
-                                let open_rect = (wx + 10, status_y + 1, 48, 16);
-                                let save_rect = (wx + 64, status_y + 1, 58, 16);
+                                let open_rect = (wx + ww.saturating_sub(198), wy + 34, 58, 22);
+                                let save_rect = (wx + ww.saturating_sub(132), wy + 34, 58, 22);
                                 let clear_rect = (wx + ww.saturating_sub(66), wy + 34, 58, 22);
                                 let palette_start = if ww.saturating_sub(16) >= 258 { wx + 58 } else { wx + 40 };
                                 if gui::in_rect(mx, my, open_rect) {
@@ -2461,7 +2461,7 @@ pub extern "C" fn _start() -> ! {
                                     }
                                     7 => settings_app.is_muted = !settings_app.is_muted,
                                     8 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); }
+                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); }
                                     _ => {}
                                 },
                                 1 => match settings_app.focused_control {
@@ -2480,7 +2480,7 @@ pub extern "C" fn _start() -> ! {
                                         now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
                                     }
                                     13 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
+                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                                 2 => match settings_app.focused_control {
@@ -2489,12 +2489,12 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
                                     }
                                     5 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
+                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                                 _ => match settings_app.focused_control {
                                     4 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    5 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); },
+                                    5 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                             }

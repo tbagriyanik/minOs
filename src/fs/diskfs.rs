@@ -98,6 +98,8 @@ struct FatState {
     root_cluster: u32,
     sectors_per_cluster: u32,
     bytes_per_sector: u32,
+    fat_size: u32,
+    num_fats: u32,
 }
 
 static mut FAT: FatState = FatState {
@@ -108,6 +110,8 @@ static mut FAT: FatState = FatState {
     root_cluster: 2,
     sectors_per_cluster: 1,
     bytes_per_sector: 512,
+    fat_size: 0,
+    num_fats: 0,
 };
 
 fn le16(b: &[u8], off: usize) -> u16 {
@@ -185,6 +189,8 @@ fn fat_mount(drive: u8, partition_lba: u32) -> bool {
         FAT.root_cluster = if root_cluster == 0 { 2 } else { root_cluster };
         FAT.sectors_per_cluster = spc;
         FAT.bytes_per_sector = bps;
+        FAT.fat_size = fat_size;
+        FAT.num_fats = num_fats;
     }
 
     serial("[FAT] BPB okundu. kok kume: ");
@@ -229,6 +235,86 @@ fn fat_next(cluster: u32) -> Option<u32> {
             Some(val)
         }
     }
+}
+
+fn fat_set_next(cluster: u32, value: u32) -> bool {
+    unsafe {
+        let off = cluster as u64 * 4;
+        let sector = FAT.fat_lba + (off / 512) as u32;
+        let in_sector = (off % 512) as usize;
+        for copy in 0..FAT.num_fats {
+            let mut buf = [0u8; 512];
+            if !read_sector_cached(FAT.drive, sector + copy * FAT.fat_size, &mut buf) { return false; }
+            buf[in_sector..in_sector + 4].copy_from_slice(&value.to_le_bytes());
+            if !ata::write_sector(FAT.drive, sector + copy * FAT.fat_size, &buf) { return false; }
+        }
+        true
+    }
+}
+
+fn fat_is_free(cluster: u32) -> bool {
+    unsafe {
+        let off = cluster as u64 * 4;
+        let sector = FAT.fat_lba + (off / 512) as u32;
+        let in_sector = (off % 512) as usize;
+        let mut buf = [0u8; 512];
+        read_sector_cached(FAT.drive, sector, &mut buf) && le32(&buf, in_sector) & 0x0FFF_FFFF == 0
+    }
+}
+
+fn fat_allocate_chain(count: usize) -> Option<alloc::vec::Vec<u32>> {
+    let mut chain = alloc::vec::Vec::new();
+    if count == 0 { return Some(chain); }
+    if chain.try_reserve_exact(count).is_err() { return None; }
+    let max_cluster = unsafe {
+        let sectors = ata::drive_capacity_sectors(FAT.drive).saturating_sub(FAT.data_lba as u64);
+        (sectors / FAT.sectors_per_cluster as u64 + 1).min((FAT.fat_size as u64 * 512 / 4).saturating_sub(2)) as u32
+    };
+    for c in 2..=max_cluster {
+        if fat_is_free(c) {
+            if !fat_set_next(c, 0x0FFF_FFFF) { return None; }
+            chain.push(c);
+            if chain.len() == count { break; }
+        }
+    }
+    if chain.len() != count {
+        for c in chain { let _ = fat_set_next(c, 0); }
+        return None;
+    }
+    for i in 0..chain.len().saturating_sub(1) {
+        if !fat_set_next(chain[i], chain[i + 1]) { return None; }
+    }
+    Some(chain)
+}
+
+fn fat_free_chain(mut cluster: u32) {
+    let mut guard = 0usize;
+    while cluster >= 2 && guard < 65536 {
+        guard += 1;
+        let next = fat_next(cluster);
+        let _ = fat_set_next(cluster, 0);
+        match next { Some(n) => cluster = n, None => break }
+    }
+}
+
+fn fat_write_data(chain: &[u32], data: &[u8]) -> bool {
+    let sectors_per_cluster = unsafe { FAT.sectors_per_cluster as usize };
+    let cluster_bytes = sectors_per_cluster * 512;
+    let drive = unsafe { FAT.drive };
+    for (i, &cluster) in chain.iter().enumerate() {
+        let start = i * cluster_bytes;
+        let end = (start + cluster_bytes).min(data.len());
+        for s in 0..sectors_per_cluster {
+            let mut sec = [0u8; 512];
+            let sector_start = start + s * 512;
+            if sector_start < end {
+                let take = (end - sector_start).min(512);
+                sec[..take].copy_from_slice(&data[sector_start..sector_start + take]);
+            }
+            if !ata::write_sector(drive, cluster_to_lba(cluster) + s as u32, &sec) { return false; }
+        }
+    }
+    true
 }
 
 fn cluster_to_lba(cluster: u32) -> u32 {
@@ -719,6 +805,63 @@ pub fn load_file(name: &str) -> usize {
     0
 }
 
+/// FAT32 kök dizinindeki dosyayı tam boyutuyla heap'e yükler.
+pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
+    if !unsafe { LISTED } { refresh(); }
+    let index = (0..unsafe { ENTRY_COUNT }).find(|&i| {
+        entry(i).map_or(false, |e| !e.is_dir && e.as_str().eq_ignore_ascii_case(name))
+    })?;
+    let meta = entry(index)?;
+    let mut cluster = unsafe { FAT.root_cluster };
+    let mut found = None;
+    let mut seen = 0usize;
+    while seen < 128 {
+        seen += 1;
+        for s in 0..unsafe { FAT.sectors_per_cluster } {
+            let lba = cluster_to_lba(cluster) + s;
+            let mut sec = [0u8; 512];
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) { return None; }
+            for e in 0..16 {
+                let off = e * 32;
+                if sec[off] == 0 { return None; }
+                if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                let mut item = DiskEntry::empty();
+                push_short_name(&mut item, &sec[off..off + 11]);
+                if item.as_str().eq_ignore_ascii_case(name) {
+                    let high = le16(&sec, off + 20) as u32;
+                    let low = le16(&sec, off + 26) as u32;
+                    found = Some((high << 16) | low);
+                    break;
+                }
+            }
+            if found.is_some() { break; }
+        }
+        if found.is_some() { break; }
+        match fat_next(cluster) { Some(next) => cluster = next, None => break }
+    }
+    let mut cluster = found?;
+    if meta.size == 0 { return Some(alloc::vec::Vec::new()); }
+    let mut out = alloc::vec::Vec::new();
+    out.try_reserve_exact(meta.size).ok()?;
+    out.resize(meta.size, 0);
+    let mut written = 0usize;
+    let mut guard = 0usize;
+    while written < meta.size && guard < 65536 {
+        guard += 1;
+        let base = cluster_to_lba(cluster);
+        for s in 0..unsafe { FAT.sectors_per_cluster } {
+            if written >= meta.size { break; }
+            let mut sec = [0u8; 512];
+            if !read_sector_cached(unsafe { FAT.drive }, base + s, &mut sec) { return None; }
+            let take = (meta.size - written).min(512);
+            out[written..written + take].copy_from_slice(&sec[..take]);
+            written += take;
+        }
+        if written < meta.size { cluster = fat_next(cluster)?; }
+    }
+    (written == meta.size).then_some(out)
+}
+
 fn load_file_body(index: usize, size: usize) -> usize {
     unsafe {
         let kind = if KIND0 != FsKind::None { KIND0 } else { KIND1 };
@@ -906,7 +1049,6 @@ pub fn delete_file_by_name(name: &str) -> bool {
                 if !read_sector_cached(FAT.drive, sector_lba, &mut sec) {
                     return false;
                 }
-                let mut modified = false;
                 for e in 0..16 {
                     let off = e * 32;
                     let first = sec[off];
@@ -923,15 +1065,14 @@ pub fn delete_file_by_name(name: &str) -> bool {
                     let mut entry = DiskEntry::empty();
                     push_short_name(&mut entry, &sec[off..off + 11]);
                     if entry.as_str().eq_ignore_ascii_case(name) {
+                        let start = (le16(&sec, off + 20) as u32) << 16 | le16(&sec, off + 26) as u32;
                         sec[off] = 0xE5;
-                        modified = true;
-                        break;
+                        if !ata::write_sector(FAT.drive, sector_lba, &sec) { return false; }
+                        fat_free_chain(start);
+                        ata::flush_cache(FAT.drive);
+                        refresh();
+                        return true;
                     }
-                }
-                if modified {
-                    ata::write_sector(FAT.drive, sector_lba, &sec);
-                    refresh();
-                    return true;
                 }
             }
             match fat_next(cluster) {
@@ -958,15 +1099,57 @@ fn to_8_3_name(name: &str) -> [u8; 11] {
     out
 }
 
+fn valid_8_3_name(name: &str) -> bool {
+    let mut parts = name.split('.');
+    let base = parts.next().unwrap_or("");
+    let ext = parts.next().unwrap_or("");
+    parts.next().is_none()
+        && !base.is_empty() && base.len() <= 8 && ext.len() <= 3
+        && base.bytes().chain(ext.bytes()).all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+pub fn rename_by_name(old_name: &str, new_name: &str) -> bool {
+    unsafe {
+        if KIND0 != FsKind::Fat32 || !valid_8_3_name(new_name) { return false; }
+        let mut cluster = FAT.root_cluster;
+        let mut guard = 0;
+        while guard < 128 {
+            guard += 1;
+            for s in 0..FAT.sectors_per_cluster {
+                let lba = cluster_to_lba(cluster) + s;
+                let mut sec = [0u8; 512];
+                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                for e in 0..16 {
+                    let off = e * 32;
+                    if sec[off] == 0 { return false; }
+                    if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    let mut item = DiskEntry::empty();
+                    push_short_name(&mut item, &sec[off..off + 11]);
+                    if item.as_str().eq_ignore_ascii_case(new_name) { return false; }
+                    if item.as_str().eq_ignore_ascii_case(old_name) {
+                        sec[off..off + 11].copy_from_slice(&to_8_3_name(new_name));
+                        let ok = ata::write_sector(FAT.drive, lba, &sec);
+                        if ok { ata::flush_cache(FAT.drive); refresh(); }
+                        return ok;
+                    }
+                }
+            }
+            match fat_next(cluster) { Some(next) => cluster = next, None => return false }
+        }
+        false
+    }
+}
+
 /// FAT32 ortamında dosya içeriğini kaydeder / yazar (mevcutsa günceller, yoksa yeni oluşturur).
 pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
     unsafe {
-        if KIND0 != FsKind::Fat32 {
+        if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) {
             return false;
         }
         let mut cluster = FAT.root_cluster;
         let mut guard = 0;
         let mut free_slot: Option<(u32, usize)> = None;
+        let mut existing: Option<(u32, u32, u32)> = None;
 
         while guard < 128 {
             guard += 1;
@@ -999,23 +1182,7 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
                         let high = le16(&sec, off + 20) as u32;
                         let low = le16(&sec, off + 26) as u32;
                         let start_cluster = (high << 16) | low;
-                        if start_cluster >= 2 {
-                            let file_base = cluster_to_lba(start_cluster);
-                            let take = data.len().min(512);
-                            let mut file_sec = [0u8; 512];
-                            file_sec[..take].copy_from_slice(&data[..take]);
-                            ata::write_sector(FAT.drive, file_base, &file_sec);
-
-                            let len_u32 = data.len() as u32;
-                            sec[off + 28] = (len_u32 & 0xFF) as u8;
-                            sec[off + 29] = ((len_u32 >> 8) & 0xFF) as u8;
-                            sec[off + 30] = ((len_u32 >> 16) & 0xFF) as u8;
-                            sec[off + 31] = ((len_u32 >> 24) & 0xFF) as u8;
-                            ata::write_sector(FAT.drive, sector_lba, &sec);
-                            ata::flush_cache(FAT.drive);
-                            refresh();
-                            return true;
-                        }
+                        existing = Some((sector_lba, off as u32, start_cluster));
                     }
                 }
             }
@@ -1025,51 +1192,138 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
             }
         }
 
-        // Dosya mevcut değildi; ilk boş dizin yuvasına yeni dosya olarak yaz
-        if let Some((sec_lba, off)) = free_slot {
-            let mut new_cluster = 4u32;
-            let mut found_cluster = false;
-            let mut fat_buf = [0u8; 512];
-            if read_sector_cached(FAT.drive, FAT.fat_lba, &mut fat_buf) {
-                for c in 4..128u32 {
-                    let entry_off = (c as usize) * 4;
-                    let val = le32(&fat_buf, entry_off) & 0x0FFF_FFFF;
-                    if val == 0 {
-                        new_cluster = c;
-                        found_cluster = true;
-                        fat_buf[entry_off..entry_off + 4].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
-                        ata::write_sector(FAT.drive, FAT.fat_lba, &fat_buf);
-                        let fat2_lba = FAT.fat_lba + 512;
-                        ata::write_sector(FAT.drive, fat2_lba, &fat_buf);
-                        break;
+        let slot = existing.map(|(lba, off, _)| (lba, off as usize)).or(free_slot);
+        let Some((dir_lba, dir_off)) = slot else { return false; };
+        let cluster_bytes = FAT.sectors_per_cluster as usize * 512;
+        let needed = data.len().max(1).saturating_add(cluster_bytes - 1) / cluster_bytes;
+        let chain = match fat_allocate_chain(needed) { Some(c) => c, None => return false };
+        if !fat_write_data(&chain, data) {
+            for c in chain { let _ = fat_set_next(c, 0); }
+            return false;
+        }
+        let mut dir_sec = [0u8; 512];
+        if !read_sector_cached(FAT.drive, dir_lba, &mut dir_sec) { return false; }
+        let off = dir_off;
+        if existing.is_none() {
+            dir_sec[off..off + 11].copy_from_slice(&to_8_3_name(name));
+            dir_sec[off + 11] = 0x20;
+        } else if let Some((_, _, old_start)) = existing {
+            let mut old = old_start;
+            let mut guard = 0;
+            while old >= 2 && guard < 4096 {
+                guard += 1;
+                let next = fat_next(old);
+                let _ = fat_set_next(old, 0);
+                match next { Some(n) => old = n, None => break }
+            }
+        }
+        let start = chain[0];
+        dir_sec[off + 20..off + 22].copy_from_slice(&((start >> 16) as u16).to_le_bytes());
+        dir_sec[off + 26..off + 28].copy_from_slice(&(start as u16).to_le_bytes());
+        dir_sec[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes());
+        if !ata::write_sector(FAT.drive, dir_lba, &dir_sec) { return false; }
+        ata::flush_cache(FAT.drive);
+        refresh();
+        true
+    }
+}
+
+/// FAT32 kök dizininde boş bir klasör oluşturur.
+pub fn create_dir_by_name(name: &str) -> bool {
+    unsafe {
+        if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) { return false; }
+        let mut cluster = FAT.root_cluster;
+        let mut free_slot = None;
+        let mut guard = 0;
+        while guard < 128 {
+            guard += 1;
+            for s in 0..FAT.sectors_per_cluster {
+                let lba = cluster_to_lba(cluster) + s;
+                let mut sec = [0u8; 512];
+                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                for e in 0..16 {
+                    let off = e * 32;
+                    if sec[off] == 0 || sec[off] == 0xE5 {
+                        if free_slot.is_none() { free_slot = Some((lba, off)); }
+                        if sec[off] == 0 { break; }
+                        continue;
                     }
+                    if sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    let mut entry = DiskEntry::empty();
+                    push_short_name(&mut entry, &sec[off..off + 11]);
+                    if entry.as_str().eq_ignore_ascii_case(name) { return entry.is_dir; }
                 }
             }
+            match fat_next(cluster) { Some(next) => cluster = next, None => break }
+        }
+        let Some((dir_lba, off)) = free_slot else { return false; };
+        let Some(chain) = fat_allocate_chain(1) else { return false; };
+        let child = chain[0];
+        let mut child_sec = [0u8; 512];
+        child_sec[..11].copy_from_slice(b".          "); child_sec[11] = FAT_ATTR_DIRECTORY;
+        child_sec[20..22].copy_from_slice(&((child >> 16) as u16).to_le_bytes());
+        child_sec[26..28].copy_from_slice(&(child as u16).to_le_bytes());
+        child_sec[32..43].copy_from_slice(b"..         "); child_sec[43] = FAT_ATTR_DIRECTORY;
+        let root = FAT.root_cluster;
+        child_sec[52..54].copy_from_slice(&((root >> 16) as u16).to_le_bytes());
+        child_sec[58..60].copy_from_slice(&(root as u16).to_le_bytes());
+        let child_lba = cluster_to_lba(child);
+        if !ata::write_sector(FAT.drive, child_lba, &child_sec) { return false; }
+        for s in 1..FAT.sectors_per_cluster {
+            if !ata::write_sector(FAT.drive, child_lba + s, &[0u8; 512]) { return false; }
+        }
+        let mut parent_sec = [0u8; 512];
+        if !read_sector_cached(FAT.drive, dir_lba, &mut parent_sec) { return false; }
+        parent_sec[off..off + 11].copy_from_slice(&to_8_3_name(name));
+        parent_sec[off + 11] = FAT_ATTR_DIRECTORY;
+        parent_sec[off + 20..off + 22].copy_from_slice(&((child >> 16) as u16).to_le_bytes());
+        parent_sec[off + 26..off + 28].copy_from_slice(&(child as u16).to_le_bytes());
+        let ok = ata::write_sector(FAT.drive, dir_lba, &parent_sec);
+        ata::flush_cache(FAT.drive);
+        refresh();
+        ok
+    }
+}
 
-            if found_cluster {
-                let file_base = cluster_to_lba(new_cluster);
-                let take = data.len().min(512);
-                let mut file_sec = [0u8; 512];
-                file_sec[..take].copy_from_slice(&data[..take]);
-                ata::write_sector(FAT.drive, file_base, &file_sec);
-
-                let mut dir_sec = [0u8; 512];
-                if read_sector_cached(FAT.drive, sec_lba, &mut dir_sec) {
-                    let s_name = to_8_3_name(name);
-                    dir_sec[off..off + 11].copy_from_slice(&s_name);
-                    dir_sec[off + 11] = 0x20; // Normal dosya (Archive)
-                    dir_sec[off + 20] = (new_cluster >> 16) as u8;
-                    dir_sec[off + 21] = ((new_cluster >> 24) & 0x0F) as u8;
-                    dir_sec[off + 26] = (new_cluster & 0xFF) as u8;
-                    dir_sec[off + 27] = ((new_cluster >> 8) & 0xFF) as u8;
-                    let len_u32 = data.len() as u32;
-                    dir_sec[off + 28..off + 32].copy_from_slice(&len_u32.to_le_bytes());
-                    ata::write_sector(FAT.drive, sec_lba, &dir_sec);
+pub fn delete_dir_by_name(name: &str) -> bool {
+    unsafe {
+        if KIND0 != FsKind::Fat32 { return false; }
+        let mut cluster = FAT.root_cluster;
+        let mut guard = 0;
+        while guard < 128 {
+            guard += 1;
+            for s in 0..FAT.sectors_per_cluster {
+                let lba = cluster_to_lba(cluster) + s;
+                let mut sec = [0u8; 512];
+                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                for e in 0..16 {
+                    let off = e * 32;
+                    if sec[off] == 0 { return false; }
+                    if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    let mut item = DiskEntry::empty();
+                    push_short_name(&mut item, &sec[off..off + 11]);
+                    if !item.is_dir || !item.as_str().eq_ignore_ascii_case(name) { continue; }
+                    let child = (le16(&sec, off + 20) as u32) << 16 | le16(&sec, off + 26) as u32;
+                    if child < 2 { return false; }
+                    let child_lba = cluster_to_lba(child);
+                    let mut child_sec = [0u8; 512];
+                    if !read_sector_cached(FAT.drive, child_lba, &mut child_sec) { return false; }
+                    for pos in (0..512).step_by(32) {
+                        let first = child_sec[pos];
+                        if first == 0 { break; }
+                        if first == 0xE5 { continue; }
+                        let dot = child_sec[pos..pos + 11] == *b".          " || child_sec[pos..pos + 11] == *b"..         ";
+                        if !dot { return false; }
+                    }
+                    sec[off] = 0xE5;
+                    if !ata::write_sector(FAT.drive, lba, &sec) { return false; }
+                    fat_free_chain(child);
                     ata::flush_cache(FAT.drive);
                     refresh();
                     return true;
                 }
             }
+            match fat_next(cluster) { Some(next) => cluster = next, None => return false }
         }
         false
     }

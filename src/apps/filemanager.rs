@@ -10,6 +10,19 @@ use crate::gui::scrollbar::{self, ScrollState};
 use crate::fs::diskfs::{self, FsKind};
 use crate::fs::vfs::{VirtualFileSystem, NodeType};
 
+fn numbered_name(prefix: &str, mut value: usize, extension: &str) -> String {
+    let mut digits = [0u8; 10];
+    let mut len = 0;
+    if value == 0 { digits[0] = b'0'; len = 1; }
+    while value > 0 && len < digits.len() { digits[len] = b'0' + (value % 10) as u8; len += 1; value /= 10; }
+    digits[..len].reverse();
+    let mut name = String::from(prefix);
+    for _ in len..3 { name.push('0'); }
+    if let Ok(number) = core::str::from_utf8(&digits[..len]) { name.push_str(number); }
+    name.push_str(extension);
+    name
+}
+
 /// Dosya listesi satır yüksekliği (px).
 const ROW_H: usize = 24;
 /// Listenin başladığı Y ofseti (pencere içine göre).
@@ -244,23 +257,13 @@ impl FileManagerApp {
 
     /// Yeni dosya oluşturur.
     pub fn new_file(&mut self, vfs: &mut VirtualFileSystem) {
-        let is_fat = self.path().starts_with("/media/hdd0") || self.path().starts_with("/media/usb0");
-        let mut name = if is_fat { String::from("NOT_") } else { String::from("yeni_belge_") };
-        let mut num_buf = [0u8; 10];
-        let mut v = self.item_counter;
-        let mut n = 0;
-        if v == 0 { num_buf[0] = b'0'; n = 1; }
-        while v > 0 && n < num_buf.len() {
-            num_buf[n] = b'0' + (v % 10) as u8;
-            n += 1;
-            v /= 10;
-        }
-        num_buf[..n].reverse();
-        if let Ok(s) = core::str::from_utf8(&num_buf[..n]) {
-            name.push_str(s);
-        }
-        if is_fat { name.push_str(".TXT"); } else { name.push_str(".txt"); }
-        self.item_counter += 1;
+        let mut counter = self.item_counter;
+        let name = loop {
+            let candidate = numbered_name("yeni_", counter, ".txt");
+            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            counter += 1;
+        };
+        self.item_counter = counter + 1;
 
         let mut full_path = String::from(self.path());
         if !full_path.ends_with('/') {
@@ -268,29 +271,21 @@ impl FileManagerApp {
         }
         full_path.push_str(&name);
 
-        vfs.create_file(&full_path, b"Yeni olusturulan dosya icerigi.\n");
+        let saved = vfs.write_file(&full_path, b"Yeni olusturulan dosya icerigi.\n");
         self.refresh_from_vfs(vfs);
-        self.status = crate::gui::ui_text("Yeni dosya olusturuldu.", "New file created.");
+        self.status = if saved { crate::gui::ui_text("Yeni dosya olusturuldu.", "New file created.") }
+            else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
     }
 
     /// Yeni klasör oluşturur.
     pub fn new_folder(&mut self, vfs: &mut VirtualFileSystem) {
-        let is_fat = self.path().starts_with("/media/hdd0") || self.path().starts_with("/media/usb0");
-        let mut name = if is_fat { String::from("KLASOR_") } else { String::from("Yeni_Klasor_") };
-        let mut num_buf = [0u8; 10];
-        let mut v = self.item_counter;
-        let mut n = 0;
-        if v == 0 { num_buf[0] = b'0'; n = 1; }
-        while v > 0 && n < num_buf.len() {
-            num_buf[n] = b'0' + (v % 10) as u8;
-            n += 1;
-            v /= 10;
-        }
-        num_buf[..n].reverse();
-        if let Ok(s) = core::str::from_utf8(&num_buf[..n]) {
-            name.push_str(s);
-        }
-        self.item_counter += 1;
+        let mut counter = self.item_counter;
+        let name = loop {
+            let candidate = numbered_name("klas_", counter, "");
+            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            counter += 1;
+        };
+        self.item_counter = counter + 1;
 
         let mut full_path = String::from(self.path());
         if !full_path.ends_with('/') {
@@ -298,9 +293,13 @@ impl FileManagerApp {
         }
         full_path.push_str(&name);
 
+        let saved = if self.path() == "/root/Documents" {
+            crate::fs::diskfs::create_dir_by_name(&name)
+        } else { false };
         vfs.create_dir(&full_path);
         self.refresh_from_vfs(vfs);
-        self.status = crate::gui::ui_text("Yeni klasor olusturuldu.", "New folder created.");
+        self.status = if saved { crate::gui::ui_text("Yeni klasor olusturuldu.", "New folder created.") }
+            else { crate::gui::ui_text("Klasör RAM'de oluşturuldu; diske kaydedilemedi.", "Folder created in RAM; disk save failed.") };
     }
 
     /// Seçili dosya veya klasörü siler. Öğe kalıcı olarak silinmez; bunun yerine

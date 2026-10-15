@@ -151,14 +151,17 @@ impl SystemSettings {
     // Aksiyonlar
     // -----------------------------------------------------------------
     pub fn reset_defaults(&mut self) {
+        // Ekran çözünürlüğü açılışta Limine tarafından belirlenir ve çalışma
+        // zamanında değiştirilemediğinden gerçek donanım çözünürlüğü korunur.
+        // Bunun dışındaki TÜM ayarlar (tema, dil, klavye, ses, bölge,
+        // yakınlaştırma, gece modu, ağ ve kayıtlı pencere yerleşimi)
+        // varsayılan değerlerine döndürülür.
+        let screen_res = self.screen_res;
         let display_res = self.display_res;
-        let saved_window_states = self.saved_window_states;
         *self = Self::default();
-        self.theme = theme::current();
+        self.screen_res = screen_res;
         self.display_res = display_res;
-        self.screen_res = display_res;
-        self.saved_window_states = saved_window_states;
-        self.status_msg = crate::gui::ui_text("Varsayılan ayarlara dönüldü!", "Settings restored to defaults!");
+        self.status_msg = crate::gui::ui_text("Tüm ayarlar varsayılana döndürüldü!", "All settings restored to defaults!");
     }
 
     /// Ayarları aktif sistem bileşenlerine uygular.
@@ -192,12 +195,9 @@ impl SystemSettings {
         self.status_msg = crate::gui::ui_text("Ses düzeyi güncellendi.", "Volume updated.");
     }
 
-    pub fn save_all(&mut self, compositor: &MinGuiCompositor, vfs: &mut VirtualFileSystem) {
-        for (i, opt_win) in compositor.windows.iter().take(self.saved_window_states.len()).enumerate() {
-            if let Some(ref win) = opt_win {
-                self.saved_window_states[i] = Some(win.get_state());
-            }
-        }
+    /// Ayarları VFS'e ve kalıcı diske yazar. Pencere yerleşimine dokunmaz;
+    /// bu yüzden hem "Kaydet" hem de "Sıfırla" akışından çağrılabilir.
+    pub fn write_config(&self, vfs: &mut VirtualFileSystem) {
         let mut cfg=[0u8;384]; let mut n=0usize;
         fn put(d:&mut [u8], n:&mut usize, s:&[u8]) { let l=core::cmp::min(s.len(),d.len()-*n); d[*n..*n+l].copy_from_slice(&s[..l]); *n+=l; }
         fn put_num(d:&mut [u8], n:&mut usize, value:u8) {
@@ -226,6 +226,15 @@ impl SystemSettings {
         vfs.write_file("settings.cfg",&cfg[..n]);
         // Diske/FAT32 bolumune de fiziksel olarak kaydet (kalici ayarlar icin)
         crate::fs::diskfs::save_file_by_name("settings.cfg", &cfg[..n]);
+    }
+
+    pub fn save_all(&mut self, compositor: &MinGuiCompositor, vfs: &mut VirtualFileSystem) {
+        for (i, opt_win) in compositor.windows.iter().take(self.saved_window_states.len()).enumerate() {
+            if let Some(ref win) = opt_win {
+                self.saved_window_states[i] = Some(win.get_state());
+            }
+        }
+        self.write_config(vfs);
         self.status_msg = crate::gui::ui_text("Ayarlar ve pencere düzeni diske kalıcı olarak kaydedildi.", "Settings and window layout saved to disk.");
     }
 

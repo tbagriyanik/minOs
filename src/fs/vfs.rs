@@ -202,10 +202,13 @@ impl VirtualFileSystem {
     pub fn create_dir(&mut self, path: &str) -> bool {
         let norm = Self::normalize_path(path);
         let parent = Self::parent_path_from_path(&norm);
+        let disk_ok = if parent == "/root/Documents" {
+            diskfs::create_dir_by_name(&Self::file_name_from_path(&norm))
+        } else { true };
         if !self.is_dir(&parent) && parent != "/" {
             self.create_dir(&parent);
         }
-        self.create_dir_internal(&norm)
+        self.create_dir_internal(&norm) || (disk_ok && self.is_dir(&norm))
     }
 
     /// Yeni dosya oluşturur veya üzerine yazar.
@@ -221,6 +224,10 @@ impl VirtualFileSystem {
     /// Dosyaya yazar veya üzerine kaydeder.
     pub fn write_file(&mut self, path_or_name: &str, data: &[u8]) -> bool {
         let norm = Self::normalize_path(path_or_name);
+        let home_file = Self::parent_path_from_path(&norm) == "/root/Documents";
+        let disk_ok = if home_file {
+            diskfs::save_file_by_name(&Self::file_name_from_path(&norm), data)
+        } else { true };
 
         // USB ve Sabit Disk ortamına yazma kontrolü
         if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
@@ -236,12 +243,12 @@ impl VirtualFileSystem {
                 }
                 it.data = data.to_vec();
                 it.size = data.len();
-                return true;
+                return disk_ok;
             }
         }
 
         // Bulunamadıysa yeni dosya olarak oluştur
-        self.create_file(&norm, data)
+        self.create_file(&norm, data) && disk_ok
     }
 
     /// Büyük dosyalar için baytları çağıran uygulamada tutup VFS'de yalnızca
@@ -249,6 +256,9 @@ impl VirtualFileSystem {
     pub fn write_large_file(&mut self, path: &str, data: Arc<[u8]>) -> bool {
         let norm = Self::normalize_path(path);
         let size = data.len();
+        let disk_ok = if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            diskfs::save_file_by_name(&Self::file_name_from_path(&norm), &data)
+        } else { true };
         if let Some((_, existing)) = self.large_files.iter_mut().find(|(saved_path, _)| *saved_path == norm) {
             *existing = data.clone();
         } else {
@@ -259,7 +269,7 @@ impl VirtualFileSystem {
                 if item.node_type == NodeType::Directory { return false; }
                 item.size = size;
                 item.data.clear();
-                return true;
+                return disk_ok;
             }
         }
         let parent = Self::parent_path_from_path(&norm);
@@ -272,14 +282,17 @@ impl VirtualFileSystem {
             data: Vec::new(),
             is_readonly: false,
         });
-        true
+        disk_ok
     }
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> bool {
         let old = Self::normalize_path(old_path);
         let new = Self::normalize_path(new_path);
         if old == "/" || new == "/" || self.exists(&new) { return false; }
-        if !self.exists(&old) { return false; }
+        let disk_rename = Self::parent_path_from_path(&old) == "/root/Documents"
+            && Self::parent_path_from_path(&new) == "/root/Documents"
+            && diskfs::rename_by_name(&Self::file_name_from_path(&old), &Self::file_name_from_path(&new));
+        if !self.exists(&old) && !disk_rename { return false; }
         let prefix = if old.ends_with('/') { old.clone() } else { let mut p = old.clone(); p.push('/'); p };
         let mut changed = false;
         for item in &mut self.items {
@@ -294,12 +307,17 @@ impl VirtualFileSystem {
                 changed = true;
             }
         }
-        changed
+        changed || disk_rename
     }
 
     /// Dosya okur (tam yol veya dosya adı ile).
     pub fn read_file(&self, path_or_name: &str) -> Option<&[u8]> {
         let norm = Self::normalize_path(path_or_name);
+
+        if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            let filename = Self::file_name_from_path(&norm);
+            if diskfs::load_file(&filename) > 0 { return Some(diskfs::content()); }
+        }
 
         // Önce doğrudan VFS kayıtlarında ara
         for it in &self.items {
@@ -343,11 +361,18 @@ impl VirtualFileSystem {
     pub fn read_large_file(&self, path: &str) -> Option<Arc<[u8]>> {
         let norm = Self::normalize_path(path);
         self.large_files.iter().find(|(saved_path, _)| *saved_path == norm).map(|(_, data)| data.clone())
+            .or_else(|| (Self::parent_path_from_path(&norm) == "/root/Documents").then(|| {
+                diskfs::load_file_alloc(&Self::file_name_from_path(&norm)).map(Arc::from)
+            }).flatten())
     }
 
     /// Dosya siler.
     pub fn delete_file(&mut self, path_or_name: &str) -> bool {
         let norm = Self::normalize_path(path_or_name);
+
+        let home_deleted = if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            diskfs::delete_file_by_name(&Self::file_name_from_path(&norm))
+        } else { false };
 
         if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
             let disk_file = Self::file_name_from_path(&norm);
@@ -365,7 +390,7 @@ impl VirtualFileSystem {
             self.items.remove(idx);
             return true;
         }
-        false
+        home_deleted
     }
 
     /// Klasör siler (içi boş olmalıdır).
@@ -380,6 +405,9 @@ impl VirtualFileSystem {
                 return false;
             }
         }
+        let home_deleted = if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            diskfs::delete_dir_by_name(&Self::file_name_from_path(&norm))
+        } else { false };
         let mut found_idx = None;
         for (i, it) in self.items.iter().enumerate() {
             if it.path == norm && it.node_type == NodeType::Directory {
@@ -391,7 +419,7 @@ impl VirtualFileSystem {
             self.items.remove(idx);
             return true;
         }
-        false
+        home_deleted
     }
 
     /// Silinen bir öğeyi kalıcı olarak silmek yerine Geri Dönüşüm Kutusu'na taşır.
@@ -404,10 +432,11 @@ impl VirtualFileSystem {
             return false;
         }
         // Öğe var mı?
-        let src = match self.items.iter().find(|it| it.path == norm) {
-            Some(it) => it.clone(),
-            None => return false,
-        };
+        let src = self.items.iter().find(|it| it.path == norm).cloned().or_else(|| {
+            let parent = Self::parent_path_from_path(&norm);
+            self.list_dir(&parent).into_iter().find(|it| it.path == norm)
+        });
+        let Some(src) = src else { return false; };
         // Klasörse içi boş olmalı (iç içe taşıma karmaşıklığını önlemek için).
         if src.node_type == NodeType::Directory {
             for it in &self.items {
@@ -430,15 +459,31 @@ impl VirtualFileSystem {
             Self::push_u32(&mut target, counter);
             counter += 1;
         }
+        // Home dizini diske yansıtılır; çöp kutusu girdisi RAM'de tutulur.
+        if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            if src.node_type == NodeType::Directory {
+                let _ = diskfs::delete_dir_by_name(&src.name);
+            } else {
+                let _ = diskfs::delete_file_by_name(&src.name);
+            }
+        }
         // Öğeyi çöp kutusuna taşı (yol ve isim güncellenir).
+        let mut moved = false;
         for it in &mut self.items {
             if it.path == norm {
                 it.path = target.clone();
                 it.name = Self::file_name_from_path(&target);
-                return true;
+                moved = true;
+                break;
             }
         }
-        false
+        if !moved {
+            let mut copy = src;
+            copy.path = target.clone();
+            copy.name = Self::file_name_from_path(&target);
+            self.items.push(copy);
+        }
+        true
     }
 
     /// Geri Dönüşüm Kutusu içindeki öğeleri listeler.
@@ -529,6 +574,19 @@ impl VirtualFileSystem {
         let norm = Self::normalize_path(dir_path);
         let mut results = Vec::new();
 
+        if norm == "/root/Documents" && diskfs::usb_available() {
+            if !diskfs::listed() { diskfs::refresh(); }
+            for i in 0..diskfs::entry_count() {
+                let Some(entry) = diskfs::entry(i) else { continue; };
+                let name = String::from(entry.as_str());
+                if name.eq_ignore_ascii_case("settings.cfg") || name.eq_ignore_ascii_case("benioku.txt") { continue; }
+                if results.iter().any(|item: &VfsItem| item.name.eq_ignore_ascii_case(&name)) { continue; }
+                let mut path = norm.clone(); path.push('/'); path.push_str(&name);
+                results.push(VfsItem { path, name, node_type: if entry.is_dir { NodeType::Directory } else { NodeType::File }, size: entry.size,
+                    data: Vec::new(), is_readonly: false });
+            }
+        }
+
         // Sabit Disk (HDD/QCOW2) ve USB disk görünümü
         if (norm == "/media/usb0" || norm == "/media/hdd0") && diskfs::usb_available() {
             if !diskfs::listed() {
@@ -581,7 +639,7 @@ impl VirtualFileSystem {
                 continue;
             }
             let parent = Self::parent_path_from_path(&it.path);
-            if parent == norm {
+            if parent == norm && !results.iter().any(|existing| existing.name.eq_ignore_ascii_case(&it.name)) {
                 results.push(it.clone());
             }
         }

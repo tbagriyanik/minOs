@@ -605,7 +605,7 @@ impl MinGuiCompositor {
             ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
             ["Video Oynatıcı", "Video Player"], ["Görev Yöneticisi", "Task Manager"],
             ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
-            ["Komut İstemi", "Terminal"], ["minOs Kurulumu", "minOs Installer"],
+            ["Komut İstemi", "Terminal"], ["Tek Tıkla Kur", "One-Click Install"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
         let mut scored: [(usize, u8); 12] = [(0, 0); 12];
@@ -1695,7 +1695,7 @@ impl MinGuiCompositor {
                 8 => "Calculator",
                 9 => "Paint",
                 10 => "Command Prompt",
-                11 => "minOs Installer",
+                11 => "One-Click Install",
                 _ => "Window",
             }
         } else {
@@ -1711,7 +1711,7 @@ impl MinGuiCompositor {
                 8 => "Hesap Makinesi",
                 9 => "Çizim Tahtası",
                 10 => "Komut İstemi",
-                11 => "minOs Kurulumu",
+                11 => "Tek Tıkla Kur",
                 _ => "Pencere",
             }
         }
@@ -2442,8 +2442,8 @@ impl MinGuiCompositor {
             fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
             Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
-            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "minOs Kurulumu"];
-            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "minOs Installer"];
+            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur"];
+            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install"];
             if count == 0 {
                 Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
             }
@@ -2483,7 +2483,7 @@ impl MinGuiCompositor {
             ("Settings", Color::ACCENT_BLUE, 1usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
             ("Terminal", Color::ACCENT_GREEN, 10),
-            ("Installer", Color::ACCENT_GREEN, 11),
+            ("One-Click Install", Color::ACCENT_GREEN, 11),
             ("Notepad", Color::TEXT_MAIN, 2),
             ("Calculator", Color::ACCENT_GREEN, 8),
             ("Paint", Color::ACCENT_PINK, 9),
@@ -2498,7 +2498,7 @@ impl MinGuiCompositor {
             ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
             ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
             ("Komut İstemi", Color::ACCENT_GREEN, 10),
-            ("minOs Kurulumu", Color::ACCENT_GREEN, 11),
+            ("Tek Tıkla Kur", Color::ACCENT_GREEN, 11),
             ("Not Defteri", Color::TEXT_MAIN, 2),
             ("Hesap Makinesi", Color::ACCENT_GREEN, 8),
             ("Çizim Tahtası", Color::ACCENT_PINK, 9),
@@ -2518,7 +2518,7 @@ impl MinGuiCompositor {
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
             let is_hovered = in_rect(mx, my, r) || (self.selected_start_item == k);
-            let bg_col = if (i == 11 && self.confirm_shutdown) || (i == 12 && self.confirm_restart) {
+            let bg_col = if (i == 12 && self.confirm_shutdown) || (i == 13 && self.confirm_restart) {
                 Color::ACCENT_RED
             } else if is_hovered {
                 Color::ACCENT_BLUE
@@ -2543,9 +2543,9 @@ impl MinGuiCompositor {
                 Self::draw_cat_icon_scaled(fb, r.0 + sp(6), icon_y);
             }
 
-            let label = if i == 11 && self.confirm_shutdown {
+            let label = if i == 12 && self.confirm_shutdown {
                 crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
-            } else if i == 12 && self.confirm_restart {
+            } else if i == 13 && self.confirm_restart {
                 crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
             } else {
                 name

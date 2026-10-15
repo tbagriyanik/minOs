@@ -37,7 +37,7 @@ minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 
 ## ✨ Özellikler ve Uygulama Paketi
 
-minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygulama** ve pencere yöneticisi içerir:
+minOs, tam teşekküllü bir masaüstü deneyimi sunan **12 adet yerleşik uygulama** ve pencere yöneticisi içerir:
 
 | Uygulama | Açıklama |
 | :--- | :--- |
@@ -53,6 +53,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **11 adet yerleşik uygul
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`), `Backspace` ve `Esc` ile temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
+| **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT` ve mevcut `settings.cfg` ayarlarını diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. |
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.
 

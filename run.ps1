@@ -5,7 +5,7 @@ param(
     [switch]$UsbDiskReadWrite,
     [ValidateRange(1, 64)][int]$CpuCount = 2,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
-    [string]$DiskImage
+    [string]$DiskImage = ".\disk.qcow2"
 )
 
 # minOs Derle ve QEMU ile Çalistir (PowerShell)

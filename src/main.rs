@@ -253,6 +253,7 @@ fn serial_print_hex(v: u64) {
 
 
 fn restart_system() -> ! {
+    #[cfg(minos_boot_log)]
     serial_print("[minOs] Restart requested from Start Menu.\n");
     unsafe {
         // QEMU/PC reset control register, then legacy 8042 fallback.
@@ -549,7 +550,9 @@ pub extern "C" fn _start() -> ! {
     init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
+    #[cfg(minos_boot_log)]
     serial_print("[minOs] Kernel _start reached!\n");
+    #[cfg(minos_boot_log)]
     serial_print("[minOs] SSE enabled & PIC IRQs masked!\n");
 
     // HHDM ofsetini al (fiziksel MMIO ve sayfa tablosu sanal erisimi icin).
@@ -559,9 +562,11 @@ pub extern "C" fn _start() -> ! {
             .filter(|resp| !resp.is_null())
         {
             let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
+            #[cfg(minos_boot_log)]
             serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
             off
         } else {
+            #[cfg(minos_boot_log)]
             serial_print("[minOs] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
             0xFFFF_8000_0000_0000
         }
@@ -707,19 +712,22 @@ pub extern "C" fn _start() -> ! {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
             if framebuffer_count == 0 || fb_ptr_ptr.is_null() || !is_canonical_ptr(fb_ptr_ptr) {
-                serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
+                #[cfg(minos_boot_log)]
+    serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
             // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
             if fb_info_ptr.is_null() || !is_canonical_ptr(fb_info_ptr) {
-                serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
+                #[cfg(minos_boot_log)]
+    serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             let fb_info = core::ptr::read_volatile(fb_info_ptr);
             if fb_info.address.is_null() || !is_canonical_ptr(fb_info.address as *const u8) {
-                serial_print("[minOs] ERROR: Limine framebuffer buffer address is NULL or non-canonical!\n");
+                #[cfg(minos_boot_log)]
+    serial_print("[minOs] ERROR: Limine framebuffer buffer address is NULL or non-canonical!\n");
                 loop { core::hint::spin_loop(); }
             }
             (
@@ -730,7 +738,8 @@ pub extern "C" fn _start() -> ! {
                 fb_info.bpp as usize,
             )
         } else {
-            serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
+            #[cfg(minos_boot_log)]
+    serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
             loop {
                 core::hint::spin_loop();
             }
@@ -768,7 +777,6 @@ pub extern "C" fn _start() -> ! {
 
     // 5b. Tema motorunu başlat
     gui::theme::init();
-    serial_print("[minOs] Theme engine initialized.\n");
 
     // İlk açılış ekranı: kedi logosu ve ilerleme animasyonu.
     fb.draw_rect(0, 0, width, height, gui::Color::DARK_BG);
@@ -781,52 +789,35 @@ pub extern "C" fn _start() -> ! {
         gui::MinGuiCompositor::draw_string(&mut fb, cx + 34, cy + 8, dots, gui::Color::ACCENT_BLUE);
         for _ in 0..180_000 { core::hint::spin_loop(); }
     }
-    serial_print("[minOs] Splash rendered; initializing GUI state.\n");
 
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
     let mut compositor = gui::MinGuiCompositor::new();
-    serial_print("[minOs] Compositor initialized.\n");
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
-    serial_print("[minOs] File manager state initialized.\n");
     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
-    serial_print("[minOs] File manager populated.\n");
     let mut settings_app = apps::settings::SystemSettings::default();
-    serial_print("[minOs] Settings state initialized.\n");
     settings_app.display_res = (width, height);
     // Disk üzerinde önceden kaydedilmiş kalıcı ayarlar var mı kontrol et
     if fs::diskfs::load_file("settings.cfg") > 0 {
         let cfg_bytes = fs::diskfs::content();
         let _ = fs_mgr.vfs.write_file("settings.cfg", cfg_bytes);
-        serial_print("[minOs] Kalici settings.cfg diskten VFS'e aktarildi.\n");
     }
     settings_app.load_from_vfs(&fs_mgr.vfs);
     keyboard.layout = settings_app.keyboard_layout;
     gui::theme::set_theme(settings_app.theme);
     let mut notepad_app = apps::notepad::NotepadApp::new();
-    serial_print("[minOs] Notepad state initialized.\n");
     let mut browser_app = apps::browser::BrowserApp::new();
-    serial_print("[minOs] Browser state initialized.\n");
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
-    serial_print("[minOs] ImageViewer state initialized.\n");
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
-    serial_print("[minOs] MusicPlayer state initialized.\n");
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
-    serial_print("[minOs] VideoPlayer state initialized.\n");
     let mut taskmgr_app = apps::taskmgr::TaskManagerApp::new();
-    serial_print("[minOs] TaskManager state initialized.\n");
     let mut calculator_app = apps::calculator::CalculatorApp::new();
-    serial_print("[minOs] Calculator state initialized.\n");
     // Başlangıçta yalnızca sabit uygulama pencereleri için state oluştur.
     // MAX_WINDOWS kadar 4096 noktalı tuval ayırmak 1 MiB kernel heap'ini aşar.
     let mut paint_apps: alloc::vec::Vec<Option<apps::paint::PaintApp>> = (0..gui::MAX_WINDOWS).map(|_| None).collect();
-    serial_print("[minOs] Paint slots initialized.\n");
     let mut terminal_app = apps::terminal::TerminalApp::new();
-    serial_print("[minOs] Terminal state initialized.\n");
     terminal_app.init_banner();
     let mut installer_app = apps::installer::InstallerApp::new();
     installer_app.refresh_drives();
-    serial_print("[minOs] Installer state initialized.\n");
-    serial_print("[minOs] App state initialized.\n");
 
     // 11 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
@@ -864,11 +855,11 @@ pub extern "C" fn _start() -> ! {
     compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 340, false));
     compositor.add_window(gui::Window::new("Çizim Tahtası", "Çizim", 180, 80, 520, 360, false));
     compositor.add_window(gui::Window::new("Komut İstemi", "Komut", 220, 100, 560, 300, false));
-    // 11: minOs Kurulum Sihirbazı
+    // 11: minOs Tek Tıkla Kur Sihirbazı
     let inst_w = 540.min(width.saturating_sub(20)).max(200);
-    let inst_h = 420.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    let inst_h = 460.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
     compositor.add_window(gui::Window::new(
-        "minOs Kurulumu", "Kurulum",
+        "minOs Tek Tıkla Kur", "Kurulum",
         width.saturating_sub(inst_w) / 2,
         height.saturating_sub(inst_h + gui::taskbar_h()) / 2,
         inst_w, inst_h, false,
@@ -876,14 +867,12 @@ pub extern "C" fn _start() -> ! {
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
-    serial_print("[minOs] Window list initialized.\n");
 
     // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
     let mut welcome_accepted = false;
-    serial_print("[minOs] Entering welcome screen.\n");
     loop {
         if welcome_dirty {
             gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
@@ -951,6 +940,7 @@ pub extern "C" fn _start() -> ! {
     let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
     compositor.cal_year = now.year;
     compositor.cal_month = now.month;
+    #[cfg(minos_boot_log)]
     serial_print("[minOs] RTC clock online.\n");
     // Save once the boot transcript is complete, including numeric fields.
     save_boot_log(&mut fs_mgr.vfs);
@@ -1488,9 +1478,10 @@ pub extern "C" fn _start() -> ! {
                     let rect = gui::MinGuiCompositor::start_menu_subitem_rect(menu_y, active_g, k, tb_y);
                     if gui::in_rect(mx, my, rect) {
                         item_clicked = true;
-                        if i == 11 {
+                        if i == 12 {
                             if compositor.confirm_shutdown {
-                                serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
+                                #[cfg(minos_boot_log)]
+    serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
                                 unsafe {
                                     core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                                     core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
@@ -1502,7 +1493,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             break;
                         }
-                        if i == 12 {
+                        if i == 13 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -2115,15 +2106,34 @@ pub extern "C" fn _start() -> ! {
                             11 => {
                                 // minOs Kurulum Sihirbazı
                                 let sel_rect = apps::installer::InstallerApp::drive_select_rect(wx, wy, ww);
+                                let fmt_rect = apps::installer::InstallerApp::format_btn_rect(wx, wy, ww, wh);
                                 let btn_rect = apps::installer::InstallerApp::install_btn_rect(wx, wy, ww, wh);
                                 if gui::in_rect(mx, my, sel_rect) {
                                     installer_app.select_next_drive();
-                                } else if gui::in_rect(mx, my, btn_rect) {
+                                } else if gui::in_rect(mx, my, fmt_rect) {
+                                    // 2. Adım: Sadece FAT32 biçimlendir.
                                     if installer_app.state == apps::installer::InstallState::Selecting
                                         || installer_app.state == apps::installer::InstallState::Failed
                                     {
-                                        installer_app.perform_install(&mut fs_mgr.vfs);
-                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                        installer_app.format_selected_drive();
+                                    }
+                                } else if gui::in_rect(mx, my, btn_rect) {
+                                    // 3. Adım: Onaylı tek tıkla kurulum.
+                                    if installer_app.state == apps::installer::InstallState::Selecting
+                                        || installer_app.state == apps::installer::InstallState::Failed
+                                    {
+                                        if installer_app.disk_formatted {
+                                            installer_app.perform_install(&mut fs_mgr.vfs);
+                                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                        } else if installer_app.confirm_install {
+                                            // Onay verildi: biçimlendirip kur.
+                                            installer_app.perform_install(&mut fs_mgr.vfs);
+                                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                        } else {
+                                            // İlk tıklama: onay iste (diski biçimlendirecek).
+                                            installer_app.confirm_install = true;
+                                            installer_app.status_msg = "UYARI: Disk silinip FAT32 olarak bicimlendirilecek. Onaylamak icin tekrar tiklayin.";
+                                        }
                                     }
                                 }
                             }
@@ -2354,9 +2364,10 @@ pub extern "C" fn _start() -> ! {
                         let (_, first, count) = gui::MENU_GROUPS[active_g];
                         let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
                         let i = first + item_k;
-                        if i == 11 {
+                        if i == 12 {
                             if compositor.confirm_shutdown {
-                                serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
+                                #[cfg(minos_boot_log)]
+    serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
                                 unsafe {
                                     core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                                     core::arch::asm!("cli; hlt");
@@ -2364,7 +2375,7 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 compositor.confirm_shutdown = true;
                             }
-                        } else if i == 12 {
+                        } else if i == 13 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -2512,7 +2523,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::ShutdownOS => {
-                    serial_print("[minOs] System Shutdown requested!\n");
+                    #[cfg(minos_boot_log)]
+    serial_print("[minOs] System Shutdown requested!\n");
                     unsafe {
                         core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
                         core::arch::asm!("cli; hlt");

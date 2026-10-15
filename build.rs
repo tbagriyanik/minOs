@@ -13,6 +13,7 @@ struct FaceOutput {
 }
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(minos_boot_log)");
     let faces = [
         FaceOutput {
             name: "INRIA",

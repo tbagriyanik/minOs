@@ -304,7 +304,7 @@ pub fn self_test() -> bool {
         _ => ok = false,
     }
     match parse_url("http://10.0.2.2:8080/", &mut h, &mut p) {
-        Ok((8080, 7, 1)) => {}
+        Ok((8080, 8, 1)) => {}
         _ => ok = false,
     }
     if parse_url("https://example.com/", &mut h, &mut p) != Err(E_TLS) {

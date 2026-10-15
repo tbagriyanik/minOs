@@ -687,7 +687,7 @@ pub fn run_network_self_test() -> bool {
     crate::serial_print("TX iletildi.\n");
 
     let mut arp_replied = false;
-    for _ in 0..100_000 {
+    for _ in 0..2_000 {
         e1000::poll();
         if unsafe { LAST_ARP_REPLY_SRC.is_some() } {
             arp_replied = true;
@@ -709,7 +709,7 @@ pub fn run_network_self_test() -> bool {
     if ping_sent {
         crate::serial_print("TX iletildi, Echo Reply bekleniyor... ");
         let mut echo_replied = false;
-        for _ in 0..200_000 {
+        for _ in 0..3_000 {
             e1000::poll();
             if unsafe { LAST_PING_REPLY_SRC.is_some() } {
                 echo_replied = true;
@@ -731,7 +731,7 @@ pub fn run_network_self_test() -> bool {
     let tcp_init = tcp_begin(GATEWAY_IP, 80, 49200);
     if tcp_init {
         let mut tcp_synack = false;
-        for _ in 0..300_000 {
+        for _ in 0..5_000 {
             e1000::poll();
             if unsafe { TCP_CONNECTED } {
                 tcp_synack = true;
@@ -746,7 +746,7 @@ pub fn run_network_self_test() -> bool {
             let http_sent = tcp_send(b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n");
             if http_sent {
                 crate::serial_print("Iletildi, veri bekleniyor... ");
-                for _ in 0..300_000 {
+                for _ in 0..5_000 {
                     e1000::poll();
                     if unsafe { TCP_DATA_LEN > 0 || TCP_FIN_RECEIVED } {
                         break;

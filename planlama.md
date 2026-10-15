@@ -107,7 +107,10 @@ flowchart TD
 - Soket başına durum makineli TCP (`socket`/`connect`/`send`/`recv`/`close`, UDP, DNS önbelleği).
 - HTTP istemcisi (chunked + yönlendirme) ve MinShell `curl` komutu.
 
-### Faz 7: Sıradakiler 🔲
-- **Tam Ring 3 Kullanıcı Alanı & Syscall API** (`int 0x80` / `syscall`/`sysret`, GDT+TSS).
-- **SMP:** AP çekirdeklerini uyandırma, çekirdekler arası zamanlayıcı.
-- **Paket Yöneticisi (`minpkg`)**, donanım 2D hızlandırma.
+### Faz 7: Ring 3, SMP ve Ses Alt Sistemi Optimizasyonu ✅
+- **Ring 3 Kullanıcı Kipi İzolasyonu:** GDT TSS kullanıcı segmentleri, `int 0x80` sistem çağrıları (`SYS_GETPID`, `SYS_YIELD`, `SYS_WRITE`), #GP/#PF hata yakalama ve çekirdek koruması.
+- **SMP (Çok Çekirdekli Paralellik):** Limine SMP protokolü ile AP başlatımı, çekirdek başına 64 KiB yığın ve GDT, LAPIC kimliği, paralel atomik iş kuyruğu (`parallel_checksum`).
+- **Gelişmiş Ses Alt Sistemi:** Intel HDA için evrensel PCI taraması, 64-bit BAR0, donanımsal CRST/SRST sıfırlama, AFG/DAC/Pin D0 güç yönetimi, donanımsal DMA Position Buffer (offset `0x70`), atomik 32-bit SDnCTL akış kontrolü ve otomatik PC Speaker PWM yedeği (fallback). Ayarlar uygulamasında donanımsal ses testi.
+
+### Faz 8: Sıradakiler 🔲
+- **Kullanıcı Alanı ELF Yükleyici**, Paket Yöneticisi (`minpkg`), donanım 2D hızlandırma.

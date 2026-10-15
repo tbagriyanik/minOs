@@ -961,6 +961,7 @@ pub fn in_rect(mx: usize, my: usize, r: (usize, usize, usize, usize)) -> bool {
 pub enum ContextKind {
     /// Masaüstü boş alanı
     Desktop,
+    DesktopItem,
     /// Dosya Yöneticisi içindeki bir dosya
     FileManager,
     /// Not Defteri metin alanı (Kes/Kopyala/Yapıştır...)
@@ -982,6 +983,12 @@ pub const CTX_DESKTOP: [(&str, u32); 9] = [
     ("Görev Yöneticisi", Color::ACCENT_YELLOW),
     ("Tema Değiştir", Color::ACCENT_GREEN),
     ("Masaüstünü Yenile", Color::TEXT_MUTED),
+];
+pub const CTX_DESKTOP_ITEM: [(&str, u32); 10] = [
+    ("Aç / Klasöre Gir", Color::ACCENT_GREEN), ("Not Defterinde Düzenle", Color::TEXT_MAIN),
+    ("Kes", Color::ACCENT_RED), ("Kopyala", Color::ACCENT_BLUE), ("Yapıştır", Color::ACCENT_GREEN),
+    ("Yeni Dosya Oluştur", Color::ACCENT_BLUE), ("Yeni Klasör Oluştur", Color::ACCENT_YELLOW),
+    ("Adını Değiştir", Color::ACCENT_YELLOW), ("Sil", Color::ACCENT_RED), ("Özellikler", Color::TEXT_MUTED),
 ];
 
 /// Dosya Yöneticisi'nde bir dosyaya veya klasöre sağ tık menüsü.
@@ -1026,6 +1033,12 @@ const CTX_DESKTOP_EN: [(&str, u32); 9] = [
     ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW), ("Paste", Color::ACCENT_GREEN),
     ("System Settings", Color::ACCENT_PINK), ("Task Manager", Color::ACCENT_YELLOW),
     ("Change Theme", Color::ACCENT_GREEN), ("Refresh Desktop", Color::TEXT_MUTED),
+];
+const CTX_DESKTOP_ITEM_EN: [(&str, u32); 10] = [
+    ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
+    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
+    ("New File", Color::ACCENT_BLUE), ("New Folder", Color::ACCENT_YELLOW),
+    ("Rename", Color::ACCENT_YELLOW), ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
 ];
 const CTX_FILE_EN: [(&str, u32); 10] = [
     ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
@@ -2350,11 +2363,13 @@ impl MinGuiCompositor {
     pub fn context_items(&self) -> &'static [(&'static str, u32)] {
         match (self.context_kind, ui_english()) {
             (ContextKind::Desktop, false) => &CTX_DESKTOP,
+            (ContextKind::DesktopItem, false) => &CTX_DESKTOP_ITEM,
             (ContextKind::FileManager, false) => &CTX_FILE,
             (ContextKind::Notepad, false) => &CTX_NOTEPAD,
             (ContextKind::TaskManager, false) => &CTX_TASKMANAGER,
             (ContextKind::Window, false) => &CTX_WINDOW,
             (ContextKind::Desktop, true) => &CTX_DESKTOP_EN,
+            (ContextKind::DesktopItem, true) => &CTX_DESKTOP_ITEM_EN,
             (ContextKind::FileManager, true) => &CTX_FILE_EN,
             (ContextKind::Notepad, true) => &CTX_NOTEPAD_EN,
             (ContextKind::TaskManager, true) => &CTX_TASKMANAGER_EN,
@@ -2368,7 +2383,7 @@ impl MinGuiCompositor {
         let items = self.context_items();
         let widest_item = items.iter().map(|(label, _)| Self::text_width(label, 1)).max().unwrap_or(0);
         let icon_pad = match self.context_kind {
-            ContextKind::Desktop | ContextKind::Notepad => sp(24),
+            ContextKind::Desktop | ContextKind::DesktopItem | ContextKind::Notepad => sp(24),
             _ => 0,
         };
         let shortcut_pad = match self.context_kind {
@@ -2394,6 +2409,7 @@ impl MinGuiCompositor {
         // Menü başlığı (tür)
         let header = match self.context_kind {
             ContextKind::Desktop => ui_text("Masaüstü", "Desktop"),
+            ContextKind::DesktopItem => ui_text("Masaüstü Öğesi", "Desktop Item"),
             ContextKind::FileManager => ui_text("Dosya İşlemleri", "File Actions"),
             ContextKind::Notepad => ui_text("Düzenleme", "Edit"),
             ContextKind::TaskManager => ui_text("Görev", "Task"),
@@ -2410,7 +2426,7 @@ impl MinGuiCompositor {
             fb.draw_rect(menu_x + 4, item_y, menu_w - 8, item_h.saturating_sub(sp(4)), Color::WINDOW_BG);
 
             let mut text_x = menu_x + sp(10);
-            if self.context_kind == ContextKind::Desktop {
+            if self.context_kind == ContextKind::Desktop || self.context_kind == ContextKind::DesktopItem {
                 // Masaüstü sağ tık menüsü simgeleri (12x12 piksel)
                 let icon_x = menu_x + sp(10);
                 let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;

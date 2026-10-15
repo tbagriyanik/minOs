@@ -486,7 +486,10 @@ fn cpu_vendor() -> &'static str {
 
 fn cpu_logical_count() -> u32 {
     let result = core::arch::x86_64::__cpuid(1);
-    ((result.ebx >> 16) & 0xFF).max(1)
+    let from_cpuid = ((result.ebx >> 16) & 0xFF).max(1);
+    // SMP açılışı tamamlandıysa gerçek çevrimiçi CPU sayısını yansıt.
+    let from_smp = arch::x86_64::smp::cpu_count() as u32;
+    from_cpuid.max(from_smp).max(1)
 }
 
 #[inline]
@@ -654,7 +657,7 @@ fn terminate_app(
             *musicplayer = apps::musicplayer::MusicPlayerApp::new();
             drivers::hda::silence();
             // PC speaker çıkışını da kapat.
-            let audio = drivers::audio::AudioDevice::new();
+            let mut audio = drivers::audio::AudioDevice::new();
             audio.set_pc_speaker_tone(0);
         }
         6 => *videoplayer = apps::videoplayer::VideoPlayerApp::new(),
@@ -915,6 +918,61 @@ pub extern "C" fn _start() -> ! {
     // Süreç yaşam döngüsü, kaza, geçersiz syscall ve kaynak temizleme testi
     mm::process::test_process_lifecycle_and_fault_recovery(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
 
+    // 1b. SMP + Ring3: kendi GDT'miz (kullanıcı segmentleri + TSS), AP açılışı,
+    // Ring3 izolasyon demosu ve paralel sağlama toplamı (checksum) doğrulaması.
+    unsafe { arch::x86_64::gdt::load_for_cpu(0) };
+    let cpu_total = arch::x86_64::smp::init();
+    let cpu_online = arch::x86_64::smp::wait_for_aps(50_000_000);
+    arch::x86_64::smp::print_locked("[SMP] CPU durumu: ");
+    arch::x86_64::smp::print_locked_dec(cpu_online as u64);
+    arch::x86_64::smp::print_locked("/");
+    arch::x86_64::smp::print_locked_dec(cpu_total as u64);
+    arch::x86_64::smp::print_locked(" cekirdek cevrimici.\n");
+    for cpu in 1..cpu_total {
+        let hb0 = arch::x86_64::smp::heartbeat(cpu);
+        arch::x86_64::smp::print_locked("[SMP] AP");
+        arch::x86_64::smp::print_locked_dec(cpu as u64);
+        arch::x86_64::smp::print_locked(" kalp atisi: ");
+        arch::x86_64::smp::print_locked_dec(hb0);
+        arch::x86_64::smp::print_locked("\n");
+    }
+    if arch::x86_64::ring3::demo(&mut address_space, &mut memory_mgr.pmm) {
+        arch::x86_64::smp::print_locked("[RING3] Kullanic kipi izolasyon demosu: TAMAM.\n");
+    } else {
+        arch::x86_64::smp::print_locked("[RING3] Kullanic kipi izolasyon demosu: BASARISIZ.\n");
+    }
+    // Paralel sağlama toplamı: AP'ler + BSP aynı tamponu parçalı işler.
+    {
+        const SUM_FRAMES: usize = 64;
+        const U64_PER_FRAME: usize = 512;
+        if let Some(buf_phys) = memory_mgr.pmm.allocate_contiguous_frames(SUM_FRAMES) {
+            unsafe {
+                let base = crate::drivers::phys_to_virt(buf_phys) as *mut u64;
+                let mut expected: u64 = 0;
+                for i in 0..SUM_FRAMES * U64_PER_FRAME {
+                    let v = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(0x1234_5678);
+                    base.add(i).write_volatile(v);
+                    expected = expected.wrapping_add(v);
+                }
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                match arch::x86_64::smp::parallel_checksum(buf_phys, SUM_FRAMES * U64_PER_FRAME, 4 * U64_PER_FRAME) {
+                    Some(got) if got == expected => {
+                        serial_print("[SMP] Paralel saglama toplami (AP+BSP) eslesti: BASARILI\n");
+                    }
+                    Some(_) => {
+                        serial_print("[SMP] Paralel saglama toplami UYUSMADI: BASARISIZ\n");
+                    }
+                    None => {
+                        serial_print("[SMP] Paralel saglama toplami zaman asimi (tek cekirdek yedegi yok).\n");
+                    }
+                }
+            }
+            for i in 0..SUM_FRAMES {
+                memory_mgr.pmm.free_frame(buf_phys + (i as u64) * 4096);
+            }
+        }
+    }
+
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
 
@@ -1044,8 +1102,13 @@ pub extern "C" fn _start() -> ! {
     // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
     // Live ortam ise welcome ekranı gösterilir.
     if fs::diskfs::is_installed() {
-        serial_print("[BOOT] Kurulu sistem tespit edildi; welcome atlandi.\n");
-        // Kurulu sistemse welcome ekranını tamamen atla, masaüstüne geç.
+        serial_print("[BOOT] Kurulu sistem tespit edildi; masaustu hazirlaniyor...\n");
+        for phase in 0..4 {
+            gui::render_loading_transition(&mut fb, width, height, phase,
+                gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
+            let frame_start = monotonic_ms();
+            while monotonic_ms().saturating_sub(frame_start) < 25 { core::hint::spin_loop(); }
+        }
     } else {
         // İlk açılış geçişi: merkezde minOs + hareketli kedi ve yükleme çubuğu.
         for phase in 0..8 {
@@ -1063,6 +1126,8 @@ pub extern "C" fn _start() -> ! {
     let mut desktop_files = apps::filemanager::FileManagerApp::new();
     desktop_files.set_path("/desktop");
     desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+    let mut desktop_drag_source = false;
+    let mut file_clipboard = apps::filemanager::FileClipboard::new();
     let mut settings_app = apps::settings::SystemSettings::default();
     settings_app.display_res = (width, height);
     // Disk üzerinde önceden kaydedilmiş kalıcı ayarlar var mı kontrol et
@@ -1071,8 +1136,6 @@ pub extern "C" fn _start() -> ! {
         let _ = fs_mgr.vfs.write_file("settings.cfg", cfg_bytes);
     }
     settings_app.load_from_vfs(&fs_mgr.vfs);
-    // DEBUG-REPRO-HOOK: ayarlar penceresini Display sekmesinde açık başlat.
-    settings_app.active_tab = 1;
     mouse.speed = settings_app.mouse_speed;
     mouse.reverse_scroll = settings_app.reverse_scroll;
     keyboard.layout = settings_app.keyboard_layout;
@@ -1150,8 +1213,6 @@ pub extern "C" fn _start() -> ! {
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
     compositor.active_window_idx = None;
-    // DEBUG-REPRO-HOOK: ayarlar penceresi açık başlasın.
-    open_app(&mut compositor, 1);
 
     // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
     if !fs::diskfs::is_installed() {
@@ -1342,7 +1403,7 @@ pub extern "C" fn _start() -> ! {
                     0 => fm.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll, kbd.ctrl),
                     1 => st.render_content(fb, win.x, win.y, win.width, win.height, kbd.layout, now, total_ram_bytes,
                         cpu_vendor(), cpu_logical_count(),
-                        if drivers::hda::is_ready() { gui::ui_text("Intel HDA (PCM aktif)", "Intel HDA (PCM active)") } else { gui::ui_text("Ses aygıtı bulunamadı", "Audio device unavailable") },
+                        if drivers::hda::is_ready() { if drivers::hda::is_dma_progressing() { gui::ui_text("Intel HDA (DMA aktif)", "Intel HDA (DMA active)") } else { gui::ui_text("Intel HDA (DMA beklemede)", "Intel HDA (DMA standby)") } } else { gui::ui_text("PC Speaker (PWM fallback)", "PC Speaker (PWM fallback)") },
                         if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
                         if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
@@ -1393,6 +1454,8 @@ pub extern "C" fn _start() -> ! {
 
         if fm.drag_active {
             fm.draw_drag_badge(fb, mouse.x as usize, mouse.y as usize, kbd.ctrl);
+        } else if desktop_fm.drag_active {
+            desktop_fm.draw_drag_badge(fb, mouse.x as usize, mouse.y as usize, kbd.ctrl);
         }
 
         // 4. Backbuffer'ı VRAM'e kopyala (flicker-free; sürüklemede sadece değişen bölge)
@@ -1506,11 +1569,17 @@ pub extern "C" fn _start() -> ! {
                         }
                         compositor.focus_window(idx);
                     } else if my < tb_y {
+                        let selected = desktop_files.selected_items;
+                        let click_idx = desktop_files.last_click_idx;
+                        let click_ms = desktop_files.last_click_ms;
                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                        desktop_files.selected_items = selected;
+                        desktop_files.last_click_idx = click_idx;
+                        desktop_files.last_click_ms = click_ms;
                         if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                             compositor.context_file_idx = Some(desk_idx);
                             desktop_files.select_row(desk_idx, keyboard.ctrl, keyboard.shift);
-                            kind = gui::ContextKind::FileManager;
+                            kind = gui::ContextKind::DesktopItem;
                         } else {
                             kind = gui::ContextKind::Desktop;
                         }
@@ -1670,13 +1739,39 @@ pub extern "C" fn _start() -> ! {
                             1 => open_app(&mut compositor, 2),
                             2 => { desktop_files.new_file(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                             3 => { desktop_files.new_folder(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
-                            4 => { desktop_files.paste_selection(&mut fs_mgr.vfs); }
+                            4 => { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
                             5 => open_app(&mut compositor, 1),
                             6 => open_app(&mut compositor, 7),
                             7 => settings_app.cycle_theme(),
                             8 => { desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                             _ => {}
                         },
+                        gui::ContextKind::DesktopItem => {
+                            match clicked_item {
+                                0 => if let Some(i) = compositor.context_file_idx {
+                                    let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name());
+                                    if desktop_files.files[i].is_dir { filemanager_app.set_path(&path); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
+                            else {
+                                let tag = desktop_files.files[i].icon_tag;
+                                if tag == "TXT" || tag == "LOG" || tag == "CFG" { if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } }
+                                else if tag == "IMG" { open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
+                                else if tag == "SND" { open_app(&mut compositor, 5); }
+                                else if tag == "VID" { open_app(&mut compositor, 6); }
+                                else if tag == "WEB" { open_app(&mut compositor, 3); }
+                                else if tag == "3D" { if let Some(data) = fs_mgr.vfs.read_file(&path) { viewer3d_app.load_file(&path, data); open_app(&mut compositor, 12); } }
+                            }
+                                },
+                                1 => if let Some(i) = compositor.context_file_idx { let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name()); if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } },
+                                2 => desktop_files.copy_selection(&mut file_clipboard, true),
+                                3 => desktop_files.copy_selection(&mut file_clipboard, false),
+                                4 => { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
+                                5 => { desktop_files.new_file(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
+                                6 => { desktop_files.new_folder(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
+                                7 => desktop_files.begin_rename(),
+                                8 => { desktop_files.delete_selected(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
+                                _ => {}
+                            }
+                        }
                         gui::ContextKind::FileManager => {
                             match clicked_item {
                                 0 => { // Aç / Klasöre Gir
@@ -1719,9 +1814,9 @@ pub extern "C" fn _start() -> ! {
                                         open_app(&mut compositor, 2);
                                     }
                                 }
-                                2 => { filemanager_app.copy_selection(true); }
-                                3 => { filemanager_app.copy_selection(false); }
-                                9 => { filemanager_app.paste_selection(&mut fs_mgr.vfs); }
+                                2 => { filemanager_app.copy_selection(&mut file_clipboard, true); }
+                                3 => { filemanager_app.copy_selection(&mut file_clipboard, false); }
+                                9 => { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
                                 5 => { // Yeni Dosya Oluştur
                                     filemanager_app.new_file(&mut fs_mgr.vfs);
                                 }
@@ -2042,6 +2137,7 @@ pub extern "C" fn _start() -> ! {
                 desktop_files.last_click_ms = saved_click_ms;
                 if let Some((i, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
                     desktop_files.select_row(i, keyboard.ctrl, keyboard.shift);
+                    compositor.active_window_idx = None;
                     let now_ms = monotonic_ms();
                     // Masaüstünün kendi tıklama durumu kullanılır (dosya yöneticisi
                     // penceresinin durumu değil); aksi halde çift tık hiç tutmaz.
@@ -2080,6 +2176,7 @@ pub extern "C" fn _start() -> ! {
                         desktop_files.last_click_ms = now_ms;
                         desktop_files.drag_item = Some(i);
                         desktop_files.drag_start = (mx, my);
+                        desktop_drag_source = true;
                     }
                     consumed = true;
                 }
@@ -2300,6 +2397,7 @@ pub extern "C" fn _start() -> ! {
                                                 if filemanager_app.files[i].display_name() != ".." {
                                                     filemanager_app.drag_item = Some(i);
                                                     filemanager_app.drag_start = (mx, my);
+                                                    desktop_drag_source = false;
                                                     filemanager_app.drag_active = false;
                                                     filemanager_app.drag_target = None;
                                                 }
@@ -2433,6 +2531,8 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.run_ram_test();
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_disk_btn_rect(wx, wy)) {
                                         with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_audio_btn_rect(wx, wy)) {
+                                        settings_app.run_audio_test(&mut audio_dev);
                                     }
                                 }
                             }
@@ -2859,6 +2959,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::RenameSelected => {
                     if app_is_focused(&compositor, 0) { filemanager_app.begin_rename(); }
+                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.begin_rename(); }
                 }
                 drivers::keyboard::KeyAction::VolumeUp => {
                     settings_app.volume = settings_app.volume.saturating_add(5).min(100);
@@ -2980,7 +3081,9 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowLeft => {
-                    if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                    if desktop_files.rename_active {
+                        desktop_files.rename_move_cursor(false);
+                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
                         filemanager_app.rename_move_cursor(false);
                     } else if compositor.is_start_menu_open {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
@@ -3026,7 +3129,9 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 drivers::keyboard::KeyAction::ArrowRight => {
-                    if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
+                    if desktop_files.rename_active {
+                        desktop_files.rename_move_cursor(true);
+                    } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
                         filemanager_app.rename_move_cursor(true);
                     } else if compositor.is_start_menu_open {
                         if compositor.active_start_group + 1 < 4 {
@@ -3267,19 +3372,22 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::CopyText => {
                     if app_is_focused(&compositor, 2) { notepad_app.copy_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_copy(); }
-                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(false); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, false); }
+                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.copy_selection(&mut file_clipboard, false); }
                     else if app_is_focused(&compositor, 8) { calculator_app.copy_result(); }
                 }
                 drivers::keyboard::KeyAction::PasteText => {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_paste(); }
-                    else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut fs_mgr.vfs); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
+                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                     else if app_is_focused(&compositor, 8) { calculator_app.paste_expression(); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
                     if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_cut(); }
-                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(true); }
+                    else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, true); }
+                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.copy_selection(&mut file_clipboard, true); }
                     else if app_is_focused(&compositor, 8) { calculator_app.cut_expression(); }
                 }
                 drivers::keyboard::KeyAction::SelectAllText => {
@@ -3413,6 +3521,10 @@ pub extern "C" fn _start() -> ! {
                         filemanager_app.delete_selected(&mut fs_mgr.vfs);
                     } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
                         filemanager_app.rename_delete();
+                    } else if desktop_files.rename_active {
+                        desktop_files.rename_delete();
+                    } else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] {
+                        desktop_files.delete_selected(&mut fs_mgr.vfs);
                     }
                 }
                 drivers::keyboard::KeyAction::DeleteWordBack => {
@@ -3593,25 +3705,24 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
             }
-            if let Some(_src_idx) = filemanager_app.drag_item {
-                if !filemanager_app.drag_active {
-                    let (sx, sy) = filemanager_app.drag_start;
-                    if mx.abs_diff(sx) > 4 || my.abs_diff(sy) > 4 {
+            let (drag_item, drag_start, drag_active) = if desktop_drag_source {
+                (desktop_files.drag_item, desktop_files.drag_start, desktop_files.drag_active)
+            } else { (filemanager_app.drag_item, filemanager_app.drag_start, filemanager_app.drag_active) };
+            if let Some(src_idx) = drag_item {
+                if !drag_active && (mx.abs_diff(drag_start.0) > 4 || my.abs_diff(drag_start.1) > 4) {
+                    if desktop_drag_source {
+                        desktop_files.drag_active = true;
+                        if !desktop_files.selected_items[src_idx] { desktop_files.selected_items = [false; apps::filemanager::MAX_ITEMS]; desktop_files.selected_items[src_idx] = true; }
+                    } else {
                         filemanager_app.drag_active = true;
                         filemanager_app.last_click_idx = None;
-                        if !_src_idx < apps::filemanager::MAX_ITEMS && !filemanager_app.selected_items[_src_idx] {
-                            filemanager_app.selected_items = [false; apps::filemanager::MAX_ITEMS];
-                            filemanager_app.selected_items[_src_idx] = true;
-                        }
+                        if !filemanager_app.selected_items[src_idx] { filemanager_app.selected_items = [false; apps::filemanager::MAX_ITEMS]; filemanager_app.selected_items[src_idx] = true; }
                     }
                 }
-                if filemanager_app.drag_active {
-                    if let Some((_, fm_win)) = focused_window_for_app(&compositor, 0) {
-                        let sy = fm_win.scroll.y;
-                        filemanager_app.drag_target = filemanager_app.drop_target_at(
-                            fm_win.x, fm_win.y, fm_win.width, fm_win.height, sy, mx, my,
-                        );
-                    }
+                if let Some((_, fm_win)) = focused_window_for_app(&compositor, 0) {
+                    let target = filemanager_app.drop_target_at(fm_win.x, fm_win.y, fm_win.width, fm_win.height, fm_win.scroll.y, mx, my);
+                    if desktop_drag_source { desktop_files.drag_target = target; }
+                    else { filemanager_app.drag_target = target; }
                 }
             }
             if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
@@ -3707,41 +3818,41 @@ pub extern "C" fn _start() -> ! {
                 if let Some(paint) = paint_apps[paint_idx].as_mut() { paint.end_stroke(); }
             }
             notepad_dragging = false;
-            if filemanager_app.drag_active {
-                if let Some(src_idx) = filemanager_app.drag_item {
-                    if let Some(target) = filemanager_app.drag_target {
-                        let is_copy = keyboard.ctrl;
-                        match filemanager_app.execute_drop(src_idx, target, is_copy, &mut fs_mgr.vfs) {
-                            Ok(_) => {
-                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
-                            }
-                            Err(err) => {
-                                filemanager_app.set_status_text(err);
-                            }
+            let (is_drag_active, drag_item, drag_target) = if desktop_drag_source {
+                (desktop_files.drag_active, desktop_files.drag_item, desktop_files.drag_target)
+            } else { (filemanager_app.drag_active, filemanager_app.drag_item, filemanager_app.drag_target) };
+            if is_drag_active {
+                if let Some(src_idx) = drag_item {
+                    if let Some(target) = drag_target {
+                        let src_app = if desktop_drag_source { &mut desktop_files } else { &mut filemanager_app };
+                        match src_app.execute_drop(src_idx, target, keyboard.ctrl, &mut fs_mgr.vfs) {
+                            Ok(_) => { src_app.refresh_from_vfs(&fs_mgr.vfs); }
+                            Err(err) => { src_app.set_status_text(err); }
                         }
                     } else if !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
-                        if let Some((dest_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
-                            if desktop_files.files[dest_idx].is_dir {
-                                let path = alloc::string::String::from("/desktop/");
-                                let src_name = desktop_files.files[src_idx].display_name();
-                                let mut src_path = alloc::string::String::from("/desktop/"); src_path.push_str(src_name);
-                                if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, &path); }
-                                else { let _ = fs_mgr.vfs.move_item(&src_path, &path); }
-                                desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                            }
-                        } else {
-                            let dst = alloc::string::String::from("/desktop");
-                            let src = desktop_files.files[src_idx].display_name();
-                            let mut src_path = alloc::string::String::from("/desktop");
-                            src_path.push('/');
-                            src_path.push_str(src);
-                            if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, &dst); }
-                            else { let _ = fs_mgr.vfs.move_item(&src_path, &dst); }
-                            desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                        let source = if desktop_drag_source { &mut desktop_files } else { &mut filemanager_app };
+                        let indices = source.drag_items;
+                        let source_count = source.file_count;
+                        for i in 0..source_count {
+                            if !(indices[i] || i == src_idx) { continue; }
+                            let name = source.files[i].display_name();
+                            if name == ".." { continue; }
+                            let mut src_path = alloc::string::String::from(source.path());
+                            if !src_path.ends_with('/') { src_path.push('/'); }
+                            src_path.push_str(name);
+                            if desktop_drag_source { if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, "/desktop"); } else { let _ = fs_mgr.vfs.move_item(&src_path, "/desktop"); } }
+                            else if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, "/desktop"); }
+                            else { let _ = fs_mgr.vfs.move_item(&src_path, "/desktop"); }
                         }
+                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                        if !desktop_drag_source { filemanager_app.refresh_from_vfs(&fs_mgr.vfs); }
                     }
                 }
             }
+            desktop_drag_source = false;
+            desktop_files.drag_item = None;
+            desktop_files.drag_active = false;
+            desktop_files.drag_target = None;
             filemanager_app.drag_item = None;
             filemanager_app.drag_active = false;
             filemanager_app.drag_target = None;
@@ -3780,20 +3891,23 @@ pub extern "C" fn _start() -> ! {
                 taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b' && notepad_app.menu != 0 {
                 notepad_app.menu = 0;
-            } else if ch == '\x1b' && filemanager_app.drag_active {
+            } else if ch == '\x1b' && (filemanager_app.drag_active || desktop_files.drag_active) {
                 filemanager_app.drag_item = None;
                 filemanager_app.drag_active = false;
                 filemanager_app.drag_target = None;
-            } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
-                if ch == '\x1b' {
-                    filemanager_app.rename_active = false;
-                } else if ch == '\x08' {
-                    filemanager_app.rename_backspace();
-                } else if ch == '\n' {
-                    filemanager_app.commit_rename(&mut fs_mgr.vfs);
-                } else if ch >= ' ' {
-                    filemanager_app.rename_char(ch);
-                }
+                desktop_files.drag_item = None;
+                desktop_files.drag_active = false;
+                desktop_files.drag_target = None;
+            } else if filemanager_app.rename_active && app_is_focused(&compositor, 0) {
+                if ch == '\x1b' { filemanager_app.rename_active = false; }
+                else if ch == '\x08' { filemanager_app.rename_backspace(); }
+                else if ch == '\n' { filemanager_app.commit_rename(&mut fs_mgr.vfs); }
+                else if ch >= ' ' { filemanager_app.rename_char(ch); }
+            } else if desktop_files.rename_active {
+                if ch == '\x1b' { desktop_files.rename_active = false; }
+                else if ch == '\x08' { desktop_files.rename_backspace(); }
+                else if ch == '\n' { desktop_files.commit_rename(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
+                else if ch >= ' ' { desktop_files.rename_char(ch); }
             } else if compositor.is_start_menu_open && ch == '\x08' {
                 if compositor.start_search_len > 0 {
                     compositor.start_search_len -= 1;
@@ -3945,8 +4059,8 @@ pub extern "C" fn _start() -> ! {
                 const NOTES: [u32; 8] = [440, 523, 587, 659, 587, 523, 494, 392];
                 let track_offset = musicplayer_app.current_track as u32 * 22;
                 let freq = NOTES[music_note % NOTES.len()] + track_offset;
-                // HDA hazır ise gerçek PCM örneği üret ve gönder.
-                if drivers::hda::is_ready() {
+                // HDA hazır ve DMA ilerliyorsa gerçek PCM örneği üret ve gönder.
+                if audio_dev.is_hda_active() {
                     let sample_count = 1920; // 40 ms
                     let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R çifti
                     let volume_scale = (audio_dev.volume_left as i32).min(100) as i16;
@@ -3966,10 +4080,15 @@ pub extern "C" fn _start() -> ! {
                         drivers::hda::push_pcm(&pcm[..n * 2]);
                         idx += n;
                     }
+                    if speaker_on {
+                        audio_dev.set_pc_speaker_tone(0);
+                        speaker_on = false;
+                    }
                 } else {
+                    // Otomatik Fallback: HDA yok veya sanallaştırma ortamında DMA duraksadıysa PC Speaker PWM tonlama yap!
                     audio_dev.set_pc_speaker_tone(freq);
+                    speaker_on = true;
                 }
-                speaker_on = true;
                 music_note = (music_note + 1) % NOTES.len();
                 musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
                 last_music_beat = anim_tick;

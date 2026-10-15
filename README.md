@@ -126,12 +126,12 @@ minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileş
    - **Bölümleme (`src/fs/part.rs`):** MBR (4 girdi) ve GPT (koruyucu MBR + 128 girdilik dizi, Linux GUID) tarama/listelme ve yazma.
    - Kurulum Sihirbazı diski FAT32 olarak biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
    - **VFS anlık görüntüsü (`VFS.DAT`):** VFS ağacının tamamı (dosyalar, klasörler, masaüstü öğeleri, çöp kutusu içeriği) her dosya/klasör işleminde otomatik olarak FAT diske `VFS.DAT` olarak yazılır ve açılışta geri yüklenir. Böylece oluşturma, silme, taşıma, kopyalama, yeniden adlandırma ve geri dönüşüm kutusu işlemleri **yeniden başlatma sonrasında bile korunur**. Kurulum sırasında mevcut ağaç biçimlendirilen diske anında kaydedilir.
-4. **HDA Donanımsal DMA İlerlemesi (QEMU Emülasyon Sınırları):**
-   - Intel HDA ses sürücüsünde BDL ve DMA stream kurulumu tamdır; fakat bazı sanallaştırma ortamlarında DMA LPIB göstergesi ses çalarken donanım tarafında ilerlemeyebilir. Ses çıkışı için ayrıca PC Speaker PWM tonlama emülasyonu yedek olarak devrededir.
+4. **HDA Donanımsal DMA İlerlemesi ve Çoklu Sanallaştırma Uyumluluğu:**
+   - Intel HDA ses sürücüsü; evrensel PCI taraması (Class `0x0403` + bilinen aygıtlar), 64-bit BAR0 desteği, donanımsal CRST/SRST sıfırlama döngüleri, AFG/DAC/Pin D0 güç yönetimi, 128-bayt hizalı donanımsal DMA Position Buffer (offset `0x70`) ve atomik 32-bit SDnCTL yazımı ile QEMU, VirtualBox, VMware ve gerçek donanımda tam uyumlu hale getirilmiştir. Ses çalınırken DMA ilerlemesi (LPIB/DPIB ve BCIS bayrağı) anlık doğrulanır; ana makine ses aygıtı bulunmayan sanallaştırma ortamlarında sistem otomatik olarak kesintisiz PC Speaker PWM yedeğine geçiş yapar. Ayarlar uygulamasındaki Donanım Testleri sekmesinden ses alt sistemi (DMA ve hoparlör) doğrudan test edilebilir.
 5. **ATAPI CD-ROM READ CAPACITY:**
    - QEMU DVD-ROM sürücüsü tespit edilir; ancak ISO medyası takılı olmadığında kapasite 0 MB olarak okunur.
-6. **Kullanıcı Modu (Ring 3) ve Syscall Ayrımı:**
-   - Çekirdek içi sanal bellek (VMM) eşlemelerinde kullanıcı ve süpervizör bayrakları (`USER`, `WRITABLE`, `NO_EXECUTE`) ayrılmış ve birim testleriyle doğrulanmıştır; ancak kullanıcı alanı ELF ikililerini çalıştıran bağımsız Ring 3 süreç yöneticisi henüz tam aktif değildir.
+6. **Kullanıcı Modu (Ring 3) ve SMP Paralelliği:**
+   - Limine SMP protokolü ile çok çekirdekli AP başlatımı, çekirdek yığınları, GDT TSS kullanıcı segmentleri, Ring 3 kullanıcı kipi izolasyonu (`int 0x80` sistem çağrıları, #GP/#PF hata yakalama ve çekirdek güvenliği) ve çekirdekler arası atomik paralel iş kuyruğu (`parallel_checksum`) tam olarak doğrulanmıştır.
 
 ---
 

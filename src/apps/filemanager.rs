@@ -36,6 +36,16 @@ const STATUS_H: usize = 30;
 
 pub const MAX_ITEMS: usize = 64;
 
+pub struct FileClipboard {
+    pub paths: [TextBuf; MAX_ITEMS],
+    pub count: usize,
+    pub cut: bool,
+}
+
+impl FileClipboard {
+    pub const fn new() -> Self { Self { paths: [TextBuf::new(); MAX_ITEMS], count: 0, cut: false } }
+}
+
 #[derive(Clone, Copy)]
 pub struct FileItem {
     pub name: &'static str,
@@ -88,9 +98,6 @@ pub struct FileManagerApp {
     pub selected_idx: usize,
     pub selected_items: [bool; MAX_ITEMS],
     pub selection_anchor: usize,
-    pub clipboard_paths: [TextBuf; MAX_ITEMS],
-    pub clipboard_count: usize,
-    pub clipboard_cut: bool,
     pub files: [FileItem; MAX_ITEMS],
     pub file_count: usize,
     pub source: Source,
@@ -191,9 +198,6 @@ impl FileManagerApp {
             selected_idx: 0,
             selected_items: [false; MAX_ITEMS],
             selection_anchor: 0,
-            clipboard_paths: [TextBuf::new(); MAX_ITEMS],
-            clipboard_count: 0,
-            clipboard_cut: false,
             files: [FileItem::empty(); MAX_ITEMS],
             file_count: 0,
             source: Source::Vfs,
@@ -365,13 +369,13 @@ impl FileManagerApp {
         self.selected_items.get(idx).copied().unwrap_or(false) || idx == self.selected_idx
     }
 
-    pub fn copy_selection(&mut self, cut: bool) {
+    pub fn copy_selection(&mut self, clipboard: &mut FileClipboard, cut: bool) {
         if self.selected_idx >= self.file_count { return; }
         if !self.selected_items[self.selected_idx] {
             self.selected_items = [false; MAX_ITEMS];
             self.selected_items[self.selected_idx] = true;
         }
-        self.clipboard_count = 0;
+        clipboard.count = 0;
         let current = String::from(self.path());
         for i in 0..self.file_count {
             if !self.selected_items[i] || self.files[i].display_name() == ".." { continue; }
@@ -380,25 +384,25 @@ impl FileManagerApp {
             path.push_str(self.files[i].display_name());
             let mut saved = TextBuf::new();
             saved.push_str(path.as_str());
-            self.clipboard_paths[self.clipboard_count] = saved;
-            self.clipboard_count += 1;
+            clipboard.paths[clipboard.count] = saved;
+            clipboard.count += 1;
         }
-        self.clipboard_cut = cut;
+        clipboard.cut = cut;
         self.status = if cut { crate::gui::ui_text("Taşımak için seçildi.", "Selected to move.") }
             else { crate::gui::ui_text("Kopyalamak için seçildi.", "Selected to copy.") };
     }
 
-    pub fn paste_selection(&mut self, vfs: &mut VirtualFileSystem) -> usize {
+    pub fn paste_selection(&mut self, clipboard: &mut FileClipboard, vfs: &mut VirtualFileSystem) -> usize {
         let dest = String::from(self.path());
         if dest == "/media/cdrom" { self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."); return 0; }
         let mut done = 0;
-        for i in 0..self.clipboard_count {
-            let src = String::from(self.clipboard_paths[i].as_str());
-            let result = if self.clipboard_cut { vfs.move_item(&src, &dest).map(|_| ()) }
+        for i in 0..clipboard.count {
+            let src = String::from(clipboard.paths[i].as_str());
+            let result = if clipboard.cut { vfs.move_item(&src, &dest).map(|_| ()) }
                 else { vfs.copy_item(&src, &dest).map(|_| ()) };
             if result.is_ok() { done += 1; }
         }
-        if self.clipboard_cut && done > 0 { self.clipboard_count = 0; self.clipboard_cut = false; }
+        if clipboard.cut && done > 0 { clipboard.count = 0; clipboard.cut = false; }
         self.refresh_from_vfs(vfs);
         self.status = if done > 0 { crate::gui::ui_text("Yapıştırma tamamlandı.", "Paste completed.") }
             else { crate::gui::ui_text("Yapıştırılacak öğe yok.", "Nothing to paste.") };

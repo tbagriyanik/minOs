@@ -75,10 +75,18 @@ fn render_device_inventory(
     } else if english { "wheel not detected" } else { "tekerlek algılanmadı" });
     draw(&line, Color::ACCENT_PINK);
 
+    let mut line = DeviceLine::new();
     if crate::drivers::hda::is_ready() {
-        let mut line = DeviceLine::new();
-        line.push("Audio: Intel 82801 HDA | PCM playback | 48 kHz | 16-bit | stereo");
-        draw(&line, Color::ACCENT_GREEN);
+        if crate::drivers::hda::is_dma_progressing() {
+            line.push(if english { "Audio: Intel HDA | DMA active | 48 kHz stereo | PC Speaker standby" } else { "Ses: Intel HDA | DMA akışı aktif | 48 kHz stereo | PC Speaker yedeği hazır" });
+            draw(&line, Color::ACCENT_GREEN);
+        } else {
+            line.push(if english { "Audio: Intel HDA ready | DMA standby / PC Speaker fallback enabled" } else { "Ses: Intel HDA hazır | DMA beklemede / PC Speaker yedeği devrede" });
+            draw(&line, Color::ACCENT_BLUE);
+        }
+    } else {
+        line.push(if english { "Audio: PC Speaker PWM fallback active (HDA not detected)" } else { "Ses: PC Speaker PWM yedeği aktif (HDA bulunamadı)" });
+        draw(&line, Color::ACCENT_YELLOW);
     }
 
     if crate::drivers::e1000::is_ready() {
@@ -181,6 +189,9 @@ pub struct SystemSettings {
     pub test_disk_sectors: u32,
     pub test_disk_ms: u32,
     pub test_disk_kbps: u32,
+    pub test_audio_tested: bool,
+    pub test_audio_ok: bool,
+    pub test_audio_msg: &'static str,
     pub test_mouse_x: usize,
     pub test_mouse_y: usize,
     pub test_mouse_over: bool,
@@ -228,6 +239,9 @@ impl SystemSettings {
             test_disk_sectors: 0,
             test_disk_ms: 0,
             test_disk_kbps: 0,
+            test_audio_tested: false,
+            test_audio_ok: false,
+            test_audio_msg: "",
             test_mouse_x: 0,
             test_mouse_y: 0,
             test_mouse_over: false,
@@ -371,6 +385,9 @@ impl SystemSettings {
     pub fn test_disk_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + sp(384), sp(100), sp(22))
     }
+    pub fn test_audio_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X, win_y + sp(440), sp(100), sp(22))
+    }
 
     // -----------------------------------------------------------------
     // Aksiyonlar
@@ -395,6 +412,9 @@ impl SystemSettings {
         self.test_disk_sectors = 0;
         self.test_disk_ms = 0;
         self.test_disk_kbps = 0;
+        self.test_audio_tested = false;
+        self.test_audio_ok = false;
+        self.test_audio_msg = "";
         self.test_mouse_x = 0;
         self.test_mouse_y = 0;
         self.test_mouse_over = false;
@@ -404,6 +424,14 @@ impl SystemSettings {
         self.test_trail_len = 0;
         self.test_trail_head = 0;
         self.status_msg = crate::gui::ui_text("Tüm ayarlar varsayılana döndürüldü!", "All settings restored to defaults!");
+    }
+
+    pub fn run_audio_test(&mut self, audio_dev: &mut crate::drivers::audio::AudioDevice) {
+        self.test_audio_tested = true;
+        let (msg, ok) = audio_dev.test_audio_subsystem();
+        self.test_audio_ok = ok;
+        self.test_audio_msg = msg;
+        self.status_msg = msg;
     }
 
     /// Ayarları aktif sistem bileşenlerine uygular.
@@ -1092,5 +1120,25 @@ impl SystemSettings {
         }
         draw_device_line(fb, cx + 120, disk_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 132), &disk,
             if self.test_disk_tested && !self.test_disk_ok { Color::ACCENT_RED } else { Color::TEXT_MAIN });
+
+        // ---- Ses alt sistemi testi ----
+        MinGuiCompositor::draw_string(fb, cx, win_y + sp(418),
+            crate::gui::ui_text("Ses testi (HDA DMA / PC Speaker Fallback)", "Audio test (HDA DMA / PC Speaker Fallback)"), Color::ACCENT_YELLOW);
+        let audio_btn = Self::test_audio_btn_rect(win_x, win_y);
+        MinGuiCompositor::draw_button(fb, audio_btn, Color::ACCENT_BLUE,
+            crate::gui::ui_text("Test Et", "Test"), Color::DARK_BG, false);
+        let mut audio = DeviceLine::new();
+        if self.test_audio_tested {
+            audio.push(if self.test_audio_ok {
+                if english { "PASS | " } else { "BAŞARILI | " }
+            } else {
+                if english { "FALLBACK | " } else { "YEDEK | " }
+            });
+            audio.push(self.test_audio_msg);
+        } else {
+            audio.push(if english { "HDA DMA + PC Speaker test ready." } else { "HDA DMA + PC Speaker testi hazır." });
+        }
+        draw_device_line(fb, cx + 120, audio_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 132), &audio,
+            if self.test_audio_tested { if self.test_audio_ok { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW } } else { Color::TEXT_MAIN });
     }
 }

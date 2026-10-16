@@ -5,7 +5,10 @@ param(
     [switch]$UsbDiskReadWrite,
     [ValidateRange(1, 64)][int]$CpuCount = 2,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
-    [string]$DiskImage = ".\disk.qcow2"
+    [string]$DiskImage = ".\disk.qcow2",
+    [switch]$Live,
+    [switch]$NoIso,
+    [switch]$ReprepareDisk
 )
 
 # minOs Derle ve QEMU ile Çalistir (PowerShell)
@@ -81,7 +84,6 @@ Write-Host "=========================================" -ForegroundColor Cyan
 $qemuArgs = @(
     "-m", $Memory,
     "-smp", "$CpuCount",
-    "-boot", "d",
     "-serial", "stdio",
     "-vga", "std",
     # SDL ses çıkışı DirectSound'un zorunlu capture/mikrofon açma hatasını önler.
@@ -96,25 +98,32 @@ $qemuArgs = @(
 
 if ($DiskImage) {
     if (-not (Test-Path -LiteralPath $DiskImage -PathType Leaf)) {
-        Write-Host "[BILGI] Disk imaji bulunamadi ($DiskImage), otomatik olusturuluyor..." -ForegroundColor Yellow
+        Write-Host "[BILGI] Bos ve formatsiz disk imaji olusturuluyor: $DiskImage (256MB)..." -ForegroundColor Yellow
         $qemuImgCandidates = @(
-            "qemu-img.exe",
+            "C:\Program Files\qemu\qemu-img.exe",
             (Join-Path (Split-Path $qemuExe -Parent) "qemu-img.exe"),
-            "C:\Program Files\qemu\qemu-img.exe"
+            "qemu-img.exe"
         )
         $qemuImgExe = $null
         foreach ($p in $qemuImgCandidates) {
             if (Test-Path $p) { $qemuImgExe = $p; break }
+            elseif (Get-Command $p -ErrorAction SilentlyContinue) { $qemuImgExe = $p; break }
         }
         if ($qemuImgExe) {
-            & $qemuImgExe create -f qcow2 $DiskImage 64M
-            Write-Host "[BASARILI] Yeni disk imaji olusturuldu (64MB qcow2): $DiskImage" -ForegroundColor Green
+            & $qemuImgExe create -f qcow2 $DiskImage 256M | Out-Null
+            Write-Host "[BASARILI] Formatsiz bos disk eklendi: $DiskImage" -ForegroundColor Green
         } else {
-            Write-Host "[HATA] Disk imaji bulunamadi ve qemu-img tespit edilemedi: $DiskImage" -ForegroundColor Red
-            exit 1
+            Write-Host "[UYARI] qemu-img bulunamadi, disk olusturulamadi." -ForegroundColor DarkYellow
         }
     }
-    $qemuArgs += @("-drive", "file=$DiskImage,format=qcow2,if=ide")
+    if (Test-Path -LiteralPath $DiskImage -PathType Leaf) {
+        if ($ReprepareDisk) {
+            Write-Host "[BILGI] ReprepareDisk aktif; build_disk.ps1 calistiriliyor..." -ForegroundColor Yellow
+            & powershell -ExecutionPolicy Bypass -File ".\build_disk.ps1" -DiskImage $DiskImage -Force
+        }
+        $diskFormat = if ($DiskImage.EndsWith(".raw", [System.StringComparison]::OrdinalIgnoreCase)) { "raw" } else { "qcow2" }
+        $qemuArgs += @("-drive", "file=$DiskImage,format=$diskFormat,if=ide")
+    }
 }
 
 if ($UsbDisks -or $UsbDiskReadWrite) {
@@ -144,11 +153,20 @@ if ($UsbDisks -or $UsbDiskReadWrite) {
     }
 }
 
-if (Test-Path ".\build_iso.ps1") {
+# Kurulum varsa varsayilan diskten boot; -Live ile ISO'dan canli boot zorlanir.
+$diskInstalled = (Test-Path $DiskImage) -and (Test-Path ".\disk.prepared")
+$useIso = $Live -or (-not $NoIso -and -not $diskInstalled)
+if ($useIso) {
+    $qemuArgs += @("-boot", "d")
+} else {
+    $qemuArgs += @("-boot", "c")
+}
+
+if ($useIso -and (Test-Path ".\build_iso.ps1")) {
     & powershell -ExecutionPolicy Bypass -File ".\build_iso.ps1"
 }
 
-if (Test-Path "minos.iso") {
+if ($useIso -and (Test-Path "minos.iso")) {
     $qemuArgs += @("-cdrom", "minos.iso")
 } elseif (Test-Path "target\iso_root") {
     $qemuArgs += @("-drive", "file=fat:rw:target\iso_root,format=raw")

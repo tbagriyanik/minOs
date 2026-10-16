@@ -95,6 +95,8 @@ impl InstallerApp {
 
     /// Sadece hedef diski FAT32 olarak bicimlendirir (kurulum yapmaz).
     /// "Tek Tıkla Kur" akisinin 2. adimidir.
+    /// Zaten FAT32 olarak bağlı bir disk yeniden biçimlendirilmez (Limine
+    /// önyükleyici/MBR korunur); yalnızca bağlama doğrulanır.
     pub fn format_selected_drive(&mut self) -> bool {
         self.state = InstallState::Formatting;
         self.progress_pct = 25;
@@ -105,6 +107,24 @@ impl InstallerApp {
             self.state = InstallState::Failed;
             self.status_msg = "HATA: Seçili sürücüde hedef disk yok!";
             return false;
+        }
+
+        // Zaten FAT32 olarak bağlıysa diski silme; yalnızca bağlamayı doğrula.
+        if diskfs::fat32_mounted_on(drive) {
+            self.disk_formatted = true;
+            self.confirm_install = false;
+            self.progress_pct = 55;
+            self.state = InstallState::Selecting;
+            self.status_msg = "Disk zaten FAT32 bağlı; biçimlendirme atlandı.";
+            return true;
+        }
+        if diskfs::mount_fat32_drive(drive) {
+            self.disk_formatted = true;
+            self.confirm_install = false;
+            self.progress_pct = 55;
+            self.state = InstallState::Selecting;
+            self.status_msg = "Disk FAT32 olarak doğrulandı. Şimdi 'Tek Tıkla Kur' basınız.";
+            return true;
         }
 
         if !diskfs::fat_format(drive) || !diskfs::mount_fat32_drive(drive) {
@@ -182,6 +202,9 @@ impl InstallerApp {
         // çöp kutusu) VFS.DAT anlık görüntüsü olarak diske yaz; böylece
         // sonraki açılışta tüm dosya/klasör işlemleri geri gelir.
         // Başarısız olursa kurulumu engellemez (en iyi çaba).
+        // Önce tam ağacı FAT32 köküne yansıt (gerçek klasör/dosya girişi),
+        // sonra anlık görüntüyü kalıcı hale getir.
+        let (_mir_dirs, _mir_files) = vfs.sync_all_to_disk();
         let snapshot_ok = vfs.persist_snapshot();
 
         // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla

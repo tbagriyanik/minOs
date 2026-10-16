@@ -368,7 +368,9 @@ impl Framebuffer {
         if self.in_clip(x, y) {
             let c = rgb(color);
             unsafe {
-                let offset = y * self.width + x;
+                // Use hardware pitch (in 32‑bit words) for correct offset
+                let pitch_words = self.pitch / 4;
+                let offset = y * pitch_words + x;
                 if offset < BACKBUFFER_LEN {
                     BACKBUFFER[offset] = c;
                 }

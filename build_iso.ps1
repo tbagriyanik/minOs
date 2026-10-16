@@ -21,31 +21,22 @@ if (Test-Path $OutputDir) {
     } catch {}
 }
 New-Item -ItemType Directory -Force -Path "$OutputDir\boot\limine" | Out-Null
-New-Item -ItemType Directory -Force -Path "$OutputDir\EFI\BOOT" | Out-Null
 
 # 2. Bootloader ve Konfigürasyon Dosyalarini Kopyala
 Write-Host "[2/4] Limine Onyukleyici Dosyalari Yerlestiriliyor..." -ForegroundColor Yellow
 if (Test-Path "boot\limine.cfg") {
     Copy-Item -Force "boot\limine.cfg" -Destination "$OutputDir\boot\limine\limine.cfg"
-    Copy-Item -Force "boot\limine.cfg" -Destination "$OutputDir\limine.cfg"
 }
 if (Test-Path "boot\limine.conf") {
     Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\boot\limine\limine.conf"
-    Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\limine.conf"
 }
 
 if (Test-Path "boot\limine\limine-bios-cd.bin") {
     Copy-Item -Force "boot\limine\limine-bios-cd.bin" -Destination "$OutputDir\boot\limine\limine-bios-cd.bin"
 }
-if (Test-Path "boot\limine\limine-uefi-cd.bin") {
-    Copy-Item -Force "boot\limine\limine-uefi-cd.bin" -Destination "$OutputDir\boot\limine\limine-uefi-cd.bin"
-}
+
 if (Test-Path "boot\limine\limine-bios.sys") {
     Copy-Item -Force "boot\limine\limine-bios.sys" -Destination "$OutputDir\boot\limine\limine-bios.sys"
-    Copy-Item -Force "boot\limine\limine-bios.sys" -Destination "$OutputDir\limine-bios.sys"
-}
-if (Test-Path "boot\EFI\BOOT\BOOTX64.EFI") {
-    Copy-Item -Force "boot\EFI\BOOT\BOOTX64.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTX64.EFI"
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala

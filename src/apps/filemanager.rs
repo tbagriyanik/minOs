@@ -447,13 +447,10 @@ impl FileManagerApp {
         }
         full_path.push_str(&name);
 
-        let saved = if self.path() == "/root/Documents" {
-            crate::fs::diskfs::create_dir_by_name(&name)
-        } else { false };
-        vfs.create_dir(&full_path);
+        let saved = vfs.create_dir(&full_path);
         self.refresh_from_vfs(vfs);
         self.status = if saved { crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.") }
-            else { crate::gui::ui_text("Klasör RAM'de oluşturuldu; diske kaydedilemedi.", "Folder created in RAM; disk save failed.") };
+            else { crate::gui::ui_text("Klasör oluşturulamadı.", "Folder creation failed.") };
     }
 
     /// Seçili dosya veya klasörü siler. Öğe kalıcı olarak silinmez; bunun yerine

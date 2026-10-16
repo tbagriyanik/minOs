@@ -42,6 +42,9 @@ pub struct VirtualFileSystem {
     pub nodes: [Option<VfsNode>; 16],
     pub items: Vec<VfsItem>,
     pub large_files: Vec<(String, Arc<[u8]>)>,
+    /// Açılış sırasında (varsayılan ağaç kurulurken) anlık görüntünün
+    /// diskteki kaydı ezmemesi için geçici olarak kapatılır.
+    suppress_sync: bool,
 }
 
 /// Açılışlar arası kalıcılık: VFS ağacının tamamı (klasörler, dosyalar,
@@ -64,19 +67,61 @@ impl VirtualFileSystem {
             ],
             items: Vec::new(),
             large_files: Vec::new(),
+            suppress_sync: true,
         };
 
         // Standart Kök Dizin Hiyerarşisi
         vfs.init_default_hierarchy();
         // Önceki oturumdan kalma anlık görüntü varsa onu yükle (tüm
         // dosya/klasör işlemleri restart sonrasında geri gelir).
+        let mut loaded_snapshot = false;
         if let Some(blob) = diskfs::load_file_alloc(SNAPSHOT_NAME) {
             if let Some((items, large)) = Self::parse_snapshot(&blob) {
                 vfs.items = items;
                 vfs.large_files = large;
+                loaded_snapshot = true;
             }
         }
+        // Anlık görüntü yoksa ama disk kuruluysa, gerçek FAT32 ağacından yükle.
+        if !loaded_snapshot && diskfs::is_installed() {
+            Self::load_tree_walk(&mut vfs, "/", "/", 0);
+        }
+        // Varsayılan ağaç/yükleme tamamlandı; bundan sonraki değişiklikler
+        // anlık görüntüye (ve FAT32 ağacına) yazılır.
+        vfs.suppress_sync = false;
         vfs
+    }
+
+    /// Diskteki FAT32 ağacını özyinelemeli olarak VFS'e yükler.
+    fn load_tree_walk(vfs: &mut VirtualFileSystem, disk_path: &str, vfs_path: &str, depth: usize) {
+        if depth > 8 { return; }
+        let Some(entries) = diskfs::fat_list_dir_path(disk_path) else { return; };
+        for (name, is_dir, size) in entries {
+            if name.eq_ignore_ascii_case(SNAPSHOT_NAME) || name.eq_ignore_ascii_case("MINOS.SYS") { continue; }
+            // Windows sistem dizinleri VFS'e alınmaz (geri yazımda çöp olmasın).
+            if name.eq_ignore_ascii_case("System Volume Information")
+                || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+                || name.eq_ignore_ascii_case("FOUND.000") { continue; }
+            let mut child_vfs = String::from(vfs_path);
+            if !child_vfs.ends_with('/') { child_vfs.push('/'); }
+            child_vfs.push_str(&name);
+            let mut child_disk = String::from(disk_path);
+            if !child_disk.ends_with('/') { child_disk.push('/'); }
+            child_disk.push_str(&name);
+            if vfs.items.iter().any(|it| it.path == child_vfs) {
+                if is_dir { Self::load_tree_walk(vfs, &child_disk, &child_vfs, depth + 1); }
+                continue;
+            }
+            if is_dir {
+                vfs.items.push(VfsItem { path: child_vfs.clone(), name, node_type: NodeType::Directory, size: 0, data: Vec::new(), is_readonly: false });
+                Self::load_tree_walk(vfs, &child_disk, &child_vfs, depth + 1);
+            } else if size <= 64 * 1024 {
+                let data = diskfs::fat_read_file_path(&child_disk).unwrap_or_default();
+                vfs.items.push(VfsItem { path: child_vfs, name, node_type: NodeType::File, size: data.len(), data, is_readonly: false });
+            } else {
+                vfs.items.push(VfsItem { path: child_vfs, name, node_type: NodeType::File, size, data: Vec::new(), is_readonly: false });
+            }
+        }
     }
 
     fn init_default_hierarchy(&mut self) {
@@ -136,7 +181,7 @@ impl VirtualFileSystem {
         );
         self.create_file_internal(
             "/boot/limine.cfg",
-            b"TIMEOUT=3\n:minOs\nPROTOCOL=limine\nKERNEL_PATH=boot:///minos-kernel\n"
+            b"TIMEOUT=5\n\n:minOs Live Environment\n    PROTOCOL=limine\n    KERNEL_PATH=boot:///boot/minos-kernel\n    KERNEL_CMDLINE=live\n    RESOLUTION=1280x720x32\n\n:minOs Installed System\n    PROTOCOL=limine\n    KERNEL_PATH=boot:///boot/minos-kernel\n    KERNEL_CMDLINE=installed\n    RESOLUTION=1280x720x32\n"
         );
         self.create_file_internal(
             "/root/Media/kedi_maskotu.bmp",
@@ -275,6 +320,7 @@ impl VirtualFileSystem {
     /// VFS'deki son değişikliği diske kalıcı olarak yazar.
     /// Disk yoksa/yazılamazsa sessizce vazgeçer (canlı ortam).
     fn sync_snapshot(&self) {
+        if self.suppress_sync { return; }
         let _ = self.persist_snapshot();
     }
 
@@ -298,6 +344,150 @@ impl VirtualFileSystem {
             }
         } else {
             String::from("/")
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Diske (FAT32 kök ağacına) yansıtma
+    // -----------------------------------------------------------------------
+
+    /// VFS yolunu disk üzerindeki FAT32 yoluna çevirir.
+    /// `None` → bu yol diske yazılmaz (sanal/canlı ortam görünümü).
+    fn disk_path_for(vfs_path: &str) -> Option<String> {
+        let norm = Self::normalize_path(vfs_path);
+        let n = norm.as_str();
+        if n == "/media/usb0" || n.starts_with("/media/usb0/")
+            || n == "/media/cdrom" || n.starts_with("/media/cdrom/") {
+            return None;
+        }
+        if n == "/media/hdd0" {
+            return Some(String::from("/"));
+        }
+        if let Some(rest) = n.strip_prefix("/media/hdd0/") {
+            let mut p = String::from("/");
+            p.push_str(rest);
+            return Some(p);
+        }
+        Some(norm)
+    }
+
+    fn disk_create_dir(vfs_path: &str) -> bool {
+        if !diskfs::fat_ready() { return true; }
+        match Self::disk_path_for(vfs_path) {
+            Some(dp) => dp == "/" || diskfs::fat_create_dir_all(&dp),
+            None => true,
+        }
+    }
+
+    fn disk_write_file(vfs_path: &str, data: &[u8]) -> bool {
+        if !diskfs::fat_ready() { return true; }
+        match Self::disk_path_for(vfs_path) {
+            Some(dp) => dp != "/" && diskfs::fat_write_file_path(&dp, data),
+            None => true,
+        }
+    }
+
+    fn disk_delete(vfs_path: &str) -> bool {
+        if !diskfs::fat_ready() { return true; }
+        match Self::disk_path_for(vfs_path) {
+            Some(dp) => dp != "/" && diskfs::fat_delete_path(&dp),
+            None => true,
+        }
+    }
+
+    fn disk_rename(from: &str, to: &str) -> bool {
+        if !diskfs::fat_ready() { return true; }
+        match (Self::disk_path_for(from), Self::disk_path_for(to)) {
+            (Some(a), Some(b)) => a == "/" || b == "/" || diskfs::fat_rename_path(&a, &b),
+            _ => true,
+        }
+    }
+
+    /// Tam ağaç aynalaması sırasında diske yazılacak hedefi döndürür.
+    /// `/media/*` sanal görünümler (disk köküne eşlenenler) atlanır.
+    fn mirror_target(vfs_path: &str) -> Option<String> {
+        let norm = Self::normalize_path(vfs_path);
+        if norm == "/media/hdd0" || norm.starts_with("/media/hdd0/") {
+            return None;
+        }
+        // Windows sistem dizinleri aynalanmaz.
+        for comp in norm.split('/').filter(|c| !c.is_empty()) {
+            if comp.eq_ignore_ascii_case("System Volume Information")
+                || comp.eq_ignore_ascii_case("$RECYCLE.BIN")
+                || comp.eq_ignore_ascii_case("FOUND.000") {
+                return None;
+            }
+        }
+        match Self::disk_path_for(&norm) {
+            Some(dp) if dp != "/" => Some(dp),
+            _ => None,
+        }
+    }
+
+    /// VFS ağacının tamamını FAT32 kök ağacına yansıtır.
+    /// Dönen değer: (yazılan klasör sayısı, yazılan dosya sayısı).
+    pub fn sync_all_to_disk(&self) -> (usize, usize) {
+        if !diskfs::fat_ready() { return (0, 0); }
+        let mut dirs = 0usize;
+        let mut files = 0usize;
+
+        // Önce ana dizinler oluşsun diye klasörleri yol uzunluğuna göre sırala.
+        let mut dir_paths: Vec<&str> = self.items.iter()
+            .filter(|it| it.node_type == NodeType::Directory)
+            .map(|it| it.path.as_str())
+            .collect();
+        dir_paths.sort_by_key(|p| p.len());
+        dir_paths.dedup();
+        for p in dir_paths {
+            if Self::mirror_target(p).is_some() && Self::disk_create_dir(p) {
+                dirs += 1;
+            }
+        }
+
+        for it in &self.items {
+            if it.node_type != NodeType::File { continue; }
+            if Self::mirror_target(&it.path).is_none() { continue; }
+            let data: &[u8] = if let Some((_, arc)) = self.large_files.iter().find(|(sp, _)| *sp == it.path) {
+                arc
+            } else {
+                &it.data
+            };
+            // Verisi başka yerde tutulan büyük dosya meta kaydını atla.
+            if data.is_empty() && it.size > 0 { continue; }
+            if Self::disk_write_file(&it.path, data) {
+                files += 1;
+            }
+        }
+        (dirs, files)
+    }
+
+    /// Bir yolun (ve varsa alt ağacının) diskteki aynasını oluşturur.
+    fn mirror_subtree_to_disk(&self, vfs_path: &str) {
+        if !diskfs::fat_ready() { return; }
+        let norm = Self::normalize_path(vfs_path);
+        let mut prefix = norm.clone();
+        if !prefix.ends_with('/') { prefix.push('/'); }
+
+        let mut dir_paths: Vec<&str> = self.items.iter()
+            .filter(|it| (it.path == norm || it.path.starts_with(&prefix)) && it.node_type == NodeType::Directory)
+            .map(|it| it.path.as_str())
+            .collect();
+        dir_paths.sort_by_key(|p| p.len());
+        for p in dir_paths {
+            if Self::mirror_target(p).is_some() { Self::disk_create_dir(p); }
+        }
+
+        for it in &self.items {
+            if it.node_type != NodeType::File { continue; }
+            if !(it.path == norm || it.path.starts_with(&prefix)) { continue; }
+            if Self::mirror_target(&it.path).is_none() { continue; }
+            let data: &[u8] = if let Some((_, arc)) = self.large_files.iter().find(|(sp, _)| *sp == it.path) {
+                arc
+            } else {
+                &it.data
+            };
+            if data.is_empty() && it.size > 0 { continue; }
+            Self::disk_write_file(&it.path, data);
         }
     }
 
@@ -348,32 +538,66 @@ impl VirtualFileSystem {
     pub fn create_dir(&mut self, path: &str) -> bool {
         let norm = Self::normalize_path(path);
         let parent = Self::parent_path_from_path(&norm);
-        let disk_ok = if parent == "/root/Documents" {
-            diskfs::create_dir_by_name(&Self::file_name_from_path(&norm))
-        } else { true };
+        if norm == "/" { return false; }
         if !self.is_dir(&parent) && parent != "/" {
             self.create_dir(&parent);
         }
-        self.create_dir_internal(&norm) || (disk_ok && self.is_dir(&norm))
+        let already = self.is_dir(&norm);
+        if !already {
+            let name = Self::file_name_from_path(&norm);
+            self.items.push(VfsItem {
+                path: norm.clone(),
+                name,
+                node_type: NodeType::Directory,
+                size: 0,
+                data: Vec::new(),
+                is_readonly: false,
+            });
+        }
+        Self::disk_create_dir(&norm);
+        self.sync_snapshot();
+        true
     }
 
     /// Yeni dosya oluşturur veya üzerine yazar.
     pub fn create_file(&mut self, path: &str, data: &[u8]) -> bool {
         let norm = Self::normalize_path(path);
+        if norm == "/" { return false; }
         let parent = Self::parent_path_from_path(&norm);
         if !self.is_dir(&parent) && parent != "/" {
             self.create_dir(&parent);
         }
-        self.create_file_internal(&norm, data)
+        let name = Self::file_name_from_path(&norm);
+        let mut found = false;
+        for it in &mut self.items {
+            if it.path == norm {
+                if it.node_type == NodeType::Directory { return false; }
+                it.data = data.to_vec();
+                it.size = data.len();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            self.items.push(VfsItem {
+                path: norm.clone(),
+                name,
+                node_type: NodeType::File,
+                size: data.len(),
+                data: data.to_vec(),
+                is_readonly: false,
+            });
+        }
+        self.large_files.retain(|(p, _)| *p != norm);
+        Self::disk_write_file(&norm, data);
+        self.sync_snapshot();
+        true
     }
 
     /// Dosyaya yazar veya üzerine kaydeder.
     pub fn write_file(&mut self, path_or_name: &str, data: &[u8]) -> bool {
         let norm = Self::normalize_path(path_or_name);
-        let home_file = Self::parent_path_from_path(&norm) == "/root/Documents";
-        let disk_ok = if home_file {
-            diskfs::save_file_by_name(&Self::file_name_from_path(&norm), data)
-        } else { true };
+        if norm == "/" { return false; }
 
         // USB ve Sabit Disk ortamına yazma kontrolü
         if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
@@ -389,59 +613,63 @@ impl VirtualFileSystem {
                 }
                 it.data = data.to_vec();
                 it.size = data.len();
+                self.large_files.retain(|(p, _)| *p != it.path);
+                let p = it.path.clone();
+                Self::disk_write_file(&p, data);
                 self.sync_snapshot();
-                return disk_ok;
+                return true;
             }
         }
 
         // Bulunamadıysa yeni dosya olarak oluştur
-        self.create_file(&norm, data) && disk_ok
+        self.create_file(&norm, data)
     }
 
     /// Büyük dosyalar için baytları çağıran uygulamada tutup VFS'de yalnızca
     /// dosya kaydı oluşturur/günceller. Çağıran tekrar okuma için sahibi olur.
     pub fn write_large_file(&mut self, path: &str, data: Arc<[u8]>) -> bool {
         let norm = Self::normalize_path(path);
+        if norm == "/" { return false; }
         let size = data.len();
-        let disk_ok = if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            diskfs::save_file_by_name(&Self::file_name_from_path(&norm), &data)
-        } else { true };
         if let Some((_, existing)) = self.large_files.iter_mut().find(|(saved_path, _)| *saved_path == norm) {
             *existing = data.clone();
         } else {
             self.large_files.push((norm.clone(), data.clone()));
         }
+        let mut found = false;
         for item in &mut self.items {
             if item.path == norm {
                 if item.node_type == NodeType::Directory { return false; }
                 item.size = size;
                 item.data.clear();
-                self.sync_snapshot();
-                return disk_ok;
+                found = true;
+                break;
             }
         }
-        let parent = Self::parent_path_from_path(&norm);
-        if !self.is_dir(&parent) && parent != "/" { self.create_dir(&parent); }
-        self.items.push(VfsItem {
-            name: Self::file_name_from_path(&norm),
-            path: norm,
-            node_type: NodeType::File,
-            size,
-            data: Vec::new(),
-            is_readonly: false,
-        });
+        if !found {
+            let parent = Self::parent_path_from_path(&norm);
+            if !self.is_dir(&parent) && parent != "/" { self.create_dir(&parent); }
+            self.items.push(VfsItem {
+                name: Self::file_name_from_path(&norm),
+                path: norm.clone(),
+                node_type: NodeType::File,
+                size,
+                data: Vec::new(),
+                is_readonly: false,
+            });
+        }
+        Self::disk_write_file(&norm, &data);
         self.sync_snapshot();
-        disk_ok
+        true
     }
 
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> bool {
         let old = Self::normalize_path(old_path);
         let new = Self::normalize_path(new_path);
         if old == "/" || new == "/" || self.exists(&new) { return false; }
-        let disk_rename = Self::parent_path_from_path(&old) == "/root/Documents"
-            && Self::parent_path_from_path(&new) == "/root/Documents"
-            && diskfs::rename_by_name(&Self::file_name_from_path(&old), &Self::file_name_from_path(&new));
-        if !self.exists(&old) && !disk_rename { return false; }
+        let existed = self.exists(&old);
+        Self::disk_rename(&old, &new);
+        if !existed { return false; }
         let prefix = if old.ends_with('/') { old.clone() } else { let mut p = old.clone(); p.push('/'); p };
         let mut changed = false;
         for item in &mut self.items {
@@ -468,23 +696,23 @@ impl VirtualFileSystem {
             }
             self.sync_snapshot();
         }
-        changed || disk_rename
+        changed
     }
 
     /// Dosya okur (tam yol veya dosya adı ile).
     pub fn read_file(&self, path_or_name: &str) -> Option<&[u8]> {
         let norm = Self::normalize_path(path_or_name);
 
-        if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            let filename = Self::file_name_from_path(&norm);
-            if diskfs::load_file(&filename) > 0 { return Some(diskfs::content()); }
-        }
-
         // Önce doğrudan VFS kayıtlarında ara
         for it in &self.items {
             if (it.path == norm || it.name == path_or_name) && it.node_type == NodeType::File {
                 return Some(&it.data);
             }
+        }
+
+        if Self::parent_path_from_path(&norm) == "/root/Documents" {
+            let filename = Self::file_name_from_path(&norm);
+            if diskfs::load_file(&filename) > 0 { return Some(diskfs::content()); }
         }
 
         // Sabit Disk (HDD/QCOW2), USB veya CD-ROM ortamından okuma
@@ -522,23 +750,22 @@ impl VirtualFileSystem {
     pub fn read_large_file(&self, path: &str) -> Option<Arc<[u8]>> {
         let norm = Self::normalize_path(path);
         self.large_files.iter().find(|(saved_path, _)| *saved_path == norm).map(|(_, data)| data.clone())
-            .or_else(|| (Self::parent_path_from_path(&norm) == "/root/Documents").then(|| {
-                diskfs::load_file_alloc(&Self::file_name_from_path(&norm)).map(Arc::from)
-            }).flatten())
+            .or_else(|| {
+                Self::disk_path_for(&norm).and_then(|dp| {
+                    if dp == "/" { None } else { diskfs::fat_read_file_path(&dp).map(Arc::from) }
+                })
+            })
     }
 
     /// Dosya siler.
     pub fn delete_file(&mut self, path_or_name: &str) -> bool {
         let norm = Self::normalize_path(path_or_name);
 
-        let home_deleted = if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            diskfs::delete_file_by_name(&Self::file_name_from_path(&norm))
-        } else { false };
-
         if norm.starts_with("/media/usb0/") || norm.starts_with("/media/hdd0/") {
             let disk_file = Self::file_name_from_path(&norm);
             diskfs::delete_file_by_name(&disk_file);
         }
+        Self::disk_delete(&norm);
 
         let mut found_idx = None;
         for (i, it) in self.items.iter().enumerate() {
@@ -553,7 +780,7 @@ impl VirtualFileSystem {
             self.sync_snapshot();
             return true;
         }
-        home_deleted
+        false
     }
 
     /// Klasör siler (içi boş olmalıdır).
@@ -568,9 +795,7 @@ impl VirtualFileSystem {
                 return false;
             }
         }
-        let home_deleted = if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            diskfs::delete_dir_by_name(&Self::file_name_from_path(&norm))
-        } else { false };
+        Self::disk_delete(&norm);
         let mut found_idx = None;
         for (i, it) in self.items.iter().enumerate() {
             if it.path == norm && it.node_type == NodeType::Directory {
@@ -583,7 +808,7 @@ impl VirtualFileSystem {
             self.sync_snapshot();
             return true;
         }
-        home_deleted
+        false
     }
 
     /// Silinen bir öğeyi kalıcı olarak silmek yerine Geri Dönüşüm Kutusu'na taşır.
@@ -615,14 +840,8 @@ impl VirtualFileSystem {
             Self::push_u32(&mut target, counter);
             counter += 1;
         }
-        // Home dizini diske yansıtılır; çöp kutusu girdisi RAM'de tutulur.
-        if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            if src.node_type == NodeType::Directory {
-                let _ = diskfs::delete_dir_by_name(&src.name);
-            } else {
-                let _ = diskfs::delete_file_by_name(&src.name);
-            }
-        }
+        // Disk aynasından sil; çöp kutusu girdisi RAM'de tutulur.
+        Self::disk_delete(&norm);
         // Klasörün ve tüm alt öğelerinin yollarını birlikte güncelle.
         let prefix = if norm.ends_with('/') { norm.clone() } else { let mut p = norm.clone(); p.push('/'); p };
         let src_is_dir = src.node_type == NodeType::Directory;
@@ -723,9 +942,7 @@ impl VirtualFileSystem {
         let prefix = if norm.ends_with('/') { norm.clone() } else { let mut p = norm.clone(); p.push('/'); p };
         self.items.retain(|it| it.path != norm && !it.path.starts_with(&prefix));
         self.large_files.retain(|(p, _)| *p != norm && !p.starts_with(&prefix));
-        if Self::parent_path_from_path(&norm) == "/root/Documents" {
-            let _ = diskfs::delete_dir_by_name(&Self::file_name_from_path(&norm));
-        }
+        Self::disk_delete(&norm);
         self.sync_snapshot();
         true
     }
@@ -909,6 +1126,8 @@ impl VirtualFileSystem {
                 results.push(VfsItem { path, name, node_type: if entry.is_dir { NodeType::Directory } else { NodeType::File }, size: entry.size,
                     data: Vec::new(), is_readonly: false });
             }
+            // Gerçek iç içe ağaçtan ek girdiler (kök-düz liste + dedup).
+            Self::inject_disk_entries(&mut results, "/root/Documents", &norm);
         }
 
         // Sabit Disk (HDD/QCOW2) ve USB disk görünümü
@@ -920,6 +1139,7 @@ impl VirtualFileSystem {
                 if let Some(entry) = diskfs::entry(i) {
                     if entry.as_str().eq_ignore_ascii_case(SNAPSHOT_NAME)
                         || entry.as_str().eq_ignore_ascii_case("MINOS.SYS") { continue; }
+                    if results.iter().any(|item: &VfsItem| item.name.eq_ignore_ascii_case(entry.as_str())) { continue; }
                     let mut path = norm.clone();
                     path.push('/');
                     path.push_str(entry.as_str());
@@ -932,6 +1152,10 @@ impl VirtualFileSystem {
                         is_readonly: false,
                     });
                 }
+            }
+            if norm == "/media/hdd0" {
+                // Kök dizin düz listesine ek olarak gerçek FAT32 kök ağacı.
+                Self::inject_disk_entries(&mut results, "/", &norm);
             }
             return results;
         }
@@ -974,6 +1198,28 @@ impl VirtualFileSystem {
         }
 
         results
+    }
+
+    /// FAT32 ağacındaki girdileri sonuç listesine ekler (yinelenenleri atlar).
+    fn inject_disk_entries(results: &mut Vec<VfsItem>, disk_path: &str, vfs_base: &str) {
+        if !diskfs::fat_ready() { return; }
+        let Some(entries) = diskfs::fat_list_dir_path(disk_path) else { return; };
+        for (name, is_dir, size) in entries {
+            if name.eq_ignore_ascii_case(SNAPSHOT_NAME)
+                || name.eq_ignore_ascii_case("MINOS.SYS")
+                || name.eq_ignore_ascii_case("settings.cfg")
+                || name.eq_ignore_ascii_case("benioku.txt")
+                || name.eq_ignore_ascii_case("System Volume Information")
+                || name.eq_ignore_ascii_case("$RECYCLE.BIN")
+                || name.eq_ignore_ascii_case("FOUND.000") { continue; }
+            if results.iter().any(|item: &VfsItem| item.name.eq_ignore_ascii_case(&name)) { continue; }
+            let mut path = String::from(vfs_base);
+            if !path.ends_with('/') { path.push('/'); }
+            path.push_str(&name);
+            results.push(VfsItem { path, name,
+                node_type: if is_dir { NodeType::Directory } else { NodeType::File },
+                size, data: Vec::new(), is_readonly: false });
+        }
     }
 
     pub fn exists(&self, path: &str) -> bool {

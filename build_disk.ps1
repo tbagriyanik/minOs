@@ -131,7 +131,12 @@ if ($LASTEXITCODE -ne 0) { Write-Host "[HATA] limine bios-install basarisiz." -F
 
 Write-Host "[5/6] Disk imaji kaydediliyor: $DiskImage ..." -ForegroundColor Yellow
 Remove-Item -Force $DiskImage -ErrorAction SilentlyContinue
-Copy-Item -Force $raw $DiskImage
+if ($DiskImage.EndsWith(".raw", [System.StringComparison]::OrdinalIgnoreCase)) {
+    Copy-Item -Force $raw $DiskImage
+} else {
+    & $qemuImg convert -f raw -O qcow2 $raw $DiskImage
+    if ($LASTEXITCODE -ne 0) { Write-Host "[HATA] qcow2 convert basarisiz." -ForegroundColor Red; exit 1 }
+}
 
 Write-Host "[6/6] Dogrulama..." -ForegroundColor Yellow
 $installed = Test-DiskInstalled $DiskImage

@@ -121,7 +121,13 @@ if ($DiskImage) {
             Write-Host "[BILGI] ReprepareDisk aktif; build_disk.ps1 calistiriliyor..." -ForegroundColor Yellow
             & powershell -ExecutionPolicy Bypass -File ".\build_disk.ps1" -DiskImage $DiskImage -Force
         }
-        $diskFormat = if ($DiskImage.EndsWith(".raw", [System.StringComparison]::OrdinalIgnoreCase)) { "raw" } else { "qcow2" }
+        $diskFormat = "raw"
+        try {
+            $hdr = [System.IO.File]::ReadAllBytes((Resolve-Path $DiskImage).Path)[0..3]
+            if ($hdr[0] -eq 0x51 -and $hdr[1] -eq 0x46 -and $hdr[2] -eq 0x49 -and $hdr[3] -eq 0xFB) {
+                $diskFormat = "qcow2"
+            }
+        } catch {}
         $qemuArgs += @("-drive", "file=$DiskImage,format=$diskFormat,if=ide")
     }
 }

@@ -19,7 +19,14 @@ impl Spinlock {
 
     #[inline(always)]
     pub fn lock(&self) {
-        while self.locked.swap(true, Ordering::Acquire) {
+        loop {
+            // Önce sadece oku (paylaşımlı önbellek hattı, bus kilidi yapmaz)
+            if !self.locked.load(Ordering::Relaxed) {
+                // Boş göründüğünde atomik olarak kapmayı dene
+                if !self.locked.swap(true, Ordering::Acquire) {
+                    return;
+                }
+            }
             core::hint::spin_loop();
         }
     }

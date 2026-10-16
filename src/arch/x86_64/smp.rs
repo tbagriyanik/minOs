@@ -226,24 +226,18 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     print_locked_dec(cpu as u64);
     print_locked(" baslatildi (yigin+GDT hazir).\n");
 
-    let mut idle_rounds: u32 = 0;
     loop {
         // Kesmelerin yanlışlıkla açılmasına karşı her turda kapalı tut.
         unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
         // İş kuyruğunu yokla; yoksa kalp atışı üret.
         if !poll_job(cpu) {
             HEARTBEAT[cpu].fetch_add(1, Ordering::Relaxed);
-            // Boşta bekleme: kilit rekabetini düşürmek için beklemeli yoklama.
-            // Her tur JOB kilidini almak yerine giderek uzayan pause uygula;
-            // VirtualBox'ta agresif test-and-set BSP'yi aç bırakıp
-            // masaüstünü donduruyordu.
-            idle_rounds = idle_rounds.saturating_add(1);
-            let spins = (idle_rounds.min(64) as usize) * 4096;
-            for _ in 0..spins {
+            // Boşta bekleme: VirtualBox çoklu vCPU zamanlamasında agresif spinlock
+            // host scheduler'da BSP'yi starve edip GUI'nin donmasına yol açar.
+            // Bu nedenle AP boşta iken kısa bir süre CPU'yu rahatlatır (pause).
+            for _ in 0..10_000 {
                 core::hint::spin_loop();
             }
-        } else {
-            idle_rounds = 0;
         }
     }
 }

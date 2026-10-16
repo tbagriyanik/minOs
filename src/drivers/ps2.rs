@@ -56,9 +56,11 @@ fn mouse_write(cmd: u8) {
 
 pub fn init() {
     unsafe {
-        // 1. Çıkış arabelleğinde kalan artık baytları temizle
-        while inb(0x64) & 0x01 != 0 {
+        // 1. Çıkış arabelleğinde kalan artık baytları temizle (sınırlı döngü)
+        let mut flushes = 0;
+        while (inb(0x64) & 0x01 != 0) && flushes < 256 {
             let _ = inb(0x60);
+            flushes += 1;
         }
 
         // 2. İkinci PS/2 portunu (Fare / Auxiliary) etkinleştir
@@ -101,9 +103,8 @@ pub fn init() {
         mouse_write(0xF3); mouse_write(80);
 
         // Fare kimliğini (Device ID) kontrol et (0x03 / 0x04 ise scroll wheel destekli)
-        // Not: Kimlik sorgusundan hemen önce tamponu temizle; aksi halde artakalan
-        // bayt (ör. gecikmiş ACK) kimlik değerini bozar ve tekerlek hiç çalışmaz.
-        while inb(0x64) & 0x01 != 0 { let _ = inb(0x60); }
+        flushes = 0;
+        while (inb(0x64) & 0x01 != 0) && flushes < 256 { let _ = inb(0x60); flushes += 1; }
         wait_write(); outb(0x64, 0xD4);
         wait_write(); outb(0x60, 0xF2);
         if wait_read() {
@@ -120,11 +121,14 @@ pub fn init() {
         mouse_write(0xF4);
 
         // 7. Çıkış arabelleğini tekrar temizle
-        while inb(0x64) & 0x01 != 0 {
+        flushes = 0;
+        while (inb(0x64) & 0x01 != 0) && flushes < 256 {
             let _ = inb(0x60);
+            flushes += 1;
         }
     }
 }
+
 
 pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w: i32, screen_h: i32) -> InputUpdate {
     let mut updated = InputUpdate::default();

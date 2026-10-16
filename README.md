@@ -6,10 +6,10 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~23.300%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/github/v/release/tbagriyanik/minos?color=brightgreen)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~24.000%20(Rust)-lightgrey.svg)]()
+[![GitHub Release](https://img.shields.io/badge/Release-v1.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
-**minOs (Sarman Edition)**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v1.3.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 ---
 
@@ -43,26 +43,28 @@ minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda te
 
 ## ✨ Özellikler ve Uygulama Paketi
 
-minOs, tam teşekküllü bir masaüstü deneyimi sunan **13 adet yerleşik uygulama** ve pencere yöneticisi içerir:
+minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygulama** ve pencere yöneticisi içerir:
 
 | Uygulama | Açıklama |
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
-| **⚙️ Sistem Ayarları** | Dört sekme (Temel / İleri / Ağ / Hakkında): beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.3.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **📦 Paket Yöneticisi (`minpkg`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
 | **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
-| **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`), "Program Aç" başlatma menüsü ve RAM grafik çubuğu. 13 uygulamanın tamamı (Kurulum Sihirbazı ve 3D Gösterici dahil) listelenir. |
+| **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`), "Program Aç" başlatma menüsü ve RAM grafik çubuğu. 14 uygulamanın tamamı (Kurulum Sihirbazı, Paket Yöneticisi ve 3D Gösterici dahil) listelenir. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
-| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, uygulama başlatma, Tab tamamlama ve komut geçmişi. |
+| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `pkg`, `apic`, `smp`, `exec`, `vmware` komutları, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.
+
 
 ---
 
@@ -103,35 +105,46 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `dns` | `dns <alan_adi>` | Belirtilen sunucu adı için yapılandırılmış DNS sunucusuna UDP DNS sorgusu iletir. |
 | `curl` | `curl http://<host>[:port][/yol]` | Soket API üzerinden HTTP GET indirir: durum kodu + gövde; chunked kod çözme ve 3xx yönlendirme takibi desteklenir (`https` desteklenmez). |
 
-### 4. Uygulama Başlatma
+### 4. Gelişmiş Teşhis ve Çekirdek Komutları (v1.3.0)
+| Komut | Kullanım | Açıklama |
+| :--- | :--- | :--- |
+| `pkg` | `pkg <list\|search\|install\|remove>` | `minpkg` komut satırı paketi: depo kataloglarını sorgular, paket kurar ve kaldırır. |
+| `smp` | `smp [bench]` | Çok çekirdek (SMP) durumunu listeler; `smp bench` ile çekirdekler arası paralel iş kuyruğunu ve sağlama (checksum) testini çalıştırır. |
+| `apic` | `apic` | Local APIC ve APIC Timer durumunu, tik sayısını ve frekans bölücü yapılandırmasını görüntüler. |
+| `exec` | `exec <ring3\|test>` | ELF yükleyici ve Ring 3 kullanıcı kipi izolasyonunu (`int 0x80` syscall) doğrudan kabuktan test eder. |
+| `vmware` | `vmware` | VMware SVGA II ve konuk grafik hızlandırma algılamasını raporlar. |
+
+### 5. Uygulama Başlatma
 | Komut | Alternatifler | Açıklama |
 | :--- | :--- | :--- |
 | `open <uygulama>` | `run <uygulama>` | İstenen masaüstü uygulamasını yeni veya mevcut pencerede açar. |
-| Doğrudan İsim | `files`, `notepad`, `calc`, `paint`, `browser`, `image`, `music`, `video`, `taskmgr`, `settings`, `cmd` | Uygulama adı doğrudan komut olarak yazıldığında ilgili grafik arayüz penceresi odaklanır/açılır. |
+| Doğrudan İsim | `files`, `notepad`, `calc`, `paint`, `browser`, `image`, `music`, `video`, `taskmgr`, `settings`, `cmd`, `pkgmgr` | Uygulama adı doğrudan komut olarak yazıldığında ilgili grafik arayüz penceresi odaklanır/açılır. |
 
 ---
 
-## ⚠️ Durum Raporu: Tam Çalışmayan / Kısmi Düzeydeki Özellikler
+## ⚠️ Durum Raporu ve Çekirdek Düzeyi
 
-minOs geliştirme aşamasında bir işletim sistemi çekirdeğidir. Bazı bileşenler protokol veya simülasyon düzeyinde hazır olup tam donanım/yığın entegrasyonu aşamasındadır:
+minOs v1.3.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
 
 1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
-   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; ancak gelen ICMP Echo Reply paketinin asenkron olarak terminale bildirilmesi henüz tam olay döngüsüne bağlanmamıştır.
-   - DNS artık eşzamanlı çözümleniyor (`resolve_host()`: önbellek → dotted-quad → 5 sn zaman aşımlı UDP sorgusu) ve `curl`/HTTP yolu bunu kullanıyor; ham `dns` komutu sorguyu iletir, yanıt `take_dns_result()` ile alınır.
-2. **Çoklu Çekirdek (SMP) Görev Dağıtımı:**
-   - QEMU `-CpuCount N` parametresiyle çoklu sanal çekirdek tanımlanabilir; ancak minOs çekirdeği şimdilik tek çekirdekte iş planlaması yürütür (SMP AP çekirdekleri henüz uyandırılıp iş yükü paylaştırılmaz).
+   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; gelen paketler asenkron olarak işlenir.
+   - DNS eşzamanlı çözümleniyor (`resolve_host()`: önbellek → dotted-quad → 5 sn zaman aşımlı UDP sorgusu) ve `curl`/HTTP yolu bunu kullanıyor; ham `dns` komutu sorguyu iletir, yanıt `take_dns_result()` ile anında alınır.
+2. **Çoklu Çekirdek (SMP) & Donanım Kararlılığı:**
+   - Limine SMP protokolü ile AP çekirdekleri başarıyla ayağa kaldırılır (üst sınır 8 CPU).
+   - Her AP kendi yığınına geçip SSE + GDT + **IDT (LIDT) + Local APIC** kurulumunu yapar; APIC Timer yalnızca BSP'de çalışır, AP'lerde tüm LVT girdileri maskeli ve kesmeler kapalıdır. Böylece VirtualBox'un AP'lere ulaştırdığı kesmeler üçlü hataya / donmaya yol açmaz.
+   - **TTAS (Test-and-Test-and-Set) Spinlock** mimarisi sayesinde VirtualBox ve QEMU ortamlarında çok çekirdekli çalıştırmalarda vCPU bellek veri yolu kilitlenmeleri ve sistem donmaları giderilmiştir.
+   - AP çekirdekleri boşta eşzamanlı atomik iş kuyruğunu tüketir; iş yokken kilide dokunmayan `JOB_PENDING` hızlı bayrağı ve giderek uzayan beklemeli yoklama (backoff) ile BSP'nin bellek yolu tıkanmaz.
 3. **Fiziksel Blok Depolama ve Kalıcı Yazma (FAT32 / Ext2 Persistence):**
    - Sabit disk (IDE/ATA Master) ve USB depolama aygıtlarında **tam sektör okuma ve yazma (`write_sector`, `flush_cache`)** ile **FAT32 dosya formatlama ve dosya yazma/silme** yeteneği aktiftir.
    - **Ext2 okuma/yazma** (`src/fs/ext2.rs`): superblock + BGDT + inode tabanlı, direct + single-indirect blok destekli dosya okuma/yazma/oluşturma/silme ve `mkdir`; açılışta FAT32'den önce Ext2 bölümü denenir.
    - **Bölümleme (`src/fs/part.rs`):** MBR (4 girdi) ve GPT (koruyucu MBR + 128 girdilik dizi, Linux GUID) tarama/listelme ve yazma.
    - Kurulum Sihirbazı diski FAT32 olarak biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
-   - **VFS anlık görüntüsü (`VFS.DAT`):** VFS ağacının tamamı (dosyalar, klasörler, masaüstü öğeleri, çöp kutusu içeriği) her dosya/klasör işleminde otomatik olarak FAT diske `VFS.DAT` olarak yazılır ve açılışta geri yüklenir. Böylece oluşturma, silme, taşıma, kopyalama, yeniden adlandırma ve geri dönüşüm kutusu işlemleri **yeniden başlatma sonrasında bile korunur**. Kurulum sırasında mevcut ağaç biçimlendirilen diske anında kaydedilir.
+   - **VFS anlık görüntüsü (`VFS.DAT`):** VFS ağacının tamamı (dosyalar, klasörler, masaüstü öğeleri, çöp kutusu içeriği) her dosya/klasör işleminde otomatik olarak FAT diske `VFS.DAT` olarak yazılır ve açılışta geri yüklenir. Böylece oluşturma, silme, taşıma, kopyalama, yeniden adlandırma ve geri dönüşüm kutusu işlemleri **yeniden başlatma sonrasında bile korunur**.
 4. **HDA Donanımsal DMA İlerlemesi ve Çoklu Sanallaştırma Uyumluluğu:**
-   - Intel HDA ses sürücüsü; evrensel PCI taraması (Class `0x0403` + bilinen aygıtlar), 64-bit BAR0 desteği, donanımsal CRST/SRST sıfırlama döngüleri, AFG/DAC/Pin D0 güç yönetimi, 128-bayt hizalı donanımsal DMA Position Buffer (offset `0x70`) ve atomik 32-bit SDnCTL yazımı ile QEMU, VirtualBox, VMware ve gerçek donanımda tam uyumlu hale getirilmiştir. Ses çalınırken DMA ilerlemesi (LPIB/DPIB ve BCIS bayrağı) anlık doğrulanır; ana makine ses aygıtı bulunmayan sanallaştırma ortamlarında sistem otomatik olarak kesintisiz PC Speaker PWM yedeğine geçiş yapar. Ayarlar uygulamasındaki Donanım Testleri sekmesinden ses alt sistemi (DMA ve hoparlör) doğrudan test edilebilir.
-5. **ATAPI CD-ROM READ CAPACITY:**
-   - QEMU DVD-ROM sürücüsü tespit edilir; ancak ISO medyası takılı olmadığında kapasite 0 MB olarak okunur.
-6. **Kullanıcı Modu (Ring 3) ve SMP Paralelliği:**
-   - Limine SMP protokolü ile çok çekirdekli AP başlatımı, çekirdek yığınları, GDT TSS kullanıcı segmentleri, Ring 3 kullanıcı kipi izolasyonu (`int 0x80` sistem çağrıları, #GP/#PF hata yakalama ve çekirdek güvenliği) ve çekirdekler arası atomik paralel iş kuyruğu (`parallel_checksum`) tam olarak doğrulanmıştır.
+   - Intel HDA ses sürücüsü; evrensel PCI taraması (Class `0x0403` + bilinen aygıtlar), 64-bit BAR0 desteği, donanımsal CRST/SRST sıfırlama döngüleri, AFG/DAC/Pin D0 güç yönetimi, 128-bayt hizalı donanımsal DMA Position Buffer (offset `0x70`) ve atomik 32-bit SDnCTL yazımı ile QEMU, VirtualBox, VMware ve gerçek donanımda tam uyumlu hale getirilmiştir. Ses alt sistemi otomatik olarak kesintisiz PC Speaker PWM yedeğine geçiş yapabilir.
+5. **Kullanıcı Modu (Ring 3), Syscall ve Süreç Yalıtımı:**
+   - Limine SMP protokolü ile çok çekirdekli AP başlatımı, bağımsız çekirdek yığınları, GDT TSS kullanıcı segmentleri, Ring 3 kullanıcı kipi izolasyonu (`int 0x80` sistem çağrıları, #GP/#PF hata yakalama ve çekirdek güvenliği) ve statik ELF yükleyici doğrulanmıştır.
+
 
 ---
 
@@ -146,16 +159,17 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
   - Komut satırından `curl http://...` ile dosya indirme (`src/drivers/http.rs`: chunked çözümü, 3xx yönlendirme takibi).
 - [x] **Kalıcı FAT32 / Ext2 Dosya Sistemi Desteği:**
   - Ext2 read-write ve MBR/GPT bölümleme (`src/fs/ext2.rs`, `src/fs/part.rs`) tamamlandı.
-- [ ] **Tam Ring 3 Kullanıcı Alanı & Syscall API:**
-  - `int 0x80` veya `syscall`/`sysret` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri.
-  - Bağımsız kullanıcı programları için dinamik bellek ve sayfa koruması.
-- [ ] **SMP (Symmetric Multiprocessing) Desteği:**
-  - ACPI / MADT tablolarını okuyarak AP çekirdeklerini uyandırma (INIT-SIPI-SIPI).
-  - Çok çekirdekli kilit mekanizmaları ve çekirdekler arası görev zamanlayıcısı (Preemptive Round-Robin Scheduler).
-- [ ] **Paket Yöneticisi (`minpkg`):**
-  - Uzak sunucudan minimal kullanıcı uygulamalarını ve script'leri çekip kurabilen hafif bir paket yöneticisi.
-- [ ] **Gelişmiş Grafik Sürücüleri & 2D Hızlandırma:**
-  - Yazılımsal çift tamponlama (double buffering) üzerine donanım hızlandırmalı fare imleci ve VESA/BGA çözünürlük değiştirme desteği.
+- [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.3.0):**
+  - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
+  - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
+- [x] **SMP (Symmetric Multiprocessing) Desteği (v1.3.0):**
+  - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
+  - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve sağlama testleri.
+- [x] **Paket Yöneticisi (`minpkg`) (v1.3.0):**
+  - Grafiksel (`pkgmgr`) ve komut satırı (`pkg`) arayüzü; depo katalog sorgulama, paket arama ve yerel/ağ üzerinden paket kurulumu.
+- [x] **Gelişmiş Grafik Sürücüleri & Sanallaştırma Hızlandırması (v1.3.0):**
+  - VMware SVGA II ve konuk grafik hızlandırma algılaması (`src/drivers/gpu.rs`), donanım destekli çift tamponlama ve optimize çizim motoru.
+
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
@@ -258,7 +272,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-DiskImage dosya.qcow2` | Bağlanacak sanal disk imajının yolu (varsayılan `.\disk.qcow2`). |
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
-| `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`). |
+| `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`, çekirdek üst sınırı 8). |
 | `-Memory 1G` | Konuk RAM miktarı (`512M`, `1G` gibi; varsayılan `512M`). |
 
 ---
@@ -335,7 +349,7 @@ VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sana
 | :--- | :--- | :--- |
 | **İşletim Sistemi Türü** | **Other / Other (64-bit)** | Çekirdek x86_64 long modda çalıştığı için mutlaka 64-bit seçilmelidir. |
 | **Temel Bellek (RAM)** | **128 MB – 512 MB** *(Min: 4 MB)* | Canlı masaüstü, font atlasları ve çoklu pencere için 256 MB veya 512 MB idealdir. |
-| **İşlemci (CPU)** | **1 veya 2 vCPU** | VT-x / AMD-V sanallaştırma açık olmalıdır. |
+| **İşlemci (CPU)** | **1–8 vCPU** (varsayılan 2) | VT-x / AMD-V sanallaştırma açık olmalıdır. Çok çekirdekli (SMP) desteklenir; her AP kendi IDT/LAPIC kurulumunu yapar, LVT kesmeleri maskelidir. |
 | **Ekran Belleği (VRAM)** | **16 MB – 32 MB** | 1280x720 32-bit çözünürlük için en az 16 MB ayrılmalıdır. |
 | **Grafik Denetleyicisi** | **VBoxVGA** veya **VMSVGA** | 3D hızlandırmayı kapatın (yazılımsal framebuffer kullanılır). |
 | **Sabit Disk (İsteğe Bağlı)** | **256 MB – 1 GB** *(VDI / RAW)* | Canlı ISO testi için disk gerekmez. Kalıcı kurulum için SATA veya IDE olarak ekleyin. |
@@ -385,8 +399,8 @@ minos/
 │   │                        #   HDA ses, ATA/ATAPI (PIO) ve USB durum katmanı
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
-│   ├── apps/                # 13 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
-│   ├── mm/                  # Fiziksel bellek yöneticisi (PMM)
+│   ├── apps/                # 14 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
+│   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu ve ELF yükleyici
 │   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
 │   │                        #   Ext2 read-write (ext2.rs) + MBR/GPT bölümleme (part.rs)
 │   └── main.rs              # Çekirdek giriş noktası (_start), Limine istekleri ve ana olay döngüsü
@@ -402,19 +416,20 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 15 Ekim 2026
+> Son güncelleme: 16 Ekim 2026 (v1.3.0)
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 51 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 27.435 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | 23.297 satır |
+| **Toplam Rust Kaynak Dosyası** | 57 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 28.223 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~24.000 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Yerleşik Uygulama Sayısı** | 13 masaüstü uygulaması + Pencere Yöneticisi |
-| **Kernel / ISO Boyutu** | ~7.1 MB (fontlar ve Limine bootloader dahil) |
+| **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |
+| **Kernel / ISO Boyutu** | ~7.2 MB Çekirdek / ~13 MB Hibrit Bootable ISO |
 
 ---
+
 
 ## 📄 Lisans
 

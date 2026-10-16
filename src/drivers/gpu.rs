@@ -153,27 +153,31 @@ pub fn mode_supported(w: usize, h: usize) -> bool {
     SUPPORTED_MODES.iter().any(|m| m.width as usize == w && m.height as usize == h)
 }
 
+fn io_out8(port: u16, val: u8) {
+    unsafe { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags)); }
+}
+
 /// VGA CRTC üzerinden donanım metin-imleci konumu (text-mode varsa işe yarar;
 /// grafik modda no-op + hızlandırmalı yazılım imleç bayrağı kurulur).
 pub fn hw_cursor_move(x: u16, y: u16) {
     unsafe { HW_CURSOR_X = x; HW_CURSOR_Y = y; }
     // VGA CRTC cursor location (3D4/3D5 idx 0x0E/0x0F) — yalnızca VGA mevcutsa dene.
     if unsafe { !CAPS.vga_present } { return; }
-    // Güvenli: bu portlara yazmak grafik LFB'yi bozmaz.
-    io_out16(0x3D4, 0x0E);
-    io_out16(0x3D5, y);
-    io_out16(0x3D4, 0x0F);
-    io_out16(0x3D5, x);
+    // Standart 8-bit VGA CRTC port indeks/veri yazımı
+    io_out8(0x3D4, 0x0E);
+    io_out8(0x3D5, (y & 0xFF) as u8);
+    io_out8(0x3D4, 0x0F);
+    io_out8(0x3D5, (x & 0xFF) as u8);
 }
 
 pub fn hw_cursor_enable(enable: bool) {
     unsafe { HW_CURSOR_ENABLED = enable; }
     if unsafe { !CAPS.vga_present } { return; }
-    io_out16(0x3D4, 0x0A);
+    io_out8(0x3D4, 0x0A);
     if enable {
-        io_out16(0x3D5, 0x00); // cursor scanline start 0 → görünür
+        io_out8(0x3D5, 0x00); // cursor scanline start 0 → görünür
     } else {
-        io_out16(0x3D5, 0x20); // bit5 = cursor off
+        io_out8(0x3D5, 0x20); // bit5 = cursor off
     }
 }
 

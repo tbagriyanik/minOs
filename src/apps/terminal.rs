@@ -398,7 +398,7 @@ impl TerminalApp {
     }
 
     /// Verilen komut satırını VFS/PMM/DateTime bağlamında yürütür.
-    pub fn execute(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
+    pub fn execute(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &mut PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
             return None;
@@ -428,8 +428,8 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cd pwd mkdir touch rm cat write disks df echo clear mem ps", Color::TEXT_MAIN);
-                self.push_line("ping <IPv4> | dns <host> | curl <url> | ipconfig | apps | open <app>", Color::ACCENT_BLUE);
+                self.push_line("help ls cd pwd mkdir touch rm cat write disks df echo clear mem ps exec", Color::TEXT_MAIN);
+                self.push_line("minpkg list|install|remove | exec <file> | ping <ip> | dns <host> | curl <url>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
                 self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
@@ -595,6 +595,122 @@ impl TerminalApp {
                     }
                 }
                 self.push_line(crate::gui::ui_text("Baglanti: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
+            }
+            "exec" => {
+                if arg.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanim: exec <ikili_dosya_yolu>", "Usage: exec <binary_path>"), Color::ACCENT_YELLOW);
+                } else {
+                    let target = if arg.starts_with('/') {
+                        alloc::string::String::from(arg)
+                    } else {
+                        let mut p = alloc::string::String::from(self.cwd_str());
+                        if !p.ends_with('/') { p.push('/'); }
+                        p.push_str(arg);
+                        p
+                    };
+                    match vfs.read_file(&target) {
+                        Some(data) => {
+                            let mut aspace = crate::mm::vmm::AddressSpace::current();
+                            match crate::mm::loader::AppLoader::load_binary(data, &mut aspace, pmm) {
+                                Ok(loaded) => {
+                                    let mut b = TextBuf::new();
+                                    b.push_str(crate::gui::ui_text("[EXEC] ELF/Binary yuklendi: RIP=0x", "[EXEC] ELF/Binary loaded: RIP=0x"));
+                                    b.push_hex64(loaded.entry_point);
+                                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
+
+                                    let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
+                                    if ok {
+                                        self.push_line(crate::gui::ui_text("[EXEC] Program basariyla calistirildi ve sonlandi.", "[EXEC] Program executed successfully and terminated."), Color::ACCENT_GREEN);
+                                    } else {
+                                        self.push_line(crate::gui::ui_text("[EXEC] Program calisirken hata olustu (izole edildi).", "[EXEC] Program faulted during execution (isolated)."), Color::ACCENT_RED);
+                                    }
+                                    loaded.unmap_and_free(&mut aspace, pmm);
+                                }
+                                Err(err) => {
+                                    let mut b = TextBuf::new();
+                                    b.push_str(crate::gui::ui_text("Yukleme hatasi: ", "Load error: "));
+                                    b.push_str(err);
+                                    self.push_line(b.as_str(), Color::ACCENT_RED);
+                                }
+                            }
+                        }
+                        None => {
+                            let mut b = TextBuf::new();
+                            b.push_str(crate::gui::ui_text("Dosya bulunamadi: ", "File not found: "));
+                            b.push_str(&target);
+                            self.push_line(b.as_str(), Color::ACCENT_RED);
+                        }
+                    }
+                }
+            }
+            "pkg" | "minpkg" => {
+                let mut sp = arg.splitn(2, ' ');
+                let subcmd = sp.next().unwrap_or("").trim();
+                let subarg = sp.next().unwrap_or("").trim();
+                match subcmd {
+                    "list" => {
+                        self.push_line(crate::gui::ui_text("--- KURULU PAKETLER (/bin) ---", "--- INSTALLED PACKAGES (/bin) ---"), Color::ACCENT_PINK);
+                        let pkgs = crate::apps::pkgmgr::MinPkg::list_installed(vfs);
+                        if pkgs.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kurulu paket bulunamadi.", "No packages installed."), Color::TEXT_MUTED);
+                        } else {
+                            for p in &pkgs {
+                                let mut b = TextBuf::new();
+                                b.push_str(&p.name);
+                                b.push_str(" (v");
+                                b.push_str(&p.version);
+                                b.push_str(") -> ");
+                                b.push_str(&p.install_path);
+                                self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                            }
+                        }
+                    }
+                    "install" => {
+                        if subarg.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanim: minpkg install <paket_adi_veya_url>", "Usage: minpkg install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
+                        } else {
+                            self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
+                            // Önce ağ üzerinden dene, ağ yoksa veya yerel simülasyonsa yerleşik paketi kur
+                            let res = if crate::drivers::e1000::is_ready() && subarg.starts_with("http://") {
+                                crate::apps::pkgmgr::MinPkg::install_from_url(subarg, vfs)
+                            } else {
+                                crate::apps::pkgmgr::MinPkg::install_builtin(subarg, vfs)
+                            };
+                            match res {
+                                Ok(path) => {
+                                    let mut b = TextBuf::new();
+                                    b.push_str(crate::gui::ui_text("Basariyla kuruldu: ", "Successfully installed: "));
+                                    b.push_str(&path);
+                                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                                    self.push_line(crate::gui::ui_text("Calistirmak icin: exec ", "To execute: exec "), Color::ACCENT_BLUE);
+                                }
+                                Err(err) => {
+                                    let mut b = TextBuf::new();
+                                    b.push_str(crate::gui::ui_text("Kurulum basarisiz: ", "Installation failed: "));
+                                    b.push_str(err);
+                                    self.push_line(b.as_str(), Color::ACCENT_RED);
+                                }
+                            }
+                        }
+                    }
+                    "remove" | "uninstall" => {
+                        if subarg.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanim: minpkg remove <paket_adi>", "Usage: minpkg remove <pkg_name>"), Color::ACCENT_YELLOW);
+                        } else {
+                            if crate::apps::pkgmgr::MinPkg::remove(subarg, vfs) {
+                                self.push_line(crate::gui::ui_text("Paket basariyla kaldirildi.", "Package removed successfully."), Color::ACCENT_GREEN);
+                            } else {
+                                self.push_line(crate::gui::ui_text("Paket bulunamadi veya silinemedi.", "Package not found or could not be removed."), Color::ACCENT_RED);
+                            }
+                        }
+                    }
+                    _ => {
+                        self.push_line(crate::gui::ui_text("minOs Paket Yoneticisi v1.0 (minpkg)", "minOs Package Manager v1.0 (minpkg)"), Color::ACCENT_PINK);
+                        self.push_line("minpkg list                  - Kurulu paketleri listeler", Color::TEXT_MAIN);
+                        self.push_line("minpkg install <paket>       - Paket indirir ve /bin altina kurar", Color::TEXT_MAIN);
+                        self.push_line("minpkg remove <paket>        - Kurulu paketi siler", Color::TEXT_MAIN);
+                    }
+                }
             }
             "cat" => {
                 if arg.is_empty() {

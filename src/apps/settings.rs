@@ -294,13 +294,13 @@ impl SystemSettings {
 
     // --- Tab 0 (Temel) Geometri ---
     pub fn theme_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 260, win_y + sp(36), sp(96), sp(22))
+        (win_x + CONTENT_X + 260, win_y + sp(56), sp(96), sp(22))
     }
     pub fn kbd_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 260, win_y + sp(64), sp(96), sp(22))
+        (win_x + CONTENT_X + 260, win_y + sp(80), sp(96), sp(22))
     }
     pub fn language_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 260, win_y + sp(92), sp(96), sp(22))
+        (win_x + CONTENT_X + 260, win_y + sp(104), sp(96), sp(22))
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + sp(200), sp(200), sp(10))
@@ -715,12 +715,20 @@ impl SystemSettings {
         // Sağ İçerik Alanı
         match self.active_tab {
             0 => {
+                // --- minOs Sistem ve Sürüm Bilgisi ---
+                let ver_str = if self.language.is_english() {
+                    "minOs Sarman Edition v1.3.0 (x86_64)"
+                } else {
+                    "minOs Sarman Sürümü v1.3.0 (x86_64)"
+                };
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(36), ver_str, Color::ACCENT_GREEN);
+
                 // --- Tema ---
                 let mut theme_str = TextBuf::new();
                 theme_str.push_str(if self.language.is_english() { "Theme: " } else { "Tema: " });
                 theme_str.push_str(self.theme.name());
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(40), theme_str.as_str(), Color::TEXT_MAIN,
-                    (win_x + CONTENT_X, win_y + sp(36), sp(250), sp(22)));
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(60), theme_str.as_str(), Color::TEXT_MAIN,
+                    (win_x + CONTENT_X, win_y + sp(56), sp(250), sp(22)));
                 let theme_r = Self::theme_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(
                     fb,
@@ -737,8 +745,8 @@ impl SystemSettings {
                     KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard: Turkish (TR-Q)" } else { "Klavye: Türkçe (TR-Q)" },
                     KeyboardLayout::EnglishUS => "Keyboard: English (EN-US)",
                 };
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(68), kbd_str, Color::ACCENT_PINK,
-                    (win_x + CONTENT_X, win_y + sp(64), sp(250), sp(22)));
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(84), kbd_str, Color::ACCENT_PINK,
+                    (win_x + CONTENT_X, win_y + sp(80), sp(250), sp(22)));
                 let kbd_r = Self::kbd_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(
                     fb,
@@ -750,9 +758,9 @@ impl SystemSettings {
                 );
                 if self.focused_control == 5 { fb.draw_rect_outline(kbd_r.0, kbd_r.1, kbd_r.2, kbd_r.3, Color::ACCENT_YELLOW); }
 
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(96),
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(108),
                     if self.language.is_english() { "Interface language:" } else { "Arayüz dili:" }, Color::ACCENT_PINK,
-                    (win_x + CONTENT_X, win_y + sp(92), sp(250), sp(22)));
+                    (win_x + CONTENT_X, win_y + sp(104), sp(250), sp(22)));
                 let lang_r = Self::language_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(fb, lang_r, Color::ACCENT_PINK,
                     if self.language.is_english() { "Turkish" } else { "English" }, Color::DARK_BG, false);
@@ -766,7 +774,7 @@ impl SystemSettings {
                 clock.push_u2(now.minute as u32);
                 clock.push_byte(b':');
                 clock.push_u2(now.second as u32);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(126), clock.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(138), clock.as_str(), Color::ACCENT_GREEN);
 
                 let mut date = TextBuf::new();
                 date.push_str(if self.language.is_english() { "Date: " } else { "Tarih: " });
@@ -778,7 +786,7 @@ impl SystemSettings {
                 date.push_str(", ");
                 let weekday = DateTime::weekday(now.year, now.month, now.day);
                 date.push_str(if self.language.is_english() { DateTime::weekday_name_en(weekday) } else { DateTime::weekday_name(weekday) });
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 160, win_y + sp(126), date.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 160, win_y + sp(138), date.as_str(), Color::TEXT_MAIN);
 
                 // --- Ses ---
                 let mut vol = TextBuf::new();

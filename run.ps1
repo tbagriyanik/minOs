@@ -3,7 +3,7 @@ param(
     [switch]$Debug,
     [switch]$UsbDisks,
     [switch]$UsbDiskReadWrite,
-    [ValidateRange(1, 64)][int]$CpuCount = 2,
+    [ValidateRange(1, 64)][int]$CpuCount = 4,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
     [string]$DiskImage = ".\disk.qcow2",
     [switch]$Live,

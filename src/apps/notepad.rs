@@ -248,7 +248,7 @@ impl NotepadApp {
                 self.select_all();
             }
             NotepadMenuAction::About => {
-                self.status_msg = crate::gui::ui_text("minOs Not Defteri v1.2", "minOs Notepad v1.2");
+                self.status_msg = crate::gui::ui_text("minOs Not Defteri v1.3", "minOs Notepad v1.3");
             }
             NotepadMenuAction::Shortcuts => {
                 self.status_msg = crate::gui::ui_text("Ctrl+N Yeni, Ctrl+O Aç, Ctrl+S Kaydet, Ctrl+Z/Y Geri/İleri", "Ctrl+N New, Ctrl+O Open, Ctrl+S Save, Ctrl+Z/Y Undo/Redo");

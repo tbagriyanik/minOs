@@ -469,3 +469,43 @@ pub fn demo(
     smp::print_locked("[RING3] Cekirdek Ring0'da calismaya devam ediyor: BASARILI\n");
     ok1 && ok2
 }
+
+/// Yüklenen bir kullanıcı programını Ring 3'te çalıştırır.
+/// Giriş noktasına atlar, program `SYS_EXIT` çağırdığında veya bir istisnada güvenle çekirdeğe döner.
+pub fn execute_loaded_program(prog: &crate::mm::loader::LoadedProgram) -> bool {
+    install_gates();
+    prepare_usermode_stack();
+
+    // Park RIP'i programın sonuna veya giriş noktasına yönlendir
+    PARK_RIP.store(prog.entry_point, Ordering::Relaxed);
+    USER_FAULT_VEC.store(0, Ordering::Relaxed);
+    USER_FAULT_RIP.store(0, Ordering::Relaxed);
+    USER_EXITED.store(false, Ordering::Relaxed);
+
+    smp::print_locked("[RING3] Kullanici programi baslatiliyor (RIP=");
+    smp::print_locked_hex(prog.entry_point);
+    smp::print_locked(" RSP=");
+    smp::print_locked_hex(prog.stack_pointer);
+    smp::print_locked(")...\n");
+
+    unsafe {
+        enter_usermode(prog.entry_point, prog.stack_pointer);
+    }
+
+    let fault = USER_FAULT_VEC.load(Ordering::Acquire);
+    let exited = USER_EXITED.load(Ordering::Acquire);
+
+    if fault != 0 {
+        smp::print_locked("[RING3] Kullanici programinda hata olustu (Istisna #");
+        smp::print_locked_dec(fault);
+        smp::print_locked("). Surec guvenle sonlandirildi.\n");
+        false
+    } else if exited {
+        smp::print_locked("[RING3] Kullanici programi basariyla tamamlandi (SYS_EXIT).\n");
+        true
+    } else {
+        smp::print_locked("[RING3] Kullanici programindan donuldu.\n");
+        true
+    }
+}
+

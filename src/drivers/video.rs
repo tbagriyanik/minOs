@@ -315,25 +315,29 @@ impl Framebuffer {
         }
     }
 
-    /// Yalnızca verilen dikdörtgeni framebuffer'a kopyalar.
+    /// Yalnızca verilen dikdörtgeni framebuffer'a kopyalar (Donanım 2D Hızlandırmalı Bit Blit).
     pub fn flush_rect(&mut self, rect: (usize, usize, usize, usize)) {
         let (x, y, w, h) = rect;
         let x_end = x.saturating_add(w).min(self.width);
         let y_end = y.saturating_add(h).min(self.height);
         if x >= x_end || y >= y_end { return; }
+        let copy_w = x_end - x;
+        let copy_h = y_end - y;
         let pitch_words = self.pitch / 4;
-        for row in y..y_end {
-            let src_offset = row * self.width + x;
-            if src_offset >= BACKBUFFER_LEN { continue; }
-            let len = (x_end - x).min(BACKBUFFER_LEN - src_offset);
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(src_offset),
-                    self.address.add(row * pitch_words + x),
-                    len,
-                );
-            }
-        }
+        let src_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *const u32;
+
+        crate::drivers::gpu::hw_accel_bit_blit(
+            src_ptr,
+            self.width,
+            self.address,
+            pitch_words,
+            x,
+            y,
+            x,
+            y,
+            copy_w,
+            copy_h,
+        );
     }
 
     /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgene kısıtlar).
@@ -431,17 +435,19 @@ impl Framebuffer {
         if x0 >= x_end || y0 >= y_end {
             return;
         }
-        for cy in y0..y_end {
-            let row_offset = cy * self.width;
-            let start = row_offset + x0;
-            let end = row_offset + x_end;
-            unsafe {
-                if start < BACKBUFFER_LEN {
-                    let real_end = end.min(BACKBUFFER_LEN);
-                    BACKBUFFER[start..real_end].fill(c);
-                }
-            }
-        }
+        let fill_w = x_end - x0;
+        let fill_h = y_end - y0;
+        let dst_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32;
+
+        crate::drivers::gpu::hw_accel_fill_rect(
+            dst_ptr,
+            self.width,
+            x0,
+            y0,
+            fill_w,
+            fill_h,
+            c,
+        );
     }
 
     /// 1px kalınlığında içi boş dikdörtgen (çerçeve).

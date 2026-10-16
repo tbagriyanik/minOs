@@ -538,7 +538,7 @@ fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
 /// `slot`, `&REQUEST.response` gibi geçerli ve okunabilir bir yuvaya işaret
 /// etmelidir.
 #[inline]
-unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
+pub(crate) unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
     if slot.is_null() || !is_canonical_ptr(slot) {
         return None;
     }
@@ -909,12 +909,13 @@ pub extern "C" fn _start() -> ! {
         memory_mgr.pmm.free_frame(frame);
     }
 
-    // Test amacli ornek kucuk uygulama bayt dizisi (ret / nop talimatlari)
-    let sample_app_code: [u8; 8] = [0x90, 0x90, 0x90, 0xC3, 0x00, 0x00, 0x00, 0x00];
-    if let Ok(loaded) = mm::loader::AppLoader::load_binary(&sample_app_code, &mut address_space, &mut memory_mgr.pmm) {
-        if loaded.entry_point == mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
-            serial_print("[LOADER] Uygulama kodu guvenli bellek izolasyonu ile yerlestirildi.\n");
+    // Test amaçlı standart ELF64 ikili dosyasını yükle ve doğrula
+    let sample_elf_bin = mm::loader::AppLoader::create_sample_elf();
+    if let Ok(loaded) = mm::loader::AppLoader::load_binary(&sample_elf_bin, &mut address_space, &mut memory_mgr.pmm) {
+        if loaded.entry_point >= mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
+            serial_print("[LOADER] Standart ELF64 ikilisi guvenli bellek izolasyonu ile yuklendi (W^X / NX aktif).\n");
         }
+        loaded.unmap_and_free(&mut address_space, &mut memory_mgr.pmm);
     }
 
     // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
@@ -958,6 +959,10 @@ pub extern "C" fn _start() -> ! {
     } else {
         arch::x86_64::smp::print_locked("[RING3] Kullanic kipi izolasyon demosu: BASARISIZ.\n");
     }
+
+    // 1c. Donanım Kesmeleri ve APIC Zamanlayıcı (APIC Timer & Hardware Interrupts)
+    arch::x86_64::apic::init_timer();
+    arch::x86_64::smp::print_locked("[APIC] Local APIC Timer ve donanim kesme vektorleri (0x20) aktif.\n");
     // Paralel sağlama toplamı: AP'ler + BSP aynı tamponu parçalı işler.
     {
         const SUM_FRAMES: usize = 64;
@@ -4001,7 +4006,7 @@ pub extern "C" fn _start() -> ! {
                 if let Some(cmd) = terminal_app.take_pending() {
                     let n = terminal_app.pending_len();
                     let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
-                    if let Some(app_idx) = terminal_app.execute(line, &mut fs_mgr.vfs, &memory_mgr.pmm, &now) {
+                    if let Some(app_idx) = terminal_app.execute(line, &mut fs_mgr.vfs, &mut memory_mgr.pmm, &now) {
                         open_app(&mut compositor, app_idx);
                     }
                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);

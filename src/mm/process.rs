@@ -244,20 +244,25 @@ impl ProcessManager {
         }
     }
 
-    /// Bir sonraki çalıştırılabilir süreci döner (Round-Robin Basit Zamanlayıcı).
+    /// Bir sonraki çalıştırılabilir süreci döner (Öncelikli Preemptive Round-Robin Zamanlayıcı).
+    /// Realtime > High > Normal > Low öncelik sıralamasına göre seçim yapar, CPU tick sayacını günceller.
     pub fn schedule_next(&mut self) -> Option<usize> {
         if self.active_count == 0 {
             return None;
         }
 
-        let total = MAX_PROCESSES;
-        for i in 1..=total {
-            let idx = (self.current_pid + i) % total;
-            let p = &mut self.processes[idx];
-            if p.state == ProcessState::Ready || p.state == ProcessState::Running {
-                self.current_pid = p.pid;
-                p.state = ProcessState::Running;
-                return Some(p.pid);
+        // Önce en yüksek öncelikli hazır/çalışan süreci ara (Realtime -> Low)
+        for target_prio in [ProcessPriority::Realtime, ProcessPriority::High, ProcessPriority::Normal, ProcessPriority::Low] {
+            let total = MAX_PROCESSES;
+            for i in 1..=total {
+                let idx = (self.current_pid + i) % total;
+                let p = &mut self.processes[idx];
+                if (p.state == ProcessState::Ready || p.state == ProcessState::Running) && p.priority == target_prio {
+                    self.current_pid = p.pid;
+                    p.state = ProcessState::Running;
+                    p.cpu_time_ticks = p.cpu_time_ticks.saturating_add(1);
+                    return Some(p.pid);
+                }
             }
         }
 
@@ -413,11 +418,32 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let free_after = pmm.free_memory_bytes;
     let active_after = proc_mgr.active_count;
 
-    if free_after == initial_free && active_after == initial_active {
-        crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (Sızıntı: 0 bayt): BASARILI\n");
+    if free_after != initial_free || active_after != initial_active {
+        crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BASARISIZ\n");
+        return false;
+    }
+    crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (Sızıntı: 0 bayt): BASARILI\n");
+
+    // 6. Öncelikli Zamanlayıcı (Priority Preemptive Scheduler) Testi
+    let p_low = proc_mgr.spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None).unwrap_or(0);
+    let p_high = proc_mgr.spawn("high_proc", 0x2000, 0x7000_2000, 0x100000, 1, None).unwrap_or(0);
+    if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == p_high) {
+        p.priority = ProcessPriority::High;
+    }
+    if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == p_low) {
+        p.priority = ProcessPriority::Low;
+    }
+
+    let next_pid = proc_mgr.schedule_next();
+    let sched_ok = next_pid == Some(p_high);
+    let _ = proc_mgr.terminate(p_low, 0, pmm);
+    let _ = proc_mgr.terminate(p_high, 0, pmm);
+
+    if sched_ok {
+        crate::serial_print("[PROC-TEST] 6. Öncelik tabanlı zamanlayıcı (High > Low): BASARILI\n");
         true
     } else {
-        crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] 6. Zamanlayıcı öncelik testi: BASARISIZ\n");
         false
     }
 }

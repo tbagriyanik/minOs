@@ -63,6 +63,8 @@ pub const PF_W: u32 = 1 << 1; // Yazılabilir (Writable)
 pub const PF_R: u32 = 1 << 2; // Okunabilir (Readable)
 
 /// Güvenli şekilde yüklenen uygulamanın bellek haritası ve çalışma durumu
+pub const MAX_LOADED_FRAMES: usize = 32;
+
 #[derive(Debug, Clone, Copy)]
 pub struct LoadedProgram {
     /// Uygulamanın giriş noktası sanal adresi (RIP)
@@ -75,6 +77,41 @@ pub struct LoadedProgram {
     pub code_size: u64,
     /// Toplam tahsis edilen sayfa sayısı
     pub allocated_pages: usize,
+    /// Tahsis edilen fiziksel çerçeveler
+    pub allocated_frames: [u64; MAX_LOADED_FRAMES],
+    /// Eşlenen sanal adresler
+    pub mapped_vaddrs: [u64; MAX_LOADED_FRAMES],
+}
+
+impl LoadedProgram {
+    pub const fn empty() -> Self {
+        Self {
+            entry_point: 0,
+            stack_pointer: 0,
+            code_base: 0,
+            code_size: 0,
+            allocated_pages: 0,
+            allocated_frames: [0; MAX_LOADED_FRAMES],
+            mapped_vaddrs: [0; MAX_LOADED_FRAMES],
+        }
+    }
+
+    pub fn unmap_and_free(
+        &self,
+        address_space: &mut AddressSpace,
+        pmm: &mut PhysicalMemoryManager,
+    ) {
+        for i in 0..self.allocated_pages.min(MAX_LOADED_FRAMES) {
+            let vaddr = self.mapped_vaddrs[i];
+            let paddr = self.allocated_frames[i];
+            if vaddr != 0 {
+                let _ = address_space.unmap_page(vaddr);
+            }
+            if paddr != 0 {
+                pmm.free_frame(paddr);
+            }
+        }
+    }
 }
 
 /// Uygulama Yükleyicisi (Application Loader)
@@ -137,6 +174,8 @@ impl AppLoader {
     ) -> Result<LoadedProgram, &'static str> {
         let header = Self::validate_elf(data)?;
         let mut allocated_pages = 0usize;
+        let mut allocated_frames = [0u64; MAX_LOADED_FRAMES];
+        let mut mapped_vaddrs = [0u64; MAX_LOADED_FRAMES];
 
         let ph_size = header.ph_entry_size as usize;
         let ph_count = header.ph_num as usize;
@@ -179,6 +218,10 @@ impl AppLoader {
             let mut page_vaddr = aligned_start;
             while page_vaddr < aligned_end {
                 let phys_frame = pmm.allocate_frame().ok_or("PMM: Yetersiz fiziksel bellek")?;
+                if allocated_pages < MAX_LOADED_FRAMES {
+                    allocated_frames[allocated_pages] = phys_frame;
+                    mapped_vaddrs[allocated_pages] = page_vaddr;
+                }
                 allocated_pages += 1;
 
                 // Çerçeveyi önce sıfırla
@@ -212,7 +255,7 @@ impl AppLoader {
         }
 
         // Kullanıcı yığınını (User Stack) ayır ve eşle
-        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages)?;
+        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages, &mut allocated_frames, &mut mapped_vaddrs)?;
 
         Ok(LoadedProgram {
             entry_point: header.entry,
@@ -220,6 +263,8 @@ impl AppLoader {
             code_base: USER_CODE_BASE,
             code_size: data.len() as u64,
             allocated_pages,
+            allocated_frames,
+            mapped_vaddrs,
         })
     }
 
@@ -230,12 +275,18 @@ impl AppLoader {
         pmm: &mut PhysicalMemoryManager,
     ) -> Result<LoadedProgram, &'static str> {
         let mut allocated_pages = 0usize;
+        let mut allocated_frames = [0u64; MAX_LOADED_FRAMES];
+        let mut mapped_vaddrs = [0u64; MAX_LOADED_FRAMES];
         let code_len = data.len() as u64;
         let num_pages = ((code_len + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
 
         for page_idx in 0..num_pages {
             let virt_addr = USER_CODE_BASE + (page_idx as u64) * PAGE_SIZE;
             let phys_frame = pmm.allocate_frame().ok_or("PMM: Yetersiz fiziksel bellek")?;
+            if allocated_pages < MAX_LOADED_FRAMES {
+                allocated_frames[allocated_pages] = phys_frame;
+                mapped_vaddrs[allocated_pages] = virt_addr;
+            }
             allocated_pages += 1;
 
             let virt_frame = phys_to_virt(phys_frame) as *mut u8;
@@ -257,7 +308,7 @@ impl AppLoader {
         }
 
         // Kullanıcı yığını
-        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages)?;
+        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages, &mut allocated_frames, &mut mapped_vaddrs)?;
 
         Ok(LoadedProgram {
             entry_point: USER_CODE_BASE,
@@ -265,6 +316,8 @@ impl AppLoader {
             code_base: USER_CODE_BASE,
             code_size: code_len,
             allocated_pages,
+            allocated_frames,
+            mapped_vaddrs,
         })
     }
 
@@ -273,12 +326,18 @@ impl AppLoader {
         address_space: &mut AddressSpace,
         pmm: &mut PhysicalMemoryManager,
         allocated_pages: &mut usize,
+        allocated_frames: &mut [u64; MAX_LOADED_FRAMES],
+        mapped_vaddrs: &mut [u64; MAX_LOADED_FRAMES],
     ) -> Result<u64, &'static str> {
         let stack_base = USER_STACK_TOP - (USER_STACK_PAGES as u64) * PAGE_SIZE;
 
         for i in 0..USER_STACK_PAGES {
             let virt_addr = stack_base + (i as u64) * PAGE_SIZE;
             let phys_frame = pmm.allocate_frame().ok_or("PMM: Yigin icin yetersiz bellek")?;
+            if *allocated_pages < MAX_LOADED_FRAMES {
+                allocated_frames[*allocated_pages] = phys_frame;
+                mapped_vaddrs[*allocated_pages] = virt_addr;
+            }
             *allocated_pages += 1;
 
             let virt_frame = phys_to_virt(phys_frame) as *mut u8;
@@ -292,6 +351,96 @@ impl AppLoader {
 
         // Yığın x86-64 ABI kuralı gereği 16-bayt hizalı olmalıdır
         Ok(USER_STACK_TOP - 16)
+    }
+
+    /// Test veya VFS üzerinde dosya olarak saklamak için geçerli bir ELF64 test ikilisi üretir.
+    /// Bu ikili Ring 3'te çalışır, `SYS_WRITE` ile mesaj yazar ve `SYS_EXIT` ile güvenle çekirdeğe döner.
+    pub fn create_sample_elf() -> alloc::vec::Vec<u8> {
+        let mut bin = alloc::vec::Vec::new();
+
+        // 1. ELF Header (64 bytes)
+        let eh = Elf64Header {
+            ident: [
+                0x7F, b'E', b'L', b'F', // Magic
+                ELF_CLASS_64,           // 64-bit
+                ELF_DATA_2LSB,          // Little-endian
+                1,                      // Version
+                0, 0, 0, 0, 0, 0, 0, 0, 0, // Padding
+            ],
+            elf_type: ELF_TYPE_EXEC,
+            machine: ELF_MACHINE_X86_64,
+            version: 1,
+            entry: USER_CODE_BASE + 0x78, // Kod program başlığının hemen ardından başlar (64 + 56 = 120 = 0x78)
+            ph_offset: 64,                // Program header ELF header'dan hemen sonra
+            sh_offset: 0,
+            flags: 0,
+            eh_size: 64,
+            ph_entry_size: 56,
+            ph_num: 1,
+            sh_entry_size: 0,
+            sh_num: 0,
+            sh_str_idx: 0,
+        };
+
+        // 2. Program Header (56 bytes)
+        let ph = Elf64ProgramHeader {
+            seg_type: PT_LOAD,
+            flags: PF_R | PF_X, // Okunabilir + Yürütülebilir
+            offset: 0,
+            vaddr: USER_CODE_BASE,
+            paddr: USER_CODE_BASE,
+            file_size: 0x100, // Toplam başlıklar + kod
+            mem_size: 0x1000, // 1 sayfa bellek
+            align: 0x1000,
+        };
+
+        let eh_bytes = unsafe {
+            core::slice::from_raw_parts(&eh as *const _ as *const u8, core::mem::size_of::<Elf64Header>())
+        };
+        bin.extend_from_slice(eh_bytes);
+
+        let ph_bytes = unsafe {
+            core::slice::from_raw_parts(&ph as *const _ as *const u8, core::mem::size_of::<Elf64ProgramHeader>())
+        };
+        bin.extend_from_slice(ph_bytes);
+
+        // 3. Kod Segmenti (+0x78):
+        // SYS_WRITE (5) -> "minOs Ring3 ELF: Calisma Basarili!\n"
+        // mov rax, 5
+        // lea rdi, [rip + msg]
+        // mov rsi, msg_len
+        // int 0x80
+        // mov rax, 1 (SYS_EXIT)
+        // int 0x80
+        // jmp $ (park)
+        let code_payload: &[u8] = &[
+            // mov rax, 5 (SYS_WRITE)
+            0x48, 0xC7, 0xC0, 0x05, 0x00, 0x00, 0x00,
+            // lea rdi, [rip + 18] -> msg
+            0x48, 0x8D, 0x3D, 0x12, 0x00, 0x00, 0x00,
+            // mov rsi, 35 (msg len)
+            0x48, 0xC7, 0xC6, 0x23, 0x00, 0x00, 0x00,
+            // int 0x80
+            0xCD, 0x80,
+            // mov rax, 1 (SYS_EXIT)
+            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
+            // int 0x80
+            0xCD, 0x80,
+            // jmp $
+            0xEB, 0xFE,
+            // String payload: "minOs Ring3 ELF: Calisma Basarili!\n" (35 bayt)
+            b'm', b'i', b'n', b'O', b's', b' ', b'R', b'i', b'n', b'g', b'3', b' ',
+            b'E', b'L', b'F', b':', b' ', b'C', b'a', b'l', b'i', b's', b'm', b'a',
+            b' ', b'B', b'a', b's', b'a', b'r', b'i', b'l', b'i', b'!', b'\n',
+        ];
+        bin.extend_from_slice(code_payload);
+
+        // Toplam boyutu 0x100 bayta doldur
+        while bin.len() < 0x100 {
+            bin.push(0);
+        }
+
+        bin
     }
 }
 

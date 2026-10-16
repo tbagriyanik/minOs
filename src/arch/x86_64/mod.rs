@@ -3,6 +3,7 @@ pub mod sync;
 pub mod gdt;
 pub mod smp;
 pub mod ring3;
+pub mod apic;
 
 pub static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 

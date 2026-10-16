@@ -168,6 +168,11 @@ pub fn lapic_id_of(cpu: usize) -> u32 {
 #[unsafe(naked)]
 pub unsafe extern "C" fn ap_entry() {
     core::arch::naked_asm!(
+        // Limine AP'yi hangi IF bayrağıyla uyandırırsa uyandırsın ilk iş
+        // kesmeleri kapat: AP, IDT/LAPIC kurulumu bitene kadar kesme almamalı.
+        // (VirtualBox AP'lere QEMU'dan farklı kesme ulaştırır; IDT'siz AP'de
+        //  kesme üçlü hataya ve tüm VM'nin donmasına yol açar.)
+        "cli",
         // idx = NEXT_AP++ (0-tabanlı AP sırası); BSP hariç kimlik = idx + 1.
         "mov eax, 1",
         "lock xadd dword ptr [{next}], eax",
@@ -202,8 +207,18 @@ pub unsafe extern "C" fn ap_entry() {
 #[no_mangle]
 pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     let cpu = (idx as usize).min(MAX_CPUS - 1);
+    // Kesmeler kapalı kalsın (polling AP kesme almaz).
+    unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     super::enable_sse();
     unsafe { gdt::load_for_cpu(cpu) };
+    // IDT CPU başına bir yazmaçtır (IDTR); BSP'nin LIDT'si AP'yi kapsamaz.
+    // Her AP kendi IDTR'sini yüklemeli, yoksa en ufak kesmede üçlü hata olur.
+    super::init_interrupts();
+    // Bu AP'nin Local APIC'ini etkinleştir (spurious vektör) ve tüm LVT
+    // girdilerini maskele; timer yalnızca BSP'de çalışır.
+    lapic_init();
+    super::apic::mask_for_ap();
+    unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     LAPIC_ID[cpu].store(lapic_read(0x20) >> 24, Ordering::Relaxed);
     AP_ONLINE[cpu].store(true, Ordering::Release);
 
@@ -211,13 +226,24 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     print_locked_dec(cpu as u64);
     print_locked(" baslatildi (yigin+GDT hazir).\n");
 
+    let mut idle_rounds: u32 = 0;
     loop {
+        // Kesmelerin yanlışlıkla açılmasına karşı her turda kapalı tut.
+        unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
         // İş kuyruğunu yokla; yoksa kalp atışı üret.
         if !poll_job(cpu) {
             HEARTBEAT[cpu].fetch_add(1, Ordering::Relaxed);
-            for _ in 0..4096 {
+            // Boşta bekleme: kilit rekabetini düşürmek için beklemeli yoklama.
+            // Her tur JOB kilidini almak yerine giderek uzayan pause uygula;
+            // VirtualBox'ta agresif test-and-set BSP'yi aç bırakıp
+            // masaüstünü donduruyordu.
+            idle_rounds = idle_rounds.saturating_add(1);
+            let spins = (idle_rounds.min(64) as usize) * 4096;
+            for _ in 0..spins {
                 core::hint::spin_loop();
             }
+        } else {
+            idle_rounds = 0;
         }
     }
 }
@@ -249,6 +275,9 @@ impl Job {
 }
 
 static JOB: SpinMutex<Job> = SpinMutex::new(Job::empty());
+/// Kilit almadan bakılan hızlı bayrak: iş yoksa AP'ler kilide dokunmaz.
+/// Bu, boşta dönen AP'lerin BSP'nin bellek yolunu tıkamasını önler.
+static JOB_PENDING: AtomicBool = AtomicBool::new(false);
 
 fn checksum_slice(phys_base: u64, start_u64: usize, len_u64: usize) -> u64 {
     let base = crate::drivers::phys_to_virt(phys_base) as *const u64;
@@ -261,6 +290,10 @@ fn checksum_slice(phys_base: u64, start_u64: usize, len_u64: usize) -> u64 {
 
 /// Kuyruktan bir parça alıp işler. İş yapıldıysa true döner.
 fn poll_job(cpu: usize) -> bool {
+    // Hızlı yol: iş yoksa kilide hiç dokunma (veri yolu rekabetini önler).
+    if !JOB_PENDING.load(Ordering::Acquire) {
+        return false;
+    }
     let (phys, start, len, last) = {
         let mut job = JOB.lock();
         if !job.active || job.next_chunk * job.chunk_u64 >= job.total_u64 {
@@ -295,6 +328,7 @@ pub fn parallel_checksum(data_phys: u64, total_u64: usize, chunk_u64: usize) -> 
         job.data_phys = data_phys;
         job.total_u64 = total_u64;
         job.chunk_u64 = chunk_u64.max(1);
+        JOB_PENDING.store(true, Ordering::Release);
     }
     // BSP de işçidir (cpu 0).
     while poll_job(0) {}
@@ -305,6 +339,7 @@ pub fn parallel_checksum(data_phys: u64, total_u64: usize, chunk_u64: usize) -> 
             let job = JOB.lock();
             if job.chunks_done >= total_chunks {
                 let sum = job.partial.iter().fold(0u64, |a, b| a.wrapping_add(*b));
+                JOB_PENDING.store(false, Ordering::Release);
                 return Some(sum);
             }
         }
@@ -314,6 +349,7 @@ pub fn parallel_checksum(data_phys: u64, total_u64: usize, chunk_u64: usize) -> 
             if spins > 20_000_000 {
                 let mut job = JOB.lock();
                 job.active = false;
+                JOB_PENDING.store(false, Ordering::Release);
                 return None;
             }
             core::hint::spin_loop();
@@ -326,26 +362,11 @@ pub fn parallel_checksum(data_phys: u64, total_u64: usize, chunk_u64: usize) -> 
 // --- BSP kurulumu --------------------------------------------------------------
 
 fn limine_response() -> Option<*const SmpResponse> {
-    unsafe {
-        let slot = core::ptr::addr_of!(SMP_REQUEST.response);
-        let resp = core::ptr::read_volatile(slot);
-        if resp.is_null() {
-            return None;
-        }
-        let addr = resp as usize as u64;
-        let upper = addr >> 47;
-        if !(upper == 0 || upper == 0x1_FFFF) {
-            return None;
-        }
-        if (resp as usize) % 8 != 0 {
-            return None;
-        }
-        // Yanıtın yüksek yarıda eşlendiğini doğrula (Limine sözleşmesi).
-        if (addr >> 47) != 0x1_FFFF {
-            return None;
-        }
-        Some(resp)
-    }
+    // SAFETY: yuva, `SMP_REQUEST.response` alanının adresidir; paylaşılan
+    // yardımcı, yuvayı ve dönen yanıt işaretçisini (null, hizalama,
+    // canonical adres, yüksek yarı eşlemesi) doğrulamadan `Some` dönmez.
+    // El yapımı `read_volatile(slot)` burada yapılmaz (CodeQL #19).
+    unsafe { crate::valid_limine_response(core::ptr::addr_of!(SMP_REQUEST.response)) }
 }
 
 pub fn cpu_count() -> usize {

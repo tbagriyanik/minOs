@@ -387,6 +387,18 @@ impl TextBuf {
         while n > 0 { n -= 1; self.push_byte(tmp[n]); }
     }
 
+    pub fn push_hex64(&mut self, mut v: u64) {
+        if v == 0 { self.push_byte(b'0'); return; }
+        let mut tmp = [0u8; 16]; let mut n = 0;
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        while v > 0 && n < tmp.len() {
+            tmp[n] = HEX[(v & 0xF) as usize];
+            n += 1;
+            v >>= 4;
+        }
+        while n > 0 { n -= 1; self.push_byte(tmp[n]); }
+    }
+
     pub fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
     }

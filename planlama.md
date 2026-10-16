@@ -1,8 +1,8 @@
-# minOs: Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs (v1.3): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 15 Ekim 2026 — tablo ve fazlar gerçekleşen koda göre güncellendi.
+> Son senkron: 16 Ekim 2026 — Sürüm v1.3.0 güncellendi; tüm fazlar (Faz 1-8) eksiksiz tamamlandı.
 
 ---
 
@@ -14,10 +14,11 @@
 | **Önyükleyici (Bootloader)** | [Limine Bootloader](https://limine-bootloader.org/) | UEFI & Legacy BIOS uyumlu, framebuffer + HHDM + bellek haritası istekleri |
 | **Geliştirme Dili** | Freestanding Rust (Nightly, `no_std`/`no_main`) | C kodu yok; çekirdek tamamı Rust + az miktarda inline asm |
 | **Bellek Yönetimi** | Fiziksel çerçeve tahsisi (PMM, bitmap) + 4-seviyeli VMM + 2 MB kernel heap (`linked_list_allocator`) | Sayfa bayrakları (`USER`/`NX`) ayrımı testlerle doğrulu |
-| **Kesmeler** | IDT yapısı + PIC maskeleme (polling G/Ç) | Donanım IRQ işleyicileri ve APIC henüz yok |
+| **Kesmeler** | IDT yapısı + Local APIC Timer (IRQ/0x20) + PIC maskeleme | Donanım APIC periyodik zamanlayıcı ve EOI yönetimi devrede |
+| **Çoklu Görev & Zamanlayıcı** | PCB + Öncelikli Preemptive / Round-Robin Zamanlayıcı | Realtime/High/Normal/Low öncelik seviyeleri ve CPU tick takibi aktif |
 | **Çekirdek Tipi** | Modüler Monolitik Çekirdek | Tek adres uzayı, modüler sürücü yapısı |
 | **Dosya Sistemi (VFS)** | Sanal Dosya Sistemi + FAT32 (r/w) + Ext2 (r/w) + ISO9660 (salt okunur) + MBR/GPT bölümleme | `VFS.DAT` anlık görüntüsüyle kalıcı depolama |
-| **Grafik Altyapısı** | Limine Linear Framebuffer (32-bpp) | Yazılımsal compositor + çift tamponlama; BGA/VGA yetenek taraması |
+| **Grafik Altyapısı** | Limine Linear Framebuffer (32-bpp) + Donanım 2D Hızlandırma | Çift tamponlu compositor + BGA/VGA taraması + 64-bit donanımsal rect fill ve bit blit |
 | **Ağ Yığını** | Özel mikro TCP/IP (e1000) + soket API + HTTP istemcisi | ARP/IPv4/ICMP/UDP/DHCP/DNS, soket başına TCP durum makinesi, `curl` |
 | **Ses Alt Sistemi** | Intel HDA (DMA) + PC Speaker PWM yedeği | PCM çalma, ses düzeyi/karıştırma |
 
@@ -70,7 +71,8 @@ flowchart TD
     C --> D[Faz 4: Sistem Uygulamaları ✅]
     D --> E[Faz 5: ISO, Kurulum ve Kalıcı Depolama ✅]
     E --> F[Faz 6: Ağ Yığını ve Soket API ✅]
-    F --> G[Faz 7: Ring 3 ve SMP 🔲]
+    F --> G[Faz 7: Ring 3 ve SMP ✅]
+    G --> H[Faz 8: ELF Yükleyici, Paket Yöneticisi & 2D Hızlandırma ✅]
 ```
 
 ### Faz 1: Çekirdek & Önyükleme İskeleti (Limine Tabanlı) ✅
@@ -112,5 +114,7 @@ flowchart TD
 - **SMP (Çok Çekirdekli Paralellik):** Limine SMP protokolü ile AP başlatımı, çekirdek başına 64 KiB yığın ve GDT, LAPIC kimliği, paralel atomik iş kuyruğu (`parallel_checksum`).
 - **Gelişmiş Ses Alt Sistemi:** Intel HDA için evrensel PCI taraması, 64-bit BAR0, donanımsal CRST/SRST sıfırlama, AFG/DAC/Pin D0 güç yönetimi, donanımsal DMA Position Buffer (offset `0x70`), atomik 32-bit SDnCTL akış kontrolü ve otomatik PC Speaker PWM yedeği (fallback). Ayarlar uygulamasında donanımsal ses testi.
 
-### Faz 8: Sıradakiler 🔲
-- **Kullanıcı Alanı ELF Yükleyici**, Paket Yöneticisi (`minpkg`), donanım 2D hızlandırma.
+### Faz 8: Kullanıcı Alanı ve Genişletilebilirlik ✅
+- **Kullanıcı Alanı ELF Yükleyici Entegrasyonu ✅:** ELF64 ayrıştırıcı (`PT_LOAD`), W^X prensibiyle sayfalama (kod salt okunur/çalıştırılabilir, veri/yığın NX), kullanıcı yığını tahsisi, `LoadedProgram::unmap_and_free()` kaynak temizliği, `arch::x86_64::ring3::execute_loaded_program()` güvenli Ring 3 çalışma/dönüş döngüsü, VFS `/bin/hello.elf` örnek ikilisi ve MinShell `exec <ikili>` komutu tamamlandı.
+- **Paket Yöneticisi (`minpkg`) ✅:** Ağ (HTTP/curl) veya dahili repodan paket indirme, VFS `/bin` dizinine kurma (`minpkg install`), kurulu ikili paketleri arayıp listeleme (`minpkg list`), kaldırma (`minpkg remove`) ve terminal (MinShell) arayüz entegrasyonu tamamlandı.
+- **Donanım 2D Hızlandırma ✅:** GPU/BGA ve Framebuffer üzerinde 64-bit hizalı blok dolgu (`hw_accel_fill_rect`) ve kopyalama (`hw_accel_bit_blit`), `flush_rect` ve `draw_rect` hızlandırmaları tamamlandı.

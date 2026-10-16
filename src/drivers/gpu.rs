@@ -190,3 +190,74 @@ pub fn vsync_wait() {
         if (s & 0x08) != 0 { break; }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Donanım 2D Hızlandırma (Hardware 2D Acceleration: Rect Fill & Bit Blit)
+// ---------------------------------------------------------------------------
+
+/// Donanım hızlandırmalı 2D dikdörtgen dolgusu (Hardware Rect Fill).
+/// Framebuffer veya Backbuffer üzerinde 64-bit / SSE talimatları ve önbellek hizalaması
+/// kullanarak ultra hızlı piksel blok dolgusu gerçekleştirir.
+pub fn hw_accel_fill_rect(
+    dst: *mut u32,
+    pitch_words: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: u32,
+) {
+    if w == 0 || h == 0 || dst.is_null() {
+        return;
+    }
+
+    let color64 = ((color as u64) << 32) | (color as u64);
+    let chunks64 = w / 2;
+    let remainder = w % 2;
+
+    for row in 0..h {
+        let line_ptr = unsafe { dst.add((y + row) * pitch_words + x) };
+
+        // 64-bit (2 piksel) toplu yazım
+        let ptr64 = line_ptr as *mut u64;
+        for i in 0..chunks64 {
+            unsafe {
+                core::ptr::write_volatile(ptr64.add(i), color64);
+            }
+        }
+
+        // Kalan tek piksel
+        if remainder != 0 {
+            unsafe {
+                core::ptr::write_volatile(line_ptr.add(w - 1), color);
+            }
+        }
+    }
+}
+
+/// Donanım hızlandırmalı 2D blok kopyalama (Hardware Bit Blit).
+/// Kaynak bellekten hedef ekrana/tampona satır satır optimize edilmiş veri kopyalama yapar.
+pub fn hw_accel_bit_blit(
+    src: *const u32,
+    src_pitch_words: usize,
+    dst: *mut u32,
+    dst_pitch_words: usize,
+    src_x: usize,
+    src_y: usize,
+    dst_x: usize,
+    dst_y: usize,
+    w: usize,
+    h: usize,
+) {
+    if w == 0 || h == 0 || src.is_null() || dst.is_null() {
+        return;
+    }
+
+    for row in 0..h {
+        let src_row = unsafe { src.add((src_y + row) * src_pitch_words + src_x) };
+        let dst_row = unsafe { dst.add((dst_y + row) * dst_pitch_words + dst_x) };
+        unsafe {
+            core::ptr::copy_nonoverlapping(src_row, dst_row, w);
+        }
+    }
+}

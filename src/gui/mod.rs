@@ -873,6 +873,12 @@ impl MinGuiCompositor {
     }
 
     pub fn tray_layout(width: usize, height: usize) -> TrayLayout {
+        let net_available = crate::drivers::e1000::is_ready();
+        let audio_available = crate::drivers::hda::is_ready();
+        Self::tray_layout_with_devices(width, height, net_available, audio_available)
+    }
+
+    pub fn tray_layout_with_devices(width: usize, height: usize, net_available: bool, audio_available: bool) -> TrayLayout {
         let tb_y = height.saturating_sub(taskbar_h());
         let by = tb_y + 5;
         // Tray düğmeleri aktif font ölçeğine göre büyür.
@@ -892,17 +898,35 @@ impl MinGuiCompositor {
         let theme_w = (sp(22) + MinGuiCompositor::text_width(theme::current().short_name(), 1) + sp(4)).max(sp(38));
         let kbd_w = sp(50);
         let gap = sp(8);
+
         let clock_x = width.saturating_sub(pad + clock_w);
-        let vol_x = clock_x.saturating_sub(gap + vol_w);
-        let net_x = vol_x.saturating_sub(gap + net_w);
-        let theme_x = net_x.saturating_sub(gap + theme_w);
+        let mut curr_x = clock_x;
+
+        let volume_rect = if audio_available {
+            let x = curr_x.saturating_sub(gap + vol_w);
+            curr_x = x;
+            (x, by, vol_w, h)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let network_rect = if net_available {
+            let x = curr_x.saturating_sub(gap + net_w);
+            curr_x = x;
+            (x, by, net_w, h)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let theme_x = curr_x.saturating_sub(gap + theme_w);
         let kbd_x = theme_x.saturating_sub(gap + kbd_w);
+
         TrayLayout {
             tb_y,
             start: (6, by, sp(112), h),
             clock: (clock_x, by, clock_w, h),
-            volume: (vol_x, by, vol_w, h),
-            network: (net_x, by, net_w, h),
+            volume: volume_rect,
+            network: network_rect,
             theme: (theme_x, by, theme_w, h),
             kbd: (kbd_x, by, kbd_w, h),
         }
@@ -2239,22 +2263,24 @@ impl MinGuiCompositor {
         let t_name = theme::current().short_name();
         Self::draw_string(fb, l.theme.0 + sp(22), tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2, t_name, if theme_hover { Color::ACCENT_PINK } else { Color::TEXT_MAIN });
 
-        // 3. Ses Düğmesi (l.volume)
-        let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
-        let icon_color = if is_muted { Color::ACCENT_RED } else if vol_hover { Color::TEXT_MAIN } else { Color::ACCENT_GREEN };
-        // Hoparlör gövdesi ve ses dalgaları.
-        fb.draw_rect(l.volume.0 + sp(8), l.volume.1 + sp(11), sp(4), sp(6), icon_color);
-        fb.draw_rect(l.volume.0 + sp(12), l.volume.1 + sp(8), sp(3), sp(12), icon_color);
-        if !is_muted && volume > 0 {
-            fb.draw_rect(l.volume.0 + sp(17), l.volume.1 + sp(10), sp(1), sp(8), icon_color);
-            if volume > 35 { fb.draw_rect(l.volume.0 + sp(20), l.volume.1 + sp(8), sp(1), sp(12), icon_color); }
-            if volume > 70 { fb.draw_rect(l.volume.0 + sp(23), l.volume.1 + sp(6), sp(1), sp(16), icon_color); }
-        } else {
-            fb.draw_rect(l.volume.0 + sp(17), l.volume.1 + sp(9), sp(2), sp(2), icon_color);
-            fb.draw_rect(l.volume.0 + sp(20), l.volume.1 + sp(16), sp(2), sp(2), icon_color);
+        // 3. Ses Düğmesi (l.volume) - Yalnızca ses aygıtı varsa çiz
+        if l.volume.2 > 0 {
+            let vol_hover = in_rect(mx, my, l.volume) || self.is_volume_popup_open;
+            let icon_color = if is_muted { Color::ACCENT_RED } else if vol_hover { Color::TEXT_MAIN } else { Color::ACCENT_GREEN };
+            // Hoparlör gövdesi ve ses dalgaları.
+            fb.draw_rect(l.volume.0 + sp(8), l.volume.1 + sp(11), sp(4), sp(6), icon_color);
+            fb.draw_rect(l.volume.0 + sp(12), l.volume.1 + sp(8), sp(3), sp(12), icon_color);
+            if !is_muted && volume > 0 {
+                fb.draw_rect(l.volume.0 + sp(17), l.volume.1 + sp(10), sp(1), sp(8), icon_color);
+                if volume > 35 { fb.draw_rect(l.volume.0 + sp(20), l.volume.1 + sp(8), sp(1), sp(12), icon_color); }
+                if volume > 70 { fb.draw_rect(l.volume.0 + sp(23), l.volume.1 + sp(6), sp(1), sp(16), icon_color); }
+            } else {
+                fb.draw_rect(l.volume.0 + sp(17), l.volume.1 + sp(9), sp(2), sp(2), icon_color);
+                fb.draw_rect(l.volume.0 + sp(20), l.volume.1 + sp(16), sp(2), sp(2), icon_color);
+            }
         }
         // Ethernet simgesi yalnızca e1000 aygıtı başarıyla başlatıldıysa görünür.
-        if ethernet_available {
+        if ethernet_available && l.network.2 > 0 {
             let net_hover = in_rect(mx, my, l.network);
             let linked = crate::drivers::e1000::link_up();
             let c = if linked { if net_hover { Color::TEXT_MAIN } else { Color::ACCENT_GREEN } } else { Color::TEXT_MUTED };

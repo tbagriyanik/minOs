@@ -73,12 +73,15 @@ static AP_ONLINE: [AtomicBool; MAX_CPUS] = [
     AtomicBool::new(false), AtomicBool::new(false),
     AtomicBool::new(false), AtomicBool::new(false),
 ];
-/// AP kalp atış sayaçları — paralel yürütmenin canlı kanıtı.
-static HEARTBEAT: [AtomicU64; MAX_CPUS] = [
-    AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0), AtomicU64::new(0),
-    AtomicU64::new(0), AtomicU64::new(0),
+#[repr(C, align(64))]
+struct PaddedCounter(AtomicU64);
+
+/// AP kalp atış sayaçları — her biri ayrı önbellek satırında (64B) false sharing önlenir.
+static HEARTBEAT: [PaddedCounter; MAX_CPUS] = [
+    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
 ];
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
 static LAPIC_ID: [AtomicU32; MAX_CPUS] = [
@@ -226,18 +229,27 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     print_locked_dec(cpu as u64);
     print_locked(" baslatildi (yigin+GDT hazir).\n");
 
+    let mut idle_spins: u32 = 0;
     loop {
         // Kesmelerin yanlışlıkla açılmasına karşı her turda kapalı tut.
         unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
-        // İş kuyruğunu yokla; yoksa kalp atışı üret.
+        // İş kuyruğunu yokla; iş varsa çalıştır.
         if !poll_job(cpu) {
-            HEARTBEAT[cpu].fetch_add(1, Ordering::Relaxed);
-            // Boşta bekleme: VirtualBox çoklu vCPU zamanlamasında agresif spinlock
-            // host scheduler'da BSP'yi starve edip GUI'nin donmasına yol açar.
-            // Bu nedenle AP boşta iken kısa bir süre CPU'yu rahatlatır (pause).
-            for _ in 0..10_000 {
+            idle_spins = idle_spins.wrapping_add(1);
+            // Kalp atışını her turda atomik yazmak veri yolunu kilitler (cache bouncing).
+            // Yalnızca her 500 döngüde bir atomik güncelle.
+            if idle_spins % 500 == 0 {
+                HEARTBEAT[cpu].0.fetch_add(1, Ordering::Relaxed);
+            }
+            // Boşta bekleme: VirtualBox gibi hipervizörlerde vCPU iş parçacıkları
+            // host scheduler'da BSP'yi (vCPU 0) starve edip GUI donmasına yol açar.
+            // spin_loop (PAUSE) çağrısı işlemci boru hattını gevşetir ve hipervizöre
+            // yield ipucu verir.
+            for _ in 0..50_000 {
                 core::hint::spin_loop();
             }
+        } else {
+            idle_spins = 0;
         }
     }
 }
@@ -375,7 +387,7 @@ pub fn is_ap_online(cpu: usize) -> bool {
 }
 
 pub fn heartbeat(cpu: usize) -> u64 {
-    HEARTBEAT[cpu.min(MAX_CPUS - 1)].load(Ordering::Relaxed)
+    HEARTBEAT[cpu.min(MAX_CPUS - 1)].0.load(Ordering::Relaxed)
 }
 
 /// BSP tarafından çağrılır: AP'leri uyandırır, LAPIC'i açar.

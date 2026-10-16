@@ -1104,14 +1104,24 @@ pub extern "C" fn _start() -> ! {
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
+    serial_print("[BOOT] PS/2 hazir.\n");
 
     // 5b. Tema motorunu başlat
     gui::theme::init();
+    serial_print("[BOOT] Tema hazir.\n");
 
     // 5c. Önyükleme modu denetimi: Boot menüsünden "installed" seçildiyse ve
     // diskte kurulu bir minOs (MINOS.SYS) yoksa canlı sisteme düşmeden hata
     // verilir ve sistem bu ekranda bekler.
-    if boot_wants_installed() && !fs::diskfs::is_installed() {
+    // (Disk taraması tek yapılır; sonucu loga yazılır.)
+    let wants_installed = boot_wants_installed();
+    let installed = fs::diskfs::is_installed();
+    serial_print("[BOOT] Kurulum denetimi: wants_installed=");
+    serial_print(if wants_installed { "1" } else { "0" });
+    serial_print(" installed=");
+    serial_print(if installed { "1" } else { "0" });
+    serial_print("\n");
+    if wants_installed && !installed {
         serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
         gui::render_boot_error(&mut fb, width, height);
         loop {
@@ -1122,7 +1132,7 @@ pub extern "C" fn _start() -> ! {
     // 5d. Eğer diskte varsa (MINOS.SYS + fat32) — kurulu sistem —
     // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
     // Live ortam ise welcome ekranı gösterilir.
-    if fs::diskfs::is_installed() {
+    if installed {
         serial_print("[BOOT] Kurulu sistem tespit edildi; masaustu hazirlaniyor...\n");
         for phase in 0..4 {
             gui::render_loading_transition(&mut fb, width, height, phase,
@@ -1236,18 +1246,55 @@ pub extern "C" fn _start() -> ! {
     compositor.active_window_idx = None;
 
     // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
-    if !fs::diskfs::is_installed() {
+    serial_print("[BOOT] Gecis animasyonu bitti; arayuz kuruluyor.\n");
+    if !installed {
         // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
         let mut welcome_was_left_down = false;
         let mut welcome_dirty = true;
         let mut welcome_mouse_pos = (mouse.x, mouse.y);
         let mut welcome_accepted = false;
+        let mut welcome_announced = false;
+        let mut welcome_diag_last = monotonic_ms();
+        let mut welcome_diag_iters: u64 = 0;
+        let mut welcome_diag_last_trace: u64 = 0;
         loop {
+            if !welcome_announced {
+                serial_print("[BOOT] Hosgeldin dongusu: Enter/ESC/tik bekleniyor.\n");
+                welcome_announced = true;
+            }
             if welcome_dirty {
                 gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
                 welcome_dirty = false;
             }
-            drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+            let welcome_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+            if welcome_update.keyboard || welcome_update.mouse {
+                serial_print("[BOOT-DIAG] PS/2 bayti isleniyor.\n");
+            }
+            let (tr_st, tr_d, tr_n) = drivers::ps2::trace_last();
+            if tr_n != welcome_diag_last_trace {
+                welcome_diag_last_trace = tr_n;
+                serial_print("[BOOT-DIAG] ham bayt #");
+                serial_print_dec(tr_n);
+                serial_print(" st=0x");
+                serial_print_hex(tr_st as u64);
+                serial_print(" d=0x");
+                serial_print_hex(tr_d as u64);
+                serial_print("\n");
+            }
+            welcome_diag_iters += 1;
+            let welcome_now = monotonic_ms();
+            if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
+                welcome_diag_last = welcome_now;
+                serial_print("[BOOT-DIAG] dongu sag (iter=");
+                serial_print_dec(welcome_diag_iters);
+                serial_print(" fare=");
+                serial_print_dec(mouse.x.max(0) as u64);
+                serial_print(",");
+                serial_print_dec(mouse.y.max(0) as u64);
+                serial_print(" ps2st=0x");
+                serial_print_hex(drivers::ps2::status_byte() as u64);
+                serial_print(")\n");
+            }
 
             // Enter veya Escape ile hoş geldin ekranını geç.
             while let Some(action) = keyboard.take_last_action() {
@@ -1303,12 +1350,19 @@ pub extern "C" fn _start() -> ! {
                 settings_app.save_all(&compositor, &mut fs_mgr.vfs);
                 break;
             }
+
+            if !welcome_update.mouse && !welcome_update.keyboard {
+                for _ in 0..1_000 {
+                    core::hint::spin_loop();
+                }
+            }
         }
+        serial_print("[BOOT] Hosgeldin kabul edildi; masaustune geciliyor.\n");
     }
 
     // Welcome ekranından masaüstüne geçişi de aynı animasyonla yumuşat.
     // Sadece live ortamda göster; kurulu sistemde atla.
-    if !fs::diskfs::is_installed() {
+    if !installed {
         for phase in 0..6 {
             gui::render_loading_transition(&mut fb, width, height, phase + 2, gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
             let frame_start = monotonic_ms();
@@ -1501,6 +1555,7 @@ pub extern "C" fn _start() -> ! {
     let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
 
     // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
+    serial_print("[BOOT] Masaustu dongusu basladi.\n");
     loop {
         let loop_start_cycles = read_cpu_cycles();
         mouse.speed = settings_app.mouse_speed;
@@ -2058,10 +2113,10 @@ pub extern "C" fn _start() -> ! {
                         compositor.cal_month = now.month;
                     }
                     consumed = true;
-                } else if gui::in_rect(mx, my, l.volume) {
+                } else if l.volume.2 > 0 && gui::in_rect(mx, my, l.volume) {
                     compositor.is_volume_popup_open = !compositor.is_volume_popup_open;
                     consumed = true;
-                } else if gui::in_rect(mx, my, l.network) {
+                } else if l.network.2 > 0 && gui::in_rect(mx, my, l.network) {
                     // Ethernet simgesi ağ ayarları sekmesini açar.
                     open_app(&mut compositor, 1);
                     settings_app.active_tab = 2;

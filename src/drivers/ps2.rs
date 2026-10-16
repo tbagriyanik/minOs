@@ -39,6 +39,14 @@ fn wait_read() -> bool {
 static mut MOUSE_CYCLE: u8 = 0;
 static mut MOUSE_BYTE: [u8; 4] = [0; 4];
 static mut HAS_WHEEL: bool = false;
+// Tanılama: yoklamada görülen son ham (status, data) çifti ve sayaç.
+static mut TRACE_STATUS: u8 = 0;
+static mut TRACE_DATA: u8 = 0;
+static mut TRACE_COUNT: u64 = 0;
+
+pub fn trace_last() -> (u8, u8, u64) {
+    unsafe { (TRACE_STATUS, TRACE_DATA, TRACE_COUNT) }
+}
 
 pub fn mouse_wheel_enabled() -> bool {
     unsafe { HAS_WHEEL }
@@ -76,7 +84,11 @@ pub fn init() {
         outb(0x64, 0x20);
         if wait_read() {
             let mut status = inb(0x60);
-            status |= 0x03;   // IRQ1 ve IRQ12 bitlerini etkinleştir
+            // IRQ1/IRQ12 ÜRETME: bu sürücü saf yoklamalıdır (polling) ve IDT'de
+            // klavye/fare kesme kapısı yoktur. Bitleri açmak, IOAPIC'li
+            // makinelerde (VirtualBox SMP) vektörsüz kesme → #GP → donma
+            // demektir; PIC maskesi IOAPIC yolunu kapatmaz.
+            status &= !0x03;  // IRQ1 ve IRQ12 bitlerini kapat
             status &= !0x30;  // Saat hatlarını aç
             wait_write();
             outb(0x64, 0x60);
@@ -159,6 +171,9 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
 
             let status = inb(0x64);
             let data = inb(0x60);
+            TRACE_STATUS = status;
+            TRACE_DATA = data;
+            TRACE_COUNT = TRACE_COUNT.wrapping_add(1);
 
             if status & 0x20 != 0 {
                 // PS/2 Fare Baytı
@@ -232,4 +247,10 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
 #[inline(always)]
 pub fn has_input() -> bool {
     unsafe { inb(0x64) & 0x01 != 0 }
+}
+
+/// Tanılama için 0x64 durum yazmacının ham değeri.
+#[inline(always)]
+pub fn status_byte() -> u8 {
+    unsafe { inb(0x64) }
 }

@@ -245,25 +245,37 @@ impl ProcessManager {
     }
 
     /// Bir sonraki çalıştırılabilir süreci döner (Öncelikli Preemptive Round-Robin Zamanlayıcı).
-    /// Realtime > High > Normal > Low öncelik sıralamasına göre seçim yapar, CPU tick sayacını günceller.
+    /// Kullanıcı süreçlerini öncelik sırasına (Realtime > High > Normal > Low) göre zamanlar,
+    /// çalıştırılabilir kullanıcı süreci yoksa PID 0 (kernel_core) fallback döner.
     pub fn schedule_next(&mut self) -> Option<usize> {
         if self.active_count == 0 {
             return None;
         }
 
-        // Önce en yüksek öncelikli hazır/çalışan süreci ara (Realtime -> Low)
+        // Mevcut çalışan sürecin slot indeksini bul
+        let curr_slot = self.processes.iter().position(|p| p.pid == self.current_pid && p.state != ProcessState::Unused).unwrap_or(0);
+
+        // 1. Önce çalıştırılmaya hazır kullanıcı süreçlerini öncelik sırasıyla ara (Realtime -> Low)
         for target_prio in [ProcessPriority::Realtime, ProcessPriority::High, ProcessPriority::Normal, ProcessPriority::Low] {
             let total = MAX_PROCESSES;
             for i in 1..=total {
-                let idx = (self.current_pid + i) % total;
-                let p = &mut self.processes[idx];
-                if (p.state == ProcessState::Ready || p.state == ProcessState::Running) && p.priority == target_prio {
+                let slot = (curr_slot + i) % total;
+                let p = &mut self.processes[slot];
+                if p.pid != 0 && (p.state == ProcessState::Ready || p.state == ProcessState::Running) && p.priority == target_prio {
                     self.current_pid = p.pid;
                     p.state = ProcessState::Running;
                     p.cpu_time_ticks = p.cpu_time_ticks.saturating_add(1);
                     return Some(p.pid);
                 }
             }
+        }
+
+        // 2. Başka çalıştırılabilir kullanıcı süreci yoksa çekirdek ana sürecine (PID 0) dön
+        if self.processes[0].state == ProcessState::Running || self.processes[0].state == ProcessState::Ready {
+            self.current_pid = 0;
+            self.processes[0].state = ProcessState::Running;
+            self.processes[0].cpu_time_ticks = self.processes[0].cpu_time_ticks.saturating_add(1);
+            return Some(0);
         }
 
         Some(0) // kernel_core fallback

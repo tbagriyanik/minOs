@@ -529,8 +529,11 @@ pub fn read_sectors(drive: u8, lba: u32, count: usize, buf: &mut [u8]) -> usize 
     let n = count.min(max);
     if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } { return 0; }
     let mut done = 0usize;
+    // UI duyarlılığını korumak için tek seferde azami 32 sektör (16 KiB) işle;
+    // böylece büyük dosya okurken giriş pompası (mouse/klavye) sık sık tetiklenir.
+    const IO_CHUNK_SECTORS: usize = 32;
     while done < n {
-        let batch = (n - done).min(u8::MAX as usize);
+        let batch = (n - done).min(IO_CHUNK_SECTORS);
         let mut ok = false;
         for attempt in 0..3 {
             if read_sectors_once(drive, lba + done as u32, batch, &mut buf[done * SECTOR_SIZE..(done + batch) * SECTOR_SIZE]) {
@@ -668,8 +671,9 @@ pub fn write_sectors_unflushed(drive: u8, lba: u32, count: usize, buf: &[u8]) ->
     let n = count.min(buf.len() / SECTOR_SIZE);
     if drive >= 4 || unsafe { DEVICES[drive as usize].kind != DeviceKind::Ata } { return 0; }
     let mut done = 0usize;
+    const IO_CHUNK_SECTORS: usize = 32;
     while done < n {
-        let batch = (n - done).min(u8::MAX as usize);
+        let batch = (n - done).min(IO_CHUNK_SECTORS);
         let mut ok = false;
         for attempt in 0..3 {
             if write_sectors_once(drive, lba + done as u32, batch,

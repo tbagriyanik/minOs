@@ -416,9 +416,7 @@ impl Framebuffer {
         let c = rgb(color);
         unsafe {
             let limit = (self.width * self.height).min(BACKBUFFER_LEN);
-            for i in 0..limit {
-                BACKBUFFER[i] = c;
-            }
+            BACKBUFFER[..limit].fill(c);
         }
     }
 

@@ -453,8 +453,11 @@ fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     let percent = busy_percent(state, done, total);
     gui::draw_busy_overlay(fb, state.mx, state.my, state.message, percent);
 
-    // 4. Kum saati imlecini yeni konuma çiz.
+    // 4. Kum saati imlecini yeni konuma çiz ve ekranı güncelle.
     gui::draw_busy_hourglass(fb, state.mx, state.my);
+    if let Some(rect) = fb.cursor_rect() {
+        fb.flush_rect(rect);
+    }
     state.cursor_shown = true;
 }
 
@@ -2929,12 +2932,15 @@ pub extern "C" fn _start() -> ! {
                             11 => {
                                 // minOs Kurulum Sihirbazı
                                 let sel_rect = apps::installer::InstallerApp::drive_select_rect(wx, wy, ww);
+                                let type_rect = apps::installer::InstallerApp::format_type_btn_rect(wx, wy, ww, wh);
                                 let fmt_rect = apps::installer::InstallerApp::format_btn_rect(wx, wy, ww, wh);
                                 let btn_rect = apps::installer::InstallerApp::install_btn_rect(wx, wy, ww, wh);
                                 if gui::in_rect(mx, my, sel_rect) {
                                     installer_app.select_next_drive();
+                                } else if gui::in_rect(mx, my, type_rect) {
+                                    installer_app.cycle_format_type();
                                 } else if gui::in_rect(mx, my, fmt_rect) {
-                                    // 2. Adım: Sadece FAT32 biçimlendir.
+                                    // 2. Adım: Sadece biçimlendir.
                                     if installer_app.state == apps::installer::InstallState::Selecting
                                         || installer_app.state == apps::installer::InstallState::Failed
                                     {

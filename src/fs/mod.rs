@@ -2,6 +2,8 @@ pub mod vfs;
 pub mod diskfs;
 pub mod part;
 pub mod ext2;
+pub mod ext4;
+pub mod exfat;
 
 pub struct FileSystemManager {
     pub vfs: vfs::VirtualFileSystem,

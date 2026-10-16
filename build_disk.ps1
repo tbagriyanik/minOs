@@ -101,7 +101,7 @@ $enc = [Text.Encoding]::ASCII
 [IO.File]::WriteAllBytes((Join-Path $root "root\Documents\kure.3d"), $enc.GetBytes("# minOs 3D Kure Modeli`nshape=sphere`nauto_rotate=true`nwireframe=false`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "etc\settings.cfg"), $enc.GetBytes("theme=velvet;volume=80;keyboard=tr;language=tr;res=1280x720;"))
 [IO.File]::WriteAllBytes((Join-Path $root "var\log\kernel.log"), $enc.GetBytes("[minOs] Kernel v2.0 online.`n[Storage] ATA 4 channels initialized.`n[VFS] Virtual File System mounted.`n[GUI] Compositor active.`n"))
-[IO.File]::WriteAllBytes((Join-Path $root "boot\limine.conf"), $enc.GetBytes("timeout: 5`n`n/minOs Live Environment`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: live`n    resolution: 1280x720x32`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
+[IO.File]::WriteAllBytes((Join-Path $root "boot\limine.conf"), $enc.GetBytes("timeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\kedi_maskotu.bmp"), ([byte[]]@(0x42,0x4D,0x36,0,0,0,0,0,0,0,0x36,0,0,0,0x28,0,0,0)))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\lofi_ring0.wav"), ([byte[]]@(0x52,0x49,0x46,0x46,0x24,0,0,0,0x57,0x41,0x56,0x45,0x66,0x6D,0x74,0x20,0x10,0,0,0,1,0,2,0,0x44,0xAC,0,0)))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\retro_drive.mp4"), ([byte[]]@(0,0,0,0x20,0x66,0x74,0x79,0x70,0x69,0x73,0x6F,0x6D,0,0,2,0,0x69,0x73,0x6F,0x6D,0x69,0x73,0x6F,0x32,0x61,0x76,0x63,0x31,0x6D,0x70,0x34,0x31)))

@@ -13,13 +13,31 @@ pub enum InstallState {
     Failed,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FormatFsType {
+    Fat32,
+    Ext4,
+    Exfat,
+}
+
+impl FormatFsType {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Fat32 => "FAT32",
+            Self::Ext4 => "ext4",
+            Self::Exfat => "exFAT",
+        }
+    }
+}
+
 pub struct InstallerApp {
     pub selected_drive: u8,
+    pub format_type: FormatFsType,
     pub state: InstallState,
     pub status_msg: &'static str,
     pub progress_pct: usize,
     pub drive_count: usize,
-    /// Secili disk FAT32 olarak bicimlendirildi mi? (Biçimlendir adımı)
+    /// Secili disk bicimlendirildi mi? (Biçimlendir adımı)
     pub disk_formatted: bool,
     /// Kullanicinin "Tek Tıkla Kur" icin verdigi onay (2. tiklamada kurar).
     pub confirm_install: bool,
@@ -29,6 +47,7 @@ impl InstallerApp {
     pub const fn new() -> Self {
         Self {
             selected_drive: 0,
+            format_type: FormatFsType::Fat32,
             state: InstallState::Selecting,
             status_msg: "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basiniz.",
             progress_pct: 0,
@@ -36,6 +55,16 @@ impl InstallerApp {
             disk_formatted: false,
             confirm_install: false,
         }
+    }
+
+    pub fn cycle_format_type(&mut self) {
+        self.format_type = match self.format_type {
+            FormatFsType::Fat32 => FormatFsType::Ext4,
+            FormatFsType::Ext4 => FormatFsType::Exfat,
+            FormatFsType::Exfat => FormatFsType::Fat32,
+        };
+        self.disk_formatted = false;
+        self.confirm_install = false;
     }
 
     pub fn refresh_drives(&mut self) {
@@ -146,7 +175,11 @@ impl InstallerApp {
         let o = 0x1BE; // Birincil bölüm girdisi
         mbr[o] = 0x80; // Aktif / Bootable
         mbr[o + 1] = 0x20; mbr[o + 2] = 0x21; mbr[o + 3] = 0x00; // CHS start
-        mbr[o + 4] = 0x0C; // Tip: FAT32 LBA
+        mbr[o + 4] = match self.format_type {
+            FormatFsType::Fat32 => 0x0C, // FAT32 LBA
+            FormatFsType::Ext4 => 0x83,  // Linux native
+            FormatFsType::Exfat => 0x07, // IFS / exFAT
+        };
         mbr[o + 5] = 0xFE; mbr[o + 6] = 0x3F; mbr[o + 7] = 0x1F; // CHS end
         mbr[o + 8..o + 12].copy_from_slice(&part_lba.to_le_bytes());
         mbr[o + 12..o + 16].copy_from_slice(&part_sectors.to_le_bytes());
@@ -158,13 +191,27 @@ impl InstallerApp {
         }
         ata::flush_cache(drive);
 
-        // 3. Bölüm 1 içine (LBA 2048) FAT32 dosya sistemini kur
+        // 3. Bölüm 1 içine (LBA 2048) seçilen dosya sistemini kur
         self.progress_pct = 40;
-        self.status_msg = "FAT32 dosya sistemi oluşturuluyor...";
-        if !diskfs::fat_format_at(drive, part_lba) || !diskfs::mount_fat32_drive(drive) {
+        let success = match self.format_type {
+            FormatFsType::Fat32 => {
+                self.status_msg = "FAT32 dosya sistemi oluşturuluyor...";
+                diskfs::fat_format_at(drive, part_lba) && diskfs::mount_fat32_drive(drive)
+            }
+            FormatFsType::Ext4 => {
+                self.status_msg = "ext4 dosya sistemi (extent tree) oluşturuluyor...";
+                crate::fs::ext4::format(drive, part_lba, part_sectors as u64)
+            }
+            FormatFsType::Exfat => {
+                self.status_msg = "exFAT dosya sistemi (VBR & bitmap) oluşturuluyor...";
+                crate::fs::exfat::format(drive, part_lba, part_sectors as u64)
+            }
+        };
+
+        if !success {
             self.state = InstallState::Failed;
             self.disk_formatted = false;
-            self.status_msg = "HATA: Disk biçimlendirilemedi veya FAT32 doğrulaması başarısız!";
+            self.status_msg = "HATA: Disk biçimlendirilemedi!";
             return false;
         }
 
@@ -172,7 +219,11 @@ impl InstallerApp {
         self.confirm_install = false;
         self.progress_pct = 55;
         self.state = InstallState::Selecting;
-        self.status_msg = "Disk önyüklenebilir FAT32 yapıldı. Şimdi 'Tek Tıkla Kur' basınız.";
+        self.status_msg = match self.format_type {
+            FormatFsType::Fat32 => "Disk önyüklenebilir FAT32 yapıldı. 'Tek Tıkla Kur' basınız.",
+            FormatFsType::Ext4 => "Disk başarıyla ext4 olarak biçimlendirildi.",
+            FormatFsType::Exfat => "Disk başarıyla exFAT olarak biçimlendirildi.",
+        };
         true
     }
 
@@ -242,7 +293,7 @@ impl InstallerApp {
         let snapshot_ok = vfs.persist_snapshot();
 
         // 5. Bağımsız Boot Desteği: Limine 8.x yapılandırması (limine.conf), bios.sys ve kernel'i diske yaz
-        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n\n/minOs Live Environment\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: live\n    resolution: 1280x720x32\n";
+        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n";
         diskfs::fat_write_file_path("/boot/limine/limine.conf", limine_conf_content);
         diskfs::fat_write_file_path("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
         diskfs::save_file_by_name("limine.conf", limine_conf_content);
@@ -285,27 +336,40 @@ impl InstallerApp {
 
     // Geometri yardımcıları
 
-    /// "Biçimlendir (FAT32)" butonu — alt satırın solunda.
-    pub fn format_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let btn_w = 180;
-        let btn_h = 28;
-        let gap = 12;
-        let total = btn_w + gap + 170;
+    /// Dosya sistemi tipi seçici buton (FAT32 / ext4 / exFAT)
+    pub fn format_type_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let type_w = 100;
+        let fmt_w = 140;
+        let inst_w = 150;
+        let gap = 10;
+        let total = type_w + gap + fmt_w + gap + inst_w;
         let x = win_x + (win_w.saturating_sub(total)) / 2;
         let y = win_y + win_h.saturating_sub(48);
-        (x, y, btn_w, btn_h)
+        (x, y, type_w, 28)
     }
 
-    /// "Tek Tıkla Kur" butonu — alt satırın ortasında.
-    pub fn install_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let btn_w = 170;
-        let btn_h = 28;
-        let gap = 12;
-        let format_w = 180;
-        let total = format_w + gap + btn_w;
-        let x = win_x + (win_w.saturating_sub(total)) / 2 + format_w + gap;
+    /// "Biçimlendir" butonu — alt satırın ortasında.
+    pub fn format_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let type_w = 100;
+        let fmt_w = 140;
+        let inst_w = 150;
+        let gap = 10;
+        let total = type_w + gap + fmt_w + gap + inst_w;
+        let x = win_x + (win_w.saturating_sub(total)) / 2 + type_w + gap;
         let y = win_y + win_h.saturating_sub(48);
-        (x, y, btn_w, btn_h)
+        (x, y, fmt_w, 28)
+    }
+
+    /// "Tek Tıkla Kur" butonu — alt satırın sağında.
+    pub fn install_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let type_w = 100;
+        let fmt_w = 140;
+        let inst_w = 150;
+        let gap = 10;
+        let total = type_w + gap + fmt_w + gap + inst_w;
+        let x = win_x + (win_w.saturating_sub(total)) / 2 + type_w + gap + fmt_w + gap;
+        let y = win_y + win_h.saturating_sub(48);
+        (x, y, inst_w, 28)
     }
 
     pub fn drive_select_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -455,17 +519,27 @@ impl InstallerApp {
             _ => Color::TEXT_MAIN,
         }, (win_x + 18, prog_y + 16, win_w.saturating_sub(36), 20));
 
-        // 6. "Biçimlendir (FAT32)" Butonu (sol)
+        // 6a. Dosya Sistemi Seçici Butonu (sol)
+        let (tx, ty, tw, th) = Self::format_type_btn_rect(win_x, win_y, win_w, win_h);
+        fb.draw_rounded_rect(tx, ty, tw, th, 6, Color::DARK_BG);
+        fb.draw_rounded_rect_outline(tx, ty, tw, th, 6, Color::ACCENT_BLUE);
+        let type_label = self.format_type.name();
+        let tlw = MinGuiCompositor::text_width(type_label, 1);
+        let tlx = tx + (tw.saturating_sub(tlw)) / 2;
+        let tly = ty + (th.saturating_sub(MinGuiCompositor::text_height())) / 2;
+        MinGuiCompositor::draw_string(fb, tlx, tly, type_label, Color::ACCENT_BLUE);
+
+        // 6b. "Biçimlendir" Butonu (orta)
         let (fx, fy, fw, fh) = Self::format_btn_rect(win_x, win_y, win_w, win_h);
         let fmt_bg = if self.disk_formatted { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW };
         fb.draw_rounded_rect(fx, fy, fw, fh, 6, fmt_bg);
         fb.draw_rounded_rect_outline(fx, fy, fw, fh, 6, Color::WHITE);
         let fmt_text = if self.disk_formatted {
-            if english { "Formatted (Redo)" } else { "Biçimlendirildi (Yeniden)" }
+            if english { "Formatted" } else { "Biçimlendirildi" }
         } else if english {
-            "Format (FAT32)"
+            "Format Disk"
         } else {
-            "Biçimlendir (FAT32)"
+            "Biçimlendir"
         };
         let ftw = MinGuiCompositor::text_width(fmt_text, 1);
         let ftx = fx + (fw.saturating_sub(ftw)) / 2;

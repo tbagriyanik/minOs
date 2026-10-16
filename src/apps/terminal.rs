@@ -18,7 +18,7 @@ pub const LINE_MAX: usize = 64;
 
 const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
-    "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "curl",
+    "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "curl",
     "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
@@ -428,7 +428,7 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cd pwd mkdir touch rm cat write disks df echo clear mem ps exec", Color::TEXT_MAIN);
+                self.push_line("help ls cd pwd mkdir touch rm cat write disks df format echo clear mem ps exec", Color::TEXT_MAIN);
                 self.push_line("minpkg list|install|remove | exec <file> | ping <ip> | dns <host> | curl <url>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
                 self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
@@ -595,6 +595,55 @@ impl TerminalApp {
                     }
                 }
                 self.push_line(crate::gui::ui_text("Baglanti: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
+            }
+            "format" | "mkfs" => {
+                let mut sp = arg.split_whitespace();
+                let fs_type = sp.next().unwrap_or("").to_ascii_lowercase();
+                let drive_str = sp.next().unwrap_or("");
+                let drive_num = if drive_str.starts_with("ide") || drive_str.starts_with("hd") {
+                    drive_str.chars().last().and_then(|c| c.to_digit(10)).map(|d| d as u8)
+                } else {
+                    drive_str.parse::<u8>().ok()
+                };
+
+                if fs_type.is_empty() || drive_num.is_none() {
+                    self.push_line(crate::gui::ui_text("Kullanim: format <fat32|ext4|exfat|ext2> <0..3>", "Usage: format <fat32|ext4|exfat|ext2> <0..3>"), Color::ACCENT_YELLOW);
+                    self.push_line("Ornek: format ext4 1  veya  format exfat 0", Color::TEXT_MUTED);
+                } else {
+                    let drive = drive_num.unwrap();
+                    if drive >= 4 || crate::drivers::ata::device(drive).map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata).unwrap_or(true) {
+                        self.push_line(crate::gui::ui_text("Hata: Gecersiz veya bagli olmayan ATA surucu!", "Error: Invalid or unattached ATA drive!"), Color::ACCENT_RED);
+                    } else {
+                        let cap = crate::drivers::ata::drive_capacity_sectors(drive);
+                        let mut b = TextBuf::new();
+                        b.push_str(crate::gui::ui_text("Bicimlendiriliyor: IDE ", "Formatting: IDE "));
+                        b.push_usize(drive as usize);
+                        b.push_str(" [");
+                        b.push_str(&fs_type);
+                        b.push_str("]...");
+                        self.push_line(b.as_str(), Color::ACCENT_YELLOW);
+
+                        let success = match fs_type.as_str() {
+                            "ext4" => crate::fs::ext4::format(drive, 0, cap),
+                            "exfat" => crate::fs::exfat::format(drive, 0, cap),
+                            "ext2" => crate::fs::ext2::format(drive, 0, cap),
+                            "fat32" | "fat" => crate::fs::diskfs::fat_format(drive),
+                            _ => {
+                                self.push_line(crate::gui::ui_text("Desteklenmeyen dosya sistemi. (fat32, ext4, exfat, ext2)", "Unsupported filesystem. (fat32, ext4, exfat, ext2)"), Color::ACCENT_RED);
+                                false
+                            }
+                        };
+
+                        if success {
+                            let mut res = TextBuf::new();
+                            res.push_str(crate::gui::ui_text("Basariyla bicimlendirildi: ", "Successfully formatted: "));
+                            res.push_str(&fs_type);
+                            self.push_line(res.as_str(), Color::ACCENT_GREEN);
+                        } else {
+                            self.push_line(crate::gui::ui_text("Bicimlendirme basarisiz oldu!", "Formatting failed!"), Color::ACCENT_RED);
+                        }
+                    }
+                }
             }
             "exec" => {
                 if arg.is_empty() {

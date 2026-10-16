@@ -215,26 +215,11 @@ pub fn hw_accel_fill_rect(
         return;
     }
 
-    let color64 = ((color as u64) << 32) | (color as u64);
-    let chunks64 = w / 2;
-    let remainder = w % 2;
-
     for row in 0..h {
         let line_ptr = unsafe { dst.add((y + row) * pitch_words + x) };
-
-        // 64-bit (2 piksel) toplu yazım
-        let ptr64 = line_ptr as *mut u64;
-        for i in 0..chunks64 {
-            unsafe {
-                core::ptr::write_volatile(ptr64.add(i), color64);
-            }
-        }
-
-        // Kalan tek piksel
-        if remainder != 0 {
-            unsafe {
-                core::ptr::write_volatile(line_ptr.add(w - 1), color);
-            }
+        unsafe {
+            let slice = core::slice::from_raw_parts_mut(line_ptr, w);
+            slice.fill(color);
         }
     }
 }

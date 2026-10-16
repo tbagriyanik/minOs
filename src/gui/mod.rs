@@ -778,8 +778,6 @@ impl MinGuiCompositor {
         let mut scored: [(usize, u8); 13] = [(0, 0); 13];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
-            // Kurulu sistemde kurulum uygulaması arama sonuçlarında çıkmaz.
-            if app_id == 11 && crate::fs::diskfs::is_installed() { continue; }
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
             let english_hit = Self::start_search_score(names[1].as_bytes(), query);
             let score = match (localized, english_hit) {
@@ -946,9 +944,8 @@ impl MinGuiCompositor {
         "Computer", "Notes", "SarmanNet", "Playlist", "Settings", "Install minOs",
     ];
 
-    /// Kurulu sistemde "minOs'u Kur" kısayolu gösterilmez.
     pub fn desktop_quick_count() -> usize {
-        if crate::fs::diskfs::is_installed() { 5 } else { Self::DESKTOP_QUICK_LABELS.len() / 2 }
+        Self::DESKTOP_QUICK_LABELS.len() / 2
     }
 
     /// Hızlı simge etiketlerinin ölçülen en uzun genişliği (aktif ölçekte).

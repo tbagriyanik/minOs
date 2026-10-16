@@ -13,6 +13,16 @@
 
 ---
 
+## Yenilikler
+
+- **Seçilebilir masaüstü arka planları:** Sistem Ayarları > Ekran sekmesinden tema rengi, 6 tek renk (koyu mavi, yeşil, bordo, mor, kahve, koyu gri) veya 3 HD masaüstü resmi (1280×720) seçilebilir.
+- **Anında önizleme:** Duvar kağıdı seçimi yapıldığında arka plan hemen uygulanır; seçim çevreli kart ve yeşil kenarlıkla gösterilir.
+- **Kalıcı ayarlar:** Arka plan seçimi `settings.cfg` (`wallpaper`, `wallcolor`) üzerinden VFS ve diske kaydedilir, yeniden açılışta geri yüklenir.
+- **Ayarlar düzeni:** Ekran sekmesindeki yazı, düğme ve önizlemeler alt alta düzenlenerek çakışmalar önlendi.
+- **Gömülü arka plan resimleri:** 3 masaüstü resmi çekirdek içine (1280×720 raw RGB) gömüldü; PNG çözücü gerektirmez.
+
+---
+
 ## 📥 Hazır ISO İndirme (Download)
 
 minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
@@ -49,7 +59,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
-| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.3.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.3.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **📦 Paket Yöneticisi (`minpkg`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |

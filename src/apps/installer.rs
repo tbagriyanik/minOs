@@ -100,17 +100,17 @@ impl InstallerApp {
         }
         self.disk_formatted = diskfs::fat32_mounted_on(self.selected_drive);
         if self.disk_formatted && diskfs::is_installed() {
-            self.state = InstallState::Complete;
+            self.state = InstallState::Selecting;
             self.progress_pct = 100;
-            self.status_msg = "minOs kurulumu diskte doğrulandı.";
+            self.status_msg = "minOs kurulu. Yeniden biçimlendirebilir veya tekrar kurabilirsiniz.";
         } else if self.disk_formatted {
             self.state = InstallState::Selecting;
             self.progress_pct = 55;
-            self.status_msg = "Disk biçimlendirilmiş. 'Tek Tıkla Kur' ile kurulumu tamamlayabilirsiniz.";
+            self.status_msg = "Disk biçimlendirilmiş. 'Tek Tıkla Kur' ile kurulum yapabilirsiniz.";
         } else {
             self.state = InstallState::Selecting;
             self.progress_pct = 0;
-            self.status_msg = "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basiniz.";
+            self.status_msg = "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.";
         }
     }
 
@@ -585,8 +585,10 @@ impl InstallerApp {
         let fmt_bg = if self.disk_formatted { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW };
         fb.draw_rounded_rect(fx, fy, fw, fh, 6, fmt_bg);
         fb.draw_rounded_rect_outline(fx, fy, fw, fh, 6, Color::WHITE);
-        let fmt_text = if self.disk_formatted {
-            if english { "Formatted" } else { "Biçimlendirildi" }
+        let fmt_text = if self.state == InstallState::Formatting {
+            if english { "Formatting..." } else { "Biçimlendiriliyor..." }
+        } else if self.disk_formatted {
+            if english { "Format (Ready)" } else { "Biçimlendir (Hazır)" }
         } else if english {
             "Format Disk"
         } else {
@@ -603,8 +605,8 @@ impl InstallerApp {
             InstallState::Complete => Color::ACCENT_GREEN,
             InstallState::Failed => Color::ACCENT_RED,
             InstallState::Formatting | InstallState::Copying => Color::TEXT_MUTED,
-            _ if !self.disk_formatted => Color::TEXT_MUTED,
             _ if self.confirm_install => Color::ACCENT_YELLOW,
+            _ if self.disk_formatted => Color::ACCENT_BLUE,
             _ => Color::ACCENT_BLUE,
         };
         fb.draw_rounded_rect(bx, by, bw, bh, 6, btn_bg);
@@ -612,7 +614,7 @@ impl InstallerApp {
 
         let btn_text = match self.state {
             InstallState::Complete => {
-                if english { "Installed (Ready)" } else { "Kuruldu (Hazır)" }
+                if english { "Reinstall" } else { "Tekrar Kur" }
             }
             InstallState::Formatting | InstallState::Copying => {
                 if english { "Installing..." } else { "Kuruluyor..." }
@@ -620,11 +622,11 @@ impl InstallerApp {
             InstallState::Failed => {
                 if english { "Retry" } else { "Tekrar Dene" }
             }
-            _ if !self.disk_formatted => {
-                if english { "Format first" } else { "Önce Biçimlendir" }
-            }
             _ if self.confirm_install => {
                 if english { "Confirm Install" } else { "Kurulumu Onayla" }
+            }
+            _ if !self.disk_formatted => {
+                if english { "One-Click Install" } else { "Tek Tıkla Kur" }
             }
             _ => {
                 if english { "One-Click Install" } else { "Tek Tıkla Kur" }

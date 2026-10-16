@@ -2977,8 +2977,8 @@ pub extern "C" fn _start() -> ! {
                                     installer_app.set_format_type(apps::installer::FormatFsType::Exfat);
                                 } else if gui::in_rect(mx, my, fmt_rect) {
                                     // 2. Adım: Sadece biçimlendir.
-                                    if installer_app.state == apps::installer::InstallState::Selecting
-                                        || installer_app.state == apps::installer::InstallState::Failed
+                                    if installer_app.state != apps::installer::InstallState::Formatting
+                                        && installer_app.state != apps::installer::InstallState::Copying
                                     {
                                         let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk biçimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
                                         if formatted {
@@ -2988,8 +2988,8 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 } else if gui::in_rect(mx, my, btn_rect) {
                                     // 3. Adım: Onaylı tek tıkla kurulum.
-                                    if installer_app.state == apps::installer::InstallState::Selecting
-                                        || installer_app.state == apps::installer::InstallState::Failed
+                                    if installer_app.state != apps::installer::InstallState::Formatting
+                                        && installer_app.state != apps::installer::InstallState::Copying
                                     {
                                         if installer_app.disk_formatted {
                                             let installed = with_busy_progress(&mut fb, mx, my, gui::ui_text("minOs kuruluyor...", "Installing minOs..."), || installer_app.perform_install(&mut fs_mgr.vfs));

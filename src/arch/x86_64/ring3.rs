@@ -248,6 +248,10 @@ pub extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         smp::print_locked_dec(vec as u64);
         smp::print_locked(", err=");
         smp::print_locked_hex(err);
+        smp::print_locked(", rip=");
+        smp::print_locked_hex(rip);
+        smp::print_locked(", cs=");
+        smp::print_locked_hex(cs);
         smp::print_locked(", cr2=");
         smp::print_locked_hex(cr2);
         smp::print_locked("). Sistem durduruldu.\n");

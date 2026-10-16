@@ -278,7 +278,7 @@ impl SystemSettings {
                 "region" => if let Ok(v)=val.parse::<u8>() { self.region=v.min(2); },
                 "res" => { let mut r=val.split('x'); if let (Some(a),Some(b))=(r.next(),r.next()) { if let (Ok(w),Ok(h))=(a.parse(),b.parse()) { self.screen_res=(w,h); } } },
                 "theme" => { self.theme = match val { "daylight"=>ThemeId::Daylight, "nord"=>ThemeId::Nord, "terminal"=>ThemeId::TerminalGreen, "sunset"=>ThemeId::Sunset, _=>ThemeId::VelvetDark }; theme::set_theme(self.theme); },
-                "wallpaper" => if let Ok(v)=val.parse::<u8>() { let v = match v { 0..=6=>v, 7..=10=>0, 11..=13=>v-4, _=>0 }; self.wallpaper=v.min(9); crate::gui::wallpaper::apply(self.wallpaper, self.wall_color); },
+                "wallpaper" => if let Ok(v)=val.parse::<u8>() { self.wallpaper=v.min(9); crate::gui::wallpaper::apply(self.wallpaper, self.wall_color); },
                 "wallcolor" => if let Ok(v)=u32::from_str_radix(val.trim_start_matches("0x"),16) { self.wall_color=v & 0xFFFFFF; crate::gui::wallpaper::apply(self.wallpaper, self.wall_color); },
                 _ => {}
             }

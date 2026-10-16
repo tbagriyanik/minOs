@@ -1,7 +1,7 @@
 # minOs Disk Hazirlama Betigi (build_disk.ps1)
 # MBR + 1MiB hizali FAT32 bolumu, Limine BIOS boot, kernel + VFS agaci.
 param(
-    [string]$DiskImage = ".\disk.raw",
+    [string]$DiskImage = ".\disk.qcow2",
     [ValidateRange(64, 4096)][int]$DiskSizeMB = 256,
     [string]$MarkerFile = ".\disk.prepared",
     [switch]$Force
@@ -87,6 +87,10 @@ Copy-Item -Force "boot\limine.conf" (Join-Path $root "limine.conf")
 Copy-Item -Force "boot\limine.conf" (Join-Path $root "boot\limine\limine.conf")
 Copy-Item -Force "boot\limine\limine-bios.sys" (Join-Path $root "limine-bios.sys")
 Copy-Item -Force "boot\limine\limine-bios.sys" (Join-Path $root "boot\limine\limine-bios.sys")
+if (Test-Path "boot\cat_small.png") {
+    Copy-Item -Force "boot\cat_small.png" (Join-Path $root "boot\cat_small.png")
+    Copy-Item -Force "boot\cat_small.png" (Join-Path $root "cat_small.png")
+}
 Copy-Item -Force $kernel (Join-Path $root "boot\minos-kernel")
 Copy-Item -Force $kernel (Join-Path $root "minos-kernel")
 
@@ -101,7 +105,9 @@ $enc = [Text.Encoding]::ASCII
 [IO.File]::WriteAllBytes((Join-Path $root "root\Documents\kure.3d"), $enc.GetBytes("# minOs 3D Kure Modeli`nshape=sphere`nauto_rotate=true`nwireframe=false`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "etc\settings.cfg"), $enc.GetBytes("theme=velvet;volume=80;keyboard=tr;language=tr;res=1280x720;"))
 [IO.File]::WriteAllBytes((Join-Path $root "var\log\kernel.log"), $enc.GetBytes("[minOs] Kernel v2.0 online.`n[Storage] ATA 4 channels initialized.`n[VFS] Virtual File System mounted.`n[GUI] Compositor active.`n"))
-[IO.File]::WriteAllBytes((Join-Path $root "boot\limine.conf"), $enc.GetBytes("timeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
+[IO.File]::WriteAllBytes((Join-Path $root "boot\limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
+[IO.File]::WriteAllBytes((Join-Path $root "limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
+[IO.File]::WriteAllBytes((Join-Path $root "boot\limine\limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed`n    resolution: 1280x720x32`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\kedi_maskotu.bmp"), ([byte[]]@(0x42,0x4D,0x36,0,0,0,0,0,0,0,0x36,0,0,0,0x28,0,0,0)))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\lofi_ring0.wav"), ([byte[]]@(0x52,0x49,0x46,0x46,0x24,0,0,0,0x57,0x41,0x56,0x45,0x66,0x6D,0x74,0x20,0x10,0,0,0,1,0,2,0,0x44,0xAC,0,0)))
 [IO.File]::WriteAllBytes((Join-Path $root "root\Media\retro_drive.mp4"), ([byte[]]@(0,0,0,0x20,0x66,0x74,0x79,0x70,0x69,0x73,0x6F,0x6D,0,0,2,0,0x69,0x73,0x6F,0x6D,0x69,0x73,0x6F,0x32,0x61,0x76,0x63,0x31,0x6D,0x70,0x34,0x31)))
@@ -127,7 +133,15 @@ if ($LASTEXITCODE -ne 0) { Write-Host "[HATA] qemu-img convert basarisiz." -Fore
 # limine stderr'e bilgi basar ama exit 0 olmalidir; powershell native hata yakalama icin kontrol:
 if ($LASTEXITCODE -ne 0) { Write-Host "[HATA] limine bios-install basarisiz." -ForegroundColor Red; exit 1 }
 
-Write-Host "[5/6] Disk imaji kaydediliyor: $DiskImage ..." -ForegroundColor Yellow
+Write-Host "[5/6] Dogrulama..." -ForegroundColor Yellow
+$installed = Test-DiskInstalled $raw
+if (-not $installed) {
+    Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+    Write-Host "[HATA] MINOS.SYS goruntude bulunamadi." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "[6/6] Disk imaji kaydediliyor: $DiskImage ..." -ForegroundColor Yellow
 Remove-Item -Force $DiskImage -ErrorAction SilentlyContinue
 if ($DiskImage.EndsWith(".raw", [System.StringComparison]::OrdinalIgnoreCase)) {
     Copy-Item -Force $raw $DiskImage
@@ -136,9 +150,6 @@ if ($DiskImage.EndsWith(".raw", [System.StringComparison]::OrdinalIgnoreCase)) {
     if ($LASTEXITCODE -ne 0) { Write-Host "[HATA] qcow2 convert basarisiz." -ForegroundColor Red; exit 1 }
 }
 
-Write-Host "[6/6] Dogrulama..." -ForegroundColor Yellow
-$installed = Test-DiskInstalled $DiskImage
 Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
-if (-not $installed) { Write-Host "[HATA] MINOS.SYS goruntude bulunamadi." -ForegroundColor Red; exit 1 }
 Set-Content -Path $MarkerFile -Value ("prepared=" + (Get-Date -Format o)) -Encoding ascii
 Write-Host "[BASARILI] Disk hazir: $DiskImage (kurulu, bootable)" -ForegroundColor Green

@@ -133,6 +133,8 @@ impl InstallerApp {
     const LIMINE_MBR_STAGE: &'static [u8] = include_bytes!("../../boot/limine/limine-mbr.bin");
     /// Gömülü Limine BIOS sistem dosyası (/boot/limine/limine-bios.sys)
     const LIMINE_BIOS_SYS: &'static [u8] = include_bytes!("../../boot/limine/limine-bios.sys");
+    /// Gömülü Limine kedi duvar kağıdı (/boot/cat_small.png)
+    const CAT_WALLPAPER_PNG: &'static [u8] = include_bytes!("../../boot/cat_small.png");
 
     /// Hedef diski MBR + dosya sistemi (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
     /// ve seçili dosya sistemini hazırlar.
@@ -325,19 +327,21 @@ impl InstallerApp {
         let snapshot_ok = vfs.persist_snapshot();
         let (_mir_dirs, _mir_files) = vfs.sync_all_to_disk();
 
-        // Independently Bootable: Limine 8.x configuration, bios.sys, and kernel.
-        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n";
+        // Independently Bootable: Limine 8.x configuration, bios.sys, kernel, and cat_small.png wallpaper.
+        let limine_conf_content = b"wallpaper: boot():/boot/cat_small.png\ntimeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n";
         if self.format_type == FormatFsType::Ext4 {
             let _ = diskfs::ext2_mkdir("/boot");
             let _ = diskfs::ext2_mkdir("/boot/limine");
             diskfs::ext2_write("/boot/limine/limine.conf", limine_conf_content);
             diskfs::ext2_write("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
+            diskfs::ext2_write("/boot/cat_small.png", Self::CAT_WALLPAPER_PNG);
             if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
                 diskfs::ext2_write("/boot/minos-kernel", kernel_bytes);
             }
         } else {
             diskfs::fat_write_file_path("/boot/limine/limine.conf", limine_conf_content);
             diskfs::fat_write_file_path("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
+            diskfs::fat_write_file_path("/boot/cat_small.png", Self::CAT_WALLPAPER_PNG);
             diskfs::save_file_by_name("limine.conf", limine_conf_content);
             diskfs::save_file_by_name("limine-bios.sys", Self::LIMINE_BIOS_SYS);
             if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {

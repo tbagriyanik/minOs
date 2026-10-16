@@ -93,14 +93,17 @@ impl InstallerApp {
         self.refresh_drives();
     }
 
-    /// Sadece hedef diski FAT32 olarak bicimlendirir (kurulum yapmaz).
-    /// "Tek Tıkla Kur" akisinin 2. adimidir.
-    /// Zaten FAT32 olarak bağlı bir disk yeniden biçimlendirilmez (Limine
-    /// önyükleyici/MBR korunur); yalnızca bağlama doğrulanır.
+    /// Gömülü Limine MBR Stage 1 & 2 (22016 bayt, 43 sektör)
+    const LIMINE_MBR_STAGE: &'static [u8] = include_bytes!("../../boot/limine/limine-mbr.bin");
+    /// Gömülü Limine BIOS sistem dosyası (/boot/limine/limine-bios.sys)
+    const LIMINE_BIOS_SYS: &'static [u8] = include_bytes!("../../boot/limine/limine-bios.sys");
+
+    /// Hedef diski MBR + FAT32 (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
+    /// ve FAT32 dosya sistemini hazırlar.
     pub fn format_selected_drive(&mut self) -> bool {
         self.state = InstallState::Formatting;
-        self.progress_pct = 25;
-        self.status_msg = "Disk FAT32 olarak biçimlendiriliyor...";
+        self.progress_pct = 20;
+        self.status_msg = "Disk bölümleniyor ve MBR önyükleyici kuruluyor...";
 
         let drive = self.selected_drive;
         if !ata::device(drive).map(|d| d.kind == ata::DeviceKind::Ata).unwrap_or(false) {
@@ -109,25 +112,56 @@ impl InstallerApp {
             return false;
         }
 
-        // Zaten FAT32 olarak bağlıysa diski silme; yalnızca bağlamayı doğrula.
-        if diskfs::fat32_mounted_on(drive) {
-            self.disk_formatted = true;
-            self.confirm_install = false;
-            self.progress_pct = 55;
-            self.state = InstallState::Selecting;
-            self.status_msg = "Disk zaten FAT32 bağlı; biçimlendirme atlandı.";
-            return true;
-        }
-        if diskfs::mount_fat32_drive(drive) {
-            self.disk_formatted = true;
-            self.confirm_install = false;
-            self.progress_pct = 55;
-            self.state = InstallState::Selecting;
-            self.status_msg = "Disk FAT32 olarak doğrulandı. Şimdi 'Tek Tıkla Kur' basınız.";
-            return true;
+        let cap = ata::drive_capacity_sectors(drive);
+        if cap < 65_600 {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: Disk kapasitesi kurulum için yetersiz!";
+            return false;
         }
 
-        if !diskfs::fat_format(drive) || !diskfs::mount_fat32_drive(drive) {
+        // 1. Limine MBR Stage sektörlerini (LBA 0..42) diske yaz
+        let stage_sectors = (Self::LIMINE_MBR_STAGE.len() + 511) / 512;
+        for s in 0..stage_sectors {
+            let mut sec = [0u8; 512];
+            let start = s * 512;
+            let end = (start + 512).min(Self::LIMINE_MBR_STAGE.len());
+            sec[..end - start].copy_from_slice(&Self::LIMINE_MBR_STAGE[start..end]);
+            if !ata::write_sector(drive, s as u32, &sec) {
+                self.state = InstallState::Failed;
+                self.status_msg = "HATA: Limine MBR kodları diske yazılamadı!";
+                return false;
+            }
+        }
+
+        // 2. LBA 0 üzerine MBR Bölümleme Tablosunu mühürle
+        // Bölüm 1: LBA 2048 (1MiB hizalı), FAT32 LBA (0x0C), Bootable (0x80)
+        let mut mbr = [0u8; 512];
+        if !ata::read_sector(drive, 0, &mut mbr) {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: MBR sektörü okunamadı!";
+            return false;
+        }
+        let part_lba: u32 = 2048;
+        let part_sectors = (cap.saturating_sub(part_lba as u64) as u32).min(0xFFFF_FFFF);
+        let o = 0x1BE; // Birincil bölüm girdisi
+        mbr[o] = 0x80; // Aktif / Bootable
+        mbr[o + 1] = 0x20; mbr[o + 2] = 0x21; mbr[o + 3] = 0x00; // CHS start
+        mbr[o + 4] = 0x0C; // Tip: FAT32 LBA
+        mbr[o + 5] = 0xFE; mbr[o + 6] = 0x3F; mbr[o + 7] = 0x1F; // CHS end
+        mbr[o + 8..o + 12].copy_from_slice(&part_lba.to_le_bytes());
+        mbr[o + 12..o + 16].copy_from_slice(&part_sectors.to_le_bytes());
+        mbr[510] = 0x55; mbr[511] = 0xAA; // MBR imza
+        if !ata::write_sector(drive, 0, &mbr) {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: MBR bölüm tablosu yazılamadı!";
+            return false;
+        }
+        ata::flush_cache(drive);
+
+        // 3. Bölüm 1 içine (LBA 2048) FAT32 dosya sistemini kur
+        self.progress_pct = 40;
+        self.status_msg = "FAT32 dosya sistemi oluşturuluyor...";
+        if !diskfs::fat_format_at(drive, part_lba) || !diskfs::mount_fat32_drive(drive) {
             self.state = InstallState::Failed;
             self.disk_formatted = false;
             self.status_msg = "HATA: Disk biçimlendirilemedi veya FAT32 doğrulaması başarısız!";
@@ -138,7 +172,7 @@ impl InstallerApp {
         self.confirm_install = false;
         self.progress_pct = 55;
         self.state = InstallState::Selecting;
-        self.status_msg = "Disk FAT32 bicimlendirildi. Şimdi 'Tek Tıkla Kur' basınız.";
+        self.status_msg = "Disk önyüklenebilir FAT32 yapıldı. Şimdi 'Tek Tıkla Kur' basınız.";
         true
     }
 
@@ -206,6 +240,19 @@ impl InstallerApp {
         // sonra anlık görüntüyü kalıcı hale getir.
         let (_mir_dirs, _mir_files) = vfs.sync_all_to_disk();
         let snapshot_ok = vfs.persist_snapshot();
+
+        // 5. Bağımsız Boot Desteği: Limine 8.x yapılandırması (limine.conf), bios.sys ve kernel'i diske yaz
+        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n\n/minOs Live Environment\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: live\n    resolution: 1280x720x32\n";
+        diskfs::fat_write_file_path("/boot/limine/limine.conf", limine_conf_content);
+        diskfs::fat_write_file_path("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
+        diskfs::save_file_by_name("limine.conf", limine_conf_content);
+        diskfs::save_file_by_name("limine-bios.sys", Self::LIMINE_BIOS_SYS);
+
+        // Çekirdeği (kernel binary) diske kopyala
+        if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
+            diskfs::fat_write_file_path("/boot/minos-kernel", kernel_bytes);
+            diskfs::save_file_by_name("minos-kernel", kernel_bytes);
+        }
 
         // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla
         // kaydedildiyse sonraki açılış bunu kurulum olarak tanısın.

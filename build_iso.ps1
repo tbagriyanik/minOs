@@ -24,9 +24,6 @@ New-Item -ItemType Directory -Force -Path "$OutputDir\boot\limine" | Out-Null
 
 # 2. Bootloader ve Konfigürasyon Dosyalarini Kopyala
 Write-Host "[2/4] Limine Onyukleyici Dosyalari Yerlestiriliyor..." -ForegroundColor Yellow
-if (Test-Path "boot\limine.cfg") {
-    Copy-Item -Force "boot\limine.cfg" -Destination "$OutputDir\boot\limine\limine.cfg"
-}
 if (Test-Path "boot\limine.conf") {
     Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\boot\limine\limine.conf"
 }

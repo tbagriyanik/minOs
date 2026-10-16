@@ -159,28 +159,76 @@ if ($UsbDisks -or $UsbDiskReadWrite) {
     }
 }
 
-# Kurulum varsa varsayilan diskten boot; -Live ile ISO'dan canli boot zorlanir.
-$diskInstalled = (Test-Path $DiskImage) -and (Test-Path ".\disk.prepared")
-$useIso = $Live -or (-not $NoIso -and -not $diskInstalled)
+function Test-DiskBootable([string]$filePath) {
+    if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) { return $false }
+    try {
+        $abs = (Resolve-Path $filePath).Path
+        $fs = [System.IO.File]::OpenRead($abs)
+        $buf = New-Object byte[] (65536)
+        $read = $fs.Read($buf, 0, $buf.Length)
+        $fs.Close()
+        if ($read -lt 512) { return $false }
+
+        # Eğer dosya QCOW2 ise, qemu-img yardımıyla ya da qcow2 cluster'ı üzerinden konuk sektörüne bak:
+        if ($buf[0] -eq 0x51 -and $buf[1] -eq 0x46 -and $buf[2] -eq 0x49 -and $buf[3] -eq 0xFB) {
+            # Dosya içi hızlı tarama (Limine MBR ve bootloader dizileri qcow2 veri bloklarında yer alır)
+            for ($i = 0; $i -le $read - 6; $i++) {
+                if ($buf[$i] -eq 76 -and $buf[$i+1] -eq 73 -and $buf[$i+2] -eq 77 -and $buf[$i+3] -eq 73 -and $buf[$i+4] -eq 78 -and $buf[$i+5] -eq 69) {
+                    return $true
+                }
+            }
+            # Eğer ilk 64K'da bulunamadıysa qemu-img veya dosya boyutu kontrolü
+            return ((Get-Item $filePath).Length -gt 2000000)
+        }
+
+        # RAW disk ise doğrudan LBA 0 sektörüne bakılır:
+        if ($buf[510] -ne 0x55 -or $buf[511] -ne 0xAA) { return $false }
+        $hasLimine = $false
+        for ($i = 0; $i -le $read - 6; $i++) {
+            if ($buf[$i] -eq 76 -and $buf[$i+1] -eq 73 -and $buf[$i+2] -eq 77 -and $buf[$i+3] -eq 73 -and $buf[$i+4] -eq 78 -and $buf[$i+5] -eq 69) {
+                $hasLimine = $true
+                break
+            }
+        }
+        return $hasLimine
+    } catch {
+        return $false
+    }
+}
+
+# Boot Seçimi:
+# 1) ISO kullanılacaksa (-NoIso verilmemişse ve minos.iso mevcut/üretilebilirse) -> CD'den boot (-boot d)
+# 2) ISO yoksa/kullanılmıyorsa -> Sabit diskten boot (-boot c)
+$isoExists = (Test-Path "minos.iso") -or (Test-Path "build_iso.ps1")
+$useIso = -not $NoIso -and $isoExists
+
 if ($useIso) {
-    $qemuArgs += @("-boot", "d")
+    if (Test-Path ".\build_iso.ps1") {
+        & powershell -ExecutionPolicy Bypass -File ".\build_iso.ps1"
+    }
+    if (Test-Path "minos.iso") {
+        Write-Host "[BILGI] ISO bulundu; CD-ROM üzerinden baslatiliyor (-boot d)..." -ForegroundColor Green
+        $qemuArgs += @("-boot", "d", "-cdrom", "minos.iso")
+    } else {
+        Write-Host "[HATA] minos.iso olusturulamadi veya bulunamadi!" -ForegroundColor Red
+        exit 1
+    }
 } else {
+    Write-Host "[BILGI] ISO bagli degil; sabit disk kontrol ediliyor..." -ForegroundColor Yellow
+    if (-not $DiskImage -or -not (Test-Path -LiteralPath $DiskImage -PathType Leaf)) {
+        Write-Host "[HATA] Sabit disk imaji bulunamadi: $DiskImage. Sistem boot edilemez!" -ForegroundColor Red
+        exit 1
+    }
+
+    $isBootable = Test-DiskBootable $DiskImage
+    if (-not $isBootable) {
+        Write-Host "[HATA] Disk formatli/onyuklenebilir degil ($DiskImage). Sistem boot edilemez!" -ForegroundColor Red
+        Write-Host "[IPUCU] Once ISO ile baslatip 'Kur' uygulamasini calistirin veya build_disk.ps1 ile diski hazirlayin." -ForegroundColor Yellow
+        exit 1
+    }
+
+    Write-Host "[BASARILI] Disk boot edilebilir dogrulandi; sabit diskten baslatiliyor (-boot c)..." -ForegroundColor Green
     $qemuArgs += @("-boot", "c")
-}
-
-if ($useIso -and (Test-Path ".\build_iso.ps1")) {
-    & powershell -ExecutionPolicy Bypass -File ".\build_iso.ps1"
-}
-
-if ($useIso -and (Test-Path "minos.iso")) {
-    $qemuArgs += @("-cdrom", "minos.iso")
-} elseif (Test-Path "target\iso_root") {
-    $qemuArgs += @("-drive", "file=fat:rw:target\iso_root,format=raw")
-} elseif (Test-Path $kernelBin) {
-    $qemuArgs += @("-kernel", $kernelBin)
-} else {
-    Write-Host "[HATA] Calistirilacak kernel ikilisi veya minos.iso bulunamadi!" -ForegroundColor Red
-    exit 1
 }
 
 & $qemuExe $qemuArgs

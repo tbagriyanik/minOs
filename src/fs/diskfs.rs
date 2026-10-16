@@ -1172,16 +1172,26 @@ fn lower_iso(b: u8) -> u8 {
 // Genel API
 // ---------------------------------------------------------------------------
 
-/// Sürücüyü (HDD/QCOW2/USB) standart FAT32 dosya sistemiyle biçimlendirir.
+/// Sürücüyü (HDD/QCOW2/USB) standart FAT32 dosya sistemiyle biçimlendirir (LBA 0 süperfloppy).
 pub fn fat_format(drive: u8) -> bool {
+    fat_format_at(drive, 0)
+}
+
+/// Sürücüdeki belirli bir LBA başlangıcına (örneğin LBA 2048 MBR bölümüne) FAT32 dosya sistemi kurar.
+pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
         return false;
     }
-    let total_sectors = ata::drive_capacity_sectors(drive);
-    if total_sectors < 65_600 || total_sectors > 0xFFFF_FFFF {
+    let total_drive_sectors = ata::drive_capacity_sectors(drive);
+    if total_drive_sectors < 65_600 || total_drive_sectors > 0xFFFF_FFFF {
         serial("[FS] FAT32 bicimlendirme desteklenmeyen disk kapasitesi.\n");
         return false;
     }
+    let total_sectors = if partition_lba > 0 {
+        total_drive_sectors.saturating_sub(partition_lba as u64)
+    } else {
+        total_drive_sectors
+    };
     let sectors_u32 = total_sectors as u32;
     let sectors_per_cluster: u8 = if total_sectors < 600_000 { 1 } else { 8 };
     let reserved_sectors: u32 = 32;
@@ -1201,7 +1211,7 @@ pub fn fat_format(drive: u8) -> bool {
         return false;
     }
 
-    // 1. Sektör 0: FAT32 Volume Boot Record (BPB)
+    // 1. Sektör (partition_lba): FAT32 Volume Boot Record (BPB)
     let mut bpb = [0u8; 512];
     bpb[0] = 0xEB; bpb[1] = 0x58; bpb[2] = 0x90; // jmp boot
     bpb[3..11].copy_from_slice(b"MINOSOS "); // OEM Name
@@ -1212,6 +1222,7 @@ pub fn fat_format(drive: u8) -> bool {
     bpb[21] = 0xF8; // media descriptor: fixed disk
     bpb[24] = 63; bpb[25] = 0; // sectors per track
     bpb[26] = 255; bpb[27] = 0; // number of heads
+    bpb[28..32].copy_from_slice(&partition_lba.to_le_bytes()); // hidden sectors
     // Total sectors 32:
     bpb[32] = (sectors_u32 & 0xFF) as u8;
     bpb[33] = ((sectors_u32 >> 8) & 0xFF) as u8;
@@ -1235,23 +1246,23 @@ pub fn fat_format(drive: u8) -> bool {
     bpb[82..90].copy_from_slice(b"FAT32   "); // System ID
     bpb[510] = 0x55; bpb[511] = 0xAA; // Signature
 
-    if !ata::write_sector(drive, 0, &bpb) {
+    if !ata::write_sector(drive, partition_lba, &bpb) {
         return false;
     }
-    // Yedek boot sektörü (LBA 6)
-    if !ata::write_sector(drive, 6, &bpb) { return false; }
+    // Yedek boot sektörü (partition_lba + 6)
+    if !ata::write_sector(drive, partition_lba + 6, &bpb) { return false; }
 
-    // 2. FSInfo Sektörü (LBA 1)
+    // 2. FSInfo Sektörü (partition_lba + 1)
     let mut fsinfo = [0u8; 512];
     fsinfo[0..4].copy_from_slice(&0x41615252u32.to_le_bytes()); // Lead sig
     fsinfo[484..488].copy_from_slice(&0x61417272u32.to_le_bytes()); // Struct sig
     fsinfo[488..492].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // Free clusters
     fsinfo[492..496].copy_from_slice(&3u32.to_le_bytes()); // Next free cluster: 3
     fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes()); // Trail sig
-    if !ata::write_sector(drive, 1, &fsinfo) { return false; }
+    if !ata::write_sector(drive, partition_lba + 1, &fsinfo) { return false; }
 
     // 3. FAT1 ve FAT2 Tablolari
-    let fat1_lba = reserved_sectors;
+    let fat1_lba = partition_lba + reserved_sectors;
     let fat2_lba = fat1_lba + fat_size;
     let mut fat_sec = [0u8; 512];
     // Cluster 0: 0x0FFFFFF8
@@ -1272,7 +1283,6 @@ pub fn fat_format(drive: u8) -> bool {
     }
 
     // 4. Kök Dizin (Root Directory - Cluster 2)
-    // data_lba = fat1_lba + 2 * fat_size = 32 + 1024 = 1056
     let root_lba = fat1_lba + num_fats * fat_size;
     let mut root_sec = [0u8; 512];
 
@@ -1307,7 +1317,7 @@ pub fn fat_format(drive: u8) -> bool {
 
     ata::flush_cache(drive);
     let mut verify = [0u8; 512];
-    if !ata::read_sector(drive, 0, &mut verify)
+    if !ata::read_sector(drive, partition_lba, &mut verify)
         || verify[510] != 0x55 || verify[511] != 0xAA
         || le32(&verify, 36) != fat_size || verify[13] != sectors_per_cluster
     {

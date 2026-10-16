@@ -278,6 +278,23 @@ fn limine_boot_cmdline() -> Option<&'static str> {
     }
 }
 
+/// Limine tarafından belleğe yüklenmiş çekirdek dosyasının ikili dilimini döndürür.
+pub fn limine_kernel_binary_slice() -> Option<&'static [u8]> {
+    unsafe {
+        let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
+        let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
+        if !is_mapped_limine_ptr(file) {
+            return None;
+        }
+        let addr = core::ptr::read_volatile(core::ptr::addr_of!((*file).address));
+        let size = core::ptr::read_volatile(core::ptr::addr_of!((*file).size)) as usize;
+        if addr.is_null() || size == 0 {
+            return None;
+        }
+        Some(core::slice::from_raw_parts(addr, size))
+    }
+}
+
 /// Önyükleme komut satirinda verilen token'i (kelime) arar.
 fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
     cmdline

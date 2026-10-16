@@ -252,28 +252,53 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | :--- | :--- |
 | `-BuildOnly` | Yalnızca derler; QEMU'yu başlatmadan çıkar. Hızlı derleme kontrolü için idealdir. |
 | `-Debug` | Debug profilinde derler (`target\x86_64-minos\debug\minos-kernel`). Varsayılan **release**'dir. |
+| `-NoIso` | ISO dosyasını bağlamaz (`-cdrom` argümanını iptal eder); sistemi doğrudan sabit diskten (`-boot c`) başlatır. |
+| `-Live` | Canlı ortamı zorlar; sabit disk kurulu olsa bile ISO üzerinden başlatır (`-boot d`). |
+| `-ReprepareDisk` | Sabit diski yeniden biçimlendirip MBR ve VFS ağacını sıfırdan kurar (`build_disk.ps1 -Force`). |
+| `-DiskImage dosya.qcow2` | Bağlanacak sanal disk imajının yolu (varsayılan `.\disk.qcow2`). |
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
 | `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`). |
 | `-Memory 1G` | Konuk RAM miktarı (`512M`, `1G` gibi; varsayılan `512M`). |
-| `-DiskImage dosya.qcow2` | Mevcut qcow2 sanal disk imajını IDE disk olarak bağlar. Oluşturma gerekiyorsa `qemu-img create -f qcow2 disk.qcow2 8G` kullanın. |
 
+---
+
+### 💽 ISO Olmadan Sabit Diskten (QCOW2 / RAW) Boot Etme
+
+minOs, canlı ISO olmadan doğrudan kurulu bir sabit disk üzerinden açılabilir.
+
+#### 1. Doğrudan Sabit Diskten Başlatma:
 ```powershell
-# Yalnızca derle (QEMU başlatma)
-powershell -ExecutionPolicy Bypass -File .\run.ps1 -BuildOnly
-
-# Debug profili + USB diskleri salt okunur ekle
-powershell -ExecutionPolicy Bypass -File .\run.ps1 -Debug -UsbDisks
-
-# 4 sanal çekirdek, 2 GB RAM ve 8 GB qcow2 diskle çalıştır
-powershell -ExecutionPolicy Bypass -File .\run.ps1 -CpuCount 4 -Memory 2G -DiskImage .\disk.qcow2
+powershell -ExecutionPolicy Bypass -File .\run.ps1 -NoIso -DiskImage .\disk.qcow2
 ```
 
-`-CpuCount` QEMU'nun SMP ayarını yapar. minOs çekirdeği şu anda çok çekirdekli (SMP) iş planlaması uygulamıyor; ek çekirdekler konukta paralel uygulama çalıştırma sağlamaz. RAM değeri QEMU'ya ayrılan miktardır. Disk imajı ayrıca oluşturulur ve `-DiskImage` ile bağlanır; USB disk seçenekleri fiziksel USB aygıtları içindir.
+#### 2. Akıllı Boot Doğrulaması:
+- Eğer `-NoIso` ile başlatırsanız veya ISO ortamı yoksa, `run.ps1` diskin önyüklenebilirliğini otomatik denetler:
+  - **Disk Boş / Formatsız ise:** QEMU açılmaz; kullanıcıya güvenli bir hata mesajı verilir:
+    ```text
+    [HATA] Disk formatli/onyuklenebilir degil (.\disk.qcow2). Sistem boot edilemez!
+    [IPUCU] Once ISO ile baslatip 'Kur' uygulamasini calistirin veya build_disk.ps1 ile diski hazirlayin.
+    ```
+  - **Disk Formatlı ve MBR Önyükleyicisi Kurulu ise:** Doğrudan sabit diskten (`-boot c`) açılır.
 
-> **Ses:** `run.ps1` ses çıkışı için QEMU `sdl` audio sürücüsünü (`-audiodev driver=sdl,id=snd0`) ve yalnızca çıkış amaçlı `hda-output` codec'ini kullanır. minOs açılışta test tonu çalmaz ve HDA akışını başlatmaz; ses, müzik veya video oynatımı kullanıcı tarafından başlatıldığında üretilir. Bu, DirectSound'un zorunlu mikrofon/capture başlatma hatasını önler.
+#### 3. Bağımsız Disk Hazırlama Aşamaları:
+Bir diski ISO olmadan boot edilebilir hale getirmek için iki yöntem vardır:
 
-> **Ağ:** QEMU kullanıcı modu (SLIRP) ve `e1000` ile ARP/ping/TCP çalışır; `8080` portu konuk makinenin `80` portuna yönlendirilir (`hostfwd=tcp::8080-:80`).
+- **Yöntem A (minOs İçinden - Kurulum Sihirbazı):**
+  1. `.\run.ps1` ile ISO canlı ortamında başlatın.
+  2. Masaüstündeki **"Kur" (Kurulum Sihirbazı)** uygulamasını açın.
+  3. Hedef diski seçip **"Tek Tıkla Kur"** düğmesine basın.
+  4. minOs çekirdeği diske otomatik olarak:
+     - 1 MiB hizalı MBR bölüm tablosu (`LBA 2048`, `0x80 Active`, `FAT32 LBA`),
+     - Limine MBR Stage 1 & Stage 2 önyükleyici kodlarını,
+     - `/boot/limine/limine.conf`, `limine-bios.sys`, `minos-kernel` ve sistem dosyalarını yazar.
+  5. Makineyi kapatıp `.\run.ps1 -NoIso` ile ISO'suz doğrudan açabilirsiniz.
+
+- **Yöntem B (Windows PowerShell ile Hazırlama):**
+  ```powershell
+  # 256 MB boyutunda önyüklenebilir disk oluşturur ve Limine BIOS'u kurar:
+  powershell -ExecutionPolicy Bypass -File .\build_disk.ps1 -DiskImage .\disk.qcow2 -Force
+  ```
 
 ---
 

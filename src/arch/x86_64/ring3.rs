@@ -243,6 +243,7 @@ pub extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         unsafe {
             core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
         }
+        smp::print_locked("\n==================== [ CEKIRDEK HATASI (EXCEPTION) ] ====================\n");
         smp::print_locked("[RING3] KRITIK: cekirdek hatasi (vektor ");
         smp::print_locked_dec(vec as u64);
         smp::print_locked(", err=");
@@ -250,11 +251,141 @@ pub extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         smp::print_locked(", cr2=");
         smp::print_locked_hex(cr2);
         smp::print_locked("). Sistem durduruldu.\n");
-        loop {
-            unsafe {
-                core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
-                core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+        smp::print_locked("========================================================================\n");
+
+        // Ekrana siyah zemin üzerine turuncu hata ekranı çiz
+        unsafe {
+            use crate::drivers::video;
+            if !video::PANIC_FB_ADDR.is_null() && video::PANIC_FB_W > 0 && video::PANIC_FB_H > 0 {
+                let mut pfb = video::Framebuffer::new(
+                    video::PANIC_FB_ADDR,
+                    video::PANIC_FB_W,
+                    video::PANIC_FB_H,
+                    video::PANIC_FB_PITCH,
+                    video::PANIC_FB_BPP,
+                );
+
+                // Siyah arka plan
+                pfb.draw_rect(0, 0, video::PANIC_FB_W, video::PANIC_FB_H, 0x000000);
+
+                const ORANGE_TITLE: u32 = 0xFFA500;
+                const ORANGE_TEXT: u32 = 0xFF8C00;
+                const ORANGE_MUTED: u32 = 0xCC7000;
+
+                let center_x = 40;
+                let mut cur_y = 50;
+
+                // 1. Başlık
+                crate::gui::MinGuiCompositor::draw_string_scaled(
+                    &mut pfb,
+                    center_x,
+                    cur_y,
+                    "!!! minOs ÇEKİRDEK HATASI (KERNEL EXCEPTION) !!!",
+                    ORANGE_TITLE,
+                    2,
+                );
+                cur_y += 50;
+
+                // 2. Çizgi
+                pfb.draw_rect(center_x, cur_y, video::PANIC_FB_W.saturating_sub(80), 2, ORANGE_MUTED);
+                cur_y += 30;
+
+                // 3. Açıklama
+                crate::gui::MinGuiCompositor::draw_string(
+                    &mut pfb,
+                    center_x,
+                    cur_y,
+                    "Çekirdek kipinde kurtarılamayan donanım kesmesi/sayfa hatası (Page Fault) oluştu.",
+                    ORANGE_TEXT,
+                );
+                cur_y += 24;
+
+                // 4. Detaylar (Vektör, Err, CR2, RIP)
+                let mut det_buf = crate::gui::TextBuf::new();
+                det_buf.push_str("Hata: Vektor ");
+                det_buf.push_usize(vec as usize);
+                match vec {
+                    14 => det_buf.push_str(" (#PF - Page Fault)"),
+                    13 => det_buf.push_str(" (#GP - General Protection Fault)"),
+                    8 => det_buf.push_str(" (#DF - Double Fault)"),
+                    _ => {},
+                }
+                det_buf.push_str(" | Hata Kodu (err): 0x");
+                det_buf.push_hex64(err);
+                crate::gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, det_buf.as_str(), 0xFFFFFF);
+                cur_y += 26;
+
+                let mut cr2_buf = crate::gui::TextBuf::new();
+                cr2_buf.push_str("Geçersiz Erişim Adresi (CR2): 0x");
+                cr2_buf.push_hex64(cr2);
+                cr2_buf.push_str(" | RIP: 0x");
+                cr2_buf.push_hex64(rip);
+                crate::gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, cr2_buf.as_str(), ORANGE_TEXT);
+                cur_y += 36;
+
+                // 5. Bilgilendirme ve Yeniden Başlatma Talimatı
+                pfb.draw_rect(center_x, cur_y, video::PANIC_FB_W.saturating_sub(80), 1, ORANGE_MUTED);
+                cur_y += 24;
+
+                crate::gui::MinGuiCompositor::draw_string(
+                    &mut pfb,
+                    center_x,
+                    cur_y,
+                    "Yeniden başlatmak (Restart) için herhangi bir tuşa [ENTER / ESC / SPACE] basınız.",
+                    ORANGE_TITLE,
+                );
+                cur_y += 24;
+                crate::gui::MinGuiCompositor::draw_string(
+                    &mut pfb,
+                    center_x,
+                    cur_y,
+                    "Press any key [ENTER / ESC / SPACE] to reboot the system.",
+                    ORANGE_MUTED,
+                );
+
+                pfb.flush();
             }
+        }
+
+        // Tuş bekleme ve Restart döngüsü
+        loop {
+            let has_key = unsafe {
+                let status: u8;
+                core::arch::asm!("in al, 0x64", out("al") status, options(nomem, nostack, preserves_flags));
+                status & 0x01 != 0
+            };
+
+            if has_key {
+                let scancode: u8;
+                unsafe {
+                    core::arch::asm!("in al, 0x60", out("al") scancode, options(nomem, nostack, preserves_flags));
+                }
+                if scancode < 0x80 {
+                    smp::print_locked("[FAULT] Tusa basildi. Sistem yeniden baslatiliyor (Reboot)...\n");
+
+                    // 1. Klavye kontrolcüsü reset
+                    unsafe {
+                        core::arch::asm!("out 0x64, al", in("al") 0xFEu8, options(nomem, nostack, preserves_flags));
+                    }
+                    // 2. PCI reset portu
+                    unsafe {
+                        core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8, options(nomem, nostack, preserves_flags));
+                    }
+                    // 3. Triple Fault
+                    #[repr(C, packed)]
+                    struct Idtr {
+                        limit: u16,
+                        base: u64,
+                    }
+                    let null_idtr = Idtr { limit: 0, base: 0 };
+                    unsafe {
+                        core::arch::asm!("lidt [{}]", in(reg) &null_idtr, options(nomem, nostack, preserves_flags));
+                        core::arch::asm!("int3", options(nomem, nostack, preserves_flags));
+                    }
+                }
+            }
+
+            core::hint::spin_loop();
         }
     }
 }

@@ -127,6 +127,9 @@ static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
     0xadc0e0531bb10d03, 0x9572709f31764c62,
 ];
 
+// Panic anında ekrana doğrudan çizim yapabilmek için video sürücüsü statikleri kullanılır:
+pub use crate::drivers::video::{PANIC_FB_ADDR, PANIC_FB_W, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_BPP};
+
 // --- Limine HHDM (Higher-Half Direct Map) istegi: fiziksel<->sanal donusum ---
 #[repr(C, align(8))]
 pub struct LimineHhdmResponse {
@@ -420,7 +423,11 @@ static mut BUSY_DIRTY: bool = false;
 
 /// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
 fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> usize {
-    let mut p = if total == 0 { 30 } else { 5 + done.saturating_mul(90) / total };
+    let mut p = if total == 0 {
+        (state.last_percent + 1).min(90)
+    } else {
+        5 + done.saturating_mul(90) / total
+    };
     if p < state.last_percent { p = state.last_percent; }
     if p > 99 { p = 99; }
     state.last_percent = p;
@@ -1084,6 +1091,13 @@ pub extern "C" fn _start() -> ! {
     let mut fb = unsafe {
         drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp)
     };
+    unsafe {
+        PANIC_FB_ADDR = fb_ptr;
+        PANIC_FB_W = width;
+        PANIC_FB_H = height;
+        PANIC_FB_PITCH = pitch;
+        PANIC_FB_BPP = bpp;
+    }
 
     if fb.verify_bounds() {
         serial_print("[VIDEO] Cizim sinirlari, kirpma ve pitch guvenligi dogrulandi.\n");
@@ -1170,6 +1184,7 @@ pub extern "C" fn _start() -> ! {
         let _ = fs_mgr.vfs.write_file("settings.cfg", cfg_bytes);
     }
     settings_app.load_from_vfs(&fs_mgr.vfs);
+    crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
     mouse.speed = settings_app.mouse_speed;
     mouse.reverse_scroll = settings_app.reverse_scroll;
     keyboard.layout = settings_app.keyboard_layout;
@@ -1258,7 +1273,7 @@ pub extern "C" fn _start() -> ! {
         let mut welcome_accepted = false;
         let mut welcome_announced = false;
         let mut welcome_diag_last = monotonic_ms();
-        let mut welcome_diag_iters: u64 = 0;
+        let mut _welcome_diag_iters: u64 = 0;
         let mut welcome_diag_last_trace: u64 = 0;
         loop {
             if !welcome_announced {
@@ -1271,24 +1286,24 @@ pub extern "C" fn _start() -> ! {
             }
             let welcome_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
             if welcome_update.keyboard || welcome_update.mouse {
-                serial_print("[BOOT-DIAG] PS/2 bayti isleniyor.\n");
+                //serial_print("[BOOT-DIAG] PS/2 bayti isleniyor.\n");
             }
-            let (tr_st, tr_d, tr_n) = drivers::ps2::trace_last();
+            let (_tr_st, _tr_d, tr_n) = drivers::ps2::trace_last();
             if tr_n != welcome_diag_last_trace {
                 welcome_diag_last_trace = tr_n;
-                serial_print("[BOOT-DIAG] ham bayt #");
+                /*serial_print("[BOOT-DIAG] ham bayt #");
                 serial_print_dec(tr_n);
                 serial_print(" st=0x");
-                serial_print_hex(tr_st as u64);
+                serial_print_hex(_tr_st as u64);
                 serial_print(" d=0x");
-                serial_print_hex(tr_d as u64);
-                serial_print("\n");
+                serial_print_hex(_tr_d as u64);
+                serial_print("\n");*/
             }
-            welcome_diag_iters += 1;
+            _welcome_diag_iters += 1;
             let welcome_now = monotonic_ms();
             if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
                 welcome_diag_last = welcome_now;
-                serial_print("[BOOT-DIAG] dongu sag (iter=");
+                /*serial_print("[BOOT-DIAG] dongu sag (iter=");
                 serial_print_dec(welcome_diag_iters);
                 serial_print(" fare=");
                 serial_print_dec(mouse.x.max(0) as u64);
@@ -1296,7 +1311,7 @@ pub extern "C" fn _start() -> ! {
                 serial_print_dec(mouse.y.max(0) as u64);
                 serial_print(" ps2st=0x");
                 serial_print_hex(drivers::ps2::status_byte() as u64);
-                serial_print(")\n");
+                serial_print(")\n");*/
             }
 
             // Enter veya Escape ile hoş geldin ekranını geç.
@@ -1858,13 +1873,13 @@ pub extern "C" fn _start() -> ! {
                                         filemanager_app.selected_idx = file_idx;
                                         if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                                 if let Some(data) = data {
                                                     notepad_app.open_file(&path, data);
                                                 }
                                                 open_app(&mut compositor, 2);
                                             } else if tag == "IMG" {
-                                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
                                                 open_app(&mut compositor, 4);
                                             } else if tag == "SND" {
                                                 open_app(&mut compositor, 5);
@@ -1873,7 +1888,7 @@ pub extern "C" fn _start() -> ! {
                                             } else if tag == "WEB" {
                                                 open_app(&mut compositor, 3);
                                             } else if tag == "3D" {
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
                                                 if let Some(data) = data {
                                                     viewer3d_app.load_file(&path, data);
                                                 }
@@ -1886,7 +1901,7 @@ pub extern "C" fn _start() -> ! {
                                     if let Some(file_idx) = compositor.context_file_idx {
                                         filemanager_app.selected_idx = file_idx;
                                         let path = filemanager_app.selected_full_path();
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                         if let Some(data) = data {
                                             notepad_app.open_file(&path, data);
                                         }
@@ -2232,18 +2247,18 @@ pub extern "C" fn _start() -> ! {
                         } else {
                             let tag = desktop_files.files[i].icon_tag;
                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
                                 if let Some(data) = data { notepad_app.open_file(&p, data); }
                                 open_app(&mut compositor, 2);
                             } else if tag == "IMG" {
-                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
                                 open_app(&mut compositor, 4);
                             }
                             else if tag == "SND" { open_app(&mut compositor, 5); }
                             else if tag == "VID" { open_app(&mut compositor, 6); }
                             else if tag == "WEB" { open_app(&mut compositor, 3); }
                             else if tag == "3D" {
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
                                 if let Some(data) = data {
                                     viewer3d_app.load_file(&p, data);
                                 }
@@ -2393,13 +2408,13 @@ pub extern "C" fn _start() -> ! {
                                         filemanager_app.restore_selected(&mut fs_mgr.vfs);
                                     } else if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                         if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                             if let Some(data) = data {
                                                 notepad_app.open_file(&path, data);
                                             }
                                             open_app(&mut compositor, 2);
                                         } else if tag == "IMG" {
-                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
                                             open_app(&mut compositor, 4);
                                         } else if tag == "SND" {
                                             open_app(&mut compositor, 5);
@@ -2408,7 +2423,7 @@ pub extern "C" fn _start() -> ! {
                                         } else if tag == "WEB" {
                                             open_app(&mut compositor, 3);
                                         } else if tag == "3D" {
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
                                             if let Some(data) = data {
                                                 viewer3d_app.load_file(&path, data);
                                             }
@@ -2448,13 +2463,13 @@ pub extern "C" fn _start() -> ! {
                                                 filemanager_app.drag_target = None;
                                                 if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                                         if let Some(data) = data {
                                                             notepad_app.open_file(&path, data);
                                                         }
                                                         open_app(&mut compositor, 2);
                                                     } else if tag == "IMG" {
-                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
                                                         open_app(&mut compositor, 4);
                                                     } else if tag == "SND" {
                                                         open_app(&mut compositor, 5);
@@ -2463,7 +2478,7 @@ pub extern "C" fn _start() -> ! {
                                                     } else if tag == "WEB" {
                                                         open_app(&mut compositor, 3);
                                                     } else if tag == "3D" {
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
                                                         if let Some(data) = data {
                                                             viewer3d_app.load_file(&path, data);
                                                         }
@@ -2525,10 +2540,24 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
                                         settings_app.is_muted = !settings_app.is_muted;
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::volume_track_rect(wx, wy)) {
-                                        let track=apps::settings::SystemSettings::volume_track_rect(wx,wy); settings_app.set_volume_from_range(mx,track.0,track.2);
+                                        let track = apps::settings::SystemSettings::volume_track_rect(wx, wy); settings_app.set_volume_from_range(mx, track.0, track.2);
                                     }
                                 }
                                 if settings_app.active_tab == 1 {
+                                    let mut swatch_hit = false;
+                                    for i in 0..apps::settings::SystemSettings::theme_swatch_count() {
+                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_swatch_rect(wx, wy, i)) {
+                                            settings_app.theme = gui::theme::ThemeId::ALL[i];
+                                            gui::theme::set_theme(settings_app.theme);
+                                            swatch_hit = true;
+                                            break;
+                                        }
+                                    }
+                                    if swatch_hit {
+                                        // Tema paletinden dogrudan secim yapildi.
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::theme_btn_rect(wx, wy, ww)) {
+                                        settings_app.cycle_theme();
+                                    } else {
                                     for i in 0..3 {
                                         if gui::in_rect(mx,my,apps::settings::SystemSettings::zoom_btn_rect(wx,wy,i)) {
                                             settings_app.zoom = [100,125,150][i];
@@ -2573,13 +2602,14 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.night_light_level=((mx-nl_track.0).min(span)*100/span).min(100) as u8;
                                         settings_app.night_light=true;
                                     }
-                                    if gui::in_rect(mx,my,apps::settings::SystemSettings::region_btn_rect(wx,wy)) {
-                                        settings_app.region=(settings_app.region+1)%3;
-                                        now=drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
-                                        compositor.cal_year=now.year;
-                                        compositor.cal_month=now.month;
-                                        settings_app.status_msg=gui::ui_text("Bölge ve saat dilimi değiştirildi.", "Region and time zone updated.");
+                                    for i in 0..apps::settings::SystemSettings::wallpaper_count() {
+                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::wallpaper_btn_rect(wx, wy, i)) {
+                                            settings_app.wallpaper = i as u8;
+                                            crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
+                                            settings_app.status_msg = gui::ui_text("Arka plan değiştirildi.", "Background changed.");
+                                        }
                                     }
+                                    } // tema else kapatma
                                 }
                                 if settings_app.active_tab == 0 {
                                     let speed_track = apps::settings::SystemSettings::mouse_speed_track_rect(wx, wy);
@@ -2643,7 +2673,7 @@ pub extern "C" fn _start() -> ! {
                                         match def.action {
                                             crate::apps::notepad::NotepadMenuAction::Open => {
                                                 let path = alloc::string::String::from(notepad_app.file_path_str());
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                                 if let Some(data) = data {
                                                     notepad_app.open_file(&path, data);
                                                 }
@@ -2839,9 +2869,9 @@ pub extern "C" fn _start() -> ! {
                                             let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
                                             match item {
                                                 0 => paint_apps[idx].as_mut().unwrap().new_document(),
-                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
+                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
                                                 2 => {
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                                     }
                                                 }
@@ -2851,7 +2881,7 @@ pub extern "C" fn _start() -> ! {
                                                         let cur = paint_apps[idx].as_ref().unwrap().current_name();
                                                         apps::paint::PaintApp::derive_save_as_name(cur)
                                                     };
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farkli kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farklı kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                                     }
                                                 }
@@ -2874,11 +2904,11 @@ pub extern "C" fn _start() -> ! {
                                     p.file_menu_open = !p.file_menu_open;
                                 } else if gui::in_rect(mx, my, open_rect) {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
                                 } else if gui::in_rect(mx, my, save_rect) {
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
                                     let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
-                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                     }
                                 } else if gui::in_rect(mx, my, clear_rect) {
@@ -2932,19 +2962,25 @@ pub extern "C" fn _start() -> ! {
                             11 => {
                                 // minOs Kurulum Sihirbazı
                                 let sel_rect = apps::installer::InstallerApp::drive_select_rect(wx, wy, ww);
-                                let type_rect = apps::installer::InstallerApp::format_type_btn_rect(wx, wy, ww, wh);
+                                let radio_fat32 = apps::installer::InstallerApp::radio_btn_rect(wx, wy + 20, 0);
+                                let radio_ext4 = apps::installer::InstallerApp::radio_btn_rect(wx, wy + 20, 1);
+                                let radio_exfat = apps::installer::InstallerApp::radio_btn_rect(wx, wy + 20, 2);
                                 let fmt_rect = apps::installer::InstallerApp::format_btn_rect(wx, wy, ww, wh);
                                 let btn_rect = apps::installer::InstallerApp::install_btn_rect(wx, wy, ww, wh);
                                 if gui::in_rect(mx, my, sel_rect) {
                                     installer_app.select_next_drive();
-                                } else if gui::in_rect(mx, my, type_rect) {
-                                    installer_app.cycle_format_type();
+                                } else if gui::in_rect(mx, my, radio_fat32) {
+                                    installer_app.set_format_type(apps::installer::FormatFsType::Fat32);
+                                } else if gui::in_rect(mx, my, radio_ext4) {
+                                    installer_app.set_format_type(apps::installer::FormatFsType::Ext4);
+                                } else if gui::in_rect(mx, my, radio_exfat) {
+                                    installer_app.set_format_type(apps::installer::FormatFsType::Exfat);
                                 } else if gui::in_rect(mx, my, fmt_rect) {
                                     // 2. Adım: Sadece biçimlendir.
                                     if installer_app.state == apps::installer::InstallState::Selecting
                                         || installer_app.state == apps::installer::InstallState::Failed
                                     {
-                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk bicimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
+                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk biçimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
                                         if formatted {
                                             filemanager_app.set_path("/media/hdd0");
                                             filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
@@ -2967,7 +3003,7 @@ pub extern "C" fn _start() -> ! {
                                         } else {
                                             // İlk tıklama: onay iste (diski biçimlendirecek).
                                             installer_app.confirm_install = true;
-                                            installer_app.status_msg = "UYARI: Disk silinip FAT32 olarak bicimlendirilecek. Onaylamak icin tekrar tiklayin.";
+                                            installer_app.status_msg = "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.";
                                         }
                                     }
                                 }
@@ -3339,13 +3375,13 @@ pub extern "C" fn _start() -> ! {
                                     filemanager_app.restore_selected(&mut fs_mgr.vfs);
                                 } else if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                                         if let Some(data) = data {
                                             notepad_app.open_file(&path, data);
                                         }
                                         open_app(&mut compositor, 2);
                                     } else if tag == "IMG" {
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
                                         open_app(&mut compositor, 4);
                                     } else if tag == "SND" {
                                         open_app(&mut compositor, 5);
@@ -3354,7 +3390,7 @@ pub extern "C" fn _start() -> ! {
                                     } else if tag == "WEB" {
                                         open_app(&mut compositor, 3);
                                     } else if tag == "3D" {
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
                                         if let Some(data) = data {
                                             viewer3d_app.load_file(&path, data);
                                         }
@@ -3366,12 +3402,11 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 1) {
                         enter_char_consumed = true;
-                        if settings_app.focused_control < 4 {
+                        if settings_app.focused_control < 5 {
                             settings_app.active_tab = settings_app.focused_control;
                         } else {
                             match settings_app.active_tab {
                                 0 => match settings_app.focused_control {
-                                    4 => settings_app.cycle_theme(),
                                     5 => {
                                         keyboard.toggle_layout();
                                         settings_app.keyboard_layout = keyboard.layout;
@@ -3380,28 +3415,13 @@ pub extern "C" fn _start() -> ! {
                                         settings_app.language.toggle();
                                         settings_app.status_msg = gui::ui_text("Arayüz dili değiştirildi.", "Interface language changed.");
                                     }
-                                    7 => settings_app.is_muted = !settings_app.is_muted,
-                                    8 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    9 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); }
+                                    7 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    8 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); }
                                     _ => {}
                                 },
                                 1 => match settings_app.focused_control {
-                                    4..=7 => {
-                                        let i = settings_app.focused_control - 4;
-                                        settings_app.screen_res = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), _ => (1920,1080) };
-                                    }
-                                    8..=10 => {
-                                        let i = settings_app.focused_control - 8;
-                                        settings_app.zoom = [100, 125, 150][i];
-                                        gui::set_font_zoom(settings_app.zoom);
-                                    }
-                                    11 => settings_app.night_light = !settings_app.night_light,
-                                    12 => {
-                                        settings_app.region = (settings_app.region + 1) % 3;
-                                        now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
-                                    }
-                                    13 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    14 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
+                                    5 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    6 => { settings_app.reset_defaults(); settings_app.apply_runtime(&mut *keyboard, &mut compositor, &mut now); settings_app.write_config(&mut fs_mgr.vfs); },
                                     _ => {}
                                 },
                                 2 => match settings_app.focused_control {
@@ -3503,7 +3523,7 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::OpenDocument => {
                     if app_is_focused(&compositor, 2) {
                         let path = alloc::string::String::from(notepad_app.file_path_str());
-                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
                         if let Some(data) = data {
                             notepad_app.open_file(&path, data);
                         }
@@ -4281,11 +4301,12 @@ fn panic(info: &PanicInfo) -> ! {
         }
     }
 
-    serial_print("[PANIC] Kernel panic: ");
+    serial_print("\n==================== [ KERNEL PANIC ] ====================\n");
+    serial_print("[PANIC] Mesaj: ");
     let mut output = PanicSerial;
     let _ = writeln!(&mut output, "{}", info.message());
     if let Some(location) = info.location() {
-        serial_print("[PANIC] Location: ");
+        serial_print("[PANIC] Konum: ");
         let _ = writeln!(
             &mut output,
             "{}:{}:{}",
@@ -4294,7 +4315,152 @@ fn panic(info: &PanicInfo) -> ! {
             location.column()
         );
     }
+    serial_print("==========================================================\n");
+
+    // Ekrana doğrudan siyah zemin üzerine turuncu hata ekranı çiz
+    unsafe {
+        if !PANIC_FB_ADDR.is_null() && PANIC_FB_W > 0 && PANIC_FB_H > 0 {
+            let mut pfb = drivers::video::Framebuffer::new(
+                PANIC_FB_ADDR,
+                PANIC_FB_W,
+                PANIC_FB_H,
+                PANIC_FB_PITCH,
+                PANIC_FB_BPP,
+            );
+
+            // Siyah arka plan (0x000000)
+            pfb.draw_rect(0, 0, PANIC_FB_W, PANIC_FB_H, 0x000000);
+
+            // Turuncu renk tonları:
+            // Parlak Turuncu: 0xFFA500, Koyu Turuncu: 0xFF8C00, Açık Turuncu: 0xFFB347
+            const ORANGE_TITLE: u32 = 0xFFA500;
+            const ORANGE_TEXT: u32 = 0xFF8C00;
+            const ORANGE_MUTED: u32 = 0xCC7000;
+
+            let center_x = 40;
+            let mut cur_y = 50;
+
+            // 1. Başlık
+            gui::MinGuiCompositor::draw_string_scaled(
+                &mut pfb,
+                center_x,
+                cur_y,
+                "!!! minOs KERNEL PANIC !!!",
+                ORANGE_TITLE,
+                2,
+            );
+            cur_y += 50;
+
+            // 2. Çizgi
+            pfb.draw_rect(center_x, cur_y, PANIC_FB_W.saturating_sub(80), 2, ORANGE_MUTED);
+            cur_y += 30;
+
+            // 3. Hata Açıklaması
+            gui::MinGuiCompositor::draw_string(
+                &mut pfb,
+                center_x,
+                cur_y,
+                "Çekirdek çalışırken kritik bir hata ile karşılaştı ve durduruldu.",
+                ORANGE_TEXT,
+            );
+            cur_y += 24;
+
+            // 4. Hata Mesajı
+            let mut msg_buf = gui::TextBuf::new();
+            msg_buf.push_str("Hata: ");
+            struct StrBufWriter<'a>(&'a mut gui::TextBuf);
+            impl<'a> FmtWrite for StrBufWriter<'a> {
+                fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                    self.0.push_str(s);
+                    Ok(())
+                }
+            }
+            let _ = write!(&mut StrBufWriter(&mut msg_buf), "{}", info.message());
+            gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, msg_buf.as_str(), 0xFFFFFF);
+            cur_y += 26;
+
+            // 5. Konum
+            if let Some(loc) = info.location() {
+                let mut loc_buf = gui::TextBuf::new();
+                loc_buf.push_str("Konum: ");
+                loc_buf.push_str(loc.file());
+                loc_buf.push_byte(b':');
+                loc_buf.push_usize(loc.line() as usize);
+                loc_buf.push_byte(b':');
+                loc_buf.push_usize(loc.column() as usize);
+                gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, loc_buf.as_str(), ORANGE_MUTED);
+                cur_y += 36;
+            } else {
+                cur_y += 10;
+            }
+
+            // 6. Bilgilendirme ve Yeniden Başlatma Talimatı
+            pfb.draw_rect(center_x, cur_y, PANIC_FB_W.saturating_sub(80), 1, ORANGE_MUTED);
+            cur_y += 24;
+
+            gui::MinGuiCompositor::draw_string(
+                &mut pfb,
+                center_x,
+                cur_y,
+                "Yeniden başlatmak (Restart) için herhangi bir tuşa [ENTER / ESC / SPACE] basınız.",
+                ORANGE_TITLE,
+            );
+            cur_y += 24;
+            gui::MinGuiCompositor::draw_string(
+                &mut pfb,
+                center_x,
+                cur_y,
+                "Press any key [ENTER / ESC / SPACE] to reboot the system.",
+                ORANGE_MUTED,
+            );
+
+            // Ekrana blit et
+            pfb.flush();
+        }
+    }
+
+    // Tuş bekleme ve Yeniden Başlatma (Restart) Döngüsü
     loop {
+        // PS/2 klavye kontrolcüsünde (port 0x64 status bit 0) veri var mı?
+        let has_key = unsafe {
+            let status: u8;
+            core::arch::asm!("in al, 0x64", out("al") status, options(nomem, nostack, preserves_flags));
+            status & 0x01 != 0
+        };
+
+        if has_key {
+            let scancode: u8;
+            unsafe {
+                core::arch::asm!("in al, 0x60", out("al") scancode, options(nomem, nostack, preserves_flags));
+            }
+            // Tuş basıldı (Make code < 0x80)
+            if scancode < 0x80 {
+                serial_print("[PANIC] Tusa basildi. Sistem yeniden baslatiliyor (Reboot)...\n");
+
+                // 1. Yöntem: Klavye kontrolcüsü üzerinden reset (0x64 portuna 0xFE gönder)
+                unsafe {
+                    core::arch::asm!("out 0x64, al", in("al") 0xFEu8, options(nomem, nostack, preserves_flags));
+                }
+
+                // 2. Yöntem: ACPI / Bochs / QEMU reset portları (0xCF9 veya 0x604)
+                unsafe {
+                    core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8, options(nomem, nostack, preserves_flags));
+                }
+
+                // 3. Yöntem: Triple Fault (Boş IDT yükleyip yazılımsal kesme tetikle)
+                #[repr(C, packed)]
+                struct Idtr {
+                    limit: u16,
+                    base: u64,
+                }
+                let null_idtr = Idtr { limit: 0, base: 0 };
+                unsafe {
+                    core::arch::asm!("lidt [{}]", in(reg) &null_idtr, options(nomem, nostack, preserves_flags));
+                    core::arch::asm!("int3", options(nomem, nostack, preserves_flags));
+                }
+            }
+        }
+
         core::hint::spin_loop();
     }
 }

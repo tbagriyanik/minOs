@@ -27,6 +27,11 @@ Write-Host "[2/4] Limine Onyukleyici Dosyalari Yerlestiriliyor..." -ForegroundCo
 if (Test-Path "boot\limine.conf") {
     Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\boot\limine\limine.conf"
 }
+# Copy background image for Limine
+if (Test-Path "boot\cat_small.png") {
+    Copy-Item -Force "boot\cat_small.png" -Destination "$OutputDir\boot\cat_small.png"
+}
+
 
 if (Test-Path "boot\limine\limine-bios-cd.bin") {
     Copy-Item -Force "boot\limine\limine-bios-cd.bin" -Destination "$OutputDir\boot\limine\limine-bios-cd.bin"

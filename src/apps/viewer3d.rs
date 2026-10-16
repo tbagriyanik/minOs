@@ -75,7 +75,7 @@ impl Viewer3DApp {
             last_mouse: (0, 0),
             file_name: [0; 48],
             file_name_len: 0,
-            status_msg: "3D Sahne Hazir",
+            status_msg: "3D Sahne Hazır",
             vertices: Vec::new(),
             edges: Vec::new(),
             faces: Vec::new(),

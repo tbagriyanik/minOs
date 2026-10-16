@@ -858,7 +858,7 @@ impl NotepadApp {
             }
         }
         self.cursor = 0;
-        self.status_msg = crate::gui::ui_text("Dosya acildi", "File opened");
+        self.status_msg = crate::gui::ui_text("Dosya açıldı", "File opened");
     }
 
     pub fn save_file(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
@@ -875,9 +875,9 @@ impl NotepadApp {
         }
         let ok = vfs.write_file(path, &utf8_buf);
         if ok {
-            self.status_msg = crate::gui::ui_text("Dosya basariyla kaydedildi!", "File saved successfully!");
+            self.status_msg = crate::gui::ui_text("Dosya başarıyla kaydedildi!", "File saved successfully!");
         } else {
-            self.status_msg = crate::gui::ui_text("Kaydetme basarisiz!", "Save failed!");
+            self.status_msg = crate::gui::ui_text("Kaydetme başarısız!", "Save failed!");
         }
         ok
     }

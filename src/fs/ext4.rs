@@ -93,15 +93,14 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     wle16(&mut sb, 88, EXT4_INODE_SIZE);              // s_inode_size: 256
     wle16(&mut sb, 90, 0);                            // s_block_group_nr: 0
 
-    // ext4 Feature Flag'leri:
+    // ext4 Feature Flag'leri (ext2 sürücüsüyle uyumlu minimal set):
+    // EXTENTS ve 64BIT yazılmıyor; böylece mevcut ext2 okuma/yazma
+    // katmanı kök dizini doğrudan blok listesiyle okuyabilir.
     let feature_compat = EXT4_FEATURE_COMPAT_DIR_INDEX;
-    let feature_incompat = EXT4_FEATURE_INCOMPAT_FILETYPE
-        | EXT4_FEATURE_INCOMPAT_EXTENTS
-        | EXT4_FEATURE_INCOMPAT_64BIT;
+    let feature_incompat = EXT4_FEATURE_INCOMPAT_FILETYPE;
     let feature_ro_compat = EXT4_FEATURE_RO_COMPAT_SPARSE_SUPER
         | EXT4_FEATURE_RO_COMPAT_LARGE_FILE
-        | EXT4_FEATURE_RO_COMPAT_DIR_NLINK
-        | EXT4_FEATURE_RO_COMPAT_EXTRA_ISIZE;
+        | EXT4_FEATURE_RO_COMPAT_DIR_NLINK;
 
     wle32(&mut sb, 92, feature_compat);               // s_feature_compat
     wle32(&mut sb, 96, feature_incompat);             // s_feature_incompat
@@ -110,7 +109,7 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     // UUID ve Volume Label
     sb[104..120].copy_from_slice(&[0x4d, 0x49, 0x4e, 0x4f, 0x53, 0x2d, 0x45, 0x58, 0x54, 0x34, 0x2d, 0x46, 0x53, 0x30, 0x31, 0x21]); // "MINOS-EXT4-FS01!"
     sb[120..136].copy_from_slice(b"minos-ext4      "); // Volume name
-    wle16(&mut sb, 254, 64);                          // s_desc_size: 64 bayt (ext4 64-bit mode)
+    wle16(&mut sb, 254, 32);                          // s_desc_size: 32 bayt (ext2 uyumlu)
 
     // Superblock diske yaz (Blok 1 = sektör part_lba + 2 ve + 3)
     let mut s0 = [0u8; 512]; s0.copy_from_slice(&sb[..512]);
@@ -139,21 +138,31 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
         return false;
     }
 
-    // 3. Block Bitmap (Blok 3)
-    let mut b_bmp = [0u8; 512];
+    // 3. Block Bitmap (Blok 3, 1024 bayt)
+    let mut b_bmp = [0u8; 1024];
     for b in 0..first_free_block {
-        b_bmp[(b / 8) as usize] |= 1 << (b % 8);
+        let idx = (b / 8) as usize;
+        if idx < b_bmp.len() {
+            b_bmp[idx] |= 1 << (b % 8);
+        }
     }
-    if !ata::write_sector(drive, bl(3), &b_bmp) || !ata::write_sector(drive, bl(3) + 1, &b_bmp) {
+    let mut bb0 = [0u8; 512]; bb0.copy_from_slice(&b_bmp[..512]);
+    let mut bb1 = [0u8; 512]; bb1.copy_from_slice(&b_bmp[512..]);
+    if !ata::write_sector(drive, bl(3), &bb0) || !ata::write_sector(drive, bl(3) + 1, &bb1) {
         return false;
     }
 
-    // 4. Inode Bitmap (Blok 4)
-    let mut i_bmp = [0u8; 512];
+    // 4. Inode Bitmap (Blok 4, 1024 bayt)
+    let mut i_bmp = [0u8; 1024];
     for i in 0..12 {
-        i_bmp[(i / 8) as usize] |= 1 << (i % 8);
+        let idx = (i / 8) as usize;
+        if idx < i_bmp.len() {
+            i_bmp[idx] |= 1 << (i % 8);
+        }
     }
-    if !ata::write_sector(drive, bl(4), &i_bmp) || !ata::write_sector(drive, bl(4) + 1, &i_bmp) {
+    let mut ibm0 = [0u8; 512]; ibm0.copy_from_slice(&i_bmp[..512]);
+    let mut ibm1 = [0u8; 512]; ibm1.copy_from_slice(&i_bmp[512..]);
+    if !ata::write_sector(drive, bl(4), &ibm0) || !ata::write_sector(drive, bl(4) + 1, &ibm1) {
         return false;
     }
 
@@ -178,23 +187,12 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     wle16(&mut root_ino, 24, 0);                       // i_gid: root (0)
     wle16(&mut root_ino, 26, 3);                       // i_links_count: 3 (. , .. ve üst dizin)
     wle32(&mut root_ino, 28, 2);                       // i_blocks_lo: 2 sektör (1024B)
-    wle32(&mut root_ino, 32, 0x00080000);              // i_flags: EXT4_EXTENTS_FL (0x80000)
+    wle32(&mut root_ino, 32, 0);                        // i_flags: extent YOK (ext2 uyumlu)
+    // Doğrudan blok listesi (ext2 sürücüsüyle uyumlu): i_block[0] = root_blk
+    wle32(&mut root_ino, 40, root_blk);                 // i_block[0]: kök dizin bloğu
+    // i_block[1..15] zaten sıfır.
 
-    // ext4 Extent Tree Yapısı (i_block alanı, ofset 40..100)
-    // ext4_extent_header (12 bayt):
-    wle16(&mut root_ino, 40, EXT4_EXT_MAGIC);          // eh_magic: 0xF30A
-    wle16(&mut root_ino, 42, 1);                       // eh_entries: 1
-    wle16(&mut root_ino, 44, 4);                       // eh_max: 4 extents
-    wle16(&mut root_ino, 46, 0);                       // eh_depth: 0 (leaf node)
-    wle32(&mut root_ino, 48, 0);                       // eh_generation: 0
-
-    // ext4_extent (12 bayt, ofset 52):
-    wle32(&mut root_ino, 52, 0);                       // ee_block: dosya içi blok 0
-    wle16(&mut root_ino, 56, 1);                       // ee_len: 1 blok uzunluğunda
-    wle16(&mut root_ino, 58, 0);                       // ee_start_hi: 0
-    wle32(&mut root_ino, 60, root_blk);                // ee_start_lo: diskteki root_blk
-
-    wle16(&mut root_ino, 128, 32);                     // i_extra_isize: 32 bayt
+    wle16(&mut root_ino, 128, 0);                       // i_extra_isize: 0 (ext2 uyumlu)
 
     let mut ib0 = [0u8; 512];
     ib0[256..512].copy_from_slice(&root_ino);
@@ -226,5 +224,10 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     }
 
     ata::flush_cache(drive);
+    // ext2 sürücüsüyle gerçekten bağlanabildiğini doğrula; aksi hâlde
+    // kurulum "biçimlendirildi" görünüp yazamaz.
+    if !crate::fs::ext2::mount(drive, part_lba) {
+        return false;
+    }
     true
 }

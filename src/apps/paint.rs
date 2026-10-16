@@ -81,7 +81,7 @@ impl PaintApp {
         } else if self.eraser {
             crate::gui::ui_text("Silgi modu aktif", "Eraser active")
         } else {
-            crate::gui::ui_text("Cizim Tahtasi Hazir", "Paint Ready")
+            crate::gui::ui_text("Çizim Tahtası Hazır", "Paint Ready")
         }
     }
 

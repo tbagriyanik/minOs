@@ -464,7 +464,7 @@ impl TerminalApp {
                     if vfs.is_dir(&target) || target == "/media/usb0" || target == "/media/cdrom" || target == "/media/hdd0" {
                         self.set_cwd(&target);
                     } else {
-                        self.push_line(crate::gui::ui_text("Hata: Dizin bulunamadi.", "Error: Directory not found."), Color::ACCENT_RED);
+                        self.push_line(crate::gui::ui_text("Hata: Dizin bulunamadı.", "Error: Directory not found."), Color::ACCENT_RED);
                     }
                 }
             }
@@ -507,15 +507,15 @@ impl TerminalApp {
                         p
                     };
                     if vfs.create_dir(&target) {
-                        self.push_line(crate::gui::ui_text("Klasor olusturuldu.", "Directory created."), Color::ACCENT_GREEN);
+                        self.push_line(crate::gui::ui_text("Klasör oluşturuldu.", "Directory created."), Color::ACCENT_GREEN);
                     } else {
-                        self.push_line(crate::gui::ui_text("Olusturulamadi.", "Failed to create directory."), Color::ACCENT_RED);
+                        self.push_line(crate::gui::ui_text("Oluşturulamadı.", "Failed to create directory."), Color::ACCENT_RED);
                     }
                 }
             }
             "touch" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanim: touch <dosya>", "Usage: touch <file>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: touch <dosya>", "Usage: touch <file>"), Color::ACCENT_YELLOW);
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
@@ -526,15 +526,15 @@ impl TerminalApp {
                         p
                     };
                     if vfs.create_file(&target, b"") {
-                        self.push_line(crate::gui::ui_text("Dosya olusturuldu.", "File created."), Color::ACCENT_GREEN);
+                        self.push_line(crate::gui::ui_text("Dosya oluşturuldu.", "File created."), Color::ACCENT_GREEN);
                     } else {
-                        self.push_line(crate::gui::ui_text("Olusturulamadi.", "Failed to create file."), Color::ACCENT_RED);
+                        self.push_line(crate::gui::ui_text("Oluşturulamadı.", "Failed to create file."), Color::ACCENT_RED);
                     }
                 }
             }
             "rm" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanim: rm <dosya_veya_klasor>", "Usage: rm <file_or_dir>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: rm <dosya_veya_klasör>", "Usage: rm <file_or_dir>"), Color::ACCENT_YELLOW);
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
@@ -556,7 +556,7 @@ impl TerminalApp {
                 let file_arg = sp.next().unwrap_or("");
                 let text_arg = sp.next().unwrap_or("");
                 if file_arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanim: write <dosya> <metin>", "Usage: write <file> <text>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: write <dosya> <metin>", "Usage: write <file> <text>"), Color::ACCENT_YELLOW);
                 } else {
                     let target = if file_arg.starts_with('/') {
                         alloc::string::String::from(file_arg)
@@ -567,14 +567,14 @@ impl TerminalApp {
                         p
                     };
                     if vfs.write_file(&target, text_arg.as_bytes()) {
-                        self.push_line(crate::gui::ui_text("Dosyaya yazildi.", "Written to file."), Color::ACCENT_GREEN);
+                        self.push_line(crate::gui::ui_text("Dosyaya yazıldı.", "Written to file."), Color::ACCENT_GREEN);
                     } else {
-                        self.push_line(crate::gui::ui_text("Yazilamadi.", "Write failed."), Color::ACCENT_RED);
+                        self.push_line(crate::gui::ui_text("Yazılamadı.", "Write failed."), Color::ACCENT_RED);
                     }
                 }
             }
             "disks" | "df" => {
-                self.push_line(crate::gui::ui_text("--- BAGLI DISKLER VE SURUCULER ---", "--- ATTACHED STORAGE DEVICES ---"), Color::ACCENT_PINK);
+                self.push_line(crate::gui::ui_text("--- BAĞLI DİSKLER VE SÜRÜCÜLER ---", "--- ATTACHED STORAGE DEVICES ---"), Color::ACCENT_PINK);
                 for drive in 0..4u8 {
                     if let Some(dev) = crate::drivers::ata::device(drive) {
                         let mut b = TextBuf::new();
@@ -594,7 +594,7 @@ impl TerminalApp {
                         self.push_line(b.as_str(), Color::ACCENT_GREEN);
                     }
                 }
-                self.push_line(crate::gui::ui_text("Baglanti: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
+                self.push_line(crate::gui::ui_text("Bağlantı: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
             }
             "format" | "mkfs" => {
                 let mut sp = arg.split_whitespace();
@@ -607,16 +607,16 @@ impl TerminalApp {
                 };
 
                 if fs_type.is_empty() || drive_num.is_none() {
-                    self.push_line(crate::gui::ui_text("Kullanim: format <fat32|ext4|exfat|ext2> <0..3>", "Usage: format <fat32|ext4|exfat|ext2> <0..3>"), Color::ACCENT_YELLOW);
-                    self.push_line("Ornek: format ext4 1  veya  format exfat 0", Color::TEXT_MUTED);
+                    self.push_line(crate::gui::ui_text("Kullanım: format <fat32|ext4|exfat|ext2> <0..3>", "Usage: format <fat32|ext4|exfat|ext2> <0..3>"), Color::ACCENT_YELLOW);
+                    self.push_line("Örnek: format ext4 1  veya  format exfat 0", Color::TEXT_MUTED);
                 } else {
                     let drive = drive_num.unwrap();
                     if drive >= 4 || crate::drivers::ata::device(drive).map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata).unwrap_or(true) {
-                        self.push_line(crate::gui::ui_text("Hata: Gecersiz veya bagli olmayan ATA surucu!", "Error: Invalid or unattached ATA drive!"), Color::ACCENT_RED);
+                        self.push_line(crate::gui::ui_text("Hata: Geçersiz veya bağlı olmayan ATA sürücü!", "Error: Invalid or unattached ATA drive!"), Color::ACCENT_RED);
                     } else {
                         let cap = crate::drivers::ata::drive_capacity_sectors(drive);
                         let mut b = TextBuf::new();
-                        b.push_str(crate::gui::ui_text("Bicimlendiriliyor: IDE ", "Formatting: IDE "));
+                        b.push_str(crate::gui::ui_text("Biçimlendiriliyor: IDE ", "Formatting: IDE "));
                         b.push_usize(drive as usize);
                         b.push_str(" [");
                         b.push_str(&fs_type);
@@ -636,18 +636,18 @@ impl TerminalApp {
 
                         if success {
                             let mut res = TextBuf::new();
-                            res.push_str(crate::gui::ui_text("Basariyla bicimlendirildi: ", "Successfully formatted: "));
+                            res.push_str(crate::gui::ui_text("Başarıyla biçimlendirildi: ", "Successfully formatted: "));
                             res.push_str(&fs_type);
                             self.push_line(res.as_str(), Color::ACCENT_GREEN);
                         } else {
-                            self.push_line(crate::gui::ui_text("Bicimlendirme basarisiz oldu!", "Formatting failed!"), Color::ACCENT_RED);
+                            self.push_line(crate::gui::ui_text("Biçimlendirme başarısız oldu!", "Formatting failed!"), Color::ACCENT_RED);
                         }
                     }
                 }
             }
             "exec" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanim: exec <ikili_dosya_yolu>", "Usage: exec <binary_path>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: exec <ikili_dosya_yolu>", "Usage: exec <binary_path>"), Color::ACCENT_YELLOW);
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
@@ -663,21 +663,21 @@ impl TerminalApp {
                             match crate::mm::loader::AppLoader::load_binary(data, &mut aspace, pmm) {
                                 Ok(loaded) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("[EXEC] ELF/Binary yuklendi: RIP=0x", "[EXEC] ELF/Binary loaded: RIP=0x"));
+                                    b.push_str(crate::gui::ui_text("[EXEC] ELF/İkili dosya yüklendi: RIP=0x", "[EXEC] ELF/Binary loaded: RIP=0x"));
                                     b.push_hex64(loaded.entry_point);
                                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
 
                                     let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
                                     if ok {
-                                        self.push_line(crate::gui::ui_text("[EXEC] Program basariyla calistirildi ve sonlandi.", "[EXEC] Program executed successfully and terminated."), Color::ACCENT_GREEN);
+                                        self.push_line(crate::gui::ui_text("[EXEC] Program başarıyla çalıştırıldı ve sonlandı.", "[EXEC] Program executed successfully and terminated."), Color::ACCENT_GREEN);
                                     } else {
-                                        self.push_line(crate::gui::ui_text("[EXEC] Program calisirken hata olustu (izole edildi).", "[EXEC] Program faulted during execution (isolated)."), Color::ACCENT_RED);
+                                        self.push_line(crate::gui::ui_text("[EXEC] Program çalışırken hata oluştu (izole edildi).", "[EXEC] Program faulted during execution (isolated)."), Color::ACCENT_RED);
                                     }
                                     loaded.unmap_and_free(&mut aspace, pmm);
                                 }
                                 Err(err) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Yukleme hatasi: ", "Load error: "));
+                                    b.push_str(crate::gui::ui_text("Yükleme hatası: ", "Load error: "));
                                     b.push_str(err);
                                     self.push_line(b.as_str(), Color::ACCENT_RED);
                                 }
@@ -685,7 +685,7 @@ impl TerminalApp {
                         }
                         None => {
                             let mut b = TextBuf::new();
-                            b.push_str(crate::gui::ui_text("Dosya bulunamadi: ", "File not found: "));
+                            b.push_str(crate::gui::ui_text("Dosya bulunamadı: ", "File not found: "));
                             b.push_str(&target);
                             self.push_line(b.as_str(), Color::ACCENT_RED);
                         }
@@ -701,7 +701,7 @@ impl TerminalApp {
                         self.push_line(crate::gui::ui_text("--- KURULU PAKETLER (/bin) ---", "--- INSTALLED PACKAGES (/bin) ---"), Color::ACCENT_PINK);
                         let pkgs = crate::apps::pkgmgr::MinPkg::list_installed(vfs);
                         if pkgs.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kurulu paket bulunamadi.", "No packages installed."), Color::TEXT_MUTED);
+                            self.push_line(crate::gui::ui_text("Kurulu paket bulunamadı.", "No packages installed."), Color::TEXT_MUTED);
                         } else {
                             for p in &pkgs {
                                 let mut b = TextBuf::new();
@@ -716,7 +716,7 @@ impl TerminalApp {
                     }
                     "install" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanim: minpkg install <paket_adi_veya_url>", "Usage: minpkg install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
+                            self.push_line(crate::gui::ui_text("Kullanım: minpkg install <paket_adi_veya_url>", "Usage: minpkg install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
                         } else {
                             self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
                             // Önce ağ üzerinden dene, ağ yoksa veya yerel simülasyonsa yerleşik paketi kur
@@ -728,14 +728,14 @@ impl TerminalApp {
                             match res {
                                 Ok(path) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Basariyla kuruldu: ", "Successfully installed: "));
+                                    b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
                                     b.push_str(&path);
                                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
-                                    self.push_line(crate::gui::ui_text("Calistirmak icin: exec ", "To execute: exec "), Color::ACCENT_BLUE);
+                                    self.push_line(crate::gui::ui_text("Çalıştırmak için: exec ", "To execute: exec "), Color::ACCENT_BLUE);
                                 }
                                 Err(err) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Kurulum basarisiz: ", "Installation failed: "));
+                                    b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
                                     b.push_str(err);
                                     self.push_line(b.as_str(), Color::ACCENT_RED);
                                 }
@@ -744,19 +744,19 @@ impl TerminalApp {
                     }
                     "remove" | "uninstall" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanim: minpkg remove <paket_adi>", "Usage: minpkg remove <pkg_name>"), Color::ACCENT_YELLOW);
+                            self.push_line(crate::gui::ui_text("Kullanım: minpkg remove <paket_adi>", "Usage: minpkg remove <pkg_name>"), Color::ACCENT_YELLOW);
                         } else {
                             if crate::apps::pkgmgr::MinPkg::remove(subarg, vfs) {
-                                self.push_line(crate::gui::ui_text("Paket basariyla kaldirildi.", "Package removed successfully."), Color::ACCENT_GREEN);
+                                self.push_line(crate::gui::ui_text("Paket başarıyla kaldırıldı.", "Package removed successfully."), Color::ACCENT_GREEN);
                             } else {
-                                self.push_line(crate::gui::ui_text("Paket bulunamadi veya silinemedi.", "Package not found or could not be removed."), Color::ACCENT_RED);
+                                self.push_line(crate::gui::ui_text("Paket bulunamadı veya silinemedi.", "Package not found or could not be removed."), Color::ACCENT_RED);
                             }
                         }
                     }
                     _ => {
-                        self.push_line(crate::gui::ui_text("minOs Paket Yoneticisi v1.0 (minpkg)", "minOs Package Manager v1.0 (minpkg)"), Color::ACCENT_PINK);
+                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minpkg)", "minOs Package Manager v1.0 (minpkg)"), Color::ACCENT_PINK);
                         self.push_line("minpkg list                  - Kurulu paketleri listeler", Color::TEXT_MAIN);
-                        self.push_line("minpkg install <paket>       - Paket indirir ve /bin altina kurar", Color::TEXT_MAIN);
+                        self.push_line("minpkg install <paket>       - Paket indirir ve /bin altına kurar", Color::TEXT_MAIN);
                         self.push_line("minpkg remove <paket>        - Kurulu paketi siler", Color::TEXT_MAIN);
                     }
                 }

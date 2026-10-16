@@ -1,5 +1,6 @@
 pub mod font_render;
 pub mod theme;
+pub mod wallpaper;
 pub mod clipboard;
 pub mod scrollbar;
 
@@ -1894,10 +1895,8 @@ impl MinGuiCompositor {
     // 1. Masaüstü Arka Planı
     // -----------------------------------------------------------------------
     pub fn render_desktop_bg(&self, fb: &mut Framebuffer) {
-        // Hafif dikey gradyan masaüstüne derinlik katar.
-        let top = Color::DARK_BG;
-        let bottom = Self::shade(Color::DARK_BG, -12);
-        fb.draw_vgradient(0, 0, fb.width, fb.height, top, bottom);
+        // Arka plan: Ayarlar'dan seçilen duvar kağıdı (düz renk / örnek desen).
+        wallpaper::draw(fb);
 
         // Masaüstü Sağ Üst minOs Kedi Logosu ve Başlığı (Watermark)
         // Metin genişliğine göre sağa hizalanır; sağ kenardan taşmaz.

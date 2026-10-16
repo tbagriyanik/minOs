@@ -102,8 +102,19 @@ fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -
     (r << 16) | (g << 8) | bl
 }
 
+pub static mut PANIC_FB_ADDR: *mut u32 = core::ptr::null_mut();
+pub static mut PANIC_FB_W: usize = 0;
+pub static mut PANIC_FB_H: usize = 0;
+pub static mut PANIC_FB_PITCH: usize = 0;
+pub static mut PANIC_FB_BPP: usize = 0;
+
 impl Framebuffer {
     pub unsafe fn new(address: *mut u32, width: usize, height: usize, pitch: usize, bpp: usize) -> Self {
+        PANIC_FB_ADDR = address;
+        PANIC_FB_W = width;
+        PANIC_FB_H = height;
+        PANIC_FB_PITCH = pitch;
+        PANIC_FB_BPP = bpp;
         Self {
             address,
             width,
@@ -142,6 +153,11 @@ impl Framebuffer {
         self.width = width;
         self.height = height;
         self.pitch = pitch;
+        unsafe {
+            PANIC_FB_W = width;
+            PANIC_FB_H = height;
+            PANIC_FB_PITCH = pitch;
+        }
         self.reset_clip();
         self.cursor_saved = false;
         self.clear(0x000000);

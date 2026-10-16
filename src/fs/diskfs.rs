@@ -1395,26 +1395,50 @@ pub fn init() {
     }
 }
 
+/// Mount and validate any supported filesystem on the requested ATA drive after formatting.
+pub fn mount_drive(drive: u8) -> bool {
+    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
+    let candidate = find_partition_lba(drive);
+    // 1) Ext2 / Ext4 bölümünü dene
+    if crate::fs::ext2::mount(drive, candidate) || (candidate != 0 && crate::fs::ext2::mount(drive, 0)) {
+        unsafe {
+            KIND0 = FsKind::Ext2;
+            READY = true;
+            INSTALLED = false;
+            LISTED = false;
+            ENTRY_COUNT = 0;
+        }
+        refresh();
+        unsafe {
+            INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
+        }
+        return true;
+    }
+    // 2) FAT32 bölümünü dene
+    let mounted = (candidate > 0 && fat_mount(drive, candidate)) || fat_mount(drive, 0);
+    if mounted {
+        unsafe {
+            KIND0 = FsKind::Fat32;
+            READY = true;
+            INSTALLED = false;
+            LISTED = false;
+            ENTRY_COUNT = 0;
+        }
+        refresh();
+        unsafe {
+            INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
+        }
+        return true;
+    }
+    // 3) exFAT veya diğer MBR bölümlü disk: okuma/yazma sürücüsü yok,
+    // bu yüzden "bağlandı" diye true dönüp FAT sürücüsüyle üstüne
+    // yazılmasına izin verme. Biçimlendirme durumu MBR tipinden anlaşılır.
+    false
+}
+
 /// Mount and validate a FAT32 volume on the requested ATA drive after formatting.
 pub fn mount_fat32_drive(drive: u8) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
-    // Önce MBR/GPT bölüm tablosundaki FAT32 bölümünü dene (önyüklenebilir disk
-    // düzeni); bulunamazsa LBA 0'daki süperfloppy düzenine geri düş.
-    let candidate = find_partition_lba(drive);
-    let mounted = (candidate > 0 && fat_mount(drive, candidate)) || fat_mount(drive, 0);
-    if !mounted { return false; }
-    unsafe {
-        KIND0 = FsKind::Fat32;
-        READY = true;
-        INSTALLED = false;
-        LISTED = false;
-        ENTRY_COUNT = 0;
-    }
-    refresh();
-    unsafe {
-        INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
-    }
-    true
+    mount_drive(drive)
 }
 
 /// Disk hiç biçimlendirilmemiş mi? (MBR imzası ve bölüm tablosu boş)
@@ -1427,8 +1451,26 @@ fn disk_looks_blank(drive: u8) -> bool {
     true
 }
 
+pub fn drive_formatted_on(drive: u8) -> bool {
+    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
+    if unsafe { (KIND0 == FsKind::Fat32 && FAT.drive == drive) || (KIND0 == FsKind::Ext2 && crate::fs::ext2::mounted()) } {
+        return true;
+    }
+    // Diskin MBR bölümü var mı ve içi boş değil mi kontrol et
+    let mut mbr = [0u8; 512];
+    if ata::read_sector(drive, 0, &mut mbr) {
+        if mbr[510] == 0x55 && mbr[511] == 0xAA {
+            let part_type = mbr[0x1BE + 4];
+            if matches!(part_type, 0x07 | 0x0C | 0x83) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub fn fat32_mounted_on(drive: u8) -> bool {
-    unsafe { KIND0 == FsKind::Fat32 && FAT.drive == drive }
+    drive_formatted_on(drive)
 }
 
 pub fn ready() -> bool {
@@ -1527,8 +1569,16 @@ pub fn load_file(name: &str) -> usize {
     0
 }
 
-/// FAT32 kök dizinindeki dosyayı tam boyutuyla heap'e yükler.
+/// Kök dizindeki dosyayı tam boyutuyla heap'e yükler (FAT32 ve Ext2/Ext4 destekli).
 pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
+    if unsafe { KIND0 == FsKind::Ext2 } {
+        let path = alloc::format!("/{}", name);
+        let mut out = alloc::vec::Vec::new();
+        if crate::fs::ext2::read_file(&path, &mut out) {
+            return Some(out);
+        }
+        return None;
+    }
     if !unsafe { LISTED } { refresh(); }
     let index = (0..unsafe { ENTRY_COUNT }).find(|&i| {
         entry(i).map_or(false, |e| !e.is_dir && e.as_str().eq_ignore_ascii_case(name))

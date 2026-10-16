@@ -49,7 +49,7 @@ impl InstallerApp {
             selected_drive: 0,
             format_type: FormatFsType::Fat32,
             state: InstallState::Selecting,
-            status_msg: "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basiniz.",
+            status_msg: "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.",
             progress_pct: 0,
             drive_count: 0,
             disk_formatted: false,
@@ -57,14 +57,21 @@ impl InstallerApp {
         }
     }
 
+    pub fn set_format_type(&mut self, fmt: FormatFsType) {
+        if self.format_type != fmt {
+            self.format_type = fmt;
+            self.disk_formatted = false;
+            self.confirm_install = false;
+        }
+    }
+
     pub fn cycle_format_type(&mut self) {
-        self.format_type = match self.format_type {
+        let next = match self.format_type {
             FormatFsType::Fat32 => FormatFsType::Ext4,
             FormatFsType::Ext4 => FormatFsType::Exfat,
             FormatFsType::Exfat => FormatFsType::Fat32,
         };
-        self.disk_formatted = false;
-        self.confirm_install = false;
+        self.set_format_type(next);
     }
 
     pub fn refresh_drives(&mut self) {
@@ -99,7 +106,7 @@ impl InstallerApp {
         } else if self.disk_formatted {
             self.state = InstallState::Selecting;
             self.progress_pct = 55;
-            self.status_msg = "Disk FAT32 biçimlendirilmiş. Kurulumu tamamlayabilirsiniz.";
+            self.status_msg = "Disk biçimlendirilmiş. 'Tek Tıkla Kur' ile kurulumu tamamlayabilirsiniz.";
         } else {
             self.state = InstallState::Selecting;
             self.progress_pct = 0;
@@ -127,8 +134,8 @@ impl InstallerApp {
     /// Gömülü Limine BIOS sistem dosyası (/boot/limine/limine-bios.sys)
     const LIMINE_BIOS_SYS: &'static [u8] = include_bytes!("../../boot/limine/limine-bios.sys");
 
-    /// Hedef diski MBR + FAT32 (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
-    /// ve FAT32 dosya sistemini hazırlar.
+    /// Hedef diski MBR + dosya sistemi (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
+    /// ve seçili dosya sistemini hazırlar.
     pub fn format_selected_drive(&mut self) -> bool {
         self.state = InstallState::Formatting;
         self.progress_pct = 20;
@@ -163,7 +170,7 @@ impl InstallerApp {
         }
 
         // 2. LBA 0 üzerine MBR Bölümleme Tablosunu mühürle
-        // Bölüm 1: LBA 2048 (1MiB hizalı), FAT32 LBA (0x0C), Bootable (0x80)
+        // Bölüm 1: LBA 2048 (1MiB hizalı), seçili türe göre bölüm ID'si, Bootable (0x80)
         let mut mbr = [0u8; 512];
         if !ata::read_sector(drive, 0, &mut mbr) {
             self.state = InstallState::Failed;
@@ -193,18 +200,28 @@ impl InstallerApp {
 
         // 3. Bölüm 1 içine (LBA 2048) seçilen dosya sistemini kur
         self.progress_pct = 40;
+        self.status_msg = "Dosya sistemi oluşturuluyor...";
         let success = match self.format_type {
             FormatFsType::Fat32 => {
-                self.status_msg = "FAT32 dosya sistemi oluşturuluyor...";
-                diskfs::fat_format_at(drive, part_lba) && diskfs::mount_fat32_drive(drive)
+                diskfs::fat_format_at(drive, part_lba) && diskfs::mount_drive(drive)
             }
             FormatFsType::Ext4 => {
-                self.status_msg = "ext4 dosya sistemi (extent tree) oluşturuluyor...";
+                // ext4::format sonunda ext2 sürücüsüyle mount doğrulaması yapar.
                 crate::fs::ext4::format(drive, part_lba, part_sectors as u64)
+                    && diskfs::mount_drive(drive)
             }
             FormatFsType::Exfat => {
-                self.status_msg = "exFAT dosya sistemi (VBR & bitmap) oluşturuluyor...";
-                crate::fs::exfat::format(drive, part_lba, part_sectors as u64)
+                // exFAT için okuma/yazma sürücüsü yok: VBR imzası doğrulanır,
+                // mount beklenmez. Kurulum bu biçimde desteklenmez.
+                if !crate::fs::exfat::format(drive, part_lba, part_sectors as u64) {
+                    false
+                } else {
+                    let mut vbr = [0u8; 512];
+                    ata::read_sector(drive, part_lba, &mut vbr)
+                        && vbr[3..11] == *b"EXFAT   "
+                        && vbr[510] == 0x55
+                        && vbr[511] == 0xAA
+                }
             }
         };
 
@@ -220,15 +237,15 @@ impl InstallerApp {
         self.progress_pct = 55;
         self.state = InstallState::Selecting;
         self.status_msg = match self.format_type {
-            FormatFsType::Fat32 => "Disk önyüklenebilir FAT32 yapıldı. 'Tek Tıkla Kur' basınız.",
-            FormatFsType::Ext4 => "Disk başarıyla ext4 olarak biçimlendirildi.",
-            FormatFsType::Exfat => "Disk başarıyla exFAT olarak biçimlendirildi.",
+            FormatFsType::Fat32 => "Disk önyüklenebilir yapıldı. 'Tek Tıkla Kur' basınız.",
+            FormatFsType::Ext4 => "Disk başarıyla biçimlendirildi.",
+            FormatFsType::Exfat => "Disk başarıyla biçimlendirildi.",
         };
         true
     }
 
     /// "Tek Tıkla Kur" işlemi:
-    /// 1. (Gerekirse) Hedef diski FAT32 olarak biçimlendirir (BPB, FSInfo, FAT1/FAT2, Root Dir)
+    /// 1. (Gerekirse) Hedef diski seçili türde biçimlendirir
     /// 2. Kurulum ve işletim sistemi kimlik/işaret dosyalarını (MINOS.SYS) yazar
     /// 3. VFS'deki mevcut sistem ayarlarını (settings.cfg) diske kalıcı olarak kaydeder
     /// 4. VFS'e bağlar ve sistem durumunu günceller
@@ -249,13 +266,21 @@ impl InstallerApp {
 
         self.state = InstallState::Copying;
         self.progress_pct = 65;
-        self.status_msg = "Sistem dosyalari ve bagimliliklar kopyalaniyor...";
+        self.status_msg = "Sistem dosyaları ve bağımlılıklar kopyalanıyor...";
+
+        // exFAT okuma/yazma sürücüsü olmadığı için kurulum desteklenmez.
+        // Biçimlendirme başarılı olabilir ama dosya yazılamaz.
+        if self.format_type == FormatFsType::Exfat {
+            self.state = InstallState::Failed;
+            self.status_msg = "HATA: exFAT'e kurulum desteklenmiyor! FAT32 seçip yeniden biçimlendirin.";
+            return false;
+        }
 
         // Biçimlendirme sonrası seçili hedefi açıkça bağla; init() daha önce
         // çalıştıysa READY nedeniyle erken dönebilir.
-        if !diskfs::mount_fat32_drive(drive) {
+        if !diskfs::mount_drive(drive) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Hedef FAT32 diski bağlanamadı!";
+            self.status_msg = "HATA: Hedef disk dosya sistemi bağlanamadı!";
             return false;
         }
 
@@ -287,32 +312,47 @@ impl InstallerApp {
         // çöp kutusu) VFS.DAT anlık görüntüsü olarak diske yaz; böylece
         // sonraki açılışta tüm dosya/klasör işlemleri geri gelir.
         // Başarısız olursa kurulumu engellemez (en iyi çaba).
-        // Önce tam ağacı FAT32 köküne yansıt (gerçek klasör/dosya girişi),
+        // Önce tam ağacı disk köküne yansıt (gerçek klasör/dosya girişi),
         // sonra anlık görüntüyü kalıcı hale getir.
-        let (_mir_dirs, _mir_files) = vfs.sync_all_to_disk();
-        let snapshot_ok = vfs.persist_snapshot();
-
-        // 5. Bağımsız Boot Desteği: Limine 8.x yapılandırması (limine.conf), bios.sys ve kernel'i diske yaz
-        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n";
-        diskfs::fat_write_file_path("/boot/limine/limine.conf", limine_conf_content);
-        diskfs::fat_write_file_path("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
-        diskfs::save_file_by_name("limine.conf", limine_conf_content);
-        diskfs::save_file_by_name("limine-bios.sys", Self::LIMINE_BIOS_SYS);
-
-        // Çekirdeği (kernel binary) diske kopyala
-        if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
-            diskfs::fat_write_file_path("/boot/minos-kernel", kernel_bytes);
-            diskfs::save_file_by_name("minos-kernel", kernel_bytes);
-        }
-
-        // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla
-        // kaydedildiyse sonraki açılış bunu kurulum olarak tanısın.
-        let marker_content = b"minOs Persistent Install\nFAT32 data and settings installed\n";
+        // Kurulum işaretini VFS ağacı yansıtılmasından ÖNCE root'a yaz.
+        let marker_content = b"minOs Persistent Install\ndata and settings installed\n";
         if !diskfs::save_file_by_name("MINOS.SYS", marker_content) {
             self.state = InstallState::Failed;
             self.status_msg = "HATA: MINOS.SYS kurulum işareti yazılamadı!";
             return false;
         }
+
+        let snapshot_ok = vfs.persist_snapshot();
+        let (_mir_dirs, _mir_files) = vfs.sync_all_to_disk();
+
+        // Independently Bootable: Limine 8.x configuration, bios.sys, and kernel.
+        let limine_conf_content = b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n";
+        if self.format_type == FormatFsType::Ext4 {
+            let _ = diskfs::ext2_mkdir("/boot");
+            let _ = diskfs::ext2_mkdir("/boot/limine");
+            diskfs::ext2_write("/boot/limine/limine.conf", limine_conf_content);
+            diskfs::ext2_write("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
+            if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
+                diskfs::ext2_write("/boot/minos-kernel", kernel_bytes);
+            }
+        } else {
+            diskfs::fat_write_file_path("/boot/limine/limine.conf", limine_conf_content);
+            diskfs::fat_write_file_path("/boot/limine/limine-bios.sys", Self::LIMINE_BIOS_SYS);
+            diskfs::save_file_by_name("limine.conf", limine_conf_content);
+            diskfs::save_file_by_name("limine-bios.sys", Self::LIMINE_BIOS_SYS);
+            if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
+                diskfs::fat_write_file_path("/boot/minos-kernel", kernel_bytes);
+                diskfs::save_file_by_name("minos-kernel", kernel_bytes);
+            }
+        }
+        diskfs::save_file_by_name("limine.conf", limine_conf_content);
+        if let Some(kernel_bytes) = crate::limine_kernel_binary_slice() {
+            diskfs::save_file_by_name("minos-kernel", kernel_bytes);
+        }
+
+        // Marker en son yazılır: yalnızca gerekli tüm dosyalar diske başarıyla
+        // kaydedildiyse sonraki açılış bunu kurulum olarak tanısın.
+        let marker_content = b"minOs Persistent Install\ndata and settings installed\n";
         let marker_verified = diskfs::load_file_alloc("MINOS.SYS")
             .map(|bytes| bytes.as_slice() == marker_content)
             .unwrap_or(false);
@@ -336,38 +376,31 @@ impl InstallerApp {
 
     // Geometri yardımcıları
 
-    /// Dosya sistemi tipi seçici buton (FAT32 / ext4 / exFAT)
-    pub fn format_type_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let type_w = 100;
-        let fmt_w = 140;
-        let inst_w = 150;
-        let gap = 10;
-        let total = type_w + gap + fmt_w + gap + inst_w;
-        let x = win_x + (win_w.saturating_sub(total)) / 2;
-        let y = win_y + win_h.saturating_sub(48);
-        (x, y, type_w, 28)
+    /// Dosya sistemi radyo butonları için koordinat (0: ilk seçenek, 1: ikinci, 2: üçüncü)
+    pub fn radio_btn_rect(win_x: usize, win_y: usize, index: usize) -> (usize, usize, usize, usize) {
+        let rx = win_x + 24 + index * 105;
+        let ry = win_y + 180;
+        (rx, ry, 95, 20)
     }
 
-    /// "Biçimlendir" butonu — alt satırın ortasında.
+    /// "Biçimlendir" butonu — alt satırın solunda.
     pub fn format_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let type_w = 100;
-        let fmt_w = 140;
-        let inst_w = 150;
-        let gap = 10;
-        let total = type_w + gap + fmt_w + gap + inst_w;
-        let x = win_x + (win_w.saturating_sub(total)) / 2 + type_w + gap;
+        let fmt_w = 175;
+        let inst_w = 175;
+        let gap = 14;
+        let total = fmt_w + gap + inst_w;
+        let x = win_x + (win_w.saturating_sub(total)) / 2;
         let y = win_y + win_h.saturating_sub(48);
         (x, y, fmt_w, 28)
     }
 
     /// "Tek Tıkla Kur" butonu — alt satırın sağında.
     pub fn install_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let type_w = 100;
-        let fmt_w = 140;
-        let inst_w = 150;
-        let gap = 10;
-        let total = type_w + gap + fmt_w + gap + inst_w;
-        let x = win_x + (win_w.saturating_sub(total)) / 2 + type_w + gap + fmt_w + gap;
+        let fmt_w = 175;
+        let inst_w = 175;
+        let gap = 14;
+        let total = fmt_w + gap + inst_w;
+        let x = win_x + (win_w.saturating_sub(total)) / 2 + fmt_w + gap;
         let y = win_y + win_h.saturating_sub(48);
         (x, y, inst_w, 28)
     }
@@ -387,9 +420,9 @@ impl InstallerApp {
 
         // 2. Açıklama metni
         let intro_text = if english {
-            "Select the target disk, format it as FAT32, then click 'One-Click Install':"
+            "Select the target disk, choose format, then click 'One-Click Install':"
         } else {
-            "Hedef diski seçin, FAT32 olarak biçimlendirin ve 'Tek Tıkla Kur' basın:"
+            "Hedef diski seçin, biçimlendirin ve 'Tek Tıkla Kur'a basın:"
         };
         MinGuiCompositor::draw_string_clipped(fb, win_x + 20, win_y + 74, intro_text, Color::TEXT_MUTED,
             (win_x + 16, win_y + 68, win_w.saturating_sub(32), 20));
@@ -401,13 +434,13 @@ impl InstallerApp {
         let step_items: [(&str, bool); 3] = if english {
             [
                 ("1. Select Disk", true),
-                ("2. Format (FAT32)", step_fmt_done),
+                ("2. Format", step_fmt_done),
                 ("3. Install", step_inst_done),
             ]
         } else {
             [
                 ("1. Disk Seç", true),
-                ("2. Biçimlendir (FAT32)", step_fmt_done),
+                ("2. Biçimlendir", step_fmt_done),
                 ("3. Kur", step_inst_done),
             ]
         };
@@ -456,7 +489,7 @@ impl InstallerApp {
         let fmt_state = if self.state == InstallState::Complete {
             if english { "[Installed]" } else { "[Kuruldu]" }
         } else if self.disk_formatted {
-            if english { "[Formatted FAT32]" } else { "[Biçimlendirildi FAT32]" }
+            if english { "[Formatted]" } else { "[Biçimlendirildi]" }
         } else {
             if english { "[Not formatted]" } else { "[Biçimlendirilmedi]" }
         };
@@ -469,36 +502,64 @@ impl InstallerApp {
         MinGuiCompositor::draw_string_clipped(fb, hint_x, state_y, switch_hint, Color::ACCENT_YELLOW,
             (sel_rect.0 + sel_rect.2 / 2, sel_rect.1 + 23, sel_rect.2 / 2 - 8, 20));
 
-        // 4. Kurulum Özellikleri Bilgi Kutusu
-        let info_y = win_y + 180;
-        let info_w = win_w.saturating_sub(40);
-        fb.draw_rounded_rect(win_x + 20, info_y, info_w, 82, 6, Color::WINDOW_BG);
-        fb.draw_rounded_rect_outline(win_x + 20, info_y, info_w, 82, 6, Color::BORDER);
+        // 4. Dosya Sistemi Seçim Radyo Düğmeleri
+        let radio_title = if english { "Filesystem Format:" } else { "Dosya Sistemi Biçimi:" };
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 22, win_y + 178, radio_title, Color::TEXT_MAIN,
+            (win_x + 20, win_y + 176, win_w.saturating_sub(40), 20));
 
-        let feature1 = if english {
-            "+ Otomatik FAT32 biçimlendirme (VBR, FAT1, FAT2, kök dizin)"
-        } else {
-            "+ Otomatik FAT32 biçimlendirme (VBR, FAT1, FAT2, kök dizin)"
+        let fs_options = [
+            (FormatFsType::Fat32, "FAT32"),
+            (FormatFsType::Ext4, "ext4"),
+            (FormatFsType::Exfat, "exFAT"),
+        ];
+
+        for (idx, (ftype, fname)) in fs_options.iter().enumerate() {
+            let (rx, ry, _rw, _rh) = Self::radio_btn_rect(win_x, win_y + 20, idx);
+            let is_selected = self.format_type == *ftype;
+
+            // Radyo dış dairesi (14x14 yuvarlak)
+            fb.draw_rounded_rect(rx, ry + 2, 14, 14, 7, Color::DARK_BG);
+            let border_col = if is_selected { Color::ACCENT_BLUE } else { Color::BORDER };
+            fb.draw_rounded_rect_outline(rx, ry + 2, 14, 14, 7, border_col);
+
+            // Radyo seçili iç noktası (8x8 yuvarlak)
+            if is_selected {
+                fb.draw_rounded_rect(rx + 3, ry + 5, 8, 8, 4, Color::ACCENT_BLUE);
+            }
+
+            // Seçenek metni
+            let text_col = if is_selected { Color::WHITE } else { Color::TEXT_MUTED };
+            MinGuiCompositor::draw_string(fb, rx + 18, ry + 2, fname, text_col);
+        }
+
+        // 4b. Kurulum Bilgi Kutusu
+        let info_y = win_y + 225;
+        let info_w = win_w.saturating_sub(40);
+        fb.draw_rounded_rect(win_x + 20, info_y, info_w, 42, 6, Color::WINDOW_BG);
+        fb.draw_rounded_rect_outline(win_x + 20, info_y, info_w, 42, 6, Color::BORDER);
+
+        let info_desc = match self.format_type {
+            FormatFsType::Fat32 => if english {
+                "Standard compatibility, bootable Limine MBR partition."
+            } else {
+                "Standart uyumluluk, önyüklenebilir Limine MBR bölümü."
+            },
+            FormatFsType::Ext4 => if english {
+                "Modern Linux filesystem, 256B inodes & extent tree."
+            } else {
+                "Modern Linux dosya sistemi, 256B inode ve extent ağacı."
+            },
+            FormatFsType::Exfat => if english {
+                "Microsoft high-capacity format (VBR only; installation not supported yet)."
+            } else {
+                "Microsoft yüksek kapasiteli biçim (yalnızca VBR; kurulum henüz desteklenmiyor)."
+            },
         };
-        let feature2 = if english {
-            "+ Full Read/Write access (Kullanıcı ve sistem dosyaları yazilabilir)"
-        } else {
-            "+ Tam Okuma/Yazma izni (Kullanıcı ve sistem dosyaları yazilabilir)"
-        };
-        let feature3 = if english {
-            "+ Kalıcı ayarlar: Tema, çözünürlük ve saat sonraki açılışta yüklenir"
-        } else {
-            "+ Kalıcı ayarlar: Tema, çözünürlük ve saat sonraki açılışta yüklenir"
-        };
-        let info_text = (win_x + 26, info_y + 6, info_w.saturating_sub(12), 20);
-        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 10, feature1, Color::ACCENT_GREEN, info_text);
-        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 32, feature2, Color::ACCENT_BLUE,
-            (info_text.0, info_y + 28, info_text.2, 20));
-        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 54, feature3, Color::ACCENT_YELLOW,
-            (info_text.0, info_y + 50, info_text.2, 20));
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 28, info_y + 12, info_desc, Color::ACCENT_GREEN,
+            (win_x + 26, info_y + 6, info_w.saturating_sub(12), 24));
 
         // 5. İlerleme Çubuğu
-        let prog_y = win_y + 270;
+        let prog_y = win_y + 280;
         let prog_w = win_w.saturating_sub(40);
         fb.draw_rounded_rect(win_x + 20, prog_y, prog_w, 14, 4, Color::DARK_BG);
         fb.draw_rounded_rect_outline(win_x + 20, prog_y, prog_w, 14, 4, Color::BORDER);
@@ -519,17 +580,7 @@ impl InstallerApp {
             _ => Color::TEXT_MAIN,
         }, (win_x + 18, prog_y + 16, win_w.saturating_sub(36), 20));
 
-        // 6a. Dosya Sistemi Seçici Butonu (sol)
-        let (tx, ty, tw, th) = Self::format_type_btn_rect(win_x, win_y, win_w, win_h);
-        fb.draw_rounded_rect(tx, ty, tw, th, 6, Color::DARK_BG);
-        fb.draw_rounded_rect_outline(tx, ty, tw, th, 6, Color::ACCENT_BLUE);
-        let type_label = self.format_type.name();
-        let tlw = MinGuiCompositor::text_width(type_label, 1);
-        let tlx = tx + (tw.saturating_sub(tlw)) / 2;
-        let tly = ty + (th.saturating_sub(MinGuiCompositor::text_height())) / 2;
-        MinGuiCompositor::draw_string(fb, tlx, tly, type_label, Color::ACCENT_BLUE);
-
-        // 6b. "Biçimlendir" Butonu (orta)
+        // 6. "Biçimlendir" Butonu (sol)
         let (fx, fy, fw, fh) = Self::format_btn_rect(win_x, win_y, win_w, win_h);
         let fmt_bg = if self.disk_formatted { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW };
         fb.draw_rounded_rect(fx, fy, fw, fh, 6, fmt_bg);
@@ -561,7 +612,7 @@ impl InstallerApp {
 
         let btn_text = match self.state {
             InstallState::Complete => {
-                if english { "Installed (Ready)" } else { "Kuruldu (Hazir)" }
+                if english { "Installed (Ready)" } else { "Kuruldu (Hazır)" }
             }
             InstallState::Formatting | InstallState::Copying => {
                 if english { "Installing..." } else { "Kuruluyor..." }
@@ -570,7 +621,7 @@ impl InstallerApp {
                 if english { "Retry" } else { "Tekrar Dene" }
             }
             _ if !self.disk_formatted => {
-                if english { "Format first" } else { "Once Biçimlendir" }
+                if english { "Format first" } else { "Önce Biçimlendir" }
             }
             _ if self.confirm_install => {
                 if english { "Confirm Install" } else { "Kurulumu Onayla" }

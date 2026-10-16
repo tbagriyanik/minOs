@@ -136,6 +136,7 @@ static mut INITIALIZED: bool = false;
 static mut LAST_DISK_ERROR: u8 = 0;
 static mut IO_PROGRESS_HOOK: Option<fn(*mut (), usize, usize)> = None;
 static mut IO_PROGRESS_CONTEXT: *mut () = core::ptr::null_mut();
+static mut SINGLE_SECTOR_WRITES: usize = 0;
 
 /// Register a temporary UI progress callback for long multi-sector I/O.
 pub fn set_io_progress_hook(hook: Option<fn(*mut (), usize, usize)>, context: *mut ()) {
@@ -604,6 +605,12 @@ pub fn write_sector_unflushed(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> b
     }
     for attempt in 0..3 {
         if write_sector_once(drive, lba, buf) {
+            unsafe {
+                SINGLE_SECTOR_WRITES = SINGLE_SECTOR_WRITES.wrapping_add(1);
+                if SINGLE_SECTOR_WRITES % 16 == 0 {
+                    report_io_progress(SINGLE_SECTOR_WRITES, 0);
+                }
+            }
             return true;
         }
         if attempt < 2 {

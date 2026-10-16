@@ -224,7 +224,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                         if flags & 0xC0 == 0 {
                             mouse.update_packet(flags, dx, dy, screen_w, screen_h);
                             // Aynı karede birden çok paket gelirse biriktir.
-                            mouse.scroll_delta = mouse.scroll_delta.saturating_add(wheel);
+                            mouse.scroll_delta = mouse.scroll_delta.saturating_sub(wheel);
                             updated.mouse = true;
                         }
                     }

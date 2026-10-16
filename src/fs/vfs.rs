@@ -180,8 +180,8 @@ impl VirtualFileSystem {
             b"[minOs] Kernel v2.0 online.\n[Storage] ATA 4 channels initialized.\n[VFS] Virtual File System mounted.\n[GUI] Compositor active.\n"
         );
         self.create_file_internal(
-            "/boot/limine.cfg",
-            b"TIMEOUT=5\n\n:minOs Live Environment\n    PROTOCOL=limine\n    KERNEL_PATH=boot:///boot/minos-kernel\n    KERNEL_CMDLINE=live\n    RESOLUTION=1280x720x32\n\n:minOs Installed System\n    PROTOCOL=limine\n    KERNEL_PATH=boot:///boot/minos-kernel\n    KERNEL_CMDLINE=installed\n    RESOLUTION=1280x720x32\n"
+            "/boot/limine.conf",
+            b"timeout: 5\n\n/minOs Live Environment\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: live\n    resolution: 1280x720x32\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n"
         );
         self.create_file_internal(
             "/root/Media/kedi_maskotu.bmp",

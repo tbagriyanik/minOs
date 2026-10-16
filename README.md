@@ -327,14 +327,25 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
   -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0
 ```
 
-#### 4. VirtualBox Kurulumu & Ayarları (VirtualBox Setup)
-VirtualBox'ta **`PANIC: limine: This CPU does not support 64-bit mode`** hatası alıyorsanız aşağıdaki 2 ayarı kontrol edin:
+#### 4. VirtualBox Kurulumu & Temel Ayarlar (VirtualBox Setup)
 
-1. **Sanal Makine Türü:** Sanal makineyi oluştururken **İşletim Sistemi Türü** olarak **`Other / Other (64-bit)`** seçildiğinden emin olun.
-2. **Sanal Donanım İvmelendirmesi (VT-x / AMD-V):**
-   - 64-bit seçeneği çıkmıyorsa, sistem sanallaştırmasının etkin olduğundan ve başka bir sanallaştırma katmanının sanal makineyi engellemediğinden emin olun.
-   - VM Ayarları -> **Sistem** -> **Hızlandırma** sekmesinde **Sanallaştırma Arabirimi** varsayılan/KVM olarak ayarlanmalıdır.
-3. **Ses:** VM Ayarları -> **Ses** bölümünde sesi etkinleştirin ve **HDA uyumlu ses denetleyicisini** seçin. minOs'un HDA sürücüsü bu denetleyiciyi kullanır.
+VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sanal makine yapılandırması:
+
+| Ayar Kategorisi | Önerilen / Minimum Değer | Açıklama |
+| :--- | :--- | :--- |
+| **İşletim Sistemi Türü** | **Other / Other (64-bit)** | Çekirdek x86_64 long modda çalıştığı için mutlaka 64-bit seçilmelidir. |
+| **Temel Bellek (RAM)** | **128 MB – 512 MB** *(Min: 4 MB)* | Canlı masaüstü, font atlasları ve çoklu pencere için 256 MB veya 512 MB idealdir. |
+| **İşlemci (CPU)** | **1 veya 2 vCPU** | VT-x / AMD-V sanallaştırma açık olmalıdır. |
+| **Ekran Belleği (VRAM)** | **16 MB – 32 MB** | 1280x720 32-bit çözünürlük için en az 16 MB ayrılmalıdır. |
+| **Grafik Denetleyicisi** | **VBoxVGA** veya **VMSVGA** | 3D hızlandırmayı kapatın (yazılımsal framebuffer kullanılır). |
+| **Sabit Disk (İsteğe Bağlı)** | **256 MB – 1 GB** *(VDI / RAW)* | Canlı ISO testi için disk gerekmez. Kalıcı kurulum için SATA veya IDE olarak ekleyin. |
+| **Ses Denetleyicisi** | **Intel HD Audio** | minOs HDA ses çıkış codec'i ile tam uyumludur. |
+| **Ağ Bağdaştırıcısı** | **Intel PRO/1000 MT Desktop (82540EM)** | e1000 sürücüsüyle DHCP, ping ve HTTP desteği sağlar. |
+
+> **⚠️ Önemli VirtualBox Sorun Giderme Notları:**
+> 1. **`PANIC: limine: This CPU does not support 64-bit mode`:** Sanal makine türünün `Other (64-bit)` olduğundan ve BIOS'ta işlemci sanallaştırmasının (VT-x / AMD-V) açık olduğundan emin olun.
+> 2. **Siyah Ekran Hatası:** Sanal makine ayarları -> **Ekran** -> **Grafik Denetleyicisi**'ni **VBoxVGA** olarak ayarlayın ve **3B Hızlandırmayı** devre dışı bırakın.
+> 3. **ISO Olmadan Başlatma:** Diske kurulum yaptıysanız (veya `build_disk.ps1` ile hazırladıysanız), CD/DVD sürücüsünden `minos.iso` dosyasını çıkarın. Sistem doğrudan MBR üzerinden açılacaktır.
 
 ---
 

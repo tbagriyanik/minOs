@@ -684,8 +684,6 @@ fn print_hex8(v: u8) {
     let hex = b"0123456789ABCDEF";
     let hi = (v >> 4) & 0xF;
     let lo = v & 0xF;
-    unsafe {
-        asm!("out dx, al", in("dx") 0x3F8u16, in("al") hex[hi as usize], options(nomem, nostack, preserves_flags));
-        asm!("out dx, al", in("dx") 0x3F8u16, in("al") hex[lo as usize], options(nomem, nostack, preserves_flags));
-    }
+    crate::serial::write_byte(hex[hi as usize]);
+    crate::serial::write_byte(hex[lo as usize]);
 }

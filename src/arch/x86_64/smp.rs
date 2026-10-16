@@ -384,6 +384,12 @@ pub fn init() -> usize {
     CPU_COUNT.store(1, Ordering::Relaxed);
     AP_ONLINE[0].store(true, Ordering::Release);
 
+    // Local APIC'i her durumda aç ve MMIO sayfasını eşle: tek CPU'da da
+    // APIC timer (`apic::init_timer`) bu eşlemeye ihtiyaç duyar. Erken
+    // dönüşlerden ÖNCE yapılmalı; yoksa ilk `lapic_write` çekirdek #PF
+    // (vektör 14) üretir ve sistem siyah ekranda durur.
+    LAPIC_ID[0].store(lapic_init(), Ordering::Relaxed);
+
     let resp = match limine_response() {
         Some(r) => r,
         None => {
@@ -404,9 +410,6 @@ pub fn init() -> usize {
     }
     let count = count.min(MAX_CPUS);
     CPU_COUNT.store(count as u32, Ordering::Relaxed);
-
-    // APIC ID'mizi kaydet.
-    LAPIC_ID[0].store(lapic_init(), Ordering::Relaxed);
 
     crate::serial_print("[SMP] ");
     crate::serial::print_dec(count as u64);

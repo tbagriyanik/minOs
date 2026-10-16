@@ -239,8 +239,16 @@ pub extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         smp::print_locked_dec(vec as u64);
         smp::print_locked("); surec park edildi, cekirdek saglam.\n");
     } else {
+        let cr2: u64;
+        unsafe {
+            core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+        }
         smp::print_locked("[RING3] KRITIK: cekirdek hatasi (vektor ");
         smp::print_locked_dec(vec as u64);
+        smp::print_locked(", err=");
+        smp::print_locked_hex(err);
+        smp::print_locked(", cr2=");
+        smp::print_locked_hex(cr2);
         smp::print_locked("). Sistem durduruldu.\n");
         loop {
             unsafe {

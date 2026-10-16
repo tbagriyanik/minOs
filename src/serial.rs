@@ -1,6 +1,13 @@
 use core::arch::asm;
 extern crate alloc;
 
+const COM1_DATA: u16 = 0x3F8;
+const COM1_INT_EN: u16 = 0x3F9;
+const COM1_FIFO: u16 = 0x3FA;
+const COM1_LINE_CTL: u16 = 0x3FB;
+const COM1_MODEM_CTL: u16 = 0x3FC;
+const COM1_LINE_STATUS: u16 = 0x3FD;
+
 static mut LOG_BYTES: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 
 const RED: &[u8] = b"\x1b[31m";
@@ -108,8 +115,52 @@ fn is_error(message: &str) -> bool {
 
 fn write_bytes(bytes: &[u8]) {
     for &byte in bytes {
+        write_byte(byte);
+    }
+}
+
+/// COM1 (0x3F8) UART'ını hazırlar: 115200 baud, 8N1, FIFO açık.
+///
+/// Firmware (SeaBIOS/VBox BIOS) varsayılanlarına güvenilmez; özellikle
+/// VirtualBox'ta bölücü farklı kalırsa tüm seri log bozuk okunur.
+pub fn init() {
+    unsafe {
+        // Tüm UART kesmelerini kapat.
+        asm!("out dx, al", in("dx") COM1_INT_EN, in("al") 0u8, options(nomem, nostack, preserves_flags));
+        // DLAB = 1: bölücü yazmacı erişimi.
+        asm!("out dx, al", in("dx") COM1_LINE_CTL, in("al") 0x80u8, options(nomem, nostack, preserves_flags));
+        // Bölücü = 1 → 115200 baud (115200 / 1).
+        asm!("out dx, al", in("dx") COM1_DATA, in("al") 1u8, options(nomem, nostack, preserves_flags));
+        asm!("out dx, al", in("dx") COM1_INT_EN, in("al") 0u8, options(nomem, nostack, preserves_flags));
+        // 8 veri biti, parity yok, 1 stop biti (8N1); DLAB = 0.
+        asm!("out dx, al", in("dx") COM1_LINE_CTL, in("al") 0x03u8, options(nomem, nostack, preserves_flags));
+        // FIFO aç + temizle, 14 bayt eşik.
+        asm!("out dx, al", in("dx") COM1_FIFO, in("al") 0xC7u8, options(nomem, nostack, preserves_flags));
+        // DTR + RTS + OUT2.
+        asm!("out dx, al", in("dx") COM1_MODEM_CTL, in("al") 0x0Bu8, options(nomem, nostack, preserves_flags));
+    }
+}
+
+/// Verici (THR) boşalana kadar bekleyip tek bayt yazar.
+/// Beklemeden art arda `out` yapmak özellikle VirtualBox'ta bayt düşürür
+/// (kesik/bozuk log). UART yanıt vermezse zaman aşımıyla vazgeçer.
+pub fn write_byte(b: u8) {
+    let mut spins = 0u32;
+    loop {
+        let status: u8;
         unsafe {
-            asm!("out dx, al", in("dx") 0x3F8u16, in("al") byte, options(nomem, nostack, preserves_flags));
+            asm!("in al, dx", in("dx") COM1_LINE_STATUS, out("al") status, options(nomem, nostack, preserves_flags));
         }
+        if status & 0x20 != 0 {
+            break;
+        }
+        spins += 1;
+        if spins > 10_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    unsafe {
+        asm!("out dx, al", in("dx") COM1_DATA, in("al") b, options(nomem, nostack, preserves_flags));
     }
 }

@@ -217,7 +217,7 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 | **CPU** | x86_64 (64-bit), SSE2 desteği | x86_64, SSE4.1+ |
 | **RAM** | **4 MB** | 32 MB – 64 MB |
 | **Depolama** | Yalnızca CD/ISO (RAM tabanlı) | 64 MB+ qcow2 disk |
-| **Ekran** | 1280×720 32-bit framebuffer | 1280×720 veya daha yüksek |
+| **Ekran** | 1024×768 32-bit framebuffer | 1024×768 veya daha yüksek |
 | **Ses** | — (isteğe bağlı) | HDA uyumlu |
 | **Ağ** | — (isteğe bağlı) | e1000 uyumlu Ethernet |
 
@@ -358,8 +358,10 @@ VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sana
 
 > **⚠️ Önemli VirtualBox Sorun Giderme Notları:**
 > 1. **`PANIC: limine: This CPU does not support 64-bit mode`:** Sanal makine türünün `Other (64-bit)` olduğundan ve BIOS'ta işlemci sanallaştırmasının (VT-x / AMD-V) açık olduğundan emin olun.
-> 2. **Siyah Ekran Hatası:** Sanal makine ayarları -> **Ekran** -> **Grafik Denetleyicisi**'ni **VBoxVGA** olarak ayarlayın ve **3B Hızlandırmayı** devre dışı bırakın.
-> 3. **ISO Olmadan Başlatma:** Diske kurulum yaptıysanız (veya `build_disk.ps1` ile hazırladıysanız), CD/DVD sürücüsünden `minos.iso` dosyasını çıkarın. Sistem doğrudan MBR üzerinden açılacaktır.
+> 2. **Siyah Ekran Hatası:** Sanal makine ayarları -> **Ekran** -> **Grafik Denetleyicisi**'ni **VBoxVGA** olarak ayarlayın ve **3B Hızlandırmayı** devre dışı bırakın. VRAM en az 16 MB olmalı.
+> 3. **EFI Kapalı Olmalı:** `minos.iso` yalnızca Legacy BIOS önyüklemelidir (UEFI yükleyici içermez). Sistem -> **EFI'yi Etkinleştir** seçeneği **kapalı** olmalıdır; aksi halde makine boot etmez.
+> 4. **Çözünürlük:** Varsayılan açılış çözünürlüğü evrensel VESA/GOP modu **1024x768x32**'dir. `1280x720` / `1920x1080`, VirtualBox'un standart mod listesinde yoktur; bu modlar için ya Limine menüsündeki `Display Resolutions` girdisini kullanın ya da `VBoxManage setextradata <vm> "CustomVideoMode1" "1280x720x32"` ile özel mod ekleyin.
+> 5. **ISO Olmadan Başlatma:** Diske kurulum yaptıysanız (veya `build_disk.ps1` ile hazırladıysanız), CD/DVD sürücüsünden `minos.iso` dosyasını çıkarın. Sistem doğrudan MBR üzerinden açılacaktır.
 
 ---
 

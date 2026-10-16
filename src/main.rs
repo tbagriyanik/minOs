@@ -809,6 +809,9 @@ fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
 pub extern "C" fn _start() -> ! {
     arch::x86_64::enable_sse();
     arch::x86_64::disable_pic();
+    // Seri konsolu ilk iş olarak hazırla: sonraki tüm loglar (PMM/VMM/SMP…)
+    // 115200 8N1 ile çerçeveye oturur, VirtualBox yakalaması bozulmaz.
+    serial::init();
     init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
@@ -1031,7 +1034,6 @@ pub extern "C" fn _start() -> ! {
             let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
             let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
             if framebuffer_count == 0 || !is_mapped_limine_ptr(fb_ptr_ptr) {
-                #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
@@ -1039,13 +1041,11 @@ pub extern "C" fn _start() -> ! {
             // first framebuffer entry of the response above.
             let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
             if !is_mapped_limine_ptr(fb_info_ptr) {
-                #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
                 loop { core::hint::spin_loop(); }
             }
             let fb_info = core::ptr::read_volatile(fb_info_ptr);
             if fb_info.address.is_null() || !is_canonical_ptr(fb_info.address as *const u8) {
-                #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine framebuffer buffer address is NULL or non-canonical!\n");
                 loop { core::hint::spin_loop(); }
             }
@@ -1057,7 +1057,6 @@ pub extern "C" fn _start() -> ! {
                 fb_info.bpp as usize,
             )
         } else {
-            #[cfg(minos_boot_log)]
     serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
             loop {
                 core::hint::spin_loop();

@@ -459,7 +459,5 @@ fn e1000_print_hex(v: u8) {
 }
 
 fn e1000_print_byte(b: u8) {
-    unsafe {
-        asm!("out dx, al", in("dx") 0x3F8u16, in("al") b, options(nomem, nostack, preserves_flags));
-    }
+    crate::serial::write_byte(b);
 }

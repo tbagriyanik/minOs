@@ -31,6 +31,7 @@ SECTIONS {
         . = ALIGN(8);
         KEEP(*(.requests_end_marker))
         *(.data .data.*)
+        *(.got .got.*)
     } :data
 
     .bss : {

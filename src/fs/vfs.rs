@@ -181,7 +181,7 @@ impl VirtualFileSystem {
         );
         self.create_file_internal(
             "/boot/limine.conf",
-            b"timeout: 5\n\n/minOs Live Environment\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: live\n    resolution: 1280x720x32\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n"
+            b"timeout: 5\n\n/minOs Installed System\n    protocol: limine\n    kernel_path: boot():/boot/minos-kernel\n    kernel_cmdline: installed\n    resolution: 1280x720x32\n"
         );
         let sample_elf = crate::mm::loader::AppLoader::create_sample_elf();
         self.create_file_internal("/bin/hello.elf", &sample_elf);

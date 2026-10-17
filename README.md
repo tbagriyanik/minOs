@@ -15,6 +15,11 @@
 
 ## Yenilikler
 
+- **Çok Çekirdekli (SMP) Görev Yöneticisi:** Görev Yöneticisi Performans sekmesinde dinamik çoklu çekirdek izleme desteği. Genel CPU kullanımının yanı sıra her bir CPU çekirdeği (C0, C1, ...) için ayrı grafik barları, yüzde göstergeleri ve RAM kullanım grafiği eklendi. Metinlerin ve grafiklerin çakışması önlendi.
+- **Yarı Saydam (Alpha Blended) Masaüstü Öğeleri:** Masaüstü simge kartları ve sol taraftaki hızlı erişim ("Bilgisayarım", "Notlar" vb.) yazı etiketlerinin arka planları %50 saydam (`alpha: 128`) yapılarak duvar kağıdının pürüzsüzce arkadan görünmesi sağlandı.
+- **Görev Yöneticisi Düğme ve Menü Düzeni:** "Program Aç" ve "Sonlandır" düğmeleri yalnızca ilk sekmede ("Uygulamalar") gösterilecek şekilde düzenlendi. "Program Aç" menüsündeki uygulamalar Türkçe alfabetik sıraya dizildi ve menüden Görev Yöneticisi'nin kendisi kaldırıldı.
+- **Pencere Altına Sabitlenen Durum Çubuğu:** Görev Yöneticisi durum çubuğu pencerenin en alt kenarına tam yapıştırıldı ve süreç listesi pencere boyutuna göre sınırlandırıldı.
+- **Yenilenen Pencere Restore (Önceki Boyut) Simgesi:** Pencereler tam ekran yapıldığında gösterilen "Önceki Boyut" (Restore) düğme simgesi, modern çift üst üste binen pencere ikonuyla yenilendi.
 - **Seçilebilir masaüstü arka planları:** Sistem Ayarları > Ekran sekmesinden tema rengi, 6 tek renk (koyu mavi, yeşil, bordo, mor, kahve, koyu gri) veya 3 HD masaüstü resmi (1280×720) seçilebilir.
 - **Anında önizleme:** Duvar kağıdı seçimi yapıldığında arka plan hemen uygulanır; seçim çevreli kart ve yeşil kenarlıkla gösterilir.
 - **Kalıcı ayarlar:** Arka plan seçimi `settings.cfg` (`wallpaper`, `wallcolor`) üzerinden VFS ve diske kaydedilir, yeniden açılışta geri yüklenir.
@@ -66,7 +71,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
 | **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
-| **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, görev tablosu, süreç sonlandırma (`Kill`), "Program Aç" başlatma menüsü ve RAM grafik çubuğu. 14 uygulamanın tamamı (Kurulum Sihirbazı, Paket Yöneticisi ve 3D Gösterici dahil) listelenir. |
+| **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, çok çekirdekli (SMP) per-core CPU çubukları, görev tablosu, süreç sonlandırma (`Kill`), alfabetik "Program Aç" başlatma menüsü ve RAM doluluk çubuğu. Pencere altına sabitlenmiş durum çubuğu ile ferah performans izleme. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `pkg`, `apic`, `smp`, `exec`, `vmware` komutları, Tab tamamlama ve komut geçmişi. |

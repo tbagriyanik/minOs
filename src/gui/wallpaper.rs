@@ -17,10 +17,6 @@ pub const COUNT: usize = 10;
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 static SOLID: AtomicU32 = AtomicU32::new(0x1E3A5F);
 
-static DESKTOP1: &[u8] = include_bytes!("desktop1_bg.bin");
-static DESKTOP2: &[u8] = include_bytes!("desktop2_bg.bin");
-static DESKTOP3: &[u8] = include_bytes!("desktop3_bg.bin");
-
 pub const SOLID_COLORS: [u32; 6] = [
     0x1E3A5F, // koyu mavi
     0x1F5F3A, // yeşil
@@ -58,9 +54,9 @@ pub fn name_tr(id: u8) -> &'static str {
         4 => "Mor",
         5 => "Kahve",
         6 => "Koyu Gri",
-        7 => "Masaüstü 1",
-        8 => "Masaüstü 2",
-        9 => "Masaüstü 3",
+        7 => "Yıldızlı Gece",
+        8 => "Gün Batımı",
+        9 => "Okyanus Dalgası",
         _ => "Tema",
     }
 }
@@ -74,9 +70,9 @@ pub fn name_en(id: u8) -> &'static str {
         4 => "Purple",
         5 => "Brown",
         6 => "Dark Gray",
-        7 => "Desktop 1",
-        8 => "Desktop 2",
-        9 => "Desktop 3",
+        7 => "Starry Night",
+        8 => "Sunset Glow",
+        9 => "Ocean Waves",
         _ => "Theme",
     }
 }
@@ -93,7 +89,6 @@ fn shade(rgb: u32, delta: i16) -> u32 {
     (cl(r + delta) << 16) | (cl(g + delta) << 8) | cl(b + delta)
 }
 
-#[allow(dead_code)]
 fn hash(mut x: u32) -> u32 {
     x ^= x >> 16;
     x = x.wrapping_mul(0x7feb352d);
@@ -115,7 +110,9 @@ pub fn draw(fb: &mut Framebuffer) {
             let c = SOLID_COLORS[(get() as usize - 1).min(5)];
             fb.draw_vgradient(0, 0, w, h, c, shade(c, -14));
         }
-        7..=9 => draw_image(fb, image_data(get())),
+        7 => draw_starry(fb, w, h),
+        8 => draw_sunset(fb, w, h),
+        9 => draw_ocean(fb, w, h),
         _ => draw_geometric(fb, w, h),
     }
 }
@@ -239,64 +236,27 @@ pub fn draw_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize
             let c = SOLID_COLORS[(id as usize - 1).min(5)];
             fb.draw_rect(x, y, w, h, c);
         }
-        7..=9 => {
-            // preview image
-            draw_preview_image(fb, x, y, w, h, image_data(id));
+        7 => {
+            // Yıldızlı Gece önizleme
+            fb.draw_vgradient(x, y, w, h, 0x070B1A, 0x101B3A);
+            fb.draw_rect(x + w * 3 / 4, y + h / 5, 4, 4, 0xE8EDF7);
+            fb.draw_rect(x, y + h * 5 / 6, w, h / 6, 0x05070F);
+        }
+        8 => {
+            // Gün Batımı önizleme
+            fb.draw_vgradient(x, y, w, h / 2, 0x2B1B4E, 0xB44A6B);
+            fb.draw_vgradient(x, y + h / 2, w, h - h / 2, 0xB44A6B, 0xF5A25D);
+            fb.draw_rect(x + w / 2 - 3, y + h / 2 - 3, 6, 6, 0xFFE6A3);
+            fb.draw_rect(x, y + h * 2 / 3, w, h / 3, 0x241426);
+        }
+        9 => {
+            // Okyanus Dalgası önizleme
+            fb.draw_vgradient(x, y, w, h, 0x0A2E4E, 0x0E5A7A);
+            fb.draw_rect(x, y + h / 3, w, 2, 0x2EA8C8);
+            fb.draw_rect(x, y + h * 2 / 3, w, 2, 0x3ED8E8);
         }
         _ => {
             fb.draw_rect(x, y, w, h, 0x1A1E2A);
-        }
-    }
-}
-
-fn draw_preview_image(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize, data: &[u8]) {
-    if data.len() < 8 || w < 2 || h < 2 { return; }
-    let src_w = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let src_h = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
-    if src_w == 0 || src_h == 0 { return; }
-    let pix = &data[8..];
-    for dy in 0..h {
-        for dx in 0..w {
-            let sx = dx * src_w / w;
-            let sy = dy * src_h / h;
-            let off = (sy * src_w + sx) * 3;
-            if off + 2 < pix.len() {
-                let color = ((pix[off] as u32) << 16) | ((pix[off + 1] as u32) << 8) | (pix[off + 2] as u32);
-                fb.put_pixel(x + dx, y + dy, color);
-            }
-        }
-    }
-}
-
-#[inline]
-fn image_data(id: u8) -> &'static [u8] {
-    match id {
-        7 => DESKTOP1,
-        8 => DESKTOP2,
-        9 => DESKTOP3,
-        _ => DESKTOP1,
-    }
-}
-
-fn draw_image(fb: &mut Framebuffer, data: &[u8]) {
-    if data.len() < 8 { return; }
-    let src_w = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
-    let src_h = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
-    if src_w == 0 || src_h == 0 { return; }
-    let pix = &data[8..];
-    let (dw, dh) = (fb.width.max(1), fb.height.max(1));
-    for sy in 0..src_h {
-        let y0 = sy * dh / src_h;
-        let y1 = ((sy + 1) * dh / src_h).max(y0 + 1).min(dh);
-        for sx in 0..src_w {
-            let x0 = sx * dw / src_w;
-            let x1 = ((sx + 1) * dw / src_w).max(x0 + 1).min(dw);
-            let off = (sy * src_w + sx) * 3;
-            if off + 2 >= pix.len() { continue; }
-            let color = ((pix[off] as u32) << 16) | ((pix[off + 1] as u32) << 8) | (pix[off + 2] as u32);
-            if x1 > x0 && y1 > y0 {
-                fb.draw_rect(x0, y0, x1 - x0, y1 - y0, color);
-            }
         }
     }
 }

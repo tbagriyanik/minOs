@@ -1519,7 +1519,7 @@ pub extern "C" fn _start() -> ! {
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
                     5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
                     6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),
-                    7 => tm.render_content(fb, win.x, win.y, win.width),
+                    7 => tm.render_content(fb, win.x, win.y, win.width, win.height),
                     8 => calc.render_content(fb, win.x, win.y, win.width, win.height),
                     9 => if let Some(app) = paint[idx].as_ref() { app.render_content(fb, win.x, win.y, win.width, win.height) },
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
@@ -2830,21 +2830,21 @@ pub extern "C" fn _start() -> ! {
                                     } else {
                                         taskmgr_app.launch_menu_open = false;
                                     }
-                                } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::launch_button_rect(wx, wy, ww)) {
-                                    taskmgr_app.focused_control = 2;
-                                    taskmgr_app.launch_menu_open = true;
-                                    taskmgr_app.launch_selected = 0;
-                                } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww)) {
-                                    taskmgr_app.focused_control = 3;
-                                    if let Some(target) = taskmgr_app.selected_app_idx() {
-                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
-                                        terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
-                                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
-                                    }
                                 } else if taskmgr_app.active_tab == 0 {
-                                    if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
+                                    if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::launch_button_rect(wx, wy, ww)) {
+                                        taskmgr_app.focused_control = 2;
+                                        taskmgr_app.launch_menu_open = true;
+                                        taskmgr_app.launch_selected = 0;
+                                    } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww)) {
+                                        taskmgr_app.focused_control = 3;
+                                        if let Some(target) = taskmgr_app.selected_app_idx() {
+                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                            terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
+                                                &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
+                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                        }
+                                    } else if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
                                         taskmgr_app.selected = i;
                                         taskmgr_app.focused_control = 4 + i;
                                     }

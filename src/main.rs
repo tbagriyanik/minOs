@@ -1616,42 +1616,9 @@ pub extern "C" fn _start() -> ! {
             desktop_fm.draw_drag_badge(fb, mouse.x as usize, mouse.y as usize, kbd.ctrl);
         }
 
-        // Hızlı Çalıştır (Run Dialog: Win+R) Diyaloğu
-        if run_dialog_state.0 {
-            let dw = 320usize;
-            let dh = 110usize;
-            let dx = fb.width.saturating_sub(dw) / 2;
-            let dy = fb.height.saturating_sub(dh) / 2;
-            fb.draw_shadow(dx, dy, dw, dh, 0x000000);
-            fb.draw_rounded_rect(dx, dy, dw, dh, 6, gui::Color::WINDOW_BG);
-            fb.draw_rounded_rect_outline(dx, dy, dw, dh, 6, gui::Color::ACCENT_BLUE);
-            fb.draw_rect(dx, dy, dw, 24, gui::Color::TITLE_BAR);
-            gui::MinGuiCompositor::draw_string(fb, dx + 10, dy + 6,
-                gui::ui_text("Çalıştır (Run)", "Run Program"), gui::Color::WHITE);
-            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 34,
-                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"), gui::Color::TEXT_MUTED);
-            // Giriş kutusu
-            let bx = dx + 12;
-            let by = dy + 54;
-            let bw = dw - 24;
-            let bh = 24;
-            fb.draw_rect(bx, by, bw, bh, gui::Color::DARK_BG);
-            fb.draw_rect_outline(bx, by, bw, bh, gui::Color::BORDER);
-            let input_text = run_dialog_state.1.as_str();
-            gui::MinGuiCompositor::draw_string(fb, bx + 6, by + 6, input_text, gui::Color::TEXT_MAIN);
-            // İmleç
-            let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
-            if (tick / 20) % 2 == 0 {
-                fb.draw_rect(cur_x, by + 4, 2, 16, gui::Color::ACCENT_YELLOW);
-            }
-            // İpucu
-            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 88,
-                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] Çık",
-                              "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel"),
-                gui::Color::TEXT_MUTED);
-        }
-
         // Dosya / Klasör Özellikler (Properties) Modalı
+        // NOT: Görev çubuğu/katmanlarından ÖNCE çizilir; böylece fare imleci
+        // modalin üstünde görünür ve modal imleci gizlemez.
         if properties_state.0 {
             let pw = 340usize.min(fb.width.saturating_sub(20));
             let ph = 260usize.min(fb.height.saturating_sub(40));
@@ -1719,6 +1686,41 @@ pub extern "C" fn _start() -> ! {
             let ok_text = gui::ui_text("Tamam", "OK");
             let tw = gui::MinGuiCompositor::text_width(ok_text, 1);
             gui::MinGuiCompositor::draw_string(fb, ok_btn_x + (ok_btn_w.saturating_sub(tw)) / 2, ok_btn_y + 4, ok_text, gui::Color::WHITE);
+        }
+
+        // Hızlı Çalıştır (Run Dialog: Win+R) Diyaloğu
+        if run_dialog_state.0 {
+            let dw = 320usize;
+            let dh = 110usize;
+            let dx = fb.width.saturating_sub(dw) / 2;
+            let dy = fb.height.saturating_sub(dh) / 2;
+            fb.draw_shadow(dx, dy, dw, dh, 0x000000);
+            fb.draw_rounded_rect(dx, dy, dw, dh, 6, gui::Color::WINDOW_BG);
+            fb.draw_rounded_rect_outline(dx, dy, dw, dh, 6, gui::Color::ACCENT_BLUE);
+            fb.draw_rect(dx, dy, dw, 24, gui::Color::TITLE_BAR);
+            gui::MinGuiCompositor::draw_string(fb, dx + 10, dy + 6,
+                gui::ui_text("Çalıştır (Run)", "Run Program"), gui::Color::WHITE);
+            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 34,
+                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"), gui::Color::TEXT_MUTED);
+            // Giriş kutusu
+            let bx = dx + 12;
+            let by = dy + 54;
+            let bw = dw - 24;
+            let bh = 24;
+            fb.draw_rect(bx, by, bw, bh, gui::Color::DARK_BG);
+            fb.draw_rect_outline(bx, by, bw, bh, gui::Color::BORDER);
+            let input_text = run_dialog_state.1.as_str();
+            gui::MinGuiCompositor::draw_string(fb, bx + 6, by + 6, input_text, gui::Color::TEXT_MAIN);
+            // İmleç
+            let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
+            if (tick / 20) % 2 == 0 {
+                fb.draw_rect(cur_x, by + 4, 2, 16, gui::Color::ACCENT_YELLOW);
+            }
+            // İpucu
+            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 88,
+                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] Çık",
+                              "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel"),
+                gui::Color::TEXT_MUTED);
         }
 
         // 4. Backbuffer'ı VRAM'e kopyala.
@@ -1931,6 +1933,31 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     consumed = true;
                 }
+            }
+            // Özellikler (Properties) modalı: modal açıkken tüm tıklamaları modal üstlenir.
+            // X / Tamam butonları ve modal dışına tıklama pencereyi kapatır.
+            if properties_open {
+                let pw = 340usize.min(width.saturating_sub(20));
+                let ph = 260usize.min(height.saturating_sub(40));
+                let px = width.saturating_sub(pw) / 2;
+                let py = height.saturating_sub(ph) / 2;
+                let close_r = (px + pw.saturating_sub(24), py + 6, 16, 16);
+                let ok_btn_w = 76usize;
+                let ok_btn_h = 24usize;
+                let ok_btn_x = px + (pw.saturating_sub(ok_btn_w)) / 2;
+                let ok_btn_y = py + ph.saturating_sub(34);
+                let on_close = gui::in_rect(mx, my, close_r);
+                let on_ok = gui::in_rect(mx, my, (ok_btn_x, ok_btn_y, ok_btn_w, ok_btn_h));
+                if on_close || on_ok || !gui::in_rect(mx, my, (px, py, pw, ph)) {
+                    properties_open = false;
+                    properties_name.clear();
+                    properties_type.clear();
+                    properties_size.clear();
+                    properties_location.clear();
+                    properties_path.clear();
+                }
+                consumed = true;
+                force_render = true;
             }
             if !consumed && compositor.toast_click(width, tb_y, mx, my) {
                 consumed = true;
@@ -4516,6 +4543,19 @@ pub extern "C" fn _start() -> ! {
             }
 
             // (pencere indeksini değil) — start_menu_app_idx ile eşlenir.
+            // Özellikler modalı açıkken ESC ve Enter modalı kapatır.
+            if properties_open {
+                if ch == '\x1b' || ch == '\n' {
+                    properties_open = false;
+                    properties_name.clear();
+                    properties_type.clear();
+                    properties_size.clear();
+                    properties_location.clear();
+                    properties_path.clear();
+                    force_render = true;
+                }
+                continue;
+            }
             if ch == '\x1b' && compositor.is_start_menu_open {
                 compositor.close_start_menu();
             } else if ch == '\x1b' && compositor.is_context_menu_open {

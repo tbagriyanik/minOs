@@ -395,6 +395,7 @@ pub struct BrowserApp {
     pub request_deadline: usize,
     pub request_state: u8,
     pub redirect_count: usize,
+    pub is_https: bool,
     pub is_post: bool,
     pub post_body: Vec<u8>,
     pub cookies: Vec<HttpCookie>,
@@ -418,6 +419,7 @@ impl BrowserApp {
             request_pending: false, request_host: [0; 128], request_host_len: 0,
             request_path: [0; 256], request_path_len: 0, request_ip: crate::drivers::netstack::Ipv4Address([0; 4]), request_port: 80,
             request_deadline: 0, request_state: 0, redirect_count: 0,
+            is_https: false,
             is_post: false, post_body: Vec::new(), cookies: Vec::new(),
             response_data: Vec::new(), response_len: 0,
         };
@@ -893,22 +895,26 @@ impl BrowserApp {
             self.set_url(value.as_bytes());
         }
         self.web_request_sent = false;
-        if value.starts_with("https://") {
-            self.active_tab=3; self.page_loaded=false; self.request_pending=false;
-            self.status=crate::gui::ui_text("HTTPS/TLS bu çekirdek motorunda desteklenmiyor.","HTTPS/TLS is not supported by this kernel renderer.");
-            self.address_focused=false; return;
-        }
-        if let Some(rest) = value.strip_prefix("http://") {
+        let (is_https, rest_opt) = if let Some(rest) = value.strip_prefix("https://") {
+            (true, Some(rest))
+        } else if let Some(rest) = value.strip_prefix("http://") {
+            (false, Some(rest))
+        } else {
+            (false, None)
+        };
+
+        if let Some(rest) = rest_opt {
             let authority_end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
             let authority = &rest[..authority_end];
             let suffix = &rest[authority_end..];
             let suffix = suffix.split('#').next().unwrap_or("");
+            let default_port = if is_https { 443 } else { 80 };
             let (host, port) = if authority.starts_with('[') {
                 ("", 0) // Bu ağ yığını şu an yalnızca IPv4 hedeflerini destekliyor.
             } else {
                 match authority.rsplit_once(':') {
                     Some((h,p)) => match p.parse::<u16>() { Ok(n) if n>0 => (h,n), _ => ("",0) },
-                    _ => (authority,80),
+                    _ => (authority, default_port),
                 }
             };
             let path_len = if suffix.is_empty() { 1 } else if suffix.starts_with('?') { suffix.len() + 1 } else { suffix.len() };
@@ -923,6 +929,7 @@ impl BrowserApp {
                 self.page_loaded = false;
                 self.web_request_sent = false;
                 self.redirect_count = 0;
+                self.is_https = is_https;
                 self.is_post = false;
                 self.post_body.clear();
                 self.request_host = [0; 128];
@@ -944,7 +951,11 @@ impl BrowserApp {
                 self.response_len = 0;
                 self.response_data.clear();
                 self.response_data.resize(65536, 0);
-                self.status = crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...");
+                self.status = if is_https {
+                    crate::gui::ui_text("Güvenli bağlantı (HTTPS/TLS) başlatılıyor...", "Starting secure (HTTPS/TLS) connection...")
+                } else {
+                    crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...")
+                };
                 self.page_title = [0; 64];
                 self.page_title_len = 0;
                 self.page_lines.clear();
@@ -1100,10 +1111,22 @@ impl BrowserApp {
                         req_buf.extend_from_slice(b"\r\n");
                     }
 
-                    if crate::drivers::netstack::tcp_send(&req_buf) {
-                        self.request_state = 2;
-                        self.web_request_sent = true;
-                        self.status = crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response...");
+                    if self.is_https {
+                        let mut hello = Vec::new();
+                        crate::drivers::tls::build_client_hello(host, &mut hello);
+                        if crate::drivers::netstack::tcp_send(&hello) {
+                            self.request_state = 2;
+                            self.web_request_sent = true;
+                            self.status = crate::gui::ui_text("TLS el sıkışması ve yanıt bekleniyor...", "Waiting for TLS handshake & response...");
+                        } else {
+                            self.finish_network_error(crate::gui::ui_text("TLS ClientHello gönderilemedi.", "Failed to send TLS ClientHello."));
+                        }
+                    } else {
+                        if crate::drivers::netstack::tcp_send(&req_buf) {
+                            self.request_state = 2;
+                            self.web_request_sent = true;
+                            self.status = crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response...");
+                        }
                     }
                 }
             }
@@ -1194,15 +1217,7 @@ impl BrowserApp {
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
-                                    if loc_str.starts_with("https://") {
-                                        self.finish_network_error(crate::gui::ui_text(
-                                            "Yönlendirme HTTPS adresine yapıldı (TLS gerekli).",
-                                            "Redirected to HTTPS (TLS required)."
-                                        ));
-                                        return;
-                                    }
-
-                                    if loc_str.starts_with("http://") {
+                                    if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
                                         self.set_url(loc_slice);
                                         self.navigate();
                                     } else {

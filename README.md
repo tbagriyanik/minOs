@@ -36,6 +36,10 @@
 - **📋 Uygulamalar Arası Pano (Clipboard) ve Terminal Entegrasyonu:** Terminal üzerinde `Ctrl+C` ile satırı panoya kopyalama ve `Ctrl+V` ile panodaki metni terminale yapıştırma desteği (Notepad, Calc, Browser ile ortak paylaşılan pano).
 - **⏱️ Yeni Terminal Komutları (`uptime` & `fetch` / `neofetch`):** Sistemin çalışma süresini milisaniye hassasiyetinde gösteren `uptime` ve renkli kedi maskotuyla mikroçekirdek, RAM ve VFS durumunu özetleyen `fetch` / `neofetch` komutları eklendi.
 - **🔊 Başlangıç Melodisi ve Sistem Ses Efektleri:** Masaüstüne ilk girişte çalan zarif 3 tonlu karşılama melodisi (`play_chime()`) ve ekran görüntüsü gibi kullanıcı eylemlerine yanıt veren kısa sesli bildirimler (`play_beep()`).
+- **🔒 HTTPS/TLS Bağlantı Katmanı (TLS 1.2/1.3 ClientHello):** `src/drivers/tls.rs` ile TLS Record ve Handshake çerçevelemesi; Web Tarayıcıda `https://` adresleri (443 portu) için ClientHello + SNI (Server Name Indication) gönderimi ve güvenli oturum kurulum başlatma.
+- **💾 ext4 ve exFAT Disk Biçimlendirme Desteği:** Yeni `src/fs/ext4.rs` (ext2 uyumlu superblock + EXT4 magic 0xEF53) ve `src/fs/exfat.rs` (standart Microsoft exFAT VBR + 11 sektör VBR dizisi, boot checksum) modülleri. Terminalde `format ext4|exfat` komutu ve Kurulum Sihirbazı'nda dosya sistemi seçim radyo düğmeleri (FAT32 / ext4 / exFAT).
+- **🌙 Gece Işığı (Night Light):** Sistem Ayarları'ndan açılıp kapatılabilen, tüm ekranı kademeli ısıtan (55-100 seviye) ekran filtresi; framebuffer düzeyinde piksel bazlı uygulama.
+- **📑 Özellikler (Properties) Modal Penceresi:** Dosya Yöneticisi'nde seçili öğe için ad, tür, boyut, konum ve tam yol bilgisi gösteren modal diyalog; **X** veya **Tamam** düğmesi, **ESC**/**Enter** ve diyalog dışına tıklama ile kapatma; fare imleci modalin üstünde çizilir.
 - **📦 ISO Boyutu Optimizasyonu (21 MB ➔ 1.89 MB):** Ham bitmap'lerin temizlenmesi ve linker script (`linker.ld`) `.got` kesitinin yeniden düzenlenmesiyle gereksiz 11 MB BSS boşluk padding'i kaldırılarak ISO dosya boyutu 1.89 MB'a düşürüldü.
 - **Çok Çekirdekli (SMP) Görev Yöneticisi:** Görev Yöneticisi Performans sekmesinde dinamik çoklu çekirdek izleme desteği. Genel CPU kullanımının yanı sıra her bir CPU çekirdeği (C0, C1, ...) için ayrı grafik barları, yüzde göstergeleri ve RAM kullanım grafiği eklendi. Metinlerin ve grafiklerin çakışması önlendi.
 - **Yarı Saydam (Alpha Blended) Masaüstü Öğeleri:** Masaüstü simge kartları ve sol taraftaki hızlı erişim ("Bilgisayarım", "Notlar" vb.) yazı etiketlerinin arka planları %50 saydam (`alpha: 128`) yapılarak duvar kağıdının pürüzsüzce arkadan görünmesi sağlandı.
@@ -53,7 +57,7 @@
 
 minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
 
-🔗 **Repo Üzerinden Doğrudan İndir:**  
+🔗 **Repo Üzerinden Doğrudan İndir:**
 [https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
 
 ---
@@ -85,7 +89,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
-| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.4.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v1.5.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **📦 Paket Yöneticisi (`minpkg`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
@@ -95,7 +99,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, çok çekirdekli (SMP) per-core CPU çubukları, görev tablosu, süreç sonlandırma (`Kill`), alfabetik "Program Aç" başlatma menüsü ve RAM doluluk çubuğu. Pencere altına sabitlenmiş durum çubuğu ile ferah performans izleme. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
 | **🎨 Çizim Tahtası** | Piksel tabanlı serbest çizim tuvali, renk paleti ve dairesel silgi aracı. Fare basılı tutuldukça **sürekli/akıcı çizim**, fırça kenarının otomatik kırpılması, doğrudan `/root/Documents/cizim.bmp` formatında kaydetme/açma ve 4096 noktalık tuval geçmişi. |
-| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `pkg`, `apic`, `smp`, `exec`, `vmware` komutları, Tab tamamlama ve komut geçmişi. |
+| **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `format` ile disk biçimlendirme (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. Disk değiştirildiğinde biçimlendirme/kurulum durumu sıfırlanır; TR/EN dilleri ve ilerleme çubuğu desteklenir. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
 
@@ -143,14 +147,12 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `dns` | `dns <alan_adi>` | Belirtilen sunucu adı için yapılandırılmış DNS sunucusuna UDP DNS sorgusu iletir. |
 | `curl` | `curl http://<host>[:port][/yol]` | Soket API üzerinden HTTP GET indirir: durum kodu + gövde; chunked kod çözme ve 3xx yönlendirme takibi desteklenir (`https` desteklenmez). |
 
-### 4. Gelişmiş Teşhis ve Çekirdek Komutları (v1.4.0)
+### 4. Disk ve Çekirdek Komutları
 | Komut | Kullanım | Açıklama |
 | :--- | :--- | :--- |
-| `pkg` | `pkg <list\|search\|install\|remove>` | `minpkg` komut satırı paketi: depo kataloglarını sorgular, paket kurar ve kaldırır. |
-| `smp` | `smp [bench]` | Çok çekirdek (SMP) durumunu listeler; `smp bench` ile çekirdekler arası paralel iş kuyruğunu ve sağlama (checksum) testini çalıştırır. |
-| `apic` | `apic` | Local APIC ve APIC Timer durumunu, tik sayısını ve frekans bölücü yapılandırmasını görüntüler. |
-| `exec` | `exec <ring3\|test>` | ELF yükleyici ve Ring 3 kullanıcı kipi izolasyonunu (`int 0x80` syscall) doğrudan kabuktan test eder. |
-| `vmware` | `vmware` | VMware SVGA II ve konuk grafik hızlandırma algılamasını raporlar. |
+| `format` / `mkfs` | `format <fat32\|ext4\|exfat\|ext2> <0..3>` | Bağlı ATA sabit diski belirtilen dosya sisteminde biçimlendirir (FAT32, ext4, exFAT veya ext2). |
+| `pkg` | `pkg <list\|search\|install\|remove>` | `minpkg` komut satırı paketi: kurulu paketleri listeler, yerel/ağ üzerinden paket kurar ve kaldırır. |
+| `exec` | `exec <dosya_yolu>` | ELF/ikili dosyayı ELF yükleyici ile belleğe yükler ve Ring 3 kullanıcı kipinde çalıştırır. |
 
 ### 5. Uygulama Başlatma
 | Komut | Alternatifler | Açıklama |
@@ -162,7 +164,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 
 ## ⚠️ Durum Raporu ve Çekirdek Düzeyi
 
-minOs v1.4.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
+minOs v1.5.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
 
 1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
    - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; gelen paketler asenkron olarak işlenir.
@@ -442,7 +444,8 @@ minos/
 │   ├── apps/                # 14 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu ve ELF yükleyici
 │   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
-│   │                        #   Ext2 read-write (ext2.rs) + MBR/GPT bölümleme (part.rs)
+│   │                        #   Ext2 read-write (ext2.rs), ext4/exFAT biçimlendirme (ext4.rs, exfat.rs)
+│   │                        #   + MBR/GPT bölümleme (part.rs)
 │   └── main.rs              # Çekirdek giriş noktası (_start), Limine istekleri ve ana olay döngüsü
 ├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
@@ -457,16 +460,15 @@ minos/
 ## 📊 Kod İstatistikleri (Code Statistics)
 
 > Son güncelleme: 17 Ekim 2026 (v1.5.0)
-
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 57 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 28.223 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~24.000 satır |
+| **Toplam Rust Kaynak Dosyası** | 62 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 34.303 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~28.000 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |
-| **Kernel / ISO Boyutu** | ~7.2 MB Çekirdek / ~13 MB Hibrit Bootable ISO |
+| **Kernel / ISO Boyutu** | ~1.6 MB Çekirdek / ~2.0 MB Hibrit Bootable ISO |
 
 ---
 

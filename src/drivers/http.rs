@@ -16,20 +16,21 @@ pub const MAX_REDIRECTS: usize = 3;
 pub const MAX_HOST: usize = 96;
 pub const MAX_PATH: usize = 256;
 
-/// `http://host[:port][/path]` ayrıştırır. `host`/`path` çıktı tamponlarına
-/// yazılır, port döner (`https://` reddedilir).
+/// `http[s]://host[:port][/path]` ayrıştırır. `host`/`path` çıktı tamponlarına
+/// yazılır, port ve (is_https) bilgisi döner.
 pub fn parse_url<'a>(
     url: &'a str,
     host_out: &mut [u8; MAX_HOST],
     path_out: &mut [u8; MAX_PATH],
 ) -> Result<(u16, usize, usize), i32> {
-    let rest = url.strip_prefix("http://").ok_or_else(|| {
-        if url.starts_with("https://") {
-            E_TLS
-        } else {
-            E_URL
-        }
-    })?;
+    let (is_https, rest) = if let Some(r) = url.strip_prefix("https://") {
+        (true, r)
+    } else if let Some(r) = url.strip_prefix("http://") {
+        (false, r)
+    } else {
+        return Err(E_URL);
+    };
+
     // host[:port] + [/path] ayır.
     let (authority, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
@@ -38,12 +39,13 @@ pub fn parse_url<'a>(
     if authority.is_empty() || authority.len() > MAX_HOST || path.len() > MAX_PATH {
         return Err(E_URL);
     }
+    let default_port = if is_https { 443 } else { 80 };
     let (host, port) = match authority.find(':') {
         Some(i) => {
             let p: u16 = authority[i + 1..].parse().map_err(|_| E_URL)?;
             (&authority[..i], p)
         }
-        None => (authority, 80),
+        None => (authority, default_port),
     };
     if host.is_empty() {
         return Err(E_URL);
@@ -250,7 +252,7 @@ pub fn http_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i
             let headers = &resp_buf[..hlen];
             if let Some(loc) = header_value(headers, b"location") {
                 let loc_str = core::str::from_utf8(loc).map_err(|_| E_HTTP)?;
-                if loc_str.starts_with("http://") {
+                if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
                     let (p2, hl2, pl2) = parse_url(loc_str, &mut host, &mut path)?;
                     port = p2;
                     host_len = hl2;
@@ -307,8 +309,9 @@ pub fn self_test() -> bool {
         Ok((8080, 8, 1)) => {}
         _ => ok = false,
     }
-    if parse_url("https://example.com/", &mut h, &mut p) != Err(E_TLS) {
-        ok = false;
+    match parse_url("https://example.com/", &mut h, &mut p) {
+        Ok((443, 11, 1)) if &h[..11] == b"example.com" && &p[..1] == b"/" => {}
+        _ => ok = false,
     }
     if parse_url("ftp://x/", &mut h, &mut p) != Err(E_URL) {
         ok = false;

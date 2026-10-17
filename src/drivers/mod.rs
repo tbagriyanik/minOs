@@ -7,6 +7,7 @@ pub mod hda;
 pub mod e1000;
 pub mod netstack;
 pub mod socket;
+pub mod tls;
 pub mod http;
 pub mod keyboard;
 pub mod ps2;

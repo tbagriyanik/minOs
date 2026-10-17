@@ -144,6 +144,10 @@ pub fn draw(fb: &mut Framebuffer) {
     };
 
     if needs_render {
+        // Önbellek yenilemesi tüm ekranı kaplar; kirli bölge kırpmasını geçici
+        // olarak kaldırıp arka planı tüm ekrana çizip önbelleğe al.
+        let saved = fb.base_clip();
+        fb.clear_frame_clip();
         // Önbellek yenile: Arka planı backbuffer'a prosedürel olarak çiz
         match cur_id {
             0 => {
@@ -171,11 +175,12 @@ pub fn draw(fb: &mut Framebuffer) {
             CACHED_H = h;
             CACHE_VALID = true;
         }
+        // Kırpmayı (varsa kirli dikdörtgeni) geri yükle.
+        fb.set_frame_clip(Some((saved.x0, saved.y0, saved.x1 - saved.x0, saved.y1 - saved.y0)));
     } else {
-        // Önbellek geçerli: Tek bir ultra hızlı memcpy ile backbuffer'ı doldur
-        unsafe {
-            fb.copy_backbuffer_from_raw(core::ptr::addr_of!(WALLPAPER_CACHE) as *const u32, crate::drivers::video::BACKBUFFER_LEN);
-        }
+        // Önbellek geçerli: yalnızca çerçeve (kirli) bölgesini tek memcpy ile geri yükle.
+        let region = fb.base_clip();
+        fb.copy_region_from_raw(core::ptr::addr_of!(WALLPAPER_CACHE) as *const u32, region);
     }
 }
 

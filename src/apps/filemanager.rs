@@ -4,6 +4,7 @@
 
 extern crate alloc;
 use alloc::string::String;
+use alloc::vec::Vec;
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use crate::gui::scrollbar::{self, ScrollState};
@@ -79,6 +80,38 @@ impl FileItem {
     }
 }
 
+/// Boyut string'ini (örn: "1.2 KB") byte cinsinden sayıya çevirir.
+fn parse_size(s: &str) -> u64 {
+    let s = s.trim();
+    if s == "<DIR>" || s == "<UP>" {
+        return 0;
+    }
+    let mut num = 0u64;
+    let mut mult = 1u64;
+    let mut i = 0usize;
+    while i < s.len() {
+        let c = s.as_bytes()[i];
+        if c >= b'0' && c <= b'9' {
+            num = num * 10 + (c - b'0') as u64;
+        } else if c == b'.' {
+            // Ondalık kısmı atla (basitleştirilmiş)
+            while i + 1 < s.len() && s.as_bytes()[i + 1] >= b'0' && s.as_bytes()[i + 1] <= b'9' {
+                i += 1;
+            }
+        } else if c == b' ' {
+            // Boşluk - birim gelebilir
+        } else if c == b'K' || c == b'k' {
+            mult = 1024;
+        } else if c == b'M' || c == b'm' {
+            mult = 1024 * 1024;
+        } else if c == b'G' || c == b'g' {
+            mult = 1024 * 1024 * 1024;
+        }
+        i += 1;
+    }
+    num * mult
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     Vfs,
@@ -90,6 +123,103 @@ pub enum DropTarget {
     Sidebar(usize),
     Folder(usize),
     CurrentDirectory,
+}
+
+/// Dosya Yöneticisi görünüm modu: klasik satır listesi veya küçük resimli ızgara.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    List,
+    Grid,
+}
+
+/// Sıralama kriteri.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SortBy {
+    Name,
+    Size,
+    Type,
+}
+
+/// Sıralama yönü.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+/// Hızlı Önizleme panelinde gösterilen içerik türü.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PreviewKind {
+    Empty,
+    File,
+    Text,
+    Image,
+    Directory,
+}
+
+/// Önizleme panelinde gösterilebilecek azami metin satırı.
+pub const PREVIEW_LINES: usize = 22;
+/// Izgara hücre ölçüleri (px).
+const GRID_CELL_W: usize = 96;
+const GRID_CELL_H: usize = 104;
+/// Hızlı Önizleme paneli genişliği (px).
+const PREVIEW_W: usize = 232;
+/// Küçük resim (thumbnail) azami kenar ölçüsü (px).
+const THUMB_MAX: usize = 28;
+/// Küçük resim üretmek için okunacak azami dosya boyutu.
+const THUMB_MAX_BYTES: usize = 1024 * 1024;
+
+/// Çözümlenmiş küçük resim: `w` x `h` boyutunda, satır-major ARGB renk dizisi.
+pub struct Thumb {
+    pub w: usize,
+    pub h: usize,
+    pub px: Vec<u32>,
+}
+
+impl Thumb {
+    /// 24-bit BMP verisinden en/boy oranını koruyan ölçekli bir küçük resim üretir.
+    fn from_bmp(data: &[u8]) -> Option<Thumb> {
+        if data.len() < 54 || &data[0..2] != b"BM" {
+            return None;
+        }
+        if u16::from_le_bytes([data[28], data[29]]) != 24 {
+            return None;
+        }
+        let raw_w = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+        let raw_h = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+        if raw_w == 0 || raw_h == 0 {
+            return None;
+        }
+        let src_w = raw_w.unsigned_abs() as usize;
+        let src_h = raw_h.unsigned_abs() as usize;
+        let offset = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+        let row_bytes = (src_w.checked_mul(3)? + 3) & !3;
+        if offset < 54 || offset.checked_add(row_bytes.checked_mul(src_h)?)? > data.len() {
+            return None;
+        }
+        let (tw, th) = if src_w >= src_h {
+            (THUMB_MAX, (src_h * THUMB_MAX / src_w).max(1))
+        } else {
+            ((src_w * THUMB_MAX / src_h).max(1), THUMB_MAX)
+        };
+        let top_down = raw_h < 0;
+        let mut px = alloc::vec![0u32; tw * th];
+        for ty in 0..th {
+            let sy = ty * src_h / th;
+            let bmp_y = if top_down { sy } else { src_h - 1 - sy };
+            for tx in 0..tw {
+                let sx = tx * src_w / tw;
+                let i = offset + bmp_y * row_bytes + sx * 3;
+                if i + 2 >= data.len() {
+                    continue;
+                }
+                px[ty * tw + tx] = (data[i + 2] as u32) << 16
+                    | (data[i + 1] as u32) << 8
+                    | data[i] as u32;
+            }
+        }
+        Some(Thumb { w: tw, h: th, px })
+    }
 }
 
 pub struct FileManagerApp {
@@ -117,6 +247,23 @@ pub struct FileManagerApp {
     pub drag_target: Option<DropTarget>,
     pub drag_items: [bool; MAX_ITEMS],
     pub rename_cursor: usize,
+    /// Görünüm modu (liste / ızgara).
+    pub view_mode: ViewMode,
+    /// Sıralama kriteri.
+    pub sort_by: SortBy,
+    /// Sıralama yönü.
+    pub sort_order: SortOrder,
+    /// Hızlı Önizleme paneli açık mı?
+    pub preview_open: bool,
+    pub preview_kind: PreviewKind,
+    pub preview_title: TextBuf,
+    pub preview_meta: TextBuf,
+    pub preview_lines: [TextBuf; PREVIEW_LINES],
+    pub preview_line_count: usize,
+    preview_key: TextBuf,
+    pub preview_has_img: bool,
+    /// Öğe indeksine göre çözümlenmiş küçük resimler (yalnız IMG dosyaları).
+    thumbs: Vec<Option<Thumb>>,
     item_counter: usize,
 }
 
@@ -153,6 +300,258 @@ impl FileManagerApp {
         (win_x + win_w.saturating_sub(62), win_y + 32, 50, 22)
     }
 
+    /// Görünüm değiştirme (Liste/Izgara) düğmesi.
+    pub fn view_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(348), win_y + 32, 54, 22)
+    }
+
+    /// Hızlı Önizleme panelini aç/kapat düğmesi.
+    pub fn preview_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(408), win_y + 32, 54, 22)
+    }
+
+    /// Sütun başlıkları dikdörtgenleri (isim, boyut, tür).
+    pub fn header_name_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        let lx = Self::list_x(win_x);
+        let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        (lx, win_y + 66, lw.saturating_sub(120), 20)
+    }
+
+    pub fn header_size_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        let lx = Self::list_x(win_x);
+        let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        (lx + lw.saturating_sub(115), win_y + 66, 70, 20)
+    }
+
+    pub fn header_type_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        let lx = Self::list_x(win_x);
+        let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        (lx + lw.saturating_sub(40), win_y + 66, 40, 20)
+    }
+
+    /// Görünüm modunu değiştirir (Liste <-> Izgara).
+    pub fn toggle_view_mode(&mut self) {
+        self.view_mode = match self.view_mode {
+            ViewMode::List => ViewMode::Grid,
+            ViewMode::Grid => ViewMode::List,
+        };
+    }
+
+    /// Izgara görünümü/önizleme için küçük resimler hazır değilse üretir.
+    pub fn ensure_thumbs(&mut self, vfs: &VirtualFileSystem) {
+        if self.thumbs.len() != self.file_count {
+            self.rebuild_thumbs(vfs);
+        }
+    }
+
+    /// Hızlı Önizleme panelini aç/kapat.
+    pub fn toggle_preview(&mut self) {
+        self.preview_open = !self.preview_open;
+        self.preview_key.clear();
+        if !self.preview_open {
+            self.preview_kind = PreviewKind::Empty;
+            self.preview_line_count = 0;
+        }
+    }
+
+    pub fn is_grid(&self) -> bool { self.view_mode == ViewMode::Grid }
+
+    /// Sıralama kriterini döngüsel olarak değiştirir (İsim -> Boyut -> Tür -> İsim).
+    pub fn cycle_sort_by(&mut self) {
+        self.sort_by = match self.sort_by {
+            SortBy::Name => SortBy::Size,
+            SortBy::Size => SortBy::Type,
+            SortBy::Type => SortBy::Name,
+        };
+        self.resort_files();
+    }
+
+    /// Sıralama yönünü tersine çevirir (A-Z <-> Z-A).
+    pub fn toggle_sort_order(&mut self) {
+        self.sort_order = match self.sort_order {
+            SortOrder::Ascending => SortOrder::Descending,
+            SortOrder::Descending => SortOrder::Ascending,
+        };
+        self.resort_files();
+    }
+
+    /// Mevcut sıralama kriterine göre dosya listesini yeniden sıralar.
+    /// Geçerli sıralama ölçütüne göre dosya listesini yeniden sıralar.
+    pub fn resort_files(&mut self) {
+        let mut indices: [usize; MAX_ITEMS] = [0; MAX_ITEMS];
+        for i in 0..self.file_count {
+            indices[i] = i;
+        }
+
+        // Basit bubble sort (MAX_ITEMS küçük olduğu için yeterli)
+        for i in 0..self.file_count {
+            for j in (i + 1)..self.file_count {
+                let should_swap = match self.sort_by {
+                    SortBy::Name => {
+                        let a = self.files[indices[i]].display_name();
+                        let b = self.files[indices[j]].display_name();
+                        if self.sort_order == SortOrder::Ascending {
+                            a > b
+                        } else {
+                            a < b
+                        }
+                    }
+                    SortBy::Size => {
+                        let a = parse_size(self.files[indices[i]].size_str.as_str());
+                        let b = parse_size(self.files[indices[j]].size_str.as_str());
+                        if self.sort_order == SortOrder::Ascending {
+                            a > b
+                        } else {
+                            a < b
+                        }
+                    }
+                    SortBy::Type => {
+                        let a = self.files[indices[i]].file_type;
+                        let b = self.files[indices[j]].file_type;
+                        if a == b {
+                            let name_a = self.files[indices[i]].display_name();
+                            let name_b = self.files[indices[j]].display_name();
+                            if self.sort_order == SortOrder::Ascending {
+                                name_a > name_b
+                            } else {
+                                name_a < name_b
+                            }
+                        } else if self.sort_order == SortOrder::Ascending {
+                            a > b
+                        } else {
+                            a < b
+                        }
+                    }
+                };
+                if should_swap {
+                    let temp = indices[i];
+                    indices[i] = indices[j];
+                    indices[j] = temp;
+                }
+            }
+        }
+
+        // Diziyi yeniden düzenle (üst dizin .. her zaman en üstte kalmalı)
+        let mut new_files = [FileItem::empty(); MAX_ITEMS];
+        let mut write_idx = 0usize;
+
+        // .. öğesini en başa al
+        for i in 0..self.file_count {
+            if self.files[indices[i]].display_name() == ".." {
+                new_files[write_idx] = self.files[indices[i]];
+                write_idx += 1;
+                break;
+            }
+        }
+
+        // Klasörleri sonra dosyaları ekle
+        for i in 0..self.file_count {
+            let idx = indices[i];
+            if self.files[idx].display_name() != ".." && self.files[idx].is_dir {
+                new_files[write_idx] = self.files[idx];
+                write_idx += 1;
+            }
+        }
+
+        for i in 0..self.file_count {
+            let idx = indices[i];
+            if !self.files[idx].is_dir && self.files[idx].display_name() != ".." {
+                new_files[write_idx] = self.files[idx];
+                write_idx += 1;
+            }
+        }
+
+        self.files = new_files;
+        // Seçimi koru
+        if self.selected_idx < self.file_count {
+            self.selected_idx = 0;
+        }
+    }
+
+    /// Izgaradaki sütun sayısı (liste genişliğine göre).
+    fn grid_columns(list_w: usize) -> usize {
+        (list_w / GRID_CELL_W).max(1)
+    }
+
+    /// Liste alanının sol X konumu (pencereye göre).
+    pub fn list_x(win_x: usize) -> usize { win_x + 110 + 14 }
+
+    /// Liste alanının genişliği. Önizleme paneli açıkken daralır.
+    pub fn list_width(&self, win_w: usize) -> usize {
+        let w = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        if self.preview_open {
+            w.saturating_sub(PREVIEW_W + 8)
+        } else {
+            w
+        }
+    }
+
+    /// Hızlı Önizleme panelinin ekran koordinatları (x, y, w, h).
+    pub fn preview_rect(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let thick = scrollbar::SCROLLBAR_THICKNESS;
+        let w = PREVIEW_W.min(win_w.saturating_sub(150));
+        let x = win_x + win_w.saturating_sub(thick + 14 + w);
+        let y = win_y + 60;
+        let h = win_h.saturating_sub(60 + STATUS_H);
+        (x, y, w, h)
+    }
+
+    /// Bir öğenin ekran üzerindeki dikdörtgeni (geçerli görünüm moduna göre).
+    pub fn item_rect(&self, win_x: usize, win_y: usize, win_w: usize, idx: usize, sy: usize) -> (usize, usize, usize, usize) {
+        let lx = Self::list_x(win_x);
+        let lw = self.list_width(win_w);
+        let top = win_y + LIST_TOP;
+        match self.view_mode {
+            ViewMode::List => (lx, (top + idx * ROW_H).saturating_sub(sy), lw, ROW_H),
+            ViewMode::Grid => {
+                let cols = Self::grid_columns(lw);
+                let col = idx % cols;
+                let row = idx / cols;
+                (lx + col * GRID_CELL_W, (top + row * GRID_CELL_H).saturating_sub(sy), GRID_CELL_W, GRID_CELL_H)
+            }
+        }
+    }
+
+    /// Fare konumundaki öğe indeksini döndürür (liste/ızgara bağımsız).
+    pub fn hit_test(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize, mx: usize, my: usize, sy: usize) -> Option<usize> {
+        let lx = Self::list_x(win_x);
+        let lw = self.list_width(win_w);
+        let top = win_y + LIST_TOP;
+        let bottom = win_y + win_h.saturating_sub(STATUS_H);
+        if mx < lx || mx >= lx + lw || my < top || my >= bottom {
+            return None;
+        }
+        for i in 0..self.file_count {
+            if crate::gui::in_rect(mx, my, self.item_rect(win_x, win_y, win_w, i, sy)) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// İçeriğin toplam yüksekliği (kaydırma için).
+    pub fn content_height(&self, win_w: usize) -> usize {
+        match self.view_mode {
+            ViewMode::List => self.file_count * ROW_H,
+            ViewMode::Grid => {
+                let cols = Self::grid_columns(self.list_width(win_w));
+                let rows = (self.file_count + cols - 1) / cols;
+                rows * GRID_CELL_H
+            }
+        }
+    }
+
+    /// Bir sayfaya sığan öğe sayısı (PageUp/PageDown adımı).
+    pub fn page_step(&self, win_w: usize, view_h: usize) -> usize {
+        match self.view_mode {
+            ViewMode::List => (view_h / ROW_H).max(1),
+            ViewMode::Grid => {
+                let cols = Self::grid_columns(self.list_width(win_w));
+                (view_h / GRID_CELL_H).max(1) * cols
+            }
+        }
+    }
+
     pub fn focus_next_control(&mut self) {
         self.focused_control = (self.focused_control + 1) % 6;
     }
@@ -167,6 +566,69 @@ impl FileManagerApp {
         if self.selected_idx + 1 < self.file_count {
             self.selected_idx += 1;
         }
+    }
+
+    /// Yukarı ok: listede bir öğe, ızgarada bir satır (sütun kadar) yukarı.
+    pub fn move_selection_up(&mut self, win_w: usize) {
+        if self.file_count == 0 {
+            return;
+        }
+        let step = match self.view_mode {
+            ViewMode::List => 1,
+            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
+        };
+        self.selected_idx = self.selected_idx.saturating_sub(step.max(1));
+    }
+
+    /// Aşağı ok: listede bir öğe, ızgarada bir satır (sütun kadar) aşağı.
+    pub fn move_selection_down(&mut self, win_w: usize) {
+        if self.file_count == 0 {
+            return;
+        }
+        let step = match self.view_mode {
+            ViewMode::List => 1,
+            ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
+        };
+        self.selected_idx = (self.selected_idx + step.max(1)).min(self.file_count - 1);
+    }
+
+    /// Sol ok: yalnızca ızgarada önceki hücre.
+    pub fn move_selection_left(&mut self) {
+        if self.view_mode == ViewMode::Grid && self.selected_idx > 0 {
+            self.selected_idx -= 1;
+        }
+    }
+
+    /// Sağ ok: yalnızca ızgarada sonraki hücre.
+    pub fn move_selection_right(&mut self) {
+        if self.view_mode == ViewMode::Grid && self.selected_idx + 1 < self.file_count {
+            self.selected_idx += 1;
+        }
+    }
+
+    /// Seçili öğeyi görünür tutacak kaydırma konusunu döndürür.
+    /// Hem liste hem ızgara yerleşimine göre hesaplar.
+    pub fn ensure_selection_visible(&self, win_w: usize, view_h: usize, scroll_y: usize) -> usize {
+        if view_h == 0 || self.file_count == 0 {
+            return scroll_y;
+        }
+        let max_off = self.content_height(win_w).saturating_sub(view_h);
+        let (item_top, item_h) = match self.view_mode {
+            ViewMode::List => (self.selected_idx * ROW_H, ROW_H),
+            ViewMode::Grid => {
+                let cols = Self::grid_columns(self.list_width(win_w));
+                let row = self.selected_idx / cols;
+                (row * GRID_CELL_H, GRID_CELL_H)
+            }
+        };
+        let item_bottom = item_top + item_h;
+        let mut sy = scroll_y.min(max_off);
+        if item_top < sy {
+            sy = item_top;
+        } else if item_bottom > sy + view_h {
+            sy = item_bottom.saturating_sub(view_h);
+        }
+        sy.min(max_off)
     }
 
     /// Satır yüksekliği (px) — kaydırma hesapları için.
@@ -217,6 +679,18 @@ impl FileManagerApp {
             drag_target: None,
             drag_items: [false; MAX_ITEMS],
             rename_cursor: 0,
+            view_mode: ViewMode::List,
+            sort_by: SortBy::Name,
+            sort_order: SortOrder::Ascending,
+            preview_open: false,
+            preview_kind: PreviewKind::Empty,
+            preview_title: TextBuf::new(),
+            preview_meta: TextBuf::new(),
+            preview_lines: [TextBuf::new(); PREVIEW_LINES],
+            preview_line_count: 0,
+            preview_key: TextBuf::new(),
+            preview_has_img: false,
+            thumbs: Vec::new(),
             item_counter: 1,
         }
     }
@@ -338,7 +812,149 @@ impl FileManagerApp {
             self.file_count += 1;
         }
 
+        // Izgara / önizleme için gerekliyse küçük resimleri (thumbnail) tazele.
+        self.thumbs.clear();
+        if self.view_mode == ViewMode::Grid || self.preview_open {
+            self.rebuild_thumbs(vfs);
+        }
+        self.preview_key.clear();
+        if self.preview_open {
+            self.update_preview(vfs);
+        }
+
+        // Mevcut sıralama kriterine göre dosyaları sırala
+        self.resort_files();
+
         self.status = "";
+    }
+
+    /// Görünür öğeler için BMP küçük resimlerini (thumbnail) çözer.
+    fn rebuild_thumbs(&mut self, vfs: &VirtualFileSystem) {
+        self.thumbs.clear();
+        let mut budget = 48usize;
+        let base = String::from(self.path());
+        for i in 0..self.file_count {
+            let file = self.files[i];
+            let is_img = !file.is_dir && file.icon_tag == "IMG";
+            if !is_img || budget == 0 {
+                self.thumbs.push(None);
+                continue;
+            }
+            let mut full = base.clone();
+            if !full.ends_with('/') { full.push('/'); }
+            full.push_str(file.display_name());
+            let thumb = vfs.read_file(&full).and_then(|d| {
+                if d.len() > THUMB_MAX_BYTES { None } else { Thumb::from_bmp(d) }
+            });
+            if thumb.is_some() { budget -= 1; }
+            self.thumbs.push(thumb);
+        }
+    }
+
+    /// Hızlı Önizleme panelinin içeriğini seçili öğeye göre yeniler.
+    /// Yalnızca seçim/konum değiştiğinde gerçekten çalışır (önbellek anahtarı).
+    /// Değişiklik olduysa `true` döner.
+    pub fn update_preview(&mut self, vfs: &VirtualFileSystem) -> bool {
+        if !self.preview_open { return false; }
+        let mut key = TextBuf::new();
+        key.push_str(self.path());
+        if self.selected_idx < self.file_count {
+            key.push_byte(b'/');
+            key.push_str(self.files[self.selected_idx].display_name());
+        }
+        if key.as_str() == self.preview_key.as_str() {
+            return false;
+        }
+        self.preview_key = key;
+        self.preview_line_count = 0;
+        self.preview_has_img = false;
+        self.preview_title = TextBuf::new();
+        self.preview_meta = TextBuf::new();
+        for l in self.preview_lines.iter_mut() { *l = TextBuf::new(); }
+
+        if self.selected_idx >= self.file_count {
+            self.preview_kind = PreviewKind::Empty;
+            return true;
+        }
+        let item = self.files[self.selected_idx];
+        let name = item.display_name();
+        if name == ".." {
+            self.preview_kind = PreviewKind::Empty;
+            return true;
+        }
+        self.preview_title.push_str(name);
+        let full = self.selected_full_path();
+
+        if item.is_dir {
+            self.preview_kind = PreviewKind::Directory;
+            let entries = vfs.list_dir(&full);
+            let mut meta = TextBuf::new();
+            meta.push_usize(entries.len());
+            meta.push_str(crate::gui::ui_text(" öğe", " items"));
+            self.preview_meta = meta;
+            let n = entries.len().min(PREVIEW_LINES);
+            for k in 0..n {
+                self.preview_lines[k].push_str(entries[k].name.as_str());
+            }
+            self.preview_line_count = n;
+        } else {
+            let mut meta = TextBuf::new();
+            meta.push_str(item.file_type);
+            meta.push_str(" - ");
+            meta.push_str(item.size_str.as_str());
+            self.preview_meta = meta;
+            match item.icon_tag {
+                "TXT" | "CFG" | "LOG" => {
+                    self.preview_kind = PreviewKind::Text;
+                    if let Some(data) = vfs.read_file(&full) {
+                        let mut start = 0usize;
+                        let mut i = 0usize;
+                        while i <= data.len() && self.preview_line_count < PREVIEW_LINES {
+                            if i == data.len() || data[i] == b'\n' {
+                                let mut line = &data[start..i];
+                                if line.last() == Some(&b'\r') { line = &line[..line.len() - 1]; }
+                                if let Ok(s) = core::str::from_utf8(line) {
+                                    self.preview_lines[self.preview_line_count].push_str(s);
+                                }
+                                self.preview_line_count += 1;
+                                start = i + 1;
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+                "IMG" => {
+                    self.preview_kind = PreviewKind::Image;
+                    // Önizleme sonradan (Space ile) açıldıysa küçük resim
+                    // önbelleği henüz boş olabilir; gerekiyorsa üret.
+                    if self.thumbs.get(self.selected_idx).and_then(|t| t.as_ref()).is_none() {
+                        self.rebuild_thumbs(vfs);
+                    }
+                    self.preview_has_img = self.thumbs.get(self.selected_idx).and_then(|t| t.as_ref()).is_some();
+                }
+                _ => {
+                    self.preview_kind = PreviewKind::File;
+                }
+            }
+        }
+        true
+    }
+
+    /// Küçük resmi ölçekli olarak çizer (merkezi `cx`, üst `cy`).
+    fn draw_thumb(fb: &mut Framebuffer, cx: usize, cy: usize, box_w: usize, box_h: usize, thumb: &Thumb) {
+        if thumb.w == 0 || thumb.h == 0 { return; }
+        let scale = (box_w / thumb.w).min(box_h / thumb.h).max(1);
+        let dw = thumb.w * scale;
+        let dh = thumb.h * scale;
+        let ox = cx + box_w.saturating_sub(dw) / 2;
+        let oy = cy + box_h.saturating_sub(dh) / 2;
+        fb.draw_rect(ox - 1, oy - 1, dw + 2, dh + 2, Color::BORDER);
+        for y in 0..thumb.h {
+            for x in 0..thumb.w {
+                let c = thumb.px[y * thumb.w + x];
+                fb.draw_rect(ox + x * scale, oy + y * scale, scale, scale, c);
+            }
+        }
     }
 
     pub fn select_row(&mut self, idx: usize, ctrl: bool, shift: bool) {
@@ -719,7 +1335,7 @@ impl FileManagerApp {
         for i in 0..self.file_count {
             if self.files[i].is_dir && Some(i) != self.drag_item {
                 if my >= list_top && my < list_bottom {
-                    let r = Self::row_rect_scrolled(win_x, win_y, win_w, i, sy);
+                    let r = self.item_rect(win_x, win_y, win_w, i, sy);
                     if crate::gui::in_rect(mx, my, r) {
                         return Some(DropTarget::Folder(i));
                     }
@@ -876,27 +1492,39 @@ impl FileManagerApp {
 
     /// Klasör Simgesi: Arka sekme, gövde, parlak sarı/amber kapak ve yukarı oku (..) desteği
     pub fn draw_folder_icon(fb: &mut Framebuffer, x: usize, y: usize, is_up: bool) {
+        Self::draw_folder_icon_sized(fb, x, y, 1, is_up);
+    }
+
+    /// Ölçekli klasör simgesi (ızgara görünümü için). `s` = ölçek çarpanı.
+    pub fn draw_folder_icon_sized(fb: &mut Framebuffer, x: usize, y: usize, s: usize, is_up: bool) {
+        let s = s.max(1);
         // Klasör Arka Sekmesi (Tab)
-        fb.draw_rect(x + 1, y, 6, 3, Color::ACCENT_YELLOW);
+        fb.draw_rect(x + 1 * s, y, 6 * s, 3 * s, Color::ACCENT_YELLOW);
         // Klasör Arka Gövdesi (Back Body)
-        fb.draw_rect(x + 1, y + 2, 14, 10, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -30));
+        fb.draw_rect(x + 1 * s, y + 2 * s, 14 * s, 10 * s, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -30));
         // Klasör Ön Kapağı (Front Flap - canlı parlak sarı)
-        fb.draw_rect(x, y + 4, 16, 9, Color::ACCENT_YELLOW);
+        fb.draw_rect(x, y + 4 * s, 16 * s, 9 * s, Color::ACCENT_YELLOW);
         // Üst kenar parıltısı (Highlight)
-        fb.draw_line(x + 1, y + 4, x + 15, y + 4, 0xFFE082);
+        fb.draw_line(x + 1 * s, y + 4 * s, x + 15 * s, y + 4 * s, 0xFFE082);
         // İnce alt kenarlık / gölge
-        fb.draw_line(x, y + 12, x + 15, y + 12, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -50));
+        fb.draw_line(x, y + 12 * s, x + 15 * s, y + 12 * s, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -50));
 
         // Eğer üst klasör ise (..) içine beyaz yukarı oku çiz
         if is_up {
-            fb.draw_line(x + 8, y + 6, x + 8, y + 10, Color::WHITE);
-            fb.draw_line(x + 7, y + 7, x + 9, y + 7, Color::WHITE);
-            fb.draw_line(x + 6, y + 8, x + 10, y + 8, Color::WHITE);
+            fb.draw_line(x + 8 * s, y + 6 * s, x + 8 * s, y + 10 * s, Color::WHITE);
+            fb.draw_line(x + 7 * s, y + 7 * s, x + 9 * s, y + 7 * s, Color::WHITE);
+            fb.draw_line(x + 6 * s, y + 8 * s, x + 10 * s, y + 8 * s, Color::WHITE);
         }
     }
 
     /// Belge / Dosya Simgesi: Katlanmış köşeli sayfa ve dosya türü vurgusu
     pub fn draw_file_icon(fb: &mut Framebuffer, x: usize, y: usize, tag: &str) {
+        Self::draw_file_icon_sized(fb, x, y, 1, tag);
+    }
+
+    /// Ölçekli dosya simgesi (ızgara görünümü için). `s` = ölçek çarpanı.
+    pub fn draw_file_icon_sized(fb: &mut Framebuffer, x: usize, y: usize, s: usize, tag: &str) {
+        let s = s.max(1);
         let accent = match tag {
             "3D" => Color::ACCENT_PINK,
             "IMG" => Color::ACCENT_YELLOW,
@@ -907,15 +1535,15 @@ impl FileManagerApp {
             _ => Color::TEXT_MAIN,
         };
         // Sayfa beyaz kağıt gövdesi
-        fb.draw_rect(x + 2, y + 1, 11, 13, Color::WHITE);
+        fb.draw_rect(x + 2 * s, y + 1 * s, 11 * s, 13 * s, Color::WHITE);
         // Sağ üst katlanmış köşe (Folded Corner)
-        fb.draw_rect(x + 9, y + 1, 4, 4, Color::TITLE_BAR);
+        fb.draw_rect(x + 9 * s, y + 1 * s, 4 * s, 4 * s, Color::TITLE_BAR);
         // İçerik satır çizgileri
-        fb.draw_line(x + 4, y + 5, x + 10, y + 5, accent);
-        fb.draw_line(x + 4, y + 7, x + 10, y + 7, accent);
-        fb.draw_line(x + 4, y + 9, x + 8, y + 9, accent);
+        fb.draw_line(x + 4 * s, y + 5 * s, x + 10 * s, y + 5 * s, accent);
+        fb.draw_line(x + 4 * s, y + 7 * s, x + 10 * s, y + 7 * s, accent);
+        fb.draw_line(x + 4 * s, y + 9 * s, x + 8 * s, y + 9 * s, accent);
         // İnce sayfa çerçevesi
-        fb.draw_rect_outline(x + 2, y + 1, 11, 13, Color::BORDER);
+        fb.draw_rect_outline(x + 2 * s, y + 1 * s, 11 * s, 13 * s, Color::BORDER);
     }
 
     /// Geri Dönüşüm Kutusu Simgesi: Kapaklı, çizgili bir çöp kutusu.
@@ -935,12 +1563,12 @@ impl FileManagerApp {
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState, is_copy: bool) {
         let sidebar_w = 110;
-        let list_x = win_x + sidebar_w + 14;
-        let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
+        let list_x = Self::list_x(win_x);
+        let list_w = self.list_width(win_w);
         let list_top = win_y + LIST_TOP;
         let list_bottom = win_y + win_h - STATUS_H;
         let list_view_h = list_bottom.saturating_sub(list_top);
-        let content_h = self.list_content_h();
+        let content_h = self.content_height(win_w);
         let sy = scroll.y.min(content_h.saturating_sub(list_view_h));
 
         // Üst Araç Çubuğu (Toolbar)
@@ -966,6 +1594,27 @@ impl FileManagerApp {
             let border = if is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
             fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg);
             fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, border);
+            let tw = MinGuiCompositor::text_width(label, 1);
+            let tx = r.0 + (r.2.saturating_sub(tw)) / 2;
+            let ty = r.1 + (r.3.saturating_sub(MinGuiCompositor::text_height())) / 2;
+            MinGuiCompositor::draw_string(fb, tx, ty, label, Color::TEXT_MAIN);
+        }
+
+        // Görünüm ve Önizleme düğmeleri
+        let view_label = if self.view_mode == ViewMode::Grid {
+            crate::gui::ui_text("Liste", "List")
+        } else {
+            crate::gui::ui_text("Izgara", "Grid")
+        };
+        let preview_active = self.preview_open;
+        let extra = [
+            (Self::view_button_rect(win_x, win_y, win_w), view_label, false, Color::ACCENT_GREEN),
+            (Self::preview_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Önizle", "Preview"), preview_active, Color::ACCENT_BLUE),
+        ];
+        for (r, label, active, accent) in extra {
+            let bg = if active { MinGuiCompositor::shade(accent, -120) } else { MinGuiCompositor::shade(Color::WINDOW_BG, 8) };
+            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg);
+            fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, if active { accent } else { Color::BORDER });
             let tw = MinGuiCompositor::text_width(label, 1);
             let tx = r.0 + (r.2.saturating_sub(tw)) / 2;
             let ty = r.1 + (r.3.saturating_sub(MinGuiCompositor::text_height())) / 2;
@@ -1041,79 +1690,176 @@ impl FileManagerApp {
             MinGuiCompositor::draw_string(fb, win_x + 28, iy + 2, item, col);
         }
 
-        // Sağ Liste Başlıkları
-        fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
+        // Sağ Liste Başlıkları (yalnız liste görünümünde).
         let col_name_x = list_x + 28;
         let col_type_x = list_x + 180;
         let col_size_x = list_x + 285;
         let col_size_w = list_w.saturating_sub(285);
+        fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
+        if self.view_mode == ViewMode::List {
+            // Sıralama göstergesi (ok)
+            let sort_arrow = if self.sort_order == SortOrder::Ascending { " ▲" } else { " ▼" };
 
-        MinGuiCompositor::draw_string_clipped(fb, col_name_x, win_y + 65, crate::gui::ui_text("Ad", "Name"), Color::TEXT_MUTED,
-            (col_name_x, win_y + 60, 145, 20));
-        if list_w > 210 {
-            MinGuiCompositor::draw_string_clipped(fb, col_type_x, win_y + 65, crate::gui::ui_text("Tür", "Type"), Color::TEXT_MUTED,
-                (col_type_x, win_y + 60, 95, 20));
-        }
-        if list_w > 320 {
-            let size_header = crate::gui::ui_text("Boyut", "Size");
-            let header_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_header, 1) + 6);
-            MinGuiCompositor::draw_string_clipped(fb, header_x, win_y + 65, size_header, Color::TEXT_MUTED,
-                (col_size_x, win_y + 60, col_size_w, 20));
+            let name_label = if self.sort_by == SortBy::Name {
+                crate::gui::ui_text("Ad", "Name")
+            } else {
+                crate::gui::ui_text("Ad", "Name")
+            };
+            let name_text = if self.sort_by == SortBy::Name {
+                let mut s = String::from(name_label);
+                s.push_str(sort_arrow);
+                s
+            } else {
+                String::from(name_label)
+            };
+            MinGuiCompositor::draw_string_clipped(fb, col_name_x, win_y + 65, name_text.as_str(), Color::TEXT_MUTED,
+                (col_name_x, win_y + 60, 145, 20));
+
+            if list_w > 210 {
+                let type_label = if self.sort_by == SortBy::Type {
+                    crate::gui::ui_text("Tür", "Type")
+                } else {
+                    crate::gui::ui_text("Tür", "Type")
+                };
+                let type_text = if self.sort_by == SortBy::Type {
+                    let mut s = String::from(type_label);
+                    s.push_str(sort_arrow);
+                    s
+                } else {
+                    String::from(type_label)
+                };
+                MinGuiCompositor::draw_string_clipped(fb, col_type_x, win_y + 65, type_text.as_str(), Color::TEXT_MUTED,
+                    (col_type_x, win_y + 60, 95, 20));
+            }
+            if list_w > 320 {
+                let size_header = crate::gui::ui_text("Boyut", "Size");
+                let size_text = if self.sort_by == SortBy::Size {
+                    let mut s = String::from(size_header);
+                    s.push_str(sort_arrow);
+                    s
+                } else {
+                    String::from(size_header)
+                };
+                let header_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text.as_str(), 1) + 6);
+                MinGuiCompositor::draw_string_clipped(fb, header_x, win_y + 65, size_text.as_str(), Color::TEXT_MUTED,
+                    (col_size_x, win_y + 60, col_size_w, 20));
+            }
+        } else {
+            MinGuiCompositor::draw_string_clipped(fb, list_x + 8, win_y + 65,
+                crate::gui::ui_text("Izgara görünümü", "Grid view"), Color::TEXT_MUTED,
+                (list_x + 6, win_y + 60, list_w.saturating_sub(12), 20));
         }
 
-        // Dosya ve Klasör Listesi
+        // Dosya ve Klasör Listesi / Izgarası.
         for i in 0..self.file_count {
-            let row_y = list_top + i * ROW_H;
-            let draw_y = row_y.saturating_sub(sy);
-            if row_y + ROW_H <= list_top + sy || row_y >= list_top + sy + list_view_h {
+            let (ix, draw_y, iw, ih) = self.item_rect(win_x, win_y, win_w, i, sy);
+            if draw_y + ih <= list_top || draw_y >= list_bottom {
                 continue;
             }
             let file = &self.files[i];
             let is_sel = self.is_row_selected(i);
             let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
             let is_drag_source = self.drag_active && self.drag_item == Some(i);
-
-            if is_drag_target {
-                let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
-                fb.draw_rounded_rect(list_x, draw_y, list_w, ROW_H - 2, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
-                fb.draw_rounded_rect_outline(list_x, draw_y, list_w, ROW_H - 2, 3, target_color);
-            } else if is_drag_source {
-                fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
-                fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::TEXT_MUTED);
-            } else if is_sel {
-                fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
-                if self.focused_control == 5 {
-                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_BLUE);
-                }
-            }
-
             let is_up = file.display_name() == "..";
-            if file.is_dir {
-                Self::draw_folder_icon(fb, list_x + 6, draw_y + 3, is_up);
-            } else {
-                Self::draw_file_icon(fb, list_x + 6, draw_y + 3, file.icon_tag);
-            }
+            let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
 
-            let name_col = if is_drag_target {
-                if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE }
-            } else if is_sel {
-                MinGuiCompositor::text_on(Color::TITLE_BAR)
-            } else {
-                Color::TEXT_MAIN
-            };
-            MinGuiCompositor::draw_string_clipped(fb, col_name_x, draw_y + 4, file.display_name(), name_col,
-                (col_name_x, draw_y + 2, 145, ROW_H - 4));
+            if self.view_mode == ViewMode::List {
+                if is_drag_target {
+                    fb.draw_rounded_rect(list_x, draw_y, list_w, ROW_H - 2, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                    fb.draw_rounded_rect_outline(list_x, draw_y, list_w, ROW_H - 2, 3, target_color);
+                } else if is_drag_source {
+                    fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
+                    fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::TEXT_MUTED);
+                } else if is_sel {
+                    fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
+                    if self.focused_control == 5 {
+                        fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::ACCENT_BLUE);
+                    }
+                }
 
-            if list_w > 210 {
-                MinGuiCompositor::draw_string_clipped(fb, col_type_x, draw_y + 4, file.file_type, Color::TEXT_MUTED,
-                    (col_type_x, draw_y + 2, 95, ROW_H - 4));
+                if file.is_dir {
+                    Self::draw_folder_icon(fb, list_x + 6, draw_y + 3, is_up);
+                } else {
+                    Self::draw_file_icon(fb, list_x + 6, draw_y + 3, file.icon_tag);
+                }
+
+                let name_col = if is_drag_target {
+                    target_color
+                } else if is_sel {
+                    MinGuiCompositor::text_on(Color::TITLE_BAR)
+                } else {
+                    Color::TEXT_MAIN
+                };
+                MinGuiCompositor::draw_string_clipped(fb, col_name_x, draw_y + 4, file.display_name(), name_col,
+                    (col_name_x, draw_y + 2, 145, ROW_H - 4));
+
+                if list_w > 210 {
+                    MinGuiCompositor::draw_string_clipped(fb, col_type_x, draw_y + 4, file.file_type, Color::TEXT_MUTED,
+                        (col_type_x, draw_y + 2, 95, ROW_H - 4));
+                }
+                if list_w > 320 {
+                    let size_text = file.size_str.as_str();
+                    let size_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text, 1) + 6);
+                    MinGuiCompositor::draw_string_clipped(fb, size_x, draw_y + 4, size_text, Color::TEXT_MAIN,
+                        (col_size_x, draw_y + 2, col_size_w, ROW_H - 4));
+                }
+            } else {
+                // Izgara kartı: büyük simge veya küçük resim + ad + tür.
+                if is_drag_target {
+                    fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                    fb.draw_rounded_rect_outline(ix, draw_y, iw, ih - 4, 5, target_color);
+                } else if is_drag_source {
+                    fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
+                    fb.draw_rounded_rect_outline(ix, draw_y, iw, ih - 4, 5, Color::TEXT_MUTED);
+                } else if is_sel {
+                    fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, Color::TITLE_BAR);
+                    if self.focused_control == 5 {
+                        fb.draw_rounded_rect_outline(ix, draw_y, iw, ih - 4, 5, Color::ACCENT_BLUE);
+                    }
+                }
+
+                let icon_box_w = 64usize;
+                let icon_box_h = 54usize;
+                let icon_x = ix + iw.saturating_sub(icon_box_w) / 2;
+                let icon_y = draw_y + 6;
+                let thumb = self.thumbs.get(i).and_then(|t| t.as_ref());
+                if let Some(t) = thumb {
+                    Self::draw_thumb(fb, icon_x, icon_y, icon_box_w, icon_box_h, t);
+                } else if file.is_dir {
+                    let s = 3usize;
+                    Self::draw_folder_icon_sized(fb,
+                        icon_x + icon_box_w.saturating_sub(16 * s) / 2,
+                        icon_y + icon_box_h.saturating_sub(13 * s) / 2, s, is_up);
+                } else {
+                    let s = 3usize;
+                    Self::draw_file_icon_sized(fb,
+                        icon_x + icon_box_w.saturating_sub(15 * s) / 2,
+                        icon_y + icon_box_h.saturating_sub(15 * s) / 2, s, file.icon_tag);
+                }
+
+                let name_col = if is_drag_target {
+                    target_color
+                } else if is_sel {
+                    MinGuiCompositor::text_on(Color::TITLE_BAR)
+                } else {
+                    Color::TEXT_MAIN
+                };
+                let type_col = if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MUTED };
+                let cell_clip_w = iw.saturating_sub(6);
+                let name = file.display_name();
+                let name_tw = MinGuiCompositor::text_width(name, 1).min(cell_clip_w);
+                MinGuiCompositor::draw_string_clipped(fb, ix + iw.saturating_sub(name_tw) / 2, draw_y + ih - 36,
+                    name, name_col, (ix + 3, draw_y + ih - 38, cell_clip_w, 16));
+                let ftype = if file.is_dir { crate::gui::ui_text("Klasör", "Folder") } else { file.file_type };
+                let type_tw = MinGuiCompositor::text_width(ftype, 1).min(cell_clip_w);
+                MinGuiCompositor::draw_string_clipped(fb, ix + iw.saturating_sub(type_tw) / 2, draw_y + ih - 20,
+                    ftype, type_col, (ix + 3, draw_y + ih - 22, cell_clip_w, 16));
             }
-            if list_w > 320 {
-                let size_text = file.size_str.as_str();
-                let size_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text, 1) + 6);
-                MinGuiCompositor::draw_string_clipped(fb, size_x, draw_y + 4, size_text, Color::TEXT_MAIN,
-                    (col_size_x, draw_y + 2, col_size_w, ROW_H - 4));
-            }
+        }
+
+        // Hızlı Önizleme paneli.
+        if self.preview_open {
+            self.render_preview(fb, win_x, win_y, win_w, win_h);
         }
 
         // Alt Durum Çubuğu
@@ -1139,6 +1885,71 @@ impl FileManagerApp {
             let cx = win_x + 12 + MinGuiCompositor::text_width(crate::gui::ui_text("Yeni ad: ", "New name: "), 1)
                 + MinGuiCompositor::text_width(prefix, 1);
             fb.draw_rect(cx, status_y + 4, 1, 12, Color::ACCENT_BLUE);
+        }
+    }
+
+    /// Hızlı Önizleme panelini çizer (seçili öğe bilgisi + içerik/metin/küçük resim).
+    pub fn render_preview(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
+        let (px, py, pw, ph) = self.preview_rect(win_x, win_y, win_w, win_h);
+        if pw < 40 || ph < 40 { return; }
+        fb.draw_rect(px, py, pw, ph, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(px, py, pw, 20, Color::TITLE_BAR);
+        MinGuiCompositor::draw_string_clipped(fb, px + 8, py + 4,
+            crate::gui::ui_text("Hızlı Önizleme", "Quick Preview"), Color::ACCENT_BLUE,
+            (px + 6, py + 2, pw.saturating_sub(12), 18));
+
+        let inner_x = px + 8;
+        let inner_w = pw.saturating_sub(16);
+        let clip = (inner_x, py + 22, inner_w, ph.saturating_sub(28));
+        let mut yy = py + 26;
+
+        if self.preview_kind == PreviewKind::Empty {
+            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy,
+                crate::gui::ui_text("Seçim yok", "No selection"), Color::TEXT_MUTED, clip);
+            return;
+        }
+
+        // Küçük resim veya büyük tür simgesi.
+        if self.preview_kind == PreviewKind::Image && self.preview_has_img {
+            if let Some(t) = self.thumbs.get(self.selected_idx).and_then(|t| t.as_ref()) {
+                let box_w = inner_w.min(180);
+                let box_h = 110usize.min(ph / 2);
+                Self::draw_thumb(fb, inner_x, yy, box_w, box_h, t);
+                yy += box_h + 8;
+            }
+        } else {
+            let is_dir = self.preview_kind == PreviewKind::Directory;
+            if is_dir {
+                Self::draw_folder_icon_sized(fb, inner_x, yy, 2, false);
+            } else {
+                let tag = self.files.get(self.selected_idx).map(|f| f.icon_tag).unwrap_or("");
+                Self::draw_file_icon_sized(fb, inner_x, yy, 2, tag);
+            }
+            yy += 34;
+        }
+
+        // Başlık (ad), meta (tür/boyut), ayraç ve içerik satırları.
+        MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_title.as_str(), Color::TEXT_MAIN, clip);
+        yy += 16;
+        MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_meta.as_str(), Color::ACCENT_GREEN, clip);
+        yy += 16;
+        fb.draw_rect(inner_x, yy, inner_w, 1, Color::BORDER);
+        yy += 6;
+
+        let line_h = 13usize;
+        for k in 0..self.preview_line_count {
+            if yy + line_h > py + ph - 4 { break; }
+            let col = match self.preview_kind {
+                PreviewKind::Text => Color::TEXT_MAIN,
+                _ => Color::TEXT_MUTED,
+            };
+            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_lines[k].as_str(), col, clip);
+            yy += line_h;
+        }
+        if self.preview_kind == PreviewKind::File {
+            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy,
+                crate::gui::ui_text("(ikili dosya - önizleme yok)", "(binary file - no preview)"),
+                Color::TEXT_MUTED, clip);
         }
     }
 }

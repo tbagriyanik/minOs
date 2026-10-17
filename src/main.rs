@@ -726,8 +726,8 @@ fn window_content_h(
     np: &apps::notepad::NotepadApp,
 ) -> usize {
     match app_id {
-        // Dosya Yöneticisi: liste içeriği (üst araç çubuğu + satırlar + durum çubuğu).
-        0 => apps::filemanager::list_top() + fm.list_content_h() + 30,
+        // Dosya Yöneticisi: geçerli görünümün (liste/ızgara) içerik yüksekliği.
+        0 => apps::filemanager::list_top() + fm.content_height(win_w) + 30,
         // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
         // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
         2 => {
@@ -760,25 +760,17 @@ fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps
     let Some((idx, w)) = focused_window_for_app(compositor, 0) else { return; };
     let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
     if view_h == 0 { return; }
-    let row_h = apps::filemanager::FileManagerApp::row_h();
-    let max_off = fm.list_content_h().saturating_sub(view_h);
-    let row_top = fm.selected_idx.saturating_mul(row_h);
-    let row_bottom = row_top + row_h;
-    let mut sy = w.scroll.y.min(max_off);
-    if row_top < sy {
-        sy = row_top;
-    } else if row_bottom > sy + view_h {
-        sy = row_bottom - view_h;
-    }
+    let sy = fm.ensure_selection_visible(w.width, view_h, w.scroll.y);
     if let Some(wm) = compositor.windows[idx].as_mut() {
-        wm.scroll.y = sy.min(max_off);
+        wm.scroll.y = sy;
     }
 }
 
-/// Dosya Yöneticisi listesinde bir sayfaya sığan satır sayısı (PageUp/PageDown).
-fn fm_page_rows(w: &gui::Window) -> usize {
+/// Dosya Yöneticisi sayfa adımı: listede görünür satır sayısı,
+/// ızgarada görünür satır x sütun sayısı (PageUp/PageDown).
+fn fm_page_rows(w: &gui::Window, fm: &apps::filemanager::FileManagerApp) -> usize {
     let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
-    (view_h / apps::filemanager::FileManagerApp::row_h()).max(1)
+    fm.page_step(w.width, view_h.max(1))
 }
 
 /// Terminal çıktı panelinde görünen satır sayısı (tekerlek ve sayfa gezinmesine ortak).
@@ -1272,6 +1264,8 @@ pub extern "C" fn _start() -> ! {
 
     // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
     serial_print("[BOOT] Gecis animasyonu bitti; arayuz kuruluyor.\n");
+    // Widget/Component ağacı mimarisini (yerleşim, Tab odağı, olaylar) doğrula.
+    gui::widget::self_test(&mut fb);
     if !installed {
         // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
         let mut welcome_was_left_down = false;
@@ -1420,6 +1414,8 @@ pub extern "C" fn _start() -> ! {
     let mut resize_orig: (usize, usize, usize, usize) = (0, 0, 0, 0);
     let mut drag_offset_x = 0;
     let mut drag_offset_y = 0;
+    // Aero Snap önizleme dikdörtgeni: (x, y, w, h)
+    let mut active_snap_preview: Option<(usize, usize, usize, usize)> = None;
     // Kaydırma çubuğu sürükleme: (idx, thumb_üst_ofset, thumb_h, track_h, content_h, view_h)
     let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
     let mut anim_tick: usize = 0;
@@ -1444,6 +1440,14 @@ pub extern "C" fn _start() -> ! {
     let mut screenshot_counter: usize = 1;
     let mut run_dialog_open = false;
     let mut run_dialog_input = gui::TextBuf::new();
+
+    // Dosya / Klasör Özellikler (Properties) Modalı
+    let mut properties_open = false;
+    let mut properties_name = gui::TextBuf::new();
+    let mut properties_path = gui::TextBuf::new();
+    let mut properties_type = gui::TextBuf::new();
+    let mut properties_size = gui::TextBuf::new();
+    let mut properties_location = gui::TextBuf::new();
 
 
     let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
@@ -1471,7 +1475,12 @@ pub extern "C" fn _start() -> ! {
                              tick: usize,
                              app_render_cycles: &mut [u64; gui::MAX_WINDOWS],
                              run_dialog_state: (bool, &gui::TextBuf),
-                             _dirty_rect: Option<(usize, usize, usize, usize)>| {
+                             properties_state: (bool, &gui::TextBuf, &gui::TextBuf, &gui::TextBuf, &gui::TextBuf, &gui::TextBuf),
+                             snap_preview: Option<(usize, usize, usize, usize)>,
+                             dirty_rect: Option<(usize, usize, usize, usize)>| {
+        // Kirli dikdörtgen verildiyse yalnızca bu bölge çizilip blit edilir;
+        // aksi halde tüm ekran yeniden çizilir.
+        fb.set_frame_clip(dirty_rect);
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
         // /desktop içeriğini masaüstü simgeleri olarak çiz.
@@ -1509,6 +1518,18 @@ pub extern "C" fn _start() -> ! {
                     || win.x.saturating_add(win.width) == win.x
                     || win.y.saturating_add(win.height) == win.y {
                     continue;
+                }
+                // Kirli bölgeyle kesişmeyen pencereyi hiç çizme (gölge payı dahil).
+                if let Some((dx, dy, dw, dh)) = dirty_rect {
+                    let wx0 = win.x.saturating_sub(8);
+                    let wy0 = win.y.saturating_sub(8);
+                    let wx1 = win.x.saturating_add(win.width).saturating_add(8);
+                    let wy1 = win.y.saturating_add(win.height).saturating_add(8);
+                    let overlaps = dx < wx1 && wx0 < dx.saturating_add(dw)
+                        && dy < wy1 && wy0 < dy.saturating_add(dh);
+                    if !overlaps {
+                        continue;
+                    }
                 }
                 compositor.render_window_frame(fb, &win, mouse, idx);
 
@@ -1576,6 +1597,13 @@ pub extern "C" fn _start() -> ! {
         }
         fb.reset_clip();
 
+        // Aero Snap Önizleme Çerçevesi (Pencere ekrana yaslanırken yarı saydam/kesikli gösterim)
+        if let Some((sx, sy, sw, sh)) = snap_preview {
+            fb.draw_rounded_rect_alpha(sx, sy, sw, sh, 4, gui::Color::ACCENT_BLUE, 55);
+            fb.draw_rounded_rect_outline(sx, sy, sw, sh, 4, gui::Color::ACCENT_BLUE);
+            fb.draw_rounded_rect_outline(sx + 1, sy + 1, sw.saturating_sub(2), sh.saturating_sub(2), 4, gui::Color::WHITE);
+        }
+
         // 3. Görev Çubuğu, sistem tepsisi, popup'lar ve fare imleci
         compositor.render_taskbar_and_overlays(
             fb, mouse, kbd, now, st.volume, st.is_muted, st.language.is_english(),
@@ -1623,10 +1651,96 @@ pub extern "C" fn _start() -> ! {
                 gui::Color::TEXT_MUTED);
         }
 
-        // 4. Backbuffer'ı VRAM'e kopyala (tam ekran temiz ve hatasız yenileme)
-        fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
-        fb.flush();
+        // Dosya / Klasör Özellikler (Properties) Modalı
+        if properties_state.0 {
+            let pw = 340usize.min(fb.width.saturating_sub(20));
+            let ph = 260usize.min(fb.height.saturating_sub(40));
+            let px = fb.width.saturating_sub(pw) / 2;
+            let py = fb.height.saturating_sub(ph) / 2;
+
+            // Gölge ve modern kart gövdesi
+            fb.draw_shadow(px, py, pw, ph, 0x000000);
+            fb.draw_rounded_rect(px, py, pw, ph, 8, gui::Color::WINDOW_BG);
+            fb.draw_rounded_rect_outline(px, py, pw, ph, 8, gui::Color::ACCENT_BLUE);
+
+            // Başlık çubuğu
+            fb.draw_rect(px, py, pw, 28, gui::Color::TITLE_BAR);
+            let prop_title = gui::ui_text("Özellikler", "Properties");
+            gui::MinGuiCompositor::draw_string(fb, px + 12, py + 7, prop_title, gui::Color::WHITE);
+
+            // Kapatma butonu (Sağ üst 'X')
+            let close_r = (px + pw.saturating_sub(24), py + 6, 16, 16);
+            let mx = mouse.x as usize;
+            let my = mouse.y as usize;
+            let close_hover = gui::in_rect(mx, my, close_r);
+            fb.draw_rect(close_r.0, close_r.1, close_r.2, close_r.3, if close_hover { gui::Color::ACCENT_RED } else { gui::Color::TITLE_BAR });
+            gui::MinGuiCompositor::draw_string(fb, close_r.0 + 4, close_r.1 + 1, "x", gui::Color::WHITE);
+
+            // Dosya / Klasör İkonu
+            gui::MinGuiCompositor::draw_gear_icon(fb, px + 18, py + 38);
+
+            // Öğe Adı
+            let item_name = properties_state.1.as_str();
+            gui::MinGuiCompositor::draw_string_clipped(fb, px + 44, py + 42, item_name, gui::Color::TEXT_MAIN, (px + 44, py + 38, pw.saturating_sub(54), 20));
+
+            // Ayırıcı çizgi
+            fb.draw_rect(px + 14, py + 66, pw.saturating_sub(28), 1, gui::Color::BORDER);
+
+            // Detay Satırları
+            let label_col = gui::Color::TEXT_MUTED;
+            let val_col = gui::Color::TEXT_MAIN;
+            let start_y = py + 76;
+            let row_gap = 26;
+
+            // Tür:
+            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y, gui::ui_text("Tür:", "Type:"), label_col);
+            gui::MinGuiCompositor::draw_string_clipped(fb, px + 90, start_y, properties_state.2.as_str(), val_col, (px + 90, start_y, pw.saturating_sub(100), 20));
+
+            // Boyut:
+            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y + row_gap, gui::ui_text("Boyut:", "Size:"), label_col);
+            gui::MinGuiCompositor::draw_string_clipped(fb, px + 90, start_y + row_gap, properties_state.3.as_str(), val_col, (px + 90, start_y + row_gap, pw.saturating_sub(100), 20));
+
+            // Konum:
+            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y + row_gap * 2, gui::ui_text("Konum:", "Location:"), label_col);
+            gui::MinGuiCompositor::draw_string_clipped(fb, px + 90, start_y + row_gap * 2, properties_state.4.as_str(), val_col, (px + 90, start_y + row_gap * 2, pw.saturating_sub(100), 20));
+
+            // Tam Yol:
+            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y + row_gap * 3, gui::ui_text("Tam Yol:", "Full Path:"), label_col);
+            gui::MinGuiCompositor::draw_string_clipped(fb, px + 90, start_y + row_gap * 3, properties_state.5.as_str(), val_col, (px + 90, start_y + row_gap * 3, pw.saturating_sub(100), 20));
+
+            // Tamam (Kapat) Butonu
+            let ok_btn_w = 76;
+            let ok_btn_h = 24;
+            let ok_btn_x = px + (pw.saturating_sub(ok_btn_w)) / 2;
+            let ok_btn_y = py + ph.saturating_sub(34);
+            let ok_hover = gui::in_rect(mx, my, (ok_btn_x, ok_btn_y, ok_btn_w, ok_btn_h));
+            fb.draw_rounded_rect(ok_btn_x, ok_btn_y, ok_btn_w, ok_btn_h, 4, if ok_hover { gui::Color::ACCENT_BLUE } else { gui::Color::TITLE_BAR });
+            fb.draw_rounded_rect_outline(ok_btn_x, ok_btn_y, ok_btn_w, ok_btn_h, 4, gui::Color::BORDER);
+            let ok_text = gui::ui_text("Tamam", "OK");
+            let tw = gui::MinGuiCompositor::text_width(ok_text, 1);
+            gui::MinGuiCompositor::draw_string(fb, ok_btn_x + (ok_btn_w.saturating_sub(tw)) / 2, ok_btn_y + 4, ok_text, gui::Color::WHITE);
+        }
+
+        // 4. Backbuffer'ı VRAM'e kopyala.
+        //    Kirli dikdörtgen verildiyse yalnızca o bölge blit edilir ve mavi
+        //    ışık filtresi de sadece o bölgeye uygulanır; böylece kalan bölge
+        //    önceki karedeki (filtrelenmiş) hâlini korur.
+        let nl = if st.night_light { st.night_light_level } else { 0 };
+        let region = fb.base_clip();
+        if dirty_rect.is_some() {
+            fb.apply_night_light_rect(nl, region);
+            fb.flush_rect((region.x0, region.y0, region.x1 - region.x0, region.y1 - region.y0));
+        } else {
+            fb.apply_night_light(nl);
+            fb.flush();
+        }
+        fb.clear_frame_clip();
     };
+
+    // Karşılama bildirimi (Modern Toast)
+    let welcome_title = gui::ui_text("minOs'a Hoş Geldiniz", "Welcome to minOs");
+    let welcome_msg = gui::ui_text("Sistem hazır. Başlat menüsü ve kısayollar aktif.", "System is ready. Start menu and shortcuts active.");
+    compositor.push_toast(gui::ToastKind::Info, welcome_title, welcome_msg, monotonic_ms(), 5500);
 
     // İlk kareyi çiz (tüm ekran)
     render_full_frame(
@@ -1635,11 +1749,14 @@ pub extern "C" fn _start() -> ! {
         &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
         (run_dialog_open, &run_dialog_input),
+        (properties_open, &properties_name, &properties_type, &properties_size, &properties_location, &properties_path),
+        None,
         None,
     );
 
     let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
     let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
+    let mut _app_dirty_rect: Option<(usize, usize, usize, usize)> = None;
 
     // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
     serial_print("[BOOT] Masaustu dongusu basladi.\n");
@@ -1663,6 +1780,14 @@ pub extern "C" fn _start() -> ! {
         if clock_now_ms.wrapping_sub(last_clock_update_ms) >= 1_000 {
             last_clock_update_ms = clock_now_ms;
             now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+            force_render = true;
+        }
+
+        // Toast bildirim sürelerini güncelle
+        let had_toasts = compositor.toasts.iter().any(|t| t.is_some());
+        compositor.update_toasts(clock_now_ms);
+        let has_toasts = compositor.toasts.iter().any(|t| t.is_some());
+        if had_toasts != has_toasts {
             force_render = true;
         }
 
@@ -1704,17 +1829,9 @@ pub extern "C" fn _start() -> ! {
                         compositor.focus_window(idx);
                         hit_window = Some((idx, gui::ContextKind::Notepad));
                     } else if idx == 0 {
-                        let list_x = win.x + 124;
-                        if mx >= list_x && mx <= win.x + win.width - 10 {
-                            let row_y_base = win.y + 86;
-                            for i in 0..filemanager_app.file_count {
-                                let item_y = row_y_base + i * 24;
-                                if my >= item_y.saturating_sub(2) && my <= item_y + 20 {
-                                    compositor.context_file_idx = Some(i);
-                                    filemanager_app.selected_idx = i;
-                                    break;
-                                }
-                            }
+                        if let Some(i) = filemanager_app.hit_test(win.x, win.y, win.width, win.height, mx, my, win.scroll.y) {
+                            compositor.context_file_idx = Some(i);
+                            filemanager_app.selected_idx = i;
                         }
                         compositor.focus_window(idx);
                         hit_window = Some((idx, gui::ContextKind::FileManager));
@@ -1814,6 +1931,10 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     consumed = true;
                 }
+            }
+            if !consumed && compositor.toast_click(width, tb_y, mx, my) {
+                consumed = true;
+                force_render = true;
             }
             // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
             // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
@@ -2059,6 +2180,26 @@ pub extern "C" fn _start() -> ! {
                                         if let Some(file_idx) = compositor.context_file_idx {
                                             filemanager_app.selected_idx = file_idx;
                                             filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                        }
+                                    }
+                                    8 => { // Özellikler
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            filemanager_app.selected_idx = file_idx;
+                                            if file_idx < filemanager_app.file_count {
+                                                let file = &filemanager_app.files[file_idx];
+                                                properties_name.clear();
+                                                properties_name.push_str(file.display_name());
+                                                properties_type.clear();
+                                                properties_type.push_str(file.file_type);
+                                                properties_size.clear();
+                                                properties_size.push_str(file.size_str.as_str());
+                                                properties_location.clear();
+                                                properties_location.push_str(filemanager_app.path());
+                                                properties_path.clear();
+                                                let full_path = filemanager_app.selected_full_path();
+                                                properties_path.push_str(&full_path);
+                                                properties_open = true;
+                                            }
                                         }
                                     }
                                     _ => {}
@@ -2568,6 +2709,24 @@ pub extern "C" fn _start() -> ! {
                                             open_app(&mut compositor, 12);
                                         }
                                     }
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::view_button_rect(wx, wy, ww)) {
+                                    filemanager_app.toggle_view_mode();
+                                    filemanager_app.ensure_thumbs(&fs_mgr.vfs);
+                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::preview_button_rect(wx, wy, ww)) {
+                                    filemanager_app.toggle_preview();
+                                    filemanager_app.ensure_thumbs(&fs_mgr.vfs);
+                                    filemanager_app.update_preview(&fs_mgr.vfs);
+                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::header_name_rect(wx, wy, ww)) {
+                                    filemanager_app.cycle_sort_by();
+                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::header_size_rect(wx, wy, ww)) {
+                                    filemanager_app.cycle_sort_by();
+                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::header_type_rect(wx, wy, ww)) {
+                                    filemanager_app.cycle_sort_by();
+                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                                 } else if mx >= wx + 6 && mx < wx + 116 && my >= wy + 66 && my < wy + 66 + 10 * 22 {
                                     let nav = (my.saturating_sub(wy + 66)) / 22;
                                     let target_path = match nav {
@@ -2589,7 +2748,7 @@ pub extern "C" fn _start() -> ! {
                                     let list_top = wy + apps::filemanager::LIST_TOP;
                                     let list_bottom = wy + wh.saturating_sub(30);
                                     for i in 0..filemanager_app.file_count {
-                                        if my >= list_top && my < list_bottom && gui::in_rect(mx, my, apps::filemanager::FileManagerApp::row_rect_scrolled(wx, wy, ww, i, sy)) {
+                                        if my >= list_top && my < list_bottom && gui::in_rect(mx, my, filemanager_app.item_rect(wx, wy, ww, i, sy)) {
                                             filemanager_app.select_row(i, keyboard.ctrl, keyboard.shift);
                                             let now_ms = monotonic_ms();
                                             let is_double_click = filemanager_app.last_click_idx == Some(i)
@@ -3280,7 +3439,9 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_up();
                         } else if fm_focused {
-                            filemanager_app.select_prev();
+                            let win_w = focused_window_for_app(&compositor, 0)
+                                .map(|(_, w)| w.width).unwrap_or(0);
+                            filemanager_app.move_selection_up(win_w);
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_prev();
@@ -3328,7 +3489,9 @@ pub extern "C" fn _start() -> ! {
                         } else if tm_focused && taskmgr_app.active_tab == 0 {
                             taskmgr_app.select_down();
                         } else if fm_focused {
-                            filemanager_app.select_next();
+                            let win_w = focused_window_for_app(&compositor, 0)
+                                .map(|(_, w)| w.width).unwrap_or(0);
+                            filemanager_app.move_selection_down(win_w);
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_next();
@@ -3347,6 +3510,9 @@ pub extern "C" fn _start() -> ! {
                     } else if compositor.is_start_menu_open {
                         compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
                         compositor.selected_start_item = 0;
+                    } else if app_is_focused(&compositor, 0) {
+                        filemanager_app.move_selection_left();
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         if keyboard.ctrl {
                             browser_app.address_move_word_left_ext(keyboard.shift);
@@ -3397,6 +3563,9 @@ pub extern "C" fn _start() -> ! {
                             compositor.active_start_group += 1;
                             compositor.selected_start_item = 0;
                         }
+                    } else if app_is_focused(&compositor, 0) {
+                        filemanager_app.move_selection_right();
+                        fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         if keyboard.ctrl {
                             browser_app.address_move_word_right_ext(keyboard.shift);
@@ -3437,7 +3606,39 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                drivers::keyboard::KeyAction::Properties => {
+                    // Alt+Enter: seçili dosyanın özelliklerini durum çubuğunda göster.
+                    if app_is_focused(&compositor, 0) {
+                        if let Some(item) = filemanager_app.row(filemanager_app.selected_idx) {
+                            let mut info = gui::TextBuf::new();
+                            info.push_str(item.display_name());
+                            info.push_str("  |  ");
+                            info.push_str(item.file_type);
+                            info.push_str("  |  ");
+                            info.push_str(item.size_str.as_str());
+                            filemanager_app.set_status_text(info.as_str());
+                        }
+                    }
+                }
                 drivers::keyboard::KeyAction::EnterKey => {
+                    // Alt+Enter: Özellikler penceresini aç
+                    if keyboard.alt && app_is_focused(&compositor, 0) && filemanager_app.selected_idx < filemanager_app.file_count {
+                        let file_idx = filemanager_app.selected_idx;
+                        let file = &filemanager_app.files[file_idx];
+                        properties_name.clear();
+                        properties_name.push_str(file.display_name());
+                        properties_type.clear();
+                        properties_type.push_str(file.file_type);
+                        properties_size.clear();
+                        properties_size.push_str(file.size_str.as_str());
+                        properties_location.clear();
+                        properties_location.push_str(filemanager_app.path());
+                        properties_path.clear();
+                        let full_path = filemanager_app.selected_full_path();
+                        properties_path.push_str(&full_path);
+                        properties_open = true;
+                        enter_char_consumed = true;
+                    }
                     if compositor.is_start_menu_open {
                         enter_char_consumed = true;
                         if compositor.start_search_len > 0 {
@@ -3720,7 +3921,8 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::PageUpKey => {
                     if app_is_focused(&compositor, 0) {
-                        let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
+                        let rows = focused_window_for_app(&compositor, 0)
+                            .map(|(_, w)| fm_page_rows(&w, &filemanager_app)).unwrap_or(8);
                         filemanager_app.select_page(false, rows);
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -3738,7 +3940,8 @@ pub extern "C" fn _start() -> ! {
                 }
                 drivers::keyboard::KeyAction::PageDownKey => {
                     if app_is_focused(&compositor, 0) {
-                        let rows = focused_window_for_app(&compositor, 0).map(|(_, w)| fm_page_rows(&w)).unwrap_or(8);
+                        let rows = focused_window_for_app(&compositor, 0)
+                            .map(|(_, w)| fm_page_rows(&w, &filemanager_app)).unwrap_or(8);
                         filemanager_app.select_page(true, rows);
                         fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -3874,11 +4077,25 @@ pub extern "C" fn _start() -> ! {
                             desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                             filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                             terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                            compositor.push_toast(
+                                gui::ToastKind::Success,
+                                gui::ui_text("Ekran Görüntüsü Alındı", "Screenshot Captured"),
+                                gui::ui_text("Görüntü /desktop/ klasörüne kaydedildi.", "Image saved to /desktop/ folder."),
+                                monotonic_ms(),
+                                4000,
+                            );
                             force_render = true;
                             serial_print("[SCREENSHOT] Basariyla kaydedildi: ");
                             serial_print(&path);
                             serial_print("\n");
                         } else {
+                            compositor.push_toast(
+                                gui::ToastKind::Error,
+                                gui::ui_text("Ekran Görüntüsü Hatası", "Screenshot Error"),
+                                gui::ui_text("Dosya diske yazılamadı!", "Failed to write file to disk!"),
+                                monotonic_ms(),
+                                4000,
+                            );
                             serial_print("[SCREENSHOT] HATA: VFS dosya yazilamadi!\n");
                         }
                     }
@@ -4076,12 +4293,31 @@ pub extern "C" fn _start() -> ! {
                     let prev_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
                     w.x = mx.saturating_sub(drag_offset_x).min(max_x);
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
+
+                    // Aero Snap kenar algılama & önizleme kutusu
+                    let old_snap = active_snap_preview;
+                    let usable_h = height.saturating_sub(gui::taskbar_h());
+                    let half_w = width / 2;
+                    if my <= 4 {
+                        active_snap_preview = Some((0, 0, width, usable_h));
+                    } else if mx <= 4 {
+                        active_snap_preview = Some((0, 0, half_w, usable_h));
+                    } else if mx >= width.saturating_sub(5) {
+                        active_snap_preview = Some((half_w, 0, width.saturating_sub(half_w), usable_h));
+                    } else {
+                        active_snap_preview = None;
+                    }
+
                     let new_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
-                    let dirty = match drag_prev_box {
+                    let mut dirty = match drag_prev_box {
                         Some(p) => drivers::video::rect_union(p, new_box),
                         None => drivers::video::rect_union(prev_box, new_box),
                     };
-                    drag_dirty_rect = Some(drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24)));
+                    dirty = drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24));
+                    // Hem eski hem yeni Aero Snap önizlemesini kirli bölgeye kat.
+                    if let Some(p) = old_snap { dirty = drivers::video::rect_union(dirty, p); }
+                    if let Some(p) = active_snap_preview { dirty = drivers::video::rect_union(dirty, p); }
+                    drag_dirty_rect = Some(dirty);
                     drag_prev_box = Some(new_box);
                 }
             } else if let Some(idx) = resizing_win {
@@ -4129,11 +4365,13 @@ pub extern "C" fn _start() -> ! {
                     w.height = nh;
                     w.is_maximized = false;
                     let new_box = (w.x.saturating_sub(4), w.y.saturating_sub(4), w.width + 12, w.height + 12);
-                    let dirty = match drag_prev_box {
+                    let mut dirty = match drag_prev_box {
                         Some(p) => drivers::video::rect_union(p, new_box),
                         None => drivers::video::rect_union(prev_box, new_box),
                     };
-                    drag_dirty_rect = Some(drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24)));
+                    dirty = drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24));
+                    if let Some(p) = active_snap_preview { dirty = drivers::video::rect_union(dirty, p); }
+                    drag_dirty_rect = Some(dirty);
                     drag_prev_box = Some(new_box);
                 }
             }
@@ -4204,14 +4442,21 @@ pub extern "C" fn _start() -> ! {
             filemanager_app.drag_item = None;
             filemanager_app.drag_active = false;
             filemanager_app.drag_target = None;
-            // Modern pencere "snap": başlık çubuğu ekranın en üstüne sürüklenip
-            // bırakılırsa pencere maksimize edilir (Windows/KDE davranışı).
+            // Modern Aero Snap: başlık çubuğu ekran kenarlarına sürüklenip bırakıldığında:
+            // - Ekranın üstü: Tam ekran (Maximize)
+            // - Ekranın solu: Sol 50% bölünmüş ekran
+            // - Ekranın sağı: Sağ 50% bölünmüş ekran
             if let Some(idx) = dragging_win {
+                compositor.focus_window(idx);
                 if my <= 4 {
-                    compositor.focus_window(idx);
-                    compositor.toggle_maximize(idx, width, height);
+                    compositor.snap_window(idx, gui::SnapPosition::Top, width, height);
+                } else if mx <= 4 {
+                    compositor.snap_window(idx, gui::SnapPosition::Left, width, height);
+                } else if mx >= width.saturating_sub(5) {
+                    compositor.snap_window(idx, gui::SnapPosition::Right, width, height);
                 }
             }
+            active_snap_preview = None;
             dragging_win = None;
             resizing_win = None;
             resize_edge = None;
@@ -4297,6 +4542,18 @@ pub extern "C" fn _start() -> ! {
                 else if ch == '\x08' { desktop_files.rename_backspace(); }
                 else if ch == '\n' { desktop_files.commit_rename(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                 else if ch >= ' ' { desktop_files.rename_char(ch); }
+            } else if (ch == 'g' || ch == 'G') && keyboard.ctrl && app_is_focused(&compositor, 0) {
+                // Ctrl+G: liste <-> ızgara görünümü.
+                filemanager_app.toggle_view_mode();
+                filemanager_app.ensure_thumbs(&fs_mgr.vfs);
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+            } else if ch == ' ' && app_is_focused(&compositor, 0)
+                && filemanager_app.selected_idx < filemanager_app.file_count {
+                // Space: seçili metin/resim için hızlı önizlemeyi aç/kapat.
+                filemanager_app.toggle_preview();
+                filemanager_app.ensure_thumbs(&fs_mgr.vfs);
+                filemanager_app.update_preview(&fs_mgr.vfs);
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
             } else if compositor.is_start_menu_open && ch == '\x08' {
                 if compositor.start_search_len > 0 {
                     compositor.start_search_len -= 1;
@@ -4410,6 +4667,17 @@ pub extern "C" fn _start() -> ! {
                         viewer3d_app.set_shape(apps::viewer3d::ShapeType::Pyramid);
                     }
                 }
+                if !run_dialog_open && !compositor.is_start_menu_open && !compositor.is_context_menu_open {
+                    if let Some(act_idx) = compositor.active_window_idx {
+                        if let Some(w) = compositor.windows[act_idx] {
+                            let dirty = (w.x.saturating_sub(8), w.y.saturating_sub(8), w.width + 16, w.height + 16);
+                            _app_dirty_rect = Some(match _app_dirty_rect {
+                                Some(d) => drivers::video::rect_union(d, dirty),
+                                None => dirty,
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -4502,6 +4770,11 @@ pub extern "C" fn _start() -> ! {
             BUSY_DIRTY = false;
             dirty
         };
+        // Seçim/konum değiştiyse Hızlı Önizleme içeriğini tazele. Kimlik anahtarı
+        // aynıyken çağrı ucuzdur ve VFS okuması yapmaz.
+        if filemanager_app.preview_open {
+            filemanager_app.update_preview(&fs_mgr.vfs);
+        }
         let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
             || force_render || busy_dirty || (mouse_moved && (is_interacting || night_light_active || settings_test_active))
             || (timer_tick_fired && media_animating);
@@ -4518,6 +4791,20 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             keep_windows_on_screen(&mut compositor, width, height);
+
+            // Menüler veya modal pencereler kapalıyken tek pencere içi klavye girişi veya
+            // pencere sürükleme yapılıyorsa yalnızca kirli dikdörtgeni (dirty rect) çizerek
+            // CPU yükünü ve gereksiz VRAM kopyalamasını %60-70 azalt.
+            let target_dirty = if force_render || busy_dirty || compositor.is_start_menu_open || compositor.is_context_menu_open || compositor.is_alt_tab_open || run_dialog_open || night_light_active {
+                None
+            } else if let Some(drag) = drag_dirty_rect {
+                Some(drag)
+            } else if let Some(app_dirty) = _app_dirty_rect {
+                Some(app_dirty)
+            } else {
+                None
+            };
+
             render_full_frame(
                 &mut fb, &compositor, &filemanager_app, &desktop_files, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
@@ -4525,9 +4812,12 @@ pub extern "C" fn _start() -> ! {
                 &installer_app, &viewer3d_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
                 (run_dialog_open, &run_dialog_input),
-                drag_dirty_rect,
+                (properties_open, &properties_name, &properties_type, &properties_size, &properties_location, &properties_path),
+                active_snap_preview,
+                target_dirty,
             );
             drag_dirty_rect = None;
+            _app_dirty_rect = None;
         } else if mouse_moved {
             // İmleç hareketinde uygulamaları ve tüm ekranı yeniden çizmek yerine
             // sadece önceki ve yeni imleç alanlarını birleşik tek bir dikdörtgen olarak güncelle.

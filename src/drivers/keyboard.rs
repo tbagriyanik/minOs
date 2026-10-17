@@ -42,6 +42,7 @@ pub enum KeyAction {
     OpenDocument,
     Screenshot,
     RunDialog,
+    Properties,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -303,6 +304,10 @@ impl KeyboardState {
                 return None;
             }
             0x1C => { // Enter key
+                if self.alt {
+                    self.push_action(KeyAction::Properties);
+                    return None;
+                }
                 self.push_action(KeyAction::EnterKey);
             }
             _ => {}
@@ -388,7 +393,14 @@ impl KeyboardState {
             0x4F => { self.push_action(KeyAction::EndKey); return None; }
             0x49 => { self.push_action(KeyAction::PageUpKey); return None; }
             0x51 => { self.push_action(KeyAction::PageDownKey); return None; }
-            0x1C => { self.push_action(KeyAction::EnterKey); return Some('\n'); }
+            0x1C => {
+                if self.alt {
+                    self.push_action(KeyAction::Properties);
+                    return None;
+                }
+                self.push_action(KeyAction::EnterKey);
+                return Some('\n');
+            }
             0x35 => { self.last_char = Some('/'); return Some('/'); } // Keypad /
             _ => {}
         }

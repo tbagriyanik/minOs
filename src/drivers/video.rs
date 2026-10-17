@@ -34,6 +34,10 @@ pub struct Framebuffer {
     pub bpp: usize,
     /// Aktif kırpma bölgesi. Varsayılan: tüm ekran.
     clip: ClipRect,
+    /// Kare (çerçeve) düzeyinde temel kırpma bölgesi. Kirli dikdörtgen
+    /// çiziminde yalnızca bu bölge güncellenir; tüm `set_clip`/`reset_clip`
+    /// işlemleri bu bölgeyle kesiştirilir.
+    base_clip: ClipRect,
     cursor_under: [u32; CURSOR_SAVE_W * CURSOR_SAVE_H],
     cursor_x: usize,
     cursor_y: usize,
@@ -122,6 +126,7 @@ impl Framebuffer {
             pitch,
             bpp,
             clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
+            base_clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
             cursor_under: [0; CURSOR_SAVE_W * CURSOR_SAVE_H],
             cursor_x: 0,
             cursor_y: 0,
@@ -158,7 +163,7 @@ impl Framebuffer {
             PANIC_FB_H = height;
             PANIC_FB_PITCH = pitch;
         }
-        self.reset_clip();
+        self.clear_frame_clip();
         self.cursor_saved = false;
         self.clear(0x000000);
         self.flush();
@@ -356,19 +361,71 @@ impl Framebuffer {
         );
     }
 
-    /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgene kısıtlar).
+    /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgeni çerçeve temel
+    /// kırpma bölgesiyle kesiştirir; böylece kirli dikdörtgen dışına taşmaz).
     pub fn set_clip(&mut self, x: usize, y: usize, w: usize, h: usize) {
-        self.clip = ClipRect {
-            x0: x.min(self.width),
-            y0: y.min(self.height),
-            x1: (x + w).min(self.width),
-            y1: (y + h).min(self.height),
-        };
+        let x0 = x.min(self.width).max(self.base_clip.x0);
+        let y0 = y.min(self.height).max(self.base_clip.y0);
+        let x1 = (x + w).min(self.width).min(self.base_clip.x1).max(x0);
+        let y1 = (y + h).min(self.height).min(self.base_clip.y1).max(y0);
+        self.clip = ClipRect { x0, y0, x1, y1 };
     }
 
-    /// Kırpma bölgesini tüm ekrana geri alır.
+    /// Kırpma bölgesini çerçeve temel bölgesine geri alır.
     pub fn reset_clip(&mut self) {
-        self.clip = ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height };
+        self.clip = self.base_clip;
+    }
+
+    /// Kare (çerçeve) düzeyinde çizim bölgesini ayarlar.
+    /// `Some(rect)` yalnızca bu dikdörtgenin (kirli bölge) çizilip blit
+    /// edilmesini sağlar; `None` tüm ekranı kullanır.
+    pub fn set_frame_clip(&mut self, rect: Option<(usize, usize, usize, usize)>) {
+        self.base_clip = match rect {
+            Some((x, y, w, h)) => {
+                let x0 = x.min(self.width);
+                let y0 = y.min(self.height);
+                let x1 = x.saturating_add(w).min(self.width).max(x0);
+                let y1 = y.saturating_add(h).min(self.height).max(y0);
+                ClipRect { x0, y0, x1, y1 }
+            }
+            None => ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height },
+        };
+        self.clip = self.base_clip;
+    }
+
+    /// Aktif çerçeve temel çizim bölgesini döndürür.
+    #[inline(always)]
+    pub fn base_clip(&self) -> ClipRect {
+        self.base_clip
+    }
+
+    /// Çerçeve temel çizim bölgesini tüm ekrana geri alır.
+    pub fn clear_frame_clip(&mut self) {
+        self.base_clip = ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height };
+        self.clip = self.base_clip;
+    }
+
+    /// Kaynak arabellekten yalnızca `region` bölgesini backbuffer'a kopyalar.
+    /// Kaynak, backbuffer ile aynı satır adımına (width) sahiptir.
+    pub fn copy_region_from_raw(&mut self, src: *const u32, region: ClipRect) {
+        let stride = self.width;
+        for y in region.y0..region.y1 {
+            let start = y * stride + region.x0;
+            if start >= BACKBUFFER_LEN {
+                continue;
+            }
+            let len = (y * stride + region.x1).min(BACKBUFFER_LEN).saturating_sub(start);
+            if len == 0 {
+                continue;
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.add(start),
+                    (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(start),
+                    len,
+                );
+            }
+        }
     }
 
     /// Aktif kırpma bölgesi.
@@ -454,6 +511,7 @@ impl Framebuffer {
     }
 
     /// Kaynak piksel arabelleğini doğrudan backbuffer'a kopyalar.
+    #[allow(dead_code)]
     pub unsafe fn copy_backbuffer_from_raw(&mut self, src: *const u32, max_len: usize) {
         let len = (self.width * self.height).min(BACKBUFFER_LEN).min(max_len);
         core::ptr::copy_nonoverlapping(src, core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32, len);
@@ -1077,5 +1135,31 @@ impl Framebuffer {
         if strength == 0 { return; }
         let limit=(self.width*self.height).min(BACKBUFFER_LEN);
         unsafe { for i in 0..limit { let c=BACKBUFFER[i]; let r=(c>>16)&255; let g=(c>>8)&255; let b=c&255; let nr=(r+((255-r)*12*strength/10_000)).min(255); let ng=(g+((255-g)*4*strength/10_000)).min(255); let nb=b*(100-45*strength/100)/100; BACKBUFFER[i]=(nr<<16)|(ng<<8)|nb; } }
+    }
+
+    /// Mavi ışık filtresini yalnızca verilen bölgeye uygular. Kirli dikdörtgen
+    /// yenilemelerinde tüm ekranı yeniden işlemeden yalnızca değişen bölgeyi
+    /// filtreler; kalan bölge önceki karedeki filtrelenmiş hâlini korur.
+    pub fn apply_night_light_rect(&mut self, strength: u8, region: ClipRect) {
+        let strength = strength.min(100) as u32;
+        if strength == 0 { return; }
+        let stride = self.width;
+        unsafe {
+            for y in region.y0..region.y1 {
+                let start = y * stride + region.x0;
+                let end = (y * stride + region.x1).min(BACKBUFFER_LEN);
+                if start >= end { continue; }
+                for i in start..end {
+                    let c = BACKBUFFER[i];
+                    let r = (c >> 16) & 255;
+                    let g = (c >> 8) & 255;
+                    let b = c & 255;
+                    let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
+                    let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
+                    let nb = b * (100 - 45 * strength / 100) / 100;
+                    BACKBUFFER[i] = (nr << 16) | (ng << 8) | nb;
+                }
+            }
+        }
     }
 }

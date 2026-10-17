@@ -582,10 +582,10 @@ impl TerminalApp {
                         b.push_usize(drive as usize);
                         b.push_str(": ");
                         match dev.role {
-                            crate::drivers::ata::DriveRole::UsbStorage => b.push_str("[USB / FAT32] "),
-                            crate::drivers::ata::DriveRole::HardDisk => b.push_str("[Sabit Disk] "),
-                            crate::drivers::ata::DriveRole::CdRom => b.push_str("[CD-ROM / ISO] "),
-                            _ => b.push_str("[Bilinmeyen] "),
+                            crate::drivers::ata::DriveRole::UsbStorage => b.push_str(crate::gui::ui_text("[USB / FAT32] ", "[USB / FAT32] ")),
+                            crate::drivers::ata::DriveRole::HardDisk => b.push_str(crate::gui::ui_text("[Sabit Disk] ", "[Hard Disk] ")),
+                            crate::drivers::ata::DriveRole::CdRom => b.push_str(crate::gui::ui_text("[CD-ROM / ISO] ", "[CD-ROM / ISO] ")),
+                            _ => b.push_str(crate::gui::ui_text("[Bilinmeyen] ", "[Unknown] ")),
                         }
                         b.push_str(dev.model_str());
                         b.push_str(" (");
@@ -608,7 +608,7 @@ impl TerminalApp {
 
                 if fs_type.is_empty() || drive_num.is_none() {
                     self.push_line(crate::gui::ui_text("Kullanım: format <fat32|ext4|exfat|ext2> <0..3>", "Usage: format <fat32|ext4|exfat|ext2> <0..3>"), Color::ACCENT_YELLOW);
-                    self.push_line("Örnek: format ext4 1  veya  format exfat 0", Color::TEXT_MUTED);
+                    self.push_line(crate::gui::ui_text("Örnek: format ext4 1  veya  format exfat 0", "Example: format ext4 1  or  format exfat 0"), Color::TEXT_MUTED);
                 } else {
                     let drive = drive_num.unwrap();
                     if drive >= 4 || crate::drivers::ata::device(drive).map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata).unwrap_or(true) {
@@ -731,7 +731,10 @@ impl TerminalApp {
                                     b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
                                     b.push_str(&path);
                                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
-                                    self.push_line(crate::gui::ui_text("Çalıştırmak için: exec ", "To execute: exec "), Color::ACCENT_BLUE);
+                                    let mut exec_hint = TextBuf::new();
+                                    exec_hint.push_str(crate::gui::ui_text("Çalıştırmak için: exec ", "To execute: exec "));
+                                    exec_hint.push_str(&path);
+                                    self.push_line(exec_hint.as_str(), Color::ACCENT_BLUE);
                                 }
                                 Err(err) => {
                                     let mut b = TextBuf::new();
@@ -755,9 +758,9 @@ impl TerminalApp {
                     }
                     _ => {
                         self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minpkg)", "minOs Package Manager v1.0 (minpkg)"), Color::ACCENT_PINK);
-                        self.push_line("minpkg list                  - Kurulu paketleri listeler", Color::TEXT_MAIN);
-                        self.push_line("minpkg install <paket>       - Paket indirir ve /bin altına kurar", Color::TEXT_MAIN);
-                        self.push_line("minpkg remove <paket>        - Kurulu paketi siler", Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minpkg list                  - Kurulu paketleri listeler", "minpkg list                  - List installed packages"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minpkg install <paket>       - Paket indirir ve /bin altına kurar", "minpkg install <package>     - Download and install to /bin"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minpkg remove <paket>        - Kurulu paketi siler", "minpkg remove <package>      - Remove installed package"), Color::TEXT_MAIN);
                     }
                 }
             }

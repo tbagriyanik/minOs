@@ -1459,10 +1459,20 @@ pub extern "C" fn _start() -> ! {
             let item = &desktop_fm.files[i];
             let (x, y, w, h) = desktop_item_rect(i);
             if !desktop_item_visible((x, y, w, h), fb.width, fb.height) { continue; }
-            if desktop_fm.is_row_selected(i) { fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28)); }
+            if desktop_fm.is_row_selected(i) {
+                fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28));
+            } else {
+                fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::WINDOW_BG, 8));
+                fb.draw_rounded_rect_outline(x, y, w, h, 5, gui::Color::BORDER);
+            }
             if item.is_dir { apps::filemanager::FileManagerApp::draw_folder_icon(fb, x + 5, y + 5, false); }
             else { apps::filemanager::FileManagerApp::draw_file_icon(fb, x + 5, y + 5, item.icon_tag); }
-            gui::MinGuiCompositor::draw_string_clipped(fb, x + 30, y + 10, item.display_name(), gui::Color::TEXT_MAIN, (x + 30, y + 2, w - 34, h - 4));
+            let item_fg = if desktop_fm.is_row_selected(i) {
+                gui::MinGuiCompositor::text_on(gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28))
+            } else {
+                gui::Color::TEXT_MAIN
+            };
+            gui::MinGuiCompositor::draw_string_clipped(fb, x + 30, y + 10, item.display_name(), item_fg, (x + 30, y + 2, w - 34, h - 4));
         }
 
         // 2. Açık pencereleri z-sırasına göre (arkadan öne) çiz
@@ -3003,7 +3013,10 @@ pub extern "C" fn _start() -> ! {
                                         } else {
                                             // İlk tıklama: onay iste (diski biçimlendirecek).
                                             installer_app.confirm_install = true;
-                                            installer_app.status_msg = "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.";
+                                            installer_app.status_msg = (
+                                                "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.",
+                                                "WARNING: Disk will be erased and formatted. Click again to confirm.",
+                                            );
                                         }
                                     }
                                 }

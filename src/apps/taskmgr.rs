@@ -272,23 +272,23 @@ impl TaskManagerApp {
         // "Sonlandır" düğmesi
         let br = Self::kill_btn_rect(win_x, win_y, win_w);
         fb.draw_rect(br.0, br.1, br.2, br.3, Color::ACCENT_RED);
-        MinGuiCompositor::draw_string_clipped(fb, br.0 + 8, br.1 + 5, crate::gui::ui_text("Sonlandır", "End Task"), Color::WHITE,
+        MinGuiCompositor::draw_string_clipped(fb, br.0 + 8, br.1 + 5, crate::gui::ui_text("Sonlandır", "End Task"), MinGuiCompositor::text_on(Color::ACCENT_RED),
             (br.0 + 2, br.1 + 1, br.2.saturating_sub(4), br.3.saturating_sub(2)));
 
         let launch_button = Self::launch_button_rect(win_x, win_y, win_w);
         fb.draw_rect(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string_clipped(fb, launch_button.0 + 8, launch_button.1 + 5, crate::gui::ui_text("Program Aç", "Run Program"), Color::WHITE,
+        MinGuiCompositor::draw_string_clipped(fb, launch_button.0 + 8, launch_button.1 + 5, crate::gui::ui_text("Program Aç", "Run Program"), MinGuiCompositor::text_on(Color::ACCENT_BLUE),
             (launch_button.0 + 2, launch_button.1 + 1, launch_button.2.saturating_sub(4), launch_button.3.saturating_sub(2)));
 
         let applications_tab = Self::applications_tab_rect(win_x, win_y);
         let performance_tab = Self::performance_tab_rect(win_x, win_y);
-        fb.draw_rect(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3,
-            if self.active_tab == 0 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
-        MinGuiCompositor::draw_string_clipped(fb, applications_tab.0 + 12, applications_tab.1 + 7, crate::gui::ui_text("Uygulamalar", "Applications"), Color::TEXT_MAIN,
+        let app_tab_bg = if self.active_tab == 0 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE };
+        fb.draw_rect(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3, app_tab_bg);
+        MinGuiCompositor::draw_string_clipped(fb, applications_tab.0 + 12, applications_tab.1 + 7, crate::gui::ui_text("Uygulamalar", "Applications"), MinGuiCompositor::text_on(app_tab_bg),
             (applications_tab.0 + 2, applications_tab.1 + 1, applications_tab.2.saturating_sub(4), applications_tab.3.saturating_sub(2)));
-        fb.draw_rect(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3,
-            if self.active_tab == 1 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE });
-        MinGuiCompositor::draw_string_clipped(fb, performance_tab.0 + 12, performance_tab.1 + 7, crate::gui::ui_text("Performans", "Performance"), Color::TEXT_MAIN,
+        let perf_tab_bg = if self.active_tab == 1 { Color::ACCENT_BLUE } else { Color::TITLE_BAR_INACTIVE };
+        fb.draw_rect(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3, perf_tab_bg);
+        MinGuiCompositor::draw_string_clipped(fb, performance_tab.0 + 12, performance_tab.1 + 7, crate::gui::ui_text("Performans", "Performance"), MinGuiCompositor::text_on(perf_tab_bg),
             (performance_tab.0 + 2, performance_tab.1 + 1, performance_tab.2.saturating_sub(4), performance_tab.3.saturating_sub(2)));
         if self.focused_control == 0 { fb.draw_rect_outline(applications_tab.0, applications_tab.1, applications_tab.2, applications_tab.3, Color::ACCENT_YELLOW); }
         if self.focused_control == 1 { fb.draw_rect_outline(performance_tab.0, performance_tab.1, performance_tab.2, performance_tab.3, Color::ACCENT_YELLOW); }

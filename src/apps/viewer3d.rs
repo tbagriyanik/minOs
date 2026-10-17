@@ -412,7 +412,7 @@ impl Viewer3DApp {
 
         let draw_btn = |fb: &mut Framebuffer, x: usize, w: usize, text: &str, active: bool| {
             let bg = if active { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-            let fg = if active { Color::WHITE } else { Color::TEXT_MAIN };
+            let fg = MinGuiCompositor::text_on(bg);
             fb.draw_rect(x, btn_y, w, btn_h, bg);
             fb.draw_rect_outline(x, btn_y, w, btn_h, Color::BORDER);
             MinGuiCompositor::draw_string(fb, x + 6, btn_y + 3, text, fg);

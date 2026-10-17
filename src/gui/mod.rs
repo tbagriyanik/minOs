@@ -1946,6 +1946,10 @@ impl MinGuiCompositor {
             // Etiket, ikon kartına dikey ortalı ve net boşlukla çizilir (temiz, tekdüze yazı).
             let label_x = card_x + card_w + sp(10);
             let label_y = dy + card_h.saturating_sub(Self::text_height()) / 2;
+            let tw = Self::text_width(lbl, 1);
+            let th = Self::text_height();
+            fb.draw_rounded_rect(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Self::shade(Color::WINDOW_BG, 8));
+            fb.draw_rounded_rect_outline(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Color::BORDER);
             Self::draw_string(fb, label_x, label_y, lbl, Color::TEXT_MAIN);
         }
     }
@@ -2855,7 +2859,7 @@ impl MinGuiCompositor {
                 name
             };
 
-            let text_col = if is_hovered { Color::WHITE } else { Color::TEXT_MAIN };
+            let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
             // Metin konumu ikon boyutundan türetilir: sol boşluk + ikon + boşluk.
             // Böylece ikon büyüse de metin ikonun üzerine binmez (taşma/kayma yok).
             let text_off = sp(6) + Self::icon_size() + sp(8);

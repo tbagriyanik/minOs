@@ -254,7 +254,7 @@ impl SystemSettings {
             test_trail: [0u32; 96],
             test_trail_len: 0,
             test_trail_head: 0,
-            status_msg: "Live CD Persistent Storage: Ready",
+            status_msg: "",
         }
     }
 
@@ -737,7 +737,11 @@ impl SystemSettings {
             if self.focused_control == i {
                 fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_YELLOW);
             }
-            let col = if is_cur { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
+            let col = if is_cur {
+                MinGuiCompositor::text_on(bg)
+            } else {
+                Color::TEXT_MUTED
+            };
             MinGuiCompositor::draw_string_clipped(fb, r.0 + 8, r.1 + 5, t, col,
                 (r.0 + 4, r.1 + 2, r.2.saturating_sub(8), r.3.saturating_sub(4)));
         }
@@ -982,7 +986,12 @@ impl SystemSettings {
         // Durum Çubuğu
         let bar_y = win_y + win_h.saturating_sub(sp(22));
         fb.draw_rect(win_x + sp(6), bar_y, win_w.saturating_sub(sp(12)), sp(20), Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + sp(12), bar_y + sp(6), self.status_msg, Color::ACCENT_YELLOW);
+        let cur_status = if self.status_msg.is_empty() {
+            crate::gui::ui_text("Canlı Ortam Kalıcı Depolama: Hazır", "Live CD Persistent Storage: Ready")
+        } else {
+            self.status_msg
+        };
+        MinGuiCompositor::draw_string(fb, win_x + sp(12), bar_y + sp(6), cur_status, Color::ACCENT_YELLOW);
     }
 
     /// Testler sekmesi: fare, RAM, disk ve ses (ekran testi Ekran sekmesine tasindi).

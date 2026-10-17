@@ -34,7 +34,7 @@ pub struct InstallerApp {
     pub selected_drive: u8,
     pub format_type: FormatFsType,
     pub state: InstallState,
-    pub status_msg: &'static str,
+    pub status_msg: (&'static str, &'static str),
     pub progress_pct: usize,
     pub drive_count: usize,
     /// Secili disk bicimlendirildi mi? (Biçimlendir adımı)
@@ -49,7 +49,7 @@ impl InstallerApp {
             selected_drive: 0,
             format_type: FormatFsType::Fat32,
             state: InstallState::Selecting,
-            status_msg: "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.",
+            status_msg: ("Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.", "Select target disk, click 'Format' first, then 'One-Click Install'."),
             progress_pct: 0,
             drive_count: 0,
             disk_formatted: false,
@@ -102,15 +102,15 @@ impl InstallerApp {
         if self.disk_formatted && diskfs::is_installed() {
             self.state = InstallState::Selecting;
             self.progress_pct = 100;
-            self.status_msg = "minOs kurulu. Yeniden biçimlendirebilir veya tekrar kurabilirsiniz.";
+            self.status_msg = ("minOs kurulu. Yeniden biçimlendirebilir veya tekrar kurabilirsiniz.", "minOs installed. You can reformat or reinstall.");
         } else if self.disk_formatted {
             self.state = InstallState::Selecting;
             self.progress_pct = 55;
-            self.status_msg = "Disk biçimlendirilmiş. 'Tek Tıkla Kur' ile kurulum yapabilirsiniz.";
+            self.status_msg = ("Disk biçimlendirilmiş. 'Tek Tıkla Kur' ile kurulum yapabilirsiniz.", "Disk formatted. You can proceed with 'One-Click Install'.");
         } else {
             self.state = InstallState::Selecting;
             self.progress_pct = 0;
-            self.status_msg = "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.";
+            self.status_msg = ("Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.", "Select target disk, click 'Format' first, then 'One-Click Install'.");
         }
     }
 
@@ -141,19 +141,19 @@ impl InstallerApp {
     pub fn format_selected_drive(&mut self) -> bool {
         self.state = InstallState::Formatting;
         self.progress_pct = 20;
-        self.status_msg = "Disk bölümleniyor ve MBR önyükleyici kuruluyor...";
+        self.status_msg = ("Disk bölümleniyor ve MBR önyükleyici kuruluyor...", "Partitioning disk and installing MBR bootloader...");
 
         let drive = self.selected_drive;
         if !ata::device(drive).map(|d| d.kind == ata::DeviceKind::Ata).unwrap_or(false) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Seçili sürücüde hedef disk yok!";
+            self.status_msg = ("HATA: Seçili sürücüde hedef disk yok!", "ERROR: No target disk on selected drive!");
             return false;
         }
 
         let cap = ata::drive_capacity_sectors(drive);
         if cap < 65_600 {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Disk kapasitesi kurulum için yetersiz!";
+            self.status_msg = ("HATA: Disk kapasitesi kurulum için yetersiz!", "ERROR: Disk capacity insufficient for installation!");
             return false;
         }
 
@@ -166,7 +166,7 @@ impl InstallerApp {
             sec[..end - start].copy_from_slice(&Self::LIMINE_MBR_STAGE[start..end]);
             if !ata::write_sector(drive, s as u32, &sec) {
                 self.state = InstallState::Failed;
-                self.status_msg = "HATA: Limine MBR kodları diske yazılamadı!";
+                self.status_msg = ("HATA: Limine MBR kodları diske yazılamadı!", "ERROR: Failed to write Limine MBR code to disk!");
                 return false;
             }
         }
@@ -176,7 +176,7 @@ impl InstallerApp {
         let mut mbr = [0u8; 512];
         if !ata::read_sector(drive, 0, &mut mbr) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: MBR sektörü okunamadı!";
+            self.status_msg = ("HATA: MBR sektörü okunamadı!", "ERROR: Failed to read MBR sector!");
             return false;
         }
         let part_lba: u32 = 2048;
@@ -195,14 +195,14 @@ impl InstallerApp {
         mbr[510] = 0x55; mbr[511] = 0xAA; // MBR imza
         if !ata::write_sector(drive, 0, &mbr) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: MBR bölüm tablosu yazılamadı!";
+            self.status_msg = ("HATA: MBR bölüm tablosu yazılamadı!", "ERROR: Failed to write MBR partition table!");
             return false;
         }
         ata::flush_cache(drive);
 
         // 3. Bölüm 1 içine (LBA 2048) seçilen dosya sistemini kur
         self.progress_pct = 40;
-        self.status_msg = "Dosya sistemi oluşturuluyor...";
+        self.status_msg = ("Dosya sistemi oluşturuluyor...", "Creating filesystem...");
         let success = match self.format_type {
             FormatFsType::Fat32 => {
                 diskfs::fat_format_at(drive, part_lba) && diskfs::mount_drive(drive)
@@ -230,7 +230,7 @@ impl InstallerApp {
         if !success {
             self.state = InstallState::Failed;
             self.disk_formatted = false;
-            self.status_msg = "HATA: Disk biçimlendirilemedi!";
+            self.status_msg = ("HATA: Disk biçimlendirilemedi!", "ERROR: Failed to format disk!");
             return false;
         }
 
@@ -239,9 +239,9 @@ impl InstallerApp {
         self.progress_pct = 55;
         self.state = InstallState::Selecting;
         self.status_msg = match self.format_type {
-            FormatFsType::Fat32 => "Disk önyüklenebilir yapıldı. 'Tek Tıkla Kur' basınız.",
-            FormatFsType::Ext4 => "Disk başarıyla biçimlendirildi.",
-            FormatFsType::Exfat => "Disk başarıyla biçimlendirildi.",
+            FormatFsType::Fat32 => ("Disk önyüklenebilir yapıldı. 'Tek Tıkla Kur' basınız.", "Disk made bootable. Click 'One-Click Install' to proceed."),
+            FormatFsType::Ext4 => ("Disk başarıyla biçimlendirildi.", "Disk formatted successfully."),
+            FormatFsType::Exfat => ("Disk başarıyla biçimlendirildi.", "Disk formatted successfully."),
         };
         true
     }
@@ -255,7 +255,7 @@ impl InstallerApp {
         let drive = self.selected_drive;
         if !ata::device(drive).map(|d| d.kind == ata::DeviceKind::Ata).unwrap_or(false) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Seçili sürücüde hedef disk yok!";
+            self.status_msg = ("HATA: Seçili sürücüde hedef disk yok!", "ERROR: No target disk on selected drive!");
             return false;
         }
 
@@ -268,13 +268,13 @@ impl InstallerApp {
 
         self.state = InstallState::Copying;
         self.progress_pct = 65;
-        self.status_msg = "Sistem dosyaları ve bağımlılıklar kopyalanıyor...";
+        self.status_msg = ("Sistem dosyaları ve bağımlılıklar kopyalanıyor...", "Copying system files and dependencies...");
 
         // exFAT okuma/yazma sürücüsü olmadığı için kurulum desteklenmez.
         // Biçimlendirme başarılı olabilir ama dosya yazılamaz.
         if self.format_type == FormatFsType::Exfat {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: exFAT'e kurulum desteklenmiyor! FAT32 seçip yeniden biçimlendirin.";
+            self.status_msg = ("HATA: exFAT'e kurulum desteklenmiyor! FAT32 seçip yeniden biçimlendirin.", "ERROR: Installation to exFAT not supported! Select FAT32 and reformat.");
             return false;
         }
 
@@ -282,7 +282,7 @@ impl InstallerApp {
         // çalıştıysa READY nedeniyle erken dönebilir.
         if !diskfs::mount_drive(drive) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Hedef disk dosya sistemi bağlanamadı!";
+            self.status_msg = ("HATA: Hedef disk dosya sistemi bağlanamadı!", "ERROR: Failed to mount target disk filesystem!");
             return false;
         }
 
@@ -290,7 +290,7 @@ impl InstallerApp {
         let readme_content = "minOs Kurulumu Başarıyla Tamamlandı!\n====================================\nBu bölümde tam okuma ve yazma hakkınız bulunmaktadır.\nSistem ayarlarınız ve yeni dosyalarınız otomatik olarak bu bölüme kaydedilir.\n".as_bytes();
         if !diskfs::save_file_by_name("BENIOKU.TXT", readme_content) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: BENIOKU.TXT diske yazılamadı!";
+            self.status_msg = ("HATA: BENIOKU.TXT diske yazılamadı!", "ERROR: Failed to write BENIOKU.TXT to disk!");
             return false;
         }
 
@@ -298,14 +298,14 @@ impl InstallerApp {
         if let Some(cfg_data) = vfs.read_file("settings.cfg") {
             if !diskfs::save_file_by_name("settings.cfg", cfg_data) {
                 self.state = InstallState::Failed;
-                self.status_msg = "HATA: settings.cfg diske yazılamadı!";
+                self.status_msg = ("HATA: settings.cfg diske yazılamadı!", "ERROR: Failed to write settings.cfg to disk!");
                 return false;
             }
         } else {
             let default_cfg = b"volume=75;muted=0;res=1280x720;night=0;night_level=55;keyboard=tr;language=tr;zoom=100;region=0;dhcp=1;theme=velvet";
             if !diskfs::save_file_by_name("settings.cfg", default_cfg) {
                 self.state = InstallState::Failed;
-                self.status_msg = "HATA: varsayılan settings.cfg yazılamadı!";
+                self.status_msg = ("HATA: varsayılan settings.cfg yazılamadı!", "ERROR: Failed to write default settings.cfg!");
                 return false;
             }
         }
@@ -320,7 +320,7 @@ impl InstallerApp {
         let marker_content = b"minOs Persistent Install\ndata and settings installed\n";
         if !diskfs::save_file_by_name("MINOS.SYS", marker_content) {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: MINOS.SYS kurulum işareti yazılamadı!";
+            self.status_msg = ("HATA: MINOS.SYS kurulum işareti yazılamadı!", "ERROR: Failed to write MINOS.SYS installation marker!");
             return false;
         }
 
@@ -362,7 +362,7 @@ impl InstallerApp {
             .unwrap_or(false);
         if !marker_verified {
             self.state = InstallState::Failed;
-            self.status_msg = "HATA: Kurulum diske yazıldı ancak geri okuma doğrulaması başarısız!";
+            self.status_msg = ("HATA: Kurulum diske yazıldı ancak geri okuma doğrulaması başarısız!", "ERROR: Installation written to disk but readback verification failed!");
             return false;
         }
 
@@ -371,9 +371,9 @@ impl InstallerApp {
         self.confirm_install = false;
         self.disk_formatted = true;
         self.status_msg = if snapshot_ok {
-            "Kurulum tamamlandı! Disk kalıcı yazmaya hazır."
+            ("Kurulum tamamlandı! Disk kalıcı yazmaya hazır.", "Installation complete! Disk is ready for persistent storage.")
         } else {
-            "Kurulum tamamlandı (UYARI: VFS.DAT yazılamadı)."
+            ("Kurulum tamamlandı (UYARI: VFS.DAT yazılamadı).", "Installation complete (WARNING: Failed to save VFS.DAT).")
         };
         true
     }
@@ -532,7 +532,7 @@ impl InstallerApp {
             }
 
             // Seçenek metni
-            let text_col = if is_selected { Color::WHITE } else { Color::TEXT_MUTED };
+            let text_col = if is_selected { Color::ACCENT_BLUE } else { Color::TEXT_MUTED };
             MinGuiCompositor::draw_string(fb, rx + 18, ry + 2, fname, text_col);
         }
 
@@ -578,7 +578,8 @@ impl InstallerApp {
         }
 
         // Durum Mesajı
-        MinGuiCompositor::draw_string_clipped(fb, win_x + 22, prog_y + 20, self.status_msg, match self.state {
+        let cur_status = if english { self.status_msg.1 } else { self.status_msg.0 };
+        MinGuiCompositor::draw_string_clipped(fb, win_x + 22, prog_y + 20, cur_status, match self.state {
             InstallState::Complete => Color::ACCENT_GREEN,
             InstallState::Failed => Color::ACCENT_RED,
             _ => Color::TEXT_MAIN,
@@ -601,7 +602,7 @@ impl InstallerApp {
         let ftw = MinGuiCompositor::text_width(fmt_text, 1);
         let ftx = fx + (fw.saturating_sub(ftw)) / 2;
         let fty = fy + (fh.saturating_sub(MinGuiCompositor::text_height())) / 2;
-        MinGuiCompositor::draw_string(fb, ftx, fty, fmt_text, Color::BLACK);
+        MinGuiCompositor::draw_string(fb, ftx, fty, fmt_text, MinGuiCompositor::text_on(fmt_bg));
 
         // 7. "Tek Tıkla Kur" Butonu (sağ)
         let (bx, by, bw, bh) = Self::install_btn_rect(win_x, win_y, win_w, win_h);
@@ -614,7 +615,7 @@ impl InstallerApp {
             _ => Color::ACCENT_BLUE,
         };
         fb.draw_rounded_rect(bx, by, bw, bh, 6, btn_bg);
-        fb.draw_rounded_rect_outline(bx, by, bw, bh, 6, Color::WHITE);
+        fb.draw_rounded_rect_outline(bx, by, bw, bh, 6, MinGuiCompositor::text_on(btn_bg));
 
         let btn_text = match self.state {
             InstallState::Complete => {
@@ -639,7 +640,7 @@ impl InstallerApp {
         let tw = MinGuiCompositor::text_width(btn_text, 1);
         let tx = bx + (bw.saturating_sub(tw)) / 2;
         let ty = by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2;
-        MinGuiCompositor::draw_string(fb, tx, ty, btn_text, Color::WHITE);
+        MinGuiCompositor::draw_string(fb, tx, ty, btn_text, MinGuiCompositor::text_on(btn_bg));
     }
 }
 

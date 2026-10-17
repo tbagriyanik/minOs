@@ -1418,6 +1418,10 @@ pub extern "C" fn _start() -> ! {
     let mut cpu_sample_start = read_cpu_cycles();
     let mut cpu_sample_total_cycles = 0u64;
     let mut cpu_sample_active_cycles = 0u64;
+    let mut last_ap_heartbeats = [0u64; arch::x86_64::smp::MAX_CPUS];
+    for c in 0..arch::x86_64::smp::MAX_CPUS {
+        last_ap_heartbeats[c] = arch::x86_64::smp::heartbeat(c);
+    }
     let mut music_note: usize = 0;
     let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
@@ -1460,9 +1464,10 @@ pub extern "C" fn _start() -> ! {
             let (x, y, w, h) = desktop_item_rect(i);
             if !desktop_item_visible((x, y, w, h), fb.width, fb.height) { continue; }
             if desktop_fm.is_row_selected(i) {
-                fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28));
+                fb.draw_rounded_rect_alpha(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28), 160);
+                fb.draw_rounded_rect_outline(x, y, w, h, 5, gui::Color::ACCENT_BLUE);
             } else {
-                fb.draw_rounded_rect(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::WINDOW_BG, 8));
+                fb.draw_rounded_rect_alpha(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::WINDOW_BG, 8), 128);
                 fb.draw_rounded_rect_outline(x, y, w, h, 5, gui::Color::BORDER);
             }
             if item.is_dir { apps::filemanager::FileManagerApp::draw_folder_icon(fb, x + 5, y + 5, false); }
@@ -2028,7 +2033,7 @@ pub extern "C" fn _start() -> ! {
                 let mut matches = [0; 13];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 for (row, app_id) in matches[..count].iter().enumerate() {
-                    let row_rect = (sub_rect.0 + 6, sub_rect.1 + gui::sp(30) + row * gui::sp(24), sub_rect.2 - 12, gui::sp(22));
+                    let row_rect = (sub_rect.0 + gui::sp(6), sub_rect.1 + gui::sp(30) + row * gui::sp(28), sub_rect.2.saturating_sub(gui::sp(12)), gui::sp(25));
                     if gui::in_rect(mx, my, row_rect) {
                         open_app(&mut compositor, *app_id);
                         compositor.close_start_menu();
@@ -4294,9 +4299,28 @@ pub extern "C" fn _start() -> ! {
         let now_cycles = read_cpu_cycles();
         let sample_window = unsafe { TSC_CYCLES_PER_US }.saturating_mul(250_000);
         if now_cycles.wrapping_sub(cpu_sample_start) >= sample_window {
-            taskmgr_app.cpu_usage_pct = if cpu_sample_total_cycles == 0 { 0 } else {
+            let bsp_pct = if cpu_sample_total_cycles == 0 { 0 } else {
                 (cpu_sample_active_cycles.saturating_mul(100) / cpu_sample_total_cycles).min(100) as usize
             };
+            taskmgr_app.cpu_usage_pct = bsp_pct;
+
+            let cpus = arch::x86_64::smp::cpu_count().min(arch::x86_64::smp::MAX_CPUS);
+            taskmgr_app.core_count = cpus;
+            taskmgr_app.core_usage_pct[0] = bsp_pct;
+
+            for c in 1..cpus {
+                let hb = arch::x86_64::smp::heartbeat(c);
+                let diff = hb.wrapping_sub(last_ap_heartbeats[c]);
+                last_ap_heartbeats[c] = hb;
+                // AP döngüsü her 500 boşta beklemede bir kalp atışı artırır.
+                // Aktif bir iş varsa poll_job yapılır veya kalp atışları canlılık gösterir.
+                taskmgr_app.core_usage_pct[c] = if arch::x86_64::smp::is_ap_online(c) {
+                    if diff > 0 { ((diff.min(50) * 100) / 50).min(100) as usize } else { 0 }
+                } else {
+                    0
+                };
+            }
+
             cpu_sample_start = now_cycles;
             cpu_sample_total_cycles = 0;
             cpu_sample_active_cycles = 0;

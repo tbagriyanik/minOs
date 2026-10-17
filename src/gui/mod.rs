@@ -691,8 +691,8 @@ impl MinGuiCompositor {
     }
 
     pub fn start_search_results_rect(menu_y: usize, group_index: usize, tb_y: usize, count: usize) -> (usize, usize, usize, usize) {
-        let sub_w = sp(230);
-        let sub_h = sp(28) + count * sp(24) + sp(6);
+        let sub_w = sp(240);
+        let sub_h = sp(32) + count * sp(28) + sp(8);
         let sub_x = 6 + sp(190) + 4;
         let cat_y = menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
@@ -700,9 +700,9 @@ impl MinGuiCompositor {
     }
 
     pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
-        let sub_w = sp(230);
+        let sub_w = sp(240);
         let count = MENU_GROUPS[group_index.min(3)].2;
-        let sub_h = sp(28) + count * sp(24) + sp(6);
+        let sub_h = sp(32) + count * sp(28) + sp(8);
         let sub_x = 6 + sp(190) + 4;
         let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
@@ -711,10 +711,10 @@ impl MinGuiCompositor {
 
     pub fn start_menu_subitem_rect(menu_y: usize, group_index: usize, item_in_group: usize, tb_y: usize) -> (usize, usize, usize, usize) {
         let (sub_x, sub_y, sub_w, _) = Self::start_menu_submenu_rect(menu_y, group_index, tb_y);
-        let x = sub_x + 6;
-        let y = sub_y + sp(28) + item_in_group * sp(24);
-        let w = sub_w - 12;
-        let h = sp(22);
+        let x = sub_x + sp(6);
+        let y = sub_y + sp(30) + item_in_group * sp(28);
+        let w = sub_w.saturating_sub(sp(12));
+        let h = sp(25);
         (x, y, w, h)
     }
 
@@ -2754,14 +2754,15 @@ impl MinGuiCompositor {
                 Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
             }
             for row in 0..count {
-                let r = (sub_x + 6, sub_y + sp(30) + row * sp(24), sub_w - 12, sp(22));
+                let r = (sub_x + sp(6), sub_y + sp(30) + row * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
                 let is_selected = row == self.selected_start_item;
                 let is_hovered = in_rect(mx, my, r);
                 if is_selected { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::ACCENT_BLUE); }
                 else if is_hovered { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR); }
                 let app_id = results[row];
                 let app_name = if english { en_names[app_id] } else { names[app_id] };
-                Self::draw_string_clipped(fb, r.0 + 8, r.1 + 5, app_name,
+                let text_y = r.1 + (r.3.saturating_sub(Self::text_height())) / 2;
+                Self::draw_string_clipped(fb, r.0 + 8, text_y, app_name,
                     if is_selected { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN },
                     (r.0 + 4, r.1 + 2, r.2 - 8, r.3 - 4));
             }

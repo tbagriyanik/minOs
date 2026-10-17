@@ -612,6 +612,113 @@ impl Framebuffer {
         }
     }
 
+    /// Yuvarlatılmış köşeli yarı saydam (alpha blended) dolu dikdörtgen.
+    /// `alpha`: 0 (tam şeffaf) .. 255 (tam opak). %50 saydamlık için 128 verilebilir.
+    pub fn draw_rounded_rect_alpha(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32, alpha: u8) {
+        if w == 0 || h == 0 || alpha == 0 {
+            return;
+        }
+        if alpha == 255 {
+            self.draw_rounded_rect(x, y, w, h, r, color);
+            return;
+        }
+        let r = r.min(w / 2).min(h / 2);
+        let c = rgb(color);
+        let br = (c >> 16) & 0xFF;
+        let bg = (c >> 8) & 0xFF;
+        let bb = c & 0xFF;
+
+        let a = alpha as u32;
+        let inv_a = 256 - a;
+        let br_a = br * a;
+        let bg_a = bg * a;
+        let bb_a = bb * a;
+
+        let r_sq = (r * r) as isize;
+
+        let x0 = x.max(self.clip.x0);
+        let y0 = y.max(self.clip.y0);
+        let x_end = (x + w).min(self.width).min(self.clip.x1);
+        let y_end = (y + h).min(self.height).min(self.clip.y1);
+        if x0 >= x_end || y0 >= y_end {
+            return;
+        }
+
+        let blend_pixel = |dst: u32| -> u32 {
+            let dr = (dst >> 16) & 0xFF;
+            let dg = (dst >> 8) & 0xFF;
+            let db = dst & 0xFF;
+            let nr = (dr * inv_a + br_a) >> 8;
+            let ng = (dg * inv_a + bg_a) >> 8;
+            let nb = (db * inv_a + bb_a) >> 8;
+            (nr << 16) | (ng << 8) | nb
+        };
+
+        let mid_y0 = (y + r).max(y0);
+        let mid_y1 = (y + h.saturating_sub(r)).min(y_end);
+
+        // Satır bazında alfa harmanlayıcı yardımcı
+        let blend_row = |cy: usize, dy: isize, check_corners: bool| {
+            let row_offset = cy * self.width;
+            let left_corner_end = if check_corners { (x + r).min(x_end) } else { x0 };
+            let right_corner_start = if check_corners { (x + w.saturating_sub(r)).max(x0) } else { x_end };
+
+            if check_corners {
+                for cx in x0..left_corner_end {
+                    let dx = (x + r - 1) as isize - cx as isize;
+                    if dx * dx + dy * dy <= r_sq {
+                        let offset = row_offset + cx;
+                        unsafe {
+                            if offset < BACKBUFFER_LEN {
+                                BACKBUFFER[offset] = blend_pixel(BACKBUFFER[offset]);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for cx in left_corner_end..right_corner_start {
+                let offset = row_offset + cx;
+                unsafe {
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = blend_pixel(BACKBUFFER[offset]);
+                    }
+                }
+            }
+
+            if check_corners {
+                for cx in right_corner_start..x_end {
+                    let dx = cx as isize - (x + w - r) as isize;
+                    if dx * dx + dy * dy <= r_sq {
+                        let offset = row_offset + cx;
+                        unsafe {
+                            if offset < BACKBUFFER_LEN {
+                                BACKBUFFER[offset] = blend_pixel(BACKBUFFER[offset]);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        // Üst köşe satırları
+        for cy in y0..mid_y0.min(y_end) {
+            let dy = (y + r - 1) as isize - cy as isize;
+            blend_row(cy, dy, true);
+        }
+
+        // Orta gövde satırları
+        for cy in mid_y0..mid_y1 {
+            blend_row(cy, 0, false);
+        }
+
+        // Alt köşe satırları
+        for cy in mid_y1.max(y0)..y_end {
+            let dy = cy as isize - (y + h - r) as isize;
+            blend_row(cy, dy, true);
+        }
+    }
+
     #[inline(always)]
     fn draw_rounded_row(
         &mut self,

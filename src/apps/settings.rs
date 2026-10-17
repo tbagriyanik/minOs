@@ -301,61 +301,60 @@ impl SystemSettings {
 
     // --- Tab 0 (Temel) Geometri ---
     pub fn kbd_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 270, win_y + sp(72), sp(110), sp(22))
+        (win_x + CONTENT_X + 270, win_y + sp(66), sp(110), sp(22))
     }
     pub fn language_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 270, win_y + sp(102), sp(110), sp(22))
+        (win_x + CONTENT_X + 270, win_y + sp(94), sp(110), sp(22))
     }
     pub fn region_btn_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 170, y + sp(162), sp(210), sp(22))
+        (x + CONTENT_X + 170, y + sp(152), sp(210), sp(22))
     }
     pub fn volume_track_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(222), sp(200), sp(10))
+        (win_x + CONTENT_X, win_y + sp(212), sp(200), sp(10))
     }
     pub fn mute_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 270, win_y + sp(216), sp(110), sp(22))
+        (win_x + CONTENT_X + 270, win_y + sp(206), sp(110), sp(22))
     }
     pub fn mouse_speed_track_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X, y + sp(308), sp(200), sp(10))
+        (x + CONTENT_X, y + sp(298), sp(200), sp(10))
     }
     pub fn double_click_dec_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 170, y + sp(338), sp(32), sp(22))
+        (x + CONTENT_X + 170, y + sp(330), sp(32), sp(22))
     }
     pub fn double_click_inc_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 290, y + sp(338), sp(32), sp(22))
+        (x + CONTENT_X + 290, y + sp(330), sp(32), sp(22))
     }
     pub fn reverse_scroll_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 170, y + sp(374), sp(140), sp(22))
+        (x + CONTENT_X + 170, y + sp(366), sp(140), sp(22))
     }
 
     // --- Tab 1 (Ekran) Geometri: tum ekran/gorunum ayarlari burada toplanir ---
     pub fn theme_btn_rect(win_x: usize, win_y: usize, _win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 270, win_y + sp(56), sp(110), sp(22))
+        (win_x + CONTENT_X + 270, win_y + sp(50), sp(110), sp(22))
     }
     pub fn theme_swatch_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + 170 + i * sp(28), win_y + sp(88), sp(24), sp(20))
+        (win_x + CONTENT_X + 170 + i * sp(28), win_y + sp(78), sp(24), sp(20))
     }
     pub fn theme_swatch_count() -> usize {
         ThemeId::ALL.len()
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + (i % 2) * sp(160), win_y + sp(152) + (i / 2) * sp(28), sp(150), sp(22))
+        (win_x + CONTENT_X + (i % 2) * sp(160), win_y + sp(144) + (i / 2) * sp(28), sp(150), sp(22))
     }
     pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
     pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 170 + i * sp(76), y + sp(224), sp(70), sp(22))
+        (x + CONTENT_X + 170 + i * sp(76), y + sp(218), sp(70), sp(22))
     }
     pub fn night_light_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X + 270, y + sp(260), sp(110), sp(22))
+        (x + CONTENT_X + 270, y + sp(256), sp(110), sp(22))
     }
     pub fn night_light_track_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
-        (x + CONTENT_X, y + sp(296), sp(200), sp(10))
+        (x + CONTENT_X, y + sp(292), sp(200), sp(10))
     }
     pub fn wallpaper_btn_rect(x: usize, y: usize, i: usize) -> (usize, usize, usize, usize) {
-        // 5 sütunlu ızgara (10 arka plan): 2 satır, düzgün boşluklar
         let col = i % 5;
         let row = i / 5;
-        (x + CONTENT_X + col * sp(82), y + sp(378) + row * sp(38), sp(74), sp(30))
+        (x + CONTENT_X + col * sp(82), y + sp(374) + row * sp(38), sp(74), sp(30))
     }
     pub fn wallpaper_count() -> usize { crate::gui::wallpaper::COUNT }
     pub fn region_offset(&self) -> i8 { match self.region { 1 => 0, 2 => -5, _ => 3 } }
@@ -762,8 +761,8 @@ impl SystemSettings {
                     KeyboardLayout::TurkishQ => if self.language.is_english() { "Keyboard: Turkish (TR-Q)" } else { "Klavye: Türkçe (TR-Q)" },
                     KeyboardLayout::EnglishUS => "Keyboard: English (EN-US)",
                 };
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(76), kbd_str, Color::ACCENT_PINK,
-                    (win_x + CONTENT_X, win_y + sp(72), sp(260), sp(22)));
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(70), kbd_str, Color::ACCENT_PINK,
+                    (win_x + CONTENT_X, win_y + sp(66), sp(260), sp(22)));
                 let kbd_r = Self::kbd_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(
                     fb,
@@ -775,9 +774,9 @@ impl SystemSettings {
                 );
                 if self.focused_control == 5 { fb.draw_rect_outline(kbd_r.0, kbd_r.1, kbd_r.2, kbd_r.3, Color::ACCENT_YELLOW); }
 
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(106),
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(98),
                     if self.language.is_english() { "Interface language:" } else { "Arayüz dili:" }, Color::ACCENT_PINK,
-                    (win_x + CONTENT_X, win_y + sp(102), sp(260), sp(22)));
+                    (win_x + CONTENT_X, win_y + sp(94), sp(260), sp(22)));
                 let lang_r = Self::language_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(fb, lang_r, Color::ACCENT_PINK,
                     if self.language.is_english() { "Turkish" } else { "English" }, Color::DARK_BG, false);
@@ -791,7 +790,7 @@ impl SystemSettings {
                 clock.push_u2(now.minute as u32);
                 clock.push_byte(b':');
                 clock.push_u2(now.second as u32);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(136), clock.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(126), clock.as_str(), Color::ACCENT_GREEN);
 
                 let mut date = TextBuf::new();
                 date.push_str(if self.language.is_english() { "Date: " } else { "Tarih: " });
@@ -803,9 +802,9 @@ impl SystemSettings {
                 date.push_str(", ");
                 let weekday = DateTime::weekday(now.year, now.month, now.day);
                 date.push_str(if self.language.is_english() { DateTime::weekday_name_en(weekday) } else { DateTime::weekday_name(weekday) });
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 170, win_y + sp(136), date.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 170, win_y + sp(126), date.as_str(), Color::TEXT_MAIN);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(166),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(156),
                     if self.language.is_english() { "Time Zone:" } else { "Bölge / Saat:" }, Color::TEXT_MAIN);
                 let reg_r = Self::region_btn_rect(win_x, win_y);
                 MinGuiCompositor::draw_button(fb, reg_r, Color::ACCENT_BLUE, self.region_name(self.language.is_english()), Color::TEXT_MAIN, false);
@@ -817,7 +816,7 @@ impl SystemSettings {
                 if self.is_muted {
                     vol.push_str(if self.language.is_english() { " (MUTED)" } else { " (SUSTURULDU)" });
                 }
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(200), vol.as_str(), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(190), vol.as_str(), Color::TEXT_MAIN);
 
                 let track = Self::volume_track_rect(win_x, win_y);
                 fb.draw_rect(track.0, track.1, track.2, track.3, Color::TITLE_BAR_INACTIVE);
@@ -833,10 +832,10 @@ impl SystemSettings {
                 if self.focused_control == 8 { fb.draw_rect_outline(mute_r.0, mute_r.1, mute_r.2, mute_r.3, Color::ACCENT_YELLOW); }
 
                 // --- Fare Ayarları Bölümü ---
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(260),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(250),
                     crate::gui::ui_text("Fare Ayarları", "Mouse Settings"), Color::ACCENT_PINK);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(288),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(278),
                     crate::gui::ui_text("İşaretçi hızı:", "Pointer speed:"), Color::TEXT_MAIN);
                 let speed_track = Self::mouse_speed_track_rect(win_x, win_y);
                 fb.draw_rect(speed_track.0, speed_track.1, speed_track.2, speed_track.3, Color::TITLE_BAR_INACTIVE);
@@ -846,7 +845,7 @@ impl SystemSettings {
                 let mut speed_label = TextBuf::new(); speed_label.push_usize(self.mouse_speed as usize);
                 MinGuiCompositor::draw_string(fb, speed_track.0 + speed_track.2 + 12, speed_track.1 - 2, speed_label.as_str(), Color::TEXT_MAIN);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(342),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(334),
                     crate::gui::ui_text("Çift tıklama:", "Double-click:"), Color::TEXT_MAIN);
                 let dec = Self::double_click_dec_rect(win_x, win_y);
                 let inc = Self::double_click_inc_rect(win_x, win_y);
@@ -855,9 +854,9 @@ impl SystemSettings {
                 let mut click_label = TextBuf::new();
                 click_label.push_usize(self.double_click_ms as usize);
                 click_label.push_str(" ms");
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 215, win_y + sp(342), click_label.as_str(), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + 215, win_y + sp(334), click_label.as_str(), Color::ACCENT_GREEN);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(378),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(370),
                     crate::gui::ui_text("Tekerlek yönü:", "Scroll direction:"), Color::TEXT_MAIN);
                 let reverse = Self::reverse_scroll_rect(win_x, win_y);
                 MinGuiCompositor::draw_button(fb, reverse, if self.reverse_scroll { Color::ACCENT_GREEN } else { Color::TITLE_BAR },
@@ -871,8 +870,8 @@ impl SystemSettings {
                 let mut theme_str = TextBuf::new();
                 theme_str.push_str(if self.language.is_english() { "Theme: " } else { "Tema: " });
                 theme_str.push_str(self.theme.name());
-                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(60), theme_str.as_str(), Color::TEXT_MAIN,
-                    (win_x + CONTENT_X, win_y + sp(56), sp(260), sp(22)));
+                MinGuiCompositor::draw_string_clipped(fb, win_x + CONTENT_X, win_y + sp(54), theme_str.as_str(), Color::TEXT_MAIN,
+                    (win_x + CONTENT_X, win_y + sp(50), sp(260), sp(22)));
                 let theme_r = Self::theme_btn_rect(win_x, win_y, win_w);
                 MinGuiCompositor::draw_button(fb, theme_r, Color::ACCENT_BLUE,
                     if self.language.is_english() { "Change" } else { "Değiştir" }, Color::DARK_BG, false);
@@ -888,9 +887,9 @@ impl SystemSettings {
                 let mut audio_status = TextBuf::new();
                 audio_status.push_str(crate::gui::ui_text("Ses sürücüsü: ", "Audio driver: "));
                 audio_status.push_str(audio_driver);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(120), audio_status.as_str(), Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(112), audio_status.as_str(), Color::ACCENT_BLUE);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(144),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(134),
                     if self.language.is_english() { "Target resolution:" } else { "Hedef çözünürlük:" }, Color::ACCENT_YELLOW);
                 for i in 0..4 {
                     let r = Self::resolution_btn_rect(win_x,win_y,i);
@@ -898,7 +897,7 @@ impl SystemSettings {
                     MinGuiCompositor::draw_button(fb, r, if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR}, Self::resolution_name(i), Color::TEXT_MAIN, false);
                 }
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(228),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(222),
                     if self.language.is_english() { "Font zoom:" } else { "Yazı boyutu:" }, Color::TEXT_MAIN);
                 for (i, value) in [100u8,125,150].iter().enumerate() {
                     let label = match value { 125=>"125%", 150=>"150%", _=>"100%" };
@@ -906,12 +905,12 @@ impl SystemSettings {
                     MinGuiCompositor::draw_button(fb, r, if self.zoom==*value{Color::ACCENT_GREEN}else{Color::TITLE_BAR}, label, Color::TEXT_MAIN, false);
                 }
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(264),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(260),
                     match (self.night_light,self.language.is_english()) { (true,true)=>"Blue light: On", (false,true)=>"Blue light: Off", (true,false)=>"Mavi ışık: Açık", (false,false)=>"Mavi ışık: Kapalı" }, Color::ACCENT_YELLOW);
                 let nl_btn = Self::night_light_rect(win_x,win_y);
                 MinGuiCompositor::draw_button(fb, nl_btn, Color::ACCENT_YELLOW, match (self.night_light,self.language.is_english()) { (true,true)=>"Off", (false,true)=>"On", (true,false)=>"Kapat", (false,false)=>"Aç" }, Color::DARK_BG, false);
 
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(294),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(290),
                     if self.language.is_english() { "Filter strength:" } else { "Filtre şiddeti:" }, Color::TEXT_MAIN);
                 let nl = Self::night_light_track_rect(win_x,win_y);
                 fb.draw_rect(nl.0,nl.1,nl.2,nl.3,Color::TITLE_BAR_INACTIVE);
@@ -922,9 +921,9 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb,nl.0+nl.2+12,nl.1 - 2,level_text.as_str(),Color::TEXT_MAIN);
 
                 // --- Arka plan / duvar kağıdı seçimi ---
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(338),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(334),
                     if self.language.is_english() { "Background / wallpaper:" } else { "Arka plan / duvar kağıdı:" }, Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(356),
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(352),
                     crate::gui::wallpaper::name(self.wallpaper, self.language.is_english()), Color::ACCENT_BLUE);
                 for i in 0..crate::gui::wallpaper::COUNT {
                     let r = Self::wallpaper_btn_rect(win_x, win_y, i);

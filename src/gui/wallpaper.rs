@@ -157,7 +157,7 @@ pub fn draw(fb: &mut Framebuffer) {
             }
             7 => draw_starry(fb, w, h),
             8 => draw_hex_pattern(fb, w, h),
-            9 => draw_cyber_grid(fb, w, h),
+            9 => draw_carbon_fiber(fb, w, h),
             _ => draw_geometric(fb, w, h),
         }
 
@@ -248,53 +248,59 @@ fn draw_hex_pattern(fb: &mut Framebuffer, w: usize, h: usize) {
     }
 }
 
-/// Siber Izgara (Cyber Grid) - Perspektifli karanlık uzay ızgarası ve neon ufuk
+/// Karbon Doku (Carbon Fiber) - Şık, 3B dokulu örgü karbon fiber deseni (Twill Weave)
 #[allow(dead_code)]
-fn draw_cyber_grid(fb: &mut Framebuffer, w: usize, h: usize) {
-    let horizon = h * 55 / 100;
-    // Gökyüzü: koyu lacivertten eflatuna gradyan
-    fb.draw_vgradient(0, 0, w, horizon, 0x070614, 0x1A0F2E);
-    // Zemin: eflatun-mor uzay zemini
-    fb.draw_vgradient(0, horizon, w, h - horizon, 0x160B26, 0x05020A);
+fn draw_carbon_fiber(fb: &mut Framebuffer, w: usize, h: usize) {
+    // Koyu antrasit zemin
+    fb.clear(0x0C0D0F);
 
-    // Parlayan neon ufuk çizgisi
-    fb.draw_rect(0, horizon.saturating_sub(1), w, 2, 0xC4458D);
-    if horizon >= 2 {
-        fb.draw_rect(0, horizon - 2, w, 1, 0x6E2452);
-    }
-    if horizon + 1 < h {
-        fb.draw_rect(0, horizon + 1, w, 1, 0x7E225E);
-    }
+    // 8x8 piksellik örgülü karbon lifi deseni
+    // Her 8x8 hücre 4 adet 4x4'lük bloktan oluşur (2x2 twill örgü simülasyonu)
+    let block = 4usize;
+    let cell = block * 2; // 8
 
-    // Ufuk altındaki perspektifli yatay ızgara çizgileri (aşağı indikçe aralık genişler)
-    let ground_h = h - horizon;
-    let mut step = 6usize;
-    let mut gy = 4usize;
-    while gy < ground_h {
-        let py = horizon + gy;
-        if py < h {
-            let col = if gy > ground_h * 2 / 3 { 0x933075 } else { 0x541C48 };
-            fb.draw_rect(0, py, w, 1, col);
-        }
-        gy += step;
-        step += 4;
-    }
+    let mut cy = 0usize;
+    while cy < h {
+        let block_row = cy / block;
+        let mut cx = 0usize;
+        while cx < w {
+            let block_col = cx / block;
+            // Çapraz dama / örgü yönü:
+            // Bir blok yatay lifleri (üstten aydınlatmalı), diğeri dikey lifleri temsil eder
+            let is_horizontal = ((block_row + block_col) & 1) == 0;
 
-    // Perspektifli dikey kaçış çizgileri (ufuk merkezinden aşağıya doğru yayılır)
-    let cx = w / 2;
-    let count = 16;
-    for i in 0..=count {
-        let bottom_x = i * w / count;
-        // Basit ve hızlı dikey kaçış çizgisi
-        let mut py = horizon;
-        while py < h {
-            let progress = (py - horizon) * 256 / ground_h.max(1);
-            let px = (cx as isize + ((bottom_x as isize - cx as isize) * progress as isize / 256)) as usize;
-            if px < w {
-                fb.draw_rect(px, py, 1, 2, 0x5E1C52);
+            if is_horizontal {
+                // Yatay karbon ipliği: 4 satır, üst açık/parlak gri, alt gölgeli koyu gri
+                let bw = block.min(w - cx);
+                if cy < h { fb.draw_rect(cx, cy, bw, 1, 0x2A2C32); }
+                if cy + 1 < h { fb.draw_rect(cx, cy + 1, bw, 1, 0x222428); }
+                if cy + 2 < h { fb.draw_rect(cx, cy + 2, bw, 1, 0x1A1B1E); }
+                if cy + 3 < h { fb.draw_rect(cx, cy + 3, bw, 1, 0x121316); }
+            } else {
+                // Dikey karbon ipliği: sol kenar aydınlık, sağ kenar gölgeli
+                let bh = block.min(h - cy);
+                if cx < w { fb.draw_rect(cx, cy, 1, bh, 0x282A30); }
+                if cx + 1 < w { fb.draw_rect(cx + 1, cy, 1, bh, 0x202226); }
+                if cx + 2 < w { fb.draw_rect(cx + 2, cy, 1, bh, 0x18191C); }
+                if cx + 3 < w { fb.draw_rect(cx + 3, cy, 1, bh, 0x101114); }
             }
-            py += 2;
+
+            cx += block;
         }
+        cy += block;
+    }
+
+    // Karbon dikiş kesişim noktaları ve derinlik gölgeleri:
+    // Her 8 pikselde bir hafif koyu ayrım çizgisi
+    let mut grid_y = 0usize;
+    while grid_y < h {
+        fb.draw_rect(0, grid_y, w, 1, 0x08080A);
+        grid_y += cell;
+    }
+    let mut grid_x = 0usize;
+    while grid_x < w {
+        fb.draw_rect(grid_x, 0, 1, h, 0x08080A);
+        grid_x += cell;
     }
 }
 
@@ -361,16 +367,23 @@ pub fn draw_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize
             fb.draw_rect(x + 16, y + 18, 6, 1, 0x223652);
         }
         9 => {
-            // Siber Izgara önizleme (Cyber Grid)
-            let mid = y + h / 2;
-            fb.draw_vgradient(x, y, w, h / 2, 0x070614, 0x1A0F2E);
-            fb.draw_vgradient(x, mid, w, h - h / 2, 0x160B26, 0x05020A);
-            fb.draw_rect(x, mid, w, 1, 0xC4458D);
-            fb.draw_rect(x, mid + 4, w, 1, 0x6E2452);
-            fb.draw_rect(x, mid + 10, w, 1, 0x933075);
-            fb.draw_rect(x + w / 2, mid, 1, h / 2, 0x6E2452);
-            fb.draw_rect(x + w / 4, mid, 1, h / 2, 0x4E183B);
-            fb.draw_rect(x + w * 3 / 4, mid, 1, h / 2, 0x4E183B);
+            // Karbon Doku önizleme (Carbon Fiber)
+            fb.draw_rect(x, y, w, h, 0x0C0D0F);
+            let mut cy = y;
+            while cy < y + h {
+                let row = (cy - y) / 3;
+                let mut cx = x;
+                while cx < x + w {
+                    let col = (cx - x) / 3;
+                    let is_horiz = ((row + col) & 1) == 0;
+                    let c = if is_horiz { 0x24262C } else { 0x16171A };
+                    let bw = 3.min(x + w - cx);
+                    let bh = 3.min(y + h - cy);
+                    fb.draw_rect(cx, cy, bw, bh, c);
+                    cx += 3;
+                }
+                cy += 3;
+            }
         }
         _ => {
             fb.draw_rect(x, y, w, h, 0x1A1E2A);

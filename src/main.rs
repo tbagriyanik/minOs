@@ -3623,7 +3623,7 @@ pub extern "C" fn _start() -> ! {
                     if app_is_focused(&compositor, 2) { notepad_app.copy_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_copy(); }
                     else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, false); }
-                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.copy_selection(&mut file_clipboard, false); }
+                    else if desktop_files.selected_items.iter().any(|&s| s) || desktop_files.selected_idx < desktop_files.file_count { desktop_files.copy_selection(&mut file_clipboard, false); }
                     else if app_is_focused(&compositor, 8) { calculator_app.copy_result(); }
                     else if app_is_focused(&compositor, 10) { terminal_app.copy_input(); }
                 }
@@ -3631,15 +3631,15 @@ pub extern "C" fn _start() -> ! {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_paste(); }
                     else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
-                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                     else if app_is_focused(&compositor, 8) { calculator_app.paste_expression(); }
                     else if app_is_focused(&compositor, 10) { terminal_app.paste_clipboard(); }
+                    else { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
                     if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_cut(); }
                     else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, true); }
-                    else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.copy_selection(&mut file_clipboard, true); }
+                    else if desktop_files.selected_items.iter().any(|&s| s) || desktop_files.selected_idx < desktop_files.file_count { desktop_files.copy_selection(&mut file_clipboard, true); }
                     else if app_is_focused(&compositor, 8) { calculator_app.cut_expression(); }
                 }
                 drivers::keyboard::KeyAction::SelectAllText => {
@@ -3775,8 +3775,9 @@ pub extern "C" fn _start() -> ! {
                         filemanager_app.rename_delete();
                     } else if desktop_files.rename_active {
                         desktop_files.rename_delete();
-                    } else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] {
+                    } else if desktop_files.selected_items.iter().any(|&s| s) || (desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx]) {
                         desktop_files.delete_selected(&mut fs_mgr.vfs);
+                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                     }
                 }
                 drivers::keyboard::KeyAction::DeleteWordBack => {
@@ -4037,7 +4038,8 @@ pub extern "C" fn _start() -> ! {
                         if !filemanager_app.selected_items[src_idx] { filemanager_app.selected_items = [false; apps::filemanager::MAX_ITEMS]; filemanager_app.selected_items[src_idx] = true; }
                     }
                 }
-                if let Some((_, fm_win)) = focused_window_for_app(&compositor, 0) {
+                let fm_win_opt = compositor.windows.iter().flatten().find(|w| w.app_id == 0 && w.is_open && !w.is_minimized);
+                if let Some(fm_win) = fm_win_opt {
                     let target = filemanager_app.drop_target_at(fm_win.x, fm_win.y, fm_win.width, fm_win.height, fm_win.scroll.y, mx, my);
                     if desktop_drag_source { desktop_files.drag_target = target; }
                     else { filemanager_app.drag_target = target; }
@@ -4144,13 +4146,20 @@ pub extern "C" fn _start() -> ! {
                     if let Some(target) = drag_target {
                         let src_app = if desktop_drag_source { &mut desktop_files } else { &mut filemanager_app };
                         match src_app.execute_drop(src_idx, target, keyboard.ctrl, &mut fs_mgr.vfs) {
-                            Ok(_) => { src_app.refresh_from_vfs(&fs_mgr.vfs); }
-                            Err(err) => { src_app.set_status_text(err); }
+                            Ok(_) => {
+                                desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            }
+                            Err(err) => {
+                                if desktop_drag_source { desktop_files.set_status_text(err); }
+                                else { filemanager_app.set_status_text(err); }
+                            }
                         }
                     } else if !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
                         let source = if desktop_drag_source { &mut desktop_files } else { &mut filemanager_app };
                         let indices = source.drag_items;
                         let source_count = source.file_count;
+                        let mut done_count = 0;
                         for i in 0..source_count {
                             if !(indices[i] || i == src_idx) { continue; }
                             let name = source.files[i].display_name();
@@ -4158,12 +4167,23 @@ pub extern "C" fn _start() -> ! {
                             let mut src_path = alloc::string::String::from(source.path());
                             if !src_path.ends_with('/') { src_path.push('/'); }
                             src_path.push_str(name);
-                            if desktop_drag_source { if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, "/desktop"); } else { let _ = fs_mgr.vfs.move_item(&src_path, "/desktop"); } }
-                            else if keyboard.ctrl { let _ = fs_mgr.vfs.copy_item(&src_path, "/desktop"); }
-                            else { let _ = fs_mgr.vfs.move_item(&src_path, "/desktop"); }
+                            if keyboard.ctrl {
+                                if fs_mgr.vfs.copy_item(&src_path, "/desktop").is_ok() { done_count += 1; }
+                            } else {
+                                if fs_mgr.vfs.move_item(&src_path, "/desktop").is_ok() { done_count += 1; }
+                            }
                         }
-                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                        if !desktop_drag_source { filemanager_app.refresh_from_vfs(&fs_mgr.vfs); }
+                        if done_count > 0 {
+                            desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            let msg = if keyboard.ctrl {
+                                gui::ui_text("Masaüstüne kopyalandı.", "Copied to Desktop.")
+                            } else {
+                                gui::ui_text("Masaüstüne taşındı.", "Moved to Desktop.")
+                            };
+                            if desktop_drag_source { desktop_files.set_status_text(msg); }
+                            else { filemanager_app.set_status_text(msg); }
+                        }
                     }
                 }
             }

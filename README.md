@@ -15,6 +15,11 @@
 
 ## Yenilikler
 
+- **📁 Çoklu Dosya Seçimi ve Toplu İşlemler:** Masaüstünde ve Dosya Yöneticisi'nde `Ctrl` ve `Shift` tuşlarıyla birden fazla dosya/klasör seçebilme; seçilen tüm öğeleri toplu olarak kopyalama (`Ctrl+C`), kesme (`Ctrl+X`), panoya alma ve kalıcı/Geri Dönüşüm Kutusu'na silme (`Delete`) desteği.
+- **🔄 Masaüstü ↔ Dosya Yöneticisi İki Yönlü Sürükle-Bırak (Drag & Drop):** Masaüstünden seçilen tek veya çoklu dosyaları Dosya Yöneticisi pencerelerine (açık olan dizine, kenar çubuğundaki hızlı konumlara veya klasörlere) ya da Dosya Yöneticisi'nden masaüstü boşluğuna sürükleyip bırakarak taşıma ve kopyalama (`Ctrl` basılıyken kopyalama, varsayılanda taşıma). İşlem sonrası her iki arayüzde anında dinamik VFS senkronizasyonu.
+- **🏁 Karbon Doku (Carbon Fiber) Masaüstü Duvar Kağıdı:** Gerçekçi 2x2 Twill Weave (çapraz örgülü) karbon fiber dokusu; yatay ve dikey antrasit lifler, aydınlık/gölge derinlik geçişleri ve pürüzsüz arka plan önbellek (`WALLPAPER_CACHE`) entegrasyonu.
+- **⌨️ Nümerik Enter ve Gelişmiş Klavye Kısayolları:** Numpad (sayı tuş takımı) üzerindeki `Enter` tuşunun Terminal (cmd) ve tüm diyaloglarda standart `Enter` ile birebir aynı komut yürütme işlevini görmesi.
+- **🪟 Windows Tuş Kombinasyonu İyileştirmeleri:** `Win + D` gibi sistem kısayollarında Başlat menüsünün yanlışlıkla açılmasının engellenmesi ve masaüstünü göster işlevinin kararlı çalışması.
 - **✨ Sağ Tık Bağlam Menüsünde "Yeni ▶" Alt Menüsü:** Masaüstü ve Dosya Yöneticisi sağ tık menüsüne modern işletim sistemlerindeki gibi yana açılır hiyerarşik "Yeni ▶" (New ▶) alt menüsü eklendi. Metin Belgesi (`.txt`), Klasör, Çizim / Resim (`.bmp`) ve Boş Belge (`.dat`) doğrudan sağ tık menüsünden anında oluşturulabilir.
 - **📸 Evrensel Ekran Görüntüsü Alma (PrtScn / F12):** Herhangi bir ekranda `PrtScn` veya `F12` tuşuna basıldığında tüm ekran 24-bit uncompressed `.bmp` formatında `/desktop/ekran_N.bmp` dosyasına anında kaydedilir ve sesli bildirim verilir.
 - **⚡ Hızlı Çalıştır / Run Program Diyaloğu (Win+R):** `Win + R` tuş kombinasyonu ile açılan şık ve gölgeli modal pencereden `cmd`, `not`, `ayar`, `task`, `calc`, `web`, `files` gibi komutlarla hızlı uygulama başlatma.

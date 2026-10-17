@@ -89,6 +89,7 @@ pub enum Source {
 pub enum DropTarget {
     Sidebar(usize),
     Folder(usize),
+    CurrentDirectory,
 }
 
 pub struct FileManagerApp {
@@ -370,9 +371,8 @@ impl FileManagerApp {
     }
 
     pub fn copy_selection(&mut self, clipboard: &mut FileClipboard, cut: bool) {
-        if self.selected_idx >= self.file_count { return; }
-        if !self.selected_items[self.selected_idx] {
-            self.selected_items = [false; MAX_ITEMS];
+        if !self.selected_items.iter().any(|&s| s) {
+            if self.selected_idx >= self.file_count { return; }
             self.selected_items[self.selected_idx] = true;
         }
         clipboard.count = 0;
@@ -479,10 +479,12 @@ impl FileManagerApp {
     /// Geri Dönüşüm Kutusu'na (`/root/Trash`) taşınır. Çöp kutusundayken yapılan
     /// silme işlemi ise kalıcıdır (boşaltma davranışı).
     pub fn delete_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
-        if self.selected_idx >= self.file_count {
-            return false;
+        if !self.selected_items.iter().any(|&s| s) {
+            if self.selected_idx >= self.file_count {
+                return false;
+            }
+            self.selected_items[self.selected_idx] = true;
         }
-        if !self.selected_items[self.selected_idx] { self.selected_items = [false; MAX_ITEMS]; self.selected_items[self.selected_idx] = true; }
         let mut any = false;
         for i in (0..self.file_count).rev() {
             if !self.selected_items[i] { continue; }
@@ -725,12 +727,18 @@ impl FileManagerApp {
             }
         }
 
+        // Dropping anywhere else inside file manager window targets current directory
+        if mx >= win_x && mx < win_x + win_w && my >= win_y && my < win_y + win_h {
+            return Some(DropTarget::CurrentDirectory);
+        }
+
         None
     }
 
     pub fn target_directory(&self, target: DropTarget) -> Option<String> {
         match target {
             DropTarget::Sidebar(idx) => Some(String::from(Self::sidebar_path(idx))),
+            DropTarget::CurrentDirectory => Some(String::from(self.path())),
             DropTarget::Folder(i) => {
                 if i >= self.file_count || !self.files[i].is_dir {
                     return None;
@@ -757,6 +765,7 @@ impl FileManagerApp {
     pub fn target_display_name(&self, target: DropTarget) -> String {
         match target {
             DropTarget::Sidebar(idx) => String::from(Self::sidebar_name(idx)),
+            DropTarget::CurrentDirectory => String::from(self.path()),
             DropTarget::Folder(i) => {
                 if i < self.file_count {
                     String::from(self.files[i].display_name())

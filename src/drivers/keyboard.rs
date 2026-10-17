@@ -340,7 +340,13 @@ impl KeyboardState {
             let released = scancode & 0x7F;
             if released == 0x1D { self.ctrl = false; }
             if released == 0x38 { self.alt = false; self.alt_gr = false; }
-            if released == 0x5B || released == 0x5C { self.super_key = false; }
+            if released == 0x5B || released == 0x5C {
+                self.super_key = false;
+                if !self.super_key_combo {
+                    self.push_action(KeyAction::ToggleStartMenu);
+                }
+                self.super_key_combo = false;
+            }
             return None;
         }
 

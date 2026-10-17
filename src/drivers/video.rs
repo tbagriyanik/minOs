@@ -396,6 +396,19 @@ impl Framebuffer {
         }
     }
 
+    #[inline(always)]
+    pub fn get_pixel(&self, x: usize, y: usize) -> u32 {
+        if x < self.width && y < self.height {
+            let offset = y * self.width + x;
+            unsafe {
+                if offset < BACKBUFFER_LEN {
+                    return BACKBUFFER[offset];
+                }
+            }
+        }
+        0
+    }
+
     /// RGB alt piksel kapsamıyla mevcut arka plan üzerine metin pikseli karıştırır.
     /// `coverage` her kanal için 0..255 aralığında örtüşme miktarıdır.
     pub fn put_subpixel_text(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3]) {

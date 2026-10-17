@@ -91,4 +91,30 @@ impl AudioDevice {
             self.pc_speaker_active = true;
         }
     }
+
+    /// Başlangıç veya bildirim melodisi (chime).
+    pub fn play_chime(&mut self) {
+        if self.is_muted || self.volume_left == 0 { return; }
+        // C5 (523Hz) -> E5 (659Hz) -> G5 (784Hz)
+        let notes = [523u32, 659, 784];
+        for &freq in &notes {
+            self.set_pc_speaker_tone(freq);
+            let start = crate::monotonic_ms();
+            while crate::monotonic_ms().saturating_sub(start) < 45 {
+                core::hint::spin_loop();
+            }
+        }
+        self.set_pc_speaker_tone(0);
+    }
+
+    /// Hızlı tıklama veya bildirim sesi (beep).
+    pub fn play_beep(&mut self, freq: u32, duration_ms: usize) {
+        if self.is_muted || self.volume_left == 0 { return; }
+        self.set_pc_speaker_tone(freq);
+        let start = crate::monotonic_ms();
+        while crate::monotonic_ms().saturating_sub(start) < duration_ms as u64 {
+            core::hint::spin_loop();
+        }
+        self.set_pc_speaker_tone(0);
+    }
 }

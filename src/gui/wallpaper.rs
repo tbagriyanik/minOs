@@ -149,8 +149,11 @@ fn draw_starry(fb: &mut Framebuffer, w: usize, h: usize) {
 #[allow(dead_code)]
 fn draw_sunset(fb: &mut Framebuffer, w: usize, h: usize) {
     let sky_h = h * 2 / 3;
+    // 1. Gökyüzü: İki parçalı dikey gradyan (mor -> kızıl -> turuncu)
     fb.draw_vgradient(0, 0, w, sky_h / 2, 0x2B1B4E, 0xB44A6B);
     fb.draw_vgradient(0, sky_h / 2, w, sky_h - sky_h / 2, 0xB44A6B, 0xF5A25D);
+
+    // 2. Güneş: Yatay satır satır hızlı çizim (çember)
     let sx = w / 2;
     let sy = sky_h.saturating_sub(sky_h / 6);
     let sr = (w.min(h) / 12).max(20);
@@ -159,33 +162,57 @@ fn draw_sunset(fb: &mut Framebuffer, w: usize, h: usize) {
     while y < y_end {
         let dy = y as isize - sy as isize;
         let dx = int_sqrt((sr * sr).saturating_sub((dy * dy) as usize)) as usize;
-        let x0 = sx.saturating_sub(dx).max(0);
+        let x0 = sx.saturating_sub(dx);
         let x1 = (sx + dx).min(w);
         if x1 > x0 { fb.draw_rect(x0, y, x1 - x0, 1, 0xFFE6A3); }
         y += 1;
     }
+
+    // 3. Arka Dağ Silüeti (0x3A2140): 4 piksellik blok adımlarıyla hızlı çizim (1280 yerine 320 çağrı)
     let base = sky_h;
-    for x in 0..w {
+    let step = 4;
+    let mut x = 0;
+    while x < w {
+        let bw = step.min(w - x);
         let h1 = base + pseudo(x, 7, h / 8);
-        let h2 = base + pseudo(x + 3917, 13, h / 5);
         let y1 = h1.min(h);
+        if y1 < h { fb.draw_rect(x, y1, bw, h - y1, 0x3A2140); }
+        x += step;
+    }
+
+    // 4. Ön Dağ Silüeti (0x241426): 4 piksellik blok adımlarıyla hızlı çizim
+    let mut x = 0;
+    while x < w {
+        let bw = step.min(w - x);
+        let h2 = base + pseudo(x + 3917, 13, h / 5);
         let y2 = h2.min(h);
-        if y1 < h { fb.draw_rect(x, y1, 1, h - y1, 0x3A2140); }
-        if y2 < h { fb.draw_rect(x, y2, 1, h - y2, 0x241426); }
+        if y2 < h { fb.draw_rect(x, y2, bw, h - y2, 0x241426); }
+        x += step;
+    }
+
+    // 5. Taban zemin dolgusu: ufuk altındaki en alt kısmı tek bir yatay blokla mühürle
+    let ground_y = (base + h / 5).min(h);
+    if ground_y < h {
+        fb.draw_rect(0, ground_y, w, h - ground_y, 0x241426);
     }
 }
 
 #[allow(dead_code)]
 fn draw_ocean(fb: &mut Framebuffer, w: usize, h: usize) {
     fb.draw_vgradient(0, 0, w, h, 0x0A2E4E, 0x0E5A7A);
-    let bands = 5;
+    let bands = 4;
+    let step = 4;
     for b in 0..bands {
         let y = h * (b + 1) / (bands + 1);
         let amp = 6 + b * 3;
-        for x in 0..w {
+        let col = shade(0x2EA8C8, (b as i16 - 2) * 8);
+        let mut x = 0;
+        while x < w {
+            let bw = step.min(w - x);
             let off = pseudo(x + b * 733, 5, amp * 2) as isize - amp as isize;
             let yy = (y as isize + off).clamp(0, h as isize - 1) as usize;
-            fb.draw_rect(x, yy, 1, 2, shade(0x2EA8C8, (b as i16 - 2) * 8));
+            fb.draw_rect(x, yy, bw, 2, col);
+            x += step;
         }
     }
 }

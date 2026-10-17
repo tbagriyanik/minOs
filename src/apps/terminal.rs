@@ -7,7 +7,6 @@
 use crate::drivers::video::Framebuffer;
 use crate::drivers::rtc::DateTime;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use crate::gui::theme;
 use crate::fs::vfs::{VirtualFileSystem, NodeType};
 use crate::mm::pmm::PhysicalMemoryManager;
 
@@ -251,6 +250,28 @@ impl TerminalApp {
         }
         while self.input_len > 0 && self.input[self.input_len - 1] != b' ' {
             self.input_len -= 1;
+        }
+    }
+
+    /// Panoya terminal giriş satırını veya son satırı kopyalar.
+    pub fn copy_input(&self) {
+        if self.input_len > 0 {
+            if let Ok(s) = core::str::from_utf8(&self.input[..self.input_len]) {
+                crate::gui::clipboard::set_str(s);
+            }
+        } else if self.out_count > 0 {
+            crate::gui::clipboard::set_str(self.out[self.out_count - 1].as_str());
+        }
+    }
+
+    /// Panodaki metni terminal girişine ekler.
+    pub fn paste_clipboard(&mut self) {
+        let mut pasted = ['\0'; crate::gui::clipboard::CAPACITY];
+        let len = crate::gui::clipboard::copy_chars(&mut pasted);
+        for &ch in &pasted[..len] {
+            if ch == '\0' || ch == '\r' { continue; }
+            if ch == '\n' { self.submit(); continue; }
+            self.insert(ch);
         }
     }
 
@@ -944,18 +965,41 @@ impl TerminalApp {
                 b.push_u2(now.second as u32);
                 self.push_line(b.as_str(), Color::ACCENT_BLUE);
             }
-            "uname" => {
-                self.push_line("minOs x86_64 Sarman Edition v2.0", Color::ACCENT_PINK);
-            }
-            "whoami" => {
-                self.push_line("sarman (root)", Color::ACCENT_YELLOW);
-            }
-            "theme" => {
-                let t = theme::cycle();
+            "uptime" => {
+                let ms = crate::monotonic_ms();
+                let secs = ms / 1000;
+                let mins = secs / 60;
+                let hours = mins / 60;
                 let mut b = TextBuf::new();
-                b.push_str(crate::gui::ui_text("Tema: ", "Theme: "));
-                b.push_str(t.name());
-                self.push_line(b.as_str(), Color::ACCENT_PINK);
+                b.push_str(crate::gui::ui_text("Çalışma Süresi: ", "Uptime: "));
+                b.push_usize(hours as usize);
+                b.push_str("h ");
+                b.push_usize((mins % 60) as usize);
+                b.push_str("m ");
+                b.push_usize((secs % 60) as usize);
+                b.push_str("s (");
+                b.push_usize(ms as usize);
+                b.push_str(" ms)");
+                self.push_line(b.as_str(), Color::ACCENT_GREEN);
+            }
+            "fetch" | "neofetch" => {
+                self.push_line("   /\\_/\\     minOs Sarman Edition v2.0", Color::ACCENT_PINK);
+                self.push_line("  ( o.o )    -------------------------", Color::ACCENT_PINK);
+                self.push_line("   > ^ <     OS: minOs x86_64 [Rust no_std]", Color::ACCENT_BLUE);
+                self.push_line("             Arch: AMD64 / Long Mode", Color::TEXT_MAIN);
+                let mut m = TextBuf::new();
+                m.push_str("             RAM: ");
+                m.push_usize((pmm.used_memory_bytes / 1024 / 1024) as usize);
+                m.push_str(" MB / ");
+                m.push_usize((pmm.total_memory_bytes / 1024 / 1024) as usize);
+                m.push_str(" MB");
+                self.push_line(m.as_str(), Color::ACCENT_YELLOW);
+                let mut f = TextBuf::new();
+                f.push_str("             VFS: ");
+                f.push_usize(vfs.items.len());
+                f.push_str(crate::gui::ui_text(" dosya/dizin", " nodes registered"));
+                self.push_line(f.as_str(), Color::ACCENT_GREEN);
+                self.push_line("             GUI: MinGuiCompositor 60FPS", Color::TEXT_MUTED);
             }
             _ => {
                 let mut b = TextBuf::new();

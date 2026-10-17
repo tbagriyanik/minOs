@@ -361,6 +361,15 @@ impl TextBuf {
         }
     }
 
+    pub fn pop(&mut self) -> Option<u8> {
+        if self.len > 0 {
+            self.len -= 1;
+            Some(self.buf[self.len])
+        } else {
+            None
+        }
+    }
+
     pub fn push_str(&mut self, s: &str) {
         for b in s.bytes() {
             self.push_byte(b);

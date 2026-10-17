@@ -7,9 +7,9 @@
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~24.000%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v1.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![GitHub Release](https://img.shields.io/badge/Release-v1.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
-**minOs (Sarman Edition) v1.3.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v1.4.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 ---
 
@@ -64,7 +64,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
-| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.3.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / İleri / Ağ / Sürüm / Hakkında): v1.4.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **📦 Paket Yöneticisi (`minpkg`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
@@ -120,7 +120,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `dns` | `dns <alan_adi>` | Belirtilen sunucu adı için yapılandırılmış DNS sunucusuna UDP DNS sorgusu iletir. |
 | `curl` | `curl http://<host>[:port][/yol]` | Soket API üzerinden HTTP GET indirir: durum kodu + gövde; chunked kod çözme ve 3xx yönlendirme takibi desteklenir (`https` desteklenmez). |
 
-### 4. Gelişmiş Teşhis ve Çekirdek Komutları (v1.3.0)
+### 4. Gelişmiş Teşhis ve Çekirdek Komutları (v1.4.0)
 | Komut | Kullanım | Açıklama |
 | :--- | :--- | :--- |
 | `pkg` | `pkg <list\|search\|install\|remove>` | `minpkg` komut satırı paketi: depo kataloglarını sorgular, paket kurar ve kaldırır. |
@@ -139,7 +139,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 
 ## ⚠️ Durum Raporu ve Çekirdek Düzeyi
 
-minOs v1.3.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
+minOs v1.4.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
 
 1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
    - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; gelen paketler asenkron olarak işlenir.
@@ -174,15 +174,15 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
   - Komut satırından `curl http://...` ile dosya indirme (`src/drivers/http.rs`: chunked çözümü, 3xx yönlendirme takibi).
 - [x] **Kalıcı FAT32 / Ext2 Dosya Sistemi Desteği:**
   - Ext2 read-write ve MBR/GPT bölümleme (`src/fs/ext2.rs`, `src/fs/part.rs`) tamamlandı.
-- [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.3.0):**
+- [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.4.0):**
   - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
-- [x] **SMP (Symmetric Multiprocessing) Desteği (v1.3.0):**
+- [x] **SMP (Symmetric Multiprocessing) Desteği (v1.4.0):**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
   - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve sağlama testleri.
-- [x] **Paket Yöneticisi (`minpkg`) (v1.3.0):**
+- [x] **Paket Yöneticisi (`minpkg`) (v1.4.0):**
   - Grafiksel (`pkgmgr`) ve komut satırı (`pkg`) arayüzü; depo katalog sorgulama, paket arama ve yerel/ağ üzerinden paket kurulumu.
-- [x] **Gelişmiş Grafik Sürücüleri & Sanallaştırma Hızlandırması (v1.3.0):**
+- [x] **Gelişmiş Grafik Sürücüleri & Sanallaştırma Hızlandırması (v1.4.0):**
   - VMware SVGA II ve konuk grafik hızlandırma algılaması (`src/drivers/gpu.rs`), donanım destekli çift tamponlama ve optimize çizim motoru.
 
 
@@ -433,7 +433,7 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 16 Ekim 2026 (v1.3.0)
+> Son güncelleme: 16 Ekim 2026 (v1.4.0)
 
 | Ölçüt | Değer |
 | :--- | :--- |

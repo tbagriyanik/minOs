@@ -1397,6 +1397,11 @@ pub extern "C" fn _start() -> ! {
     // Save once the boot transcript is complete, including numeric fields.
     save_boot_log(&mut fs_mgr.vfs);
 
+    // Açılış melodisi (Chime)
+    audio_dev.set_volume(settings_app.volume);
+    audio_dev.is_muted = settings_app.is_muted;
+    audio_dev.play_chime();
+
     // Etkileşim durumu
     let mut last_mouse_x = mouse.x;
     let mut last_mouse_y = mouse.y;
@@ -1426,9 +1431,12 @@ pub extern "C" fn _start() -> ! {
     let mut speaker_on = false;
     let mut last_title_idx: Option<usize> = None;
     let mut last_title_click_ms: u64 = 0;
-        // Not Defteri metin seçimi sürükleme durumu.
+    // Not Defteri metin seçimi sürükleme durumu.
     let mut notepad_dragging = false;
     let mut image_drag_last: Option<(usize, usize)> = None;
+    let mut screenshot_counter: usize = 1;
+    let mut run_dialog_open = false;
+    let mut run_dialog_input = gui::TextBuf::new();
 
 
     let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
@@ -1455,6 +1463,7 @@ pub extern "C" fn _start() -> ! {
                              total_ram_bytes: u64,
                              tick: usize,
                              app_render_cycles: &mut [u64; gui::MAX_WINDOWS],
+                             run_dialog_state: (bool, &gui::TextBuf),
                              dirty_rect: Option<(usize, usize, usize, usize)>| {
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
@@ -1566,6 +1575,41 @@ pub extern "C" fn _start() -> ! {
             desktop_fm.draw_drag_badge(fb, mouse.x as usize, mouse.y as usize, kbd.ctrl);
         }
 
+        // Hızlı Çalıştır (Run Dialog: Win+R) Diyaloğu
+        if run_dialog_state.0 {
+            let dw = 320usize;
+            let dh = 110usize;
+            let dx = fb.width.saturating_sub(dw) / 2;
+            let dy = fb.height.saturating_sub(dh) / 2;
+            fb.draw_shadow(dx, dy, dw, dh, 0x000000);
+            fb.draw_rounded_rect(dx, dy, dw, dh, 6, gui::Color::WINDOW_BG);
+            fb.draw_rounded_rect_outline(dx, dy, dw, dh, 6, gui::Color::ACCENT_BLUE);
+            fb.draw_rect(dx, dy, dw, 24, gui::Color::TITLE_BAR);
+            gui::MinGuiCompositor::draw_string(fb, dx + 10, dy + 6,
+                gui::ui_text("Çalıştır (Run)", "Run Program"), gui::Color::WHITE);
+            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 34,
+                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"), gui::Color::TEXT_MUTED);
+            // Giriş kutusu
+            let bx = dx + 12;
+            let by = dy + 54;
+            let bw = dw - 24;
+            let bh = 24;
+            fb.draw_rect(bx, by, bw, bh, gui::Color::DARK_BG);
+            fb.draw_rect_outline(bx, by, bw, bh, gui::Color::BORDER);
+            let input_text = run_dialog_state.1.as_str();
+            gui::MinGuiCompositor::draw_string(fb, bx + 6, by + 6, input_text, gui::Color::TEXT_MAIN);
+            // İmleç
+            let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
+            if (tick / 20) % 2 == 0 {
+                fb.draw_rect(cur_x, by + 4, 2, 16, gui::Color::ACCENT_YELLOW);
+            }
+            // İpucu
+            gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 88,
+                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] Çık",
+                              "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel"),
+                gui::Color::TEXT_MUTED);
+        }
+
         // 4. Backbuffer'ı VRAM'e kopyala (flicker-free; sürüklemede sadece değişen bölge)
         fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
         if let Some(r) = dirty_rect {
@@ -1581,6 +1625,7 @@ pub extern "C" fn _start() -> ! {
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
         &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
+        (run_dialog_open, &run_dialog_input),
         None,
     );
 
@@ -1744,6 +1789,15 @@ pub extern "C" fn _start() -> ! {
                     gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::launch_button_rect(w.x, w.y, w.width))
                 });
                 if !in_menu && !in_button { taskmgr_app.launch_menu_open = false; }
+            }
+            if run_dialog_open {
+                let rbox = (width.saturating_sub(320) / 2, height.saturating_sub(110) / 2, 320, 110);
+                if !gui::in_rect(mx, my, rbox) {
+                    run_dialog_open = false;
+                    run_dialog_input.clear();
+                } else {
+                    consumed = true;
+                }
             }
             // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
             // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
@@ -3495,6 +3549,7 @@ pub extern "C" fn _start() -> ! {
                     else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, false); }
                     else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.copy_selection(&mut file_clipboard, false); }
                     else if app_is_focused(&compositor, 8) { calculator_app.copy_result(); }
+                    else if app_is_focused(&compositor, 10) { terminal_app.copy_input(); }
                 }
                 drivers::keyboard::KeyAction::PasteText => {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
@@ -3502,6 +3557,7 @@ pub extern "C" fn _start() -> ! {
                     else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
                     else if desktop_files.selected_idx < desktop_files.file_count && desktop_files.selected_items[desktop_files.selected_idx] { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
                     else if app_is_focused(&compositor, 8) { calculator_app.paste_expression(); }
+                    else if app_is_focused(&compositor, 10) { terminal_app.paste_clipboard(); }
                 }
                 drivers::keyboard::KeyAction::CutText => {
                     if app_is_focused(&compositor, 2) { notepad_app.cut_selection(); }
@@ -3673,6 +3729,65 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::BrowserRefresh => {
                     let focused = app_is_focused(&compositor, 3);
                     if focused { browser_app.navigate(); }
+                }
+                drivers::keyboard::KeyAction::RunDialog => {
+                    run_dialog_open = !run_dialog_open;
+                    run_dialog_input.clear();
+                    compositor.close_start_menu();
+                }
+                drivers::keyboard::KeyAction::Screenshot => {
+                    // Ekran görüntüsü (F12 / PrtScn) -> BMP olarak VFS'ye kaydet
+                    audio_dev.play_beep(980, 40);
+                    let mut bmp_data = alloc::vec::Vec::new();
+                    let sw = width;
+                    let sh = height;
+                    let row_bytes = (sw * 3 + 3) & !3;
+                    let image_size = row_bytes * sh;
+                    let file_size = 54 + image_size;
+                    bmp_data.reserve_exact(file_size);
+                    // BMP Header (14 bytes)
+                    bmp_data.extend_from_slice(b"BM");
+                    bmp_data.extend_from_slice(&(file_size as u32).to_le_bytes());
+                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&54u32.to_le_bytes());
+                    // DIB Header (40 bytes)
+                    bmp_data.extend_from_slice(&40u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&(sw as i32).to_le_bytes());
+                    bmp_data.extend_from_slice(&(sh as i32).to_le_bytes());
+                    bmp_data.extend_from_slice(&1u16.to_le_bytes());
+                    bmp_data.extend_from_slice(&24u16.to_le_bytes());
+                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&(image_size as u32).to_le_bytes());
+                    bmp_data.extend_from_slice(&2835u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&2835u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                    // Pixel Data (Alt satırdan üst satıra BGR)
+                    for y in (0..sh).rev() {
+                        for x in 0..sw {
+                            let p = fb.get_pixel(x, y);
+                            let b = (p & 0xFF) as u8;
+                            let g = ((p >> 8) & 0xFF) as u8;
+                            let r = ((p >> 16) & 0xFF) as u8;
+                            bmp_data.push(b);
+                            bmp_data.push(g);
+                            bmp_data.push(r);
+                        }
+                        for _ in 0..(row_bytes - sw * 3) {
+                            bmp_data.push(0);
+                        }
+                    }
+                    let mut path = alloc::string::String::from("/desktop/ekran_");
+                    let mut num = gui::TextBuf::new();
+                    num.push_usize(screenshot_counter);
+                    path.push_str(num.as_str());
+                    path.push_str(".bmp");
+                    screenshot_counter += 1;
+                    if fs_mgr.vfs.write_file(&path, &bmp_data) {
+                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                        terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                    }
                 }
             }
         }
@@ -4002,6 +4117,46 @@ pub extern "C" fn _start() -> ! {
                 continue;
             }
             // Başlat menüsü açıkken klavye kısayolları menü SIRASINI kullanır
+            if run_dialog_open {
+                if ch == '\x1b' {
+                    run_dialog_open = false;
+                    run_dialog_input.clear();
+                } else if ch == '\x08' {
+                    run_dialog_input.pop();
+                } else if ch == '\n' {
+                    let cmd = run_dialog_input.as_str().trim();
+                    let app_id = match cmd {
+                        "cmd" | "terminal" | "term" | "bash" | "sh" => Some(10),
+                        "not" | "notepad" | "text" | "edit" => Some(2),
+                        "ayar" | "settings" | "config" => Some(1),
+                        "task" | "taskmgr" | "top" | "ps" => Some(7),
+                        "calc" | "hesap" => Some(8),
+                        "web" | "browser" | "www" => Some(3),
+                        "file" | "files" | "fm" | "dosya" => Some(0),
+                        "paint" | "cizim" => Some(9),
+                        "resim" | "image" | "img" => Some(4),
+                        "muzik" | "music" => Some(5),
+                        "video" => Some(6),
+                        "kur" | "install" => Some(11),
+                        "3d" => Some(12),
+                        _ => None,
+                    };
+                    if let Some(target) = app_id {
+                        audio_dev.play_beep(1200, 30);
+                        open_app(&mut compositor, target);
+                    } else {
+                        audio_dev.play_beep(440, 60);
+                    }
+                    run_dialog_open = false;
+                    run_dialog_input.clear();
+                } else if ch >= ' ' && ch != '\x7f' && run_dialog_input.len() < 30 {
+                    let mut b = [0u8; 4];
+                    let s = ch.encode_utf8(&mut b);
+                    run_dialog_input.push_str(s);
+                }
+                continue;
+            }
+
             // (pencere indeksini değil) — start_menu_app_idx ile eşlenir.
             if ch == '\x1b' && compositor.is_start_menu_open {
                 compositor.close_start_menu();
@@ -4249,6 +4404,7 @@ pub extern "C" fn _start() -> ! {
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app,
                 &installer_app, &viewer3d_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
+                (run_dialog_open, &run_dialog_input),
                 drag_dirty_rect,
             );
             drag_dirty_rect = None;

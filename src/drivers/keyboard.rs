@@ -40,6 +40,8 @@ pub enum KeyAction {
     SaveDocument,
     NewDocument,
     OpenDocument,
+    Screenshot,
+    RunDialog,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -169,6 +171,8 @@ impl KeyboardState {
             0x20 if self.super_key => { self.last_action = Some(KeyAction::WinShowDesktop); return None; } // Win+D
             0x32 if self.super_key => { self.last_action = Some(KeyAction::WinMinimizeAll); return None; } // Win+M
             0x12 if self.super_key => { self.last_action = Some(KeyAction::WinOpenFiles); return None; } // Win+E
+            0x13 if self.super_key => { self.last_action = Some(KeyAction::RunDialog); return None; } // Win+R
+            0x58 => { self.last_action = Some(KeyAction::Screenshot); return None; } // F12 (Screenshot)
             0x3E => { // F4 key
                 if self.alt {
                     self.last_action = Some(KeyAction::CloseActiveWindow);
@@ -300,6 +304,7 @@ impl KeyboardState {
                 return None;
             }
             // Yaygın PS/2 multimedia tuşları (E0 öneki ile gelir).
+            0x37 => { self.last_action = Some(KeyAction::Screenshot); return None; } // PrtScn
             0x20 => { self.last_action = Some(KeyAction::VolumeMute); return None; }
             0x2E => { self.last_action = Some(KeyAction::VolumeDown); return None; }
             0x30 => { self.last_action = Some(KeyAction::VolumeUp); return None; }

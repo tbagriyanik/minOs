@@ -1464,7 +1464,7 @@ pub extern "C" fn _start() -> ! {
                              tick: usize,
                              app_render_cycles: &mut [u64; gui::MAX_WINDOWS],
                              run_dialog_state: (bool, &gui::TextBuf),
-                             dirty_rect: Option<(usize, usize, usize, usize)>| {
+                             _dirty_rect: Option<(usize, usize, usize, usize)>| {
         // 1. Masaüstü Arka Planı
         compositor.render_desktop_bg(fb);
         // /desktop içeriğini masaüstü simgeleri olarak çiz.
@@ -1472,9 +1472,6 @@ pub extern "C" fn _start() -> ! {
             let item = &desktop_fm.files[i];
             let (x, y, w, h) = desktop_item_rect(i);
             if !desktop_item_visible((x, y, w, h), fb.width, fb.height) { continue; }
-            if let Some(r) = dirty_rect {
-                if x + w <= r.0 || x >= r.0 + r.2 || y + h <= r.1 || y >= r.1 + r.3 { continue; }
-            }
             if desktop_fm.is_row_selected(i) {
                 fb.draw_rounded_rect_alpha(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28), 160);
                 fb.draw_rounded_rect_outline(x, y, w, h, 5, gui::Color::ACCENT_BLUE);
@@ -1737,7 +1734,7 @@ pub extern "C" fn _start() -> ! {
 
             if let Some((_, kind)) = hit_window {
                 compositor.context_kind = kind;
-            } else if my < tb_y {
+            } else if !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
                 let selected = desktop_files.selected_items;
                 let click_idx = desktop_files.last_click_idx;
                 let click_ms = desktop_files.last_click_ms;
@@ -1753,7 +1750,7 @@ pub extern "C" fn _start() -> ! {
                     compositor.context_kind = gui::ContextKind::Desktop;
                 }
             } else {
-                compositor.context_kind = gui::ContextKind::Desktop;
+                compositor.is_context_menu_open = false;
             }
         }
 

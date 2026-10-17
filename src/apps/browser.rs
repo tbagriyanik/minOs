@@ -401,6 +401,8 @@ pub struct BrowserApp {
     pub cookies: Vec<HttpCookie>,
     pub response_data: Vec<u8>,
     pub response_len: usize,
+    pub tls_session: Option<crate::drivers::tls::TlsSession>,
+    pub tls_app_data: Vec<u8>,
 }
 
 impl BrowserApp {
@@ -422,6 +424,8 @@ impl BrowserApp {
             is_https: false,
             is_post: false, post_body: Vec::new(), cookies: Vec::new(),
             response_data: Vec::new(), response_len: 0,
+            tls_session: None,
+            tls_app_data: Vec::new(),
         };
         app.set_url(b"minos://help");
         app
@@ -948,6 +952,8 @@ impl BrowserApp {
                 self.request_port = port;
                 self.request_state = 0;
                 self.request_pending = true;
+                self.tls_session = None;
+                self.tls_app_data.clear();
                 self.response_len = 0;
                 self.response_data.clear();
                 self.response_data.resize(65536, 0);
@@ -1112,9 +1118,18 @@ impl BrowserApp {
                     }
 
                     if self.is_https {
+                        let mut client_random = [0u8; 32];
+                        let seed = crate::main_monotonic_ms() as u64;
+                        for (i, b) in client_random.iter_mut().enumerate() {
+                            *b = ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
+                        }
                         let mut hello = Vec::new();
-                        crate::drivers::tls::build_client_hello(host, &mut hello);
+                        crate::drivers::tls::build_client_hello(host, &client_random, &mut hello);
+                        let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+                        let mut tls_session = crate::drivers::tls::TlsSession::new(host, client_random);
+                        tls_session.note_client_hello(ch_body);
                         if crate::drivers::netstack::tcp_send(&hello) {
+                            self.tls_session = Some(tls_session);
                             self.request_state = 2;
                             self.web_request_sent = true;
                             self.status = crate::gui::ui_text("TLS el sıkışması ve yanıt bekleniyor...", "Waiting for TLS handshake & response...");
@@ -1131,16 +1146,53 @@ impl BrowserApp {
                 }
             }
             2 => {
+                // TCP verisini al ve TLS oturumuna besle (https için).
                 if self.response_data.len() < 65536 {
                     self.response_data.resize(65536, 0);
                 }
                 let room = self.response_data.len().saturating_sub(self.response_len);
                 if room > 0 {
-                    self.response_len += crate::drivers::netstack::take_tcp_data(&mut self.response_data[self.response_len..]);
+                    let n = crate::drivers::netstack::take_tcp_data(&mut self.response_data[self.response_len..]);
+                    if n > 0 {
+                        self.response_len += n;
+                        if let Some(ref mut tls) = self.tls_session {
+                            tls.feed_tcp_data(&self.response_data[self.response_len - n..self.response_len]);
+                        }
+                    }
                 }
-                if self.response_len > 0 {
-                    if let Some(end) = find_bytes(&self.response_data[..self.response_len], b"\r\n\r\n") {
-                        let headers = &self.response_data[..end];
+
+                // TLS oturumundan giden mesajları (ChangeCipherSpec + Finished) gönder.
+                if let Some(ref mut tls) = self.tls_session {
+                    let outgoing = tls.take_outgoing();
+                    if !outgoing.is_empty() {
+                        let _ = crate::drivers::netstack::tcp_send(&outgoing);
+                    }
+                }
+
+                // TLS kayıtlarını işle: el sıkışma mesajları ve şifreli application data.
+                if let Some(ref mut tls) = self.tls_session {
+                    let mut hs_out = Vec::new();
+                    let mut app_out = Vec::new();
+                    match tls.process_records(&mut hs_out, &mut app_out) {
+                        Ok(_) => {}
+                        Err(()) => {
+                            self.finish_network_error(crate::gui::ui_text("TLS kayıt işleme hatası.", "TLS record processing error."));
+                        }
+                    }
+                    self.tls_app_data.extend_from_slice(&app_out);
+                }
+
+                // TLS kurulduysa ve application data var, HTTP yanıtını ayrıştır.
+                let tls_established = self.tls_session.as_ref().map_or(false, |t| t.state() == crate::drivers::tls::TlsState::Established);
+                let data_to_parse = if tls_established && !self.tls_app_data.is_empty() {
+                    &self.tls_app_data
+                } else {
+                    &self.response_data[..self.response_len]
+                };
+
+                if data_to_parse.len() > 0 {
+                    if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
+                        let headers = &data_to_parse[..end];
                         let status_end = find_bytes(headers, b"\r\n").unwrap_or(end);
                         let status_line = &headers[..status_end];
 
@@ -1168,7 +1220,6 @@ impl BrowserApp {
                                             let name = k.trim();
                                             let val = v.trim();
                                             if !name.is_empty() {
-                                                // Var olan çerezi güncelle veya yenisini ekle
                                                 if let Some(pos) = self.cookies.iter().position(|c| c.name == name) {
                                                     self.cookies[pos].value = String::from(val);
                                                 } else if self.cookies.len() < 32 {
@@ -1214,6 +1265,8 @@ impl BrowserApp {
                                     self.response_len = 0;
                                     self.response_data.clear();
                                     self.response_data.resize(65536, 0);
+                                    self.tls_app_data.clear();
+                                    self.tls_session = None;
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
@@ -1261,6 +1314,11 @@ impl BrowserApp {
                             indent: 0,
                         });
 
+                        let body_start = end + 4;
+                        let raw_body_len = data_to_parse.len().saturating_sub(body_start);
+                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
+                        body_bytes.extend_from_slice(&data_to_parse[body_start..data_to_parse.len()]);
+
                         // Transfer-Encoding: chunked kontrolü
                         let is_chunked = headers.split(|b| *b == b'\n').any(|line| {
                             let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
@@ -1272,11 +1330,6 @@ impl BrowserApp {
                             }
                             false
                         });
-
-                        let body_start = end + 4;
-                        let raw_body_len = self.response_len.saturating_sub(body_start);
-                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
-                        body_bytes.extend_from_slice(&self.response_data[body_start..self.response_len]);
 
                         if is_chunked {
                             if let Some(decoded_len) = crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len) {

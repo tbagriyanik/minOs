@@ -1,7 +1,5 @@
 //! SHA-256 (FIPS 180-4) — no_std, no external dependencies.
 
-use core::convert::TryInto;
-
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -25,10 +23,12 @@ fn sigma1(x: u32) -> u32 {
     rotr(x, 17) ^ rotr(x, 19) ^ (x >> 10)
 }
 
+#[allow(non_snake_case)]
 fn Sigma0(x: u32) -> u32 {
     rotr(x, 2) ^ rotr(x, 13) ^ rotr(x, 22)
 }
 
+#[allow(non_snake_case)]
 fn Sigma1(x: u32) -> u32 {
     rotr(x, 6) ^ rotr(x, 11) ^ rotr(x, 25)
 }
@@ -41,6 +41,7 @@ fn maj(x: u32, y: u32, z: u32) -> u32 {
     (x & y) ^ (x & z) ^ (y & z)
 }
 
+#[derive(Clone)]
 pub struct Sha256 {
     h: [u32; 8],
     buffer: [u8; 64],
@@ -120,7 +121,8 @@ impl Sha256 {
         if self.buffer_len > 0 && self.buffer_len + data.len() >= 64 {
             let need = 64 - self.buffer_len;
             self.buffer[self.buffer_len..64].copy_from_slice(&data[..need]);
-            self.compress_block(&self.buffer);
+            let buf = self.buffer.clone();
+            self.compress_block(&buf);
             self.buffer_len = 0;
             data = &data[need..];
         }
@@ -140,14 +142,16 @@ impl Sha256 {
         pad[0] = 0x80;
         if bit_len > (56 * 8) - 8 {
             self.update(&pad[..1]);
-            self.compress_block(&self.buffer);
+            let buf = self.buffer.clone();
+            self.compress_block(&buf);
             self.buffer = [0; 64];
             self.buffer_len = 0;
         }
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
         if self.buffer_len > 56 {
-            self.compress_block(&self.buffer);
+            let buf = self.buffer.clone();
+            self.compress_block(&buf);
             self.buffer = [0; 64];
             self.buffer_len = 0;
         }
@@ -156,7 +160,8 @@ impl Sha256 {
             self.buffer_len += 1;
         }
         self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
-        self.compress_block(&self.buffer);
+        let buf = self.buffer.clone();
+        self.compress_block(&buf);
 
         let mut out = [0u8; 32];
         for i in 0..8 {

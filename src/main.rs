@@ -2841,6 +2841,12 @@ pub extern "C" fn _start() -> ! {
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::dhcp_btn_rect(wx, wy)) {
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
                                     settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
+                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
+                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
+                                } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
                                 } else if settings_app.active_tab == 0 {
                                     let mut swatch_hit = false;
                                     for i in 0..apps::settings::SystemSettings::theme_swatch_count() {
@@ -2966,12 +2972,6 @@ pub extern "C" fn _start() -> ! {
                                         with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_audio_btn_rect(wx, wy)) {
                                         settings_app.run_audio_test(&mut audio_dev);
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
-                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
                                     }
                                 }
                             }

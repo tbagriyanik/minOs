@@ -419,13 +419,13 @@ impl SystemSettings {
         (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 9 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
     }
     pub fn test_net_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(100), sp(UI_BTN_H))
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP + 8), sp(110), sp(UI_BTN_H))
     }
     pub fn test_ping_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + sp(108), win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(90), sp(UI_BTN_H))
+        (win_x + CONTENT_X + sp(118), win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP + 8), sp(90), sp(UI_BTN_H))
     }
     pub fn test_http_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + sp(206), win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(90), sp(UI_BTN_H))
+        (win_x + CONTENT_X + sp(216), win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP + 8), sp(90), sp(UI_BTN_H))
     }
 
     // -----------------------------------------------------------------
@@ -1119,6 +1119,46 @@ impl SystemSettings {
                 let dhcp_btn = Self::dhcp_btn_rect(win_x, win_y);
                 MinGuiCompositor::draw_button(fb, dhcp_btn, Color::ACCENT_BLUE, if self.dhcp_enabled { "Static IP" } else { "DHCP" }, Color::DARK_BG, false);
                 if self.focused_control == 4 { fb.draw_rect_outline(dhcp_btn.0, dhcp_btn.1, dhcp_btn.2, dhcp_btn.3, Color::ACCENT_YELLOW); }
+
+                // --- Ağ Tanılama ve Testleri (Satır 6 & 7) ---
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),
+                    crate::gui::ui_text("Ağ Testleri ve Bağlantı Sınama:", "Network Diagnostics & Tests:"), Color::ACCENT_YELLOW);
+
+                let net_btn = Self::test_net_btn_rect(win_x, win_y);
+                let ping_btn = Self::test_ping_btn_rect(win_x, win_y);
+                let http_btn = Self::test_http_btn_rect(win_x, win_y);
+
+                MinGuiCompositor::draw_button(fb, net_btn, Color::ACCENT_BLUE,
+                    crate::gui::ui_text("Tümünü Sına", "Self-Test"), Color::DARK_BG, false);
+                MinGuiCompositor::draw_button(fb, ping_btn, Color::ACCENT_BLUE,
+                    "Ping GW", Color::DARK_BG, false);
+                MinGuiCompositor::draw_button(fb, http_btn, Color::ACCENT_GREEN,
+                    "HTTP GET", Color::DARK_BG, false);
+
+                let english = self.language.is_english();
+                let mut net_line = DeviceLine::new();
+                if self.test_net_tested {
+                    net_line.push(if self.test_net_ok {
+                        if english { "PASS | " } else { "BAŞARILI | " }
+                    } else if english { "FAIL | " } else { "UYARI | " });
+                    net_line.push(self.test_net_msg);
+                } else {
+                    let ready = crate::drivers::e1000::is_ready();
+                    let link = crate::drivers::e1000::link_up();
+                    if ready && link {
+                        net_line.push(if english { "Intel 82540EM Link UP | 10.0.2.15 hazır" } else { "Intel 82540EM Link UP | 10.0.2.15 hazır" });
+                    } else if ready {
+                        net_line.push(if english { "Intel 82540EM Link DOWN" } else { "Intel 82540EM Bağlantı Yok" });
+                    } else {
+                        net_line.push(if english { "NIC not detected" } else { "Ağ kartı algılanmadı" });
+                    }
+                }
+                draw_device_line(fb, win_x + CONTENT_X + sp(316), net_btn.1 + 4, win_w.saturating_sub(CONTENT_X + sp(326)), &net_line,
+                    if self.test_net_tested {
+                        if self.test_net_ok { Color::ACCENT_GREEN } else { Color::ACCENT_RED }
+                    } else {
+                        Color::TEXT_MAIN
+                    });
             }
             3 => {
                 render_device_inventory(
@@ -1339,43 +1379,5 @@ impl SystemSettings {
         }
         draw_device_line(fb, cx + 112, audio_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 124), &audio,
             if self.test_audio_tested { if self.test_audio_ok { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW } } else { Color::TEXT_MAIN });
-
-        // ---- Ağ alt sistemi testi (Satır 10) ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),
-            crate::gui::ui_text("Ağ testi:", "Net test:"), Color::ACCENT_YELLOW);
-        let net_btn = Self::test_net_btn_rect(win_x, win_y);
-        let ping_btn = Self::test_ping_btn_rect(win_x, win_y);
-        let http_btn = Self::test_http_btn_rect(win_x, win_y);
-
-        MinGuiCompositor::draw_button(fb, net_btn, Color::ACCENT_BLUE,
-            crate::gui::ui_text("Tümünü Sına", "Self-Test"), Color::DARK_BG, false);
-        MinGuiCompositor::draw_button(fb, ping_btn, Color::ACCENT_BLUE,
-            "Ping GW", Color::DARK_BG, false);
-        MinGuiCompositor::draw_button(fb, http_btn, Color::ACCENT_GREEN,
-            "HTTP GET", Color::DARK_BG, false);
-
-        let mut net_line = DeviceLine::new();
-        if self.test_net_tested {
-            net_line.push(if self.test_net_ok {
-                if english { "PASS | " } else { "BAŞARILI | " }
-            } else if english { "FAIL | " } else { "UYARI | " });
-            net_line.push(self.test_net_msg);
-        } else {
-            let ready = crate::drivers::e1000::is_ready();
-            let link = crate::drivers::e1000::link_up();
-            if ready && link {
-                net_line.push(if english { "Intel 82540EM Link UP | 10.0.2.15 hazır" } else { "Intel 82540EM Link UP | 10.0.2.15 hazır" });
-            } else if ready {
-                net_line.push(if english { "Intel 82540EM Link DOWN" } else { "Intel 82540EM Bağlantı Yok" });
-            } else {
-                net_line.push(if english { "NIC not detected" } else { "Ağ kartı algılanmadı" });
-            }
-        }
-        draw_device_line(fb, cx + sp(306), net_btn.1 + 4, win_w.saturating_sub(CONTENT_X + sp(316)), &net_line,
-            if self.test_net_tested {
-                if self.test_net_ok { Color::ACCENT_GREEN } else { Color::ACCENT_RED }
-            } else {
-                Color::TEXT_MAIN
-            });
     }
 }

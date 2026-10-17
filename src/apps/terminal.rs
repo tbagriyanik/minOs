@@ -1032,11 +1032,19 @@ impl TerminalApp {
         h: usize,
         is_focused: bool,
     ) {
-        // Terminal zemin
-        fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BLACK);
+        let is_light = crate::gui::theme::current() == crate::gui::theme::ThemeId::Daylight;
+        let term_bg = if is_light { 0xF5F7FA } else { 0x0C0D14 };
+        let default_fg = if is_light { 0x1A1C23 } else { 0xE6E9F5 };
+        let muted_fg = if is_light { 0x606575 } else { 0x8C92A4 };
+        let prompt_fg = if is_light { 0x1E8E3E } else { Color::ACCENT_GREEN };
+        let title_fg = if is_light { 0x188038 } else { Color::ACCENT_GREEN };
+
+        // Terminal zemin (temaya duyarlı iç konsol kutusu)
+        fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), term_bg);
+        fb.draw_rect_outline(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BORDER);
 
         // Başlık
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("minOs Komut İstemi v2.0 (MinShell)", "minOs Command Prompt v2.0 (MinShell)"), Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("minOs Komut İstemi v2.0 (MinShell)", "minOs Command Prompt v2.0 (MinShell)"), title_fg);
 
         let line_height = crate::gui::font_render::text_height(
             crate::gui::font_render::Face::Geist,
@@ -1052,19 +1060,26 @@ impl TerminalApp {
         let mut ly = output_y;
         let content_clip = (x + 12, y + 36, w.saturating_sub(24), h.saturating_sub(48));
         for i in first..last {
-            MinGuiCompositor::draw_terminal_string_clipped(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color, content_clip);
+            let col = if self.out[i].color == Color::TEXT_MAIN {
+                default_fg
+            } else if self.out[i].color == Color::TEXT_MUTED {
+                muted_fg
+            } else {
+                self.out[i].color
+            };
+            MinGuiCompositor::draw_terminal_string_clipped(fb, x + 16, ly, self.out[i].as_str(), col, content_clip);
             ly += line_height + line_gap;
         }
 
         // Aktif Istem + Girdi
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", prompt_fg);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
         let input_clip = (x + 30, prompt_y, w.saturating_sub(42), line_height + 4);
-        MinGuiCompositor::draw_terminal_string_clipped(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN, input_clip);
+        MinGuiCompositor::draw_terminal_string_clipped(fb, x + 30, prompt_y, input_str, default_fg, input_clip);
         if is_focused {
             let caret_x = x + 30 + MinGuiCompositor::terminal_text_width(input_str);
             if caret_x < x + w.saturating_sub(16) {
-                fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), Color::ACCENT_GREEN);
+                fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), prompt_fg);
             }
         }
 
@@ -1073,6 +1088,6 @@ impl TerminalApp {
         status.push_str(crate::gui::ui_text("geçmiş: ", "history: "));
         status.push_usize(self.history_count);
         status.push_str(crate::gui::ui_text(" komut | UTF-8 / TR-Q", " commands | UTF-8 / TR-Q"));
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), muted_fg);
     }
 }

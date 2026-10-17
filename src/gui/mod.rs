@@ -1937,18 +1937,18 @@ impl MinGuiCompositor {
         for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate().take(desk_icon_count) {
             // Tıklama testiyle aynı kanonik konum (kayma/çakışma olmaz).
             let (card_x, dy, _hit_w, card_h) = Self::desktop_quick_rect(i);
-            fb.draw_rounded_rect(card_x, dy, card_w, card_h, 6, Self::shade(Color::WINDOW_BG, 8));
+            fb.draw_rounded_rect_alpha(card_x, dy, card_w, card_h, 6, Self::shade(Color::WINDOW_BG, 8), 128);
             fb.draw_rounded_rect_outline(card_x, dy, card_w, card_h, 6, Color::BORDER);
             let isz = Self::icon_size();
             let inner_x = card_x + (card_w.saturating_sub(isz)) / 2;
             let inner_y = dy + (card_h.saturating_sub(isz)) / 2;
             Self::draw_icon_by_index(fb, inner_x, inner_y, *icon_idx);
-            // Etiket, ikon kartına dikey ortalı ve net boşlukla çizilir (temiz, tekdüze yazı).
+            // Etiket, ikon kartına dikey ortalı ve net boşlukla çizilir (yarı saydam arkaplan).
             let label_x = card_x + card_w + sp(10);
             let label_y = dy + card_h.saturating_sub(Self::text_height()) / 2;
             let tw = Self::text_width(lbl, 1);
             let th = Self::text_height();
-            fb.draw_rounded_rect(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Self::shade(Color::WINDOW_BG, 8));
+            fb.draw_rounded_rect_alpha(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Self::shade(Color::WINDOW_BG, 8), 128);
             fb.draw_rounded_rect_outline(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Color::BORDER);
             Self::draw_string(fb, label_x, label_y, lbl, Color::TEXT_MAIN);
         }
@@ -2107,20 +2107,40 @@ impl MinGuiCompositor {
         let bottom = myr as f32 + mb as f32 - inset;
         let stroke = (sp(14) as f32 / 10.0).max(1.4);
         if win.is_maximized {
-            let offset = mb as f32 * 0.16;
-            Self::draw_antialiased_line(fb, left + offset, top + offset, right, top + offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right, top + offset, right, bottom - offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right, bottom - offset, left + offset, bottom - offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, left + offset, bottom - offset, left + offset, top + offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, left, top, right - offset, top, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right - offset, top, right - offset, bottom - offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right - offset, bottom - offset, left, bottom - offset, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, left, bottom - offset, left, top, max_mark_color, stroke);
+            // Restore (Önceki Boyut) simgesi: Arkada sağ-üstte bir pencere karesi ve önde sol-altta bir pencere karesi.
+            let size = (right - left) * 0.72;
+            let offset = (right - left) * 0.28;
+
+            // Arka pencere (sağ-üst): üst kenar, sağ kenar ve öne kadar uzanan parçalar
+            let back_l = left + offset;
+            let back_t = top;
+            let back_r = back_l + size;
+            let back_b = back_t + size;
+
+            // Arka pencere üst kenarı
+            Self::draw_antialiased_line(fb, back_l, back_t, back_r, back_t, max_mark_color, stroke);
+            // Arka pencere sağ kenarı
+            Self::draw_antialiased_line(fb, back_r, back_t, back_r, back_b, max_mark_color, stroke);
+            // Arka pencere sol kenarının açıkta kalan üst parçası
+            Self::draw_antialiased_line(fb, back_l, back_t, back_l, top + offset, max_mark_color, stroke);
+            // Arka pencere alt kenarının açıkta kalan sağ parçası
+            Self::draw_antialiased_line(fb, left + size, back_b, back_r, back_b, max_mark_color, stroke);
+
+            // Ön pencere (sol-alt): tam dikdörtgen
+            let front_l = left;
+            let front_t = top + offset;
+            let front_r = front_l + size;
+            let front_b = front_t + size;
+
+            Self::draw_antialiased_line(fb, front_l, front_t, front_r, front_t, max_mark_color, stroke);
+            Self::draw_antialiased_line(fb, front_r, front_t, front_r, front_b, max_mark_color, stroke);
+            Self::draw_antialiased_line(fb, front_r, front_b, front_l, front_b, max_mark_color, stroke);
+            Self::draw_antialiased_line(fb, front_l, front_b, front_l, front_t, max_mark_color, stroke);
         } else {
-            Self::draw_antialiased_line(fb, left, top, right, top, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right, top, right, bottom, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, right, bottom, left, bottom, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, left, bottom, left, top, max_mark_color, stroke);
+            Self::draw_antialiased_line(fb, left, top, right, top, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
+            Self::draw_antialiased_line(fb, right, top, right, bottom, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
+            Self::draw_antialiased_line(fb, right, bottom, left, bottom, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
+            Self::draw_antialiased_line(fb, left, bottom, left, top, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
         }
 
         let (nx, ny, nb, _) = win.min_rect();

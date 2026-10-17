@@ -5,7 +5,6 @@ use crate::fs::vfs::VirtualFileSystem;
 
 /// Pencere yöneticisindeki uygulama yuvası sayısı.
 pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
-const PROCESS_ROW_STEP: usize = 22;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
 pub const LAUNCH_APP_COUNT: usize = 13;
@@ -54,6 +53,16 @@ pub struct TaskManagerApp {
     pub focused_control: usize,
 }
 
+/// Standart Görev Yöneticisi UI yerleşim sabitleri
+pub const TM_TAB_Y: usize = 30;
+pub const TM_TAB_H: usize = 24;
+pub const TM_ACTION_Y: usize = 64;
+pub const TM_ACTION_H: usize = 22;
+pub const TM_HEADER_Y: usize = 96;
+pub const TM_HEADER_H: usize = 20;
+pub const TM_CONTENT_Y: usize = 120;
+pub const TM_ROW_STEP: usize = 22;
+
 impl TaskManagerApp {
     pub const fn new() -> Self {
         Self {
@@ -83,11 +92,11 @@ impl TaskManagerApp {
     }
 
     pub fn applications_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + 10, win_y + 30, 130, 24)
+        (win_x + 10, win_y + TM_TAB_Y, 130, TM_TAB_H)
     }
 
     pub fn performance_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + 148, win_y + 30, 130, 24)
+        (win_x + 148, win_y + TM_TAB_Y, 130, TM_TAB_H)
     }
 
     pub fn launch_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -98,7 +107,7 @@ impl TaskManagerApp {
     }
 
     pub fn launch_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(270), win_y + 88, 260, 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H)
+        (win_x + win_w.saturating_sub(270), win_y + TM_ACTION_Y + TM_ACTION_H + 4, 260, 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H)
     }
 
     pub fn launch_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
@@ -244,7 +253,7 @@ impl TaskManagerApp {
 
     /// i. süreç satırının tıklanabilir dikdörtgeni (çizim ile birebir aynı).
     pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + 8, win_y + 118 + i * PROCESS_ROW_STEP, win_w.saturating_sub(16), PROCESS_ROW_H)
+        (win_x + 8, win_y + TM_CONTENT_Y + i * TM_ROW_STEP, win_w.saturating_sub(16), PROCESS_ROW_H)
     }
 
     /// Fare konumunun denk geldiği süreç satırı indeksi.
@@ -261,7 +270,7 @@ impl TaskManagerApp {
     /// "Sonlandır" düğmesinin dikdörtgeni.
     pub fn kill_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         let width = 110.min(win_w.saturating_sub(20) / 2).max(1);
-        (win_x + win_w.saturating_sub(width + 10), win_y + 60, width, 22)
+        (win_x + win_w.saturating_sub(width + 10), win_y + TM_ACTION_Y, width, TM_ACTION_H)
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {
@@ -284,7 +293,7 @@ impl TaskManagerApp {
         let mut header = TextBuf::new();
         header.push_str(crate::gui::ui_text("Uygulamalar: ", "Applications: "));
         header.push_u2((self.alive_count().min(99)) as u32);
-        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + 64, header.as_str(), Color::ACCENT_PINK);
+        MinGuiCompositor::draw_string(fb, win_x + 10, win_y + TM_ACTION_Y + 4, header.as_str(), Color::ACCENT_PINK);
 
         // "Program Aç" ve "Sonlandır" düğmeleri
         let br = Self::kill_btn_rect(win_x, win_y, win_w);
@@ -302,15 +311,15 @@ impl TaskManagerApp {
 
         if self.active_tab == 0 {
             // Sütun başlıkları (genişletilmiş ve ferah aralıklar)
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 12, win_y + 98, crate::gui::ui_text("Uygulama", "Application"), Color::TEXT_MUTED,
-                (win_x + 10, win_y + 96, 160, 20));
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 180, win_y + 98, "CPU", Color::TEXT_MUTED,
-                (win_x + 176, win_y + 96, 60, 20));
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 246, win_y + 98, crate::gui::ui_text("Bellek", "Memory"), Color::TEXT_MUTED,
-                (win_x + 242, win_y + 96, 76, 20));
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 328, win_y + 98, crate::gui::ui_text("Durum", "Status"), Color::TEXT_MUTED,
-                (win_x + 324, win_y + 96, 120, 20));
-            fb.draw_rect(win_x + 10, win_y + 112, win_w.saturating_sub(20), 1, Color::BORDER);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 12, win_y + TM_HEADER_Y + 2, crate::gui::ui_text("Uygulama", "Application"), Color::TEXT_MUTED,
+                (win_x + 10, win_y + TM_HEADER_Y, 160, TM_HEADER_H));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 180, win_y + TM_HEADER_Y + 2, "CPU", Color::TEXT_MUTED,
+                (win_x + 176, win_y + TM_HEADER_Y, 60, TM_HEADER_H));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 246, win_y + TM_HEADER_Y + 2, crate::gui::ui_text("Bellek", "Memory"), Color::TEXT_MUTED,
+                (win_x + 242, win_y + TM_HEADER_Y, 76, TM_HEADER_H));
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 328, win_y + TM_HEADER_Y + 2, crate::gui::ui_text("Durum", "Status"), Color::TEXT_MUTED,
+                (win_x + 324, win_y + TM_HEADER_Y, 120, TM_HEADER_H));
+            fb.draw_rect(win_x + 10, win_y + TM_HEADER_Y + TM_HEADER_H - 2, win_w.saturating_sub(20), 1, Color::BORDER);
 
             for (i, proc) in self.processes.iter().take(self.proc_count).enumerate() {
                 let row = Self::row_rect(win_x, win_y, win_w, i);
@@ -350,10 +359,10 @@ impl TaskManagerApp {
                 cpu_text.push_usize(self.core_count);
                 cpu_text.push_str(crate::gui::ui_text(" çekirdek)", " cores)"));
             }
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 90, cpu_text.as_str(), Color::TEXT_MAIN,
-                (win_x + 12, win_y + 88, win_w.saturating_sub(24), 16));
-            fb.draw_rect(bar_x, win_y + 90, bar_w, 12, Color::TITLE_BAR_INACTIVE);
-            fb.draw_rect(bar_x, win_y + 90, bar_w.saturating_mul(self.cpu_usage_pct.min(100)) / 100, 12, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + TM_HEADER_Y + 2, cpu_text.as_str(), Color::TEXT_MAIN,
+                (win_x + 12, win_y + TM_HEADER_Y, win_w.saturating_sub(24), 16));
+            fb.draw_rect(bar_x, win_y + TM_HEADER_Y + 2, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + TM_HEADER_Y + 2, bar_w.saturating_mul(self.cpu_usage_pct.min(100)) / 100, 12, Color::ACCENT_RED);
 
             // Çekirdek başına göstergeler (çok çekirdek varsa)
             if self.core_count > 1 {
@@ -361,7 +370,7 @@ impl TaskManagerApp {
                 let gap = 4;
                 let total_gaps = gap * cores.saturating_sub(1);
                 let per_core_w = (bar_w.saturating_sub(total_gaps) / cores).max(4);
-                let y_offset = win_y + 108;
+                let y_offset = win_y + TM_CONTENT_Y;
 
                 for c in 0..cores {
                     let cx = bar_x + c * (per_core_w + gap);
@@ -376,13 +385,13 @@ impl TaskManagerApp {
                         (cx, y_offset + 12, per_core_w, 14));
                 }
 
-                MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 134,
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + TM_CONTENT_Y + 28,
                     crate::gui::ui_text("SMP çoklu çekirdek izleme aktif.", "SMP multi-core monitoring active."), Color::TEXT_MUTED,
-                    (win_x + 12, win_y + 132, win_w.saturating_sub(24), 16));
+                    (win_x + 12, win_y + TM_CONTENT_Y + 28, win_w.saturating_sub(24), 16));
             } else {
-                MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 112,
+                MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + TM_CONTENT_Y,
                     crate::gui::ui_text("Ana döngü ölçümü; boşta bekleme hariç, tek çekirdek.", "Main-loop estimate; idle wait excluded, single core."), Color::TEXT_MUTED,
-                    (win_x + 12, win_y + 110, win_w.saturating_sub(24), 16));
+                    (win_x + 12, win_y + TM_CONTENT_Y, win_w.saturating_sub(24), 16));
             }
 
             let memory_pct = if self.total_memory_kb == 0 { 0 }
@@ -394,15 +403,15 @@ impl TaskManagerApp {
             memory_label.push_str(" / ");
             memory_label.push_usize(self.total_memory_kb / 1024);
             memory_label.push_str(" MB");
-            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + 154, memory_label.as_str(), Color::TEXT_MAIN,
-                (win_x + 12, win_y + 152, win_w.saturating_sub(24), 16));
-            fb.draw_rect(bar_x, win_y + 170, bar_w, 12, Color::TITLE_BAR_INACTIVE);
-            fb.draw_rect(bar_x, win_y + 170, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
+            MinGuiCompositor::draw_string_clipped(fb, win_x + 14, win_y + TM_CONTENT_Y + 54, memory_label.as_str(), Color::TEXT_MAIN,
+                (win_x + 12, win_y + TM_CONTENT_Y + 54, win_w.saturating_sub(24), 16));
+            fb.draw_rect(bar_x, win_y + TM_CONTENT_Y + 70, bar_w, 12, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect(bar_x, win_y + TM_CONTENT_Y + 70, bar_w.saturating_mul(memory_pct.min(100)) / 100, 12, Color::ACCENT_GREEN);
             let mut free_label = TextBuf::new();
             free_label.push_str(crate::gui::ui_text("Kullanılabilir RAM: ", "Available RAM: "));
             free_label.push_usize(self.free_memory_kb / 1024);
             free_label.push_str(" MB");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 188, free_label.as_str(), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + TM_CONTENT_Y + 90, free_label.as_str(), Color::TEXT_MUTED);
 
             let mut storage_label = TextBuf::new();
             storage_label.push_str("VFS: ");
@@ -410,8 +419,8 @@ impl TaskManagerApp {
             storage_label.push_str(crate::gui::ui_text(" dosya, ", " files, "));
             storage_label.push_usize(self.ramdisk_used);
             storage_label.push_str(" B");
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 230, storage_label.as_str(), Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 260,
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + TM_CONTENT_Y + 120, storage_label.as_str(), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, win_x + 14, win_y + TM_CONTENT_Y + 148,
                 crate::gui::ui_text("Süreç başına RAM ölçümü çekirdekte henüz yok.", "Per-process RAM accounting is not available yet."), Color::TEXT_MUTED);
         }
 

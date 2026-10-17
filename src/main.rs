@@ -1229,7 +1229,14 @@ pub extern "C" fn _start() -> ! {
     // 2: Not Defteri
     compositor.add_window(gui::Window::new("Not Defteri", "Notlar", 80, 70, 520, 330, false));
     // 3: Web Tarayıcısı
-    compositor.add_window(gui::Window::new("Web Gezgini", "Web", 550, 60, 600, 380, false));
+    let browser_w = 760.min(width.saturating_sub(20)).max(300);
+    let browser_h = 490.min(height.saturating_sub(gui::taskbar_h() + 10)).max(200);
+    compositor.add_window(gui::Window::new(
+        "Web Gezgini", "Web",
+        width.saturating_sub(browser_w) / 2,
+        height.saturating_sub(browser_h + gui::taskbar_h()) / 2,
+        browser_w, browser_h, false,
+    ));
     // 4: Resim Gösterici
     compositor.add_window(gui::Window::new("Resim Gösterici", "Resim", 120, 90, 500, 330, false));
     // 5: Müzik Çalar
@@ -1530,7 +1537,7 @@ pub extern "C" fn _start() -> ! {
                         if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
                         if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
-                    3 => br.render_content(fb, win.x, win.y, win.width, win.height),
+                    3 => br.render_content(fb, win.x, win.y, win.width, win.height, &win.scroll),
                     4 => iv.render_content(fb, win.x, win.y, win.width, win.height),
                     5 => mp.render_content(fb, win.x, win.y, win.width, win.height, tick),
                     6 => vp.render_content(fb, win.x, win.y, win.width, win.height, tick),

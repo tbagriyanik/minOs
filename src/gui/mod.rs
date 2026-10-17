@@ -1597,6 +1597,26 @@ impl MinGuiCompositor {
         fb.set_clip(old_clip.x0, old_clip.y0, old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
     }
 
+    /// Metni ölçekli ve belirtilen dikdörtgenin içinde kırparak çizer.
+    pub fn draw_string_scaled_clipped(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        text: &str,
+        color: u32,
+        scale: usize,
+        rect: (usize, usize, usize, usize),
+    ) {
+        let old_clip = fb.clip();
+        let clip_x = old_clip.x0.max(rect.0);
+        let clip_y = old_clip.y0.max(rect.1);
+        let clip_right = old_clip.x1.min(rect.0.saturating_add(rect.2));
+        let clip_bottom = old_clip.y1.min(rect.1.saturating_add(rect.3));
+        fb.set_clip(clip_x, clip_y, clip_right.saturating_sub(clip_x), clip_bottom.saturating_sub(clip_y));
+        Self::draw_string_scaled(fb, x, y, text, color, scale);
+        fb.set_clip(old_clip.x0, old_clip.y0, old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
+    }
+
     /// minOs kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
     fn draw_icon_bitmap(fb: &mut Framebuffer, x: usize, y: usize, size: usize, source: &[u32; 256]) {
         let mut resolved = [0u32; 256];

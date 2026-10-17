@@ -6,14 +6,24 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~24.000%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v1.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~25.000%20(Rust)-lightgrey.svg)]()
+[![GitHub Release](https://img.shields.io/badge/Release-v1.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
-**minOs (Sarman Edition) v1.4.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v1.5.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 ---
 
-## Yenilikler
+## Yenilikler (v1.5.0)
+
+- **🌐 Gelişmiş Web Tarayıcısı & Ağ Yığını (HTTP/1.1):**
+  - **HTTP/1.1 Protokol Desteği:** `Connection: close`, standart `Host` ve `User-Agent: minOs/1.5` başlıkları.
+  - **Genişletilmiş Ağ Tamponları:** 64 KB TCP alma tamponu (`TCP_DATA`) ve 64 KB dinamik yanıt tamponu (`response_data`). 256 bayt URL yolu ve 128 bayt ana makine adı desteği.
+  - **Dikey Kaydırma (Scrolling):** Sayfa satır sayısına göre dinamik pencere içerik yüksekliği (`content_height`), pencere kaydırma çubuğu ve fare tekerleği (wheel scroll) entegrasyonu.
+  - **HTTP 3xx Yönlendirme (Redirect) Takibi:** 301, 302, 303, 307 ve 308 durum kodları ve `Location:` başlığı çözümleyicisi (azami 3 atlama).
+  - **POST Metodu ve Form Gönderimi:** `navigate_post()` ile `application/x-www-form-urlencoded` ve dinamik `Content-Length` başlığı ile veri gönderebilme.
+  - **Çerez (Cookie) Yönetimi:** `Set-Cookie:` başlıklarının otomatik kaydedilmesi ve domain/path eşleşmesine göre isteklerde `Cookie:` başlığının gönderilmesi.
+  - **Parçalı Gönderim Çözümleme (Chunked Transfer Decoding):** `Transfer-Encoding: chunked` yanıtlarının yerinde çözülerek temiz HTML/metin içeriğe dönüştürülmesi.
+  - **15 Saniyelik Ağ Zaman Aşımı:** Yavaş bağlantılar ve büyük web sayfaları için kararlı istek tamamlama.
 
 - **📁 Çoklu Dosya Seçimi ve Toplu İşlemler:** Masaüstünde ve Dosya Yöneticisi'nde `Ctrl` ve `Shift` tuşlarıyla birden fazla dosya/klasör seçebilme; seçilen tüm öğeleri toplu olarak kopyalama (`Ctrl+C`), kesme (`Ctrl+X`), panoya alma ve kalıcı/Geri Dönüşüm Kutusu'na silme (`Delete`) desteği.
 - **🔄 Masaüstü ↔ Dosya Yöneticisi İki Yönlü Sürükle-Bırak (Drag & Drop):** Masaüstünden seçilen tek veya çoklu dosyaları Dosya Yöneticisi pencerelerine (açık olan dizine, kenar çubuğundaki hızlı konumlara veya klasörlere) ya da Dosya Yöneticisi'nden masaüstü boşluğuna sürükleyip bırakarak taşıma ve kopyalama (`Ctrl` basılıyken kopyalama, varsayılanda taşıma). İşlem sonrası her iki arayüzde anında dinamik VFS senkronizasyonu.
@@ -446,7 +456,7 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 16 Ekim 2026 (v1.4.0)
+> Son güncelleme: 17 Ekim 2026 (v1.5.0)
 
 | Ölçüt | Değer |
 | :--- | :--- |

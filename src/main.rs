@@ -2966,6 +2966,12 @@ pub extern "C" fn _start() -> ! {
                                         with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_audio_btn_rect(wx, wy)) {
                                         settings_app.run_audio_test(&mut audio_dev);
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
+                                    } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
                                     }
                                 }
                             }

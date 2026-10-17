@@ -88,6 +88,7 @@ const RCTL_MPE: u32 = 1 << 4;
 const RCTL_LPE: u32 = 1 << 5;
 const RCTL_BAM: u32 = 1 << 15;
 const RCTL_BSIZE_2048: u32 = 0; // 0 << 16
+const RCTL_SECRC: u32 = 1 << 26; // Strip Ethernet CRC
 
 const TCTL_EN: u32 = 1 << 1;
 const TCTL_PSP: u32 = 1 << 3;
@@ -226,8 +227,8 @@ unsafe fn init_rx_ring() {
     mmio_write32(REG_RDLEN, (RX_RING_SIZE * 16) as u32);
     mmio_write32(REG_RDH, 0);
     mmio_write32(REG_RDT, RX_RING_SIZE as u32 - 1);
-    // RCTL: enable, broadcast accept, unicast promiscuous, buffer 2048
-    mmio_write32(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_LPE);
+    // RCTL: enable, broadcast accept, unicast promiscuous, strip CRC, buffer 2048
+    mmio_write32(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_LPE | RCTL_SECRC);
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +280,10 @@ pub fn transmit(packet: &[u8]) -> bool {
 
         // DD (Descriptor Done - bit 0) kontrolü
         let mut spins = 0;
+        let desc_ptr = &(*rings()).tx_ring[tail] as *const TxDescriptor;
         loop {
-            if (*rings()).tx_ring[tail].status & 0x01 != 0 {
+            let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
+            if status & 0x01 != 0 {
                 return true;
             }
             spins += 1;
@@ -300,25 +303,27 @@ pub fn receive(buf: &mut [u8]) -> usize {
     }
     unsafe {
         let idx = RX_TAIL;
-        let desc = &(*rings()).rx_ring[idx];
-        if desc.status & 0x01 == 0 {
+        let desc_ptr = &mut (*rings()).rx_ring[idx] as *mut RxDescriptor;
+        let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
+        if status & 0x01 == 0 {
             return 0; // DD biti ayarlanmadı
         }
-        let len = desc.length as usize;
-        // Çok descriptor'lı çerçeveler henüz birleştirilmiyor; hatalı veya
-        // EOP olmadan biten parçaları üst katmana Ethernet paketi diye verme.
-        if len == 0 || len > buf.len() || desc.errors != 0 || desc.status & 0x02 == 0 {
+        let len = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).length)) as usize;
+        let errors = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).errors));
+        let addr = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).addr));
+
+        if len == 0 || len > buf.len() || errors != 0 || status & 0x02 == 0 {
             // Bu buffer'ı yeniden kullan
-            (*rings()).rx_ring[idx].status = 0;
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*desc_ptr).status), 0);
             mmio_write32(REG_RDT, idx as u32);
             RX_TAIL = (idx + 1) % RX_RING_SIZE;
             return 0;
         }
-        let src = crate::drivers::phys_to_virt(desc.addr) as *const u8;
+        let src = crate::drivers::phys_to_virt(addr) as *const u8;
         core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
 
         // Descriptoru temizle ve RDT'yi ilerlet
-        (*rings()).rx_ring[idx].status = 0;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*desc_ptr).status), 0);
         mmio_write32(REG_RDT, idx as u32);
         RX_TAIL = (idx + 1) % RX_RING_SIZE;
         len
@@ -391,7 +396,14 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | 0x6);
 
         MMIO_BASE = base;
-        // Ring yapısını HHDM üzerinden sıfırla (fiziksel 0x400000)
+        // Global reset ve link-up (MAC ve register yapılandırmasından ÖNCE yapılmalı!)
+        mmio_write32(REG_CTRL, CTRL_LRST);
+        for _ in 0..100_000 {
+            core::hint::spin_loop();
+        }
+        mmio_write32(REG_CTRL, CTRL_SLU);
+
+        // Ring yapısını HHDM üzerinden sıfırla
         let r = rings();
         core::ptr::write_bytes(r as *mut u8, 0, core::mem::size_of::<E1000Rings>());
 
@@ -412,23 +424,18 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         e1000_print_hex(mac[5]);
         e1000_print("\n");
 
-        // RAL0/RAH0'a MAC yaz
+        // RAL0/RAH0'a MAC yaz (Address Valid biti 0x8000_0000 ile)
         let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
         let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | 0x8000_0000;
         mmio_write32(REG_RAL0, ral);
         mmio_write32(REG_RAH0, rah);
 
-        // Global reset ve link-up
-        mmio_write32(REG_CTRL, CTRL_LRST);
-        for _ in 0..100_000 {
-            core::hint::spin_loop();
+        // Multicast Table Array (MTA: 0x5200..0x5400 - 128 dword) sıfırla
+        for i in 0..128u32 {
+            mmio_write32(0x5200 + i * 4, 0);
         }
-        mmio_write32(REG_CTRL, CTRL_SLU);
 
-        // Tüm kesme kaynaklarını kapat: minOs sürücüleri çekirdek IDT'si
-        // üzerinden donanım IRQ'larını işlemez, bu yüzden kartı yoklamayla
-        // (polling) kullanıyoruz. Kesme açık kalırsa paylaşılan IRQ hattında
-        // fırtına oluşup diğer aygıtları (ör. HDA ses akışını) bozuyor.
+        // Tüm kesme kaynaklarını kapat: yoklamayla (polling) çalışıyoruz
         mmio_write32(REG_IMC, 0xFFFF_FFFF);
         mmio_write32(REG_CTRL, CTRL_SLU);
         let _ = mmio_read32(REG_ICR); // bekleyen kesme nedenlerini temizle

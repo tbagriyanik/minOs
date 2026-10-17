@@ -201,6 +201,11 @@ pub struct SystemSettings {
     pub test_audio_tested: bool,
     pub test_audio_ok: bool,
     pub test_audio_msg: &'static str,
+    pub test_net_tested: bool,
+    pub test_net_ok: bool,
+    pub test_net_ping_ok: bool,
+    pub test_net_http_ok: bool,
+    pub test_net_msg: &'static str,
     pub test_mouse_x: usize,
     pub test_mouse_y: usize,
     pub test_mouse_over: bool,
@@ -253,6 +258,11 @@ impl SystemSettings {
             test_audio_tested: false,
             test_audio_ok: false,
             test_audio_msg: "",
+            test_net_tested: false,
+            test_net_ok: false,
+            test_net_ping_ok: false,
+            test_net_http_ok: false,
+            test_net_msg: "",
             test_mouse_x: 0,
             test_mouse_y: 0,
             test_mouse_over: false,
@@ -408,6 +418,15 @@ impl SystemSettings {
     pub fn test_audio_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 9 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
     }
+    pub fn test_net_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(100), sp(UI_BTN_H))
+    }
+    pub fn test_ping_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + sp(108), win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(90), sp(UI_BTN_H))
+    }
+    pub fn test_http_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + sp(206), win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + 20), sp(90), sp(UI_BTN_H))
+    }
 
     // -----------------------------------------------------------------
     // Aksiyonlar
@@ -435,6 +454,11 @@ impl SystemSettings {
         self.test_audio_tested = false;
         self.test_audio_ok = false;
         self.test_audio_msg = "";
+        self.test_net_tested = false;
+        self.test_net_ok = false;
+        self.test_net_ping_ok = false;
+        self.test_net_http_ok = false;
+        self.test_net_msg = "";
         self.test_mouse_x = 0;
         self.test_mouse_y = 0;
         self.test_mouse_over = false;
@@ -452,6 +476,122 @@ impl SystemSettings {
         self.test_audio_ok = ok;
         self.test_audio_msg = msg;
         self.status_msg = msg;
+    }
+
+    /// Ağ alt sistemi testi: Link durumu, Gateway ARP ve Ping doğrulaması yapar.
+    pub fn run_network_test(&mut self) {
+        self.test_net_tested = true;
+        if !crate::drivers::e1000::is_ready() {
+            self.test_net_ok = false;
+            self.test_net_ping_ok = false;
+            self.test_net_http_ok = false;
+            self.test_net_msg = crate::gui::ui_text("e1000 NIC bulunamadı!", "e1000 NIC not found!");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        if !crate::drivers::e1000::link_up() {
+            self.test_net_ok = false;
+            self.test_net_ping_ok = false;
+            self.test_net_http_ok = false;
+            self.test_net_msg = crate::gui::ui_text("Link Down (Kablo/ağ yok)", "Link Down (No cable/network)");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        let passed = crate::drivers::netstack::run_network_self_test();
+        self.test_net_ok = passed;
+        self.test_net_ping_ok = passed;
+        self.test_net_msg = if passed {
+            crate::gui::ui_text("Ağ kartı ve TCP/IP hazır (10.0.2.15)", "NIC and TCP/IP ready (10.0.2.15)")
+        } else {
+            crate::gui::ui_text("Ağ testi başarısız!", "Network test failed!")
+        };
+        self.status_msg = self.test_net_msg;
+    }
+
+    /// Yalnızca Gateway (10.0.2.2) ICMP Ping testi gönderir.
+    pub fn run_ping_test(&mut self) {
+        self.test_net_tested = true;
+        if !crate::drivers::e1000::is_ready() || !crate::drivers::e1000::link_up() {
+            self.test_net_ok = false;
+            self.test_net_ping_ok = false;
+            self.test_net_msg = crate::gui::ui_text("Ağ bağlantısı yok (Link Down)", "No network link (Link Down)");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        crate::drivers::netstack::clear_ping_reply();
+        let gw = crate::drivers::netstack::gateway_ip();
+        let sent = crate::drivers::netstack::ping(gw);
+        if !sent {
+            self.test_net_ok = false;
+            self.test_net_ping_ok = false;
+            self.test_net_msg = crate::gui::ui_text("Ping iletim hatası (TX)", "Ping transmit failure (TX)");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        let mut replied = false;
+        for _ in 0..5_000 {
+            crate::drivers::e1000::poll();
+            if crate::drivers::netstack::has_ping_reply() {
+                replied = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+
+        self.test_net_ping_ok = replied;
+        self.test_net_ok = replied;
+        self.test_net_msg = if replied {
+            crate::gui::ui_text("Ping 10.0.2.2: Yanıt alındı (OK)", "Ping 10.0.2.2: Echo Reply OK")
+        } else {
+            crate::gui::ui_text("Ping 10.0.2.2: Zaman aşımı (Timeout)", "Ping 10.0.2.2: Request Timeout")
+        };
+        self.status_msg = self.test_net_msg;
+    }
+
+    /// Gateway HTTP (10.0.2.2:80) SYN handshake testi.
+    pub fn run_http_test(&mut self) {
+        self.test_net_tested = true;
+        if !crate::drivers::e1000::is_ready() || !crate::drivers::e1000::link_up() {
+            self.test_net_ok = false;
+            self.test_net_http_ok = false;
+            self.test_net_msg = crate::gui::ui_text("Ağ bağlantısı yok", "No network link");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        let gw = crate::drivers::netstack::gateway_ip();
+        let init = crate::drivers::netstack::tcp_begin(gw, 80, 49210);
+        if !init {
+            self.test_net_http_ok = false;
+            self.test_net_msg = crate::gui::ui_text("TCP SYN iletilemedi", "TCP SYN send failed");
+            self.status_msg = self.test_net_msg;
+            return;
+        }
+
+        let mut connected = false;
+        for _ in 0..6_000 {
+            crate::drivers::e1000::poll();
+            if crate::drivers::netstack::tcp_connected() {
+                connected = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+
+        if connected {
+            crate::drivers::netstack::tcp_close();
+            self.test_net_http_ok = true;
+            self.test_net_ok = true;
+            self.test_net_msg = crate::gui::ui_text("HTTP 10.0.2.2:80: Bağlantı kuruldu (OK)", "HTTP 10.0.2.2:80: Connected (OK)");
+        } else {
+            self.test_net_http_ok = false;
+            self.test_net_msg = crate::gui::ui_text("HTTP 10.0.2.2:80: Yanıt yok (Port kapalı)", "HTTP 10.0.2.2:80: No response (Closed)");
+        }
+        self.status_msg = self.test_net_msg;
     }
 
     /// Ayarları aktif sistem bileşenlerine uygular.
@@ -1199,5 +1339,43 @@ impl SystemSettings {
         }
         draw_device_line(fb, cx + 112, audio_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 124), &audio,
             if self.test_audio_tested { if self.test_audio_ok { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW } } else { Color::TEXT_MAIN });
+
+        // ---- Ağ alt sistemi testi (Satır 10) ----
+        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 10 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),
+            crate::gui::ui_text("Ağ testi:", "Net test:"), Color::ACCENT_YELLOW);
+        let net_btn = Self::test_net_btn_rect(win_x, win_y);
+        let ping_btn = Self::test_ping_btn_rect(win_x, win_y);
+        let http_btn = Self::test_http_btn_rect(win_x, win_y);
+
+        MinGuiCompositor::draw_button(fb, net_btn, Color::ACCENT_BLUE,
+            crate::gui::ui_text("Tümünü Sına", "Self-Test"), Color::DARK_BG, false);
+        MinGuiCompositor::draw_button(fb, ping_btn, Color::ACCENT_BLUE,
+            "Ping GW", Color::DARK_BG, false);
+        MinGuiCompositor::draw_button(fb, http_btn, Color::ACCENT_GREEN,
+            "HTTP GET", Color::DARK_BG, false);
+
+        let mut net_line = DeviceLine::new();
+        if self.test_net_tested {
+            net_line.push(if self.test_net_ok {
+                if english { "PASS | " } else { "BAŞARILI | " }
+            } else if english { "FAIL | " } else { "UYARI | " });
+            net_line.push(self.test_net_msg);
+        } else {
+            let ready = crate::drivers::e1000::is_ready();
+            let link = crate::drivers::e1000::link_up();
+            if ready && link {
+                net_line.push(if english { "Intel 82540EM Link UP | 10.0.2.15 hazır" } else { "Intel 82540EM Link UP | 10.0.2.15 hazır" });
+            } else if ready {
+                net_line.push(if english { "Intel 82540EM Link DOWN" } else { "Intel 82540EM Bağlantı Yok" });
+            } else {
+                net_line.push(if english { "NIC not detected" } else { "Ağ kartı algılanmadı" });
+            }
+        }
+        draw_device_line(fb, cx + sp(306), net_btn.1 + 4, win_w.saturating_sub(CONTENT_X + sp(316)), &net_line,
+            if self.test_net_tested {
+                if self.test_net_ok { Color::ACCENT_GREEN } else { Color::ACCENT_RED }
+            } else {
+                Color::TEXT_MAIN
+            });
     }
 }

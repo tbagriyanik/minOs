@@ -278,6 +278,20 @@ const ICMP_ECHO_REQUEST: u8 = 8;
 pub static mut LAST_PING_REPLY_SRC: Option<Ipv4Address> = None;
 pub static mut LAST_ARP_REPLY_SRC: Option<Ipv4Address> = None;
 
+#[inline]
+pub fn clear_ping_reply() {
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_PING_REPLY_SRC), None);
+    }
+}
+
+#[inline]
+pub fn has_ping_reply() -> bool {
+    unsafe {
+        core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_SRC)).is_some()
+    }
+}
+
 fn handle_icmp(src_ip: Ipv4Address, payload: &[u8]) {
     if payload.len() < 8 || checksum(payload) != 0 {
         return;
@@ -703,7 +717,7 @@ pub fn run_network_self_test() -> bool {
     }
 
     // 2. ICMP Echo Request ve Echo Reply testi
-    unsafe { LAST_PING_REPLY_SRC = None; }
+    clear_ping_reply();
     crate::serial_print("[NET-TEST] 2. ICMP: Gateway'e Ping paketi gonderiliyor... ");
     let ping_sent = ping(GATEWAY_IP);
     if ping_sent {
@@ -711,7 +725,7 @@ pub fn run_network_self_test() -> bool {
         let mut echo_replied = false;
         for _ in 0..3_000 {
             e1000::poll();
-            if unsafe { LAST_PING_REPLY_SRC.is_some() } {
+            if has_ping_reply() {
                 echo_replied = true;
                 break;
             }

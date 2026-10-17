@@ -9,7 +9,7 @@ use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
 #[allow(dead_code)]
-const HEAP_SIZE: usize = 2 * 1024 * 1024;
+const HEAP_SIZE: usize = 16 * 1024 * 1024;
 #[allow(dead_code)]
 static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
@@ -3815,62 +3815,68 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::Screenshot => {
                     // Ekran görüntüsü (F12 / PrtScn) -> BMP olarak VFS'ye kaydet
                     audio_dev.play_beep(980, 40);
-                    let mut bmp_data = alloc::vec::Vec::new();
                     let sw = width;
                     let sh = height;
                     let row_bytes = (sw * 3 + 3) & !3;
                     let image_size = row_bytes * sh;
                     let file_size = 54 + image_size;
-                    bmp_data.reserve_exact(file_size);
-                    // BMP Header (14 bytes)
-                    bmp_data.extend_from_slice(b"BM");
-                    bmp_data.extend_from_slice(&(file_size as u32).to_le_bytes());
-                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&54u32.to_le_bytes());
-                    // DIB Header (40 bytes)
-                    bmp_data.extend_from_slice(&40u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&(sw as i32).to_le_bytes());
-                    bmp_data.extend_from_slice(&(sh as i32).to_le_bytes());
-                    bmp_data.extend_from_slice(&1u16.to_le_bytes());
-                    bmp_data.extend_from_slice(&24u16.to_le_bytes());
-                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&(image_size as u32).to_le_bytes());
-                    bmp_data.extend_from_slice(&2835u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&2835u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
-                    bmp_data.extend_from_slice(&0u32.to_le_bytes());
-                    // Pixel Data (Alt satırdan üst satıra BGR)
-                    for y in (0..sh).rev() {
-                        for x in 0..sw {
-                            let p = fb.get_pixel(x, y);
-                            let b = (p & 0xFF) as u8;
-                            let g = ((p >> 8) & 0xFF) as u8;
-                            let r = ((p >> 16) & 0xFF) as u8;
-                            bmp_data.push(b);
-                            bmp_data.push(g);
-                            bmp_data.push(r);
-                        }
-                        for _ in 0..(row_bytes - sw * 3) {
-                            bmp_data.push(0);
-                        }
-                    }
-                    let mut path = alloc::string::String::from("/desktop/ekran_");
-                    let mut num = gui::TextBuf::new();
-                    num.push_usize(screenshot_counter);
-                    path.push_str(num.as_str());
-                    path.push_str(".bmp");
-                    serial_print("[SCREENSHOT] Ekran goruntusu aliniyor...\n");
-                    screenshot_counter += 1;
-                    if fs_mgr.vfs.write_file(&path, &bmp_data) {
-                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
-                        terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
-                        force_render = true;
-                        serial_print("[SCREENSHOT] Basariyla kaydedildi: ");
-                        serial_print(&path);
-                        serial_print("\n");
+                    
+                    let mut bmp_data = alloc::vec::Vec::new();
+                    if bmp_data.try_reserve_exact(file_size).is_err() {
+                        serial_print("[SCREENSHOT] HATA: Yetersiz bellek!\n");
+                        terminal_app.push_line(gui::ui_text("Ekran görüntüsü alınamadı: Yetersiz bellek", "Screenshot failed: Out of memory"), gui::Color::ACCENT_RED);
                     } else {
-                        serial_print("[SCREENSHOT] HATA: VFS dosya yazilamadi!\n");
+                        // BMP Header (14 bytes)
+                        bmp_data.extend_from_slice(b"BM");
+                        bmp_data.extend_from_slice(&(file_size as u32).to_le_bytes());
+                        bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&54u32.to_le_bytes());
+                        // DIB Header (40 bytes)
+                        bmp_data.extend_from_slice(&40u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&(sw as i32).to_le_bytes());
+                        bmp_data.extend_from_slice(&(sh as i32).to_le_bytes());
+                        bmp_data.extend_from_slice(&1u16.to_le_bytes());
+                        bmp_data.extend_from_slice(&24u16.to_le_bytes());
+                        bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&(image_size as u32).to_le_bytes());
+                        bmp_data.extend_from_slice(&2835u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&2835u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                        bmp_data.extend_from_slice(&0u32.to_le_bytes());
+                        // Pixel Data (Alt satırdan üst satıra BGR)
+                        for y in (0..sh).rev() {
+                            for x in 0..sw {
+                                let p = fb.get_pixel(x, y);
+                                let b = (p & 0xFF) as u8;
+                                let g = ((p >> 8) & 0xFF) as u8;
+                                let r = ((p >> 16) & 0xFF) as u8;
+                                bmp_data.push(b);
+                                bmp_data.push(g);
+                                bmp_data.push(r);
+                            }
+                            for _ in 0..(row_bytes - sw * 3) {
+                                bmp_data.push(0);
+                            }
+                        }
+                        let mut path = alloc::string::String::from("/desktop/ekran_");
+                        let mut num = gui::TextBuf::new();
+                        num.push_usize(screenshot_counter);
+                        path.push_str(num.as_str());
+                        path.push_str(".bmp");
+                        serial_print("[SCREENSHOT] Ekran goruntusu aliniyor...\n");
+                        screenshot_counter += 1;
+                        let arc_data: alloc::sync::Arc<[u8]> = bmp_data.into();
+                        if fs_mgr.vfs.write_large_file(&path, arc_data) {
+                            desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                            terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                            force_render = true;
+                            serial_print("[SCREENSHOT] Basariyla kaydedildi: ");
+                            serial_print(&path);
+                            serial_print("\n");
+                        } else {
+                            serial_print("[SCREENSHOT] HATA: VFS dosya yazilamadi!\n");
+                        }
                     }
                 }
             }

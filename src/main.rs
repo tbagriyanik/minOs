@@ -1472,6 +1472,9 @@ pub extern "C" fn _start() -> ! {
             let item = &desktop_fm.files[i];
             let (x, y, w, h) = desktop_item_rect(i);
             if !desktop_item_visible((x, y, w, h), fb.width, fb.height) { continue; }
+            if let Some(r) = dirty_rect {
+                if x + w <= r.0 || x >= r.0 + r.2 || y + h <= r.1 || y >= r.1 + r.3 { continue; }
+            }
             if desktop_fm.is_row_selected(i) {
                 fb.draw_rounded_rect_alpha(x, y, w, h, 5, gui::MinGuiCompositor::shade(gui::Color::ACCENT_BLUE, 28), 160);
                 fb.draw_rounded_rect_outline(x, y, w, h, 5, gui::Color::ACCENT_BLUE);
@@ -1495,6 +1498,12 @@ pub extern "C" fn _start() -> ! {
             let idx = order[k];
             if let Some(win) = compositor.windows[idx] {
                 if !win.is_open || win.is_minimized {
+                    continue;
+                }
+                // Off-screen pencereleri tamamen atla (çizim maliyeti yok).
+                if win.x >= fb.width || win.y >= fb.height
+                    || win.x.saturating_add(win.width) == win.x
+                    || win.y.saturating_add(win.height) == win.y {
                     continue;
                 }
                 compositor.render_window_frame(fb, &win, mouse, idx);
@@ -1610,13 +1619,9 @@ pub extern "C" fn _start() -> ! {
                 gui::Color::TEXT_MUTED);
         }
 
-        // 4. Backbuffer'ı VRAM'e kopyala (flicker-free; sürüklemede sadece değişen bölge)
+        // 4. Backbuffer'ı VRAM'e kopyala (tam ekran temiz ve hatasız yenileme)
         fb.apply_night_light(if st.night_light { st.night_light_level } else { 0 });
-        if let Some(r) = dirty_rect {
-            fb.flush_rect(r);
-        } else {
-            fb.flush();
-        }
+        fb.flush();
     };
 
     // İlk kareyi çiz (tüm ekran)
@@ -1668,6 +1673,7 @@ pub extern "C" fn _start() -> ! {
             compositor.is_volume_popup_open = false;
             compositor.close_start_menu();
             compositor.is_context_menu_open = true;
+            compositor.is_context_submenu_open = false;
             compositor.context_menu_x = mx;
             compositor.context_menu_y = my;
             compositor.context_file_idx = None;
@@ -1675,10 +1681,13 @@ pub extern "C" fn _start() -> ! {
 
             // Tıklanan pencereyi en üstten aşağıya ara
             let (order, count) = compositor.draw_order();
-            let mut kind = gui::ContextKind::Desktop;
+            let mut hit_window: Option<(usize, gui::ContextKind)> = None;
             for k in (0..count).rev() {
                 let idx = order[k];
                 if let Some(win) = compositor.windows[idx] {
+                    if !win.is_open || win.is_minimized {
+                        continue;
+                    }
                     let inside = mx >= win.x && mx < win.x + win.width
                         && my >= win.y && my < win.y + win.height;
                     if !inside {
@@ -1686,14 +1695,11 @@ pub extern "C" fn _start() -> ! {
                     }
                     compositor.context_window = Some(idx);
                     if my < win.y + gui::titlebar_h() {
-                        // Başlık çubuğu → pencere menüsü
-                        kind = gui::ContextKind::Window;
+                        hit_window = Some((idx, gui::ContextKind::Window));
                     } else if idx == 2 {
-                        // Not Defteri metin alanı → düzenleme menüsü
-                        kind = gui::ContextKind::Notepad;
                         compositor.focus_window(idx);
+                        hit_window = Some((idx, gui::ContextKind::Notepad));
                     } else if idx == 0 {
-                        // Dosya Yöneticisi → dosya üzerinde mi?
                         let list_x = win.x + 124;
                         if mx >= list_x && mx <= win.x + win.width - 10 {
                             let row_y_base = win.y + 86;
@@ -1706,46 +1712,49 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                         }
-                        kind = gui::ContextKind::FileManager;
                         compositor.focus_window(idx);
+                        hit_window = Some((idx, gui::ContextKind::FileManager));
                     } else if idx == 7 {
-                        // Görev Yöneticisi → süreç satırı üzerinde mi?
                         if taskmgr_app.active_tab == 0 {
                             if let Some(row) = taskmgr_app.row_at(mx, my, win.x, win.y, win.width) {
                                 taskmgr_app.selected = row;
                                 taskmgr_app.focused_control = 4 + row;
-                                kind = gui::ContextKind::TaskManager;
+                                hit_window = Some((idx, gui::ContextKind::TaskManager));
                             } else {
-                                kind = gui::ContextKind::Window;
+                                hit_window = Some((idx, gui::ContextKind::Window));
                             }
                         } else {
-                            kind = gui::ContextKind::Window;
+                            hit_window = Some((idx, gui::ContextKind::Window));
                         }
                         compositor.focus_window(idx);
-                    } else if my < tb_y {
-                        let selected = desktop_files.selected_items;
-                        let click_idx = desktop_files.last_click_idx;
-                        let click_ms = desktop_files.last_click_ms;
-                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
-                        desktop_files.selected_items = selected;
-                        desktop_files.last_click_idx = click_idx;
-                        desktop_files.last_click_ms = click_ms;
-                        if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
-                            compositor.context_file_idx = Some(desk_idx);
-                            desktop_files.select_row(desk_idx, keyboard.ctrl, keyboard.shift);
-                            kind = gui::ContextKind::DesktopItem;
-                        } else {
-                            kind = gui::ContextKind::Desktop;
-                        }
                     } else {
-                        // Diğer uygulamalar → pencere menüsü
-                        kind = gui::ContextKind::Window;
                         compositor.focus_window(idx);
+                        hit_window = Some((idx, gui::ContextKind::Window));
                     }
                     break;
                 }
             }
-            compositor.context_kind = kind;
+
+            if let Some((_, kind)) = hit_window {
+                compositor.context_kind = kind;
+            } else if my < tb_y {
+                let selected = desktop_files.selected_items;
+                let click_idx = desktop_files.last_click_idx;
+                let click_ms = desktop_files.last_click_ms;
+                desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                desktop_files.selected_items = selected;
+                desktop_files.last_click_idx = click_idx;
+                desktop_files.last_click_ms = click_ms;
+                if let Some((desk_idx, _)) = desktop_item_at(mx, my, &desktop_files, width, height) {
+                    compositor.context_file_idx = Some(desk_idx);
+                    desktop_files.select_row(desk_idx, keyboard.ctrl, keyboard.shift);
+                    compositor.context_kind = gui::ContextKind::DesktopItem;
+                } else {
+                    compositor.context_kind = gui::ContextKind::Desktop;
+                }
+            } else {
+                compositor.context_kind = gui::ContextKind::Desktop;
+            }
         }
 
         // 2. Fare Sol Tıklama Olayları (Mouse Down)
@@ -1766,10 +1775,13 @@ pub extern "C" fn _start() -> ! {
                     compositor.close_start_menu();
                 }
             }
-            if compositor.is_context_menu_open
-                && compositor.context_hit(width, height, mx, my).is_none()
-            {
-                compositor.is_context_menu_open = false;
+            if compositor.is_context_menu_open {
+                let hit_main = compositor.context_hit(width, height, mx, my).is_some();
+                let hit_sub = compositor.context_submenu_hit(width, height, mx, my).is_some();
+                if !hit_main && !hit_sub {
+                    compositor.is_context_menu_open = false;
+                    compositor.is_context_submenu_open = false;
+                }
             }
             if compositor.is_volume_popup_open
                 && !gui::in_rect(mx, my, compositor.volume_slider_rect(&l))
@@ -1895,170 +1907,223 @@ pub extern "C" fn _start() -> ! {
 
             // C) Bağlam menüsü açıkken
             if !consumed && compositor.is_context_menu_open {
-                if let Some(clicked_item) = compositor.context_hit(width, height, mx, my) {
+                // Önce varsa açık olan "Yeni ▶" alt menüsündeki tıklamayı kontrol et
+                if let Some(sub_item) = compositor.context_submenu_hit(width, height, mx, my) {
                     match compositor.context_kind {
-                        gui::ContextKind::Desktop => match clicked_item {
-                            0 => { filemanager_app.set_path("/root/Documents"); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
-                            1 => open_app(&mut compositor, 2),
-                            2 => { desktop_files.new_file(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
-                            3 => { desktop_files.new_folder(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
-                            4 => { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
-                            5 => open_app(&mut compositor, 1),
-                            6 => open_app(&mut compositor, 7),
-                            7 => settings_app.cycle_theme(),
-                            8 => { desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
-                            _ => {}
-                        },
-                        gui::ContextKind::DesktopItem => {
-                            match clicked_item {
-                                0 => if let Some(i) = compositor.context_file_idx {
-                                    let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name());
-                                    if desktop_files.files[i].is_dir { filemanager_app.set_path(&path); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
-                            else {
-                                let tag = desktop_files.files[i].icon_tag;
-                                if tag == "TXT" || tag == "LOG" || tag == "CFG" { if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } }
-                                else if tag == "IMG" { open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
-                                else if tag == "SND" { open_app(&mut compositor, 5); }
-                                else if tag == "VID" { open_app(&mut compositor, 6); }
-                                else if tag == "WEB" { open_app(&mut compositor, 3); }
-                                else if tag == "3D" { if let Some(data) = fs_mgr.vfs.read_file(&path) { viewer3d_app.load_file(&path, data); open_app(&mut compositor, 12); } }
-                            }
-                                },
-                                1 => if let Some(i) = compositor.context_file_idx { let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name()); if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } },
-                                2 => desktop_files.copy_selection(&mut file_clipboard, true),
-                                3 => desktop_files.copy_selection(&mut file_clipboard, false),
-                                4 => { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
-                                5 => { desktop_files.new_file(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
-                                6 => { desktop_files.new_folder(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
-                                7 => desktop_files.begin_rename(),
-                                8 => { desktop_files.delete_selected(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
-                                _ => {}
+                        gui::ContextKind::Desktop | gui::ContextKind::DesktopItem => {
+                            match sub_item {
+                                0 => { // Metin Belgesi (.txt)
+                                    desktop_files.new_file(&mut fs_mgr.vfs);
+                                    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                }
+                                1 => { // Klasör
+                                    desktop_files.new_folder(&mut fs_mgr.vfs);
+                                    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                }
+                                2 => { // Çizim / Resim (.bmp)
+                                    desktop_files.new_custom_file("cizim_", ".bmp", &[], &mut fs_mgr.vfs);
+                                    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                }
+                                _ => { // Boş Belge
+                                    desktop_files.new_custom_file("belge_", ".dat", &[], &mut fs_mgr.vfs);
+                                    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                }
                             }
                         }
                         gui::ContextKind::FileManager => {
-                            match clicked_item {
-                                0 => { // Aç / Klasöre Gir
-                                    if let Some(file_idx) = compositor.context_file_idx {
-                                        filemanager_app.selected_idx = file_idx;
-                                        if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
-                                            if tag == "TXT" || tag == "LOG" || tag == "CFG" {
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
-                                                if let Some(data) = data {
-                                                    notepad_app.open_file(&path, data);
+                            match sub_item {
+                                0 => { // Metin Belgesi (.txt)
+                                    filemanager_app.new_file(&mut fs_mgr.vfs);
+                                }
+                                1 => { // Klasör
+                                    filemanager_app.new_folder(&mut fs_mgr.vfs);
+                                }
+                                2 => { // Çizim / Resim (.bmp)
+                                    filemanager_app.new_custom_file("cizim_", ".bmp", &[], &mut fs_mgr.vfs);
+                                }
+                                _ => { // Boş Belge
+                                    filemanager_app.new_custom_file("belge_", ".dat", &[], &mut fs_mgr.vfs);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    compositor.is_context_menu_open = false;
+                    compositor.is_context_submenu_open = false;
+                    consumed = true;
+                } else if let Some(clicked_item) = compositor.context_hit(width, height, mx, my) {
+                    // "Yeni ▶" öğesine tıklandıysa alt menüyü aç / kapa, ana menüyü kapatma
+                    let is_sub_parent = match compositor.context_kind {
+                        gui::ContextKind::Desktop => clicked_item == 1,
+                        gui::ContextKind::DesktopItem => clicked_item == 4,
+                        gui::ContextKind::FileManager => clicked_item == 5,
+                        _ => false,
+                    };
+
+                    if is_sub_parent {
+                        compositor.is_context_submenu_open = !compositor.is_context_submenu_open;
+                        consumed = true;
+                    } else {
+                        match compositor.context_kind {
+                            gui::ContextKind::Desktop => match clicked_item {
+                                0 => { filemanager_app.set_path("/root/Documents"); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
+                                2 => { desktop_files.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
+                                3 => open_app(&mut compositor, 1),
+                                4 => open_app(&mut compositor, 7),
+                                5 => settings_app.cycle_theme(),
+                                6 => { desktop_files.refresh_from_vfs(&fs_mgr.vfs); }
+                                7 => open_app(&mut compositor, 2),
+                                _ => {}
+                            },
+                            gui::ContextKind::DesktopItem => {
+                                match clicked_item {
+                                    0 => if let Some(i) = compositor.context_file_idx {
+                                        let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name());
+                                        if desktop_files.files[i].is_dir { filemanager_app.set_path(&path); filemanager_app.refresh_from_vfs(&fs_mgr.vfs); open_app(&mut compositor, 0); }
+                                        else {
+                                            let tag = desktop_files.files[i].icon_tag;
+                                            if tag == "TXT" || tag == "LOG" || tag == "CFG" { if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } }
+                                            else if tag == "IMG" { open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app); open_app(&mut compositor, 4); }
+                                            else if tag == "SND" { open_app(&mut compositor, 5); }
+                                            else if tag == "VID" { open_app(&mut compositor, 6); }
+                                            else if tag == "WEB" { open_app(&mut compositor, 3); }
+                                            else if tag == "3D" { if let Some(data) = fs_mgr.vfs.read_file(&path) { viewer3d_app.load_file(&path, data); open_app(&mut compositor, 12); } }
+                                        }
+                                    },
+                                    1 => if let Some(i) = compositor.context_file_idx { let mut path = alloc::string::String::from("/desktop/"); path.push_str(desktop_files.files[i].display_name()); if let Some(data) = fs_mgr.vfs.read_file(&path) { notepad_app.open_file(&path, data); open_app(&mut compositor, 2); } },
+                                    2 => desktop_files.copy_selection(&mut file_clipboard, true),
+                                    3 => desktop_files.copy_selection(&mut file_clipboard, false),
+                                    4 => {} // Yeni ▶
+                                    5 => desktop_files.begin_rename(),
+                                    6 => { desktop_files.delete_selected(&mut fs_mgr.vfs); desktop_files.refresh_from_vfs(&fs_mgr.vfs); },
+                                    _ => {}
+                                }
+                            }
+                            gui::ContextKind::FileManager => {
+                                match clicked_item {
+                                    0 => { // Aç / Klasöre Gir
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            filemanager_app.selected_idx = file_idx;
+                                            if let Some((tag, path)) = filemanager_app.enter_selected(&fs_mgr.vfs) {
+                                                if tag == "TXT" || tag == "LOG" || tag == "CFG" {
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                    if let Some(data) = data {
+                                                        notepad_app.open_file(&path, data);
+                                                    }
+                                                    open_app(&mut compositor, 2);
+                                                } else if tag == "IMG" {
+                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                    open_app(&mut compositor, 4);
+                                                } else if tag == "SND" {
+                                                    open_app(&mut compositor, 5);
+                                                } else if tag == "VID" {
+                                                    open_app(&mut compositor, 6);
+                                                } else if tag == "WEB" {
+                                                    open_app(&mut compositor, 3);
+                                                } else if tag == "3D" {
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                    if let Some(data) = data {
+                                                        viewer3d_app.load_file(&path, data);
+                                                    }
+                                                    open_app(&mut compositor, 12);
                                                 }
-                                                open_app(&mut compositor, 2);
-                                            } else if tag == "IMG" {
-                                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
-                                                open_app(&mut compositor, 4);
-                                            } else if tag == "SND" {
-                                                open_app(&mut compositor, 5);
-                                            } else if tag == "VID" {
-                                                open_app(&mut compositor, 6);
-                                            } else if tag == "WEB" {
-                                                open_app(&mut compositor, 3);
-                                            } else if tag == "3D" {
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
-                                                if let Some(data) = data {
-                                                    viewer3d_app.load_file(&path, data);
-                                                }
-                                                open_app(&mut compositor, 12);
                                             }
                                         }
                                     }
-                                }
-                                1 => { // Not Defterinde Düzenle
-                                    if let Some(file_idx) = compositor.context_file_idx {
-                                        filemanager_app.selected_idx = file_idx;
-                                        let path = filemanager_app.selected_full_path();
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
-                                        if let Some(data) = data {
-                                            notepad_app.open_file(&path, data);
+                                    1 => { // Not Defterinde Düzenle
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            filemanager_app.selected_idx = file_idx;
+                                            let path = filemanager_app.selected_full_path();
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            if let Some(data) = data {
+                                                notepad_app.open_file(&path, data);
+                                            }
+                                            open_app(&mut compositor, 2);
                                         }
-                                        open_app(&mut compositor, 2);
                                     }
-                                }
-                                2 => { filemanager_app.copy_selection(&mut file_clipboard, true); }
-                                3 => { filemanager_app.copy_selection(&mut file_clipboard, false); }
-                                9 => { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
-                                5 => { // Yeni Dosya Oluştur
-                                    filemanager_app.new_file(&mut fs_mgr.vfs);
-                                }
-                                6 => { // Yeni Klasör Oluştur
-                                    filemanager_app.new_folder(&mut fs_mgr.vfs);
-                                }
-                                8 => { // Dosyayı / Klasörü Sil
-                                    if let Some(file_idx) = compositor.context_file_idx {
-                                        filemanager_app.selected_idx = file_idx;
-                                        filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                    2 => { filemanager_app.copy_selection(&mut file_clipboard, true); }
+                                    3 => { filemanager_app.copy_selection(&mut file_clipboard, false); }
+                                    4 => { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
+                                    5 => {} // Yeni ▶
+                                    6 => { // Adını değiştir
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            filemanager_app.selected_idx = file_idx;
+                                            filemanager_app.begin_rename();
+                                        }
                                     }
+                                    7 => { // Dosyayı / Klasörü Sil
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            filemanager_app.selected_idx = file_idx;
+                                            filemanager_app.delete_selected(&mut fs_mgr.vfs);
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                7 => { // Adını değiştir
-                                    if let Some(file_idx) = compositor.context_file_idx {
-                                        filemanager_app.selected_idx = file_idx;
-                                        filemanager_app.begin_rename();
+                            }
+                            gui::ContextKind::Notepad => match clicked_item {
+                                0 => notepad_app.cut_selection(),
+                                1 => notepad_app.copy_selection(),
+                                2 => notepad_app.paste_clipboard(),
+                                3 => notepad_app.delete_selection(),
+                                4 => notepad_app.select_all(),
+                                _ => notepad_app.clear(),
+                            },
+                            gui::ContextKind::TaskManager => match clicked_item {
+                                0 => {
+                                    // Sonlandır (Del): seçili süreci kapat
+                                    if let Some(target) = taskmgr_app.selected_app_idx() {
+                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                        if let Some(wi) = compositor.context_window {
+                                            terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
+                                                &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[wi],
+                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                        }
                                     }
                                 }
                                 _ => {}
-                            }
-                        }
-                        gui::ContextKind::Notepad => match clicked_item {
-                            0 => notepad_app.cut_selection(),
-                            1 => notepad_app.copy_selection(),
-                            2 => notepad_app.paste_clipboard(),
-                            3 => notepad_app.delete_selection(),
-                            4 => notepad_app.select_all(),
-                            _ => notepad_app.clear(),
-                        },
-                        gui::ContextKind::TaskManager => match clicked_item {
-                            0 => {
-                                // Sonlandır (Del): seçili süreci kapat
-                                if let Some(target) = taskmgr_app.selected_app_idx() {
-                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
-                                    if let Some(wi) = compositor.context_window {
-                                        terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
-                                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-                                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[wi],
-                                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
-                                    }
-                                }
-                            }
-                            _ => {}
-                        },
-                        gui::ContextKind::Window => {
-                            if let Some(wi) = compositor.context_window {
-                                match clicked_item {
-                                    0 => {
-                                        if let Some(w) = compositor.windows[wi].as_mut() {
-                                            w.is_minimized = true;
+                            },
+                            gui::ContextKind::Window => {
+                                if let Some(wi) = compositor.context_window {
+                                    match clicked_item {
+                                        0 => {
+                                            if let Some(w) = compositor.windows[wi].as_mut() {
+                                                w.is_minimized = true;
+                                            }
+                                            compositor.focus_top_window();
                                         }
-                                        compositor.focus_top_window();
-                                    }
-                                    1 => {
-                                        compositor.focus_window(wi);
-                                        compositor.toggle_maximize(wi, width, height);
-                                    }
-                                    2 => {
-                                        if let Some(w) = compositor.windows[wi].as_mut() {
-                                            w.x = width.saturating_sub(w.width) / 2;
-                                            w.y = height
-                                                .saturating_sub(gui::taskbar_h())
-                                                .saturating_sub(w.height)
-                                                / 2;
+                                        1 => {
+                                            compositor.focus_window(wi);
+                                            compositor.toggle_maximize(wi, width, height);
                                         }
-                                    }
-                                    _ => {
-                                        if let Some(w) = compositor.windows[wi].as_mut() {
-                                            w.is_open = false;
+                                        2 => {
+                                            if let Some(w) = compositor.windows[wi].as_mut() {
+                                                w.x = width.saturating_sub(w.width) / 2;
+                                                w.y = height
+                                                    .saturating_sub(gui::taskbar_h())
+                                                    .saturating_sub(w.height)
+                                                    / 2;
+                                            }
                                         }
-                                        compositor.focus_top_window();
+                                        _ => {
+                                            if let Some(w) = compositor.windows[wi].as_mut() {
+                                                w.is_open = false;
+                                            }
+                                            compositor.focus_top_window();
+                                        }
                                     }
                                 }
                             }
                         }
+                        compositor.is_context_menu_open = false;
+                        compositor.is_context_submenu_open = false;
+                        consumed = true;
                     }
+                } else {
+                    compositor.is_context_menu_open = false;
+                    compositor.is_context_submenu_open = false;
+                    consumed = true;
                 }
-                compositor.is_context_menu_open = false;
-                consumed = true;
             }
 
         if compositor.is_start_menu_open {
@@ -3527,6 +3592,17 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 8) {
                         enter_char_consumed = true;
                         calculator_app.press('=');
+                    } else if app_is_focused(&compositor, 10) {
+                        enter_char_consumed = true;
+                        terminal_app.submit();
+                        if let Some(cmd) = terminal_app.take_pending() {
+                            let n = terminal_app.pending_len();
+                            let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
+                            if let Some(app_idx) = terminal_app.execute(line, &mut fs_mgr.vfs, &mut memory_mgr.pmm, &now) {
+                                open_app(&mut compositor, app_idx);
+                            }
+                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                        }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         enter_char_consumed = true;
                         notepad_app.insert_char('\n');
@@ -3782,11 +3858,18 @@ pub extern "C" fn _start() -> ! {
                     num.push_usize(screenshot_counter);
                     path.push_str(num.as_str());
                     path.push_str(".bmp");
+                    serial_print("[SCREENSHOT] Ekran goruntusu aliniyor...\n");
                     screenshot_counter += 1;
                     if fs_mgr.vfs.write_file(&path, &bmp_data) {
                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                         terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                        force_render = true;
+                        serial_print("[SCREENSHOT] Basariyla kaydedildi: ");
+                        serial_print(&path);
+                        serial_print("\n");
+                    } else {
+                        serial_print("[SCREENSHOT] HATA: VFS dosya yazilamadi!\n");
                     }
                 }
             }
@@ -4162,6 +4245,7 @@ pub extern "C" fn _start() -> ! {
                 compositor.close_start_menu();
             } else if ch == '\x1b' && compositor.is_context_menu_open {
                 compositor.is_context_menu_open = false;
+                compositor.is_context_submenu_open = false;
             } else if ch == '\x1b' && taskmgr_app.launch_menu_open {
                 taskmgr_app.launch_menu_open = false;
             } else if ch == '\x1b' && notepad_app.menu != 0 {
@@ -4395,7 +4479,13 @@ pub extern "C" fn _start() -> ! {
         if full_redraw {
             let tm_open = compositor.windows.iter().flatten().any(|w| w.app_id == 7 && w.is_open && !w.is_minimized);
             if tm_open {
-                taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
+                // Görev yöneticisi istatistiklerini her frame yerine periyodik güncelle.
+                use core::sync::atomic::{AtomicUsize, Ordering};
+                static TM_UPDATE_TICK: AtomicUsize = AtomicUsize::new(0);
+                let tick = TM_UPDATE_TICK.fetch_add(1, Ordering::Relaxed);
+                if tick % 30 == 0 {
+                    taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
+                }
             }
             keep_windows_on_screen(&mut compositor, width, height);
             render_full_frame(

@@ -15,16 +15,22 @@
 
 ## Yenilikler
 
+- **✨ Sağ Tık Bağlam Menüsünde "Yeni ▶" Alt Menüsü:** Masaüstü ve Dosya Yöneticisi sağ tık menüsüne modern işletim sistemlerindeki gibi yana açılır hiyerarşik "Yeni ▶" (New ▶) alt menüsü eklendi. Metin Belgesi (`.txt`), Klasör, Çizim / Resim (`.bmp`) ve Boş Belge (`.dat`) doğrudan sağ tık menüsünden anında oluşturulabilir.
+- **📸 Evrensel Ekran Görüntüsü Alma (PrtScn / F12):** Herhangi bir ekranda `PrtScn` veya `F12` tuşuna basıldığında tüm ekran 24-bit uncompressed `.bmp` formatında `/desktop/ekran_N.bmp` dosyasına anında kaydedilir ve sesli bildirim verilir.
+- **⚡ Hızlı Çalıştır / Run Program Diyaloğu (Win+R):** `Win + R` tuş kombinasyonu ile açılan şık ve gölgeli modal pencereden `cmd`, `not`, `ayar`, `task`, `calc`, `web`, `files` gibi komutlarla hızlı uygulama başlatma.
+- **📋 Uygulamalar Arası Pano (Clipboard) ve Terminal Entegrasyonu:** Terminal üzerinde `Ctrl+C` ile satırı panoya kopyalama ve `Ctrl+V` ile panodaki metni terminale yapıştırma desteği (Notepad, Calc, Browser ile ortak paylaşılan pano).
+- **⏱️ Yeni Terminal Komutları (`uptime` & `fetch` / `neofetch`):** Sistemin çalışma süresini milisaniye hassasiyetinde gösteren `uptime` ve renkli kedi maskotuyla mikroçekirdek, RAM ve VFS durumunu özetleyen `fetch` / `neofetch` komutları eklendi.
+- **🔊 Başlangıç Melodisi ve Sistem Ses Efektleri:** Masaüstüne ilk girişte çalan zarif 3 tonlu karşılama melodisi (`play_chime()`) ve ekran görüntüsü gibi kullanıcı eylemlerine yanıt veren kısa sesli bildirimler (`play_beep()`).
+- **📦 ISO Boyutu Optimizasyonu (21 MB ➔ 1.89 MB):** Ham bitmap'lerin temizlenmesi ve linker script (`linker.ld`) `.got` kesitinin yeniden düzenlenmesiyle gereksiz 11 MB BSS boşluk padding'i kaldırılarak ISO dosya boyutu 1.89 MB'a düşürüldü.
 - **Çok Çekirdekli (SMP) Görev Yöneticisi:** Görev Yöneticisi Performans sekmesinde dinamik çoklu çekirdek izleme desteği. Genel CPU kullanımının yanı sıra her bir CPU çekirdeği (C0, C1, ...) için ayrı grafik barları, yüzde göstergeleri ve RAM kullanım grafiği eklendi. Metinlerin ve grafiklerin çakışması önlendi.
 - **Yarı Saydam (Alpha Blended) Masaüstü Öğeleri:** Masaüstü simge kartları ve sol taraftaki hızlı erişim ("Bilgisayarım", "Notlar" vb.) yazı etiketlerinin arka planları %50 saydam (`alpha: 128`) yapılarak duvar kağıdının pürüzsüzce arkadan görünmesi sağlandı.
 - **Görev Yöneticisi Düğme ve Menü Düzeni:** "Program Aç" ve "Sonlandır" düğmeleri yalnızca ilk sekmede ("Uygulamalar") gösterilecek şekilde düzenlendi. "Program Aç" menüsündeki uygulamalar Türkçe alfabetik sıraya dizildi ve menüden Görev Yöneticisi'nin kendisi kaldırıldı.
 - **Pencere Altına Sabitlenen Durum Çubuğu:** Görev Yöneticisi durum çubuğu pencerenin en alt kenarına tam yapıştırıldı ve süreç listesi pencere boyutuna göre sınırlandırıldı.
 - **Yenilenen Pencere Restore (Önceki Boyut) Simgesi:** Pencereler tam ekran yapıldığında gösterilen "Önceki Boyut" (Restore) düğme simgesi, modern çift üst üste binen pencere ikonuyla yenilendi.
-- **Seçilebilir masaüstü arka planları:** Sistem Ayarları > Ekran sekmesinden tema rengi, 6 tek renk (koyu mavi, yeşil, bordo, mor, kahve, koyu gri) veya 3 HD masaüstü resmi (1280×720) seçilebilir.
+- **Seçilebilir masaüstü arka planları:** Sistem Ayarları > Ekran sekmesinden tema rengi veya tek renk seçenekleri seçilebilir.
 - **Anında önizleme:** Duvar kağıdı seçimi yapıldığında arka plan hemen uygulanır; seçim çevreli kart ve yeşil kenarlıkla gösterilir.
 - **Kalıcı ayarlar:** Arka plan seçimi `settings.cfg` (`wallpaper`, `wallcolor`) üzerinden VFS ve diske kaydedilir, yeniden açılışta geri yüklenir.
-- **Ayarlar düzeni:** Ekran sekmesindeki yazı, düğme ve önizlemeler alt alta düzenlenerek çakışmalar önlendi.
-- **Gömülü arka plan resimleri:** 3 masaüstü resmi çekirdek içine (1280×720 raw RGB) gömüldü; PNG çözücü gerektirmez.
+- **Ayarlar ve Görev Yöneticisi standart düzeni:** Tüm sekme ve pencerelerde standartlaştırılmış dikey margin ve padding aralıkları ile okunaklı, çakışmayan ferah UI düzeni sağlandı.
 
 ---
 
@@ -109,6 +115,8 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `uname` | `uname` | minOs çekirdek sürümünü ve mimari bilgisini (`x86_64 Sarman Edition v2.0`) yazar. |
 | `whoami` | `whoami` | Aktif kullanıcı yetkisini gösterir (`sarman (root)`). |
 | `theme` | `theme` | Masaüstü temasını komut satırından anında sıradaki temaya geçirir. |
+| `uptime` | `uptime` | Sistemin açılışından itibaren geçen çalışma süresini (saat, dakika, saniye, milisaniye) gösterir. |
+| `fetch` / `neofetch` | `fetch` veya `neofetch` | Renkli ASCII Sarman maskotu ile çekirdek, mimari, boş/toplam RAM ve VFS düğüm özetini sunar. |
 | `clear` | `clear` | Terminal ekranını temizler. |
 | `help` | `help` | Kullanılabilir temel komutların özet listesini görüntüler. |
 

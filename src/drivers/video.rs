@@ -447,6 +447,18 @@ impl Framebuffer {
         }
     }
 
+    /// Backbuffer'ın mevcut piksel içeriğini hedef arabelleğe kopyalar.
+    pub unsafe fn copy_backbuffer_to_raw(&self, dst: *mut u32, max_len: usize) {
+        let len = (self.width * self.height).min(BACKBUFFER_LEN).min(max_len);
+        core::ptr::copy_nonoverlapping(core::ptr::addr_of!(BACKBUFFER) as *const u32, dst, len);
+    }
+
+    /// Kaynak piksel arabelleğini doğrudan backbuffer'a kopyalar.
+    pub unsafe fn copy_backbuffer_from_raw(&mut self, src: *const u32, max_len: usize) {
+        let len = (self.width * self.height).min(BACKBUFFER_LEN).min(max_len);
+        core::ptr::copy_nonoverlapping(src, core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32, len);
+    }
+
     pub fn draw_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         if w == 0 || h == 0 {
             return;

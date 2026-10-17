@@ -11,14 +11,14 @@ use crate::fs::vfs::{VirtualFileSystem, NodeType};
 use crate::mm::pmm::PhysicalMemoryManager;
 
 /// Çıktı satırı sayısı (kaydırma geçmişi).
-pub const OUT_LINES: usize = 22;
-/// Tek satırın azami uzunluğu.
-pub const LINE_MAX: usize = 64;
+pub const OUT_LINES: usize = 64;
+/// Tek satırın azami uzunluğu (karakter sınırı).
+pub const LINE_MAX: usize = 256;
 
 const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
     "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "curl",
-    "date", "uname", "whoami", "theme", "open", "run", "files", "settings", "notepad",
+    "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
 const COMPLETION_APPS: &[&str] = &[
@@ -279,8 +279,7 @@ impl TerminalApp {
     pub fn submit(&mut self) {
         self.completion_active = false;
         let n = self.input_len;
-        let mut prompt = TextBuf::new();
-        prompt.push_str("> ");
+        let mut prompt = alloc::string::String::from("> ");
         if let Ok(s) = core::str::from_utf8(&self.input[..n]) {
             prompt.push_str(s);
         }
@@ -450,9 +449,9 @@ impl TerminalApp {
         match cmd {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df format echo clear mem ps exec", Color::TEXT_MAIN);
-                self.push_line("minpkg list|install|remove | exec <file> | ping <ip> | dns <host> | curl <url>", Color::ACCENT_BLUE);
-                self.push_line("apps: files settings notepad browser image music", Color::ACCENT_PINK);
-                self.push_line("video taskmgr calc paint cmd", Color::ACCENT_PINK);
+                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns curl", Color::ACCENT_GREEN);
+                self.push_line("minpkg list|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
+                self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
                 let mut buf = TextBuf::new();
@@ -493,7 +492,7 @@ impl TerminalApp {
                 let target = if arg.is_empty() { self.cwd_str() } else { arg };
                 let items = vfs.list_dir(target);
                 if items.is_empty() {
-                    self.push_line(crate::gui::ui_text("(bos dizin)", "(empty directory)"), Color::TEXT_MUTED);
+                    self.push_line(crate::gui::ui_text("(boş dizin)", "(empty directory)"), Color::TEXT_MUTED);
                 } else {
                     for it in &items {
                         let mut buf = TextBuf::new();
@@ -517,7 +516,7 @@ impl TerminalApp {
             }
             "mkdir" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanim: mkdir <klasor>", "Usage: mkdir <dir>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: mkdir <klasor>", "Usage: mkdir <dir>"), Color::ACCENT_YELLOW);
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
@@ -865,7 +864,11 @@ impl TerminalApp {
                     b.push_byte(HEX[(octet & 0x0F) as usize]);
                 }
                 self.push_line(b.as_str(), Color::TEXT_MAIN);
-                self.push_line(if crate::drivers::e1000::is_ready() { "Link: ready" } else { "Link: unavailable" }, Color::ACCENT_YELLOW);
+                self.push_line(if crate::drivers::e1000::is_ready() {
+                    crate::gui::ui_text("Bağlantı: hazır", "Link: ready")
+                } else {
+                    crate::gui::ui_text("Bağlantı: kullanılamıyor", "Link: unavailable")
+                }, Color::ACCENT_YELLOW);
             }
             "ping" => {
                 match parse_ipv4(arg) {
@@ -875,7 +878,11 @@ impl TerminalApp {
                     Some(ip) => {
                         let sent = crate::drivers::netstack::ping(crate::drivers::netstack::Ipv4Address(ip));
                         let mut b = TextBuf::new();
-                        b.push_str(if sent { "Ping tx: " } else { "Ping failed: " });
+                        b.push_str(if sent {
+                            crate::gui::ui_text("Ping iletildi: ", "Ping tx: ")
+                        } else {
+                            crate::gui::ui_text("Ping başarısız: ", "Ping failed: ")
+                        });
                         push_ipv4(&mut b, ip);
                         self.push_line(b.as_str(), if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
                         if sent { self.push_line(crate::gui::ui_text("Echo isteği gönderildi; yanıt bekleme henüz yok.", "Echo request transmitted; reply wait is unavailable."), Color::TEXT_MUTED); }
@@ -899,7 +906,7 @@ impl TerminalApp {
                             b.push_usize(status as usize);
                             b.push_str("  (");
                             b.push_usize(total as usize);
-                            b.push_str(" bytes)");
+                            b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
                             self.push_line(b.as_str(), if status < 400 { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
                             // Gövdeyi metin satırları hâlinde dök (en fazla 60 satır).
                             let body = &buf[hlen.min(total)..total];
@@ -928,12 +935,12 @@ impl TerminalApp {
                             }
                             if lines < 60 && (!line.is_empty() || lines == 0) {
                                 if line.is_empty() && lines == 0 {
-                                    self.push_line("(empty body)", Color::TEXT_MUTED);
+                                    self.push_line(crate::gui::ui_text("(boş gövde)", "(empty body)"), Color::TEXT_MUTED);
                                 } else {
                                     self.push_line(line.as_str(), Color::TEXT_MAIN);
                                 }
                             } else if lines >= 60 {
-                                self.push_line("... (truncated)", Color::TEXT_MUTED);
+                                self.push_line(crate::gui::ui_text("... (kısaltıldı)", "... (truncated)"), Color::TEXT_MUTED);
                             }
                         }
                         Err(_) => {
@@ -947,7 +954,11 @@ impl TerminalApp {
                     self.push_line(crate::gui::ui_text("Kullanım: dns <alan adı>", "Usage: dns <hostname>"), Color::ACCENT_YELLOW);
                 } else {
                     let sent = crate::drivers::netstack::dns_query(arg);
-                    self.push_line(if sent { "DNS query transmitted" } else { "DNS query failed" }, if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                    self.push_line(if sent {
+                        crate::gui::ui_text("DNS sorgusu gönderildi", "DNS query transmitted")
+                    } else {
+                        crate::gui::ui_text("DNS sorgusu başarısız", "DNS query failed")
+                    }, if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
                 }
             }
             "date" => {
@@ -1039,18 +1050,22 @@ impl TerminalApp {
         let first = self.out_count.saturating_sub(view_lines).saturating_sub(self.output_scroll);
         let last = (first + view_lines).min(self.out_count);
         let mut ly = output_y;
+        let content_clip = (x + 12, y + 36, w.saturating_sub(24), h.saturating_sub(48));
         for i in first..last {
-            MinGuiCompositor::draw_terminal_string(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color);
+            MinGuiCompositor::draw_terminal_string_clipped(fb, x + 16, ly, self.out[i].as_str(), self.out[i].color, content_clip);
             ly += line_height + line_gap;
         }
 
         // Aktif Istem + Girdi
         MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", Color::ACCENT_GREEN);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
-        MinGuiCompositor::draw_terminal_string(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN);
+        let input_clip = (x + 30, prompt_y, w.saturating_sub(42), line_height + 4);
+        MinGuiCompositor::draw_terminal_string_clipped(fb, x + 30, prompt_y, input_str, Color::TEXT_MAIN, input_clip);
         if is_focused {
             let caret_x = x + 30 + MinGuiCompositor::terminal_text_width(input_str);
-            fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), Color::ACCENT_GREEN);
+            if caret_x < x + w.saturating_sub(16) {
+                fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), Color::ACCENT_GREEN);
+            }
         }
 
         // Durum satırı

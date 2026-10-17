@@ -108,7 +108,7 @@ impl ThemeId {
         }
     }
 
-    fn index(self) -> u8 {
+    pub(crate) fn index(self) -> u8 {
         match self {
             ThemeId::VelvetDark => 0,
             ThemeId::Daylight => 1,

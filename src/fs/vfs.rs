@@ -725,14 +725,15 @@ impl VirtualFileSystem {
             }
         }
 
-        // Geriye dönük uyumluluk: static nodes tablosu
-        for opt in self.nodes.iter() {
-            if let Some(node) = opt {
+        // Geriye dönük uyumlululuk: static nodes tablosu (önbellekli arama)
+        for i in 0..16 {
+            if let Some(node) = &self.nodes[i] {
                 if node.node_type == NodeType::File && (node.name == path_or_name || norm.ends_with(node.name)) {
                     return Some(node.data);
                 }
             }
         }
+
 
         None
     }
@@ -1235,8 +1236,8 @@ impl VirtualFileSystem {
     }
 
     pub fn find_file(&self, name: &str) -> Option<&VfsNode> {
-        for node_opt in self.nodes.iter() {
-            if let Some(node) = node_opt {
+        for i in 0..16 {
+            if let Some(node) = &self.nodes[i] {
                 if node.node_type == NodeType::File && node.name == name {
                     return Some(node);
                 }

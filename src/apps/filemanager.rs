@@ -431,6 +431,28 @@ impl FileManagerApp {
             else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
     }
 
+    /// Özel önek, uzantı ve başlangıç içeriği ile yeni dosya oluşturur.
+    pub fn new_custom_file(&mut self, prefix: &str, ext: &str, initial_content: &[u8], vfs: &mut VirtualFileSystem) {
+        let mut counter = self.item_counter;
+        let name = loop {
+            let candidate = numbered_name(prefix, counter, ext);
+            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            counter += 1;
+        };
+        self.item_counter = counter + 1;
+
+        let mut full_path = String::from(self.path());
+        if !full_path.ends_with('/') {
+            full_path.push('/');
+        }
+        full_path.push_str(&name);
+
+        let saved = vfs.write_file(&full_path, initial_content);
+        self.refresh_from_vfs(vfs);
+        self.status = if saved { crate::gui::ui_text("Yeni öğe oluşturuldu.", "New item created.") }
+            else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
+    }
+
     /// Yeni klasör oluşturur.
     pub fn new_folder(&mut self, vfs: &mut VirtualFileSystem) {
         let mut counter = self.item_counter;

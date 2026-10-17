@@ -63,7 +63,19 @@ struct ArpEntry {
     used: bool,
 }
 
-static mut ARP_TABLE: [ArpEntry; 4] = [
+static mut ARP_TABLE: [ArpEntry; 16] = [
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
     ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
     ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
     ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
@@ -81,8 +93,16 @@ pub fn arp_lookup(ip: Ipv4Address) -> Option<MacAddress> {
     None
 }
 
-fn arp_insert(ip: Ipv4Address, mac: MacAddress) {
+pub fn arp_insert(ip: Ipv4Address, mac: MacAddress) {
     unsafe {
+        // Var olan eşleşmeyi güncelle
+        for e in ARP_TABLE.iter_mut() {
+            if e.used && e.ip == ip {
+                e.mac = mac;
+                return;
+            }
+        }
+        // Boş slota ekle
         for e in ARP_TABLE.iter_mut() {
             if !e.used {
                 e.ip = ip;
@@ -91,7 +111,15 @@ fn arp_insert(ip: Ipv4Address, mac: MacAddress) {
                 return;
             }
         }
-        // dolu — ilk girişi değiştir
+        // Dolu ise Gateway olmayan ilk girişi değiştir
+        for e in ARP_TABLE.iter_mut() {
+            if e.ip != GATEWAY_IP && e.ip != DNS_SERVER {
+                e.ip = ip;
+                e.mac = mac;
+                e.used = true;
+                return;
+            }
+        }
         ARP_TABLE[0].ip = ip;
         ARP_TABLE[0].mac = mac;
     }
@@ -164,7 +192,18 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
             match resolved {
                 Some(m) => m,
                 None => {
-                    return false;
+                    // QEMU SLIRP Gateway için bilinen varsayılan MAC'e geri düş (paket düşmesini önle)
+                    if next_hop == gateway {
+                        let gw_mac = MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02]);
+                        arp_insert(gateway, gw_mac);
+                        gw_mac
+                    } else if next_hop == DNS_SERVER {
+                        let dns_mac = MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x03]);
+                        arp_insert(DNS_SERVER, dns_mac);
+                        dns_mac
+                    } else {
+                        return false;
+                    }
                 }
             }
         }

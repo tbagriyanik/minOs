@@ -19,12 +19,19 @@ unsafe fn outb(port: u16, val: u8) {
     core::arch::asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
 }
 
-fn wait_write() {
+#[inline(always)]
+fn io_wait() {
+    unsafe { outb(0x80, 0); }
+}
+
+fn wait_write() -> bool {
     for _ in 0..10_000 {
         if unsafe { inb(0x64) } & 0x02 == 0 {
-            return;
+            return true;
         }
+        io_wait();
     }
+    false
 }
 
 fn wait_read() -> bool {
@@ -32,6 +39,7 @@ fn wait_read() -> bool {
         if unsafe { inb(0x64) } & 0x01 != 0 {
             return true;
         }
+        io_wait();
     }
     false
 }
@@ -53,9 +61,9 @@ pub fn mouse_wheel_enabled() -> bool {
 }
 
 fn mouse_write(cmd: u8) {
-    wait_write();
+    if !wait_write() { return; }
     unsafe { outb(0x64, 0xD4); }
-    wait_write();
+    if !wait_write() { return; }
     unsafe { outb(0x60, cmd); }
     if wait_read() {
         unsafe { let _ = inb(0x60); }

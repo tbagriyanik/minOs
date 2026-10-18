@@ -564,9 +564,11 @@ pub extern "C" fn _start() -> ! {
         let mut welcome_diag_last = monotonic_ms();
         let mut _welcome_diag_iters: u64 = 0;
         let mut welcome_diag_last_trace: u64 = 0;
+        let mut welcome_start_time = monotonic_ms();
+        let welcome_timeout_ms: u64 = 5_000; // 5 saniye içinde etkileşim olmazsa masaüstüne otomatik geç
         loop {
             if !welcome_announced {
-                serial_print("[BOOT] Hosgeldin dongusu: Enter/ESC/tik bekleniyor.\n");
+                serial_print("[BOOT] Hosgeldin dongusu: Enter/ESC/tik bekleniyor (5sn zaman asimi aktif).\n");
                 welcome_announced = true;
             }
             if welcome_dirty {
@@ -575,32 +577,23 @@ pub extern "C" fn _start() -> ! {
             }
             let welcome_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
             if welcome_update.keyboard || welcome_update.mouse {
-                //serial_print("[BOOT-DIAG] PS/2 bayti isleniyor.\n");
+                // Herhangi bir kullanıcı hareketi algılanırsa zaman aşımını sıfırla/uzat
+                welcome_start_time = monotonic_ms();
             }
             let (_tr_st, _tr_d, tr_n) = drivers::ps2::trace_last();
             if tr_n != welcome_diag_last_trace {
                 welcome_diag_last_trace = tr_n;
-                /*serial_print("[BOOT-DIAG] ham bayt #");
-                serial_print_dec(tr_n);
-                serial_print(" st=0x");
-                serial_print_hex(_tr_st as u64);
-                serial_print(" d=0x");
-                serial_print_hex(_tr_d as u64);
-                serial_print("\n");*/
             }
             _welcome_diag_iters += 1;
             let welcome_now = monotonic_ms();
             if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
                 welcome_diag_last = welcome_now;
-                /*serial_print("[BOOT-DIAG] dongu sag (iter=");
-                serial_print_dec(welcome_diag_iters);
-                serial_print(" fare=");
-                serial_print_dec(mouse.x.max(0) as u64);
-                serial_print(",");
-                serial_print_dec(mouse.y.max(0) as u64);
-                serial_print(" ps2st=0x");
-                serial_print_hex(drivers::ps2::status_byte() as u64);
-                serial_print(")\n");*/
+            }
+
+            // 5 saniye zaman aşımı: USB klavye veya fare algılanamasa bile sistemi kilitleme, doğrudan masaüstüne geç
+            if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms {
+                serial_print("[BOOT] Hosgeldin zamani asildi; otomatik masaustune geciliyor.\n");
+                welcome_accepted = true;
             }
 
             // Enter veya Escape ile hoş geldin ekranını geç.
@@ -610,7 +603,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             while let Some(ch) = keyboard.take_last_char() {
-                if ch == '\x1b' {
+                if ch == '\x1b' || ch == ' ' {
                     welcome_accepted = true;
                 }
             }

@@ -220,9 +220,13 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
         }
     }
 
-    // 3. Alt Kısım: Bilgi İpucu & Başla Düğmesi
-    MinGuiCompositor::draw_string(fb, x + 28, y + h.saturating_sub(40),
-        if english { "Press Enter to start" } else { "Başlamak için Enter'a basın" }, Color::TEXT_MUTED);
+    // 3. Alt Kısım: Bilgi İpucu (Zaman Aşımı Göstergesi) & Başla Düğmesi
+    let hint_text = if english {
+        "Press Enter or wait to start..."
+    } else {
+        "Enter'a basın veya bekleyin..."
+    };
+    MinGuiCompositor::draw_string(fb, x + 28, y + h.saturating_sub(40), hint_text, Color::TEXT_MUTED);
 
     let button = welcome_continue_rect(width, height);
     fb.draw_rounded_rect(button.0, button.1, button.2, button.3, 6, Color::ACCENT_GREEN);

@@ -67,13 +67,17 @@ pub mod boot;
 pub mod desktop;
 pub mod panic_handler;
 
-pub use boot::console::*;
-pub use boot::cpu::*;
-pub use boot::devices::*;
-pub use boot::limine::*;
-pub use boot::progress::*;
-pub use boot::time::*;
-pub use desktop::helpers::*;
+// These modules were split out of this file, but the rest of the kernel still
+// uses their names from the crate root.  A private `use` is sufficient for
+// intra-crate lookup; `pub use` silently drops private items and caused the
+// compiler to report hundreds of cascading "not found" errors.
+use boot::console::*;
+use boot::cpu::*;
+use boot::devices::*;
+use boot::limine::*;
+use boot::progress::*;
+use boot::time::*;
+use desktop::helpers::*;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

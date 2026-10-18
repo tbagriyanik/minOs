@@ -1,6 +1,6 @@
 //! Uzun suren disk/ag islemleri icin ekran ortasi ilerleme gostergesi (busy progress).
 
-use crate::{drivers, gui};
+use crate::{drivers, gui, GLOBAL_KEYBOARD, GLOBAL_MOUSE};
 
 struct BusyProgressContext {
     fb: *mut drivers::video::Framebuffer,
@@ -11,7 +11,7 @@ struct BusyProgressContext {
     cursor_shown: bool,
 }
 
-static mut BUSY_DIRTY: bool = false;
+pub static mut BUSY_DIRTY: bool = false;
 
 /// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
 fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> usize {
@@ -26,7 +26,7 @@ fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> u
     p
 }
 
-fn draw_io_progress(context: *mut (), done: usize, total: usize) {
+pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     if context.is_null() { return; }
     let state = unsafe { &mut *(context as *mut BusyProgressContext) };
 
@@ -60,7 +60,7 @@ fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     state.cursor_shown = true;
 }
 
-fn with_busy_progress<T>(
+pub fn with_busy_progress<T>(
     fb: &mut drivers::video::Framebuffer,
     mx: usize,
     my: usize,
@@ -87,4 +87,3 @@ fn with_busy_progress<T>(
     result
 }
 
-pub(crate) fn main_monotonic_ms() -> usize { monotonic_ms() as usize }

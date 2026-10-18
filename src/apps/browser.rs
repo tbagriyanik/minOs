@@ -32,6 +32,7 @@ fn html_color(value:&[u8])->Option<u32> {
 extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HtmlTagType {
@@ -393,14 +394,17 @@ fn history_count() -> usize { HISTORY_COUNT.load(Ordering::Acquire) }
 fn history_push(url: &str) {
     if url.is_empty() { return; }
     let mut count = HISTORY_COUNT.load(Ordering::Acquire);
-    let pos = HISTORY_POS.load(Ordering::Acquire);
+    // Atomic state can briefly be observed while a navigation update is in
+    // progress. Always normalize it before using it as an array index.
+    count = count.min(HISTORY_MAX);
+    let pos = HISTORY_POS.load(Ordering::Acquire).min(count.saturating_sub(1));
     if count > 0 && pos < count {
         if let Some(cur) = history_copy(pos) {
             if cur == url { return; }
         }
     }
     // Geri gidildikten sonra yeni gezinme, ileri geçmişi budar.
-    if count > 0 { count = (pos + 1).min(count); }
+    if count > 0 { count = pos.saturating_add(1).min(count); }
     // Kapasite dolduysa en eski girdiyi düşür.
     if count >= HISTORY_MAX {
         for i in 1..HISTORY_MAX {
@@ -436,7 +440,7 @@ fn history_back() -> Option<String> {
 fn history_forward() -> Option<String> {
     let count = HISTORY_COUNT.load(Ordering::Acquire);
     let pos = HISTORY_POS.load(Ordering::Acquire);
-    if count == 0 || pos + 1 >= count { return None; }
+    if count == 0 || pos >= count || pos.saturating_add(1) >= count { return None; }
     let target = pos + 1;
     HISTORY_POS.store(target, Ordering::Release);
     history_copy(target)
@@ -749,7 +753,7 @@ pub struct BrowserApp {
     pub page_title: [u8; 64],
     pub page_title_len: usize,
     pub page_lines: Vec<BrowserLine>,
-    pub rendered_links: Vec<RenderedLink>,
+    pub rendered_links: RefCell<Vec<RenderedLink>>,
     pub scroll_y: usize,
     pub request_pending: bool,
     pub request_host: [u8; 128],
@@ -786,7 +790,7 @@ impl BrowserApp {
             web_request_sent: false,
             page_title: [0; 64], page_title_len: 0,
             page_lines: Vec::new(),
-            rendered_links: Vec::new(),
+            rendered_links: RefCell::new(Vec::new()),
             scroll_y: 0,
             request_pending: false, request_host: [0; 128], request_host_len: 0,
             request_path: [0; 256], request_path_len: 0, request_ip: crate::drivers::netstack::Ipv4Address([0; 4]), request_port: 80,
@@ -826,7 +830,7 @@ impl BrowserApp {
     pub fn click_link_at(&mut self, mx: usize, my: usize) -> Option<String> {
         let mut clicked_url = None;
         let mut clicked_js = None;
-        for link in &self.rendered_links {
+        for link in self.rendered_links.borrow().iter() {
             let (rx, ry, rw, rh) = link.rect;
             if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
                 if !link.onclick.is_empty() {
@@ -952,7 +956,7 @@ impl BrowserApp {
 
     pub fn load_html(&mut self, body: &[u8], wrap_width_px: usize, max_lines: usize) {
         self.page_lines.clear();
-        self.rendered_links.clear();
+        self.rendered_links.borrow_mut().clear();
         self.page_bg_color = None;
         self.js_alert = None;
         self.js_vars.clear();
@@ -1078,11 +1082,16 @@ impl BrowserApp {
                     "Recently opened links (newest first):",
                 )),
                 color: Color::TEXT_MUTED,
+                bg_color: None,
                 is_link: false,
                 link_url: String::new(),
+                is_button: false,
+                onclick: String::new(),
+                elem_id: String::new(),
             }],
             tag: HtmlTagType::Heading3,
             indent: 0,
+            align: TextAlign::Left,
         });
 
         let count = history_count().min(HISTORY_MAX);
@@ -1091,11 +1100,16 @@ impl BrowserApp {
                 spans: alloc::vec![TextSpan {
                     text: String::from(crate::gui::ui_text("Henüz geçmiş yok.", "No history yet.")),
                     color: Color::TEXT_MAIN,
+                    bg_color: None,
                     is_link: false,
                     link_url: String::new(),
+                    is_button: false,
+                    onclick: String::new(),
+                    elem_id: String::new(),
                 }],
                 tag: HtmlTagType::Normal,
                 indent: 0,
+                align: TextAlign::Left,
             });
             return;
         }
@@ -1105,11 +1119,16 @@ impl BrowserApp {
                     spans: alloc::vec![TextSpan {
                         text: url.clone(),
                         color: Color::TEXT_MAIN,
+                        bg_color: None,
                         is_link: true,
                         link_url: url,
+                        is_button: false,
+                        onclick: String::new(),
+                        elem_id: String::new(),
                     }],
                     tag: HtmlTagType::ListItem,
                     indent: 18,
+                    align: TextAlign::Left,
                 });
             }
         }
@@ -1592,7 +1611,7 @@ impl BrowserApp {
     /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
     pub fn poll_network(&mut self) {
         if !self.request_pending { return; }
-        let now = crate::main_monotonic_ms();
+        let now = crate::boot::time::main_monotonic_ms();
         if self.request_deadline == 0 { self.request_deadline = now.wrapping_add(15000); }
         if now.wrapping_sub(self.request_deadline) < usize::MAX / 2 {
             self.request_pending = false;
@@ -1696,7 +1715,7 @@ impl BrowserApp {
 
                     if self.is_https {
                         let mut client_random = [0u8; 32];
-                        let seed = crate::main_monotonic_ms() as u64;
+                        let seed = crate::boot::time::main_monotonic_ms() as u64;
                         for (i, b) in client_random.iter_mut().enumerate() {
                             *b = ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
                         }
@@ -1987,10 +2006,7 @@ impl BrowserApp {
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &crate::gui::ScrollState) {
         let english = crate::gui::ui_english();
         // Bağlantı isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
-        unsafe {
-            let links_ptr = &self.rendered_links as *const Vec<RenderedLink> as *mut Vec<RenderedLink>;
-            (*links_ptr).clear();
-        }
+        self.rendered_links.borrow_mut().clear();
         // Araç çubuğu (üst sekmeler kaldırıldı): Geri, İleri, Yenile, Geçmiş, adres, GIT
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 30, Color::TITLE_BAR);
         fb.draw_rect(win_x + 12, win_y + 32, 22, 20, Color::WINDOW_BG);
@@ -2089,10 +2105,8 @@ impl BrowserApp {
                 }
 
                 // Clear rendered links for hit testing
-                let links_ptr = &self.rendered_links as *const Vec<RenderedLink> as *mut Vec<RenderedLink>;
-                unsafe {
-                    (*links_ptr).clear();
-                }
+                let mut links = self.rendered_links.borrow_mut();
+                links.clear();
 
                 let mut cur_line_y = doc_y + 12 + if self.js_alert.is_some() { 28 } else { 0 };
                 for line in &self.page_lines {
@@ -2150,8 +2164,8 @@ impl BrowserApp {
                                 fb.draw_rect(cur_x, draw_y, span_w, line_h, btn_bg);
                                 fb.draw_rect_outline(cur_x, draw_y, span_w, line_h, Color::BORDER);
                                 MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 8, draw_y + 2, &span.text, span.color, scale, doc_clip);
-                                unsafe {
-                                    (*links_ptr).push(RenderedLink {
+                                {
+                                    links.push(RenderedLink {
                                         rect: (cur_x, draw_y, span_w, line_h),
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
@@ -2169,8 +2183,8 @@ impl BrowserApp {
                                         let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
                                         fb.draw_rect(cur_x, underline_y, ul_w, 1, Color::ACCENT_BLUE);
                                     }
-                                    unsafe {
-                                        (*links_ptr).push(RenderedLink {
+                                    {
+                                        links.push(RenderedLink {
                                             rect: (cur_x, draw_y, span_w, line_h),
                                             url: span.link_url.clone(),
                                             onclick: span.onclick.clone(),

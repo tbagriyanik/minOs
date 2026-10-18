@@ -3,17 +3,17 @@
 use crate::{fs, serial};
 
 #[inline(never)]
-fn serial_print(s: &str) {
+pub fn serial_print(s: &str) {
     serial::print(s);
 }
 
-fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
+pub fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
     let log = serial::log_snapshot();
     let _ = vfs.write_file("/root/Documents/boot.log", &log);
 }
 
 #[inline(never)]
-fn serial_print_dec(v: u64) {
+pub fn serial_print_dec(v: u64) {
     if v == 0 { serial_print("0"); return; }
     let mut value = v;
     let mut buf = [0u8; 20];
@@ -27,7 +27,7 @@ fn serial_print_dec(v: u64) {
 }
 
 #[inline(never)]
-fn serial_print_hex(v: u64) {
+pub fn serial_print_hex(v: u64) {
     serial_print("0x");
     if v == 0 { serial_print("0"); return; }
     let mut value = v;
@@ -43,7 +43,7 @@ fn serial_print_hex(v: u64) {
 }
 
 
-fn restart_system() -> ! {
+pub fn restart_system() -> ! {
     #[cfg(minos_boot_log)]
     serial_print("[minOs] Restart requested from Start Menu.\n");
     unsafe {

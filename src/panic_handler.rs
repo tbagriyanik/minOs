@@ -3,7 +3,7 @@
 use core::fmt::Write as FmtWrite;
 use core::panic::PanicInfo;
 use crate::boot::console::serial_print;
-use crate::{drivers, gui};
+use crate::{drivers, gui, PANIC_FB_ADDR, PANIC_FB_W, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_BPP};
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

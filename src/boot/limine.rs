@@ -39,20 +39,20 @@ unsafe impl Sync for LimineFramebufferRequest {}
 
 #[used]
 #[link_section = ".requests_start_marker"]
-static LIMINE_REQUESTS_START_MARKER: [u64; 4] = [
+pub static LIMINE_REQUESTS_START_MARKER: [u64; 4] = [
     0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf,
     0x785c6ed015d3e316, 0x181e920a7852b9d9,
 ];
 
 #[used]
 #[link_section = ".requests_base_revision"]
-static LIMINE_BASE_REVISION: [u64; 3] = [
+pub static LIMINE_BASE_REVISION: [u64; 3] = [
     0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 3,
 ];
 
 #[used]
 #[link_section = ".requests"]
-static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
+pub static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
     id: [
         0xc7b1dd30df4c8b88,
         0x0a82e883a194f07b,
@@ -65,7 +65,7 @@ static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest 
 
 #[used]
 #[link_section = ".requests_end_marker"]
-static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
+pub static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
     0xadc0e0531bb10d03, 0x9572709f31764c62,
 ];
 
@@ -114,7 +114,7 @@ unsafe impl Sync for LimineHhdmRequest {}
 
 #[used]
 #[link_section = ".requests"]
-static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+pub static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x48dcf1cb8ad2b852, 0x63984e959a98244b],
     revision: 0,
     response: core::ptr::null(),
@@ -137,7 +137,7 @@ unsafe impl Sync for LimineStackSizeRequest {}
 
 #[used]
 #[link_section = ".requests"]
-static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
+pub static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
     id: [
         0xc7b1dd30df4c8b88,
         0x0a82e883a194f07b,
@@ -151,7 +151,7 @@ static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
 
 #[used]
 #[link_section = ".requests"]
-static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
+pub static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
     id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x67cf3d9d378a806f, 0xe304acdfc50c3c62],
     revision: 0,
     response: core::ptr::null(),
@@ -186,7 +186,7 @@ unsafe impl Sync for LimineKernelFileRequest {}
 
 #[used]
 #[link_section = ".requests"]
-static KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
+pub static KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
     id: [
         0xc7b1dd30df4c8b88,
         0x0a82e883a194f07b,
@@ -199,7 +199,7 @@ static KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
 
 /// Limine'in sağladığı önyükleme komut satirini (cmdline) döndürür.
 /// `None` ise cmdline alınamadı demektir (bu durumda canlı sistem kabul edilir).
-fn limine_boot_cmdline() -> Option<&'static str> {
+pub fn limine_boot_cmdline() -> Option<&'static str> {
     unsafe {
         let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
         let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
@@ -241,19 +241,19 @@ pub fn limine_kernel_binary_slice() -> Option<&'static [u8]> {
 }
 
 /// Önyükleme komut satirinda verilen token'i (kelime) arar.
-fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
+pub fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
     cmdline
         .split(|c: char| c.is_whitespace())
         .any(|part| part == token)
 }
 
 /// Kernel'in kurulu sistem modunda baslatilmak istenip istenmedigini bildirir.
-fn boot_wants_installed() -> bool {
+pub fn boot_wants_installed() -> bool {
     limine_boot_cmdline().map_or(false, |cmdline| cmdline_has_token(cmdline, "installed"))
 }
 
 #[inline]
-fn is_canonical_ptr<T>(ptr: *const T) -> bool {
+pub fn is_canonical_ptr<T>(ptr: *const T) -> bool {
     if ptr.is_null() {
         return false;
     }
@@ -266,7 +266,7 @@ fn is_canonical_ptr<T>(ptr: *const T) -> bool {
 /// lower-half values so malformed boot data cannot direct these reads into an
 /// unmapped region.
 #[inline]
-fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
+pub fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
     is_canonical_ptr(ptr) && ((ptr as usize as u64) >> 47) == 0x1_FFFF
 }
 

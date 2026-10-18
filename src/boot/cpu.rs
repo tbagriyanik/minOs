@@ -2,7 +2,7 @@
 
 use crate::arch;
 
-fn cpu_vendor() -> &'static str {
+pub fn cpu_vendor() -> &'static str {
     let result = core::arch::x86_64::__cpuid(0);
     let ebx = result.ebx;
     let edx = result.edx;
@@ -16,7 +16,7 @@ fn cpu_vendor() -> &'static str {
     }
 }
 
-fn cpu_logical_count() -> u32 {
+pub fn cpu_logical_count() -> u32 {
     let result = core::arch::x86_64::__cpuid(1);
     let from_cpuid = ((result.ebx >> 16) & 0xFF).max(1);
     // SMP açılışı tamamlandıysa gerçek çevrimiçi CPU sayısını yansıt.

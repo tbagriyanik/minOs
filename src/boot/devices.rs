@@ -2,5 +2,5 @@
 
 use crate::drivers;
 
-static mut GLOBAL_MOUSE: drivers::mouse::MouseState = drivers::mouse::MouseState::new();
-static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState = drivers::keyboard::KeyboardState::new();
+pub static mut GLOBAL_MOUSE: drivers::mouse::MouseState = drivers::mouse::MouseState::new();
+pub static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState = drivers::keyboard::KeyboardState::new();

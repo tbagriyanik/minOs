@@ -4,7 +4,7 @@
 use crate::{apps, drivers, fs, gui};
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
-fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
+pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
     if let Some(idx) = compositor.launch_app_window(app_id) {
         if let Some(win) = compositor.windows[idx].as_mut() {
             win.is_open = true;
@@ -15,7 +15,7 @@ fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
     }
 }
 
-fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
+pub fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
     // Dosya ızgarası sol şerit hızlı simgelerin sağından başlar; iki grup
     // asla üst üste binmez (çizim + tıklama aynı kanonik konumu kullanır).
     let origin_x = gui::MinGuiCompositor::desktop_strip_right();
@@ -24,7 +24,7 @@ fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
     (origin_x + col * 150, 30 + row * 54, 138, 46)
 }
 
-fn rects_overlap(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> bool {
+pub fn rects_overlap(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> bool {
     a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
 }
 
@@ -32,14 +32,14 @@ fn rects_overlap(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize
 /// Çizim döngüsü ile tıklama testi bu kuralı paylaşır: ekran dışına taşan,
 /// görev çubuğuna gömülen veya sağ üst filigrana binen hücreler hem
 /// çizilmez hem tıklanamaz.
-fn desktop_item_visible(rect: (usize, usize, usize, usize), width: usize, height: usize) -> bool {
+pub fn desktop_item_visible(rect: (usize, usize, usize, usize), width: usize, height: usize) -> bool {
     if rect.0 + rect.2 > width || rect.1 + rect.3 >= height.saturating_sub(gui::taskbar_h()) {
         return false;
     }
     !rects_overlap(rect, gui::MinGuiCompositor::desktop_watermark_rect(width))
 }
 
-fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize, height: usize) -> Option<(usize, (usize, usize, usize, usize))> {
+pub fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize, height: usize) -> Option<(usize, (usize, usize, usize, usize))> {
     for i in 0..fm.file_count {
         let rect = desktop_item_rect(i);
         if !desktop_item_visible(rect, width, height) { continue; }
@@ -49,7 +49,7 @@ fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, w
 }
 
 /// Belirli bir pencere örneğini açar ve odaklar.
-fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
+pub fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     if let Some(win) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
         win.is_open = true;
         win.is_minimized = false;
@@ -58,7 +58,7 @@ fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
     compositor.focus_window(idx);
 }
 
-fn open_image_file(
+pub fn open_image_file(
     path: &str,
     vfs: &fs::vfs::VirtualFileSystem,
     _paints: &[Option<apps::paint::PaintApp>],
@@ -77,7 +77,7 @@ fn open_image_file(
     }
 }
 
-fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usize, screen_h: usize) {
+pub fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usize, screen_h: usize) {
     let screen_w = screen_w.max(1);
     let usable_h = screen_h.saturating_sub(gui::taskbar_h()).max(1);
     for window in compositor.windows.iter_mut().flatten() {
@@ -89,7 +89,7 @@ fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usiz
     }
 }
 
-fn terminate_app(
+pub fn terminate_app(
     idx: usize,
     compositor: &mut gui::MinGuiCompositor,
     fm: &mut apps::filemanager::FileManagerApp,
@@ -149,13 +149,13 @@ fn terminate_app(
     compositor.focus_top_window();
 }
 
-fn app_is_focused(compositor: &gui::MinGuiCompositor, app_id: usize) -> bool {
+pub fn app_is_focused(compositor: &gui::MinGuiCompositor, app_id: usize) -> bool {
     compositor.windows.iter().any(|slot| {
         slot.map_or(false, |window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
     })
 }
 
-fn focused_window_for_app(compositor: &gui::MinGuiCompositor, app_id: usize) -> Option<(usize, gui::Window)> {
+pub fn focused_window_for_app(compositor: &gui::MinGuiCompositor, app_id: usize) -> Option<(usize, gui::Window)> {
     compositor.windows.iter().enumerate().find_map(|(idx, slot)| {
         slot.filter(|window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
             .map(|window| (idx, window))
@@ -165,7 +165,7 @@ fn focused_window_for_app(compositor: &gui::MinGuiCompositor, app_id: usize) -> 
 /// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
 /// Kaydırma çubuğunun gerekip gerekmediğini ve tutamaç boyutunu belirlemek için
 /// hem çizim hem de tıklama kod yollarında ortak kullanılır.
-fn window_content_h(
+pub fn window_content_h(
     app_id: usize,
     _win_h: usize,
     win_w: usize,
@@ -197,7 +197,7 @@ fn window_content_h(
 }
 
 /// Defter imlecini her zaman görünür kılacak dikey kaydırmayı uygular.
-fn notepad_ensure_cursor_visible(compositor: &mut gui::MinGuiCompositor, np: &apps::notepad::NotepadApp) {
+pub fn notepad_ensure_cursor_visible(compositor: &mut gui::MinGuiCompositor, np: &apps::notepad::NotepadApp) {
     let Some((idx, w)) = focused_window_for_app(compositor, 2) else { return; };
     let desired = np.ensure_cursor_visible(w.width, w.height, w.scroll.y);
     if let Some(wm) = compositor.windows[idx].as_mut() {
@@ -206,7 +206,7 @@ fn notepad_ensure_cursor_visible(compositor: &mut gui::MinGuiCompositor, np: &ap
 }
 
 /// Dosya Yöneticisi listesinde seçili satırı görünür tutacak kaydırmayı uygular.
-fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps::filemanager::FileManagerApp) {
+pub fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps::filemanager::FileManagerApp) {
     let Some((idx, w)) = focused_window_for_app(compositor, 0) else { return; };
     let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
     if view_h == 0 { return; }
@@ -218,17 +218,17 @@ fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps
 
 /// Dosya Yöneticisi sayfa adımı: listede görünür satır sayısı,
 /// ızgarada görünür satır x sütun sayısı (PageUp/PageDown).
-fn fm_page_rows(w: &gui::Window, fm: &apps::filemanager::FileManagerApp) -> usize {
+pub fn fm_page_rows(w: &gui::Window, fm: &apps::filemanager::FileManagerApp) -> usize {
     let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
     fm.page_step(w.width, view_h.max(1))
 }
 
 /// Terminal çıktı panelinde görünen satır sayısı (tekerlek ve sayfa gezinmesine ortak).
-fn terminal_view_lines(w: &gui::Window) -> usize {
+pub fn terminal_view_lines(w: &gui::Window) -> usize {
     (w.height.saturating_sub(86) / 13).max(1)
 }
 
-fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
+pub fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
     let inner_x = w.x + 10;
     let inner_w = w.width.saturating_sub(20).max(1);
     let content_y = w.y + 60;
@@ -243,7 +243,7 @@ fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
 }
 
 /// Takvimde ay ileri/geri gezinme.
-fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
+pub fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
     if forward {
         if month >= 12 {
             (year + 1, 1)

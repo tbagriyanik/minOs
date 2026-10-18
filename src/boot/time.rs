@@ -1,6 +1,6 @@
 //! Zaman tabani: TSC okuma, PIT kanal 2 ile kalibrasyon ve monotonik milisaniye.
 
-fn read_cpu_cycles() -> u64 {
+pub fn read_cpu_cycles() -> u64 {
     let low: u32;
     let high: u32;
     unsafe {
@@ -14,10 +14,10 @@ fn read_cpu_cycles() -> u64 {
     ((high as u64) << 32) | low as u64
 }
 
-static mut TSC_CYCLES_PER_US: u64 = 1;
+pub static mut TSC_CYCLES_PER_US: u64 = 1;
 
 /// TSC frekansını PIT kanal 2 ile kalibre eder.
-fn init_timebase() {
+pub fn init_timebase() {
     unsafe {
         let mut port61: u8;
         core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
@@ -45,4 +45,4 @@ pub fn monotonic_ms() -> u64 {
     read_cpu_cycles() / cycles_per_us / 1_000
 }
 
-pub(crate) fn main_monotonic_ms() -> usize { monotonic_ms() as usize }
+pub fn main_monotonic_ms() -> usize { monotonic_ms() as usize }

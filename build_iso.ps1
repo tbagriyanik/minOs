@@ -48,21 +48,18 @@ if (Test-Path "boot\limine\limine-bios.sys") {
     Copy-Item -Force "boot\limine\limine-bios.sys" -Destination "$OutputDir\boot\limine\limine-bios.sys"
 }
 
-# Limine UEFI El Torito imajı. Bu dosya olmadan ISO yalnızca Legacy BIOS'ta açılır.
-$uefiCandidates = @(
-    (Get-Item "boot\limine\limine-uefi-cd.bin" -ErrorAction SilentlyContinue),
-    (Get-Item "boot\limine\limine-eltorito-efi.bin" -ErrorAction SilentlyContinue),
-    (Get-Item "limine-uefi-cd.bin" -ErrorAction SilentlyContinue),
-    (Get-Item "limine-eltorito-efi.bin" -ErrorAction SilentlyContinue)
-) | Where-Object { $_ -ne $null } | Select-Object -First 1
+# Limine UEFI El Torito imajı ve EFI ikilileri
+if (Test-Path "boot\limine\limine-uefi-cd.bin") {
+    Copy-Item -Force "boot\limine\limine-uefi-cd.bin" -Destination "$OutputDir\boot\limine\limine-uefi-cd.bin"
+    Write-Host "UEFI El Torito imaji: boot\limine\limine-uefi-cd.bin" -ForegroundColor Cyan
+}
 
-if ($uefiCandidates) {
-    # Bu dosya bir EFI uygulaması değil, El Torito UEFI boot imajıdır.
-    # ISO içinde normal dosya olarak EFI/BOOT/BOOTX64.EFI adıyla tutulmamalıdır.
-    Copy-Item -Force $uefiCandidates.FullName -Destination "$OutputDir\boot\limine\limine-uefi-cd.bin"
-    Write-Host "UEFI önyükleyici: $($uefiCandidates.Name)" -ForegroundColor Cyan
-} else {
-    Write-Host "UYARI: UEFI önyükleyici bulunamadı; ISO yalnızca BIOS uyumlu olacaktır." -ForegroundColor Magenta
+if (Test-Path "boot\limine\BOOTX64.EFI") {
+    Copy-Item -Force "boot\limine\BOOTX64.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTX64.EFI"
+    Write-Host "UEFI x86_64 ikilisi: EFI\BOOT\BOOTX64.EFI" -ForegroundColor Cyan
+}
+if (Test-Path "boot\limine\BOOTIA32.EFI") {
+    Copy-Item -Force "boot\limine\BOOTIA32.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTIA32.EFI"
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala

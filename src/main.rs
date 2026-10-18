@@ -406,6 +406,11 @@ pub extern "C" fn _start() -> ! {
         serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
         gui::render_boot_error(&mut fb, width, height);
         loop {
+            let update = drivers::ps2::poll_input(mouse, keyboard, width as i32, height as i32);
+            if update.keyboard {
+                serial_print("[BOOT] Yeniden baslatma tusu algilandi; sistem yeniden baslatiliyor...\n");
+                restart_system();
+            }
             core::hint::spin_loop();
         }
     }

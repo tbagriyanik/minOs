@@ -277,13 +277,13 @@ impl TlsSession {
         // Encrypt Finished with client GCM
         let client_iv = self.client_write_iv.ok_or(())?;
         let gcm = self.client_gcm.as_mut().ok_or(())?;
-        let mut nonce = [0u8; 12];
+        let mut nonce = <[u8; 12]>::default();
         nonce[..4].copy_from_slice(&client_iv);
         nonce[4..12].copy_from_slice(&self.client_seq.to_be_bytes());
         let seq_for_aad = self.client_seq;
         self.client_seq = self.client_seq.wrapping_add(1);
 
-        let mut gcm_aad = [0u8; 13];
+        let mut gcm_aad = <[u8; 13]>::default();
         gcm_aad[..8].copy_from_slice(&seq_for_aad.to_be_bytes());
         gcm_aad[8] = TLS_RECORD_HANDSHAKE;
         gcm_aad[9..11].copy_from_slice(&TLS_VERSION_1_2.to_be_bytes());
@@ -397,11 +397,11 @@ impl TlsSession {
         let seq = self.server_seq;
         self.server_seq = self.server_seq.wrapping_add(1);
 
-        let mut nonce = [0u8; 12];
+        let mut nonce = <[u8; 12]>::default();
         nonce[..4].copy_from_slice(&server_iv);
         nonce[4..12].copy_from_slice(&seq.to_be_bytes());
 
-        let mut gcm_aad = [0u8; 13];
+        let mut gcm_aad = <[u8; 13]>::default();
         gcm_aad[..8].copy_from_slice(&seq.to_be_bytes());
         gcm_aad[8] = TLS_RECORD_APPLICATION_DATA;
         gcm_aad[9..11].copy_from_slice(&TLS_VERSION_1_2.to_be_bytes());
@@ -426,11 +426,11 @@ impl TlsSession {
 
         let seq = self.client_seq;
 
-        let mut nonce = [0u8; 12];
+        let mut nonce = <[u8; 12]>::default();
         nonce[..4].copy_from_slice(&client_iv);
         nonce[4..12].copy_from_slice(&seq.to_be_bytes());
 
-        let mut gcm_aad = [0u8; 13];
+        let mut gcm_aad = <[u8; 13]>::default();
         gcm_aad[..8].copy_from_slice(&seq.to_be_bytes());
         gcm_aad[8] = TLS_RECORD_APPLICATION_DATA;
         gcm_aad[9..11].copy_from_slice(&TLS_VERSION_1_2.to_be_bytes());

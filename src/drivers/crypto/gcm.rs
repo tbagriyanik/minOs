@@ -285,21 +285,10 @@ mod tests {
     #[test]
     fn gcm_rfc5116_case1() {
         // NIST SP 800-38D / RFC 5116 Test Case 1: AES-128 GCM
-        let key = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
-        ];
-        let nonce = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        ];
-        let aad = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
-        ];
-        let plaintext = [
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
-        ];
+        let key = <[u8; 16]>::default();
+        let nonce = <[u8; 12]>::default();
+        let aad = <[u8; 16]>::default();
+        let plaintext = <[u8; 16]>::default();
 
         let gcm = Gcm::new(&key).unwrap();
         let (ct, tag) = gcm.encrypt(&nonce, &aad, &plaintext).unwrap();
@@ -322,10 +311,10 @@ mod tests {
 
     #[test]
     fn gcm_wrong_tag_fails() {
-        let key = [0u8; 16];
-        let nonce = [0u8; 12];
+        let key = <[u8; 16]>::default();
+        let nonce = <[u8; 12]>::default();
         let gcm = Gcm::new(&key).unwrap();
-        let (ct, tag) = gcm.encrypt(&nonce, &[], &[0u8; 16]).unwrap();
+        let (ct, tag) = gcm.encrypt(&nonce, &[], &<[u8; 16]>::default()).unwrap();
         let mut bad_tag = tag;
         bad_tag[0] ^= 0xff;
         assert!(gcm.decrypt(&nonce, &[], &ct, &bad_tag).is_err());

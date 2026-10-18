@@ -105,6 +105,7 @@ pub fn terminate_app(
     terminal: &mut apps::terminal::TerminalApp,
     installer: &mut apps::installer::InstallerApp,
     viewer3d: &mut apps::viewer3d::Viewer3DApp,
+    pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
@@ -144,6 +145,7 @@ pub fn terminate_app(
         }
         11 => *installer = apps::installer::InstallerApp::new(),
         12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
+        13 => *pkgmgr = apps::pkgmgr::PackageManagerApp::new(),
         _ => return,
     } }
     compositor.focus_top_window();

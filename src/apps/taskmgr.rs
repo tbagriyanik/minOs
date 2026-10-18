@@ -7,17 +7,17 @@ use crate::fs::vfs::VirtualFileSystem;
 pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
-pub const ALL_APP_COUNT: usize = 13;
+pub const ALL_APP_COUNT: usize = 14;
 const ALL_APP_LABELS: [&str; ALL_APP_COUNT] = [
     "Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Gezgini",
     "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi",
     "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Kurulum Sihirbazı",
-    "3D Gösterici",
+    "3D Gösterici", "Paket Yöneticisi",
 ];
 const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
     "File Manager", "Settings", "Notepad", "Browser", "Image Viewer", "Music Player",
     "Video Player", "Task Manager", "Calculator", "Paint", "Command Prompt",
-    "Installer", "3D Viewer",
+    "Installer", "3D Viewer", "Package Manager",
 ];
 
 // "Program Aç" menüsü için Görev Yöneticisi (ID 7) hariç tutulmuş,
@@ -30,12 +30,13 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
 // 6. Kurulum Sihirbazı (11)
 // 7. Müzik Çalar (5)
 // 8. Not Defteri (2)
-// 9. Resim Gösterici (4)
-// 10. Sistem Ayarları (1)
-// 11. Video Oynatıcı (6)
-// 12. Web Gezgini (3)
-pub const LAUNCH_APP_COUNT: usize = 12;
-const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [12, 9, 0, 8, 10, 11, 5, 2, 4, 1, 6, 3];
+// 9. Paket Yöneticisi (13)
+// 10. Resim Gösterici (4)
+// 11. Sistem Ayarları (1)
+// 12. Video Oynatıcı (6)
+// 13. Web Gezgini (3)
+pub const LAUNCH_APP_COUNT: usize = 13;
+const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [12, 9, 0, 8, 10, 11, 5, 2, 13, 4, 1, 6, 3];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "3D Gösterici",
     "Çizim Tahtası",
@@ -45,6 +46,7 @@ const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "Kurulum Sihirbazı",
     "Müzik Çalar",
     "Not Defteri",
+    "Paket Yöneticisi",
     "Resim Gösterici",
     "Sistem Ayarları",
     "Video Oynatıcı",
@@ -59,6 +61,7 @@ const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
     "Installer",
     "Music Player",
     "Notepad",
+    "Package Manager",
     "Image Viewer",
     "Settings",
     "Video Player",
@@ -254,6 +257,7 @@ impl TaskManagerApp {
             10 => core::mem::size_of::<crate::apps::terminal::TerminalApp>(),
             11 => core::mem::size_of::<crate::apps::installer::InstallerApp>(),
             12 => core::mem::size_of::<crate::apps::viewer3d::Viewer3DApp>(),
+            13 => core::mem::size_of::<crate::apps::pkgmgr::PackageManagerApp>(),
             _ => 0,
         }
     }

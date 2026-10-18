@@ -468,6 +468,8 @@ pub extern "C" fn _start() -> ! {
     let mut installer_app = apps::installer::InstallerApp::new();
     installer_app.refresh_drives();
     let mut viewer3d_app = apps::viewer3d::Viewer3DApp::new();
+    let mut pkgmgr_app = apps::pkgmgr::PackageManagerApp::new();
+    pkgmgr_app.refresh_installed(&fs_mgr.vfs);
 
     // 12 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
     // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
@@ -529,6 +531,15 @@ pub extern "C" fn _start() -> ! {
         width.saturating_sub(v3d_w) / 2,
         height.saturating_sub(v3d_h + gui::taskbar_h()) / 2,
         v3d_w, v3d_h, false,
+    ));
+    // 13: Paket Yöneticisi
+    let pkg_w = 620.min(width.saturating_sub(20)).max(200);
+    let pkg_h = 440.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+    compositor.add_window(gui::Window::new(
+        "Paket Yöneticisi", "Paketler",
+        width.saturating_sub(pkg_w) / 2,
+        height.saturating_sub(pkg_h + gui::taskbar_h()) / 2,
+        pkg_w, pkg_h, false,
     ));
 
     // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
@@ -740,6 +751,7 @@ pub extern "C" fn _start() -> ! {
                              term: &apps::terminal::TerminalApp,
                              inst: &apps::installer::InstallerApp,
                              v3d: &apps::viewer3d::Viewer3DApp,
+                             pkg: &apps::pkgmgr::PackageManagerApp,
                              now: &drivers::rtc::DateTime,
                              mouse: &drivers::mouse::MouseState,
                              kbd: &drivers::keyboard::KeyboardState,
@@ -840,6 +852,7 @@ pub extern "C" fn _start() -> ! {
                     10 => term.render_content(fb, win.x, win.y, win.width, win.height, win.is_focused),
                     11 => inst.render_content(fb, win.x, win.y, win.width, win.height),
                     12 => v3d.render_content(fb, win.x, win.y, win.width, win.height),
+                    13 => pkg.render_content(fb, win.x, win.y, win.width, win.height),
                     _ => {}
                 }
                 app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
@@ -1020,7 +1033,7 @@ pub extern "C" fn _start() -> ! {
     render_full_frame(
         &mut fb, &compositor, &filemanager_app, &desktop_files, &settings_app,
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &pkgmgr_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
         &mut app_render_cycles,
         (run_dialog_open, &run_dialog_input),
         (properties_open, &properties_name, &properties_type, &properties_size, &properties_location, &properties_path),
@@ -1521,7 +1534,7 @@ pub extern "C" fn _start() -> ! {
                                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[wi],
-                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                                         }
                                     }
                                 }
@@ -1588,12 +1601,12 @@ pub extern "C" fn _start() -> ! {
             let active_g = compositor.active_start_group;
             let mut sub_rect = gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
             if compositor.start_search_len > 0 {
-                let mut matches = [0; 13];
+                let mut matches = [0; 14];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 sub_rect = gui::MinGuiCompositor::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             }
             if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
-                let mut matches = [0; 13];
+                let mut matches = [0; 14];
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
                 for (row, app_id) in matches[..count].iter().enumerate() {
                     let row_rect = (sub_rect.0 + gui::sp(6), sub_rect.1 + gui::sp(30) + row * gui::sp(28), sub_rect.2.saturating_sub(gui::sp(12)), gui::sp(25));
@@ -1645,7 +1658,7 @@ pub extern "C" fn _start() -> ! {
                     let rect = gui::MinGuiCompositor::start_menu_subitem_rect(menu_y, active_g, k, tb_y);
                     if gui::in_rect(mx, my, rect) {
                         item_clicked = true;
-                        if i == 13 {
+                        if i == 14 {
                             if compositor.confirm_shutdown {
                                 #[cfg(minos_boot_log)]
     serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
@@ -1660,7 +1673,7 @@ pub extern "C" fn _start() -> ! {
                             }
                             break;
                         }
-                        if i == 14 {
+                        if i == 15 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -1886,7 +1899,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                            &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                         break;
                     }
                     // Maksimize / Geri Yükle
@@ -2424,7 +2437,7 @@ pub extern "C" fn _start() -> ! {
                                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                                         }
                                     } else if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
                                         taskmgr_app.selected = i;
@@ -2611,6 +2624,9 @@ pub extern "C" fn _start() -> ! {
                             12 => {
                                 viewer3d_app.handle_mouse_down(mx.saturating_sub(wx), my.saturating_sub(wy), ww, wh);
                             }
+                            13 => {
+                                pkgmgr_app.handle_click(mx.saturating_sub(wx), my.saturating_sub(wy), ww, wh, &mut fs_mgr.vfs);
+                            }
                             _ => {}
                         }
                         break;
@@ -2640,7 +2656,7 @@ pub extern "C" fn _start() -> ! {
                         terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
                             &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                             &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-                            &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                            &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                     } else {
                         // Masaüstündeyken Alt+F4 güç menüsünü açar.
                         compositor.is_start_menu_open = true;
@@ -2946,7 +2962,7 @@ pub extern "C" fn _start() -> ! {
                         let (_, first, count) = gui::MENU_GROUPS[active_g];
                         let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
                         let i = first + item_k;
-                        if i == 13 {
+                        if i == 14 {
                             if compositor.confirm_shutdown {
                                 #[cfg(minos_boot_log)]
     serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
@@ -2957,7 +2973,7 @@ pub extern "C" fn _start() -> ! {
                             } else {
                                 compositor.confirm_shutdown = true;
                             }
-                        } else if i == 14 {
+                        } else if i == 15 {
                             if compositor.confirm_restart {
                                 restart_system();
                             }
@@ -2991,7 +3007,7 @@ pub extern "C" fn _start() -> ! {
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                         &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                         &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                        &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                        &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                                 }
                             }
                             _ => {}
@@ -3261,7 +3277,7 @@ pub extern "C" fn _start() -> ! {
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
                                 &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
                                 &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[target],
-                                &mut terminal_app, &mut installer_app, &mut viewer3d_app);
+                                &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         notepad_app.delete_action();
@@ -3789,6 +3805,7 @@ pub extern "C" fn _start() -> ! {
                         "video" => Some(6),
                         "kur" | "install" => Some(11),
                         "3d" => Some(12),
+                        "pkg" | "minpak" | "paket" | "pkgmgr" => Some(13),
                         _ => None,
                     };
                     if let Some(target) = app_id {
@@ -3972,6 +3989,16 @@ pub extern "C" fn _start() -> ! {
                         viewer3d_app.set_shape(apps::viewer3d::ShapeType::Pyramid);
                     }
                 }
+                let pkg_focused = app_is_focused(&compositor, 13);
+                if pkg_focused {
+                    if ch == '\x08' {
+                        pkgmgr_app.backspace_search();
+                    } else if ch == '\x1b' {
+                        pkgmgr_app.clear_search();
+                    } else if ch >= ' ' {
+                        pkgmgr_app.insert_search_char(ch);
+                    }
+                }
                 if !run_dialog_open && !compositor.is_start_menu_open && !compositor.is_context_menu_open {
                     if let Some(act_idx) = compositor.active_window_idx {
                         if let Some(w) = compositor.windows[act_idx] {
@@ -4114,7 +4141,7 @@ pub extern "C" fn _start() -> ! {
                 &mut fb, &compositor, &filemanager_app, &desktop_files, &settings_app,
                 &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
                 &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app,
-                &installer_app, &viewer3d_app,
+                &installer_app, &viewer3d_app, &pkgmgr_app,
                 &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
                 (run_dialog_open, &run_dialog_input),
                 (properties_open, &properties_name, &properties_type, &properties_size, &properties_location, &properties_path),

@@ -23,7 +23,7 @@ const COMPLETION_COMMANDS: &[&str] = &[
 ];
 const COMPLETION_APPS: &[&str] = &[
     "files", "settings", "notepad", "browser", "image", "music", "video", "taskmgr",
-    "calc", "paint", "cmd",
+    "calc", "paint", "cmd", "installer", "3d", "pkgmgr",
 ];
 
 fn app_index(name: &str) -> Option<usize> {
@@ -39,6 +39,9 @@ fn app_index(name: &str) -> Option<usize> {
         "calc" | "calculator" | "hesap" => Some(8),
         "paint" | "draw" | "cizim" => Some(9),
         "cmd" | "terminal" | "shell" => Some(10),
+        "install" | "installer" | "kur" => Some(11),
+        "3d" | "viewer3d" => Some(12),
+        "pkgmgr" | "packagemgr" | "packages" | "paket" => Some(13),
         _ => None,
     }
 }
@@ -49,9 +52,11 @@ fn app_name(index: usize) -> &'static str {
         (3,false) => "Web Gezgini", (4,false) => "Resim Gösterici", (5,false) => "Müzik Çalar",
         (6,false) => "Video Oynatıcı", (7,false) => "Görev Yöneticisi", (8,false) => "Hesap Makinesi",
         (9,false) => "Çizim Tahtası", (10,false) => "Komut İstemi",
+        (11,false) => "Kurulum Sihirbazı", (12,false) => "3D Gösterici", (13,false) => "Paket Yöneticisi",
         (0,true) => "File Manager", (1,true) => "Settings", (2,true) => "Notepad", (3,true) => "Browser",
         (4,true) => "Image Viewer", (5,true) => "Music Player", (6,true) => "Video Player",
-        (7,true) => "Task Manager", (8,true) => "Calculator", (9,true) => "Paint", _ => "Terminal",
+        (7,true) => "Task Manager", (8,true) => "Calculator", (9,true) => "Paint",
+        (10,true) => "Terminal", (11,true) => "Installer", (12,true) => "3D Viewer", _ => "Package Manager",
     }
 }
 

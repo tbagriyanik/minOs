@@ -1,5 +1,6 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 fn find_bytes(haystack:&[u8], needle:&[u8])->Option<usize> {
     if needle.is_empty() || needle.len()>haystack.len(){return None;}
@@ -360,6 +361,87 @@ pub struct RenderedLink {
     pub onclick: String,
 }
 
+// ── Tarayıcı geçmişi ──────────────────────────────────────────────────────
+// Son açılan adresler oturum boyunca saklanır; pencere kapatılıp yeniden
+// açılsa bile geçmiş korunur (modül düzeyinde atomik diziler).
+const HISTORY_MAX: usize = 32;
+const HISTORY_URL_CAP: usize = 128;
+
+static HISTORY: [[AtomicU32; HISTORY_URL_CAP]; HISTORY_MAX] =
+    [const { [const { AtomicU32::new(0) }; HISTORY_URL_CAP] }; HISTORY_MAX];
+static HISTORY_LEN: [AtomicUsize; HISTORY_MAX] = [const { AtomicUsize::new(0) }; HISTORY_MAX];
+static HISTORY_COUNT: AtomicUsize = AtomicUsize::new(0);
+static HISTORY_POS: AtomicUsize = AtomicUsize::new(0);
+
+/// Belirtilen geçmiş girdisini (0 = en eski) metne çevirir.
+fn history_copy(index: usize) -> Option<String> {
+    let count = HISTORY_COUNT.load(Ordering::Acquire);
+    if index >= count || index >= HISTORY_MAX { return None; }
+    let len = HISTORY_LEN[index].load(Ordering::Acquire).min(HISTORY_URL_CAP);
+    if len == 0 { return None; }
+    let mut out = String::with_capacity(len);
+    for slot in HISTORY[index].iter().take(len) {
+        out.push(char::from_u32(slot.load(Ordering::Relaxed)).unwrap_or('\u{FFFD}'));
+    }
+    Some(out)
+}
+
+/// Kayıtlı geçmiş girdisi sayısı.
+fn history_count() -> usize { HISTORY_COUNT.load(Ordering::Acquire) }
+
+/// Yeni bir adresi geçmişe ekler (art arda yinelemeleri atlar).
+fn history_push(url: &str) {
+    if url.is_empty() { return; }
+    let mut count = HISTORY_COUNT.load(Ordering::Acquire);
+    let pos = HISTORY_POS.load(Ordering::Acquire);
+    if count > 0 && pos < count {
+        if let Some(cur) = history_copy(pos) {
+            if cur == url { return; }
+        }
+    }
+    // Geri gidildikten sonra yeni gezinme, ileri geçmişi budar.
+    if count > 0 { count = (pos + 1).min(count); }
+    // Kapasite dolduysa en eski girdiyi düşür.
+    if count >= HISTORY_MAX {
+        for i in 1..HISTORY_MAX {
+            for j in 0..HISTORY_URL_CAP {
+                HISTORY[i - 1][j].store(HISTORY[i][j].load(Ordering::Relaxed), Ordering::Relaxed);
+            }
+            HISTORY_LEN[i - 1].store(HISTORY_LEN[i].load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        count = HISTORY_MAX - 1;
+    }
+    let mut len = 0;
+    for (i, ch) in url.chars().take(HISTORY_URL_CAP).enumerate() {
+        HISTORY[count][i].store(ch as u32, Ordering::Relaxed);
+        len = i + 1;
+    }
+    HISTORY_LEN[count].store(len, Ordering::Release);
+    count += 1;
+    HISTORY_COUNT.store(count, Ordering::Release);
+    HISTORY_POS.store(count - 1, Ordering::Release);
+}
+
+/// Bir önceki adrese döner; yoksa `None`.
+fn history_back() -> Option<String> {
+    let count = HISTORY_COUNT.load(Ordering::Acquire);
+    let pos = HISTORY_POS.load(Ordering::Acquire);
+    if count == 0 || pos == 0 || pos >= count { return None; }
+    let target = pos - 1;
+    HISTORY_POS.store(target, Ordering::Release);
+    history_copy(target)
+}
+
+/// İleri geçmişte bir sonraki adrese gider; yoksa `None`.
+fn history_forward() -> Option<String> {
+    let count = HISTORY_COUNT.load(Ordering::Acquire);
+    let pos = HISTORY_POS.load(Ordering::Acquire);
+    if count == 0 || pos + 1 >= count { return None; }
+    let target = pos + 1;
+    HISTORY_POS.store(target, Ordering::Release);
+    history_copy(target)
+}
+
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<BrowserLine>, max_lines: usize) {
     let mut current_color = Color::TEXT_MAIN;
@@ -658,6 +740,7 @@ pub struct BrowserApp {
     address_redo_count: usize,
     pub active_tab: usize,
     pub focused_control: usize,
+    suppress_history: bool,
     pub page_loaded: bool,
     pub status: &'static str,
     pub net_online: bool,
@@ -698,7 +781,7 @@ impl BrowserApp {
             url: [0; 128], url_len: 0, address_focused: false, address_cursor: 0, address_scroll: 0, address_selection: None,
             address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
             address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
-            active_tab: 0, focused_control: 0, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
+            active_tab: 0, focused_control: 0, suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
             net_online: false, ping_ok: false,
             web_request_sent: false,
             page_title: [0; 64], page_title_len: 0,
@@ -910,50 +993,14 @@ impl BrowserApp {
     }
 
     pub fn focus_next_control(&mut self) {
-        // 0..2: Tabs (Help, Cats, Web), 3: Back, 4: Fwd, 5: Refresh, 6: Address bar, 7: Go button
-        self.focused_control = (self.focused_control + 1) % 8;
-        if self.focused_control == 6 {
-            self.address_focused = true;
-        } else {
-            self.address_focused = false;
-        }
-        if self.focused_control < 3 {
-            match self.focused_control {
-                0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
-                1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
-                _ => { self.active_tab = 3; self.page_loaded = true; },
-            }
-        }
+        // 0: Geri, 1: İleri, 2: Yenile, 3: Geçmiş, 4: Adres çubuğu, 5: GIT
+        self.focused_control = (self.focused_control + 1) % 6;
+        self.address_focused = self.focused_control == 4;
     }
 
-    pub fn select_tab_prev(&mut self) {
-        let cur = match self.active_tab {
-            0 => 0,
-            1 => 1,
-            _ => 2,
-        };
-        let next = (cur + 2) % 3;
-        self.focused_control = next;
-        match next {
-            0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
-            1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
-            _ => { self.active_tab = 3; self.page_loaded = true; },
-        }
-    }
-
-    pub fn select_tab_next(&mut self) {
-        let cur = match self.active_tab {
-            0 => 0,
-            1 => 1,
-            _ => 2,
-        };
-        let next = (cur + 1) % 3;
-        self.focused_control = next;
-        match next {
-            0 => { self.active_tab = 0; self.set_url(b"minos://help"); self.navigate(); },
-            1 => { self.active_tab = 1; self.set_url(b"minos://cats"); self.navigate(); },
-            _ => { self.active_tab = 3; self.page_loaded = true; },
-        }
+    pub fn focus_prev_control(&mut self) {
+        self.focused_control = (self.focused_control + 5) % 6;
+        self.address_focused = self.focused_control == 4;
     }
 
     pub fn set_url(&mut self, value: &[u8]) {
@@ -967,7 +1014,7 @@ impl BrowserApp {
 
     pub fn focus_address_at(&mut self, x: usize, field_x: usize) {
         self.address_focused = true;
-        self.focused_control = 6;
+        self.focused_control = 4;
         let column = x.saturating_sub(field_x) / 10;
         self.address_cursor = (self.address_scroll + column).min(self.url_len);
         self.address_selection = None;
@@ -976,7 +1023,7 @@ impl BrowserApp {
 
     pub fn focus_address_end(&mut self) {
         self.address_focused = true;
-        self.focused_control = 6;
+        self.focused_control = 4;
         self.address_selection = None;
         self.address_cursor = self.url_len;
         self.keep_address_cursor_visible();
@@ -1013,6 +1060,58 @@ impl BrowserApp {
                 indent: 0,
                 align: TextAlign::Left,
             });
+        }
+    }
+
+    pub fn build_history_page(&mut self) {
+        self.page_title = [0; 64];
+        let title = crate::gui::ui_text("Tarayıcı Geçmişi", "Browser History");
+        let tb = title.as_bytes();
+        self.page_title_len = tb.len().min(64);
+        self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
+
+        self.page_lines.clear();
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![TextSpan {
+                text: String::from(crate::gui::ui_text(
+                    "Son açılan bağlantılar (en yeni en üstte):",
+                    "Recently opened links (newest first):",
+                )),
+                color: Color::TEXT_MUTED,
+                is_link: false,
+                link_url: String::new(),
+            }],
+            tag: HtmlTagType::Heading3,
+            indent: 0,
+        });
+
+        let count = history_count().min(HISTORY_MAX);
+        if count == 0 {
+            self.page_lines.push(BrowserLine {
+                spans: alloc::vec![TextSpan {
+                    text: String::from(crate::gui::ui_text("Henüz geçmiş yok.", "No history yet.")),
+                    color: Color::TEXT_MAIN,
+                    is_link: false,
+                    link_url: String::new(),
+                }],
+                tag: HtmlTagType::Normal,
+                indent: 0,
+            });
+            return;
+        }
+        for i in (0..count).rev() {
+            if let Some(url) = history_copy(i) {
+                self.page_lines.push(BrowserLine {
+                    spans: alloc::vec![TextSpan {
+                        text: url.clone(),
+                        color: Color::TEXT_MAIN,
+                        is_link: true,
+                        link_url: url,
+                    }],
+                    tag: HtmlTagType::ListItem,
+                    indent: 18,
+                });
+            }
         }
     }
 
@@ -1299,7 +1398,7 @@ impl BrowserApp {
 
     pub fn address_select_all(&mut self) {
         self.address_focused = true;
-        self.focused_control = 6;
+        self.focused_control = 4;
         if self.url_len > 0 {
             self.address_selection = Some((0, self.url_len));
             self.address_cursor = self.url_len;
@@ -1336,6 +1435,8 @@ impl BrowserApp {
     }
 
     pub fn navigate(&mut self) {
+        let suppress = self.suppress_history;
+        self.suppress_history = false;
         let mut input = [0u8; 128];
         input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
         let entered = core::str::from_utf8(&input[..self.url_len]).unwrap_or("").trim();
@@ -1420,6 +1521,7 @@ impl BrowserApp {
                 self.page_title = [0; 64];
                 self.page_title_len = 0;
                 self.page_lines.clear();
+                if !suppress { history_push(value); }
             }
             self.address_focused = false;
             return;
@@ -1428,12 +1530,20 @@ impl BrowserApp {
             "minos://help" => {
                 self.active_tab = 0;
                 self.page_loaded = true;
+                if !suppress { history_push(value); }
                 self.status = crate::gui::ui_text("Yerel minOs yardım sayfası açıldı.", "Local minOs help page opened.");
             }
             "minos://cats" => {
                 self.active_tab = 1;
                 self.page_loaded = true;
+                if !suppress { history_push(value); }
                 self.status = crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened.");
+            }
+            "minos://history" => {
+                self.active_tab = 3;
+                self.page_loaded = true;
+                self.build_history_page();
+                self.status = crate::gui::ui_text("Geçmiş sayfası açıldı.", "History page opened.");
             }
             "minos://net" | "net://status" => {
                 // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi
@@ -1450,6 +1560,7 @@ impl BrowserApp {
                     self.page_loaded = false;
                     self.status = crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive.");
                 }
+                if self.page_loaded && !suppress { history_push(value); }
             }
             "minos://demo" | "minos://tr" => {
                 self.active_tab = 3;
@@ -1853,49 +1964,56 @@ impl BrowserApp {
     fn finish_network_error(&mut self, status:&'static str) { self.request_pending=false; self.page_loaded=false; self.status=status; self.request_state=0; self.request_deadline=0; crate::drivers::netstack::tcp_clear_result(); }
 
     pub fn back(&mut self) {
-        self.set_url(b"minos://help");
-        self.navigate();
+        if let Some(url) = history_back() {
+            self.set_url(url.as_bytes());
+            self.suppress_history = true;
+            self.navigate();
+        }
     }
 
     pub fn forward(&mut self) {
-        self.set_url(b"minos://cats");
+        if let Some(url) = history_forward() {
+            self.set_url(url.as_bytes());
+            self.suppress_history = true;
+            self.navigate();
+        }
+    }
+
+    pub fn show_history(&mut self) {
+        self.set_url(b"minos://history");
         self.navigate();
     }
 
     pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &crate::gui::ScrollState) {
         let english = crate::gui::ui_english();
-        fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 22, Color::TITLE_BAR_INACTIVE);
-        let tab0_bg = if self.active_tab == 0 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
-        fb.draw_rect(win_x + 8, win_y + 30, 140, 20, tab0_bg);
-        MinGuiCompositor::draw_string(fb, win_x + 14, win_y + 34, crate::gui::ui_text("minOs Yardım", "minOs Help"), Color::TEXT_MAIN);
-        if self.focused_control == 0 { fb.draw_rect_outline(win_x + 8, win_y + 30, 140, 20, Color::ACCENT_YELLOW); }
+        // Bağlantı isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
+        unsafe {
+            let links_ptr = &self.rendered_links as *const Vec<RenderedLink> as *mut Vec<RenderedLink>;
+            (*links_ptr).clear();
+        }
+        // Araç çubuğu (üst sekmeler kaldırıldı): Geri, İleri, Yenile, Geçmiş, adres, GIT
+        fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 30, Color::TITLE_BAR);
+        fb.draw_rect(win_x + 12, win_y + 32, 22, 20, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 36, "<", Color::TEXT_MAIN);
+        if self.focused_control == 0 { fb.draw_rect_outline(win_x + 12, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
 
-        let tab1_bg = if self.active_tab == 1 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
-        fb.draw_rect(win_x + 152, win_y + 30, 85, 20, tab1_bg);
-        MinGuiCompositor::draw_string(fb, win_x + 158, win_y + 34, "KediWiki", Color::TEXT_MAIN);
-        if self.focused_control == 1 { fb.draw_rect_outline(win_x + 152, win_y + 30, 85, 20, Color::ACCENT_YELLOW); }
+        fb.draw_rect(win_x + 38, win_y + 32, 22, 20, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 44, win_y + 36, ">", Color::TEXT_MAIN);
+        if self.focused_control == 1 { fb.draw_rect_outline(win_x + 38, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
 
-        let tab3_bg = if self.active_tab == 3 { Color::WINDOW_BG } else { Color::TITLE_BAR_INACTIVE };
-        fb.draw_rect(win_x + 241, win_y + 30, 100, 20, tab3_bg);
-        MinGuiCompositor::draw_string(fb, win_x + 247, win_y + 34, "Web Sayfasi", Color::ACCENT_GREEN);
-        if self.focused_control == 2 { fb.draw_rect_outline(win_x + 241, win_y + 30, 100, 20, Color::ACCENT_YELLOW); }
+        fb.draw_rect(win_x + 64, win_y + 32, 22, 20, Color::WINDOW_BG);
+        MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 36, "R", Color::ACCENT_GREEN);
+        if self.focused_control == 2 { fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
 
-        fb.draw_rect(win_x + 6, win_y + 52, win_w - 12, 28, Color::TITLE_BAR);
-        fb.draw_rect(win_x + 12, win_y + 56, 22, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 60, "<", Color::TEXT_MAIN);
-        if self.focused_control == 3 { fb.draw_rect_outline(win_x + 12, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
-
-        fb.draw_rect(win_x + 38, win_y + 56, 22, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 44, win_y + 60, ">", Color::TEXT_MAIN);
-        if self.focused_control == 4 { fb.draw_rect_outline(win_x + 38, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
-
-        fb.draw_rect(win_x + 64, win_y + 56, 22, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 60, "R", Color::ACCENT_GREEN);
-        if self.focused_control == 5 { fb.draw_rect_outline(win_x + 64, win_y + 56, 22, 20, Color::ACCENT_YELLOW); }
+        let hist_r = (win_x + win_w - 124, win_y + 32, 58, 20);
+        fb.draw_rect(hist_r.0, hist_r.1, hist_r.2, hist_r.3, Color::ACCENT_PINK);
+        MinGuiCompositor::draw_string(fb, hist_r.0 + 6, hist_r.1 + 4,
+            crate::gui::ui_text("Geçmiş", "HIST."), MinGuiCompositor::text_on(Color::ACCENT_PINK));
+        if self.focused_control == 3 { fb.draw_rect_outline(hist_r.0, hist_r.1, hist_r.2, hist_r.3, Color::ACCENT_YELLOW); }
 
         let url_x = win_x + 94;
-        let url_w = win_w.saturating_sub(160);
-        fb.draw_rect(url_x, win_y + 56, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
+        let url_w = win_w.saturating_sub(224);
+        fb.draw_rect(url_x, win_y + 32, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
         let char_width = MinGuiCompositor::text_width("M", 1).max(1);
         let visible_chars = url_w.saturating_sub(12).checked_div(char_width).unwrap_or(1).max(1);
         let mut addr_scroll = self.address_scroll.min(self.url_len);
@@ -1904,7 +2022,7 @@ impl BrowserApp {
             addr_scroll = self.address_cursor + 1 - visible_chars;
         }
         let visible_end = (addr_scroll + visible_chars).min(self.url_len);
-        let clip = (url_x + 4, win_y + 56, url_w.saturating_sub(8), 20);
+        let clip = (url_x + 4, win_y + 32, url_w.saturating_sub(8), 20);
         let text_x = url_x + 6;
         let selection = self.address_selection.map(|(a,b)| (a.min(b).max(addr_scroll), a.max(b).min(visible_end)))
             .filter(|(a,b)| a < b);
@@ -1912,16 +2030,16 @@ impl BrowserApp {
             let prefix = core::str::from_utf8(&self.url[addr_scroll..sel_start]).unwrap_or("");
             let selected = core::str::from_utf8(&self.url[sel_start..sel_end]).unwrap_or("");
             let suffix = core::str::from_utf8(&self.url[sel_end..visible_end]).unwrap_or("");
-            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 60, prefix, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 36, prefix, Color::TEXT_MAIN, clip);
             let selection_x = text_x + MinGuiCompositor::text_width(prefix, 1);
             let selection_w = MinGuiCompositor::text_width(selected, 1);
-            fb.draw_rect(selection_x, win_y + 56, selection_w, 20, Color::ACCENT_BLUE);
-            MinGuiCompositor::draw_string_clipped(fb, selection_x, win_y + 60, selected,
+            fb.draw_rect(selection_x, win_y + 32, selection_w, 20, Color::ACCENT_BLUE);
+            MinGuiCompositor::draw_string_clipped(fb, selection_x, win_y + 36, selected,
                 MinGuiCompositor::text_on(Color::ACCENT_BLUE), clip);
-            MinGuiCompositor::draw_string_clipped(fb, selection_x + selection_w, win_y + 60, suffix, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(fb, selection_x + selection_w, win_y + 36, suffix, Color::TEXT_MAIN, clip);
         } else {
             let shown = core::str::from_utf8(&self.url[addr_scroll..visible_end]).unwrap_or("");
-            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 60, shown, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 36, shown, Color::TEXT_MAIN, clip);
         }
         if self.address_focused && selection.is_none() {
             let caret_end = self.address_cursor.min(self.url_len);
@@ -1929,20 +2047,20 @@ impl BrowserApp {
             let caret_prefix = core::str::from_utf8(&self.url[caret_start..caret_end]).unwrap_or("");
             let caret_x = text_x + MinGuiCompositor::text_width(caret_prefix, 1);
             if caret_x < url_x + url_w.saturating_sub(2) {
-                fb.draw_rect(caret_x, win_y + 58, 1, 16, Color::ACCENT_YELLOW);
+                fb.draw_rect(caret_x, win_y + 34, 1, 16, Color::ACCENT_YELLOW);
             }
         }
-        if self.focused_control == 6 { fb.draw_rect_outline(url_x, win_y + 56, url_w, 20, Color::ACCENT_YELLOW); }
+        if self.focused_control == 4 { fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW); }
 
-        let git_r = (win_x + win_w - 60, win_y + 56, 50, 20);
+        let git_r = (win_x + win_w - 60, win_y + 32, 50, 20);
         fb.draw_rect(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 60, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
-        if self.focused_control == 7 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
+        MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 36, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
+        if self.focused_control == 5 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
 
         let status_h = 20;
         let status_y = win_y + win_h.saturating_sub(status_h + 4);
         let page_x = win_x + 6;
-        let page_y = win_y + 82;
+        let page_y = win_y + 62;
         let page_w = win_w.saturating_sub(12);
         let page_h = status_y.saturating_sub(page_y + 4).max(120);
         fb.draw_rect(page_x, page_y, page_w, page_h, Color::DARK_BG);
@@ -2080,9 +2198,9 @@ impl BrowserApp {
             } else if self.active_tab == 0 {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Yerel Yardım ve Belgeler", "minOs | Local Help and Documents"), Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats, minos://help, minos://net", "Local addresses: minos://cats, minos://help, minos://net"), Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats, minos://help, minos://net, minos://history", "Local addresses: minos://cats, minos://help, minos://net, minos://history"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("minos://net ile ağ durumunu sınayın.", "Check network status at minos://net."), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("minos://net ile ağ durumunu, minos://history ile geçmişi açın.", "Check the network at minos://net, open history at minos://history."), Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("Yerel sayfalar adres çubuğundan açılabilir.", "Open local pages from the address bar."), Color::TEXT_MUTED);
             } else {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
@@ -2093,7 +2211,7 @@ impl BrowserApp {
             }
         } else {
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, crate::gui::ui_text("Bu adres açılamadı.", "This address could not be opened."), Color::ACCENT_RED);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, crate::gui::ui_text("Desteklenen adresler: minos://help, minos://cats, minos://net", "Supported: minos://help, minos://cats, minos://net"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, crate::gui::ui_text("Desteklenen adresler: minos://help, minos://cats, minos://net, minos://history", "Supported: minos://help, minos://cats, minos://net, minos://history"), Color::TEXT_MAIN);
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, crate::gui::ui_text("Yerel: minos://help | Ağ: minos://net", "Local: minos://help | Network: minos://net"), Color::TEXT_MUTED);
         }
         fb.draw_rect(win_x + 6, status_y, win_w.saturating_sub(12), status_h, Color::TASKBAR_BG);

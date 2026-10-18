@@ -19,7 +19,7 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
     "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
     "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "open", "run", "files", "settings", "notepad",
-    "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
+    "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd", "minPak",
 ];
 const COMPLETION_APPS: &[&str] = &[
     "files", "settings", "notepad", "browser", "image", "music", "video", "taskmgr",
@@ -450,7 +450,7 @@ impl TerminalApp {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df format echo clear mem ps exec", Color::TEXT_MAIN);
                 self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget", Color::ACCENT_GREEN);
-                self.push_line("minpkg list|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
+                self.push_line("minPak list|search|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
@@ -712,7 +712,7 @@ impl TerminalApp {
                     }
                 }
             }
-            "pkg" | "minpkg" => {
+            "pkg" | "minpkg" | "minPak" | "minpak" => {
                 let mut sp = arg.splitn(2, ' ');
                 let subcmd = sp.next().unwrap_or("").trim();
                 let subarg = sp.next().unwrap_or("").trim();
@@ -734,9 +734,35 @@ impl TerminalApp {
                             }
                         }
                     }
+                    "search" => {
+                        if subarg.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak search <paket_adi>", "Usage: minPak search <pkg_name>"), Color::ACCENT_YELLOW);
+                        } else {
+                            self.push_line(crate::gui::ui_text("--- ARAMA SONUÇLARI ---", "--- SEARCH RESULTS ---"), Color::ACCENT_PINK);
+                            let needle = subarg.to_lowercase();
+                            let mut found = 0;
+                            for p in &crate::apps::pkgmgr::MinPkg::list_installed(vfs) {
+                                if p.name.to_lowercase().contains(&needle)
+                                    || p.description.to_lowercase().contains(&needle)
+                                {
+                                    let mut b = TextBuf::new();
+                                    b.push_str(&p.name);
+                                    b.push_str(" (v");
+                                    b.push_str(&p.version);
+                                    b.push_str(") -> ");
+                                    b.push_str(&p.install_path);
+                                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                                    found += 1;
+                                }
+                            }
+                            if found == 0 {
+                                self.push_line(crate::gui::ui_text("Eşleşen paket bulunamadı.", "No matching packages found."), Color::TEXT_MUTED);
+                            }
+                        }
+                    }
                     "install" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minpkg install <paket_adi_veya_url>", "Usage: minpkg install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak install <paket_adi_veya_url>", "Usage: minPak install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
                         } else {
                             self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
                             // Önce ağ üzerinden dene, ağ yoksa veya yerel simülasyonsa yerleşik paketi kur
@@ -767,7 +793,7 @@ impl TerminalApp {
                     }
                     "remove" | "uninstall" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minpkg remove <paket_adi>", "Usage: minpkg remove <pkg_name>"), Color::ACCENT_YELLOW);
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak remove <paket_adi>", "Usage: minPak remove <pkg_name>"), Color::ACCENT_YELLOW);
                         } else {
                             if crate::apps::pkgmgr::MinPkg::remove(subarg, vfs) {
                                 self.push_line(crate::gui::ui_text("Paket başarıyla kaldırıldı.", "Package removed successfully."), Color::ACCENT_GREEN);
@@ -777,10 +803,11 @@ impl TerminalApp {
                         }
                     }
                     _ => {
-                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minpkg)", "minOs Package Manager v1.0 (minpkg)"), Color::ACCENT_PINK);
-                        self.push_line(crate::gui::ui_text("minpkg list                  - Kurulu paketleri listeler", "minpkg list                  - List installed packages"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minpkg install <paket>       - Paket indirir ve /bin altına kurar", "minpkg install <package>     - Download and install to /bin"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minpkg remove <paket>        - Kurulu paketi siler", "minpkg remove <package>      - Remove installed package"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minPak)", "minOs Package Manager v1.0 (minPak)"), Color::ACCENT_PINK);
+                        self.push_line(crate::gui::ui_text("minPak list                  - Kurulu paketleri listeler", "minPak list                  - List installed packages"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak search <paket>        - Kurulu paketlerde arama yapar", "minPak search <package>      - Search installed packages"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak install <paket|url>   - Paket indirir ve /bin altına kurar", "minPak install <package|url> - Download and install to /bin"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak remove <paket>        - Kurulu paketi siler", "minPak remove <package>      - Remove installed package"), Color::TEXT_MAIN);
                     }
                 }
             }

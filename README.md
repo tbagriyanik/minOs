@@ -7,14 +7,26 @@
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~25.000%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v1.5.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![GitHub Release](https://img.shields.io/badge/Release-v1.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
-**minOs (Sarman Edition) v1.5.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v1.6.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 ---
 
+## Yenilikler (v1.6.0)
+
+- **🌐 Tam Ağ Yığını & DNS Çözümleme İyileştirmeleri:**
+  - RFC 1035 uyumlu DNS soru ve yanıt ayrıştırma mekanizması; etiket (label) ve sıkıştırılmış işaretçi (`0xC0`) desteği ile harici alan adları (`example.com`, `google.com` vb.) anında çözümlenir.
+  - Harici internet yönlendirmesinde dinamik ağ geçidi (Gateway) MAC geri düşüşü (ARP fallback) eklendi; yerel alt ağ dışındaki IP paketlerinin düşmesi önlendi.
+  - Paralel DNS sorgulama (Yerel DNS + Cloudflare 1.1.1.1 fallback) desteği.
+  - Terminalde `dns <alan_adı>` komutu ile canlı IP çözümleme ve renkli adres çıktısı.
+  - HTTP bağlantı zaman aşımı süresi 8 saniyeye çıkarılarak yavaş internet hatlarında stabilite artırıldı.
+- **⚙️ Sistem Ayarları Ağ Tanılama Sekmesi:** Ağ sekmesi altına canlı ARP, ICMP (Ping) ve TCP bağlantı sınama testleri eklendi.
+- **🖥️ Terminal Tema Kontrast İyileştirmesi:** Açık temalarda (Daylight vb.) terminal yazı renkleri koyulaştırılarak okunabilirlik artırıldı.
+
 ## Yenilikler (v1.5.0)
 
+- **📦 Yeni Paket Yöneticisi Komutu (`minPak`):** Terminalde `minPak` komutu ile paket yönetimi; `minPak list` ile `/bin` altındaki kurulu paketleri listeleme, `minPak search <paket>` ile ad/açıklamada arama, `minPak install <paket|url>` ile HTTP üzerinden paket indirme ve kurma (ağ yoksa yerleşik paketi kurar), `minPak remove <paket>` ile kurulu paketi silme. Alt komutsuz çağrıda yardım menüsü gösterilir (eski `pkg`/`minpkg` adları da çalışmaya devam eder).
 - **🌐 Gelişmiş Web Tarayıcısı & Ağ Yığını (HTTP/1.1):**
   - **HTTP/1.1 Protokol Desteği:** `Connection: close`, standart `Host` ve `User-Agent: minOs/1.5` başlıkları.
   - **Genişletilmiş Ağ Tamponları:** 64 KB TCP alma tamponu (`TCP_DATA`) ve 64 KB dinamik yanıt tamponu (`response_data`). 256 bayt URL yolu ve 128 bayt ana makine adı desteği.
@@ -90,7 +102,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **14 adet yerleşik uygul
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
 | **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v1.5.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
-| **📦 Paket Yöneticisi (`minpkg`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
+| **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Yerel `minos://help` ve `minos://cats` sayfaları, sekmeli (tab) gezinme, `file://` adresleriyle yerel dosya görüntüleme ve e1000 üzerinden ARP/ping/DNS test paneli. |
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
@@ -151,7 +163,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | Komut | Kullanım | Açıklama |
 | :--- | :--- | :--- |
 | `format` / `mkfs` | `format <fat32\|ext4\|exfat\|ext2> <0..3>` | Bağlı ATA sabit diski belirtilen dosya sisteminde biçimlendirir (FAT32, ext4, exFAT veya ext2). |
-| `pkg` | `pkg <list\|search\|install\|remove>` | `minpkg` komut satırı paketi: kurulu paketleri listeler, yerel/ağ üzerinden paket kurar ve kaldırır. |
+| `minPak` / `pkg` | `minPak <list\|search\|install\|remove>` | `minPak` komut satırı paketi: kurulu paketleri listeler, arar, yerel/ağ üzerinden paket kurar ve kaldırır. |
 | `exec` | `exec <dosya_yolu>` | ELF/ikili dosyayı ELF yükleyici ile belleğe yükler ve Ring 3 kullanıcı kipinde çalıştırır. |
 
 ### 5. Uygulama Başlatma
@@ -205,8 +217,8 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 - [x] **SMP (Symmetric Multiprocessing) Desteği (v1.4.0):**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
   - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve sağlama testleri.
-- [x] **Paket Yöneticisi (`minpkg`) (v1.4.0):**
-  - Grafiksel (`pkgmgr`) ve komut satırı (`pkg`) arayüzü; depo katalog sorgulama, paket arama ve yerel/ağ üzerinden paket kurulumu.
+- [x] **Paket Yöneticisi (`minPak`) (v1.4.0 / v1.5.0):**
+  - Grafiksel (`pkgmgr`) ve komut satırı (`minPak`) arayüzü; depo katalog sorgulama, paket arama, yerel/ağ üzerinden paket kurulumu ve kaldırma.
 - [x] **Gelişmiş Grafik Sürücüleri & Sanallaştırma Hızlandırması (v1.4.0):**
   - VMware SVGA II ve konuk grafik hızlandırma algılaması (`src/drivers/gpu.rs`), donanım destekli çift tamponlama ve optimize çizim motoru.
 
@@ -459,7 +471,7 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 17 Ekim 2026 (v1.5.0)
+> Son güncelleme: 18 Ekim 2026 (v1.6.0)
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 62 dosya (`src/**/*.rs`) |

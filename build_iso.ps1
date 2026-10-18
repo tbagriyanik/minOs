@@ -51,7 +51,9 @@ $uefiCandidates = @(
 ) | Where-Object { $_ -ne $null } | Select-Object -First 1
 
 if ($uefiCandidates) {
-    Copy-Item -Force $uefiCandidates.FullName -Destination "$OutputDir\EFI\BOOT\BOOTX64.EFI"
+    # Bu dosya bir EFI uygulaması değil, El Torito UEFI boot imajıdır.
+    # ISO içinde normal dosya olarak EFI/BOOT/BOOTX64.EFI adıyla tutulmamalıdır.
+    Copy-Item -Force $uefiCandidates.FullName -Destination "$OutputDir\boot\limine\limine-uefi-cd.bin"
     Write-Host "UEFI önyükleyici: $($uefiCandidates.Name)" -ForegroundColor Cyan
 } else {
     Write-Host "UYARI: UEFI önyükleyici bulunamadı; ISO yalnızca BIOS uyumlu olacaktır." -ForegroundColor Magenta

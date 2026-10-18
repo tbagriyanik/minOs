@@ -41,12 +41,300 @@ pub enum HtmlTagType {
     ListItem,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Clone)]
+pub struct ElementStyle {
+    pub color: Option<u32>,
+    pub bg_color: Option<u32>,
+    pub font_scale: usize,
+    pub align: TextAlign,
+    pub display_none: bool,
+}
+
+impl ElementStyle {
+    pub fn new() -> Self {
+        Self {
+            color: None,
+            bg_color: None,
+            font_scale: 1,
+            align: TextAlign::Left,
+            display_none: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CssRule {
+    pub selector: String,
+    pub style: ElementStyle,
+}
+
+fn parse_css(css_code: &str) -> Vec<CssRule> {
+    let mut rules = Vec::new();
+    let bytes = css_code.as_bytes();
+    let mut p = 0;
+    while p < bytes.len() {
+        while p < bytes.len() && (bytes[p].is_ascii_whitespace() || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
+        if p >= bytes.len() { break; }
+        let sel_start = p;
+        while p < bytes.len() && bytes[p] != b'{' && bytes[p] != b'<' { p += 1; }
+        if p >= bytes.len() || bytes[p] != b'{' { break; }
+        let selector = core::str::from_utf8(&bytes[sel_start..p]).unwrap_or("").trim();
+        p += 1;
+        let block_start = p;
+        while p < bytes.len() && bytes[p] != b'}' { p += 1; }
+        let block_end = p;
+        if p < bytes.len() { p += 1; }
+
+        let block = core::str::from_utf8(&bytes[block_start..block_end]).unwrap_or("");
+        let mut style = ElementStyle::new();
+        for decl in block.split(';') {
+            if let Some((prop, val)) = decl.split_once(':') {
+                let prop = prop.trim().to_ascii_lowercase();
+                let val = val.trim();
+                if prop == "color" {
+                    if let Some(c) = html_color(val.as_bytes()) {
+                        style.color = Some(c);
+                    }
+                } else if prop == "background-color" || prop == "background" {
+                    if let Some(c) = html_color(val.as_bytes()) {
+                        style.bg_color = Some(c);
+                    }
+                } else if prop == "text-align" {
+                    match val.to_ascii_lowercase().as_str() {
+                        "center" => style.align = TextAlign::Center,
+                        "right" => style.align = TextAlign::Right,
+                        _ => style.align = TextAlign::Left,
+                    }
+                } else if prop == "font-size" {
+                    if val.contains("20px") || val.contains("24px") || val.contains("2em") || val.contains("large") {
+                        style.font_scale = 2;
+                    }
+                } else if prop == "display" && val.to_ascii_lowercase().contains("none") {
+                    style.display_none = true;
+                }
+            }
+        }
+        for s in selector.split(',') {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                rules.push(CssRule {
+                    selector: String::from(trimmed),
+                    style: style.clone(),
+                });
+            }
+        }
+    }
+    rules
+}
+
+fn match_css_style(rules: &[CssRule], tag: &str, class: Option<&str>, id: Option<&str>, inline_style: Option<&str>) -> ElementStyle {
+    let mut resolved = ElementStyle::new();
+    for rule in rules {
+        let sel = rule.selector.as_str();
+        let matches = if sel.starts_with('.') {
+            class.map_or(false, |c| c.split_whitespace().any(|part| part.eq_ignore_ascii_case(&sel[1..])))
+        } else if sel.starts_with('#') {
+            id.map_or(false, |i| i.eq_ignore_ascii_case(&sel[1..]))
+        } else {
+            sel.eq_ignore_ascii_case(tag)
+        };
+        if matches {
+            if let Some(c) = rule.style.color { resolved.color = Some(c); }
+            if let Some(bg) = rule.style.bg_color { resolved.bg_color = Some(bg); }
+            if rule.style.font_scale > 1 { resolved.font_scale = rule.style.font_scale; }
+            if rule.style.align != TextAlign::Left { resolved.align = rule.style.align; }
+            if rule.style.display_none { resolved.display_none = true; }
+        }
+    }
+    if let Some(inline) = inline_style {
+        for decl in inline.split(';') {
+            if let Some((prop, val)) = decl.split_once(':') {
+                let prop = prop.trim().to_ascii_lowercase();
+                let val = val.trim();
+                if prop == "color" {
+                    if let Some(c) = html_color(val.as_bytes()) { resolved.color = Some(c); }
+                } else if prop == "background-color" || prop == "background" {
+                    if let Some(c) = html_color(val.as_bytes()) { resolved.bg_color = Some(c); }
+                } else if prop == "text-align" {
+                    match val.to_ascii_lowercase().as_str() {
+                        "center" => resolved.align = TextAlign::Center,
+                        "right" => resolved.align = TextAlign::Right,
+                        _ => resolved.align = TextAlign::Left,
+                    }
+                } else if prop == "font-size" {
+                    if val.contains("20px") || val.contains("24px") || val.contains("2em") || val.contains("large") {
+                        resolved.font_scale = 2;
+                    }
+                } else if prop == "display" && val.to_ascii_lowercase().contains("none") {
+                    resolved.display_none = true;
+                }
+            }
+        }
+    }
+    resolved
+}
+
+fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
+    let mut i = 0;
+    while i < attrs.len() {
+        while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') { i += 1; }
+        let k_start = i;
+        while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') { i += 1; }
+        let cur_key = &attrs[k_start..i];
+        while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
+        if i < attrs.len() && attrs[i] == b'=' {
+            i += 1;
+            while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
+            let quote = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
+                let q = attrs[i];
+                i += 1;
+                q
+            } else { 0 };
+            let v_start = i;
+            while i < attrs.len() && ((quote != 0 && attrs[i] != quote) || (quote == 0 && !attrs[i].is_ascii_whitespace() && attrs[i] != b'>')) {
+                i += 1;
+            }
+            let val = &attrs[v_start..i];
+            if quote != 0 && i < attrs.len() { i += 1; }
+            if eq_ascii(cur_key, key) {
+                return core::str::from_utf8(val).ok();
+            }
+        } else if i == k_start {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Robust UTF-8, HTML entity, and Turkish ISO-8859-9/Windows-1254 character decoder
+fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
+    if p >= bytes.len() { return ('\0', 0); }
+    let b0 = bytes[p];
+
+    // HTML Entity &...;
+    if b0 == b'&' {
+        let max_e = (p + 12).min(bytes.len());
+        if let Some(pos) = bytes[p..max_e].iter().position(|&b| b == b';') {
+            let entity = &bytes[p + 1..p + pos];
+            let ent_str = core::str::from_utf8(entity).unwrap_or("");
+            let resolved = match ent_str {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some(' '),
+                // Turkish HTML Entities
+                "ccedil" => Some('ç'),
+                "Ccedil" => Some('Ç'),
+                "ouml" => Some('ö'),
+                "Ouml" => Some('Ö'),
+                "uuml" => Some('ü'),
+                "Uuml" => Some('Ü'),
+                "gbreve" => Some('ğ'),
+                "Gbreve" => Some('Ğ'),
+                "scedil" => Some('ş'),
+                "Scedil" => Some('Ş'),
+                "inodot" => Some('ı'),
+                "Idot" => Some('İ'),
+                _ => {
+                    if ent_str.starts_with('#') {
+                        if ent_str.starts_with("#x") || ent_str.starts_with("#X") {
+                            u32::from_str_radix(&ent_str[2..], 16).ok().and_then(core::char::from_u32)
+                        } else {
+                            ent_str[1..].parse::<u32>().ok().and_then(core::char::from_u32)
+                        }
+                    } else {
+                        None
+                    }
+                }
+            };
+            if let Some(ch) = resolved {
+                return (ch, pos + 1);
+            }
+        }
+    }
+
+    // Standard UTF-8 decoding
+    if b0 < 0x80 {
+        return (b0 as char, 1);
+    } else if (b0 & 0xE0) == 0xC0 && p + 1 < bytes.len() {
+        let b1 = bytes[p + 1];
+        if (b1 & 0xC0) == 0x80 {
+            let cp = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
+            if let Some(ch) = core::char::from_u32(cp) {
+                return (ch, 2);
+            }
+        }
+    } else if (b0 & 0xF0) == 0xE0 && p + 2 < bytes.len() {
+        let b1 = bytes[p + 1];
+        let b2 = bytes[p + 2];
+        if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 {
+            let cp = (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
+            if let Some(ch) = core::char::from_u32(cp) {
+                return (ch, 3);
+            }
+        }
+    } else if (b0 & 0xF8) == 0xF0 && p + 3 < bytes.len() {
+        let b1 = bytes[p + 1];
+        let b2 = bytes[p + 2];
+        let b3 = bytes[p + 3];
+        if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80 {
+            let cp = (((b0 & 0x07) as u32) << 18) | (((b1 & 0x3F) as u32) << 12) | (((b2 & 0x3F) as u32) << 6) | ((b3 & 0x3F) as u32);
+            if let Some(ch) = core::char::from_u32(cp) {
+                return (ch, 4);
+            }
+        }
+    }
+
+    // Fallback: Windows-1254 / ISO-8859-9 Turkish single-byte mapping
+    let ch = match b0 {
+        0xD0 => 'Ğ',
+        0xF0 => 'ğ',
+        0xDD => 'İ',
+        0xFD => 'ı',
+        0xDE => 'Ş',
+        0xFE => 'ş',
+        0xC7 => 'Ç',
+        0xE7 => 'ç',
+        0xD6 => 'Ö',
+        0xF6 => 'ö',
+        0xDC => 'Ü',
+        0xFC => 'ü',
+        _ => b0 as char,
+    };
+    (ch, 1)
+}
+
+fn decode_bytes_to_string(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut p = 0;
+    while p < bytes.len() {
+        let (ch, len) = decode_html_char(bytes, p);
+        if len == 0 { break; }
+        out.push(ch);
+        p += len;
+    }
+    out
+}
+
 #[derive(Clone)]
 pub struct TextSpan {
     pub text: String,
     pub color: u32,
+    pub bg_color: Option<u32>,
     pub is_link: bool,
     pub link_url: String,
+    pub is_button: bool,
+    pub onclick: String,
+    pub elem_id: String,
 }
 
 #[derive(Clone)]
@@ -54,6 +342,7 @@ pub struct BrowserLine {
     pub spans: Vec<TextSpan>,
     pub tag: HtmlTagType,
     pub indent: usize,
+    pub align: TextAlign,
 }
 
 #[derive(Clone)]
@@ -68,18 +357,45 @@ pub struct HttpCookie {
 pub struct RenderedLink {
     pub rect: (usize, usize, usize, usize),
     pub url: String,
+    pub onclick: String,
 }
 
-/// Tokenizer and word-wrapping HTML layout engine
+/// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<BrowserLine>, max_lines: usize) {
     let mut current_color = Color::TEXT_MAIN;
+    let mut current_bg: Option<u32> = None;
     let mut active_link: Option<String> = None;
-    let mut hidden: Option<&[u8]> = None;
+    let mut active_onclick: Option<String> = None;
+    let mut active_is_button = false;
+    let mut active_id: Option<String> = None;
+    let mut css_rules = Vec::new();
+
+    // 1. First extract all <style> blocks
+    let mut p = 0;
+    while p < body.len() {
+        if body[p] == b'<' && p + 6 <= body.len() && eq_ascii(&body[p..p + 6], b"<style") {
+            let start = p + 6;
+            let mut close_tag = start;
+            while close_tag < body.len() && body[close_tag] != b'>' { close_tag += 1; }
+            if close_tag < body.len() {
+                close_tag += 1;
+                let css_start = close_tag;
+                if let Some(pos) = find_bytes(&body[css_start..], b"</style>") {
+                    let css_text = decode_bytes_to_string(&body[css_start..css_start + pos]);
+                    css_rules.extend(parse_css(&css_text));
+                    p = css_start + pos + 8;
+                    continue;
+                }
+            }
+        }
+        p += 1;
+    }
 
     // Buffer of spans for the line currently being built
     let mut cur_line_spans: Vec<TextSpan> = Vec::new();
     let mut cur_line_w: usize = 0;
     let mut cur_line_tag = HtmlTagType::Normal;
+    let mut cur_line_align = TextAlign::Left;
 
     let tag_indent = |t: HtmlTagType| -> usize {
         match t {
@@ -88,13 +404,14 @@ fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<B
         }
     };
 
-    let flush_line = |lines: &mut Vec<BrowserLine>, spans: &mut Vec<TextSpan>, line_w: &mut usize, tag: HtmlTagType, max: usize| {
+    let flush_line = |lines: &mut Vec<BrowserLine>, spans: &mut Vec<TextSpan>, line_w: &mut usize, tag: HtmlTagType, align: TextAlign, max: usize| {
         if lines.len() < max && !spans.is_empty() {
             let indent = tag_indent(tag);
             lines.push(BrowserLine {
                 spans: core::mem::take(spans),
                 tag,
                 indent,
+                align,
             });
             *line_w = 0;
         }
@@ -105,9 +422,14 @@ fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<B
                     line_w: &mut usize,
                     word: &str,
                     color: u32,
+                    bg_color: Option<u32>,
                     is_link: bool,
                     link_url: &str,
+                    is_button: bool,
+                    onclick: &str,
+                    elem_id: &str,
                     tag: HtmlTagType,
+                    align: TextAlign,
                     max: usize| {
         if word.is_empty() { return; }
         let scale = match tag {
@@ -115,13 +437,13 @@ fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<B
             HtmlTagType::Heading2 => 1,
             _ => 1,
         };
-        let word_w = MinGuiCompositor::text_width(word, scale);
+        let word_w = MinGuiCompositor::text_width(word, scale) + if is_button { 16 } else { 0 };
         let space_w = MinGuiCompositor::text_width(" ", scale);
         let indent = tag_indent(tag);
         let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
 
         if *line_w > 0 && *line_w + space_w + word_w > eff_wrap {
-            flush_line(lines, spans, line_w, tag, max);
+            flush_line(lines, spans, line_w, tag, align, max);
         }
 
         if spans.is_empty() {
@@ -129,44 +451,57 @@ fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<B
             spans.push(TextSpan {
                 text: String::from(word),
                 color,
+                bg_color,
                 is_link,
                 link_url: String::from(link_url),
+                is_button,
+                onclick: String::from(onclick),
+                elem_id: String::from(elem_id),
             });
         } else {
             *line_w += space_w + word_w;
-            // Append with leading space
             if let Some(last) = spans.last_mut() {
-                if last.color == color && last.is_link == is_link && last.link_url == link_url {
+                if !is_button && last.color == color && last.bg_color == bg_color && last.is_link == is_link && last.link_url == link_url && !last.is_button && last.elem_id == elem_id {
                     last.text.push(' ');
                     last.text.push_str(word);
                     return;
                 }
             }
-            let mut s = String::from(" ");
+            let mut s = String::from(if is_button { "" } else { " " });
             s.push_str(word);
             spans.push(TextSpan {
                 text: s,
                 color,
+                bg_color,
                 is_link,
                 link_url: String::from(link_url),
+                is_button,
+                onclick: String::from(onclick),
+                elem_id: String::from(elem_id),
             });
         }
     };
 
-    let mut p = 0usize;
+    p = 0;
     let mut word_buf = String::new();
+    let mut hidden_until_close: Option<Vec<u8>> = None;
 
     let flush_word = |lines: &mut Vec<BrowserLine>,
-                          spans: &mut Vec<TextSpan>,
-                          line_w: &mut usize,
-                          buf: &mut String,
-                          color: u32,
-                          is_link: bool,
-                          link_url: &str,
-                          tag: HtmlTagType,
-                          max: usize| {
+                      spans: &mut Vec<TextSpan>,
+                      line_w: &mut usize,
+                      buf: &mut String,
+                      color: u32,
+                      bg: Option<u32>,
+                      is_link: bool,
+                      link_url: &str,
+                      is_btn: bool,
+                      onclick: &str,
+                      elem_id: &str,
+                      tag: HtmlTagType,
+                      align: TextAlign,
+                      max: usize| {
         if !buf.is_empty() {
-            add_word(lines, spans, line_w, buf, color, is_link, link_url, tag, max);
+            add_word(lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, onclick, elem_id, tag, align, max);
             buf.clear();
         }
     };
@@ -177,187 +512,135 @@ fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<B
             let mut end = start;
             while end < body.len() && body[end] != b'>' { end += 1; }
             if end == body.len() { break; }
-            let mut tag = &body[start..end];
-            let closing = tag.first() == Some(&b'/');
-            if closing { tag = &tag[1..]; }
-            let name_end = tag.iter().position(|b| b.is_ascii_whitespace() || *b == b'/').unwrap_or(tag.len());
-            let name = &tag[..name_end];
+            let mut tag_content = &body[start..end];
+            let closing = tag_content.first() == Some(&b'/');
+            if closing { tag_content = &tag_content[1..]; }
+            let name_end = tag_content.iter().position(|b| b.is_ascii_whitespace() || *b == b'/').unwrap_or(tag_content.len());
+            let name = &tag_content[..name_end];
 
-            if let Some(h) = hidden {
-                if closing && eq_ascii(name, h) { hidden = None; }
+            if let Some(ref h) = hidden_until_close {
+                if closing && eq_ascii(name, h) {
+                    hidden_until_close = None;
+                }
                 p = end + 1;
                 continue;
             }
             if !closing && (eq_ascii(name, b"script") || eq_ascii(name, b"style")) {
-                hidden = Some(name);
+                hidden_until_close = Some(name.to_vec());
                 p = end + 1;
                 continue;
             }
 
-            // Word boundary at tag
             let link_target = active_link.as_deref().unwrap_or("");
             let is_link = active_link.is_some();
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, is_link, link_target, cur_line_tag, max_lines);
+            let onclick_str = active_onclick.as_deref().unwrap_or("");
+            let elem_id_str = active_id.as_deref().unwrap_or("");
+            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
 
-            if !closing && eq_ascii(name, b"a") {
-                // Parse href
-                let attrs = &tag[name_end..];
-                let mut i = 0;
-                let mut found_href = None;
-                while i < attrs.len() {
-                    while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') { i += 1; }
-                    let k = i;
-                    while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') { i += 1; }
-                    let key = &attrs[k..i];
-                    while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-                    if i < attrs.len() && attrs[i] == b'=' {
-                        i += 1;
-                        while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-                        let quote = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
-                            let q = attrs[i];
-                            i += 1;
-                            q
-                        } else { 0 };
-                        let v = i;
-                        while i < attrs.len() && ((quote != 0 && attrs[i] != quote) || (quote == 0 && !attrs[i].is_ascii_whitespace())) {
-                            i += 1;
-                        }
-                        if eq_ascii(key, b"href") {
-                            found_href = core::str::from_utf8(&attrs[v..i]).ok();
-                        }
-                        if quote != 0 && i < attrs.len() { i += 1; }
-                    } else if i == k {
-                        i += 1;
-                    }
-                }
-                if let Some(href) = found_href {
-                    active_link = Some(String::from(href));
-                }
-            } else if closing && eq_ascii(name, b"a") {
-                active_link = None;
-            }
+            let tag_name_str = core::str::from_utf8(name).unwrap_or("");
+            let attrs = &tag_content[name_end..];
+            let class_attr = extract_attr(attrs, b"class");
+            let id_attr = extract_attr(attrs, b"id");
+            let style_attr = extract_attr(attrs, b"style");
+            let href_attr = extract_attr(attrs, b"href");
+            let onclick_attr = extract_attr(attrs, b"onclick");
 
-            // Parse style color
-            if !closing && name_end < tag.len() {
-                let attrs = &tag[name_end..];
-                let mut i = 0;
-                while i < attrs.len() {
-                    while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') { i += 1; }
-                    let k = i;
-                    while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') { i += 1; }
-                    let key = &attrs[k..i];
-                    while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-                    if i < attrs.len() && attrs[i] == b'=' {
-                        i += 1;
-                        while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-                        let quote = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
-                            let q = attrs[i];
-                            i += 1;
-                            q
-                        } else { 0 };
-                        let v = i;
-                        while i < attrs.len() && ((quote != 0 && attrs[i] != quote) || (quote == 0 && !attrs[i].is_ascii_whitespace())) {
-                            i += 1;
-                        }
-                        if eq_ascii(key, b"style") {
-                            let style = &attrs[v..i];
-                            for rule in style.split(|b| *b == b';') {
-                                if let Some(colon) = rule.iter().position(|b| *b == b':') {
-                                    if eq_ascii(rule[..colon].trim_ascii(), b"color") {
-                                        if let Some(c) = html_color(&rule[colon + 1..]) {
-                                            current_color = c;
-                                        }
-                                    }
-                                }
-                            }
-                        } else if eq_ascii(key, b"color") {
-                            if let Some(c) = html_color(&attrs[v..i]) {
-                                current_color = c;
-                            }
-                        }
-                        if quote != 0 && i < attrs.len() { i += 1; }
-                    } else if i == k {
-                        i += 1;
-                    }
-                }
-            }
+            let matched = match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
 
-            // Heading & list block detection
             if !closing {
-                if eq_ascii(name, b"h1") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                if let Some(c) = matched.color { current_color = c; }
+                if let Some(bg) = matched.bg_color { current_bg = Some(bg); }
+                if matched.align != TextAlign::Left {
+                    cur_line_align = matched.align;
+                }
+
+                if id_attr.is_some() {
+                    active_id = id_attr.map(String::from);
+                }
+
+                if eq_ascii(name, b"a") {
+                    if let Some(href) = href_attr {
+                        active_link = Some(String::from(href));
+                    }
+                    if let Some(oc) = onclick_attr {
+                        active_onclick = Some(String::from(oc));
+                    }
+                } else if eq_ascii(name, b"button") {
+                    active_is_button = true;
+                    if let Some(oc) = onclick_attr {
+                        active_onclick = Some(String::from(oc));
+                    }
+                    if current_bg.is_none() {
+                        current_bg = Some(0xE0E0E8);
+                    }
+                } else if eq_ascii(name, b"h1") {
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Heading1;
-                    if current_color == Color::TEXT_MAIN { current_color = Color::ACCENT_PINK; }
+                    if matched.color.is_none() { current_color = Color::ACCENT_PINK; }
                 } else if eq_ascii(name, b"h2") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Heading2;
-                    if current_color == Color::TEXT_MAIN { current_color = Color::ACCENT_BLUE; }
+                    if matched.color.is_none() { current_color = Color::ACCENT_BLUE; }
                 } else if eq_ascii(name, b"h3") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Heading3;
-                    if current_color == Color::TEXT_MAIN { current_color = Color::ACCENT_GREEN; }
+                    if matched.color.is_none() { current_color = Color::ACCENT_GREEN; }
                 } else if eq_ascii(name, b"li") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::ListItem;
-                } else if matches!(name, b"p" | b"div" | b"br" | b"hr" | b"tr" | b"section" | b"article" | b"ul" | b"ol") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                } else if matches!(name, b"p" | b"div" | b"br" | b"hr" | b"tr" | b"section" | b"article" | b"ul" | b"ol" | b"center") {
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Normal;
+                    if eq_ascii(name, b"center") {
+                        cur_line_align = TextAlign::Center;
+                    }
                 }
             } else {
-                if matches!(name, b"h1" | b"h2" | b"h3" | b"li" | b"p" | b"div" | b"ul" | b"ol") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+                if eq_ascii(name, b"a") {
+                    active_link = None;
+                    active_onclick = None;
+                } else if eq_ascii(name, b"button") {
+                    active_is_button = false;
+                    active_onclick = None;
+                    current_bg = None;
+                } else if eq_ascii(name, b"center") {
+                    cur_line_align = TextAlign::Left;
+                } else if matches!(name, b"h1" | b"h2" | b"h3" | b"li" | b"p" | b"div" | b"ul" | b"ol") {
+                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Normal;
                     current_color = Color::TEXT_MAIN;
+                    current_bg = None;
+                    cur_line_align = TextAlign::Left;
                 }
+                active_id = None;
             }
 
             p = end + 1;
             continue;
         }
 
-        if body[p] == b'&' {
-            if let Some(semi) = body[p..].iter().take(12).position(|b| *b == b';') {
-                let entity = &body[p + 1..p + semi];
-                let decoded = match entity {
-                    b"amp" => Some('&'),
-                    b"lt" => Some('<'),
-                    b"gt" => Some('>'),
-                    b"quot" => Some('"'),
-                    b"apos" => Some('\''),
-                    b"nbsp" => Some(' '),
-                    _ => None,
-                };
-                if let Some(ch) = decoded {
-                    if ch == ' ' {
-                        let link_target = active_link.as_deref().unwrap_or("");
-                        let is_link = active_link.is_some();
-                        flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, is_link, link_target, cur_line_tag, max_lines);
-                    } else {
-                        word_buf.push(ch);
-                    }
-                    p += semi + 1;
-                    continue;
-                }
-            }
-        }
+        let (ch, clen) = decode_html_char(body, p);
+        p += clen;
 
-        let b = body[p];
-        p += 1;
-        if b == b'\r' { continue; }
-        if b == b'\n' || b == b'\t' || b == b' ' {
+        if ch == '\r' { continue; }
+        if ch == '\n' || ch == '\t' || ch == ' ' {
             let link_target = active_link.as_deref().unwrap_or("");
             let is_link = active_link.is_some();
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, is_link, link_target, cur_line_tag, max_lines);
+            let onclick_str = active_onclick.as_deref().unwrap_or("");
+            let elem_id_str = active_id.as_deref().unwrap_or("");
+            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
             continue;
         }
-        if b < 0x20 { continue; }
-        word_buf.push(b as char);
+        if (ch as u32) < 0x20 { continue; }
+        word_buf.push(ch);
     }
 
     let link_target = active_link.as_deref().unwrap_or("");
     let is_link = active_link.is_some();
-    flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, is_link, link_target, cur_line_tag, max_lines);
-    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, max_lines);
+    let onclick_str = active_onclick.as_deref().unwrap_or("");
+    let elem_id_str = active_id.as_deref().unwrap_or("");
+    flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
+    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
 }
 
 pub struct BrowserApp {
@@ -403,6 +686,10 @@ pub struct BrowserApp {
     pub response_len: usize,
     pub tls_session: Option<crate::drivers::tls::TlsSession>,
     pub tls_app_data: Vec<u8>,
+    pub page_bg_color: Option<u32>,
+    pub js_alert: Option<String>,
+    pub js_vars: Vec<(String, String)>,
+    pub js_functions: Vec<(String, String)>,
 }
 
 impl BrowserApp {
@@ -426,6 +713,10 @@ impl BrowserApp {
             response_data: Vec::new(), response_len: 0,
             tls_session: None,
             tls_app_data: Vec::new(),
+            page_bg_color: None,
+            js_alert: None,
+            js_vars: Vec::new(),
+            js_functions: Vec::new(),
         };
         app.set_url(b"minos://help");
         app
@@ -450,13 +741,172 @@ impl BrowserApp {
     }
 
     pub fn click_link_at(&mut self, mx: usize, my: usize) -> Option<String> {
+        let mut clicked_url = None;
+        let mut clicked_js = None;
         for link in &self.rendered_links {
             let (rx, ry, rw, rh) = link.rect;
             if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
-                return Some(link.url.clone());
+                if !link.onclick.is_empty() {
+                    clicked_js = Some(link.onclick.clone());
+                } else if !link.url.is_empty() {
+                    clicked_url = Some(link.url.clone());
+                }
+                break;
             }
         }
-        None
+        if let Some(js_code) = clicked_js {
+            self.execute_js(&js_code);
+            return None;
+        }
+        clicked_url
+    }
+
+    pub fn execute_js(&mut self, code: &str) {
+        for stmt in code.split(';') {
+            let stmt = stmt.trim();
+            if !stmt.is_empty() {
+                self.execute_js_statement(stmt);
+            }
+        }
+    }
+
+    fn eval_js_expr(&self, expr: &str) -> String {
+        let expr = expr.trim();
+        if (expr.starts_with('\'') && expr.ends_with('\'') && expr.len() >= 2)
+            || (expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2) {
+            return String::from(&expr[1..expr.len() - 1]);
+        }
+        for (var, val) in &self.js_vars {
+            if var == expr {
+                return val.clone();
+            }
+        }
+        if expr.contains('+') {
+            let mut result = String::new();
+            for part in expr.split('+') {
+                result.push_str(&self.eval_js_expr(part));
+            }
+            return result;
+        }
+        String::from(expr)
+    }
+
+    fn execute_js_statement(&mut self, stmt: &str) {
+        let stmt = stmt.trim();
+        if stmt.starts_with("alert(") && stmt.ends_with(')') {
+            let inner = &stmt[6..stmt.len() - 1];
+            let val = self.eval_js_expr(inner);
+            self.js_alert = Some(val);
+        } else if stmt.starts_with("console.log(") && stmt.ends_with(')') {
+            // No-op
+        } else if stmt.starts_with("document.title =") || stmt.starts_with("document.title=") {
+            let val_part = if stmt.starts_with("document.title =") { &stmt[16..] } else { &stmt[15..] };
+            let val = self.eval_js_expr(val_part);
+            let vb = val.as_bytes();
+            self.page_title_len = vb.len().min(64);
+            self.page_title[..self.page_title_len].copy_from_slice(&vb[..self.page_title_len]);
+        } else if stmt.starts_with("document.body.style.backgroundColor =") || stmt.starts_with("document.body.style.backgroundColor=")
+            || stmt.starts_with("document.body.style.background =") || stmt.starts_with("document.body.style.background=") {
+            let val_part = stmt.split('=').nth(1).unwrap_or("");
+            let val = self.eval_js_expr(val_part);
+            if let Some(c) = html_color(val.as_bytes()) {
+                self.page_bg_color = Some(c);
+            }
+        } else if stmt.starts_with("document.getElementById(") {
+            if let Some(close_paren) = stmt.find(')') {
+                let id_expr = &stmt[24..close_paren];
+                let id = self.eval_js_expr(id_expr);
+                let rest = stmt[close_paren + 1..].trim();
+                if rest.starts_with(".innerText =") || rest.starts_with(".innerText=")
+                    || rest.starts_with(".innerHTML =") || rest.starts_with(".innerHTML=")
+                    || rest.starts_with(".textContent =") || rest.starts_with(".textContent=") {
+                    let val_part = rest.split('=').nth(1).unwrap_or("");
+                    let val = self.eval_js_expr(val_part);
+                    for line in &mut self.page_lines {
+                        for span in &mut line.spans {
+                            if span.elem_id == id {
+                                span.text = val.clone();
+                            }
+                        }
+                    }
+                } else if rest.starts_with(".style.color =") || rest.starts_with(".style.color=") {
+                    let val_part = rest.split('=').nth(1).unwrap_or("");
+                    let val = self.eval_js_expr(val_part);
+                    if let Some(c) = html_color(val.as_bytes()) {
+                        for line in &mut self.page_lines {
+                            for span in &mut line.spans {
+                                if span.elem_id == id {
+                                    span.color = c;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if stmt.starts_with("var ") || stmt.starts_with("let ") {
+            let decl = &stmt[4..];
+            if let Some((var, val_part)) = decl.split_once('=') {
+                let var = var.trim();
+                let val = self.eval_js_expr(val_part);
+                if let Some(existing) = self.js_vars.iter_mut().find(|(k, _)| k == var) {
+                    existing.1 = val;
+                } else {
+                    self.js_vars.push((String::from(var), val));
+                }
+            }
+        } else if let Some((var, val_part)) = stmt.split_once('=') {
+            let var = var.trim();
+            if !var.contains(' ') && !var.contains('.') {
+                let val = self.eval_js_expr(val_part);
+                if let Some(existing) = self.js_vars.iter_mut().find(|(k, _)| k == var) {
+                    existing.1 = val;
+                } else {
+                    self.js_vars.push((String::from(var), val));
+                }
+            }
+        }
+    }
+
+    pub fn load_html(&mut self, body: &[u8], wrap_width_px: usize, max_lines: usize) {
+        self.page_lines.clear();
+        self.rendered_links.clear();
+        self.page_bg_color = None;
+        self.js_alert = None;
+        self.js_vars.clear();
+
+        // Preprocess: Extract <script> tags and handle document.write()
+        let mut preprocessed_html = Vec::with_capacity(body.len());
+        let mut p = 0;
+        while p < body.len() {
+            if body[p] == b'<' && p + 7 <= body.len() && eq_ascii(&body[p..p + 7], b"<script") {
+                let start = p + 7;
+                let mut close_tag = start;
+                while close_tag < body.len() && body[close_tag] != b'>' { close_tag += 1; }
+                if close_tag < body.len() {
+                    close_tag += 1;
+                    let script_start = close_tag;
+                    if let Some(pos) = find_bytes(&body[script_start..], b"</script>") {
+                        let script_code = decode_bytes_to_string(&body[script_start..script_start + pos]);
+                        for stmt in script_code.split(';') {
+                            let stmt = stmt.trim();
+                            if stmt.starts_with("document.write(") && stmt.ends_with(')') {
+                                let inner = &stmt[15..stmt.len() - 1];
+                                let written = self.eval_js_expr(inner);
+                                preprocessed_html.extend_from_slice(written.as_bytes());
+                            } else if !stmt.is_empty() {
+                                self.execute_js_statement(stmt);
+                            }
+                        }
+                        p = script_start + pos + 9;
+                        continue;
+                    }
+                }
+            }
+            preprocessed_html.push(body[p]);
+            p += 1;
+        }
+
+        render_html_to_lines(&preprocessed_html, wrap_width_px, &mut self.page_lines, max_lines);
     }
 
     pub fn focus_next_control(&mut self) {
@@ -552,11 +1002,16 @@ impl BrowserApp {
                 spans: alloc::vec![TextSpan {
                     text: String::from(line),
                     color: Color::TEXT_MAIN,
+                    bg_color: None,
                     is_link: false,
                     link_url: String::new(),
+                    is_button: false,
+                    onclick: String::new(),
+                    elem_id: String::new(),
                 }],
                 tag: HtmlTagType::Normal,
                 indent: 0,
+                align: TextAlign::Left,
             });
         }
     }
@@ -996,6 +1451,17 @@ impl BrowserApp {
                     self.status = crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive.");
                 }
             }
+            "minos://demo" | "minos://tr" => {
+                self.active_tab = 3;
+                self.page_loaded = true;
+                let title = "minOs Türkçe & Web Motoru Testi";
+                let tb = title.as_bytes();
+                self.page_title_len = tb.len().min(64);
+                self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
+                let demo_html = b"<html><head><style>h1 { color: #D03030; text-align: center; } .sub { color: #188040; text-align: center; } .btn { color: #FFFFFF; background-color: #2050C0; }</style></head><body><h1>minOs Web & TR Destegi</h1><p class='sub'>Turkce Karakterler: \xc3\xa7 \xc4\x9f \xc4\xb1 \xc3\xb6 \xc5\x9f \xc3\xbc - \xc3\x87 \xc4\x9e \xc4\xb0 \xc3\x96 \xc5\x9e \xc3\x9c</p><p id='counter_msg' style='color: #2050C0;'>Etkilesimli JavaScript Testi:</p><p><button class='btn' onclick=\"document.getElementById('counter_msg').innerText = 'Dugmeye tiklandi! JS calisiyor.'; alert('minOs JS Uyari: Dugmeye basildi!');\">Tikla (JS Test)</button></p><p><button onclick=\"document.getElementById('counter_msg').style.color = '#D03030';\">Kirmizi Yap</button> <button onclick=\"document.getElementById('counter_msg').style.color = '#188040';\">Yesil Yap</button></p><hr><script>document.write('<p style=\"color: #D0A020;\">Bu satir JavaScript document.write() ile olusturuldu!</p>');</script></body></html>";
+                self.load_html(demo_html, 600, 256);
+                self.status = crate::gui::ui_text("Türkçe & CSS & JS test sayfası yüklendi.", "Turkish & CSS & JS demo page loaded.");
+            }
             _ => {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Desteklenen: http:// ve minos:// adresleri.", "Supported schemes: http:// and minos://.");
@@ -1307,11 +1773,16 @@ impl BrowserApp {
                             spans: alloc::vec![TextSpan {
                                 text: String::from(status_str),
                                 color: Color::ACCENT_BLUE,
+                                bg_color: None,
                                 is_link: false,
                                 link_url: String::new(),
+                                is_button: false,
+                                onclick: String::new(),
+                                elem_id: String::new(),
                             }],
                             tag: HtmlTagType::Heading2,
                             indent: 0,
+                            align: TextAlign::Left,
                         });
 
                         let body_start = end + 4;
@@ -1338,18 +1809,23 @@ impl BrowserApp {
                         }
 
                         if body_bytes.iter().any(|b| *b == b'<') {
-                            render_html_to_lines(&body_bytes, 600, &mut self.page_lines, 256);
+                            self.load_html(&body_bytes, 600, 256);
                         } else {
                             for line in split_http_lines(&body_bytes).take(256) {
                                 self.page_lines.push(BrowserLine {
                                     spans: alloc::vec![TextSpan {
                                         text: String::from(line),
                                         color: Color::TEXT_MAIN,
+                                        bg_color: None,
                                         is_link: false,
                                         link_url: String::new(),
+                                        is_button: false,
+                                        onclick: String::new(),
+                                        elem_id: String::new(),
                                     }],
                                     tag: HtmlTagType::Normal,
                                     indent: 0,
+                                    align: TextAlign::Left,
                                 });
                             }
                         }
@@ -1477,15 +1953,22 @@ impl BrowserApp {
                 let title_str = core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or("Web Document");
                 MinGuiCompositor::draw_string(fb, page_x + 16, page_y + 14, title_str, Color::ACCENT_GREEN);
 
-                // Beyaz/Açık HTML Kağıt Alanı
+                // HTML Kağıt Alanı (CSS body bg_color desteğiyle)
                 let doc_x = page_x + 8;
                 let doc_y = page_y + 38;
                 let doc_w = page_w.saturating_sub(16);
                 let doc_h = page_h.saturating_sub(46);
-                fb.draw_rect(doc_x, doc_y, doc_w, doc_h, Color::WINDOW_BG);
+                let paper_bg = self.page_bg_color.unwrap_or(Color::WINDOW_BG);
+                fb.draw_rect(doc_x, doc_y, doc_w, doc_h, paper_bg);
 
                 let doc_clip = (doc_x, doc_y, doc_w, doc_h);
                 let scroll_y = scroll.y;
+
+                // JS alert kutusu bildirimi
+                if let Some(ref alert_msg) = self.js_alert {
+                    fb.draw_rect(doc_x + 10, doc_y + 6, doc_w.saturating_sub(20), 24, Color::ACCENT_YELLOW);
+                    MinGuiCompositor::draw_string_clipped(fb, doc_x + 16, doc_y + 10, alert_msg, Color::BLACK, doc_clip);
+                }
 
                 // Clear rendered links for hit testing
                 let links_ptr = &self.rendered_links as *const Vec<RenderedLink> as *mut Vec<RenderedLink>;
@@ -1493,7 +1976,7 @@ impl BrowserApp {
                     (*links_ptr).clear();
                 }
 
-                let mut cur_line_y = doc_y + 12;
+                let mut cur_line_y = doc_y + 12 + if self.js_alert.is_some() { 28 } else { 0 };
                 for line in &self.page_lines {
                     let line_h = match line.tag {
                         HtmlTagType::Heading1 => 26,
@@ -1511,7 +1994,20 @@ impl BrowserApp {
                     let draw_y = cur_line_y.saturating_sub(scroll_y);
 
                     if visible {
-                        let mut cur_x = doc_x + 12 + line.indent;
+                        let total_line_w: usize = line.spans.iter().map(|s| {
+                            MinGuiCompositor::text_width(&s.text, scale) + if s.is_button { 16 } else { 0 }
+                        }).sum();
+
+                        let mut cur_x = match line.align {
+                            TextAlign::Center => {
+                                let avail = doc_w.saturating_sub(24);
+                                doc_x + 12 + (avail.saturating_sub(total_line_w) / 2)
+                            }
+                            TextAlign::Right => {
+                                doc_x + doc_w.saturating_sub(12 + total_line_w)
+                            }
+                            TextAlign::Left => doc_x + 12 + line.indent,
+                        };
 
                         // Draw bullet for list items
                         if line.tag == HtmlTagType::ListItem {
@@ -1523,22 +2019,45 @@ impl BrowserApp {
                         }
 
                         for span in &line.spans {
-                            let span_w = MinGuiCompositor::text_width(&span.text, scale);
-                            let text_color = if span.is_link { Color::ACCENT_BLUE } else { span.color };
+                            let raw_text_w = MinGuiCompositor::text_width(&span.text, scale);
+                            let span_w = raw_text_w + if span.is_button { 16 } else { 0 };
+                            let text_color = if span.is_link {
+                                Color::ACCENT_BLUE
+                            } else {
+                                span.color
+                            };
 
-                            MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
-
-                            if span.is_link {
-                                let underline_y = draw_y + line_h.saturating_sub(3);
-                                if underline_y >= doc_y && underline_y < doc_y + doc_h {
-                                    let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                    fb.draw_rect(cur_x, underline_y, ul_w, 1, Color::ACCENT_BLUE);
-                                }
+                            if span.is_button {
+                                let btn_bg = span.bg_color.unwrap_or(Color::TITLE_BAR);
+                                fb.draw_rect(cur_x, draw_y, span_w, line_h, btn_bg);
+                                fb.draw_rect_outline(cur_x, draw_y, span_w, line_h, Color::BORDER);
+                                MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 8, draw_y + 2, &span.text, span.color, scale, doc_clip);
                                 unsafe {
                                     (*links_ptr).push(RenderedLink {
                                         rect: (cur_x, draw_y, span_w, line_h),
                                         url: span.link_url.clone(),
+                                        onclick: span.onclick.clone(),
                                     });
+                                }
+                            } else {
+                                if let Some(bg) = span.bg_color {
+                                    fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
+                                }
+                                MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
+
+                                if span.is_link || !span.onclick.is_empty() {
+                                    let underline_y = draw_y + line_h.saturating_sub(3);
+                                    if underline_y >= doc_y && underline_y < doc_y + doc_h {
+                                        let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        fb.draw_rect(cur_x, underline_y, ul_w, 1, Color::ACCENT_BLUE);
+                                    }
+                                    unsafe {
+                                        (*links_ptr).push(RenderedLink {
+                                            rect: (cur_x, draw_y, span_w, line_h),
+                                            url: span.link_url.clone(),
+                                            onclick: span.onclick.clone(),
+                                        });
+                                    }
                                 }
                             }
                             cur_x += span_w;

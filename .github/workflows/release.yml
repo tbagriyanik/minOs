@@ -27,7 +27,11 @@ jobs:
       - name: Install ISO Creation Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xorriso mtools
+          sudo apt-get install -y xorriso mtools build-essential git
+          # Limine binary utility (for limine bios-install)
+          git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1 /tmp/limine
+          make -C /tmp/limine limine
+          sudo cp /tmp/limine/limine /usr/local/bin/
 
       - name: Build minOs Kernel (Release)
         run: cargo build --release
@@ -35,21 +39,25 @@ jobs:
       - name: Create Bootable ISO (using xorriso & Limine)
         run: |
           mkdir -p target/iso_root/boot/limine
-          mkdir -p target/iso_root/EFI/BOOT
           
-          cp boot/limine.cfg target/iso_root/boot/limine/limine.cfg 2>/dev/null || true
-          cp boot/limine.cfg target/iso_root/limine.cfg 2>/dev/null || true
+          # Copy limine configuration and boot background
+          cp boot/limine.conf target/iso_root/boot/limine/limine.conf 2>/dev/null || true
+          cp boot/cat_small.png target/iso_root/boot/cat_small.png 2>/dev/null || true
+          
+          # Copy Limine bootloader binaries
           cp boot/limine/limine-bios-cd.bin target/iso_root/boot/limine/ 2>/dev/null || true
-          cp boot/limine/limine-uefi-cd.bin target/iso_root/boot/limine/ 2>/dev/null || true
           cp boot/limine/limine-bios.sys target/iso_root/boot/limine/ 2>/dev/null || true
-          cp boot/limine/limine-bios.sys target/iso_root/limine-bios.sys 2>/dev/null || true
-          cp boot/EFI/BOOT/BOOTX64.EFI target/iso_root/EFI/BOOT/ 2>/dev/null || true
           
+          # Copy compiled kernel binary
           cp target/x86_64-minos/release/minos-kernel target/iso_root/boot/minos-kernel
           
+          # Generate ISO with xorriso
           xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
             -no-emul-boot -boot-load-size 4 -boot-info-table \
             -o minos.iso target/iso_root
+            
+          # Enroll BIOS boot sectors on ISO using Limine
+          limine bios-install minos.iso
             
           mkdir -p target/release
           cp minos.iso target/release/minos.iso

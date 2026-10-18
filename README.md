@@ -454,11 +454,13 @@ minos/
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
 │   ├── apps/                # 14 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
+│   ├── desktop/             # Masaüstü oturumu (session.rs: DesktopState kurulumu + ana olay döngüsü) ve yardımcılar
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu ve ELF yükleyici
 │   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
 │   │                        #   Ext2 read-write (ext2.rs), ext4/exFAT biçimlendirme (ext4.rs, exfat.rs)
 │   │                        #   + MBR/GPT bölümleme (part.rs)
-│   └── main.rs              # Çekirdek giriş noktası (_start), Limine istekleri ve ana olay döngüsü
+│   └── main.rs              # Çekirdek giriş noktası (_start): Limine istekleri, donanım kurulumu ve
+│                            #   DesktopState oluşturup masaüstü oturumunu (desktop/session.rs) başlatır
 ├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
 ├── build_iso.ps1            # El Torito yamalı hibrit ISO oluşturucu
@@ -474,9 +476,9 @@ minos/
 > Son güncelleme: 18 Ekim 2026 (v1.6.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 62 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 34.303 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~28.000 satır |
+| **Toplam Rust Kaynak Dosyası** | 91 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 37.929 satır |
+| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~35.000 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |

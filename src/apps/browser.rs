@@ -446,6 +446,37 @@ fn history_forward() -> Option<String> {
     history_copy(target)
 }
 
+/// Tüm tarayıcı geçmişini temizler.
+pub fn history_clear() {
+    HISTORY_COUNT.store(0, Ordering::Release);
+    HISTORY_POS.store(0, Ordering::Release);
+    for i in 0..HISTORY_MAX {
+        HISTORY_LEN[i].store(0, Ordering::Release);
+    }
+}
+
+/// Belirtilen indeksteki geçmiş kaydını siler ve kalanları kaydırır.
+pub fn history_remove(index: usize) -> bool {
+    let count = HISTORY_COUNT.load(Ordering::Acquire).min(HISTORY_MAX);
+    if index >= count || count == 0 { return false; }
+    for i in index + 1..count {
+        for j in 0..HISTORY_URL_CAP {
+            HISTORY[i - 1][j].store(HISTORY[i][j].load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        HISTORY_LEN[i - 1].store(HISTORY_LEN[i].load(Ordering::Relaxed), Ordering::Relaxed);
+    }
+    HISTORY_LEN[count - 1].store(0, Ordering::Relaxed);
+    let new_count = count - 1;
+    HISTORY_COUNT.store(new_count, Ordering::Release);
+    let pos = HISTORY_POS.load(Ordering::Acquire);
+    if pos >= new_count && new_count > 0 {
+        HISTORY_POS.store(new_count - 1, Ordering::Release);
+    } else if new_count == 0 {
+        HISTORY_POS.store(0, Ordering::Release);
+    }
+    true
+}
+
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<BrowserLine>, max_lines: usize) {
     let mut current_color = Color::TEXT_MAIN;
@@ -1075,12 +1106,25 @@ impl BrowserApp {
         self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
 
         self.page_lines.clear();
-        self.page_lines.push(BrowserLine {
-            spans: alloc::vec![TextSpan {
-                text: String::from(crate::gui::ui_text(
-                    "Son açılan bağlantılar (en yeni en üstte):",
-                    "Recently opened links (newest first):",
-                )),
+        let count = history_count().min(HISTORY_MAX);
+
+        let mut header_spans = alloc::vec![TextSpan {
+            text: String::from(crate::gui::ui_text(
+                "Son açılan bağlantılar (en yeni en üstte):",
+                "Recently opened links (newest first):",
+            )),
+            color: Color::TEXT_MUTED,
+            bg_color: None,
+            is_link: false,
+            link_url: String::new(),
+            is_button: false,
+            onclick: String::new(),
+            elem_id: String::new(),
+        }];
+
+        if count > 0 {
+            header_spans.push(TextSpan {
+                text: String::from("   "),
                 color: Color::TEXT_MUTED,
                 bg_color: None,
                 is_link: false,
@@ -1088,13 +1132,26 @@ impl BrowserApp {
                 is_button: false,
                 onclick: String::new(),
                 elem_id: String::new(),
-            }],
+            });
+            header_spans.push(TextSpan {
+                text: String::from(crate::gui::ui_text("[ Tümünü Temizle ]", "[ Clear All History ]")),
+                color: Color::ACCENT_RED,
+                bg_color: Some(Color::TITLE_BAR),
+                is_link: true,
+                link_url: String::from("minos://history?action=clear"),
+                is_button: true,
+                onclick: String::new(),
+                elem_id: String::new(),
+            });
+        }
+
+        self.page_lines.push(BrowserLine {
+            spans: header_spans,
             tag: HtmlTagType::Heading3,
             indent: 0,
             align: TextAlign::Left,
         });
 
-        let count = history_count().min(HISTORY_MAX);
         if count == 0 {
             self.page_lines.push(BrowserLine {
                 spans: alloc::vec![TextSpan {
@@ -1113,21 +1170,68 @@ impl BrowserApp {
             });
             return;
         }
+
         for i in (0..count).rev() {
             if let Some(url) = history_copy(i) {
+                let mut remove_action = String::from("minos://history?action=delete&idx=");
+                let mut num_buf = [0u8; 16];
+                let num_str = {
+                    let mut n = i;
+                    let len = if n == 0 {
+                        num_buf[0] = b'0';
+                        1
+                    } else {
+                        let mut temp = [0u8; 16];
+                        let mut tlen = 0;
+                        while n > 0 {
+                            temp[tlen] = b'0' + (n % 10) as u8;
+                            n /= 10;
+                            tlen += 1;
+                        }
+                        for j in 0..tlen {
+                            num_buf[j] = temp[tlen - 1 - j];
+                        }
+                        tlen
+                    };
+                    core::str::from_utf8(&num_buf[..len]).unwrap_or("0")
+                };
+                remove_action.push_str(num_str);
+
                 self.page_lines.push(BrowserLine {
-                    spans: alloc::vec![TextSpan {
-                        text: url.clone(),
-                        color: Color::TEXT_MAIN,
-                        bg_color: None,
-                        is_link: true,
-                        link_url: url,
-                        is_button: false,
-                        onclick: String::new(),
-                        elem_id: String::new(),
-                    }],
+                    spans: alloc::vec![
+                        TextSpan {
+                            text: String::from("[X] "),
+                            color: Color::ACCENT_RED,
+                            bg_color: Some(Color::TITLE_BAR),
+                            is_link: true,
+                            link_url: remove_action,
+                            is_button: true,
+                            onclick: String::new(),
+                            elem_id: String::new(),
+                        },
+                        TextSpan {
+                            text: String::from(" "),
+                            color: Color::TEXT_MUTED,
+                            bg_color: None,
+                            is_link: false,
+                            link_url: String::new(),
+                            is_button: false,
+                            onclick: String::new(),
+                            elem_id: String::new(),
+                        },
+                        TextSpan {
+                            text: url.clone(),
+                            color: Color::TEXT_MAIN,
+                            bg_color: None,
+                            is_link: true,
+                            link_url: url,
+                            is_button: false,
+                            onclick: String::new(),
+                            elem_id: String::new(),
+                        }
+                    ],
                     tag: HtmlTagType::ListItem,
-                    indent: 18,
+                    indent: 8,
                     align: TextAlign::Left,
                 });
             }
@@ -1558,11 +1662,22 @@ impl BrowserApp {
                 if !suppress { history_push(value); }
                 self.status = crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened.");
             }
-            "minos://history" => {
+            s if s.starts_with("minos://history") => {
+                if s == "minos://history?action=clear" {
+                    history_clear();
+                    self.status = crate::gui::ui_text("Tüm geçmiş temizlendi.", "All history cleared.");
+                } else if let Some(idx_str) = s.strip_prefix("minos://history?action=delete&idx=") {
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        history_remove(idx);
+                        self.status = crate::gui::ui_text("Geçmiş kaydı silindi.", "History entry deleted.");
+                    }
+                } else {
+                    self.status = crate::gui::ui_text("Geçmiş sayfası açıldı.", "History page opened.");
+                }
                 self.active_tab = 3;
                 self.page_loaded = true;
+                self.set_url(b"minos://history");
                 self.build_history_page();
-                self.status = crate::gui::ui_text("Geçmiş sayfası açıldı.", "History page opened.");
             }
             "minos://net" | "net://status" => {
                 // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi

@@ -178,8 +178,10 @@ if ($oscdimg) {
 
     Write-Host "[BASARILI] $IsoName oscdimg & Limine ile boot edilebilir olusturuldu!" -ForegroundColor Green
 } elseif ($xorriso) {
-    if (Test-Path "$OutputDir\EFI\BOOT\BOOTX64.EFI") {
-        & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot EFI/BOOT/BOOTX64.EFI -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
+    if (Test-Path "$OutputDir\boot\limine\limine-uefi-cd.bin") {
+        # Limine'nin UEFI El Torito imajini kullan. BOOTX64.EFI dosyasi
+        # aramak yerine UEFI boot imaji dogrudan ISO'ya eklenmelidir.
+        & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
     } else {
         & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
     }
@@ -190,7 +192,12 @@ if ($oscdimg) {
 
     Write-Host "[BASARILI] $IsoName xorriso & Limine ile boot edilebilir olusturuldu!" -ForegroundColor Green
 } elseif ($mkisofs) {
-    & $mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
+    $mkisofsArgs = @('-b', 'boot/limine/limine-bios-cd.bin', '-no-emul-boot', '-boot-load-size', '4', '-boot-info-table')
+    if (Test-Path "$OutputDir\boot\limine\limine-uefi-cd.bin") {
+        $mkisofsArgs += @('--efi-boot', 'boot/limine/limine-uefi-cd.bin', '-efi-boot-part', '-efi-boot-image', '--protective-msdos-label')
+    }
+    $mkisofsArgs += @('-o', $IsoName, $OutputDir)
+    & $mkisofs @mkisofsArgs
     if (Test-Path "tools\limine.exe") {
         & "tools\limine.exe" bios-install $IsoName
     }

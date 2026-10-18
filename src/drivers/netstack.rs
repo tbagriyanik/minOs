@@ -9,10 +9,10 @@ use crate::drivers::e1000;
 // Adres tipleri
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MacAddress(pub [u8; 6]);
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Ipv4Address(pub [u8; 4]);
 
 impl Ipv4Address {
@@ -315,7 +315,18 @@ fn handle_arp(payload: &[u8]) {
 const ICMP_ECHO_REPLY: u8 = 0;
 const ICMP_ECHO_REQUEST: u8 = 8;
 pub static mut LAST_PING_REPLY_SRC: Option<Ipv4Address> = None;
+pub static mut LAST_PING_REPLY_SEQ: u16 = 0;
+pub static mut LAST_PING_REPLY_LEN: usize = 0;
+pub static mut LAST_PING_REPLY_TTL: u8 = 64;
 pub static mut LAST_ARP_REPLY_SRC: Option<Ipv4Address> = None;
+
+#[derive(Clone, Copy, Debug)]
+pub struct PingReply {
+    pub src: Ipv4Address,
+    pub seq: u16,
+    pub len: usize,
+    pub ttl: u8,
+}
 
 #[inline]
 pub fn clear_ping_reply() {
@@ -331,7 +342,22 @@ pub fn has_ping_reply() -> bool {
     }
 }
 
-fn handle_icmp(src_ip: Ipv4Address, payload: &[u8]) {
+pub fn take_ping_reply() -> Option<PingReply> {
+    unsafe {
+        let src = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_SRC));
+        if let Some(ip) = src {
+            let seq = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_SEQ));
+            let len = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_LEN));
+            let ttl = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_TTL));
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_PING_REPLY_SRC), None);
+            Some(PingReply { src: ip, seq, len, ttl })
+        } else {
+            None
+        }
+    }
+}
+
+fn handle_icmp(src_ip: Ipv4Address, ttl: u8, payload: &[u8]) {
     if payload.len() < 8 || checksum(payload) != 0 {
         return;
     }
@@ -349,8 +375,17 @@ fn handle_icmp(src_ip: Ipv4Address, payload: &[u8]) {
         reply[3] = (ck & 0xFF) as u8;
         send_ipv4(src_ip, IP_PROTO_ICMP, &reply[..n]);
     } else if icmp_type == ICMP_ECHO_REPLY {
+        let seq = if payload.len() >= 8 {
+            u16::from_be_bytes([payload[6], payload[7]])
+        } else {
+            0
+        };
+        let data_len = payload.len().saturating_sub(8);
         unsafe {
             LAST_PING_REPLY_SRC = Some(src_ip);
+            LAST_PING_REPLY_SEQ = seq;
+            LAST_PING_REPLY_LEN = data_len;
+            LAST_PING_REPLY_TTL = ttl;
         }
     }
 }
@@ -399,7 +434,7 @@ fn handle_ipv4(payload: &[u8]) {
     }
     let l4 = &payload[ihl..end];
     match proto {
-        IP_PROTO_ICMP => handle_icmp(src_ip, l4),
+        IP_PROTO_ICMP => handle_icmp(src_ip, payload[8], l4),
         IP_PROTO_UDP => {
             if l4.len() < 8 { return; }
             let udp_len = u16::from_be_bytes([l4[4], l4[5]]) as usize;
@@ -483,10 +518,10 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     {
         return;
     }
-    if src_port == DNS_PORT && src_ip == dns_server() && data.len() >= 12 {
+    if src_port == DNS_PORT && data.len() >= 12 {
         let id = u16::from_be_bytes([data[0], data[1]]);
         let flags = u16::from_be_bytes([data[2], data[3]]);
-        if id == 0x4D4D && flags & 0x8000 != 0 && flags & 0x000F == 0 {
+        if (id == 0x4D4D || id == 0x4D4E) && (flags & 0x8000 != 0) && (flags & 0x000F == 0) {
             unsafe {
                 if let Some(ip) = dns_parse_a(data, id) {
                     let n = data.len().min(DNS_REPLY_DATA.len());
@@ -560,22 +595,63 @@ fn handle_tcp(src_ip: Ipv4Address, payload: &[u8]) {
 fn dns_parse_a(data: &[u8], id: u16) -> Option<Ipv4Address> {
     if data.len() < 12 || u16::from_be_bytes([data[0], data[1]]) != id { return None; }
     let flags = u16::from_be_bytes([data[2], data[3]]);
-    if flags & 0x8000 == 0 || flags & 0x000F != 0 { return None; }
+    // Yanıt bayrağı (QR=1) ve RCODE == 0 (hata yok) olmalı
+    if (flags & 0x8000) == 0 || (flags & 0x000F) != 0 { return None; }
     let qd = u16::from_be_bytes([data[4], data[5]]) as usize;
     let an = u16::from_be_bytes([data[6], data[7]]) as usize;
     let mut p = 12usize;
+    // Soru bölümünü atla
     for _ in 0..qd {
-        loop { if p >= data.len() { return None; } let n=data[p] as usize; p+=1; if n==0 { break; } if n&0xC0==0 || p+n>data.len(){return None;} p+=n; }
-        if p+4>data.len(){return None;} p+=4;
+        loop {
+            if p >= data.len() { return None; }
+            let n = data[p] as usize;
+            p += 1;
+            if n == 0 { break; }
+            if (n & 0xC0) == 0xC0 {
+                // Sıkıştırılmış isim işaretçisi (2 bayt)
+                if p >= data.len() { return None; }
+                p += 1;
+                break;
+            } else if (n & 0xC0) != 0 {
+                return None; // Desteklenmeyen etiket formatı
+            }
+            if p + n > data.len() { return None; }
+            p += n;
+        }
+        if p + 4 > data.len() { return None; }
+        p += 4; // QTYPE (2) + QCLASS (2)
     }
+    // Yanıt bölümünü ayrıştır ve A kaydını ara
     for _ in 0..an {
-        if p+2>data.len(){return None;}
-        if data[p]&0xC0==0xC0 { p+=2; } else { loop { if p>=data.len(){return None;} let n=data[p] as usize; p+=1; if n==0{break;} if p+n>data.len(){return None;} p+=n; } }
-        if p+10>data.len(){return None;}
-        let typ=u16::from_be_bytes([data[p],data[p+1]]); let class=u16::from_be_bytes([data[p+2],data[p+3]]); let rdlen=u16::from_be_bytes([data[p+8],data[p+9]]) as usize; p+=10;
-        if p+rdlen>data.len(){return None;}
-        if typ==1 && class==1 && rdlen==4 { return Some(Ipv4Address([data[p],data[p+1],data[p+2],data[p+3]])); }
-        p+=rdlen;
+        if p >= data.len() { return None; }
+        // İsim alanını atla (pointer veya label listesi olabilir)
+        loop {
+            if p >= data.len() { return None; }
+            let n = data[p] as usize;
+            if (n & 0xC0) == 0xC0 {
+                if p + 2 > data.len() { return None; }
+                p += 2;
+                break;
+            } else if n == 0 {
+                p += 1;
+                break;
+            } else {
+                p += 1;
+                if p + n > data.len() { return None; }
+                p += n;
+            }
+        }
+        if p + 10 > data.len() { return None; }
+        let typ = u16::from_be_bytes([data[p], data[p+1]]);
+        let class = u16::from_be_bytes([data[p+2], data[p+3]]);
+        let rdlen = u16::from_be_bytes([data[p+8], data[p+9]]) as usize;
+        p += 10;
+        if p + rdlen > data.len() { return None; }
+        // TYPE A (1) ve CLASS IN (1) ve RDLENGTH 4
+        if typ == 1 && class == 1 && rdlen == 4 {
+            return Some(Ipv4Address([data[p], data[p+1], data[p+2], data[p+3]]));
+        }
+        p += rdlen;
     }
     None
 }
@@ -602,19 +678,38 @@ pub fn send_udp(dst: Ipv4Address, src_port: u16, dst_port: u16, data: &[u8]) -> 
     send_ipv4(dst, IP_PROTO_UDP, &packet[..len])
 }
 
-/// DNS A sorgusu oluşturup gönderir; yanıt `take_udp_data` ile okunabilir.
+/// DNS A sorgusu oluşturup gönderir; hem yapılandırılmış DNS sunucusuna hem de 1.1.1.1 yedek sunucuya iletir.
 pub fn dns_query(host: &str) -> bool {
     let bytes = host.as_bytes();
     if bytes.is_empty() || bytes.len() > 96 { return false; }
     let mut q = [0u8; 256];
     q[0..2].copy_from_slice(&0x4D4Du16.to_be_bytes());
-    q[2..4].copy_from_slice(&0x0100u16.to_be_bytes());
-    q[4..6].copy_from_slice(&1u16.to_be_bytes());
+    q[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Standard query, RD=1
+    q[4..6].copy_from_slice(&1u16.to_be_bytes()); // QDCOUNT = 1
     let mut p = 12; let mut start = 0;
-    for i in 0..=bytes.len() { if i == bytes.len() || bytes[i] == b'.' { let n=i-start; if n==0 || n>63 { return false; } q[p]=n as u8; p+=1; q[p..p+n].copy_from_slice(&bytes[start..i]); p+=n; start=i+1; } }
-    q[p]=0; p+=1; q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p+=2; q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p+=2;
-    unsafe { DNS_REPLY_LEN=0; DNS_REPLY_IP=[0;4]; }
-    send_udp(dns_server(), 49152, DNS_PORT, &q[..p])
+    for i in 0..=bytes.len() {
+        if i == bytes.len() || bytes[i] == b'.' {
+            let n = i - start;
+            if n == 0 || n > 63 { return false; }
+            q[p] = n as u8; p += 1;
+            q[p..p+n].copy_from_slice(&bytes[start..i]); p += n;
+            start = i + 1;
+        }
+    }
+    q[p] = 0; p += 1;
+    q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p += 2; // QTYPE: A
+    q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p += 2; // QCLASS: IN
+    unsafe { DNS_REPLY_LEN = 0; DNS_REPLY_IP = [0; 4]; }
+
+    let primary_dns = dns_server();
+    let sent_primary = send_udp(primary_dns, 49152, DNS_PORT, &q[..p]);
+
+    // Yedek olarak genel DNS (1.1.1.1) sunucusuna da ilet
+    let fallback_dns = Ipv4Address::new(1, 1, 1, 1);
+    if primary_dns != fallback_dns {
+        send_udp(fallback_dns, 49153, DNS_PORT, &q[..p]);
+    }
+    sent_primary
 }
 
 pub fn resolve_ipv4(host: &str) -> Option<Ipv4Address> {
@@ -688,20 +783,28 @@ pub fn http_get(dst: Ipv4Address, host: &str, path: &str, seq: u32, ack: u32) ->
 // Ping (ICMP Echo Request) — dış sunucuya test
 // ---------------------------------------------------------------------------
 
-pub fn ping(target: Ipv4Address) -> bool {
-    let mut icmp = [0u8; 8 + 4];
+pub fn ping_ex(target: Ipv4Address, seq: u16, payload_len: usize) -> bool {
+    let mut icmp = [0u8; 128];
+    let plen = payload_len.min(64);
+    let total = 8 + plen;
     icmp[0] = ICMP_ECHO_REQUEST;
     icmp[1] = 0;
     icmp[2] = 0;
     icmp[3] = 0;
     icmp[4] = 0x12;
     icmp[5] = 0x34;
-    icmp[6..8].copy_from_slice(&1u16.to_be_bytes()); // seq
-    icmp[8..12].copy_from_slice(&0xDEAD_BEEFu32.to_be_bytes()); // payload
-    let ck = checksum(&icmp);
+    icmp[6..8].copy_from_slice(&seq.to_be_bytes());
+    for i in 0..plen {
+        icmp[8 + i] = b'a' + ((i % 26) as u8);
+    }
+    let ck = checksum(&icmp[..total]);
     icmp[2] = (ck >> 8) as u8;
     icmp[3] = (ck & 0xFF) as u8;
-    send_ipv4(target, IP_PROTO_ICMP, &icmp)
+    send_ipv4(target, IP_PROTO_ICMP, &icmp[..total])
+}
+
+pub fn ping(target: Ipv4Address) -> bool {
+    ping_ex(target, 1, 32)
 }
 
 // ---------------------------------------------------------------------------

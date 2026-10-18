@@ -17,7 +17,7 @@ pub const LINE_MAX: usize = 256;
 
 const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
-    "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "curl",
+    "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
     "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd",
 ];
@@ -449,7 +449,7 @@ impl TerminalApp {
         match cmd {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df format echo clear mem ps exec", Color::TEXT_MAIN);
-                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns curl", Color::ACCENT_GREEN);
+                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget", Color::ACCENT_GREEN);
                 self.push_line("minpkg list|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
@@ -871,94 +871,354 @@ impl TerminalApp {
                 }, Color::ACCENT_YELLOW);
             }
             "ping" => {
-                match parse_ipv4(arg) {
-                    Some(_) if !crate::drivers::e1000::is_ready() => {
-                        self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                let mut sp = arg.split_whitespace();
+                let mut count = 4usize;
+                let mut target = "";
+                while let Some(tok) = sp.next() {
+                    if tok == "-c" || tok == "-n" {
+                        if let Some(cnt_str) = sp.next() {
+                            if let Ok(c) = cnt_str.parse::<usize>() {
+                                count = c.clamp(1, 10);
+                            }
+                        }
+                    } else if !tok.starts_with('-') && target.is_empty() {
+                        target = tok;
                     }
-                    Some(ip) => {
-                        let sent = crate::drivers::netstack::ping(crate::drivers::netstack::Ipv4Address(ip));
-                        let mut b = TextBuf::new();
-                        b.push_str(if sent {
-                            crate::gui::ui_text("Ping iletildi: ", "Ping tx: ")
-                        } else {
-                            crate::gui::ui_text("Ping başarısız: ", "Ping failed: ")
-                        });
-                        push_ipv4(&mut b, ip);
-                        self.push_line(b.as_str(), if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
-                        if sent { self.push_line(crate::gui::ui_text("Echo isteği gönderildi; yanıt bekleme henüz yok.", "Echo request transmitted; reply wait is unavailable."), Color::TEXT_MUTED); }
-                    }
-                    None => self.push_line(crate::gui::ui_text("Kullanım: ping <IPv4 adresi>", "Usage: ping <IPv4 address>"), Color::ACCENT_YELLOW),
                 }
-            }
-            "curl" => {
-                if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: curl http://<host>[:port][/yol]", "Usage: curl http://<host>[:port][/path]"), Color::ACCENT_YELLOW);
+
+                if target.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: ping [-c adet] <hedef_veya_ip>", "Usage: ping [-c count] <target_or_ip>"), Color::ACCENT_YELLOW);
                 } else if !crate::drivers::e1000::is_ready() {
                     self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
                 } else {
-                    self.push_line(crate::gui::ui_text("İndiriliyor...", "Downloading..."), Color::TEXT_MUTED);
-                    let mut buf = alloc::vec::Vec::new();
-                    buf.resize(24576, 0);
-                    match crate::drivers::http::http_get(arg, &mut buf) {
-                        Ok((status, hlen, total)) => {
-                            let mut b = TextBuf::new();
-                            b.push_str("HTTP ");
-                            b.push_usize(status as usize);
-                            b.push_str("  (");
-                            b.push_usize(total as usize);
-                            b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
-                            self.push_line(b.as_str(), if status < 400 { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
-                            // Gövdeyi metin satırları hâlinde dök (en fazla 60 satır).
-                            let body = &buf[hlen.min(total)..total];
-                            let mut line = TextBuf::new();
-                            let mut lines = 0usize;
-                            for &c in body {
-                                if c == b'\n' || line.len() >= 62 {
-                                    self.push_line(line.as_str(), Color::TEXT_MAIN);
-                                    line.clear();
-                                    lines += 1;
-                                    if lines >= 60 {
-                                        break;
-                                    }
-                                    if c == b'\n' {
-                                        continue;
-                                    }
-                                }
-                                if c == b'\r' {
-                                    continue;
-                                }
-                                line.push_byte(if c.is_ascii_graphic() || c == b' ' || c == b'\t' {
-                                    c
-                                } else {
-                                    b'?'
-                                });
-                            }
-                            if lines < 60 && (!line.is_empty() || lines == 0) {
-                                if line.is_empty() && lines == 0 {
-                                    self.push_line(crate::gui::ui_text("(boş gövde)", "(empty body)"), Color::TEXT_MUTED);
-                                } else {
-                                    self.push_line(line.as_str(), Color::TEXT_MAIN);
-                                }
-                            } else if lines >= 60 {
-                                self.push_line(crate::gui::ui_text("... (kısaltıldı)", "... (truncated)"), Color::TEXT_MUTED);
+                    let target_ip = if let Some(ip) = parse_ipv4(target) {
+                        Some(crate::drivers::netstack::Ipv4Address(ip))
+                    } else {
+                        let mut msg = TextBuf::new();
+                        msg.push_str(crate::gui::ui_text("Alan adı çözümleniyor: ", "Resolving host: "));
+                        msg.push_str(target);
+                        msg.push_str("...");
+                        self.push_line(msg.as_str(), Color::TEXT_MUTED);
+                        match crate::drivers::socket::resolve_host(target) {
+                            Ok(ip) => Some(ip),
+                            Err(_) => {
+                                let mut err = TextBuf::new();
+                                err.push_str(crate::gui::ui_text("Ping isteği hedef ana bilgisayarı bulamadı: ", "Ping request could not find host: "));
+                                err.push_str(target);
+                                self.push_line(err.as_str(), Color::ACCENT_RED);
+                                None
                             }
                         }
-                        Err(_) => {
-                            self.push_line(crate::gui::ui_text("curl: indirme başarısız (ağ/DNS/HTTP hatası).", "curl: download failed (network/DNS/HTTP error)."), Color::ACCENT_RED);
+                    };
+
+                    if let Some(ip) = target_ip {
+                        let mut banner = TextBuf::new();
+                        banner.push_str(target);
+                        banner.push_str(" [");
+                        push_ipv4(&mut banner, ip.0);
+                        banner.push_str(crate::gui::ui_text("] adresi 32 bayt veri ile pingleniyor:", "] with 32 bytes of data:"));
+                        self.push_line(banner.as_str(), Color::TEXT_MAIN);
+
+                        let mut recvd = 0usize;
+                        let mut min_rtt = u64::MAX;
+                        let mut max_rtt = 0u64;
+                        let mut sum_rtt = 0u64;
+
+                        for seq in 1..=(count as u16) {
+                            crate::drivers::netstack::clear_ping_reply();
+                            let t_start = crate::monotonic_ms();
+                            let sent = crate::drivers::netstack::ping_ex(ip, seq, 32);
+                            if !sent {
+                                self.push_line(crate::gui::ui_text("İletim hatası (TX)", "Transmit failure (TX)"), Color::ACCENT_RED);
+                            } else {
+                                let mut reply: Option<crate::drivers::netstack::PingReply> = None;
+                                while crate::monotonic_ms().wrapping_sub(t_start) < 1000 {
+                                    crate::drivers::e1000::poll();
+                                    crate::drivers::socket::pump_all();
+                                    if let Some(r) = crate::drivers::netstack::take_ping_reply() {
+                                        if r.src == ip {
+                                            reply = Some(r);
+                                            break;
+                                        }
+                                    }
+                                    core::hint::spin_loop();
+                                }
+
+                                if let Some(r) = reply {
+                                    let rtt = crate::monotonic_ms().wrapping_sub(t_start).max(1);
+                                    recvd += 1;
+                                    sum_rtt += rtt;
+                                    min_rtt = min_rtt.min(rtt);
+                                    max_rtt = max_rtt.max(rtt);
+
+                                    let mut line = TextBuf::new();
+                                    line.push_str(crate::gui::ui_text("Yanıt geldi: ", "Reply from "));
+                                    push_ipv4(&mut line, r.src.0);
+                                    line.push_str(": bayt=");
+                                    line.push_usize(r.len.max(32));
+                                    line.push_str(crate::gui::ui_text(" süre=", " time="));
+                                    line.push_usize(rtt as usize);
+                                    line.push_str("ms TTL=");
+                                    line.push_usize(r.ttl as usize);
+                                    self.push_line(line.as_str(), Color::ACCENT_GREEN);
+                                } else {
+                                    self.push_line(crate::gui::ui_text("İstek zaman aşımına uğradı.", "Request timed out."), Color::ACCENT_YELLOW);
+                                }
+                            }
+
+                            if (seq as usize) < count {
+                                let pause_until = crate::monotonic_ms().wrapping_add(150);
+                                while crate::monotonic_ms() < pause_until {
+                                    crate::drivers::socket::pump_all();
+                                    core::hint::spin_loop();
+                                }
+                            }
+                        }
+
+                        let lost = count.saturating_sub(recvd);
+                        let loss_pct = (lost * 100) / count.max(1);
+
+                        let mut stat_hdr = TextBuf::new();
+                        stat_hdr.push_str(crate::gui::ui_text("--- Ping istatistiği: ", "--- Ping statistics for "));
+                        push_ipv4(&mut stat_hdr, ip.0);
+                        stat_hdr.push_str(" ---");
+                        self.push_line(stat_hdr.as_str(), Color::TEXT_MUTED);
+
+                        let mut stat_pkt = TextBuf::new();
+                        stat_pkt.push_str(crate::gui::ui_text("Paket: Gönderilen = ", "Packets: Sent = "));
+                        stat_pkt.push_usize(count);
+                        stat_pkt.push_str(crate::gui::ui_text(", Alınan = ", ", Received = "));
+                        stat_pkt.push_usize(recvd);
+                        stat_pkt.push_str(crate::gui::ui_text(", Kayıp = ", ", Lost = "));
+                        stat_pkt.push_usize(lost);
+                        stat_pkt.push_str(" (%");
+                        stat_pkt.push_usize(loss_pct);
+                        stat_pkt.push_str(crate::gui::ui_text(" kayıp)", " loss)"));
+                        self.push_line(stat_pkt.as_str(), if lost == 0 { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW });
+
+                        if recvd > 0 {
+                            let avg_rtt = sum_rtt / (recvd as u64);
+                            let mut stat_time = TextBuf::new();
+                            stat_time.push_str(crate::gui::ui_text("Gidiş-dönüş süreleri: En az = ", "Round trip times: Minimum = "));
+                            stat_time.push_usize(min_rtt as usize);
+                            stat_time.push_str(crate::gui::ui_text("ms, En çok = ", "ms, Maximum = "));
+                            stat_time.push_usize(max_rtt as usize);
+                            stat_time.push_str(crate::gui::ui_text("ms, Ortalama = ", "ms, Average = "));
+                            stat_time.push_usize(avg_rtt as usize);
+                            stat_time.push_str("ms");
+                            self.push_line(stat_time.as_str(), Color::TEXT_MAIN);
                         }
                     }
                 }
             }
-            "dns" => {
-                if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: dns <alan adı>", "Usage: dns <hostname>"), Color::ACCENT_YELLOW);
+            "curl" | "wget" => {
+                let is_wget = cmd == "wget";
+                let mut sp = arg.split_whitespace();
+                let mut out_file: Option<alloc::string::String> = None;
+                let mut include_headers = false;
+                let mut head_only = false;
+                let mut silent = false;
+                let mut raw_url: Option<&str> = None;
+
+                while let Some(tok) = sp.next() {
+                    if tok == "-o" || tok == "--output" {
+                        if let Some(f) = sp.next() {
+                            out_file = Some(alloc::string::String::from(f));
+                        }
+                    } else if tok == "-i" || tok == "--include" {
+                        include_headers = true;
+                    } else if tok == "-I" || tok == "--head" {
+                        head_only = true;
+                        include_headers = true;
+                    } else if tok == "-s" || tok == "--silent" {
+                        silent = true;
+                    } else if !tok.starts_with('-') && raw_url.is_none() {
+                        raw_url = Some(tok);
+                    }
+                }
+
+                if raw_url.is_none() {
+                    self.push_line(crate::gui::ui_text("Kullanım: curl [-i|-I|-s] [-o dosya] <url>", "Usage: curl [-i|-I|-s] [-o file] <url>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Örnek: curl 10.0.2.2  veya  curl -o sayfa.html http://10.0.2.2:8080/", "Example: curl 10.0.2.2  or  curl -o page.html http://10.0.2.2:8080/"), Color::TEXT_MUTED);
+                } else if !crate::drivers::e1000::is_ready() {
+                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
                 } else {
-                    let sent = crate::drivers::netstack::dns_query(arg);
-                    self.push_line(if sent {
-                        crate::gui::ui_text("DNS sorgusu gönderildi", "DNS query transmitted")
+                    let target_url = raw_url.unwrap();
+                    let normalized_url = if target_url.starts_with("http://") || target_url.starts_with("https://") || target_url.contains("://") {
+                        alloc::string::String::from(target_url)
                     } else {
-                        crate::gui::ui_text("DNS sorgusu başarısız", "DNS query failed")
-                    }, if sent { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                        let mut s = alloc::string::String::from("http://");
+                        s.push_str(target_url);
+                        s
+                    };
+
+                    if is_wget && out_file.is_none() {
+                        let last_seg = normalized_url.rsplit('/').next().unwrap_or("index.html");
+                        let fname = if last_seg.is_empty() || last_seg.contains('?') || last_seg.contains(':') {
+                            "index.html"
+                        } else {
+                            last_seg
+                        };
+                        out_file = Some(alloc::string::String::from(fname));
+                    }
+
+                    if !silent {
+                        let mut msg = TextBuf::new();
+                        msg.push_str(crate::gui::ui_text("Ağdan veri çekiliyor: ", "Fetching from network: "));
+                        msg.push_str(&normalized_url);
+                        msg.push_str("...");
+                        self.push_line(msg.as_str(), Color::TEXT_MUTED);
+                    }
+
+                    let mut buf = alloc::vec::Vec::new();
+                    buf.resize(32768, 0);
+                    match crate::drivers::http::http_get(&normalized_url, &mut buf) {
+                        Ok((status, hlen, total)) => {
+                            if !silent {
+                                let mut b = TextBuf::new();
+                                b.push_str("HTTP ");
+                                b.push_usize(status as usize);
+                                b.push_str("  (");
+                                b.push_usize(total as usize);
+                                b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
+                                self.push_line(b.as_str(), if status < 400 { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                            }
+
+                            let body = &buf[hlen.min(total)..total];
+
+                            if let Some(dest) = out_file {
+                                let target_path = if dest.starts_with('/') {
+                                    dest
+                                } else {
+                                    let mut p = alloc::string::String::from(self.cwd_str());
+                                    if !p.ends_with('/') { p.push('/'); }
+                                    p.push_str(&dest);
+                                    p
+                                };
+
+                                let saved = if vfs.write_file(&target_path, body) {
+                                    true
+                                } else {
+                                    vfs.create_file(&target_path, body)
+                                };
+
+                                if saved {
+                                    let mut ok_b = TextBuf::new();
+                                    ok_b.push_str(crate::gui::ui_text("Dosyaya kaydedildi: ", "Saved to file: "));
+                                    ok_b.push_str(&target_path);
+                                    ok_b.push_str(" (");
+                                    ok_b.push_usize(body.len());
+                                    ok_b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
+                                    self.push_line(ok_b.as_str(), Color::ACCENT_GREEN);
+                                } else {
+                                    let mut err_b = TextBuf::new();
+                                    err_b.push_str(crate::gui::ui_text("Dosyaya yazılamadı: ", "Failed to write file: "));
+                                    err_b.push_str(&target_path);
+                                    self.push_line(err_b.as_str(), Color::ACCENT_RED);
+                                }
+                            } else {
+                                if include_headers {
+                                    let hdr_slice = &buf[..hlen.min(total)];
+                                    if let Ok(hdr_text) = core::str::from_utf8(hdr_slice) {
+                                        for line in hdr_text.lines() {
+                                            if !line.is_empty() {
+                                                self.push_line(line, Color::ACCENT_BLUE);
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !head_only {
+                                    if body.is_empty() {
+                                        self.push_line(crate::gui::ui_text("(boş gövde)", "(empty body)"), Color::TEXT_MUTED);
+                                    } else {
+                                        let mut line = TextBuf::new();
+                                        let mut lines = 0usize;
+                                        for &c in body {
+                                            if c == b'\n' || line.len() >= 62 {
+                                                self.push_line(line.as_str(), Color::TEXT_MAIN);
+                                                line.clear();
+                                                lines += 1;
+                                                if lines >= 60 { break; }
+                                                if c == b'\n' { continue; }
+                                            }
+                                            if c == b'\r' { continue; }
+                                            line.push_byte(if c.is_ascii_graphic() || c == b' ' || c == b'\t' { c } else { b'?' });
+                                        }
+                                        if lines < 60 && !line.is_empty() {
+                                            self.push_line(line.as_str(), Color::TEXT_MAIN);
+                                        } else if lines >= 60 {
+                                            self.push_line(crate::gui::ui_text("... (kısaltıldı)", "... (truncated)"), Color::TEXT_MUTED);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let mut err_b = TextBuf::new();
+                            err_b.push_str("curl: ");
+                            match e {
+                                crate::drivers::socket::E_TIMEOUT => {
+                                    err_b.push_str(crate::gui::ui_text("(28) Bağlantı zaman aşımı: sunucudan yanıt alınamadı.", "(28) Connection timed out: no response from server."));
+                                }
+                                crate::drivers::socket::E_CONNREFUSED => {
+                                    err_b.push_str(crate::gui::ui_text("(7) Bağlantı reddedildi: hedef port kapalı.", "(7) Failed to connect: connection refused."));
+                                }
+                                crate::drivers::socket::E_NOTCONN => {
+                                    err_b.push_str(crate::gui::ui_text("(6) Ağ bağlantısı yok veya ana bilgisayar çözümlenemedi.", "(6) Could not resolve host or network unavailable."));
+                                }
+                                crate::drivers::http::E_URL => {
+                                    err_b.push_str(crate::gui::ui_text("(3) Geçersiz URL sözdizimi.", "(3) Invalid URL format."));
+                                }
+                                crate::drivers::http::E_REDIRECT => {
+                                    err_b.push_str(crate::gui::ui_text("(47) Çok fazla HTTP yönlendirmesi (maksimum 3).", "(47) Maximum redirection limit exceeded."));
+                                }
+                                crate::drivers::http::E_HTTP => {
+                                    err_b.push_str(crate::gui::ui_text("(52) Sunucu geçersiz/boş HTTP yanıtı döndürdü.", "(52) Empty or invalid HTTP response from server."));
+                                }
+                                _ => {
+                                    err_b.push_str(crate::gui::ui_text("İndirme başarısız (hata kodu: ", "Download failed (error code: "));
+                                    err_b.push_usize((-e).max(0) as usize);
+                                    err_b.push_byte(b')');
+                                }
+                            }
+                            self.push_line(err_b.as_str(), Color::ACCENT_RED);
+                        }
+                    }
+                }
+            }
+            "dns" | "nslookup" => {
+                let name = arg.trim();
+                if name.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: dns <alan_adı>  veya  nslookup <alan_adı>", "Usage: dns <hostname>  or  nslookup <hostname>"), Color::ACCENT_YELLOW);
+                } else if !crate::drivers::e1000::is_ready() {
+                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                } else {
+                    let mut srv = TextBuf::new();
+                    srv.push_str(crate::gui::ui_text("Sunucu: ", "Server: "));
+                    push_ipv4(&mut srv, crate::drivers::netstack::dns_server().0);
+                    self.push_line(srv.as_str(), Color::TEXT_MUTED);
+
+                    match crate::drivers::socket::resolve_host(name) {
+                        Ok(ip) => {
+                            let mut res = TextBuf::new();
+                            res.push_str(crate::gui::ui_text("Ad:     ", "Name:   "));
+                            res.push_str(name);
+                            self.push_line(res.as_str(), Color::TEXT_MAIN);
+
+                            let mut addr = TextBuf::new();
+                            addr.push_str(crate::gui::ui_text("Adres:  ", "Address: "));
+                            push_ipv4(&mut addr, ip.0);
+                            self.push_line(addr.as_str(), Color::ACCENT_GREEN);
+                        }
+                        Err(code) => {
+                            let mut err_b = TextBuf::new();
+                            err_b.push_str(crate::gui::ui_text("DNS çözümlenemedi (hata kodu: ", "DNS resolution failed (error code: "));
+                            err_b.push_u2((-code).max(0) as u32);
+                            err_b.push_byte(b')');
+                            self.push_line(err_b.as_str(), Color::ACCENT_RED);
+                        }
+                    }
                 }
             }
             "date" => {

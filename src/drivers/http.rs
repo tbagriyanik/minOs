@@ -27,8 +27,10 @@ pub fn parse_url<'a>(
         (true, r)
     } else if let Some(r) = url.strip_prefix("http://") {
         (false, r)
-    } else {
+    } else if url.contains("://") {
         return Err(E_URL);
+    } else {
+        (false, url)
     };
 
     // host[:port] + [/path] ayır.
@@ -195,6 +197,7 @@ fn fetch_once(
     resp_buf: &mut [u8],
 ) -> Result<(u16, usize, usize), i32> {
     let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
+    let _ = socket::set_timeout(fd, 4000);
     let res = (|| {
         socket::connect(fd, ip, port)?;
         let mut req = [0u8; 768];
@@ -210,13 +213,42 @@ fn fetch_once(
             })?;
         }
         let mut total = 0usize;
+        let mut expected_total: Option<usize> = None;
         loop {
             if total >= resp_buf.len() {
                 break;
             }
+            if let Some(exp) = expected_total {
+                if total >= exp {
+                    break;
+                }
+            }
             match socket::recv(fd, &mut resp_buf[total..]) {
                 Ok(0) => break, // FIN = EOF
-                Ok(n) => total += n,
+                Ok(n) => {
+                    total += n;
+                    if expected_total.is_none() {
+                        if let Some(hlen) = find_header_end(&resp_buf[..total]) {
+                            let headers = &resp_buf[..hlen];
+                            if let Some(cl_bytes) = header_value(headers, b"content-length") {
+                                if let Ok(cl_str) = core::str::from_utf8(cl_bytes) {
+                                    if let Ok(cl_val) = cl_str.trim().parse::<usize>() {
+                                        expected_total = Some(hlen + cl_val);
+                                        if total >= hlen + cl_val {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(hlen) = find_header_end(&resp_buf[..total]) {
+                        let body = &resp_buf[hlen..total];
+                        if body.ends_with(b"0\r\n\r\n") || body.ends_with(b"0\r\n") {
+                            break;
+                        }
+                    }
+                }
                 Err(_) => break,
             }
         }

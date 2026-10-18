@@ -265,6 +265,11 @@ pub fn poll_timeouts() {
     }
 }
 
+pub fn pump_all() {
+    e1000::poll();
+    poll_timeouts();
+}
+
 fn pump(fd: usize) {
     e1000::poll();
     fire_retry(fd);

@@ -4,8 +4,6 @@
 
 extern crate alloc;
 
-use core::fmt::Write as FmtWrite;
-use core::panic::PanicInfo;
 use linked_list_allocator::LockedHeap;
 
 #[allow(dead_code)]
@@ -61,751 +59,21 @@ pub mod gui;
 pub mod apps;
 pub mod serial;
 
-// Limine Protokolü İstek Yapıları (Sıfır Dış Bağımlılık)
-#[repr(C, align(8))]
-pub struct LimineFramebufferRequest {
-    pub id: [u64; 4],
-    pub revision: u64,
-    pub response: *const LimineFramebufferResponse,
-}
-
-#[repr(C, align(8))]
-pub struct LimineFramebufferResponse {
-    pub revision: u64,
-    pub framebuffer_count: u64,
-    pub framebuffers: *const *const LimineFramebuffer,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C, align(8))]
-pub struct LimineFramebuffer {
-    pub address: *mut u8,
-    pub width: u64,
-    pub height: u64,
-    pub pitch: u64,
-    pub bpp: u16,
-    pub memory_model: u8,
-    pub red_mask_size: u8,
-    pub red_mask_shift: u8,
-    pub green_mask_size: u8,
-    pub green_mask_shift: u8,
-    pub blue_mask_size: u8,
-    pub blue_mask_shift: u8,
-}
-
-unsafe impl Sync for LimineFramebufferRequest {}
-
-#[used]
-#[link_section = ".requests_start_marker"]
-static LIMINE_REQUESTS_START_MARKER: [u64; 4] = [
-    0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf,
-    0x785c6ed015d3e316, 0x181e920a7852b9d9,
-];
-
-#[used]
-#[link_section = ".requests_base_revision"]
-static LIMINE_BASE_REVISION: [u64; 3] = [
-    0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 3,
-];
-
-#[used]
-#[link_section = ".requests"]
-static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x9d5827dcd881dd75,
-        0xa3148604f6fab11b,
-    ],
-    revision: 0,
-    response: core::ptr::null(),
-};
-
-#[used]
-#[link_section = ".requests_end_marker"]
-static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
-    0xadc0e0531bb10d03, 0x9572709f31764c62,
-];
-
-// Panic anında ekrana doğrudan çizim yapabilmek için video sürücüsü statikleri kullanılır:
-pub use crate::drivers::video::{PANIC_FB_ADDR, PANIC_FB_W, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_BPP};
-
-// --- Limine HHDM (Higher-Half Direct Map) istegi: fiziksel<->sanal donusum ---
-#[repr(C, align(8))]
-pub struct LimineHhdmResponse {
-    pub revision: u64,
-    pub offset: u64,
-}
-
-#[repr(C, align(8))]
-pub struct LimineHhdmRequest {
-    pub id: [u64; 4],
-    pub revision: u64,
-    pub response: *const LimineHhdmResponse,
-}
-
-#[repr(C, align(8))]
-pub struct LimineMemoryMapEntry {
-    pub base: u64,
-    pub length: u64,
-    pub entry_type: u64,
-    pub unused: [u64; 4],
-}
-
-#[repr(C, align(8))]
-pub struct LimineMemoryMapResponse {
-    pub revision: u64,
-    pub entry_count: u64,
-    pub entries: *const *const LimineMemoryMapEntry,
-}
-
-#[repr(C, align(8))]
-pub struct LimineMemoryMapRequest {
-    pub id: [u64; 4],
-    pub revision: u64,
-    pub response: *const LimineMemoryMapResponse,
-}
-
-unsafe impl Sync for LimineMemoryMapRequest {}
-
-unsafe impl Sync for LimineHhdmRequest {}
-
-#[used]
-#[link_section = ".requests"]
-static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
-    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x48dcf1cb8ad2b852, 0x63984e959a98244b],
-    revision: 0,
-    response: core::ptr::null(),
-};
-
-#[repr(C, align(8))]
-pub struct LimineStackSizeResponse {
-    pub revision: u64,
-}
-
-#[repr(C, align(8))]
-pub struct LimineStackSizeRequest {
-    pub id: [u64; 4],
-    pub revision: u64,
-    pub response: *const LimineStackSizeResponse,
-    pub stack_size: u64,
-}
-
-unsafe impl Sync for LimineStackSizeRequest {}
-
-#[used]
-#[link_section = ".requests"]
-static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0x224ef0460a8e8926,
-        0xe1cb0fc25f46ea3d,
-    ],
-    revision: 0,
-    response: core::ptr::null(),
-    stack_size: 1024 * 1024, // 1 MiB kernel stack
-};
-
-#[used]
-#[link_section = ".requests"]
-static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
-    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x67cf3d9d378a806f, 0xe304acdfc50c3c62],
-    revision: 0,
-    response: core::ptr::null(),
-};
-
-// --- Limine Kernel File istegi: önyükleme komut satirini (cmdline) okur ---
-// Boot menüsündeki "live" / "installed" seçimi bu cmdline ile kernel'e bildirilir.
-#[repr(C, align(8))]
-pub struct LimineKernelFileRequest {
-    pub id: [u64; 4],
-    pub revision: u64,
-    pub response: *const LimineKernelFileResponse,
-}
-
-#[repr(C, align(8))]
-pub struct LimineKernelFileResponse {
-    pub revision: u64,
-    pub kernel_file: *const LimineFile,
-}
-
-/// `struct limine_file` başlangıcı. İlk alanlar (cmdline'a kadar) yeterlidir.
-#[repr(C, align(8))]
-pub struct LimineFile {
-    pub revision: u64,
-    pub address: *const u8,
-    pub size: u64,
-    pub path: *const u8,
-    pub cmdline: *const u8,
-}
-
-unsafe impl Sync for LimineKernelFileRequest {}
-
-#[used]
-#[link_section = ".requests"]
-static KERNEL_FILE_REQUEST: LimineKernelFileRequest = LimineKernelFileRequest {
-    id: [
-        0xc7b1dd30df4c8b88,
-        0x0a82e883a194f07b,
-        0xad97e90e83f1ed67,
-        0x31eb5d1c5ff23b69,
-    ],
-    revision: 0,
-    response: core::ptr::null(),
-};
-
-/// Limine'in sağladığı önyükleme komut satirini (cmdline) döndürür.
-/// `None` ise cmdline alınamadı demektir (bu durumda canlı sistem kabul edilir).
-fn limine_boot_cmdline() -> Option<&'static str> {
-    unsafe {
-        let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
-        let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
-        if !is_mapped_limine_ptr(file) {
-            return None;
-        }
-        let cmdline = core::ptr::read_volatile(core::ptr::addr_of!((*file).cmdline));
-        if !is_mapped_limine_ptr(cmdline) {
-            return None;
-        }
-        // NUL sonlandırıcıya kadar (en fazla 256 bayt) oku.
-        let mut len = 0usize;
-        while len < 256 {
-            let byte = core::ptr::read_volatile(cmdline.add(len));
-            if byte == 0 {
-                break;
-            }
-            len += 1;
-        }
-        core::str::from_utf8(core::slice::from_raw_parts(cmdline, len)).ok()
-    }
-}
-
-/// Limine tarafından belleğe yüklenmiş çekirdek dosyasının ikili dilimini döndürür.
-pub fn limine_kernel_binary_slice() -> Option<&'static [u8]> {
-    unsafe {
-        let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_FILE_REQUEST.response))?;
-        let file = core::ptr::read_volatile(core::ptr::addr_of!((*resp).kernel_file));
-        if !is_mapped_limine_ptr(file) {
-            return None;
-        }
-        let addr = core::ptr::read_volatile(core::ptr::addr_of!((*file).address));
-        let size = core::ptr::read_volatile(core::ptr::addr_of!((*file).size)) as usize;
-        if addr.is_null() || size == 0 {
-            return None;
-        }
-        Some(core::slice::from_raw_parts(addr, size))
-    }
-}
-
-/// Önyükleme komut satirinda verilen token'i (kelime) arar.
-fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
-    cmdline
-        .split(|c: char| c.is_whitespace())
-        .any(|part| part == token)
-}
-
-/// Kernel'in kurulu sistem modunda baslatilmak istenip istenmedigini bildirir.
-fn boot_wants_installed() -> bool {
-    limine_boot_cmdline().map_or(false, |cmdline| cmdline_has_token(cmdline, "installed"))
-}
-
-#[inline(never)]
-fn serial_print(s: &str) {
-    serial::print(s);
-}
-
-fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
-    let log = serial::log_snapshot();
-    let _ = vfs.write_file("/root/Documents/boot.log", &log);
-}
-
-#[inline(never)]
-fn serial_print_dec(v: u64) {
-    if v == 0 { serial_print("0"); return; }
-    let mut value = v;
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    while value > 0 {
-        i -= 1;
-        buf[i] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
-}
-
-#[inline(never)]
-fn serial_print_hex(v: u64) {
-    serial_print("0x");
-    if v == 0 { serial_print("0"); return; }
-    let mut value = v;
-    let mut buf = [0u8; 16];
-    let mut i = buf.len();
-    let hex = b"0123456789ABCDEF";
-    while value > 0 {
-        i -= 1;
-        buf[i] = hex[(value & 0xF) as usize];
-        value >>= 4;
-    }
-    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
-}
-
-
-fn restart_system() -> ! {
-    #[cfg(minos_boot_log)]
-    serial_print("[minOs] Restart requested from Start Menu.\n");
-    unsafe {
-        // QEMU/PC reset control register, then legacy 8042 fallback.
-        core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);
-        core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8);
-        core::arch::asm!("cli");
-    }
-    loop { core::hint::spin_loop(); }
-}
-
-fn read_cpu_cycles() -> u64 {
-    let low: u32;
-    let high: u32;
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") low,
-            out("edx") high,
-            options(nomem, nostack, preserves_flags),
-        );
-    }
-    ((high as u64) << 32) | low as u64
-}
-
-static mut TSC_CYCLES_PER_US: u64 = 1;
-
-/// TSC frekansını PIT kanal 2 ile kalibre eder.
-fn init_timebase() {
-    unsafe {
-        let mut port61: u8;
-        core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
-        let saved = port61;
-        port61 = (port61 & !0x03) | 0x01;
-        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") port61, options(nomem, nostack, preserves_flags));
-        // PIT kanal 2 mode 0, 65536 sayım ≈ 54.9 ms.
-        core::arch::asm!("out dx, al", in("dx") 0x43u16, in("al") 0xB0u8, options(nomem, nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0x42u16, in("al") 0u8, options(nomem, nostack, preserves_flags));
-        let start = read_cpu_cycles();
-        loop {
-            core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
-            if port61 & 0x20 != 0 { break; }
-            core::hint::spin_loop();
-        }
-        let elapsed = read_cpu_cycles().wrapping_sub(start).max(1);
-        TSC_CYCLES_PER_US = (elapsed / 54_925).max(1);
-        core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") saved, options(nomem, nostack, preserves_flags));
-    }
-}
-
-pub fn monotonic_ms() -> u64 {
-    let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);
-    read_cpu_cycles() / cycles_per_us / 1_000
-}
-
-struct BusyProgressContext {
-    fb: *mut drivers::video::Framebuffer,
-    mx: usize,
-    my: usize,
-    message: &'static str,
-    last_percent: usize,
-    cursor_shown: bool,
-}
-
-static mut GLOBAL_MOUSE: drivers::mouse::MouseState = drivers::mouse::MouseState::new();
-static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState = drivers::keyboard::KeyboardState::new();
-static mut BUSY_DIRTY: bool = false;
-
-/// İlerleme yüzdesini hesaplar; değer asla geri gitmez (monotonik).
-fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> usize {
-    let mut p = if total == 0 {
-        (state.last_percent + 1).min(90)
-    } else {
-        5 + done.saturating_mul(90) / total
-    };
-    if p < state.last_percent { p = state.last_percent; }
-    if p > 99 { p = 99; }
-    state.last_percent = p;
-    p
-}
-
-fn draw_io_progress(context: *mut (), done: usize, total: usize) {
-    if context.is_null() { return; }
-    let state = unsafe { &mut *(context as *mut BusyProgressContext) };
-
-    // 1. Girişi pompa'la: uzun işlem sürerken fare imleci donmasın.
-    unsafe {
-        let w = (*state.fb).width as i32;
-        let h = (*state.fb).height as i32;
-        let mouse_ptr = core::ptr::addr_of_mut!(GLOBAL_MOUSE);
-        let kbd_ptr = core::ptr::addr_of_mut!(GLOBAL_KEYBOARD);
-        drivers::ps2::poll_input(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
-        state.mx = (*mouse_ptr).x.max(0) as usize;
-        state.my = (*mouse_ptr).y.max(0) as usize;
-    }
-    let fb = unsafe { &mut *state.fb };
-
-    // 2. Önceki kum saati imlecini temizle.
-    if state.cursor_shown {
-        if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
-        state.cursor_shown = false;
-    }
-
-    // 3. Panel + ilerleme çubuğunu güncelle (tek, monotonik çubuk).
-    let percent = busy_percent(state, done, total);
-    gui::draw_busy_overlay(fb, state.mx, state.my, state.message, percent);
-
-    // 4. Kum saati imlecini yeni konuma çiz ve ekranı güncelle.
-    gui::draw_busy_hourglass(fb, state.mx, state.my);
-    if let Some(rect) = fb.cursor_rect() {
-        fb.flush_rect(rect);
-    }
-    state.cursor_shown = true;
-}
-
-fn with_busy_progress<T>(
-    fb: &mut drivers::video::Framebuffer,
-    mx: usize,
-    my: usize,
-    message: &'static str,
-    operation: impl FnOnce() -> T,
-) -> T {
-    // Önceki karede çizilen ok imlecini kaldır (kum saati ile çakışmasın).
-    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
-    gui::draw_busy_overlay(fb, mx, my, message, 5);
-    gui::draw_busy_hourglass(fb, mx, my);
-
-    // `fb` işaretçisi bağlama devredilir; bundan sonraki çizimler üzerinden yapılır.
-    let mut state = BusyProgressContext { fb, mx, my, message, last_percent: 5, cursor_shown: true };
-    drivers::ata::set_io_progress_hook(Some(draw_io_progress), &mut state as *mut _ as *mut ());
-    let result = operation();
-    drivers::ata::set_io_progress_hook(None, core::ptr::null_mut());
-
-    // İşlem sonunda kum saatini temizle; ok imlecini ana döngü yeniden çizer.
-    let fb = unsafe { &mut *state.fb };
-    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
-    gui::draw_busy_overlay(fb, mx, my, message, 100);
-    // Panel bir sonraki tam yeniden çizimde kalksın.
-    unsafe { BUSY_DIRTY = true; }
-    result
-}
-
-pub(crate) fn main_monotonic_ms() -> usize { monotonic_ms() as usize }
-
-fn cpu_vendor() -> &'static str {
-    let result = core::arch::x86_64::__cpuid(0);
-    let ebx = result.ebx;
-    let edx = result.edx;
-    let ecx = result.ecx;
-    if ebx == u32::from_le_bytes(*b"Genu") && edx == u32::from_le_bytes(*b"ineI") && ecx == u32::from_le_bytes(*b"ntel") {
-        "Intel"
-    } else if ebx == u32::from_le_bytes(*b"Auth") && edx == u32::from_le_bytes(*b"enti") && ecx == u32::from_le_bytes(*b"cAMD") {
-        "AMD"
-    } else {
-        "x86_64 uyumlu"
-    }
-}
-
-fn cpu_logical_count() -> u32 {
-    let result = core::arch::x86_64::__cpuid(1);
-    let from_cpuid = ((result.ebx >> 16) & 0xFF).max(1);
-    // SMP açılışı tamamlandıysa gerçek çevrimiçi CPU sayısını yansıt.
-    let from_smp = arch::x86_64::smp::cpu_count() as u32;
-    from_cpuid.max(from_smp).max(1)
-}
-
-#[inline]
-fn is_canonical_ptr<T>(ptr: *const T) -> bool {
-    if ptr.is_null() {
-        return false;
-    }
-    let addr = ptr as usize as u64;
-    let upper = addr >> 47;
-    (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
-}
-
-/// Limine response pointers are expected in the mapped higher half. Reject
-/// lower-half values so malformed boot data cannot direct these reads into an
-/// unmapped region.
-#[inline]
-fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
-    is_canonical_ptr(ptr) && ((ptr as usize as u64) >> 47) == 0x1_FFFF
-}
-
-/// Limine yanıt yuvasını (`&REQUEST.response`) güvenli biçimde okur.
-///
-/// Okuma yapıldıktan sonra dönen işaretçi null olmamalı, doğru hizalanmalı ve
-/// canonical bir adres olmalıdır. Tüm bu koşullar sağlandığında `Some` döner;
-/// aksi halde `None` döner ve çağıran taraf yanıtı hiç dereference etmez.
-/// Böylece tek bir noktada doğrulanan işaretçi CodeQL için de temiz kalır.
-///
-/// # Safety
-/// `slot`, `&REQUEST.response` gibi geçerli ve okunabilir bir yuvaya işaret
-/// etmelidir.
-#[inline]
-pub(crate) unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
-    if slot.is_null() || !is_canonical_ptr(slot) {
-        return None;
-    }
-    let ptr = core::ptr::read_volatile(slot);
-    if !is_mapped_limine_ptr(ptr) { None } else { Some(ptr) }
-}
-
-/// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
-fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
-    if let Some(idx) = compositor.launch_app_window(app_id) {
-        if let Some(win) = compositor.windows[idx].as_mut() {
-            win.is_open = true;
-            win.is_minimized = false;
-            win.is_maximized = false;
-        }
-        compositor.focus_window(idx);
-    }
-}
-
-fn desktop_item_rect(idx: usize) -> (usize, usize, usize, usize) {
-    // Dosya ızgarası sol şerit hızlı simgelerin sağından başlar; iki grup
-    // asla üst üste binmez (çizim + tıklama aynı kanonik konumu kullanır).
-    let origin_x = gui::MinGuiCompositor::desktop_strip_right();
-    let col = idx / 12;
-    let row = idx % 12;
-    (origin_x + col * 150, 30 + row * 54, 138, 46)
-}
-
-fn rects_overlap(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> bool {
-    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
-}
-
-/// Masaüstü simgesinin gerçekten çizildiği (görünür) alan mı?
-/// Çizim döngüsü ile tıklama testi bu kuralı paylaşır: ekran dışına taşan,
-/// görev çubuğuna gömülen veya sağ üst filigrana binen hücreler hem
-/// çizilmez hem tıklanamaz.
-fn desktop_item_visible(rect: (usize, usize, usize, usize), width: usize, height: usize) -> bool {
-    if rect.0 + rect.2 > width || rect.1 + rect.3 >= height.saturating_sub(gui::taskbar_h()) {
-        return false;
-    }
-    !rects_overlap(rect, gui::MinGuiCompositor::desktop_watermark_rect(width))
-}
-
-fn desktop_item_at(x: usize, y: usize, fm: &apps::filemanager::FileManagerApp, width: usize, height: usize) -> Option<(usize, (usize, usize, usize, usize))> {
-    for i in 0..fm.file_count {
-        let rect = desktop_item_rect(i);
-        if !desktop_item_visible(rect, width, height) { continue; }
-        if gui::in_rect(x, y, rect) { return Some((i, rect)); }
-    }
-    None
-}
-
-/// Belirli bir pencere örneğini açar ve odaklar.
-fn focus_app_window(compositor: &mut gui::MinGuiCompositor, idx: usize) {
-    if let Some(win) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
-        win.is_open = true;
-        win.is_minimized = false;
-        win.is_maximized = false;
-    }
-    compositor.focus_window(idx);
-}
-
-fn open_image_file(
-    path: &str,
-    vfs: &fs::vfs::VirtualFileSystem,
-    _paints: &[Option<apps::paint::PaintApp>],
-    viewer: &mut apps::imageviewer::ImageViewerApp,
-) {
-    // Large VFS entries intentionally have an empty inline `data` vector;
-    // check the shared payload store before `read_file`, which can return that
-    // empty slice for the metadata row.
-    if let Some(data) = vfs.read_large_file(path) {
-        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
-    } else if let Some(data) = vfs.read_file(path).filter(|data| !data.is_empty()) {
-        let data: alloc::sync::Arc<[u8]> = alloc::sync::Arc::from(data);
-        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
-    } else {
-        viewer.clear_image(if path.ends_with("cizim.bmp") { "cizim.bmp" } else { "Image unavailable" });
-    }
-}
-
-fn keep_windows_on_screen(compositor: &mut gui::MinGuiCompositor, screen_w: usize, screen_h: usize) {
-    let screen_w = screen_w.max(1);
-    let usable_h = screen_h.saturating_sub(gui::taskbar_h()).max(1);
-    for window in compositor.windows.iter_mut().flatten() {
-        if !window.is_open { continue; }
-        window.width = window.width.min(screen_w).max(1);
-        window.height = window.height.min(usable_h).max(1);
-        window.x = window.x.min(screen_w.saturating_sub(window.width));
-        window.y = window.y.min(usable_h.saturating_sub(window.height));
-    }
-}
-
-fn terminate_app(
-    idx: usize,
-    compositor: &mut gui::MinGuiCompositor,
-    fm: &mut apps::filemanager::FileManagerApp,
-    settings: &mut apps::settings::SystemSettings,
-    notepad: &mut apps::notepad::NotepadApp,
-    browser: &mut apps::browser::BrowserApp,
-    imageviewer: &mut apps::imageviewer::ImageViewerApp,
-    musicplayer: &mut apps::musicplayer::MusicPlayerApp,
-    videoplayer: &mut apps::videoplayer::VideoPlayerApp,
-    taskmgr: &mut apps::taskmgr::TaskManagerApp,
-    calculator: &mut apps::calculator::CalculatorApp,
-    paint: &mut Option<apps::paint::PaintApp>,
-    terminal: &mut apps::terminal::TerminalApp,
-    installer: &mut apps::installer::InstallerApp,
-    viewer3d: &mut apps::viewer3d::Viewer3DApp,
-) {
-    let app_id = compositor.app_id_for_window(idx);
-    if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
-        window.is_open = false;
-        window.is_minimized = false;
-        window.is_focused = false;
-        window.is_maximized = false;
-        window.scroll.x = 0;
-        window.scroll.y = 0;
-    } else {
-        return;
-    }
-
-    let another_instance_open = compositor.windows.iter().any(|slot| {
-        slot.map_or(false, |window| window.app_id as usize == app_id && window.is_open)
-    });
-    if !another_instance_open { match app_id {
-        0 => *fm = apps::filemanager::FileManagerApp::new(),
-        1 => settings.active_tab = 0,
-        2 => notepad.clear(),
-        3 => *browser = apps::browser::BrowserApp::new(),
-        4 => *imageviewer = apps::imageviewer::ImageViewerApp::new(),
-        5 => {
-            *musicplayer = apps::musicplayer::MusicPlayerApp::new();
-            drivers::hda::silence();
-            // PC speaker çıkışını da kapat.
-            let mut audio = drivers::audio::AudioDevice::new();
-            audio.set_pc_speaker_tone(0);
-        }
-        6 => *videoplayer = apps::videoplayer::VideoPlayerApp::new(),
-        7 => *taskmgr = apps::taskmgr::TaskManagerApp::new(),
-        8 => *calculator = apps::calculator::CalculatorApp::new(),
-        9 => *paint = None,
-        10 => {
-            *terminal = apps::terminal::TerminalApp::new();
-            terminal.init_banner();
-        }
-        11 => *installer = apps::installer::InstallerApp::new(),
-        12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
-        _ => return,
-    } }
-    compositor.focus_top_window();
-}
-
-fn app_is_focused(compositor: &gui::MinGuiCompositor, app_id: usize) -> bool {
-    compositor.windows.iter().any(|slot| {
-        slot.map_or(false, |window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
-    })
-}
-
-fn focused_window_for_app(compositor: &gui::MinGuiCompositor, app_id: usize) -> Option<(usize, gui::Window)> {
-    compositor.windows.iter().enumerate().find_map(|(idx, slot)| {
-        slot.filter(|window| window.app_id as usize == app_id && window.is_open && !window.is_minimized && window.is_focused)
-            .map(|window| (idx, window))
-    })
-}
-
-/// Bir pencerenin (uygulama indeksine göre) dikey içerik yüksekliğini hesaplar.
-/// Kaydırma çubuğunun gerekip gerekmediğini ve tutamaç boyutunu belirlemek için
-/// hem çizim hem de tıklama kod yollarında ortak kullanılır.
-fn window_content_h(
-    app_id: usize,
-    _win_h: usize,
-    win_w: usize,
-    fm: &apps::filemanager::FileManagerApp,
-    np: &apps::notepad::NotepadApp,
-) -> usize {
-    match app_id {
-        // Dosya Yöneticisi: geçerli görünümün (liste/ızgara) içerik yüksekliği.
-        0 => apps::filemanager::list_top() + fm.content_height(win_w) + 30,
-        // Not Defteri: satır kaydırma (wrap) sonrası metin yüksekliği.
-        // Satır yüksekliği ve karakter genişliği font ölçeğine duyarlı olmalı.
-        2 => {
-            let char_w = gui::sp(12);
-            let line_h = gui::sp(16);
-            let text_w = win_w.saturating_sub(gui::sp(12) + gui::sp(32) + gui::sp(16));
-            let wrap_cols = (text_w / char_w.max(1)).max(1);
-            let (lines, _) = np.text_extent(wrap_cols);
-            lines * line_h + gui::sp(58) + gui::sp(22)
-        }
-        // Görev Yöneticisi: başlık + süreç satırları + bellek grafiği + durum.
-        7 => 275,
-        // Diğer uygulamalar sabit düzenlidir: kaydırma gerekmez, içerik pencereye
-        // kırpılır (clip). `0` döndürmek "kaydırma yok" anlamına gelir.
-        _ => 0,
-    }
-}
-
-/// Defter imlecini her zaman görünür kılacak dikey kaydırmayı uygular.
-fn notepad_ensure_cursor_visible(compositor: &mut gui::MinGuiCompositor, np: &apps::notepad::NotepadApp) {
-    let Some((idx, w)) = focused_window_for_app(compositor, 2) else { return; };
-    let desired = np.ensure_cursor_visible(w.width, w.height, w.scroll.y);
-    if let Some(wm) = compositor.windows[idx].as_mut() {
-        wm.scroll.y = desired;
-    }
-}
-
-/// Dosya Yöneticisi listesinde seçili satırı görünür tutacak kaydırmayı uygular.
-fn fm_ensure_selection_visible(compositor: &mut gui::MinGuiCompositor, fm: &apps::filemanager::FileManagerApp) {
-    let Some((idx, w)) = focused_window_for_app(compositor, 0) else { return; };
-    let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
-    if view_h == 0 { return; }
-    let sy = fm.ensure_selection_visible(w.width, view_h, w.scroll.y);
-    if let Some(wm) = compositor.windows[idx].as_mut() {
-        wm.scroll.y = sy;
-    }
-}
-
-/// Dosya Yöneticisi sayfa adımı: listede görünür satır sayısı,
-/// ızgarada görünür satır x sütun sayısı (PageUp/PageDown).
-fn fm_page_rows(w: &gui::Window, fm: &apps::filemanager::FileManagerApp) -> usize {
-    let view_h = w.height.saturating_sub(apps::filemanager::list_top() + 30);
-    fm.page_step(w.width, view_h.max(1))
-}
-
-/// Terminal çıktı panelinde görünen satır sayısı (tekerlek ve sayfa gezinmesine ortak).
-fn terminal_view_lines(w: &gui::Window) -> usize {
-    (w.height.saturating_sub(86) / 13).max(1)
-}
-
-fn image_viewer_canvas_rect(w: &gui::Window) -> (usize, usize, usize, usize) {
-    let inner_x = w.x + 10;
-    let inner_w = w.width.saturating_sub(20).max(1);
-    let content_y = w.y + 60;
-    let status_y = w.y + w.height.saturating_sub(24);
-    let content_h = status_y.saturating_sub(content_y + 6).max(1);
-    if inner_w < 360 {
-        (inner_x, content_y, inner_w, (content_h * 2 / 3).max(1))
-    } else {
-        let panel_w = (inner_w / 3).clamp(130, 220).min(inner_w.saturating_sub(13));
-        (inner_x, content_y, inner_w.saturating_sub(panel_w + 12).max(1), content_h)
-    }
-}
-
-/// Takvimde ay ileri/geri gezinme.
-fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
-    if forward {
-        if month >= 12 {
-            (year + 1, 1)
-        } else {
-            (year, month + 1)
-        }
-    } else if month <= 1 {
-        (year.saturating_sub(1), 12)
-    } else {
-        (year, month - 1)
-    }
-}
+// --- Asama 1: ayristirilan moduller -------------------------------------------------
+// Tasima yok: bu modullerdeki ogeler crate kokunde yeniden disa aktarilir, boylece
+// `crate::serial_print`, `crate::monotonic_ms`, `crate::valid_limine_response` gibi
+// cagrilar degismeden calismaya devam eder.
+pub mod boot;
+pub mod desktop;
+pub mod panic_handler;
+
+pub use boot::console::*;
+pub use boot::cpu::*;
+pub use boot::devices::*;
+pub use boot::limine::*;
+pub use boot::progress::*;
+pub use boot::time::*;
+pub use desktop::helpers::*;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
@@ -1539,7 +807,7 @@ pub extern "C" fn _start() -> ! {
 
                 // Uygulamaya göre ölçülen içerik boyutu (kaydırma çubuğu gerekli mi?).
                 let app_id = compositor.app_id_for_window(idx);
-                let content_h = window_content_h(app_id, win.height, win.width, fm, np);
+                let content_h = window_content_h(app_id, win.height, win.width, fm, np, br);
                 let content_w = cw;
                 let want_v = content_h > ch;
                 let want_h = content_w > cw;
@@ -2634,7 +1902,7 @@ pub extern "C" fn _start() -> ! {
                     // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
                     {
                         let (ccx, ccy, ccw, cch) = win.content_rect();
-                        let c_h = window_content_h(win.app_id as usize, wh, ww, &filemanager_app, &notepad_app);
+                        let c_h = window_content_h(win.app_id as usize, wh, ww, &filemanager_app, &notepad_app, &browser_app);
                         let view_h = cch;
                         if c_h > view_h {
                             let t = gui::scrollbar::SCROLLBAR_THICKNESS;
@@ -3054,26 +2322,21 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
                             3 => {
-                                if gui::in_rect(mx, my, (wx + 8, wy + 30, 140, 20)) {
-                                    browser_app.active_tab = 0;
-                                    browser_app.set_url(b"minos://help");
-                                    browser_app.navigate();
-                                } else if gui::in_rect(mx, my, (wx + 152, wy + 30, 85, 20)) {
-                                    browser_app.active_tab = 1;
-                                    browser_app.set_url(b"minos://cats");
-                                    browser_app.navigate();
-                                } else if gui::in_rect(mx, my, (wx + 241, wy + 30, 100, 20)) {
-                                    browser_app.active_tab = 3;
-                                    browser_app.page_loaded = true;
-                                } else if gui::in_rect(mx, my, (wx + 12, wy + 56, 22, 20)) {
+                                if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
                                     browser_app.back();
-                                } else if gui::in_rect(mx, my, (wx + 38, wy + 56, 22, 20)) {
+                                } else if gui::in_rect(mx, my, (wx + 38, wy + 32, 22, 20)) {
                                     browser_app.forward();
-                                } else if gui::in_rect(mx, my, (wx + 64, wy + 56, 22, 20)) {
+                                } else if gui::in_rect(mx, my, (wx + 64, wy + 32, 22, 20)) {
                                     browser_app.navigate();
-                                } else if gui::in_rect(mx, my, (wx + 94, wy + 56, ww.saturating_sub(160), 20)) {
+                                } else if gui::in_rect(mx, my, (wx + ww - 124, wy + 32, 58, 20)) {
+                                    browser_app.show_history();
+                                } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(224), 20)) {
                                     browser_app.focus_address_at(mx, wx + 100);
-                                } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 56, 50, 20)) {
+                                } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 32, 50, 20)) {
+                                    browser_app.navigate();
+                                } else if let Some(url) = browser_app.click_link_at(mx, my) {
+                                    // Sayfa içindeki bağlantıya tıklandı: geçmişe kaydet ve aç.
+                                    browser_app.set_url(url.as_bytes());
                                     browser_app.navigate();
                                 } else {
                                     browser_app.address_focused = false;
@@ -3458,7 +2721,6 @@ pub extern "C" fn _start() -> ! {
                         let tm_focused = app_is_focused(&compositor, 7);
                         let fm_focused = app_is_focused(&compositor, 0);
                         let set_focused = app_is_focused(&compositor, 1);
-                        let br_focused = app_is_focused(&compositor, 3);
 
                         if terminal_focused {
                             terminal_app.history_up();
@@ -3478,8 +2740,6 @@ pub extern "C" fn _start() -> ! {
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_prev();
-                        } else if br_focused && browser_app.focused_control < 3 {
-                            browser_app.select_tab_prev();
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x -= 0.1;
                         }
@@ -3508,7 +2768,6 @@ pub extern "C" fn _start() -> ! {
                         let tm_focused = app_is_focused(&compositor, 7);
                         let fm_focused = app_is_focused(&compositor, 0);
                         let set_focused = app_is_focused(&compositor, 1);
-                        let br_focused = app_is_focused(&compositor, 3);
 
                         if terminal_focused {
                             terminal_app.history_down();
@@ -3528,8 +2787,6 @@ pub extern "C" fn _start() -> ! {
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_next();
-                        } else if br_focused && browser_app.focused_control < 3 {
-                            browser_app.select_tab_next();
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x += 0.1;
                         }
@@ -3580,7 +2837,7 @@ pub extern "C" fn _start() -> ! {
                                 browser_app.address_move_left_ext(keyboard.shift);
                             }
                         } else {
-                            browser_app.select_tab_prev();
+                            browser_app.focus_prev_control();
                         }
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y -= 0.1;
@@ -3635,7 +2892,7 @@ pub extern "C" fn _start() -> ! {
                                 browser_app.address_move_right_ext(keyboard.shift);
                             }
                         } else {
-                            browser_app.select_tab_next();
+                            browser_app.focus_next_control();
                         }
                     }
                 }
@@ -3818,13 +3075,11 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 3) {
                         enter_char_consumed = true;
                         match browser_app.focused_control {
-                            0 => { browser_app.active_tab = 0; browser_app.set_url(b"minos://help"); browser_app.navigate(); }
-                            1 => { browser_app.active_tab = 1; browser_app.set_url(b"minos://cats"); browser_app.navigate(); }
-                            2 => { browser_app.active_tab = 3; browser_app.page_loaded = true; }
-                            3 => browser_app.back(),
-                            4 => browser_app.forward(),
-                            5 | 7 => browser_app.navigate(),
-                            6 => browser_app.navigate(),
+                            0 => browser_app.back(),
+                            1 => browser_app.forward(),
+                            2 => browser_app.navigate(),
+                            3 => browser_app.show_history(),
+                            4 | 5 => browser_app.navigate(),
                             _ => {}
                         }
                     } else if app_is_focused(&compositor, 8) {
@@ -4178,7 +3433,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 let app_id = w.app_id as usize;
                 let (cx, cy, cw, ch) = w.content_rect();
-                let c_h = window_content_h(app_id, w.height, w.width, &filemanager_app, &notepad_app);
+                let c_h = window_content_h(app_id, w.height, w.width, &filemanager_app, &notepad_app, &browser_app);
                 let c_w = cw;
                 let over_content = gui::in_rect(mx, my, (cx, cy, cw, ch));
                 if over_content && (c_h > ch || c_w > cw) {
@@ -4939,182 +4194,3 @@ pub extern "C" fn _start() -> ! {
         }
     }
 }
-
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
-    struct PanicSerial;
-    impl FmtWrite for PanicSerial {
-        fn write_str(&mut self, text: &str) -> core::fmt::Result {
-            serial_print(text);
-            Ok(())
-        }
-    }
-
-    serial_print("\n==================== [ KERNEL PANIC ] ====================\n");
-    serial_print("[PANIC] Mesaj: ");
-    let mut output = PanicSerial;
-    let _ = writeln!(&mut output, "{}", info.message());
-    if let Some(location) = info.location() {
-        serial_print("[PANIC] Konum: ");
-        let _ = writeln!(
-            &mut output,
-            "{}:{}:{}",
-            location.file(),
-            location.line(),
-            location.column()
-        );
-    }
-    serial_print("==========================================================\n");
-
-    // Ekrana doğrudan siyah zemin üzerine turuncu hata ekranı çiz
-    unsafe {
-        if !PANIC_FB_ADDR.is_null() && PANIC_FB_W > 0 && PANIC_FB_H > 0 {
-            let mut pfb = drivers::video::Framebuffer::new(
-                PANIC_FB_ADDR,
-                PANIC_FB_W,
-                PANIC_FB_H,
-                PANIC_FB_PITCH,
-                PANIC_FB_BPP,
-            );
-
-            // Siyah arka plan (0x000000)
-            pfb.draw_rect(0, 0, PANIC_FB_W, PANIC_FB_H, 0x000000);
-
-            // Turuncu renk tonları:
-            // Parlak Turuncu: 0xFFA500, Koyu Turuncu: 0xFF8C00, Açık Turuncu: 0xFFB347
-            const ORANGE_TITLE: u32 = 0xFFA500;
-            const ORANGE_TEXT: u32 = 0xFF8C00;
-            const ORANGE_MUTED: u32 = 0xCC7000;
-
-            let center_x = 40;
-            let mut cur_y = 50;
-
-            // 1. Başlık
-            gui::MinGuiCompositor::draw_string_scaled(
-                &mut pfb,
-                center_x,
-                cur_y,
-                "!!! minOs KERNEL PANIC !!!",
-                ORANGE_TITLE,
-                2,
-            );
-            cur_y += 50;
-
-            // 2. Çizgi
-            pfb.draw_rect(center_x, cur_y, PANIC_FB_W.saturating_sub(80), 2, ORANGE_MUTED);
-            cur_y += 30;
-
-            // 3. Hata Açıklaması
-            gui::MinGuiCompositor::draw_string(
-                &mut pfb,
-                center_x,
-                cur_y,
-                "Çekirdek çalışırken kritik bir hata ile karşılaştı ve durduruldu.",
-                ORANGE_TEXT,
-            );
-            cur_y += 24;
-
-            // 4. Hata Mesajı
-            let mut msg_buf = gui::TextBuf::new();
-            msg_buf.push_str("Hata: ");
-            struct StrBufWriter<'a>(&'a mut gui::TextBuf);
-            impl<'a> FmtWrite for StrBufWriter<'a> {
-                fn write_str(&mut self, s: &str) -> core::fmt::Result {
-                    self.0.push_str(s);
-                    Ok(())
-                }
-            }
-            let _ = write!(&mut StrBufWriter(&mut msg_buf), "{}", info.message());
-            gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, msg_buf.as_str(), 0xFFFFFF);
-            cur_y += 26;
-
-            // 5. Konum
-            if let Some(loc) = info.location() {
-                let mut loc_buf = gui::TextBuf::new();
-                loc_buf.push_str("Konum: ");
-                loc_buf.push_str(loc.file());
-                loc_buf.push_byte(b':');
-                loc_buf.push_usize(loc.line() as usize);
-                loc_buf.push_byte(b':');
-                loc_buf.push_usize(loc.column() as usize);
-                gui::MinGuiCompositor::draw_string(&mut pfb, center_x, cur_y, loc_buf.as_str(), ORANGE_MUTED);
-                cur_y += 36;
-            } else {
-                cur_y += 10;
-            }
-
-            // 6. Bilgilendirme ve Yeniden Başlatma Talimatı
-            pfb.draw_rect(center_x, cur_y, PANIC_FB_W.saturating_sub(80), 1, ORANGE_MUTED);
-            cur_y += 24;
-
-            gui::MinGuiCompositor::draw_string(
-                &mut pfb,
-                center_x,
-                cur_y,
-                "Yeniden başlatmak (Restart) için herhangi bir tuşa [ENTER / ESC / SPACE] basınız.",
-                ORANGE_TITLE,
-            );
-            cur_y += 24;
-            gui::MinGuiCompositor::draw_string(
-                &mut pfb,
-                center_x,
-                cur_y,
-                "Press any key [ENTER / ESC / SPACE] to reboot the system.",
-                ORANGE_MUTED,
-            );
-
-            // Ekrana blit et
-            pfb.flush();
-        }
-    }
-
-    // Tuş bekleme ve Yeniden Başlatma (Restart) Döngüsü
-    loop {
-        // PS/2 klavye kontrolcüsünde (port 0x64 status bit 0) veri var mı?
-        let has_key = unsafe {
-            let status: u8;
-            core::arch::asm!("in al, 0x64", out("al") status, options(nomem, nostack, preserves_flags));
-            status & 0x01 != 0
-        };
-
-        if has_key {
-            let scancode: u8;
-            unsafe {
-                core::arch::asm!("in al, 0x60", out("al") scancode, options(nomem, nostack, preserves_flags));
-            }
-            // Tuş basıldı (Make code < 0x80)
-            if scancode < 0x80 {
-                serial_print("[PANIC] Tusa basildi. Sistem yeniden baslatiliyor (Reboot)...\n");
-
-                // 1. Yöntem: Klavye kontrolcüsü üzerinden reset (0x64 portuna 0xFE gönder)
-                unsafe {
-                    core::arch::asm!("out 0x64, al", in("al") 0xFEu8, options(nomem, nostack, preserves_flags));
-                }
-
-                // 2. Yöntem: ACPI / Bochs / QEMU reset portları (0xCF9 veya 0x604)
-                unsafe {
-                    core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8, options(nomem, nostack, preserves_flags));
-                }
-
-                // 3. Yöntem: Triple Fault (Boş IDT yükleyip yazılımsal kesme tetikle)
-                #[repr(C, packed)]
-                struct Idtr {
-                    limit: u16,
-                    base: u64,
-                }
-                let null_idtr = Idtr { limit: 0, base: 0 };
-                unsafe {
-                    core::arch::asm!("lidt [{}]", in(reg) &null_idtr, options(nomem, nostack, preserves_flags));
-                    core::arch::asm!("int3", options(nomem, nostack, preserves_flags));
-                }
-            }
-        }
-
-        core::hint::spin_loop();
-    }
-}
-
-
-
-
-

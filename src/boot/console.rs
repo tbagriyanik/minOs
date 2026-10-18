@@ -1,0 +1,56 @@
+//! Seri konsol ciktisi ve yeniden baslatma yardimcilari.
+
+use crate::{fs, serial};
+
+#[inline(never)]
+fn serial_print(s: &str) {
+    serial::print(s);
+}
+
+fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
+    let log = serial::log_snapshot();
+    let _ = vfs.write_file("/root/Documents/boot.log", &log);
+}
+
+#[inline(never)]
+fn serial_print_dec(v: u64) {
+    if v == 0 { serial_print("0"); return; }
+    let mut value = v;
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while value > 0 {
+        i -= 1;
+        buf[i] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
+}
+
+#[inline(never)]
+fn serial_print_hex(v: u64) {
+    serial_print("0x");
+    if v == 0 { serial_print("0"); return; }
+    let mut value = v;
+    let mut buf = [0u8; 16];
+    let mut i = buf.len();
+    let hex = b"0123456789ABCDEF";
+    while value > 0 {
+        i -= 1;
+        buf[i] = hex[(value & 0xF) as usize];
+        value >>= 4;
+    }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
+}
+
+
+fn restart_system() -> ! {
+    #[cfg(minos_boot_log)]
+    serial_print("[minOs] Restart requested from Start Menu.\n");
+    unsafe {
+        // QEMU/PC reset control register, then legacy 8042 fallback.
+        core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);
+        core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8);
+        core::arch::asm!("cli");
+    }
+    loop { core::hint::spin_loop(); }
+}

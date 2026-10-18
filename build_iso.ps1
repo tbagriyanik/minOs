@@ -21,6 +21,7 @@ if (Test-Path $OutputDir) {
     } catch {}
 }
 New-Item -ItemType Directory -Force -Path "$OutputDir\boot\limine" | Out-Null
+New-Item -ItemType Directory -Force -Path "$OutputDir\limine" | Out-Null
 New-Item -ItemType Directory -Force -Path "$OutputDir\EFI\BOOT" | Out-Null
 
 # 2. Bootloader ve Konfigürasyon Dosyalarini Kopyala
@@ -30,6 +31,8 @@ if (Test-Path "boot\limine.conf") {
     # Limine searches the ISO root first on CD/El Torito boots. Keep the
     # config in the boot directory too for compatibility with older layouts.
     Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\limine.conf"
+    Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\limine\limine.conf"
+    Copy-Item -Force "boot\limine.conf" -Destination "$OutputDir\EFI\BOOT\limine.conf"
 }
 # Copy background image for Limine
 if (Test-Path "boot\cat_small.png") {

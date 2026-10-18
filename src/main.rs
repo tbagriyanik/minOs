@@ -3,6 +3,7 @@
 #![feature(alloc_error_handler)]
 
 extern crate alloc;
+use alloc::vec::Vec;
 
 use linked_list_allocator::LockedHeap;
 
@@ -50,6 +51,14 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
 #[allow(static_mut_refs)]
 fn init_heap() {
     unsafe { ALLOCATOR.lock().init(HEAP_MEMORY.as_mut_ptr(), HEAP_SIZE); }
+}
+
+fn persist_boot_log(vfs: &mut fs::vfs::VirtualFileSystem, log: &mut Vec<u8>, line: &str) {
+    log.extend_from_slice(line.as_bytes());
+    log.push(b'\n');
+    // FAT32/Ext2 mounted ise kok dizine kalici olarak yazar. ISO9660 ise
+    // read-only oldugu icin VFS bellekte tutar ve yazma basarisiz olabilir.
+    let _ = vfs.write_file("boot.log", log);
 }
 pub mod arch;
 pub mod mm;
@@ -274,28 +283,51 @@ pub extern "C" fn _start() -> ! {
 
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
     let mut fs_mgr = fs::FileSystemManager::new();
+    let mut boot_log = Vec::with_capacity(4096);
+    persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] kernel filesystem initialized");
 
-    // 3. Ağ ve Ses Sürücülerinin Başlatımı (HDA + e1000)
-    // Sabit adresler (0x300000, 0x400000) yerine PMM'den güvenli, çakışmayan bitişik DMA çerçeveleri tahsis et.
-    // HDA DMA Havuzu: ~20 KB (~5 sayfa)
-    let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
-    if hda_dma_phys.is_some() {
-        serial_print("[DMA] HDA ses surucusu icin dinamik DMA havuzu tahsis edildi.\n");
+    // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
+    // Profil belirtilmemisse varsayilan guvenli moddur.
+    let cmdline = limine_boot_cmdline().unwrap_or("");
+    let driver_profile = if cmdline_has_token(cmdline, "full") {
+        "full"
+    } else if cmdline_has_token(cmdline, "hardware") {
+        "hardware"
+    } else if cmdline_has_token(cmdline, "audio") {
+        "audio"
+    } else {
+        "safe"
+    };
+    serial_print("[DRIVERS] Profil: ");
+    serial_print(driver_profile);
+    serial_print("\n");
+    let profile_line = alloc::format!("[DRIVERS] profile: {}", driver_profile);
+    persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, &profile_line);
+
+    if driver_profile == "audio" || driver_profile == "full" {
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA starting");
+        let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
+        drivers::hda::init(hda_dma_phys);
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA finished");
     }
-    drivers::hda::init(hda_dma_phys);
 
-    // e1000 RX/TX Ring ve Tampon Havuzu: ~132 KB (~33 sayfa)
-    let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
-    if e1000_dma_phys.is_some() {
-        serial_print("[DMA] e1000 ag karti icin dinamik DMA ring havuzu tahsis edildi.\n");
+    if driver_profile == "hardware" || driver_profile == "full" {
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 starting");
+        let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
+        drivers::e1000::init(e1000_dma_phys);
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 finished");
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network starting");
+        drivers::netstack::init();
+        let _ = drivers::netstack::dhcp_request();
+        drivers::netstack::run_network_self_test();
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network finished");
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB starting");
+        drivers::usb::init();
+        drivers::usb::test_usb_subsystems();
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB finished");
     }
-    drivers::e1000::init(e1000_dma_phys);
 
-    drivers::netstack::init();
-    let _ = drivers::netstack::dhcp_request();
-    drivers::netstack::run_network_self_test();
-    drivers::usb::init();
-    drivers::usb::test_usb_subsystems();
+    persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] driver profile finished");
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
 

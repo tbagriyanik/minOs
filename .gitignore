@@ -25,3 +25,6 @@ target/x86_64-minos/release/minos-kernel.d
 disk.qcow2
 
 disk.raw
+tools/cygiconv-2.dll
+tools/cygwin1.dll
+tools/xorriso.exe

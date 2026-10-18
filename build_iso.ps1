@@ -89,21 +89,39 @@ public static class LimineIsoPatcher {
             byte[] bytes = File.ReadAllBytes(isoPath);
             byte[] bootBytes = File.ReadAllBytes(bootBinPath);
 
-            int catalogLba = -1;
+            // El Torito Boot Record Volume Descriptor, Volume Descriptor
+            // Sequence icinde type=0 (Boot Record) olarak yer alir ve
+            // genellikle 17. sektordedir. Boot catalog LBA'si bu
+            // descriptor'in 71..74 byte'larinda LITTLE-ENDIAN tutulur.
+            //
+            // UYARI: PVD (type=1) icindeki ayni offset El Torito boot
+            // catalog LBA'si DEGILDIR; oradan okumak ISO'yu bozar.
+            int bootRecordOffset = -1;
             for (int lba = 16; lba < 32; lba++) {
                 int offset = lba * 2048;
-                if (bytes[offset] == 0 &&
+                bool isIsoMagic =
                     bytes[offset + 1] == 'C' && bytes[offset + 2] == 'D' &&
-                    bytes[offset + 3] == '0' && bytes[offset + 4] == '0' && bytes[offset + 5] == '1') {
-                    catalogLba = BitConverter.ToInt32(bytes, offset + 71);
+                    bytes[offset + 3] == '0' && bytes[offset + 4] == '0' &&
+                    bytes[offset + 5] == '1';
+                if (isIsoMagic && bytes[offset] == 0) { // 0 = Boot Record descriptor
+                    bootRecordOffset = offset;
                     break;
                 }
             }
 
-            if (catalogLba <= 0) return false;
+            if (bootRecordOffset < 0) return false;
 
+            int catalogLba = BitConverter.ToInt32(bytes, bootRecordOffset + 71);
+
+            if (catalogLba <= 0 || (catalogLba * 2048) + 64 > bytes.Length) return false;
+
+            // Boot Catalog Validation Entry (32 bayt) sonrasinda ilk boot kaydi gelir.
             int entryOffset = (catalogLba * 2048) + 32;
             int bootLba = BitConverter.ToInt32(bytes, entryOffset + 8);
+
+            // Sinir kontrolu: yamalanacak sektor ISO'nun icinde olmali.
+            if (bootLba <= 0 || (bootLba * 2048) + 64 > bytes.Length) return false;
+
             int bootOffset = bootLba * 2048;
 
             uint csum = 0;
@@ -139,6 +157,15 @@ $mkisofs = Get-Command "mkisofs.exe" -ErrorAction SilentlyContinue
 if (-not $xorriso -and (Test-Path "tools\xorriso.exe")) { $xorriso = (Get-Item "tools\xorriso.exe").FullName }
 if (-not $oscdimg -and (Test-Path "tools\oscdimg.exe")) { $oscdimg = (Get-Item "tools\oscdimg.exe").FullName }
 if (-not $mkisofs -and (Test-Path "tools\mkisofs.exe")) { $mkisofs = (Get-Item "tools\mkisofs.exe").FullName }
+
+# Limine'nin fiziksel USB/UEFI ile uyumlu hybrid ISO tarifi xorriso kullanir.
+# xorriso mevcutsa oscdimg yolunu bilincli olarak devre disi birak.
+if ($xorriso) {
+    $oscdimg = $null
+    $mkisofs = $null
+} elseif ($oscdimg) {
+    Write-Warning "xorriso bulunamadi; oscdimg yalnizca sanal makine testleri icin kullaniliyor. Fiziksel USB icin xorriso kurulmasi onerilir."
+}
 
 if ($oscdimg) {
     $tempIso = "target\temp_build.iso"
@@ -178,9 +205,13 @@ if ($oscdimg) {
     if (Test-Path "$OutputDir\boot\limine\limine-uefi-cd.bin") {
         # Limine'nin UEFI El Torito imajini kullan. BOOTX64.EFI dosyasi
         # aramak yerine UEFI boot imaji dogrudan ISO'ya eklenmelidir.
-        & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
+        & $xorriso -as mkisofs -R -r -J -hfsplus -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table --efi-boot boot/limine/limine-uefi-cd.bin -efi-boot-part --efi-boot-image --protective-msdos-label -o $IsoName $OutputDir
     } else {
-        & $xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
+        & $xorriso -as mkisofs -R -r -J -hfsplus -apm-block-size 2048 -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -o $IsoName $OutputDir
+    }
+
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IsoName)) {
+        throw "xorriso ISO uretimi basarisiz oldu (exit code: $LASTEXITCODE)."
     }
 
     if (Test-Path "tools\limine.exe") {

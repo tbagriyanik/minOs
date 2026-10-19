@@ -1563,7 +1563,7 @@ fn report(ok: bool, label: &str, all_ok: &mut bool) {
 /// Widget ağacı, dinamik yerleşim, Tab sırası ve olay yönlendirmesini
 /// gerçek bir ağaç üzerinde doğrular. Çizim yolu da çalıştırılır; böylece
 /// odak halkası ve tüm denetim çizimleri çekirdekte sınanmış olur.
-pub fn self_test(fb: &mut Framebuffer) {
+pub fn self_test(fb: &mut Framebuffer) -> bool {
     crate::serial_print("[UI-TEST] --- Widget/Component Agaci Dogrulama Testi ---\n");
     let mut ok = true;
 
@@ -1718,4 +1718,5 @@ pub fn self_test(fb: &mut Framebuffer) {
     } else {
         "[UI-TEST] Sonuc: BASARISIZ TESTLER VAR\n"
     });
+    ok
 }

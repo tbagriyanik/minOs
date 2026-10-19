@@ -4,6 +4,7 @@
 //! Bu moduller `src/main.rs` icinden ayristirildi (Asama 1 refactor).
 
 pub mod console;
+pub mod text_console;
 pub mod cpu;
 pub mod devices;
 pub mod limine;

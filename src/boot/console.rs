@@ -5,6 +5,7 @@ use crate::{fs, serial};
 #[inline(never)]
 pub fn serial_print(s: &str) {
     serial::print(s);
+    crate::boot::text_console::write(s);
 }
 
 pub fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {

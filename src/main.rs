@@ -88,6 +88,7 @@ use boot::progress::*;
 use boot::time::*;
 use desktop::helpers::*;
 
+/// Basit metin çizim fonksiyonu (font sistemi olmadan)
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     arch::x86_64::enable_sse();
@@ -95,9 +96,56 @@ pub extern "C" fn _start() -> ! {
     // Seri konsolu ilk iş olarak hazırla: sonraki tüm loglar (PMM/VMM/SMP…)
     // 115200 8N1 ile çerçeveye oturur, VirtualBox yakalaması bozulmaz.
     serial::init();
-    init_timebase();
     // Initialize heap for dynamic allocations
     init_heap();
+    // Install early display output before PMM/VMM/SMP and device probes.
+    let (fb_ptr, width, height, pitch, bpp) = unsafe {
+        let resp = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
+            .filter(|resp| !resp.is_null())
+            .unwrap_or_else(|| boot::text_console::fatal("Limine framebuffer yaniti yok"));
+        let count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
+        let entries = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
+        if count == 0 || !is_mapped_limine_ptr(entries) {
+            boot::text_console::fatal("Limine framebuffer listesi gecersiz; GUI acilmadi");
+        }
+        let entry = core::ptr::read_volatile(entries);
+        if !is_mapped_limine_ptr(entry) {
+            boot::text_console::fatal("Limine framebuffer girdisi gecersiz; GUI acilmadi");
+        }
+        let info = core::ptr::read_volatile(entry);
+        if info.address.is_null() || !is_canonical_ptr(info.address as *const u8) {
+            boot::text_console::fatal("Limine framebuffer adresi gecersiz; GUI acilmadi");
+        }
+        (info.address as *mut u32, info.width as usize, info.height as usize,
+         info.pitch as usize, info.bpp as usize)
+    };
+    if bpp != 32 || width < 320 || height < 200 || pitch < width.saturating_mul(4)
+        || pitch % 4 != 0 || width.checked_mul(height).map_or(true, |n| n > drivers::video::BACKBUFFER_LEN)
+    {
+        boot::text_console::fatal("Framebuffer dogrulamasi basarisiz; GUI acilmadi");
+    }
+    let mut fb = unsafe { drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp) };
+    if !fb.verify_bounds() {
+        boot::text_console::fatal("Framebuffer cizim sinirlari dogrulanamadi; GUI acilmadi");
+    }
+    unsafe {
+        PANIC_FB_ADDR = fb_ptr;
+        PANIC_FB_W = width;
+        PANIC_FB_H = height;
+        PANIC_FB_PITCH = pitch;
+        PANIC_FB_BPP = bpp;
+        boot::text_console::init(drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp));
+    }
+    serial_print("[BOOT] UEFI metin konsolu aktif; donanim ve bellek hazirlaniyor.\n");
+    serial_print("[BOOT] PIT/TSC zaman tabani baslatiliyor...\n");
+    if init_timebase() {
+        serial_print("[BOOT] PIT/TSC zaman tabani hazir.\n");
+    } else {
+        serial_print("[BOOT] UYARI: PIT yanit vermedi; CPUID TSC tahmini kullaniliyor.\n");
+    }
+    serial_print("[VIDEO] "); serial_print_dec(width as u64); serial_print("x");
+    serial_print_dec(height as u64); serial_print(" @ "); serial_print_dec(bpp as u64); serial_print(" bpp.\n");
+
     #[cfg(minos_boot_log)]
     serial_print("[minOs] Kernel _start reached!\n");
     #[cfg(minos_boot_log)]
@@ -121,7 +169,14 @@ pub extern "C" fn _start() -> ! {
     };
     drivers::set_hhdm_offset(hhdm_offset);
 
+    // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
+    serial_print("[BOOT] Sanal dosya sistemi başlatılıyor...\n");
+    let mut fs_mgr = fs::FileSystemManager::new();
+    let mut boot_log = Vec::with_capacity(4096);
+    persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] kernel filesystem initialized");
+
     // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
+    serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatiliyor...\n");
     arch::x86_64::init_interrupts();
     let mut memory_mgr = mm::MemoryManager::new();
     unsafe {
@@ -172,6 +227,7 @@ pub extern "C" fn _start() -> ! {
     serial_print("[PMM] Fiziksel bellek yoneticisi baslatildi.\n");
 
     // PMM Kendi Kendini Test Etme (Tahsisat ve Geri Birakma Dogrulamasi)
+    serial_print("[BOOT] Bellek yöneticisi test ediliyor...\n");
     if let (Some(f1), Some(f2)) = (memory_mgr.pmm.allocate_frame(), memory_mgr.pmm.allocate_frame()) {
         if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
             serial_print("[PMM] Cerceve tahsis testi basarili (cakismayan cerceveler dogrulandi).\n");
@@ -181,6 +237,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi (Sanal Bellek Eşleme ve Yükleme Testi)
+    serial_print("[BOOT] Sanal bellek yöneticisi test ediliyor...\n");
     let mut address_space = memory_mgr.kernel_address_space();
     let test_vaddr = mm::loader::USER_CODE_BASE;
     if let Some(frame) = memory_mgr.pmm.allocate_frame() {
@@ -205,6 +262,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
+    serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
     memory_mgr.proc_mgr.init_kernel_process();
     // Sistem cagrilarini test et (sys_getpid & sys_alloc_frame)
     let test_pid = mm::process::syscall_dispatch(mm::process::sys_nos::SYS_GETPID, 0, 0, 0, &mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
@@ -217,38 +275,22 @@ pub extern "C" fn _start() -> ! {
     }
 
     // Bellek tahsisi, sayfalama ve kullanıcı kipi izolasyon doğrulama testi
+    serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
 
     // Süreç yaşam döngüsü, kaza, geçersiz syscall ve kaynak temizleme testi
+    serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
 
-    // 1b. SMP + Ring3: kendi GDT'miz (kullanıcı segmentleri + TSS), AP açılışı,
-    // Ring3 izolasyon demosu ve paralel sağlama toplamı (checksum) doğrulaması.
+    // Hardware-safe mode: do not touch APIC/SMP until the laptop path is stable.
+    serial_print("[BOOT] Tek CPU modu secildi; APIC/SMP baslatmasi atlandi.\n");
+    serial_print("[SMP] BSP GDT yukleniyor...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };
-    let cpu_total = arch::x86_64::smp::init();
-    let cpu_online = arch::x86_64::smp::wait_for_aps(50_000_000);
-    arch::x86_64::smp::print_locked("[SMP] CPU durumu: ");
-    arch::x86_64::smp::print_locked_dec(cpu_online as u64);
-    arch::x86_64::smp::print_locked("/");
-    arch::x86_64::smp::print_locked_dec(cpu_total as u64);
-    arch::x86_64::smp::print_locked(" cekirdek cevrimici.\n");
-    for cpu in 1..cpu_total {
-        let hb0 = arch::x86_64::smp::heartbeat(cpu);
-        arch::x86_64::smp::print_locked("[SMP] AP");
-        arch::x86_64::smp::print_locked_dec(cpu as u64);
-        arch::x86_64::smp::print_locked(" kalp atisi: ");
-        arch::x86_64::smp::print_locked_dec(hb0);
-        arch::x86_64::smp::print_locked("\n");
-    }
-    if arch::x86_64::ring3::demo(&mut address_space, &mut memory_mgr.pmm) {
-        arch::x86_64::smp::print_locked("[RING3] Kullanic kipi izolasyon demosu: TAMAM.\n");
-    } else {
-        arch::x86_64::smp::print_locked("[RING3] Kullanic kipi izolasyon demosu: BASARISIZ.\n");
-    }
+    serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
 
     // 1c. Donanım Kesmeleri ve APIC Zamanlayıcı (APIC Timer & Hardware Interrupts)
-    arch::x86_64::apic::init_timer();
-    arch::x86_64::smp::print_locked("[APIC] Local APIC Timer ve donanim kesme vektorleri (0x20) aktif.\n");
+    serial_print("[BOOT] APIC zamanlayıcı başlatılıyor...\n");
+    serial_print("[APIC] APIC timer atlandi; TSC monotonic saat kullaniliyor.\n");
     // Paralel sağlama toplamı: AP'ler + BSP aynı tamponu parçalı işler.
     {
         const SUM_FRAMES: usize = 64;
@@ -281,23 +323,12 @@ pub extern "C" fn _start() -> ! {
         }
     }
 
-    // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
-    let mut fs_mgr = fs::FileSystemManager::new();
-    let mut boot_log = Vec::with_capacity(4096);
-    persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] kernel filesystem initialized");
-
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
-    // Profil belirtilmemisse varsayilan guvenli moddur.
+    serial_print("[BOOT] Donanım sürücüleri başlatılıyor...\n");
     let cmdline = limine_boot_cmdline().unwrap_or("");
-    let driver_profile = if cmdline_has_token(cmdline, "full") {
-        "full"
-    } else if cmdline_has_token(cmdline, "hardware") {
-        "hardware"
-    } else if cmdline_has_token(cmdline, "audio") {
-        "audio"
-    } else {
-        "safe"
-    };
+    let driver_profile = if cmdline_has_token(cmdline, "full") { "full" }
+        else if cmdline_has_token(cmdline, "hardware") { "hardware" }
+        else if cmdline_has_token(cmdline, "audio") { "audio" } else { "safe" };
     serial_print("[DRIVERS] Profil: ");
     serial_print(driver_profile);
     serial_print("\n");
@@ -305,104 +336,53 @@ pub extern "C" fn _start() -> ! {
     persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, &profile_line);
 
     if driver_profile == "audio" || driver_profile == "full" {
+        serial_print("[DRIVER] HDA audio sürücüsü başlatılıyor...\n");
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA starting");
         let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
-        drivers::hda::init(hda_dma_phys);
+        let Some(hda_dma_phys) = hda_dma_phys else {
+            boot::text_console::fatal("HDA DMA bellek tahsisati basarisiz");
+        };
+        drivers::hda::init(Some(hda_dma_phys));
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA finished");
+        serial_print("[DRIVER] HDA audio sürücüsü hazır.\n");
     }
 
     if driver_profile == "hardware" || driver_profile == "full" {
+        serial_print("[DRIVER] e1000 ağ sürücüsü başlatılıyor...\n");
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 starting");
         let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
-        drivers::e1000::init(e1000_dma_phys);
+        let Some(e1000_dma_phys) = e1000_dma_phys else {
+            boot::text_console::fatal("e1000 DMA bellek tahsisati basarisiz");
+        };
+        drivers::e1000::init(Some(e1000_dma_phys));
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 finished");
+        serial_print("[DRIVER] e1000 ağ sürücüsü hazır.\n");
+
+        serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network starting");
         drivers::netstack::init();
         let _ = drivers::netstack::dhcp_request();
         drivers::netstack::run_network_self_test();
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network finished");
+        serial_print("[DRIVER] Ağ protokolü hazır.\n");
+
+        serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB starting");
         drivers::usb::init();
         drivers::usb::test_usb_subsystems();
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB finished");
+        serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }
 
     persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] driver profile finished");
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
-
-    // 4. Limine Framebuffer Alımı
-    let (fb_ptr, width, height, pitch, bpp) = unsafe {
-        // SAFETY: the response pointer is validated before being dereferenced.
-        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
-            .filter(|resp| !resp.is_null())
-        {
-            let framebuffer_count = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffer_count));
-            let fb_ptr_ptr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).framebuffers));
-            if framebuffer_count == 0 || !is_mapped_limine_ptr(fb_ptr_ptr) {
-    serial_print("[minOs] ERROR: Limine framebuffer list is NULL!\n");
-                loop { core::hint::spin_loop(); }
-            }
-            // SAFETY: fb_ptr_ptr is non-null/aligned/canonical and points to the
-            // first framebuffer entry of the response above.
-            let fb_info_ptr = core::ptr::read_volatile(fb_ptr_ptr);
-            if !is_mapped_limine_ptr(fb_info_ptr) {
-    serial_print("[minOs] ERROR: Limine framebuffer entry is NULL!\n");
-                loop { core::hint::spin_loop(); }
-            }
-            let fb_info = core::ptr::read_volatile(fb_info_ptr);
-            if fb_info.address.is_null() || !is_canonical_ptr(fb_info.address as *const u8) {
-    serial_print("[minOs] ERROR: Limine framebuffer buffer address is NULL or non-canonical!\n");
-                loop { core::hint::spin_loop(); }
-            }
-            (
-                fb_info.address as *mut u32,
-                fb_info.width as usize,
-                fb_info.height as usize,
-                fb_info.pitch as usize,
-                fb_info.bpp as usize,
-            )
-        } else {
-    serial_print("[minOs] ERROR: Limine Framebuffer response is NULL!\n");
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-    };
-
-    serial_print("[VIDEO] Limine Framebuffer alindi: ");
-    serial_print_dec(width as u64);
-    serial_print("x");
-    serial_print_dec(height as u64);
-    serial_print(" @ ");
-    serial_print_dec(bpp as u64);
-    serial_print(" bpp | Pitch: ");
-    serial_print_dec(pitch as u64);
-    serial_print(" byte (");
-    serial_print_dec((pitch / 4) as u64);
-    serial_print(" kelime) | Adres: ");
-    serial_print_hex(fb_ptr as u64);
-    serial_print("\n");
-
-    let mut fb = unsafe {
-        drivers::video::Framebuffer::new(fb_ptr, width, height, pitch, bpp)
-    };
-    unsafe {
-        PANIC_FB_ADDR = fb_ptr;
-        PANIC_FB_W = width;
-        PANIC_FB_H = height;
-        PANIC_FB_PITCH = pitch;
-        PANIC_FB_BPP = bpp;
-    }
-
-    if fb.verify_bounds() {
-        serial_print("[VIDEO] Cizim sinirlari, kirpma ve pitch guvenligi dogrulandi.\n");
-    } else {
-        serial_print("[VIDEO] UYARI: Cizim sinirlari veya pitch dogrulamasi basarisiz!\n");
-    }
+    serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
 
     // 4b. Gelişmiş grafik sürücüleri: BGA/VMware/VGA yetenek taraması.
     let gpu_caps = drivers::gpu::init();
+    // GPU initialization status is mirrored to the early text console.
+
     if gpu_caps.bga_present {
         serial_print("[GPU] BGA algilandi, cozunurluk degisimi acik.\n");
         // BGA grafik modda HW sprite yoktur; yazılım imleci çizilmeye devam
@@ -412,12 +392,12 @@ pub extern "C" fn _start() -> ! {
     } else {
         serial_print("[GPU] BGA yok; cozunurluk Limine ile sabit, yazilim imleci.\n");
     }
-
     // 5. PS/2 Donanım Sürücüleri
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
     serial_print("[BOOT] PS/2 hazir.\n");
+    // Input initialization continues without an artificial delay.
 
     // 5b. Tema motorunu başlat
     gui::theme::init();
@@ -434,41 +414,19 @@ pub extern "C" fn _start() -> ! {
     serial_print(" installed=");
     serial_print(if installed { "1" } else { "0" });
     serial_print("\n");
+
     if wants_installed && !installed {
         serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
-        gui::render_boot_error(&mut fb, width, height);
-        loop {
-            let update = drivers::ps2::poll_input(mouse, keyboard, width as i32, height as i32);
-            if update.keyboard {
-                serial_print("[BOOT] Yeniden baslatma tusu algilandi; sistem yeniden baslatiliyor...\n");
-                restart_system();
-            }
-            core::hint::spin_loop();
-        }
+        boot::text_console::fatal("Kurulu sistem secildi ancak MINOS.SYS bulunamadi");
     }
+
+    serial_print("[BOOT] Tum kritik alt sistemler baslatildi. GUI ve uygulamalar yukleniyor...\n");
 
     // 5d. Eğer diskte varsa (MINOS.SYS + fat32) — kurulu sistem —
     // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
     // Live ortam ise welcome ekranı gösterilir.
-    if installed {
-        serial_print("[BOOT] Kurulu sistem tespit edildi; masaustu hazirlaniyor...\n");
-        for phase in 0..4 {
-            gui::render_loading_transition(&mut fb, width, height, phase,
-                gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
-            let frame_start = monotonic_ms();
-            while monotonic_ms().saturating_sub(frame_start) < 25 { core::hint::spin_loop(); }
-        }
-    } else {
-        // İlk açılış geçişi: merkezde minOs + hareketli kedi ve yükleme çubuğu.
-        for phase in 0..8 {
-            gui::render_loading_transition(&mut fb, width, height, phase,
-                gui::ui_text("Sistem yukleniyor", "Loading system"));
-            let frame_start = monotonic_ms();
-            while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
-        }
-    }
-
     // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
+    serial_print("[BOOT] Pencere yoneticisi ve uygulamalar hazirlaniyor...\n");
     let mut compositor = gui::MinGuiCompositor::new();
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
@@ -583,9 +541,30 @@ pub extern "C" fn _start() -> ! {
     compositor.active_window_idx = None;
 
     // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
-    serial_print("[BOOT] Gecis animasyonu bitti; arayuz kuruluyor.\n");
+    serial_print("[BOOT] Hosgeldin ekrani hazirlaniyor; grafik oz-denetimleri calistiriliyor.\n");
     // Widget/Component ağacı mimarisini (yerleşim, Tab odağı, olaylar) doğrula.
-    gui::widget::self_test(&mut fb);
+    if !gui::widget::self_test(&mut fb) {
+        boot::text_console::fatal("Grafik arayuz oz-denetimi basarisiz; GUI acilmadi");
+    }
+    serial_print("[BOOT] Grafik arayuz denetimleri tamamlandi.\n");
+    serial_print("[BOOT] Kritik denetimler tamamlandi; grafik arayuz baslatiliyor.\n");
+    boot::text_console::disable();
+    if installed {
+        serial_print("[BOOT] Kurulu sistem tespit edildi; masaustu hazirlaniyor...\n");
+        for phase in 0..4 {
+            gui::render_loading_transition(&mut fb, width, height, phase,
+                gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
+            let frame_start = monotonic_ms();
+            while monotonic_ms().saturating_sub(frame_start) < 25 { core::hint::spin_loop(); }
+        }
+    } else {
+        for phase in 0..8 {
+            gui::render_loading_transition(&mut fb, width, height, phase,
+                gui::ui_text("Sistem yukleniyor", "Loading system"));
+            let frame_start = monotonic_ms();
+            while monotonic_ms().saturating_sub(frame_start) < 45 { core::hint::spin_loop(); }
+        }
+    }
     if !installed {
         // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
         let mut welcome_was_left_down = false;
@@ -603,7 +582,7 @@ pub extern "C" fn _start() -> ! {
                 serial_print("[BOOT] Hosgeldin dongusu: Enter/ESC/tik bekleniyor (5sn zaman asimi aktif).\n");
                 welcome_announced = true;
             }
-            if welcome_dirty {
+            if welcome_dirty && !boot::text_console::is_active() {
                 gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
                 welcome_dirty = false;
             }
@@ -611,6 +590,11 @@ pub extern "C" fn _start() -> ! {
             if welcome_update.keyboard || welcome_update.mouse {
                 // Herhangi bir kullanıcı hareketi algılanırsa zaman aşımını sıfırla/uzat
                 welcome_start_time = monotonic_ms();
+               /* serial_print("[BOOT] Welcome input algilandi: keyboard=");
+                serial_print(if welcome_update.keyboard { "1" } else { "0" });
+                serial_print(" mouse=");
+                serial_print(if welcome_update.mouse { "1" } else { "0" });
+                serial_print("\n");*/
             }
             let (_tr_st, _tr_d, tr_n) = drivers::ps2::trace_last();
             if tr_n != welcome_diag_last_trace {
@@ -620,6 +604,11 @@ pub extern "C" fn _start() -> ! {
             let welcome_now = monotonic_ms();
             if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
                 welcome_diag_last = welcome_now;
+                serial_print("[BOOT] Welcome loop tick: ms=");
+                serial_print_dec(welcome_now.wrapping_sub(welcome_start_time) as u64);
+                serial_print(" iters=");
+                serial_print_dec(_welcome_diag_iters as u64);
+                serial_print("\n");
             }
 
             // 5 saniye zaman aşımı: USB klavye veya fare algılanamasa bile sistemi kilitleme, doğrudan masaüstüne geç
@@ -635,6 +624,21 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             while let Some(ch) = keyboard.take_last_char() {
+                if ch == 'e' || ch == 'E' {
+                    // E tuşu ile boot mesajlarını göster/gizle
+                    unsafe {
+                        if !boot::text_console::is_active() {
+                            boot::text_console::save_screen();
+                            boot::text_console::toggle_active();
+                            serial_print("[BOOT] Boot mesajları gösteriliyor (E tuşu ile geri dön)...\n");
+                        } else {
+                            boot::text_console::toggle_active();
+                            boot::text_console::restore_screen();
+                            serial_print("[BOOT] GUI'ye geri dönüldü.\n");
+                            welcome_dirty = true;
+                        }
+                    }
+                }
                 if ch == '\x1b' || ch == ' ' {
                     welcome_accepted = true;
                 }
@@ -761,7 +765,6 @@ pub extern "C" fn _start() -> ! {
     let mut properties_type = gui::TextBuf::new();
     let mut properties_size = gui::TextBuf::new();
     let mut properties_location = gui::TextBuf::new();
-
 
     let mut app_render_cycles = [0u64; gui::MAX_WINDOWS];
     taskmgr_app.update(&memory_mgr.pmm, &fs_mgr.vfs, &compositor.windows, &app_render_cycles);
@@ -3365,7 +3368,7 @@ pub extern "C" fn _start() -> ! {
                     let row_bytes = (sw * 3 + 3) & !3;
                     let image_size = row_bytes * sh;
                     let file_size = 54 + image_size;
-                    
+
                     let mut bmp_data = alloc::vec::Vec::new();
                     if bmp_data.try_reserve_exact(file_size).is_err() {
                         serial_print("[SCREENSHOT] HATA: Yetersiz bellek!\n");

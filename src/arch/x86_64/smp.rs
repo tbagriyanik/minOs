@@ -420,15 +420,20 @@ pub fn init() -> usize {
         crate::serial_print("[SMP] Tek CPU gorundu; SMP kapali.\n");
         return 1;
     }
-    let count = count.min(MAX_CPUS);
-    CPU_COUNT.store(count as u32, Ordering::Relaxed);
+    let detected_count = count;
+    let supported_count = count.min(MAX_CPUS);
 
     crate::serial_print("[SMP] ");
-    crate::serial::print_dec(count as u64);
-    crate::serial_print(" CPU bulundu; AP'ler baslatiliyor...\n");
+    crate::serial::print_dec(supported_count as u64);
+    crate::serial_print(" CPU bulundu (Limine raporu: ");
+    crate::serial::print_dec(detected_count as u64);
+    crate::serial_print("); AP siniri: ");
+    crate::serial::print_dec(MAX_CPUS as u64);
+    crate::serial_print(".\n");
 
     let entry = ap_entry as *const () as usize as u64;
-    for i in 0..count {
+    let mut started = 0usize;
+    for i in 0..detected_count.min(MAX_CPUS) {
         let cpu_ptr = unsafe { core::ptr::read_volatile(cpus.add(i)) };
         if cpu_ptr.is_null() {
             continue;
@@ -440,11 +445,21 @@ pub fn init() -> usize {
         unsafe {
             core::ptr::addr_of_mut!((*cpu_ptr).goto_address).write_volatile(entry);
         }
+        started += 1;
         crate::serial_print("[SMP] AP (LAPIC ");
         crate::serial::print_dec(lapic as u64);
         crate::serial_print(") uyandirildi.\n");
     }
-    count
+    if started == 0 {
+        crate::serial_print("[SMP] AP baslatilamadi; 1 CPU modunda devam.\n");
+        CPU_COUNT.store(1, Ordering::Release);
+        return 1;
+    }
+
+    // CPU_COUNT is committed only to the number of APs actually requested.
+    let requested = started.saturating_add(1).min(supported_count);
+    CPU_COUNT.store(requested as u32, Ordering::Release);
+    requested
 }
 
 /// AP'lerin çevrimiçi olmasını sınırlı süre bekler.
@@ -463,7 +478,19 @@ pub fn wait_for_aps(timeout_spins: u32) -> usize {
         }
         spins += 1;
         if spins >= timeout_spins {
-            return online;
+            crate::serial_print("[SMP] AP bekleme zaman asimi; gelen AP sayisi: ");
+            crate::serial::print_dec(online as u64);
+            crate::serial_print("/ ");
+            crate::serial::print_dec(count as u64);
+            crate::serial_print(". Tek CPU modunda devam.\n");
+            // A partial AP set is treated as unsupported on this machine.
+            // Park APs that did arrive and make the public topology unambiguously 1 CPU.
+            for cpu in 1..count {
+                AP_ONLINE[cpu].store(false, Ordering::Release);
+            }
+            CPU_COUNT.store(1, Ordering::Release);
+            LAPIC_ID[0].store(lapic_init(), Ordering::Relaxed);
+            return 1;
         }
         core::hint::spin_loop();
     }

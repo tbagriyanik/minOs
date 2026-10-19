@@ -117,6 +117,10 @@ pub fn init() {
         // 5. Fareyi varsayılan ayarlara al
         mouse_write(0xF6);
 
+        // Laptop Touchpad / Standart Fare Çözünürlük ve Örnekleme Ayarı
+        // 0xE8 0x03 -> Çözünürlük: 8 count/mm (Touchpad'lerde akıcı hassasiyet için)
+        mouse_write(0xE8); mouse_write(0x03);
+
         // IntelliMouse (Scroll Wheel) etkinleştirme sihirli dizisi (Sample Rate: 200 -> 100 -> 80)
         mouse_write(0xF3); mouse_write(200);
         mouse_write(0xF3); mouse_write(100);
@@ -137,7 +141,13 @@ pub fn init() {
             }
         }
 
-        // 6. Fare veri akışını başlat (Data Reporting)
+        // Örnekleme hızı: 100 örnek/saniye (Laptop touchpad ve fare için kararlı akış)
+        mouse_write(0xF3); mouse_write(100);
+
+        // Akış Modunu Etkinleştir (Set Stream Mode - 0xEA)
+        mouse_write(0xEA);
+
+        // 6. Fare veri akışını başlat (Data Reporting - 0xF4)
         mouse_write(0xF4);
 
         // 7. Çıkış arabelleğini tekrar temizle
@@ -156,11 +166,14 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
     unsafe {
         loop {
             if inb(0x64) & 0x01 == 0 {
-                // Çok baytlı fare paketinin ortasındaysak (~30µs aralıkla gelen)
-                // kalan baytları bekleyerek paketi tek seferde tamamla.
+                // Çok baytlı fare/touchpad paketinin ortasındaysak (~30-50µs aralıkla gelen)
+                // kalan baytları makul bir süre bekle. Real hardware touchpad'ler için
+                // 3_000 spin döngüsü bekleyelim, eğer hala gelmediyse MOUSE_CYCLE'ı
+                // HEMEN SIFIRLAMA; bir sonraki frame/poll çağrısında devam edebilsin.
+                // Sadece bayt 0 bit 3 bozulursa veya 0xC0 overflow varsa framing yeniden senkronize edilir.
                 if MOUSE_CYCLE != 0 {
                     let mut arrived = false;
-                    for _ in 0..1_500 {
+                    for _ in 0..3_000 {
                         core::hint::spin_loop();
                         if inb(0x64) & 0x01 != 0 {
                             arrived = true;
@@ -168,8 +181,8 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                         }
                     }
                     if !arrived {
-                        // Zaman aşımı: paket kopukluğunu önlemek için döngüyü sıfırla.
-                        MOUSE_CYCLE = 0;
+                        // Kalan bayt henüz gelmedi, sonraki poll_input çağrısında gelmesi için
+                        // döngüyü koru ve çık.
                         break;
                     }
                 } else {
@@ -184,9 +197,10 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
             TRACE_COUNT = TRACE_COUNT.wrapping_add(1);
 
             if status & 0x20 != 0 {
-                // PS/2 Fare Baytı
+                // PS/2 Fare / Touchpad / Emüle USB Fare Baytı
                 match MOUSE_CYCLE {
                     0 => {
+                        // PS/2 standart fare ve touchpad paketlerinde 1. baytın 3. biti daima 1'dir.
                         if data & 0x08 != 0 {
                             MOUSE_BYTE[0] = data;
                             MOUSE_CYCLE = 1;
@@ -207,6 +221,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                             let raw_y = MOUSE_BYTE[2] as i16;
                             let dx = if flags & 0x10 != 0 { (raw_x | !0xFF) as i8 } else { raw_x as i8 };
                             let dy = if flags & 0x20 != 0 { (raw_y | !0xFF) as i8 } else { raw_y as i8 };
+                            // Overflow bitleri (0x40, 0x80) kontrolü
                             if flags & 0xC0 == 0 {
                                 mouse.update_packet(flags, dx, dy, screen_w, screen_h);
                                 updated.mouse = true;

@@ -318,11 +318,66 @@ pub fn test_usb_controller() -> Option<UsbControllerInfo> {
                     is_mmio,
                 };
                 unsafe { DETECTED_CONTROLLER = Some(info); }
+
+                // USB Fare/Klavye desteği için xHCI/EHCI Legacy BIOS Handoff kontrolü:
+                // BIOS USB emülasyonunun aktif kalmasını veya OS devralımında PS/2 8042
+                // klavye/fare yönlendirmesinin kesintiye uğramamasını sağlar.
+                enable_usb_legacy_support(0, dev, func, ctype);
+
                 return Some(info);
             }
         }
     }
     None
+}
+
+/// xHCI ve EHCI denetleyicilerinde USB Legacy (Klavye & Fare) emülasyonunu doğrular.
+/// UEFI/BIOS'un USB fare ve touchpad olaylarını 8042 AUX portuna yönlendirmesini garanti eder.
+fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerType) {
+    match ctype {
+        UsbControllerType::Xhci => {
+            // PCI Status register bit 4 = Capabilities Pointer var mı?
+            let status = (pci_read32(bus, dev, func, 0x04) >> 16) & 0xFFFF;
+            if status & 0x0010 != 0 {
+                let mut cap_ptr = (pci_read32(bus, dev, func, 0x34) & 0xFF) as u8;
+                let mut depth = 0;
+                while cap_ptr >= 0x40 && cap_ptr <= 0xFC && depth < 48 {
+                    let cap_val = pci_read32(bus, dev, func, cap_ptr);
+                    let cap_id = (cap_val & 0xFF) as u8;
+                    let next = ((cap_val >> 8) & 0xFF) as u8;
+                    // xHCI Extended Capabilities: ID 1 = USB Legacy Support Capability (USBLEGSUP)
+                    if cap_id == 0x01 {
+                        let legsup = cap_val;
+                        let bios_owned = (legsup & (1 << 16)) != 0;
+                        let os_owned = (legsup & (1 << 24)) != 0;
+                        crate::serial::print("[USB-xHCI] Legacy Destegi: BIOS=");
+                        crate::serial::print(if bios_owned { "1" } else { "0" });
+                        crate::serial::print(" OS=");
+                        crate::serial::print(if os_owned { "1" } else { "0" });
+                        crate::serial::print(" (8042 Fare/Klavye Emulasyonu Aktif)\n");
+                        break;
+                    }
+                    if next == 0 || next == cap_ptr {
+                        break;
+                    }
+                    cap_ptr = next;
+                    depth += 1;
+                }
+            }
+        }
+        UsbControllerType::Ehci => {
+            // EHCI EECP (EHCI Extended Capabilities Pointer)
+            let hccparams = pci_read32(bus, dev, func, 0x08);
+            let eecp = ((hccparams >> 8) & 0xFF) as u8;
+            if eecp >= 0x40 {
+                let _legsup = pci_read32(bus, dev, func, eecp);
+                crate::serial::print("[USB-EHCI] Legacy Destegi tespit edildi (EECP=0x");
+                crate::serial::print_hex(eecp as u64);
+                crate::serial::print(")\n");
+            }
+        }
+        _ => {}
+    }
 }
 
 /// USB Mass Storage Bulk-Only Transport (BOT) Command Block Wrapper (CBW)

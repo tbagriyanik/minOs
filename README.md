@@ -6,7 +6,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-~25.000%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-41.702%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v1.6.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 
 **minOs (Sarman Edition) v1.6.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
@@ -14,6 +14,12 @@
 ---
 
 ## Yenilikler (v1.6.0)
+
+- **🖥️ UEFI Önyükleme Tanılama Konsolu:** Limine framebuffer doğrulandıktan sonra bellek, sürücü ve sistem başlatma adımları metin olarak ekrana yazılır. Hata durumunda son loglar korunur; kritik hatada GUI başlatılmaz.
+- **🛑 Panik Sonrası Otomatik Reset Yok:** Kernel panic mesajı ekranda bırakılır ve sistem bekler; hata okunmadan yeniden başlatılmaz.
+- **🧵 Laptop için Tek CPU Açılışı:** Gerçek donanımda SMP/APIC başlatmasının reset oluşturduğu test yolunda AP başlatımı ve APIC timer devre dışı; açılış BSP üzerinde TSC tabanlı zamanla sürer. Çok çekirdek desteği bu açılış yapılandırmasında etkin değildir.
+- **🖱️ PS/2 Fare ve Touchpad Akışı:** PS/2 uyumlu fare/touchpad için çözünürlük ve örnekleme hızı ayarlandı; eksik paket baytında ayrıştırma durumu sonraki yoklamaya kadar korunur. Firmware'in 8042/PS/2 uyumluluğu sunması gerekir.
+- **🔌 USB Legacy Desteği Tanılama:** xHCI/EHCI PCI extended capability alanlarında legacy handoff kaydı aranıp loglanır. Bu, USB HID fare sürücüsü değildir; USB aygıtlarını numaralandırıp HID raporu okuma desteği henüz yoktur.
 
 - **🌐 Tam Ağ Yığını & DNS Çözümleme İyileştirmeleri:**
   - RFC 1035 uyumlu DNS soru ve yanıt ayrıştırma mekanizması; etiket (label) ve sıkıştırılmış işaretçi (`0xC0`) desteği ile harici alan adları (`example.com`, `google.com` vb.) anında çözümlenir.
@@ -174,28 +180,24 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 
 ---
 
-## ⚠️ Durum Raporu ve Çekirdek Düzeyi
+## ⚠️ Donanım Desteği ve Güncel Açılış Yapılandırması
 
-minOs v1.5.0 ile temel sistem mimarisi tam olarak oturtulmuştur:
+- **Boot ekranı ve hata davranışı:** Limine framebuffer doğrulandıktan sonra `serial_print` kayıtları metin konsoluna da aktarılır. Framebuffer geçersizse ya da kritik bir açılış hatası oluşursa GUI açılmaz. Panik mesajı ve son boot logu ekranda bırakılır; otomatik reset yapılmaz.
+- **CPU/APIC:** Mevcut laptop tanılama yapılandırması AP başlatımını ve APIC timer'ı atlar; sistem tek CPU modunda TSC saatiyle devam eder. `src/arch/x86_64/smp.rs` içinde Limine SMP/AP başlatma kodu mevcut olsa da varsayılan açılış akışında kullanılmıyor.
+- **PS/2 fare/touchpad:** `src/drivers/ps2.rs` PS/2 8042 yardımcı portunu yoklayarak standart fare paketlerini okur. Dahili touchpad'in bu arayüzde sunulması firmware/ACPI ayarına bağlıdır; I2C-HID touchpad sürücüsü henüz bulunmuyor.
+- **USB fare:** `src/drivers/usb.rs` USB host denetleyicisini PCI'de tanır ve xHCI/EHCI legacy capability bilgisini raporlar. USB HID aygıt numaralandırma, interrupt transfer ve fare raporu çözümleme uygulanmadığından yerel USB fare desteği henüz yoktur. Firmware'in USB Legacy/8042 emülasyonu açıksa bazı aygıtlar PS/2 yolundan çalışabilir; bu OS seviyesinde garanti edilmez.
+- **USB depolama:** USB depolama desteği, mevcut ATA/ATAPI ve diskfs yolları üzerinden sunulur; bu, USB HID giriş desteğinden ayrıdır.
+- **SMP ve Ring 3:** Kod tabanında SMP ve Ring 3 bileşenleri/testleri vardır; fiziksel laptop açılışında kararlılık için Ring3 demosu ve AP başlatımı varsayılan boot yolunda çalıştırılmaz. Bileşenlerin bulunması, her donanımda açılışta etkin oldukları anlamına gelmez.
 
-1. **Ağ Yanıt Kuyruğu (ICMP/DNS Reply Polling):**
-   - `ping` komutu e1000 üzerinden gerçek ICMP Echo Request paketini başarıyla TX halkasına iletir; gelen paketler asenkron olarak işlenir.
-   - DNS eşzamanlı çözümleniyor (`resolve_host()`: önbellek → dotted-quad → 5 sn zaman aşımlı UDP sorgusu) ve `curl`/HTTP yolu bunu kullanıyor; ham `dns` komutu sorguyu iletir, yanıt `take_dns_result()` ile anında alınır.
-2. **Çoklu Çekirdek (SMP) & Donanım Kararlılığı:**
-   - Limine SMP protokolü ile AP çekirdekleri başarıyla ayağa kaldırılır (üst sınır 8 CPU).
-   - Her AP kendi yığınına geçip SSE + GDT + **IDT (LIDT) + Local APIC** kurulumunu yapar; APIC Timer yalnızca BSP'de çalışır, AP'lerde tüm LVT girdileri maskeli ve kesmeler kapalıdır. Böylece VirtualBox'un AP'lere ulaştırdığı kesmeler üçlü hataya / donmaya yol açmaz.
-   - **TTAS (Test-and-Test-and-Set) Spinlock** mimarisi sayesinde VirtualBox ve QEMU ortamlarında çok çekirdekli çalıştırmalarda vCPU bellek veri yolu kilitlenmeleri ve sistem donmaları giderilmiştir.
-   - AP çekirdekleri boşta eşzamanlı atomik iş kuyruğunu tüketir; iş yokken kilide dokunmayan `JOB_PENDING` hızlı bayrağı ve giderek uzayan beklemeli yoklama (backoff) ile BSP'nin bellek yolu tıkanmaz.
-3. **Fiziksel Blok Depolama ve Kalıcı Yazma (FAT32 / Ext2 Persistence):**
-   - Sabit disk (IDE/ATA Master) ve USB depolama aygıtlarında **tam sektör okuma ve yazma (`write_sector`, `flush_cache`)** ile **FAT32 dosya formatlama ve dosya yazma/silme** yeteneği aktiftir.
-   - **Ext2 okuma/yazma** (`src/fs/ext2.rs`): superblock + BGDT + inode tabanlı, direct + single-indirect blok destekli dosya okuma/yazma/oluşturma/silme ve `mkdir`; açılışta FAT32'den önce Ext2 bölümü denenir.
-   - **Bölümleme (`src/fs/part.rs`):** MBR (4 girdi) ve GPT (koruyucu MBR + 128 girdilik dizi, Linux GUID) tarama/listelme ve yazma.
-   - Kurulum Sihirbazı diski FAT32 olarak biçimlendirir ve `settings.cfg` gibi sistem ayarlarını diske kalıcı olarak kaydeder. Sonraki açılışlarda ayarlar geri yüklenir.
-   - **VFS anlık görüntüsü (`VFS.DAT`):** VFS ağacının tamamı (dosyalar, klasörler, masaüstü öğeleri, çöp kutusu içeriği) her dosya/klasör işleminde otomatik olarak FAT diske `VFS.DAT` olarak yazılır ve açılışta geri yüklenir. Böylece oluşturma, silme, taşıma, kopyalama, yeniden adlandırma ve geri dönüşüm kutusu işlemleri **yeniden başlatma sonrasında bile korunur**.
-4. **HDA Donanımsal DMA İlerlemesi ve Çoklu Sanallaştırma Uyumluluğu:**
-   - Intel HDA ses sürücüsü; evrensel PCI taraması (Class `0x0403` + bilinen aygıtlar), 64-bit BAR0 desteği, donanımsal CRST/SRST sıfırlama döngüleri, AFG/DAC/Pin D0 güç yönetimi, 128-bayt hizalı donanımsal DMA Position Buffer (offset `0x70`) ve atomik 32-bit SDnCTL yazımı ile QEMU, VirtualBox, VMware ve gerçek donanımda tam uyumlu hale getirilmiştir. Ses alt sistemi otomatik olarak kesintisiz PC Speaker PWM yedeğine geçiş yapabilir.
-5. **Kullanıcı Modu (Ring 3), Syscall ve Süreç Yalıtımı:**
-   - Limine SMP protokolü ile çok çekirdekli AP başlatımı, bağımsız çekirdek yığınları, GDT TSS kullanıcı segmentleri, Ring 3 kullanıcı kipi izolasyonu (`int 0x80` sistem çağrıları, #GP/#PF hata yakalama ve çekirdek güvenliği) ve statik ELF yükleyici doğrulanmıştır.
+### Son değişikliklerin kaynak referansları
+
+| Özellik | Kaynak konumu |
+| :--- | :--- |
+| Erken framebuffer doğrulaması ve tek CPU açılış kararı | [`src/main.rs:102`](src/main.rs#L102), [`src/main.rs:286`](src/main.rs#L286) |
+| PS/2 fare/touchpad başlatma ve paket yoklama | [`src/drivers/ps2.rs:73`](src/drivers/ps2.rs#L73), [`src/drivers/ps2.rs:163`](src/drivers/ps2.rs#L163) |
+| USB controller ve legacy capability tanılama | [`src/drivers/usb.rs:280`](src/drivers/usb.rs#L280), [`src/drivers/usb.rs:336`](src/drivers/usb.rs#L336) |
+| Boot log metin çizimi, ayna font ve fatal stop | [`src/boot/text_console.rs:197`](src/boot/text_console.rs#L197), [`src/boot/text_console.rs:269`](src/boot/text_console.rs#L269), [`src/boot/text_console.rs:335`](src/boot/text_console.rs#L335) |
+| Panic ekranında otomatik resetin engellenmesi | [`src/panic_handler.rs:51`](src/panic_handler.rs#L51) |
 
 
 ---
@@ -214,7 +216,7 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 - [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.4.0):**
   - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
-- [x] **SMP (Symmetric Multiprocessing) Desteği (v1.4.0):**
+- [x] **SMP (Symmetric Multiprocessing) Kod Bileşenleri (v1.4.0; mevcut boot yolunda kapalı):**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
   - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve sağlama testleri.
 - [x] **Paket Yöneticisi (`minPak`) (v1.4.0 / v1.5.0):**
@@ -401,7 +403,7 @@ VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sana
 | :--- | :--- | :--- |
 | **İşletim Sistemi Türü** | **Other / Other (64-bit)** | Çekirdek x86_64 long modda çalıştığı için mutlaka 64-bit seçilmelidir. |
 | **Temel Bellek (RAM)** | **128 MB – 512 MB** *(Min: 4 MB)* | Canlı masaüstü, font atlasları ve çoklu pencere için 256 MB veya 512 MB idealdir. |
-| **İşlemci (CPU)** | **1–8 vCPU** (varsayılan 2) | VT-x / AMD-V sanallaştırma açık olmalıdır. Çok çekirdekli (SMP) desteklenir; her AP kendi IDT/LAPIC kurulumunu yapar, LVT kesmeleri maskelidir. |
+| **İşlemci (CPU)** | **1 vCPU önerilir** | Güncel fiziksel laptop açılışında AP/SMP ve APIC timer devre dışıdır; TSC tabanlı saat kullanılır. SMP kodu kaynakta bulunsa da bu boot profilinde etkin değildir. |
 | **Ekran Belleği (VRAM)** | **16 MB – 32 MB** | 1280x720 32-bit çözünürlük için en az 16 MB ayrılmalıdır. |
 | **Grafik Denetleyicisi** | **VBoxVGA** veya **VMSVGA** | 3D hızlandırmayı kapatın (yazılımsal framebuffer kullanılır). |
 | **Sabit Disk (İsteğe Bağlı)** | **256 MB – 1 GB** *(VDI / RAW)* | Canlı ISO testi için disk gerekmez. Kalıcı kurulum için SATA veya IDE olarak ekleyin. |
@@ -473,12 +475,12 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 18 Ekim 2026 (v1.6.0)
+> Son güncelleme: 19 Ekim 2026 (v1.6.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 91 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 37.929 satır |
-| **Etkin Kod Satırı** (boş ve `//` yorum satırları hariç) | ~35.000 satır |
+| **Toplam Rust Kaynak Dosyası** | 92 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | 41.702 satır (`src/**/*.rs`) |
+| **Etkin Kod Satırı** (boş ve satır başı yorumları hariç, yaklaşık) | 35.189 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |

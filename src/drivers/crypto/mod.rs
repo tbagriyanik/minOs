@@ -5,4 +5,5 @@ pub mod hmac;
 pub mod aes;
 pub mod gcm;
 pub mod rsa;
+pub mod ecc;
 pub mod x509;

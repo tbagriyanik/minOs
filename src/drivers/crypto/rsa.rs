@@ -225,6 +225,51 @@ pub fn rsa_public_encrypt(key: &RsaPublicKey, msg: &[u8]) -> Result<Vec<u8>, ()>
     pkcs1_v1_5_encrypt(key, msg)
 }
 
+/// PKCS#1 v1.5 + SHA-256 imza doğrulaması (TLS ServerKeyExchange için).
+///
+/// `sig^e mod n` ile şifre çözülür, elde edilen EM = 0x00||0x01||PS||0x00||
+/// DigestInfo yapısı ve SHA-256 özeti karşılaştırılır.
+pub fn rsa_verify_pkcs1_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+    let k = key.n.len();
+    if k < 11 || sig.len() != k {
+        return Err(());
+    }
+    let modulus = bytes_to_limbs(&key.n);
+    let m = mod_pow_limbs(&bytes_to_limbs(sig), key.e, &modulus);
+    let em = limbs_to_bytes(&m, k);
+
+    if em.len() < 11 || em[0] != 0x00 || em[1] != 0x01 {
+        return Err(());
+    }
+    // PS: en az 8 bayt 0xFF, ardından tek bir 0x00 ayracı.
+    let mut i = 2usize;
+    let mut ps_len = 0usize;
+    while i < em.len() && em[i] == 0xFF {
+        ps_len += 1;
+        i += 1;
+    }
+    if ps_len < 8 || i >= em.len() || em[i] != 0x00 {
+        return Err(());
+    }
+    i += 1;
+    let di = &em[i..];
+    // DigestInfo: ASN.1 başlığı (19 bayt) + 32 baytlık SHA-256 özeti.
+    let prefix: [u8; 19] = [
+        0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+        0x05, 0x00, 0x04, 0x20,
+    ];
+    if di.len() != 19 + 32 || di[..19] != prefix[..] {
+        return Err(());
+    }
+    let mut h = Sha256::new();
+    h.update(msg);
+    let digest = h.finalize();
+    if di[19..] != digest[..] {
+        return Err(());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +308,52 @@ mod tests {
         // Dolgu sigmayan cok kucuk modulus reddedilmeli.
         let tiny = RsaPublicKey { n: vec![0x0c, 0x91], e: 17 };
         assert!(pkcs1_v1_5_encrypt(&tiny, &msg).is_err());
+    }
+
+    fn hex(s: &str) -> Vec<u8> {
+        let b = s.as_bytes();
+        let mut out = Vec::with_capacity(s.len() / 2);
+        let mut i = 0;
+        while i + 1 < b.len() {
+            let hi = (b[i] as char).to_digit(16).unwrap() as u8;
+            let lo = (b[i + 1] as char).to_digit(16).unwrap() as u8;
+            out.push((hi << 4) | lo);
+            i += 2;
+        }
+        out
+    }
+
+    #[test]
+    fn pkcs1_sha256_verify_known_answer() {
+        // Python cryptography ile uretilmis 1024-bit RSA anahtari + imza (KAT).
+        let key = RsaPublicKey {
+            n: hex("C10FD34BFCE8F2EDC37AB97EDF7CF0CF123183CD4C3DA773955510D08C4FA14F\
+                    419337BF31B4088D8A476E3DB9873195F77C188A4C172C737F19286E225ACB1C\
+                    AE341265864603E568256EB692994E5BEADE574840B996C1B6437B40F999407B\
+                    8CCB51BC4778ADB798DBE8C4E8EE433C6759CC4625ABA0C935454EE36B389815"),
+            e: 65537,
+        };
+        let sig = hex(
+            "6138E115E6FA79723510B616E2983FB022B71ABCDED8199CA12D39D498B25413\
+             6E7F817BDB74EE08470E93092A47B5EC62390B167BEBA4B283500409BEA61B3D\
+             3838C4B6E22BBF92739673B35CBBCD06B87F8A7D839EAD2E009D6CD23DC1827\
+             F9692741CD15F1B3AF3E33F678901C293E842A4FB3A633B45339FF02520B6868D",
+        );
+        let msg = b"client_random|server_random|params";
+        assert!(rsa_verify_pkcs1_sha256(&key, msg, &sig).is_ok());
+
+        // Bozuk imza reddedilmeli.
+        let bad = hex(
+            "4E128A7F776B24E29690A722F912B02997991DFF5CC53A43CD56734F0219159F\
+             C85DA42625CDA217B7890BD9A8A10981C9ECCC407929D566E279BA35284960F\
+             58B425814045717EB11163FA29A4947915EEC349F2D395064FD92EEB946610CC\
+             CCF5848062371F3F50307C9D0EFE964C4689C5BACC7D471E2178C5B9AD699EA316",
+        );
+        assert!(rsa_verify_pkcs1_sha256(&key, msg, &bad).is_err());
+
+        // Yanlis mesaj, dogru imza bile olsa reddedilmeli.
+        assert!(rsa_verify_pkcs1_sha256(&key, b"yanlis mesaj", &sig).is_err());
+        // Uzunluk uyusmayan imza reddedilmeli.
+        assert!(rsa_verify_pkcs1_sha256(&key, msg, &sig[..64]).is_err());
     }
 }

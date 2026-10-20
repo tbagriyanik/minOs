@@ -1,8 +1,8 @@
 //! TLS 1.2 Protokol İstemci Katmanı (no_std)
 //! Tam TLS 1.2 el sıkışması: ClientHello → ServerHello → Certificate →
-//! ServerHelloDone → ClientKeyExchange → ChangeCipherSpec → Finished →
-//! şifreli Application Data. AES-128-GCM, RSA anahtar değişimi,
-//! SHA-256 PRF ve anahtar türetme dahil.
+//! ServerKeyExchange → ServerHelloDone → ClientKeyExchange → ChangeCipherSpec
+//! → Finished → şifreli Application Data. AES-128-GCM, ECDHE (secp256r1) ve
+//! RSA anahtar değişimi, SHA-256 PRF ve anahtar türetme dahil.
 
 #![allow(dead_code)]
 
@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use crate::drivers::crypto::gcm::Gcm;
 use crate::drivers::crypto::hmac::HmacSha256;
 use crate::drivers::crypto::sha256::Sha256;
-use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, RsaPublicKey};
+use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, rsa_verify_pkcs1_sha256, RsaPublicKey};
 use crate::drivers::crypto::x509::parse_x509_rsa_public_key;
 
 pub const TLS_RECORD_CHANGE_CIPHER_SPEC: u8 = 20;
@@ -25,11 +25,17 @@ pub const TLS_VERSION_1_2: u16 = 0x0303;
 pub const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 pub const HANDSHAKE_SERVER_HELLO: u8 = 2;
 pub const HANDSHAKE_CERTIFICATE: u8 = 11;
+pub const HANDSHAKE_SERVER_KEY_EXCHANGE: u8 = 12;
 pub const HANDSHAKE_SERVER_HELLO_DONE: u8 = 14;
 pub const HANDSHAKE_CLIENT_KEY_EXCHANGE: u8 = 16;
 pub const HANDSHAKE_FINISHED: u8 = 20;
 
+/// ECDHE + RSA sertifikası + AES-128-GCM + SHA-256 (büyük sitelerin tercihi).
+pub const TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: u16 = 0xC02F;
 pub const TLS_RSA_WITH_AES_128_GCM_SHA256: u16 = 0x009C;
+
+/// secp256r1 (NIST P-256) named curve kimliği.
+pub const NAMED_CURVE_SECP256R1: u16 = 0x0017;
 
 const TLS_MASTER_SECRET_LEN: usize = 48;
 const TLS_KEY_BLOCK_LEN: usize = 40;
@@ -53,7 +59,9 @@ pub struct TlsSession {
     server_random: [u8; 32],
     cipher_suite: u16,
     rsa_key: Option<RsaPublicKey>,
-    pre_master_secret: Option<[u8; 48]>,
+    /// Sunucunun geçici ECDHE açık noktası (65 bayt, 04||X||Y).
+    ecdhe_point: Vec<u8>,
+    pre_master_secret: Option<Vec<u8>>,
     master_secret: Option<[u8; 48]>,
     client_write_key: Option<[u8; 16]>,
     server_write_key: Option<[u8; 16]>,
@@ -80,6 +88,7 @@ impl TlsSession {
             server_random: [0; 32],
             cipher_suite: 0,
             rsa_key: None,
+            ecdhe_point: Vec::new(),
             pre_master_secret: None,
             master_secret: None,
             client_write_key: None,
@@ -188,6 +197,7 @@ impl TlsSession {
             match msg_type {
                 HANDSHAKE_SERVER_HELLO => self.handle_server_hello(msg_body)?,
                 HANDSHAKE_CERTIFICATE => self.handle_certificate(msg_body)?,
+                HANDSHAKE_SERVER_KEY_EXCHANGE => self.handle_server_key_exchange(msg_body)?,
                 HANDSHAKE_SERVER_HELLO_DONE => {
                     self.handle_server_hello_done()?;
                 }
@@ -212,10 +222,59 @@ impl TlsSession {
             return Err(());
         }
         self.cipher_suite = u16::from_be_bytes([body[pos], body[pos + 1]]);
-        if self.cipher_suite != TLS_RSA_WITH_AES_128_GCM_SHA256 {
+        if self.cipher_suite != TLS_RSA_WITH_AES_128_GCM_SHA256
+            && self.cipher_suite != TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        {
             return Err(());
         }
         self.state = TlsState::ServerHelloReceived;
+        Ok(())
+    }
+
+    /// ServerKeyExchange: sunucunun geçici ECDHE noktası ve bu noktayı
+    /// imzalayan RSA-PKCS#1 v1.5 / SHA-256 imzası.
+    ///
+    /// İmza `client_random || server_random || ServerECDHParams` üzerinden
+    /// sertifikanın RSA anahtarıyla doğrulanır (RFC 4492 §5.4).
+    fn handle_server_key_exchange(&mut self, body: &[u8]) -> Result<(), ()> {
+        // curve_type(1) + named_curve(2) + point_len(2) + nokta + imza
+        if body.len() < 5 {
+            return Err(());
+        }
+        if body[0] != 3 {
+            // explicit_prime kullanılmıyor; yalnızca named_curve kabul.
+            return Err(());
+        }
+        let curve = u16::from_be_bytes([body[1], body[2]]);
+        if curve != NAMED_CURVE_SECP256R1 {
+            return Err(());
+        }
+        let point_len = u16::from_be_bytes([body[3], body[4]]) as usize;
+        if point_len != 65 || body.len() < 5 + point_len + 4 {
+            return Err(());
+        }
+        let params_end = 5 + point_len;
+        self.ecdhe_point = body[5..params_end].to_vec();
+
+        let sig_alg = u16::from_be_bytes([body[params_end], body[params_end + 1]]);
+        let sig_len =
+            u16::from_be_bytes([body[params_end + 2], body[params_end + 3]]) as usize;
+        if body.len() < params_end + 4 + sig_len {
+            return Err(());
+        }
+        // Yalnızca PKCS#1 v1.5 + SHA-256 doğrulanabilir; ClientHello da bu
+        // şemayı tek başına ilan eder, sunucu bunu seçmek zorundadır.
+        if sig_alg != 0x0401 {
+            return Err(());
+        }
+        let sig = &body[params_end + 4..params_end + 4 + sig_len];
+
+        let rsa_key = self.rsa_key.as_ref().ok_or(())?;
+        let mut msg = Vec::with_capacity(64 + params_end);
+        msg.extend_from_slice(&self.client_random);
+        msg.extend_from_slice(&self.server_random);
+        msg.extend_from_slice(&body[..params_end]);
+        rsa_verify_pkcs1_sha256(rsa_key, &msg, sig)?;
         Ok(())
     }
 
@@ -250,29 +309,52 @@ impl TlsSession {
         if self.state != TlsState::CertificateReceived {
             return Err(());
         }
-        let rsa_key = self.rsa_key.as_ref().ok_or(())?;
-
-        // Pre-master secret: TLS 1.2 version + 46 random bytes
-        let mut pms = [0u8; 48];
-        pms[0] = (TLS_VERSION_1_2 >> 8) as u8;
-        pms[1] = (TLS_VERSION_1_2 & 0xFF) as u8;
-        let seed = crate::monotonic_ms();
-        for i in 2..48 {
-            pms[i] = ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
+        let mut cke_body = Vec::new();
+        if self.cipher_suite == TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
+            // ECDHE: geçici istemci anahtarı üretilir, paylaşılan X = PMS.
+            if self.ecdhe_point.len() != 65 {
+                return Err(());
+            }
+            let mut seed = [0u8; 32];
+            let mut state = crate::monotonic_ms() ^ 0x2545_F491_4F6C_DD1D;
+            for b in seed.iter_mut() {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+            }
+            let kp = crate::drivers::crypto::ecc::generate_keypair(&seed);
+            let shared =
+                crate::drivers::crypto::ecc::shared_secret(&kp.secret, &self.ecdhe_point)
+                    .ok_or(())?;
+            self.pre_master_secret = Some(shared.to_vec());
+            cke_body.extend_from_slice(&kp.public);
+        } else {
+            // Pre-master secret: TLS 1.2 version + 46 random bytes
+            let mut pms = [0u8; 48];
+            pms[0] = (TLS_VERSION_1_2 >> 8) as u8;
+            pms[1] = (TLS_VERSION_1_2 & 0xFF) as u8;
+            let seed = crate::monotonic_ms();
+            for i in 2..48 {
+                pms[i] = ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
+            }
+            let encrypted_pms = {
+                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
+                pkcs1_v1_5_encrypt(rsa_key, &pms)?
+            };
+            self.pre_master_secret = Some(pms.to_vec());
+            cke_body.extend_from_slice(&encrypted_pms);
         }
-        self.pre_master_secret = Some(pms);
-
-        let encrypted_pms = pkcs1_v1_5_encrypt(rsa_key, &pms)?;
 
         // ClientKeyExchange handshake message
-        let cke_body_len = 2 + encrypted_pms.len();
+        let cke_body_len = 2 + cke_body.len();
         let mut cke = Vec::new();
         cke.push(HANDSHAKE_CLIENT_KEY_EXCHANGE);
         cke.push(((cke_body_len >> 16) & 0xFF) as u8);
         cke.push(((cke_body_len >> 8) & 0xFF) as u8);
         cke.push((cke_body_len & 0xFF) as u8);
-        cke.extend_from_slice(&(encrypted_pms.len() as u16).to_be_bytes());
-        cke.extend_from_slice(&encrypted_pms);
+        cke.extend_from_slice(&(cke_body.len() as u16).to_be_bytes());
+        cke.extend_from_slice(&cke_body);
         self.handshake_hash.update(&cke);
 
         // Derive keys
@@ -360,11 +442,11 @@ impl TlsSession {
     }
 
     fn derive_keys(&mut self) -> Result<(), ()> {
-        let pms = self.pre_master_secret.ok_or(())?;
+        let pms = self.pre_master_secret.as_ref().ok_or(())?;
         let mut seed = Vec::with_capacity(64);
         seed.extend_from_slice(&self.client_random);
         seed.extend_from_slice(&self.server_random);
-        let ms = self.prf(&pms, b"master secret", &seed);
+        let ms = self.prf(pms, b"master secret", &seed);
         let mut master = [0u8; 48];
         master.copy_from_slice(&ms[..48]);
         self.master_secret = Some(master);
@@ -526,7 +608,11 @@ pub fn build_client_hello(hostname: &str, client_random: &[u8; 32], out: &mut Ve
     handshake.extend_from_slice(client_random);
     handshake.push(0);
 
-    let ciphers = [TLS_RSA_WITH_AES_128_GCM_SHA256];
+    // Sunucunun ilk sıraya koyduğu ECDHE; eski sunucular RSA'ya düşer.
+    let ciphers = [
+        TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        TLS_RSA_WITH_AES_128_GCM_SHA256,
+    ];
     // Secure Renegotiation SCSV + uzunluk alanına dahil edilir
     let cipher_len = ((ciphers.len() + 1) * 2) as u16;
     handshake.extend_from_slice(&cipher_len.to_be_bytes());
@@ -558,25 +644,28 @@ pub fn build_client_hello(hostname: &str, client_random: &[u8; 32], out: &mut Ve
     extensions.push(1);
     extensions.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
 
-    // signature_algorithms (0x000d): sunucunun sertifika/imzalama şeması
-    // seçmesi için gereklidir; modern sunucular bu uzantı yoksa el sıkışmayı
-    // reddeder.
-    let sigalgs: [u16; 8] = [
-        0x0401, // SHA256 + RSA (PKCS#1 v1.5)
-        0x0501, // SHA384 + RSA
-        0x0601, // SHA512 + RSA
-        0x0201, // SHA1 + RSA (eski)
-        0x0804, // SHA256 + RSA-PSS
-        0x0805, // SHA384 + RSA-PSS
-        0x0806, // SHA512 + RSA-PSS
-        0x0403, // SHA256 + ECDSA
-    ];
+    // signature_algorithms (0x000d): yalnızca doğrulayabildiğimiz şema
+    // ilan edilir (ServerKeyExchange imzası PKCS#1 v1.5 + SHA-256 ile
+    // denetlenir); sunucu listeden seçmek zorunda kalır.
+    let sigalgs: [u16; 1] = [0x0401];
     extensions.extend_from_slice(&0x000du16.to_be_bytes());
     extensions.extend_from_slice(&((2 + sigalgs.len() * 2) as u16).to_be_bytes());
     extensions.extend_from_slice(&((sigalgs.len() * 2) as u16).to_be_bytes());
     for s in &sigalgs {
         extensions.extend_from_slice(&s.to_be_bytes());
     }
+
+    // supported_groups (0x000a): secp256r1 (ECDHE için gerekli)
+    extensions.extend_from_slice(&0x000au16.to_be_bytes());
+    extensions.extend_from_slice(&4u16.to_be_bytes());
+    extensions.extend_from_slice(&2u16.to_be_bytes());
+    extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
+
+    // ec_point_formats (0x000b): yalnızca sıkıştırılmamış nokta
+    extensions.extend_from_slice(&0x000bu16.to_be_bytes());
+    extensions.extend_from_slice(&2u16.to_be_bytes());
+    extensions.push(1);
+    extensions.push(0);
 
     // renegotiation_info (0xff01): boş yeniden müzakere bilgisi
     extensions.extend_from_slice(&0xff01u16.to_be_bytes());

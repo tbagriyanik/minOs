@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use crate::drivers::crypto::gcm::Gcm;
 use crate::drivers::crypto::hmac::HmacSha256;
 use crate::drivers::crypto::sha256::Sha256;
-use crate::drivers::crypto::x25519::{pkcs1_v1_5_encrypt, RsaPublicKey};
+use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, RsaPublicKey};
 use crate::drivers::crypto::x509::parse_x509_rsa_public_key;
 
 pub const TLS_RECORD_CHANGE_CIPHER_SPEC: u8 = 20;

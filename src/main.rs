@@ -328,7 +328,8 @@ pub extern "C" fn _start() -> ! {
     let cmdline = limine_boot_cmdline().unwrap_or("");
     let driver_profile = if cmdline_has_token(cmdline, "full") { "full" }
         else if cmdline_has_token(cmdline, "hardware") { "hardware" }
-        else if cmdline_has_token(cmdline, "audio") { "audio" } else { "safe" };
+        else if cmdline_has_token(cmdline, "audio") { "audio" }
+        else if cmdline_has_token(cmdline, "safe") { "safe" } else { "full" };
     serial_print("[DRIVERS] Profil: ");
     serial_print(driver_profile);
     serial_print("\n");

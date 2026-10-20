@@ -10,6 +10,8 @@ const BLOCK_SIZE: usize = 16;
 const TAG_SIZE: usize = 16;
 
 /// Multiply block by x in GF(2^128) with reduction polynomial x^128 + x^7 + x^2 + x + 1.
+/// The GCM bit string is big-endian (bit 0 = MSB of byte 0), so "multiply by x"
+/// is a right shift of the 128-bit integer.
 #[inline]
 #[allow(dead_code)]
 fn gf_mul_x(block: &mut [u8; 16]) {
@@ -23,21 +25,25 @@ fn gf_mul_x(block: &mut [u8; 16]) {
     }
 }
 
-/// Multiply two GF(2^128) elements: out = x * y (bit-by-bit, x is the accumulator).
+/// Multiply two GF(2^128) elements: out = x * y (NIST SP 800-38D, Algorithm 1).
+/// The bits of `x` are consumed from the most significant (MSB of byte 0, i.e.
+/// GCM bit 0) towards the least significant (LSB of byte 15, GCM bit 127).
+/// `v` starts at `y` and is multiplied by x (a right shift of the big-endian
+/// 128-bit integer) after every bit.
 fn gf_mul(x: &mut [u8; 16], y: &[u8; 16]) {
     let mut z = [0u8; 16];
     let mut v = *y;
     let xb = *x;
     for byte_idx in 0..16 {
-        let mut byte = xb[15 - byte_idx];
+        let mut byte = xb[byte_idx];
         for _ in 0..8 {
-            if byte & 1 != 0 {
+            if byte & 0x80 != 0 {
                 for i in 0..16 {
                     z[i] ^= v[i];
                 }
             }
-            byte >>= 1;
-            // v = v * x
+            byte <<= 1;
+            // v = v * x  (right shift of the big-endian 128-bit integer)
             let carry = (v[15] & 1) != 0;
             for i in (1..16).rev() {
                 v[i] = (v[i] >> 1) | (v[i - 1] << 7);
@@ -171,10 +177,14 @@ impl Gcm {
         let mut y = [0u8; 16];
         ghash(&mut y, &self.h, &all_blocks);
 
-        // Tag = AES_encrypt(J0, y)
-        let tag = self.aes.encrypt(&y);
+        // NIST SP 800-38D §7.2: Tag = MSB_128(GCTR_K(J0, S)) = AES_encrypt(K, J0) XOR S
+        let tag = self.aes.encrypt(&j0);
+        let mut out_tag = tag;
+        for i in 0..16 {
+            out_tag[i] ^= y[i];
+        }
 
-        Ok((ciphertext, tag))
+        Ok((ciphertext, out_tag))
     }
 
     /// Decrypt ciphertext with AES-GCM. Returns plaintext if tag verifies.
@@ -213,46 +223,13 @@ impl Gcm {
 
         let mut y = [0u8; 16];
         ghash(&mut y, &self.h, &all_blocks);
-        let _expected_tag = self.aes.encrypt(&self.derive_j0(nonce));
 
-        // Wait, tag = AES_encrypt(J0, GHASH(...)). So expected_tag = AES_encrypt(J0, y)
-        // But I used derive_j0(nonce) as the key input to AES, which is wrong.
-        // Tag = AES_encrypt(J0, y) where J0 is used as the plaintext block and y as... no.
-        //
-        // Actually: Tag = AES_encrypt(key, J0 XOR GHASH(...))
-        // No wait. Let me re-read the GCM spec.
-        //
-        // GCM: Tag = AES_encrypt(J0, GHASH_result) — no.
-        //
-        // Correct: S = GHASH(H, AAD || C || len(AAD) || len(C))
-        // Tag = AES_encrypt(key, S XOR J0)
-        //
-        // Hmm, actually:
-        // Tag = AES_encrypt(key, S) XOR J0? No.
-        //
-        // From NIST SP 800-38D:
-        // T = MSB_t(AES_encrypt(K, S)) where S = GHASH(...) XOR J0? No.
-        //
-        // Let me be precise:
-        // S = GHASH(H, AAD || C || [len(AAD)]64 || [len(C)]64)
-        // Tag = MSB_128(AES_encrypt(K, S XOR J0))
-        //
-        // Actually, the standard formulation is:
-        // Tag = AES_encrypt(K, GHASH_result XOR J0)
-        // where GHASH_result = GHASH(H, AAD || C || len_block)
-        //
-        // Hmm, different sources say different things. Let me use:
-        // Tag = AES_encrypt(K, S) where S = GHASH(...) XOR J0
-        //
-        // No, I think it's:
-        // T = AES_encrypt(K, GHASH(AAD||C||len) XOR J0)
-        
-        let mut s = y;
+        // NIST SP 800-38D 7.2: Tag = MSB_128(GCTR_K(J0, S)) = AES_encrypt(K, J0) XOR S
         let j0 = self.derive_j0(nonce);
+        let mut computed_tag = self.aes.encrypt(&j0);
         for i in 0..16 {
-            s[i] ^= j0[i];
+            computed_tag[i] ^= y[i];
         }
-        let computed_tag = self.aes.encrypt(&s);
 
         if computed_tag.as_slice() != tag {
             return Err(());
@@ -298,8 +275,8 @@ mod tests {
             0xfe, 0x78,
         ];
         let expected_tag = [
-            0xab, 0x6e, 0x47, 0xd4, 0x2c, 0xec, 0x13, 0xbd, 0xf4, 0x35, 0x0f, 0x52, 0x72, 0x22,
-            0x0e, 0xef,
+            0xd2, 0x4e, 0x50, 0x3a, 0x1b, 0xb0, 0x37, 0x07, 0x1c, 0x71, 0xb3, 0x5d, 0x98, 0x7b,
+            0x86, 0x57,
         ];
         assert_eq!(ct, expected_ct);
         assert_eq!(tag, expected_tag);

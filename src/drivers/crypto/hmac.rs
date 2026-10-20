@@ -50,6 +50,7 @@ impl HmacSha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn hmac_rfc4231_case1() {

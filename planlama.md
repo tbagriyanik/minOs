@@ -1,8 +1,8 @@
-# minOs (v1.3): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs (v1.7.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 16 Ekim 2026 — Sürüm v1.3.0 güncellendi; tüm fazlar (Faz 1-8) eksiksiz tamamlandı.
+> Son senkron: 20 Ekim 2026 — TLS 1.2 istemcisi ve kripto ilkelleri (`src/drivers/crypto/`) tamamlandı; tüm fazlar (Faz 1-8) eksiksiz tamamlandı.
 
 ---
 
@@ -19,7 +19,8 @@
 | **Çekirdek Tipi** | Modüler Monolitik Çekirdek | Tek adres uzayı, modüler sürücü yapısı |
 | **Dosya Sistemi (VFS)** | Sanal Dosya Sistemi + FAT32 (r/w) + Ext2 (r/w) + ISO9660 (salt okunur) + MBR/GPT bölümleme | `VFS.DAT` anlık görüntüsüyle kalıcı depolama |
 | **Grafik Altyapısı** | Limine Linear Framebuffer (32-bpp) + Donanım 2D Hızlandırma | Çift tamponlu compositor + BGA/VGA taraması + 64-bit donanımsal rect fill ve bit blit |
-| **Ağ Yığını** | Özel mikro TCP/IP (e1000) + soket API + HTTP istemcisi | ARP/IPv4/ICMP/UDP/DHCP/DNS, soket başına TCP durum makinesi, `curl` |
+| **Ağ Yığını** | Özel mikro TCP/IP (e1000) + soket API + HTTP istemcisi + TLS 1.2 istemcisi | ARP/IPv4/ICMP/UDP/DHCP/DNS, soket başına TCP durum makinesi, `curl`; RSA anahtar değişimi + AES-128-GCM ile şifreli HTTP (`https://`) |
+| **Kriptografi** | El yazımı `no_std` ilkeller: SHA-256, HMAC-SHA256, AES-128/256, GCM, RSA/PKCS#1 v1.5, X.509 | `src/drivers/crypto/` modülü; harici kütüphane bağımlılığı yok, TLS 1.2 PRF ve anahtar türetme bu ilkeller üzerine kurulu |
 | **Ses Alt Sistemi** | Intel HDA (DMA) + PC Speaker PWM yedeği | PCM çalma, ses düzeyi/karıştırma |
 
 ---
@@ -58,7 +59,7 @@ minOs grafik motoru, CPU ve bellek tasarrufu için optimize edilmiş **çift tam
   - Dahili komut kabuğu: dosya yönetimi, `ping`/`dns`/`curl`, `ipconfig`, uygulama başlatma, Tab tamamlama.
 - **Tek Tıkla Kur (Kurulum Sihirbazı):**
   - Hedef disk seçimi → FAT32 biçimlendirme → `MINOS.SYS` + `VFS.DAT` ile kalıcı kurulum.
-- **Diğerleri:** Not Defteri, Web Tarayıcısı (`http://`, `minos://`, `file://`), Resim Gösterici (BMP), Müzik Çalar, Video Oynatıcı, Hesap Makinesi, Çizim Tahtası (BMP kayıt), 3D Gösterici.
+- **Diğerleri:** Not Defteri, Web Tarayıcısı (`http://`, `https://`, `minos://`, `file://`), Resim Gösterici (BMP), Müzik Çalar, Video Oynatıcı, Hesap Makinesi, Çizim Tahtası (BMP kayıt), 3D Gösterici.
 
 ---
 
@@ -108,6 +109,7 @@ flowchart TD
 - ARP/IPv4/ICMP/DHCP/DNS, UDP, tek-bağlantılı TCP + tarayıcı HTTP yolu.
 - Soket başına durum makineli TCP (`socket`/`connect`/`send`/`recv`/`close`, UDP, DNS önbelleği).
 - HTTP istemcisi (chunked + yönlendirme) ve MinShell `curl` komutu.
+- **TLS 1.2 istemcisi** (`src/drivers/tls.rs`): ClientHello (SNI) → ServerHello → Certificate (X.509) → ServerHelloDone → ClientKeyExchange (RSA) → ChangeCipherSpec → Finished → şifreli Application Data; tarayıcıda `https://` desteği.
 
 ### Faz 7: Ring 3, SMP ve Ses Alt Sistemi Optimizasyonu ✅
 - **Ring 3 Kullanıcı Kipi İzolasyonu:** GDT TSS kullanıcı segmentleri, `int 0x80` sistem çağrıları (`SYS_GETPID`, `SYS_YIELD`, `SYS_WRITE`), #GP/#PF hata yakalama ve çekirdek koruması.
@@ -118,3 +120,9 @@ flowchart TD
 - **Kullanıcı Alanı ELF Yükleyici Entegrasyonu ✅:** ELF64 ayrıştırıcı (`PT_LOAD`), W^X prensibiyle sayfalama (kod salt okunur/çalıştırılabilir, veri/yığın NX), kullanıcı yığını tahsisi, `LoadedProgram::unmap_and_free()` kaynak temizliği, `arch::x86_64::ring3::execute_loaded_program()` güvenli Ring 3 çalışma/dönüş döngüsü, VFS `/bin/hello.elf` örnek ikilisi ve MinShell `exec <ikili>` komutu tamamlandı.
 - **Paket Yöneticisi (`minpkg`) ✅:** Ağ (HTTP/curl) veya dahili repodan paket indirme, VFS `/bin` dizinine kurma (`minpkg install`), kurulu ikili paketleri arayıp listeleme (`minpkg list`), kaldırma (`minpkg remove`) ve terminal (MinShell) arayüz entegrasyonu tamamlandı.
 - **Donanım 2D Hızlandırma ✅:** GPU/BGA ve Framebuffer üzerinde 64-bit hizalı blok dolgu (`hw_accel_fill_rect`) ve kopyalama (`hw_accel_bit_blit`), `flush_rect` ve `draw_rect` hızlandırmaları tamamlandı.
+
+### Faz 9: Kriptografi ve TLS 1.2 ✅
+- **Kripto İlkelleri (`src/drivers/crypto/`, `no_std`, bağımlılıksız):** SHA-256 (`sha256.rs`), HMAC-SHA256 (`hmac.rs`), AES-128/256 (`aes.rs`), GCM (`gcm.rs`), RSA + PKCS#1 v1.5 (`rsa.rs`), minimal X.509 sertifika ayrıştırıcı (`x509.rs`).
+- **TLS 1.2 Oturumu:** `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) tek cipher suite; PRF (P_SHA256), master/pre-master secret türetme, GCM kayıt şifreleme/çözme, Finished doğrulama.
+- **Entegrasyon:** Web Tarayıcısı `https://` şeması; şifreli yanıt şifresi çözülüp HTTP ayrıştırıcısına aktarılır.
+- **Bilinen sınırlar:** Sertifika zinciri ve hostname doğrulaması yapılmaz; TLS 1.3, ECDHE ve AEAD-GCM dışı cipher suite'ler desteklenmez.

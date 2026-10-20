@@ -7,14 +7,41 @@ on:
       - '[0-9]+.[0-9]+*'
     branches:
       - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  quality:
+    name: Kernel Check (no_std / x86_64-minos)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Nightly & Components
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Type-check Kernel (0 warning gate)
+        run: |
+          cargo check \
+            --target x86_64-minos.json \
+            -Zbuild-std=core,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            --all-targets
+
+      - name: Build Kernel (Release)
+        run: cargo build --release
+
   build-release:
     name: Build minOs ISO Release
+    needs: quality
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -41,23 +68,23 @@ jobs:
         run: |
           mkdir -p target/iso_root/boot/limine
           mkdir -p target/iso_root/EFI/BOOT
-          
+
           # Copy limine configuration and boot background
           cp boot/limine.conf target/iso_root/boot/limine/limine.conf 2>/dev/null || true
           cp boot/limine.conf target/iso_root/limine.conf 2>/dev/null || true
           cp boot/limine.conf target/iso_root/EFI/BOOT/limine.conf 2>/dev/null || true
           cp boot/cat_small.png target/iso_root/boot/cat_small.png 2>/dev/null || true
-          
+
           # Copy Limine bootloader binaries
           cp boot/limine/limine-bios-cd.bin target/iso_root/boot/limine/ 2>/dev/null || true
           cp boot/limine/limine-bios.sys target/iso_root/boot/limine/ 2>/dev/null || true
           cp boot/limine/limine-uefi-cd.bin target/iso_root/boot/limine/ 2>/dev/null || true
           cp boot/limine/BOOTX64.EFI target/iso_root/EFI/BOOT/BOOTX64.EFI 2>/dev/null || true
           cp boot/limine/BOOTIA32.EFI target/iso_root/EFI/BOOT/BOOTIA32.EFI 2>/dev/null || true
-          
+
           # Copy compiled kernel binary
           cp target/x86_64-minos/release/minos-kernel target/iso_root/boot/minos-kernel
-          
+
           # Generate Hybrid BIOS + UEFI ISO with xorriso
           if [ -f target/iso_root/boot/limine/limine-uefi-cd.bin ]; then
             xorriso -as mkisofs -b boot/limine/limine-bios-cd.bin \
@@ -69,10 +96,10 @@ jobs:
               -no-emul-boot -boot-load-size 4 -boot-info-table \
               -o minos.iso target/iso_root
           fi
-            
+
           # Enroll BIOS boot sectors on ISO using Limine
           limine bios-install minos.iso
-            
+
           mkdir -p target/release
           cp minos.iso target/release/minos.iso
           test -s target/release/minos.iso
@@ -91,10 +118,12 @@ jobs:
           name: minOs Release ${{ github.ref_name }}
           body: |
             🐾 **minOs (Cat Edition) Bootable ISO Release**
-            
+
             - **Kernel Version:** 64-Bit (`x86_64`) Long Mode
             - **Bootloader:** Limine v8 (El Torito / UEFI)
             - **Display:** 1280x720 32-bit Framebuffer (Double Buffered)
+            - **Networking:** e1000 + TCP/IP yığını, DNS, HTTP istemcisi
+            - **Security:** TLS 1.2 istemcisi (RSA + AES-128-GCM + SHA-256) — tarayıcıda `https://` desteği
           draft: false
           prerelease: false
         env:
@@ -110,10 +139,11 @@ jobs:
           name: minOs Latest (Rolling Release)
           body: |
             🐾 **minOs (Cat Edition) Latest Automated ISO Build**
-            
+
             - **Branch:** `main` (${{ github.sha }})
             - **Kernel Version:** 64-Bit (`x86_64`) Long Mode
             - **Bootloader:** Limine v8
+            - **Security:** TLS 1.2 istemcisi (RSA + AES-128-GCM + SHA-256) — tarayıcıda `https://` desteği
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

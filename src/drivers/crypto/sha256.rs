@@ -138,26 +138,22 @@ impl Sha256 {
 
     pub fn finalize(mut self) -> [u8; 32] {
         let bit_len = self.total_bits;
-        let mut pad = [0u8; 64];
-        pad[0] = 0x80;
-        if bit_len > (56 * 8) - 8 {
-            self.update(&pad[..1]);
-            let buf = self.buffer.clone();
-            self.compress_block(&buf);
-            self.buffer = [0; 64];
-            self.buffer_len = 0;
-        }
+        // Append the "1" padding bit.
         self.buffer[self.buffer_len] = 0x80;
         self.buffer_len += 1;
         if self.buffer_len > 56 {
+            // No room for the length in this block: zero-fill, compress, start a new one.
+            for i in self.buffer_len..64 {
+                self.buffer[i] = 0;
+            }
             let buf = self.buffer.clone();
             self.compress_block(&buf);
             self.buffer = [0; 64];
             self.buffer_len = 0;
         }
-        while self.buffer_len < 56 {
-            self.buffer[self.buffer_len] = 0;
-            self.buffer_len += 1;
+        // Zero-fill up to 56 bytes, then the 64-bit big-endian message length.
+        for i in self.buffer_len..56 {
+            self.buffer[i] = 0;
         }
         self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
         let buf = self.buffer.clone();
@@ -180,6 +176,7 @@ impl Sha256 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     #[test]
     fn sha256_empty() {
@@ -196,7 +193,7 @@ mod tests {
         let h = Sha256::hash(b"hello");
         let expected = [
             0x2c, 0xf2, 0x4d, 0xba, 0x5f, 0xb0, 0xa3, 0x0e, 0x26, 0xe8, 0x3b, 0x2a, 0xc5, 0xb9, 0xe2, 0x9e,
-            0x1b, 0x16, 0x1e, 0x5c, 0xfa, 0x97, 0x66, 0xf3, 0x97, 0x52, 0x8c, 0x0b, 0x43, 0x67, 0x6c, 0xc4,
+            0x1b, 0x16, 0x1e, 0x5c, 0x1f, 0xa7, 0x42, 0x5e, 0x73, 0x04, 0x33, 0x62, 0x93, 0x8b, 0x98, 0x24,
         ];
         assert_eq!(h, expected);
     }

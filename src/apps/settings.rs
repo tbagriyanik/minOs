@@ -897,9 +897,9 @@ impl SystemSettings {
             0 => {
                 // --- minOs Sistem ve Sürüm Bilgisi (Satır 0) ---
                 let ver_str = if self.language.is_english() {
-                    "minOs Sarman Edition v1.6.0 (x86_64)"
+                    "minOs Sarman Edition v1.7.0 (x86_64)"
                 } else {
-                    "minOs Sarman Sürümü v1.6.0 (x86_64)"
+                    "minOs Sarman Sürümü v1.7.0 (x86_64)"
                 };
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + UI_LABEL_OFFSET), ver_str, Color::ACCENT_GREEN);
 

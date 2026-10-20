@@ -4,5 +4,5 @@ pub mod sha256;
 pub mod hmac;
 pub mod aes;
 pub mod gcm;
-pub mod x25519;
+pub mod rsa;
 pub mod x509;

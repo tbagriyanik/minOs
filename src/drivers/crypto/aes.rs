@@ -85,7 +85,8 @@ impl Aes {
         while i < nb * (nr + 1) {
             let mut temp = w[i - 1];
             if i % nk == 0 {
-                temp = sub_word(rot_word(temp)) ^ (RCON[(i / nk - 1) as usize] as u32);
+                // RCON occupies the most significant byte of the round constant word.
+                temp = sub_word(rot_word(temp)) ^ ((RCON[(i / nk - 1) as usize] as u32) << 24);
             } else if nk > 6 && i % nk == 4 {
                 temp = sub_word(temp);
             }
@@ -95,36 +96,14 @@ impl Aes {
 
         let encrypt_keys = w.clone();
 
-        // Compute inverse key schedule for decryption
+        // Straightforward inverse cipher (FIPS-197 Fig. 15): the encryption round
+        // keys are consumed in descending order, w[Nr] .. w[0]. InvMixColumns is
+        // applied to the state after AddRoundKey, so the keys themselves stay
+        // unchanged.
         let mut decrypt_keys: Vec<u32> = Vec::with_capacity(w.len());
-        // First round key (last encryption key) goes first in decryption
-        decrypt_keys.extend_from_slice(&w[w.len() - nb..]);
-        let mut idx = w.len() - nb - nb;
-        let mut round = (nr - 1) as isize;
-        while round > 0 {
-            let block: [u32; 4] = [
-                w[idx], w[idx + 1], w[idx + 2], w[idx + 3],
-            ];
-            let mut inv = [0u32; 4];
-            for j in 0..4 {
-                inv[j] = sub_word(block[j]);
-            }
-            // Apply InvMixColumns to all but first and last round keys
-            if round > 0 && round < nr as isize {
-                for j in 0..4 {
-                    let a = inv[j];
-                    let b = inv[(j + 1) % 4];
-                    let c = inv[(j + 2) % 4];
-                    let d = inv[(j + 3) % 4];
-                    inv[j] = gmul_0e(a as u8) as u32 ^ gmul_0b(b as u8) as u32 ^ gmul_0d(c as u8) as u32 ^ gmul_09(d as u8) as u32;
-                }
-            }
-            decrypt_keys.extend_from_slice(&inv);
-            idx -= nb;
-            round -= 1;
+        for round in (0..=nr).rev() {
+            decrypt_keys.extend_from_slice(&w[round * nb..(round + 1) * nb]);
         }
-        // Last decryption round key is the first encryption key
-        decrypt_keys.extend_from_slice(&w[0..nb]);
 
         Ok(Aes {
             rounds: nr,
@@ -279,9 +258,11 @@ mod tests {
         ];
         let aes = Aes::new(&key).unwrap();
         let ct = aes.encrypt(&input);
+        // Sifir anahtar + sifir blok icin beklenen AES-128 ECB ciktisi
+        // (.NET Aes / ECB / NoPadding referansi ile dogrulandi).
         let expected = [
-            0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x9a, 0x2c, 0x3e, 0x3d, 0x4f, 0x33, 0xb0, 0x50, 0xaa,
-            0x1e, 0x99,
+            0x66, 0xe9, 0x4b, 0xd4, 0xef, 0x8a, 0x2c, 0x3b, 0x88, 0x4c, 0xfa, 0x59, 0xca, 0x34,
+            0x2b, 0x2e,
         ];
         assert_eq!(ct, expected);
         let pt = aes.decrypt(&ct);

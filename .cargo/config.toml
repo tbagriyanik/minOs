@@ -1,12 +1,12 @@
-[build]
-target = "x86_64-minos.json"
-
 [unstable]
-build-std = ["core", "compiler_builtins", "alloc"]
+build-std = ["core", "alloc", "compiler_builtins"]
 build-std-features = ["compiler-builtins-mem"]
 json-target-spec = true
 
+[build]
+target = "x86_64-minos.json"
 
 [target.'cfg(target_os = "none")']
 runner = "qemu-system-x86_64 -cdrom"
 rustflags = ["-C", "link-arg=-Tlinker.ld"]
+

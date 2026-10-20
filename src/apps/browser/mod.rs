@@ -1209,6 +1209,8 @@ impl BrowserApp {
                 self.request_state = 0;
                 self.request_pending = true;
                 self.tls_session = None;
+                self.tls_pending_request.clear();
+                self.tls_request_sent = false;
                 self.tls_app_data.clear();
                 self.response_len = 0;
                 self.response_data.clear();
@@ -1486,15 +1488,9 @@ impl BrowserApp {
                     self.tls_app_data.extend_from_slice(&app_out);
                 }
                 if let Some(alert) = tls_failed {
-                    let detail = match alert {
-                        Some((_, desc)) => alloc::format!(
-                            "TLS uyarısı: {}",
-                            crate::drivers::tls::alert_description_text(desc)
-                        ),
-                        None => String::from(crate::gui::ui_text(
-                            "TLS kayıt işleme hatası.",
-                            "TLS record processing error.",
-                        )),
+                    let detail: &'static str = match alert {
+                        Some((_, desc)) => crate::drivers::tls::alert_description_text(desc),
+                        None => crate::gui::ui_text("TLS kayıt işleme hatası.", "TLS record processing error."),
                     };
                     self.finish_network_error(detail);
                 }
@@ -1601,6 +1597,8 @@ impl BrowserApp {
                                     self.response_data.resize(65536, 0);
                                     self.tls_app_data.clear();
                                     self.tls_session = None;
+                self.tls_pending_request.clear();
+                self.tls_request_sent = false;
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");

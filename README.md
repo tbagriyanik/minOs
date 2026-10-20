@@ -23,7 +23,7 @@
 - **🛑 Panik Sonrası Otomatik Reset Yok:** Kernel panic mesajı ekranda bırakılır ve sistem bekler; hata okunmadan yeniden başlatılmaz.
 - **🧵 Laptop için Tek CPU Açılışı:** Gerçek donanımda SMP/APIC başlatmasının reset oluşturduğu test yolunda AP başlatımı ve APIC timer devre dışı; açılış BSP üzerinde TSC tabanlı zamanla sürer. Çok çekirdek desteği bu açılış yapılandırmasında etkin değildir.
 - **🖱️ PS/2 Fare ve Touchpad Akışı:** PS/2 uyumlu fare/touchpad için çözünürlük ve örnekleme hızı ayarlandı; eksik paket baytında ayrıştırma durumu sonraki yoklamaya kadar korunur. Firmware'in 8042/PS/2 uyumluluğu sunması gerekir.
-- **🔌 USB Legacy Desteği Tanılama:** xHCI/EHCI PCI extended capability alanlarında legacy handoff kaydı aranıp loglanır. Bu, USB HID fare sürücüsü değildir; USB aygıtlarını numaralandırıp HID raporu okuma desteği henüz yoktur.
+- **🔌 Yerel USB Klavye ve Fare (xHCI):** `src/drivers/usb_hid.rs`, PCI üzerinde bulunan xHCI (USB 3.x) denetleyicilerini başlatır, bağlı aygıtları numaralandırır ve HID Boot Protocol kullanan klavye/fare raporlarını yoklama ile okur. USB 1.1/2.0 klavye ve fareler xHCI'nin USB 2.0 portları üzerinden çalışır. Raporlar mevcut PS/2 tarama kodu/durum katmanına çevrildiği için masaüstü, uygulamalar ve kısayollar değişmeden çalışır. UHCI/OHCI/EHCI denetleyicileri için yerel sürücü henüz yoktur; bu donanımda firmware'in USB Legacy/8042 emülasyonu yedek yol olarak kullanılır.
 
 - **🌐 Tam Ağ Yığını & DNS Çözümleme İyileştirmeleri:**
   - RFC 1035 uyumlu DNS soru ve yanıt ayrıştırma mekanizması; etiket (label) ve sıkıştırılmış işaretçi (`0xC0`) desteği ile harici alan adları (`example.com`, `google.com` vb.) anında çözümlenir.
@@ -189,7 +189,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 - **Boot ekranı ve hata davranışı:** Limine framebuffer doğrulandıktan sonra `serial_print` kayıtları metin konsoluna da aktarılır. Framebuffer geçersizse ya da kritik bir açılış hatası oluşursa GUI açılmaz. Panik mesajı ve son boot logu ekranda bırakılır; otomatik reset yapılmaz.
 - **CPU/APIC:** Mevcut laptop tanılama yapılandırması AP başlatımını ve APIC timer'ı atlar; sistem tek CPU modunda TSC saatiyle devam eder. `src/arch/x86_64/smp.rs` içinde Limine SMP/AP başlatma kodu mevcut olsa da varsayılan açılış akışında kullanılmıyor.
 - **PS/2 fare/touchpad:** `src/drivers/ps2.rs` PS/2 8042 yardımcı portunu yoklayarak standart fare paketlerini okur. Dahili touchpad'in bu arayüzde sunulması firmware/ACPI ayarına bağlıdır; I2C-HID touchpad sürücüsü henüz bulunmuyor.
-- **USB fare:** `src/drivers/usb.rs` USB host denetleyicisini PCI'de tanır ve xHCI/EHCI legacy capability bilgisini raporlar. USB HID aygıt numaralandırma, interrupt transfer ve fare raporu çözümleme uygulanmadığından yerel USB fare desteği henüz yoktur. Firmware'in USB Legacy/8042 emülasyonu açıksa bazı aygıtlar PS/2 yolundan çalışabilir; bu OS seviyesinde garanti edilmez.
+- **USB klavye/fare:** `src/drivers/usb_hid.rs`, xHCI denetleyicilerinde yerel HID Boot Protocol desteği sunar: aygıt numaralandırma, yapılandırma seçimi, kesme IN uç noktası ve rapor çözümleme uygulanmıştır. Klavye HID kullanım kimlikleri PS/2 set-1 tarama kodlarına, fare raporları ise mevcut `MouseState` paketlerine çevrilir. Sınırlar: yalnızca HID sınıfı/alt sınıf 1 (Boot Interface) ve boot protokolü desteklenir; UHCI/OHCI/EHCI için yerel sürücü yoktur ve bu denetleyicilerde firmware'in USB Legacy/8042 emülasyonu gerekir. `src/drivers/usb.rs` ayrıca PCI denetleyici tanısı ve legacy capability raporlamasını sürdürür.
 - **USB depolama:** USB depolama desteği, mevcut ATA/ATAPI ve diskfs yolları üzerinden sunulur; bu, USB HID giriş desteğinden ayrıdır.
 - **SMP ve Ring 3:** Kod tabanında SMP ve Ring 3 bileşenleri/testleri vardır; fiziksel laptop açılışında kararlılık için Ring3 demosu ve AP başlatımı varsayılan boot yolunda çalıştırılmaz. Bileşenlerin bulunması, her donanımda açılışta etkin oldukları anlamına gelmez.
 
@@ -200,6 +200,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | Erken framebuffer doğrulaması ve tek CPU açılış kararı | [`src/main.rs:102`](src/main.rs#L102), [`src/main.rs:286`](src/main.rs#L286) |
 | PS/2 fare/touchpad başlatma ve paket yoklama | [`src/drivers/ps2.rs:73`](src/drivers/ps2.rs#L73), [`src/drivers/ps2.rs:163`](src/drivers/ps2.rs#L163) |
 | USB controller ve legacy capability tanılama | [`src/drivers/usb.rs:280`](src/drivers/usb.rs#L280), [`src/drivers/usb.rs:336`](src/drivers/usb.rs#L336) |
+| Yerel xHCI USB HID klavye/fare sürücüsü | [`src/drivers/usb_hid.rs:1`](src/drivers/usb_hid.rs#L1), [`src/drivers/usb_hid.rs:1731`](src/drivers/usb_hid.rs#L1731) |
 | Boot log metin çizimi, ayna font ve fatal stop | [`src/boot/text_console.rs:197`](src/boot/text_console.rs#L197), [`src/boot/text_console.rs:269`](src/boot/text_console.rs#L269), [`src/boot/text_console.rs:335`](src/boot/text_console.rs#L335) |
 | Panic ekranında otomatik resetin engellenmesi | [`src/panic_handler.rs:51`](src/panic_handler.rs#L51) |
 
@@ -330,6 +331,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-DiskImage dosya.qcow2` | Bağlanacak sanal disk imajının yolu (varsayılan `.\disk.qcow2`). |
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
+| `-UsbHid` | Yerel xHCI HID sürücüsünü test etmek için QEMU'ya `qemu-xhci` denetleyicisi ile `usb-kbd` ve `usb-mouse` ekler. QEMU varsayılan PS/2 girişi de açık kaldığından aynı tuşlar iki yoldan gelebilir. |
 | `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`, çekirdek üst sınırı 8). |
 | `-Memory 1G` | Konuk RAM miktarı (`512M`, `1G` gibi; varsayılan `512M`). |
 
@@ -458,7 +460,8 @@ minos/
 │   │                        #   e1000 + TCP/IP yığını (netstack) + soket API (socket.rs) + HTTP (http.rs),
 │   │                        #   TLS 1.2 istemcisi (tls.rs) + kripto ilkelleri (crypto/: SHA-256,
 │   │                        #   HMAC, AES, GCM, RSA, X.509),
-│   │                        #   HDA ses, ATA/ATAPI (PIO) ve USB durum katmanı
+│   │                        #   HDA ses, ATA/ATAPI (PIO), USB durum katmanı ve xHCI HID
+│   │                        #   klavye/fare sürücüsü (usb_hid.rs)
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
 │   ├── apps/                # 14 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)

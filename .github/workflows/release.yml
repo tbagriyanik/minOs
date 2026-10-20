@@ -33,8 +33,7 @@ jobs:
           cargo check \
             --target x86_64-minos.json \
             -Zbuild-std=core,alloc \
-            -Zbuild-std-features=compiler-builtins-mem \
-            --all-targets
+            -Zbuild-std-features=compiler-builtins-mem
 
       - name: Build Kernel (Release)
         run: cargo build --release

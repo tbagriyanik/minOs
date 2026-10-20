@@ -63,14 +63,22 @@ fn render_device_inventory(
     draw(&line, Color::TEXT_MAIN);
 
     let mut line = DeviceLine::new();
-    line.push(if english { "Keyboard: PS/2 | " } else { "Klavye: PS/2 | " });
+    line.push(if english { "Keyboard: PS/2" } else { "Klavye: PS/2" });
+    if crate::drivers::usb_hid::keyboard_present() {
+        line.push(if english { " + USB HID" } else { " + USB HID" });
+    }
+    line.push(" | ");
     line.push(match layout { KeyboardLayout::TurkishQ => "TR-Q", KeyboardLayout::EnglishUS => "EN-US" });
     line.push(if english { " | polling driver active" } else { " | yoklama sürücüsü etkin" });
     draw(&line, Color::ACCENT_GREEN);
 
     let mut line = DeviceLine::new();
-    line.push(if english { "Mouse: PS/2 | 3 buttons | " } else { "Fare: PS/2 | 3 düğme | " });
-    line.push(if crate::drivers::ps2::mouse_wheel_enabled() {
+    line.push(if english { "Mouse: PS/2" } else { "Fare: PS/2" });
+    if crate::drivers::usb_hid::mouse_present() {
+        line.push(if english { " + USB HID" } else { " + USB HID" });
+    }
+    line.push(if english { " | 3 buttons | " } else { " | 3 düğme | " });
+    line.push(if crate::drivers::ps2::mouse_wheel_enabled() || crate::drivers::usb_hid::mouse_present() {
         if english { "wheel detected" } else { "tekerlek algılandı" }
     } else if english { "wheel not detected" } else { "tekerlek algılanmadı" });
     draw(&line, Color::ACCENT_PINK);
@@ -117,6 +125,16 @@ fn render_device_inventory(
         line.push("."); line.number(controller.func as u64); line.push(" | ");
         line.push(if controller.is_mmio { "MMIO base " } else { "I/O base " });
         line.number(controller.base_addr);
+        draw(&line, Color::ACCENT_GREEN);
+    }
+
+    if crate::drivers::usb_hid::ready() {
+        let mut line = DeviceLine::new();
+        line.push(if english { "USB HID (native xHCI): " } else { "USB HID (yerel xHCI): " });
+        line.number(crate::drivers::usb_hid::controller_count() as u64);
+        line.push(if english { " controller(s) | " } else { " denetleyici | " });
+        line.number(crate::drivers::usb_hid::device_count() as u64);
+        line.push(if english { " active device(s) | boot protocol" } else { " etkin aygıt | boot protokolü" });
         draw(&line, Color::ACCENT_GREEN);
     }
 

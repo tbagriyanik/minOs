@@ -15,6 +15,9 @@ pub mod ps2;
 pub mod rtc;
 pub mod ata;
 pub mod usb;
+pub mod usb_hid;
+pub mod camera;
+pub mod wifi;
 
 // --- HHDM ofset yönetimi: fiziksel adresleri sanal adrese çevirir ---
 static mut HHDM_OFFSET: u64 = 0;

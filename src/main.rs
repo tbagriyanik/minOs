@@ -371,6 +371,11 @@ pub extern "C" fn _start() -> ! {
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB starting");
         drivers::usb::init();
         drivers::usb::test_usb_subsystems();
+        serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB HID starting");
+        drivers::usb_hid::init(&mut memory_mgr.pmm);
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB HID finished");
+        serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB finished");
         serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }
@@ -587,7 +592,16 @@ pub extern "C" fn _start() -> ! {
                 gui::render_welcome_screen(&mut fb, width, height, settings_app.language.is_english(), settings_app.theme, &mouse);
                 welcome_dirty = false;
             }
-            let welcome_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+            let mut welcome_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+            let welcome_usb_update = drivers::usb_hid::poll_input(
+                &mut *mouse,
+                &mut *keyboard,
+                width as i32,
+                height as i32,
+                &mut memory_mgr.pmm,
+            );
+            welcome_update.keyboard |= welcome_usb_update.keyboard;
+            welcome_update.mouse |= welcome_usb_update.mouse;
             if welcome_update.keyboard || welcome_update.mouse {
                 // Herhangi bir kullanıcı hareketi algılanırsa zaman aşımını sıfırla/uzat
                 welcome_start_time = monotonic_ms();
@@ -1085,7 +1099,16 @@ pub extern "C" fn _start() -> ! {
         let loop_start_cycles = read_cpu_cycles();
         mouse.speed = settings_app.mouse_speed;
         mouse.reverse_scroll = settings_app.reverse_scroll;
-        let input_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+        let mut input_update = drivers::ps2::poll_input(&mut *mouse, &mut *keyboard, width as i32, height as i32);
+        let usb_input_update = drivers::usb_hid::poll_input(
+            &mut *mouse,
+            &mut *keyboard,
+            width as i32,
+            height as i32,
+            &mut memory_mgr.pmm,
+        );
+        input_update.keyboard |= usb_input_update.keyboard;
+        input_update.mouse |= usb_input_update.mouse;
         loop_counter = loop_counter.wrapping_add(1);
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
@@ -4211,7 +4234,7 @@ pub extern "C" fn _start() -> ! {
             let wait_start = read_cpu_cycles();
             let wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
             while read_cpu_cycles().wrapping_sub(wait_start) < wait_cycles {
-                if drivers::ps2::has_input() {
+                if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
                     break;
                 }
                 core::hint::spin_loop();

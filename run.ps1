@@ -3,6 +3,7 @@ param(
     [switch]$Debug,
     [switch]$UsbDisks,
     [switch]$UsbDiskReadWrite,
+    [switch]$UsbHid,
     [ValidateRange(1, 64)][int]$CpuCount = 2,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
     [string]$DiskImage = ".\disk.qcow2",
@@ -157,6 +158,18 @@ if ($UsbDisks -or $UsbDiskReadWrite) {
         Write-Host "[HATA] USB diskleri listelenemedi: $($_.Exception.Message)" -ForegroundColor Red
         exit 1
     }
+}
+
+if ($UsbHid) {
+    # Yerel xHCI HID sürücüsünü test etmek için USB 3.0 denetleyicisi ve
+    # boot protokollü klavye/fare ekle. QEMU varsayılan PS/2 girişini de
+    # sunmaya devam eder; bu nedenle aynı tuşlar iki yoldan da gelebilir.
+    $qemuArgs += @(
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0",
+        "-device", "usb-mouse,bus=xhci.0"
+    )
+    Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
 }
 
 function Test-DiskBootable([string]$filePath) {

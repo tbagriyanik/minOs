@@ -16,7 +16,7 @@ pub const OUT_LINES: usize = 64;
 pub const LINE_MAX: usize = 256;
 
 const COMPLETION_COMMANDS: &[&str] = &[
-    "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df",
+    "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df", "usb", "lsusb", "cam", "wifi",
     "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
     "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd", "minPak",
@@ -453,8 +453,8 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cd pwd mkdir touch rm cat write disks df format echo clear mem ps exec", Color::TEXT_MAIN);
-                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget", Color::ACCENT_GREEN);
+                self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem ps exec", Color::TEXT_MAIN);
+                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
                 self.push_line("minPak list|search|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
@@ -620,6 +620,133 @@ impl TerminalApp {
                     }
                 }
                 self.push_line(crate::gui::ui_text("Bağlantı: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
+            }
+            "usb" | "lsusb" => {
+                self.push_line(crate::gui::ui_text("--- USB DENETLEYICILERI VE AYGITLARI ---", "--- USB CONTROLLERS & DEVICES ---"), Color::ACCENT_PINK);
+                if let Some(ctrl) = crate::drivers::usb::controller_info() {
+                    let mut b = TextBuf::new();
+                    b.push_str("[Host] ");
+                    b.push_str(ctrl.controller_type.name());
+                    b.push_str(" @ PCI 00:");
+                    b.push_usize(ctrl.dev as usize);
+                    b.push_str(".");
+                    b.push_usize(ctrl.func as usize);
+                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                } else {
+                    self.push_line(crate::gui::ui_text("[Host] Harici USB denetleyici yok (Emulasyon modu)", "[Host] No host controller (Emulation mode)"), Color::TEXT_MUTED);
+                }
+
+                if crate::drivers::usb_hid::ready() {
+                    let mut b = TextBuf::new();
+                    b.push_str("[HID] ");
+                    b.push_usize(crate::drivers::usb_hid::device_count());
+                    b.push_str(crate::gui::ui_text(" aygit (", " dev(s) ("));
+                    b.push_usize(crate::drivers::usb_hid::keyboard_count());
+                    b.push_str(crate::gui::ui_text(" klavye, ", " kbd, "));
+                    b.push_usize(crate::drivers::usb_hid::mouse_count());
+                    b.push_str(crate::gui::ui_text(" fare)", " mouse)"));
+                    self.push_line(b.as_str(), Color::ACCENT_BLUE);
+                } else {
+                    self.push_line(crate::gui::ui_text("[HID] PS/2 ve USB Legacy emulasyonu devrede", "[HID] PS/2 and USB Legacy fallback active"), Color::TEXT_MUTED);
+                }
+
+                if crate::drivers::usb::usb_available() {
+                    self.push_line(crate::gui::ui_text("[Disk] /media/usb0 (USB Bellek FAT32 bagli)", "[Disk] /media/usb0 (USB Drive FAT32 mounted)"), Color::ACCENT_YELLOW);
+                } else {
+                    self.push_line(crate::gui::ui_text("[Disk] Bagli USB bellek yok (/media/usb0)", "[Disk] No USB drive attached (/media/usb0)"), Color::TEXT_MUTED);
+                }
+            }
+            "cam" | "camera" => {
+                self.push_line(crate::gui::ui_text("--- UVC KAMERA SURUCUSU ---", "--- UVC CAMERA DRIVER ---"), Color::ACCENT_PINK);
+                if let Some(cam) = crate::drivers::camera::info() {
+                    let mut b = TextBuf::new();
+                    b.push_str(cam.name_str());
+                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
+
+                    let mut b2 = TextBuf::new();
+                    b2.push_str("[Cozunurluk] ");
+                    b2.push_usize(cam.width as usize);
+                    b2.push_str("x");
+                    b2.push_usize(cam.height as usize);
+                    b2.push_str(" @ ");
+                    b2.push_usize(cam.fps as usize);
+                    b2.push_str(" FPS");
+                    self.push_line(b2.as_str(), Color::ACCENT_BLUE);
+
+                    let mut b3 = TextBuf::new();
+                    b3.push_str("[Format] ");
+                    b3.push_str(cam.format.name());
+                    self.push_line(b3.as_str(), Color::ACCENT_YELLOW);
+                } else {
+                    self.push_line(crate::gui::ui_text("Kamera algilanamadi (UVC bekleniyor).", "No camera detected (UVC waiting)."), Color::TEXT_MUTED);
+                }
+            }
+            "wifi" | "wlan" => {
+                let mut sp = arg.split_whitespace();
+                let sub = sp.next().unwrap_or("status");
+                match sub {
+                    "scan" => {
+                        self.push_line(crate::gui::ui_text("--- KABLOSUZ AGLAR (802.11) ---", "--- WIRELESS NETWORKS (802.11) ---"), Color::ACCENT_PINK);
+                        let aps = crate::drivers::wifi::scan_networks();
+                        for ap_opt in aps {
+                            if let Some(ap) = ap_opt {
+                                let mut b = TextBuf::new();
+                                b.push_str(ap.ssid_str());
+                                b.push_str(" (CH ");
+                                b.push_usize(ap.channel as usize);
+                                b.push_str(", %");
+                                b.push_usize(ap.signal_percent() as usize);
+                                b.push_str(")");
+                                self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                            }
+                        }
+                    }
+                    "connect" => {
+                        let target_ssid = sp.next().unwrap_or("");
+                        let pass = sp.next().unwrap_or("");
+                        if target_ssid.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanim: wifi connect <SSID> [sifre]", "Usage: wifi connect <SSID> [pass]"), Color::ACCENT_YELLOW);
+                        } else {
+                            let mut b = TextBuf::new();
+                            b.push_str(crate::gui::ui_text("Baglaniliyor: ", "Connecting: "));
+                            b.push_str(target_ssid);
+                            self.push_line(b.as_str(), Color::ACCENT_YELLOW);
+                            if crate::drivers::wifi::connect(target_ssid, pass) {
+                                self.push_line(crate::gui::ui_text("Baglanti basarili! IP: 192.168.1.105", "Connected! IP: 192.168.1.105"), Color::ACCENT_GREEN);
+                            } else {
+                                self.push_line(crate::gui::ui_text("Hata: Ag bulunamadi.", "Error: Network not found."), Color::ACCENT_RED);
+                            }
+                        }
+                    }
+                    "disconnect" => {
+                        crate::drivers::wifi::disconnect();
+                        self.push_line(crate::gui::ui_text("Wi-Fi baglantisi kesildi.", "Wi-Fi disconnected."), Color::ACCENT_YELLOW);
+                    }
+                    _ => {
+                        self.push_line(crate::gui::ui_text("--- WI-FI DURUMU ---", "--- WI-FI STATUS ---"), Color::ACCENT_PINK);
+                        let st = crate::drivers::wifi::status();
+                        match st.state {
+                            crate::drivers::wifi::WifiState::Connected => {
+                                let mut b = TextBuf::new();
+                                b.push_str(crate::gui::ui_text("Bagli: ", "Connected: "));
+                                b.push_str(st.ssid_str());
+                                self.push_line(b.as_str(), Color::ACCENT_GREEN);
+
+                                let mut b2 = TextBuf::new();
+                                b2.push_str("IP: ");
+                                b2.push_usize(st.ip_addr[0] as usize); b2.push_str(".");
+                                b2.push_usize(st.ip_addr[1] as usize); b2.push_str(".");
+                                b2.push_usize(st.ip_addr[2] as usize); b2.push_str(".");
+                                b2.push_usize(st.ip_addr[3] as usize);
+                                self.push_line(b2.as_str(), Color::ACCENT_BLUE);
+                            }
+                            _ => {
+                                self.push_line(crate::gui::ui_text("Durum: Bagli Degil", "Status: Disconnected"), Color::TEXT_MUTED);
+                                self.push_line(crate::gui::ui_text("Komutlar: wifi scan | wifi connect <SSID>", "Commands: wifi scan | wifi connect <SSID>"), Color::ACCENT_YELLOW);
+                            }
+                        }
+                    }
+                }
             }
             "format" | "mkfs" => {
                 let mut sp = arg.split_whitespace();

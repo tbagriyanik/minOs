@@ -111,6 +111,7 @@ flowchart TD
 - HTTP istemcisi (chunked + yönlendirme) ve MinShell `curl` komutu.
 - **TLS 1.2 istemcisi** (`src/drivers/tls.rs`): ClientHello (SNI) → ServerHello → Certificate (X.509) → ServerHelloDone → ClientKeyExchange (RSA) → ChangeCipherSpec → Finished → şifreli Application Data; tarayıcıda `https://` desteği.
 
+- **Web Tarayıcısı Sık Kullanılanlar & Yer İmleri:** Adres çubuğu altında interaktif Bookmarks Bar, http://httpforever.com/ hafif HTTP test sitesi, minos://bookmarks, minos://help ve minos://demo hızlı erişim çipleri ve sayfa entegrasyonu.
 ### Faz 7: Ring 3, SMP ve Ses Alt Sistemi Optimizasyonu ✅
 - **Ring 3 Kullanıcı Kipi İzolasyonu:** GDT TSS kullanıcı segmentleri, `int 0x80` sistem çağrıları (`SYS_GETPID`, `SYS_YIELD`, `SYS_WRITE`), #GP/#PF hata yakalama ve çekirdek koruması.
 - **SMP (Çok Çekirdekli Paralellik):** Limine SMP protokolü ile AP başlatımı, çekirdek başına 64 KiB yığın ve GDT, LAPIC kimliği, paralel atomik iş kuyruğu (`parallel_checksum`).
@@ -126,3 +127,9 @@ flowchart TD
 - **TLS 1.2 Oturumu:** `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) tek cipher suite; PRF (P_SHA256), master/pre-master secret türetme, GCM kayıt şifreleme/çözme, Finished doğrulama.
 - **Entegrasyon:** Web Tarayıcısı `https://` şeması; şifreli yanıt şifresi çözülüp HTTP ayrıştırıcısına aktarılır.
 - **Bilinen sınırlar:** Sertifika zinciri ve hostname doğrulaması yapılmaz; TLS 1.3, ECDHE ve AEAD-GCM dışı cipher suite'ler desteklenmez.
+
+### Faz 10: Gelişmiş Giriş ve Donanım Sürücüleri (USB HID, Touchpad, UVC Kamera, Wi-Fi) ✅
+- **Yerel xHCI USB HID Klavye ve Fare (`src/drivers/usb_hid.rs`):** PCI xHCI (USB 3.x) denetleyicisi, port reset ve aygıt numaralandırma, Boot Protocol klavye ve fare desteği; PS/2 ile birleşik olay döngüsü ve gecikmesiz olay kontrolü (`has_event`).
+- **Laptop Dokunmatik Yüzey (Touchpad) İyileştirmesi (`src/drivers/mouse.rs`, `src/drivers/ps2.rs`):** 8 count/mm çözünürlük, 100 sample/sec örnekleme, parmak temas ve dokunarak tıklama (Tap-to-Click, <180ms dokunma), çift parmak ve kaydırma tekerleği desteği.
+- **UVC Kamera Alt Sistemi (`src/drivers/camera.rs`):** USB Video Class (Class 0x0E), VideoControl ve VideoStreaming arayüzleri, YUY2 (4:2:2 uncompressed) piksel dönüşümü (`yuv_to_rgb32`), sentetik test deseni üretimi, MinShell `cam` / `camera` komutu ve Ayarlar entegrasyonu.
+- **IEEE 802.11 Wi-Fi ve WPA2-PSK Altyapısı (`src/drivers/wifi.rs`):** 802.11 MAC çerçeve yapısı (Beacon, Probe, Data), kablosuz ağ tarama tablosu (`scan_networks`), WPA2-PSK anahtar türetimi (PBKDF2-HMAC-SHA256 ile PMK ve PTK türetimi), MinShell `wifi scan/connect/disconnect/status` komutları.

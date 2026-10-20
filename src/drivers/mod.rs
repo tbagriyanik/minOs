@@ -16,6 +16,8 @@ pub mod rtc;
 pub mod ata;
 pub mod usb;
 pub mod usb_hid;
+pub mod usb_keyboard;
+pub mod usb_mouse;
 pub mod camera;
 pub mod wifi;
 

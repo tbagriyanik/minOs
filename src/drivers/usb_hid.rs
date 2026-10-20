@@ -1627,12 +1627,29 @@ unsafe fn handle_transfer_event(
                 );
                 match device.kind {
                     HidKind::Keyboard => {
-                        if handle_keyboard_report(device, data, keyboard) {
+                        let mut kbd_dev = crate::drivers::usb_keyboard::UsbKeyboardDevice {
+                            active: device.active,
+                            prev_modifiers: device.prev_modifiers,
+                            prev_keys: device.prev_keys,
+                            leds: 0,
+                        };
+                        if crate::drivers::usb_keyboard::process_keyboard_report(&mut kbd_dev, data, keyboard) {
+                            device.prev_modifiers = kbd_dev.prev_modifiers;
+                            device.prev_keys = kbd_dev.prev_keys;
                             updated.keyboard = true;
                         }
                     }
                     HidKind::Mouse => {
-                        if handle_mouse_report(data, mouse, screen_w, screen_h) {
+                        let mut mouse_dev = crate::drivers::usb_mouse::UsbMouseDevice {
+                            active: device.active,
+                            mode: if data.len() >= 6 && data.len() <= 8 {
+                                crate::drivers::usb_mouse::UsbPointerMode::Absolute
+                            } else {
+                                crate::drivers::usb_mouse::UsbPointerMode::Relative
+                            },
+                            last_buttons: 0,
+                        };
+                        if crate::drivers::usb_mouse::process_mouse_report(&mut mouse_dev, data, mouse, screen_w, screen_h) {
                             updated.mouse = true;
                         }
                     }

@@ -15,6 +15,7 @@ const CHAR_W: usize = 8; // 8x8 font * 1x scale
 const FONT_SCALE: usize = 1;
 const LOG_LINE_CAPACITY: usize = 4096;
 const MAX_VISIBLE_LINES: usize = 80;
+const LINE_PAUSE_MS: u64 = 45;
 
 /// Basit 8x8 font bitmap (ASCII 32-126 için)
 const FONT_8X8: [[u8; 8]; 95] = [
@@ -291,6 +292,13 @@ pub fn write(text: &str) {
                 '\n' => {
                     CURSOR_X = 16;
                     CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
+                    screen.flush();
+                    if crate::boot::time::is_ready() {
+                        let started = crate::boot::time::monotonic_ms();
+                        while crate::boot::time::monotonic_ms().wrapping_sub(started) < LINE_PAUSE_MS {
+                            core::hint::spin_loop();
+                        }
+                    }
                 }
                 '\t' => CURSOR_X = CURSOR_X.saturating_add(CHAR_W * 4),
                 c if !c.is_control() => {

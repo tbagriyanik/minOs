@@ -1,365 +1,37 @@
-use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor};
+//! minOs tarayıcı uygulaması.
+//!
+//! Modül yapısı:
+//! - `types`: paylaşılan veri tipleri (`TextSpan`, `BrowserLine` ...)
+//! - `css`: CSS ayrıştırma ve stil eşleştirme
+//! - `html`: HTML tokenize + yerleşim (`render_html_to_lines`)
+//! - `crate::apps::js`: minJs betik motoru
+//! - bu dosya: HTTP/TLS akışı, geçmiş ve `BrowserApp` pencere denetçisi
+mod types;
+mod css;
+mod html;
+
+pub use types::{
+    html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedLink, TextAlign, TextSpan,
+    BOOKMARKS,
+};
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-fn find_bytes(haystack:&[u8], needle:&[u8])->Option<usize> {
-    if needle.is_empty() || needle.len()>haystack.len(){return None;}
-    haystack.windows(needle.len()).position(|w|w==needle)
-}
+use crate::drivers::video::Framebuffer;
+use crate::gui::{Color, MinGuiCompositor};
+
+use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
+
+extern crate alloc;
 
 fn split_http_lines(body:&[u8])->impl Iterator<Item=&str> {
     body.split(|b|*b==b'\n').filter_map(|line| {
         let line=if line.last()==Some(&b'\r'){&line[..line.len()-1]}else{line};
         if line.is_empty(){None}else{Some(core::str::from_utf8(line).unwrap_or("[binary or non-UTF8 content]"))}
     })
-}
-
-fn eq_ascii(a:&[u8], b:&[u8])->bool { a.eq_ignore_ascii_case(b) }
-
-fn html_color(value:&[u8])->Option<u32> {
-    let mut v=value;
-    while v.first().map_or(false,|b|b.is_ascii_whitespace()||*b==b'\''||*b==b'"') { v=&v[1..]; }
-    if v.first()==Some(&b'#') && v.len()>=7 {
-        let mut rgb=0u32;
-        for &b in &v[1..7] { let d=match b {b'0'..=b'9'=>(b-b'0') as u32,b'a'..=b'f'=>(b-b'a'+10) as u32,b'A'..=b'F'=>(b-b'A'+10) as u32,_=>return None};rgb=(rgb<<4)|d; }
-        return Some(rgb);
-    }
-    match v.split(|b|*b==b';'||b.is_ascii_whitespace()||*b==b'\''||*b==b'"').next()? {
-        b"black"=>Some(0x101010),b"white"=>Some(0xFFFFFF),b"red"=>Some(0xD03030),b"green"=>Some(0x188040),b"blue"=>Some(0x2050C0),b"yellow"=>Some(0xD0A020),b"gray"|b"grey"=>Some(0x808080),_=>None,
-    }
-}
-
-extern crate alloc;
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::cell::RefCell;
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum HtmlTagType {
-    Normal,
-    Heading1,
-    Heading2,
-    Heading3,
-    ListItem,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum TextAlign {
-    Left,
-    Center,
-    Right,
-}
-
-#[derive(Clone)]
-pub struct ElementStyle {
-    pub color: Option<u32>,
-    pub bg_color: Option<u32>,
-    pub font_scale: usize,
-    pub align: TextAlign,
-    pub display_none: bool,
-}
-
-impl ElementStyle {
-    pub fn new() -> Self {
-        Self {
-            color: None,
-            bg_color: None,
-            font_scale: 1,
-            align: TextAlign::Left,
-            display_none: false,
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct CssRule {
-    pub selector: String,
-    pub style: ElementStyle,
-}
-
-fn parse_css(css_code: &str) -> Vec<CssRule> {
-    let mut rules = Vec::new();
-    let bytes = css_code.as_bytes();
-    let mut p = 0;
-    while p < bytes.len() {
-        while p < bytes.len() && (bytes[p].is_ascii_whitespace() || bytes[p] == b'\r' || bytes[p] == b'\n') { p += 1; }
-        if p >= bytes.len() { break; }
-        let sel_start = p;
-        while p < bytes.len() && bytes[p] != b'{' && bytes[p] != b'<' { p += 1; }
-        if p >= bytes.len() || bytes[p] != b'{' { break; }
-        let selector = core::str::from_utf8(&bytes[sel_start..p]).unwrap_or("").trim();
-        p += 1;
-        let block_start = p;
-        while p < bytes.len() && bytes[p] != b'}' { p += 1; }
-        let block_end = p;
-        if p < bytes.len() { p += 1; }
-
-        let block = core::str::from_utf8(&bytes[block_start..block_end]).unwrap_or("");
-        let mut style = ElementStyle::new();
-        for decl in block.split(';') {
-            if let Some((prop, val)) = decl.split_once(':') {
-                let prop = prop.trim().to_ascii_lowercase();
-                let val = val.trim();
-                if prop == "color" {
-                    if let Some(c) = html_color(val.as_bytes()) {
-                        style.color = Some(c);
-                    }
-                } else if prop == "background-color" || prop == "background" {
-                    if let Some(c) = html_color(val.as_bytes()) {
-                        style.bg_color = Some(c);
-                    }
-                } else if prop == "text-align" {
-                    match val.to_ascii_lowercase().as_str() {
-                        "center" => style.align = TextAlign::Center,
-                        "right" => style.align = TextAlign::Right,
-                        _ => style.align = TextAlign::Left,
-                    }
-                } else if prop == "font-size" {
-                    if val.contains("20px") || val.contains("24px") || val.contains("2em") || val.contains("large") {
-                        style.font_scale = 2;
-                    }
-                } else if prop == "display" && val.to_ascii_lowercase().contains("none") {
-                    style.display_none = true;
-                }
-            }
-        }
-        for s in selector.split(',') {
-            let trimmed = s.trim();
-            if !trimmed.is_empty() {
-                rules.push(CssRule {
-                    selector: String::from(trimmed),
-                    style: style.clone(),
-                });
-            }
-        }
-    }
-    rules
-}
-
-fn match_css_style(rules: &[CssRule], tag: &str, class: Option<&str>, id: Option<&str>, inline_style: Option<&str>) -> ElementStyle {
-    let mut resolved = ElementStyle::new();
-    for rule in rules {
-        let sel = rule.selector.as_str();
-        let matches = if sel.starts_with('.') {
-            class.map_or(false, |c| c.split_whitespace().any(|part| part.eq_ignore_ascii_case(&sel[1..])))
-        } else if sel.starts_with('#') {
-            id.map_or(false, |i| i.eq_ignore_ascii_case(&sel[1..]))
-        } else {
-            sel.eq_ignore_ascii_case(tag)
-        };
-        if matches {
-            if let Some(c) = rule.style.color { resolved.color = Some(c); }
-            if let Some(bg) = rule.style.bg_color { resolved.bg_color = Some(bg); }
-            if rule.style.font_scale > 1 { resolved.font_scale = rule.style.font_scale; }
-            if rule.style.align != TextAlign::Left { resolved.align = rule.style.align; }
-            if rule.style.display_none { resolved.display_none = true; }
-        }
-    }
-    if let Some(inline) = inline_style {
-        for decl in inline.split(';') {
-            if let Some((prop, val)) = decl.split_once(':') {
-                let prop = prop.trim().to_ascii_lowercase();
-                let val = val.trim();
-                if prop == "color" {
-                    if let Some(c) = html_color(val.as_bytes()) { resolved.color = Some(c); }
-                } else if prop == "background-color" || prop == "background" {
-                    if let Some(c) = html_color(val.as_bytes()) { resolved.bg_color = Some(c); }
-                } else if prop == "text-align" {
-                    match val.to_ascii_lowercase().as_str() {
-                        "center" => resolved.align = TextAlign::Center,
-                        "right" => resolved.align = TextAlign::Right,
-                        _ => resolved.align = TextAlign::Left,
-                    }
-                } else if prop == "font-size" {
-                    if val.contains("20px") || val.contains("24px") || val.contains("2em") || val.contains("large") {
-                        resolved.font_scale = 2;
-                    }
-                } else if prop == "display" && val.to_ascii_lowercase().contains("none") {
-                    resolved.display_none = true;
-                }
-            }
-        }
-    }
-    resolved
-}
-
-fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
-    let mut i = 0;
-    while i < attrs.len() {
-        while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') { i += 1; }
-        let k_start = i;
-        while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') { i += 1; }
-        let cur_key = &attrs[k_start..i];
-        while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-        if i < attrs.len() && attrs[i] == b'=' {
-            i += 1;
-            while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
-            let quote = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
-                let q = attrs[i];
-                i += 1;
-                q
-            } else { 0 };
-            let v_start = i;
-            while i < attrs.len() && ((quote != 0 && attrs[i] != quote) || (quote == 0 && !attrs[i].is_ascii_whitespace() && attrs[i] != b'>')) {
-                i += 1;
-            }
-            let val = &attrs[v_start..i];
-            if quote != 0 && i < attrs.len() { i += 1; }
-            if eq_ascii(cur_key, key) {
-                return core::str::from_utf8(val).ok();
-            }
-        } else if i == k_start {
-            i += 1;
-        }
-    }
-    None
-}
-
-/// Robust UTF-8, HTML entity, and Turkish ISO-8859-9/Windows-1254 character decoder
-fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
-    if p >= bytes.len() { return ('\0', 0); }
-    let b0 = bytes[p];
-
-    // HTML Entity &...;
-    if b0 == b'&' {
-        let max_e = (p + 12).min(bytes.len());
-        if let Some(pos) = bytes[p..max_e].iter().position(|&b| b == b';') {
-            let entity = &bytes[p + 1..p + pos];
-            let ent_str = core::str::from_utf8(entity).unwrap_or("");
-            let resolved = match ent_str {
-                "amp" => Some('&'),
-                "lt" => Some('<'),
-                "gt" => Some('>'),
-                "quot" => Some('"'),
-                "apos" => Some('\''),
-                "nbsp" => Some(' '),
-                // Turkish HTML Entities
-                "ccedil" => Some('ç'),
-                "Ccedil" => Some('Ç'),
-                "ouml" => Some('ö'),
-                "Ouml" => Some('Ö'),
-                "uuml" => Some('ü'),
-                "Uuml" => Some('Ü'),
-                "gbreve" => Some('ğ'),
-                "Gbreve" => Some('Ğ'),
-                "scedil" => Some('ş'),
-                "Scedil" => Some('Ş'),
-                "inodot" => Some('ı'),
-                "Idot" => Some('İ'),
-                _ => {
-                    if ent_str.starts_with('#') {
-                        if ent_str.starts_with("#x") || ent_str.starts_with("#X") {
-                            u32::from_str_radix(&ent_str[2..], 16).ok().and_then(core::char::from_u32)
-                        } else {
-                            ent_str[1..].parse::<u32>().ok().and_then(core::char::from_u32)
-                        }
-                    } else {
-                        None
-                    }
-                }
-            };
-            if let Some(ch) = resolved {
-                return (ch, pos + 1);
-            }
-        }
-    }
-
-    // Standard UTF-8 decoding
-    if b0 < 0x80 {
-        return (b0 as char, 1);
-    } else if (b0 & 0xE0) == 0xC0 && p + 1 < bytes.len() {
-        let b1 = bytes[p + 1];
-        if (b1 & 0xC0) == 0x80 {
-            let cp = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
-            if let Some(ch) = core::char::from_u32(cp) {
-                return (ch, 2);
-            }
-        }
-    } else if (b0 & 0xF0) == 0xE0 && p + 2 < bytes.len() {
-        let b1 = bytes[p + 1];
-        let b2 = bytes[p + 2];
-        if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 {
-            let cp = (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
-            if let Some(ch) = core::char::from_u32(cp) {
-                return (ch, 3);
-            }
-        }
-    } else if (b0 & 0xF8) == 0xF0 && p + 3 < bytes.len() {
-        let b1 = bytes[p + 1];
-        let b2 = bytes[p + 2];
-        let b3 = bytes[p + 3];
-        if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80 {
-            let cp = (((b0 & 0x07) as u32) << 18) | (((b1 & 0x3F) as u32) << 12) | (((b2 & 0x3F) as u32) << 6) | ((b3 & 0x3F) as u32);
-            if let Some(ch) = core::char::from_u32(cp) {
-                return (ch, 4);
-            }
-        }
-    }
-
-    // Fallback: Windows-1254 / ISO-8859-9 Turkish single-byte mapping
-    let ch = match b0 {
-        0xD0 => 'Ğ',
-        0xF0 => 'ğ',
-        0xDD => 'İ',
-        0xFD => 'ı',
-        0xDE => 'Ş',
-        0xFE => 'ş',
-        0xC7 => 'Ç',
-        0xE7 => 'ç',
-        0xD6 => 'Ö',
-        0xF6 => 'ö',
-        0xDC => 'Ü',
-        0xFC => 'ü',
-        _ => b0 as char,
-    };
-    (ch, 1)
-}
-
-fn decode_bytes_to_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len());
-    let mut p = 0;
-    while p < bytes.len() {
-        let (ch, len) = decode_html_char(bytes, p);
-        if len == 0 { break; }
-        out.push(ch);
-        p += len;
-    }
-    out
-}
-
-#[derive(Clone)]
-pub struct TextSpan {
-    pub text: String,
-    pub color: u32,
-    pub bg_color: Option<u32>,
-    pub is_link: bool,
-    pub link_url: String,
-    pub is_button: bool,
-    pub onclick: String,
-    pub elem_id: String,
-}
-
-#[derive(Clone)]
-pub struct BrowserLine {
-    pub spans: Vec<TextSpan>,
-    pub tag: HtmlTagType,
-    pub indent: usize,
-    pub align: TextAlign,
-}
-
-#[derive(Clone)]
-pub struct HttpCookie {
-    pub name: String,
-    pub value: String,
-    pub domain: String,
-    pub path: String,
-}
-
-#[derive(Clone)]
-pub struct RenderedLink {
-    pub rect: (usize, usize, usize, usize),
-    pub url: String,
-    pub onclick: String,
 }
 
 // ── Tarayıcı geçmişi ──────────────────────────────────────────────────────
@@ -477,289 +149,6 @@ pub fn history_remove(index: usize) -> bool {
     true
 }
 
-/// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
-fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<BrowserLine>, max_lines: usize) {
-    let mut current_color = Color::TEXT_MAIN;
-    let mut current_bg: Option<u32> = None;
-    let mut active_link: Option<String> = None;
-    let mut active_onclick: Option<String> = None;
-    let mut active_is_button = false;
-    let mut active_id: Option<String> = None;
-    let mut css_rules = Vec::new();
-
-    // 1. First extract all <style> blocks
-    let mut p = 0;
-    while p < body.len() {
-        if body[p] == b'<' && p + 6 <= body.len() && eq_ascii(&body[p..p + 6], b"<style") {
-            let start = p + 6;
-            let mut close_tag = start;
-            while close_tag < body.len() && body[close_tag] != b'>' { close_tag += 1; }
-            if close_tag < body.len() {
-                close_tag += 1;
-                let css_start = close_tag;
-                if let Some(pos) = find_bytes(&body[css_start..], b"</style>") {
-                    let css_text = decode_bytes_to_string(&body[css_start..css_start + pos]);
-                    css_rules.extend(parse_css(&css_text));
-                    p = css_start + pos + 8;
-                    continue;
-                }
-            }
-        }
-        p += 1;
-    }
-
-    // Buffer of spans for the line currently being built
-    let mut cur_line_spans: Vec<TextSpan> = Vec::new();
-    let mut cur_line_w: usize = 0;
-    let mut cur_line_tag = HtmlTagType::Normal;
-    let mut cur_line_align = TextAlign::Left;
-
-    let tag_indent = |t: HtmlTagType| -> usize {
-        match t {
-            HtmlTagType::ListItem => 18,
-            _ => 0,
-        }
-    };
-
-    let flush_line = |lines: &mut Vec<BrowserLine>, spans: &mut Vec<TextSpan>, line_w: &mut usize, tag: HtmlTagType, align: TextAlign, max: usize| {
-        if lines.len() < max && !spans.is_empty() {
-            let indent = tag_indent(tag);
-            lines.push(BrowserLine {
-                spans: core::mem::take(spans),
-                tag,
-                indent,
-                align,
-            });
-            *line_w = 0;
-        }
-    };
-
-    let add_word = |lines: &mut Vec<BrowserLine>,
-                    spans: &mut Vec<TextSpan>,
-                    line_w: &mut usize,
-                    word: &str,
-                    color: u32,
-                    bg_color: Option<u32>,
-                    is_link: bool,
-                    link_url: &str,
-                    is_button: bool,
-                    onclick: &str,
-                    elem_id: &str,
-                    tag: HtmlTagType,
-                    align: TextAlign,
-                    max: usize| {
-        if word.is_empty() { return; }
-        let scale = match tag {
-            HtmlTagType::Heading1 => 2,
-            HtmlTagType::Heading2 => 1,
-            _ => 1,
-        };
-        let word_w = MinGuiCompositor::text_width(word, scale) + if is_button { 16 } else { 0 };
-        let space_w = MinGuiCompositor::text_width(" ", scale);
-        let indent = tag_indent(tag);
-        let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
-
-        if *line_w > 0 && *line_w + space_w + word_w > eff_wrap {
-            flush_line(lines, spans, line_w, tag, align, max);
-        }
-
-        if spans.is_empty() {
-            *line_w = word_w;
-            spans.push(TextSpan {
-                text: String::from(word),
-                color,
-                bg_color,
-                is_link,
-                link_url: String::from(link_url),
-                is_button,
-                onclick: String::from(onclick),
-                elem_id: String::from(elem_id),
-            });
-        } else {
-            *line_w += space_w + word_w;
-            if let Some(last) = spans.last_mut() {
-                if !is_button && last.color == color && last.bg_color == bg_color && last.is_link == is_link && last.link_url == link_url && !last.is_button && last.elem_id == elem_id {
-                    last.text.push(' ');
-                    last.text.push_str(word);
-                    return;
-                }
-            }
-            let mut s = String::from(if is_button { "" } else { " " });
-            s.push_str(word);
-            spans.push(TextSpan {
-                text: s,
-                color,
-                bg_color,
-                is_link,
-                link_url: String::from(link_url),
-                is_button,
-                onclick: String::from(onclick),
-                elem_id: String::from(elem_id),
-            });
-        }
-    };
-
-    p = 0;
-    let mut word_buf = String::new();
-    let mut hidden_until_close: Option<Vec<u8>> = None;
-
-    let flush_word = |lines: &mut Vec<BrowserLine>,
-                      spans: &mut Vec<TextSpan>,
-                      line_w: &mut usize,
-                      buf: &mut String,
-                      color: u32,
-                      bg: Option<u32>,
-                      is_link: bool,
-                      link_url: &str,
-                      is_btn: bool,
-                      onclick: &str,
-                      elem_id: &str,
-                      tag: HtmlTagType,
-                      align: TextAlign,
-                      max: usize| {
-        if !buf.is_empty() {
-            add_word(lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, onclick, elem_id, tag, align, max);
-            buf.clear();
-        }
-    };
-
-    while p < body.len() && out_lines.len() < max_lines {
-        if body[p] == b'<' {
-            let start = p + 1;
-            let mut end = start;
-            while end < body.len() && body[end] != b'>' { end += 1; }
-            if end == body.len() { break; }
-            let mut tag_content = &body[start..end];
-            let closing = tag_content.first() == Some(&b'/');
-            if closing { tag_content = &tag_content[1..]; }
-            let name_end = tag_content.iter().position(|b| b.is_ascii_whitespace() || *b == b'/').unwrap_or(tag_content.len());
-            let name = &tag_content[..name_end];
-
-            if let Some(ref h) = hidden_until_close {
-                if closing && eq_ascii(name, h) {
-                    hidden_until_close = None;
-                }
-                p = end + 1;
-                continue;
-            }
-            if !closing && (eq_ascii(name, b"script") || eq_ascii(name, b"style")) {
-                hidden_until_close = Some(name.to_vec());
-                p = end + 1;
-                continue;
-            }
-
-            let link_target = active_link.as_deref().unwrap_or("");
-            let is_link = active_link.is_some();
-            let onclick_str = active_onclick.as_deref().unwrap_or("");
-            let elem_id_str = active_id.as_deref().unwrap_or("");
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
-
-            let tag_name_str = core::str::from_utf8(name).unwrap_or("");
-            let attrs = &tag_content[name_end..];
-            let class_attr = extract_attr(attrs, b"class");
-            let id_attr = extract_attr(attrs, b"id");
-            let style_attr = extract_attr(attrs, b"style");
-            let href_attr = extract_attr(attrs, b"href");
-            let onclick_attr = extract_attr(attrs, b"onclick");
-
-            let matched = match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
-
-            if !closing {
-                if let Some(c) = matched.color { current_color = c; }
-                if let Some(bg) = matched.bg_color { current_bg = Some(bg); }
-                if matched.align != TextAlign::Left {
-                    cur_line_align = matched.align;
-                }
-
-                if id_attr.is_some() {
-                    active_id = id_attr.map(String::from);
-                }
-
-                if eq_ascii(name, b"a") {
-                    if let Some(href) = href_attr {
-                        active_link = Some(String::from(href));
-                    }
-                    if let Some(oc) = onclick_attr {
-                        active_onclick = Some(String::from(oc));
-                    }
-                } else if eq_ascii(name, b"button") {
-                    active_is_button = true;
-                    if let Some(oc) = onclick_attr {
-                        active_onclick = Some(String::from(oc));
-                    }
-                    if current_bg.is_none() {
-                        current_bg = Some(0xE0E0E8);
-                    }
-                } else if eq_ascii(name, b"h1") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::Heading1;
-                    if matched.color.is_none() { current_color = Color::ACCENT_PINK; }
-                } else if eq_ascii(name, b"h2") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::Heading2;
-                    if matched.color.is_none() { current_color = Color::ACCENT_BLUE; }
-                } else if eq_ascii(name, b"h3") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::Heading3;
-                    if matched.color.is_none() { current_color = Color::ACCENT_GREEN; }
-                } else if eq_ascii(name, b"li") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::ListItem;
-                } else if matches!(name, b"p" | b"div" | b"br" | b"hr" | b"tr" | b"section" | b"article" | b"ul" | b"ol" | b"center") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::Normal;
-                    if eq_ascii(name, b"center") {
-                        cur_line_align = TextAlign::Center;
-                    }
-                }
-            } else {
-                if eq_ascii(name, b"a") {
-                    active_link = None;
-                    active_onclick = None;
-                } else if eq_ascii(name, b"button") {
-                    active_is_button = false;
-                    active_onclick = None;
-                    current_bg = None;
-                } else if eq_ascii(name, b"center") {
-                    cur_line_align = TextAlign::Left;
-                } else if matches!(name, b"h1" | b"h2" | b"h3" | b"li" | b"p" | b"div" | b"ul" | b"ol") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-                    cur_line_tag = HtmlTagType::Normal;
-                    current_color = Color::TEXT_MAIN;
-                    current_bg = None;
-                    cur_line_align = TextAlign::Left;
-                }
-                active_id = None;
-            }
-
-            p = end + 1;
-            continue;
-        }
-
-        let (ch, clen) = decode_html_char(body, p);
-        p += clen;
-
-        if ch == '\r' { continue; }
-        if ch == '\n' || ch == '\t' || ch == ' ' {
-            let link_target = active_link.as_deref().unwrap_or("");
-            let is_link = active_link.is_some();
-            let onclick_str = active_onclick.as_deref().unwrap_or("");
-            let elem_id_str = active_id.as_deref().unwrap_or("");
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
-            continue;
-        }
-        if (ch as u32) < 0x20 { continue; }
-        word_buf.push(ch);
-    }
-
-    let link_target = active_link.as_deref().unwrap_or("");
-    let is_link = active_link.is_some();
-    let onclick_str = active_onclick.as_deref().unwrap_or("");
-    let elem_id_str = active_id.as_deref().unwrap_or("");
-    flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, cur_line_tag, cur_line_align, max_lines);
-    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
-}
-
 pub struct BrowserApp {
     pub url: [u8; 128],
     pub url_len: usize,
@@ -804,6 +193,9 @@ pub struct BrowserApp {
     pub response_len: usize,
     pub tls_session: Option<crate::drivers::tls::TlsSession>,
     pub tls_app_data: Vec<u8>,
+    /// El sıkışması tamamlanınca TLS üzerinden gönderilecek HTTP isteği.
+    pub tls_pending_request: Vec<u8>,
+    pub tls_request_sent: bool,
     pub page_bg_color: Option<u32>,
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
@@ -831,6 +223,8 @@ impl BrowserApp {
             response_data: Vec::new(), response_len: 0,
             tls_session: None,
             tls_app_data: Vec::new(),
+            tls_pending_request: Vec::new(),
+            tls_request_sent: false,
             page_bg_color: None,
             js_alert: None,
             js_vars: Vec::new(),
@@ -1088,6 +482,8 @@ impl BrowserApp {
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
+                    bold: false,
+                    underline: false,
                     onclick: String::new(),
                     elem_id: String::new(),
                 }],
@@ -1118,6 +514,8 @@ impl BrowserApp {
             is_link: false,
             link_url: String::new(),
             is_button: false,
+            bold: false,
+            underline: false,
             onclick: String::new(),
             elem_id: String::new(),
         }];
@@ -1130,6 +528,8 @@ impl BrowserApp {
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
+            bold: false,
+            underline: false,
                 onclick: String::new(),
                 elem_id: String::new(),
             });
@@ -1140,6 +540,8 @@ impl BrowserApp {
                 is_link: true,
                 link_url: String::from("minos://history?action=clear"),
                 is_button: true,
+                bold: false,
+                underline: false,
                 onclick: String::new(),
                 elem_id: String::new(),
             });
@@ -1161,6 +563,8 @@ impl BrowserApp {
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
+                    bold: false,
+                    underline: false,
                     onclick: String::new(),
                     elem_id: String::new(),
                 }],
@@ -1206,6 +610,8 @@ impl BrowserApp {
                             is_link: true,
                             link_url: remove_action,
                             is_button: true,
+                            bold: false,
+                            underline: false,
                             onclick: String::new(),
                             elem_id: String::new(),
                         },
@@ -1216,6 +622,8 @@ impl BrowserApp {
                             is_link: false,
                             link_url: String::new(),
                             is_button: false,
+                    bold: false,
+                    underline: false,
                             onclick: String::new(),
                             elem_id: String::new(),
                         },
@@ -1226,6 +634,8 @@ impl BrowserApp {
                             is_link: true,
                             link_url: url,
                             is_button: false,
+                    bold: false,
+                    underline: false,
                             onclick: String::new(),
                             elem_id: String::new(),
                         }
@@ -1236,6 +646,173 @@ impl BrowserApp {
                 });
             }
         }
+    }
+
+    pub fn build_bookmarks_page(&mut self) {
+        self.page_title = [0; 64];
+        let title = crate::gui::ui_text("Sık Kullanılanlar", "Bookmarks");
+        let tb = title.as_bytes();
+        self.page_title_len = tb.len().min(64);
+        self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
+
+        self.page_lines.clear();
+
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![TextSpan {
+                text: String::from(crate::gui::ui_text(
+                    "minOs Tarayıcı | Sık Kullanılanlar ve Yer İmleri",
+                    "minOs Browser | Favorites & Bookmarks",
+                )),
+                color: Color::ACCENT_PINK,
+                bg_color: None,
+                is_link: false,
+                link_url: String::new(),
+                is_button: false,
+                bold: true,
+                underline: false,
+                onclick: String::new(),
+                elem_id: String::new(),
+            }],
+            tag: HtmlTagType::Heading2,
+            indent: 0,
+            align: TextAlign::Left,
+        });
+
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![TextSpan {
+                text: String::from(crate::gui::ui_text(
+                    "Aşağıdaki bağlantılara tıklayarak doğrudan web ve yerel sayfalara gidebilirsiniz:",
+                    "Click on any bookmark link below to navigate directly:",
+                )),
+                color: Color::TEXT_MUTED,
+                bg_color: None,
+                is_link: false,
+                link_url: String::new(),
+                is_button: false,
+                bold: false,
+                underline: false,
+                onclick: String::new(),
+                elem_id: String::new(),
+            }],
+            tag: HtmlTagType::Normal,
+            indent: 0,
+            align: TextAlign::Left,
+        });
+
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![],
+            tag: HtmlTagType::Normal,
+            indent: 0,
+            align: TextAlign::Left,
+        });
+
+        for bm in BOOKMARKS {
+            let title_text = crate::gui::ui_text(bm.title, bm.title_en);
+            let desc_text = crate::gui::ui_text(bm.description, bm.description_en);
+            let is_web = bm.url.starts_with("http");
+
+            self.page_lines.push(BrowserLine {
+                spans: alloc::vec![
+                    TextSpan {
+                        text: String::from(if is_web { "* [WEB] " } else { "* [LOCAL] " }),
+                        color: if is_web { Color::ACCENT_YELLOW } else { Color::ACCENT_BLUE },
+                        bg_color: None,
+                        is_link: false,
+                        link_url: String::new(),
+                        is_button: false,
+                        bold: true,
+                        underline: false,
+                        onclick: String::new(),
+                        elem_id: String::new(),
+                    },
+                    TextSpan {
+                        text: String::from(title_text),
+                        color: Color::WHITE,
+                        bg_color: Some(if is_web { 0x188040 } else { Color::TITLE_BAR }),
+                        is_link: true,
+                        link_url: String::from(bm.url),
+                        is_button: true,
+                        bold: true,
+                        underline: false,
+                        onclick: String::new(),
+                        elem_id: String::new(),
+                    },
+                    TextSpan {
+                        text: alloc::format!("  {}", bm.url),
+                        color: Color::ACCENT_BLUE,
+                        bg_color: None,
+                        is_link: true,
+                        link_url: String::from(bm.url),
+                        is_button: false,
+                        bold: false,
+                        underline: true,
+                        onclick: String::new(),
+                        elem_id: String::new(),
+                    },
+                ],
+                tag: HtmlTagType::Heading3,
+                indent: 4,
+                align: TextAlign::Left,
+            });
+
+            self.page_lines.push(BrowserLine {
+                spans: alloc::vec![TextSpan {
+                    text: alloc::format!("      {}", desc_text),
+                    color: Color::TEXT_MUTED,
+                    bg_color: None,
+                    is_link: false,
+                    link_url: String::new(),
+                    is_button: false,
+                    bold: false,
+                    underline: false,
+                    onclick: String::new(),
+                    elem_id: String::new(),
+                }],
+                tag: HtmlTagType::Normal,
+                indent: 8,
+                align: TextAlign::Left,
+            });
+
+            self.page_lines.push(BrowserLine {
+                spans: alloc::vec![],
+                tag: HtmlTagType::Normal,
+                indent: 0,
+                align: TextAlign::Left,
+            });
+        }
+    }
+
+    pub fn url_matches(&self, target: &str) -> bool {
+        let current = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        if current.eq_ignore_ascii_case(target) {
+            return true;
+        }
+        let t_trimmed = target.trim_end_matches('/');
+        let c_trimmed = current.trim_end_matches('/');
+        !t_trimmed.is_empty() && c_trimmed.eq_ignore_ascii_case(t_trimmed)
+    }
+
+    pub fn click_bookmark_at(&self, mx: usize, my: usize, win_x: usize, win_y: usize, win_w: usize) -> Option<&'static str> {
+        let bbar_y = win_y + 59;
+        let bbar_h = 22;
+        if my < bbar_y || my >= bbar_y + bbar_h {
+            return None;
+        }
+        let star_w = MinGuiCompositor::text_width("*", 1);
+        let mut cur_bx = win_x + 12 + star_w + 6;
+        for bm in BOOKMARKS {
+            let label = crate::gui::ui_text(bm.title, bm.title_en);
+            let tw = MinGuiCompositor::text_width(label, 1);
+            let chip_w = tw + 12;
+            if cur_bx + chip_w > win_x + win_w - 10 {
+                break;
+            }
+            if mx >= cur_bx && mx < cur_bx + chip_w {
+                return Some(bm.url);
+            }
+            cur_bx += chip_w + 5;
+        }
+        None
     }
 
     pub fn address_char(&mut self, ch: char) {
@@ -1679,6 +1256,14 @@ impl BrowserApp {
                 self.set_url(b"minos://history");
                 self.build_history_page();
             }
+            "minos://bookmarks" | "minos://favorites" => {
+                self.active_tab = 3;
+                self.page_loaded = true;
+                if !suppress { history_push(value); }
+                self.status = crate::gui::ui_text("Sık kullanılanlar sayfası açıldı.", "Bookmarks page opened.");
+                self.set_url(b"minos://bookmarks");
+                self.build_bookmarks_page();
+            }
             "minos://net" | "net://status" => {
                 // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi
                 self.active_tab = 2;
@@ -1829,10 +1414,17 @@ impl BrowserApp {
                     }
 
                     if self.is_https {
+                        self.tls_pending_request = req_buf;
+                        self.tls_request_sent = false;
                         let mut client_random = [0u8; 32];
                         let seed = crate::boot::time::main_monotonic_ms() as u64;
-                        for (i, b) in client_random.iter_mut().enumerate() {
-                            *b = ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
+                        let mut state = seed ^ 0x9e3779b97f4a7c15u64;
+                        for b in client_random.iter_mut() {
+                            // xorshift64* tabanlı daha iyi karıştırma
+                            state ^= state >> 12;
+                            state ^= state << 25;
+                            state ^= state >> 27;
+                            *b = (state.wrapping_mul(0x2545F4914F6CDD1D) >> 56) as u8;
                         }
                         let mut hello = Vec::new();
                         crate::drivers::tls::build_client_hello(host, &client_random, &mut hello);
@@ -1881,20 +1473,51 @@ impl BrowserApp {
                 }
 
                 // TLS kayıtlarını işle: el sıkışma mesajları ve şifreli application data.
+                let mut tls_failed: Option<Option<(u8, u8)>> = None;
                 if let Some(ref mut tls) = self.tls_session {
                     let mut hs_out = Vec::new();
                     let mut app_out = Vec::new();
                     match tls.process_records(&mut hs_out, &mut app_out) {
                         Ok(_) => {}
                         Err(()) => {
-                            self.finish_network_error(crate::gui::ui_text("TLS kayıt işleme hatası.", "TLS record processing error."));
+                            tls_failed = Some(tls.last_alert());
                         }
                     }
                     self.tls_app_data.extend_from_slice(&app_out);
                 }
+                if let Some(alert) = tls_failed {
+                    let detail = match alert {
+                        Some((_, desc)) => alloc::format!(
+                            "TLS uyarısı: {}",
+                            crate::drivers::tls::alert_description_text(desc)
+                        ),
+                        None => String::from(crate::gui::ui_text(
+                            "TLS kayıt işleme hatası.",
+                            "TLS record processing error.",
+                        )),
+                    };
+                    self.finish_network_error(detail);
+                }
 
-                // TLS kurulduysa ve application data var, HTTP yanıtını ayrıştır.
+                // El sıkışma tamamlandıysa HTTP isteğini şifreleyip gönder.
                 let tls_established = self.tls_session.as_ref().map_or(false, |t| t.state() == crate::drivers::tls::TlsState::Established);
+                if tls_established && !self.tls_request_sent && !self.tls_pending_request.is_empty() {
+                    let request = core::mem::take(&mut self.tls_pending_request);
+                    let record = self.tls_session.as_mut().and_then(|t| t.encrypt_app_data(&request));
+                    match record {
+                        Some(rec) => {
+                            let _ = crate::drivers::netstack::tcp_send(&rec);
+                            self.tls_request_sent = true;
+                            self.status = crate::gui::ui_text("Güvenli istek gönderildi, yanıt bekleniyor...", "Secure request sent, waiting for response...");
+                        }
+                        None => {
+                            self.finish_network_error(crate::gui::ui_text(
+                                "TLS isteği şifrelenemedi.",
+                                "Could not encrypt TLS request.",
+                            ));
+                        }
+                    }
+                }
                 let data_to_parse = if tls_established && !self.tls_app_data.is_empty() {
                     &self.tls_app_data
                 } else {
@@ -2022,6 +1645,8 @@ impl BrowserApp {
                                 is_link: false,
                                 link_url: String::new(),
                                 is_button: false,
+                    bold: false,
+                    underline: false,
                                 onclick: String::new(),
                                 elem_id: String::new(),
                             }],
@@ -2065,6 +1690,8 @@ impl BrowserApp {
                                         is_link: false,
                                         link_url: String::new(),
                                         is_button: false,
+                    bold: false,
+                    underline: false,
                                         onclick: String::new(),
                                         elem_id: String::new(),
                                     }],
@@ -2188,10 +1815,43 @@ impl BrowserApp {
         MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 36, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
         if self.focused_control == 5 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
 
+        // Sık Kullanılanlar / Yer İmleri Çubuğu (Bookmarks Bar)
+        let bbar_y = win_y + 59;
+        let bbar_h = 22;
+        fb.draw_rect(win_x + 6, bbar_y, win_w - 12, bbar_h, Color::TITLE_BAR);
+        fb.draw_rect(win_x + 6, bbar_y + bbar_h - 1, win_w - 12, 1, Color::BORDER);
+
+        let mut cur_bx = win_x + 12;
+        let star_w = MinGuiCompositor::text_width("*", 1);
+        MinGuiCompositor::draw_string(fb, cur_bx, bbar_y + 4, "*", Color::ACCENT_YELLOW);
+        cur_bx += star_w + 6;
+
+        for bm in BOOKMARKS {
+            let label = crate::gui::ui_text(bm.title, bm.title_en);
+            let tw = MinGuiCompositor::text_width(label, 1);
+            let chip_w = tw + 12;
+            if cur_bx + chip_w > win_x + win_w - 10 {
+                break;
+            }
+            let is_active = self.url_matches(bm.url);
+            let bg_col = if is_active { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+            let fg_col = if is_active {
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE)
+            } else if bm.url.starts_with("http") {
+                Color::ACCENT_GREEN
+            } else {
+                Color::TEXT_MAIN
+            };
+            fb.draw_rect(cur_bx, bbar_y + 2, chip_w, 18, bg_col);
+            fb.draw_rect_outline(cur_bx, bbar_y + 2, chip_w, 18, Color::BORDER);
+            MinGuiCompositor::draw_string(fb, cur_bx + 6, bbar_y + 4, label, fg_col);
+            cur_bx += chip_w + 5;
+        }
+
         let status_h = 20;
         let status_y = win_y + win_h.saturating_sub(status_h + 4);
         let page_x = win_x + 6;
-        let page_y = win_y + 62;
+        let page_y = win_y + 83;
         let page_w = win_w.saturating_sub(12);
         let page_h = status_y.saturating_sub(page_y + 4).max(120);
         fb.draw_rect(page_x, page_y, page_w, page_h, Color::DARK_BG);
@@ -2291,6 +1951,18 @@ impl BrowserApp {
                                     fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
                                 }
                                 MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
+                                // Sentez kalın: 1px sağa ikinci geçiş
+                                if span.bold && !span.text.trim().is_empty() {
+                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 1, draw_y, &span.text, text_color, scale, doc_clip);
+                                }
+                                // Altı çizili
+                                if span.underline && !span.text.trim().is_empty() {
+                                    let ul_y = draw_y + line_h.saturating_sub(2);
+                                    if ul_y >= doc_y && ul_y < doc_y + doc_h {
+                                        let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        fb.draw_rect(cur_x, ul_y, ul_w, 1, text_color);
+                                    }
+                                }
 
                                 if span.is_link || !span.onclick.is_empty() {
                                     let underline_y = draw_y + line_h.saturating_sub(3);
@@ -2326,11 +1998,12 @@ impl BrowserApp {
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, "IP: 10.0.2.15/24 GW: 10.0.2.2", Color::TEXT_MUTED);
             } else if self.active_tab == 0 {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Yerel Yardım ve Belgeler", "minOs | Local Help and Documents"), Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats, minos://help, minos://net, minos://history", "Local addresses: minos://cats, minos://help, minos://net, minos://history"), Color::ACCENT_BLUE);
-                fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("minos://net ile ağ durumunu, minos://history ile geçmişi açın.", "Check the network at minos://net, open history at minos://history."), Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("Yerel sayfalar adres çubuğundan açılabilir.", "Open local pages from the address bar."), Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Yerel Yardım ve Sık Kullanılanlar", "minOs | Local Help and Bookmarks"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://bookmarks, minos://cats, minos://help, minos://net", "Local addresses: minos://bookmarks, minos://cats, minos://help, minos://net"), Color::ACCENT_BLUE);
+                fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 110, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("★ Sık Kullanılan: http://httpforever.com/ (saf HTTP test sitesi)", "★ Favorite: http://httpforever.com/ (pure HTTP test site)"), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("minos://net ile ağ durumunu, minos://history ile geçmişi açın.", "Check the network at minos://net, open history at minos://history."), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, crate::gui::ui_text("Yer imleri çubuğundan veya minos://bookmarks ile tüm favorileri açın.", "Open bookmarks via the toolbar or visit minos://bookmarks."), Color::TEXT_MUTED);
             } else {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("KediWiki | Yerel Sayfa", "KediWiki | Local Page"), Color::ACCENT_PINK);

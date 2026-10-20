@@ -1549,22 +1549,18 @@ impl Ui {
 // ---------------------------------------------------------------------------
 
 fn report(ok: bool, label: &str, all_ok: &mut bool) {
-    crate::serial_print("[UI-TEST] ");
-    if ok {
-        crate::serial_print("BASARILI: ");
-    } else {
-        crate::serial_print("BASARISIZ: ");
+    if !ok {
+        crate::serial_print("[UI-TEST] BASARISIZ: ");
         *all_ok = false;
+        crate::serial_print(label);
+        crate::serial_print("\n");
     }
-    crate::serial_print(label);
-    crate::serial_print("\n");
 }
 
 /// Widget ağacı, dinamik yerleşim, Tab sırası ve olay yönlendirmesini
 /// gerçek bir ağaç üzerinde doğrular. Çizim yolu da çalıştırılır; böylece
 /// odak halkası ve tüm denetim çizimleri çekirdekte sınanmış olur.
 pub fn self_test(fb: &mut Framebuffer) -> bool {
-    crate::serial_print("[UI-TEST] --- Widget/Component Agaci Dogrulama Testi ---\n");
     let mut ok = true;
 
     let text = TextBox::new("Ad yazin");
@@ -1713,10 +1709,8 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
         &mut ok,
     );
 
-    crate::serial_print(if ok {
-        "[UI-TEST] Sonuc: TUM TESTLER BASARILI\n"
-    } else {
-        "[UI-TEST] Sonuc: BASARISIZ TESTLER VAR\n"
-    });
+    if !ok {
+        crate::serial_print("[UI-TEST] Sonuc: BASARISIZ TESTLER VAR\n");
+    }
     ok
 }

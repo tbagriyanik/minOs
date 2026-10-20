@@ -17,6 +17,12 @@ extern crate alloc;
 #[path = "../src/drivers/crypto/mod.rs"]
 pub mod crypto;
 
+#[path = "../src/apps/js.rs"]
+pub mod js;
+
+#[path = "../src/apps/browser/types.rs"]
+pub mod browser_types;
+
 // Kaynak moduller `crate::drivers::crypto::...` yoluyla birbirine bagli
 // oldugu icin ayni yolu host harness'inda da saglariz.
 pub mod drivers {

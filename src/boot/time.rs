@@ -1,5 +1,9 @@
 //! Zaman tabani: TSC okuma, PIT kanal 2 ile kalibrasyon ve monotonik milisaniye.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static TIMEBASE_READY: AtomicBool = AtomicBool::new(false);
+
 pub fn read_cpu_cycles() -> u64 {
     let low: u32;
     let high: u32;
@@ -63,9 +67,12 @@ pub fn init_timebase() -> bool {
             TSC_CYCLES_PER_US = (elapsed / 54_925).max(1);
         }
         core::arch::asm!("out dx, al", in("dx") 0x61u16, in("al") saved, options(nomem, nostack, preserves_flags));
+        TIMEBASE_READY.store(true, Ordering::Release);
         ready
     }
 }
+
+pub fn is_ready() -> bool { TIMEBASE_READY.load(Ordering::Acquire) }
 
 pub fn monotonic_ms() -> u64 {
     let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);

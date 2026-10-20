@@ -2408,6 +2408,9 @@ pub extern "C" fn _start() -> ! {
                                     browser_app.focus_address_at(mx, wx + 100);
                                 } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 32, 50, 20)) {
                                     browser_app.navigate();
+                                } else if let Some(url) = browser_app.click_bookmark_at(mx, my, wx, wy, ww) {
+                                    browser_app.set_url(url.as_bytes());
+                                    browser_app.navigate();
                                 } else if let Some(url) = browser_app.click_link_at(mx, my) {
                                     // Sayfa içindeki bağlantıya tıklandı: geçmişe kaydet ve aç.
                                     browser_app.set_url(url.as_bytes());

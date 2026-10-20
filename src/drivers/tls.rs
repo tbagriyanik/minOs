@@ -64,8 +64,11 @@ pub struct TlsSession {
     server_seq: u64,
     client_seq: u64,
     record_buffer: Vec<u8>,
+    hs_buffer: Vec<u8>,
     handshake_hash: Sha256,
     outgoing: Vec<u8>,
+    /// Alınan son TLS uyarısı (seviye, açıklama).
+    last_alert: Option<(u8, u8)>,
 }
 
 impl TlsSession {
@@ -88,9 +91,16 @@ impl TlsSession {
             server_seq: 0,
             client_seq: 0,
             record_buffer: Vec::new(),
+            hs_buffer: Vec::new(),
             handshake_hash: Sha256::new(),
             outgoing: Vec::new(),
+            last_alert: None,
         }
+    }
+
+    /// Sunucudan gelen son TLS uyarısı (seviye, açıklama) — hata mesajı için.
+    pub fn last_alert(&self) -> Option<(u8, u8)> {
+        self.last_alert
     }
 
     pub fn note_client_hello(&mut self, client_hello_body: &[u8]) {
@@ -128,7 +138,12 @@ impl TlsSession {
                     self.process_handshake_records(&payload_copy, out_handshake)?;
                 }
                 TLS_RECORD_CHANGE_CIPHER_SPEC => {}
-                TLS_RECORD_ALERT => return Err(()),
+                TLS_RECORD_ALERT => {
+                    let desc = payload_copy.get(1).copied().unwrap_or(0);
+                    let level = payload_copy.first().copied().unwrap_or(0);
+                    self.last_alert = Some((level, desc));
+                    return Err(());
+                }
                 TLS_RECORD_APPLICATION_DATA => {
                     let plaintext = self.decrypt_app_data(&payload_copy)?;
                     out_app_data.extend_from_slice(&plaintext);
@@ -148,17 +163,24 @@ impl TlsSession {
         payload: &[u8],
         out_handshake: &mut Vec<u8>,
     ) -> Result<(), ()> {
+        // El sıkışma mesajları kayıt sınırını aşabilir (büyük sertifika
+        // zincirleri çoğu zaman birden fazla record'a bölünür). Tamamlanmamış
+        // kısım tamponda bekletilir.
+        let mut buf = core::mem::take(&mut self.hs_buffer);
+        buf.extend_from_slice(payload);
+
         let mut pos = 0;
-        while pos + 4 <= payload.len() {
-            let msg_type = payload[pos];
-            let msg_len = ((payload[pos + 1] as usize) << 16)
-                | ((payload[pos + 2] as usize) << 8)
-                | (payload[pos + 3] as usize);
-            if pos + 4 + msg_len > payload.len() {
+        while pos + 4 <= buf.len() {
+            let msg_type = buf[pos];
+            let msg_len = ((buf[pos + 1] as usize) << 16)
+                | ((buf[pos + 2] as usize) << 8)
+                | (buf[pos + 3] as usize);
+            if pos + 4 + msg_len > buf.len() {
+                // Eksik mesaj: beklemeye al.
                 break;
             }
-            let msg_body = &payload[pos + 4..pos + 4 + msg_len];
-            let msg_frame = &payload[pos..pos + 4 + msg_len];
+            let msg_frame = &buf[pos..pos + 4 + msg_len];
+            let msg_body = &buf[pos + 4..pos + 4 + msg_len];
 
             self.handshake_hash.update(msg_frame);
             out_handshake.extend_from_slice(msg_frame);
@@ -174,6 +196,7 @@ impl TlsSession {
             }
             pos += 4 + msg_len;
         }
+        self.hs_buffer.extend_from_slice(&buf[pos..]);
         Ok(())
     }
 
@@ -420,11 +443,13 @@ impl TlsSession {
         gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr)
     }
 
-    pub fn encrypt_app_data(&self, plaintext: &[u8]) -> Option<Vec<u8>> {
+    /// Şifreli application data kaydı üretir; istemci sıra numarası artırılır.
+    pub fn encrypt_app_data(&mut self, plaintext: &[u8]) -> Option<Vec<u8>> {
         let client_iv = self.client_write_iv?;
         let gcm = self.client_gcm.as_ref()?;
 
         let seq = self.client_seq;
+        self.client_seq = self.client_seq.wrapping_add(1);
 
         let mut nonce = <[u8; 12]>::default();
         nonce[..4].copy_from_slice(&client_iv);
@@ -448,8 +473,40 @@ impl TlsSession {
     }
 }
 
-pub fn parse_record_header(buf: &[u8]) -> Option<(u8, u16, usize)> {
-    if buf.len() < 5 {
+/// TLS uyarı açıklamalarının insan okunur karşılığı (RFC 5246 §7.2).
+pub fn alert_description_text(desc: u8) -> &'static str {
+    match desc {
+        0 => "close_notify",
+        10 => "unexpected_message",
+        20 => "bad_record_mac",
+        40 => "handshake_failure",
+        41 => "no_certificate",
+        42 => "bad_certificate",
+        43 => "unsupported_certificate",
+        44 => "certificate_revoked",
+        45 => "certificate_expired",
+        46 => "certificate_unknown",
+        47 => "illegal_parameter",
+        48 => "unknown_ca",
+        49 => "access_denied",
+        50 => "decode_error",
+        51 => "decrypt_error",
+        70 => "protocol_version",
+        71 => "insufficient_security",
+        80 => "internal_error",
+        86 => "inappropriate_fallback",
+        90 => "user_canceled",
+        100 => "no_renegotiation",
+        109 => "missing_extension",
+        110 => "unsupported_extension",
+        112 => "unrecognized_name",
+        116 => "certificate_required",
+        120 => "no_application_protocol",
+        _ => "bilinmeyen uyarı",
+    }
+}
+
+pub fn parse_record_header(buf: &[u8]) -> Option<(u8, u16, usize)> {    if buf.len() < 5 {
         return None;
     }
     let ctype = buf[0];
@@ -470,11 +527,13 @@ pub fn build_client_hello(hostname: &str, client_random: &[u8; 32], out: &mut Ve
     handshake.push(0);
 
     let ciphers = [TLS_RSA_WITH_AES_128_GCM_SHA256];
-    let cipher_len = (ciphers.len() * 2) as u16;
+    // Secure Renegotiation SCSV + uzunluk alanına dahil edilir
+    let cipher_len = ((ciphers.len() + 1) * 2) as u16;
     handshake.extend_from_slice(&cipher_len.to_be_bytes());
     for c in &ciphers {
         handshake.extend_from_slice(&c.to_be_bytes());
     }
+    handshake.extend_from_slice(&0x00FFu16.to_be_bytes());
 
     handshake.push(1);
     handshake.push(0);
@@ -482,6 +541,7 @@ pub fn build_client_hello(hostname: &str, client_random: &[u8; 32], out: &mut Ve
     let mut extensions = Vec::new();
     let host_bytes = hostname.as_bytes();
     if !host_bytes.is_empty() {
+        // SNI (0x0000)
         extensions.extend_from_slice(&0x0000u16.to_be_bytes());
         let list_len = (host_bytes.len() + 3) as u16;
         let ext_len = list_len + 2;
@@ -490,12 +550,38 @@ pub fn build_client_hello(hostname: &str, client_random: &[u8; 32], out: &mut Ve
         extensions.push(0);
         extensions.extend_from_slice(&(host_bytes.len() as u16).to_be_bytes());
         extensions.extend_from_slice(host_bytes);
-
-        extensions.extend_from_slice(&0x002bu16.to_be_bytes());
-        extensions.extend_from_slice(&2u16.to_be_bytes());
-        extensions.push(1);
-        extensions.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
     }
+
+    // supported_versions (0x002b): yalnızca TLS 1.2
+    extensions.extend_from_slice(&0x002bu16.to_be_bytes());
+    extensions.extend_from_slice(&3u16.to_be_bytes());
+    extensions.push(1);
+    extensions.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+
+    // signature_algorithms (0x000d): sunucunun sertifika/imzalama şeması
+    // seçmesi için gereklidir; modern sunucular bu uzantı yoksa el sıkışmayı
+    // reddeder.
+    let sigalgs: [u16; 8] = [
+        0x0401, // SHA256 + RSA (PKCS#1 v1.5)
+        0x0501, // SHA384 + RSA
+        0x0601, // SHA512 + RSA
+        0x0201, // SHA1 + RSA (eski)
+        0x0804, // SHA256 + RSA-PSS
+        0x0805, // SHA384 + RSA-PSS
+        0x0806, // SHA512 + RSA-PSS
+        0x0403, // SHA256 + ECDSA
+    ];
+    extensions.extend_from_slice(&0x000du16.to_be_bytes());
+    extensions.extend_from_slice(&((2 + sigalgs.len() * 2) as u16).to_be_bytes());
+    extensions.extend_from_slice(&((sigalgs.len() * 2) as u16).to_be_bytes());
+    for s in &sigalgs {
+        extensions.extend_from_slice(&s.to_be_bytes());
+    }
+
+    // renegotiation_info (0xff01): boş yeniden müzakere bilgisi
+    extensions.extend_from_slice(&0xff01u16.to_be_bytes());
+    extensions.extend_from_slice(&1u16.to_be_bytes());
+    extensions.push(0);
 
     if !extensions.is_empty() {
         handshake.extend_from_slice(&(extensions.len() as u16).to_be_bytes());

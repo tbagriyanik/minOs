@@ -14,7 +14,7 @@ use crate::drivers::crypto::gcm::Gcm;
 use crate::drivers::crypto::hmac::HmacSha256;
 use crate::drivers::crypto::sha256::Sha256;
 use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, rsa_verify_pkcs1_sha256, RsaPublicKey};
-use crate::drivers::crypto::x509::parse_x509_rsa_public_key;
+use crate::drivers::crypto::x509::{parse_x509_ec_public_key, parse_x509_rsa_public_key};
 
 pub const TLS_RECORD_CHANGE_CIPHER_SPEC: u8 = 20;
 pub const TLS_RECORD_ALERT: u8 = 21;
@@ -88,6 +88,8 @@ pub struct TlsSession {
     cipher_suite: u16,
     tls13_mode: bool,
     rsa_key: Option<RsaPublicKey>,
+    /// P-256 EC açık anahtarı (04 || X || Y) — ECDSA sertifikaları için.
+    ec_key: Option<[u8; 65]>,
     /// Sunucunun geçici ECDHE açık noktası (65 bayt, 04||X||Y).
     ecdhe_point: Vec<u8>,
     pre_master_secret: Option<Vec<u8>>,
@@ -139,6 +141,7 @@ impl TlsSession {
             cipher_suite: 0,
             tls13_mode: false,
             rsa_key: None,
+            ec_key: None,
             ecdhe_point: Vec::new(),
             pre_master_secret: None,
             master_secret: None,
@@ -234,8 +237,27 @@ impl TlsSession {
                     return Err(());
                 }
                 TLS_RECORD_APPLICATION_DATA => {
-                    let plaintext = self.decrypt_app_data(&payload_copy)?;
-                    out_app_data.extend_from_slice(&plaintext);
+                    if self.tls13_mode {
+                        // TLS 1.3'te sunucu, el sıkışma sonrası mesajları
+                        // (örn. NewSessionTicket) uygulama verisi kaydının
+                        // içinde, içerik türü 0x16 olarak gönderir.
+                        let (content, ctype) = self.decrypt_tls13_app_record(&payload_copy)?;
+                        match ctype {
+                            TLS_RECORD_HANDSHAKE => {
+                                self.process_handshake_records(&content, out_handshake)?;
+                            }
+                            TLS_RECORD_ALERT => {
+                                let desc = content.get(1).copied().unwrap_or(0);
+                                let level = content.first().copied().unwrap_or(0);
+                                self.last_alert = Some((level, desc));
+                                return Err(());
+                            }
+                            _ => out_app_data.extend_from_slice(&content),
+                        }
+                    } else {
+                        let plaintext = self.decrypt_app_data(&payload_copy)?;
+                        out_app_data.extend_from_slice(&plaintext);
+                    }
                 }
                 _ => {}
             }
@@ -266,7 +288,13 @@ impl TlsSession {
         let mut tag_arr = [0u8; 16];
         tag_arr.copy_from_slice(tag);
 
-        gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr)
+        let inner = gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr)?;
+        // Ic duz metinden el sikisma icerigini ve icerik turunu ayir.
+        let (content, content_type) = Self::tls13_strip_inner_plaintext(&inner)?;
+        if content_type != TLS_RECORD_HANDSHAKE {
+            return Err(());
+        }
+        Ok(content.to_vec())
     }
 
     /// TLS 1.2 şifreli el sıkışma kaydının çözülmesi.
@@ -489,18 +517,37 @@ impl TlsSession {
         if body.len() < params_end + 4 + sig_len {
             return Err(());
         }
-        if sig_alg != SIG_ALG_RSA_SHA256 {
-            return Err(());
-        }
         let sig = &body[params_end + 4..params_end + 4 + sig_len];
 
-        let rsa_key = self.rsa_key.as_ref().ok_or(())?;
         let mut msg = Vec::with_capacity(64 + params_end);
         msg.extend_from_slice(&self.client_random);
         msg.extend_from_slice(&self.server_random);
         msg.extend_from_slice(&body[..params_end]);
-        rsa_verify_pkcs1_sha256(rsa_key, &msg, sig)?;
-        Ok(())
+        self.verify_signature(sig_alg, &msg, sig)
+    }
+
+    /// İmza doğrulaması: şema türüne göre RSA veya ECDSA yolunu seçer.
+    fn verify_signature(&self, sig_alg: u16, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+        match sig_alg {
+            SIG_ALG_RSA_SHA256 => {
+                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
+                rsa_verify_pkcs1_sha256(rsa_key, msg, sig)
+            }
+            SIG_ALG_ECDSA_SECP256R1_SHA256 => {
+                let ec_key = self.ec_key.as_ref().ok_or(())?;
+                let mut h = Sha256::new();
+                h.update(msg);
+                let digest = h.finalize();
+                let (r, s) = crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig)
+                    .ok_or(())?;
+                if crate::drivers::crypto::ecc::ecdsa_verify_p256(ec_key, &digest, &r, &s) {
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            }
+            _ => Err(()),
+        }
     }
 
     /// TLS 1.3 CertificateVerify: sunucunun transcript hash üzerindeki imzasını
@@ -520,10 +567,6 @@ impl TlsSession {
             return Err(());
         }
         let sig_alg = u16::from_be_bytes([body[0], body[1]]);
-        if sig_alg != SIG_ALG_RSA_SHA256 {
-            // Yalnızca RSA PKCS#1 v1.5 + SHA-256 doğrulayabiliyoruz.
-            return Err(());
-        }
         let sig_len = u16::from_be_bytes([body[2], body[3]]) as usize;
         if body.len() < 4 + sig_len {
             return Err(());
@@ -544,9 +587,7 @@ impl TlsSession {
         signed.push(0);
         signed.extend_from_slice(&transcript);
 
-        let rsa_key = self.rsa_key.as_ref().ok_or(())?;
-        rsa_verify_pkcs1_sha256(rsa_key, &signed, sig)?;
-        Ok(())
+        self.verify_signature(sig_alg, &signed, sig)
     }
 
     fn handle_certificate(&mut self, body: &[u8]) -> Result<(), ()> {
@@ -583,12 +624,15 @@ impl TlsSession {
             if pos + cert_len > list_end {
                 return Err(());
             }
-            if self.rsa_key.is_none() {
+            if self.rsa_key.is_none() && self.ec_key.is_none() {
                 // Zincirdeki ilk sertifika RSA degilse (örn. ECDSA) hata
                 // vermek yerine siradaki sertifikalara bakilir; bazi sunucular
                 // zincirde RSA capraz-imzali bir sertifika da gonderir.
-                if let Ok(key) = parse_x509_rsa_public_key(&body[pos..pos + cert_len]) {
+                let cert = &body[pos..pos + cert_len];
+                if let Ok(key) = parse_x509_rsa_public_key(cert) {
                     self.rsa_key = Some(key);
+                } else if let Ok(point) = parse_x509_ec_public_key(cert) {
+                    self.ec_key = Some(point);
                 }
             }
             pos += cert_len;
@@ -605,8 +649,8 @@ impl TlsSession {
                 }
             }
         }
-        if self.rsa_key.is_none() {
-            // Hicbir sertifika RSA icermiyor; imza dogrulanamaz.
+        if self.rsa_key.is_none() && self.ec_key.is_none() {
+            // Hicbir sertifika RSA/EC icermiyor; imza dogrulanamaz.
             return Err(());
         }
         self.state = TlsState::CertificateReceived;
@@ -843,9 +887,11 @@ impl TlsSession {
         let iv: [u8; 12] = iv.try_into().ok()?;
 
         let gcm = Gcm::new(&key).ok()?;
+        // Ic duz metin: Finished || 0x16 (el sikisma) || dolgu
+        let inner = Self::tls13_inner_plaintext(&finished, TLS_RECORD_HANDSHAKE);
         let nonce = Self::tls13_nonce(&iv, 0);
-        let aad = Self::tls13_aad(TLS_RECORD_HANDSHAKE, finished.len() + GCM_TAG_LEN);
-        let (ct, tag) = gcm.encrypt(&nonce, &aad, &finished).ok()?;
+        let aad = Self::tls13_aad(TLS_RECORD_HANDSHAKE, inner.len() + GCM_TAG_LEN);
+        let (ct, tag) = gcm.encrypt(&nonce, &aad, &inner).ok()?;
 
         let mut record = Vec::new();
         record.push(TLS_RECORD_HANDSHAKE);
@@ -856,6 +902,22 @@ impl TlsSession {
 
         self.state = TlsState::Established;
         Some(record)
+    }
+
+    /// TLS 1.3 ara cihaz (middlebox) uyumlulugu icin ChangeCipherSpec kaydi.
+    ///
+    /// RFC 8446 §D.4: eski ara cihazlar bu kaydi gormeyi bekler. TLS 1.3'de
+    /// anlamsizdir, sunucu tarafindan yok sayilir.
+    pub fn tls13_change_cipher_spec(&self) -> Option<Vec<u8>> {
+        if !self.tls13_mode {
+            return None;
+        }
+        let mut rec = Vec::with_capacity(6);
+        rec.push(TLS_RECORD_CHANGE_CIPHER_SPEC);
+        rec.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+        rec.extend_from_slice(&1u16.to_be_bytes());
+        rec.push(1);
+        Some(rec)
     }
 
     fn derive_keys(&mut self) -> Result<(), ()> {
@@ -1040,6 +1102,33 @@ impl TlsSession {
         nonce
     }
 
+    /// TLS 1.3 iç düz metin (RFC 8446 §5.2):
+    /// `TLSInnerPlaintext = content + Opaque content_type + uint8 zeros[padding]`
+    ///
+    /// Gerçek sunucular şifreli kayıtların içinde bu içerik türü baytını
+    /// gönderir; istemci aynı biçimde üretmelidir.
+    fn tls13_inner_plaintext(content: &[u8], content_type: u8) -> Vec<u8> {
+        let mut inner = Vec::with_capacity(content.len() + 1);
+        inner.extend_from_slice(content);
+        inner.push(content_type);
+        inner
+    }
+
+    /// Şifreli iç düz metni ayrıştırır: (içerik, içerik türü).
+    ///
+    /// Sondaki sıfır dolgu baytları atılır; kalan son bayt içerik türüdür.
+    fn tls13_strip_inner_plaintext(inner: &[u8]) -> Result<(&[u8], u8), ()> {
+        let mut end = inner.len();
+        while end > 0 && inner[end - 1] == 0 {
+            end -= 1;
+        }
+        if end == 0 {
+            return Err(());
+        }
+        let content_type = inner[end - 1];
+        Ok((&inner[..end - 1], content_type))
+    }
+
     /// TLS 1.3 AAD: record_type || legacy_version || length (RFC 8446 §5.2).
     ///
     /// Uzunluk alanı 8 bayttır ve şifreli metnin (GCM etiketi dahil)
@@ -1088,28 +1177,38 @@ impl TlsSession {
         result
     }
 
+    /// TLS 1.3 uygulama trafik anahtarıyla bir kaydı çözer.
+    ///
+    /// Dönen değer: (içerik, içerik türü).
+    fn decrypt_tls13_app_record(&mut self, ciphertext: &[u8]) -> Result<(Vec<u8>, u8), ()> {
+        let server_base_iv = self.server_base_iv.ok_or(())?;
+        let gcm = self.server_gcm.as_mut().ok_or(())?;
+
+        let seq = self.server_seq;
+        self.server_seq = self.server_seq.wrapping_add(1);
+
+        let nonce = Self::tls13_nonce(&server_base_iv, seq);
+        let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, ciphertext.len());
+
+        if ciphertext.len() < 16 {
+            return Err(());
+        }
+        let ct_len = ciphertext.len() - 16;
+        let ct = &ciphertext[..ct_len];
+        let tag = &ciphertext[ct_len..];
+
+        let mut tag_arr = [0u8; 16];
+        tag_arr.copy_from_slice(tag);
+
+        let inner = gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr)?;
+        let (content, content_type) = Self::tls13_strip_inner_plaintext(&inner)?;
+        Ok((content.to_vec(), content_type))
+    }
+
     fn decrypt_app_data(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, ()> {
         if self.tls13_mode {
-            let server_base_iv = self.server_base_iv.ok_or(())?;
-            let gcm = self.server_gcm.as_mut().ok_or(())?;
-
-            let seq = self.server_seq;
-            self.server_seq = self.server_seq.wrapping_add(1);
-
-            let nonce = Self::tls13_nonce(&server_base_iv, seq);
-            let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, ciphertext.len());
-
-            if ciphertext.len() < 16 {
-                return Err(());
-            }
-            let ct_len = ciphertext.len() - 16;
-            let ct = &ciphertext[..ct_len];
-            let tag = &ciphertext[ct_len..];
-
-            let mut tag_arr = [0u8; 16];
-            tag_arr.copy_from_slice(tag);
-
-            gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr)
+            let (content, _) = self.decrypt_tls13_app_record(ciphertext)?;
+            Ok(content)
         } else {
             let server_iv = self.server_write_iv.ok_or(())?;
             let gcm = self.server_gcm.as_mut().ok_or(())?;
@@ -1142,10 +1241,12 @@ impl TlsSession {
             let seq = self.client_seq;
             self.client_seq = self.client_seq.wrapping_add(1);
 
+            // Ic duz metin: veri || 0x17 (uygulama verisi) || dolgu
+            let inner = Self::tls13_inner_plaintext(plaintext, TLS_RECORD_APPLICATION_DATA);
             let nonce = Self::tls13_nonce(&client_base_iv, seq);
-            let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, plaintext.len() + GCM_TAG_LEN);
+            let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, inner.len() + GCM_TAG_LEN);
 
-            let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, plaintext).ok()?;
+            let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, &inner).ok()?;
 
             let mut record = Vec::new();
             record.push(TLS_RECORD_APPLICATION_DATA);
@@ -1288,10 +1389,9 @@ pub fn build_client_hello(
         extensions.extend_from_slice(&v.to_be_bytes());
     }
 
-    // signature_algorithms (0x000d): yalnızca doğrulayabildiğimiz şemalar
-    // ilan edilir (RSA PKCS#1 v1.5 + SHA-256). Sunucu listeden seçmek
-    // zorundadır; ECDSA doğrulaması desteklenmediği için ilan edilmez.
-    let sigalgs: [u16; 1] = [SIG_ALG_RSA_SHA256];
+    // signature_algorithms (0x000d): doğrulayabildiğimiz şemalar ilan edilir.
+    // Sunucu listeden seçmek zorundadır.
+    let sigalgs: [u16; 2] = [SIG_ALG_RSA_SHA256, SIG_ALG_ECDSA_SECP256R1_SHA256];
     extensions.extend_from_slice(&0x000du16.to_be_bytes());
     extensions.extend_from_slice(&((2 + sigalgs.len() * 2) as u16).to_be_bytes());
     extensions.extend_from_slice(&((sigalgs.len() * 2) as u16).to_be_bytes());
@@ -1495,6 +1595,29 @@ mod tests {
         assert_eq!(&n[4..], &0x0102030405060708u64.to_be_bytes());
     }
 
+    /// TLS 1.3 ic duz metin: content || content_type || zeros.
+    #[test]
+    fn tls13_inner_plaintext_roundtrip() {
+        let content = b"hello";
+        let inner = TlsSession::tls13_inner_plaintext(content, TLS_RECORD_HANDSHAKE);
+        assert_eq!(inner.len(), content.len() + 1);
+        assert_eq!(inner[content.len()], TLS_RECORD_HANDSHAKE);
+
+        let (c, t) = TlsSession::tls13_strip_inner_plaintext(&inner).unwrap();
+        assert_eq!(c, &content[..]);
+        assert_eq!(t, TLS_RECORD_HANDSHAKE);
+
+        // Dolgu (sifir) baytlari olusturuldugunda da ayristirma calisir.
+        let mut padded = inner.clone();
+        padded.extend_from_slice(&[0u8; 16]);
+        let (c, t) = TlsSession::tls13_strip_inner_plaintext(&padded).unwrap();
+        assert_eq!(c, &content[..]);
+        assert_eq!(t, TLS_RECORD_HANDSHAKE);
+
+        // Tamami sifir olan icerik gecersizdir.
+        assert!(TlsSession::tls13_strip_inner_plaintext(&[0u8; 16]).is_err());
+    }
+
     /// ServerHello uzantı ayrıştırma: supported_versions ve key_share.
     #[test]
     fn server_extensions_parsed() {
@@ -1569,6 +1692,101 @@ mod tests {
         }
         out.extend_from_slice(body);
         out
+    }
+
+    /// Test icin P-256 (secp256r1) EC sertifikası uretir.
+    ///
+    /// SPKI: id-ecPublicKey + secp256r1 OID + 04||X||Y BIT STRING.
+    fn make_test_ec_cert(point: &[u8; 65]) -> Vec<u8> {
+        let mut bits = Vec::new();
+        bits.push(0x00);
+        bits.extend_from_slice(point);
+        let bitstring = der_tlv(0x03, &bits);
+
+        // AlgorithmIdentifier: id-ecPublicKey (1.2.840.10045.2.1) + secp256r1
+        const EC_PUBKEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+        const SECP256R1_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+        let mut alg_body = Vec::new();
+        alg_body.push(0x06);
+        alg_body.push(EC_PUBKEY_OID.len() as u8);
+        alg_body.extend_from_slice(EC_PUBKEY_OID);
+        alg_body.push(0x06);
+        alg_body.push(SECP256R1_OID.len() as u8);
+        alg_body.extend_from_slice(SECP256R1_OID);
+        let alg_id = der_tlv(0x30, &alg_body);
+
+        let mut spki_body = Vec::new();
+        spki_body.extend_from_slice(&alg_id);
+        spki_body.extend_from_slice(&bitstring);
+        let spki = der_tlv(0x30, &spki_body);
+
+        let mut atv = Vec::new();
+        atv.push(0x06);
+        atv.push(3);
+        atv.extend_from_slice(&[0x55, 0x04, 0x03]);
+        atv.push(0x13);
+        atv.push(11);
+        atv.extend_from_slice(b"minos.test");
+        let atv_seq = der_tlv(0x30, &atv);
+        let set = der_tlv(0x31, &atv_seq);
+        let name = der_tlv(0x30, &set);
+
+        let mut val_body = Vec::new();
+        for ts in [&b"240101000000Z"[..], &b"340101000000Z"[..]] {
+            val_body.push(0x17);
+            val_body.push(ts.len() as u8);
+            val_body.extend_from_slice(ts);
+        }
+        let validity = der_tlv(0x30, &val_body);
+
+        let mut tbs_body = Vec::new();
+        tbs_body.push(0x02);
+        tbs_body.push(0x01);
+        tbs_body.push(0x01);
+        tbs_body.extend_from_slice(&alg_id);
+        tbs_body.extend_from_slice(&name);
+        tbs_body.extend_from_slice(&validity);
+        tbs_body.extend_from_slice(&name);
+        tbs_body.extend_from_slice(&spki);
+        let tbs = der_tlv(0x30, &tbs_body);
+
+        let mut cert_body = Vec::new();
+        cert_body.extend_from_slice(&tbs);
+        cert_body.extend_from_slice(&alg_id);
+        cert_body.extend_from_slice(&der_tlv(0x03, &[0x00]));
+        der_tlv(0x30, &cert_body)
+    }
+
+    /// ClientHello içindeki key_share uzantısından istemcinin açık noktasını
+    /// çıkarır.
+    fn client_hello_key_share(hs: &[u8]) -> Option<Vec<u8>> {
+        let mut pos = 4 + 34;
+        let sess_len = hs[pos] as usize;
+        pos += 1 + sess_len;
+        let cs_len = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
+        pos += 2 + cs_len;
+        let comp_len = hs[pos] as usize;
+        pos += 1 + comp_len;
+        if pos + 2 > hs.len() {
+            return None;
+        }
+        let ext_total = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
+        pos += 2;
+        let ext_end = pos + ext_total;
+        while pos + 4 <= ext_end {
+            let et = u16::from_be_bytes([hs[pos], hs[pos + 1]]);
+            let el = u16::from_be_bytes([hs[pos + 2], hs[pos + 3]]) as usize;
+            if et == 0x0033 {
+                let body = &hs[pos + 4..pos + 4 + el];
+                let group = u16::from_be_bytes([body[0], body[1]]);
+                let plen = u16::from_be_bytes([body[2], body[3]]) as usize;
+                if group == NAMED_CURVE_SECP256R1 && plen == 65 {
+                    return Some(body[4..4 + plen].to_vec());
+                }
+            }
+            pos += 4 + el;
+        }
+        None
     }
 
     /// Test icin kendi kendine imzali RSA sertifikasi uretir.
@@ -1646,6 +1864,9 @@ mod tests {
         transcript: Sha256,
         handshake_secret: [u8; 32],
         master_secret: [u8; 32],
+        /// ServerHello aninda turetilen el sikisma trafik sirlari.
+        server_hs_secret: [u8; 32],
+        client_hs_secret: [u8; 32],
         server_hs_key: [u8; 16],
         server_hs_iv: [u8; 12],
         server_hs_seq: u64,
@@ -1667,6 +1888,8 @@ mod tests {
                 transcript: Sha256::new(),
                 handshake_secret: [0; 32],
                 master_secret: [0; 32],
+                server_hs_secret: [0; 32],
+                client_hs_secret: [0; 32],
                 server_hs_key: [0; 16],
                 server_hs_iv: [0; 12],
                 server_hs_seq: 0,
@@ -1715,6 +1938,7 @@ mod tests {
                 32,
             );
             let server_hs: [u8; 32] = server_hs.try_into().unwrap();
+            self.server_hs_secret = server_hs;
             self.server_hs_key = TlsSession::hkdf_expand_label(&server_hs, b"key", b"", 16)
                 .try_into()
                 .unwrap();
@@ -1729,6 +1953,7 @@ mod tests {
                 32,
             );
             let client_hs: [u8; 32] = client_hs.try_into().unwrap();
+            self.client_hs_secret = client_hs;
             self.client_hs_key = TlsSession::hkdf_expand_label(&client_hs, b"key", b"", 16)
                 .try_into()
                 .unwrap();
@@ -1772,9 +1997,10 @@ mod tests {
             let gcm = Gcm::new(&self.server_hs_key).unwrap();
             let seq = self.server_hs_seq;
             self.server_hs_seq += 1;
+            let inner = TlsSession::tls13_inner_plaintext(plaintext, TLS_RECORD_HANDSHAKE);
             let nonce = TlsSession::tls13_nonce(&self.server_hs_iv, seq);
-            let aad = TlsSession::tls13_aad(TLS_RECORD_HANDSHAKE, plaintext.len() + GCM_TAG_LEN);
-            let (ct, tag) = gcm.encrypt(&nonce, &aad, plaintext).unwrap();
+            let aad = TlsSession::tls13_aad(TLS_RECORD_HANDSHAKE, inner.len() + GCM_TAG_LEN);
+            let (ct, tag) = gcm.encrypt(&nonce, &aad, &inner).unwrap();
             let mut rec = Vec::new();
             rec.push(TLS_RECORD_HANDSHAKE);
             rec.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
@@ -1788,9 +2014,10 @@ mod tests {
             let gcm = Gcm::new(&self.server_ap_key).unwrap();
             let seq = self.server_ap_seq;
             self.server_ap_seq += 1;
+            let inner = TlsSession::tls13_inner_plaintext(plaintext, TLS_RECORD_APPLICATION_DATA);
             let nonce = TlsSession::tls13_nonce(&self.server_ap_iv, seq);
-            let aad = TlsSession::tls13_aad(TLS_RECORD_APPLICATION_DATA, plaintext.len() + GCM_TAG_LEN);
-            let (ct, tag) = gcm.encrypt(&nonce, &aad, plaintext).unwrap();
+            let aad = TlsSession::tls13_aad(TLS_RECORD_APPLICATION_DATA, inner.len() + GCM_TAG_LEN);
+            let (ct, tag) = gcm.encrypt(&nonce, &aad, &inner).unwrap();
             let mut rec = Vec::new();
             rec.push(TLS_RECORD_APPLICATION_DATA);
             rec.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
@@ -1822,7 +2049,11 @@ mod tests {
             let ct_len = payload.len() - 16;
             let mut tag = [0u8; 16];
             tag.copy_from_slice(&payload[ct_len..]);
-            gcm.decrypt(&nonce, &aad, &payload[..ct_len], &tag).unwrap()
+            let inner = gcm
+                .decrypt(&nonce, &aad, &payload[..ct_len], &tag)
+                .unwrap();
+            let (content, _) = TlsSession::tls13_strip_inner_plaintext(&inner).unwrap();
+            content.to_vec()
         }
     }
 
@@ -1840,7 +2071,7 @@ mod tests {
     /// TLS 1.3 el sikismasinin uctan uca dogrulanmasi.
     #[test]
     fn tls13_handshake_loopback() {
-        let mut client_random = [0x11u8; 32];
+        let client_random = [0x11u8; 32];
         let mut hello = Vec::new();
         let mut client_ecdhe = [0u8; 32];
         build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe);
@@ -1856,33 +2087,10 @@ mod tests {
 
         // ClientHello icindeki key_share uzantisindan istemci noktasini al.
         let hs = ch_body;
-        let mut pos = 4 + 34;
-        let sess_len = hs[pos] as usize;
-        pos += 1 + sess_len;
-        let cs_len = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
-        pos += 2 + cs_len;
-        let comp_len = hs[pos] as usize;
-        pos += 1 + comp_len;
-        let ext_total = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
-        pos += 2;
-        let ext_end = pos + ext_total;
-        let mut client_point: Option<Vec<u8>> = None;
-        while pos + 4 <= ext_end {
-            let et = u16::from_be_bytes([hs[pos], hs[pos + 1]]);
-            let el = u16::from_be_bytes([hs[pos + 2], hs[pos + 3]]) as usize;
-            if et == 0x0033 {
-                let body = &hs[pos + 4..pos + 4 + el];
-                let group = u16::from_be_bytes([body[0], body[1]]);
-                let plen = u16::from_be_bytes([body[2], body[3]]) as usize;
-                assert_eq!(group, NAMED_CURVE_SECP256R1);
-                client_point = Some(body[4..4 + plen].to_vec());
-            }
-            pos += 4 + el;
-        }
-        let client_point = client_point.expect("ClientHello key_share bulunamadi");
+        let client_point = client_hello_key_share(hs).expect("ClientHello key_share bulunamadi");
         assert_eq!(client_point.len(), 65);
 
-        let mut srv_seed = [0x77u8; 32];
+        let srv_seed = [0x77u8; 32];
         let srv_kp = crate::drivers::crypto::ecc::generate_keypair(&srv_seed);
         let shared = crate::drivers::crypto::ecc::shared_secret(&srv_kp.secret, &client_point)
             .expect("paylasilan gizli");
@@ -1910,15 +2118,6 @@ mod tests {
         server.note(&sh);
         server.derive_secrets(&shared);
         server.derive_handshake_traffic();
-        {
-            extern crate std;
-            std::println!(
-                "[dbg] server hs_key={} hs_iv={} th={}",
-                to_hex(&server.server_hs_key),
-                to_hex(&server.server_hs_iv),
-                to_hex(&server.transcript_hash())
-            );
-        }
 
         // ServerHello duz metin bir kayit olarak gonderilir.
         let mut sh_rec = Vec::new();
@@ -1937,19 +2136,10 @@ mod tests {
         //   certificate_list<0..2^24-1>            -> 3 bayt uzunluk
         //   CertificateEntry: cert_data<1..2^24-1> + extensions<0..2^16-1>
         let cert = make_test_cert();
-        {
-            extern crate std;
-            let parsed = parse_x509_rsa_public_key(&cert);
-            std::println!(
-                "[dbg] cert len={} parse_ok={}",
-                cert.len(),
-                parsed.is_ok()
-            );
-            if let Ok(ref k) = parsed {
-                std::println!("[dbg] n.len()={} e={}", k.n.len(), k.e);
-            }
-            assert!(parsed.is_ok(), "test sertifikasi cozulemeli");
-        }
+        assert!(
+            parse_x509_rsa_public_key(&cert).is_ok(),
+            "test sertifikasi cozulemeli"
+        );
         let mut cert_body = Vec::new();
         cert_body.push(0); // certificate_request_context length
         let list_len = cert.len() + 5; // 3 bayt cert_data + 2 bayt extensions
@@ -1982,15 +2172,8 @@ mod tests {
         let cv_rec = server.encrypt_hs_record(&cv);
 
         // Finished (sunucu)
-        let th = server.transcript_hash();
-        let server_hs_secret = TlsSession::hkdf_expand_label(
-            &server.handshake_secret,
-            b"s hs traffic",
-            &th,
-            32,
-        );
-        let server_hs_secret: [u8; 32] = server_hs_secret.try_into().unwrap();
-        let s_finished = TlsSession::hkdf_expand_label(&server_hs_secret, b"s finished", b"", 32);
+        let s_finished =
+            TlsSession::hkdf_expand_label(&server.server_hs_secret, b"s finished", b"", 32);
         let s_finished: [u8; 32] = s_finished.try_into().unwrap();
         let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
@@ -2003,38 +2186,12 @@ mod tests {
         let mut hs_out = Vec::new();
         let mut app_out = Vec::new();
         client.feed_tcp_data(&sh_rec);
-        let r = client.process_records(&mut hs_out, &mut app_out);
-        {
-            extern crate std;
-            std::println!(
-                "[dbg] client hs_key={} hs_iv={} th={}",
-                client
-                    .tls13_server_hs_key
-                    .as_ref()
-                    .map(|k| to_hex(k))
-                    .unwrap_or_default(),
-                client
-                    .tls13_server_hs_iv
-                    .as_ref()
-                    .map(|k| to_hex(k))
-                    .unwrap_or_default(),
-                to_hex(&client.tls13_transcript_hash.clone().finalize())
-            );
-        }
-        r.unwrap();
+        client.process_records(&mut hs_out, &mut app_out).unwrap();
         assert_eq!(client.state(), TlsState::ServerHelloReceived);
 
-        for (i, rec) in [&ee_rec[..], &cert_rec[..], &cv_rec[..], &fin_rec[..]]
-            .iter()
-            .enumerate()
-        {
+        for rec in [&ee_rec[..], &cert_rec[..], &cv_rec[..], &fin_rec[..]] {
             client.feed_tcp_data(rec);
-            let rr = client.process_records(&mut hs_out, &mut app_out);
-            {
-                extern crate std;
-                std::println!("[dbg] record {} processed ok={}", i, rr.is_ok());
-            }
-            rr.unwrap();
+            client.process_records(&mut hs_out, &mut app_out).unwrap();
         }
         assert_eq!(client.state(), TlsState::Tls13ServerFinished);
 
@@ -2047,14 +2204,8 @@ mod tests {
         // Sunucu istemci Finished'i cozer ve dogrular.
         let plain = server.decrypt_client_record(&client_finished, true);
         let th2 = server.transcript_hash();
-        let client_hs_secret = TlsSession::hkdf_expand_label(
-            &server.handshake_secret,
-            b"c hs traffic",
-            &th2,
-            32,
-        );
-        let client_hs_secret: [u8; 32] = client_hs_secret.try_into().unwrap();
-        let c_finished = TlsSession::hkdf_expand_label(&client_hs_secret, b"c finished", b"", 32);
+        let c_finished =
+            TlsSession::hkdf_expand_label(&server.client_hs_secret, b"c finished", b"", 32);
         let c_finished: [u8; 32] = c_finished.try_into().unwrap();
         let c_key = TlsSession::hkdf_expand_label(&c_finished, b"finished", b"", 32);
         let c_key: [u8; 32] = c_key.try_into().unwrap();
@@ -2064,8 +2215,10 @@ mod tests {
             &expected[..TLS_VERIFY_DATA_LEN],
             "Istemci Finished dogrulanmaliydi"
         );
-        server.note(&hs_message(HANDSHAKE_FINISHED, &plain[4..]));
+        // Uygulama trafik sirlari, transcript "ClientHello..sunucu Finished"
+        // uzerinden turetilir; istemci Finished bu noktadan sonra eklenir.
         server.derive_application_traffic();
+        server.note(&hs_message(HANDSHAKE_FINISHED, &plain[4..]));
 
         // Uygulama verisi gidis-gelisi.
         let request = b"GET / HTTP/1.1\r\nHost: minos.test\r\n\r\n";
@@ -2079,5 +2232,171 @@ mod tests {
         client.feed_tcp_data(&rec);
         client.process_records(&mut hs_out, &mut app_out).unwrap();
         assert_eq!(&app_out[..], &response[..]);
+    }
+
+    /// ECDSA sertifikalı sunucu ile TLS 1.3 el sıkışması.
+    ///
+    /// Aynı akış ECDSA (P-256) anahtarıyla yürütülür; CertificateVerify
+    /// imzası ECDSA ile üretilir ve istemci tarafından doğrulanır.
+    #[test]
+    fn tls13_handshake_loopback_ecdsa() {
+        // Test anahtarı: d ve k (P-256 skalarları).
+        const EC_D: [u8; 32] = [
+            0xc9, 0xaf, 0xa9, 0xd8, 0x45, 0xba, 0x75, 0x16, 0x6b, 0x5c, 0x21, 0x57, 0x67, 0xb1, 0xd6, 0x93,
+            0x4e, 0x50, 0xc3, 0xdb, 0x36, 0xe8, 0x9b, 0x12, 0x7b, 0x8a, 0x62, 0x2b, 0x12, 0x0f, 0x67, 0x21,
+        ];
+        const EC_K: [u8; 32] = [
+            0xa6, 0xe3, 0xc5, 0x7d, 0xd0, 0x1a, 0xbe, 0x90, 0x08, 0x65, 0x38, 0x39, 0x83, 0x55, 0xdd, 0x4c,
+            0x3b, 0x17, 0xaa, 0x87, 0x33, 0x82, 0xb0, 0xf2, 0x4d, 0x61, 0x2d, 0x94, 0x93, 0xd8, 0xaa, 0xd6,
+        ];
+
+        // Sunucu anahtar cifti.
+        let kp = crate::drivers::crypto::ecc::generate_keypair(&EC_D);
+
+        // --- Istemci ---
+        let client_random = [0x22u8; 32];
+        let mut hello = Vec::new();
+        let mut client_ecdhe = [0u8; 32];
+        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe);
+        let mut client = TlsSession::new("minos.test", client_random);
+        let ch_body = &hello[5..];
+        client.note_client_hello(ch_body);
+        client.set_client_ecdhe_secret(client_ecdhe);
+
+        // --- Sunucu ---
+        let mut server = TestServer::new();
+        server.note(ch_body);
+        let client_point = client_hello_key_share(ch_body).expect("ClientHello key_share yok");
+        assert_eq!(client_point.len(), 65);
+
+        let srv_seed = [0x77u8; 32];
+        let srv_kp = crate::drivers::crypto::ecc::generate_keypair(&srv_seed);
+        let shared = crate::drivers::crypto::ecc::shared_secret(&srv_kp.secret, &client_point)
+            .expect("paylasilan gizli");
+
+        // ServerHello
+        let mut sh_body = Vec::new();
+        sh_body.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+        sh_body.extend_from_slice(&[0x33u8; 32]);
+        sh_body.push(0);
+        sh_body.extend_from_slice(&TLS_AES_128_GCM_SHA256.to_be_bytes());
+        sh_body.push(0);
+        let mut sh_ext = Vec::new();
+        sh_ext.extend_from_slice(&0x002bu16.to_be_bytes());
+        sh_ext.extend_from_slice(&2u16.to_be_bytes());
+        sh_ext.extend_from_slice(&TLS_VERSION_1_3.to_be_bytes());
+        sh_ext.extend_from_slice(&0x0033u16.to_be_bytes());
+        sh_ext.extend_from_slice(&((4 + srv_kp.public.len()) as u16).to_be_bytes());
+        sh_ext.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
+        sh_ext.extend_from_slice(&(srv_kp.public.len() as u16).to_be_bytes());
+        sh_ext.extend_from_slice(&srv_kp.public);
+        sh_body.extend_from_slice(&(sh_ext.len() as u16).to_be_bytes());
+        sh_body.extend_from_slice(&sh_ext);
+        let sh = hs_message(HANDSHAKE_SERVER_HELLO, &sh_body);
+        server.note(&sh);
+        server.derive_secrets(&shared);
+        server.derive_handshake_traffic();
+
+        let mut sh_rec = Vec::new();
+        sh_rec.push(TLS_RECORD_HANDSHAKE);
+        sh_rec.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+        sh_rec.extend_from_slice(&(sh.len() as u16).to_be_bytes());
+        sh_rec.extend_from_slice(&sh);
+
+        // EncryptedExtensions
+        let ee = hs_message(HANDSHAKE_ENCRYPTED_EXTENSIONS, &[]);
+        server.note(&ee);
+        let ee_rec = server.encrypt_hs_record(&ee);
+
+        // Certificate (EC)
+        let cert = make_test_ec_cert(&kp.public);
+        assert!(
+            parse_x509_ec_public_key(&cert).is_ok(),
+            "EC test sertifikat cozulemeli"
+        );
+        let mut cert_body = Vec::new();
+        cert_body.push(0);
+        let list_len = cert.len() + 5;
+        cert_body.push(((list_len >> 16) & 0xFF) as u8);
+        cert_body.push(((list_len >> 8) & 0xFF) as u8);
+        cert_body.push((list_len & 0xFF) as u8);
+        cert_body.push(((cert.len() >> 16) & 0xFF) as u8);
+        cert_body.push(((cert.len() >> 8) & 0xFF) as u8);
+        cert_body.push((cert.len() & 0xFF) as u8);
+        cert_body.extend_from_slice(&cert);
+        cert_body.push(0);
+        cert_body.push(0);
+        let cert_msg = hs_message(HANDSHAKE_CERTIFICATE, &cert_body);
+        server.note(&cert_msg);
+        let cert_rec = server.encrypt_hs_record(&cert_msg);
+
+        // CertificateVerify (ECDSA)
+        let mut signed = Vec::new();
+        signed.extend_from_slice(&[0x20u8; 64]);
+        signed.extend_from_slice(b"TLS 1.3, server CertificateVerify");
+        signed.push(0);
+        let transcript = server.transcript_hash();
+        signed.extend_from_slice(&transcript);
+        let mut h = Sha256::new();
+        h.update(&signed);
+        let digest = h.finalize();
+        let (r, s) = crate::drivers::crypto::ecc::ecdsa_sign_p256(&EC_D, &digest, &EC_K)
+            .expect("ECDSA imza uretilemedi");
+        // DER: SEQUENCE { r INTEGER, s INTEGER }
+        let mut der_body = Vec::new();
+        for v in [r, s] {
+            let mut b = v.to_vec();
+            if b[0] & 0x80 != 0 {
+                b.insert(0, 0x00);
+            }
+            der_body.push(0x02);
+            der_body.push(b.len() as u8);
+            der_body.extend_from_slice(&b);
+        }
+        let mut der = Vec::new();
+        der.push(0x30);
+        der.push(der_body.len() as u8);
+        der.extend_from_slice(&der_body);
+
+        let mut cv_body = Vec::new();
+        cv_body.extend_from_slice(&SIG_ALG_ECDSA_SECP256R1_SHA256.to_be_bytes());
+        cv_body.extend_from_slice(&(der.len() as u16).to_be_bytes());
+        cv_body.extend_from_slice(&der);
+        let cv = hs_message(HANDSHAKE_CERTIFICATE_VERIFY, &cv_body);
+        server.note(&cv);
+        let cv_rec = server.encrypt_hs_record(&cv);
+
+        // Finished (sunucu)
+        let s_finished =
+            TlsSession::hkdf_expand_label(&server.server_hs_secret, b"s finished", b"", 32);
+        let s_finished: [u8; 32] = s_finished.try_into().unwrap();
+        let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
+        let finished_key: [u8; 32] = finished_key.try_into().unwrap();
+        let verify = HmacSha256::sign(&finished_key, &server.transcript_hash());
+        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS_VERIFY_DATA_LEN]);
+        server.note(&fin);
+        let fin_rec = server.encrypt_hs_record(&fin);
+
+        // Istemci sunucu kayitlarini isler.
+        let mut hs_out = Vec::new();
+        let mut app_out = Vec::new();
+        client.feed_tcp_data(&sh_rec);
+        client.process_records(&mut hs_out, &mut app_out).unwrap();
+        assert_eq!(client.state(), TlsState::ServerHelloReceived);
+
+        for rec in [&ee_rec[..], &cert_rec[..], &cv_rec[..], &fin_rec[..]] {
+            client.feed_tcp_data(rec);
+            client.process_records(&mut hs_out, &mut app_out).unwrap();
+        }
+        assert_eq!(
+            client.state(),
+            TlsState::Tls13ServerFinished,
+            "ECDSA CertificateVerify dogrulanmaliydi"
+        );
+
+        let client_finished = client.build_tls13_client_finished().unwrap();
+        assert_eq!(client.state(), TlsState::Established);
+        let plain = server.decrypt_client_record(&client_finished, true);
+        assert_eq!(plain[0], HANDSHAKE_FINISHED);
     }
 }

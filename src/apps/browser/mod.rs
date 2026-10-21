@@ -1518,6 +1518,10 @@ impl BrowserApp {
                     });
                     if server_finished {
                         if let Some(ref mut tls) = self.tls_session {
+                            // Eski ara cihazlar için ChangeCipherSpec (RFC 8446 D.4).
+                            if let Some(ccs) = tls.tls13_change_cipher_spec() {
+                                let _ = crate::drivers::netstack::tcp_send(&ccs);
+                            }
                             if let Some(record) = tls.build_tls13_client_finished() {
                                 let _ = crate::drivers::netstack::tcp_send(&record);
                                 self.tls13_finished_sent = true;
@@ -1550,7 +1554,11 @@ impl BrowserApp {
                         }
                     }
                 }
-                let data_to_parse = if tls_established && !self.tls_app_data.is_empty() {
+                // HTTPS'te ham (şifreli) kayıtlar HTTP olarak ayrıştırılmaz;
+                // yalnızca çözülmüş uygulama verisi kullanılır.
+                let data_to_parse: &[u8] = if self.is_https {
+                    &self.tls_app_data
+                } else if tls_established && !self.tls_app_data.is_empty() {
                     &self.tls_app_data
                 } else {
                     &self.response_data[..self.response_len]

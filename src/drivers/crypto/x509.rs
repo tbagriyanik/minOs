@@ -55,8 +55,10 @@ fn read_der_tlv(data: &[u8], offset: usize) -> Result<(u8, usize, usize, usize),
 }
 
 /// Parse a DER-encoded X.509 certificate and extract the RSA public key.
-/// Returns the RsaPublicKey (modulus + exponent).
-pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
+/// SubjectPublicKeyInfo'nin konumunu bulur.
+///
+/// Dönen değer: (algoritma TLV'nin değer ofseti, BIT STRING'in değer ofseti).
+fn locate_spki(cert_der: &[u8]) -> Result<(usize, usize), ()> {
     // Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
     let (cert_tag, cert_vo, _, _) = read_der_tlv(cert_der, 0)?;
     if cert_tag != TAG_SEQUENCE {
@@ -110,6 +112,20 @@ pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
         return Err(());
     }
     let _ = alg_vl;
+
+    // subjectPublicKey BIT STRING
+    let (bs_tag, bs_vo, _, _) = read_der_tlv(cert_der, alg_next)?;
+    if bs_tag != TAG_BIT_STRING {
+        return Err(());
+    }
+
+    Ok((alg_vo, bs_vo))
+}
+
+/// Returns the RsaPublicKey (modulus + exponent).
+pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
+    let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+
     // The OID must be rsaEncryption (1.2.840.113549.1.1.1).
     const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
     let (oid_tag, oid_vo, oid_vl, oid_next) = read_der_tlv(cert_der, alg_vo)?;
@@ -118,7 +134,7 @@ pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
     }
     // Skip the optional parameters (usually NULL).
     let mut after_alg = oid_next;
-    while after_alg < alg_next {
+    while after_alg < alg_next_of(cert_der, alg_vo)? {
         let (ptag, _, _, pnext) = read_der_tlv(cert_der, after_alg)?;
         if ptag == TAG_NULL {
             after_alg = pnext;
@@ -127,14 +143,58 @@ pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
         }
     }
 
-    // subjectPublicKey BIT STRING
-    let (bs_tag, bs_vo, bs_vl, _) = read_der_tlv(cert_der, after_alg)?;
-    if bs_tag != TAG_BIT_STRING {
+    parse_rsa_public_key_bits(cert_der, bs_vo)
+}
+
+/// AlgorithmIdentifier SEQUENCE'inin bittiği ofseti döner.
+fn alg_next_of(cert_der: &[u8], alg_vo: usize) -> Result<usize, ()> {
+    let (_, _, _, alg_next) = read_der_tlv(cert_der, alg_vo)?;
+    Ok(alg_next)
+}
+
+/// X.509 sertifikasından P-256 (secp256r1) EC açık anahtarını çıkarır.
+///
+/// Dönen değer: `04 || X || Y` biçiminde 65 bayt.
+pub fn parse_x509_ec_public_key(cert_der: &[u8]) -> Result<[u8; 65], ()> {
+    let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+
+    // id-ecPublicKey (1.2.840.10045.2.1)
+    const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+    // secp256r1 / prime256v1 (1.2.840.10045.3.1.7)
+    const SECP256R1_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+
+    let (oid_tag, oid_vo, oid_vl, oid_next) = read_der_tlv(cert_der, alg_vo)?;
+    if oid_tag != TAG_OID
+        || oid_vl != EC_PUBLIC_KEY_OID.len()
+        || &cert_der[oid_vo..oid_vo + oid_vl] != EC_PUBLIC_KEY_OID
+    {
         return Err(());
     }
-    let _ = bs_vl;
 
-    parse_rsa_public_key_bits(cert_der, bs_vo)
+    // Named curve OID.
+    let (curve_tag, curve_vo, curve_vl, _) = read_der_tlv(cert_der, oid_next)?;
+    if curve_tag != TAG_OID
+        || curve_vl != SECP256R1_OID.len()
+        || &cert_der[curve_vo..curve_vo + curve_vl] != SECP256R1_OID
+    {
+        return Err(());
+    }
+
+    // BIT STRING: 0x00 (kullanılmayan bit) + 04 || X || Y
+    if bs_vo >= cert_der.len() || cert_der[bs_vo] != 0 {
+        return Err(());
+    }
+    let point_start = bs_vo + 1;
+    if point_start + 65 > cert_der.len() {
+        return Err(());
+    }
+    if cert_der[point_start] != 0x04 {
+        // Sadece sıkıştırılmamış noktalar desteklenir.
+        return Err(());
+    }
+    let mut point = [0u8; 65];
+    point.copy_from_slice(&cert_der[point_start..point_start + 65]);
+    Ok(point)
 }
 
 /// Parse an RSAPublicKey out of a BIT STRING value.

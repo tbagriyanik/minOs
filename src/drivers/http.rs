@@ -362,6 +362,10 @@ fn fetch_https(
 
         // Sunucu Finished doğrulandıysa istemci Finished'ı gönder.
         if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
+            // Eski araç cihazlar için ChangeCipherSpec (RFC 8446 D.4).
+            if let Some(ccs) = session.tls13_change_cipher_spec() {
+                socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+            }
             if let Some(record) = session.build_tls13_client_finished() {
                 socket::send(fd, &record).map_err(|_| E_TLS)?;
             }

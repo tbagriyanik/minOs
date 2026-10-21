@@ -480,6 +480,181 @@ pub fn shared_secret(secret: &[u8; 32], peer_public: &[u8]) -> Option<[u8; 32]> 
     Some(to_be(&sx))
 }
 
+/// P-256 (secp256r1) ECDSA imza üretimi.
+///
+/// `secret`: özel anahtar skaları (d).
+/// `hash`: imzalanan mesajın SHA-256 özeti.
+/// `k`: tek kullanımlık nonce (skalar).
+///
+/// Dönen değer: `(r, s)`.
+pub fn ecdsa_sign_p256(
+    secret: &[u8; 32],
+    hash: &[u8; 32],
+    k: &[u8; 32],
+) -> Option<([u8; 32], [u8; 32])> {
+    let d = limbs_from_be_bytes(secret);
+    if d == ZERO || cmp_limbs(&d, &N) != Ordering::Less {
+        return None;
+    }
+    let kv = limbs_from_be_bytes(k);
+    if kv == ZERO || cmp_limbs(&kv, &N) != Ordering::Less {
+        return None;
+    }
+
+    // r = (k·G).x mod n
+    let point = pt_mul(&kv, &base_point());
+    let (px, _) = pt_affine(&point)?;
+    let mut wide = [0u32; 16];
+    wide[..8].copy_from_slice(&px);
+    let r = reduce_bin(&wide, &N);
+    if r == ZERO {
+        return None;
+    }
+
+    // s = k^-1 · (e + r·d) mod n
+    let e = limbs_from_be_bytes(hash);
+    let mut ew = [0u32; 16];
+    ew[..8].copy_from_slice(&e);
+    let e = reduce_bin(&ew, &N);
+
+    let kinv = minv(&kv, &N);
+    let rd = mmul(&r, &d, &N);
+    let sum = madd(&e, &rd, &N);
+    let s = mmul(&kinv, &sum, &N);
+    if s == ZERO {
+        return None;
+    }
+    Some((to_be(&r), to_be(&s)))
+}
+
+/// P-256 (secp256r1) ECDSA imza doğrulaması (FIPS 186-4 §6.4).
+///
+/// `pubkey`: 04 || X || Y (65 bayt, sıkıştırılmamış SEC1 noktası).
+/// `hash`: imzalanan mesajın SHA-256 özeti.
+/// `r`, `s`: ECDSA imza bileşenleri (big-endian, 32 bayt).
+///
+/// Doğrulama: `X = u1·G + u2·Q` noktasının x bileşeni `r` ile eşleşmeli.
+pub fn ecdsa_verify_p256(
+    pubkey: &[u8; 65],
+    hash: &[u8; 32],
+    r: &[u8; 32],
+    s: &[u8; 32],
+) -> bool {
+    if pubkey[0] != 0x04 {
+        return false;
+    }
+    let mut xb = [0u8; 32];
+    let mut yb = [0u8; 32];
+    xb.copy_from_slice(&pubkey[1..33]);
+    yb.copy_from_slice(&pubkey[33..65]);
+    let x = limbs_from_be_bytes(&xb);
+    let y = limbs_from_be_bytes(&yb);
+    if !is_on_curve(&x, &y) {
+        return false;
+    }
+
+    let rv = limbs_from_be_bytes(r);
+    let sv = limbs_from_be_bytes(s);
+    // 1 <= r, s <= n-1
+    if rv == ZERO || sv == ZERO {
+        return false;
+    }
+    if cmp_limbs(&rv, &N) != Ordering::Less || cmp_limbs(&sv, &N) != Ordering::Less {
+        return false;
+    }
+
+    // P-256'da hash (256 bit) ve n (256 bit) aynı uzunlukta: e = hash.
+    let e = limbs_from_be_bytes(hash);
+
+    // w = s^-1 mod n
+    let w = minv(&sv, &N);
+    let u1 = mmul(&e, &w, &N);
+    let u2 = mmul(&rv, &w, &N);
+
+    // X = u1·G + u2·Q
+    let q = Pt { x, y, z: ONE };
+    let p1 = pt_mul(&u1, &base_point());
+    let p2 = pt_mul(&u2, &q);
+    let sum = pt_add(&p1, &p2);
+    let (ax, _) = match pt_affine(&sum) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    // x mod n == r ?
+    let mut wide = [0u32; 16];
+    wide[..8].copy_from_slice(&ax);
+    let xn = reduce_bin(&wide, &N);
+    cmp_limbs(&xn, &rv) == Ordering::Equal
+}
+
+/// ECDSA imzasının DER çözümü: `SEQUENCE { r INTEGER, s INTEGER }`.
+///
+/// Başarı durumunda `(r, s)` değerleri 32 bayta tamamlanır.
+pub fn parse_ecdsa_der_signature(sig: &[u8]) -> Option<([u8; 32], [u8; 32])> {
+    if sig.len() < 8 || sig[0] != 0x30 {
+        return None;
+    }
+    let mut pos = 2usize;
+    if sig[1] & 0x80 != 0 {
+        let n = (sig[1] & 0x7F) as usize;
+        if n == 0 || n > 2 || pos + n > sig.len() {
+            return None;
+        }
+        let mut total = 0usize;
+        for i in 0..n {
+            total = (total << 8) | sig[pos + i] as usize;
+        }
+        pos += n;
+        if pos + total != sig.len() {
+            return None;
+        }
+    } else if pos + sig[1] as usize != sig.len() {
+        return None;
+    }
+
+    // r INTEGER
+    if pos + 2 > sig.len() || sig[pos] != 0x02 {
+        return None;
+    }
+    let r_len = sig[pos + 1] as usize;
+    if r_len == 0 || r_len > 33 || pos + 2 + r_len > sig.len() {
+        return None;
+    }
+    let r_bytes = &sig[pos + 2..pos + 2 + r_len];
+    pos += 2 + r_len;
+
+    // s INTEGER
+    if pos + 2 > sig.len() || sig[pos] != 0x02 {
+        return None;
+    }
+    let s_len = sig[pos + 1] as usize;
+    if s_len == 0 || s_len > 33 || pos + 2 + s_len > sig.len() {
+        return None;
+    }
+    let s_bytes = &sig[pos + 2..pos + 2 + s_len];
+
+    let mut r = [0u8; 32];
+    let mut s = [0u8; 32];
+    if r_len == 33 {
+        if r_bytes[0] != 0x00 {
+            return None;
+        }
+        r.copy_from_slice(&r_bytes[1..33]);
+    } else {
+        r[32 - r_len..].copy_from_slice(r_bytes);
+    }
+    if s_len == 33 {
+        if s_bytes[0] != 0x00 {
+            return None;
+        }
+        s.copy_from_slice(&s_bytes[1..33]);
+    } else {
+        s[32 - s_len..].copy_from_slice(s_bytes);
+    }
+    Some((r, s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -665,6 +840,69 @@ mod tests {
         let (f2x, f2y) = pt_affine(&f2).expect("3G + G affine");
         assert_eq!(fx, f2x, "4G x tutarsiz");
         assert_eq!(fy, f2y, "4G y tutarsiz");
+    }
+
+    #[test]
+    fn ecdsa_verify_known_answer() {
+        // P-256 ECDSA test vektörü (Python ile üretildi).
+        let mut pubkey = [0u8; 65];
+        pubkey[0] = 0x04;
+        pubkey[1..33].copy_from_slice(
+            &parse_hex("60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"),
+        );
+        pubkey[33..65].copy_from_slice(
+            &parse_hex("7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"),
+        );
+
+        let hash = parse_hex("23A684D8E64D69E3B9F2568CF4C088087C6C63D11858DC02BEA2805828694645");
+        let mut h = [0u8; 32];
+        h.copy_from_slice(&hash);
+
+        let r = parse_hex("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716");
+        let s = parse_hex("EB4FB2D3DB54C0251C9AFF85224F763B072B320518A123599C62FDBE2B561E1A");
+        let mut ra = [0u8; 32];
+        let mut sa = [0u8; 32];
+        ra.copy_from_slice(&r);
+        sa.copy_from_slice(&s);
+
+        assert!(ecdsa_verify_p256(&pubkey, &h, &ra, &sa), "gecerli imza reddedilmemeli");
+
+        // Bozuk özet reddedilmeli.
+        let mut bad_hash = h;
+        bad_hash[0] ^= 0xff;
+        assert!(!ecdsa_verify_p256(&pubkey, &bad_hash, &ra, &sa));
+
+        // Bozuk imza bileşeni reddedilmeli.
+        let mut bad_r = ra;
+        bad_r[0] ^= 0xff;
+        assert!(!ecdsa_verify_p256(&pubkey, &h, &bad_r, &sa));
+
+        // Eğri dışı nokta reddedilmeli.
+        let mut bad_key = pubkey;
+        bad_key[1] ^= 0xff;
+        assert!(!ecdsa_verify_p256(&bad_key, &h, &ra, &sa));
+    }
+
+    #[test]
+    fn ecdsa_der_signature_parsing() {
+        let der = parse_hex(
+            "3046022100efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716\
+             022100eb4fb2d3db54c0251c9aff85224f763b072b320518a123599c62fdbe2b561e1a",
+        );
+        let (r, s) = parse_ecdsa_der_signature(&der).expect("DER imza cozulemeli");
+        assert_eq!(
+            r.to_vec(),
+            parse_hex("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716")
+        );
+        assert_eq!(
+            s.to_vec(),
+            parse_hex("EB4FB2D3DB54C0251C9AFF85224F763B072B320518A123599C62FDBE2B561E1A")
+        );
+
+        // Bozuk girdiler reddedilmeli.
+        assert!(parse_ecdsa_der_signature(&[]).is_none());
+        assert!(parse_ecdsa_der_signature(&[0x30, 0x00]).is_none());
+        assert!(parse_ecdsa_der_signature(&[0x31, 0x02, 0x00, 0x00]).is_none());
     }
 
     #[test]

@@ -23,10 +23,28 @@ pub mod js;
 #[path = "../src/apps/browser/types.rs"]
 pub mod browser_types;
 
+// TLS protokol katmani: `crate::boot::time` ve `crate::monotonic_ms`
+// cekirdekte var; host testlerinde sabit birer yedek (stub) saglanir.
+pub fn monotonic_ms() -> u64 {
+    0
+}
+
+pub mod boot {
+    pub mod time {
+        pub fn main_monotonic_ms() -> u64 {
+            0
+        }
+    }
+}
+
+#[path = "../src/drivers/tls.rs"]
+pub mod tls;
+
 // Kaynak moduller `crate::drivers::crypto::...` yoluyla birbirine bagli
 // oldugu icin ayni yolu host harness'inda da saglariz.
 pub mod drivers {
     pub use crate::crypto;
+    pub use crate::tls;
 }
 
 #[cfg(test)]

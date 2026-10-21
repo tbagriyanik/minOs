@@ -55,6 +55,10 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
+- **🖥️ Otomatik Açılış Çözünürlüğü ve BGA Donanım Geçişi:** Limine açılış menüsünden (`res=WxH`) veya `settings.cfg` dosyasından okunan çözünürlük tercihi çekirdek tarafından masaüstü açılmadan önce donanıma (BGA) uygulanır; sistem doğrudan seçili çözünürlükle başlatılır.
+- **🔄 Dinamik Çözünürlük ve Pencere Sınır Yönetimi:** Sistem çalışırken ekran çözünürlüğü değiştirildiğinde masaüstü sınırları, imleç hareket uzayı ve açık pencereler (`keep_windows_on_screen`) yeni geometriye anında uyarlanır; duvar kağıdı yeniden ölçeklenir ve tam ekran çizimi (`force_render`) tetiklenir.
+- **🔐 Statik BSS Bellek Mimarisi (CodeQL Sertifikasyonu):** `MemoryManager` yapısı statik `.bss` segmentine taşınarak yerel yığın işaretçilerinin küresel alana kaçması önlendi; CodeQL statik analiz uyarıları (Alert #25) giderildi.
+- **🔑 Genişletilmiş Kripto & TLS 1.3:** Çekirdeğe SHA-384 ve SHA-512 özetleme desteği eklendi (40 host testiyle doğrulandı); TLS 1.3 paket şifreleme/çözme, transcript hash ve base IV türetme altyapısı sağlandı.
 - **🛡️ Erken İstisna Yakalama & Triple Fault Koruması:** Çekirdek başlangıcında (`init_interrupts`) ilk iş olarak BSP için `GDT+TSS (IST1)` ve erken IDT istisna kapıları (`#DE`, `#UD`, `#DF`, `#SS`, `#GP`, `#PF`, `0x80`) yüklenir. Sürücü başlatma veya bellek aşımı anında donanımın sessizce üçlü hataya (triple fault) düşüp reset atması engellenir.
 - **📟 Etkileşimli Metin Kurtarma Konsolu (`recovery#`):** Açılışta veya kritik sürücülerde hata meydana geldiğinde karşılama ekranına geçilmeden önce ekranda hata detayları (Vektör, RIP, CS, CR2, Err) renkli metinle sunulur ve kullanıcıya interaktif komut istemi sağlanır (`restart` / `reboot` / `r`, `halt` / `h`, `help`).
 - **🖥️ 2560×1600'e Kadar Yüksek Çözünürlük ve 16:10 Desteği:** Çekirdek arka tamponu (backbuffer) `2560x1600` boyutuna genişletildi. 1920×1080 (FHD), 1920×1200 (16:10 WUXGA), 2560×1440 (2K) ve 2560×1600 ekranlar tam desteklenir; 1920 çözünürlükteki sınır doğrulama algoritması düzeltildi.

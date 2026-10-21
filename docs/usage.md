@@ -60,7 +60,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 ## 🎮 Masaüstü Kullanımı ve Kısayollar
 
 - **Başlat Menüsünde Gezinme:** Klavye **Yukarı / Aşağı / Sol / Sağ ok tuşları** ile menüler arasında dolaşın, **Enter** ile seçili uygulamayı çalıştırın veya **fare tekerleğini** çevirerek kaydırın.
-- **Açılış Çözünürlüğü Seçimi:** Limine menüsünde minOs çözünürlük girdilerinden birini seçin. Hoş geldin ekranı ve Sistem Ayarları çözünürlük tercihini kaydeder; çalışan framebuffer modunu değiştirmez.
+- **Açılış Çözünürlüğü ve Ekran Modu:** Limine açılış menüsünde `/Display Resolutions` altından istenen çözünürlük (`800x600`, `1024x768`, `1280x720`, `1920x1080`) seçilebilir. Ayrıca Sistem Ayarları uygulamasından seçilen ve kaydedilen çözünürlük sonraki tüm açılışlarda BGA üzerinden otomatik uygulanır. Çalışma zamanında çözünürlük değiştirildiğinde masaüstü sınırları, imleç ve açık pencereler anında yeni çözünürlüğe adapte edilir.
 - **Açılış Günlüğü Kaydırma:** Hoş geldin ekranındaki log paneli üzerinde fare tekerleğini kullanarak daha eski veya yeni satırlara gidin.
 - **Pencere Boyutlandırma:** Pencerelerin herhangi bir kenarından veya köşesinden basılı tutarak boyutlandırın (tutma alanı 12px'e çıkarılmıştır).
 - **Pencere Taşıma (Drag & Drop):** Herhangi bir pencerenin üst başlık çubuğuna sol tıklayıp basılı tutarak ekran üzerinde sürükleyin.
@@ -146,16 +146,16 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 20 Ekim 2026 (v1.7.0)
+> Son güncelleme: 21 Ekim 2026 (v1.7.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 92 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | 41.703 satır (`src/**/*.rs`) |
-| **Etkin Kod Satırı** (boş ve satır başı yorumları hariç, yaklaşık) | 35.234 satır |
+| **Toplam Rust Kaynak Dosyası** | 93 dosya (`src/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | ~42.000 satır (`src/**/*.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
+| **Birim Testleri (`test_host.ps1`)** | 40 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |
-| **Kernel / ISO Boyutu** | ~1.85 MB Çekirdek / ~5.85 MB Hibrit Bootable ISO |
+| **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 
 ---
 

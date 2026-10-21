@@ -9,7 +9,8 @@ param(
     [string]$DiskImage = ".\disk.qcow2",
     [switch]$Live,
     [switch]$NoIso,
-    [switch]$ReprepareDisk
+    [switch]$ReprepareDisk,
+    [ValidateSet("default", "sdl", "gtk")][string]$Display = "default"
 )
 
 # minOs Derle ve QEMU ile Çalistir (PowerShell)
@@ -87,6 +88,7 @@ $qemuArgs = @(
     "-smp", "$CpuCount",
     "-serial", "stdio",
     "-vga", "std",
+    "-global", "VGA.vgamem_mb=64",
     # SDL ses çıkışı DirectSound'un zorunlu capture/mikrofon açma hatasını önler.
     "-audiodev", "driver=sdl,id=snd0",
     "-device", "intel-hda",
@@ -96,6 +98,12 @@ $qemuArgs = @(
     "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
     "-device", "e1000,netdev=n0"
 )
+
+if ($Display -eq "sdl") {
+    $qemuArgs += @("-display", "sdl")
+} elseif ($Display -eq "gtk") {
+    $qemuArgs += @("-display", "gtk")
+}
 
 if ($DiskImage) {
     if (-not (Test-Path -LiteralPath $DiskImage -PathType Leaf)) {

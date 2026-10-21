@@ -20,6 +20,16 @@ pub struct RsaPublicKey {
     pub e: u32,     // public exponent (typically 65537)
 }
 
+/// RSA private key: modulus n and private exponent d.
+///
+/// The kernel currently only verifies signatures, but keeping the signing
+/// primitive here lets the TLS layer be tested end-to-end against a local
+/// server implementation.
+pub struct RsaPrivateKey {
+    pub n: Vec<u8>, // big-endian modulus
+    pub d: Vec<u8>, // big-endian private exponent
+}
+
 /// Convert a big-endian byte string into little-endian 32-bit limbs.
 fn bytes_to_limbs(b: &[u8]) -> Vec<u32> {
     let mut limbs: Vec<u32> = Vec::with_capacity(b.len() / 4 + 1);
@@ -220,6 +230,70 @@ pub fn pkcs1_v1_5_encrypt_seeded(
     Ok(limbs_to_bytes(&c, k))
 }
 
+/// Modular exponentiation with an arbitrary-length exponent (limbs, LSW first).
+fn mod_pow_limbs_big(base: &[u32], exp: &[u32], m: &[u32]) -> Vec<u32> {
+    let mut result = vec![0u32; m.len()];
+    result[0] = 1;
+    let mut acc = mod_reduce_limbs(base, m);
+    let total_bits = exp.len() * 32;
+    // En dusuk bitten yuksege dogru (LSB-first) square-and-multiply.
+    for i in 0..total_bits {
+        if (exp[i / 32] >> (i % 32)) & 1 == 1 {
+            result = mod_mul(&result, &acc, m);
+        }
+        acc = mod_mul(&acc, &acc, m);
+    }
+    result
+}
+
+/// SHA-256 DigestInfo prefix used by PKCS#1 v1.5 signatures.
+const SHA256_DIGEST_INFO_PREFIX: [u8; 19] = [
+    0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05,
+    0x00, 0x04, 0x20,
+];
+
+/// PKCS#1 v1.5 + SHA-256 signature generation.
+///
+/// `EM = 0x00 || 0x01 || 0xFF... || 0x00 || DigestInfo(SHA-256(msg))`
+/// followed by the raw private-key exponentiation `EM^d mod n`.
+pub fn pkcs1_v1_5_sign(key: &RsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>, ()> {
+    let k = key.n.len();
+    if k < 11 {
+        return Err(());
+    }
+    let mut hash = Sha256::new();
+    hash.update(msg);
+    let digest = hash.finalize();
+
+    let mut t = Vec::with_capacity(SHA256_DIGEST_INFO_PREFIX.len() + digest.len());
+    t.extend_from_slice(&SHA256_DIGEST_INFO_PREFIX);
+    t.extend_from_slice(&digest);
+
+    if t.len() > k - 11 {
+        return Err(());
+    }
+    let ps_len = k - t.len() - 3;
+    let mut em = Vec::with_capacity(k);
+    em.push(0x00);
+    em.push(0x01);
+    em.extend(core::iter::repeat(0xFFu8).take(ps_len));
+    em.push(0x00);
+    em.extend_from_slice(&t);
+
+    let modulus = bytes_to_limbs(&key.n);
+    let sig = mod_pow_limbs_big(&bytes_to_limbs(&em), &bytes_to_limbs(&key.d), &modulus);
+    Ok(limbs_to_bytes(&sig, k))
+}
+
+/// Verify a signature produced by [`pkcs1_v1_5_sign`] using the public key.
+pub fn pkcs1_v1_5_sign_verify(
+    key: &RsaPublicKey,
+    msg: &[u8],
+    sig: &[u8],
+) -> Result<(), ()> {
+    rsa_verify_pkcs1_sha256(key, msg, sig)
+}
+
 /// Raw RSA public-key operation: m^e mod n.
 pub fn rsa_public_encrypt(key: &RsaPublicKey, msg: &[u8]) -> Result<Vec<u8>, ()> {
     pkcs1_v1_5_encrypt(key, msg)
@@ -321,6 +395,37 @@ mod tests {
             i += 2;
         }
         out
+    }
+
+    #[test]
+    fn pkcs1_sign_verify_roundtrip() {
+        // 512-bit RSA test anahtari (n, d).
+        const N: [u8; 64] = [
+            0xb0, 0xea, 0xe6, 0x91, 0x0f, 0xea, 0x84, 0x1c, 0x20, 0x51, 0x68, 0xa0, 0xb8, 0x35, 0x0e, 0xb8,
+            0x95, 0xfc, 0x78, 0x8d, 0xdb, 0x3e, 0x3c, 0x10, 0xc2, 0x7b, 0xa5, 0xbf, 0xf8, 0x42, 0x70, 0xa7,
+            0x1b, 0x73, 0x4b, 0xb2, 0xa9, 0xbb, 0x95, 0x6c, 0x91, 0xdf, 0xa1, 0xfa, 0xa6, 0xd4, 0xf2, 0xe8,
+            0x42, 0xe9, 0xf6, 0x6d, 0xb5, 0xb0, 0x1b, 0x99, 0xe2, 0x05, 0x81, 0xc4, 0x18, 0x44, 0xa2, 0xbb,
+        ];
+        const D: [u8; 64] = [
+            0x21, 0x25, 0xb1, 0xd3, 0x66, 0x0f, 0x03, 0x77, 0x9d, 0x9a, 0x83, 0x26, 0xf1, 0xbc, 0x87, 0x28,
+            0x90, 0x79, 0x80, 0x40, 0xdb, 0xde, 0x1a, 0x34, 0xed, 0xab, 0x6b, 0x0f, 0xbf, 0xbc, 0xfb, 0x0c,
+            0x14, 0x17, 0x4f, 0x54, 0xde, 0xeb, 0xd5, 0xcf, 0xfa, 0x17, 0xa0, 0xdb, 0xc4, 0xc6, 0x1d, 0x58,
+            0x75, 0x13, 0xdf, 0xa1, 0x57, 0xff, 0xa3, 0x7e, 0xba, 0x46, 0xde, 0x19, 0x9a, 0x14, 0x7e, 0xf9,
+        ];
+        let priv_key = RsaPrivateKey { n: N.to_vec(), d: D.to_vec() };
+        let pub_key = RsaPublicKey { n: N.to_vec(), e: 65537 };
+
+        let msg = b"TLS 1.3, server CertificateVerify";
+        let sig = pkcs1_v1_5_sign(&priv_key, msg).expect("imza uretilemedi");
+        assert_eq!(sig.len(), 64);
+        // Python ile uretilen referans deger.
+        let expected = hex(
+            "2eaad98f9fdc9d794e0dfe201b8556e0610d3191b3555cd86eb03a6183a4e147\
+             0471f2e551db6ae2f64051e0f6f78b6dbae2420b55f057e5c6f0bd02381e254a",
+        );
+        assert_eq!(sig, expected, "imza referans degerle eslesmeli");
+        assert!(rsa_verify_pkcs1_sha256(&pub_key, msg, &sig).is_ok());
+        assert!(rsa_verify_pkcs1_sha256(&pub_key, b"baska mesaj", &sig).is_err());
     }
 
     #[test]

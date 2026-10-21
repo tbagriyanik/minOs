@@ -178,26 +178,12 @@ use desktop::helpers::*;
 
 
 
-static mut GLOBAL_PMM_PTR: *mut mm::pmm::PhysicalMemoryManager = core::ptr::null_mut();
-
-
+static mut MEMORY_MGR: mm::MemoryManager = mm::MemoryManager::new();
 
 fn alloc_pmm_frame_global() -> Option<u64> {
-
     unsafe {
-
-        if !GLOBAL_PMM_PTR.is_null() {
-
-            (*GLOBAL_PMM_PTR).allocate_frame()
-
-        } else {
-
-            None
-
-        }
-
+        (*core::ptr::addr_of_mut!(MEMORY_MGR)).pmm.allocate_frame()
     }
-
 }
 
 
@@ -224,7 +210,7 @@ pub extern "C" fn _start() -> ! {
 
     // Install early display output before PMM/VMM/SMP and device probes.
 
-    let (fb_ptr, width, height, pitch, bpp) = unsafe {
+    let (fb_ptr, mut width, mut height, pitch, bpp) = unsafe {
 
         let resp = valid_limine_response(core::ptr::addr_of!(FRAMEBUFFER_REQUEST.response))
 
@@ -382,7 +368,7 @@ pub extern "C" fn _start() -> ! {
 
     arch::x86_64::init_interrupts();
 
-    let mut memory_mgr = mm::MemoryManager::new();
+    let memory_mgr = unsafe { &mut *core::ptr::addr_of_mut!(MEMORY_MGR) };
 
     unsafe {
 
@@ -476,11 +462,6 @@ pub extern "C" fn _start() -> ! {
 
     serial_print("[PMM] Fiziksel bellek yoneticisi baslatildi.\n");
 
-    unsafe {
-
-        GLOBAL_PMM_PTR = &mut memory_mgr.pmm as *mut _;
-
-    }
 
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
 
@@ -925,6 +906,7 @@ pub extern "C" fn _start() -> ! {
     let mut settings_app = apps::settings::SystemSettings::default();
 
     settings_app.display_res = (width, height);
+    settings_app.screen_res = (width, height);
 
     // Disk uzerinde onceden kaydedilmis kalici ayarlar var mi kontrol et
 
@@ -937,6 +919,35 @@ pub extern "C" fn _start() -> ! {
     }
 
     settings_app.load_from_vfs(&fs_mgr.vfs);
+
+    // Eger Limine onyukleme komut satirinda res=WxH secilmisse oncelik ver:
+    if let Some(cmd_res) = boot::limine::cmdline_resolution() {
+        settings_app.screen_res = cmd_res;
+    }
+
+    // Secili cozunurluk su anki ekrandan farkliysa ve GPU tarafindan destekleniyorsa acilista uygula:
+    let target_res = settings_app.screen_res;
+    if target_res != (fb.width, fb.height) && drivers::gpu::mode_supported(target_res.0, target_res.1) {
+        let (switched, pitch_opt) = drivers::gpu::try_set_resolution(target_res.0, target_res.1);
+        if switched {
+            let p = pitch_opt.unwrap_or(target_res.0 * 4);
+            let new_bytes = p.saturating_mul(target_res.1);
+            let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
+            for off in (0..new_bytes.max(16 * 1024 * 1024)).step_by(2 * 1024 * 1024) {
+                arch::x86_64::mmio_map_2mb((fb_phys + off as u64) & !0x1F_FFFF);
+            }
+            if fb.resize(target_res.0, target_res.1, p) {
+                width = fb.width;
+                height = fb.height;
+                                settings_app.display_res = target_res;
+                serial_print("[BOOT] Secili cozunurluk basariyla uygulandi: ");
+                serial_print_dec(width as u64);
+                serial_print("x");
+                serial_print_dec(height as u64);
+                serial_print("\n");
+            }
+        }
+    }
 
     crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
 
@@ -4520,17 +4531,22 @@ pub extern "C" fn _start() -> ! {
                                                     settings_app.display_res = requested;
                                                     settings_app.status_msg = gui::ui_text("Bu cozunurluk zaten etkin.", "This resolution is already active.");
                                                 } else if drivers::gpu::mode_supported(requested.0, requested.1) {
-                                                    let (switched, pitch) = drivers::gpu::try_set_resolution(requested.0, requested.1);
+                                                    let (switched, pitch_opt) = drivers::gpu::try_set_resolution(requested.0, requested.1);
                                                     if switched {
-                                                        let p = pitch.unwrap_or(requested.0 * 4);
+                                                        let p = pitch_opt.unwrap_or(requested.0 * 4);
                                                         let new_bytes = p.saturating_mul(requested.1);
                                                         let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
                                                         for off in (0..new_bytes.max(16 * 1024 * 1024)).step_by(2 * 1024 * 1024) {
                                                             arch::x86_64::mmio_map_2mb((fb_phys + off as u64) & !0x1F_FFFF);
                                                         }
                                                         if fb.resize(requested.0, requested.1, p) {
-                                                            settings_app.screen_res = requested;
+                                                            width = fb.width;
+                                                            height = fb.height;
+                                                                                                                        settings_app.screen_res = requested;
                                                             settings_app.display_res = requested;
+                                                            crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
+                                                            keep_windows_on_screen(&mut compositor, width, height);
+                                                            force_render = true;
                                                             settings_app.status_msg = gui::ui_text("cozunurluk degistirildi (BGA).", "Resolution changed (BGA).");
                                                         } else {
                                                             settings_app.status_msg = gui::ui_text("cozunurluk uygulanamadi (bellek siniri).", "Resolution failed (memory limit).");

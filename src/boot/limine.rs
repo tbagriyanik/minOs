@@ -247,6 +247,24 @@ pub fn cmdline_has_token(cmdline: &str, token: &str) -> bool {
         .any(|part| part == token)
 }
 
+/// Önyükleme komut satırından `res=WxH` çözünürlük parametresini okur.
+pub fn cmdline_resolution() -> Option<(usize, usize)> {
+    let cmdline = limine_boot_cmdline()?;
+    for part in cmdline.split(|c: char| c.is_whitespace()) {
+        if let Some(val) = part.strip_prefix("res=") {
+            let mut parts = val.split('x');
+            if let (Some(w_str), Some(h_str)) = (parts.next(), parts.next()) {
+                if let (Ok(w), Ok(h)) = (w_str.parse::<usize>(), h_str.parse::<usize>()) {
+                    if w >= 320 && h >= 200 && w <= 2560 && h <= 1600 {
+                        return Some((w, h));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Kernel'in kurulu sistem modunda baslatilmak istenip istenmedigini bildirir.
 pub fn boot_wants_installed() -> bool {
     limine_boot_cmdline().map_or(false, |cmdline| cmdline_has_token(cmdline, "installed"))

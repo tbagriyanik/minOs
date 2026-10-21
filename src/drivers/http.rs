@@ -1,11 +1,14 @@
 //! Minimal HTTP istemcisi (`curl`/`http_get`): HTTP/1.1 GET, Content-Length ve
 //! `Connection: close` çerçeveleme, chunked transfer çözümü, 3xx yönlendirme
-//! takibi (en fazla 3 atlama). TLS (`https://`) desteklenmez ve hata döner.
+//! takibi (en fazla 3 atlama). `https://` adreslerinde TLS 1.2/1.3 el sıkışması
+//! `drivers::tls` katmanı üzerinden gerçekleştirilir.
 #![allow(dead_code, static_mut_refs)]
 
+use alloc::vec::Vec;
 use crate::drivers::e1000;
 use crate::drivers::netstack::Ipv4Address;
 use crate::drivers::socket;
+use crate::drivers::tls::TlsSession;
 
 pub const E_URL: i32 = 1001;
 pub const E_TLS: i32 = 1002;
@@ -189,12 +192,16 @@ fn build_request(req: &mut [u8], host: &[u8], path: &[u8], ip: Ipv4Address) -> O
 
 /// Tek bir HTTP GET turu yapar: yanıtın tamamını (başlık+gövde) `resp_buf`'a
 /// yazar, `(durum_kodu, başlık_uzunluğu, toplam_uzunluk)` döner.
+///
+/// `is_https` doğruysa TLS el sıkışması yapılır, istek şifreli gönderilir ve
+/// yanıt şifreli olarak alınıp çözülür.
 fn fetch_once(
     host: &[u8],
     port: u16,
     path: &[u8],
     ip: Ipv4Address,
     resp_buf: &mut [u8],
+    is_https: bool,
 ) -> Result<(u16, usize, usize), i32> {
     let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
     let _ = socket::set_timeout(fd, 4000);
@@ -202,65 +209,191 @@ fn fetch_once(
         socket::connect(fd, ip, port)?;
         let mut req = [0u8; 768];
         let reqlen = build_request(&mut req, host, path, ip).ok_or(socket::E_INVAL)?;
-        let mut sent = 0;
-        while sent < reqlen {
-            sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
-                if sent == 0 {
-                    e
-                } else {
-                    socket::E_TIMEOUT
-                }
-            })?;
+
+        if is_https {
+            fetch_https(fd, host, req, reqlen, resp_buf)
+        } else {
+            let mut sent = 0;
+            while sent < reqlen {
+                sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                    if sent == 0 {
+                        e
+                    } else {
+                        socket::E_TIMEOUT
+                    }
+                })?;
+            }
+            let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+            let _ = expected_total;
+            if total < 12 {
+                return Err(E_HTTP);
+            }
+            let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+            let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+            Ok((status, hlen, total))
         }
-        let mut total = 0usize;
-        let mut expected_total: Option<usize> = None;
-        loop {
-            if total >= resp_buf.len() {
+    })();
+    socket::close(fd);
+    res
+}
+
+/// HTTP yanıtını socket'ten okur; `decrypt` verilirse gövde şifreli okunur
+/// ve çözülür. Dönen değerler: (toplam bayt, beklenen toplam (Content-Length)).
+fn read_http_response(
+    fd: i32,
+    resp_buf: &mut [u8],
+    mut decrypt: Option<&mut TlsSession>,
+) -> Result<(usize, Option<usize>), i32> {
+    let mut total = 0usize;
+    let mut expected_total: Option<usize> = None;
+    loop {
+        if total >= resp_buf.len() {
+            break;
+        }
+        if let Some(exp) = expected_total {
+            if total >= exp {
                 break;
             }
-            if let Some(exp) = expected_total {
-                if total >= exp {
-                    break;
+        }
+        let mut raw = [0u8; 4096];
+        let want = raw.len().min(resp_buf.len() - total);
+        match socket::recv(fd, &mut raw[..want]) {
+            Ok(0) => break, // FIN = EOF
+            Ok(n) => {
+                // Şifreli taşıma: kayıt çerçevesini çöz, düz metni işle.
+                if let Some(ref mut session) = decrypt {
+                    session.feed_tcp_data(&raw[..n]);
+                    let mut app = Vec::new();
+                    let mut hs = Vec::new();
+                    match session.process_records(&mut hs, &mut app) {
+                        Ok(_) => {}
+                        Err(_) => return Err(E_TLS),
+                    }
+                    if !app.is_empty() {
+                        let end = (total + app.len()).min(resp_buf.len());
+                        resp_buf[total..end].copy_from_slice(&app[..end - total]);
+                        total = end;
+                    }
+                } else {
+                    let end = (total + n).min(resp_buf.len());
+                    resp_buf[total..end].copy_from_slice(&raw[..end - total]);
+                    total = end;
                 }
-            }
-            match socket::recv(fd, &mut resp_buf[total..]) {
-                Ok(0) => break, // FIN = EOF
-                Ok(n) => {
-                    total += n;
-                    if expected_total.is_none() {
-                        if let Some(hlen) = find_header_end(&resp_buf[..total]) {
-                            let headers = &resp_buf[..hlen];
-                            if let Some(cl_bytes) = header_value(headers, b"content-length") {
-                                if let Ok(cl_str) = core::str::from_utf8(cl_bytes) {
-                                    if let Ok(cl_val) = cl_str.trim().parse::<usize>() {
-                                        expected_total = Some(hlen + cl_val);
-                                        if total >= hlen + cl_val {
-                                            break;
-                                        }
+                if expected_total.is_none() {
+                    if let Some(hlen) = find_header_end(&resp_buf[..total]) {
+                        let headers = &resp_buf[..hlen];
+                        if let Some(cl_bytes) = header_value(headers, b"content-length") {
+                            if let Ok(cl_str) = core::str::from_utf8(cl_bytes) {
+                                if let Ok(cl_val) = cl_str.trim().parse::<usize>() {
+                                    expected_total = Some(hlen + cl_val);
+                                    if total >= hlen + cl_val {
+                                        break;
                                     }
                                 }
                             }
                         }
                     }
-                    if let Some(hlen) = find_header_end(&resp_buf[..total]) {
-                        let body = &resp_buf[hlen..total];
-                        if body.ends_with(b"0\r\n\r\n") || body.ends_with(b"0\r\n") {
-                            break;
-                        }
+                }
+                if let Some(hlen) = find_header_end(&resp_buf[..total]) {
+                    let body = &resp_buf[hlen..total];
+                    if body.ends_with(b"0\r\n\r\n") || body.ends_with(b"0\r\n") {
+                        break;
                     }
                 }
-                Err(_) => break,
+            }
+            Err(_) => break,
+        }
+    }
+    Ok((total, expected_total))
+}
+
+/// TLS el sıkışması yapar, şifreli HTTP isteği gönderir ve şifreli yanıtı
+/// çözerek `resp_buf`'a yazar.
+fn fetch_https(
+    fd: i32,
+    host: &[u8],
+    req: [u8; 768],
+    reqlen: usize,
+    resp_buf: &mut [u8],
+) -> Result<(u16, usize, usize), i32> {
+    let host_str = core::str::from_utf8(host).map_err(|_| E_URL)?;
+
+    // İstemci rastgelelikleri.
+    let mut client_random = [0u8; 32];
+    let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+    for b in client_random.iter_mut() {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+    }
+
+    let mut hello = Vec::new();
+    let mut ecdhe_secret = [0u8; 32];
+    crate::drivers::tls::build_client_hello(
+        host_str,
+        &client_random,
+        &mut hello,
+        &mut ecdhe_secret,
+    );
+    let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+    let mut session = TlsSession::new(host_str, client_random);
+    session.note_client_hello(ch_body);
+    session.set_client_ecdhe_secret(ecdhe_secret);
+
+    socket::send(fd, &hello).map_err(|_| E_TLS)?;
+
+    // El sıkışma: sunucu yanıtı gelene kadar kayıtları işle.
+    let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+    loop {
+        let mut raw = [0u8; 4096];
+        let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
+        if n == 0 {
+            return Err(E_TLS);
+        }
+        session.feed_tcp_data(&raw[..n]);
+
+        let mut app = Vec::new();
+        let mut hs = Vec::new();
+        match session.process_records(&mut hs, &mut app) {
+            Ok(_) => {}
+            Err(_) => return Err(E_TLS),
+        }
+
+        // Sunucu Finished doğrulandıysa istemci Finished'ı gönder.
+        if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
+            if let Some(record) = session.build_tls13_client_finished() {
+                socket::send(fd, &record).map_err(|_| E_TLS)?;
             }
         }
-        if total < 12 {
-            return Err(E_HTTP);
+
+        // TLS 1.2 için sunucu Finished'ı beklerken ChangeCipherSpec + Finished
+        // gönderilmiş olur (outgoing tamponundan).
+        let outgoing = session.take_outgoing();
+        if !outgoing.is_empty() {
+            socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
         }
-        let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
-        let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
-        Ok((status, hlen, total))
-    })();
-    socket::close(fd);
-    res
+
+        if session.state() == crate::drivers::tls::TlsState::Established {
+            break;
+        }
+        if crate::boot::time::main_monotonic_ms() > handshake_deadline {
+            return Err(E_TLS);
+        }
+    }
+
+    // Şifreli HTTP isteğini gönder.
+    let record = session.encrypt_app_data(&req[..reqlen]).ok_or(E_TLS)?;
+    socket::send(fd, &record).map_err(|_| E_TLS)?;
+
+    // Şifreli yanıtı oku.
+    let (total, _) = read_http_response(fd, resp_buf, Some(&mut session))?;
+    if total < 12 {
+        return Err(E_HTTP);
+    }
+    let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+    let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+    Ok((status, hlen, total))
 }
 
 /// `http://` URL'sini indirir; 3xx yönlendirmeleri takip eder.
@@ -273,18 +406,26 @@ pub fn http_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i
     let mut host = [0u8; MAX_HOST];
     let mut path = [0u8; MAX_PATH];
     let (mut port, mut host_len, mut path_len) = parse_url(url, &mut host, &mut path)?;
+    let mut is_https = url.starts_with("https://");
     let mut hops = 0;
     loop {
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
         let ip = socket::resolve_host(host_str)?;
-        let (status, hlen, total) =
-            fetch_once(&host[..host_len], port, &path[..path_len], ip, resp_buf)?;
+        let (status, hlen, total) = fetch_once(
+            &host[..host_len],
+            port,
+            &path[..path_len],
+            ip,
+            resp_buf,
+            is_https,
+        )?;
         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
             let headers = &resp_buf[..hlen];
             if let Some(loc) = header_value(headers, b"location") {
                 let loc_str = core::str::from_utf8(loc).map_err(|_| E_HTTP)?;
                 if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                    is_https = loc_str.starts_with("https://");
                     let (p2, hl2, pl2) = parse_url(loc_str, &mut host, &mut path)?;
                     port = p2;
                     host_len = hl2;

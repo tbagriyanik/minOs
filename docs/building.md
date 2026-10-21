@@ -91,6 +91,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 | `-UsbDisks` | Sistemdeki USB diskleri **salt okunur** olarak QEMU'ya `usb-storage` aygıtı olarak bağlar. |
 | `-UsbDiskReadWrite` | USB diskleri **yazma izniyle** bağlar (dikkatli kullanın). |
 | `-UsbHid` | Yerel xHCI HID sürücüsünü test etmek için QEMU'ya `qemu-xhci` denetleyicisi ile `usb-kbd` ve `usb-mouse` ekler. QEMU varsayılan PS/2 girişi de açık kaldığından aynı tuşlar iki yoldan gelebilir. |
+| `-Display <sdl\|gtk\|default>` | QEMU grafik arayüz arka ucunu belirler. `-Display sdl` seçildiğinde Windows GTK pixbuf/tema uyarıları engellenir ve daha düşük fare gecikmesi elde edilir. |
 | `-CpuCount N` | QEMU'ya verilecek sanal CPU sayısı (varsayılan `2`, aralık `1–64`, çekirdek üst sınırı 8). |
 | `-Memory 1G` | Konuk RAM miktarı (`512M`, `1G` gibi; varsayılan `512M`). |
 
@@ -145,7 +146,14 @@ cargo build --release -Zjson-target-spec --target x86_64-minos.json `
   -Zbuild-std=core,alloc -Zbuild-std-features=compiler-builtins-mem
 ```
 
-#### 2. Boot Edilebilir ISO İmajını Paketleme (ISO Creation)
+#### 2. Birim ve Regresyon Testlerini Çalıştırma (Host Unit Tests)
+Kriptografi (AES, GCM, RSA, ECC, SHA-256, SHA-384, SHA-512), X.509, JavaScript motoru ve HTML ayrıştırıcı testlerini içeren 40 adet birim testini host ortamında yürütmek için:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\test_host.ps1
+```
+
+#### 3. Boot Edilebilir ISO İmajını Paketleme (ISO Creation)
 Limine bootloader dosyalarını çekirdekle birleştirmek ve El Torito tablosunu yamalamak için:
 
 ```powershell
@@ -153,14 +161,14 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 ```
 > *İşlem tamamlandığında kök dizinde `minos.iso` dosyası oluşturulur.*
 
-#### 3. QEMU ile Test Etme (Run in QEMU)
+#### 4. QEMU ile Test Etme (Run in QEMU)
 ```powershell
-& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std `
+& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std -global VGA.vgamem_mb=64 `
   -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0
 ```
 
-#### 4. VirtualBox Kurulumu & Temel Ayarlar (VirtualBox Setup)
+#### 5. VirtualBox Kurulumu & Temel Ayarlar (VirtualBox Setup)
 
 VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sanal makine yapılandırması:
 

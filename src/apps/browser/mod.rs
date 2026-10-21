@@ -196,6 +196,8 @@ pub struct BrowserApp {
     /// El sıkışması tamamlanınca TLS üzerinden gönderilecek HTTP isteği.
     pub tls_pending_request: Vec<u8>,
     pub tls_request_sent: bool,
+    /// TLS 1.3 istemci Finished kaydı gönderildi mi?
+    pub tls13_finished_sent: bool,
     pub page_bg_color: Option<u32>,
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
@@ -225,6 +227,7 @@ impl BrowserApp {
             tls_app_data: Vec::new(),
             tls_pending_request: Vec::new(),
             tls_request_sent: false,
+            tls13_finished_sent: false,
             page_bg_color: None,
             js_alert: None,
             js_vars: Vec::new(),
@@ -1211,6 +1214,7 @@ impl BrowserApp {
                 self.tls_session = None;
                 self.tls_pending_request.clear();
                 self.tls_request_sent = false;
+                self.tls13_finished_sent = false;
                 self.tls_app_data.clear();
                 self.response_len = 0;
                 self.response_data.clear();
@@ -1418,6 +1422,7 @@ impl BrowserApp {
                     if self.is_https {
                         self.tls_pending_request = req_buf;
                         self.tls_request_sent = false;
+                        self.tls13_finished_sent = false;
                         let mut client_random = [0u8; 32];
                         let seed = crate::boot::time::main_monotonic_ms() as u64;
                         let mut state = seed ^ 0x9e3779b97f4a7c15u64;
@@ -1429,10 +1434,18 @@ impl BrowserApp {
                             *b = (state.wrapping_mul(0x2545F4914F6CDD1D) >> 56) as u8;
                         }
                         let mut hello = Vec::new();
-                        crate::drivers::tls::build_client_hello(host, &client_random, &mut hello);
+                        let mut ecdhe_secret = [0u8; 32];
+                        crate::drivers::tls::build_client_hello(
+                            host,
+                            &client_random,
+                            &mut hello,
+                            &mut ecdhe_secret,
+                        );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut tls_session = crate::drivers::tls::TlsSession::new(host, client_random);
                         tls_session.note_client_hello(ch_body);
+                        // TLS 1.3 anahtar türetimi için istemci ECDHE gizlisi saklanır.
+                        tls_session.set_client_ecdhe_secret(ecdhe_secret);
                         if crate::drivers::netstack::tcp_send(&hello) {
                             self.tls_session = Some(tls_session);
                             self.request_state = 2;
@@ -1493,6 +1506,29 @@ impl BrowserApp {
                         None => crate::gui::ui_text("TLS kayıt işleme hatası.", "TLS record processing error."),
                     };
                     self.finish_network_error(detail);
+                }
+
+                // TLS 1.3: sunucunun Finished mesajı doğrulandıysa istemci
+                // Finished kaydını üretip gönder (istemci el sıkışma trafik
+                // anahtarıyla şifrelenir). Bu kayıt gönderilmeden uygulama
+                // verisi gönderilemez.
+                if !self.tls13_finished_sent {
+                    let server_finished = self.tls_session.as_ref().map_or(false, |t| {
+                        t.state() == crate::drivers::tls::TlsState::Tls13ServerFinished
+                    });
+                    if server_finished {
+                        if let Some(ref mut tls) = self.tls_session {
+                            if let Some(record) = tls.build_tls13_client_finished() {
+                                let _ = crate::drivers::netstack::tcp_send(&record);
+                                self.tls13_finished_sent = true;
+                            } else {
+                                self.finish_network_error(crate::gui::ui_text(
+                                    "TLS 1.3 istemci Finished üretilemedi.",
+                                    "Could not build TLS 1.3 client Finished.",
+                                ));
+                            }
+                        }
+                    }
                 }
 
                 // El sıkışma tamamlandıysa HTTP isteğini şifreleyip gönder.
@@ -1597,8 +1633,9 @@ impl BrowserApp {
                                     self.response_data.resize(65536, 0);
                                     self.tls_app_data.clear();
                                     self.tls_session = None;
-                self.tls_pending_request.clear();
-                self.tls_request_sent = false;
+                                    self.tls_pending_request.clear();
+                                    self.tls_request_sent = false;
+                                    self.tls13_finished_sent = false;
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");

@@ -7,8 +7,28 @@ pub mod apic;
 
 pub static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
+static mut MMIO_FRAME_ALLOCATOR: Option<fn() -> Option<u64>> = None;
+
+pub fn set_mmio_frame_allocator(alloc_fn: fn() -> Option<u64>) {
+    unsafe { MMIO_FRAME_ALLOCATOR = Some(alloc_fn); }
+}
+
+fn alloc_table_frame() -> Option<u64> {
+    unsafe {
+        if let Some(alloc) = MMIO_FRAME_ALLOCATOR {
+            alloc()
+        } else {
+            None
+        }
+    }
+}
+
 pub fn init_interrupts() {
     unsafe {
+        // Erken CPU GDT + TSS yükle (BSP = 0)
+        gdt::load_for_cpu(0);
+        // IDT kapılarını erkenden yükle (#DE, #UD, #DF, #SS, #GP, #PF, 0x80)
+        ring3::install_gates();
         let idt_ptr = core::ptr::addr_of_mut!(IDT);
         (*idt_ptr).load();
     }
@@ -47,24 +67,61 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
         let mut cr3: u64;
         core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
         let pml4_phys = cr3 & 0x000F_FFFF_FFFF_F000;
-        let pml4 = (hhdm + pml4_phys) as *const u64;
+        let pml4 = (hhdm + pml4_phys) as *mut u64;
 
         let i4 = ((v >> 39) & 511) as usize;
-        let pml4e = pml4.add(i4).read_volatile();
+        let mut pml4e = pml4.add(i4).read_volatile();
+        if (pml4e & 1) == 0 {
+            if let Some(table_phys) = alloc_table_frame() {
+                core::ptr::write_bytes((hhdm + table_phys) as *mut u8, 0, 4096);
+                pml4e = table_phys | 0x03;
+                pml4.add(i4).write_volatile(pml4e);
+            } else {
+                return;
+            }
+        }
+
         let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
-        let pdpt = (hhdm + pdpt_phys) as *const u64;
+        if pdpt_phys == 0 { return; }
+        let pdpt = (hhdm + pdpt_phys) as *mut u64;
 
         let i3 = ((v >> 30) & 511) as usize;
-        let pdpte = pdpt.add(i3).read_volatile();
+        let mut pdpte = pdpt.add(i3).read_volatile();
+
+        // 1GB büyük sayfa (huge page) kontrolü:
+        // Eğer Present (bit 0) ve PS (bit 7) bayrakları kuruluysa,
+        // Limine bu 1GB fiziksel bölgeyi zaten sanal belleğe eşlemiştir.
+        // Mevcut eşlemeyi bozmamak için üzerine yazılmamalıdır.
+        if (pdpte & 1) != 0 && (pdpte & 0x80) != 0 {
+            return;
+        }
+
+        if (pdpte & 1) == 0 {
+            if let Some(table_phys) = alloc_table_frame() {
+                core::ptr::write_bytes((hhdm + table_phys) as *mut u8, 0, 4096);
+                pdpte = table_phys | 0x03;
+                pdpt.add(i3).write_volatile(pdpte);
+            } else {
+                return;
+            }
+        }
+
         let pd_phys = pdpte & 0x000F_FFFF_FFFF_F000;
+        if pd_phys == 0 { return; }
         let pd = (hhdm + pd_phys) as *mut u64;
 
         let i2 = ((v >> 21) & 511) as usize;
-        // 2MB page: Present | RW | PS(1<<7)
-        pd.add(i2).write_volatile(phys_2mb_aligned | 0x83);
+        let pde = pd.add(i2).read_volatile();
 
-        // TLB temizle (CR3 yeniden yükle)
-        core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
+        // Zaten eşlenmişse yeniden yazma
+        if (pde & 1) != 0 {
+            return;
+        }
+
+        // 2MB sayfa: Present (0x1) | RW (0x2) | PCD (0x10) | PS (0x80) = 0x93
+        pd.add(i2).write_volatile(phys_2mb_aligned | 0x93);
+
+        // Sanal adres için TLB'yi temizle
+        core::arch::asm!("invlpg [{}]", in(reg) v, options(nostack, preserves_flags));
     }
 }
-

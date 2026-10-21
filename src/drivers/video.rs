@@ -1,7 +1,7 @@
 use crate::gui::theme;
 
-pub const MAX_SCREEN_WIDTH: usize = 1920;
-pub const MAX_SCREEN_HEIGHT: usize = 1080;
+pub const MAX_SCREEN_WIDTH: usize = 2560;
+pub const MAX_SCREEN_HEIGHT: usize = 1600;
 pub const BACKBUFFER_LEN: usize = MAX_SCREEN_WIDTH * MAX_SCREEN_HEIGHT;
 static mut BACKBUFFER: [u32; BACKBUFFER_LEN] = [0; BACKBUFFER_LEN];
 const CURSOR_SAVE_W: usize = 24;
@@ -210,13 +210,28 @@ impl Framebuffer {
             return false;
         }
 
-        // 3. Testlerde ekran dışı çizim öncesi/sonrası sentinel (canary) değerleri karşılaştır
+        // 3. Uç piksel çizim testi (Son geçerli piksel: width-1, height-1)
+        // Sentinellerle çakışmaması için önce bağımsız olarak test edilir ve geri yüklenir
+        let last_x = self.width.saturating_sub(1);
+        let last_y = self.height.saturating_sub(1);
+        let last_pixel_idx = last_y * self.width + last_x;
+        let orig_last = unsafe { BACKBUFFER[last_pixel_idx] };
+        self.put_pixel(last_x, last_y, 0x00AABBCC);
+        let corner_written = unsafe { BACKBUFFER[last_pixel_idx] == 0x00AABBCC };
+        unsafe { BACKBUFFER[last_pixel_idx] = orig_last; }
+
+        if !corner_written {
+            return false;
+        }
+
+        // 4. Testlerde ekran dışı çizim öncesi/sonrası sentinel (canary) değerleri karşılaştır
         const SENTINEL_HEAD: u32 = 0xDEADBEEF;
         const SENTINEL_MID: u32 = 0xCAFEBABE;
         const SENTINEL_TAIL: u32 = 0x5A5AA5A5;
 
+        // Sentineller: ekran başı (0), ekranın ortası (total_pixels / 2) ve arka tampon sonu
         let head_idx = 0usize;
-        let mid_idx = total_pixels - 1;
+        let mid_idx = total_pixels / 2;
         let tail_idx = BACKBUFFER_LEN - 1;
 
         let orig_head = unsafe { BACKBUFFER[head_idx] };
@@ -229,7 +244,6 @@ impl Framebuffer {
             BACKBUFFER[tail_idx] = SENTINEL_TAIL;
         }
 
-        // 4. Sınır testlerini gerçek ekran çiziminden ayır:
         // Ekran dışı koordinatlara kasıtlı çizim denemeleri yap
         // (Bu çağrılar asla sentinelleri değiştirmemeli ve donanım VRAM'ine dokunmamalıdır)
         self.put_pixel(self.width + 100, self.height + 100, 0x11223344);
@@ -247,20 +261,11 @@ impl Framebuffer {
         self.flush_rect((self.width + 100, self.height + 100, 50, 50));
         self.flush_rect((usize::MAX - 50, usize::MAX - 50, 100, 100));
 
-        // 5. Uç piksel çizim testi (Son geçerli piksel: width-1, height-1)
-        let last_x = self.width.saturating_sub(1);
-        let last_y = self.height.saturating_sub(1);
-        let last_pixel_idx = last_y * self.width + last_x;
-        let orig_last = unsafe { BACKBUFFER[last_pixel_idx] };
-        self.put_pixel(last_x, last_y, 0x00AABBCC);
-        let corner_written = unsafe { BACKBUFFER[last_pixel_idx] == 0x00AABBCC };
-        unsafe { BACKBUFFER[last_pixel_idx] = orig_last; }
-
         // Sentinel doğrulaması: Ekran dışı hiçbir çizim sentinelleri bozmamış olmalı
         let sentinels_intact = unsafe {
             BACKBUFFER[head_idx] == SENTINEL_HEAD
-                && BACKBUFFER[mid_idx] == SENTINEL_MID
-                && BACKBUFFER[tail_idx] == SENTINEL_TAIL
+                && (head_idx == mid_idx || BACKBUFFER[mid_idx] == SENTINEL_MID)
+                && (mid_idx == tail_idx || BACKBUFFER[tail_idx] == SENTINEL_TAIL)
         };
 
         // Test tamamlandıktan sonra sentinel konumlarını orijinal haline geri yükle
@@ -270,7 +275,7 @@ impl Framebuffer {
             BACKBUFFER[tail_idx] = orig_tail;
         }
 
-        if !sentinels_intact || !corner_written {
+        if !sentinels_intact {
             return false;
         }
 

@@ -111,7 +111,7 @@ flowchart TD
 - HTTP istemcisi (chunked + yönlendirme) ve MinShell `curl` komutu.
 - **TLS 1.2 istemcisi** (`src/drivers/tls.rs`): ClientHello (SNI) → ServerHello → Certificate (X.509) → ServerHelloDone → ClientKeyExchange (RSA) → ChangeCipherSpec → Finished → şifreli Application Data; tarayıcıda `https://` desteği.
 
-- **Web Tarayıcısı Sık Kullanılanlar & Yer İmleri:** Adres çubuğu altında interaktif Bookmarks Bar, http://httpforever.com/ hafif HTTP test sitesi, minos://bookmarks, minos://help ve minos://demo hızlı erişim çipleri ve sayfa entegrasyonu.
+- **Web Tarayıcısı Sık Kullanılanlar & Yer İmleri:** Adres çubuğu altında interaktif Bookmarks Bar, hafif HTTP test sitesi, minos://bookmarks, minos://help ve minos://demo hızlı erişim çipleri ve sayfa entegrasyonu.
 ### Faz 7: Ring 3, SMP ve Ses Alt Sistemi Optimizasyonu ✅
 - **Ring 3 Kullanıcı Kipi İzolasyonu:** GDT TSS kullanıcı segmentleri, `int 0x80` sistem çağrıları (`SYS_GETPID`, `SYS_YIELD`, `SYS_WRITE`), #GP/#PF hata yakalama ve çekirdek koruması.
 - **SMP (Çok Çekirdekli Paralellik):** Limine SMP protokolü ile AP başlatımı, çekirdek başına 64 KiB yığın ve GDT, LAPIC kimliği, paralel atomik iş kuyruğu (`parallel_checksum`).

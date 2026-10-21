@@ -1999,7 +1999,7 @@ impl BrowserApp {
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Yerel Yardım ve Sık Kullanılanlar", "minOs | Local Help and Bookmarks"), Color::ACCENT_PINK);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://bookmarks, minos://cats, minos://help, minos://net", "Local addresses: minos://bookmarks, minos://cats, minos://help, minos://net"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 110, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("★ Sık Kullanılan: http://httpforever.com/ (saf HTTP test sitesi)", "★ Favorite: http://httpforever.com/ (pure HTTP test site)"), Color::ACCENT_GREEN);
+                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("★ Sık Kullanılan:(saf HTTP test sitesi)", "★ Favorite: (pure HTTP test site)"), Color::ACCENT_GREEN);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("minos://net ile ağ durumunu, minos://history ile geçmişi açın.", "Check the network at minos://net, open history at minos://history."), Color::TEXT_MAIN);
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, crate::gui::ui_text("Yer imleri çubuğundan veya minos://bookmarks ile tüm favorileri açın.", "Open bookmarks via the toolbar or visit minos://bookmarks."), Color::TEXT_MUTED);
             } else {

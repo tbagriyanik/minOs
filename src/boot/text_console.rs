@@ -9,7 +9,8 @@ static IN_ERROR_PROMPT: AtomicBool = AtomicBool::new(false);
 static mut FB: Option<Framebuffer> = None;
 static mut CURSOR_X: usize = 16;
 static mut CURSOR_Y: usize = 16;
-static mut SAVED_SCREEN: Option<([u32; crate::drivers::video::BACKBUFFER_LEN], usize, usize)> = None;
+static mut SAVED_SCREEN_BUF: [u32; crate::drivers::video::BACKBUFFER_LEN] = [0; crate::drivers::video::BACKBUFFER_LEN];
+static mut SAVED_SCREEN_DIM: Option<(usize, usize)> = None;
 static mut BOOT_LOG_BUFFER: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
 const LINE_H: usize = 14;
 const CHAR_W: usize = 8; // 8x8 font * 1x scale
@@ -122,25 +123,24 @@ pub fn is_active() -> bool { ACTIVE.load(Ordering::Acquire) }
 /// Mevcut ekran durumunu kaydet (GUI'den boot mesajlarına geçiş için)
 pub unsafe fn save_screen() {
     if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-        let mut buffer = [0u32; crate::drivers::video::BACKBUFFER_LEN];
         let len = screen.width * screen.height;
         if len <= crate::drivers::video::BACKBUFFER_LEN {
             for i in 0..len {
-                buffer[i] = core::ptr::read_volatile(screen.address.offset(i as isize));
+                SAVED_SCREEN_BUF[i] = core::ptr::read_volatile(screen.address.offset(i as isize));
             }
-            SAVED_SCREEN = Some((buffer, screen.width, screen.height));
+            SAVED_SCREEN_DIM = Some((screen.width, screen.height));
         }
     }
 }
 
 /// Kaydedilen ekran durumunu geri yükle (boot mesajlarından GUI'ye dönüş için)
 pub unsafe fn restore_screen() {
-    if let Some((buffer, saved_w, saved_h)) = SAVED_SCREEN {
+    if let Some((saved_w, saved_h)) = SAVED_SCREEN_DIM {
         if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
             let len = screen.width * screen.height;
             if len <= crate::drivers::video::BACKBUFFER_LEN && screen.width == saved_w && screen.height == saved_h {
                 for i in 0..len {
-                    core::ptr::write_volatile(screen.address.offset(i as isize), buffer[i]);
+                    core::ptr::write_volatile(screen.address.offset(i as isize), SAVED_SCREEN_BUF[i]);
                 }
                 screen.flush();
             }

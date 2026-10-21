@@ -85,29 +85,32 @@ static mut HW_CURSOR_ENABLED: bool = false;
 static mut HW_CURSOR_X: u16 = 0;
 static mut HW_CURSOR_Y: u16 = 0;
 
-fn detect_vga() -> (bool, bool) {
+fn detect_vga() -> (bool, bool, bool) {
     let mut vga = false;
     let mut vmware = false;
+    let mut bga_pci = false;
     for dev in 0..32u8 {
         for func in 0..8u8 {
             let id = pci_read32(0, dev, func, 0x00);
-            if id == 0xFFFF_FFFF { continue; }
+            if id == 0xFFFF_FFFF || id == 0 { continue; }
             let class = pci_read32(0, dev, func, 0x08) >> 16;
             if (class & 0xFFFF) == 0x0300 { vga = true; }
             let vid = (id & 0xFFFF) as u16;
             let did = ((id >> 16) & 0xFFFF) as u16;
             if vid == 0x15AD && did == 0x0405 { vmware = true; }
-            if vid == 0x1234 && did == 0x1111 { vga = true; }
+            if vid == 0x1234 && did == 0x1111 { bga_pci = true; vga = true; }
         }
     }
-    (vga, vmware)
+    (vga, vmware, bga_pci)
 }
 
 /// Boot sırasında çağrılır; yetenekleri tarar, sonucu döndürür.
 pub fn init() -> GpuCaps {
-    let id = bga_read(BGA_IDX_ID);
-    let bga = id >= BGA_VERSION_MIN && id < 0xB0C6;
-    let (vga, vmware) = detect_vga();
+    let (vga, vmware, bga_pci) = detect_vga();
+    // BGA yalnızca gerçek QEMU/Bochs BGA PCI aygıtı (0x1234:0x1111) mevcutsa etkinleştirilir.
+    // Gerçek donanımda (Intel/AMD/Nvidia) I/O portları 0x1CE/0x1CF'ye dokunulmaz.
+    let id = if bga_pci { bga_read(BGA_IDX_ID) } else { 0 };
+    let bga = bga_pci && id >= BGA_VERSION_MIN && id < 0xB0C6;
     let caps = GpuCaps { bga_present: bga, bga_version: if bga { id } else { 0 }, vmware_present: vmware, vga_present: vga || bga };
     unsafe { CAPS = caps; }
     caps

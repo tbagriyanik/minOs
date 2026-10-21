@@ -202,7 +202,7 @@ fn alloc_pmm_frame_global() -> Option<u64> {
 
 
 
-/// Basit metin çizim fonksiyonu (font sistemi olmadan)
+/// Basit metin cizim fonksiyonu (font sistemi olmadan)
 
 #[no_mangle]
 
@@ -212,9 +212,9 @@ pub extern "C" fn _start() -> ! {
 
     arch::x86_64::disable_pic();
 
-    // Seri konsolu ilk iş olarak hazırla: sonraki tüm loglar (PMM/VMM/SMP…)
+    // Seri konsolu ilk is olarak hazirla: sonraki tum loglar (PMM/VMM/SMP…)
 
-    // 115200 8N1 ile çerçeveye oturur, VirtualBox yakalaması bozulmaz.
+    // 115200 8N1 ile cerceveye oturur, VirtualBox yakalamasi bozulmaz.
 
     serial::init();
 
@@ -364,9 +364,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 2. Sanal Dosya Sistemi (VFS / TarFS) Başlatımı
+    // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
 
-    serial_print("[BOOT] Sanal dosya sistemi başlatılıyor...\n");
+    serial_print("[BOOT] Sanal dosya sistemi baslatiliyor...\n");
 
     let mut fs_mgr = fs::FileSystemManager::new();
 
@@ -376,9 +376,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 1. Donanım Kesmeleri (IDT) ve PMM Başlatımı
+    // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
 
-    serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatiliyor...\n");
+    serial_print("[BOOT] Donanim kesmeleri ve bellek yoneticisi baslatiliyor...\n");
 
     arch::x86_64::init_interrupts();
 
@@ -484,7 +484,7 @@ pub extern "C" fn _start() -> ! {
 
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
 
-    // VRAM MMIO aralığını (16MB) sayfa tablolarına eşle; çözünürlük veya çizim asla unmapped #PF üretmesin
+    // VRAM MMIO araligini (16MB) sayfa tablolarina esle; cozunurluk veya cizim asla unmapped #PF uretmesin
     let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
     for off in (0..16 * 1024 * 1024).step_by(2 * 1024 * 1024) {
         arch::x86_64::mmio_map_2mb((fb_phys + off as u64) & !0x1F_FFFF);
@@ -494,7 +494,7 @@ pub extern "C" fn _start() -> ! {
 
     // PMM Kendi Kendini Test Etme (Tahsisat ve Geri Birakma Dogrulamasi)
 
-    serial_print("[BOOT] Bellek yöneticisi test ediliyor...\n");
+    serial_print("[BOOT] Bellek yoneticisi test ediliyor...\n");
 
     if let (Some(f1), Some(f2)) = (memory_mgr.pmm.allocate_frame(), memory_mgr.pmm.allocate_frame()) {
 
@@ -512,9 +512,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi (Sanal Bellek Eşleme ve Yükleme Testi)
+    // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi (Sanal Bellek Esleme ve Yukleme Testi)
 
-    serial_print("[BOOT] Sanal bellek yöneticisi test ediliyor...\n");
+    serial_print("[BOOT] Sanal bellek yoneticisi test ediliyor...\n");
 
     let mut address_space = memory_mgr.kernel_address_space();
 
@@ -528,7 +528,7 @@ pub extern "C" fn _start() -> ! {
 
                 if translated_phys == frame {
 
-                    serial_print("[VMM] 4-seviyeli sanal bellek esleme ve adres cozümleme aktif.\n");
+                    serial_print("[VMM] 4-seviyeli sanal bellek esleme ve adres cozumleme aktif.\n");
 
                 }
 
@@ -544,7 +544,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Test amaçlı standart ELF64 ikili dosyasını yükle ve doğrula
+    // Test amacli standart ELF64 ikili dosyasini yukle ve dogrula
 
     let sample_elf_bin = mm::loader::AppLoader::create_sample_elf();
 
@@ -564,7 +564,7 @@ pub extern "C" fn _start() -> ! {
 
     // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
 
-    serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
+    serial_print("[BOOT] Surec yoneticisi baslatiliyor...\n");
 
     memory_mgr.proc_mgr.init_kernel_process();
 
@@ -588,17 +588,17 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Bellek tahsisi, sayfalama ve kullanıcı kipi izolasyon doğrulama testi
+    // Bellek tahsisi, sayfalama ve kullanici kipi izolasyon dogrulama testi
 
-    serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
+    serial_print("[BOOT] Bellek testleri calistiriliyor...\n");
 
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
 
 
 
-    // Süreç yaşam döngüsü, kaza, geçersiz syscall ve kaynak temizleme testi
+    // Surec yasam dongusu, kaza, gecersiz syscall ve kaynak temizleme testi
 
-    serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
+    serial_print("[BOOT] Surec testleri calistiriliyor...\n");
 
     mm::process::test_process_lifecycle_and_fault_recovery(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
 
@@ -616,13 +616,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 1c. Donanım Kesmeleri ve APIC Zamanlayıcı (APIC Timer & Hardware Interrupts)
+    // 1c. Donanim Kesmeleri ve APIC Zamanlayici (APIC Timer & Hardware Interrupts)
 
-    serial_print("[BOOT] APIC zamanlayıcı başlatılıyor...\n");
+    serial_print("[BOOT] APIC zamanlayici baslatiliyor...\n");
 
     serial_print("[APIC] APIC timer atlandi; TSC monotonic saat kullaniliyor.\n");
 
-    // Paralel sağlama toplamı: AP'ler + BSP aynı tamponu parçalı işler.
+    // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
 
     {
 
@@ -688,7 +688,7 @@ pub extern "C" fn _start() -> ! {
 
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
 
-    serial_print("[BOOT] Donanım sürücüleri başlatılıyor...\n");
+    serial_print("[BOOT] Donanim suruculeri baslatiliyor...\n");
 
     let cmdline = limine_boot_cmdline().unwrap_or("");
 
@@ -714,7 +714,7 @@ pub extern "C" fn _start() -> ! {
 
     if driver_profile == "audio" || driver_profile == "full" {
 
-        serial_print("[DRIVER] HDA audio sürücüsü başlatılıyor...\n");
+        serial_print("[DRIVER] HDA audio surucusu baslatiliyor...\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA starting");
 
@@ -730,7 +730,7 @@ pub extern "C" fn _start() -> ! {
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] HDA finished");
 
-        serial_print("[DRIVER] HDA audio sürücüsü hazır.\n");
+        serial_print("[DRIVER] HDA audio surucusu hazir.\n");
 
     }
 
@@ -738,7 +738,7 @@ pub extern "C" fn _start() -> ! {
 
     if driver_profile == "hardware" || driver_profile == "full" {
 
-        serial_print("[DRIVER] e1000 ağ sürücüsü başlatılıyor...\n");
+        serial_print("[DRIVER] e1000 ag surucusu baslatiliyor...\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 starting");
 
@@ -754,11 +754,11 @@ pub extern "C" fn _start() -> ! {
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] e1000 finished");
 
-        serial_print("[DRIVER] e1000 ağ sürücüsü hazır.\n");
+        serial_print("[DRIVER] e1000 ag surucusu hazir.\n");
 
 
 
-        serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
+        serial_print("[DRIVER] Ag protokolu baslatiliyor...\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network starting");
 
@@ -770,11 +770,11 @@ pub extern "C" fn _start() -> ! {
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] network finished");
 
-        serial_print("[DRIVER] Ağ protokolü hazır.\n");
+        serial_print("[DRIVER] Ag protokolu hazir.\n");
 
 
 
-        serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
+        serial_print("[DRIVER] USB surucusu baslatiliyor...\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB starting");
 
@@ -782,7 +782,7 @@ pub extern "C" fn _start() -> ! {
 
         drivers::usb::test_usb_subsystems();
 
-        serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
+        serial_print("[DRIVER] USB HID (xHCI) surucusu baslatiliyor...\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB HID starting");
 
@@ -790,11 +790,11 @@ pub extern "C" fn _start() -> ! {
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB HID finished");
 
-        serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
+        serial_print("[DRIVER] USB HID surucusu hazir.\n");
 
         persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[DRIVER] USB finished");
 
-        serial_print("[DRIVER] USB sürücüsü hazır.\n");
+        serial_print("[DRIVER] USB surucusu hazir.\n");
 
     }
 
@@ -806,11 +806,11 @@ pub extern "C" fn _start() -> ! {
 
     let mut audio_dev = drivers::audio::AudioDevice::new();
 
-    serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
+    serial_print("[DRIVERS] Tum suruculer hazir.\n");
 
 
 
-    // 4b. Gelişmiş grafik sürücüleri: BGA/VMware/VGA yetenek taraması.
+    // 4b. Gelismis grafik suruculeri: BGA/VMware/VGA yetenek taramasi.
 
     let gpu_caps = drivers::gpu::init();
 
@@ -822,9 +822,9 @@ pub extern "C" fn _start() -> ! {
 
         serial_print("[GPU] BGA algilandi, cozunurluk degisimi acik.\n");
 
-        // BGA grafik modda HW sprite yoktur; yazılım imleci çizilmeye devam
+        // BGA grafik modda HW sprite yoktur; yazilim imleci cizilmeye devam
 
-        // edilir (görünürlük için şart). CRTC'ye konum bildirimi sürer.
+        // edilir (gorunurluk icin sart). CRTC'ye konum bildirimi surer.
 
         fb.set_hw_cursor(false);
 
@@ -836,7 +836,7 @@ pub extern "C" fn _start() -> ! {
 
     }
 
-    // 5. PS/2 Donanım Sürücüleri
+    // 5. PS/2 Donanim Suruculeri
 
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
 
@@ -850,7 +850,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 5b. Tema motorunu başlat
+    // 5b. Tema motorunu baslat
 
     gui::theme::init();
 
@@ -858,13 +858,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 5c. Önyükleme modu denetimi: Boot menüsünden "installed" seçildiyse ve
+    // 5c. onyukleme modu denetimi: Boot menusunden "installed" secildiyse ve
 
-    // diskte kurulu bir minOs (MINOS.SYS) yoksa canlı sisteme düşmeden hata
+    // diskte kurulu bir minOs (MINOS.SYS) yoksa canli sisteme dusmeden hata
 
     // verilir ve sistem bu ekranda bekler.
 
-    // (Disk taraması tek yapılır; sonucu loga yazılır.)
+    // (Disk taramasi tek yapilir; sonucu loga yazilir.)
 
     let wants_installed = boot_wants_installed();
 
@@ -896,13 +896,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 5d. Eğer diskte varsa (MINOS.SYS + fat32) — kurulu sistem —
+    // 5d. Eger diskte varsa (MINOS.SYS + fat32) — kurulu sistem —
 
-    // welcome (hoş geldin) ekranını atlayıp doğrudan masaüstüye geç.
+    // welcome (hos geldin) ekranini atlayip dogrudan masaustuye gec.
 
-    // Live ortam ise welcome ekranı gösterilir.
+    // Live ortam ise welcome ekrani gosterilir.
 
-    // 6. MinGUI Pencere Yöneticisi ve Tüm Uygulamalar
+    // 6. MinGUI Pencere Yoneticisi ve Tum Uygulamalar
 
     serial_print("[BOOT] Pencere yoneticisi ve uygulamalar hazirlaniyor...\n");
 
@@ -926,7 +926,7 @@ pub extern "C" fn _start() -> ! {
 
     settings_app.display_res = (width, height);
 
-    // Disk üzerinde önceden kaydedilmiş kalıcı ayarlar var mı kontrol et
+    // Disk uzerinde onceden kaydedilmis kalici ayarlar var mi kontrol et
 
     if fs::diskfs::load_file("settings.cfg") > 0 {
 
@@ -962,9 +962,9 @@ pub extern "C" fn _start() -> ! {
 
     let mut calculator_app = apps::calculator::CalculatorApp::new();
 
-    // Başlangıçta yalnızca sabit uygulama pencereleri için state oluştur.
+    // Baslangicta yalnizca sabit uygulama pencereleri icin state olustur.
 
-    // MAX_WINDOWS kadar 4096 noktalı tuval ayırmak 1 MiB kernel heap'ini aşar.
+    // MAX_WINDOWS kadar 4096 noktali tuval ayirmak 1 MiB kernel heap'ini asar.
 
     let mut paint_apps: alloc::vec::Vec<Option<apps::paint::PaintApp>> = (0..gui::MAX_WINDOWS).map(|_| None).collect();
 
@@ -984,13 +984,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 12 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimliği).
+    // 12 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
 
-    // Açılışta TÜM pencereler kapalıdır; kullanıcı temiz bir masaüstüyle başlar
+    // Acilista TuM pencereler kapalidir; kullanici temiz bir masaustuyle baslar
 
-    // ve uygulamaları Başlat Menüsü, masaüstü simgeleri veya sağ tık ile açar.
+    // ve uygulamalari Baslat Menusu, masaustu simgeleri veya sag tik ile acar.
 
-    // 0: Dosya Yöneticisi
+    // 0: Dosya Yoneticisi
 
     let files_width = 720.min(width.saturating_sub(20)).max(200);
 
@@ -998,7 +998,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new(
 
-        "Dosya Yöneticisi", "Dosyalar",
+        "Dosya Yoneticisi", "Dosyalar",
 
         width.saturating_sub(files_width) / 2,
 
@@ -1008,7 +1008,7 @@ pub extern "C" fn _start() -> ! {
 
     ));
 
-    // 1: Sistem Ayarları
+    // 1: Sistem Ayarlari
 
     let settings_width = 700.min(width.saturating_sub(20)).max(200);
 
@@ -1016,7 +1016,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new(
 
-        "Sistem Ayarları", "Ayarlar",
+        "Sistem Ayarlari", "Ayarlar",
 
         width.saturating_sub(settings_width) / 2,
 
@@ -1030,7 +1030,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new("Not Defteri", "Notlar", 80, 70, 520, 330, false));
 
-    // 3: Web Tarayıcısı
+    // 3: Web Tarayicisi
 
     let browser_w = 760.min(width.saturating_sub(20)).max(300);
 
@@ -1048,29 +1048,29 @@ pub extern "C" fn _start() -> ! {
 
     ));
 
-    // 4: Resim Gösterici
+    // 4: Resim Gosterici
 
-    compositor.add_window(gui::Window::new("Resim Gösterici", "Resim", 120, 90, 500, 330, false));
+    compositor.add_window(gui::Window::new("Resim Gosterici", "Resim", 120, 90, 500, 330, false));
 
-    // 5: Müzik Çalar
+    // 5: Muzik calar
 
-    compositor.add_window(gui::Window::new("Müzik Çalar", "Müzik", 560, 80, 460, 245, false));
+    compositor.add_window(gui::Window::new("Muzik calar", "Muzik", 560, 80, 460, 245, false));
 
-    // 6: Video Oynatıcı
+    // 6: Video Oynatici
 
-    compositor.add_window(gui::Window::new("Video Oynatıcı", "Video", 150, 110, 540, 330, false));
+    compositor.add_window(gui::Window::new("Video Oynatici", "Video", 150, 110, 540, 330, false));
 
-    // 7: Görev Yöneticisi
+    // 7: Gorev Yoneticisi
 
-    compositor.add_window(gui::Window::new("Görev Yöneticisi", "Görevler", 220, 60, 480, 460, false));
+    compositor.add_window(gui::Window::new("Gorev Yoneticisi", "Gorevler", 220, 60, 480, 460, false));
 
     compositor.add_window(gui::Window::new("Hesap Makinesi", "Hesap", 260, 120, 360, 340, false));
 
-    compositor.add_window(gui::Window::new("Çizim Tahtası", "Çizim", 180, 80, 520, 360, false));
+    compositor.add_window(gui::Window::new("cizim Tahtasi", "cizim", 180, 80, 520, 360, false));
 
-    compositor.add_window(gui::Window::new("Komut İstemi", "Komut", 220, 100, 560, 300, false));
+    compositor.add_window(gui::Window::new("Komut Istemi", "Komut", 220, 100, 560, 300, false));
 
-    // 11: minOs Tek Tıkla Kur Sihirbazı
+    // 11: minOs Tek Tikla Kur Sihirbazi
 
     let inst_w = 540.min(width.saturating_sub(20)).max(200);
 
@@ -1078,7 +1078,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new(
 
-        "minOs Tek Tıkla Kur", "Kurulum",
+        "minOs Tek Tikla Kur", "Kurulum",
 
         width.saturating_sub(inst_w) / 2,
 
@@ -1088,7 +1088,7 @@ pub extern "C" fn _start() -> ! {
 
     ));
 
-    // 12: 3D Gösterici
+    // 12: 3D Gosterici
 
     let v3d_w = 600.min(width.saturating_sub(20)).max(200);
 
@@ -1096,7 +1096,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new(
 
-        "3D Gösterici", "3D",
+        "3D Gosterici", "3D",
 
         width.saturating_sub(v3d_w) / 2,
 
@@ -1106,7 +1106,7 @@ pub extern "C" fn _start() -> ! {
 
     ));
 
-    // 13: Paket Yöneticisi
+    // 13: Paket Yoneticisi
 
     let pkg_w = 620.min(width.saturating_sub(20)).max(200);
 
@@ -1114,7 +1114,7 @@ pub extern "C" fn _start() -> ! {
 
     compositor.add_window(gui::Window::new(
 
-        "Paket Yöneticisi", "Paketler",
+        "Paket Yoneticisi", "Paketler",
 
         width.saturating_sub(pkg_w) / 2,
 
@@ -1126,17 +1126,17 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Açılışta hiçbir pencere odaklı değildir (temiz masaüstü).
+    // Acilista hicbir pencere odakli degildir (temiz masaustu).
 
     compositor.active_window_idx = None;
 
 
 
-    // Kurulu sistemse welcome ekranını atla, live ortam ise göster.
+    // Kurulu sistemse welcome ekranini atla, live ortam ise goster.
 
     serial_print("[BOOT] Hosgeldin ekrani hazirlaniyor; grafik oz-denetimleri calistiriliyor.\n");
 
-    // Widget/Component ağacı mimarisini (yerleşim, Tab odağı, olaylar) doğrula.
+    // Widget/Component agaci mimarisini (yerlesim, Tab odagi, olaylar) dogrula.
 
     if !gui::widget::self_test(&mut fb) {
 
@@ -1184,7 +1184,7 @@ pub extern "C" fn _start() -> ! {
 
     if !installed {
 
-        // Her açılışta dil ve masaüstü teması seçilebilen hoş geldin ekranı.
+        // Her acilista dil ve masaustu temasi secilebilen hos geldin ekrani.
 
         let mut welcome_was_left_down = false;
 
@@ -1204,7 +1204,7 @@ pub extern "C" fn _start() -> ! {
 
         let mut welcome_start_time = monotonic_ms();
 
-        let welcome_timeout_ms: u64 = 5_000; // 5 saniye içinde etkileşim olmazsa masaüstüne otomatik geç
+        let welcome_timeout_ms: u64 = 5_000; // 5 saniye icinde etkilesim olmazsa masaustune otomatik gec
 
         loop {
 
@@ -1246,7 +1246,7 @@ pub extern "C" fn _start() -> ! {
 
             if welcome_update.keyboard || welcome_update.mouse {
 
-                // Herhangi bir kullanıcı hareketi algılanırsa zaman aşımını sıfırla/uzat
+                // Herhangi bir kullanici hareketi algilanirsa zaman asimini sifirla/uzat
 
                 welcome_start_time = monotonic_ms();
 
@@ -1292,7 +1292,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // 5 saniye zaman aşımı: USB klavye veya fare algılanamasa bile sistemi kilitleme, doğrudan masaüstüne geç
+            // 5 saniye zaman asimi: USB klavye veya fare algilanamasa bile sistemi kilitleme, dogrudan masaustune gec
 
             if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms {
 
@@ -1304,7 +1304,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Enter veya Escape ile hoş geldin ekranını geç.
+            // Enter veya Escape ile hos geldin ekranini gec.
 
             while let Some(action) = keyboard.take_last_action() {
 
@@ -1320,7 +1320,7 @@ pub extern "C" fn _start() -> ! {
 
                 if ch == 'e' || ch == 'E' {
 
-                    // E tuşu ile boot mesajlarını göster/gizle
+                    // E tusu ile boot mesajlarini goster/gizle
 
                     unsafe {
 
@@ -1330,7 +1330,7 @@ pub extern "C" fn _start() -> ! {
 
                             boot::text_console::toggle_active();
 
-                            serial_print("[BOOT] Boot mesajları gösteriliyor (E tuşu ile geri dön)...\n");
+                            serial_print("[BOOT] Boot mesajlari gosteriliyor (E tusu ile geri don)...\n");
 
                         } else {
 
@@ -1338,7 +1338,7 @@ pub extern "C" fn _start() -> ! {
 
                             boot::text_console::restore_screen();
 
-                            serial_print("[BOOT] GUI'ye geri dönüldü.\n");
+                            serial_print("[BOOT] GUI'ye geri donuldu.\n");
 
                             welcome_dirty = true;
 
@@ -1462,9 +1462,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Welcome ekranından masaüstüne geçişi de aynı animasyonla yumuşat.
+    // Welcome ekranindan masaustune gecisi de ayni animasyonla yumusat.
 
-    // Sadece live ortamda göster; kurulu sistemde atla.
+    // Sadece live ortamda goster; kurulu sistemde atla.
 
     if !installed {
 
@@ -1482,7 +1482,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // RTC - gerçek zamanlı saat
+    // RTC - gercek zamanli saat
 
     let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
 
@@ -1500,7 +1500,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Açılış melodisi (Chime)
+    // Acilis melodisi (Chime)
 
     audio_dev.set_volume(settings_app.volume);
 
@@ -1510,7 +1510,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Etkileşim durumu
+    // Etkilesim durumu
 
     let mut last_mouse_x = mouse.x;
 
@@ -1524,7 +1524,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut resize_edge: Option<gui::ResizeEdge> = None;
 
-    // Kenar yeniden boyutlandırma başlangıcında pencere geometrisi (sol/üst kenarlar için)
+    // Kenar yeniden boyutlandirma baslangicinda pencere geometrisi (sol/ust kenarlar icin)
 
     let mut resize_orig: (usize, usize, usize, usize) = (0, 0, 0, 0);
 
@@ -1532,11 +1532,11 @@ pub extern "C" fn _start() -> ! {
 
     let mut drag_offset_y = 0;
 
-    // Aero Snap önizleme dikdörtgeni: (x, y, w, h)
+    // Aero Snap onizleme dikdortgeni: (x, y, w, h)
 
     let mut active_snap_preview: Option<(usize, usize, usize, usize)> = None;
 
-    // Kaydırma çubuğu sürükleme: (idx, thumb_üst_ofset, thumb_h, track_h, content_h, view_h)
+    // Kaydirma cubugu surukleme: (idx, thumb_ust_ofset, thumb_h, track_h, content_h, view_h)
 
     let mut vscroll_drag: Option<(usize, usize, usize, usize, usize, usize)> = None;
 
@@ -1572,7 +1572,7 @@ pub extern "C" fn _start() -> ! {
 
     let mut last_title_click_ms: u64 = 0;
 
-    // Not Defteri metin seçimi sürükleme durumu.
+    // Not Defteri metin secimi surukleme durumu.
 
     let mut notepad_dragging = false;
 
@@ -1586,7 +1586,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Dosya / Klasör Özellikler (Properties) Modalı
+    // Dosya / Klasor ozellikler (Properties) Modali
 
     let mut properties_open = false;
 
@@ -1660,17 +1660,17 @@ pub extern "C" fn _start() -> ! {
 
                              dirty_rect: Option<(usize, usize, usize, usize)>| {
 
-        // Kirli dikdörtgen verildiyse yalnızca bu bölge çizilip blit edilir;
+        // Kirli dikdortgen verildiyse yalnizca bu bolge cizilip blit edilir;
 
-        // aksi halde tüm ekran yeniden çizilir.
+        // aksi halde tum ekran yeniden cizilir.
 
         fb.set_frame_clip(dirty_rect);
 
-        // 1. Masaüstü Arka Planı
+        // 1. Masaustu Arka Plani
 
         compositor.render_desktop_bg(fb);
 
-        // /desktop içeriğini masaüstü simgeleri olarak çiz.
+        // /desktop icerigini masaustu simgeleri olarak ciz.
 
         for i in 0..desktop_fm.file_count {
 
@@ -1714,7 +1714,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 2. Açık pencereleri z-sırasına göre (arkadan öne) çiz
+        // 2. Acik pencereleri z-sirasina gore (arkadan one) ciz
 
         let (order, count) = compositor.draw_order();
 
@@ -1730,7 +1730,7 @@ pub extern "C" fn _start() -> ! {
 
                 }
 
-                // Off-screen pencereleri tamamen atla (çizim maliyeti yok).
+                // Off-screen pencereleri tamamen atla (cizim maliyeti yok).
 
                 if win.x >= fb.width || win.y >= fb.height
 
@@ -1742,7 +1742,7 @@ pub extern "C" fn _start() -> ! {
 
                 }
 
-                // Kirli bölgeyle kesişmeyen pencereyi hiç çizme (gölge payı dahil).
+                // Kirli bolgeyle kesismeyen pencereyi hic cizme (golge payi dahil).
 
                 if let Some((dx, dy, dw, dh)) = dirty_rect {
 
@@ -1770,7 +1770,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                // İçerik alanını pencere çerçevesine kırp (taşma önleme).
+                // Icerik alanini pencere cercevesine kirp (tasma onleme).
 
                 let (cx, cy, cw, ch) = win.content_rect();
 
@@ -1778,7 +1778,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                // Uygulamaya göre ölçülen içerik boyutu (kaydırma çubuğu gerekli mi?).
+                // Uygulamaya gore olculen icerik boyutu (kaydirma cubugu gerekli mi?).
 
                 let app_id = compositor.app_id_for_window(idx);
 
@@ -1794,7 +1794,7 @@ pub extern "C" fn _start() -> ! {
 
                 let h_gutter = if want_h { crate::gui::scrollbar::SCROLLBAR_THICKNESS } else { 0 };
 
-                // İçerik alanı (kaydırma çubukları kadar daraltılmış).
+                // Icerik alani (kaydirma cubuklari kadar daraltilmis).
 
                 let content_area = (cx, cy, cw.saturating_sub(v_gutter), ch.saturating_sub(h_gutter));
 
@@ -1814,9 +1814,9 @@ pub extern "C" fn _start() -> ! {
 
                         if drivers::hda::is_ready() { if drivers::hda::is_dma_progressing() { gui::ui_text("Intel HDA (DMA aktif)", "Intel HDA (DMA active)") } else { gui::ui_text("Intel HDA (DMA beklemede)", "Intel HDA (DMA standby)") } } else { gui::ui_text("PC Speaker (PWM fallback)", "PC Speaker (PWM fallback)") },
 
-                        if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadı", "Not found") },
+                        if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadi", "Not found") },
 
-                        if drivers::e1000::is_ready() { gui::ui_text("Hazır", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
+                        if drivers::e1000::is_ready() { gui::ui_text("Hazir", "Ready") } else { gui::ui_text("Baslatilamadi / aygit yok", "Initialization failed / device missing") }),
 
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
 
@@ -1850,7 +1850,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                // Kırpmayı kaldır ve kaydırma çubuklarını pencerenin içinde çiz.
+                // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.
 
                 fb.reset_clip();
 
@@ -1862,7 +1862,7 @@ pub extern "C" fn _start() -> ! {
 
                     if v_h > 0 {
 
-                        // Sağa tam dayalı dikey kaydırma çubuğu
+                        // Saga tam dayali dikey kaydirma cubugu
 
                         let track = (cx + cw - sb, cy, sb, v_h);
 
@@ -1880,7 +1880,7 @@ pub extern "C" fn _start() -> ! {
 
                     if h_w > 0 {
 
-                        // Alta tam dayalı yatay kaydırma çubuğu
+                        // Alta tam dayali yatay kaydirma cubugu
 
                         let track = (cx, cy + ch - sb, h_w, sb);
 
@@ -1900,7 +1900,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Aero Snap Önizleme Çerçevesi (Pencere ekrana yaslanırken yarı saydam/kesikli gösterim)
+        // Aero Snap onizleme cercevesi (Pencere ekrana yaslanirken yari saydam/kesikli gosterim)
 
         if let Some((sx, sy, sw, sh)) = snap_preview {
 
@@ -1914,7 +1914,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 3. Görev Çubuğu, sistem tepsisi, popup'lar ve fare imleci
+        // 3. Gorev cubugu, sistem tepsisi, popup'lar ve fare imleci
 
         compositor.render_taskbar_and_overlays(
 
@@ -1938,11 +1938,11 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Dosya / Klasör Özellikler (Properties) Modalı
+        // Dosya / Klasor ozellikler (Properties) Modali
 
-        // NOT: Görev çubuğu/katmanlarından ÖNCE çizilir; böylece fare imleci
+        // NOT: Gorev cubugu/katmanlarindan oNCE cizilir; boylece fare imleci
 
-        // modalin üstünde görünür ve modal imleci gizlemez.
+        // modalin ustunde gorunur ve modal imleci gizlemez.
 
         if properties_state.0 {
 
@@ -1956,7 +1956,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Gölge ve modern kart gövdesi
+            // Golge ve modern kart govdesi
 
             fb.draw_shadow(px, py, pw, ph, 0x000000);
 
@@ -1966,17 +1966,17 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Başlık çubuğu
+            // Baslik cubugu
 
             fb.draw_rect(px, py, pw, 28, gui::Color::TITLE_BAR);
 
-            let prop_title = gui::ui_text("Özellikler", "Properties");
+            let prop_title = gui::ui_text("ozellikler", "Properties");
 
             gui::MinGuiCompositor::draw_string(fb, px + 12, py + 7, prop_title, gui::Color::WHITE);
 
 
 
-            // Kapatma butonu (Sağ üst 'X')
+            // Kapatma butonu (Sag ust 'X')
 
             let close_r = (px + pw.saturating_sub(24), py + 6, 16, 16);
 
@@ -1992,13 +1992,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Dosya / Klasör İkonu
+            // Dosya / Klasor Ikonu
 
             gui::MinGuiCompositor::draw_gear_icon(fb, px + 18, py + 38);
 
 
 
-            // Öğe Adı
+            // oge Adi
 
             let item_name = properties_state.1.as_str();
 
@@ -2006,13 +2006,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Ayırıcı çizgi
+            // Ayirici cizgi
 
             fb.draw_rect(px + 14, py + 66, pw.saturating_sub(28), 1, gui::Color::BORDER);
 
 
 
-            // Detay Satırları
+            // Detay Satirlari
 
             let label_col = gui::Color::TEXT_MUTED;
 
@@ -2024,9 +2024,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Tür:
+            // Tur:
 
-            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y, gui::ui_text("Tür:", "Type:"), label_col);
+            gui::MinGuiCompositor::draw_string(fb, px + 16, start_y, gui::ui_text("Tur:", "Type:"), label_col);
 
             gui::MinGuiCompositor::draw_string_clipped(fb, px + 90, start_y, properties_state.2.as_str(), val_col, (px + 90, start_y, pw.saturating_sub(100), 20));
 
@@ -2082,7 +2082,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Hızlı Çalıştır (Run Dialog: Win+R) Diyaloğu
+        // Hizli calistir (Run Dialog: Win+R) Diyalogu
 
         if run_dialog_state.0 {
 
@@ -2104,13 +2104,13 @@ pub extern "C" fn _start() -> ! {
 
             gui::MinGuiCompositor::draw_string(fb, dx + 10, dy + 6,
 
-                gui::ui_text("Çalıştır (Run)", "Run Program"), gui::Color::WHITE);
+                gui::ui_text("calistir (Run)", "Run Program"), gui::Color::WHITE);
 
             gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 34,
 
-                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"), gui::Color::TEXT_MUTED);
+                gui::ui_text("Komut veya uygulama adi:", "Command or app name:"), gui::Color::TEXT_MUTED);
 
-            // Giriş kutusu
+            // Giris kutusu
 
             let bx = dx + 12;
 
@@ -2128,7 +2128,7 @@ pub extern "C" fn _start() -> ! {
 
             gui::MinGuiCompositor::draw_string(fb, bx + 6, by + 6, input_text, gui::Color::TEXT_MAIN);
 
-            // İmleç
+            // Imlec
 
             let cur_x = bx + 6 + gui::MinGuiCompositor::text_width(input_text, 1);
 
@@ -2138,11 +2138,11 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // İpucu
+            // Ipucu
 
             gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 88,
 
-                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] Çık",
+                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Ac  [Esc] cik",
 
                               "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel"),
 
@@ -2152,13 +2152,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 4. Backbuffer'ı VRAM'e kopyala.
+        // 4. Backbuffer'i VRAM'e kopyala.
 
-        //    Kirli dikdörtgen verildiyse yalnızca o bölge blit edilir ve mavi
+        //    Kirli dikdortgen verildiyse yalnizca o bolge blit edilir ve mavi
 
-        //    ışık filtresi de sadece o bölgeye uygulanır; böylece kalan bölge
+        //    isik filtresi de sadece o bolgeye uygulanir; boylece kalan bolge
 
-        //    önceki karedeki (filtrelenmiş) hâlini korur.
+        //    onceki karedeki (filtrelenmis) hâlini korur.
 
         let nl = if st.night_light { st.night_light_level } else { 0 };
 
@@ -2184,17 +2184,17 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Karşılama bildirimi (Modern Toast)
+    // Karsilama bildirimi (Modern Toast)
 
-    let welcome_title = gui::ui_text("minOs'a Hoş Geldiniz", "Welcome to minOs");
+    let welcome_title = gui::ui_text("minOs'a Hos Geldiniz", "Welcome to minOs");
 
-    let welcome_msg = gui::ui_text("Sistem hazır. Başlat menüsü ve kısayollar aktif.", "System is ready. Start menu and shortcuts active.");
+    let welcome_msg = gui::ui_text("Sistem hazir. Baslat menusu ve kisayollar aktif.", "System is ready. Start menu and shortcuts active.");
 
     compositor.push_toast(gui::ToastKind::Info, welcome_title, welcome_msg, monotonic_ms(), 5500);
 
 
 
-    // İlk kareyi çiz (tüm ekran)
+    // Ilk kareyi ciz (tum ekran)
 
     render_full_frame(
 
@@ -2226,7 +2226,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 7. Ana Masaüstü Etkileşim ve Olay Döngüsü
+    // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
     serial_print("[BOOT] Masaustu dongusu basladi.\n");
 
@@ -2276,7 +2276,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // RTC saatini işlem döngüsü sayısına göre değil, geçen gerçek zamana göre yenile.
+        // RTC saatini islem dongusu sayisina gore degil, gecen gercek zamana gore yenile.
 
         let mut force_render = false;
 
@@ -2294,7 +2294,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Toast bildirim sürelerini güncelle
+        // Toast bildirim surelerini guncelle
 
         let had_toasts = compositor.toasts.iter().any(|t| t.is_some());
 
@@ -2310,7 +2310,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Ses cihazını ayarlarla senkronla
+        // Ses cihazini ayarlarla senkronla
 
         audio_dev.set_volume(settings_app.volume);
 
@@ -2320,7 +2320,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 1. Fare Sağ Tık — tıklanan yere göre bağlam menüsü
+        // 1. Fare Sag Tik — tiklanan yere gore baglam menusu
 
         if right_clicked {
 
@@ -2344,7 +2344,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Tıklanan pencereyi en üstten aşağıya ara
+            // Tiklanan pencereyi en ustten asagiya ara
 
             let (order, count) = compositor.draw_order();
 
@@ -2484,7 +2484,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 2. Fare Sol Tıklama Olayları (Mouse Down)
+        // 2. Fare Sol Tiklama Olaylari (Mouse Down)
 
         if mouse_clicked {
 
@@ -2494,9 +2494,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Açık menü/popup dışına tıklanınca kapat; tıklamayı tüketmeden
+            // Acik menu/popup disina tiklaninca kapat; tiklamayi tuketmeden
 
-            // bırak ki aynı tıklama alttaki pencere veya görev çubuğuna ulaşsın.
+            // birak ki ayni tiklama alttaki pencere veya gorev cubuguna ulassin.
 
             if compositor.is_start_menu_open {
 
@@ -2592,9 +2592,9 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Özellikler (Properties) modalı: modal açıkken tüm tıklamaları modal üstlenir.
+            // ozellikler (Properties) modali: modal acikken tum tiklamalari modal ustlenir.
 
-            // X / Tamam butonları ve modal dışına tıklama pencereyi kapatır.
+            // X / Tamam butonlari ve modal disina tiklama pencereyi kapatir.
 
             if properties_open {
 
@@ -2650,9 +2650,9 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Not Defteri metin alanı: imleci konumlandır, çift tıkta kelime seç,
+            // Not Defteri metin alani: imleci konumlandir, cift tikta kelime sec,
 
-            // tek tıkta seçimi temizle ve sürükleyerek seçimi başlat.
+            // tek tikta secimi temizle ve surukleyerek secimi baslat.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 2) {
 
@@ -2680,7 +2680,7 @@ pub extern "C" fn _start() -> ! {
 
                     if !in_menu_box && !in_tabs {
 
-                        // Menü açıkken dışarı tıklandı -> menüyü kapat, alttaki metni tıklama
+                        // Menu acikken disari tiklandi -> menuyu kapat, alttaki metni tiklama
 
                         notepad_app.menu = 0;
 
@@ -2690,7 +2690,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Menü kutusu veya sekmeler tıklanmışsa pencere olay işleyicisi işleyecek
+                    // Menu kutusu veya sekmeler tiklanmissa pencere olay isleyicisi isleyecek
 
                 } else if w.is_focused
 
@@ -2700,7 +2700,7 @@ pub extern "C" fn _start() -> ! {
 
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
 
-                    // Çift tık algılama: aynı konuma kısa sürede ikinci tık.
+                    // cift tik algilama: ayni konuma kisa surede ikinci tik.
 
                     let now_ms = monotonic_ms() as usize;
 
@@ -2762,7 +2762,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // A) Takvim açıkken
+            // A) Takvim acikken
 
             if compositor.is_calendar_open {
 
@@ -2806,7 +2806,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // B) Ses paneli açıkken
+            // B) Ses paneli acikken
 
             if !consumed && compositor.is_volume_popup_open {
 
@@ -2838,11 +2838,11 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // C) Bağlam menüsü açıkken
+            // C) Baglam menusu acikken
 
             if !consumed && compositor.is_context_menu_open {
 
-                // Önce varsa açık olan "Yeni ▶" alt menüsündeki tıklamayı kontrol et
+                // once varsa acik olan "Yeni ▶" alt menusundeki tiklamayi kontrol et
 
                 if let Some(sub_item) = compositor.context_submenu_hit(width, height, mx, my) {
 
@@ -2860,7 +2860,7 @@ pub extern "C" fn _start() -> ! {
 
                                 }
 
-                                1 => { // Klasör
+                                1 => { // Klasor
 
                                     desktop_files.new_folder(&mut fs_mgr.vfs);
 
@@ -2868,7 +2868,7 @@ pub extern "C" fn _start() -> ! {
 
                                 }
 
-                                2 => { // Çizim / Resim (.bmp)
+                                2 => { // cizim / Resim (.bmp)
 
                                     desktop_files.new_custom_file("cizim_", ".bmp", &[], &mut fs_mgr.vfs);
 
@@ -2876,7 +2876,7 @@ pub extern "C" fn _start() -> ! {
 
                                 }
 
-                                _ => { // Boş Belge
+                                _ => { // Bos Belge
 
                                     desktop_files.new_custom_file("belge_", ".dat", &[], &mut fs_mgr.vfs);
 
@@ -2898,19 +2898,19 @@ pub extern "C" fn _start() -> ! {
 
                                 }
 
-                                1 => { // Klasör
+                                1 => { // Klasor
 
                                     filemanager_app.new_folder(&mut fs_mgr.vfs);
 
                                 }
 
-                                2 => { // Çizim / Resim (.bmp)
+                                2 => { // cizim / Resim (.bmp)
 
                                     filemanager_app.new_custom_file("cizim_", ".bmp", &[], &mut fs_mgr.vfs);
 
                                 }
 
-                                _ => { // Boş Belge
+                                _ => { // Bos Belge
 
                                     filemanager_app.new_custom_file("belge_", ".dat", &[], &mut fs_mgr.vfs);
 
@@ -2932,7 +2932,7 @@ pub extern "C" fn _start() -> ! {
 
                 } else if let Some(clicked_item) = compositor.context_hit(width, height, mx, my) {
 
-                    // "Yeni ▶" öğesine tıklandıysa alt menüyü aç / kapa, ana menüyü kapatma
+                    // "Yeni ▶" ogesine tiklandiysa alt menuyu ac / kapa, ana menuyu kapatma
 
                     let is_sub_parent = match compositor.context_kind {
 
@@ -3030,7 +3030,7 @@ pub extern "C" fn _start() -> ! {
 
                                 match clicked_item {
 
-                                    0 => { // Aç / Klasöre Gir
+                                    0 => { // Ac / Klasore Gir
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -3040,7 +3040,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                     if let Some(data) = data {
 
@@ -3052,7 +3052,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 } else if tag == "IMG" {
 
-                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                                     open_app(&mut compositor, 4);
 
@@ -3070,7 +3070,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 } else if tag == "3D" {
 
-                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                                     if let Some(data) = data {
 
@@ -3088,7 +3088,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    1 => { // Not Defterinde Düzenle
+                                    1 => { // Not Defterinde Duzenle
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -3096,7 +3096,7 @@ pub extern "C" fn _start() -> ! {
 
                                             let path = filemanager_app.selected_full_path();
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -3118,7 +3118,7 @@ pub extern "C" fn _start() -> ! {
 
                                     5 => {} // Yeni ▶
 
-                                    6 => { // Adını değiştir
+                                    6 => { // Adini degistir
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -3130,7 +3130,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    7 => { // Dosyayı / Klasörü Sil
+                                    7 => { // Dosyayi / Klasoru Sil
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -3142,7 +3142,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    8 => { // Özellikler
+                                    8 => { // ozellikler
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -3208,11 +3208,11 @@ pub extern "C" fn _start() -> ! {
 
                                 0 => {
 
-                                    // Sonlandır (Del): seçili süreci kapat
+                                    // Sonlandir (Del): secili sureci kapat
 
                                     if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
 
                                         if let Some(wi) = compositor.context_window {
 
@@ -3342,7 +3342,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // D) Başlat menüsü açıkken
+        // D) Baslat menusu acikken
 
         if !consumed && compositor.is_start_menu_open {
 
@@ -3562,7 +3562,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // E) Sistem tepsisi düğmeleri
+        // E) Sistem tepsisi dugmeleri
 
         if !consumed {
 
@@ -3606,13 +3606,13 @@ pub extern "C" fn _start() -> ! {
 
                 } else if l.network.2 > 0 && gui::in_rect(mx, my, l.network) {
 
-                    // Ethernet simgesi ağ ayarları sekmesini açar.
+                    // Ethernet simgesi ag ayarlari sekmesini acar.
 
                     open_app(&mut compositor, 1);
 
                     settings_app.active_tab = 2;
 
-                    settings_app.status_msg = gui::ui_text("Ağ ayarları açıldı.", "Network settings opened.");
+                    settings_app.status_msg = gui::ui_text("Ag ayarlari acildi.", "Network settings opened.");
 
                     consumed = true;
 
@@ -3636,7 +3636,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // F) Görev çubuğu uygulama sekmeleri (font ölçeğine duyarlı)
+            // F) Gorev cubugu uygulama sekmeleri (font olcegine duyarli)
 
             let tab_h = gui::MinGuiCompositor::taskbar_tab_rect_at(0, tb_y).3;
 
@@ -3706,7 +3706,7 @@ pub extern "C" fn _start() -> ! {
 
                     if mx >= badge_x && mx < badge_x + badge_w {
 
-                        // +N alanı gizli sekmeler arasında sırayla dolaşır.
+                        // +N alani gizli sekmeler arasinda sirayla dolasir.
 
                         let mut ordinal = 0usize;
 
@@ -3776,13 +3776,13 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // G) Masaüstü simgeleri
+            // G) Masaustu simgeleri
 
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
 
-                // Yenileme tıklama durumunu sıfırlar; çift tık tespiti için koru
+                // Yenileme tiklama durumunu sifirlar; cift tik tespiti icin koru
 
-                // (yoksa her tıklama durumu siler ve çift tıklama hiç algılanamaz).
+                // (yoksa her tiklama durumu siler ve cift tiklama hic algilanamaz).
 
                 let saved_click_idx = desktop_files.last_click_idx;
 
@@ -3802,9 +3802,9 @@ pub extern "C" fn _start() -> ! {
 
                     let now_ms = monotonic_ms();
 
-                    // Masaüstünün kendi tıklama durumu kullanılır (dosya yöneticisi
+                    // Masaustunun kendi tiklama durumu kullanilir (dosya yoneticisi
 
-                    // penceresinin durumu değil); aksi halde çift tık hiç tutmaz.
+                    // penceresinin durumu degil); aksi halde cift tik hic tutmaz.
 
                     let is_double = desktop_files.last_click_idx == Some(i)
 
@@ -3830,7 +3830,7 @@ pub extern "C" fn _start() -> ! {
 
                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
 
                                 if let Some(data) = data { notepad_app.open_file(&p, data); }
 
@@ -3838,7 +3838,7 @@ pub extern "C" fn _start() -> ! {
 
                             } else if tag == "IMG" {
 
-                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                 open_app(&mut compositor, 4);
 
@@ -3852,7 +3852,7 @@ pub extern "C" fn _start() -> ! {
 
                             else if tag == "3D" {
 
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
 
                                 if let Some(data) = data {
 
@@ -3886,13 +3886,13 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Masaüstü sol şerit hızlı simgeleri (çizimle aynı kanonik geometri).
+            // Masaustu sol serit hizli simgeleri (cizimle ayni kanonik geometri).
 
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
 
                 let desk_apps = [0, 2, 3, 5, 1, 11];
 
-                // Kurulu sistemde kaldırılan kurulum kısayolunu (app 11) atla.
+                // Kurulu sistemde kaldirilan kurulum kisayolunu (app 11) atla.
 
                 let desk_icon_count = gui::MinGuiCompositor::desktop_quick_count();
 
@@ -3916,7 +3916,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // H) Pencereler (başlık, butonlar, içerik)
+            // H) Pencereler (baslik, butonlar, icerik)
 
             if !consumed {
 
@@ -3936,7 +3936,7 @@ pub extern "C" fn _start() -> ! {
 
                     let (wx, wy, ww, wh) = (win.x, win.y, win.width, win.height);
 
-                    // Standart pencere davranışı: üstteki pencere gövdesine tıklama odağı alır.
+                    // Standart pencere davranisi: ustteki pencere govdesine tiklama odagi alir.
 
                     if gui::in_rect(mx, my, (wx, wy, ww, wh)) { compositor.focus_window(idx); }
 
@@ -3958,7 +3958,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Maksimize / Geri Yükle
+                    // Maksimize / Geri Yukle
 
                     if gui::in_rect(mx, my, win.max_rect()) {
 
@@ -3970,7 +3970,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Simge durumuna küçült [-]
+                    // Simge durumuna kucult [-]
 
                     if gui::in_rect(mx, my, win.min_rect()) {
 
@@ -3986,7 +3986,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Dikey kaydırma çubuğu (pencere sağ kenarı) — tıklama/sürükleme.
+                    // Dikey kaydirma cubugu (pencere sag kenari) — tiklama/surukleme.
 
                     {
 
@@ -4000,7 +4000,7 @@ pub extern "C" fn _start() -> ! {
 
                             let t = gui::scrollbar::SCROLLBAR_THICKNESS;
 
-                            // Sağa tam dayalı dikey scrollbar track'i
+                            // Saga tam dayali dikey scrollbar track'i
 
                             let track = (ccx + ccw - t, ccy, t, view_h);
 
@@ -4008,7 +4008,7 @@ pub extern "C" fn _start() -> ! {
 
                                 let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
 
-                                // Tutamaç yakınındaysa tutamacın üstünü koru, değilse anında zıpla.
+                                // Tutamac yakinindaysa tutamacin ustunu koru, degilse aninda zipla.
 
                                 if gui::in_rect(mx, my, g.thumb) {
 
@@ -4016,7 +4016,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else {
 
-                                    // Track üzerinde tıklanan konumdan kaydırmayı hesapla.
+                                    // Track uzerinde tiklanan konumdan kaydirmayi hesapla.
 
                                     let ratio = (my.saturating_sub(track.1)) as f32 / track.3.max(1) as f32;
 
@@ -4042,9 +4042,9 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Pencere kenar ve köşelerinden boyutlandırma. Scrollbar
+                    // Pencere kenar ve koselerinden boyutlandirma. Scrollbar
 
-                    // alanı yukarıda tüketildi; geri kalan kenar alanı resize'a ait.
+                    // alani yukarida tuketildi; geri kalan kenar alani resize'a ait.
 
                     if !win.is_maximized {
 
@@ -4064,7 +4064,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Başlık çubuğu — sürükle / çift tık ile maksimize
+                    // Baslik cubugu — surukle / cift tik ile maksimize
 
                     if gui::in_rect(mx, my, win.title_drag_rect()) {
 
@@ -4082,9 +4082,9 @@ pub extern "C" fn _start() -> ! {
 
                             dragging_win = None;
 
-                            // Çift tık tüketildikten sonra eşleşmeyi temizle;
+                            // cift tik tuketildikten sonra eslesmeyi temizle;
 
-                            // üçüncü kısa tık yeni bir çift tık başlatabilsin.
+                            // ucuncu kisa tik yeni bir cift tik baslatabilsin.
 
                             last_title_idx = None;
 
@@ -4112,7 +4112,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                    // Pencere gövdesi içindeki uygulama düğmeleri
+                    // Pencere govdesi icindeki uygulama dugmeleri
 
                     if mx >= wx && mx < wx + ww && my >= wy && my < wy + wh {
 
@@ -4122,7 +4122,7 @@ pub extern "C" fn _start() -> ! {
 
                             0 => {
 
-                                // Dosya Yöneticisi: [Yenile], [+Dosya], [+Klasör], [Sil], [Aç], gezinti, liste
+                                // Dosya Yoneticisi: [Yenile], [+Dosya], [+Klasor], [Sil], [Ac], gezinti, liste
 
                                 if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
 
@@ -4142,7 +4142,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::open_button_rect(wx, wy, ww)) {
 
-                                    // Geri Dönüşüm Kutusu'ndayken "Aç" düğmesi öğeyi geri yükler.
+                                    // Geri Donusum Kutusu'ndayken "Ac" dugmesi ogeyi geri yukler.
 
                                     if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
 
@@ -4152,7 +4152,7 @@ pub extern "C" fn _start() -> ! {
 
                                         if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -4164,7 +4164,7 @@ pub extern "C" fn _start() -> ! {
 
                                         } else if tag == "IMG" {
 
-                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                             open_app(&mut compositor, 4);
 
@@ -4182,7 +4182,7 @@ pub extern "C" fn _start() -> ! {
 
                                         } else if tag == "3D" {
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -4298,7 +4298,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                         if let Some(data) = data {
 
@@ -4310,7 +4310,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     } else if tag == "IMG" {
 
-                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                                         open_app(&mut compositor, 4);
 
@@ -4328,7 +4328,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     } else if tag == "3D" {
 
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                                         if let Some(data) = data {
 
@@ -4376,7 +4376,7 @@ pub extern "C" fn _start() -> ! {
 
                             1 => {
 
-                                // Sistem Ayarları
+                                // Sistem Ayarlari
 
                                 for t in 0..5 {
 
@@ -4404,19 +4404,19 @@ pub extern "C" fn _start() -> ! {
 
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
 
-                                    settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
+                                    settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinlestirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP secildi.", "Static IP selected.") };
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ag testi yapiliyor...", "Running network test..."), || settings_app.run_network_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gonderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP baglantisi test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
 
                                 } else if settings_app.active_tab == 0 {
 
@@ -4456,7 +4456,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.language.toggle();
 
-                                        settings_app.status_msg = gui::ui_text("Arayüz dili Türkçe olarak ayarlandı.", "Interface language set to English.");
+                                        settings_app.status_msg = gui::ui_text("Arayuz dili Turkce olarak ayarlandi.", "Interface language set to English.");
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
 
@@ -4505,7 +4505,7 @@ pub extern "C" fn _start() -> ! {
                                         if gui::in_rect(mx,my,apps::settings::SystemSettings::zoom_btn_rect(wx,wy,i)) {
                                             settings_app.zoom = [100,125,150][i];
                                             gui::set_font_zoom(settings_app.zoom);
-                                            settings_app.status_msg = gui::ui_text("Yazı yakınlaştırması değiştirildi.", "Font zoom changed.");
+                                            settings_app.status_msg = gui::ui_text("Yazi yakinlastirmasi degistirildi.", "Font zoom changed.");
                                             handled = true;
                                             break;
                                         }
@@ -4518,7 +4518,7 @@ pub extern "C" fn _start() -> ! {
                                                 if requested == (fb.width, fb.height) {
                                                     settings_app.screen_res = requested;
                                                     settings_app.display_res = requested;
-                                                    settings_app.status_msg = gui::ui_text("Bu çözünürlük zaten etkin.", "This resolution is already active.");
+                                                    settings_app.status_msg = gui::ui_text("Bu cozunurluk zaten etkin.", "This resolution is already active.");
                                                 } else if drivers::gpu::mode_supported(requested.0, requested.1) {
                                                     let (switched, pitch) = drivers::gpu::try_set_resolution(requested.0, requested.1);
                                                     if switched {
@@ -4531,13 +4531,13 @@ pub extern "C" fn _start() -> ! {
                                                         if fb.resize(requested.0, requested.1, p) {
                                                             settings_app.screen_res = requested;
                                                             settings_app.display_res = requested;
-                                                            settings_app.status_msg = gui::ui_text("Çözünürlük değiştirildi (BGA).", "Resolution changed (BGA).");
+                                                            settings_app.status_msg = gui::ui_text("cozunurluk degistirildi (BGA).", "Resolution changed (BGA).");
                                                         } else {
-                                                            settings_app.status_msg = gui::ui_text("Çözünürlük uygulanamadı (bellek sınırı).", "Resolution failed (memory limit).");
+                                                            settings_app.status_msg = gui::ui_text("cozunurluk uygulanamadi (bellek siniri).", "Resolution failed (memory limit).");
                                                         }
                                                     } else {
                                                         settings_app.screen_res = (fb.width, fb.height);
-                                                        settings_app.status_msg = gui::ui_text("Çözünürlük açılışta Limine tarafından belirlenir.", "Resolution is set by Limine at boot.");
+                                                        settings_app.status_msg = gui::ui_text("cozunurluk acilista Limine tarafindan belirlenir.", "Resolution is set by Limine at boot.");
                                                     }
                                                 }
                                                 handled = true;
@@ -4552,9 +4552,9 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.status_msg = if settings_app.night_light {
 
-                                            gui::ui_text("Mavi ışık filtresi açıldı.", "Blue light filter enabled.")
+                                            gui::ui_text("Mavi isik filtresi acildi.", "Blue light filter enabled.")
 
-                                        } else { gui::ui_text("Mavi ışık filtresi kapatıldı.", "Blue light filter disabled.") };
+                                        } else { gui::ui_text("Mavi isik filtresi kapatildi.", "Blue light filter disabled.") };
 
                                     }
 
@@ -4578,7 +4578,7 @@ pub extern "C" fn _start() -> ! {
 
                                             crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
 
-                                            settings_app.status_msg = gui::ui_text("Arka plan değiştirildi.", "Background changed.");
+                                            settings_app.status_msg = gui::ui_text("Arka plan degistirildi.", "Background changed.");
 
                                         }
 
@@ -4620,7 +4620,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if mouse_setting_changed {
 
-                                        settings_app.status_msg = gui::ui_text("Fare ayarları değiştirildi. Kalıcı olması için Kaydet'e tıklayın.", "Mouse settings changed. Click Save to keep them.");
+                                        settings_app.status_msg = gui::ui_text("Fare ayarlari degistirildi. Kalici olmasi icin Kaydet'e tiklayin.", "Mouse settings changed. Click Save to keep them.");
 
                                     }
 
@@ -4644,7 +4644,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_disk_btn_rect(wx, wy)) {
 
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi calisiyor...", "Running disk test..."), || settings_app.run_disk_test());
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_audio_btn_rect(wx, wy)) {
 
@@ -4658,13 +4658,13 @@ pub extern "C" fn _start() -> ! {
 
                             2 => {
 
-                                // Not Defteri: Dosya/Düzen/Yardım araç çubuğu ve menü aksiyonları
+                                // Not Defteri: Dosya/Duzen/Yardim arac cubugu ve menu aksiyonlari
 
-                                // Tıklama testleri, menü çizimiyle aynı geometri
+                                // Tiklama testleri, menu cizimiyle ayni geometri
 
-                                // yardımcılarını (apps::notepad) kullanır; böylece font
+                                // yardimcilarini (apps::notepad) kullanir; boylece font
 
-                                // ölçeği 100'den farklıyken de koordinatlar örtüşür.
+                                // olcegi 100'den farkliyken de koordinatlar ortusur.
 
                                 let menu_tb_y = wy + 30;
 
@@ -4712,7 +4712,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 let path = alloc::string::String::from(notepad_app.file_path_str());
 
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                 if let Some(data) = data {
 
@@ -4756,7 +4756,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if notepad_app.menu != 0 {
 
-                                    // Menü açıkken menü dışına tıklandığında menüyü kapat
+                                    // Menu acikken menu disina tiklandiginda menuyu kapat
 
                                     notepad_app.menu = 0;
 
@@ -4846,7 +4846,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if let Some(url) = browser_app.click_link_at(mx, my) {
 
-                                    // Sayfa içindeki bağlantıya tıklandı: geçmişe kaydet ve aç.
+                                    // Sayfa icindeki baglantiya tiklandi: gecmise kaydet ve ac.
 
                                     browser_app.set_url(url.as_bytes());
 
@@ -4862,7 +4862,7 @@ pub extern "C" fn _start() -> ! {
 
                             4 => {
 
-                                // Resim: yakınlaştır / uzaklaştır
+                                // Resim: yakinlastir / uzaklastir
 
                                 if my >= wy + 32 && my <= wy + 52 {
 
@@ -4882,7 +4882,7 @@ pub extern "C" fn _start() -> ! {
 
                             5 => {
 
-                                // Müzik çalar: önceki / oynat / sonraki
+                                // Muzik calar: onceki / oynat / sonraki
 
                                 let ctrl_y = wy + 180;
 
@@ -5008,7 +5008,7 @@ pub extern "C" fn _start() -> ! {
 
                                         if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
 
                                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -5036,9 +5036,9 @@ pub extern "C" fn _start() -> ! {
 
                             9 => {
 
-                                // Tüm dikdörtgenler `PaintApp::*_rect` yardımcılarından gelir;
+                                // Tum dikdortgenler `PaintApp::*_rect` yardimcilarindan gelir;
 
-                                // çizim (`render_content`) ile tıklama testi birebir örtüşür.
+                                // cizim (`render_content`) ile tiklama testi birebir ortusur.
 
                                 let r = apps::paint::PaintApp::open_btn_rect(ww);
 
@@ -5076,7 +5076,7 @@ pub extern "C" fn _start() -> ! {
 
                                 let file_btn_rect = (wx + file_btn.0, wy + file_btn.1, file_btn.2, file_btn.3);
 
-                                // Açılır menü öğesi seçiliyse önce onu işle ve menüyü kapat.
+                                // Acilir menu ogesi seciliyse once onu isle ve menuyu kapat.
 
                                 let mut menu_handled = false;
 
@@ -5100,11 +5100,11 @@ pub extern "C" fn _start() -> ! {
 
                                                 0 => paint_apps[idx].as_mut().unwrap().new_document(),
 
-                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
+                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
 
                                                 2 => {
 
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
 
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -5114,7 +5114,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 _ => {
 
-                                                    // Farklı Kaydet: dosya adını türetip yeni dosyaya yaz.
+                                                    // Farkli Kaydet: dosya adini turetip yeni dosyaya yaz.
 
                                                     let name = {
 
@@ -5124,7 +5124,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     };
 
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farklı kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farkli kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
 
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -5142,7 +5142,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    // Menü açıkken dışına tıklandıysa sadece menüyü kapat.
+                                    // Menu acikken disina tiklandiysa sadece menuyu kapat.
 
                                     if !menu_handled {
 
@@ -5156,7 +5156,7 @@ pub extern "C" fn _start() -> ! {
 
                                 if menu_handled {
 
-                                    // Menü işlemi tamamlandı; diğer isabet testleri atlanır.
+                                    // Menu islemi tamamlandi; diger isabet testleri atlanir.
 
                                 } else if gui::in_rect(mx, my, file_btn_rect) {
 
@@ -5170,7 +5170,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
 
                                 } else if gui::in_rect(mx, my, save_rect) {
 
@@ -5178,7 +5178,7 @@ pub extern "C" fn _start() -> ! {
 
                                     let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
 
-                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
 
                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -5220,7 +5220,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if {
 
-                                    // Renk kutularından birine basıldı mı?
+                                    // Renk kutularindan birine basildi mi?
 
                                     let mut hit: Option<usize> = None;
 
@@ -5264,13 +5264,13 @@ pub extern "C" fn _start() -> ! {
 
                                     if let Some((cxp, cyp)) = paint.to_canvas(ww, wh, mx - wx, my - wy) {
 
-                                    // İlk tıklama noktası (last=None iken tek nokta başlangıcı).
+                                    // Ilk tiklama noktasi (last=None iken tek nokta baslangici).
 
                                     paint.paint(cxp, cyp);
 
                                     } else {
 
-                                    // Tuval dışına tıklandı: kalem yolunu bitir.
+                                    // Tuval disina tiklandi: kalem yolunu bitir.
 
                                     paint.end_stroke();
 
@@ -5282,7 +5282,7 @@ pub extern "C" fn _start() -> ! {
 
                             11 => {
 
-                                // minOs Kurulum Sihirbazı
+                                // minOs Kurulum Sihirbazi
 
                                 let sel_rect = apps::installer::InstallerApp::drive_select_rect(wx, wy, ww);
 
@@ -5314,7 +5314,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if gui::in_rect(mx, my, fmt_rect) {
 
-                                    // 2. Adım: Sadece biçimlendir.
+                                    // 2. Adim: Sadece bicimlendir.
 
                                     if installer_app.state != apps::installer::InstallState::Formatting
 
@@ -5322,7 +5322,7 @@ pub extern "C" fn _start() -> ! {
 
                                     {
 
-                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk biçimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
+                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk bicimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
 
                                         if formatted {
 
@@ -5336,7 +5336,7 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if gui::in_rect(mx, my, btn_rect) {
 
-                                    // 3. Adım: Onaylı tek tıkla kurulum.
+                                    // 3. Adim: Onayli tek tikla kurulum.
 
                                     if installer_app.state != apps::installer::InstallState::Formatting
 
@@ -5354,7 +5354,7 @@ pub extern "C" fn _start() -> ! {
 
                                         } else if installer_app.confirm_install {
 
-                                            // Onay verildi: biçimlendirip kur.
+                                            // Onay verildi: bicimlendirip kur.
 
                                             let installed = with_busy_progress(&mut fb, mx, my, gui::ui_text("minOs kuruluyor...", "Installing minOs..."), || installer_app.perform_install(&mut fs_mgr.vfs));
 
@@ -5364,13 +5364,13 @@ pub extern "C" fn _start() -> ! {
 
                                         } else {
 
-                                            // İlk tıklama: onay iste (diski biçimlendirecek).
+                                            // Ilk tiklama: onay iste (diski bicimlendirecek).
 
                                             installer_app.confirm_install = true;
 
                                             installer_app.status_msg = (
 
-                                                "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.",
+                                                "UYARI: Disk silinip bicimlendirilecek. Onaylamak icin tekrar tiklayin.",
 
                                                 "WARNING: Disk will be erased and formatted. Click again to confirm.",
 
@@ -5412,7 +5412,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 3. Klavye kısayolları
+        // 3. Klavye kisayollari
 
         let mut enter_char_consumed = false;
 
@@ -5458,7 +5458,7 @@ pub extern "C" fn _start() -> ! {
 
                     } else {
 
-                        // Masaüstündeyken Alt+F4 güç menüsünü açar.
+                        // Masaustundeyken Alt+F4 guc menusunu acar.
 
                         compositor.is_start_menu_open = true;
 
@@ -5538,7 +5538,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.is_muted = false;
 
-                    settings_app.status_msg = gui::ui_text("Ses artırıldı.", "Volume increased.");
+                    settings_app.status_msg = gui::ui_text("Ses artirildi.", "Volume increased.");
 
                 }
 
@@ -5546,7 +5546,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.volume = settings_app.volume.saturating_sub(5);
 
-                    settings_app.status_msg = gui::ui_text("Ses azaltıldı.", "Volume decreased.");
+                    settings_app.status_msg = gui::ui_text("Ses azaltildi.", "Volume decreased.");
 
                 }
 
@@ -5554,7 +5554,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.is_muted = !settings_app.is_muted;
 
-                    settings_app.status_msg = if settings_app.is_muted { gui::ui_text("Ses kapatıldı.", "Muted.") } else { gui::ui_text("Ses açıldı.", "Unmuted.") };
+                    settings_app.status_msg = if settings_app.is_muted { gui::ui_text("Ses kapatildi.", "Muted.") } else { gui::ui_text("Ses acildi.", "Unmuted.") };
 
                 }
 
@@ -5604,7 +5604,7 @@ pub extern "C" fn _start() -> ! {
 
                     } else if compositor.is_context_menu_open {
 
-                        // Sağ tık / Bağlam menüsü gezintisi
+                        // Sag tik / Baglam menusu gezintisi
 
                         if compositor.context_file_idx.unwrap_or(0) > 0 {
 
@@ -5976,7 +5976,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::Properties => {
 
-                    // Alt+Enter: seçili dosyanın özelliklerini durum çubuğunda göster.
+                    // Alt+Enter: secili dosyanin ozelliklerini durum cubugunda goster.
 
                     if app_is_focused(&compositor, 0) {
 
@@ -6004,7 +6004,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::EnterKey => {
 
-                    // Alt+Enter: Özellikler penceresini aç
+                    // Alt+Enter: ozellikler penceresini ac
 
                     if keyboard.alt && app_is_focused(&compositor, 0) && filemanager_app.selected_idx < filemanager_app.file_count {
 
@@ -6148,7 +6148,7 @@ pub extern "C" fn _start() -> ! {
 
                                 if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
 
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -6196,7 +6196,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                         if let Some(data) = data {
 
@@ -6208,7 +6208,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if tag == "IMG" {
 
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                         open_app(&mut compositor, 4);
 
@@ -6226,7 +6226,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if tag == "3D" {
 
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                         if let Some(data) = data {
 
@@ -6272,7 +6272,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.language.toggle();
 
-                                        settings_app.status_msg = gui::ui_text("Arayüz dili değiştirildi.", "Interface language changed.");
+                                        settings_app.status_msg = gui::ui_text("Arayuz dili degistirildi.", "Interface language changed.");
 
                                     }
 
@@ -6300,7 +6300,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
 
-                                        settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
+                                        settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinlestirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP secildi.", "Static IP selected.") };
 
                                     }
 
@@ -6502,7 +6502,7 @@ pub extern "C" fn _start() -> ! {
 
                         notepad_app.clear();
 
-                        notepad_app.status_msg = gui::ui_text("Yeni belge oluşturuldu", "New document created");
+                        notepad_app.status_msg = gui::ui_text("Yeni belge olusturuldu", "New document created");
 
                     }
 
@@ -6514,7 +6514,7 @@ pub extern "C" fn _start() -> ! {
 
                         let path = alloc::string::String::from(notepad_app.file_path_str());
 
-                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                         if let Some(data) = data {
 
@@ -6680,7 +6680,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::Delete => {
 
-                    // Görev Yöneticisi odaklıysa seçili süreci sonlandır.
+                    // Gorev Yoneticisi odakliysa secili sureci sonlandir.
 
                     let tm_focused = app_is_focused(&compositor, 7);
 
@@ -6688,7 +6688,7 @@ pub extern "C" fn _start() -> ! {
 
                         if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                            taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
 
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -6798,7 +6798,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::Screenshot => {
 
-                    // Ekran görüntüsü (F12 / PrtScn) -> BMP olarak VFS'ye kaydet
+                    // Ekran goruntusu (F12 / PrtScn) -> BMP olarak VFS'ye kaydet
 
                     audio_dev.play_beep(980, 40);
 
@@ -6820,7 +6820,7 @@ pub extern "C" fn _start() -> ! {
 
                         serial_print("[SCREENSHOT] HATA: Yetersiz bellek!\n");
 
-                        terminal_app.push_line(gui::ui_text("Ekran görüntüsü alınamadı: Yetersiz bellek", "Screenshot failed: Out of memory"), gui::Color::ACCENT_RED);
+                        terminal_app.push_line(gui::ui_text("Ekran goruntusu alinamadi: Yetersiz bellek", "Screenshot failed: Out of memory"), gui::Color::ACCENT_RED);
 
                     } else {
 
@@ -6858,7 +6858,7 @@ pub extern "C" fn _start() -> ! {
 
                         bmp_data.extend_from_slice(&0u32.to_le_bytes());
 
-                        // Pixel Data (Alt satırdan üst satıra BGR)
+                        // Pixel Data (Alt satirdan ust satira BGR)
 
                         for y in (0..sh).rev() {
 
@@ -6910,15 +6910,15 @@ pub extern "C" fn _start() -> ! {
 
                             filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
-                            terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                            terminal_app.push_line(gui::ui_text("Ekran goruntusu kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
 
                             compositor.push_toast(
 
                                 gui::ToastKind::Success,
 
-                                gui::ui_text("Ekran Görüntüsü Alındı", "Screenshot Captured"),
+                                gui::ui_text("Ekran Goruntusu Alindi", "Screenshot Captured"),
 
-                                gui::ui_text("Görüntü /desktop/ klasörüne kaydedildi.", "Image saved to /desktop/ folder."),
+                                gui::ui_text("Goruntu /desktop/ klasorune kaydedildi.", "Image saved to /desktop/ folder."),
 
                                 monotonic_ms(),
 
@@ -6940,9 +6940,9 @@ pub extern "C" fn _start() -> ! {
 
                                 gui::ToastKind::Error,
 
-                                gui::ui_text("Ekran Görüntüsü Hatası", "Screenshot Error"),
+                                gui::ui_text("Ekran Goruntusu Hatasi", "Screenshot Error"),
 
-                                gui::ui_text("Dosya diske yazılamadı!", "Failed to write file to disk!"),
+                                gui::ui_text("Dosya diske yazilamadi!", "Failed to write file to disk!"),
 
                                 monotonic_ms(),
 
@@ -6970,7 +6970,7 @@ pub extern "C" fn _start() -> ! {
 
         if scroll_val != 0 {
 
-            // Ayarlar > Testler: tekerlek sınaması sayacı.
+            // Ayarlar > Testler: tekerlek sinamasi sayaci.
 
             if app_is_focused(&compositor, 1) && settings_app.active_tab == 4 {
 
@@ -6988,7 +6988,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Başlat menüsü açıkken scroll wheel desteği
+            // Baslat menusu acikken scroll wheel destegi
 
             if compositor.is_start_menu_open {
 
@@ -7008,7 +7008,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // CMD geçmişi: yalnızca çıktı panelini kaydır; giriş satırı sabit kalır.
+            // CMD gecmisi: yalnizca cikti panelini kaydir; giris satiri sabit kalir.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
 
@@ -7024,11 +7024,11 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // İmlecin altındaki en üst pencerede içerik kaydırmasını güncelle.
+            // Imlecin altindaki en ust pencerede icerik kaydirmasini guncelle.
 
-            // Scrollbar aynı ScrollState üzerinden çizildiği için tutamaç da
+            // Scrollbar ayni ScrollState uzerinden cizildigi icin tutamac da
 
-            // tekerlekle birlikte anında hareket eder.
+            // tekerlekle birlikte aninda hareket eder.
 
             let (window_order, window_count) = compositor.draw_order();
 
@@ -7074,7 +7074,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Görüntüleyicide tekerlek zoom kısayoludur (yukarı yakınlaştırır).
+            // Goruntuleyicide tekerlek zoom kisayoludur (yukari yakinlastirir).
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
 
@@ -7088,7 +7088,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Çizim tuvalinde tekerlek yakınlaştırmayı ayarlar.
+            // cizim tuvalinde tekerlek yakinlastirmayi ayarlar.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 12) {
 
@@ -7118,7 +7118,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 5. Pencere Sürükleme ve Yeniden Boyutlandırma
+        // 5. Pencere Surukleme ve Yeniden Boyutlandirma
 
         if mouse.left_button {
 
@@ -7198,9 +7198,9 @@ pub extern "C" fn _start() -> ! {
 
                 if w.is_focused {
 
-                    // Windows Paint davranışı: sol tuş basılı tutuldukça fare
+                    // Windows Paint davranisi: sol tus basili tutuldukca fare
 
-                    // hareketi sürekli çizer. Tuval dışına çıkınca vuruşu bitir.
+                    // hareketi surekli cizer. Tuval disina cikinca vurusu bitir.
 
                     if paint_apps[paint_idx].is_none() { paint_apps[paint_idx] = Some(apps::paint::PaintApp::new()); }
 
@@ -7304,7 +7304,7 @@ pub extern "C" fn _start() -> ! {
 
             if let Some((idx, grab, thumb_h, track_h, content_h, view_h)) = vscroll_drag {
 
-                // Tutamacı fare ile sürükle → kaydırma ofseti.
+                // Tutamaci fare ile surukle → kaydirma ofseti.
 
                 let track_top = compositor.windows[idx]
 
@@ -7346,7 +7346,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                    // Aero Snap kenar algılama & önizleme kutusu
+                    // Aero Snap kenar algilama & onizleme kutusu
 
                     let old_snap = active_snap_preview;
 
@@ -7386,7 +7386,7 @@ pub extern "C" fn _start() -> ! {
 
                     dirty = drivers::video::rect_union(dirty, (mx.saturating_sub(8), my.saturating_sub(8), 24, 24));
 
-                    // Hem eski hem yeni Aero Snap önizlemesini kirli bölgeye kat.
+                    // Hem eski hem yeni Aero Snap onizlemesini kirli bolgeye kat.
 
                     if let Some(p) = old_snap { dirty = drivers::video::rect_union(dirty, p); }
 
@@ -7408,13 +7408,13 @@ pub extern "C" fn _start() -> ! {
 
                     let (ox, oy, ow, oh) = resize_orig;
 
-                    let left = ox + ow;   // sol kenarın sabit sağ referansı
+                    let left = ox + ow;   // sol kenarin sabit sag referansi
 
-                    let right = ox;       // sağ kenarın sabit sol referansı
+                    let right = ox;       // sag kenarin sabit sol referansi
 
-                    let top = oy + oh;    // üst kenarın sabit alt referansı
+                    let top = oy + oh;    // ust kenarin sabit alt referansi
 
-                    let bottom = oy;      // alt kenarın sabit üst referansı
+                    let bottom = oy;      // alt kenarin sabit ust referansi
 
 
 
@@ -7428,7 +7428,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                    // Sağ kenar sürükleniyor
+                    // Sag kenar surukleniyor
 
                     if matches!(edge, Right | TopRight | BottomRight) {
 
@@ -7438,7 +7438,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Sol kenar sürükleniyor
+                    // Sol kenar surukleniyor
 
                     if matches!(edge, Left | TopLeft | BottomLeft) {
 
@@ -7450,7 +7450,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Alt kenar sürükleniyor
+                    // Alt kenar surukleniyor
 
                     if matches!(edge, Bottom | BottomLeft | BottomRight) {
 
@@ -7460,7 +7460,7 @@ pub extern "C" fn _start() -> ! {
 
                     }
 
-                    // Üst kenar sürükleniyor
+                    // ust kenar surukleniyor
 
                     if matches!(edge, Top | TopLeft | TopRight) {
 
@@ -7608,11 +7608,11 @@ pub extern "C" fn _start() -> ! {
 
                             let msg = if keyboard.ctrl {
 
-                                gui::ui_text("Masaüstüne kopyalandı.", "Copied to Desktop.")
+                                gui::ui_text("Masaustune kopyalandi.", "Copied to Desktop.")
 
                             } else {
 
-                                gui::ui_text("Masaüstüne taşındı.", "Moved to Desktop.")
+                                gui::ui_text("Masaustune tasindi.", "Moved to Desktop.")
 
                             };
 
@@ -7642,13 +7642,13 @@ pub extern "C" fn _start() -> ! {
 
             filemanager_app.drag_target = None;
 
-            // Modern Aero Snap: başlık çubuğu ekran kenarlarına sürüklenip bırakıldığında:
+            // Modern Aero Snap: baslik cubugu ekran kenarlarina suruklenip birakildiginda:
 
-            // - Ekranın üstü: Tam ekran (Maximize)
+            // - Ekranin ustu: Tam ekran (Maximize)
 
-            // - Ekranın solu: Sol 50% bölünmüş ekran
+            // - Ekranin solu: Sol 50% bolunmus ekran
 
-            // - Ekranın sağı: Sağ 50% bölünmüş ekran
+            // - Ekranin sagi: Sag 50% bolunmus ekran
 
             if let Some(idx) = dragging_win {
 
@@ -7684,7 +7684,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Alt tuşu bırakıldığında Alt+Tab penceresini kapat
+        // Alt tusu birakildiginda Alt+Tab penceresini kapat
 
         if !keyboard.alt && compositor.is_alt_tab_open {
 
@@ -7694,7 +7694,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // 6. Klavye karakter girişleri
+        // 6. Klavye karakter girisleri
 
         while let Some(ch) = keyboard.take_last_char() {
 
@@ -7706,7 +7706,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // Başlat menüsü açıkken klavye kısayolları menü SIRASINI kullanır
+            // Baslat menusu acikken klavye kisayollari menu SIRASINI kullanir
 
             if run_dialog_open {
 
@@ -7790,9 +7790,9 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // (pencere indeksini değil) — start_menu_app_idx ile eşlenir.
+            // (pencere indeksini degil) — start_menu_app_idx ile eslenir.
 
-            // Özellikler modalı açıkken ESC ve Enter modalı kapatır.
+            // ozellikler modali acikken ESC ve Enter modali kapatir.
 
             if properties_open {
 
@@ -7872,7 +7872,7 @@ pub extern "C" fn _start() -> ! {
 
             } else if (ch == 'g' || ch == 'G') && keyboard.ctrl && app_is_focused(&compositor, 0) {
 
-                // Ctrl+G: liste <-> ızgara görünümü.
+                // Ctrl+G: liste <-> izgara gorunumu.
 
                 filemanager_app.toggle_view_mode();
 
@@ -7884,7 +7884,7 @@ pub extern "C" fn _start() -> ! {
 
                 && filemanager_app.selected_idx < filemanager_app.file_count {
 
-                // Space: seçili metin/resim için hızlı önizlemeyi aç/kapat.
+                // Space: secili metin/resim icin hizli onizlemeyi ac/kapat.
 
                 filemanager_app.toggle_preview();
 
@@ -8038,7 +8038,7 @@ pub extern "C" fn _start() -> ! {
 
                 if term_focused { if ch == '\x08' { terminal_app.backspace(); } else if ch == '\n' { terminal_app.submit(); } else if ch >= ' ' { terminal_app.insert(ch); } }
 
-                // Terminalde Enter'a basıldıysa bekleyen komutu VFS/PMM bağlamında yürüt.
+                // Terminalde Enter'a basildiysa bekleyen komutu VFS/PMM baglaminda yurut.
 
                 if let Some(cmd) = terminal_app.take_pending() {
 
@@ -8210,7 +8210,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Ağ kartından gelen paketleri işle (ARP cevapları, ICMP vs.).
+        // Ag kartindan gelen paketleri isle (ARP cevaplari, ICMP vs.).
 
         drivers::e1000::poll();
 
@@ -8220,7 +8220,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Beş parçalı, HDA PCM tabanlı melodi yürütücüsü. (HDA yoksa PIT/PC speaker fallback).
+        // Bes parcali, HDA PCM tabanli melodi yurutucusu. (HDA yoksa PIT/PC speaker fallback).
 
         audio_dev.set_volume(settings_app.volume);
 
@@ -8238,13 +8238,13 @@ pub extern "C" fn _start() -> ! {
 
                 let freq = NOTES[music_note % NOTES.len()] + track_offset;
 
-                // HDA hazır ve DMA ilerliyorsa gerçek PCM örneği üret ve gönder.
+                // HDA hazir ve DMA ilerliyorsa gercek PCM ornegi uret ve gonder.
 
                 if audio_dev.is_hda_active() {
 
                     let sample_count = 1920; // 40 ms
 
-                    let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R çifti
+                    let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R cifti
 
                     let volume_scale = (audio_dev.volume_left as i32).min(100) as i16;
 
@@ -8290,7 +8290,7 @@ pub extern "C" fn _start() -> ! {
 
                 } else {
 
-                    // Otomatik Fallback: HDA yok veya sanallaştırma ortamında DMA duraksadıysa PC Speaker PWM tonlama yap!
+                    // Otomatik Fallback: HDA yok veya sanallastirma ortaminda DMA duraksadiysa PC Speaker PWM tonlama yap!
 
                     audio_dev.set_pc_speaker_tone(freq);
 
@@ -8322,7 +8322,7 @@ pub extern "C" fn _start() -> ! {
 
         let night_light_active = settings_app.night_light;
 
-        // Ayarlar > Testler: ekran deseni dışında fare test verisini canlı besle.
+        // Ayarlar > Testler: ekran deseni disinda fare test verisini canli besle.
 
         let settings_test_active = app_is_focused(&compositor, 1) && settings_app.active_tab == 4;
 
@@ -8346,9 +8346,9 @@ pub extern "C" fn _start() -> ! {
 
         };
 
-        // Seçim/konum değiştiyse Hızlı Önizleme içeriğini tazele. Kimlik anahtarı
+        // Secim/konum degistiyse Hizli onizleme icerigini tazele. Kimlik anahtari
 
-        // aynıyken çağrı ucuzdur ve VFS okuması yapmaz.
+        // ayniyken cagri ucuzdur ve VFS okumasi yapmaz.
 
         if filemanager_app.preview_open {
 
@@ -8370,7 +8370,7 @@ pub extern "C" fn _start() -> ! {
 
             if tm_open {
 
-                // Görev yöneticisi istatistiklerini her frame yerine periyodik güncelle.
+                // Gorev yoneticisi istatistiklerini her frame yerine periyodik guncelle.
 
                 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -8390,11 +8390,11 @@ pub extern "C" fn _start() -> ! {
 
 
 
-            // Menüler veya modal pencereler kapalıyken tek pencere içi klavye girişi veya
+            // Menuler veya modal pencereler kapaliyken tek pencere ici klavye girisi veya
 
-            // pencere sürükleme yapılıyorsa yalnızca kirli dikdörtgeni (dirty rect) çizerek
+            // pencere surukleme yapiliyorsa yalnizca kirli dikdortgeni (dirty rect) cizerek
 
-            // CPU yükünü ve gereksiz VRAM kopyalamasını %60-70 azalt.
+            // CPU yukunu ve gereksiz VRAM kopyalamasini %60-70 azalt.
 
             let target_dirty = if force_render || busy_dirty || compositor.is_start_menu_open || compositor.is_context_menu_open || compositor.is_alt_tab_open || run_dialog_open || night_light_active {
 
@@ -8444,9 +8444,9 @@ pub extern "C" fn _start() -> ! {
 
         } else if mouse_moved {
 
-            // İmleç hareketinde uygulamaları ve tüm ekranı yeniden çizmek yerine
+            // Imlec hareketinde uygulamalari ve tum ekrani yeniden cizmek yerine
 
-            // sadece önceki ve yeni imleç alanlarını birleşik tek bir dikdörtgen olarak güncelle.
+            // sadece onceki ve yeni imlec alanlarini birlesik tek bir dikdortgen olarak guncelle.
 
             let old_rect = fb.restore_cursor_background();
 
@@ -8486,9 +8486,9 @@ pub extern "C" fn _start() -> ! {
 
         if !input_update.mouse && !input_update.keyboard && !mouse_moved && !buttons_changed && !force_render {
 
-            // Boşta bekleme: port 0x80 VM çıkışları olmadan spin_loop ile bekle.
+            // Bosta bekleme: port 0x80 VM cikislari olmadan spin_loop ile bekle.
 
-            // PS/2 giriş tamponunda veri algılandığı anda gecikmesiz döngüden çık.
+            // PS/2 giris tamponunda veri algilandigi anda gecikmesiz donguden cik.
 
             let wait_start = read_cpu_cycles();
 
@@ -8562,9 +8562,9 @@ pub extern "C" fn _start() -> ! {
 
                 last_ap_heartbeats[c] = hb;
 
-                // AP döngüsü her 500 boşta beklemede bir kalp atışı artırır.
+                // AP dongusu her 500 bosta beklemede bir kalp atisi artirir.
 
-                // Aktif bir iş varsa poll_job yapılır veya kalp atışları canlılık gösterir.
+                // Aktif bir is varsa poll_job yapilir veya kalp atislari canlilik gosterir.
 
                 taskmgr_app.core_usage_pct[c] = if arch::x86_64::smp::is_ap_online(c) {
 

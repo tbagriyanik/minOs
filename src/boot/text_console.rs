@@ -459,10 +459,10 @@ pub fn interactive_error_prompt(message: &str) -> ! {
     write_color("Kritik baslatma veya surucu hatasi tespit edildi.\n", 0xD8E1EE);
     write_color("Grafik arayuzu ve Hosgeldin ekrani baslatilmadi (Halted before Welcome Screen).\n\n", 0xFA5252);
     write_color("Kullanilabilir Komutlar / Available Commands:\n", 0x62D6A8);
-    write("  [R] restart / reboot : Sistemi yeniden baslat (Restart system)\n");
-    write("  [H] halt / shutdown  : Sistemi kapat (Halt CPU)\n");
-    write("  help                 : Komut listesini goster\n\n");
-    write_color("Komut girin veya [R] tusuna basin:\n", 0x4DABF7);
+    write("  [Enter] / restart / r : Sistemi yeniden baslat (Restart system)\n");
+    write("  halt / shutdown / h   : Sistemi kapat (Halt CPU)\n");
+    write("  help                  : Komut listesini goster\n\n");
+    write_color("Komut girin veya [Enter] tusuna basin:\n", 0x4DABF7);
     write_color("recovery# ", 0x62D6A8);
 
     let mut cmd_buf = [0u8; 32];
@@ -485,17 +485,17 @@ pub fn interactive_error_prompt(message: &str) -> ! {
                         core::arch::asm!("cli");
                         loop { core::arch::asm!("hlt"); }
                     }
-                } else if cmd_str.eq_ignore_ascii_case("help") {
-                    write("Komutlar:\n");
-                    write("  restart / reboot / r : Sistemi hemen yeniden baslatir\n");
-                    write("  halt / shutdown / h  : Sistemi durdurur (CPU hlt)\n");
-                    write("  help                 : Bu yardim mesajini gosterir\n");
+                } else if cmd_str.eq_ignore_ascii_case("help") || cmd_str == "?" {
+                    write("Komutlar / Commands:\n");
+                    write("  [Enter] / restart / r : Sistemi hemen yeniden baslatir\n");
+                    write("  halt / shutdown / h   : Sistemi durdurur (CPU hlt)\n");
+                    write("  help                  : Bu yardim mesajini gosterir\n");
                     write_color("recovery# ", 0x62D6A8);
                     cmd_len = 0;
                 } else {
                     write("Bilinmeyen komut: '");
                     write(cmd_str);
-                    write("'. Yeniden baslatmak icin 'restart' yazin veya [R] tusuna basin.\n");
+                    write("'. Yeniden baslatmak icin [Enter], yardim icin 'help' yazin.\n");
                     write_color("recovery# ", 0x62D6A8);
                     cmd_len = 0;
                 }
@@ -504,20 +504,6 @@ pub fn interactive_error_prompt(message: &str) -> ! {
                 if cmd_len > 0 {
                     cmd_len -= 1;
                     write("\x08");
-                }
-            } else if (c == 'r' || c == 'R') && cmd_len == 0 {
-                // Quick restart hotkey
-                write_color("restart\n[RESTART] [R] tusu algilandi; sistem yeniden baslatiliyor...\n", 0x62D6A8);
-                crate::serial::print("[BOOT] [R] tusu algilandi. Sistem yeniden baslatiliyor...\n");
-                for _ in 0..200_000 { core::hint::spin_loop(); }
-                crate::boot::console::restart_system();
-            } else if (c == 'h' || c == 'H') && cmd_len == 0 {
-                // Quick halt hotkey
-                write_color("halt\n[HALT] [H] tusu algilandi; sistem durduruldu.\n", 0xFF6B6B);
-                crate::serial::print("[BOOT] [H] tusu algilandi. Sistem durduruldu.\n");
-                unsafe {
-                    core::arch::asm!("cli");
-                    loop { core::arch::asm!("hlt"); }
                 }
             } else if !c.is_control() && cmd_len < cmd_buf.len() {
                 cmd_buf[cmd_len] = c as u8;

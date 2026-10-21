@@ -1,19 +1,19 @@
-//! Süreç ve Sistem Çağrıları Yönetimi (Process & System Call Management).
+//! Surec ve Sistem cagrilari Yonetimi (Process & System Call Management).
 //!
-//! Bu modül:
-//! 1. Süreç Kontrol Bloğu (PCB - Process Control Block),
-//! 2. Süreç durumları (Hazır, Çalışıyor, Uyuyor, Sonlandı),
-//! 3. x86_64 Register/Context yapısı ve süreç bellek/kaynak takibi,
-//! 4. Süreç tablosu (Process Table): Süreç başlatma (spawn/exec), sonlandırma (exit/kill),
-//! 5. Sistem Çağrıları (Syscalls): `sys_yield`, `sys_exit`, `sys_write`, `sys_read`,
+//! Bu modul:
+//! 1. Surec Kontrol Blogu (PCB - Process Control Block),
+//! 2. Surec durumlari (Hazir, calisiyor, Uyuyor, Sonlandi),
+//! 3. x86_64 Register/Context yapisi ve surec bellek/kaynak takibi,
+//! 4. Surec tablosu (Process Table): Surec baslatma (spawn/exec), sonlandirma (exit/kill),
+//! 5. Sistem cagrilari (Syscalls): `sys_yield`, `sys_exit`, `sys_write`, `sys_read`,
 //!    `sys_alloc_frame`, `sys_free_frame`, `sys_get_pid`, `sys_time` vb.
 
 use crate::mm::pmm::PhysicalMemoryManager;
 
-/// Azami eşzamanlı aktif süreç sayısı
+/// Azami eszamanli aktif surec sayisi
 pub const MAX_PROCESSES: usize = 32;
 
-/// Süreç Durumu
+/// Surec Durumu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
     Unused,
@@ -23,7 +23,7 @@ pub enum ProcessState {
     Terminated,
 }
 
-/// Süreç Önceliği
+/// Surec onceligi
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessPriority {
     Low = 0,
@@ -32,7 +32,7 @@ pub enum ProcessPriority {
     Realtime = 3,
 }
 
-/// CPU Yazmaç/Bağlam Durumu (Saved Context on Interrupt/Syscall)
+/// CPU Yazmac/Baglam Durumu (Saved Context on Interrupt/Syscall)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProcessContext {
@@ -57,15 +57,15 @@ pub struct ProcessContext {
     pub cr3: u64,
 }
 
-/// Bir sürece tahsis edilen kaynaklar (Sayfa çerçeveleri, dosya tanıtıcıları vb.)
+/// Bir surece tahsis edilen kaynaklar (Sayfa cerceveleri, dosya taniticilari vb.)
 pub const MAX_PROC_FRAMES: usize = 64;
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessResources {
-    /// Sürecin sahip olduğu tahsis edilmiş fiziksel sayfa çerçeveleri
+    /// Surecin sahip oldugu tahsis edilmis fiziksel sayfa cerceveleri
     pub allocated_frames: [u64; MAX_PROC_FRAMES],
     pub frame_count: usize,
-    /// Süreç tarafından açılan dosya veya pencere tanıtıcısı (Handle)
+    /// Surec tarafindan acilan dosya veya pencere taniticisi (Handle)
     pub window_idx: Option<usize>,
     pub app_id: usize,
 }
@@ -91,7 +91,7 @@ impl ProcessResources {
     }
 }
 
-/// Süreç Kontrol Bloğu (PCB - Process Control Block)
+/// Surec Kontrol Blogu (PCB - Process Control Block)
 #[derive(Debug, Clone, Copy)]
 pub struct Process {
     pub pid: usize,
@@ -131,7 +131,7 @@ impl Process {
     }
 }
 
-/// Süreç Tablosu ve Zamanlayıcı Yöneticisi
+/// Surec Tablosu ve Zamanlayici Yoneticisi
 pub struct ProcessManager {
     pub processes: [Process; MAX_PROCESSES],
     pub current_pid: usize,
@@ -149,7 +149,7 @@ impl ProcessManager {
         }
     }
 
-    /// Çekirdek başlangıç sürecini (PID 0 / init / kernel_core) kaydeder.
+    /// cekirdek baslangic surecini (PID 0 / init / kernel_core) kaydeder.
     pub fn init_kernel_process(&mut self) {
         let mut p = Process::empty();
         p.pid = 0;
@@ -164,7 +164,7 @@ impl ProcessManager {
         self.active_count = 1;
     }
 
-    /// Yeni bir kullanıcı veya sistem uygulamasını süreç tablosuna ekler (Spawn).
+    /// Yeni bir kullanici veya sistem uygulamasini surec tablosuna ekler (Spawn).
     pub fn spawn(
         &mut self,
         name: &str,
@@ -189,11 +189,11 @@ impl ProcessManager {
         p.state = ProcessState::Ready;
         p.priority = ProcessPriority::Normal;
 
-        // Bağlamı hazırla
+        // Baglami hazirla
         p.context.rip = entry_point;
         p.context.rsp = stack_top;
         p.context.cr3 = cr3;
-        p.context.rflags = 0x202; // IF = 1 (Kesmeler açık)
+        p.context.rflags = 0x202; // IF = 1 (Kesmeler acik)
 
         p.resources.app_id = app_id;
         p.resources.window_idx = window_idx;
@@ -204,10 +204,10 @@ impl ProcessManager {
         Ok(pid)
     }
 
-    /// Belirtilen PID'ye sahip süreci sonlandırır (Kill/Terminate) ve kaynaklarını serbest bırakır.
+    /// Belirtilen PID'ye sahip sureci sonlandirir (Kill/Terminate) ve kaynaklarini serbest birakir.
     pub fn terminate(&mut self, pid: usize, exit_code: i32, pmm: &mut PhysicalMemoryManager) -> bool {
         if pid == 0 {
-            // Çekirdek ana süreci sonlandırılamaz!
+            // cekirdek ana sureci sonlandirilamaz!
             return false;
         }
 
@@ -215,7 +215,7 @@ impl ProcessManager {
             p.state = ProcessState::Terminated;
             p.exit_code = exit_code;
 
-            // 1. Sürecin sahip olduğu tüm fiziksel sayfa çerçevelerini PMM'e iade et
+            // 1. Surecin sahip oldugu tum fiziksel sayfa cercevelerini PMM'e iade et
             for i in 0..p.resources.frame_count {
                 let frame = p.resources.allocated_frames[i];
                 if frame != 0 {
@@ -231,7 +231,7 @@ impl ProcessManager {
         }
     }
 
-    /// Pencere indeksine göre çalışan süreci bulur ve sonlandırır.
+    /// Pencere indeksine gore calisan sureci bulur ve sonlandirir.
     pub fn terminate_by_window(&mut self, win_idx: usize, pmm: &mut PhysicalMemoryManager) -> bool {
         let target_pid = self.processes.iter().find(|p| {
             p.state != ProcessState::Unused && p.state != ProcessState::Terminated && p.resources.window_idx == Some(win_idx)
@@ -244,18 +244,18 @@ impl ProcessManager {
         }
     }
 
-    /// Bir sonraki çalıştırılabilir süreci döner (Öncelikli Preemptive Round-Robin Zamanlayıcı).
-    /// Kullanıcı süreçlerini öncelik sırasına (Realtime > High > Normal > Low) göre zamanlar,
-    /// çalıştırılabilir kullanıcı süreci yoksa PID 0 (kernel_core) fallback döner.
+    /// Bir sonraki calistirilabilir sureci doner (oncelikli Preemptive Round-Robin Zamanlayici).
+    /// Kullanici sureclerini oncelik sirasina (Realtime > High > Normal > Low) gore zamanlar,
+    /// calistirilabilir kullanici sureci yoksa PID 0 (kernel_core) fallback doner.
     pub fn schedule_next(&mut self) -> Option<usize> {
         if self.active_count == 0 {
             return None;
         }
 
-        // Mevcut çalışan sürecin slot indeksini bul
+        // Mevcut calisan surecin slot indeksini bul
         let curr_slot = self.processes.iter().position(|p| p.pid == self.current_pid && p.state != ProcessState::Unused).unwrap_or(0);
 
-        // 1. Önce çalıştırılmaya hazır kullanıcı süreçlerini öncelik sırasıyla ara (Realtime -> Low)
+        // 1. once calistirilmaya hazir kullanici sureclerini oncelik sirasiyla ara (Realtime -> Low)
         for target_prio in [ProcessPriority::Realtime, ProcessPriority::High, ProcessPriority::Normal, ProcessPriority::Low] {
             let total = MAX_PROCESSES;
             for i in 1..=total {
@@ -270,7 +270,7 @@ impl ProcessManager {
             }
         }
 
-        // 2. Başka çalıştırılabilir kullanıcı süreci yoksa çekirdek ana sürecine (PID 0) dön
+        // 2. Baska calistirilabilir kullanici sureci yoksa cekirdek ana surecine (PID 0) don
         if self.processes[0].state == ProcessState::Running || self.processes[0].state == ProcessState::Ready {
             self.current_pid = 0;
             self.processes[0].state = ProcessState::Running;
@@ -281,17 +281,17 @@ impl ProcessManager {
         Some(0) // kernel_core fallback
     }
 
-    /// PID ile süreç referansı alır.
+    /// PID ile surec referansi alir.
     pub fn get_process(&self, pid: usize) -> Option<&Process> {
         self.processes.iter().find(|p| p.pid == pid && p.state != ProcessState::Unused)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Sistem Çağrısı (Syscall) Arabirimi
+// Sistem cagrisi (Syscall) Arabirimi
 // ---------------------------------------------------------------------------
 
-/// Standart Sistem Çağrısı Numaraları
+/// Standart Sistem cagrisi Numaralari
 pub mod sys_nos {
     pub const SYS_YIELD: u64 = 0;
     pub const SYS_EXIT: u64 = 1;
@@ -303,14 +303,14 @@ pub mod sys_nos {
     pub const SYS_SPAWN: u64 = 7;
 }
 
-/// Sistem çağrısı sevkedicisi (Syscall Dispatcher).
+/// Sistem cagrisi sevkedicisi (Syscall Dispatcher).
 /// x86_64 ABI:
 /// RAX = Syscall No
 /// RDI = Arg 1
 /// RSI = Arg 2
 /// RDX = Arg 3
 /// R10 = Arg 4
-/// Dönen değer: RAX (Sonuç kodu / adres)
+/// Donen deger: RAX (Sonuc kodu / adres)
 pub fn syscall_dispatch(
     sys_no: u64,
     arg1: u64,
@@ -335,7 +335,7 @@ pub fn syscall_dispatch(
         }
         sys_nos::SYS_ALLOC_FRAME => {
             if let Some(frame) = pmm.allocate_frame() {
-                // Mevcut sürecin kaynaklarına kaydet
+                // Mevcut surecin kaynaklarina kaydet
                 let current = proc_mgr.current_pid;
                 if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == current) {
                     p.resources.record_frame(frame);
@@ -355,7 +355,7 @@ pub fn syscall_dispatch(
             let ptr = arg1 as *const u8;
             let len = arg2 as usize;
             if !ptr.is_null() && len > 0 && len <= 1024 {
-                // Güvenli tampon kopyalama ve seriye yazdırma
+                // Guvenli tampon kopyalama ve seriye yazdirma
                 let slice = unsafe { core::slice::from_raw_parts(ptr, len) };
                 if let Ok(s) = core::str::from_utf8(slice) {
                     crate::serial::print(s);
@@ -363,33 +363,33 @@ pub fn syscall_dispatch(
             }
             len as u64
         }
-        _ => u64::MAX, // Desteklenmeyen çağrı
+        _ => u64::MAX, // Desteklenmeyen cagri
     }
 }
 
-/// Süreç yaşam döngüsü, kaza (crash/termination), geçersiz sistem çağrısı ve kaynak temizleme testi.
+/// Surec yasam dongusu, kaza (crash/termination), gecersiz sistem cagrisi ve kaynak temizleme testi.
 pub fn test_process_lifecycle_and_fault_recovery(
     proc_mgr: &mut ProcessManager,
     pmm: &mut PhysicalMemoryManager,
 ) -> bool {
-    crate::serial_print("[PROC-TEST] --- Süreç Çökmesi, Syscall Hataları ve Kaynak Temizleme Testi ---\n");
+    crate::serial_print("[PROC-TEST] --- Surec cokmesi, Syscall Hatalari ve Kaynak Temizleme Testi ---\n");
 
     let initial_free = pmm.free_memory_bytes;
     let initial_active = proc_mgr.active_count;
 
-    // 1. Yeni bir test süreci başlat (spawn)
+    // 1. Yeni bir test sureci baslat (spawn)
     let pid = match proc_mgr.spawn("fault_test_proc", 0x1000, 0x7000_2000, 0x100000, 99, Some(99)) {
         Ok(id) => id,
         Err(_) => {
-            crate::serial_print("[PROC-TEST] Süreç başlatma: BASARISIZ\n");
+            crate::serial_print("[PROC-TEST] Surec baslatma: BASARISIZ\n");
             return false;
         }
     };
-    crate::serial_print("[PROC-TEST] 1. Test süreci başlatıldı (PID ");
+    crate::serial_print("[PROC-TEST] 1. Test sureci baslatildi (PID ");
     crate::serial::print_dec(pid as u64);
     crate::serial_print("): BASARILI\n");
 
-    // 2. Sürece kaynak tahsis et (PMM çerçeveleri)
+    // 2. Surece kaynak tahsis et (PMM cerceveleri)
     let frame1 = match pmm.allocate_frame() {
         Some(f) => f,
         None => return false,
@@ -405,38 +405,38 @@ pub fn test_process_lifecycle_and_fault_recovery(
         p.resources.record_frame(frame1);
         p.resources.record_frame(frame2);
     }
-    crate::serial_print("[PROC-TEST] 2. Sürece 2 sayfa çerçevesi tahsis edildi (Kaynak takibi aktif)\n");
+    crate::serial_print("[PROC-TEST] 2. Surece 2 sayfa cercevesi tahsis edildi (Kaynak takibi aktif)\n");
 
-    // 3. Hatalı / Geçersiz Sistem Çağrısı Testi (Geçersiz Syscall No)
+    // 3. Hatali / Gecersiz Sistem cagrisi Testi (Gecersiz Syscall No)
     let invalid_res = syscall_dispatch(9999, 0, 0, 0, proc_mgr, pmm);
     let null_ptr_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 100, 0, proc_mgr, pmm);
     if invalid_res == u64::MAX && null_ptr_write == 100 {
-        crate::serial_print("[PROC-TEST] 3. Geçersiz syscall no ve NULL pointer sınır kontrolü: BASARILI\n");
+        crate::serial_print("[PROC-TEST] 3. Gecersiz syscall no ve NULL pointer sinir kontrolu: BASARILI\n");
     } else {
-        crate::serial_print("[PROC-TEST] Hatalı sistem çağrısı sınır koruması: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Hatali sistem cagrisi sinir korumasi: BASARISIZ\n");
         return false;
     }
 
-    // 4. Süreç Çökmesi / Hata Simülasyonu (SIGSEGV / Fault Exit Code -11)
+    // 4. Surec cokmesi / Hata Simulasyonu (SIGSEGV / Fault Exit Code -11)
     let terminated = proc_mgr.terminate(pid, -11, pmm);
     if terminated {
-        crate::serial_print("[PROC-TEST] 4. Süreç çökmesi simüle edildi (Exit Code: -11 / SIGSEGV)\n");
+        crate::serial_print("[PROC-TEST] 4. Surec cokmesi simule edildi (Exit Code: -11 / SIGSEGV)\n");
     } else {
-        crate::serial_print("[PROC-TEST] Süreç sonlandırma: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Surec sonlandirma: BASARISIZ\n");
         return false;
     }
 
-    // 5. Kaynak Temizliği ve Bellek Sızıntısı Kontrolü
+    // 5. Kaynak Temizligi ve Bellek Sizintisi Kontrolu
     let free_after = pmm.free_memory_bytes;
     let active_after = proc_mgr.active_count;
 
     if free_after != initial_free || active_after != initial_active {
-        crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Kaynak temizleme sizintisi: BASARISIZ\n");
         return false;
     }
-    crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (Sızıntı: 0 bayt): BASARILI\n");
+    crate::serial_print("[PROC-TEST] 5. Surec kaynaklari PMM'e eksiksiz iade edildi (Sizinti: 0 bayt): BASARILI\n");
 
-    // 6. Öncelikli Zamanlayıcı (Priority Preemptive Scheduler) Testi
+    // 6. oncelikli Zamanlayici (Priority Preemptive Scheduler) Testi
     let p_low = proc_mgr.spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None).unwrap_or(0);
     let p_high = proc_mgr.spawn("high_proc", 0x2000, 0x7000_2000, 0x100000, 1, None).unwrap_or(0);
     if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == p_high) {
@@ -452,10 +452,10 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let _ = proc_mgr.terminate(p_high, 0, pmm);
 
     if sched_ok {
-        crate::serial_print("[PROC-TEST] 6. Öncelik tabanlı zamanlayıcı (High > Low): BASARILI\n");
+        crate::serial_print("[PROC-TEST] 6. oncelik tabanli zamanlayici (High > Low): BASARILI\n");
         true
     } else {
-        crate::serial_print("[PROC-TEST] 6. Zamanlayıcı öncelik testi: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] 6. Zamanlayici oncelik testi: BASARISIZ\n");
         false
     }
 }

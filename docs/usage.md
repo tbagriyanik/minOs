@@ -83,6 +83,34 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 ---
 
 
+## 🛡️ Açılış Hata ve Kurtarma Konsolu (Boot Recovery Console)
+
+minOs, önyükleme sırasında veya grafiksel masaüstü (`Welcome Screen`) başlatılmadan önce oluşabilecek çekirdek istisnaları (`#DE`, `#UD`, `#DF`, `#SS`, `#GP`, `#PF`) ve kritik sürücü arızalarında sistemi kontrolsüzce donanımsal reset (triple fault) döngüsüne sokmak yerine **etkileşimli metin kurtarma konsoluna (`recovery#`)** yönlendirir.
+
+### 1. Konsolun Devreye Girdiği Durumlar
+- Erken donanım veya sayfa hataları (Page Fault / General Protection Fault).
+- Desteklenmeyen veya bellek sınırı dışındaki video donanımı/framebuffer hataları.
+- Başarısız kritik sürücü başlatımları veya DMA tahsisat arızaları.
+- Çekirdek panikleri (`panic!`).
+
+### 2. Görüntülenen Teşhis Bilgileri
+- **Hata Başlığı ve Açıklaması:** Hangi sürücü veya bileşenin hata verdiği (`[minOs - BOOT ERROR]`).
+- **İstisna Detayları:** Kesme Vektörü (örn. Vektör 14 `#PF`), Hata Kodu (`Err`), İlgili Bellek Adresi (`CR2`) ve Program Sayacı (`RIP` / `CS`).
+- **Açılış Günlüğü (Boot Log):** O ana kadar çalıştırılan sürücü adımları ve seri port çıktıları.
+
+### 3. Kullanılabilir Komutlar (`recovery#`)
+Kurtarma isteminde klavye ile komut yazılabilir (`Backspace` ile düzeltme yapılabilir) ve işlem **Enter** tuşuna basıldığında gerçekleştirilir:
+
+| Komut | Alternatifler | Açıklama |
+| :--- | :--- | :--- |
+| `[Enter]` | `restart`, `reboot`, `r` | Sistemi güvenli donanım reset dizisiyle (`PCI 0xCF9` -> `KBD 0x64` -> `Triple Fault Fallback`) anında yeniden başlatır. Boş satırda yalnızca **Enter** tuşuna basmak da hızlı yeniden başlatma sağlar. |
+| `halt` | `shutdown`, `h` | İşlemciyi güvenli şekilde durdurur (`cli` ve sonsuz `hlt` döngüsü). |
+| `help` | `?` | Kullanılabilir kurtarma komutlarının listesini ekrana yazdırır. |
+
+> **Not:** `h` harfine basıldığında sistem hemen kapanmaz; harf ekrana yazılır ve `help` komutu rahatlıkla tamamlanabilir. Komutlar yalnızca **Enter** tuşuna basıldığında yürütülür.
+
+---
+
 ## 📂 Proje Dizin Yapısı
 
 ```

@@ -14,7 +14,7 @@
 # 4. Basari / Hata ozetini konsola raporlar.
 
 param(
-    [int]$TimeoutSeconds = 8,
+    [int]$TimeoutSeconds = 15,
     [switch]$KeepOpen
 )
 

@@ -70,9 +70,6 @@ impl MinGuiCompositor {
     }
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
         fb.save_cursor_background(mx, my);
-        if pressed {
-            fb.draw_rounded_rect_outline(mx.saturating_sub(2), my.saturating_sub(2), 16, 16, 7, Color::ACCENT_YELLOW);
-        }
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
@@ -100,21 +97,26 @@ impl MinGuiCompositor {
             0b00001100,
             0b00001100,
         ];
+        let (cursor_fill, cursor_outline) = if pressed {
+            (Color::CURSOR_OUTLINE, Color::CURSOR_FILL)
+        } else {
+            (Color::CURSOR_FILL, Color::CURSOR_OUTLINE)
+        };
 
         // Önce dış hat (outline), sonra dolgu — her zeminde görünür kalır.
         for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
             for col in 0..8 {
                 if (byte & (1 << (7 - col))) != 0 {
-                    fb.put_pixel(mx + col + 1, my + row, Color::CURSOR_OUTLINE);
-                    fb.put_pixel(mx + col, my + row + 1, Color::CURSOR_OUTLINE);
-                    fb.put_pixel(mx + col + 1, my + row + 1, Color::CURSOR_OUTLINE);
+                    fb.put_pixel(mx + col + 1, my + row, cursor_outline);
+                    fb.put_pixel(mx + col, my + row + 1, cursor_outline);
+                    fb.put_pixel(mx + col + 1, my + row + 1, cursor_outline);
                 }
             }
         }
         for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
             for col in 0..8 {
                 if (byte & (1 << (7 - col))) != 0 {
-                    fb.put_pixel(mx + col, my + row, if pressed { Color::ACCENT_YELLOW } else { Color::CURSOR_FILL });
+                    fb.put_pixel(mx + col, my + row, cursor_fill);
                 }
             }
         }

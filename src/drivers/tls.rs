@@ -58,12 +58,6 @@ const GCM_TAG_LEN: usize = 16;
 /// TLS 1.3 hash output length (SHA-256).
 const TLS13_HASH_LEN: usize = 32;
 
-/// RFC 8446 §7.1: Early Secret ve Master Secret türetiminde kullanılan Hash.length sıfır girdisi.
-#[inline(always)]
-fn rfc8446_zero_hash() -> [u8; TLS13_HASH_LEN] {
-    [0u8; TLS13_HASH_LEN]
-}
-
 /// TLS 1.3 HKDF-Expand-Label prefix.
 const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 
@@ -990,8 +984,7 @@ impl TlsSession {
         seed.extend_from_slice(&self.client_random);
         seed.extend_from_slice(&self.server_random);
         let ms = self.prf(pms, b"master secret", &seed);
-        let mut master = [0u8; 48];
-        master.copy_from_slice(&ms[..48]);
+        let master: [u8; 48] = ms.get(..48).ok_or(())?.try_into().map_err(|_| ())?;
         self.master_secret = Some(master);
 
         let mut kb_seed = Vec::with_capacity(64);
@@ -999,14 +992,10 @@ impl TlsSession {
         kb_seed.extend_from_slice(&self.client_random);
         let kb = self.prf(&master, b"key expansion", &kb_seed);
 
-        let mut cwk = [0u8; 16];
-        let mut swk = [0u8; 16];
-        let mut civ = [0u8; 4];
-        let mut siv = [0u8; 4];
-        cwk.copy_from_slice(&kb[0..16]);
-        swk.copy_from_slice(&kb[16..32]);
-        civ.copy_from_slice(&kb[32..36]);
-        siv.copy_from_slice(&kb[36..40]);
+        let cwk: [u8; 16] = kb.get(0..16).ok_or(())?.try_into().map_err(|_| ())?;
+        let swk: [u8; 16] = kb.get(16..32).ok_or(())?.try_into().map_err(|_| ())?;
+        let civ: [u8; 4] = kb.get(32..36).ok_or(())?.try_into().map_err(|_| ())?;
+        let siv: [u8; 4] = kb.get(36..40).ok_or(())?.try_into().map_err(|_| ())?;
 
         self.client_write_key = Some(cwk);
         self.server_write_key = Some(swk);
@@ -1024,7 +1013,14 @@ impl TlsSession {
     // ---------------------------------------------------------------------------
 
     fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; TLS13_HASH_LEN] {
-        HmacSha256::sign(salt, ikm)
+        if salt.is_empty() || ikm.is_empty() {
+            let default_buf: [u8; TLS13_HASH_LEN] = core::array::from_fn(|_| 0);
+            let actual_salt = if salt.is_empty() { &default_buf[..] } else { salt };
+            let actual_ikm = if ikm.is_empty() { &default_buf[..] } else { ikm };
+            HmacSha256::sign(actual_salt, actual_ikm)
+        } else {
+            HmacSha256::sign(salt, ikm)
+        }
     }
 
     fn hkdf_expand(prk: &[u8; TLS13_HASH_LEN], info: &[u8], length: usize) -> Vec<u8> {
@@ -1071,8 +1067,7 @@ impl TlsSession {
     /// uygulama trafik anahtarları türetilir.
     fn derive_tls13_handshake_keys(&mut self, shared_secret: &[u8]) -> Result<(), ()> {
         // early_secret = HKDF-Extract(salt=0, IKM=0)
-        let zero_hash = rfc8446_zero_hash();
-        let early_secret = Self::hkdf_extract(&zero_hash, &zero_hash);
+        let early_secret = Self::hkdf_extract(&[], &[]);
         // derived = Derive-Secret(early_secret, "derived", "")
         let derived = Self::hkdf_expand_label(&early_secret, b"derived", b"", TLS13_HASH_LEN);
         let derived_arr: [u8; TLS13_HASH_LEN] = derived.try_into().map_err(|_| ())?;
@@ -1089,7 +1084,7 @@ impl TlsSession {
             TLS13_HASH_LEN,
         );
         let derived2_arr: [u8; TLS13_HASH_LEN] = derived2.try_into().map_err(|_| ())?;
-        let master_secret = Self::hkdf_extract(&derived2_arr, &zero_hash);
+        let master_secret = Self::hkdf_extract(&derived2_arr, &[]);
         self.tls13_master_secret = Some(master_secret);
 
         // El sıkışma trafik sırları (transcript hash = ClientHello..ServerHello).
@@ -1984,8 +1979,7 @@ mod tests {
         }
 
         fn derive_secrets(&mut self, shared: &[u8; 32]) {
-            let zero_hash = rfc8446_zero_hash();
-            let early = TlsSession::hkdf_extract(&zero_hash, &zero_hash);
+            let early = TlsSession::hkdf_extract(&[], &[]);
             let derived = TlsSession::hkdf_expand_label(&early, b"derived", b"", 32);
             let derived: [u8; 32] = derived.try_into().unwrap();
             let hs = TlsSession::hkdf_extract(&derived, shared);
@@ -1993,7 +1987,7 @@ mod tests {
 
             let derived2 = TlsSession::hkdf_expand_label(&hs, b"derived", b"", 32);
             let derived2: [u8; 32] = derived2.try_into().unwrap();
-            self.master_secret = Some(TlsSession::hkdf_extract(&derived2, &zero_hash));
+            self.master_secret = Some(TlsSession::hkdf_extract(&derived2, &[]));
         }
 
         fn derive_handshake_traffic(&mut self) {

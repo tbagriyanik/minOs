@@ -141,23 +141,25 @@ impl MinGuiCompositor {
     ) {
         let px = POINTER_X.load(Ordering::Relaxed);
         let py = POINTER_Y.load(Ordering::Relaxed);
-        let pressed = POINTER_DOWN.load(Ordering::Relaxed)
-            && px >= r.0 && px < r.0.saturating_add(r.2)
+        let pointer_over = px >= r.0 && px < r.0.saturating_add(r.2)
             && py >= r.1 && py < r.1.saturating_add(r.3);
+        let hovered = hovered || pointer_over;
+        let pressed = POINTER_DOWN.load(Ordering::Relaxed) && pointer_over;
         let bg = if pressed {
-            Self::shade(bg, -24)
+            Self::shade(bg, -48)
         } else if hovered {
-            Self::shade(bg, 26)
+            Self::shade(bg, 40)
         } else {
             bg
         };
         let rect = if pressed {
-            (r.0 + 1, r.1 + 1, r.2.saturating_sub(2), r.3.saturating_sub(2))
+            (r.0 + 2, r.1 + 2, r.2.saturating_sub(4), r.3.saturating_sub(4))
         } else {
             r
         };
         fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
-        fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
+        fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5,
+            if pressed { Color::WHITE } else { Color::BORDER });
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = rect.0 + rect.2.saturating_sub(tw) / 2;
         let text_h = Self::text_height();

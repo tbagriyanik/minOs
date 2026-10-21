@@ -150,6 +150,8 @@ pub mod boot;
 
 pub mod desktop;
 
+pub mod task;
+
 pub mod panic_handler;
 
 
@@ -1537,6 +1539,8 @@ pub extern "C" fn _start() -> ! {
     let mut last_mouse_y = mouse.y;
 
     let mut last_buttons = (mouse.left_button, mouse.right_button);
+
+    let mut pending_window_control: Option<(usize, u8)> = None;
 
     let mut dragging_win: Option<usize> = None;
 
@@ -3964,48 +3968,20 @@ pub extern "C" fn _start() -> ! {
 
 
 
-                    // Kapat [X]
-
-                    if gui::in_rect(mx, my, win.close_rect()) {
-
-                        terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
-
-                            &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-
-                            &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-
-                            &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
-
-                        break;
-
-                    }
-
-                    // Maksimize / Geri Yukle
-
-                    if gui::in_rect(mx, my, win.max_rect()) {
-
+                    // Window controls activate on release so their pressed state is visible.
+                    let control = if gui::in_rect(mx, my, win.close_rect()) {
+                        Some(0)
+                    } else if gui::in_rect(mx, my, win.max_rect()) {
+                        Some(1)
+                    } else if gui::in_rect(mx, my, win.min_rect()) {
+                        Some(2)
+                    } else {
+                        None
+                    };
+                    if let Some(control) = control {
+                        pending_window_control = Some((idx, control));
                         compositor.focus_window(idx);
-
-                        compositor.toggle_maximize(idx, width, height);
-
                         break;
-
-                    }
-
-                    // Simge durumuna kucult [-]
-
-                    if gui::in_rect(mx, my, win.min_rect()) {
-
-                        if let Some(w) = compositor.windows[idx].as_mut() {
-
-                            w.is_minimized = true;
-
-                        }
-
-                        compositor.focus_top_window();
-
-                        break;
-
                     }
 
                     // Dikey kaydirma cubugu (pencere sag kenari) — tiklama/surukleme.
@@ -7537,7 +7513,36 @@ pub extern "C" fn _start() -> ! {
 
         }
 
-        if mouse_released { image_drag_last = None; }
+        if mouse_released {
+            if let Some((idx, control)) = pending_window_control.take() {
+                if let Some(win) = compositor.windows.get(idx).and_then(|slot| *slot) {
+                    let release_rect = match control {
+                        0 => win.close_rect(),
+                        1 => win.max_rect(),
+                        _ => win.min_rect(),
+                    };
+                    if win.is_open && !win.is_minimized && gui::in_rect(mx, my, release_rect) {
+                        match control {
+                            0 => terminate_app(idx, &mut compositor, &mut filemanager_app, &mut settings_app,
+                                &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
+                                &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app),
+                            1 => {
+                                compositor.focus_window(idx);
+                                compositor.toggle_maximize(idx, width, height);
+                            }
+                            _ => {
+                                if let Some(w) = compositor.windows[idx].as_mut() {
+                                    w.is_minimized = true;
+                                }
+                                compositor.focus_top_window();
+                            }
+                        }
+                    }
+                }
+            }
+            image_drag_last = None;
+        }
 
 
 
@@ -8240,6 +8245,8 @@ pub extern "C" fn _start() -> ! {
         // Ag kartindan gelen paketleri isle (ARP cevaplari, ICMP vs.).
 
         drivers::e1000::poll();
+
+        task::poll_tasks();
 
         drivers::socket::poll_timeouts();
 

@@ -118,15 +118,15 @@ impl Window {
     /// Başlık çubuğu kontrol düğmesi dikdörtgenleri.
     /// Boyutlar aktif font ölçeğine göre büyür; başlık çubuğunda dikey ortalanır.
     pub fn close_rect(&self) -> (usize, usize, usize, usize) {
-        let b = sp(14);
+        let b = sp(18);
         (self.x + self.width.saturating_sub(sp(26)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
-        let b = sp(14);
+        let b = sp(18);
         (self.x + self.width.saturating_sub(sp(46)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
-        let b = sp(14);
+        let b = sp(18);
         (self.x + self.width.saturating_sub(sp(66)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
     }
     /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
@@ -385,10 +385,15 @@ impl MinGuiCompositor {
 
         // Kontrol Butonları (hover'da parlama — yuvarlatılmış)
         // Boyut, scale'li rect'ten türetilir; bu sayede font büyüdükçe düğmeler de büyür.
-        let (cx, cy, cb, _) = win.close_rect();
+        let (cx, cy, base_cb, _) = win.close_rect();
         let hover_close = in_rect(mx, my, win.close_rect());
-        let close_bg = if hover_close { Self::shade(Color::ACCENT_RED, 30) } else { Color::ACCENT_RED };
+        let pressed_close = mouse.left_button && hover_close;
+        let press_inset = if pressed_close { 2 } else { 0 };
+        let (cx, cy, cb) = (cx + press_inset, cy + press_inset, base_cb.saturating_sub(press_inset * 2));
+        let close_bg = if pressed_close { Self::shade(Color::ACCENT_RED, -48) }
+            else if hover_close { Self::shade(Color::ACCENT_RED, 42) } else { Color::ACCENT_RED };
         fb.draw_rounded_rect(cx, cy, cb, cb, 4, close_bg);
+        if pressed_close { fb.draw_rounded_rect_outline(cx, cy, cb, cb, 4, Color::WHITE); }
         let close_mark_color = Self::text_on(close_bg);
         let mark_inset = cb as f32 * 0.29;
         let mark_left = cx as f32 + mark_inset;
@@ -399,10 +404,15 @@ impl MinGuiCompositor {
         Self::draw_antialiased_line(fb, mark_left, mark_top, mark_right, mark_bottom, close_mark_color, mark_width);
         Self::draw_antialiased_line(fb, mark_right, mark_top, mark_left, mark_bottom, close_mark_color, mark_width);
 
-        let (mxr, myr, mb, _) = win.max_rect();
+        let (mxr, myr, base_mb, _) = win.max_rect();
         let hover_max = in_rect(mx, my, win.max_rect());
-        let max_bg = if hover_max { Self::shade(Color::ACCENT_GREEN, 30) } else { Color::ACCENT_GREEN };
+        let pressed_max = mouse.left_button && hover_max;
+        let max_inset = if pressed_max { 2 } else { 0 };
+        let (mxr, myr, mb) = (mxr + max_inset, myr + max_inset, base_mb.saturating_sub(max_inset * 2));
+        let max_bg = if pressed_max { Self::shade(Color::ACCENT_GREEN, -48) }
+            else if hover_max { Self::shade(Color::ACCENT_GREEN, 42) } else { Color::ACCENT_GREEN };
         fb.draw_rounded_rect(mxr, myr, mb, mb, 4, max_bg);
+        if pressed_max { fb.draw_rounded_rect_outline(mxr, myr, mb, mb, 4, Color::WHITE); }
         let max_mark_color = Self::text_on(max_bg);
         let inset = mb as f32 * 0.29;
         let left = mxr as f32 + inset;
@@ -447,10 +457,15 @@ impl MinGuiCompositor {
             Self::draw_antialiased_line(fb, left, bottom, left, top, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
         }
 
-        let (nx, ny, nb, _) = win.min_rect();
+        let (nx, ny, base_nb, _) = win.min_rect();
         let hover_min = in_rect(mx, my, win.min_rect());
-        let min_bg = if hover_min { Self::shade(Color::ACCENT_YELLOW, 30) } else { Color::ACCENT_YELLOW };
+        let pressed_min = mouse.left_button && hover_min;
+        let min_inset = if pressed_min { 2 } else { 0 };
+        let (nx, ny, nb) = (nx + min_inset, ny + min_inset, base_nb.saturating_sub(min_inset * 2));
+        let min_bg = if pressed_min { Self::shade(Color::ACCENT_YELLOW, -48) }
+            else if hover_min { Self::shade(Color::ACCENT_YELLOW, 42) } else { Color::ACCENT_YELLOW };
         fb.draw_rounded_rect(nx, ny, nb, nb, 4, min_bg);
+        if pressed_min { fb.draw_rounded_rect_outline(nx, ny, nb, nb, 4, Color::WHITE); }
         let bar_inset = nb as f32 * 0.24;
         let bar_y = ny as f32 + nb as f32 * 0.67;
         Self::draw_antialiased_line(

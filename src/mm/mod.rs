@@ -2,6 +2,7 @@ pub mod pmm;
 pub mod vmm;
 pub mod loader;
 pub mod process;
+pub mod allocator;
 
 pub struct MemoryManager {
     pub pmm: pmm::PhysicalMemoryManager,

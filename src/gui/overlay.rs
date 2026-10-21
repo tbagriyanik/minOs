@@ -70,6 +70,9 @@ impl MinGuiCompositor {
     }
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
         fb.save_cursor_background(mx, my);
+        if pressed {
+            fb.draw_rounded_rect_outline(mx.saturating_sub(2), my.saturating_sub(2), 16, 16, 7, Color::ACCENT_YELLOW);
+        }
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.

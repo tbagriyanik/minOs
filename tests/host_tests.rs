@@ -96,3 +96,7 @@ pub mod allocator;
 #[path = "host_crypto_tests.rs"]
 mod crypto_tests;
 
+#[cfg(test)]
+#[path = "host_allocator_tests.rs"]
+mod host_allocator_tests;
+

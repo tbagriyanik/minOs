@@ -1,10 +1,10 @@
 //! minOs Paket Yöneticisi (`minPak` / `pkgmgr`)
 //!
 //! Bu modül:
-//! 1. VFS `/bin` dizinindeki çalıştırılabilir ve kurulu paketleri yönetir.
+//! 1. VFS `/bin` dizinindeki kurulu paketleri yönetir.
 //! 2. Depo (repo) kataloglarını ve yerel paket listesini sunar.
 //! 3. Hem komut satırı (minPak) hem de grafiksel pencere arayüzü (PackageManagerApp) sağlar.
-//! 4. Paket arama, kurma (yerleşik ELF veya HTTP GET) ve kaldırma işlevlerini destekler.
+//! 4. Paket arama, kurma (yerleşik araç manifesti veya HTTP GET) ve kaldırma işlevlerini destekler.
 
 use alloc::format;
 use alloc::string::String;
@@ -28,7 +28,7 @@ pub struct PackageMeta {
 pub struct MinPkg;
 
 impl MinPkg {
-    /// VFS üzerinde kurulu paketleri arar ve listeler.
+    /// VFS `/bin` dizinindeki kurulu araçları ve ikilileri listeler.
     pub fn list_installed(vfs: &VirtualFileSystem) -> Vec<PackageMeta> {
         let mut list = Vec::new();
         let bin_items = vfs.list_dir("/bin");
@@ -159,22 +159,17 @@ impl MinPkg {
         Ok(actual.eq_ignore_ascii_case(expected_sha256.trim()))
     }
 
-    /// Yerleşik paket oluşturucu (Repo kapalıyken veya test için dahili paket kurulumu).
+    /// Depo kapalıyken kullanılabilen yerleşik araç paketini kurar.
     pub fn install_builtin(name: &str, vfs: &mut VirtualFileSystem) -> Result<String, &'static str> {
         let clean = name.strip_suffix(".elf").unwrap_or(name);
-        let target_path = format!("/bin/{}.elf", clean);
-        let (msg, size_kb) = match clean {
-            "sarman-cli" => ("[sarman-cli v1.2.0] Sarman kedi araclari devrede: miyav!\n", 14),
-            "netcat-lite" => ("[netcat-lite v0.9.1] Port 8080 dinleniyor, soket hazir.\n", 18),
-            "hexdump" => ("[hexdump v1.0.4] 00000000: 7f 45 4c 46 02 01 01 00 .ELF....\n", 12),
-            "tiny-editor" => ("[tiny-editor v2.1.0] Hizli metin editoru baslatildi.\n", 24),
-            _ => ("[minOs] Program Ring 3 ortaminda basariyla calistirildi!\n", 4),
-        };
-        let sample_elf = crate::mm::loader::AppLoader::create_sample_elf_with_msg(clean, msg, size_kb * 1024);
-        if vfs.write_file(&target_path, &sample_elf) {
+        let version = REPO_CATALOG.iter().find(|pkg| pkg.name == clean).map(|pkg| pkg.version)
+            .ok_or("Yerlesik paket katalogda bulunamadi")?;
+        let target_path = format!("/bin/{}.pkg", clean);
+        let manifest = format!("MINOS-BUILTIN\n{}\n{}\n", clean, version);
+        if vfs.write_file(&target_path, manifest.as_bytes()) {
             Ok(target_path)
         } else {
-            Err("VFS uzerine yerlesik paket yazilamadi")
+            Err("VFS uzerine yerlesik paket bilgisi yazilamadi")
         }
     }
 
@@ -182,7 +177,8 @@ impl MinPkg {
     pub fn remove(pkg_name: &str, vfs: &mut VirtualFileSystem) -> bool {
         let path1 = format!("/bin/{}", pkg_name);
         let path2 = format!("/bin/{}.elf", pkg_name);
-        vfs.delete_file(&path1) || vfs.delete_file(&path2)
+        let path3 = format!("/bin/{}.pkg", pkg_name);
+        vfs.delete_file(&path1) || vfs.delete_file(&path2) || vfs.delete_file(&path3)
     }
 }
 
@@ -202,19 +198,19 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
     RepoPackage {
         name: "sarman-cli",
         version: "1.2.0",
-        description_tr: "Gelişmiş kedi temalı kabuk yardımcıları",
-        description_en: "Advanced cat themed shell utilities",
+        description_tr: "Sistem durumunu raporlar veya vecize gösterir",
+        description_en: "Reports system status or shows a quote",
         category: "Sistem",
-        size_kb: 14,
-        sha256: Some("a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"),
+        size_kb: 0,
+        sha256: None,
     },
     RepoPackage {
         name: "netcat-lite",
         version: "0.9.1",
-        description_tr: "Hafif soket test ve veri aktarım aracı",
-        description_en: "Lightweight socket test and transfer tool",
+        description_tr: "TCP bağlantısına metin gönderip yanıt okur",
+        description_en: "Sends text to a TCP connection and reads a reply",
         category: "Ağ",
-        size_kb: 18,
+        size_kb: 0,
         sha256: None,
     },
     RepoPackage {
@@ -223,34 +219,34 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_tr: "İkili dosya onaltılık görüntüleyici",
         description_en: "Binary file hexadecimal inspector",
         category: "Geliştirici",
-        size_kb: 12,
+        size_kb: 0,
         sha256: None,
     },
     RepoPackage {
         name: "tiny-editor",
         version: "2.1.0",
-        description_tr: "Hızlı komut satırı metin düzenleyici",
-        description_en: "Fast command line text editor",
+        description_tr: "Not Defteri uygulamasını açar",
+        description_en: "Opens the Notepad application",
         category: "Üretkenlik",
-        size_kb: 22,
+        size_kb: 0,
         sha256: None,
     },
     RepoPackage {
         name: "benchmark",
         version: "1.0.0",
-        description_tr: "CPU ve PMM bellek hız ölçüm aracı",
-        description_en: "CPU and PMM memory benchmark suite",
+        description_tr: "CPU döngüsü ve boş bellek özetini gösterir",
+        description_en: "Reports a CPU loop timing and free memory summary",
         category: "Sistem",
-        size_kb: 16,
+        size_kb: 0,
         sha256: None,
     },
     RepoPackage {
         name: "fortune",
         version: "1.1.0",
-        description_tr: "Günün minOs bilge kedi vecizesi",
-        description_en: "Wise minOs cat quote of the day",
+        description_tr: "Günün vecizelerinden birini gösterir",
+        description_en: "Shows one of the daily quotes",
         category: "Eğlence",
-        size_kb: 8,
+        size_kb: 0,
         sha256: None,
     },
 ];
@@ -643,8 +639,12 @@ impl PackageManagerApp {
                     MinGuiCompositor::draw_string_clipped(fb, la.0 + 240, ry + 6, desc, Color::TEXT_MUTED, (la.0 + 240, ry, la.2.saturating_sub(330), row_h));
 
                     let mut sz_buf = TextBuf::new();
-                    sz_buf.push_usize(p.size_kb);
-                    sz_buf.push_str(" KB");
+                    if p.size_kb == 0 {
+                        sz_buf.push_str(if english { "Built-in" } else { "Yerleşik" });
+                    } else {
+                        sz_buf.push_usize(p.size_kb);
+                        sz_buf.push_str(" KB");
+                    }
                     MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(80), ry + 6, sz_buf.as_str(), Color::ACCENT_GREEN);
                 }
             }

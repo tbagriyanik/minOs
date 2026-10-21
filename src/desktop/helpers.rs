@@ -272,7 +272,7 @@ pub fn launch_installed_pkg(
     now: &crate::drivers::rtc::DateTime,
 ) {
     if app_name.is_empty() { return; }
-    let clean = app_name.strip_suffix(".elf").unwrap_or(app_name);
+    let clean = app_name.strip_suffix(".pkg").or_else(|| app_name.strip_suffix(".elf")).unwrap_or(app_name);
     let lower = clean.to_ascii_lowercase();
     if lower == "notepad" || lower == "not defteri" || lower == "tiny-editor" {
         open_app(compositor, 2);
@@ -284,8 +284,10 @@ pub fn launch_installed_pkg(
         open_app(compositor, 3);
     } else {
         open_app(compositor, 10);
-        let path = if app_name.ends_with(".elf") {
+        let path = if app_name.ends_with(".elf") || app_name.ends_with(".pkg") {
             alloc::format!("/bin/{}", app_name)
+        } else if vfs.read_file(&alloc::format!("/bin/{}.pkg", app_name)).is_some() {
+            alloc::format!("/bin/{}.pkg", app_name)
         } else {
             alloc::format!("/bin/{}.elf", app_name)
         };

@@ -46,7 +46,8 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | :--- | :--- | :--- |
 | `format` / `mkfs` | `format <fat32\|ext4\|exfat\|ext2> <0..3>` | Bağlı ATA sabit diski belirtilen dosya sisteminde biçimlendirir (FAT32, ext4, exFAT veya ext2). |
 | `minPak` / `pkg` | `minPak <list\|search\|install\|remove>` | `minPak` komut satırı paketi: kurulu paketleri listeler, arar, yerel/ağ üzerinden paket kurar ve kaldırır. |
-| `exec` | `exec <dosya_yolu>` | ELF/ikili dosyayı ELF yükleyici ile belleğe yükler ve Ring 3 kullanıcı kipinde çalıştırır. |
+| Örnek paketler | `exec /bin/hexdump.pkg <dosya>`; `exec /bin/netcat-lite.pkg <host> <port> [metin]` | Yerleşik paketler VFS dosyalarını hex olarak gösterir, TCP istemci isteği yapar, CPU/bellek ölçümü verir (`benchmark`), vecize gösterir (`fortune`) veya sistem durumunu raporlar (`sarman-cli status`). `tiny-editor` Not Defteri'ni açar. |
+| `exec` | `exec <dosya_yolu> [argümanlar]` | ELF/ikili dosyayı ELF yükleyici ile belleğe yükleyip Ring 3'te çalıştırır. Yerleşik `.pkg` araç tanımlarını doğrulayıp ilgili terminal işlevini başlatır. |
 
 ### 5. Uygulama Başlatma
 | Komut | Alternatifler | Açıklama |

@@ -18,7 +18,7 @@ pub const LINE_MAX: usize = 256;
 const COMPLETION_COMMANDS: &[&str] = &[
     "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df", "usb", "lsusb", "cam", "wifi",
     "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
-    "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "open", "run", "files", "settings", "notepad",
+    "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "hexdump", "nc", "fortune", "benchmark", "sarman-cli", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd", "minPak",
 ];
 const COMPLETION_APPS: &[&str] = &[
@@ -455,7 +455,8 @@ impl TerminalApp {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem ps exec", Color::TEXT_MAIN);
                 self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
-                self.push_line("minPak list|search|install|remove | exec <file> | open <app>", Color::ACCENT_BLUE);
+                self.push_line("hexdump <file> | nc <host> <port> [text] | fortune | benchmark", Color::ACCENT_BLUE);
+                self.push_line("minPak list|search|install|remove | exec <file> [args] | open <app>", Color::ACCENT_BLUE);
                 self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
@@ -799,18 +800,39 @@ impl TerminalApp {
             }
             "exec" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: exec <ikili_dosya_yolu>", "Usage: exec <binary_path>"), Color::ACCENT_YELLOW);
+                    self.push_line(crate::gui::ui_text("Kullanım: exec <ikili_dosya_yolu> [argümanlar]", "Usage: exec <binary_path> [arguments]"), Color::ACCENT_YELLOW);
                 } else {
-                    let target = if arg.starts_with('/') {
-                        alloc::string::String::from(arg)
+                    let mut exec_parts = arg.splitn(2, ' ');
+                    let exec_path = exec_parts.next().unwrap_or("");
+                    let exec_args = exec_parts.next().unwrap_or("").trim();
+                    let target = if exec_path.starts_with('/') {
+                        alloc::string::String::from(exec_path)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
                         if !p.ends_with('/') { p.push('/'); }
-                        p.push_str(arg);
+                        p.push_str(exec_path);
                         p
                     };
                     match vfs.read_file(&target) {
                         Some(data) => {
+                            let file_name = target.rsplit('/').next().unwrap_or("");
+                            let name = file_name.strip_suffix(".pkg").or_else(|| file_name.strip_suffix(".elf")).unwrap_or(file_name);
+                            let manifest_name = data.split(|b| *b == b'\n').nth(1).unwrap_or(&[]);
+                            let builtin_manifest = target.ends_with(".pkg")
+                                && data.starts_with(b"MINOS-BUILTIN\n")
+                                && manifest_name == name.as_bytes();
+                            let legacy_builtin = target.starts_with("/bin/") && target.ends_with(".elf");
+                            if target.starts_with("/bin/") && (builtin_manifest || legacy_builtin) {
+                                match name {
+                                    "tiny-editor" => return Some(2),
+                                    "sarman-cli" => { self.run_sarman_cli(exec_args, pmm); return None; }
+                                    "netcat-lite" => { self.run_netcat_lite(exec_args); return None; }
+                                    "hexdump" => { self.run_hexdump(exec_args, vfs); return None; }
+                                    "benchmark" => { self.run_benchmark(pmm); return None; }
+                                    "fortune" => { self.run_fortune(); return None; }
+                                    _ => {}
+                                }
+                            }
                             let mut aspace = crate::mm::vmm::AddressSpace::current();
                             match crate::mm::loader::AppLoader::load_binary(data, &mut aspace, pmm) {
                                 Ok(loaded) => {
@@ -1030,6 +1052,11 @@ impl TerminalApp {
                     }
                 }
             }
+            "hexdump" => self.run_hexdump(arg, vfs),
+            "nc" => self.run_netcat_lite(arg),
+            "fortune" => self.run_fortune(),
+            "benchmark" => self.run_benchmark(pmm),
+            "sarman-cli" => self.run_sarman_cli(arg, pmm),
             "echo" => {
                 self.push_line(arg, Color::TEXT_MAIN);
             }
@@ -1497,6 +1524,181 @@ impl TerminalApp {
             }
         }
         None
+    }
+
+    fn run_hexdump(&mut self, arg: &str, vfs: &VirtualFileSystem) {
+        if arg.is_empty() {
+            self.push_line("Usage: hexdump <file>", Color::ACCENT_YELLOW);
+            return;
+        }
+        let path = if arg.starts_with('/') {
+            alloc::string::String::from(arg)
+        } else {
+            alloc::format!("{}/{}", self.cwd_str().trim_end_matches('/'), arg)
+        };
+        let Some(data) = vfs.read_file(&path) else {
+            let mut line = TextBuf::new();
+            line.push_str("hexdump: file not found: ");
+            line.push_str(arg);
+            self.push_line(line.as_str(), Color::ACCENT_RED);
+            return;
+        };
+
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        const LIMIT: usize = 1024;
+        for offset in (0..data.len().min(LIMIT)).step_by(16) {
+            let mut line = TextBuf::new();
+            for shift in (0..8).rev() {
+                line.push_byte(HEX[(offset >> (shift * 4)) & 0x0f]);
+            }
+            line.push_str(": ");
+            for byte in data[offset..(offset + 16).min(data.len())].iter().copied() {
+                line.push_byte(HEX[(byte >> 4) as usize]);
+                line.push_byte(HEX[(byte & 0x0f) as usize]);
+                line.push_byte(b' ');
+            }
+            self.push_line(line.as_str(), Color::TEXT_MAIN);
+        }
+        if data.len() > LIMIT {
+            let mut line = TextBuf::new();
+            line.push_str("... truncated; total ");
+            line.push_usize(data.len());
+            line.push_str(" bytes");
+            self.push_line(line.as_str(), Color::TEXT_MUTED);
+        } else {
+            let mut line = TextBuf::new();
+            line.push_usize(data.len());
+            line.push_str(" bytes");
+            self.push_line(line.as_str(), Color::TEXT_MUTED);
+        }
+    }
+
+    fn run_netcat_lite(&mut self, arg: &str) {
+        let mut parts = arg.splitn(3, ' ');
+        let host = parts.next().unwrap_or("");
+        let port_text = parts.next().unwrap_or("");
+        let payload = parts.next().unwrap_or("");
+        let Ok(port) = port_text.parse::<u16>() else {
+            self.push_line("Usage: nc <host> <port> [text]", Color::ACCENT_YELLOW);
+            return;
+        };
+        if host.is_empty() || port == 0 {
+            self.push_line("Usage: nc <host> <port> [text]", Color::ACCENT_YELLOW);
+            return;
+        }
+        if !crate::drivers::e1000::is_ready() {
+            self.push_line("nc: network adapter is unavailable", Color::ACCENT_RED);
+            return;
+        }
+        let ip = match crate::drivers::netstack::parse_ipv4(host) {
+            Some(ip) => ip,
+            None => match crate::drivers::socket::resolve_host(host) {
+                Ok(ip) => ip,
+                Err(_) => {
+                    self.push_line("nc: host lookup failed", Color::ACCENT_RED);
+                    return;
+                }
+            },
+        };
+        use crate::drivers::socket;
+        let fd = match socket::socket(socket::AF_INET, socket::SOCK_STREAM) {
+            Ok(fd) => fd,
+            Err(_) => {
+                self.push_line("nc: could not allocate a socket", Color::ACCENT_RED);
+                return;
+            }
+        };
+        let _ = socket::set_timeout(fd, 3000);
+        if socket::connect(fd, ip, port).is_err() {
+            socket::close(fd);
+            self.push_line("nc: connection failed or timed out", Color::ACCENT_RED);
+            return;
+        }
+        if !payload.is_empty() && socket::send(fd, payload.as_bytes()).is_err() {
+            socket::close(fd);
+            self.push_line("nc: send failed", Color::ACCENT_RED);
+            return;
+        }
+        let mut buf = [0u8; 256];
+        match socket::recv(fd, &mut buf) {
+            Ok(0) => self.push_line("nc: peer closed without sending data", Color::TEXT_MUTED),
+            Ok(n) => {
+                if let Ok(text) = core::str::from_utf8(&buf[..n]) {
+                    for line in text.split('\n') {
+                        if !line.is_empty() {
+                            self.push_line(line.trim_end_matches('\r'), Color::TEXT_MAIN);
+                        }
+                    }
+                } else {
+                    self.push_line("nc: received binary data", Color::ACCENT_YELLOW);
+                    let mut line = TextBuf::new();
+                    for byte in buf[..n.min(24)].iter().copied() {
+                        if !line.is_empty() { line.push_byte(b' '); }
+                        line.push_byte(b"0123456789abcdef"[(byte >> 4) as usize]);
+                        line.push_byte(b"0123456789abcdef"[(byte & 0x0f) as usize]);
+                    }
+                    self.push_line(line.as_str(), Color::TEXT_MAIN);
+                }
+            }
+            Err(_) => self.push_line("nc: no response before timeout", Color::ACCENT_YELLOW),
+        }
+        socket::close(fd);
+    }
+
+    fn run_fortune(&mut self) {
+        const QUOTES: [&str; 5] = [
+            "Small steps still move you forward.",
+            "A curious cat finds the useful bug.",
+            "Make it work, then make it clear.",
+            "The best backup is the one you tested.",
+            "There is no shortcut around a good readme.",
+        ];
+        let idx = (crate::monotonic_ms() as usize / 1000) % QUOTES.len();
+        self.push_line(QUOTES[idx], Color::ACCENT_PINK);
+    }
+
+    fn run_benchmark(&mut self, pmm: &PhysicalMemoryManager) {
+        let start = crate::monotonic_ms();
+        let mut checksum = 0u64;
+        for i in 0..200_000u64 {
+            checksum = checksum.rotate_left(5) ^ i.wrapping_mul(0x9e37_79b9);
+        }
+        core::hint::black_box(checksum);
+        let elapsed = crate::monotonic_ms().wrapping_sub(start);
+        let mut line = TextBuf::new();
+        line.push_str("CPU: 200000 iterations in ");
+        line.push_usize(elapsed as usize);
+        line.push_str(" ms; checksum=0x");
+        line.push_hex64(checksum);
+        self.push_line(line.as_str(), Color::ACCENT_GREEN);
+        let mut memory = TextBuf::new();
+        memory.push_str("PMM free: ");
+        memory.push_usize((pmm.free_memory_bytes / 1024) as usize);
+        memory.push_str(" KB / ");
+        memory.push_usize((pmm.total_memory_bytes / 1024) as usize);
+        memory.push_str(" KB");
+        self.push_line(memory.as_str(), Color::TEXT_MAIN);
+    }
+
+    fn run_sarman_cli(&mut self, arg: &str, pmm: &PhysicalMemoryManager) {
+        match arg.trim() {
+            "status" => {
+                self.push_line("minOs Sarman CLI status", Color::ACCENT_PINK);
+                let mut uptime = TextBuf::new();
+                uptime.push_str("Uptime: ");
+                uptime.push_usize((crate::monotonic_ms() / 1000) as usize);
+                uptime.push_str(" seconds");
+                self.push_line(uptime.as_str(), Color::TEXT_MAIN);
+                let mut memory = TextBuf::new();
+                memory.push_str("Free memory: ");
+                memory.push_usize((pmm.free_memory_bytes / 1024) as usize);
+                memory.push_str(" KB");
+                self.push_line(memory.as_str(), Color::TEXT_MAIN);
+                self.push_line(if crate::drivers::e1000::is_ready() { "Network: adapter ready" } else { "Network: adapter unavailable" }, Color::ACCENT_GREEN);
+            }
+            "fortune" => self.run_fortune(),
+            _ => self.push_line("Usage: sarman-cli status|fortune", Color::ACCENT_YELLOW),
+        }
     }
 
     pub fn render_content(

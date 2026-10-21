@@ -44,12 +44,6 @@ fn panic(info: &PanicInfo) -> ! {
         let _ = writeln!(&mut PanicText, "{}:{}", location.file(), location.line());
     }
     crate::boot::text_console::write("GUI baslatilmadi. Sistem guvenli sekilde durduruldu.\n");
-    if text_console::is_active() {
-        loop { core::hint::spin_loop(); }
-    }
 
-    // Panic mesajini inceleyebilmek icin otomatik reset yapma; ekranda bekle.
-    loop {
-        core::hint::spin_loop();
-    }
+    crate::boot::text_console::interactive_error_prompt("Kernel Panic");
 }

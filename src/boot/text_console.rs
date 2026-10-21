@@ -5,6 +5,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use crate::drivers::video::Framebuffer;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+static IN_ERROR_PROMPT: AtomicBool = AtomicBool::new(false);
 static mut FB: Option<Framebuffer> = None;
 static mut CURSOR_X: usize = 16;
 static mut CURSOR_Y: usize = 16;
@@ -267,14 +268,11 @@ fn sanitize_char(c: char) -> char {
     }
 }
 
-pub fn write(text: &str) {
-    // Buffer'a her zaman kaydet (ekran aktif olmasa bile)
+/// Renkli metin çıktısı verir (hata, uyarı ve komut satırı için).
+pub fn write_color(text: &str, color: u32) {
     write_to_buffer(text);
-    
     if !ACTIVE.load(Ordering::Acquire) { return; }
     unsafe {
-        // Retain the newest transcript so a later fatal stop can show where
-        // startup ended instead of clearing the useful lines away.
         let log = &mut *core::ptr::addr_of_mut!(BOOT_LOG_BUFFER);
         if log.len().saturating_add(text.len()) > LOG_LINE_CAPACITY {
             let drop_len = log.len().saturating_add(text.len()) - LOG_LINE_CAPACITY;
@@ -293,7 +291,7 @@ pub fn write(text: &str) {
                     CURSOR_X = 16;
                     CURSOR_Y = CURSOR_Y.saturating_add(LINE_H);
                     screen.flush();
-                    if crate::boot::time::is_ready() {
+                    if !IN_ERROR_PROMPT.load(Ordering::Relaxed) && crate::boot::time::is_ready() {
                         let started = crate::boot::time::monotonic_ms();
                         while crate::boot::time::monotonic_ms().wrapping_sub(started) < LINE_PAUSE_MS {
                             core::hint::spin_loop();
@@ -301,12 +299,18 @@ pub fn write(text: &str) {
                     }
                 }
                 '\t' => CURSOR_X = CURSOR_X.saturating_add(CHAR_W * 4),
+                '\x08' => {
+                    // Backspace karakteri: önceki karakteri ekranda temizle
+                    if CURSOR_X >= 16 + CHAR_W {
+                        CURSOR_X -= CHAR_W;
+                        screen.draw_rect(CURSOR_X.saturating_sub(1), CURSOR_Y.saturating_sub(1), CHAR_W + 2, LINE_H, 0x080D16);
+                    }
+                }
                 c if !c.is_control() => {
                     let mut buf = [0u8; 4];
                     let s = c.encode_utf8(&mut buf);
-                    // Karakter çizmeden önce koyu çerçeve (arka plan)
                     screen.draw_rect(CURSOR_X.saturating_sub(1), CURSOR_Y.saturating_sub(1), CHAR_W + 2, LINE_H, 0x000000);
-                    draw_char(screen, CURSOR_X, CURSOR_Y, s.as_bytes()[0], 0xD8E1EE);
+                    draw_char(screen, CURSOR_X, CURSOR_Y, s.as_bytes()[0], color);
                     CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
                 }
                 _ => {}
@@ -319,6 +323,10 @@ pub fn write(text: &str) {
         }
         screen.flush();
     }
+}
+
+pub fn write(text: &str) {
+    write_color(text, 0xD8E1EE);
 }
 
 unsafe fn scroll_one_line(screen: &mut Framebuffer) {
@@ -339,15 +347,196 @@ unsafe fn scroll_one_line(screen: &mut Framebuffer) {
     CURSOR_Y = CURSOR_Y.saturating_sub(shift);
 }
 
-/// Show a fatal boot message using the text console, then stop before GUI init.
+/// Polls for a single character from serial (COM1), GLOBAL_KEYBOARD or PS/2 port 0x60.
+pub fn poll_input_char() -> Option<char> {
+    // 1. Check COM1 serial line status (port 0x3FD bit 0 = Data Ready)
+    unsafe {
+        let mut lsr: u8;
+        core::arch::asm!("in al, dx", in("dx") 0x3FDu16, out("al") lsr, options(nomem, nostack, preserves_flags));
+        if lsr & 1 != 0 {
+            let mut byte: u8;
+            core::arch::asm!("in al, dx", in("dx") 0x3F8u16, out("al") byte, options(nomem, nostack, preserves_flags));
+            if byte == b'\r' || byte == b'\n' {
+                return Some('\n');
+            }
+            if byte == 0x7F || byte == 0x08 {
+                return Some('\x08');
+            }
+            if byte >= 32 && byte < 127 {
+                return Some(byte as char);
+            }
+        }
+    }
+
+    // 2. Check GLOBAL_KEYBOARD if initialized
+    unsafe {
+        let kbd = &mut *core::ptr::addr_of_mut!(crate::GLOBAL_KEYBOARD);
+        if let Some(ch) = kbd.take_last_char() {
+            return Some(ch);
+        }
+    }
+
+    // 3. Direct PS/2 Keyboard polling (port 0x64 and 0x60)
+    unsafe {
+        let mut status: u8;
+        core::arch::asm!("in al, dx", in("dx") 0x64u16, out("al") status, options(nomem, nostack, preserves_flags));
+        if status & 0x01 != 0 {
+            let mut scancode: u8;
+            core::arch::asm!("in al, dx", in("dx") 0x60u16, out("al") scancode, options(nomem, nostack, preserves_flags));
+            // If bit 5 is 1, it's mouse data, skip it
+            if status & 0x20 == 0 && (scancode & 0x80 == 0) {
+                // Key press make code
+                return match scancode {
+                    0x13 => Some('r'),
+                    0x1C => Some('\n'),
+                    0x1F => Some('s'),
+                    0x2E => Some('c'),
+                    0x23 => Some('h'),
+                    0x0E => Some('\x08'), // Backspace
+                    0x01 => Some('\x1b'), // Escape
+                    0x39 => Some(' '),
+                    0x10 => Some('q'),
+                    0x11 => Some('w'),
+                    0x12 => Some('e'),
+                    0x14 => Some('t'),
+                    0x15 => Some('y'),
+                    0x16 => Some('u'),
+                    0x17 => Some('i'),
+                    0x18 => Some('o'),
+                    0x19 => Some('p'),
+                    0x1E => Some('a'),
+                    0x20 => Some('d'),
+                    0x21 => Some('f'),
+                    0x22 => Some('g'),
+                    0x24 => Some('j'),
+                    0x25 => Some('k'),
+                    0x26 => Some('l'),
+                    0x2C => Some('z'),
+                    0x2D => Some('x'),
+                    0x2F => Some('v'),
+                    0x30 => Some('b'),
+                    0x31 => Some('n'),
+                    0x32 => Some('m'),
+                    0x02 => Some('1'),
+                    0x03 => Some('2'),
+                    0x04 => Some('3'),
+                    0x05 => Some('4'),
+                    0x06 => Some('5'),
+                    0x07 => Some('6'),
+                    0x08 => Some('7'),
+                    0x09 => Some('8'),
+                    0x0A => Some('9'),
+                    0x0B => Some('0'),
+                    _ => None,
+                };
+            }
+        }
+    }
+
+    None
+}
+
+/// Shows a boot error or critical driver problem in text mode,
+/// and presents an interactive command recovery prompt before GUI/Welcome screen.
+pub fn interactive_error_prompt(message: &str) -> ! {
+    IN_ERROR_PROMPT.store(true, Ordering::SeqCst);
+    crate::serial::print("\n==================== [ BOOT ERROR ] ====================\n");
+    crate::serial::print("[BOOT] HATA: ");
+    crate::serial::print(message);
+    crate::serial::print("\n=========================================================\n");
+
+    unsafe {
+        show_boot_log();
+    }
+
+    write("\n\n");
+    write_color("================================================================================\n", 0xFF6B6B);
+    write_color("[minOs - BOOT ERROR / KRITIK SURUCU HATASI]\n", 0xFF6B6B);
+    write_color("================================================================================\n", 0xFF6B6B);
+    write("Hata / Error: ");
+    write_color(message, 0xFFD43B);
+    write("\n\n");
+    write_color("Kritik baslatma veya surucu hatasi tespit edildi.\n", 0xD8E1EE);
+    write_color("Grafik arayuzu ve Hosgeldin ekrani baslatilmadi (Halted before Welcome Screen).\n\n", 0xFA5252);
+    write_color("Kullanilabilir Komutlar / Available Commands:\n", 0x62D6A8);
+    write("  [R] restart / reboot : Sistemi yeniden baslat (Restart system)\n");
+    write("  [H] halt / shutdown  : Sistemi kapat (Halt CPU)\n");
+    write("  help                 : Komut listesini goster\n\n");
+    write_color("Komut girin veya [R] tusuna basin:\n", 0x4DABF7);
+    write_color("recovery# ", 0x62D6A8);
+
+    let mut cmd_buf = [0u8; 32];
+    let mut cmd_len = 0usize;
+
+    loop {
+        if let Some(c) = poll_input_char() {
+            if c == '\n' {
+                write("\n");
+                let cmd_str = core::str::from_utf8(&cmd_buf[..cmd_len]).unwrap_or("").trim();
+                if cmd_str.is_empty() || cmd_str.eq_ignore_ascii_case("restart") || cmd_str.eq_ignore_ascii_case("reboot") || cmd_str.eq_ignore_ascii_case("r") {
+                    write_color("[RESTART] Sistem yeniden baslatiliyor (Restarting)...\n", 0x62D6A8);
+                    crate::serial::print("[BOOT] Komut alindi: restart. Sistem yeniden baslatiliyor...\n");
+                    for _ in 0..200_000 { core::hint::spin_loop(); }
+                    crate::boot::console::restart_system();
+                } else if cmd_str.eq_ignore_ascii_case("halt") || cmd_str.eq_ignore_ascii_case("shutdown") || cmd_str.eq_ignore_ascii_case("h") {
+                    write_color("[HALT] Sistem guvenli sekilde durduruldu (Halted).\n", 0xFF6B6B);
+                    crate::serial::print("[BOOT] Komut alindi: halt. Sistem durduruldu.\n");
+                    unsafe {
+                        core::arch::asm!("cli");
+                        loop { core::arch::asm!("hlt"); }
+                    }
+                } else if cmd_str.eq_ignore_ascii_case("help") {
+                    write("Komutlar:\n");
+                    write("  restart / reboot / r : Sistemi hemen yeniden baslatir\n");
+                    write("  halt / shutdown / h  : Sistemi durdurur (CPU hlt)\n");
+                    write("  help                 : Bu yardim mesajini gosterir\n");
+                    write_color("recovery# ", 0x62D6A8);
+                    cmd_len = 0;
+                } else {
+                    write("Bilinmeyen komut: '");
+                    write(cmd_str);
+                    write("'. Yeniden baslatmak icin 'restart' yazin veya [R] tusuna basin.\n");
+                    write_color("recovery# ", 0x62D6A8);
+                    cmd_len = 0;
+                }
+            } else if c == '\x08' {
+                // Backspace
+                if cmd_len > 0 {
+                    cmd_len -= 1;
+                    write("\x08");
+                }
+            } else if (c == 'r' || c == 'R') && cmd_len == 0 {
+                // Quick restart hotkey
+                write_color("restart\n[RESTART] [R] tusu algilandi; sistem yeniden baslatiliyor...\n", 0x62D6A8);
+                crate::serial::print("[BOOT] [R] tusu algilandi. Sistem yeniden baslatiliyor...\n");
+                for _ in 0..200_000 { core::hint::spin_loop(); }
+                crate::boot::console::restart_system();
+            } else if (c == 'h' || c == 'H') && cmd_len == 0 {
+                // Quick halt hotkey
+                write_color("halt\n[HALT] [H] tusu algilandi; sistem durduruldu.\n", 0xFF6B6B);
+                crate::serial::print("[BOOT] [H] tusu algilandi. Sistem durduruldu.\n");
+                unsafe {
+                    core::arch::asm!("cli");
+                    loop { core::arch::asm!("hlt"); }
+                }
+            } else if !c.is_control() && cmd_len < cmd_buf.len() {
+                cmd_buf[cmd_len] = c as u8;
+                cmd_len += 1;
+                let mut buf = [0u8; 4];
+                let s = c.encode_utf8(&mut buf);
+                write(s);
+            }
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Show a fatal boot message using the text console, then run the interactive recovery prompt.
 pub fn fatal(message: &str) -> ! {
     crate::serial::print("\n[FATAL] ");
     crate::serial::print(message);
     crate::serial::print("\n[BOOT] Kritik hata: grafik arayuzu baslatilmadi.\n");
-    write("\n[FATAL] ");
-    write(message);
-    write("\nKritik hata: grafik arayuzu baslatilmadi. Sistem durduruldu.\n");
-    loop { core::hint::spin_loop(); }
+    interactive_error_prompt(message);
 }
 
 /// Clear graphics output after every visible boot check has passed.

@@ -43,14 +43,17 @@ pub fn serial_print_hex(v: u64) {
     if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
 }
 
-
 pub fn restart_system() -> ! {
-    #[cfg(minos_boot_log)]
-    serial_print("[minOs] Restart requested from Start Menu.\n");
+    serial_print("[minOs] Restarting system...\n");
     unsafe {
-        // QEMU/PC reset control register, then legacy 8042 fallback.
+        // 1. QEMU/PC reset control register
         core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);
+        // 2. Legacy 8042 keyboard controller reset
         core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8);
+        // 3. Triple fault fallback if port reset fails
+        let null_idt: [u16; 5] = [0, 0, 0, 0, 0];
+        core::arch::asm!("lidt [{}]", in(reg) &null_idt);
+        core::arch::asm!("int3");
         core::arch::asm!("cli");
     }
     loop { core::hint::spin_loop(); }

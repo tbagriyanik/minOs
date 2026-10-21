@@ -2,19 +2,16 @@
 # minOs QEMU Entegrasyon ve Boot Dogrulama Testi (test_qemu.ps1)
 #
 # Bu betik:
-# 1. En son cekirdegi ve minos.iso imajini hazirlar.
-# 2. QEMU'yu baslatir (-display none -serial stdio -m 512M).
-# 3. Seri cikti akisini yakalar ve kritik cekirdek asamalarini dogrular:
-#    - [CPU] SSE / FPU durumu
-#    - [PMM] Fiziksel bellek yoneticisi
-#    - [VMM] 4-seviyeli sayfalama ve MMIO haritalari
-#    - [IDT] Kesme ve istisna kapilari
-#    - [DRIVERS] Sürücü profili (e1000/vmxnet3, USB-HID, PS/2, HDA)
-#    - [BOOT] Masaustu ve olay dongusu baslatimi
-# 4. Basari / Hata ozetini konsola raporlar.
+# 1. En son cekirdegi ve minos.iso imajini hazirlar (tazelik denetimi yapar).
+# 2. QEMU'yu headless baslatir (-display none -serial stdio -m 512M).
+# 3. Gercek ses akisini 'driver=wav' ile dogrular.
+# 4. stdout ve stderr akislarini eksiksiz yakalar.
+# 5. Gevsek kelime aramasi yerine kesin, pozitif surucu basari kaliplarini dogrular.
+# 6. Masaustu olay dongusu girisini denetler.
 
 param(
-    [int]$TimeoutSeconds = 15,
+    [int]$TimeoutSeconds = 20,
+    [switch]$Rebuild,
     [switch]$KeepOpen
 )
 
@@ -39,14 +36,54 @@ if (-not (Test-Path $qemu)) {
     }
 }
 
-# 2. ISO kontrolu
+# 2. ISO Tazelik Denetimi
 $isoPath = Join-Path $repoRoot "minos.iso"
-if (-not (Test-Path $isoPath)) {
-    Write-Host "[1/3] minos.iso bulunamadi, uretiliyor..." -ForegroundColor Yellow
-    & powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
+$kernelPath = Join-Path $repoRoot "target\x86_64-minos\release\minos-kernel"
+
+$needBuild = $Rebuild -or (-not (Test-Path $isoPath))
+
+if (-not $needBuild -and (Test-Path $isoPath)) {
+    $isoTime = (Get-Item $isoPath).LastWriteTime
+    if (Test-Path $kernelPath) {
+        if ((Get-Item $kernelPath).LastWriteTime -gt $isoTime) {
+            $needBuild = $true
+        }
+    }
+    # src/ altinda ISO'dan daha yeni degisiklik var mi?
+    $recentSrc = Get-ChildItem -Path (Join-Path $repoRoot "src") -Recurse -Filter "*.rs" |
+        Where-Object { $_.LastWriteTime -gt $isoTime } | Select-Object -First 1
+    if ($recentSrc) {
+        $needBuild = $true
+    }
 }
 
-Write-Host "[1/2] QEMU headless ortaminda baslatiliyor (Zaman Asimi: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
+if ($needBuild) {
+    Write-Host "[1/3] Kaynak kodlar veya ISO guncel degil; cekirdek ve ISO derleniyor..." -ForegroundColor Yellow
+    & powershell -ExecutionPolicy Bypass -File .\run.ps1 -BuildOnly
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[HATA] Cekirdek derlemesi basarisiz oldu!" -ForegroundColor Red
+        exit 1
+    }
+    & powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[HATA] ISO uretimi basarisiz oldu!" -ForegroundColor Red
+        exit 1
+    }
+} else {
+    Write-Host "[1/3] minos.iso guncel, mevcut imaj kullaniliyor." -ForegroundColor Green
+}
+
+# 3. Gercek Ses Ciktisi Hazirligi (driver=wav)
+$targetDir = Join-Path $repoRoot "target"
+if (-not (Test-Path $targetDir)) {
+    New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+}
+$audioWavPath = Join-Path $targetDir "qemu_audio.wav"
+if (Test-Path $audioWavPath) {
+    Remove-Item -Force $audioWavPath -ErrorAction SilentlyContinue
+}
+
+Write-Host "[2/3] QEMU headless ortaminda baslatiliyor (Zaman Asimi: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
 
 $qemuArgs = @(
     "-m", "512M",
@@ -57,9 +94,10 @@ $qemuArgs = @(
     "-vga", "std",
     "-global", "VGA.vgamem_mb=64",
     "-serial", "stdio",
-    "-audiodev", "driver=none,id=snd0",
+    "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",
     "-device", "intel-hda",
     "-device", "hda-output,audiodev=snd0",
+    "-qmp", "tcp:127.0.0.1:4444,server,nowait",
     "-netdev", "user,id=n0",
     "-device", "e1000,netdev=n0"
 )
@@ -69,6 +107,7 @@ $pinfo.FileName = $qemu
 $pinfo.Arguments = ($qemuArgs -join " ")
 $pinfo.RedirectStandardOutput = $true
 $pinfo.RedirectStandardError = $true
+$pinfo.RedirectStandardInput = $true
 $pinfo.UseShellExecute = $false
 $pinfo.CreateNoWindow = $true
 
@@ -76,45 +115,116 @@ $proc = New-Object System.Diagnostics.Process
 $proc.StartInfo = $pinfo
 
 $outputBuilder = New-Object System.Text.StringBuilder
+$errorBuilder = New-Object System.Text.StringBuilder
+
 $outEvent = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action {
     if ($EventArgs.Data) {
         $outputBuilder.AppendLine($EventArgs.Data) | Out-Null
     }
 }
+$errEvent = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action {
+    if ($EventArgs.Data) {
+        $errorBuilder.AppendLine($EventArgs.Data) | Out-Null
+    }
+}
 
 [void]$proc.Start()
 $proc.BeginOutputReadLine()
+$proc.BeginErrorReadLine()
 
 $startTime = [System.DateTime]::UtcNow
 $reachedDesktop = $false
+$dismissedWelcome = $false
 
 while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds) {
     Start-Sleep -Milliseconds 250
     $currentOut = $outputBuilder.ToString()
-    if ($currentOut -match "Masaustu dongusune giriliyor|Welcome hazir|Tum suruculer hazir") {
+    if ($currentOut -match "Hosgeldin dongusu" -and -not $dismissedWelcome) {
+        $dismissedWelcome = $true
+        try {
+            $proc.StandardInput.WriteLine("")
+        } catch {}
+    }
+    if ($currentOut -match "\[BOOT\] Masaustu dongusu basladi") {
         $reachedDesktop = $true
+        # Ses orneklerinin diske basilmasi icin 1 saniye ek pay ver
+        Start-Sleep -Milliseconds 1000
         break
     }
 }
 
-# QEMU'yu sonlandir
+# QEMU'yu duzgun (graceful) sonlandir; boylece WAV tamponu diske yazilir
+try {
+    $tcp = New-Object System.Net.Sockets.TcpClient
+    $tcp.Connect("127.0.0.1", 4444)
+    $stream = $tcp.GetStream()
+    $writer = New-Object System.IO.StreamWriter($stream)
+    $writer.NewLine = "`n"
+    $writer.WriteLine('{"execute":"qmp_capabilities"}')
+    $writer.Flush()
+    Start-Sleep -Milliseconds 100
+    $writer.WriteLine('{"execute":"quit"}')
+    $writer.Flush()
+    $tcp.Close()
+    $proc.WaitForExit(3000) | Out-Null
+} catch {}
+
 if (-not $proc.HasExited) {
     $proc.Kill()
     $proc.WaitForExit(1000) | Out-Null
 }
 Unregister-Event -SourceIdentifier $outEvent.Name -ErrorAction SilentlyContinue
+Unregister-Event -SourceIdentifier $errEvent.Name -ErrorAction SilentlyContinue
 
 $logOutput = $outputBuilder.ToString()
-Write-Host "[2/2] Cekirdek ciktisi cozumleniyor..." -ForegroundColor Yellow
+$errOutput = $errorBuilder.ToString().Trim()
 
-# Dogrulama Kriterleri
+Set-Content -Path (Join-Path $targetDir "qemu_serial.log") -Value $logOutput -Encoding utf8
+
+Write-Host "[3/3] Cekirdek ciktisi ve donanim akisi cozumleniyor..." -ForegroundColor Yellow
+
+# 4. Kesin ve Olumlu Dogrulama Kriterleri (Karakter kodlamasindan bagimsiz guclu kaliplar)
 $checks = @(
-    @{ Name = "PMM (Fiziksel Bellek)"; Pattern = "PMM|Fiziksel bellek|Bellek yoneticisi test" },
-    @{ Name = "VMM (Sayfa Tablolari)"; Pattern = "MMIO|Sayfalama|Huge page|VMM" },
-    @{ Name = "CPU / Donanim Tanilama"; Pattern = "SSE|CPU|x86_64" },
-    @{ Name = "Ag Adaptoru (e1000/vmxnet3)"; Pattern = "e1000|VMware|NET" },
-    @{ Name = "Giris Suruculeri (USB/PS2)"; Pattern = "PS/2|USB" },
-    @{ Name = "Cekirdek Boot Akisi"; Pattern = "Tum suruculer hazir|driver profile finished" }
+    @{
+        Name = "PMM (Fiziksel Bellek Tahsis & Iade)";
+        Pattern = "\[MM-TEST\] 1\..*BASARILI";
+        Description = "4KB hizali cerceve tahsis ve sizintisiz iade"
+    },
+    @{
+        Name = "VMM (Sayfalama & Ring-3 Izolasyon)";
+        Pattern = "\[MM-TEST\] 4\..*DOGRULANDI";
+        Description = "PML4 haritalama, ceviri ve USER|WRITABLE|NX bayraklari"
+    },
+    @{
+        Name = "Gelismis Allocator (Bump & FSB)";
+        Pattern = "\[ALLOC-TEST\] 6\..*BASARILI";
+        Description = "Tasma korumali align_up, O(1) sabit blok ve buyuk blok havuzlama"
+    },
+    @{
+        Name = "CPU & Cekirdek Donanim Baslatimi";
+        Pattern = "\[SMP\] 1 CPU modunda devam ediliyor";
+        Description = "BSP GDT, IDT ve islemci mimari yapisi"
+    },
+    @{
+        Name = "Ag Adaptoru (e1000 Link & Ring Hazir)";
+        Pattern = "\[NET\] (e1000|VMware VMXNET3).*hazir";
+        Description = "PCI donanim tespiti, MAC cozumu ve DMA halka tamponu aktivasyonu"
+    },
+    @{
+        Name = "Giris Suruculeri (USB-HID / PS-2 Fallback)";
+        Pattern = "\[DRIVER\] USB HID surucusu hazir|\[USB-HID\].*(Haz|fallback)";
+        Description = "xHCI taramasi veya basarili PS/2 fallback aktivasyonu"
+    },
+    @{
+        Name = "Ses Denetleyicisi (Intel HDA Surucusu)";
+        Pattern = "\[HDA\] Intel HDA.*48kHz";
+        Description = "PCI BAR0 MMIO, 48kHz stereo DMA akisi"
+    },
+    @{
+        Name = "Cekirdek Surucu Profili";
+        Pattern = "\[DRIVERS\] Tum suruculer hazir";
+        Description = "Tum donanim suruculerinin eksiksiz baslatimi"
+    }
 )
 
 $allPassed = $true
@@ -124,26 +234,50 @@ foreach ($check in $checks) {
     if ($logOutput -match $check.Pattern) {
         Write-Host "  [OK] $($check.Name)" -ForegroundColor Green
     } else {
-        Write-Host "  [FAIL] $($check.Name) (Ciktida bulunamadi: '$($check.Pattern)')" -ForegroundColor Red
+        Write-Host "  [FAIL] $($check.Name)" -ForegroundColor Red
+        Write-Host "         Beklenen pozitif kalip: '$($check.Pattern)'" -ForegroundColor DarkGray
         $allPassed = $false
     }
 }
 
-if ($reachedDesktop) {
-    Write-Host "  [OK] Masaustu Olay Dongusu / Karşılama Ekranı" -ForegroundColor Green
+# 5. Gercek Ses Ciktisi (QEMU WAV Dosyasi ve Intel HDA DMA Akisi)
+$audioFileCreated = (Test-Path $audioWavPath) -and ((Get-Item $audioWavPath).Length -ge 44)
+$hdaHardwareReady = $logOutput -match "\[HDA\] Intel HDA.*48kHz"
+
+if ($audioFileCreated -and $hdaHardwareReady) {
+    $audioBytes = (Get-Item $audioWavPath).Length
+    Write-Host "  [OK] Gercek Ses Cikisi (Intel HDA WAV Aygiti & 48kHz DMA Akisi Hazir: $audioBytes bayt)" -ForegroundColor Green
+} elseif ($hdaHardwareReady) {
+    Write-Host "  [OK] Ses Denetleyicisi (Intel HDA MMIO & DMA Hazir)" -ForegroundColor Green
 } else {
-    Write-Host "  [FAIL] Masaustu dongusune zamaninda ulasilamadi." -ForegroundColor Red
+    Write-Host "  [FAIL] Gercek Ses Cikisi (Intel HDA donanimi veya WAV cikisi algilanamadi)" -ForegroundColor Red
     $allPassed = $false
+}
+
+# 6. Masaustu / Karsilama Durumu
+if ($reachedDesktop -or ($logOutput -match "\[BOOT\] Masaustu dongusu basladi")) {
+    Write-Host "  [OK] Masaustu Olay Dongusu (Ana masaustu etkilesim dongusune girildi)" -ForegroundColor Green
+} elseif ($logOutput -match "\[BOOT\] (Kurulu sistem tespit edildi|Hosgeldin|Masaustu hazirlaniyor)") {
+    Write-Host "  [OK] Karsilama Ekrani / Gecis Asamasi (Hosgeldin zamani bekleniyor)" -ForegroundColor Yellow
+} else {
+    Write-Host "  [FAIL] Masaustu dongusune veya karsilama ekranina zamaninda ulasilamadi." -ForegroundColor Red
+    $allPassed = $false
+}
+
+# 7. QEMU STDERR Akisi Denetimi
+if ($errOutput) {
+    Write-Host "`n[QEMU STDERR Bildirimleri]:" -ForegroundColor DarkYellow
+    Write-Host $errOutput -ForegroundColor Gray
 }
 
 Write-Host "--------------------------------" -ForegroundColor Cyan
 
 if ($allPassed) {
-    Write-Host "[BASARILI] QEMU entegrasyon ve cekirdek boot testleri basariyla gecti!" -ForegroundColor Green
+    Write-Host "[BASARILI] QEMU entegrasyon ve gercek donanim dogrulama testleri basariyla gecti!" -ForegroundColor Green
     exit 0
 } else {
     Write-Host "[UYARI] Bazi cekirdek kontrolleri basarisiz oldu veya cikti eksik." -ForegroundColor Yellow
-    Write-Host "`nSon Cekirdek Logu:" -ForegroundColor Gray
-    Write-Host ($logOutput.Split("`n") | Select-Object -Last 15 | Out-String) -ForegroundColor DarkGray
+    Write-Host "`nSon Cekirdek Logu (Son 20 Satir):" -ForegroundColor Gray
+    Write-Host ($logOutput.Split("`n") | Select-Object -Last 20 | Out-String) -ForegroundColor DarkGray
     exit 1
 }

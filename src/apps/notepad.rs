@@ -42,6 +42,7 @@ pub struct NotepadApp {
     // For double‑click detection
     pub last_click_tick: usize,
     pub last_click_pos: (usize, usize),
+    pub click_streak: u8,
     pub menu: u8, // 0 kapalı, 1 Dosya, 2 Düzen, 3 Yardım
     pub file_path: [u8; 64],
     pub file_path_len: usize,
@@ -342,6 +343,7 @@ impl NotepadApp {
             scroll_offset: 0,
             last_click_tick: 0,
             last_click_pos: (0, 0),
+            click_streak: 0,
             menu: 0,
             file_path: [0; 64],
             file_path_len: 0,
@@ -627,6 +629,75 @@ impl NotepadApp {
         }
     }
 
+    /// Record a click in the same small hit area and return its sequence
+    /// number: 1 (caret), 2 (word), or 3 (paragraph). A fourth click starts
+    /// a new sequence.
+    pub fn record_click(&mut self, now_ms: usize, pos: (usize, usize), interval_ms: usize) -> u8 {
+        let same_target = now_ms.abs_diff(self.last_click_tick) <= interval_ms
+            && self.last_click_pos.0.abs_diff(pos.0) < 4
+            && self.last_click_pos.1.abs_diff(pos.1) < 4;
+        self.click_streak = if same_target && self.click_streak < 3 {
+            self.click_streak + 1
+        } else { 1 };
+        self.last_click_tick = now_ms;
+        self.last_click_pos = pos;
+        self.click_streak
+    }
+
+    /// Select the paragraph containing `idx`. Lines separated by a blank line
+    /// form a paragraph; a lone line break remains inside the paragraph.
+    pub fn select_paragraph_at(&mut self, idx: usize) {
+        if self.len == 0 {
+            self.selection_anchor = None;
+            self.selection_start = None;
+            self.selection_end = None;
+            self.cursor = 0;
+            return;
+        }
+
+        let idx = idx.min(self.len);
+        let mut start = idx;
+        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        let mut end = idx;
+        while end < self.len && self.buffer[end] != '\n' { end += 1; }
+
+        // A blank line is itself the paragraph target; do not absorb the
+        // preceding or following paragraph when the caret is on it.
+        if start == end {
+            let selection_end = if end < self.len { end + 1 } else { end };
+            self.set_selection(start, selection_end);
+            return;
+        }
+
+        while start > 0 {
+            let previous_end = start - 1;
+            let mut previous_start = previous_end;
+            while previous_start > 0 && self.buffer[previous_start - 1] != '\n' { previous_start -= 1; }
+            if previous_start == previous_end { break; }
+            start = previous_start;
+        }
+
+        while end < self.len && self.buffer[end] == '\n' {
+            let next_start = end + 1;
+            if next_start >= self.len { end = self.len; break; }
+            let mut next_end = next_start;
+            while next_end < self.len && self.buffer[next_end] != '\n' { next_end += 1; }
+            if next_start == next_end { break; }
+            end = next_end;
+        }
+        if end < self.len && self.buffer[end] == '\n' { end += 1; }
+        self.set_selection(start, end);
+    }
+
+    fn set_selection(&mut self, start: usize, end: usize) {
+        let start = start.min(self.len);
+        let end = end.min(self.len).max(start);
+        self.selection_anchor = Some(start);
+        self.selection_start = if start == end { None } else { Some(start) };
+        self.selection_end = if start == end { None } else { Some(end) };
+        self.cursor = end;
+    }
+
     /// İmleci bir sonraki konuma taşır; `select` true ise seçimi genişletir.
     fn move_to(&mut self, target: usize, select: bool) {
         if select {
@@ -811,6 +882,7 @@ impl NotepadApp {
 
     pub fn clear(&mut self) {
         self.push_history();
+        self.click_streak = 0;
         self.len = 0;
         self.cursor = 0;
         for c in self.buffer.iter_mut() {

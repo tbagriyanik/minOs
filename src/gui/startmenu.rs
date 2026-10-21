@@ -151,15 +151,144 @@ impl MinGuiCompositor {
     }
 
     pub fn push_start_search(&mut self, ch: char) {
-        if ch.is_ascii_alphanumeric() && self.start_search_len < self.start_search.len() {
-            self.start_search[self.start_search_len] = ch.to_ascii_lowercase() as u8;
+        if !ch.is_ascii_alphanumeric() { return; }
+        self.delete_start_search_selection();
+        if self.start_search_len < self.start_search.len() {
+            self.start_search.copy_within(self.start_search_cursor..self.start_search_len, self.start_search_cursor + 1);
+            self.start_search[self.start_search_cursor] = ch.to_ascii_lowercase() as u8;
             self.start_search_len += 1;
+            self.start_search_cursor += 1;
+        }
+        self.selected_start_item = 0;
+    }
+
+    fn delete_start_search_selection(&mut self) -> bool {
+        let Some((a, b)) = self.start_search_selection.take() else { return false };
+        let start = a.min(b).min(self.start_search_len);
+        let end = a.max(b).min(self.start_search_len);
+        if start >= end { return false; }
+        self.start_search.copy_within(end..self.start_search_len, start);
+        self.start_search_len -= end - start;
+        self.start_search[self.start_search_len..].fill(0);
+        self.start_search_cursor = start;
+        self.start_search_anchor = None;
+        true
+    }
+
+    pub fn backspace_start_search(&mut self) {
+        if self.delete_start_search_selection() { self.selected_start_item = 0; return; }
+        if self.start_search_cursor > 0 {
+            self.start_search_cursor -= 1;
+            self.start_search.copy_within(self.start_search_cursor + 1..self.start_search_len, self.start_search_cursor);
+            self.start_search_len -= 1;
+            self.start_search[self.start_search_len] = 0;
+            self.start_search_selection = None;
+            self.selected_start_item = 0;
+        }
+    }
+
+    pub fn start_search_move_to(&mut self, target: usize, extend: bool) {
+        let target = target.min(self.start_search_len);
+        if extend {
+            let anchor = *self.start_search_anchor.get_or_insert(self.start_search_cursor);
+            self.start_search_selection = if anchor == target { None }
+                else { Some((anchor.min(target), anchor.max(target))) };
+        } else {
+            self.start_search_selection = None;
+            self.start_search_anchor = None;
+        }
+        self.start_search_cursor = target;
+    }
+
+    pub fn start_search_click_at(&mut self, x: usize, y: usize, field_x: usize, now_ms: u64, interval_ms: u64) -> u8 {
+        self.start_search_focused = true;
+        let column = x.saturating_sub(field_x) / Self::text_width("M", 1).max(1);
+        let at = column.min(self.start_search_len);
+        self.start_search_cursor = at;
+        self.start_search_anchor = Some(at);
+        self.start_search_selection = None;
+        let same_target = now_ms.abs_diff(self.start_search_last_click.0) <= interval_ms
+            && self.start_search_last_click.1.abs_diff(x) < 4
+            && self.start_search_last_click.2.abs_diff(y) < 4;
+        self.start_search_click_streak = if same_target && self.start_search_click_streak < 3 {
+            self.start_search_click_streak + 1
+        } else { 1 };
+        self.start_search_last_click = (now_ms, x, y);
+        match self.start_search_click_streak {
+            2 => self.select_start_search_word(at),
+            3 => self.select_all_start_search(),
+            _ => {}
+        }
+        self.start_search_click_streak
+    }
+
+    pub fn start_search_drag_to(&mut self, x: usize, field_x: usize) {
+        let column = x.saturating_sub(field_x) / Self::text_width("M", 1).max(1);
+        let target = column.min(self.start_search_len);
+        let anchor = self.start_search_anchor.unwrap_or(self.start_search_cursor);
+        self.start_search_cursor = target;
+        self.start_search_selection = if anchor == target { None }
+            else { Some((anchor.min(target), anchor.max(target))) };
+    }
+
+    pub fn select_start_search_word(&mut self, index: usize) {
+        if self.start_search_len == 0 { return; }
+        let mut at = index.min(self.start_search_len);
+        if at == self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() {
+            if at > 0 && self.start_search[at - 1].is_ascii_alphanumeric() { at -= 1; }
+        }
+        if at >= self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() { return; }
+        let mut start = at;
+        let mut end = at + 1;
+        while start > 0 && self.start_search[start - 1].is_ascii_alphanumeric() { start -= 1; }
+        while end < self.start_search_len && self.start_search[end].is_ascii_alphanumeric() { end += 1; }
+        self.start_search_anchor = Some(start);
+        self.start_search_selection = Some((start, end));
+        self.start_search_cursor = end;
+    }
+
+    pub fn select_all_start_search(&mut self) {
+        self.start_search_focused = true;
+        if self.start_search_len > 0 {
+            self.start_search_selection = Some((0, self.start_search_len));
+            self.start_search_anchor = Some(0);
+            self.start_search_cursor = self.start_search_len;
+        }
+    }
+
+    pub fn copy_start_search(&self) {
+        if let Some((a, b)) = self.start_search_selection {
+            let start = a.min(b).min(self.start_search_len);
+            let end = a.max(b).min(self.start_search_len);
+            if let Ok(text) = core::str::from_utf8(&self.start_search[start..end]) {
+                crate::gui::clipboard::set_str(text);
+            }
+        }
+    }
+
+    pub fn cut_start_search(&mut self) {
+        self.copy_start_search();
+        if self.delete_start_search_selection() { self.selected_start_item = 0; }
+    }
+
+    pub fn paste_start_search(&mut self) {
+        let mut chars = ['\0'; crate::gui::clipboard::CAPACITY];
+        let len = crate::gui::clipboard::copy_chars(&mut chars);
+        self.delete_start_search_selection();
+        self.start_search_focused = true;
+        for ch in chars[..len].iter().copied().filter(|ch| ch.is_ascii_alphanumeric()) {
+            self.push_start_search(ch);
         }
     }
 
     pub fn clear_start_search(&mut self) {
         self.start_search_len = 0;
         self.start_search.fill(0);
+        self.start_search_cursor = 0;
+        self.start_search_selection = None;
+        self.start_search_anchor = None;
+        self.start_search_focused = false;
+        self.start_search_click_streak = 0;
         self.selected_start_item = 0;
     }
 
@@ -230,10 +359,37 @@ impl MinGuiCompositor {
         let search_rect = Self::start_search_rect(menu_x, menu_y, menu_w);
         fb.draw_rounded_rect(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::WINDOW_BG);
         fb.draw_rounded_rect_outline(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::BORDER);
-        let search_text = if self.start_search_len == 0 { ui_text("Uygulama ara...", "Search apps...") }
-            else { core::str::from_utf8(&self.start_search[..self.start_search_len]).unwrap_or("") };
-        Self::draw_string_clipped(fb, search_rect.0 + 6, search_rect.1 + 4, search_text, Color::TEXT_MAIN,
-            (search_rect.0 + 4, search_rect.1 + 2, search_rect.2.saturating_sub(8), search_rect.3.saturating_sub(4)));
+        let search_x = search_rect.0 + 6;
+        let search_y = search_rect.1 + 4;
+        let search_clip = (search_rect.0 + 4, search_rect.1 + 2, search_rect.2.saturating_sub(8), search_rect.3.saturating_sub(4));
+        if self.start_search_len == 0 {
+            Self::draw_string_clipped(fb, search_x, search_y, ui_text("Uygulama ara...", "Search apps..."), Color::TEXT_MAIN, search_clip);
+        } else {
+            let visible = &self.start_search[..self.start_search_len];
+            if let Some((a, b)) = self.start_search_selection {
+                let start = a.min(b).min(self.start_search_len);
+                let end = a.max(b).min(self.start_search_len);
+                let prefix = core::str::from_utf8(&visible[..start]).unwrap_or("");
+                let selected = core::str::from_utf8(&visible[start..end]).unwrap_or("");
+                let suffix = core::str::from_utf8(&visible[end..]).unwrap_or("");
+                Self::draw_string_clipped(fb, search_x, search_y, prefix, Color::TEXT_MAIN, search_clip);
+                let selection_x = search_x + Self::text_width(prefix, 1);
+                let selection_w = Self::text_width(selected, 1);
+                fb.draw_rect(selection_x, search_rect.1 + 2, selection_w, search_rect.3.saturating_sub(4), Color::ACCENT_BLUE);
+                Self::draw_string_clipped(fb, selection_x, search_y, selected, Self::text_on(Color::ACCENT_BLUE), search_clip);
+                Self::draw_string_clipped(fb, selection_x + selection_w, search_y, suffix, Color::TEXT_MAIN, search_clip);
+            } else {
+                let text = core::str::from_utf8(visible).unwrap_or("");
+                Self::draw_string_clipped(fb, search_x, search_y, text, Color::TEXT_MAIN, search_clip);
+            }
+            if self.start_search_focused && self.start_search_selection.is_none() {
+                let prefix = core::str::from_utf8(&visible[..self.start_search_cursor.min(self.start_search_len)]).unwrap_or("");
+                let caret_x = search_x + Self::text_width(prefix, 1);
+                if caret_x < search_rect.0 + search_rect.2.saturating_sub(2) {
+                    fb.draw_rect(caret_x, search_rect.1 + 4, 1, search_rect.3.saturating_sub(8), Color::ACCENT_YELLOW);
+                }
+            }
+        }
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {

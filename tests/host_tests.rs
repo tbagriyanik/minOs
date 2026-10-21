@@ -47,6 +47,51 @@ pub mod drivers {
     pub use crate::tls;
 }
 
+pub mod arch {
+    pub mod x86_64 {
+        pub mod sync {
+            use core::cell::UnsafeCell;
+            use core::ops::{Deref, DerefMut};
+
+            pub struct SpinMutex<T> {
+                inner: UnsafeCell<T>,
+            }
+
+            unsafe impl<T: Send> Sync for SpinMutex<T> {}
+            unsafe impl<T: Send> Send for SpinMutex<T> {}
+
+            pub struct SpinGuard<'a, T> {
+                lock: &'a SpinMutex<T>,
+            }
+
+            impl<T> SpinMutex<T> {
+                pub const fn new(value: T) -> Self {
+                    Self { inner: UnsafeCell::new(value) }
+                }
+                pub fn lock(&self) -> SpinGuard<'_, T> {
+                    SpinGuard { lock: self }
+                }
+            }
+
+            impl<'a, T> Deref for SpinGuard<'a, T> {
+                type Target = T;
+                fn deref(&self) -> &T {
+                    unsafe { &*self.lock.inner.get() }
+                }
+            }
+
+            impl<'a, T> DerefMut for SpinGuard<'a, T> {
+                fn deref_mut(&mut self) -> &mut T {
+                    unsafe { &mut *self.lock.inner.get() }
+                }
+            }
+        }
+    }
+}
+
+#[path = "../src/mm/allocator/mod.rs"]
+pub mod allocator;
+
 #[cfg(test)]
 #[path = "host_crypto_tests.rs"]
 mod crypto_tests;

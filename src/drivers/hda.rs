@@ -1328,7 +1328,9 @@ pub fn play_test_tone() -> bool {
 
         // 35 ms boyunca donanımın örnekleri tüketmesini gözlemle
 
-        while crate::monotonic_ms().saturating_sub(start_ms) < 35 {
+        let mut spins = 0u32;
+        while crate::monotonic_ms().saturating_sub(start_ms) < 250 && spins < 2_000_000 {
+            spins += 1;
 
             lpib2 = current_dma_pos();
 

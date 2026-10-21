@@ -156,6 +156,9 @@ pub struct BrowserApp {
     pub address_cursor: usize,
     pub address_scroll: usize,
     pub address_selection: Option<(usize, usize)>,
+    address_selection_anchor: Option<usize>,
+    address_last_click: (u64, usize, usize),
+    address_click_streak: u8,
     address_undo: [[u8; 128]; 16],
     address_undo_len: [usize; 16],
     address_undo_count: usize,
@@ -208,6 +211,7 @@ impl BrowserApp {
     pub fn new() -> Self {
         let mut app = Self {
             url: [0; 128], url_len: 0, address_focused: false, address_cursor: 0, address_scroll: 0, address_selection: None,
+            address_selection_anchor: None, address_last_click: (0, 0, 0), address_click_streak: 0,
             address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
             address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
             active_tab: 0, focused_control: 0, suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
@@ -442,14 +446,64 @@ impl BrowserApp {
         self.address_cursor = self.url_len;
         self.address_scroll = self.url_len.saturating_sub(40);
         self.address_selection = None;
+        self.address_selection_anchor = None;
+        self.address_click_streak = 0;
     }
 
     pub fn focus_address_at(&mut self, x: usize, field_x: usize) {
         self.address_focused = true;
         self.focused_control = 4;
-        let column = x.saturating_sub(field_x) / 10;
+        let column = x.saturating_sub(field_x) / MinGuiCompositor::text_width("M", 1).max(1);
         self.address_cursor = (self.address_scroll + column).min(self.url_len);
+        self.address_selection_anchor = Some(self.address_cursor);
         self.address_selection = None;
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_click_at(&mut self, x: usize, y: usize, field_x: usize, now_ms: u64, interval_ms: u64) -> u8 {
+        self.focus_address_at(x, field_x);
+        let same_target = now_ms.abs_diff(self.address_last_click.0) <= interval_ms
+            && self.address_last_click.1.abs_diff(x) < 4
+            && self.address_last_click.2.abs_diff(y) < 4;
+        self.address_click_streak = if same_target && self.address_click_streak < 3 {
+            self.address_click_streak + 1
+        } else { 1 };
+        self.address_last_click = (now_ms, x, y);
+        match self.address_click_streak {
+            2 => self.address_select_word_at(self.address_cursor),
+            3 => self.address_select_all(),
+            _ => {}
+        }
+        self.address_click_streak
+    }
+
+    pub fn address_drag_to(&mut self, x: usize, field_x: usize) {
+        let char_width = MinGuiCompositor::text_width("M", 1).max(1);
+        let column = x.saturating_sub(field_x) / char_width;
+        let target = (self.address_scroll + column).min(self.url_len);
+        self.address_cursor = target;
+        let anchor = self.address_selection_anchor.unwrap_or(target);
+        self.address_selection = if anchor == target { None } else {
+            Some((anchor.min(target), anchor.max(target)))
+        };
+        self.keep_address_cursor_visible();
+    }
+
+    pub fn address_select_word_at(&mut self, index: usize) {
+        if self.url_len == 0 { return; }
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
+        let mut at = index.min(self.url_len);
+        if at == self.url_len || !is_word(self.url[at]) {
+            if at > 0 && is_word(self.url[at - 1]) { at -= 1; }
+        }
+        if at >= self.url_len || !is_word(self.url[at]) { return; }
+        let mut start = at;
+        let mut end = at + 1;
+        while start > 0 && is_word(self.url[start - 1]) { start -= 1; }
+        while end < self.url_len && is_word(self.url[end]) { end += 1; }
+        self.address_selection_anchor = Some(start);
+        self.address_selection = Some((start, end));
+        self.address_cursor = end;
         self.keep_address_cursor_visible();
     }
 
@@ -1104,6 +1158,7 @@ impl BrowserApp {
         self.focused_control = 4;
         if self.url_len > 0 {
             self.address_selection = Some((0, self.url_len));
+            self.address_selection_anchor = Some(0);
             self.address_cursor = self.url_len;
             self.keep_address_cursor_visible();
         }

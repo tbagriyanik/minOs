@@ -95,6 +95,23 @@ impl AudioDevice {
     /// Başlangıç veya bildirim melodisi (chime).
     pub fn play_chime(&mut self) {
         if self.is_muted || self.volume_left == 0 { return; }
+        if self.is_hda {
+            const SINE_48: [i16; 48] = [
+                0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863,
+                16000, 15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088,
+                0, -2088, -4141, -6122, -7999, -9740, -11313, -12693, -13856, -14782, -15454, -15863,
+                -16000, -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
+            ];
+            let mut pcm = [0i16; 384];
+            for (idx, sample) in pcm.chunks_exact_mut(2).enumerate() {
+                let s = SINE_48[idx % 48];
+                sample[0] = s;
+                sample[1] = s;
+            }
+            for _ in 0..16 {
+                crate::drivers::hda::push_pcm(&pcm);
+            }
+        }
         // C5 (523Hz) -> E5 (659Hz) -> G5 (784Hz)
         let notes = [523u32, 659, 784];
         for &freq in &notes {

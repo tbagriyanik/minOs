@@ -90,6 +90,7 @@ pub struct TaskManagerApp {
     pub cpu_usage_pct: usize,
     pub core_count: usize,
     pub core_usage_pct: [usize; crate::arch::x86_64::smp::MAX_CPUS],
+    pub scheduler_task_counts: crate::task::TaskStateCounts,
     pub ramdisk_used: usize,
     pub ramdisk_files: usize,
     /// Sonlandırma ve liste durumu mesajı.
@@ -120,6 +121,7 @@ impl TaskManagerApp {
             cpu_usage_pct: 0,
             core_count: 1,
             core_usage_pct: [0; crate::arch::x86_64::smp::MAX_CPUS],
+            scheduler_task_counts: crate::task::TaskStateCounts { ready: 0, blocked: 0, running: 0 },
             ramdisk_used: 0, ramdisk_files: 0,
             status: "Ready",
             launch_menu_open: false,
@@ -197,6 +199,7 @@ impl TaskManagerApp {
         windows: &[Option<crate::gui::Window>; MAX_PROC],
         render_cycles: &[u64; MAX_PROC],
     ) {
+        self.scheduler_task_counts = crate::task::task_state_counts();
         self.total_memory_kb = (pmm.total_memory_bytes / 1024) as usize;
         self.free_memory_kb = (pmm.free_memory_bytes / 1024) as usize;
         self.used_memory_kb = (pmm.used_memory_bytes / 1024) as usize;
@@ -416,6 +419,17 @@ impl TaskManagerApp {
                 cpu_text.push_str(crate::gui::ui_text(" Çekirdek Çevrimiçi)", " Cores Online)"));
             }
             MinGuiCompositor::draw_string_clipped(fb, content_x, cpu_y, cpu_text.as_str(), Color::ACCENT_BLUE,
+                (content_x, cpu_y, content_w, 16));
+
+            cpu_y += 18;
+            let mut task_text = TextBuf::new();
+            task_text.push_str(crate::gui::ui_text("Görevler hazır/bloke/çalışıyor: ", "Tasks ready/blocked/running: "));
+            task_text.push_usize(self.scheduler_task_counts.ready);
+            task_text.push_byte(b'/');
+            task_text.push_usize(self.scheduler_task_counts.blocked);
+            task_text.push_byte(b'/');
+            task_text.push_usize(self.scheduler_task_counts.running);
+            MinGuiCompositor::draw_string_clipped(fb, content_x, cpu_y, task_text.as_str(), Color::TEXT_MUTED,
                 (content_x, cpu_y, content_w, 16));
 
             cpu_y += 20;

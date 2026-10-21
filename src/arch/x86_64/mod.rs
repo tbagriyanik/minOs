@@ -113,8 +113,24 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
         let i2 = ((v >> 21) & 511) as usize;
         let pde = pd.add(i2).read_volatile();
 
-        // Zaten eşlenmişse yeniden yazma
+        // Zaten eşlenmişse kontrol et
         if (pde & 1) != 0 {
+            if (pde & 0x80) != 0 {
+                // Zaten 2MB huge page olarak tüm aralık eşlenmiş
+                return;
+            }
+            // 4KB sayfa tablosu (PT) mevcut; Limine'in yarım bıraktığı 4KB sayfaları tamamla
+            let pt_phys = pde & 0x000F_FFFF_FFFF_F000;
+            if pt_phys != 0 {
+                let pt = (hhdm + pt_phys) as *mut u64;
+                for pti in 0..512 {
+                    let pte = pt.add(pti).read_volatile();
+                    if (pte & 1) == 0 {
+                        let page_phys = phys_2mb_aligned + (pti as u64 * 4096);
+                        pt.add(pti).write_volatile(page_phys | 0x13);
+                    }
+                }
+            }
             return;
         }
 

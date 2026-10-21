@@ -576,6 +576,7 @@ pub extern "C" fn _start() -> ! {
     serial_print("[BOOT] Bellek testleri calistiriliyor...\n");
 
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
+    mm::allocator::test_allocator_subsystem();
 
 
 
@@ -785,9 +786,20 @@ pub extern "C" fn _start() -> ! {
 
     persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[BOOT] driver profile finished");
 
+    let _socket_timeout_task = task::spawn(
+        "socket-timeouts",
+        task::TaskPriority::Normal,
+        || {
+            drivers::socket::poll_timeouts();
+            task::TaskStatus::Yielded
+        },
+    );
+    serial_print("[TASK] Cooperative socket timeout task queued.\n");
+
     let _net_dev = drivers::net::NetworkInterface::new();
 
     let mut audio_dev = drivers::audio::AudioDevice::new();
+    audio_dev.test_audio_subsystem();
 
     serial_print("[DRIVERS] Tum suruculer hazir.\n");
 
@@ -1599,6 +1611,8 @@ pub extern "C" fn _start() -> ! {
     // Not Defteri metin secimi surukleme durumu.
 
     let mut notepad_dragging = false;
+    let mut browser_address_dragging = false;
+    let mut start_search_dragging = false;
 
     let mut image_drag_last: Option<(usize, usize)> = None;
 
@@ -2726,17 +2740,18 @@ pub extern "C" fn _start() -> ! {
 
                     let at = notepad_app.index_at_scrolled(mx - w.x, my - w.y, w.width, w.scroll.y);
 
-                    // cift tik algilama: ayni konuma kisa surede ikinci tik.
-
                     let now_ms = monotonic_ms() as usize;
+                    let click_count = notepad_app.record_click(
+                        now_ms,
+                        (mx, my),
+                        settings_app.double_click_ms as usize,
+                    );
 
-                    let dbl = now_ms.abs_diff(notepad_app.last_click_tick) <= settings_app.double_click_ms as usize
+                    if click_count == 3 {
 
-                        && notepad_app.last_click_pos.0.abs_diff(mx) < 4
+                        notepad_app.select_paragraph_at(at);
 
-                        && notepad_app.last_click_pos.1.abs_diff(my) < 4;
-
-                    if dbl {
+                    } else if click_count == 2 {
 
                         notepad_app.select_word_at(at);
 
@@ -2775,10 +2790,6 @@ pub extern "C" fn _start() -> ! {
                         notepad_dragging = true;
 
                     }
-
-                    notepad_app.last_click_tick = now_ms;
-
-                    notepad_app.last_click_pos = (mx, my);
 
                     consumed = true;
 
@@ -3434,7 +3445,11 @@ pub extern "C" fn _start() -> ! {
 
             if gui::in_rect(mx, my, search_rect) {
 
-                compositor.clear_start_search();
+                compositor.start_search_click_at(
+                    mx, my, search_rect.0 + 6, monotonic_ms(),
+                    settings_app.double_click_ms as u64,
+                );
+                start_search_dragging = true;
 
                 consumed = true;
 
@@ -4835,7 +4850,11 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(224), 20)) {
 
-                                    browser_app.focus_address_at(mx, wx + 100);
+                                    browser_app.address_click_at(
+                                        mx, my, wx + 100, monotonic_ms(),
+                                        settings_app.double_click_ms as u64,
+                                    );
+                                    browser_address_dragging = true;
 
                                 } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 32, 50, 20)) {
 
@@ -5781,9 +5800,18 @@ pub extern "C" fn _start() -> ! {
 
                     } else if compositor.is_start_menu_open {
 
-                        compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
-
-                        compositor.selected_start_item = 0;
+                        if compositor.start_search_focused {
+                            let target = if keyboard.ctrl {
+                                let mut i = compositor.start_search_cursor;
+                                while i > 0 && compositor.start_search[i - 1] == b' ' { i -= 1; }
+                                while i > 0 && compositor.start_search[i - 1].is_ascii_alphanumeric() { i -= 1; }
+                                i
+                            } else { compositor.start_search_cursor.saturating_sub(1) };
+                            compositor.start_search_move_to(target, keyboard.shift);
+                        } else {
+                            compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
+                            compositor.selected_start_item = 0;
+                        }
 
                     } else if app_is_focused(&compositor, 0) {
 
@@ -5883,7 +5911,15 @@ pub extern "C" fn _start() -> ! {
 
                     } else if compositor.is_start_menu_open {
 
-                        if compositor.active_start_group + 1 < 4 {
+                        if compositor.start_search_focused {
+                            let target = if keyboard.ctrl {
+                                let mut i = compositor.start_search_cursor;
+                                while i < compositor.start_search_len && compositor.start_search[i].is_ascii_alphanumeric() { i += 1; }
+                                while i < compositor.start_search_len && compositor.start_search[i] == b' ' { i += 1; }
+                                i
+                            } else { (compositor.start_search_cursor + 1).min(compositor.start_search_len) };
+                            compositor.start_search_move_to(target, keyboard.shift);
+                        } else if compositor.active_start_group + 1 < 4 {
 
                             compositor.active_start_group += 1;
 
@@ -6415,6 +6451,8 @@ pub extern "C" fn _start() -> ! {
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_copy(); }
 
+                    else if compositor.is_start_menu_open && compositor.start_search_focused { compositor.copy_start_search(); }
+
                     else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, false); }
 
                     else if desktop_files.selected_items.iter().any(|&s| s) || desktop_files.selected_idx < desktop_files.file_count { desktop_files.copy_selection(&mut file_clipboard, false); }
@@ -6430,6 +6468,8 @@ pub extern "C" fn _start() -> ! {
                     if app_is_focused(&compositor, 2) { notepad_app.paste_clipboard(); }
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_paste(); }
+
+                    else if compositor.is_start_menu_open && compositor.start_search_focused { compositor.paste_start_search(); }
 
                     else if app_is_focused(&compositor, 0) { filemanager_app.paste_selection(&mut file_clipboard, &mut fs_mgr.vfs); }
 
@@ -6447,6 +6487,8 @@ pub extern "C" fn _start() -> ! {
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_cut(); }
 
+                    else if compositor.is_start_menu_open && compositor.start_search_focused { compositor.cut_start_search(); }
+
                     else if app_is_focused(&compositor, 0) { filemanager_app.copy_selection(&mut file_clipboard, true); }
 
                     else if desktop_files.selected_items.iter().any(|&s| s) || desktop_files.selected_idx < desktop_files.file_count { desktop_files.copy_selection(&mut file_clipboard, true); }
@@ -6462,6 +6504,8 @@ pub extern "C" fn _start() -> ! {
                     if focused { notepad_app.select_all(); }
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_select_all(); }
+
+                    else if compositor.is_start_menu_open && compositor.start_search_focused { compositor.select_all_start_search(); }
 
                 }
 
@@ -7263,6 +7307,20 @@ pub extern "C" fn _start() -> ! {
 
             }
 
+            if browser_address_dragging {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                    if w.is_focused {
+                        browser_app.address_drag_to(mx, w.x + 100);
+                    }
+                }
+            }
+
+            if start_search_dragging && compositor.is_start_menu_open {
+                let (menu_x, menu_y, menu_w, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+                let search = gui::MinGuiCompositor::start_search_rect(menu_x, menu_y, menu_w);
+                compositor.start_search_drag_to(mx, search.0 + 6);
+            }
+
             let (drag_item, drag_start, drag_active) = if desktop_drag_source {
 
                 (desktop_files.drag_item, desktop_files.drag_start, desktop_files.drag_active)
@@ -7561,6 +7619,8 @@ pub extern "C" fn _start() -> ! {
             }
 
             notepad_dragging = false;
+            browser_address_dragging = false;
+            start_search_dragging = false;
 
             let (is_drag_active, drag_item, drag_target) = if desktop_drag_source {
 
@@ -7928,19 +7988,12 @@ pub extern "C" fn _start() -> ! {
 
             } else if compositor.is_start_menu_open && ch == '\x08' {
 
-                if compositor.start_search_len > 0 {
-
-                    compositor.start_search_len -= 1;
-
-                    compositor.start_search[compositor.start_search_len] = 0;
-
-                    compositor.selected_start_item = 0;
-
-                }
+                compositor.start_search_focused = true;
+                compositor.backspace_start_search();
 
             } else if compositor.is_start_menu_open && ch.is_ascii_alphanumeric() {
 
-                if compositor.start_search_len == 0 { compositor.selected_start_item = 0; }
+                compositor.start_search_focused = true;
 
                 compositor.push_start_search(ch);
 
@@ -8246,9 +8299,9 @@ pub extern "C" fn _start() -> ! {
 
         drivers::e1000::poll();
 
+        // Run one short cooperative task step per event-loop turn. The
+        // scheduler budget is one callback; a callback itself is not preempted.
         task::poll_tasks();
-
-        drivers::socket::poll_timeouts();
 
         browser_app.poll_network();
 

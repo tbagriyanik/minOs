@@ -820,6 +820,12 @@ impl TerminalApp {
                                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
 
                                     let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
+                                    if let Some(out) = crate::arch::x86_64::ring3::take_last_output() {
+                                        let clean = out.trim_end_matches(['\r', '\n']);
+                                        if !clean.is_empty() {
+                                            self.push_line(clean, Color::ACCENT_BLUE);
+                                        }
+                                    }
                                     if ok {
                                         self.push_line(crate::gui::ui_text("[EXEC] Program başarıyla çalıştırıldı ve sonlandı.", "[EXEC] Program executed successfully and terminated."), Color::ACCENT_GREEN);
                                     } else {

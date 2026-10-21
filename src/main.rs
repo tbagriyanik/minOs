@@ -1015,6 +1015,7 @@ pub extern "C" fn _start() -> ! {
     let mut pkgmgr_app = apps::pkgmgr::PackageManagerApp::new();
 
     pkgmgr_app.refresh_installed(&fs_mgr.vfs);
+    compositor.sync_installed_apps(&fs_mgr.vfs);
 
 
 
@@ -2548,7 +2549,7 @@ pub extern "C" fn _start() -> ! {
 
                 );
 
-                if !gui::in_rect(mx, my, (menu_x, menu_y, menu_w, menu_h))
+                if !gui::in_rect(mx, my, (menu_x, menu_y, menu_w + 6, menu_h))
 
                     && !gui::in_rect(mx, my, submenu)
 
@@ -3361,7 +3362,7 @@ pub extern "C" fn _start() -> ! {
 
             let (_, menu_y, _, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
 
-            for g in 0..4 {
+            for g in 0..5 {
 
                 let cat_r = gui::MinGuiCompositor::start_menu_category_rect(menu_y, g);
 
@@ -3413,7 +3414,24 @@ pub extern "C" fn _start() -> ! {
 
                     if gui::in_rect(mx, my, row_rect) {
 
-                        open_app(&mut compositor, *app_id);
+                        if *app_id >= 100 {
+                            let app_name = alloc::string::String::from(compositor.installed_app_name(*app_id - 100));
+                            if !app_name.is_empty() {
+                                desktop::helpers::launch_installed_pkg(
+                                    &app_name,
+                                    &mut compositor,
+                                    &mut terminal_app,
+                                    &mut notepad_app,
+                                    &mut calculator_app,
+                                    &mut paint_apps,
+                                    &mut fs_mgr.vfs,
+                                    &mut memory_mgr.pmm,
+                                    &now,
+                                );
+                            }
+                        } else {
+                            open_app(&mut compositor, *app_id);
+                        }
 
                         compositor.close_start_menu();
 
@@ -3473,7 +3491,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            for g in 0..4 {
+            for g in 0..5 {
 
                 if cat_clicked { break; }
 
@@ -3482,6 +3500,10 @@ pub extern "C" fn _start() -> ! {
                 if gui::in_rect(mx, my, cat_r) {
 
                     compositor.active_start_group = g;
+
+                    compositor.selected_start_item = 0;
+
+                    compositor.start_menu_focus_submenu = true;
 
                     cat_clicked = true;
 
@@ -3497,13 +3519,19 @@ pub extern "C" fn _start() -> ! {
 
             if !cat_clicked {
 
-                let (_, first, count) = gui::MENU_GROUPS[active_g];
+                let count = if active_g == 3 {
+                    compositor.installed_apps_count
+                } else if active_g == 4 {
+                    2
+                } else {
+                    gui::MENU_GROUPS[active_g].2
+                };
 
                 let mut item_clicked = false;
 
                 for k in 0..count {
 
-                    let i = first + k;
+                    let i = if active_g < 3 { gui::MENU_GROUPS[active_g].1 + k } else { 0 };
 
                     let rect = gui::MinGuiCompositor::start_menu_subitem_rect(menu_y, active_g, k, tb_y);
 
@@ -3511,49 +3539,53 @@ pub extern "C" fn _start() -> ! {
 
                         item_clicked = true;
 
-                        if i == 14 {
+                        if active_g == 4 {
 
-                            if compositor.confirm_shutdown {
+                            if k == 0 {
 
-                                #[cfg(minos_boot_log)]
+                                if compositor.confirm_shutdown {
+
+                                    #[cfg(minos_boot_log)]
 
     serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
 
-                                unsafe {
+                                    unsafe {
 
-                                    core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
+                                        core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16);
 
-                                    core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
+                                        core::arch::asm!("out dx, ax", in("dx") 0x404u16, in("ax") 0x3400u16);
 
-                                    core::arch::asm!("cli; hlt");
+                                        core::arch::asm!("cli; hlt");
+
+                                    }
+
+                                } else {
+
+                                    compositor.confirm_shutdown = true;
+
+                                    compositor.confirm_restart = false;
 
                                 }
 
-                            } else {
-
-                                compositor.confirm_shutdown = true;
-
-                                compositor.confirm_restart = false;
+                                break;
 
                             }
 
-                            break;
+                            if k == 1 {
 
-                        }
+                                if compositor.confirm_restart {
 
-                        if i == 15 {
+                                    restart_system();
 
-                            if compositor.confirm_restart {
+                                }
 
-                                restart_system();
+                                compositor.confirm_restart = true;
+
+                                compositor.confirm_shutdown = false;
+
+                                break;
 
                             }
-
-                            compositor.confirm_restart = true;
-
-                            compositor.confirm_shutdown = false;
-
-                            break;
 
                         }
 
@@ -3561,7 +3593,37 @@ pub extern "C" fn _start() -> ! {
 
                         compositor.confirm_restart = false;
 
-                        if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
+                        if active_g == 3 {
+
+                            let app_name = alloc::string::String::from(compositor.installed_app_name(k));
+
+                            if !app_name.is_empty() {
+
+                                desktop::helpers::launch_installed_pkg(
+
+                                    &app_name,
+
+                                    &mut compositor,
+
+                                    &mut terminal_app,
+
+                                    &mut notepad_app,
+
+                                    &mut calculator_app,
+
+                                    &mut paint_apps,
+
+                                    &mut fs_mgr.vfs,
+
+                                    &mut memory_mgr.pmm,
+
+                                    &now,
+
+                                );
+
+                            }
+
+                        } else if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
 
                             open_app(&mut compositor, app_idx);
 
@@ -5415,6 +5477,20 @@ pub extern "C" fn _start() -> ! {
                             13 => {
 
                                 pkgmgr_app.handle_click(mx.saturating_sub(wx), my.saturating_sub(wy), ww, wh, &mut fs_mgr.vfs);
+                                compositor.sync_installed_apps(&fs_mgr.vfs);
+                                if let Some(app_name) = pkgmgr_app.take_pending_launch() {
+                                    desktop::helpers::launch_installed_pkg(
+                                        &app_name,
+                                        &mut compositor,
+                                        &mut terminal_app,
+                                        &mut notepad_app,
+                                        &mut calculator_app,
+                                        &mut paint_apps,
+                                        &mut fs_mgr.vfs,
+                                        &mut memory_mgr.pmm,
+                                        &now,
+                                    );
+                                }
 
                             }
 
@@ -5618,6 +5694,15 @@ pub extern "C" fn _start() -> ! {
 
                             compositor.move_start_search_selection(settings_app.language.is_english(), false);
 
+                        } else if !compositor.start_menu_focus_submenu {
+
+                            if compositor.active_start_group > 0 {
+                                compositor.active_start_group -= 1;
+                                compositor.selected_start_item = 0;
+                                compositor.confirm_shutdown = false;
+                                compositor.confirm_restart = false;
+                            }
+
                         } else if compositor.selected_start_item > 0 {
 
                             compositor.selected_start_item -= 1;
@@ -5702,11 +5787,26 @@ pub extern "C" fn _start() -> ! {
 
                             compositor.move_start_search_selection(settings_app.language.is_english(), true);
 
+                        } else if !compositor.start_menu_focus_submenu {
+
+                            if compositor.active_start_group + 1 < 5 {
+                                compositor.active_start_group += 1;
+                                compositor.selected_start_item = 0;
+                                compositor.confirm_shutdown = false;
+                                compositor.confirm_restart = false;
+                            }
+
                         } else {
 
                             let active_g = compositor.active_start_group;
 
-                            let count = gui::MENU_GROUPS[active_g].2;
+                            let count = if active_g == 3 {
+                                compositor.installed_apps_count
+                            } else if active_g == 4 {
+                                2
+                            } else {
+                                gui::MENU_GROUPS[active_g].2
+                            };
 
                             if compositor.selected_start_item + 1 < count {
 
@@ -5809,8 +5909,7 @@ pub extern "C" fn _start() -> ! {
                             } else { compositor.start_search_cursor.saturating_sub(1) };
                             compositor.start_search_move_to(target, keyboard.shift);
                         } else {
-                            compositor.active_start_group = compositor.active_start_group.saturating_sub(1);
-                            compositor.selected_start_item = 0;
+                            compositor.start_menu_focus_submenu = false;
                         }
 
                     } else if app_is_focused(&compositor, 0) {
@@ -5919,9 +6018,9 @@ pub extern "C" fn _start() -> ! {
                                 i
                             } else { (compositor.start_search_cursor + 1).min(compositor.start_search_len) };
                             compositor.start_search_move_to(target, keyboard.shift);
-                        } else if compositor.active_start_group + 1 < 4 {
+                        } else {
 
-                            compositor.active_start_group += 1;
+                            compositor.start_menu_focus_submenu = true;
 
                             compositor.selected_start_item = 0;
 
@@ -6087,7 +6186,24 @@ pub extern "C" fn _start() -> ! {
 
                             if let Some(app_idx) = compositor.selected_start_search_result(settings_app.language.is_english()) {
 
-                                open_app(&mut compositor, app_idx);
+                                if app_idx >= 100 {
+                                    let app_name = alloc::string::String::from(compositor.installed_app_name(app_idx - 100));
+                                    if !app_name.is_empty() {
+                                        desktop::helpers::launch_installed_pkg(
+                                            &app_name,
+                                            &mut compositor,
+                                            &mut terminal_app,
+                                            &mut notepad_app,
+                                            &mut calculator_app,
+                                            &mut paint_apps,
+                                            &mut fs_mgr.vfs,
+                                            &mut memory_mgr.pmm,
+                                            &now,
+                                        );
+                                    }
+                                } else {
+                                    open_app(&mut compositor, app_idx);
+                                }
 
                                 compositor.close_start_menu();
 
@@ -6097,15 +6213,27 @@ pub extern "C" fn _start() -> ! {
 
                         }
 
+                        if !compositor.start_menu_focus_submenu {
+                            compositor.start_menu_focus_submenu = true;
+                            compositor.selected_start_item = 0;
+                            continue;
+                        }
+
                         let active_g = compositor.active_start_group;
 
-                        let (_, first, count) = gui::MENU_GROUPS[active_g];
+                        let count = if active_g == 3 {
+                            compositor.installed_apps_count
+                        } else if active_g == 4 {
+                            2
+                        } else {
+                            gui::MENU_GROUPS[active_g].2
+                        };
 
                         let item_k = compositor.selected_start_item.min(count.saturating_sub(1));
 
-                        let i = first + item_k;
+                        let i = if active_g < 3 { gui::MENU_GROUPS[active_g].1 + item_k } else { 0 };
 
-                        if i == 14 {
+                        if active_g == 4 && item_k == 0 {
 
                             if compositor.confirm_shutdown {
 
@@ -6127,7 +6255,7 @@ pub extern "C" fn _start() -> ! {
 
                             }
 
-                        } else if i == 15 {
+                        } else if active_g == 4 && item_k == 1 {
 
                             if compositor.confirm_restart {
 
@@ -6139,7 +6267,22 @@ pub extern "C" fn _start() -> ! {
 
                         } else {
 
-                            if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
+                            if active_g == 3 {
+                                let app_name = alloc::string::String::from(compositor.installed_app_name(item_k));
+                                if !app_name.is_empty() {
+                                    desktop::helpers::launch_installed_pkg(
+                                        &app_name,
+                                        &mut compositor,
+                                        &mut terminal_app,
+                                        &mut notepad_app,
+                                        &mut calculator_app,
+                                        &mut paint_apps,
+                                        &mut fs_mgr.vfs,
+                                        &mut memory_mgr.pmm,
+                                        &now,
+                                    );
+                                }
+                            } else if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
 
                                 open_app(&mut compositor, app_idx);
 
@@ -7041,7 +7184,13 @@ pub extern "C" fn _start() -> ! {
 
                 let active_g = compositor.active_start_group;
 
-                let count = gui::MENU_GROUPS[active_g].2;
+                let count = if active_g == 3 {
+                    compositor.installed_apps_count
+                } else if active_g == 4 {
+                    2
+                } else {
+                    gui::MENU_GROUPS[active_g].2
+                };
 
                 if scroll_val > 0 {
 
@@ -8255,6 +8404,23 @@ pub extern "C" fn _start() -> ! {
 
         let mouse_moved = mouse.x != last_mouse_x || mouse.y != last_mouse_y;
 
+        if mouse_moved && compositor.is_start_menu_open {
+            let (_, menu_y, _, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
+            for g in 0..5 {
+                let cat_r = gui::MinGuiCompositor::start_menu_category_rect(menu_y, g);
+                if gui::in_rect(mx, my, cat_r) {
+                    if compositor.active_start_group != g {
+                        compositor.active_start_group = g;
+                        compositor.selected_start_item = 0;
+                        compositor.start_menu_focus_submenu = false;
+                        compositor.confirm_shutdown = false;
+                        compositor.confirm_restart = false;
+                    }
+                    break;
+                }
+            }
+        }
+
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;
 
 
@@ -8445,7 +8611,7 @@ pub extern "C" fn _start() -> ! {
 
         let full_redraw = input_update.keyboard || buttons_changed || scroll_val != 0
 
-            || force_render || busy_dirty || (mouse_moved && (is_interacting || night_light_active || settings_test_active))
+            || force_render || busy_dirty || (mouse_moved && (is_interacting || night_light_active || settings_test_active || compositor.is_start_menu_open))
 
             || (timer_tick_fired && media_animating);
 

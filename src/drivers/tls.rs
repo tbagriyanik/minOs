@@ -64,6 +64,7 @@ const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 /// Signature algorithms supported.
 pub const SIG_ALG_RSA_SHA256: u16 = 0x0401;
 pub const SIG_ALG_ECDSA_SECP256R1_SHA256: u16 = 0x0403;
+pub const SIG_ALG_RSA_PSS_RSAE_SHA256: u16 = 0x0804;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TlsState {
@@ -377,9 +378,7 @@ impl TlsSession {
 
             match msg_type {
                 HANDSHAKE_SERVER_HELLO => self.handle_server_hello(msg_body)?,
-                HANDSHAKE_ENCRYPTED_EXTENSIONS => {
-                    // TLS 1.3: EncryptedExtensions - temel destek için aksiyon gerekmez.
-                }
+                HANDSHAKE_ENCRYPTED_EXTENSIONS => self.handle_encrypted_extensions(msg_body)?,
                 HANDSHAKE_CERTIFICATE => self.handle_certificate(msg_body)?,
                 HANDSHAKE_SERVER_KEY_EXCHANGE => self.handle_server_key_exchange(msg_body)?,
                 HANDSHAKE_SERVER_HELLO_DONE => {
@@ -457,6 +456,40 @@ impl TlsSession {
             self.derive_tls13_handshake_keys(&shared)?;
         }
 
+        Ok(())
+    }
+
+    fn handle_encrypted_extensions(&mut self, body: &[u8]) -> Result<(), ()> {
+        if body.len() < 2 {
+            return Err(());
+        }
+        let ext_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+        if ext_len != body.len() - 2 {
+            return Err(());
+        }
+        let mut pos = 2;
+        while pos + 4 <= body.len() {
+            let ext_type = u16::from_be_bytes([body[pos], body[pos + 1]]);
+            let len = u16::from_be_bytes([body[pos + 2], body[pos + 3]]) as usize;
+            pos += 4;
+            if pos + len > body.len() {
+                return Err(());
+            }
+            if ext_type == 0x0010 {
+                let alpn = &body[pos..pos + len];
+                if alpn.len() != 11
+                    || u16::from_be_bytes([alpn[0], alpn[1]]) != 9
+                    || alpn[2] != 8
+                    || &alpn[3..] != b"http/1.1"
+                {
+                    return Err(());
+                }
+            }
+            pos += len;
+        }
+        if pos != body.len() {
+            return Err(());
+        }
         Ok(())
     }
 
@@ -544,6 +577,10 @@ impl TlsSession {
             SIG_ALG_RSA_SHA256 => {
                 let rsa_key = self.rsa_key.as_ref().ok_or(())?;
                 rsa_verify_pkcs1_sha256(rsa_key, msg, sig)
+            }
+            SIG_ALG_RSA_PSS_RSAE_SHA256 => {
+                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
+                crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig)
             }
             SIG_ALG_ECDSA_SECP256R1_SHA256 => {
                 let ec_key = self.ec_key.as_ref().ok_or(())?;
@@ -1441,6 +1478,14 @@ pub fn build_client_hello(
         extensions.extend_from_slice(host_bytes);
     }
 
+    // HTTP/1.1 is the only application protocol implemented by this renderer.
+    // Advertising it avoids servers that require ALPN rejecting the handshake.
+    extensions.extend_from_slice(&0x0010u16.to_be_bytes());
+    extensions.extend_from_slice(&11u16.to_be_bytes());
+    extensions.extend_from_slice(&9u16.to_be_bytes());
+    extensions.push(8);
+    extensions.extend_from_slice(b"http/1.1");
+
     let versions: [u16; 2] = [TLS_VERSION_1_3, TLS_VERSION_1_2];
     extensions.extend_from_slice(&0x002bu16.to_be_bytes());
     let sv_len = (1 + versions.len() * 2) as u16;
@@ -1452,7 +1497,11 @@ pub fn build_client_hello(
 
     // signature_algorithms (0x000d): doğrulayabildiğimiz şemalar ilan edilir.
     // Sunucu listeden seçmek zorundadır.
-    let sigalgs: [u16; 2] = [SIG_ALG_RSA_SHA256, SIG_ALG_ECDSA_SECP256R1_SHA256];
+    let sigalgs: [u16; 3] = [
+        SIG_ALG_RSA_PSS_RSAE_SHA256,
+        SIG_ALG_RSA_SHA256,
+        SIG_ALG_ECDSA_SECP256R1_SHA256,
+    ];
     extensions.extend_from_slice(&0x000du16.to_be_bytes());
     extensions.extend_from_slice(&((2 + sigalgs.len() * 2) as u16).to_be_bytes());
     extensions.extend_from_slice(&((sigalgs.len() * 2) as u16).to_be_bytes());
@@ -2214,7 +2263,8 @@ mod tests {
         sh_rec.extend_from_slice(&sh);
 
         // EncryptedExtensions
-        let ee = hs_message(HANDSHAKE_ENCRYPTED_EXTENSIONS, &[]);
+        // EncryptedExtensions always starts with extensions<2..2^16-1> length.
+        let ee = hs_message(HANDSHAKE_ENCRYPTED_EXTENSIONS, &[0, 0]);
         server.note(&ee);
         let ee_rec = server.encrypt_hs_record(&ee);
 
@@ -2391,7 +2441,7 @@ mod tests {
         sh_rec.extend_from_slice(&sh);
 
         // EncryptedExtensions
-        let ee = hs_message(HANDSHAKE_ENCRYPTED_EXTENSIONS, &[]);
+        let ee = hs_message(HANDSHAKE_ENCRYPTED_EXTENSIONS, &[0, 0]);
         server.note(&ee);
         let ee_rec = server.encrypt_hs_record(&ee);
 

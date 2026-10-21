@@ -258,3 +258,45 @@ pub fn step_month(year: u16, month: u8, forward: bool) -> (u16, u8) {
         (year, month - 1)
     }
 }
+
+/// Kurulu paketi veya sistem ikilisini başlatır (Terminal veya ilgili pencere).
+pub fn launch_installed_pkg(
+    app_name: &str,
+    compositor: &mut gui::MinGuiCompositor,
+    terminal: &mut apps::terminal::TerminalApp,
+    _notepad: &mut apps::notepad::NotepadApp,
+    _calc: &mut apps::calculator::CalculatorApp,
+    _paint: &mut alloc::vec::Vec<Option<apps::paint::PaintApp>>,
+    vfs: &mut fs::vfs::VirtualFileSystem,
+    pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
+    now: &crate::drivers::rtc::DateTime,
+) {
+    if app_name.is_empty() { return; }
+    let clean = app_name.strip_suffix(".elf").unwrap_or(app_name);
+    let lower = clean.to_ascii_lowercase();
+    if lower == "notepad" || lower == "not defteri" || lower == "tiny-editor" {
+        open_app(compositor, 2);
+    } else if lower == "calculator" || lower == "hesap makinesi" {
+        open_app(compositor, 8);
+    } else if lower == "paint" || lower == "cizim tahtasi" {
+        open_app(compositor, 9);
+    } else if lower == "browser" || lower == "web tarayicisi" {
+        open_app(compositor, 3);
+    } else {
+        open_app(compositor, 10);
+        let path = if app_name.ends_with(".elf") {
+            alloc::format!("/bin/{}", app_name)
+        } else {
+            alloc::format!("/bin/{}.elf", app_name)
+        };
+        terminal.push_line(crate::gui::ui_text("--- UYGULAMA BASLATILIYOR ---", "--- LAUNCHING APPLICATION ---"), gui::Color::ACCENT_PINK);
+        let mut msg = gui::TextBuf::new();
+        msg.push_str(crate::gui::ui_text("[minPak] Çalıştırılıyor: ", "[minPak] Executing: "));
+        msg.push_str(&path);
+        terminal.push_line(msg.as_str(), gui::Color::ACCENT_GREEN);
+
+        let exec_cmd = alloc::format!("exec {}", path);
+        terminal.execute(&exec_cmd, vfs, pmm, now);
+    }
+}
+

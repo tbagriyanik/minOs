@@ -51,7 +51,15 @@ pub const fn is_token(color: u32) -> bool {
 #[inline(always)]
 pub fn resolve(color: u32) -> u32 {
     if (color & THEME_MASK) == THEME_MARKER {
-        PALETTE[(color & 0xFF) as usize].load(Ordering::Relaxed)
+        let idx = (color & 0xFF) as usize;
+        if idx < PALETTE_LEN {
+            PALETTE[idx].load(Ordering::Relaxed)
+        } else {
+            // Opaque framebuffer/icon colors can share the marker prefix.
+            // Invalid token indices are therefore treated as literal RGB(A),
+            // not used as unchecked palette offsets.
+            color
+        }
     } else {
         color
     }
@@ -280,5 +288,10 @@ fn apply(id: ThemeId) {
 /// Aktif paletten tek bir renk indeksini okur (UI kodu doğrudan RGB isteyebilir).
 #[inline(always)]
 pub fn get(idx: u32) -> u32 {
-    PALETTE[(idx & 0xFF) as usize].load(Ordering::Relaxed)
+    let index = idx as usize;
+    if index < PALETTE_LEN {
+        PALETTE[index].load(Ordering::Relaxed)
+    } else {
+        0
+    }
 }

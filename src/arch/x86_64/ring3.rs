@@ -282,7 +282,13 @@ pub extern "C" fn rust_int80(frame: *mut u64) -> u64 {
 
             match core::str::from_utf8(&buf[..len]) {
 
-                Ok(s) => smp::print_locked(s),
+                Ok(s) => {
+                    smp::print_locked(s);
+                    unsafe {
+                        LAST_RING3_OUTPUT[..len].copy_from_slice(&buf[..len]);
+                        LAST_RING3_OUTPUT_LEN = len;
+                    }
+                }
 
                 Err(_) => smp::print_locked("[ring3: ikili veri]\n"),
 
@@ -313,6 +319,23 @@ static USER_FAULT_VEC: AtomicU64 = AtomicU64::new(0);
 static USER_FAULT_RIP: AtomicU64 = AtomicU64::new(0);
 
 static USER_EXITED: AtomicBool = AtomicBool::new(false);
+
+static mut LAST_RING3_OUTPUT: [u8; 256] = [0; 256];
+static mut LAST_RING3_OUTPUT_LEN: usize = 0;
+
+pub fn take_last_output() -> Option<alloc::string::String> {
+    unsafe {
+        if LAST_RING3_OUTPUT_LEN == 0 {
+            None
+        } else {
+            let s = core::str::from_utf8(&LAST_RING3_OUTPUT[..LAST_RING3_OUTPUT_LEN])
+                .ok()
+                .map(alloc::string::String::from);
+            LAST_RING3_OUTPUT_LEN = 0;
+            s
+        }
+    }
+}
 
 
 
@@ -1201,6 +1224,9 @@ pub fn demo(
     PARK_RIP.store(DEMO_CODE + PROG_A_PARK_OFF, Ordering::Relaxed);
 
     USER_EXITED.store(false, Ordering::Relaxed);
+    unsafe {
+        LAST_RING3_OUTPUT_LEN = 0;
+    }
 
     smp::print_locked("[RING3] Adim 1: sayfalar esleniyor...\n");
 
@@ -1251,6 +1277,9 @@ pub fn demo(
     USER_FAULT_VEC.store(0, Ordering::Relaxed);
 
     USER_EXITED.store(false, Ordering::Relaxed);
+    unsafe {
+        LAST_RING3_OUTPUT_LEN = 0;
+    }
 
     let prog2 = prog_fault();
 
@@ -1327,6 +1356,9 @@ pub fn execute_loaded_program(prog: &crate::mm::loader::LoadedProgram) -> bool {
     USER_FAULT_RIP.store(0, Ordering::Relaxed);
 
     USER_EXITED.store(false, Ordering::Relaxed);
+    unsafe {
+        LAST_RING3_OUTPUT_LEN = 0;
+    }
 
 
 

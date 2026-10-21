@@ -239,7 +239,7 @@ pub struct TrayLayout {
 /// Düzen: profil şeridi (40px) → her grup için bir başlık (GRP_H) + öğeler (ITEM_H).
 
 /// Başlat menüsünün toplam yüksekliği.
-pub const MENU_H: usize = 200;
+pub const MENU_H: usize = 230;
 /// Menü içerik başlangıcı (profil ve arama alanından sonra).
 pub const MENU_CONTENT_TOP: usize = 82;
 /// Grup başlığı yüksekliği.
@@ -251,8 +251,13 @@ pub const MENU_ITEM_STEP: usize = 20;
 
 /// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
 /// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
-pub const MENU_GROUPS: [(&str, usize, usize); 4] =
-    [("Sistem", 0, 6), ("Üretkenlik", 6, 3), ("Medya", 9, 5), ("Güç", 14, 2)];
+pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
+    ("Sistem", 0, 6),
+    ("Üretkenlik", 6, 3),
+    ("Medya", 9, 5),
+    ("Kurulu", 14, 8),
+    ("Güç", 22, 2),
+];
 
 impl MinGuiCompositor {
     // -----------------------------------------------------------------------
@@ -273,7 +278,7 @@ impl MinGuiCompositor {
             10 => 0,// Terminal -> Komut İstemi
             11 => 0,// Kurulum Sihirbazı -> Bilgisayarım / Disk
             12 => 1,// 3D Gösterici -> Görsel/Çizim
-            13 => 0,// Paket Yöneticisi -> Paket/Kutu/Sistem
+            13 => 5,// Paket Yöneticisi -> Paket / Kutu
             _ => 0,
         }
     }

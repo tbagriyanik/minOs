@@ -344,6 +344,77 @@ pub fn rsa_verify_pkcs1_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Re
     Ok(())
 }
 
+/// Verify an RSA-PSS signature using SHA-256 and a 32-byte salt (TLS scheme
+/// `rsa_pss_rsae_sha256`).
+pub fn rsa_verify_pss_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+    const H_LEN: usize = 32;
+    let k = key.n.len();
+    if k < 2 * H_LEN + 2 || sig.len() != k || key.n[0] == 0 {
+        return Err(());
+    }
+
+    let modulus_bits = k * 8 - key.n[0].leading_zeros() as usize;
+    let em_bits = modulus_bits.checked_sub(1).ok_or(())?;
+    let em_len = (em_bits + 7) / 8;
+    if em_len < 2 * H_LEN + 2 || em_len > k {
+        return Err(());
+    }
+
+    let modulus = bytes_to_limbs(&key.n);
+    let encoded = limbs_to_bytes(&mod_pow_limbs(&bytes_to_limbs(sig), key.e, &modulus), k);
+    if encoded[..k - em_len].iter().any(|&b| b != 0) {
+        return Err(());
+    }
+    let em = &encoded[k - em_len..];
+    if em[em_len - 1] != 0xbc {
+        return Err(());
+    }
+
+    let db_len = em_len - H_LEN - 1;
+    let (masked_db, h_and_trailer) = em.split_at(db_len);
+    let h = &h_and_trailer[..H_LEN];
+    let unused_bits = 8 * em_len - em_bits;
+    if unused_bits > 0 && masked_db[0] & (0xff << (8 - unused_bits)) != 0 {
+        return Err(());
+    }
+
+    let mut db = masked_db.to_vec();
+    let mut counter = 0u32;
+    let mut offset = 0;
+    while offset < db_len {
+        let mut mgf = Sha256::new();
+        mgf.update(h);
+        mgf.update(&counter.to_be_bytes());
+        let block = mgf.finalize();
+        let take = (db_len - offset).min(H_LEN);
+        for i in 0..take {
+            db[offset + i] ^= block[i];
+        }
+        offset += take;
+        counter = counter.checked_add(1).ok_or(())?;
+    }
+    if unused_bits > 0 {
+        db[0] &= 0xff >> unused_bits;
+    }
+
+    let salt_start = db_len - H_LEN;
+    if db[..salt_start - 1].iter().any(|&b| b != 0) || db[salt_start - 1] != 1 {
+        return Err(());
+    }
+    let salt = &db[salt_start..];
+    let mut m_hash = Sha256::new();
+    m_hash.update(msg);
+    let m_hash = m_hash.finalize();
+    let mut check = Sha256::new();
+    check.update(&[0u8; 8]);
+    check.update(&m_hash);
+    check.update(salt);
+    if check.finalize().as_slice() != h {
+        return Err(());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -132,6 +132,7 @@ impl VirtualFileSystem {
         self.create_dir_internal("/root/Media");
         self.create_dir_internal("/root/Downloads");
         self.create_dir_internal("/boot");
+        self.create_dir_internal("/bin");
         self.create_dir_internal("/etc");
         self.create_dir_internal("/var");
         self.create_dir_internal("/var/log");

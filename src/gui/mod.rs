@@ -109,6 +109,7 @@ pub struct MinGuiCompositor {
     pub is_start_menu_open: bool,
     pub active_start_group: usize,
     pub selected_start_item: usize,
+    pub start_menu_focus_submenu: bool,
     pub start_search: [u8; 32],
     pub start_search_len: usize,
     pub start_search_cursor: usize,
@@ -136,6 +137,9 @@ pub struct MinGuiCompositor {
     pub confirm_shutdown: bool,
     pub confirm_restart: bool,
     pub toasts: [Option<ToastNotification>; MAX_TOASTS],
+    pub installed_apps: [[u8; 24]; 8],
+    pub installed_apps_len: [u8; 8],
+    pub installed_apps_count: usize,
     alt_tab_order: [usize; MAX_WINDOWS],
     alt_tab_count: usize,
     alt_tab_selection: usize,
@@ -150,6 +154,7 @@ impl MinGuiCompositor {
             is_start_menu_open: true,
             active_start_group: 0,
             selected_start_item: 0,
+            start_menu_focus_submenu: false,
             start_search: [0; 32],
             start_search_len: 0,
             start_search_cursor: 0,
@@ -173,6 +178,9 @@ impl MinGuiCompositor {
             confirm_shutdown: false,
             confirm_restart: false,
             toasts: [None, None, None, None],
+            installed_apps: [[0; 24]; 8],
+            installed_apps_len: [0; 8],
+            installed_apps_count: 0,
             alt_tab_order: [0; MAX_WINDOWS],
             alt_tab_count: 0,
             alt_tab_selection: 0,
@@ -462,5 +470,34 @@ impl MinGuiCompositor {
             }
         }
         None
+    }
+
+    pub fn update_installed_app(&mut self, idx: usize, name: &str) {
+        if idx >= 8 { return; }
+        let bytes = name.as_bytes();
+        let len = bytes.len().min(24);
+        self.installed_apps[idx][..len].copy_from_slice(&bytes[..len]);
+        self.installed_apps_len[idx] = len as u8;
+    }
+
+    pub fn installed_app_name(&self, idx: usize) -> &str {
+        if idx >= self.installed_apps_count { return ""; }
+        let len = self.installed_apps_len[idx] as usize;
+        core::str::from_utf8(&self.installed_apps[idx][..len]).unwrap_or("")
+    }
+
+    pub fn sync_installed_apps(&mut self, vfs: &crate::fs::vfs::VirtualFileSystem) {
+        let items = vfs.list_dir("/bin");
+        let mut count = 0;
+        for it in items {
+            if it.node_type == crate::fs::vfs::NodeType::File {
+                let name = it.name.as_str();
+                let clean_name = name.strip_suffix(".elf").unwrap_or(name);
+                self.update_installed_app(count, clean_name);
+                count += 1;
+                if count >= 8 { break; }
+            }
+        }
+        self.installed_apps_count = count;
     }
 }

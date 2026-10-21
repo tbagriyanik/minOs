@@ -350,6 +350,127 @@ impl MinGuiCompositor {
         Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
+    /// 16x16 3D İzometrik Paket / Koli Kutusu simgesi (Paket Yöneticisi ve Kurulu Uygulamalar için).
+    pub fn draw_package_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        let s = Self::icon_size();
+        let mut bitmap = [0u32; 16 * 16];
+
+        // 3D Kutu Renk Paleti:
+        let c_top = 0xFFE5C07B;     // Üst yüzey (aydınlık karton)
+        let c_tape = 0xFFD19A66;    // Üst koli bandı / katlama çizgisi
+        let c_left = 0xFFC89248;    // Sol ön yüz (orta ton karton)
+        let c_right = 0xFF9E6822;   // Sağ ön yüz (gölgeli karton)
+        let c_edge = 0xFF3E2006;    // 3D kutu dış konturu ve köşe çizgileri
+        let c_label = 0xFFF0F0F0;   // Paket üzerindeki kargo etiketi
+        let c_bar = 0xFF2980B9;     // Etiket üzerindeki mavi barkod/şerit
+
+        let mut set_px = |r: usize, c: usize, col: u32| {
+            if r < 16 && c < 16 {
+                bitmap[r * 16 + c] = col;
+            }
+        };
+
+        // Row 1: Tepe noktası
+        for c in 7..=8 { set_px(1, c, c_edge); }
+
+        // Row 2
+        set_px(2, 5, c_edge);
+        set_px(2, 6, c_top);
+        set_px(2, 7, c_tape);
+        set_px(2, 8, c_tape);
+        set_px(2, 9, c_top);
+        set_px(2, 10, c_edge);
+
+        // Row 3
+        set_px(3, 3, c_edge);
+        for c in 4..=6 { set_px(3, c, c_top); }
+        set_px(3, 7, c_tape);
+        set_px(3, 8, c_tape);
+        for c in 9..=11 { set_px(3, c, c_top); }
+        set_px(3, 12, c_edge);
+
+        // Row 4
+        set_px(4, 1, c_edge);
+        for c in 2..=6 { set_px(4, c, c_top); }
+        set_px(4, 7, c_tape);
+        set_px(4, 8, c_tape);
+        for c in 9..=13 { set_px(4, c, c_top); }
+        set_px(4, 14, c_edge);
+
+        // Row 5: Üst yüzeyin yan yüzeylerle birleşimi
+        set_px(5, 1, c_edge);
+        for c in 2..=5 { set_px(5, c, c_left); }
+        set_px(5, 6, c_top);
+        set_px(5, 7, c_tape);
+        set_px(5, 8, c_tape);
+        set_px(5, 9, c_top);
+        for c in 10..=13 { set_px(5, c, c_right); }
+        set_px(5, 14, c_edge);
+
+        // Row 6..7: Kutu gövdesi ve orta dikey kenar
+        for r in 6..=7 {
+            set_px(r, 1, c_edge);
+            for c in 2..=6 { set_px(r, c, c_left); }
+            set_px(r, 7, c_edge);
+            set_px(r, 8, c_edge);
+            for c in 9..=13 { set_px(r, c, c_right); }
+            set_px(r, 14, c_edge);
+        }
+
+        // Row 8: Beyaz kargo etiketi
+        set_px(8, 1, c_edge);
+        set_px(8, 2, c_left);
+        for c in 3..=5 { set_px(8, c, c_label); }
+        set_px(8, 6, c_left);
+        set_px(8, 7, c_edge);
+        set_px(8, 8, c_edge);
+        for c in 9..=13 { set_px(8, c, c_right); }
+        set_px(8, 14, c_edge);
+
+        // Row 9: Etiket barkod çizgisi
+        set_px(9, 1, c_edge);
+        set_px(9, 2, c_left);
+        set_px(9, 3, c_label);
+        set_px(9, 4, c_bar);
+        set_px(9, 5, c_label);
+        set_px(9, 6, c_left);
+        set_px(9, 7, c_edge);
+        set_px(9, 8, c_edge);
+        for c in 9..=13 { set_px(9, c, c_right); }
+        set_px(9, 14, c_edge);
+
+        // Row 10..11: Alt gövde
+        for r in 10..=11 {
+            set_px(r, 1, c_edge);
+            for c in 2..=6 { set_px(r, c, c_left); }
+            set_px(r, 7, c_edge);
+            set_px(r, 8, c_edge);
+            for c in 9..=13 { set_px(r, c, c_right); }
+            set_px(r, 14, c_edge);
+        }
+
+        // Row 12: Alt taban eğimi
+        set_px(12, 3, c_edge);
+        for c in 4..=6 { set_px(12, c, c_left); }
+        set_px(12, 7, c_edge);
+        set_px(12, 8, c_edge);
+        for c in 9..=11 { set_px(12, c, c_right); }
+        set_px(12, 12, c_edge);
+
+        // Row 13: Alt taban ucu
+        set_px(13, 5, c_edge);
+        set_px(13, 6, c_left);
+        set_px(13, 7, c_edge);
+        set_px(13, 8, c_edge);
+        set_px(13, 9, c_right);
+        set_px(13, 10, c_edge);
+
+        // Row 14: Taban tepe noktası
+        for c in 7..=8 { set_px(14, c, c_edge); }
+
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+    }
+
     /// İndekse göre ilgili simgeyi çizer (aktif UI ölçeğinde).
     pub fn draw_icon_by_index(fb: &mut Framebuffer, x: usize, y: usize, index: usize) {
         Self::draw_icon_by_index_scaled(fb, x, y, index)
@@ -364,6 +485,7 @@ impl MinGuiCompositor {
             2 => Self::draw_browser_icon(fb, x, y),
             3 => Self::draw_music_icon(fb, x, y),
             4 => Self::draw_gear_icon(fb, x, y),
+            5 => Self::draw_package_icon(fb, x, y),
             _ => Self::draw_cat_icon(fb, x, y),
         }
     }

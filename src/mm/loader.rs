@@ -356,7 +356,14 @@ impl AppLoader {
     /// Test veya VFS üzerinde dosya olarak saklamak için geçerli bir ELF64 test ikilisi üretir.
     /// Bu ikili Ring 3'te çalışır, `SYS_WRITE` ile mesaj yazar ve `SYS_EXIT` ile güvenle çekirdeğe döner.
     pub fn create_sample_elf() -> alloc::vec::Vec<u8> {
+        Self::create_sample_elf_with_msg("hello", "minOs Ring3 ELF: Calisma Basarili!\n", 256)
+    }
+
+    /// Özel mesaj ve hedef dosya boyutu ile geçerli ELF64 ikili dosyası üretir.
+    pub fn create_sample_elf_with_msg(_name: &str, msg: &str, target_size: usize) -> alloc::vec::Vec<u8> {
         let mut bin = alloc::vec::Vec::new();
+        let target_size = target_size.max(256);
+        let mem_size = ((target_size as u64 + 0xFFF) & !0xFFF).max(0x1000);
 
         // 1. ELF Header (64 bytes)
         let eh = Elf64Header {
@@ -389,8 +396,8 @@ impl AppLoader {
             offset: 0,
             vaddr: USER_CODE_BASE,
             paddr: USER_CODE_BASE,
-            file_size: 0x100, // Toplam başlıklar + kod
-            mem_size: 0x1000, // 1 sayfa bellek
+            file_size: target_size as u64,
+            mem_size,
             align: 0x1000,
         };
 
@@ -405,21 +412,17 @@ impl AppLoader {
         bin.extend_from_slice(ph_bytes);
 
         // 3. Kod Segmenti (+0x78):
-        // SYS_WRITE (5) -> "minOs Ring3 ELF: Calisma Basarili!\n"
-        // mov rax, 5
-        // lea rdi, [rip + msg]
-        // mov rsi, msg_len
-        // int 0x80
-        // mov rax, 1 (SYS_EXIT)
-        // int 0x80
-        // jmp $ (park)
-        let code_payload: &[u8] = &[
+        let msg_bytes = msg.as_bytes();
+        let msg_len = msg_bytes.len() as u32;
+        let len_bytes = msg_len.to_le_bytes();
+
+        let code_header: [u8; 34] = [
             // mov rax, 5 (SYS_WRITE)
             0x48, 0xC7, 0xC0, 0x05, 0x00, 0x00, 0x00,
-            // lea rdi, [rip + 18] -> msg
-            0x48, 0x8D, 0x3D, 0x12, 0x00, 0x00, 0x00,
-            // mov rsi, 35 (msg len)
-            0x48, 0xC7, 0xC6, 0x23, 0x00, 0x00, 0x00,
+            // lea rdi, [rip + 20] -> sonraki 20 bayt ilerisindeki mesaja
+            0x48, 0x8D, 0x3D, 0x14, 0x00, 0x00, 0x00,
+            // mov rsi, msg_len
+            0x48, 0xC7, 0xC6, len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3],
             // int 0x80
             0xCD, 0x80,
             // mov rax, 1 (SYS_EXIT)
@@ -428,15 +431,12 @@ impl AppLoader {
             0xCD, 0x80,
             // jmp $
             0xEB, 0xFE,
-            // String payload: "minOs Ring3 ELF: Calisma Basarili!\n" (35 bayt)
-            b'm', b'i', b'n', b'O', b's', b' ', b'R', b'i', b'n', b'g', b'3', b' ',
-            b'E', b'L', b'F', b':', b' ', b'C', b'a', b'l', b'i', b's', b'm', b'a',
-            b' ', b'B', b'a', b's', b'a', b'r', b'i', b'l', b'i', b'!', b'\n',
         ];
-        bin.extend_from_slice(code_payload);
+        bin.extend_from_slice(&code_header);
+        bin.extend_from_slice(msg_bytes);
 
-        // Toplam boyutu 0x100 bayta doldur
-        while bin.len() < 0x100 {
+        // Toplam boyutu target_size'a kadar doldur
+        while bin.len() < target_size {
             bin.push(0);
         }
 

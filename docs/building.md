@@ -147,7 +147,7 @@ cargo build --release -Zjson-target-spec --target x86_64-minos.json `
 ```
 
 #### 2. Birim ve Regresyon Testlerini Çalıştırma (Host Unit Tests)
-Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru ve HTML ayrıştırıcı testlerini içeren 57 adet birim testini host ortamında yürütmek için:
+Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru ve HTML ayrıştırıcı testlerini içeren 70 adet birim testini host ortamında yürütmek için:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1

@@ -45,7 +45,11 @@ impl MinGuiCompositor {
 
     pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
         let sub_w = sp(240);
-        let count = MENU_GROUPS[group_index.min(3)].2;
+        let count = match group_index {
+            3 => 6,
+            4 => 2,
+            g => MENU_GROUPS[g.min(4)].2,
+        };
         let sub_h = sp(32) + count * sp(28) + sp(8);
         let sub_x = 6 + sp(190) + 4;
         let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
@@ -132,6 +136,14 @@ impl MinGuiCompositor {
             };
             if let Some(s) = score {
                 scored[count] = (app_id, s);
+                count += 1;
+            }
+        }
+        for k in 0..self.installed_apps_count {
+            if count >= 14 { break; }
+            let name = self.installed_app_name(k);
+            if let Some(s) = Self::start_search_score(name.as_bytes(), query) {
+                scored[count] = (100 + k, s);
                 count += 1;
             }
         }
@@ -298,6 +310,7 @@ impl MinGuiCompositor {
         self.is_start_menu_open = false;
         self.confirm_shutdown = false;
         self.confirm_restart = false;
+        self.start_menu_focus_submenu = false;
         self.clear_start_search();
     }
 
@@ -393,12 +406,12 @@ impl MinGuiCompositor {
 
         // Ana Menü Alt Başlıkları (Kategoriler)
         let category_titles = if english {
-            ["System", "Productivity", "Media", "Power"]
+            ["System", "Productivity", "Media", "Installed Apps", "Power"]
         } else {
-            ["Sistem", "Üretkenlik", "Medya", "Güç"]
+            ["Sistem", "Üretkenlik", "Medya", "Kurulu Uygulamalar", "Güç"]
         };
 
-        let active_g = self.active_start_group.min(3);
+        let active_g = self.active_start_group.min(4);
 
         for (g, title) in category_titles.iter().enumerate() {
             let r = Self::start_menu_category_rect(menu_y, g);
@@ -453,11 +466,19 @@ impl MinGuiCompositor {
                 if is_selected { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::ACCENT_BLUE); }
                 else if is_hovered { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR); }
                 let app_id = results[row];
-                let app_name = if english { en_names[app_id] } else { names[app_id] };
+                let (app_name, icon_idx) = if app_id >= 100 {
+                    (self.installed_app_name(app_id - 100), 5)
+                } else {
+                    let n = if english { en_names[app_id] } else { names[app_id] };
+                    (n, Self::window_icon_index(app_id))
+                };
+                let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
+                Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
                 let text_y = r.1 + (r.3.saturating_sub(Self::text_height())) / 2;
-                Self::draw_string_clipped(fb, r.0 + 8, text_y, app_name,
+                let text_off = sp(6) + Self::icon_size() + sp(8);
+                Self::draw_string_clipped(fb, r.0 + text_off, text_y, app_name,
                     if is_selected { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN },
-                    (r.0 + 4, r.1 + 2, r.2 - 8, r.3 - 4));
+                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
             }
         }
     }
@@ -473,12 +494,85 @@ impl MinGuiCompositor {
             0 => crate::gui::ui_text("Sistem Uygulamaları", "System Apps"),
             1 => crate::gui::ui_text("Üretkenlik Araçları", "Productivity Tools"),
             2 => crate::gui::ui_text("Medya ve Eğlence", "Media & Entertainment"),
+            3 => crate::gui::ui_text("Kurulu Uygulamalar", "Installed Apps"),
             _ => crate::gui::ui_text("Güç Seçenekleri", "Power Options"),
         };
         fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
-        let menu_items: [(&str, u32, usize); 16] = if english { [
+        if group_idx == 3 {
+            if self.installed_apps_count == 0 {
+                let r = (sub_x + sp(6), sub_y + sp(30), sub_w.saturating_sub(sp(12)), sp(25));
+                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::WINDOW_BG);
+                let text_y = r.1 + (r.3.saturating_sub(Self::text_height())) / 2;
+                Self::draw_string(fb, r.0 + 12, text_y, crate::gui::ui_text("Kurulu paket yok", "No installed packages"), Color::TEXT_MUTED);
+            } else {
+                for k in 0..self.installed_apps_count {
+                    let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
+                    let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
+                    let bg_col = if is_hovered { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                    fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+                    if is_hovered {
+                        fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
+                    }
+                    let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
+                    Self::draw_package_icon(fb, r.0 + sp(6), icon_y);
+
+                    let app_name = self.installed_app_name(k);
+                    let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+                    let text_off = sp(6) + Self::icon_size() + sp(8);
+                    let text_x = r.0 + text_off;
+                    let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
+                    Self::draw_string_clipped(fb, text_x, text_y, app_name, text_col,
+                        (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+                }
+            }
+            return;
+        }
+
+        if group_idx == 4 {
+            let power_items = if english {
+                [("Shut Down", 255usize), ("Restart", 254usize)]
+            } else {
+                [("Sistemi Kapat", 255usize), ("Yeniden Başlat", 254usize)]
+            };
+            for k in 0..2 {
+                let (name, _code) = power_items[k];
+                let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
+                let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
+                let bg_col = if (k == 0 && self.confirm_shutdown) || (k == 1 && self.confirm_restart) {
+                    Color::ACCENT_RED
+                } else if is_hovered {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::TITLE_BAR
+                };
+                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+                if is_hovered {
+                    fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
+                }
+                let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
+                Self::draw_cat_icon_scaled(fb, r.0 + sp(6), icon_y);
+
+                let label = if k == 0 && self.confirm_shutdown {
+                    crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
+                } else if k == 1 && self.confirm_restart {
+                    crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
+                } else {
+                    name
+                };
+
+                let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+                let text_off = sp(6) + Self::icon_size() + sp(8);
+                let text_x = r.0 + text_off;
+                let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
+                Self::draw_string_clipped(fb, text_x, text_y, label, text_col,
+                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+            }
+            return;
+        }
+
+        let menu_items: [(&str, u32, usize); 14] = if english { [
             ("File Manager", Color::ACCENT_YELLOW, 0),
             ("Settings", Color::ACCENT_BLUE, 1usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
@@ -493,8 +587,6 @@ impl MinGuiCompositor {
             ("Music Player", Color::ACCENT_YELLOW, 5),
             ("Video Player", Color::ACCENT_RED, 6),
             ("3D Viewer", Color::ACCENT_BLUE, 12),
-            ("Shut Down", Color::ACCENT_RED, 255),
-            ("Restart", Color::ACCENT_YELLOW, 254),
         ] } else { [
             ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
             ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
@@ -510,8 +602,6 @@ impl MinGuiCompositor {
             ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
             ("Video Oynatıcı", Color::ACCENT_RED, 6),
             ("3D Gösterici", Color::ACCENT_BLUE, 12),
-            ("Sistemi Kapat", Color::ACCENT_RED, 255),
-            ("Yeniden Başlat", Color::ACCENT_YELLOW, 254),
         ] };
 
         let (_, first, count) = MENU_GROUPS[group_idx];
@@ -521,13 +611,9 @@ impl MinGuiCompositor {
             let (name, _col, app_or_code) = menu_items[i];
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
-            let is_hovered = in_rect(mx, my, r) || (self.selected_start_item == k);
-            let bg_col = if (i == 14 && self.confirm_shutdown) || (i == 15 && self.confirm_restart) {
-                Color::ACCENT_RED
-            } else if is_hovered {
+            let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
+            let bg_col = if is_hovered {
                 Color::ACCENT_BLUE
-            } else if i >= 14 {
-                Color::TITLE_BAR
             } else {
                 Color::WINDOW_BG
             };
@@ -537,31 +623,16 @@ impl MinGuiCompositor {
                 fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
             }
 
-            // Çizim: Simgeler (İkonlar) — öğe içinde dikey ortalanır.
+            // Çizim: Simgeler (İkonlar)
             let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
-            if app_or_code < 14 {
-                let icon_idx = Self::window_icon_index(app_or_code);
-                Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
-            } else {
-                // Güç simgeleri (kedi veya varsayılan simge)
-                Self::draw_cat_icon_scaled(fb, r.0 + sp(6), icon_y);
-            }
-
-            let label = if i == 14 && self.confirm_shutdown {
-                crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
-            } else if i == 15 && self.confirm_restart {
-                crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
-            } else {
-                name
-            };
+            let icon_idx = Self::window_icon_index(app_or_code);
+            Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
 
             let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
-            // Metin konumu ikon boyutundan türetilir: sol boşluk + ikon + boşluk.
-            // Böylece ikon büyüse de metin ikonun üzerine binmez (taşma/kayma yok).
             let text_off = sp(6) + Self::icon_size() + sp(8);
             let text_x = r.0 + text_off;
             let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
-            Self::draw_string_clipped(fb, text_x, text_y, label, text_col,
+            Self::draw_string_clipped(fb, text_x, text_y, name, text_col,
                 (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
         }
     }

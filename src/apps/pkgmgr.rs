@@ -161,12 +161,16 @@ impl MinPkg {
 
     /// Yerleşik paket oluşturucu (Repo kapalıyken veya test için dahili paket kurulumu).
     pub fn install_builtin(name: &str, vfs: &mut VirtualFileSystem) -> Result<String, &'static str> {
-        let target_path = if name.ends_with(".elf") {
-            format!("/bin/{}", name)
-        } else {
-            format!("/bin/{}.elf", name)
+        let clean = name.strip_suffix(".elf").unwrap_or(name);
+        let target_path = format!("/bin/{}.elf", clean);
+        let (msg, size_kb) = match clean {
+            "sarman-cli" => ("[sarman-cli v1.2.0] Sarman kedi araclari devrede: miyav!\n", 14),
+            "netcat-lite" => ("[netcat-lite v0.9.1] Port 8080 dinleniyor, soket hazir.\n", 18),
+            "hexdump" => ("[hexdump v1.0.4] 00000000: 7f 45 4c 46 02 01 01 00 .ELF....\n", 12),
+            "tiny-editor" => ("[tiny-editor v2.1.0] Hizli metin editoru baslatildi.\n", 24),
+            _ => ("[minOs] Program Ring 3 ortaminda basariyla calistirildi!\n", 4),
         };
-        let sample_elf = crate::mm::loader::AppLoader::create_sample_elf();
+        let sample_elf = crate::mm::loader::AppLoader::create_sample_elf_with_msg(clean, msg, size_kb * 1024);
         if vfs.write_file(&target_path, &sample_elf) {
             Ok(target_path)
         } else {
@@ -261,6 +265,7 @@ pub struct PackageManagerApp {
     pub status_msg: (&'static str, &'static str),
     pub status_is_err: bool,
     pub installed_cache: Vec<PackageMeta>,
+    pub pending_launch: Option<String>,
 }
 
 impl PackageManagerApp {
@@ -274,7 +279,12 @@ impl PackageManagerApp {
             status_msg: ("minPak Paket Yöneticisi hazır.", "minPak Package Manager ready."),
             status_is_err: false,
             installed_cache: Vec::new(),
+            pending_launch: None,
         }
+    }
+
+    pub fn take_pending_launch(&mut self) -> Option<String> {
+        self.pending_launch.take()
     }
 
     pub fn refresh_installed(&mut self, vfs: &VirtualFileSystem) {
@@ -337,6 +347,22 @@ impl PackageManagerApp {
         (x, y, w, h)
     }
 
+    pub fn open_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let w = 100;
+        let h = 28;
+        let x = win_x + win_w.saturating_sub(w + 14);
+        let y = win_y + win_h.saturating_sub(h + 12);
+        (x, y, w, h)
+    }
+
+    pub fn remove_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+        let w = 100;
+        let h = 28;
+        let x = win_x + win_w.saturating_sub(w + 122);
+        let y = win_y + win_h.saturating_sub(h + 12);
+        (x, y, w, h)
+    }
+
     pub fn action_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
         let w = 120;
         let h = 28;
@@ -346,9 +372,9 @@ impl PackageManagerApp {
     }
 
     pub fn refresh_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
-        let w = 110;
+        let w = 100;
         let h = 28;
-        let x = win_x + win_w.saturating_sub(w + 142);
+        let x = win_x + win_w.saturating_sub(w + 230);
         let y = win_y + win_h.saturating_sub(h + 12);
         (x, y, w, h)
     }
@@ -390,7 +416,7 @@ impl PackageManagerApp {
             self.search_focused = false;
         }
 
-        // Liste satır seçimi
+        // Liste satır seçimi veya satırdaki [▶ Aç] rozeti tıklaması
         let la = Self::list_area_rect(0, 0, win_w, win_h);
         if crate::gui::in_rect(abs_x, abs_y, la) {
             let row_h = 28usize;
@@ -403,12 +429,26 @@ impl PackageManagerApp {
             };
             if clicked_row < total_count {
                 self.selected_index = clicked_row;
+                // Kurulu sekmesinde sağdaki [▶ Aç] butonuna tıklandıysa doğrudan başlat
+                if self.active_tab == 1 && abs_x >= la.0 + la.2.saturating_sub(75) {
+                    if let Some(pkg) = self.filtered_installed_item(clicked_row) {
+                        self.pending_launch = Some(pkg.name.clone());
+                        self.status_msg = ("Uygulama başlatılıyor...", "Launching application...");
+                        self.status_is_err = false;
+                    }
+                }
             }
             return;
         }
 
         // Yenile Butonu
-        let rf = Self::refresh_button_rect(0, 0, win_w, win_h);
+        let rf = if self.active_tab == 0 {
+            let rx = win_w.saturating_sub(252);
+            let ry = win_h.saturating_sub(40);
+            (rx, ry, 110, 28)
+        } else {
+            Self::refresh_button_rect(0, 0, win_w, win_h)
+        };
         if crate::gui::in_rect(abs_x, abs_y, rf) {
             self.refresh_installed(vfs);
             self.status_msg = ("Paket listesi güncellendi.", "Package list refreshed.");
@@ -416,15 +456,15 @@ impl PackageManagerApp {
             return;
         }
 
-        // Aksiyon Butonu: Kur (Depo) veya Kaldır (Kurulu)
-        let ab = Self::action_button_rect(0, 0, win_w, win_h);
-        if crate::gui::in_rect(abs_x, abs_y, ab) {
-            if self.active_tab == 0 {
-                // Depodan kur
+        if self.active_tab == 0 {
+            // Depodan kur butonu
+            let ab = Self::action_button_rect(0, 0, win_w, win_h);
+            if crate::gui::in_rect(abs_x, abs_y, ab) {
                 if let Some(pkg) = self.filtered_repo_item(self.selected_index) {
-                    let install_res = if crate::drivers::e1000::is_ready() {
+                    let install_res = if pkg.name.starts_with("http://") {
                         MinPkg::install_from_url(pkg.name, vfs)
                     } else {
+                        // Örnek kurulabilir paketler doğrudan dahili kaynaktan kurulur
                         MinPkg::install_builtin(pkg.name, vfs)
                     };
                     match install_res {
@@ -440,8 +480,21 @@ impl PackageManagerApp {
                         }
                     }
                 }
-            } else {
-                // Kurulu olanı kaldır
+            }
+        } else {
+            // Kurulu sekmesi: [▶ Aç] ve [Kaldır] butonları
+            let ob = Self::open_button_rect(0, 0, win_w, win_h);
+            if crate::gui::in_rect(abs_x, abs_y, ob) {
+                if let Some(pkg) = self.filtered_installed_item(self.selected_index) {
+                    self.pending_launch = Some(pkg.name.clone());
+                    self.status_msg = ("Uygulama başlatılıyor...", "Launching application...");
+                    self.status_is_err = false;
+                    return;
+                }
+            }
+
+            let rb = Self::remove_button_rect(0, 0, win_w, win_h);
+            if crate::gui::in_rect(abs_x, abs_y, rb) {
                 if let Some(pkg) = self.filtered_installed_item(self.selected_index) {
                     let name = String::from(pkg.name.as_str());
                     if MinPkg::remove(&name, vfs) {
@@ -611,12 +664,27 @@ impl PackageManagerApp {
                     let txt_col = if is_sel { Color::WHITE } else { Color::TEXT_MAIN };
                     MinGuiCompositor::draw_string(fb, la.0 + 10, ry + 6, &p.name, txt_col);
                     MinGuiCompositor::draw_string(fb, la.0 + 160, ry + 6, &p.version, Color::ACCENT_PINK);
-                    MinGuiCompositor::draw_string_clipped(fb, la.0 + 240, ry + 6, &p.install_path, Color::ACCENT_YELLOW, (la.0 + 240, ry, la.2.saturating_sub(330), row_h));
+                    MinGuiCompositor::draw_string_clipped(fb, la.0 + 240, ry + 6, &p.install_path, Color::ACCENT_YELLOW, (la.0 + 240, ry, la.2.saturating_sub(380), row_h));
 
                     let mut sz_buf = TextBuf::new();
-                    sz_buf.push_usize(p.size_bytes / 1024);
-                    sz_buf.push_str(" KB");
-                    MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(80), ry + 6, sz_buf.as_str(), Color::ACCENT_GREEN);
+                    if p.size_bytes >= 1024 * 1024 {
+                        sz_buf.push_usize(p.size_bytes / (1024 * 1024));
+                        sz_buf.push_str(" MB");
+                    } else if p.size_bytes >= 1024 {
+                        sz_buf.push_usize(p.size_bytes / 1024);
+                        sz_buf.push_str(" KB");
+                    } else {
+                        sz_buf.push_usize(p.size_bytes);
+                        sz_buf.push_str(" B");
+                    }
+                    MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(130), ry + 6, sz_buf.as_str(), Color::ACCENT_GREEN);
+
+                    // Aç rozeti (satır içi hızlı çalıştırma)
+                    let badge_x = la.0 + la.2.saturating_sub(62);
+                    let badge_y = ry + 3;
+                    fb.draw_rounded_rect(badge_x, badge_y, 54, 20, 3, Color::ACCENT_GREEN);
+                    let badge_txt = if english { "▶ Open" } else { "▶ Aç" };
+                    MinGuiCompositor::draw_string(fb, badge_x + 5, badge_y + 3, badge_txt, Color::WHITE);
                 }
             }
             if count == 0 {
@@ -634,26 +702,48 @@ impl PackageManagerApp {
             win_y + win_h.saturating_sub(32),
             status_text,
             st_col,
-            (win_x + 16, win_y + win_h.saturating_sub(36), win_w.saturating_sub(280), 28),
+            (win_x + 16, win_y + win_h.saturating_sub(36), win_w.saturating_sub(340), 28),
         );
 
-        // Yenile Butonu
-        let rf = Self::refresh_button_rect(win_x, win_y, win_w, win_h);
-        fb.draw_rounded_rect(rf.0, rf.1, rf.2, rf.3, 4, Color::TASKBAR_BG);
-        fb.draw_rounded_rect_outline(rf.0, rf.1, rf.2, rf.3, 4, Color::BORDER);
-        let rf_txt = if english { "Refresh" } else { "Yenile" };
-        MinGuiCompositor::draw_string(fb, rf.0 + 24, rf.1 + 6, rf_txt, Color::TEXT_MAIN);
+        if self.active_tab == 1 {
+            // Aç Butonu
+            let ob = Self::open_button_rect(win_x, win_y, win_w, win_h);
+            fb.draw_rounded_rect(ob.0, ob.1, ob.2, ob.3, 4, Color::ACCENT_GREEN);
+            fb.draw_rounded_rect_outline(ob.0, ob.1, ob.2, ob.3, 4, Color::WHITE);
+            let ob_txt = if english { "▶ Open" } else { "▶ Aç" };
+            let off = (ob.2.saturating_sub(ob_txt.len() * 8)) / 2;
+            MinGuiCompositor::draw_string(fb, ob.0 + off, ob.1 + 6, ob_txt, Color::WHITE);
 
-        // Aksiyon Butonu
-        let ab = Self::action_button_rect(win_x, win_y, win_w, win_h);
-        let (ab_bg, ab_txt) = if self.active_tab == 0 {
-            (Color::ACCENT_GREEN, if english { "Install" } else { "Kur" })
+            // Kaldır Butonu
+            let rb = Self::remove_button_rect(win_x, win_y, win_w, win_h);
+            fb.draw_rounded_rect(rb.0, rb.1, rb.2, rb.3, 4, Color::ACCENT_RED);
+            fb.draw_rounded_rect_outline(rb.0, rb.1, rb.2, rb.3, 4, Color::WHITE);
+            let rb_txt = if english { "Remove" } else { "Kaldır" };
+            let off_r = (rb.2.saturating_sub(rb_txt.len() * 8)) / 2;
+            MinGuiCompositor::draw_string(fb, rb.0 + off_r, rb.1 + 6, rb_txt, Color::WHITE);
+
+            // Yenile Butonu
+            let rf = Self::refresh_button_rect(win_x, win_y, win_w, win_h);
+            fb.draw_rounded_rect(rf.0, rf.1, rf.2, rf.3, 4, Color::TASKBAR_BG);
+            fb.draw_rounded_rect_outline(rf.0, rf.1, rf.2, rf.3, 4, Color::BORDER);
+            let rf_txt = if english { "Refresh" } else { "Yenile" };
+            let off_rf = (rf.2.saturating_sub(rf_txt.len() * 8)) / 2;
+            MinGuiCompositor::draw_string(fb, rf.0 + off_rf, rf.1 + 6, rf_txt, Color::TEXT_MAIN);
         } else {
-            (Color::ACCENT_RED, if english { "Remove" } else { "Kaldır" })
-        };
-        fb.draw_rounded_rect(ab.0, ab.1, ab.2, ab.3, 4, ab_bg);
-        fb.draw_rounded_rect_outline(ab.0, ab.1, ab.2, ab.3, 4, Color::WHITE);
-        let text_off = (ab.2.saturating_sub(ab_txt.len() * 8)) / 2;
-        MinGuiCompositor::draw_string(fb, ab.0 + text_off, ab.1 + 6, ab_txt, MinGuiCompositor::text_on(ab_bg));
+            // Depo sekmesi: Kur ve Yenile Butonları
+            let rf_x = win_x + win_w.saturating_sub(252);
+            let rf_y = win_y + win_h.saturating_sub(40);
+            fb.draw_rounded_rect(rf_x, rf_y, 110, 28, 4, Color::TASKBAR_BG);
+            fb.draw_rounded_rect_outline(rf_x, rf_y, 110, 28, 4, Color::BORDER);
+            let rf_txt = if english { "Refresh" } else { "Yenile" };
+            MinGuiCompositor::draw_string(fb, rf_x + 24, rf_y + 6, rf_txt, Color::TEXT_MAIN);
+
+            let ab = Self::action_button_rect(win_x, win_y, win_w, win_h);
+            fb.draw_rounded_rect(ab.0, ab.1, ab.2, ab.3, 4, Color::ACCENT_GREEN);
+            fb.draw_rounded_rect_outline(ab.0, ab.1, ab.2, ab.3, 4, Color::WHITE);
+            let ab_txt = if english { "Install" } else { "Kur" };
+            let text_off = (ab.2.saturating_sub(ab_txt.len() * 8)) / 2;
+            MinGuiCompositor::draw_string(fb, ab.0 + text_off, ab.1 + 6, ab_txt, Color::WHITE);
+        }
     }
 }

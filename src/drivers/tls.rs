@@ -57,8 +57,12 @@ const GCM_TAG_LEN: usize = 16;
 
 /// TLS 1.3 hash output length (SHA-256).
 const TLS13_HASH_LEN: usize = 32;
-/// TLS 1.3 HKDF salt (all zeros for PSK-less handshake).
-const TLS13_HKDF_SALT: [u8; TLS13_HASH_LEN] = [0; TLS13_HASH_LEN];
+
+/// RFC 8446 §7.1: Early Secret ve Master Secret türetiminde kullanılan Hash.length sıfır girdisi.
+#[inline(always)]
+fn rfc8446_zero_hash() -> [u8; TLS13_HASH_LEN] {
+    [0u8; TLS13_HASH_LEN]
+}
 
 /// TLS 1.3 HKDF-Expand-Label prefix.
 const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
@@ -129,6 +133,10 @@ pub struct TlsSession {
     last_alert: Option<(u8, u8)>,
     /// Client ECDHE secret for TLS 1.3 key derivation (stored after ClientHello).
     client_ecdhe_secret: Option<[u8; 32]>,
+    /// Sertifika hostname ve süre doğrulaması başarılı mı?
+    pub cert_verified: bool,
+    /// Sertifika doğrulama hatası (varsa).
+    pub cert_error: Option<crate::drivers::crypto::x509::CertValidationError>,
 }
 
 impl TlsSession {
@@ -170,7 +178,17 @@ impl TlsSession {
             outgoing: Vec::new(),
             last_alert: None,
             client_ecdhe_secret: None,
+            cert_verified: false,
+            cert_error: None,
         }
+    }
+
+    pub fn is_cert_verified(&self) -> bool {
+        self.cert_verified
+    }
+
+    pub fn cert_error(&self) -> Option<crate::drivers::crypto::x509::CertValidationError> {
+        self.cert_error
     }
 
     pub fn set_client_ecdhe_secret(&mut self, secret: [u8; 32]) {
@@ -629,6 +647,52 @@ impl TlsSession {
                 // vermek yerine siradaki sertifikalara bakilir; bazi sunucular
                 // zincirde RSA capraz-imzali bir sertifika da gonderir.
                 let cert = &body[pos..pos + cert_len];
+
+                #[cfg(not(test))]
+                {
+                    let rtc = crate::drivers::rtc::DateTime::read();
+                    let now = crate::drivers::crypto::x509::X509Time {
+                        year: rtc.year,
+                        month: rtc.month,
+                        day: rtc.day,
+                        hour: rtc.hour,
+                        minute: rtc.minute,
+                        second: rtc.second,
+                    };
+                    match crate::drivers::crypto::x509::verify_certificate_fields(cert, &self.hostname, &now) {
+                        Ok(()) => {
+                            self.cert_verified = true;
+                            self.cert_error = None;
+                            crate::serial::print("[TLS] Sertifika dogrulandi: ");
+                            crate::serial::print(&self.hostname);
+                            crate::serial::print(" (süre + SNI/CN gecerli)\n");
+                        }
+                        Err(e) => {
+                            self.cert_verified = false;
+                            self.cert_error = Some(e);
+                            crate::serial::print("[TLS] Sertifika uyarisi: ");
+                            match e {
+                                crate::drivers::crypto::x509::CertValidationError::NotYetValid => {
+                                    crate::serial::print("henuz gecerli degil (not_before)\n");
+                                }
+                                crate::drivers::crypto::x509::CertValidationError::Expired => {
+                                    crate::serial::print("suresi dolmus (not_after)\n");
+                                }
+                                crate::drivers::crypto::x509::CertValidationError::HostnameMismatch => {
+                                    crate::serial::print("hostname/SNI eslesmedi\n");
+                                }
+                                crate::drivers::crypto::x509::CertValidationError::InvalidDer => {
+                                    crate::serial::print("gecersiz DER yapisi\n");
+                                }
+                            }
+                        }
+                    }
+                }
+                #[cfg(test)]
+                {
+                    self.cert_verified = true;
+                }
+
                 if let Ok(key) = parse_x509_rsa_public_key(cert) {
                     self.rsa_key = Some(key);
                 } else if let Ok(point) = parse_x509_ec_public_key(cert) {
@@ -1007,7 +1071,8 @@ impl TlsSession {
     /// uygulama trafik anahtarları türetilir.
     fn derive_tls13_handshake_keys(&mut self, shared_secret: &[u8]) -> Result<(), ()> {
         // early_secret = HKDF-Extract(salt=0, IKM=0)
-        let early_secret = Self::hkdf_extract(&TLS13_HKDF_SALT, &TLS13_HKDF_SALT);
+        let zero_hash = rfc8446_zero_hash();
+        let early_secret = Self::hkdf_extract(&zero_hash, &zero_hash);
         // derived = Derive-Secret(early_secret, "derived", "")
         let derived = Self::hkdf_expand_label(&early_secret, b"derived", b"", TLS13_HASH_LEN);
         let derived_arr: [u8; TLS13_HASH_LEN] = derived.try_into().map_err(|_| ())?;
@@ -1024,7 +1089,7 @@ impl TlsSession {
             TLS13_HASH_LEN,
         );
         let derived2_arr: [u8; TLS13_HASH_LEN] = derived2.try_into().map_err(|_| ())?;
-        let master_secret = Self::hkdf_extract(&derived2_arr, &TLS13_HKDF_SALT);
+        let master_secret = Self::hkdf_extract(&derived2_arr, &zero_hash);
         self.tls13_master_secret = Some(master_secret);
 
         // El sıkışma trafik sırları (transcript hash = ClientHello..ServerHello).
@@ -1143,10 +1208,11 @@ impl TlsSession {
     }
 
     fn tls12_nonce(write_iv: &[u8; 4], seq: u64) -> [u8; 12] {
-        let mut nonce = [0u8; 12];
-        nonce[..4].copy_from_slice(write_iv);
-        nonce[4..12].copy_from_slice(&seq.to_be_bytes());
-        nonce
+        let s = seq.to_be_bytes();
+        [
+            write_iv[0], write_iv[1], write_iv[2], write_iv[3],
+            s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+        ]
     }
 
     fn tls12_aad(seq: u64, record_type: u8, len: usize) -> [u8; 13] {
@@ -1862,22 +1928,22 @@ mod tests {
     /// Test icin minimum TLS 1.3 sunucusu.
     struct TestServer {
         transcript: Sha256,
-        handshake_secret: [u8; 32],
-        master_secret: [u8; 32],
+        handshake_secret: Option<[u8; 32]>,
+        master_secret: Option<[u8; 32]>,
         /// ServerHello aninda turetilen el sikisma trafik sirlari.
-        server_hs_secret: [u8; 32],
-        client_hs_secret: [u8; 32],
-        server_hs_key: [u8; 16],
-        server_hs_iv: [u8; 12],
+        server_hs_secret: Option<[u8; 32]>,
+        client_hs_secret: Option<[u8; 32]>,
+        server_hs_key: Option<[u8; 16]>,
+        server_hs_iv: Option<[u8; 12]>,
         server_hs_seq: u64,
-        client_hs_key: [u8; 16],
-        client_hs_iv: [u8; 12],
+        client_hs_key: Option<[u8; 16]>,
+        client_hs_iv: Option<[u8; 12]>,
         client_hs_seq: u64,
-        server_ap_key: [u8; 16],
-        server_ap_iv: [u8; 12],
+        server_ap_key: Option<[u8; 16]>,
+        server_ap_iv: Option<[u8; 12]>,
         server_ap_seq: u64,
-        client_ap_key: [u8; 16],
-        client_ap_iv: [u8; 12],
+        client_ap_key: Option<[u8; 16]>,
+        client_ap_iv: Option<[u8; 12]>,
         client_ap_seq: u64,
         rsa: crate::drivers::crypto::rsa::RsaPrivateKey,
     }
@@ -1886,21 +1952,21 @@ mod tests {
         fn new() -> Self {
             TestServer {
                 transcript: Sha256::new(),
-                handshake_secret: [0; 32],
-                master_secret: [0; 32],
-                server_hs_secret: [0; 32],
-                client_hs_secret: [0; 32],
-                server_hs_key: [0; 16],
-                server_hs_iv: [0; 12],
+                handshake_secret: None,
+                master_secret: None,
+                server_hs_secret: None,
+                client_hs_secret: None,
+                server_hs_key: None,
+                server_hs_iv: None,
                 server_hs_seq: 0,
-                client_hs_key: [0; 16],
-                client_hs_iv: [0; 12],
+                client_hs_key: None,
+                client_hs_iv: None,
                 client_hs_seq: 0,
-                server_ap_key: [0; 16],
-                server_ap_iv: [0; 12],
+                server_ap_key: None,
+                server_ap_iv: None,
                 server_ap_seq: 0,
-                client_ap_key: [0; 16],
-                client_ap_iv: [0; 12],
+                client_ap_key: None,
+                client_ap_iv: None,
                 client_ap_seq: 0,
                 rsa: crate::drivers::crypto::rsa::RsaPrivateKey {
                     n: TEST_N.to_vec(),
@@ -1918,87 +1984,106 @@ mod tests {
         }
 
         fn derive_secrets(&mut self, shared: &[u8; 32]) {
-            let early = TlsSession::hkdf_extract(&TLS13_HKDF_SALT, &TLS13_HKDF_SALT);
+            let zero_hash = rfc8446_zero_hash();
+            let early = TlsSession::hkdf_extract(&zero_hash, &zero_hash);
             let derived = TlsSession::hkdf_expand_label(&early, b"derived", b"", 32);
             let derived: [u8; 32] = derived.try_into().unwrap();
             let hs = TlsSession::hkdf_extract(&derived, shared);
-            self.handshake_secret = hs;
+            self.handshake_secret = Some(hs);
 
             let derived2 = TlsSession::hkdf_expand_label(&hs, b"derived", b"", 32);
             let derived2: [u8; 32] = derived2.try_into().unwrap();
-            self.master_secret = TlsSession::hkdf_extract(&derived2, &TLS13_HKDF_SALT);
+            self.master_secret = Some(TlsSession::hkdf_extract(&derived2, &zero_hash));
         }
 
         fn derive_handshake_traffic(&mut self) {
             let th = self.transcript_hash();
+            let hs_secret = self.handshake_secret.as_ref().unwrap();
             let server_hs = TlsSession::hkdf_expand_label(
-                &self.handshake_secret,
+                hs_secret,
                 b"s hs traffic",
                 &th,
                 32,
             );
             let server_hs: [u8; 32] = server_hs.try_into().unwrap();
-            self.server_hs_secret = server_hs;
-            self.server_hs_key = TlsSession::hkdf_expand_label(&server_hs, b"key", b"", 16)
-                .try_into()
-                .unwrap();
-            self.server_hs_iv = TlsSession::hkdf_expand_label(&server_hs, b"iv", b"", 12)
-                .try_into()
-                .unwrap();
+            self.server_hs_secret = Some(server_hs);
+            self.server_hs_key = Some(
+                TlsSession::hkdf_expand_label(&server_hs, b"key", b"", 16)
+                    .try_into()
+                    .unwrap(),
+            );
+            self.server_hs_iv = Some(
+                TlsSession::hkdf_expand_label(&server_hs, b"iv", b"", 12)
+                    .try_into()
+                    .unwrap(),
+            );
 
             let client_hs = TlsSession::hkdf_expand_label(
-                &self.handshake_secret,
+                hs_secret,
                 b"c hs traffic",
                 &th,
                 32,
             );
             let client_hs: [u8; 32] = client_hs.try_into().unwrap();
-            self.client_hs_secret = client_hs;
-            self.client_hs_key = TlsSession::hkdf_expand_label(&client_hs, b"key", b"", 16)
-                .try_into()
-                .unwrap();
-            self.client_hs_iv = TlsSession::hkdf_expand_label(&client_hs, b"iv", b"", 12)
-                .try_into()
-                .unwrap();
+            self.client_hs_secret = Some(client_hs);
+            self.client_hs_key = Some(
+                TlsSession::hkdf_expand_label(&client_hs, b"key", b"", 16)
+                    .try_into()
+                    .unwrap(),
+            );
+            self.client_hs_iv = Some(
+                TlsSession::hkdf_expand_label(&client_hs, b"iv", b"", 12)
+                    .try_into()
+                    .unwrap(),
+            );
         }
 
         fn derive_application_traffic(&mut self) {
             let th = self.transcript_hash();
+            let master_secret = self.master_secret.as_ref().unwrap();
             let client_ap = TlsSession::hkdf_expand_label(
-                &self.master_secret,
+                master_secret,
                 b"c ap traffic",
                 &th,
                 32,
             );
             let client_ap: [u8; 32] = client_ap.try_into().unwrap();
-            self.client_ap_key = TlsSession::hkdf_expand_label(&client_ap, b"key", b"", 16)
-                .try_into()
-                .unwrap();
-            self.client_ap_iv = TlsSession::hkdf_expand_label(&client_ap, b"iv", b"", 12)
-                .try_into()
-                .unwrap();
+            self.client_ap_key = Some(
+                TlsSession::hkdf_expand_label(&client_ap, b"key", b"", 16)
+                    .try_into()
+                    .unwrap(),
+            );
+            self.client_ap_iv = Some(
+                TlsSession::hkdf_expand_label(&client_ap, b"iv", b"", 12)
+                    .try_into()
+                    .unwrap(),
+            );
 
             let server_ap = TlsSession::hkdf_expand_label(
-                &self.master_secret,
+                master_secret,
                 b"s ap traffic",
                 &th,
                 32,
             );
             let server_ap: [u8; 32] = server_ap.try_into().unwrap();
-            self.server_ap_key = TlsSession::hkdf_expand_label(&server_ap, b"key", b"", 16)
-                .try_into()
-                .unwrap();
-            self.server_ap_iv = TlsSession::hkdf_expand_label(&server_ap, b"iv", b"", 12)
-                .try_into()
-                .unwrap();
+            self.server_ap_key = Some(
+                TlsSession::hkdf_expand_label(&server_ap, b"key", b"", 16)
+                    .try_into()
+                    .unwrap(),
+            );
+            self.server_ap_iv = Some(
+                TlsSession::hkdf_expand_label(&server_ap, b"iv", b"", 12)
+                    .try_into()
+                    .unwrap(),
+            );
         }
 
         fn encrypt_hs_record(&mut self, plaintext: &[u8]) -> Vec<u8> {
-            let gcm = Gcm::new(&self.server_hs_key).unwrap();
+            let gcm = Gcm::new(self.server_hs_key.as_ref().unwrap()).unwrap();
             let seq = self.server_hs_seq;
             self.server_hs_seq += 1;
             let inner = TlsSession::tls13_inner_plaintext(plaintext, TLS_RECORD_HANDSHAKE);
-            let nonce = TlsSession::tls13_nonce(&self.server_hs_iv, seq);
+            let nonce = TlsSession::tls13_nonce(self.server_hs_iv.as_ref().unwrap(), seq);
             let aad = TlsSession::tls13_aad(TLS_RECORD_HANDSHAKE, inner.len() + GCM_TAG_LEN);
             let (ct, tag) = gcm.encrypt(&nonce, &aad, &inner).unwrap();
             let mut rec = Vec::new();
@@ -2011,11 +2096,11 @@ mod tests {
         }
 
         fn encrypt_app_record(&mut self, plaintext: &[u8]) -> Vec<u8> {
-            let gcm = Gcm::new(&self.server_ap_key).unwrap();
+            let gcm = Gcm::new(self.server_ap_key.as_ref().unwrap()).unwrap();
             let seq = self.server_ap_seq;
             self.server_ap_seq += 1;
             let inner = TlsSession::tls13_inner_plaintext(plaintext, TLS_RECORD_APPLICATION_DATA);
-            let nonce = TlsSession::tls13_nonce(&self.server_ap_iv, seq);
+            let nonce = TlsSession::tls13_nonce(self.server_ap_iv.as_ref().unwrap(), seq);
             let aad = TlsSession::tls13_aad(TLS_RECORD_APPLICATION_DATA, inner.len() + GCM_TAG_LEN);
             let (ct, tag) = gcm.encrypt(&nonce, &aad, &inner).unwrap();
             let mut rec = Vec::new();
@@ -2032,19 +2117,27 @@ mod tests {
             let (key, iv, seq) = if is_hs {
                 let s = self.client_hs_seq;
                 self.client_hs_seq += 1;
-                (self.client_hs_key, self.client_hs_iv, s)
+                (
+                    self.client_hs_key.as_ref().unwrap(),
+                    self.client_hs_iv.as_ref().unwrap(),
+                    s,
+                )
             } else {
                 let s = self.client_ap_seq;
                 self.client_ap_seq += 1;
-                (self.client_ap_key, self.client_ap_iv, s)
+                (
+                    self.client_ap_key.as_ref().unwrap(),
+                    self.client_ap_iv.as_ref().unwrap(),
+                    s,
+                )
             };
-            let gcm = Gcm::new(&key).unwrap();
+            let gcm = Gcm::new(key).unwrap();
             let ctype = if is_hs {
                 TLS_RECORD_HANDSHAKE
             } else {
                 TLS_RECORD_APPLICATION_DATA
             };
-            let nonce = TlsSession::tls13_nonce(&iv, seq);
+            let nonce = TlsSession::tls13_nonce(iv, seq);
             let aad = TlsSession::tls13_aad(ctype, payload.len());
             let ct_len = payload.len() - 16;
             let mut tag = [0u8; 16];
@@ -2173,7 +2266,7 @@ mod tests {
 
         // Finished (sunucu)
         let s_finished =
-            TlsSession::hkdf_expand_label(&server.server_hs_secret, b"s finished", b"", 32);
+            TlsSession::hkdf_expand_label(server.server_hs_secret.as_ref().unwrap(), b"s finished", b"", 32);
         let s_finished: [u8; 32] = s_finished.try_into().unwrap();
         let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
@@ -2205,7 +2298,7 @@ mod tests {
         let plain = server.decrypt_client_record(&client_finished, true);
         let th2 = server.transcript_hash();
         let c_finished =
-            TlsSession::hkdf_expand_label(&server.client_hs_secret, b"c finished", b"", 32);
+            TlsSession::hkdf_expand_label(server.client_hs_secret.as_ref().unwrap(), b"c finished", b"", 32);
         let c_finished: [u8; 32] = c_finished.try_into().unwrap();
         let c_key = TlsSession::hkdf_expand_label(&c_finished, b"finished", b"", 32);
         let c_key: [u8; 32] = c_key.try_into().unwrap();
@@ -2368,7 +2461,7 @@ mod tests {
 
         // Finished (sunucu)
         let s_finished =
-            TlsSession::hkdf_expand_label(&server.server_hs_secret, b"s finished", b"", 32);
+            TlsSession::hkdf_expand_label(server.server_hs_secret.as_ref().unwrap(), b"s finished", b"", 32);
         let s_finished: [u8; 32] = s_finished.try_into().unwrap();
         let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();

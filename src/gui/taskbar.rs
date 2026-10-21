@@ -221,6 +221,6 @@ impl MinGuiCompositor {
         self.render_toasts(fb, tb_y, mx, my);
 
         // Donanım Fare İmleci
-        self.draw_mouse_cursor(fb, mx, my);
+        self.draw_mouse_cursor(fb, mx, my, mouse.left_button);
     }
 }

@@ -5,6 +5,8 @@
 //! patterns, so it also works for 2048-bit moduli (whose INTEGER TLV uses a
 //! long-form length).
 
+use alloc::string::String;
+use alloc::vec::Vec;
 use crate::drivers::crypto::rsa::RsaPublicKey;
 
 const TAG_INTEGER: u8 = 0x02;
@@ -12,8 +14,64 @@ const TAG_BIT_STRING: u8 = 0x03;
 const TAG_OCTET_STRING: u8 = 0x04;
 const TAG_NULL: u8 = 0x05;
 const TAG_OID: u8 = 0x06;
+#[allow(dead_code)]
+const TAG_UTF8_STRING: u8 = 0x0C;
+#[allow(dead_code)]
+const TAG_PRINTABLE_STRING: u8 = 0x13;
+#[allow(dead_code)]
+const TAG_IA5_STRING: u8 = 0x16;
+const TAG_UTC_TIME: u8 = 0x17;
+const TAG_GENERALIZED_TIME: u8 = 0x18;
 const TAG_SEQUENCE: u8 = 0x30;
+const TAG_SET: u8 = 0x31;
 const TAG_CONTEXT_0: u8 = 0xA0;
+const TAG_CONTEXT_3: u8 = 0xA3;
+
+/// X.509 zaman yapısı (notBefore ve notAfter için).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct X509Time {
+    pub year: u16,
+    pub month: u8,
+    pub day: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+}
+
+impl PartialOrd for X509Time {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for X509Time {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.year
+            .cmp(&other.year)
+            .then_with(|| self.month.cmp(&other.month))
+            .then_with(|| self.day.cmp(&other.day))
+            .then_with(|| self.hour.cmp(&other.hour))
+            .then_with(|| self.minute.cmp(&other.minute))
+            .then_with(|| self.second.cmp(&other.second))
+    }
+}
+
+/// Sertifikadan ayrıştırılan alanlar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CertificateInfo {
+    pub common_name: Option<String>,
+    pub san_dns_names: Vec<String>,
+    pub not_before: Option<X509Time>,
+    pub not_after: Option<X509Time>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertValidationError {
+    InvalidDer,
+    NotYetValid,
+    Expired,
+    HostnameMismatch,
+}
 
 /// DER length reader: returns (bytes_consumed, length). Handles long-form lengths.
 fn read_der_len(data: &[u8], offset: usize) -> Result<(usize, usize), ()> {
@@ -144,6 +202,325 @@ pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
     }
 
     parse_rsa_public_key_bits(cert_der, bs_vo)
+}
+
+fn parse_two_digits(bytes: &[u8]) -> Option<u8> {
+    if bytes.len() < 2 || !bytes[0].is_ascii_digit() || !bytes[1].is_ascii_digit() {
+        return None;
+    }
+    Some((bytes[0] - b'0') * 10 + (bytes[1] - b'0'))
+}
+
+fn parse_four_digits(bytes: &[u8]) -> Option<u16> {
+    if bytes.len() < 4 {
+        return None;
+    }
+    let mut val = 0u16;
+    for b in &bytes[..4] {
+        if !b.is_ascii_digit() {
+            return None;
+        }
+        val = val * 10 + (*b - b'0') as u16;
+    }
+    Some(val)
+}
+
+pub fn parse_der_time(tag: u8, data: &[u8]) -> Option<X509Time> {
+    match tag {
+        TAG_UTC_TIME => {
+            // UTCTime: YYMMDDHHMMSSZ (veya YYMMDDHHMMZ)
+            if data.len() < 10 {
+                return None;
+            }
+            let yy = parse_two_digits(&data[0..2])? as u16;
+            let year = if yy >= 50 { 1900 + yy } else { 2000 + yy };
+            let month = parse_two_digits(&data[2..4])?;
+            let day = parse_two_digits(&data[4..6])?;
+            let hour = parse_two_digits(&data[6..8])?;
+            let minute = parse_two_digits(&data[8..10])?;
+            let second = if data.len() >= 12 && data[10].is_ascii_digit() {
+                parse_two_digits(&data[10..12]).unwrap_or(0)
+            } else {
+                0
+            };
+            Some(X509Time {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            })
+        }
+        TAG_GENERALIZED_TIME => {
+            // GeneralizedTime: YYYYMMDDHHMMSSZ
+            if data.len() < 12 {
+                return None;
+            }
+            let year = parse_four_digits(&data[0..4])?;
+            let month = parse_two_digits(&data[4..6])?;
+            let day = parse_two_digits(&data[6..8])?;
+            let hour = parse_two_digits(&data[8..10])?;
+            let minute = parse_two_digits(&data[10..12])?;
+            let second = if data.len() >= 14 && data[12].is_ascii_digit() {
+                parse_two_digits(&data[12..14]).unwrap_or(0)
+            } else {
+                0
+            };
+            Some(X509Time {
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn find_common_name(der: &[u8], sub_vo: usize, sub_vl: usize) -> Option<String> {
+    const CN_OID: &[u8] = &[0x55, 0x04, 0x03]; // 2.5.4.3
+    let end = sub_vo + sub_vl;
+    let mut pos = sub_vo;
+    while pos < end {
+        let (tag, rdn_vo, rdn_vl, rdn_next) = read_der_tlv(der, pos).ok()?;
+        if tag == TAG_SET || tag == TAG_SEQUENCE {
+            let mut inner = rdn_vo;
+            let inner_end = rdn_vo + rdn_vl;
+            while inner < inner_end {
+                let (seq_tag, atv_vo, _atv_vl, atv_next) = read_der_tlv(der, inner).ok()?;
+                if seq_tag == TAG_SEQUENCE {
+                    if let Ok((oid_tag, oid_vo, oid_vl, oid_next)) = read_der_tlv(der, atv_vo) {
+                        if oid_tag == TAG_OID && oid_vl == CN_OID.len() && &der[oid_vo..oid_vo + oid_vl] == CN_OID {
+                            if let Ok((_str_tag, str_vo, str_vl, _)) = read_der_tlv(der, oid_next) {
+                                if let Ok(s) = core::str::from_utf8(&der[str_vo..str_vo + str_vl]) {
+                                    return Some(String::from(s));
+                                }
+                            }
+                        }
+                    }
+                }
+                inner = atv_next;
+            }
+        }
+        pos = rdn_next;
+    }
+    None
+}
+
+fn find_san_dns_names(der: &[u8], ext_vo: usize, _ext_vl: usize) -> Vec<String> {
+    const SAN_OID: &[u8] = &[0x55, 0x1d, 0x11]; // 2.5.29.17
+    let mut results = Vec::new();
+    let Ok((seq_tag, seq_vo, seq_vl, _)) = read_der_tlv(der, ext_vo) else {
+        return results;
+    };
+    if seq_tag != TAG_SEQUENCE {
+        return results;
+    }
+    let mut cur = seq_vo;
+    let cur_end = seq_vo + seq_vl;
+
+    while cur < cur_end {
+        let Ok((etag, evo, _evl, enext)) = read_der_tlv(der, cur) else {
+            break;
+        };
+        if etag == TAG_SEQUENCE {
+            let mut p = evo;
+            if let Ok((oid_tag, oid_vo, oid_vl, oid_next)) = read_der_tlv(der, p) {
+                if oid_tag == TAG_OID && oid_vl == SAN_OID.len() && &der[oid_vo..oid_vo + oid_vl] == SAN_OID {
+                    p = oid_next;
+                    // Optional critical BOOLEAN
+                    if let Ok((btag, _, _, bnext)) = read_der_tlv(der, p) {
+                        if btag == 0x01 {
+                            p = bnext;
+                        }
+                    }
+                    // extnValue OCTET STRING
+                    if let Ok((otag, ovo, _ovl, _)) = read_der_tlv(der, p) {
+                        if otag == TAG_OCTET_STRING {
+                            // GeneralNames SEQUENCE
+                            if let Ok((gn_tag, gn_vo, gn_vl, _)) = read_der_tlv(der, ovo) {
+                                if gn_tag == TAG_SEQUENCE {
+                                    let mut gn_p = gn_vo;
+                                    let gn_end = gn_vo + gn_vl;
+                                    while gn_p < gn_end {
+                                        if let Ok((name_tag, nvo, nvl, nnext)) = read_der_tlv(der, gn_p) {
+                                            // 0x82: context-specific tag 2 = dNSName
+                                            if name_tag == 0x82 {
+                                                if let Ok(s) = core::str::from_utf8(&der[nvo..nvo + nvl]) {
+                                                    results.push(String::from(s));
+                                                }
+                                            }
+                                            gn_p = nnext;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cur = enext;
+    }
+    results
+}
+
+/// DER sertifikasından konu (CN), SAN (DNS adları) ve geçerlilik sürelerini ayrıştırır.
+pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo, ()> {
+    let (cert_tag, cert_vo, _, _) = read_der_tlv(cert_der, 0)?;
+    if cert_tag != TAG_SEQUENCE {
+        return Err(());
+    }
+
+    let (tbs_tag, tbs_vo, tbs_vl, _) = read_der_tlv(cert_der, cert_vo)?;
+    if tbs_tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    let tbs_end = tbs_vo + tbs_vl;
+
+    let mut pos = tbs_vo;
+    let (first_tag, _, _, first_next) = read_der_tlv(cert_der, pos)?;
+    if first_tag == TAG_CONTEXT_0 {
+        pos = first_next;
+    }
+    // serialNumber
+    let (_, _, _, serial_next) = read_der_tlv(cert_der, pos)?;
+    pos = serial_next;
+    // signature
+    let (_, _, _, sig_next) = read_der_tlv(cert_der, pos)?;
+    pos = sig_next;
+    // issuer
+    let (_, _, _, iss_next) = read_der_tlv(cert_der, pos)?;
+    pos = iss_next;
+
+    // validity
+    let (val_tag, val_vo, _val_vl, val_next) = read_der_tlv(cert_der, pos)?;
+    if val_tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    pos = val_next;
+
+    let mut not_before = None;
+    let mut not_after = None;
+    if let Ok((nb_tag, nb_vo, nb_vl, nb_next)) = read_der_tlv(cert_der, val_vo) {
+        not_before = parse_der_time(nb_tag, &cert_der[nb_vo..nb_vo + nb_vl]);
+        if let Ok((na_tag, na_vo, na_vl, _)) = read_der_tlv(cert_der, nb_next) {
+            not_after = parse_der_time(na_tag, &cert_der[na_vo..na_vo + na_vl]);
+        }
+    }
+
+    // subject
+    let (sub_tag, sub_vo, sub_vl, sub_next) = read_der_tlv(cert_der, pos)?;
+    if sub_tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    pos = sub_next;
+    let common_name = find_common_name(cert_der, sub_vo, sub_vl);
+
+    // subjectPublicKeyInfo
+    let (spki_tag, _spki_vo, _spki_vl, spki_next) = read_der_tlv(cert_der, pos)?;
+    if spki_tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    pos = spki_next;
+
+    // Optional extensions [3] (0xA3)
+    let mut san_dns_names = Vec::new();
+    while pos < tbs_end {
+        if let Ok((ext_tag, ext_vo, ext_vl, ext_next)) = read_der_tlv(cert_der, pos) {
+            if ext_tag == TAG_CONTEXT_3 {
+                san_dns_names = find_san_dns_names(cert_der, ext_vo, ext_vl);
+                break;
+            }
+            pos = ext_next;
+        } else {
+            break;
+        }
+    }
+
+    Ok(CertificateInfo {
+        common_name,
+        san_dns_names,
+        not_before,
+        not_after,
+    })
+}
+
+/// RFC 6125 kurallarına uygun hostname eşleşmesi (büyük/küçük harf duyarsız, `*.domain.com` joker karakteri).
+pub fn match_hostname(pattern: &str, hostname: &str) -> bool {
+    let pattern = pattern.trim();
+    let hostname = hostname.trim();
+    if pattern.is_empty() || hostname.is_empty() {
+        return false;
+    }
+    // Tam birebir eşleşme (büyük/küçük harf duyarsız)
+    if pattern.eq_ignore_ascii_case(hostname) {
+        return true;
+    }
+    // Joker karakterli eşleşme: *.example.com
+    if pattern.starts_with("*.") {
+        let suffix = &pattern[2..];
+        if let Some(dot_idx) = hostname.find('.') {
+            let host_prefix = &hostname[..dot_idx];
+            let host_suffix = &hostname[dot_idx + 1..];
+            // Tek düzeyli joker eşleşmesi: prefix boş olmamalı ve içinde nokta olmamalıdır
+            if !host_prefix.is_empty() && host_suffix.eq_ignore_ascii_case(suffix) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Sertifika alanlarını doğrular:
+/// 1. `not_before` ve `not_after` zaman aralığı kontrolü
+/// 2. `expected_hostname` ile SAN veya CN eşleşmesi
+pub fn verify_certificate_fields(
+    cert_der: &[u8],
+    expected_hostname: &str,
+    now: &X509Time,
+) -> Result<(), CertValidationError> {
+    let info = parse_certificate_info(cert_der).map_err(|_| CertValidationError::InvalidDer)?;
+
+    // 1. Zaman geçerliliği
+    if let Some(not_before) = &info.not_before {
+        if now < not_before {
+            return Err(CertValidationError::NotYetValid);
+        }
+    }
+    if let Some(not_after) = &info.not_after {
+        if now > not_after {
+            return Err(CertValidationError::Expired);
+        }
+    }
+
+    // 2. Hostname kontrolü
+    if !expected_hostname.is_empty() {
+        let mut matched = false;
+        if !info.san_dns_names.is_empty() {
+            for san in &info.san_dns_names {
+                if match_hostname(san, expected_hostname) {
+                    matched = true;
+                    break;
+                }
+            }
+        } else if let Some(ref cn) = info.common_name {
+            if match_hostname(cn, expected_hostname) {
+                matched = true;
+            }
+        }
+
+        if !matched {
+            return Err(CertValidationError::HostnameMismatch);
+        }
+    }
+
+    Ok(())
 }
 
 /// AlgorithmIdentifier SEQUENCE'inin bittiği ofseti döner.
@@ -358,5 +735,80 @@ mod tests {
         let key = parse_x509_rsa_public_key(&der).expect("should parse RSA key");
         assert_eq!(key.n, vec![0x0c, 0x91]);
         assert_eq!(key.e, 0x11);
+    }
+
+    #[test]
+    fn test_parse_certificate_info() {
+        let der = make_test_cert_der();
+        let info = parse_certificate_info(&der).expect("should parse certificate info");
+        assert_eq!(info.common_name.as_deref(), Some("XX"));
+        let nb = info.not_before.expect("not_before present");
+        assert_eq!(nb.year, 2024);
+        assert_eq!(nb.month, 1);
+        assert_eq!(nb.day, 1);
+        let na = info.not_after.expect("not_after present");
+        assert_eq!(na.year, 2025);
+        assert_eq!(na.month, 1);
+        assert_eq!(na.day, 1);
+    }
+
+    #[test]
+    fn test_verify_certificate_fields() {
+        let der = make_test_cert_der();
+        let valid_now = X509Time {
+            year: 2024,
+            month: 6,
+            day: 15,
+            hour: 12,
+            minute: 0,
+            second: 0,
+        };
+        // Başarılı doğrulama (CN="XX", tarih aralık içinde)
+        assert_eq!(verify_certificate_fields(&der, "XX", &valid_now), Ok(()));
+        assert_eq!(verify_certificate_fields(&der, "xx", &valid_now), Ok(())); // case-insensitive
+
+        // Hostname uyuşmazlığı
+        assert_eq!(
+            verify_certificate_fields(&der, "yy.com", &valid_now),
+            Err(CertValidationError::HostnameMismatch)
+        );
+
+        // Henüz geçerli değil
+        let too_early = X509Time {
+            year: 2023,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59,
+        };
+        assert_eq!(
+            verify_certificate_fields(&der, "XX", &too_early),
+            Err(CertValidationError::NotYetValid)
+        );
+
+        // Süresi dolmuş
+        let too_late = X509Time {
+            year: 2025,
+            month: 1,
+            day: 2,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(
+            verify_certificate_fields(&der, "XX", &too_late),
+            Err(CertValidationError::Expired)
+        );
+    }
+
+    #[test]
+    fn test_match_hostname_wildcard() {
+        assert!(match_hostname("*.example.com", "foo.example.com"));
+        assert!(match_hostname("*.example.com", "FOO.EXAMPLE.COM"));
+        assert!(!match_hostname("*.example.com", "example.com"));
+        assert!(!match_hostname("*.example.com", "bar.foo.example.com"));
+        assert!(match_hostname("minos.org", "MINOS.ORG"));
+        assert!(!match_hostname("minos.org", "other.org"));
     }
 }

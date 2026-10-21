@@ -99,7 +99,11 @@ fn render_device_inventory(
 
     if crate::drivers::e1000::is_ready() {
         let mut line = DeviceLine::new();
-        line.push("Ethernet: Intel e1000 82540EM | ");
+        line.push(if crate::drivers::e1000::nic_type() == crate::drivers::e1000::NicType::VmwareVmxnet3 {
+            "Ethernet: VMware VMXNET3 | "
+        } else {
+            "Ethernet: Intel e1000 | "
+        });
         line.push(if crate::drivers::e1000::link_up() { if english { "link up | MAC " } else { "bağlı | MAC " } }
             else { if english { "link down | MAC " } else { "bağlantı yok | MAC " } });
         let mac = unsafe { crate::drivers::e1000::MAC_ADDR };

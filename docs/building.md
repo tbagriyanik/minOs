@@ -147,7 +147,7 @@ cargo build --release -Zjson-target-spec --target x86_64-minos.json `
 ```
 
 #### 2. Birim ve Regresyon Testlerini Çalıştırma (Host Unit Tests)
-Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), TLS 1.2 / TLS 1.3 el sıkışması, X.509, JavaScript motoru ve HTML ayrıştırıcı testlerini içeren 54 adet birim testini host ortamında yürütmek için:
+Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru ve HTML ayrıştırıcı testlerini içeren 57 adet birim testini host ortamında yürütmek için:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
@@ -162,11 +162,20 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 > *İşlem tamamlandığında kök dizinde `minos.iso` dosyası oluşturulur.*
 
 #### 4. QEMU ile Test Etme (Run in QEMU)
-```powershell
-& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -vga std -global VGA.vgamem_mb=64 `
-  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 `
-  -netdev user,id=n0,hostfwd=tcp::8080-:80 -device e1000,netdev=n0
-```
+
+##### Linux (PulseAudio + Intel HDA Duplex + e1000):
+`ash
+qemu-system-x86_64 -cdrom minos.iso -m 512M -smp 2 -vga std -global VGA.vgamem_mb=64 \
+  -audiodev pa,id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
+  -netdev user,id=n0 -device e1000,netdev=n0
+`
+
+##### Windows (SDL veya DirectSound + Intel HDA Output + e1000):
+`powershell
+& 'C:\Program Files\qemu\qemu-system-x86_64.exe' -cdrom minos.iso -m 512M -smp 2 -vga std -global VGA.vgamem_mb=64 
+  -audiodev driver=sdl,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 
+  -netdev user,id=n0 -device e1000,netdev=n0
+`
 
 #### 5. VirtualBox Kurulumu & Temel Ayarlar (VirtualBox Setup)
 

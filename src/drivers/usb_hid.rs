@@ -2206,7 +2206,7 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
 
         if CONTROLLER_COUNT == 0 {
             crate::serial::print(
-                "[USB-HID] Yerel xHCI denetleyicisi bulunamadı; PS/2/USB Legacy yolu kullanılacak.\n",
+                "[USB-HID] Yerel xHCI denetleyicisi bulunamadı; PS/2 fallback kullanılacak (BIOS Legacy USB/CSM açık olmalıdır).\n",
             );
             return;
         }
@@ -2242,11 +2242,15 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
                 }
             }
         }
-        crate::serial::print("[USB-HID] Hazır: ");
-        crate::serial::print_dec(keyboards as u64);
-        crate::serial::print(" klavye, ");
-        crate::serial::print_dec(mice as u64);
-        crate::serial::print(" fare.\n");
+        if keyboards == 0 && mice == 0 {
+            crate::serial::print("[USB-HID] Bağlı USB HID klavye/fare bulunamadı; PS/2 fallback devrede (BIOS Legacy USB/CSM açık olmalıdır).\n");
+        } else {
+            crate::serial::print("[USB-HID] Hazır: ");
+            crate::serial::print_dec(keyboards as u64);
+            crate::serial::print(" klavye, ");
+            crate::serial::print_dec(mice as u64);
+            crate::serial::print(" fare.\n");
+        }
     }
 }
 

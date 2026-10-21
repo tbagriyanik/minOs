@@ -68,7 +68,7 @@ impl MinGuiCompositor {
             ui_text("Alt tuşunu bıraktığınızda pencere öne gelir.", "Release Alt to bring the window forward."), Color::TEXT_MUTED,
             (box_x + 18, footer_y + 21, box_w.saturating_sub(36), 20));
     }
-    pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize) {
+    pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
         fb.save_cursor_background(mx, my);
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
@@ -111,7 +111,7 @@ impl MinGuiCompositor {
         for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
             for col in 0..8 {
                 if (byte & (1 << (7 - col))) != 0 {
-                    fb.put_pixel(mx + col, my + row, Color::CURSOR_FILL);
+                    fb.put_pixel(mx + col, my + row, if pressed { Color::ACCENT_YELLOW } else { Color::CURSOR_FILL });
                 }
             }
         }

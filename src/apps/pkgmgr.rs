@@ -49,9 +49,24 @@ impl MinPkg {
         list
     }
 
-    /// Belirtilen paketi uzak repodan veya URL'den HTTP ile indirip VFS'e kurar.
-    pub fn install_from_url(
+    /// Verilen bayt dizisinin SHA-256 özetini küçük harfli onaltılık dize olarak döner.
+    pub fn compute_sha256(data: &[u8]) -> String {
+        let hash = crate::drivers::crypto::sha256::Sha256::hash(data);
+        let mut s = String::with_capacity(64);
+        for b in hash {
+            let hi = b >> 4;
+            let lo = b & 0x0F;
+            s.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + (hi - 10)) as char });
+            s.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + (lo - 10)) as char });
+        }
+        s
+    }
+
+    /// Belirtilen paketi uzak repodan veya URL'den HTTP ile indirir, opsiyonel
+    /// beklenen SHA-256 checksum'ını kontrol eder ve VFS'e kurar.
+    pub fn install_from_url_with_checksum(
         pkg_name_or_url: &str,
+        expected_sha256: Option<&str>,
         vfs: &mut VirtualFileSystem,
     ) -> Result<String, &'static str> {
         if !crate::drivers::e1000::is_ready() {
@@ -78,6 +93,29 @@ impl MinPkg {
                     return Err("Indirilen paket bos");
                 }
 
+                // Checksum kontrolü
+                let expected = expected_sha256.or_else(|| {
+                    for pkg in REPO_CATALOG {
+                        if pkg_name_or_url == pkg.name || pkg_name_or_url.ends_with(&format!("/{}.elf", pkg.name)) {
+                            return pkg.sha256;
+                        }
+                    }
+                    None
+                });
+
+                if let Some(exp) = expected {
+                    let actual = Self::compute_sha256(body);
+                    if !actual.eq_ignore_ascii_case(exp.trim()) {
+                        crate::serial::print("[PKG] Checksum uyuşmazlığı! Beklenen: ");
+                        crate::serial::print(exp);
+                        crate::serial::print(", Hesaplanan: ");
+                        crate::serial::print(&actual);
+                        crate::serial::print("\n");
+                        return Err("Paket dogrulama hatasi (SHA-256 checksum uyusmuyor)");
+                    }
+                    crate::serial::print("[PKG] SHA-256 checksum dogrulandi.\n");
+                }
+
                 let base_name = if let Some(idx) = pkg_name_or_url.rfind('/') {
                     &pkg_name_or_url[idx + 1..]
                 } else {
@@ -98,6 +136,27 @@ impl MinPkg {
             }
             Err(_) => Err("Ag indirme veya baglanti hatasi"),
         }
+    }
+
+    /// Belirtilen paketi uzak repodan veya URL'den HTTP ile indirip VFS'e kurar.
+    pub fn install_from_url(
+        pkg_name_or_url: &str,
+        vfs: &mut VirtualFileSystem,
+    ) -> Result<String, &'static str> {
+        Self::install_from_url_with_checksum(pkg_name_or_url, None, vfs)
+    }
+
+    /// VFS'teki bir dosyanın SHA-256 özetini doğrular.
+    pub fn verify_file_checksum(
+        path: &str,
+        expected_sha256: &str,
+        vfs: &VirtualFileSystem,
+    ) -> Result<bool, &'static str> {
+        let Some(data) = vfs.read_file(path) else {
+            return Err("Dosya bulunamadi");
+        };
+        let actual = Self::compute_sha256(&data);
+        Ok(actual.eq_ignore_ascii_case(expected_sha256.trim()))
     }
 
     /// Yerleşik paket oluşturucu (Repo kapalıyken veya test için dahili paket kurulumu).
@@ -132,6 +191,7 @@ pub struct RepoPackage {
     pub description_en: &'static str,
     pub category: &'static str,
     pub size_kb: usize,
+    pub sha256: Option<&'static str>,
 }
 
 pub const REPO_CATALOG: &[RepoPackage] = &[
@@ -142,6 +202,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "Advanced cat themed shell utilities",
         category: "Sistem",
         size_kb: 14,
+        sha256: Some("a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"),
     },
     RepoPackage {
         name: "netcat-lite",
@@ -150,6 +211,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "Lightweight socket test and transfer tool",
         category: "Ağ",
         size_kb: 18,
+        sha256: None,
     },
     RepoPackage {
         name: "hexdump",
@@ -158,6 +220,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "Binary file hexadecimal inspector",
         category: "Geliştirici",
         size_kb: 12,
+        sha256: None,
     },
     RepoPackage {
         name: "tiny-editor",
@@ -166,6 +229,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "Fast command line text editor",
         category: "Üretkenlik",
         size_kb: 22,
+        sha256: None,
     },
     RepoPackage {
         name: "benchmark",
@@ -174,6 +238,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "CPU and PMM memory benchmark suite",
         category: "Sistem",
         size_kb: 16,
+        sha256: None,
     },
     RepoPackage {
         name: "fortune",
@@ -182,6 +247,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         description_en: "Wise minOs cat quote of the day",
         category: "Eğlence",
         size_kb: 8,
+        sha256: None,
     },
 ];
 

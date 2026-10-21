@@ -51,13 +51,51 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
     io_out32(PCI_CONFIG_DATA, val);
 }
 
-/// Intel 82540EM / e1000 PCI kimliği
+/// Intel ve VMware PCI kimlikleri
 const E1000_VENDOR: u32 = 0x8086;
-// Aynı descriptor/MMIO düzenini kullanan klasik 8254x denetleyicileri.
-const E1000_DEVICES: [u32; 5] = [0x100E, 0x100F, 0x1010, 0x1011, 0x1012];
+const VMWARE_VENDOR: u32 = 0x15AD;
+
+// Aynı descriptor/MMIO düzenini kullanan klasik 8254x ve 8257x denetleyicileri (Intel e1000 / e1000e).
+const E1000_DEVICES: [u32; 10] = [
+    0x100E, // 82540EM (QEMU default)
+    0x100F, // 82545EM (VMware e1000 default)
+    0x1010, // 82546EB
+    0x1011, // 82545EM
+    0x1012, // 82546EB
+    0x1079, // 82546GB
+    0x107C, // 82541PI
+    0x10D3, // 82574L (VMware / QEMU e1000e)
+    0x10F5, // 82567LM
+    0x1539, // I211
+];
+
+// VMware sanal ağ aygıtları
+const VMWARE_DEVICES: [u32; 2] = [
+    0x07B0, // VMware VMXNET3 Ethernet Controller
+    0x0720, // VMware VMXNET Virtual Ethernet Controller
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NicType {
+    IntelE1000,
+    VmwareVmxnet3,
+}
+
+static mut DETECTED_NIC: NicType = NicType::IntelE1000;
+
+pub fn nic_type() -> NicType {
+    unsafe { DETECTED_NIC }
+}
+
+pub fn nic_name() -> &'static str {
+    match unsafe { DETECTED_NIC } {
+        NicType::IntelE1000 => "Intel e1000",
+        NicType::VmwareVmxnet3 => "VMware VMXNET3",
+    }
+}
 
 // ---------------------------------------------------------------------------
-// MMIO kayıt ofsetleri
+// MMIO kayıt ofsetleri (Intel e1000)
 // ---------------------------------------------------------------------------
 
 const REG_CTRL: u32 = 0x0000;
@@ -79,6 +117,23 @@ const REG_ICR: u32 = 0x00C0; // Interrupt Cause Read (okuma temizler)
 const REG_IMC: u32 = 0x00D8; // Interrupt Mask Clear (tüm kesmeleri kapat)
 const REG_RAL0: u32 = 0x5400; // Receive Address Low 0
 const REG_RAH0: u32 = 0x5404; // Receive Address High 0
+
+// ---------------------------------------------------------------------------
+// VMware VMXNET3 MMIO kayıt ve komutları (BAR0)
+// ---------------------------------------------------------------------------
+const VMXNET3_REG_VRRS: u32 = 0x0000;
+const VMXNET3_REG_UVRS: u32 = 0x0008;
+const VMXNET3_REG_DSAL: u32 = 0x0010;
+const VMXNET3_REG_DSAH: u32 = 0x0014;
+const VMXNET3_REG_CMD: u32 = 0x0018;
+const VMXNET3_REG_MACL: u32 = 0x0020;
+const VMXNET3_REG_MACH: u32 = 0x0024;
+
+const VMXNET3_CMD_ENABLE: u32 = 0x0000;
+const VMXNET3_CMD_DISABLE: u32 = 0x0001;
+const VMXNET3_CMD_RESET: u32 = 0x0002;
+const VMXNET3_CMD_GET_LINK: u32 = 0x0005;
+const VMXNET3_CMD_GET_MAC: u32 = 0x0006;
 
 // Kontrol bitleri
 const RCTL_EN: u32 = 1 << 1;
@@ -173,14 +228,40 @@ pub fn is_ready() -> bool {
     E1000_READY.load(Ordering::Relaxed)
 }
 
-/// Reports physical Ethernet link state (STATUS.LU).
+/// Reports physical Ethernet link state.
 pub fn link_up() -> bool {
-    is_ready() && unsafe { mmio_read32(REG_STATUS) & (1 << 1) != 0 }
+    if !is_ready() {
+        return false;
+    }
+    unsafe {
+        match DETECTED_NIC {
+            NicType::IntelE1000 => mmio_read32(REG_STATUS) & (1 << 1) != 0,
+            NicType::VmwareVmxnet3 => {
+                mmio_write32(VMXNET3_REG_CMD, VMXNET3_CMD_GET_LINK);
+                let v = mmio_read32(VMXNET3_REG_CMD);
+                (v & 1) != 0
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// EEPROM'dan MAC okuma
+// EEPROM / Register'dan MAC okuma
 // ---------------------------------------------------------------------------
+
+unsafe fn read_mac_vmxnet3() -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    mmio_write32(VMXNET3_REG_CMD, VMXNET3_CMD_GET_MAC);
+    let mac_l = mmio_read32(VMXNET3_REG_MACL);
+    let mac_h = mmio_read32(VMXNET3_REG_MACH);
+    mac[0] = (mac_l & 0xFF) as u8;
+    mac[1] = ((mac_l >> 8) & 0xFF) as u8;
+    mac[2] = ((mac_l >> 16) & 0xFF) as u8;
+    mac[3] = ((mac_l >> 24) & 0xFF) as u8;
+    mac[4] = (mac_h & 0xFF) as u8;
+    mac[5] = ((mac_h >> 8) & 0xFF) as u8;
+    mac
+}
 
 unsafe fn read_mac_from_eeprom() -> [u8; 6] {
     let mut mac = [0u8; 6];
@@ -357,17 +438,21 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         };
         RINGS_ADDR = phys;
 
-        // PCI'da e1000'ı bul
-        let mut found: Option<(u8, u8, u8, u64)> = None;
+        // PCI'da e1000 veya VMware VMXNET3'ü bul
+        let mut found: Option<(u8, u8, u8, u64, NicType)> = None;
         for dev in 0..32u8 {
             for func in 0..8u8 {
                 let vid = pci_read32(0, dev, func, 0x00) & 0xFFFF;
                 let did = (pci_read32(0, dev, func, 0x00) >> 16) & 0xFFFF;
                 if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
-                    // BAR0'ı oku (32-bit MMIO BAR)
                     let bar0_lo = pci_read32(0, dev, func, 0x10);
                     let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
-                    found = Some((0, dev, func, base));
+                    found = Some((0, dev, func, base, NicType::IntelE1000));
+                    break;
+                } else if vid == VMWARE_VENDOR && VMWARE_DEVICES.contains(&did) {
+                    let bar0_lo = pci_read32(0, dev, func, 0x10);
+                    let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
+                    found = Some((0, dev, func, base, NicType::VmwareVmxnet3));
                     break;
                 }
             }
@@ -376,39 +461,65 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             }
         }
 
-        let (bus, dev, func, base_phys) = match found {
+        let (bus, dev, func, base_phys, ntype) = match found {
             Some(v) => v,
             None => {
-                e1000_print("[NET] e1000 PCI'da bulunamadi.\n");
+                e1000_print("[NET] Ag adaptoru (e1000 / VMware VMXNET3) PCI'da bulunamadi.\n");
                 return;
             }
         };
+        DETECTED_NIC = ntype;
         let base = crate::drivers::phys_to_virt(base_phys);
         // Limine HHDM MMIO'yu map'lemediği için elle 2MB huge page ekliyoruz.
         crate::arch::x86_64::mmio_map_2mb(base_phys & !0x1F_FFFF);
 
-        e1000_print("[NET] Intel e1000 bulundu. PCI 00:");
-        e1000_print_hex(dev);
-        e1000_print("\n");
+        match ntype {
+            NicType::IntelE1000 => {
+                e1000_print("[NET] Intel e1000 bulundu. PCI 00:");
+                e1000_print_hex(dev);
+                e1000_print("\n");
+            }
+            NicType::VmwareVmxnet3 => {
+                e1000_print("[NET] VMware VMXNET3 ag adaptoru bulundu (Vendor: 0x15AD). PCI 00:");
+                e1000_print_hex(dev);
+                e1000_print("\n");
+            }
+        }
 
         // PCI Komut: Bus Master + MMIO enable
         let cmd = pci_read32(bus, dev, func, 0x04);
         pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | 0x6);
 
         MMIO_BASE = base;
-        // Global reset ve link-up (MAC ve register yapılandırmasından ÖNCE yapılmalı!)
-        mmio_write32(REG_CTRL, CTRL_LRST);
-        for _ in 0..100_000 {
-            core::hint::spin_loop();
+
+        // Reset ve yapılandırma
+        match ntype {
+            NicType::IntelE1000 => {
+                // Global reset ve link-up (MAC ve register yapılandırmasından ÖNCE yapılmalı!)
+                mmio_write32(REG_CTRL, CTRL_LRST);
+                for _ in 0..100_000 {
+                    core::hint::spin_loop();
+                }
+                mmio_write32(REG_CTRL, CTRL_SLU);
+            }
+            NicType::VmwareVmxnet3 => {
+                mmio_write32(VMXNET3_REG_CMD, VMXNET3_CMD_RESET);
+                for _ in 0..50_000 {
+                    core::hint::spin_loop();
+                }
+                mmio_write32(VMXNET3_REG_CMD, VMXNET3_CMD_ENABLE);
+            }
         }
-        mmio_write32(REG_CTRL, CTRL_SLU);
 
         // Ring yapısını HHDM üzerinden sıfırla
         let r = rings();
         core::ptr::write_bytes(r as *mut u8, 0, core::mem::size_of::<E1000Rings>());
 
-        // EEPROM'dan MAC oku
-        let mac = read_mac_from_eeprom();
+        // MAC oku
+        let mac = match ntype {
+            NicType::IntelE1000 => read_mac_from_eeprom(),
+            NicType::VmwareVmxnet3 => read_mac_vmxnet3(),
+        };
         MAC_ADDR = mac;
         e1000_print("[NET] MAC adresi: ");
         e1000_print_hex(mac[0]);
@@ -424,27 +535,36 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         e1000_print_hex(mac[5]);
         e1000_print("\n");
 
-        // RAL0/RAH0'a MAC yaz (Address Valid biti 0x8000_0000 ile)
-        let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
-        let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | 0x8000_0000;
-        mmio_write32(REG_RAL0, ral);
-        mmio_write32(REG_RAH0, rah);
+        if ntype == NicType::IntelE1000 {
+            // RAL0/RAH0'a MAC yaz (Address Valid biti 0x8000_0000 ile)
+            let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
+            let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | 0x8000_0000;
+            mmio_write32(REG_RAL0, ral);
+            mmio_write32(REG_RAH0, rah);
 
-        // Multicast Table Array (MTA: 0x5200..0x5400 - 128 dword) sıfırla
-        for i in 0..128u32 {
-            mmio_write32(0x5200 + i * 4, 0);
+            // Multicast Table Array (MTA: 0x5200..0x5400 - 128 dword) sıfırla
+            for i in 0..128u32 {
+                mmio_write32(0x5200 + i * 4, 0);
+            }
+
+            // Tüm kesme kaynaklarını kapat: yoklamayla (polling) çalışıyoruz
+            mmio_write32(REG_IMC, 0xFFFF_FFFF);
+            mmio_write32(REG_CTRL, CTRL_SLU);
+            let _ = mmio_read32(REG_ICR); // bekleyen kesme nedenlerini temizle
         }
-
-        // Tüm kesme kaynaklarını kapat: yoklamayla (polling) çalışıyoruz
-        mmio_write32(REG_IMC, 0xFFFF_FFFF);
-        mmio_write32(REG_CTRL, CTRL_SLU);
-        let _ = mmio_read32(REG_ICR); // bekleyen kesme nedenlerini temizle
 
         // Ring'leri hazırla
         init_rx_ring();
         init_tx_ring();
 
-        e1000_print("[NET] e1000 RX/TX ring'leri hazir, link acildi.\n");
+        match ntype {
+            NicType::IntelE1000 => {
+                e1000_print("[NET] e1000 RX/TX ring'leri hazir, link acildi.\n");
+            }
+            NicType::VmwareVmxnet3 => {
+                e1000_print("[NET] VMware VMXNET3 RX/TX ring'leri hazir, link acildi.\n");
+            }
+        }
         E1000_READY.store(true, Ordering::Relaxed);
     }
 }

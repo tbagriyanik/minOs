@@ -894,14 +894,18 @@ impl TerminalApp {
                     }
                     "install" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak install <paket_adi_veya_url>", "Usage: minPak install <pkg_name_or_url>"), Color::ACCENT_YELLOW);
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak install <paket_adi_veya_url> [sha256]", "Usage: minPak install <pkg_name_or_url> [sha256]"), Color::ACCENT_YELLOW);
                         } else {
+                            let mut parts = subarg.split_whitespace();
+                            let target_pkg = parts.next().unwrap_or("");
+                            let expected_sha256 = parts.next();
+
                             self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
                             // Önce ağ üzerinden dene, ağ yoksa veya yerel simülasyonsa yerleşik paketi kur
-                            let res = if crate::drivers::e1000::is_ready() && subarg.starts_with("http://") {
-                                crate::apps::pkgmgr::MinPkg::install_from_url(subarg, vfs)
+                            let res = if crate::drivers::e1000::is_ready() && target_pkg.starts_with("http://") {
+                                crate::apps::pkgmgr::MinPkg::install_from_url_with_checksum(target_pkg, expected_sha256, vfs)
                             } else {
-                                crate::apps::pkgmgr::MinPkg::install_builtin(subarg, vfs)
+                                crate::apps::pkgmgr::MinPkg::install_builtin(target_pkg, vfs)
                             };
                             match res {
                                 Ok(path) => {
@@ -923,6 +927,51 @@ impl TerminalApp {
                             }
                         }
                     }
+                    "sha256" | "checksum" | "hash" => {
+                        if subarg.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak sha256 <dosya_veya_paket>", "Usage: minPak sha256 <file_or_pkg>"), Color::ACCENT_YELLOW);
+                        } else {
+                            let path = if subarg.starts_with('/') {
+                                alloc::string::String::from(subarg)
+                            } else {
+                                alloc::format!("/bin/{}", subarg)
+                            };
+                            if let Some(data) = vfs.read_file(&path) {
+                                let csum = crate::apps::pkgmgr::MinPkg::compute_sha256(&data);
+                                let mut b = TextBuf::new();
+                                b.push_str("SHA-256: ");
+                                b.push_str(&csum);
+                                self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                            } else {
+                                self.push_line(crate::gui::ui_text("Dosya bulunamadı.", "File not found."), Color::ACCENT_RED);
+                            }
+                        }
+                    }
+                    "verify" => {
+                        let mut parts = subarg.split_whitespace();
+                        let target_file = parts.next().unwrap_or("");
+                        let expected = parts.next().unwrap_or("");
+                        if target_file.is_empty() || expected.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak verify <dosya_veya_paket> <beklenen_sha256>", "Usage: minPak verify <file_or_pkg> <expected_sha256>"), Color::ACCENT_YELLOW);
+                        } else {
+                            let path = if target_file.starts_with('/') {
+                                alloc::string::String::from(target_file)
+                            } else {
+                                alloc::format!("/bin/{}", target_file)
+                            };
+                            match crate::apps::pkgmgr::MinPkg::verify_file_checksum(&path, expected, vfs) {
+                                Ok(true) => {
+                                    self.push_line(crate::gui::ui_text("Doğrulama başarılı: SHA-256 checksum eşleşti.", "Verification successful: SHA-256 matches."), Color::ACCENT_GREEN);
+                                }
+                                Ok(false) => {
+                                    self.push_line(crate::gui::ui_text("Doğrulama BAŞARISIZ: SHA-256 checksum uyuşmuyor!", "Verification FAILED: SHA-256 checksum mismatch!"), Color::ACCENT_RED);
+                                }
+                                Err(e) => {
+                                    self.push_line(e, Color::ACCENT_RED);
+                                }
+                            }
+                        }
+                    }
                     "remove" | "uninstall" => {
                         if subarg.is_empty() {
                             self.push_line(crate::gui::ui_text("Kullanım: minPak remove <paket_adi>", "Usage: minPak remove <pkg_name>"), Color::ACCENT_YELLOW);
@@ -936,10 +985,12 @@ impl TerminalApp {
                     }
                     _ => {
                         self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minPak)", "minOs Package Manager v1.0 (minPak)"), Color::ACCENT_PINK);
-                        self.push_line(crate::gui::ui_text("minPak list                  - Kurulu paketleri listeler", "minPak list                  - List installed packages"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak search <paket>        - Kurulu paketlerde arama yapar", "minPak search <package>      - Search installed packages"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak install <paket|url>   - Paket indirir ve /bin altına kurar", "minPak install <package|url> - Download and install to /bin"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak remove <paket>        - Kurulu paketi siler", "minPak remove <package>      - Remove installed package"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak list                   - Kurulu paketleri listeler", "minPak list                   - List installed packages"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak search <paket>         - Kurulu paketlerde arama yapar", "minPak search <package>       - Search installed packages"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak install <paket> [hash] - Paketi indirir, checksum'ı doğrular ve kurar", "minPak install <pkg> [hash]  - Download, verify checksum and install"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak sha256 <dosya>         - Dosyanın SHA-256 özetini hesaplar", "minPak sha256 <file>          - Calculate file SHA-256 hash"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak verify <dosya> <hash>  - Dosyanın SHA-256 özetini doğrular", "minPak verify <file> <hash>   - Verify file SHA-256 checksum"), Color::TEXT_MAIN);
+                        self.push_line(crate::gui::ui_text("minPak remove <paket>         - Kurulu paketi siler", "minPak remove <package>       - Remove installed package"), Color::TEXT_MAIN);
                     }
                 }
             }

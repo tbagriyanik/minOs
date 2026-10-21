@@ -18,11 +18,15 @@
 
 ## Yenilikler (v1.7.0)
 
+- **X.509 Sertifika Doğrulama (Zaman & SNI/CN):** TLS el sıkışmasında sunucu sertifikasının geçerlilik tarih aralığı (`not_before` / `not_after`) CMOS RTC saatiyle, hedef ana makine adı ise CN (`CommonName`) ve SAN (`Subject Alternative Name`) DNS kayıtları üzerinden RFC 6125 kurallarıyla (tek düzeyli joker `*.domain.com` dahil) doğrulanır.
+- **VMware VMXNET3 & Genişletilmiş Ağ Desteği:** Intel e1000 ailesine ek olarak VMware PCI vendor `0x15AD` ve aygıt kimlikleri (`0x07B0` VMXNET3, `0x0720` VMXNET) algılanır; MAC adresi, bağlantı (link) yoklaması ve donanım adı raporlaması entegre edildi.
+- **minPak / minpkg SHA-256 Bütünlük Doğrulaması:** Paket yöneticisine indirilen ve kurulan ikili paketlerin SHA-256 özetini kontrol etme özelliği eklendi (`minPak install <paket> [hash]`, `minPak sha256 <dosya>`, `minPak verify <dosya> <hash>`).
+- **Açılış Konsolunda USB HID & PS/2 Fallback Teşhisi:** Açılışta yerel xHCI USB HID denetleyicisi veya aygıtı bulunamadığında önyükleme konsoluna ve seri porta net teşhis günlüğü basılır (`[INPUT] USB HID bulunamadı, PS/2 fallback kullanılıyor`).
 - **Açılışta Otomatik Çözünürlük ve Kalıcılık:** Limine önyükleme menüsünden seçilen ekran çözünürlüğü (`kernel_cmdline: res=WxH`) ve Ayarlar uygulamasından diske kaydedilen tercihler (`settings.cfg`), masaüstü açılmadan önce donanıma (BGA) otomatik olarak uygulanır; sistem doğrudan seçili çözünürlükle açılır.
 - **Dinamik Çözünürlük ve Masaüstü Uyumlanması:** Çalışma zamanında çözünürlük değiştirildiğinde masaüstü sınırları, imleç hareket alanı, pencere konumları (`keep_windows_on_screen`) ve duvar kağıdı yeni çözünürlüğe anında uyarlanır; ekran tamamen yeniden çizilir (`force_render`).
 - **QEMU SDL / GTK Desteği & 64 MB VRAM:** `run.ps1` betiğine `-Display sdl` parametresi eklendi (GTK pixbuf uyarıları engellenir, daha düşük fare gecikmesi sunar). QEMU video belleği 64 MB'a yükseltildi (`-global VGA.vgamem_mb=64`).
 - **Statik BSS Bellek Mimarisi (CodeQL Alert #25 Düzeltmesi):** Çekirdek bellek yöneticisi (`MemoryManager`) statik BSS depolama alanına taşınarak yığın belleğin kaçışı ve raw pointer çözümlenmesi güvenli hale getirildi.
-- **Genişletilmiş Kripto & TLS 1.3:** SHA-384, SHA-512 ve ECDSA (secp256r1) imza doğrulama/üretme ilkelleri eklendi (54/54 test geçerli); TLS 1.3 tam el sıkışma döngüsü (RSA & ECDSA CertificateVerify, HKDF anahtar planı ve şifreli kayıt işleme) entegre edildi.
+- **Genişletilmiş Kripto & TLS 1.3:** SHA-384, SHA-512 ve ECDSA (secp256r1) imza doğrulama/üretme ilkelleri eklendi (57 host testi geçerli); TLS 1.3 tam el sıkışma döngüsü (RSA & ECDSA CertificateVerify, HKDF anahtar planı ve şifreli kayıt işleme) entegre edildi.
 - **Erken İstisna Yakalama & Donanımsal Triple Fault Koruması:** Çekirdeğin açılışının ilk anından itibaren BSP GDT+TSS (`IST1`) ve IDT istisna kapıları (`#DE`, `#UD`, `#DF`, `#SS`, `#GP`, `#PF`) yüklenir. Sürücü başlatma aşamasında oluşabilecek donanım hatalarında anakartın ani yeniden başlaması önlenir.
 - **Etkileşimli Metin Kurtarma Konsolu (`recovery#`):** Açılışta veya kritik sürücülerde hata meydana geldiğinde grafik karşılama ekranına geçilmeden önce ekranda hata ayrıntıları (vektör, RIP, CR2, hata kodu) gösterilir ve kullanıcıya interaktif komut istemi sunulur (`restart` / `reboot` / `r`, `halt` / `h`, `help`).
 - **Genişletilmiş Yüksek Çözünürlük ve 16:10 Desteği:** Çekirdek arka tamponu (backbuffer) `2560x1600` boyutuna genişletildi. 1920x1080 (FHD), 1920x1200 (16:10 WUXGA), 2560x1440 (2K) ve 2560x1600 ekranlar tam desteklenir; 1920 sınır doğrulama algoritması düzeltildi.
@@ -92,6 +96,58 @@ Yerel Markdown Dokümanları:
 - [Komutlar, Kısayollar ve Proje Yapısı](docs/usage.md)
 - [Donanım, Gereksinimler ve Derleme](docs/building.md)
 - [Önceki Sürüm Notları](docs/releases.md)
+
+---
+
+---
+
+### 💾 Dosya Sistemleri Desteği ve Format Sınırları
+
+minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sisteminin yetenek düzeyi farklıdır:
+
+| Dosya Sistemi | Destek Düzeyi | Açıklama |
+| :--- | :--- | :--- |
+| **FAT32** | **Tam Okuma / Yazma / Biçimlendirme / Kalıcılık** | MBR/GPT disklerde tam dosya okuma, yazma, oluşturma, silme; `settings.cfg` ve `VFS.DAT` sistem kalıcılığı. |
+| **Ext2** | **Okuma / Yazma / Biçimlendirme** | `src/fs/ext2.rs` üzerinden ATA disk bölümlerine mount etme, dizin listeleme ve dosya okuma/yazma. |
+| **Ext4** | **Yalnızca Biçimlendirme (Format-only)** | `src/fs/ext4.rs` ile disk ext4 süperblokuyla biçimlendirilebilir. Temel ext2 geriye dönük uyumluluğu haricinde ext4 extents ve journaling okuma/yazma sürücüsü **bulunmamaktadır** (yalnızca format). |
+| **exFAT** | **Yalnızca Biçimlendirme (Format-only)** | `src/fs/exfat.rs` ile bölüm biçimlendirme desteklenir; henüz VFS dosya okuma/yazma sürücüsü **bulunmamaktadır**. |
+| **ISO9660** | **Salt Okunur (Read-only)** | Canlı CD/DVD ve kurulum medyası içeriğini okuma desteği. |
+
+---
+
+### ⚡ Çekirdek Mimarisi ve Donanım Durumu (UEFI, USB-HID, SMP)
+
+- **UEFI & BIOS Dual-Boot:** Limine v8 önyükleyici sayesinde sistem hem modern x86_64 UEFI sistemlerde hem de geleneksel BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
+- **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer.
+- **SMP (Symmetric Multiprocessing) Altyapısı:** Çekirdekte Limine SMP protokolü, Local APIC timer/IPI, TTAS Spinlock senkronizasyonu ve Görev Yöneticisi per-core CPU izleme çubukları mevcuttur; fiziksel laptop açılış kararlılığı için varsayılan profilde tek çekirdek emniyetiyle başlar.
+
+---
+
+### 💻 Doğrudan QEMU Çalıştırma Örnekleri (Ses ve Ağ Dahil)
+
+`run.ps1` otomasyonunu kullanmadan doğrudan QEMU komut satırıyla çalıştırmak isterseniz, ses (HDA) ve ağ (e1000) bayraklarının eksiksiz verilmesi gerekir:
+
+#### Linux (PulseAudio + Intel HDA Duplex + e1000):
+```bash
+qemu-system-x86_64 -m 512M -smp 2 \
+  -cdrom minos.iso -boot d \
+  -vga std -global VGA.vgamem_mb=64 \
+  -audiodev pa,id=snd0 \
+  -device intel-hda -device hda-duplex,audiodev=snd0 \
+  -netdev user,id=n0 -device e1000,netdev=n0
+```
+
+#### Windows (SDL veya DirectSound + Intel HDA Output + e1000):
+```powershell
+# SDL ses arka ucu DirectSoundCapture (mikrofon açma) hatasını önler:
+qemu-system-x86_64.exe -m 512M -smp 2 `
+  -cdrom .\minos.iso -boot d `
+  -vga std -global VGA.vgamem_mb=64 `
+  -audiodev driver=sdl,id=snd0 `
+  -device intel-hda -device hda-output,audiodev=snd0 `
+  -netdev user,id=n0 -device e1000,netdev=n0
+```
+> 💡 *Not: DirectSound kullanıyorsanız `hda-duplex` yerine `hda-output` veya `-audiodev driver=sdl` kullanmak mikrofon yakalama aygıtı eksikliğinden kaynaklanan QEMU açılış çökmelerini önler.*
 
 ---
 

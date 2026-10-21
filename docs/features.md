@@ -44,13 +44,17 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 - [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.4.0):**
   - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
-- [x] **SMP (Symmetric Multiprocessing) Kod Bileşenleri (v1.4.0; mevcut boot yolunda kapalı):**
+- [x] **SMP (Symmetric Multiprocessing) Mimarisi:**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
-  - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve sağlama testleri.
-- [x] **Paket Yöneticisi (`minPak`) (v1.4.0 / v1.5.0):**
-  - Grafiksel (`pkgmgr`) ve komut satırı (`minPak`) arayüzü; depo katalog sorgulama, paket arama, yerel/ağ üzerinden paket kurulumu ve kaldırma.
-- [x] **Gelişmiş Grafik Sürücüleri & Sanallaştırma Hızlandırması (v1.4.0):**
-  - VMware SVGA II ve konuk grafik hızlandırma algılaması (`src/drivers/gpu.rs`), donanım destekli çift tamponlama ve optimize çizim motoru.
+  - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve Görev Yöneticisi per-core CPU izleme çubukları.
+- [x] **Yerel xHCI USB HID & PS/2 Fallback:**
+  - xHCI (USB 3.x) denetleyicileri üzerinde yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`), port tarama, boot protokolü ve olay kuyruğu; BIOS CSM/Legacy USB kapalı olduğunda tanılama bildirimli PS/2 fallback.
+- [x] **Limine v8 BIOS & UEFI Dual-Boot Desteği:**
+  - Limine önyükleyici ile x86_64 UEFI ve Legacy BIOS ortamlarında grafik framebuffer doğrulaması ve doğrudan başlatma.
+- [x] **Paket Yöneticisi (`minPak`) ve SHA-256 Doğrulama:**
+  - Grafiksel (`pkgmgr`) ve komut satırı (`minPak`) arayüzü; depo katalog sorgulama, paket arama, SHA-256 checksum doğrulama ve /bin dizinine paket kurulumu/kaldırma.
+- [x] **Gelişmiş Grafik & Ağ Sanallaştırma Hızlandırması:**
+  - VMware SVGA II algılaması (`src/drivers/gpu.rs`) ve VMware VMXNET3 sanal ağ adaptörü PCI vendor/register desteği (`src/drivers/e1000.rs`).
 
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri

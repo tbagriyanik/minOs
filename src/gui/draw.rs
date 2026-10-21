@@ -1,8 +1,19 @@
 //! Text and colour drawing helpers.
 
 use super::*;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+static POINTER_X: AtomicUsize = AtomicUsize::new(0);
+static POINTER_Y: AtomicUsize = AtomicUsize::new(0);
+static POINTER_DOWN: AtomicBool = AtomicBool::new(false);
 
 impl MinGuiCompositor {
+    pub fn set_pointer_state(x: usize, y: usize, down: bool) {
+        POINTER_X.store(x, Ordering::Relaxed);
+        POINTER_Y.store(y, Ordering::Relaxed);
+        POINTER_DOWN.store(down, Ordering::Relaxed);
+    }
+
     /// Siyah veya beyaz metinden, verilen zemin üzerinde daha okunaklı olanı seçer.
     pub fn text_on(background: u32) -> u32 {
         let c = theme::resolve(background);
@@ -128,16 +139,32 @@ impl MinGuiCompositor {
         _label_color: u32,
         hovered: bool,
     ) {
-        let bg = if hovered { Self::shade(bg, 26) } else { bg };
-        fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg);
-        fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 5, Color::BORDER);
+        let px = POINTER_X.load(Ordering::Relaxed);
+        let py = POINTER_Y.load(Ordering::Relaxed);
+        let pressed = POINTER_DOWN.load(Ordering::Relaxed)
+            && px >= r.0 && px < r.0.saturating_add(r.2)
+            && py >= r.1 && py < r.1.saturating_add(r.3);
+        let bg = if pressed {
+            Self::shade(bg, -24)
+        } else if hovered {
+            Self::shade(bg, 26)
+        } else {
+            bg
+        };
+        let rect = if pressed {
+            (r.0 + 1, r.1 + 1, r.2.saturating_sub(2), r.3.saturating_sub(2))
+        } else {
+            r
+        };
+        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+        fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
         let tw = Self::text_width(label, 1).saturating_sub(1);
-        let tx = r.0 + r.2.saturating_sub(tw) / 2;
+        let tx = rect.0 + rect.2.saturating_sub(tw) / 2;
         let text_h = Self::text_height();
-        let ty = r.1 + r.3.saturating_sub(text_h) / 2;
+        let ty = rect.1 + rect.3.saturating_sub(text_h) / 2;
         let readable_label_color = Self::text_on(bg);
         Self::draw_string_clipped(fb, tx, ty, label, readable_label_color,
-            (r.0 + 2, r.1 + 1, r.2.saturating_sub(4), r.3.saturating_sub(2)));
+            (rect.0 + 2, rect.1 + 1, rect.2.saturating_sub(4), rect.3.saturating_sub(2)));
     }
 
     /// Metni belirtilen dikdörtgenin içinde kırparak çizer.

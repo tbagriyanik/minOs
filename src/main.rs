@@ -827,6 +827,15 @@ pub extern "C" fn _start() -> ! {
 
     serial_print("[BOOT] PS/2 hazir.\n");
 
+    let usb_hid_count = drivers::usb_hid::device_count();
+    if usb_hid_count == 0 {
+        serial_print("[INPUT] USB HID bulunamadi, PS/2 fallback kullaniliyor (BIOS Legacy USB/CSM kapaliysa klavye/fare algilanamayabilir).\n");
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[INPUT] USB HID not found, using PS/2 fallback");
+    } else {
+        serial_print("[INPUT] USB HID aktif: bagli aygitlar kullanima hazir.\n");
+        persist_boot_log(&mut fs_mgr.vfs, &mut boot_log, "[INPUT] USB HID active");
+    }
+
     // Input initialization continues without an artificial delay.
 
 
@@ -1825,7 +1834,7 @@ pub extern "C" fn _start() -> ! {
 
                         if drivers::hda::is_ready() { if drivers::hda::is_dma_progressing() { gui::ui_text("Intel HDA (DMA aktif)", "Intel HDA (DMA active)") } else { gui::ui_text("Intel HDA (DMA beklemede)", "Intel HDA (DMA standby)") } } else { gui::ui_text("PC Speaker (PWM fallback)", "PC Speaker (PWM fallback)") },
 
-                        if drivers::e1000::is_ready() { "Intel e1000" } else { gui::ui_text("Bulunamadi", "Not found") },
+                        if drivers::e1000::is_ready() { drivers::e1000::nic_name() } else { gui::ui_text("Bulunamadi", "Not found") },
 
                         if drivers::e1000::is_ready() { gui::ui_text("Hazir", "Ready") } else { gui::ui_text("Baslatilamadi / aygit yok", "Initialization failed / device missing") }),
 
@@ -2274,6 +2283,8 @@ pub extern "C" fn _start() -> ! {
         let mx = mouse.x as usize;
 
         let my = mouse.y as usize;
+
+        gui::MinGuiCompositor::set_pointer_state(mx, my, mouse.left_button);
 
         let mouse_clicked = mouse.left_button && !last_buttons.0;
 
@@ -8466,7 +8477,7 @@ pub extern "C" fn _start() -> ! {
 
             let old_rect = fb.restore_cursor_background();
 
-            compositor.draw_mouse_cursor(&mut fb, mx, my);
+            compositor.draw_mouse_cursor(&mut fb, mx, my, mouse.left_button);
 
             let new_rect = fb.cursor_rect();
 

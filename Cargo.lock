@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "minos-kernel"
-version = "1.7.0"
+version = "1.8.0"
 dependencies = [
  "fontdue",
  "linked_list_allocator",

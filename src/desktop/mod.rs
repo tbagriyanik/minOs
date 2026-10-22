@@ -1,6 +1,6 @@
 //! Masaustu oturumu katmani.
 //!
-//! Asama 1'de yalnizca masaustu/pencere yardimcilari burada; Asama 2-3'te baslatma
-//! fazlari, olay dongusu ve giris isleyicileri (mouse/keyboard/scroll) de buraya tasinacak.
+//! Masaustu/pencere yardimcilari, hos geldin ekrani, olay dongusu ve giris isleyicileri.
 
 pub mod helpers;
+pub mod welcome;

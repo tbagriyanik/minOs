@@ -9,4 +9,5 @@ pub mod cpu;
 pub mod devices;
 pub mod limine;
 pub mod progress;
+pub mod subsystems;
 pub mod time;

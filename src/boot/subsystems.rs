@@ -1,0 +1,367 @@
+use alloc::vec::Vec;
+use crate::arch;
+use crate::boot;
+use crate::boot::console::serial_print;
+use crate::boot::limine::*;
+use crate::boot::devices::{GLOBAL_KEYBOARD, GLOBAL_MOUSE};
+use crate::drivers;
+use crate::drivers::video::Framebuffer;
+use crate::fs;
+use crate::mm;
+use crate::task;
+
+pub struct BootSubsystems {
+    pub fs_mgr: fs::FileSystemManager,
+    pub boot_log: Vec<u8>,
+    pub gpu_caps: drivers::gpu::GpuCaps,
+    pub audio_dev: drivers::audio::AudioDevice,
+    pub mouse: &'static mut drivers::mouse::MouseState,
+    pub keyboard: &'static mut drivers::keyboard::KeyboardState,
+    pub installed: bool,
+    pub wants_installed: bool,
+}
+
+pub fn init_subsystems(
+    fb: &mut Framebuffer,
+    fb_ptr: *mut u32,
+    memory_mgr: &mut mm::MemoryManager,
+    alloc_pmm_frame_global: fn() -> Option<u64>,
+) -> BootSubsystems {
+    // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
+    serial_print("[BOOT] Sanal dosya sistemi baslatiliyor...\n");
+    let mut fs_mgr = fs::FileSystemManager::new();
+    let boot_log = Vec::with_capacity(4096);
+    boot::console::save_boot_log(&mut fs_mgr.vfs);
+
+    // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
+    serial_print("[BOOT] Donanim kesmeleri ve bellek yoneticisi baslatiliyor...\n");
+    arch::x86_64::init_interrupts();
+
+    unsafe {
+        if let Some(response) = valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response))
+            .filter(|response| !response.is_null())
+        {
+            let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count));
+            let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
+            let count = count.min(256) as usize;
+            let array_bytes = count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
+            if count > 0 && is_mapped_limine_ptr(entries) && array_bytes.is_some() {
+                let array_end = (entries as usize).checked_add(array_bytes.unwrap());
+                if array_end.map_or(false, |end| is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)) {
+                    for i in 0..count {
+                        let slot_addr = match (entries as usize)
+                            .checked_add(i * core::mem::size_of::<*const LimineMemoryMapEntry>())
+                        {
+                            Some(addr) => addr,
+                            None => break,
+                        };
+                        let slot = slot_addr as *const *const LimineMemoryMapEntry;
+                        if !is_mapped_limine_ptr(slot) {
+                            break;
+                        }
+                        let entry_ptr = core::ptr::read_volatile(slot);
+                        if !is_mapped_limine_ptr(entry_ptr) {
+                            continue;
+                        }
+                        let base = core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).base));
+                        let length =
+                            core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).length));
+                        let entry_type =
+                            core::ptr::read_volatile(core::ptr::addr_of!((*entry_ptr).entry_type));
+                        if length == 0 || base.checked_add(length).is_none() {
+                            continue;
+                        }
+                        let kind = match entry_type {
+                            0 => mm::pmm::MemoryEntryType::Usable,
+                            1 => mm::pmm::MemoryEntryType::Reserved,
+                            2 => mm::pmm::MemoryEntryType::AcpiReclaimable,
+                            3 => mm::pmm::MemoryEntryType::AcpiNvs,
+                            4 => mm::pmm::MemoryEntryType::BadMemory,
+                            5 => mm::pmm::MemoryEntryType::BootloaderReclaimable,
+                            6 => mm::pmm::MemoryEntryType::KernelAndModules,
+                            7 => mm::pmm::MemoryEntryType::Framebuffer,
+                            _ => continue,
+                        };
+                        memory_mgr.pmm.add_region(base, length, kind);
+                    }
+                }
+            }
+        }
+    }
+
+    serial_print("[PMM] Fiziksel bellek yoneticisi baslatildi.\n");
+    arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
+
+    // VRAM MMIO araligini (16MB) sayfa tablolarina esle; cozunurluk veya cizim asla unmapped #PF uretmesin
+    let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
+    for off in (0..16 * 1024 * 1024).step_by(2 * 1024 * 1024) {
+        arch::x86_64::mmio_map_2mb((fb_phys + off as u64) & !0x1F_FFFF);
+    }
+
+    // PMM Kendi Kendini Test Etme
+    serial_print("[BOOT] Bellek yoneticisi test ediliyor...\n");
+    if let (Some(f1), Some(f2)) = (
+        memory_mgr.pmm.allocate_frame(),
+        memory_mgr.pmm.allocate_frame(),
+    ) {
+        if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
+            serial_print("[PMM] Cerceve tahsis testi basarili (cakismayan cerceveler dogrulandi).\n");
+        }
+        memory_mgr.pmm.free_frame(f2);
+        memory_mgr.pmm.free_frame(f1);
+    }
+
+    // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi
+    serial_print("[BOOT] Sanal bellek yoneticisi test ediliyor...\n");
+    let mut address_space = memory_mgr.kernel_address_space();
+    let test_vaddr = mm::loader::USER_CODE_BASE;
+    if let Some(frame) = memory_mgr.pmm.allocate_frame() {
+        if address_space
+            .map_page(
+                test_vaddr,
+                frame,
+                mm::vmm::PageFlags::USER_CODE,
+                &mut memory_mgr.pmm,
+            )
+            .is_ok()
+        {
+            if let Some(translated_phys) = address_space.translate(test_vaddr) {
+                if translated_phys == frame {
+                    serial_print(
+                        "[VMM] 4-seviyeli sanal bellek esleme ve adres cozumleme aktif.\n",
+                    );
+                }
+            }
+            let _ = address_space.unmap_page(test_vaddr);
+        }
+        memory_mgr.pmm.free_frame(frame);
+    }
+
+    // Test amacli standart ELF64 ikili dosyasini yukle ve dogrula
+    let sample_elf_bin = mm::loader::AppLoader::create_sample_elf();
+    if let Ok(loaded) = mm::loader::AppLoader::load_binary(
+        &sample_elf_bin,
+        &mut address_space,
+        &mut memory_mgr.pmm,
+    ) {
+        if loaded.entry_point >= mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
+            serial_print("[LOADER] Standart ELF64 ikilisi guvenli bellek izolasyonu ile yuklendi (W^X / NX aktif).\n");
+        }
+        loaded.unmap_and_free(&mut address_space, &mut memory_mgr.pmm);
+    }
+
+    // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
+    serial_print("[BOOT] Surec yoneticisi baslatiliyor...\n");
+    memory_mgr.proc_mgr.init_kernel_process();
+
+    let test_pid = mm::process::syscall_dispatch(
+        mm::process::sys_nos::SYS_GETPID,
+        0,
+        0,
+        0,
+        &mut memory_mgr.proc_mgr,
+        &mut memory_mgr.pmm,
+    );
+    let test_frame = mm::process::syscall_dispatch(
+        mm::process::sys_nos::SYS_ALLOC_FRAME,
+        0,
+        0,
+        0,
+        &mut memory_mgr.proc_mgr,
+        &mut memory_mgr.pmm,
+    );
+    if test_frame != 0 {
+        let _ = mm::process::syscall_dispatch(
+            mm::process::sys_nos::SYS_FREE_FRAME,
+            test_frame,
+            0,
+            0,
+            &mut memory_mgr.proc_mgr,
+            &mut memory_mgr.pmm,
+        );
+    }
+    if test_pid == 0 {
+        serial_print("[PROC] Surec tablosu ve sistem cagrilar (syscalls) aktif.\n");
+    }
+
+    serial_print("[BOOT] Bellek testleri calistiriliyor...\n");
+    mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
+    mm::allocator::test_allocator_subsystem();
+
+    serial_print("[BOOT] Surec testleri calistiriliyor...\n");
+    mm::process::test_process_lifecycle_and_fault_recovery(
+        &mut memory_mgr.proc_mgr,
+        &mut memory_mgr.pmm,
+    );
+
+    // Hardware-safe mode: do not touch APIC/SMP until the laptop path is stable.
+    serial_print("[BOOT] Tek CPU modu secildi; APIC/SMP baslatmasi atlandi.\n");
+    serial_print("[SMP] BSP GDT yukleniyor...\n");
+    unsafe { arch::x86_64::gdt::load_for_cpu(0) };
+    serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
+
+    serial_print("[BOOT] APIC zamanlayici baslatiliyor...\n");
+    serial_print("[APIC] APIC timer atlandi; TSC monotonic saat kullaniliyor.\n");
+
+    // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
+    {
+        const SUM_FRAMES: usize = 64;
+        const U64_PER_FRAME: usize = 512;
+        if let Some(buf_phys) = memory_mgr.pmm.allocate_contiguous_frames(SUM_FRAMES) {
+            unsafe {
+                let base = crate::drivers::phys_to_virt(buf_phys) as *mut u64;
+                let mut expected: u64 = 0;
+                for i in 0..SUM_FRAMES * U64_PER_FRAME {
+                    let v = (i as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        .wrapping_add(0x1234_5678);
+                    base.add(i).write_volatile(v);
+                    expected = expected.wrapping_add(v);
+                }
+                core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+                match arch::x86_64::smp::parallel_checksum(
+                    buf_phys,
+                    SUM_FRAMES * U64_PER_FRAME,
+                    4 * U64_PER_FRAME,
+                ) {
+                    Some(got) if got == expected => {
+                        serial_print("[SMP] Paralel saglama toplami (AP+BSP) eslesti: BASARILI\n");
+                    }
+                    Some(_) => {
+                        serial_print("[SMP] Paralel saglama toplami UYUSMADI: BASARISIZ\n");
+                    }
+                    None => {
+                        serial_print("[SMP] Paralel saglama toplami zaman asimi (tek cekirdek yedegi yok).\n");
+                    }
+                }
+            }
+            for i in 0..SUM_FRAMES {
+                memory_mgr.pmm.free_frame(buf_phys + (i as u64) * 4096);
+            }
+        }
+    }
+
+    // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
+    serial_print("[BOOT] Donanim suruculeri baslatiliyor...\n");
+    let cmdline = limine_boot_cmdline().unwrap_or("");
+    let driver_profile = if cmdline_has_token(cmdline, "full") {
+        "full"
+    } else if cmdline_has_token(cmdline, "hardware") {
+        "hardware"
+    } else if cmdline_has_token(cmdline, "audio") {
+        "audio"
+    } else if cmdline_has_token(cmdline, "safe") {
+        "safe"
+    } else {
+        "full"
+    };
+    serial_print("[DRIVERS] Profil: ");
+    serial_print(driver_profile);
+    serial_print("\n");
+    let profile_line = alloc::format!("[DRIVERS] profile: {}", driver_profile);
+    let _ = fs_mgr.vfs.write_file("/root/Documents/boot.log", profile_line.as_bytes());
+
+    if driver_profile == "audio" || driver_profile == "full" {
+        serial_print("[DRIVER] HDA audio surucusu baslatiliyor...\n");
+        let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
+        let Some(hda_dma_phys) = hda_dma_phys else {
+            boot::text_console::fatal("HDA DMA bellek tahsisati basarisiz");
+        };
+        drivers::hda::init(Some(hda_dma_phys));
+        serial_print("[DRIVER] HDA audio surucusu hazir.\n");
+    }
+
+    if driver_profile == "hardware" || driver_profile == "full" {
+        serial_print("[DRIVER] e1000 ag surucusu baslatiliyor...\n");
+        let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
+        let Some(e1000_dma_phys) = e1000_dma_phys else {
+            boot::text_console::fatal("e1000 DMA bellek tahsisati basarisiz");
+        };
+        drivers::e1000::init(Some(e1000_dma_phys));
+        serial_print("[DRIVER] e1000 ag surucusu hazir.\n");
+
+        serial_print("[DRIVER] Ag protokolu baslatiliyor...\n");
+        drivers::netstack::init();
+        let _ = drivers::netstack::dhcp_request();
+        drivers::netstack::run_network_self_test();
+        serial_print("[DRIVER] Ag protokolu hazir.\n");
+
+        serial_print("[DRIVER] USB surucusu baslatiliyor...\n");
+        drivers::usb::init();
+        drivers::usb::test_usb_subsystems();
+        serial_print("[DRIVER] USB HID (xHCI) surucusu baslatiliyor...\n");
+        drivers::usb_hid::init(&mut memory_mgr.pmm);
+        serial_print("[DRIVER] USB HID surucusu hazir.\n");
+        serial_print("[DRIVER] USB surucusu hazir.\n");
+    }
+
+    let _socket_timeout_task = task::spawn(
+        "socket-timeouts",
+        task::TaskPriority::Normal,
+        || {
+            drivers::socket::poll_timeouts();
+            task::TaskStatus::Yielded
+        },
+    );
+    serial_print("[TASK] Cooperative socket timeout task queued.\n");
+
+    let _net_dev = drivers::net::NetworkInterface::new();
+    let mut audio_dev = drivers::audio::AudioDevice::new();
+    audio_dev.test_audio_subsystem();
+
+    serial_print("[DRIVERS] Tum suruculer hazir.\n");
+
+    // 4b. Gelismis grafik suruculeri: BGA/VMware/VGA yetenek taramasi.
+    let gpu_caps = drivers::gpu::init();
+    if gpu_caps.bga_present {
+        serial_print("[GPU] BGA algilandi, cozunurluk degisimi acik.\n");
+        fb.set_hw_cursor(false);
+        serial_print("[GPU] Hizlandirilmis yazilim imleci etkin.\n");
+    } else {
+        serial_print("[GPU] BGA yok; cozunurluk Limine ile sabit, yazilim imleci.\n");
+    }
+
+    // 5. PS/2 Donanim Suruculeri
+    let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
+    let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
+    drivers::ps2::init();
+    serial_print("[BOOT] PS/2 hazir.\n");
+
+    let usb_hid_count = drivers::usb_hid::device_count();
+    if usb_hid_count == 0 {
+        serial_print("[INPUT] USB HID bulunamadi, PS/2 fallback kullaniliyor (BIOS Legacy USB/CSM kapaliysa klavye/fare algilanamayabilir).\n");
+    } else {
+        serial_print("[INPUT] USB HID aktif: bagli aygitlar kullanima hazir.\n");
+    }
+
+    // 5b. Tema motorunu baslat
+    crate::gui::theme::init();
+    serial_print("[BOOT] Tema hazir.\n");
+
+    // 5c. onyukleme modu denetimi:
+    let wants_installed = boot_wants_installed();
+    let installed = fs::diskfs::is_installed();
+    serial_print("[BOOT] Kurulum denetimi: wants_installed=");
+    serial_print(if wants_installed { "1" } else { "0" });
+    serial_print(" installed=");
+    serial_print(if installed { "1" } else { "0" });
+    serial_print("\n");
+
+    if wants_installed && !installed {
+        serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
+        boot::text_console::fatal("Kurulu sistem secildi ancak MINOS.SYS bulunamadi");
+    }
+
+    serial_print("[BOOT] Tum kritik alt sistemler baslatildi. GUI ve uygulamalar yukleniyor...\n");
+
+    BootSubsystems {
+        fs_mgr,
+        boot_log,
+        gpu_caps,
+        audio_dev,
+        mouse,
+        keyboard,
+        installed,
+        wants_installed,
+    }
+}

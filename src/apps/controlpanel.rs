@@ -9,12 +9,16 @@ use crate::drivers::keyboard::KeyboardLayout;
 use crate::drivers::rtc::DateTime;
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Sekme sayısı: Sistem, Ağ, Hakkında.
 pub const TAB_COUNT: usize = 3;
 
 static ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
+static REFRESHED_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// 0: bos, 1: yanit bekleniyor, 2: basarili, 3: basarisiz.
+static NET_TEST_STATE: AtomicUsize = AtomicUsize::new(0);
+static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Etkin sekme indeksi (0..TAB_COUNT).
 pub fn active_tab() -> usize {
@@ -31,6 +35,37 @@ pub fn select_tab(tab: usize) {
 /// Pencere kapatıldığında sekmeyi başa alır.
 pub fn reset() {
     ACTIVE_TAB.store(0, Ordering::Relaxed);
+    NET_TEST_STATE.store(0, Ordering::Relaxed);
+    REFRESHED_AT_MS.store(0, Ordering::Relaxed);
+}
+
+/// Panel verilerini yeniler (canli degerler bir sonraki cizimde okunur).
+pub fn refresh() {
+    REFRESHED_AT_MS.store(crate::monotonic_ms(), Ordering::Relaxed);
+    NET_TEST_STATE.store(0, Ordering::Relaxed);
+}
+
+/// Ağ geçidine ICMP ping testi başlatır (UI kilitlemeden).
+pub fn start_network_test() {
+    if !crate::drivers::e1000::is_ready() {
+        NET_TEST_STATE.store(3, Ordering::Relaxed);
+        return;
+    }
+    crate::drivers::netstack::clear_ping_reply();
+    let sent = crate::drivers::netstack::ping(crate::drivers::netstack::gateway_ip());
+    NET_TEST_STATE.store(if sent { 1 } else { 3 }, Ordering::Relaxed);
+    NET_TEST_START_MS.store(crate::monotonic_ms(), Ordering::Relaxed);
+}
+
+fn poll_network_test() {
+    if NET_TEST_STATE.load(Ordering::Relaxed) != 1 { return; }
+    let now = crate::monotonic_ms();
+    if crate::drivers::netstack::has_ping_reply() {
+        let _ = crate::drivers::netstack::take_ping_reply();
+        NET_TEST_STATE.store(2, Ordering::Relaxed);
+    } else if now.wrapping_sub(NET_TEST_START_MS.load(Ordering::Relaxed)) >= 2_500 {
+        NET_TEST_STATE.store(3, Ordering::Relaxed);
+    }
 }
 
 /// Yazı yakınlaştırmasına göre satır/sekme yüksekliği artışı (100/125/150 -> 0/5/10).
@@ -58,6 +93,18 @@ pub fn theme_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) ->
         w,
         26,
     )
+}
+
+/// "Yenile" düğmesinin tıklanabilir dikdörtgeni.
+pub fn refresh_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    let theme = theme_btn_rect(win_x, win_y, win_w, win_h);
+    (theme.0.saturating_sub(100 + 8), theme.1, 100, theme.3)
+}
+
+/// "Ağ Testi" düğmesinin tıklanabilir dikdörtgeni.
+pub fn net_test_btn_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    let refresh = refresh_btn_rect(win_x, win_y, win_w, win_h);
+    (refresh.0.saturating_sub(124 + 8), refresh.1, 124, refresh.3)
 }
 
 fn draw_row(
@@ -92,12 +139,15 @@ fn push_date(buf: &mut TextBuf, now: &DateTime) {
 }
 
 fn push_uptime(buf: &mut TextBuf, total_seconds: usize) {
-    buf.push_usize(total_seconds / 3600);
-    buf.push_str(crate::gui::ui_text("sa ", "h "));
-    buf.push_usize((total_seconds / 60) % 60);
-    buf.push_str(crate::gui::ui_text("dk ", "m "));
-    buf.push_usize(total_seconds % 60);
-    buf.push_str(crate::gui::ui_text("sn", "s"));
+    let mut text = [0u8; crate::gui::timefmt::MAX_TEXT];
+    let len = crate::gui::timefmt::format_duration(
+        total_seconds as u64,
+        crate::gui::ui_english(),
+        &mut text,
+    );
+    for &byte in &text[..len] {
+        buf.push_byte(byte);
+    }
 }
 
 fn push_ip(buf: &mut TextBuf, ip: crate::drivers::netstack::Ipv4Address) {
@@ -122,6 +172,7 @@ pub fn render_content(
     used_ram_bytes: u64,
     kbd_layout: KeyboardLayout,
 ) {
+    poll_network_test();
     let names_tr = ["Sistem", "Ağ", "Hakkında"];
     let names_en = ["System", "Network", "About"];
 
@@ -294,6 +345,15 @@ pub fn render_content(
             };
             draw_row(fb, left, y, row_w, crate::gui::ui_text("Ses:", "Audio:"), audio,
                 if audio_ok { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW });
+            y += step;
+
+            let (net_test, net_color) = match NET_TEST_STATE.load(Ordering::Relaxed) {
+                1 => (crate::gui::ui_text("Ağ testi: yanıt bekleniyor...", "Network test: waiting for reply..."), Color::ACCENT_YELLOW),
+                2 => (crate::gui::ui_text("Ağ testi: BAŞARILI (ICMP yanıtı alındı)", "Network test: SUCCESS (ICMP reply received)"), Color::ACCENT_GREEN),
+                3 => (crate::gui::ui_text("Ağ testi: BAŞARISIZ (yanıt yok)", "Network test: FAILED (no reply)"), Color::ACCENT_RED),
+                _ => (crate::gui::ui_text("Ağ testi: hazır", "Network test: ready"), Color::TEXT_MUTED),
+            };
+            draw_row(fb, left, y, row_w, crate::gui::ui_text("Test:", "Test:"), net_test, net_color);
         }
         _ => {
             draw_row(fb, left, y, row_w, crate::gui::ui_text("Sürüm:", "Version:"),
@@ -315,6 +375,20 @@ pub fn render_content(
                 "docs/usage.md • README.md", Color::TEXT_MUTED);
         }
     }
+
+    // Yenile ve Ağ Testi kısayolları (her sekmede görünür).
+    let refresh_btn = refresh_btn_rect(win_x, win_y, win_w, win_h);
+    fb.draw_rect(refresh_btn.0, refresh_btn.1, refresh_btn.2, refresh_btn.3, Color::WINDOW_BG);
+    fb.draw_rect_outline(refresh_btn.0, refresh_btn.1, refresh_btn.2, refresh_btn.3, Color::BORDER);
+    let refresh_label = crate::gui::ui_text("Yenile", "Refresh");
+    MinGuiCompositor::draw_string(fb, refresh_btn.0 + 10, refresh_btn.1 + 7, refresh_label, Color::TEXT_MAIN);
+
+    let net_btn = net_test_btn_rect(win_x, win_y, win_w, win_h);
+    fb.draw_rect(net_btn.0, net_btn.1, net_btn.2, net_btn.3, Color::ACCENT_GREEN);
+    let net_label = crate::gui::ui_text("Ağ Testi", "Network Test");
+    let ntw = MinGuiCompositor::text_width(net_label, 1);
+    MinGuiCompositor::draw_string(fb, net_btn.0 + net_btn.2.saturating_sub(ntw) / 2, net_btn.1 + 7, net_label,
+        MinGuiCompositor::text_on(Color::ACCENT_GREEN));
 
     // Tema değiştirme düğmesi (her sekmede görünür).
     let b = theme_btn_rect(win_x, win_y, win_w, win_h);

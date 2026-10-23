@@ -6,6 +6,8 @@ pub mod scrollbar;
 pub mod widget;
 pub mod screens;
 pub mod textbuf;
+pub mod textedit;
+pub mod timefmt;
 pub mod window;
 pub mod draw;
 pub mod icons;

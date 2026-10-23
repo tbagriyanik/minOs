@@ -1,7 +1,66 @@
 //! Masaustu ve pencere yardimcilari: uygulama acma/kapama, masaustu simge geometrisi,
 //! kaydirma konumlandirma ve takvim gezinme.
 
-use crate::{apps, drivers, fs, gui};
+use crate::{apps, drivers, fs, gui, mm};
+
+/// Pencereye bagli calisan surec adlari (gorev yoneticisi surec tablosu icin).
+fn app_process_name(app_id: usize) -> &'static str {
+    match app_id {
+        0 => "dosya_yoneticisi",
+        1 => "sistem_ayarlari",
+        2 => "not_defteri",
+        3 => "web_gezgini",
+        4 => "resim_gosterici",
+        5 => "muzik_calar",
+        6 => "video_oynatici",
+        7 => "gorev_yoneticisi",
+        8 => "hesap_makinesi",
+        9 => "cizim_tahtasi",
+        10 => "komut_istemi",
+        11 => "kurulum_sihirbazi",
+        12 => "3d_gosterici",
+        13 => "paket_yoneticisi",
+        14 => "kontrol_paneli",
+        _ => "uygulama",
+    }
+}
+
+/// Bir pencere acildiginda ona karsilik gelen surec kaydini olusturur.
+fn ensure_window_process(idx: usize, app_id: usize) {
+    unsafe {
+        let mgr = &mut *core::ptr::addr_of_mut!(crate::MEMORY_MGR);
+        let exists = mgr.proc_mgr.processes.iter().any(|p| {
+            p.state != mm::process::ProcessState::Unused
+                && p.state != mm::process::ProcessState::Terminated
+                && p.resources.window_idx == Some(idx)
+        });
+        if !exists {
+            let _ = mgr.proc_mgr.spawn(
+                app_process_name(app_id),
+                0,
+                0,
+                0,
+                app_id,
+                Some(idx),
+            );
+        }
+    }
+}
+
+/// Bir pencereye bagli sureci sonlandirir ve kaynaklarini serbest birakir.
+pub fn terminate_window_process(idx: usize) {
+    unsafe {
+        let mgr = &mut *core::ptr::addr_of_mut!(crate::MEMORY_MGR);
+        let pid = mgr.proc_mgr.processes.iter().find(|p| {
+            p.state != mm::process::ProcessState::Unused
+                && p.state != mm::process::ProcessState::Terminated
+                && p.resources.window_idx == Some(idx)
+        }).map(|p| p.pid);
+        if let Some(pid) = pid {
+            let _ = mgr.proc_mgr.terminate(pid, 0, &mut mgr.pmm);
+        }
+    }
+}
 
 /// Uygulama başlatma isteğinde yeni örnek açar; tekil uygulamalar var olan pencereye gider.
 pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
@@ -11,6 +70,7 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
             win.is_minimized = false;
             win.is_maximized = false;
         }
+        ensure_window_process(idx, app_id);
         compositor.focus_window(idx);
     }
 }
@@ -108,6 +168,8 @@ pub fn terminate_app(
     pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
+    // Pencereyi kapatmakla kalma: pencereye bagli sureci de gercekten sonlandir.
+    terminate_window_process(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
         window.is_open = false;
         window.is_minimized = false;

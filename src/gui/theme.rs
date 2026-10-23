@@ -246,6 +246,67 @@ const fn palette_for(id: ThemeId) -> [u32; PALETTE_LEN] {
     }
 }
 
+/// Bir temanin RGB paletini aktif paleti degistirmeden dondurur.
+///
+/// Arayuz onizlemeleri ve host testlerindeki kontrast denetimleri icin.
+pub const fn palette(id: ThemeId) -> [u32; PALETTE_LEN] {
+    palette_for(id)
+}
+
+/// Bir rengin `IDX_*` indeksindeki degerini verilen paletten okur.
+pub const fn palette_color(id: ThemeId, index: u32) -> u32 {
+    let p = palette_for(id);
+    p[index as usize % PALETTE_LEN]
+}
+
+/// sRGB kanal degerini (0..=1) lineer isik degerine cevirir.
+///
+/// `core` hedefinde `powf` bulunmadigi icin 2.4 ussu, karekok gerektirmeyen
+/// bir Newton besinci-kok yaklasimiyla hesaplanir.
+fn srgb_to_linear(channel: u8) -> f32 {
+    let c = channel as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        let x = (c + 0.055) / 1.055;
+        // x^2.4 = x^2 * x^0.4, x^0.4 = (x^2)^(1/5)
+        x * x * fifth_root(x * x)
+    }
+}
+
+/// `y` degerinin besinci koku (0 <= y <= 1 icin Newton yinelemesi).
+fn fifth_root(y: f32) -> f32 {
+    if y <= 0.0 {
+        return 0.0;
+    }
+    // y 0..=1 araliginda oldugu icin 1.0 iyi bir baslangic tahminidir;
+    // kucuk y degerlerinde `root = y` Newton yinelemesini bozardi.
+    let mut root = 1.0;
+    let mut i = 0;
+    while i < 24 {
+        let square = root * root;
+        root = (4.0 * root + y / (square * square)) / 5.0;
+        i += 1;
+    }
+    root
+}
+
+/// WCAG 2.x bagil parlaklik (0.0 = siyah, 1.0 = beyaz).
+pub fn relative_luminance(rgb: u32) -> f32 {
+    let r = srgb_to_linear(((rgb >> 16) & 0xFF) as u8);
+    let g = srgb_to_linear(((rgb >> 8) & 0xFF) as u8);
+    let b = srgb_to_linear((rgb & 0xFF) as u8);
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/// Iki renk arasindaki WCAG kontrast orani (1.0 .. 21.0).
+pub fn contrast_ratio(a: u32, b: u32) -> f32 {
+    let la = relative_luminance(a);
+    let lb = relative_luminance(b);
+    let (light, dark) = if la >= lb { (la, lb) } else { (lb, la) };
+    (light + 0.05) / (dark + 0.05)
+}
+
 /// Bir temanın önizleme renklerini (zemin + vurgu) aktif paleti değiştirmeden döndürür.
 /// Ayar ekranındaki renk örnekleri (swatch) için kullanılır.
 pub const fn preview_colors(id: ThemeId) -> (u32, u32) {

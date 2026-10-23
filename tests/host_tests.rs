@@ -23,6 +23,18 @@ pub mod js;
 #[path = "../src/apps/browser/types.rs"]
 pub mod browser_types;
 
+#[path = "../src/apps/calc_core.rs"]
+pub mod calc_core;
+
+#[path = "../src/gui/textedit.rs"]
+pub mod textedit;
+
+#[path = "../src/gui/timefmt.rs"]
+pub mod timefmt;
+
+#[path = "../src/gui/theme.rs"]
+pub mod theme;
+
 // TLS protokol katmani: `crate::boot::time` ve `crate::monotonic_ms`
 // cekirdekte var; host testlerinde sabit birer yedek (stub) saglanir.
 pub fn monotonic_ms() -> u64 {
@@ -99,4 +111,8 @@ mod crypto_tests;
 #[cfg(test)]
 #[path = "host_allocator_tests.rs"]
 mod host_allocator_tests;
+
+#[cfg(test)]
+#[path = "host_feature_tests.rs"]
+mod host_feature_tests;
 

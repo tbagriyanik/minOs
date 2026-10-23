@@ -40,6 +40,8 @@ pub enum KeyAction {
     SaveDocument,
     NewDocument,
     OpenDocument,
+    FindText,
+    ReplaceText,
     Screenshot,
     RunDialog,
     Properties,
@@ -286,6 +288,8 @@ impl KeyboardState {
             0x1F if self.ctrl => { self.push_action(KeyAction::SaveDocument); return None; } // Ctrl+S
             0x31 if self.ctrl => { self.push_action(KeyAction::NewDocument); return None; } // Ctrl+N
             0x18 if self.ctrl => { self.push_action(KeyAction::OpenDocument); return None; } // Ctrl+O
+            0x21 if self.ctrl => { self.push_action(KeyAction::FindText); return None; } // Ctrl+F
+            0x23 if self.ctrl => { self.push_action(KeyAction::ReplaceText); return None; } // Ctrl+H
             0x26 if self.ctrl => { self.push_action(KeyAction::BrowserAddress); return None; } // Ctrl+L
             0x13 if self.ctrl => { self.push_action(KeyAction::BrowserRefresh); return None; } // Ctrl+R
             0x48 if !self.num_lock => { // Arrow Up / keypad 8

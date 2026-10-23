@@ -121,6 +121,15 @@ impl MusicPlayerApp {
         let mut volume = crate::gui::TextBuf::new(); volume.push_str(crate::gui::ui_text("Ses: %", "Volume: %")); volume.push_u2(self.volume as u32);
         MinGuiCompositor::draw_string(fb, win_x + 150, ctrl_y + 8, volume.as_str(), Color::TEXT_MAIN);
 
+        // Görünür ses kaydırıcısı
+        let vol_bar_x = win_x + 150;
+        let vol_bar_y = ctrl_y + 20;
+        let vol_bar_w = 90;
+        fb.draw_rect(vol_bar_x, vol_bar_y, vol_bar_w, 6, Color::DARK_BG);
+        let vol_fill = (vol_bar_w * self.volume.min(100)) / 100;
+        fb.draw_rect(vol_bar_x, vol_bar_y, vol_fill, 6, Color::ACCENT_GREEN);
+        fb.draw_rect(vol_bar_x + vol_fill.saturating_sub(2), vol_bar_y - 2, 5, 10, Color::WHITE);
+
         // Alt Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 218, win_w - 12, 18, Color::TASKBAR_BG);
         MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 222, match (self.is_playing, crate::gui::ui_english()) {

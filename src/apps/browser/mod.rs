@@ -15,9 +15,10 @@ pub use types::{
     BOOKMARKS,
 };
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crate::drivers::video::Framebuffer;
@@ -167,6 +168,11 @@ pub struct BrowserApp {
     address_redo_count: usize,
     pub active_tab: usize,
     pub focused_control: usize,
+    pub find_active: bool,
+    pub find_query: [u8; 64],
+    pub find_len: usize,
+    pub find_match_index: Cell<usize>,
+    pub find_match_count: Cell<usize>,
     suppress_history: bool,
     pub page_loaded: bool,
     pub status: &'static str,
@@ -205,16 +211,35 @@ pub struct BrowserApp {
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
     pub js_functions: Vec<(String, String)>,
+    pub bookmarks_extra: Vec<crate::apps::browser::types::Bookmark>,
+    pub download_path: Option<alloc::string::String>,
+    pub download_data: Option<Vec<u8>>,
 }
 
 impl BrowserApp {
+    pub fn open_find(&mut self) { self.find_active = true; self.find_len = 0; self.find_match_index.set(0); self.find_match_count.set(0); }
+    pub fn close_find(&mut self) { self.find_active = false; }
+    pub fn find_char(&mut self, ch: char) {
+        let mut buf = [0u8; 4];
+        for byte in ch.encode_utf8(&mut buf).bytes() { if self.find_len < self.find_query.len() { self.find_query[self.find_len] = byte; self.find_len += 1; } }
+        self.find_match_index.set(0);
+    }
+    pub fn find_backspace(&mut self) {
+        if self.find_len == 0 { return; }
+        self.find_len -= 1;
+        while self.find_len > 0 && self.find_query[self.find_len] & 0xC0 == 0x80 { self.find_len -= 1; }
+        self.find_match_index.set(0);
+    }
+    pub fn find_next(&mut self) { let count = self.find_match_count.get(); if count > 0 { self.find_match_index.set((self.find_match_index.get() + 1) % count); } }
+
     pub fn new() -> Self {
         let mut app = Self {
             url: [0; 128], url_len: 0, address_focused: false, address_cursor: 0, address_scroll: 0, address_selection: None,
             address_selection_anchor: None, address_last_click: (0, 0, 0), address_click_streak: 0,
             address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
             address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
-            active_tab: 0, focused_control: 0, suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
+            active_tab: 0, focused_control: 0, find_active: false, find_query: [0; 64], find_len: 0,
+            find_match_index: Cell::new(0), find_match_count: Cell::new(0), suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
             net_online: false, ping_ok: false,
             web_request_sent: false,
             page_title: [0; 64], page_title_len: 0,
@@ -236,9 +261,60 @@ impl BrowserApp {
             js_alert: None,
             js_vars: Vec::new(),
             js_functions: Vec::new(),
+            bookmarks_extra: Vec::new(),
+            download_path: None,
+            download_data: None,
         };
         app.set_url(b"minos://help");
         app
+    }
+
+    pub fn add_bookmark_current(&mut self) {
+        let current = alloc::string::String::from(core::str::from_utf8(&self.url[..self.url_len]).unwrap_or(""));
+        if current.is_empty() { return; }
+        let title = alloc::string::String::from(core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or(&current));
+        self.bookmarks_extra.push(crate::apps::browser::types::Bookmark {
+            title: Box::leak(title.clone().into_boxed_str()),
+            title_en: Box::leak(title.into_boxed_str()),
+            url: Box::leak(current.clone().into_boxed_str()),
+            description: "Kullanıcı yer imi",
+            description_en: "User bookmark",
+        });
+        self.status = crate::gui::ui_text("Yer imi eklendi.", "Bookmark added.");
+    }
+
+    pub fn remove_bookmark_current(&mut self) {
+        let current = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        self.bookmarks_extra.retain(|b| b.url != current);
+        self.status = crate::gui::ui_text("Yer imi kaldırıldı.", "Bookmark removed.");
+    }
+
+    pub fn save_current_download(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
+        let Some(data) = self.download_data.clone() else {
+            self.status = crate::gui::ui_text("İndirilecek içerik yok.", "Nothing to download.");
+            return false;
+        };
+        let path = alloc::format!("/root/Downloads/indirme_{}.bin", crate::monotonic_ms());
+        if vfs.write_file(&path, &data) {
+            self.download_path = Some(path);
+            self.status = crate::gui::ui_text("İndirme /root/Downloads klasörüne kaydedildi.", "Download saved to /root/Downloads.");
+            true
+        } else {
+            self.status = crate::gui::ui_text("İndirme kaydedilemedi.", "Download could not be saved.");
+            false
+        }
+    }
+
+    pub fn bookmark_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(220), win_y + 32, 22, 20)
+    }
+
+    pub fn download_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(194), win_y + 32, 22, 20)
+    }
+
+    pub fn find_bar_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(258), win_y + 87, 244, 24)
     }
 
     pub fn content_height(&self) -> usize {
@@ -763,7 +839,7 @@ impl BrowserApp {
             align: TextAlign::Left,
         });
 
-        for bm in BOOKMARKS {
+        for bm in BOOKMARKS.iter().chain(self.bookmarks_extra.iter()) {
             let title_text = crate::gui::ui_text(bm.title, bm.title_en);
             let desc_text = crate::gui::ui_text(bm.description, bm.description_en);
             let is_web = bm.url.starts_with("http");
@@ -857,7 +933,7 @@ impl BrowserApp {
         }
         let star_w = MinGuiCompositor::text_width("*", 1);
         let mut cur_bx = win_x + 12 + star_w + 6;
-        for bm in BOOKMARKS {
+        for bm in BOOKMARKS.iter().chain(self.bookmarks_extra.iter()) {
             let label = crate::gui::ui_text(bm.title, bm.title_en);
             let tw = MinGuiCompositor::text_width(label, 1);
             let chip_w = tw + 12;
@@ -1776,6 +1852,9 @@ impl BrowserApp {
                             }
                         }
 
+                        // Basit indirme için son yanıt gövdesini sakla.
+                        self.download_data = Some(body_bytes.clone());
+
                         if body_bytes.iter().any(|b| *b == b'<') {
                             self.load_html(&body_bytes, 600, 256);
                         } else {
@@ -1868,7 +1947,7 @@ impl BrowserApp {
         if self.focused_control == 3 { fb.draw_rect_outline(hist_r.0, hist_r.1, hist_r.2, hist_r.3, Color::ACCENT_YELLOW); }
 
         let url_x = win_x + 94;
-        let url_w = win_w.saturating_sub(224);
+        let url_w = win_w.saturating_sub(320);
         fb.draw_rect(url_x, win_y + 32, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
         let char_width = MinGuiCompositor::text_width("M", 1).max(1);
         let visible_chars = url_w.saturating_sub(12).checked_div(char_width).unwrap_or(1).max(1);
@@ -1908,6 +1987,21 @@ impl BrowserApp {
         }
         if self.focused_control == 4 { fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW); }
 
+        // Yer imi ekle/kaldır ve basit indirme düğmeleri
+        let bm_btn = Self::bookmark_btn_rect(win_x, win_y, win_w);
+        let current_url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+        let is_bookmarked = BOOKMARKS.iter().chain(self.bookmarks_extra.iter()).any(|b| b.url == current_url);
+        fb.draw_rect(bm_btn.0, bm_btn.1, bm_btn.2, bm_btn.3,
+            if is_bookmarked { Color::ACCENT_YELLOW } else { Color::WINDOW_BG });
+        MinGuiCompositor::draw_string(fb, bm_btn.0 + 7, bm_btn.1 + 4, "*",
+            if is_bookmarked { MinGuiCompositor::text_on(Color::ACCENT_YELLOW) } else { Color::ACCENT_YELLOW });
+        if self.focused_control == 6 { fb.draw_rect_outline(bm_btn.0, bm_btn.1, bm_btn.2, bm_btn.3, Color::ACCENT_YELLOW); }
+
+        let dl_btn = Self::download_btn_rect(win_x, win_y, win_w);
+        fb.draw_rect(dl_btn.0, dl_btn.1, dl_btn.2, dl_btn.3, Color::ACCENT_GREEN);
+        MinGuiCompositor::draw_string(fb, dl_btn.0 + 4, dl_btn.1 + 4, "DL", MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+        if self.focused_control == 7 { fb.draw_rect_outline(dl_btn.0, dl_btn.1, dl_btn.2, dl_btn.3, Color::ACCENT_YELLOW); }
+
         let git_r = (win_x + win_w - 60, win_y + 32, 50, 20);
         fb.draw_rect(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 36, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
@@ -1924,7 +2018,7 @@ impl BrowserApp {
         MinGuiCompositor::draw_string(fb, cur_bx, bbar_y + 4, "*", Color::ACCENT_YELLOW);
         cur_bx += star_w + 6;
 
-        for bm in BOOKMARKS {
+        for bm in BOOKMARKS.iter().chain(self.bookmarks_extra.iter()) {
             let label = crate::gui::ui_text(bm.title, bm.title_en);
             let tw = MinGuiCompositor::text_width(label, 1);
             let chip_w = tw + 12;
@@ -1982,6 +2076,7 @@ impl BrowserApp {
                 links.clear();
 
                 let mut cur_line_y = doc_y + 12 + if self.js_alert.is_some() { 28 } else { 0 };
+                let mut find_span_index = 0usize;
                 for line in &self.page_lines {
                     let line_h = match line.tag {
                         HtmlTagType::Heading1 => 26,
@@ -2048,7 +2143,19 @@ impl BrowserApp {
                                 if let Some(bg) = span.bg_color {
                                     fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
                                 }
-                                MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
+                                let query = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("");
+                                let matched = self.find_active && !query.is_empty()
+                                    && span.text.to_ascii_lowercase().contains(&query.to_ascii_lowercase());
+                                if matched {
+                                    let active_match = find_span_index == self.find_match_index.get();
+                                    find_span_index += 1;
+                                    let match_color = if active_match { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW };
+                                    fb.draw_rect(cur_x, draw_y, span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x))), line_h, match_color);
+                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text,
+                                        MinGuiCompositor::text_on(match_color), scale, doc_clip);
+                                } else {
+                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
+                                }
                                 // Sentez kalın: 1px sağa ikinci geçiş
                                 if span.bold && !span.text.trim().is_empty() {
                                     MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 1, draw_y, &span.text, text_color, scale, doc_clip);
@@ -2083,6 +2190,12 @@ impl BrowserApp {
 
                     cur_line_y += line_h;
                 }
+                if self.find_active && self.find_len > 0 {
+                    let needle = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("").to_ascii_lowercase();
+                    let mut count = 0usize;
+                    for line in &self.page_lines { for span in &line.spans { if span.text.to_ascii_lowercase().contains(&needle) { count += 1; } } }
+                    self.find_match_count.set(count);
+                } else { self.find_match_count.set(0); }
             } else if self.active_tab == 2 {
                 // Ağ durumu paneli
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
@@ -2113,6 +2226,18 @@ impl BrowserApp {
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, crate::gui::ui_text("Bu adres açılamadı.", "This address could not be opened."), Color::ACCENT_RED);
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, crate::gui::ui_text("Desteklenen adresler: minos://help, minos://cats, minos://net, minos://history", "Supported: minos://help, minos://cats, minos://net, minos://history"), Color::TEXT_MAIN);
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, crate::gui::ui_text("Yerel: minos://help | Ağ: minos://net", "Local: minos://help | Network: minos://net"), Color::TEXT_MUTED);
+        }
+        if self.find_active {
+            let (find_x, find_y, _, _) = Self::find_bar_rect(win_x, win_y, win_w);
+            fb.draw_rect(find_x, find_y, 244, 24, Color::TITLE_BAR);
+            fb.draw_rect_outline(find_x, find_y, 244, 24, Color::BORDER);
+            let query = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("");
+            MinGuiCompositor::draw_string(fb, find_x + 6, find_y + 7, crate::gui::ui_text("Bul:", "Find:"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string_clipped(fb, find_x + 48, find_y + 7,
+                if query.is_empty() { crate::gui::ui_text("Aramak için yaz", "type to search") } else { query }, Color::ACCENT_YELLOW,
+                (find_x + 46, find_y + 2, 132, 20));
+            let count_text = alloc::format!("{}/{}", if self.find_match_count.get() == 0 { 0 } else { self.find_match_index.get() + 1 }, self.find_match_count.get());
+            MinGuiCompositor::draw_string(fb, find_x + 184, find_y + 7, &count_text, Color::TEXT_MUTED);
         }
         fb.draw_rect(win_x + 6, status_y, win_w.saturating_sub(12), status_h, Color::TASKBAR_BG);
         let status = match self.status {

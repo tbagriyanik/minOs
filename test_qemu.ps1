@@ -89,6 +89,12 @@ if (Test-Path $audioWavPath) {
 
 Write-Host "[2/3] QEMU headless ortaminda baslatiliyor (Zaman Asimi: ${TimeoutSeconds}s)..." -ForegroundColor Yellow
 
+# QMP icin bos bir yerel port sec; sabit 4444 portu baska bir QEMU ile carpisabilir.
+$qmpProbe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+$qmpProbe.Start()
+$qmpPort = ([System.Net.IPEndPoint]$qmpProbe.LocalEndpoint).Port
+$qmpProbe.Stop()
+
 $qemuArgs = @(
     "-m", "512M",
     "-smp", "2",
@@ -101,7 +107,7 @@ $qemuArgs = @(
     "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",
     "-device", "intel-hda",
     "-device", "hda-output,audiodev=snd0",
-    "-qmp", "tcp:127.0.0.1:4444,server,nowait",
+    "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait",
     "-netdev", "user,id=n0",
     "-device", "e1000,netdev=n0"
 )
@@ -130,6 +136,10 @@ $pinfo.RedirectStandardError = $true
 $pinfo.RedirectStandardInput = $true
 $pinfo.UseShellExecute = $false
 $pinfo.CreateNoWindow = $true
+# QEMU seri ciktisi UTF-8'dir. Varsayilan OEM kod sayfasi (tr-TR icin CP857)
+# Turkce karakterleri bozar ve regex dogrulamalarini yanlis basarisiz kilar.
+$pinfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+$pinfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
 
 $proc = New-Object System.Diagnostics.Process
 $proc.StartInfo = $pinfo
@@ -175,14 +185,18 @@ function Connect-Qmp([int]$port = 4444) {
 
 function Send-InputEvents($qmp, [string]$eventsJson) {
     if (-not $qmp) { return }
-    $qmp.Writer.WriteLine('{"execute":"input-send-event","arguments":{"events":' + $eventsJson + '}}')
+    try {
+        $qmp.Writer.WriteLine('{"execute":"input-send-event","arguments":{"events":' + $eventsJson + '}}')
+    } catch {
+        Write-Host "[UYARI] QMP girdi olayi gonderilemedi: $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
 }
 
 $qmp = $null
 if ($UsbHid) {
     $qmpDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
     while (-not $qmp -and [System.DateTime]::UtcNow -lt $qmpDeadline) {
-        $qmp = Connect-Qmp 4444
+        $qmp = Connect-Qmp $qmpPort
         if (-not $qmp) { Start-Sleep -Milliseconds 150 }
     }
     if (-not $qmp) {
@@ -203,7 +217,7 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
             $proc.StandardInput.WriteLine("")
         } catch {}
     }
-    if ($currentOut -match "\[BOOT\] Masaustu dongusu basladi") {
+    if ($currentOut -match "\[BOOT\] Masa.st. d.ng.s. ba.lad") {
         $reachedDesktop = $true
         # Ses orneklerinin diske basilmasi icin 1 saniye ek pay ver
         Start-Sleep -Milliseconds 1000
@@ -237,7 +251,7 @@ try {
         $qmp.Client.Close()
     } else {
         $tcp = New-Object System.Net.Sockets.TcpClient
-        $tcp.Connect("127.0.0.1", 4444)
+        $tcp.Connect("127.0.0.1", $qmpPort)
         $stream = $tcp.GetStream()
         $writer = New-Object System.IO.StreamWriter($stream)
         $writer.NewLine = "`n"
@@ -313,7 +327,7 @@ if ($UsbHid) {
     $checks += @(
         @{
             Name = "USB HID Numaralandirma (xHCI)";
-            Pattern = "\[USB-HID\] Hazır: [0-9]+ klavye, [0-9]+ fare";
+            Pattern = "\[USB-HID\] Haz.*: [0-9]+ klavye, [0-9]+ fare";
             Description = "qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi"
         },
         @{
@@ -375,7 +389,7 @@ if ($audioFileCreated -and $hdaHardwareReady) {
 }
 
 # 6. Masaustu / Karsilama Durumu
-if ($reachedDesktop -or ($logOutput -match "\[BOOT\] Masaustu dongusu basladi")) {
+if ($reachedDesktop -or ($logOutput -match "\[BOOT\] Masa.st. d.ng.s. ba.lad")) {
     Write-Host "  [OK] Masaustu Olay Dongusu (Ana masaustu etkilesim dongusune girildi)" -ForegroundColor Green
 } elseif ($logOutput -match "\[BOOT\] (Kurulu sistem tespit edildi|Hosgeldin|Masaustu hazirlaniyor)") {
     Write-Host "  [OK] Karsilama Ekrani / Gecis Asamasi (Hosgeldin zamani bekleniyor)" -ForegroundColor Yellow

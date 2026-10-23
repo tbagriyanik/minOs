@@ -11,6 +11,8 @@ impl VideoPlayerApp {
     pub const SCRUB_Y: usize = 205;
     /// Oynatıcı denetim düğmelerinin pencere içi üst kenarı (px).
     pub const CONTROLS_Y: usize = 223;
+    pub const FPS: usize = 30;
+    pub const DURATION_S: usize = 90; // 01:30
 
     pub const fn new() -> Self {
         Self {
@@ -144,10 +146,10 @@ impl VideoPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, crate::gui::ui_text("Durdur", "Stop"), Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + 102, ctrl_y, 48, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 108, ctrl_y + 6, "-10s", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 108, ctrl_y + 6, "-10s", Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + 154, ctrl_y, 48, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + win_w - 76, ctrl_y, 64, 22, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, crate::gui::ui_text("Tam Ekran", "Full Screen"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));

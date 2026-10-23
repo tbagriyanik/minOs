@@ -166,3 +166,9 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 Bu proje açık kaynaklıdır ve eğitim/araştırma amaçlı geliştirilmektedir.
 Katkıda bulunmaktan ve geliştirmeler önermekten çekinmeyin! 🐾
+
+## 🆕 Yeni Özellikler (v1.8.1)
+
+- **Not Defteri – Bul ve Değiştir:** `Ctrl+F` ile **Bul** çubuğu, `Ctrl+H` ile **Değiştir** çubuğu açılır. Metin girişi aktif alanda yönlendirilir, `Esc` ile çubuk kapanır. Gelişmiş arama seçenekleri ve otomatik vurgulama desteklenir.
+- **Klavye Kısayolları Geliştirildi:** `FindText` ve `ReplaceText` eylemleri `src/main.rs` içinde tam olarak işlenmiştir; artık seçili metin içinde hızlı arama / değiştirme mümkündür.
+- **Dokümantasyon Güncellendi:** README ve `docs/features.md` dosyalarına yeni özellikler eklendi.

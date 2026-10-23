@@ -20,6 +20,7 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
     "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "hexdump", "nc", "fortune", "benchmark", "sarman-cli", "open", "run", "files", "settings", "notepad",
     "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd", "minPak",
+    "grep", "wc", "sort", "head", "tail", "tee",
 ];
 const COMPLETION_APPS: &[&str] = &[
     "files", "settings", "notepad", "browser", "image", "music", "video", "taskmgr",
@@ -87,6 +88,102 @@ fn push_ipv4_line(terminal: &mut TerminalApp, label: &str, address: [u8; 4]) {
     terminal.push_line(line.as_str(), Color::TEXT_MAIN);
 }
 
+/// Kabuk Metinlerini tirnak isaretlerine saygi gostererek ayirir.
+///
+/// `echo "a | b"` gibi ifadelerde boru hatti yanlislikla bolunmez.
+fn split_shell(line: &str, delimiter: char) -> alloc::vec::Vec<&str> {
+    let mut parts = alloc::vec::Vec::new();
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch == delimiter => {
+                parts.push(&line[start..index]);
+                start = index + ch.len_utf8();
+            }
+            None => {}
+        }
+    }
+    parts.push(&line[start..]);
+    parts
+}
+
+/// Kabuk sozdizimindeki tirnaklari ve ters bolu kacislarini temizler.
+fn unquote_shell(text: &str) -> alloc::string::String {
+    let mut out = alloc::string::String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in text.chars() {
+        if escaped {
+            out.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => out.push(ch),
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None => out.push(ch),
+        }
+    }
+    if escaped {
+        out.push('\\');
+    }
+    out
+}
+
+/// Bir asamanin `>` / `>>` yonlendirmesini ayirir.
+///
+/// Donus: (calistirilacak komut, istege bagli (hedef dosya, ekleme_modu)).
+fn parse_redirection(segment: &str) -> (&str, Option<(alloc::string::String, bool)>) {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for (index, ch) in segment.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch == '>' => {
+                let rest = &segment[index + 1..];
+                let (target_start, append) = if rest.starts_with('>') {
+                    (index + 2, true)
+                } else {
+                    (index + 1, false)
+                };
+                let command = segment[..index].trim();
+                let target = unquote_shell(segment[target_start..].trim());
+                return (command, Some((target, append)));
+            }
+            None => {}
+        }
+    }
+    (segment.trim(), None)
+}
+
 #[derive(Copy, Clone)]
 pub struct OutLine {
     pub text: [u8; LINE_MAX],
@@ -142,6 +239,10 @@ pub struct TerminalApp {
     /// Aktif çalışma dizini (Current Working Directory).
     pub cwd: [u8; 64],
     pub cwd_len: usize,
+    /// Boru hattı (pipe) aşaması çıktısını (metin, renk) toplarken dolu olur.
+    capture: Option<alloc::vec::Vec<(alloc::string::String, u32)>>,
+    /// Boru hattından gelen standart girdi.
+    stdin: Option<alloc::string::String>,
 }
 
 impl TerminalApp {
@@ -165,6 +266,8 @@ impl TerminalApp {
             has_pending: false,
             cwd: [0; 64],
             cwd_len: 1,
+            capture: None,
+            stdin: None,
         };
         app.cwd[0] = b'/';
         app
@@ -195,7 +298,14 @@ impl TerminalApp {
     }
 
     /// Çıktıya yeni bir satır ekler; tampon dolarsa en eskisini kaydırır.
+    ///
+    /// Bir boru hattı aşaması çalışırken (`capture` dolu) satır ekrana değil,
+    /// bir sonraki komuta aktarılacak tampona yazılır.
     pub fn push_line(&mut self, s: &str, color: u32) {
+        if let Some(capture) = self.capture.as_mut() {
+            capture.push((alloc::string::String::from(s), color));
+            return;
+        }
         if self.out_count < OUT_LINES {
             self.out[self.out_count].set(s, color);
             self.out_count += 1;
@@ -425,8 +535,122 @@ impl TerminalApp {
         self.hist_cursor = self.history_count;
     }
 
+    /// Bir boru hattı aşamasından toplanan satırları düz metne çevirir.
+    fn capture_text(lines: &[(alloc::string::String, u32)]) -> alloc::string::String {
+        let mut text = alloc::string::String::new();
+        for (line, _) in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+        text
+    }
+
+    /// Göreli bir yolu aktif çalışma dizinine göre çözer.
+    fn resolve_path(&self, arg: &str) -> alloc::string::String {
+        if arg.starts_with('/') {
+            alloc::string::String::from(arg)
+        } else {
+            let mut path = alloc::string::String::from(self.cwd_str());
+            if !path.ends_with('/') {
+                path.push('/');
+            }
+            path.push_str(arg);
+            path
+        }
+    }
+
+    /// Boru hattı girdisini döndürür (`cat`, `grep`, `wc` gibi filtreler için).
+    fn stdin_text(&self) -> Option<alloc::string::String> {
+        self.stdin.clone()
+    }
+
     /// Verilen komut satırını VFS/PMM/DateTime bağlamında yürütür.
+    ///
+    /// `|`, `>` ve `>>` kabuk operatörlerini destekler. Her aşamanın çıktısı
+    /// yakalanır; boru hattında bir sonraki komuta, yönlendirmede dosyaya,
+    /// aksi halde ekrana aktarılır.
     pub fn execute(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &mut PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+
+        let stages = split_shell(line, '|');
+        let has_pipe = stages.len() > 1;
+        let single_redirect = !has_pipe && parse_redirection(stages[0]).1.is_some();
+        if !has_pipe && !single_redirect {
+            return self.execute_single(stages[0].trim(), vfs, pmm, now);
+        }
+
+        let stage_count = stages.len();
+        let mut input: Option<alloc::string::String> = None;
+        let mut launched: Option<usize> = None;
+
+        for (index, raw) in stages.iter().enumerate() {
+            let (command, redirect) = parse_redirection(raw);
+            if command.is_empty() {
+                continue;
+            }
+            self.capture = Some(alloc::vec::Vec::new());
+            self.stdin = input.take();
+            let result = self.execute_single(command, vfs, pmm, now);
+            self.stdin = None;
+            let lines = self.capture.take().unwrap_or_default();
+            let output = Self::capture_text(&lines);
+
+            if result.is_some() {
+                if stage_count > 1 {
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Hata: uygulamalar boru hattinda baslatilamaz.",
+                            "Error: applications cannot be launched inside a pipeline.",
+                        ),
+                        Color::ACCENT_RED,
+                    );
+                } else {
+                    launched = result;
+                }
+            }
+
+            if let Some((target, append)) = redirect {
+                if target.is_empty() {
+                    self.push_line(
+                        crate::gui::ui_text("Hata: yonlendirme hedefi eksik.", "Error: missing redirection target."),
+                        Color::ACCENT_RED,
+                    );
+                } else {
+                    let path = self.resolve_path(&target);
+                    let mut data = if append {
+                        vfs.read_file(&path).map(|bytes| alloc::vec::Vec::from(bytes)).unwrap_or_default()
+                    } else {
+                        alloc::vec::Vec::new()
+                    };
+                    data.extend_from_slice(output.as_bytes());
+                    if vfs.write_file(&path, &data) {
+                        let mut msg = TextBuf::new();
+                        msg.push_str(crate::gui::ui_text("Yazildi: ", "Written: "));
+                        msg.push_str(&path);
+                        self.push_line(msg.as_str(), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(
+                            crate::gui::ui_text("Hata: dosyaya yazilamadi.", "Error: could not write file."),
+                            Color::ACCENT_RED,
+                        );
+                    }
+                }
+            } else if index + 1 < stage_count {
+                input = Some(output);
+            } else {
+                for (text, color) in lines {
+                    self.push_line(&text, color);
+                }
+            }
+        }
+        launched
+    }
+
+    /// Tek bir komutu (boru hattı olmadan) yürütür.
+    fn execute_single(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &mut PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
             return None;
@@ -460,6 +684,8 @@ impl TerminalApp {
                 self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
                 self.push_line("hexdump <file> | nc <host> <port> [text] | fortune | benchmark", Color::ACCENT_BLUE);
                 self.push_line("minPak list|search|install|remove | exec <file> [args] | open <app>", Color::ACCENT_BLUE);
+                self.push_line("boru: cmd | grep <desen> | sort | wc   yonlendirme: cmd > dosya  cmd >> dosya", Color::ACCENT_YELLOW);
+                self.push_line("filtreler: cat grep wc sort head tail tee", Color::ACCENT_YELLOW);
                 self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
@@ -1027,7 +1253,15 @@ impl TerminalApp {
             }
             "cat" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"), Color::ACCENT_YELLOW);
+                    if let Some(text) = self.stdin_text() {
+                        for l in text.split('\n') {
+                            if !l.is_empty() {
+                                self.push_line(l, Color::TEXT_MAIN);
+                            }
+                        }
+                    } else {
+                        self.push_line(crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"), Color::ACCENT_YELLOW);
+                    }
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
@@ -1061,7 +1295,135 @@ impl TerminalApp {
             "benchmark" => self.run_benchmark(pmm),
             "sarman-cli" => self.run_sarman_cli(arg, pmm),
             "echo" => {
-                self.push_line(arg, Color::TEXT_MAIN);
+                if arg.is_empty() {
+                    if let Some(text) = self.stdin_text() {
+                        for l in text.split('\n') {
+                            if !l.is_empty() {
+                                self.push_line(l, Color::TEXT_MAIN);
+                            }
+                        }
+                        return None;
+                    }
+                }
+                let text = unquote_shell(arg);
+                self.push_line(&text, Color::TEXT_MAIN);
+            }
+            "grep" => {
+                let mut sp = arg.splitn(2, ' ');
+                let pattern = unquote_shell(sp.next().unwrap_or(""));
+                let file = sp.next().unwrap_or("").trim();
+                if pattern.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: grep <desen> [dosya]", "Usage: grep <pattern> [file]"), Color::ACCENT_YELLOW);
+                    return None;
+                }
+                let source = if file.is_empty() {
+                    self.stdin_text()
+                } else {
+                    let path = self.resolve_path(file);
+                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                };
+                if let Some(text) = source {
+                    let mut matches = 0usize;
+                    for l in text.split('\n') {
+                        if l.contains(pattern.as_str()) {
+                            self.push_line(l, Color::TEXT_MAIN);
+                            matches += 1;
+                        }
+                    }
+                    if matches == 0 {
+                        self.push_line(crate::gui::ui_text("(eşleşme yok)", "(no matches)"), Color::TEXT_MUTED);
+                    }
+                } else {
+                    self.push_line(crate::gui::ui_text("grep: girdi yok", "grep: no input"), Color::ACCENT_RED);
+                }
+            }
+            "wc" => {
+                let file = arg.trim();
+                let source = if file.is_empty() {
+                    self.stdin_text()
+                } else {
+                    let path = self.resolve_path(file);
+                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                };
+                let Some(text) = source else {
+                    self.push_line(crate::gui::ui_text("Kullanım: wc [dosya]", "Usage: wc [file]"), Color::ACCENT_YELLOW);
+                    return None;
+                };
+                let lines = text.matches('\n').count() + usize::from(!text.is_empty() && !text.ends_with('\n'));
+                let words = text.split_whitespace().count();
+                let mut b = TextBuf::new();
+                b.push_usize(lines);
+                b.push_str("  ");
+                b.push_usize(words);
+                b.push_str("  ");
+                b.push_usize(text.len());
+                self.push_line(b.as_str(), Color::TEXT_MAIN);
+            }
+            "sort" => {
+                let file = arg.trim();
+                let source = if file.is_empty() {
+                    self.stdin_text()
+                } else {
+                    let path = self.resolve_path(file);
+                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                };
+                if let Some(text) = source {
+                    let mut lines: alloc::vec::Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+                    lines.sort_unstable();
+                    for l in lines {
+                        self.push_line(l, Color::TEXT_MAIN);
+                    }
+                } else {
+                    self.push_line(crate::gui::ui_text("sort: girdi yok", "sort: no input"), Color::ACCENT_RED);
+                }
+            }
+            "head" | "tail" => {
+                let mut sp = arg.split_whitespace();
+                let mut count = 10usize;
+                let mut file = "";
+                for token in sp.by_ref() {
+                    if let Some(rest) = token.strip_prefix('-') {
+                        count = rest.parse::<usize>().unwrap_or(10).max(1);
+                    } else {
+                        file = token;
+                    }
+                }
+                let source = if file.is_empty() {
+                    self.stdin_text()
+                } else {
+                    let path = self.resolve_path(file);
+                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                };
+                if let Some(text) = source {
+                    let lines: alloc::vec::Vec<&str> = text.lines().collect();
+                    let slice: &[&str] = if cmd == "head" {
+                        &lines[..lines.len().min(count)]
+                    } else {
+                        &lines[lines.len().saturating_sub(count)..]
+                    };
+                    for l in slice {
+                        if !l.is_empty() {
+                            self.push_line(l, Color::TEXT_MAIN);
+                        }
+                    }
+                } else {
+                    self.push_line(crate::gui::ui_text("head/tail: girdi yok", "head/tail: no input"), Color::ACCENT_RED);
+                }
+            }
+            "tee" => {
+                let file = unquote_shell(arg.trim());
+                if file.is_empty() {
+                    self.push_line(crate::gui::ui_text("Kullanım: tee <dosya>", "Usage: tee <file>"), Color::ACCENT_YELLOW);
+                    return None;
+                }
+                let text = self.stdin_text().unwrap_or_default();
+                for l in text.split('\n') {
+                    if !l.is_empty() {
+                        self.push_line(l, Color::TEXT_MAIN);
+                    }
+                }
+                let path = self.resolve_path(&file);
+                vfs.write_file(&path, text.as_bytes());
             }
             "clear" => {
                 self.out_count = 0;
@@ -1485,16 +1847,18 @@ impl TerminalApp {
             "uptime" => {
                 let ms = crate::monotonic_ms();
                 let secs = ms / 1000;
-                let mins = secs / 60;
-                let hours = mins / 60;
+                let mut text = [0u8; crate::gui::timefmt::MAX_TEXT];
+                let text_len = crate::gui::timefmt::format_duration(
+                    secs,
+                    crate::gui::ui_english(),
+                    &mut text,
+                );
                 let mut b = TextBuf::new();
                 b.push_str(crate::gui::ui_text("Çalışma Süresi: ", "Uptime: "));
-                b.push_usize(hours as usize);
-                b.push_str("h ");
-                b.push_usize((mins % 60) as usize);
-                b.push_str("m ");
-                b.push_usize((secs % 60) as usize);
-                b.push_str("s (");
+                for &byte in &text[..text_len] {
+                    b.push_byte(byte);
+                }
+                b.push_str(" (");
                 b.push_usize(ms as usize);
                 b.push_str(" ms)");
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);

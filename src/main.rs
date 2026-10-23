@@ -165,7 +165,7 @@ use desktop::helpers::*;
 
 
 
-static mut MEMORY_MGR: mm::MemoryManager = mm::MemoryManager::new();
+pub(crate) static mut MEMORY_MGR: mm::MemoryManager = mm::MemoryManager::new();
 
 fn alloc_pmm_frame_global() -> Option<u64> {
     unsafe {
@@ -3415,7 +3415,11 @@ pub extern "C" fn _start() -> ! {
 
                                 // Dosya Yoneticisi: [Yenile], [+Dosya], [+Klasor], [Sil], [Ac], gezinti, liste
 
-                                if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
+                                if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::search_rect(wx, wy, ww)) {
+
+                                    filemanager_app.focused_control = 5;
+
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
 
                                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -3691,7 +3695,23 @@ pub extern "C" fn _start() -> ! {
 
                                     settings_app.write_config(&mut fs_mgr.vfs);
 
+                                } else if settings_app.active_tab == 2 && (0..4).any(|octet| gui::in_rect(mx, my, apps::settings::SystemSettings::static_ip_octet_rect(wx, wy, octet))) {
+
+                                    for octet in 0..4 {
+                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::static_ip_octet_rect(wx, wy, octet)) {
+                                            settings_app.static_ip_octet = octet;
+                                            settings_app.static_ip_value = 0;
+                                            settings_app.static_ip_digits = 0;
+                                            settings_app.static_ip_edit = true;
+                                            settings_app.dhcp_enabled = false;
+                                            settings_app.focused_control = 7 + octet;
+                                            break;
+                                        }
+                                    }
+
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::dhcp_btn_rect(wx, wy)) {
+
+                                    settings_app.static_ip_edit = false;
 
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
 
@@ -3699,13 +3719,19 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
 
+                                    settings_app.static_ip_edit = false;
+
                                     with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
 
+                                    settings_app.static_ip_edit = false;
+
                                     with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
+
+                                    settings_app.static_ip_edit = false;
 
                                     with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
 
@@ -3803,9 +3829,9 @@ pub extern "C" fn _start() -> ! {
                                     }
 
                                     if !handled {
-                                        for i in 0..4 {
+                                        for i in 0..7 {
                                             if gui::in_rect(mx,my,apps::settings::SystemSettings::resolution_btn_rect(wx,wy,i)) {
-                                                let requested = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), _ => (1920,1080) };
+                                                let requested = match i { 0 => (800,600), 1 => (1024,768), 2 => (1280,720), 3 => (1920,1080), 4 => (1920,1200), 5 => (2560,1440), 6 => (2560,1600), _ => (1920,1080) };
                                                 if requested == (fb.width, fb.height) {
                                                     settings_app.screen_res = requested;
                                                     settings_app.display_res = requested;
@@ -4068,7 +4094,40 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                } else if gui::in_rect(mx, my, (wx + 6, wy + 58, ww.saturating_sub(12), wh.saturating_sub(90))) {
+                                } else if notepad_app.find_active && gui::in_rect(mx, my, (wx + 6, wy + 56, ww.saturating_sub(12), if notepad_app.replace_active { 58 } else { 30 })) {
+                                    let by = wy + 56;
+                                    let bw = ww.saturating_sub(12);
+                                    let input_w = crate::gui::sp(140);
+                                    let f_box_x = wx + crate::gui::sp(50);
+                                    let f_box_y = by + 4;
+                                    let close_x = wx + bw.saturating_sub(20);
+
+                                    // Close button
+                                    if mx >= close_x && mx <= close_x + 16 && my >= f_box_y && my <= f_box_y + 16 {
+                                        notepad_app.close_find();
+                                    } else if mx >= f_box_x && mx <= f_box_x + input_w && my >= f_box_y && my <= f_box_y + 20 {
+                                        notepad_app.find_focused_replace = false;
+                                    } else if mx >= f_box_x + input_w + 8 && mx <= f_box_x + input_w + 68 && my >= f_box_y && my <= f_box_y + 20 {
+                                        notepad_app.find_next(true);
+                                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                    } else if mx >= f_box_x + input_w + 74 && mx <= f_box_x + input_w + 134 && my >= f_box_y && my <= f_box_y + 20 {
+                                        notepad_app.find_next(false);
+                                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                    } else if notepad_app.replace_active {
+                                        let ry = by + 30;
+                                        let r_box_y = ry + 4;
+                                        let rbtn_x = f_box_x + input_w + 8;
+                                        if mx >= f_box_x && mx <= f_box_x + input_w && my >= r_box_y && my <= r_box_y + 20 {
+                                            notepad_app.find_focused_replace = true;
+                                        } else if mx >= rbtn_x && mx <= rbtn_x + 60 && my >= r_box_y && my <= r_box_y + 20 {
+                                            notepad_app.replace_current();
+                                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                        } else if mx >= rbtn_x + 66 && mx <= rbtn_x + 142 && my >= r_box_y && my <= r_box_y + 20 {
+                                            notepad_app.replace_all();
+                                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                        }
+                                    }
+                                } else if gui::in_rect(mx, my, (wx + 6, wy + notepad_app.text_y() - 4, ww.saturating_sub(12), wh.saturating_sub(notepad_app.text_y() + 28))) {
 
                                     let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
 
@@ -4110,7 +4169,11 @@ pub extern "C" fn _start() -> ! {
 
                             3 => {
 
-                                if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
+                                if browser_app.find_active && gui::in_rect(mx, my, apps::browser::BrowserApp::find_bar_rect(wx, wy, ww)) {
+
+                                    browser_app.find_next();
+
+                                } else if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
 
                                     browser_app.back();
 
@@ -4126,7 +4189,20 @@ pub extern "C" fn _start() -> ! {
 
                                     browser_app.show_history();
 
-                                } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(224), 20)) {
+                                } else if gui::in_rect(mx, my, apps::browser::BrowserApp::bookmark_btn_rect(wx, wy, ww)) {
+
+                                    let current = core::str::from_utf8(&browser_app.url[..browser_app.url_len]).unwrap_or("");
+                                    if apps::browser::BOOKMARKS.iter().chain(browser_app.bookmarks_extra.iter()).any(|b| b.url == current) {
+                                        browser_app.remove_bookmark_current();
+                                    } else {
+                                        browser_app.add_bookmark_current();
+                                    }
+
+                                } else if gui::in_rect(mx, my, apps::browser::BrowserApp::download_btn_rect(wx, wy, ww)) {
+
+                                    browser_app.save_current_download(&mut fs_mgr.vfs);
+
+                                } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(320), 20)) {
 
                                     browser_app.address_click_at(
                                         mx, my, wx + 100, monotonic_ms(),
@@ -4204,11 +4280,23 @@ pub extern "C" fn _start() -> ! {
 
                                         musicplayer_app.progress = 0;
 
-                                    } else if mx >= wx + 146 && mx < wx + 230 {
+                                    } else if mx >= wx + 146 && mx < wx + 240 {
 
-                                        let player_volume = (((mx - (wx + 146)) * 100) / 84).min(100) as u8;
+                                        let player_volume = (((mx - (wx + 146)) * 100) / 94).min(100) as u8;
 
                                         settings_app.volume = player_volume;
+
+                                        settings_app.is_muted = false;
+
+                                        musicplayer_app.volume = player_volume as usize;
+
+                                    } else if my >= wy + 198 && my <= wy + 212 && mx >= wx + 150 && mx <= wx + 240 {
+
+                                        let player_volume = (((mx - (wx + 150)) * 100) / 90).min(100) as u8;
+
+                                        settings_app.volume = player_volume;
+
+                                        settings_app.is_muted = false;
 
                                         musicplayer_app.volume = player_volume as usize;
 
@@ -4232,7 +4320,7 @@ pub extern "C" fn _start() -> ! {
 
                             6 => {
 
-                                // Video: oynat / durdur
+                                // Video: oynat / durdur / -10s / +10s / tam ekran
 
                                 let ctrl_y = wy + apps::videoplayer::VideoPlayerApp::CONTROLS_Y;
 
@@ -4248,6 +4336,26 @@ pub extern "C" fn _start() -> ! {
 
                                         videoplayer_app.frame = 0;
 
+                                    } else if mx >= wx + 102 && mx <= wx + 150 {
+
+                                        let fps = apps::videoplayer::VideoPlayerApp::FPS;
+                                        if videoplayer_app.frame >= fps * 10 {
+                                            videoplayer_app.frame = videoplayer_app.frame - fps * 10;
+                                        } else {
+                                            videoplayer_app.frame = 0;
+                                        }
+
+                                    } else if mx >= wx + 154 && mx <= wx + 202 {
+
+                                        let fps = apps::videoplayer::VideoPlayerApp::FPS;
+                                        let dur = apps::videoplayer::VideoPlayerApp::DURATION_S;
+                                        let total = fps * dur;
+                                        videoplayer_app.frame = (videoplayer_app.frame + fps * 10).min(total.saturating_sub(1));
+
+                                    } else if let Some(w) = compositor.windows[idx].as_ref() {
+                                        if mx >= wx + w.width.saturating_sub(76) && mx <= wx + w.width.saturating_sub(12) {
+                                            compositor.toggle_maximize(idx, width, height);
+                                        }
                                     }
 
                                 }
@@ -4351,6 +4459,19 @@ pub extern "C" fn _start() -> ! {
                                 let r = apps::paint::PaintApp::clear_btn_rect(ww);
 
                                 let clear_rect = (wx + r.0, wy + r.1, r.2, r.3);
+
+                                let r = apps::paint::PaintApp::undo_btn_rect();
+                                let undo_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::redo_btn_rect();
+                                let redo_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::tool_line_rect();
+                                let tool_line_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::tool_rect_rect();
+                                let tool_rect_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::tool_circle_rect();
+                                let tool_circle_rect = (wx + r.0, wy + r.1, r.2, r.3);
+                                let r = apps::paint::PaintApp::picker_btn_rect();
+                                let picker_btn_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
                                 let r = apps::paint::PaintApp::eraser_rect();
 
@@ -4488,11 +4609,74 @@ pub extern "C" fn _start() -> ! {
 
                                     if let Some(paint) = paint_apps[idx].as_mut() { paint.clear(); }
 
+                                } else if gui::in_rect(mx, my, undo_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    let _ = paint_apps[idx].as_mut().unwrap().undo();
+
+                                } else if gui::in_rect(mx, my, redo_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    let _ = paint_apps[idx].as_mut().unwrap().redo();
+
+                                } else if gui::in_rect(mx, my, tool_line_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    paint_apps[idx].as_mut().unwrap().tool = apps::paint::PaintTool::Line;
+                                    paint_apps[idx].as_mut().unwrap().picker_open = false;
+
+                                } else if gui::in_rect(mx, my, tool_rect_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    paint_apps[idx].as_mut().unwrap().tool = apps::paint::PaintTool::Rect;
+                                    paint_apps[idx].as_mut().unwrap().picker_open = false;
+
+                                } else if gui::in_rect(mx, my, tool_circle_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    paint_apps[idx].as_mut().unwrap().tool = apps::paint::PaintTool::Circle;
+                                    paint_apps[idx].as_mut().unwrap().picker_open = false;
+
+                                } else if gui::in_rect(mx, my, picker_btn_rect) {
+
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+
+                                    paint_apps[idx].as_mut().unwrap().picker_open = !paint_apps[idx].as_mut().unwrap().picker_open;
+
+                                } else if paint_apps[idx].as_ref().map_or(false, |p| p.picker_open) {
+
+                                    // renk secici
+                                    if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
+                                    let mut picked = None;
+                                    for i in 0..apps::paint::PICKER_COLORS.len() {
+                                        let r = apps::paint::PaintApp::picker_cell_rect(i);
+                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) { picked = Some(i); break; }
+                                    }
+                                    if let Some(i) = picked {
+                                        let p = paint_apps[idx].as_mut().unwrap();
+                                        p.color = apps::paint::PICKER_COLORS[i];
+                                        p.tool = apps::paint::PaintTool::Brush;
+                                        p.picker_open = false;
+                                    } else {
+                                        // popup disina tiklandiysa kapat
+                                        let pr = apps::paint::PaintApp::picker_rect();
+                                        if !gui::in_rect(mx, my, (wx + pr.0, wy + pr.1, pr.2, pr.3)) {
+                                            paint_apps[idx].as_mut().unwrap().picker_open = false;
+                                        }
+                                    }
+
                                 } else if gui::in_rect(mx, my, eraser_rect) {
 
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
 
-                                    paint_apps[idx].as_mut().unwrap().eraser = true;
+                                    let p = paint_apps[idx].as_mut().unwrap();
+                                    p.tool = apps::paint::PaintTool::Eraser;
+                                    p.picker_open = false;
 
                                 } else if gui::in_rect(mx, my, brush_minus_rect) {
 
@@ -4548,7 +4732,8 @@ pub extern "C" fn _start() -> ! {
 
                                             paint.color = apps::paint::PALETTE[i];
 
-                                            paint.eraser = false;
+                                            paint.tool = apps::paint::PaintTool::Brush;
+                                            paint.picker_open = false;
 
                                             break;
 
@@ -4724,7 +4909,15 @@ pub extern "C" fn _start() -> ! {
 
                                 }
 
-                                if gui::in_rect(mx, my, apps::controlpanel::theme_btn_rect(wx, wy, ww, wh)) {
+                                if gui::in_rect(mx, my, apps::controlpanel::refresh_btn_rect(wx, wy, ww, wh)) {
+
+                                    apps::controlpanel::refresh();
+
+                                } else if gui::in_rect(mx, my, apps::controlpanel::net_test_btn_rect(wx, wy, ww, wh)) {
+
+                                    apps::controlpanel::start_network_test();
+
+                                } else if gui::in_rect(mx, my, apps::controlpanel::theme_btn_rect(wx, wy, ww, wh)) {
 
                                     settings_app.cycle_theme();
 
@@ -5380,6 +5573,11 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::EnterKey => {
 
+                    if app_is_focused(&compositor, 3) && browser_app.find_active {
+                        browser_app.find_next();
+                        enter_char_consumed = true;
+                    }
+
                     // Alt+Enter: özellikler penceresini ac
 
                     if keyboard.alt && app_is_focused(&compositor, 0) && filemanager_app.selected_idx < filemanager_app.file_count {
@@ -5750,7 +5948,7 @@ pub extern "C" fn _start() -> ! {
 
                         enter_char_consumed = true;
 
-                        match browser_app.focused_control {
+                        if browser_app.find_active { browser_app.find_next(); } else { match browser_app.focused_control {
 
                             0 => browser_app.back(),
 
@@ -5764,7 +5962,7 @@ pub extern "C" fn _start() -> ! {
 
                             _ => {}
 
-                        }
+                        } }
 
                     } else if app_is_focused(&compositor, 8) {
 
@@ -5898,6 +6096,12 @@ pub extern "C" fn _start() -> ! {
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_undo_edit(); }
 
+                    else if app_is_focused(&compositor, 9) {
+                        if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {
+                            if let Some(paint) = paint_apps[paint_idx].as_mut() { let _ = paint.undo(); }
+                        }
+                    }
+
                 }
 
                 drivers::keyboard::KeyAction::Redo => {
@@ -5907,6 +6111,12 @@ pub extern "C" fn _start() -> ! {
                     if focused { notepad_app.redo(); }
 
                     else if app_is_focused(&compositor, 3) && browser_app.address_focused { browser_app.address_redo_edit(); }
+
+                    else if app_is_focused(&compositor, 9) {
+                        if let Some((paint_idx, _)) = focused_window_for_app(&compositor, 9) {
+                            if let Some(paint) = paint_apps[paint_idx].as_mut() { let _ = paint.redo(); }
+                        }
+                    }
 
                 }
 
@@ -5937,21 +6147,27 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::OpenDocument => {
-
                     if app_is_focused(&compositor, 2) {
-
                         let path = alloc::string::String::from(notepad_app.file_path_str());
-
                         let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
-
                         if let Some(data) = data {
-
                             notepad_app.open_file(&path, data);
-
                         }
-
                     }
+                }
 
+                drivers::keyboard::KeyAction::FindText => {
+                    if app_is_focused(&compositor, 2) {
+                        notepad_app.open_find();
+                    } else if app_is_focused(&compositor, 3) {
+                        browser_app.open_find();
+                    }
+                }
+
+                drivers::keyboard::KeyAction::ReplaceText => {
+                    if app_is_focused(&compositor, 2) {
+                        notepad_app.open_replace();
+                    }
                 }
 
                 drivers::keyboard::KeyAction::HomeKey => {
@@ -6728,6 +6944,19 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
+            if let Some((_, w)) = focused_window_for_app(&compositor, 5) {
+                if w.is_focused {
+                    if my >= w.y + 156 && my <= w.y + 172 && mx >= w.x + 54 && mx <= w.x + 190 {
+                        musicplayer_app.progress = (((mx - (w.x + 54)) * 100) / 136).min(100);
+                    } else if my >= w.y + 198 && my <= w.y + 214 && mx >= w.x + 150 && mx <= w.x + 240 {
+                        let player_volume = (((mx - (w.x + 150)) * 100) / 90).min(100) as u8;
+                        settings_app.volume = player_volume;
+                        settings_app.is_muted = false;
+                        musicplayer_app.volume = player_volume as usize;
+                    }
+                }
+            }
+
             if start_search_dragging && compositor.is_start_menu_open {
                 let (menu_x, menu_y, menu_w, _) = gui::MinGuiCompositor::start_menu_rect(tb_y);
                 let search = gui::MinGuiCompositor::start_search_rect(menu_x, menu_y, menu_w);
@@ -7339,9 +7568,49 @@ pub extern "C" fn _start() -> ! {
 
                 taskmgr_app.launch_menu_open = false;
 
+            } else if ch == '\x1b' && notepad_app.find_active && app_is_focused(&compositor, 2) {
+                notepad_app.close_find();
             } else if ch == '\x1b' && notepad_app.menu != 0 {
 
                 notepad_app.menu = 0;
+
+            } else if ch == '\x1b' && app_is_focused(&compositor, 3) && browser_app.find_active {
+
+                browser_app.close_find();
+
+            } else if ch == '\x08' && app_is_focused(&compositor, 3) && browser_app.find_active {
+
+                browser_app.find_backspace();
+
+            } else if keyboard.ctrl && (ch == 'f' || ch == 'F') && app_is_focused(&compositor, 3) {
+
+                // Ctrl+F is handled by the FindText keyboard action.
+
+            } else if app_is_focused(&compositor, 3) && browser_app.find_active && ch >= ' ' && ch != '\x7f' {
+
+                browser_app.find_char(ch);
+
+            } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x1b' {
+
+                settings_app.static_ip_edit = false;
+
+            } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x08' {
+
+                settings_app.static_ip_backspace();
+
+            } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\t' {
+
+                settings_app.static_ip_next_octet();
+
+            } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch.is_ascii_digit() {
+
+                settings_app.static_ip_input_char(ch);
+
+            } else if ch == '\x1b' && app_is_focused(&compositor, 0) && filemanager_app.search_len > 0 {
+
+                filemanager_app.clear_search();
+
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
 
             } else if ch == '\x1b' && (filemanager_app.drag_active || desktop_files.drag_active) {
 
@@ -7367,6 +7636,12 @@ pub extern "C" fn _start() -> ! {
 
                 else if ch >= ' ' { filemanager_app.rename_char(ch); }
 
+            } else if app_is_focused(&compositor, 0) && ch == '\x08' {
+
+                filemanager_app.search_backspace();
+
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+
             } else if desktop_files.rename_active {
 
                 if ch == '\x1b' { desktop_files.rename_active = false; }
@@ -7384,6 +7659,12 @@ pub extern "C" fn _start() -> ! {
                 filemanager_app.toggle_view_mode();
 
                 filemanager_app.ensure_thumbs(&fs_mgr.vfs);
+
+                fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+
+            } else if app_is_focused(&compositor, 0) && ch >= ' ' && ch != '\x7f' {
+
+                filemanager_app.search_char(ch);
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
 
@@ -7491,13 +7772,26 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 let notepad_focused = app_is_focused(&compositor, 2);
-
                 if notepad_focused {
-
                     if notepad_app.menu != 0 {
-
                         notepad_app.menu = 0;
-
+                    } else if notepad_app.find_active {
+                        if ch == '\x08' {
+                            notepad_app.find_input_backspace();
+                        } else if ch == '\t' {
+                            if notepad_app.replace_active {
+                                notepad_app.find_focused_replace = !notepad_app.find_focused_replace;
+                            }
+                        } else if ch == '\n' {
+                            if notepad_app.replace_active && notepad_app.find_focused_replace {
+                                notepad_app.replace_current();
+                            } else {
+                                notepad_app.find_next(true);
+                            }
+                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                        } else if ch >= ' ' {
+                            notepad_app.find_input_char(ch);
+                        }
                     } else if ch == '\x08' {
 
                         notepad_app.backspace();
@@ -7562,7 +7856,7 @@ pub extern "C" fn _start() -> ! {
 
                         if ch == 'c' || ch == 'C' { paint.clear(); }
 
-                        else if ch == 'e' || ch == 'E' { paint.eraser = !paint.eraser; }
+                        else if ch == 'e' || ch == 'E' { paint.tool = if paint.tool == apps::paint::PaintTool::Eraser { apps::paint::PaintTool::Brush } else { apps::paint::PaintTool::Eraser }; }
 
                     }
 

@@ -55,6 +55,14 @@ pub struct NotepadApp {
     undo_len: u8,
     redo_len: u8,
     history: History,
+    // Find / Replace
+    pub find_active: bool,
+    pub replace_active: bool,
+    pub find_text: [u8; 64],
+    pub find_len: usize,
+    pub replace_text: [u8; 64],
+    pub replace_len: usize,
+    pub find_focused_replace: bool,
 }
 
 /// Her not defteri penceresi için undo/redo geçmiş derinliği.
@@ -81,6 +89,8 @@ pub enum NotepadMenuAction {
     Paste,
     Delete,
     SelectAll,
+    Find,
+    Replace,
     About,
     Shortcuts,
 }
@@ -100,7 +110,7 @@ const FILE_MENU_ITEMS: [MenuItemDef; 4] = [
     MenuItemDef { label_tr: "Temizle", label_en: "Clear", shortcut: "", action: NotepadMenuAction::Clear },
 ];
 
-const EDIT_MENU_ITEMS: [MenuItemDef; 7] = [
+const EDIT_MENU_ITEMS: [MenuItemDef; 9] = [
     MenuItemDef { label_tr: "Geri Al", label_en: "Undo", shortcut: "Ctrl+Z", action: NotepadMenuAction::Undo },
     MenuItemDef { label_tr: "Yinele", label_en: "Redo", shortcut: "Ctrl+Y", action: NotepadMenuAction::Redo },
     MenuItemDef { label_tr: "Kes", label_en: "Cut", shortcut: "Ctrl+X", action: NotepadMenuAction::Cut },
@@ -108,6 +118,8 @@ const EDIT_MENU_ITEMS: [MenuItemDef; 7] = [
     MenuItemDef { label_tr: "Yapıştır", label_en: "Paste", shortcut: "Ctrl+V", action: NotepadMenuAction::Paste },
     MenuItemDef { label_tr: "Sil", label_en: "Delete", shortcut: "Del", action: NotepadMenuAction::Delete },
     MenuItemDef { label_tr: "Tümünü Seç", label_en: "Select All", shortcut: "Ctrl+A", action: NotepadMenuAction::SelectAll },
+    MenuItemDef { label_tr: "Bul...", label_en: "Find...", shortcut: "Ctrl+F", action: NotepadMenuAction::Find },
+    MenuItemDef { label_tr: "Değiştir...", label_en: "Replace...", shortcut: "Ctrl+H", action: NotepadMenuAction::Replace },
 ];
 
 const HELP_MENU_ITEMS: [MenuItemDef; 2] = [
@@ -248,6 +260,12 @@ impl NotepadApp {
             NotepadMenuAction::SelectAll => {
                 self.select_all();
             }
+            NotepadMenuAction::Find => {
+                self.open_find();
+            }
+            NotepadMenuAction::Replace => {
+                self.open_replace();
+            }
             NotepadMenuAction::About => {
                 self.status_msg = crate::gui::ui_text("minOs Not Defteri v1.3", "minOs Notepad v1.3");
             }
@@ -352,6 +370,13 @@ impl NotepadApp {
             undo_len: 0,
             redo_len: 0,
             history: History { undo: Vec::new(), redo: Vec::new() },
+            find_active: false,
+            replace_active: false,
+            find_text: [0; 64],
+            find_len: 0,
+            replace_text: [0; 64],
+            replace_len: 0,
+            find_focused_replace: false,
         };
 
         let default_path = "/root/Documents/notlar.txt";
@@ -969,12 +994,281 @@ impl NotepadApp {
         self.selection_end = Some(self.len);
         self.cursor = self.len;
     }
+    pub fn open_find(&mut self) {
+        self.find_active = true;
+        self.replace_active = false;
+        self.find_focused_replace = false;
+        self.status_msg = crate::gui::ui_text("Metin Ara (Enter: Sonraki, Esc: Kapat)", "Find Text (Enter: Next, Esc: Close)");
+    }
+
+    pub fn open_replace(&mut self) {
+        self.find_active = true;
+        self.replace_active = true;
+        self.status_msg = crate::gui::ui_text("Bul ve Değiştir (Tab: Geçiş, Enter: Değiştir)", "Find & Replace (Tab: Switch, Enter: Replace)");
+    }
+
+    pub fn close_find(&mut self) {
+        self.find_active = false;
+        self.replace_active = false;
+        self.status_msg = "";
+    }
+
+    pub fn find_str(&self) -> &str {
+        core::str::from_utf8(&self.find_text[..self.find_len]).unwrap_or("")
+    }
+
+    pub fn replace_str(&self) -> &str {
+        core::str::from_utf8(&self.replace_text[..self.replace_len]).unwrap_or("")
+    }
+
+    pub fn find_input_char(&mut self, ch: char) {
+        let is_rep = self.find_focused_replace;
+        let (buf, len) = if is_rep {
+            (&mut self.replace_text, &mut self.replace_len)
+        } else {
+            (&mut self.find_text, &mut self.find_len)
+        };
+        let mut b = [0u8; 4];
+        let s = ch.encode_utf8(&mut b);
+        for byte in s.bytes() {
+            if *len < buf.len() {
+                buf[*len] = byte;
+                *len += 1;
+            }
+        }
+    }
+
+    pub fn find_input_backspace(&mut self) {
+        let is_rep = self.find_focused_replace;
+        let len = if is_rep { &mut self.replace_len } else { &mut self.find_len };
+        if *len > 0 {
+            *len -= 1;
+        }
+    }
+
+    pub fn find_next(&mut self, forward: bool) -> bool {
+        let needle = self.find_str();
+        if needle.is_empty() || self.len == 0 {
+            return false;
+        }
+        let needle_chars: alloc::vec::Vec<char> = needle.chars().collect();
+        let n_len = needle_chars.len();
+        if n_len > self.len {
+            self.status_msg = crate::gui::ui_text("Eşleşme bulunamadı", "No match found");
+            return false;
+        }
+
+        let start_pos = if forward {
+            if let Some(e) = self.selection_end { e.min(self.len) } else { self.cursor }
+        } else {
+            if let Some(s) = self.selection_start { s.saturating_sub(1) } else { self.cursor.saturating_sub(1) }
+        };
+
+        let mut found = None;
+        if forward {
+            // Check from start_pos to end
+            for i in start_pos..=(self.len.saturating_sub(n_len)) {
+                let mut match_ok = true;
+                for j in 0..n_len {
+                    if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                        match_ok = false;
+                        break;
+                    }
+                }
+                if match_ok {
+                    found = Some(i);
+                    break;
+                }
+            }
+            // Wrap around
+            if found.is_none() && start_pos > 0 {
+                for i in 0..start_pos.min(self.len.saturating_sub(n_len) + 1) {
+                    let mut match_ok = true;
+                    for j in 0..n_len {
+                        if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                            match_ok = false;
+                            break;
+                        }
+                    }
+                    if match_ok {
+                        found = Some(i);
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Backward search
+            let check_limit = start_pos.min(self.len.saturating_sub(n_len));
+            for i in (0..=check_limit).rev() {
+                let mut match_ok = true;
+                for j in 0..n_len {
+                    if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                        match_ok = false;
+                        break;
+                    }
+                }
+                if match_ok {
+                    found = Some(i);
+                    break;
+                }
+            }
+            if found.is_none() && self.len >= n_len {
+                for i in (start_pos..=(self.len - n_len)).rev() {
+                    let mut match_ok = true;
+                    for j in 0..n_len {
+                        if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                            match_ok = false;
+                            break;
+                        }
+                    }
+                    if match_ok {
+                        found = Some(i);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some(pos) = found {
+            self.selection_anchor = Some(pos);
+            self.selection_start = Some(pos);
+            self.selection_end = Some(pos + n_len);
+            self.cursor = pos + n_len;
+            self.status_msg = crate::gui::ui_text("Eşleşme bulundu", "Match found");
+            true
+        } else {
+            self.status_msg = crate::gui::ui_text("Eşleşme bulunamadı", "No match found");
+            false
+        }
+    }
+
+    pub fn replace_current(&mut self) -> bool {
+        let needle = self.find_str();
+        if needle.is_empty() { return false; }
+        let needle_chars: alloc::vec::Vec<char> = needle.chars().collect();
+        let rep_chars: alloc::vec::Vec<char> = self.replace_str().chars().collect();
+
+        // Check if current selection matches needle
+        let is_match = if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
+            if e - s == needle_chars.len() {
+                let mut ok = true;
+                for j in 0..needle_chars.len() {
+                    if self.buffer[s + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                        ok = false;
+                        break;
+                    }
+                }
+                ok
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if is_match {
+            let s = self.selection_start.unwrap();
+            let e = self.selection_end.unwrap();
+            self.push_history();
+            // Delete selection
+            let del_len = e - s;
+            for i in s..self.len - del_len {
+                self.buffer[i] = self.buffer[i + del_len];
+            }
+            self.len -= del_len;
+            // Insert replacement
+            let add_len = rep_chars.len();
+            if self.len + add_len > self.buffer.len() {
+                let needed = self.len + add_len - self.buffer.len();
+                if self.buffer.try_reserve(needed).is_err() { return false; }
+                self.buffer.resize(self.len + add_len, ' ');
+            }
+            for i in (s..self.len).rev() {
+                self.buffer[i + add_len] = self.buffer[i];
+            }
+            self.buffer[s..s + add_len].copy_from_slice(&rep_chars[..add_len]);
+            self.len += add_len;
+            self.cursor = s + add_len;
+            self.selection_anchor = Some(s);
+            self.selection_start = Some(s);
+            self.selection_end = Some(s + add_len);
+            self.status_msg = crate::gui::ui_text("Değiştirildi", "Replaced");
+            // Find next
+            self.find_next(true);
+            true
+        } else {
+            // Find next first
+            self.find_next(true)
+        }
+    }
+
+    pub fn replace_all(&mut self) -> usize {
+        let needle = self.find_str();
+        if needle.is_empty() { return 0; }
+        let needle_chars: alloc::vec::Vec<char> = needle.chars().collect();
+        let rep_chars: alloc::vec::Vec<char> = self.replace_str().chars().collect();
+        let n_len = needle_chars.len();
+        if n_len == 0 { return 0; }
+
+        self.push_history();
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i + n_len <= self.len {
+            let mut match_ok = true;
+            for j in 0..n_len {
+                if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                    match_ok = false;
+                    break;
+                }
+            }
+            if match_ok {
+                // replace at i
+                for k in i..self.len - n_len {
+                    self.buffer[k] = self.buffer[k + n_len];
+                }
+                self.len -= n_len;
+
+                let add_len = rep_chars.len();
+                if self.len + add_len > self.buffer.len() {
+                    let needed = self.len + add_len - self.buffer.len();
+                    if self.buffer.try_reserve(needed).is_err() { break; }
+                    self.buffer.resize(self.len + add_len, ' ');
+                }
+                for k in (i..self.len).rev() {
+                    self.buffer[k + add_len] = self.buffer[k];
+                }
+                self.buffer[i..i + add_len].copy_from_slice(&rep_chars[..add_len]);
+                self.len += add_len;
+                i += add_len;
+                count += 1;
+            } else {
+                i += 1;
+            }
+        }
+        self.cursor = self.cursor.min(self.len);
+        self.selection_anchor = None;
+        self.selection_start = None;
+        self.selection_end = None;
+        self.status_msg = if count > 0 {
+            crate::gui::ui_text("Tüm eşleşmeler değiştirildi", "All matches replaced")
+        } else {
+            crate::gui::ui_text("Eşleşme bulunamadı", "No match found")
+        };
+        count
+    }
+
     /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
     #[inline(always)]
     pub fn text_x() -> usize { gutter_w() + crate::gui::sp(12) }
     /// Metin alanı başlangıcının pencere içi Y koordinatı (araç çubuğu + boşluk).
     #[inline(always)]
-    pub fn text_y() -> usize { crate::gui::sp(62) }
+    pub fn text_y(&self) -> usize {
+        if self.find_active {
+            if self.replace_active { crate::gui::sp(120) } else { crate::gui::sp(92) }
+        } else {
+            crate::gui::sp(62)
+        }
+    }
 
     /// Pencere içi fare (x, y) koordinatını metin indeksine çevirir.
     /// `win_w` satır kaydırma (wrap) hesabı için, `scroll_y` dikey kaydırma
@@ -995,7 +1289,7 @@ impl NotepadApp {
         let click_col = x.saturating_sub(Self::text_x()) / char_w();
         // Kaydırma ofseti satır cinsindendir.
         let scroll_lines = scroll_y / line_h();
-        let click_row = scroll_lines + (y.saturating_sub(Self::text_y())) / line_h();
+        let click_row = scroll_lines + (y.saturating_sub(self.text_y())) / line_h();
 
         // Satır kaydırmayı (wrap) hesaba katarak istenen satır/sütuna ulaş.
         let mut line = 0usize;
@@ -1087,8 +1381,72 @@ impl NotepadApp {
         MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, crate::gui::ui_text("Kaydet", "Save"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
         // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
+        // Bul / Değiştir Çubuğu (Find & Replace Bar)
+        let bar_h = if self.find_active {
+            if self.replace_active { crate::gui::sp(58) } else { crate::gui::sp(30) }
+        } else {
+            0
+        };
+
+        if self.find_active {
+            let by = win_y + 56;
+            let bw = win_w.saturating_sub(12);
+            fb.draw_rect(win_x + 6, by, bw, bar_h, Color::TITLE_BAR_INACTIVE);
+            fb.draw_rect_outline(win_x + 6, by, bw, bar_h, Color::BORDER);
+
+            // Satır 1: Bul
+            MinGuiCompositor::draw_string(fb, win_x + 12, by + 6, crate::gui::ui_text("Bul:", "Find:"), Color::TEXT_MAIN);
+            let input_w = crate::gui::sp(140);
+            let f_box_x = win_x + crate::gui::sp(50);
+            let f_box_y = by + 4;
+            let f_box_h = 20;
+            let find_foc = !self.find_focused_replace;
+            fb.draw_rect(f_box_x, f_box_y, input_w, f_box_h, Color::DARK_BG);
+            fb.draw_rect_outline(f_box_x, f_box_y, input_w, f_box_h, if find_foc { Color::ACCENT_BLUE } else { Color::BORDER });
+            MinGuiCompositor::draw_string_clipped(fb, f_box_x + 4, f_box_y + 3, self.find_str(), Color::TEXT_MAIN, (f_box_x + 4, f_box_y, input_w - 8, f_box_h));
+            if find_foc && (tick / 20) % 2 == 0 {
+                let tw = MinGuiCompositor::terminal_text_width(self.find_str()).min(input_w.saturating_sub(10));
+                fb.draw_rect(f_box_x + 4 + tw, f_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
+            }
+
+            // Butonlar: Sonraki, Önceki, Kapat
+            let mut btn_x = f_box_x + input_w + 8;
+            fb.draw_rect(btn_x, f_box_y, 60, f_box_h, Color::WINDOW_BG);
+            MinGuiCompositor::draw_string(fb, btn_x + 6, f_box_y + 3, crate::gui::ui_text("Sonraki", "Next"), Color::TEXT_MAIN);
+            btn_x += 66;
+            fb.draw_rect(btn_x, f_box_y, 60, f_box_h, Color::WINDOW_BG);
+            MinGuiCompositor::draw_string(fb, btn_x + 6, f_box_y + 3, crate::gui::ui_text("Önceki", "Prev"), Color::TEXT_MAIN);
+
+            let close_x = win_x + bw.saturating_sub(20);
+            MinGuiCompositor::draw_string(fb, close_x, f_box_y + 2, "X", Color::ACCENT_RED);
+
+            // Satır 2: Değiştir
+            if self.replace_active {
+                let ry = by + 30;
+                MinGuiCompositor::draw_string(fb, win_x + 12, ry + 6, crate::gui::ui_text("Değiştir:", "Replace:"), Color::TEXT_MAIN);
+                let r_box_x = f_box_x;
+                let r_box_y = ry + 4;
+                let rep_foc = self.find_focused_replace;
+                fb.draw_rect(r_box_x, r_box_y, input_w, f_box_h, Color::DARK_BG);
+                fb.draw_rect_outline(r_box_x, r_box_y, input_w, f_box_h, if rep_foc { Color::ACCENT_BLUE } else { Color::BORDER });
+                MinGuiCompositor::draw_string_clipped(fb, r_box_x + 4, r_box_y + 3, self.replace_str(), Color::TEXT_MAIN, (r_box_x + 4, r_box_y, input_w - 8, f_box_h));
+                if rep_foc && (tick / 20) % 2 == 0 {
+                    let tw = MinGuiCompositor::terminal_text_width(self.replace_str()).min(input_w.saturating_sub(10));
+                    fb.draw_rect(r_box_x + 4 + tw, r_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
+                }
+
+                let mut rbtn_x = r_box_x + input_w + 8;
+                fb.draw_rect(rbtn_x, r_box_y, 60, f_box_h, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string(fb, rbtn_x + 6, r_box_y + 3, crate::gui::ui_text("Değiştir", "Replace"), Color::TEXT_MAIN);
+                rbtn_x += 66;
+                fb.draw_rect(rbtn_x, r_box_y, 76, f_box_h, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string(fb, rbtn_x + 6, r_box_y + 3, crate::gui::ui_text("Tümünü", "All"), Color::TEXT_MAIN);
+            }
+        }
+
+        // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         let area_x = win_x + 6;
-        let area_y = win_y + 58;
+        let area_y = win_y + 58 + bar_h;
         // İçerik alanı, kaydırma çubuğu ve durum çubuğu düşülerek hesaplanır.
         let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
         let area_h = win_h

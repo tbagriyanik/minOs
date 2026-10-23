@@ -205,6 +205,10 @@ pub struct SystemSettings {
     // İleri Seviye Ayarlar
     pub dhcp_enabled: bool,
     pub static_ip: [u8; 4],
+    pub static_ip_octet: usize,
+    pub static_ip_edit: bool,
+    pub static_ip_value: u16,
+    pub static_ip_digits: u8,
     pub vfs_mounted: bool,
     pub kernel_debug_log: bool,
 
@@ -264,6 +268,10 @@ impl SystemSettings {
             saved_window_states: [None; 11],
             dhcp_enabled: true,
             static_ip: [192, 168, 1, 100],
+            static_ip_octet: 0,
+            static_ip_edit: false,
+            static_ip_value: 0,
+            static_ip_digits: 0,
             vfs_mounted: true,
             kernel_debug_log: true,
             test_screen_pattern: 0,
@@ -311,6 +319,13 @@ impl SystemSettings {
                 "night" => self.night_light=val=="1",
                 "night_level" => if let Ok(v)=val.parse::<u8>() { self.night_light_level=v.min(100); },
                 "dhcp" => self.dhcp_enabled=val!="0",
+                "static_ip" => {
+                    let mut parts = val.split('.');
+                    let mut address = [0u8; 4];
+                    let mut valid = true;
+                    for octet in &mut address { match parts.next().and_then(|s| s.parse::<u8>().ok()) { Some(v) => *octet = v, None => valid = false } }
+                    if valid && parts.next().is_none() { self.static_ip = address; }
+                }
                 "keyboard" => self.keyboard_layout=if val=="en" { KeyboardLayout::EnglishUS } else { KeyboardLayout::TurkishQ },
                 "language" => { self.language=if val=="en" { UiLanguage::English } else { UiLanguage::Turkish }; crate::gui::set_ui_language_english(self.language.is_english()); },
                 "zoom" => { self.zoom=match val { "125"=>125, "150"=>150, _=>100 }; crate::gui::set_font_zoom(self.zoom); },
@@ -378,9 +393,11 @@ impl SystemSettings {
         ThemeId::ALL.len()
     }
     pub fn resolution_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + (i % 2) * sp(160), win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP) + (i / 2) * sp(28), sp(150), sp(UI_BTN_H))
+        let col = i % 4;
+        let row = i / 4;
+        (win_x + CONTENT_X + col * sp(112), win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP) + row * sp(28), sp(108), sp(UI_BTN_H))
     }
-    pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080"][i.min(3)] }
+    pub fn resolution_name(i: usize) -> &'static str { ["800x600", "1024x768", "1280x720", "1920x1080", "1920x1200", "2560x1440", "2560x1600"][i.min(6)] }
     pub fn zoom_btn_rect(x: usize, y: usize, i: usize) -> (usize, usize, usize, usize) {
         (x + CONTENT_X + 170 + i * sp(76), y + sp(UI_TOP_Y + 5 * UI_ROW_STEP), sp(70), sp(UI_BTN_H))
     }
@@ -404,6 +421,31 @@ impl SystemSettings {
     // --- Tab 2 (Ağ) Geometri ---
     pub fn dhcp_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP), sp(150), sp(24))
+    }
+
+    pub fn static_ip_octet_rect(win_x: usize, win_y: usize, octet: usize) -> (usize, usize, usize, usize) {
+        (win_x + CONTENT_X + sp(34 + octet * 58), win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP - 2), sp(48), sp(24))
+    }
+
+    pub fn static_ip_input_char(&mut self, ch: char) {
+        if !self.static_ip_edit || !ch.is_ascii_digit() || self.static_ip_digits >= 3 { return; }
+        if self.static_ip_digits == 0 { self.static_ip_value = 0; }
+        self.static_ip_value = (self.static_ip_value * 10 + ch.to_digit(10).unwrap_or(0) as u16).min(255);
+        self.static_ip_digits = self.static_ip_digits.saturating_add(1).min(3);
+        self.static_ip[self.static_ip_octet] = self.static_ip_value as u8;
+    }
+
+    pub fn static_ip_backspace(&mut self) {
+        if !self.static_ip_edit { return; }
+        self.static_ip_value /= 10;
+        self.static_ip_digits = self.static_ip_digits.saturating_sub(1);
+        self.static_ip[self.static_ip_octet] = self.static_ip_value as u8;
+    }
+
+    pub fn static_ip_next_octet(&mut self) {
+        self.static_ip_octet = (self.static_ip_octet + 1) % 4;
+        self.static_ip_value = 0;
+        self.static_ip_digits = 0;
     }
 
     // --- Ortak Butonlar ---
@@ -803,6 +845,8 @@ impl SystemSettings {
         put(&mut cfg,&mut n,b";zoom="); put(&mut cfg,&mut n,match self.zoom { 125=>b"125" as &[u8], 150=>b"150", _=>b"100" });
         put(&mut cfg,&mut n,b";region="); put(&mut cfg,&mut n,&[b'0'+self.region.min(2)]);
         put(&mut cfg,&mut n,b";dhcp="); put(&mut cfg,&mut n,if self.dhcp_enabled{b"1"}else{b"0"});
+        put(&mut cfg,&mut n,b";static_ip=");
+        for (i, octet) in self.static_ip.iter().enumerate() { if i > 0 { put(&mut cfg,&mut n,b"."); } put_num(&mut cfg,&mut n,*octet); }
         put(&mut cfg,&mut n,b";theme="); put(&mut cfg,&mut n,match self.theme { ThemeId::VelvetDark=>b"velvet" as &[u8], ThemeId::Daylight=>b"daylight", ThemeId::Nord=>b"nord", ThemeId::TerminalGreen=>b"terminal", ThemeId::Sunset=>b"sunset" });
         put(&mut cfg,&mut n,b";wallpaper="); put_num(&mut cfg,&mut n,self.wallpaper);
         put(&mut cfg,&mut n,b";wallcolor=");
@@ -1066,9 +1110,9 @@ impl SystemSettings {
                 // --- Hedef Çözünürlük (Satır 3 & 4) ---
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP - 14),
                     if self.language.is_english() { "Target resolution:" } else { "Hedef çözünürlük:" }, Color::ACCENT_YELLOW);
-                for i in 0..4 {
+                for i in 0..7 {
                     let r = Self::resolution_btn_rect(win_x,win_y,i);
-                    let active = self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),_=>(1920,1080)};
+                    let active = self.screen_res == match i {0=>(800,600),1=>(1024,768),2=>(1280,720),3=>(1920,1080),4=>(1920,1200),5=>(2560,1440),6=>(2560,1600),_=> (1920,1080)};
                     MinGuiCompositor::draw_button(fb, r, if active{Color::ACCENT_GREEN}else{Color::TITLE_BAR}, Self::resolution_name(i), Color::TEXT_MAIN, false);
                 }
 
@@ -1133,14 +1177,28 @@ impl SystemSettings {
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP + UI_LABEL_OFFSET),
                     if self.dhcp_enabled { crate::gui::ui_text("IP yöntemi: DHCP", "IP mode: DHCP") } else { crate::gui::ui_text("IP yöntemi: Statik", "IP mode: Static") }, Color::ACCENT_YELLOW);
 
-                let mut ip = TextBuf::new(); ip.push_str("IP: "); for (i, b) in self.static_ip.iter().enumerate() { if i > 0 { ip.push_byte(b'.'); } ip.push_usize(*b as usize); }
-                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP + UI_LABEL_OFFSET), ip.as_str(), Color::TEXT_MAIN);
+                let ip_y = win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP - 2);
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, ip_y + sp(6), "IP:", Color::TEXT_MAIN);
+                for i in 0..4 {
+                    let r = Self::static_ip_octet_rect(win_x, win_y, i);
+                    fb.draw_rect_outline(r.0, r.1, r.2, r.3, if self.static_ip_edit && self.static_ip_octet == i { Color::ACCENT_YELLOW } else { Color::BORDER });
+                    let mut octet = TextBuf::new(); octet.push_usize(self.static_ip[i] as usize);
+                    MinGuiCompositor::draw_string(fb, r.0 + (r.2.saturating_sub(MinGuiCompositor::text_width(octet.as_str(), 1))) / 2,
+                        r.1 + 6, octet.as_str(), Color::TEXT_MAIN);
+                    if i < 3 { MinGuiCompositor::draw_string(fb, r.0 + r.2 + sp(4), r.1 + 6, ".", Color::TEXT_MUTED); }
+                }
+                MinGuiCompositor::draw_string(fb, win_x + CONTENT_X + sp(294), win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP + UI_LABEL_OFFSET),
+                    crate::gui::ui_text("Düzenlemek için bir oktete tıkla", "Click an octet to edit"), Color::TEXT_MUTED);
 
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP + UI_LABEL_OFFSET), "Gateway: 10.0.2.2    DNS: 10.0.2.3", Color::TEXT_MAIN);
 
                 let dhcp_btn = Self::dhcp_btn_rect(win_x, win_y);
                 MinGuiCompositor::draw_button(fb, dhcp_btn, Color::ACCENT_BLUE, if self.dhcp_enabled { "Static IP" } else { "DHCP" }, Color::DARK_BG, false);
                 if self.focused_control == 4 { fb.draw_rect_outline(dhcp_btn.0, dhcp_btn.1, dhcp_btn.2, dhcp_btn.3, Color::ACCENT_YELLOW); }
+                if self.static_ip_edit {
+                    MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, dhcp_btn.1 + sp(28),
+                        crate::gui::ui_text("Rakam gir, Tab ile sonraki oktet", "Type digits, Tab for next octet"), Color::TEXT_MUTED);
+                }
 
                 // --- Ağ Tanılama ve Testleri (Satır 6 & 7) ---
                 MinGuiCompositor::draw_string(fb, win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + UI_LABEL_OFFSET + 4),

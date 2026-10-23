@@ -13,10 +13,41 @@ pub const TOOLBAR_H: usize = 82;
 pub const STATUS_H: usize = 24;
 /// Tuval renkleri tema jetonu değildir; seçilen RGB değerleri çizimde ve BMP'de sabit kalır.
 pub const PALETTE: [u32; 4] = [0x0078D7, 0xE53935, 0x2E8B57, 0x000000];
+/// Renk seçicide sunulan geniş palet (6 x 4).
+pub const PICKER_COLORS: [u32; 24] = [
+    0x000000, 0x404040, 0x808080, 0xC0C0C0, 0xFFFFFF, 0x7F0000,
+    0xFF0000, 0xFF7F00, 0xFFD400, 0xFFFF00, 0xBFFF00, 0x00FF00,
+    0x00FF7F, 0x00FFFF, 0x007FFF, 0x0000FF, 0x7F00FF, 0xFF00FF,
+    0xFF007F, 0x8B4513, 0xD2691E, 0xF5DEB3, 0x2E8B57, 0x0078D7,
+];
 const EMPTY_POINT: PaintPoint = PaintPoint { x: 0, y: 0, color: PALETTE[0] };
+/// Geri al/ileri al için saklanan en fazla anlık görüntü sayısı.
+pub const HISTORY_LIMIT: usize = 20;
 
 const BMP_W: usize = 800;
 const BMP_H: usize = 600;
+
+/// Etkin çizim aracı.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PaintTool {
+    Brush,
+    Eraser,
+    Line,
+    Rect,
+    Circle,
+}
+
+impl PaintTool {
+    pub fn name(self) -> &'static str {
+        match self {
+            PaintTool::Brush => crate::gui::ui_text("Kalem", "Brush"),
+            PaintTool::Eraser => crate::gui::ui_text("Silgi", "Eraser"),
+            PaintTool::Line => crate::gui::ui_text("Çizgi", "Line"),
+            PaintTool::Rect => crate::gui::ui_text("Dikdörtgen", "Rect"),
+            PaintTool::Circle => crate::gui::ui_text("Daire", "Circle"),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct PaintPoint {
@@ -29,10 +60,18 @@ pub struct PaintApp {
     pub len: usize,
     pub points: alloc::boxed::Box<[PaintPoint]>,
     pub color: u32,
-    pub eraser: bool,
+    pub tool: PaintTool,
     pub brush_size: usize,
     pub zoom: usize,
     pub last: Option<(usize, usize)>,
+    /// Şekil araçlarında sürüklemenin başlangıç ve geçerli noktası.
+    pub shape_start: Option<(usize, usize)>,
+    pub shape_current: Option<(usize, usize)>,
+    /// Geri al / ileri al yığınları (tuval anlık görüntüleri).
+    pub undo_stack: alloc::vec::Vec<alloc::vec::Vec<PaintPoint>>,
+    pub redo_stack: alloc::vec::Vec<alloc::vec::Vec<PaintPoint>>,
+    /// Geniş renk seçici açık mı?
+    pub picker_open: bool,
     pub status_msg: &'static str,
     /// Son üretilen BMP; VFS'nin RAM kopyası olmadan kaydedilip tekrar açılır.
     pub saved_bmp: alloc::sync::Arc<[u8]>,
@@ -49,10 +88,15 @@ impl PaintApp {
             len: 0,
             points: alloc::vec![EMPTY_POINT; MAX_POINTS].into_boxed_slice(),
             color: PALETTE[0],
-            eraser: false,
+            tool: PaintTool::Brush,
             brush_size: 7,
             zoom: 100,
             last: None,
+            shape_start: None,
+            shape_current: None,
+            undo_stack: alloc::vec::Vec::new(),
+            redo_stack: alloc::vec::Vec::new(),
+            picker_open: false,
             status_msg: "",
             saved_bmp: alloc::sync::Arc::from([]),
             file_menu_open: false,
@@ -60,6 +104,60 @@ impl PaintApp {
             file_name_len: 0,
         }
     }
+
+    fn snapshot(&self) -> alloc::vec::Vec<PaintPoint> {
+        let mut copy = alloc::vec::Vec::with_capacity(self.len);
+        copy.extend_from_slice(&self.points[..self.len]);
+        copy
+    }
+
+    /// Değişiklik öncesi tuvali geri al yığınına kaydeder.
+    fn push_undo(&mut self) {
+        if self.undo_stack.len() >= HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        let snapshot = self.snapshot();
+        self.undo_stack.push(snapshot);
+        self.redo_stack.clear();
+    }
+
+    fn restore(&mut self, points: alloc::vec::Vec<PaintPoint>) {
+        let n = points.len().min(self.points.len());
+        self.points[..n].copy_from_slice(&points[..n]);
+        self.len = n;
+        self.last = None;
+        self.shape_start = None;
+        self.shape_current = None;
+    }
+
+    /// Son değişikliği geri alır.
+    pub fn undo(&mut self) -> bool {
+        let Some(previous) = self.undo_stack.pop() else { return false; };
+        let current = self.snapshot();
+        if self.redo_stack.len() >= HISTORY_LIMIT {
+            self.redo_stack.remove(0);
+        }
+        self.redo_stack.push(current);
+        self.restore(previous);
+        self.status_msg = crate::gui::ui_text("Geri alındı", "Undone");
+        true
+    }
+
+    /// Geri alınan değişikliği yeniden uygular.
+    pub fn redo(&mut self) -> bool {
+        let Some(next) = self.redo_stack.pop() else { return false; };
+        let current = self.snapshot();
+        if self.undo_stack.len() >= HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(current);
+        self.restore(next);
+        self.status_msg = crate::gui::ui_text("Yinelendi", "Redone");
+        true
+    }
+
+    pub fn can_undo(&self) -> bool { !self.undo_stack.is_empty() }
+    pub fn can_redo(&self) -> bool { !self.redo_stack.is_empty() }
 
     /// Tuvalin başlangıç X koordinatı (pencere içi).
     pub fn canvas_x() -> usize { 8 }
@@ -78,10 +176,12 @@ impl PaintApp {
     pub fn status_text(&self) -> &str {
         if !self.status_msg.is_empty() {
             self.status_msg
-        } else if self.eraser {
+        } else if self.tool == PaintTool::Eraser {
             crate::gui::ui_text("Silgi modu aktif", "Eraser active")
-        } else {
+        } else if self.tool == PaintTool::Brush {
             crate::gui::ui_text("Çizim Tahtası Hazır", "Paint Ready")
+        } else {
+            crate::gui::ui_text("Şekil aracı: sürükleyerek çizin", "Shape tool: drag to draw")
         }
     }
 
@@ -105,30 +205,74 @@ impl PaintApp {
     /// hareketlerinde iki nokta arasını enterpolasyonla doldurarak sürekli ve
     /// akıcı bir çizgi üretir (noktalı/kesik çizgi oluşmaz).
     pub fn paint(&mut self, x: usize, y: usize) {
-        if self.eraser {
-            self.erase(x, y);
-            self.last = Some((x, y));
-            return;
-        }
-
-        let (sx, sy) = self.last.unwrap_or((x, y));
-        let dx = x as isize - sx as isize;
-        let dy = y as isize - sy as isize;
-        let steps = dx.unsigned_abs().max(dy.unsigned_abs()).max(1);
-        for i in 1..=steps {
-            if self.len >= MAX_POINTS {
-                break;
+        match self.tool {
+            PaintTool::Brush => {
+                if self.last.is_none() {
+                    self.push_undo();
+                }
+                let (sx, sy) = self.last.unwrap_or((x, y));
+                let dx = x as isize - sx as isize;
+                let dy = y as isize - sy as isize;
+                let steps = dx.unsigned_abs().max(dy.unsigned_abs()).max(1);
+                for i in 1..=steps {
+                    if self.len >= MAX_POINTS {
+                        break;
+                    }
+                    let px = (sx as isize + dx * i as isize / steps as isize).max(0) as usize;
+                    let py = (sy as isize + dy * i as isize / steps as isize).max(0) as usize;
+                    self.push_paint_point(px, py);
+                }
+                self.last = Some((x, y));
             }
-            let px = (sx as isize + dx * i as isize / steps as isize).max(0) as usize;
-            let py = (sy as isize + dy * i as isize / steps as isize).max(0) as usize;
+            PaintTool::Eraser => {
+                if self.last.is_none() {
+                    self.push_undo();
+                }
+                self.erase(x, y);
+                self.last = Some((x, y));
+            }
+            PaintTool::Line | PaintTool::Rect | PaintTool::Circle => {
+                if self.shape_start.is_none() {
+                    self.push_undo();
+                    self.shape_start = Some((x, y));
+                }
+                self.shape_current = Some((x, y));
+            }
+        }
+    }
+
+    fn push_paint_point(&mut self, x: usize, y: usize) {
+        if self.len < MAX_POINTS {
             self.points[self.len] = PaintPoint {
-                x: px,
-                y: py,
+                x,
+                y,
                 color: crate::gui::theme::resolve(self.color),
             };
             self.len += 1;
         }
-        self.last = Some((x, y));
+    }
+
+    /// Etkin şekil aracının noktalarını üretir.
+    fn raster_shape<F: FnMut(usize, usize)>(&self, mut emit: F) {
+        let (Some((x0, y0)), Some((x1, y1))) = (self.shape_start, self.shape_current) else {
+            return;
+        };
+        match self.tool {
+            PaintTool::Line => raster_line(x0 as isize, y0 as isize, x1 as isize, y1 as isize, &mut emit),
+            PaintTool::Rect => {
+                raster_line(x0 as isize, y0 as isize, x1 as isize, y0 as isize, &mut emit);
+                raster_line(x1 as isize, y0 as isize, x1 as isize, y1 as isize, &mut emit);
+                raster_line(x1 as isize, y1 as isize, x0 as isize, y1 as isize, &mut emit);
+                raster_line(x0 as isize, y1 as isize, x0 as isize, y0 as isize, &mut emit);
+            }
+            PaintTool::Circle => {
+                let dx = x1 as isize - x0 as isize;
+                let dy = y1 as isize - y0 as isize;
+                let radius = integer_sqrt((dx * dx + dy * dy) as usize);
+                raster_circle(x0 as isize, y0 as isize, radius as isize, &mut emit);
+            }
+            _ => {}
+        }
     }
 
     /// Silgi: merkez çevresindeki noktaları dairesel olarak kaldırır.
@@ -148,12 +292,34 @@ impl PaintApp {
     }
 
     pub fn end_stroke(&mut self) {
+        if matches!(self.tool, PaintTool::Line | PaintTool::Rect | PaintTool::Circle) {
+            let color = crate::gui::theme::resolve(self.color);
+            let mut new_points = alloc::vec::Vec::new();
+            self.raster_shape(|x, y| {
+                if new_points.len() < MAX_POINTS {
+                    new_points.push(PaintPoint { x, y, color });
+                }
+            });
+            for point in new_points {
+                if self.len < MAX_POINTS {
+                    self.points[self.len] = point;
+                    self.len += 1;
+                }
+            }
+        }
         self.last = None;
+        self.shape_start = None;
+        self.shape_current = None;
     }
 
     pub fn clear(&mut self) {
+        if self.len > 0 {
+            self.push_undo();
+        }
         self.len = 0;
         self.last = None;
+        self.shape_start = None;
+        self.shape_current = None;
     }
 
     /// Belirtilen dosya adına BMP kaydeder (ör. "/root/Documents/deneme.bmp").
@@ -348,6 +514,23 @@ impl PaintApp {
             }
         }
 
+        // Şekil önizlemesi: sürükleme sırasında henüz noktalara işlenmemiş
+        // çizgi/dikdörtgen/daireyi doğrudan framebuffer'a çiz.
+        if matches!(self.tool, PaintTool::Line | PaintTool::Rect | PaintTool::Circle) && self.shape_start.is_some() {
+            let color = crate::gui::theme::resolve(self.color);
+            self.raster_shape(|x, y| {
+                if x < canvas_w && y < canvas_h {
+                    let px = (canvas_x as isize + canvas_w as isize / 2
+                        + (x as isize - canvas_w as isize / 2) * zoom as isize / 100).max(0) as usize;
+                    let py = (canvas_y as isize + canvas_h as isize / 2
+                        + (y as isize - canvas_h as isize / 2) * zoom as isize / 100).max(0) as usize;
+                    if px >= canvas_x && py >= canvas_y && px < canvas_x + canvas_w && py < canvas_y + canvas_h {
+                        fb.draw_rect(px, py, 2, 2, color);
+                    }
+                }
+            });
+        }
+
         // 2. Üst Menü Çubuğu (Menu Bar: y + 28 .. y + 52)
         fb.draw_rect(x + 6, y + 28, w.saturating_sub(12), 24, Color::TITLE_BAR);
         let file_rect = Self::file_menu_rect(w);
@@ -357,6 +540,23 @@ impl PaintApp {
         fb.draw_rect_outline(x + file_rect.0, y + file_rect.1, file_rect.2, file_rect.3, Color::BORDER);
         MinGuiCompositor::draw_string(fb, x + file_rect.0 + 8, y + file_rect.1 + 4,
             crate::gui::ui_text("Dosya", "File"), file_btn_fg);
+
+        // Geri Al / İleri Al (Ctrl+Z / Ctrl+Y)
+        let undo_rect = Self::undo_btn_rect();
+        let undo_enabled = self.can_undo();
+        fb.draw_rect(x + undo_rect.0, y + undo_rect.1, undo_rect.2, undo_rect.3, Color::WINDOW_BG);
+        fb.draw_rect_outline(x + undo_rect.0, y + undo_rect.1, undo_rect.2, undo_rect.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + undo_rect.0 + 6, y + undo_rect.1 + 4,
+            crate::gui::ui_text("Geri Al", "Undo"),
+            if undo_enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED });
+
+        let redo_rect = Self::redo_btn_rect();
+        let redo_enabled = self.can_redo();
+        fb.draw_rect(x + redo_rect.0, y + redo_rect.1, redo_rect.2, redo_rect.3, Color::WINDOW_BG);
+        fb.draw_rect_outline(x + redo_rect.0, y + redo_rect.1, redo_rect.2, redo_rect.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + redo_rect.0 + 6, y + redo_rect.1 + 4,
+            crate::gui::ui_text("Yinele", "Redo"),
+            if redo_enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED });
 
         // Hızlı Aksiyon Butonları (Sağ Taraf)
         let clear_x = x + w.saturating_sub(68);
@@ -385,18 +585,68 @@ impl PaintApp {
             let swatch_x = x + 60 + i * 22;
             fb.draw_rect(swatch_x, y + 58, 18, 18, *color);
             fb.draw_rect_outline(swatch_x, y + 58, 18, 18, Color::BORDER);
-            if !self.eraser && self.color == *color {
+            if self.tool == PaintTool::Brush && self.color == *color {
                 fb.draw_rect_outline(swatch_x.saturating_sub(1), y + 57, 20, 20, Color::WHITE);
             }
         }
 
         // Silgi Butonu
         let eraser_x = x + 154;
-        let eraser_bg = if self.eraser { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-        let eraser_fg = if self.eraser { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+        let eraser_bg = if self.tool == PaintTool::Eraser { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+        let eraser_fg = if self.tool == PaintTool::Eraser { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
         fb.draw_rect(eraser_x, y + 56, 56, 22, eraser_bg);
         fb.draw_rect_outline(eraser_x, y + 56, 56, 22, Color::BORDER);
         MinGuiCompositor::draw_string(fb, eraser_x + 8, y + 60, crate::gui::ui_text("Silgi", "Eraser"), eraser_fg);
+
+        // Şekil Araçları
+        let line_r = Self::tool_line_rect();
+        let line_bg = if self.tool == PaintTool::Line { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+        let line_fg = if self.tool == PaintTool::Line { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+        fb.draw_rect(x + line_r.0, y + line_r.1, line_r.2, line_r.3, line_bg);
+        fb.draw_rect_outline(x + line_r.0, y + line_r.1, line_r.2, line_r.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + line_r.0 + 6, y + line_r.1 + 4, crate::gui::ui_text("Çizgi", "Line"), line_fg);
+
+        let rect_r = Self::tool_rect_rect();
+        let rect_bg = if self.tool == PaintTool::Rect { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+        let rect_fg = if self.tool == PaintTool::Rect { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+        fb.draw_rect(x + rect_r.0, y + rect_r.1, rect_r.2, rect_r.3, rect_bg);
+        fb.draw_rect_outline(x + rect_r.0, y + rect_r.1, rect_r.2, rect_r.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + rect_r.0 + 6, y + rect_r.1 + 4, crate::gui::ui_text("Dikdörtgen", "Rect"), rect_fg);
+
+        let circ_r = Self::tool_circle_rect();
+        let circ_bg = if self.tool == PaintTool::Circle { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+        let circ_fg = if self.tool == PaintTool::Circle { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+        fb.draw_rect(x + circ_r.0, y + circ_r.1, circ_r.2, circ_r.3, circ_bg);
+        fb.draw_rect_outline(x + circ_r.0, y + circ_r.1, circ_r.2, circ_r.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + circ_r.0 + 6, y + circ_r.1 + 4, crate::gui::ui_text("Daire", "Circle"), circ_fg);
+
+        // Renk seçici
+        let pick_r = Self::picker_btn_rect();
+        let pick_bg = if self.picker_open { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+        let pick_fg = if self.picker_open { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+        fb.draw_rect(x + pick_r.0, y + pick_r.1, pick_r.2, pick_r.3, pick_bg);
+        fb.draw_rect_outline(x + pick_r.0, y + pick_r.1, pick_r.2, pick_r.3, Color::BORDER);
+        MinGuiCompositor::draw_string(fb, x + pick_r.0 + 6, y + pick_r.1 + 4, crate::gui::ui_text("Renkler", "Colors"), pick_fg);
+
+        if self.picker_open {
+            let pr = Self::picker_rect();
+            let pxr = x + pr.0;
+            let pyr = y + pr.1;
+            fb.draw_shadow(pxr, pyr, pr.2, pr.3, Color::SHADOW);
+            fb.draw_rect(pxr, pyr, pr.2, pr.3, Color::WINDOW_BG);
+            fb.draw_rect_outline(pxr, pyr, pr.2, pr.3, Color::BORDER);
+            for i in 0..PICKER_COLORS.len() {
+                let cr = Self::picker_cell_rect(i);
+                let cxr = x + cr.0;
+                let cyr = y + cr.1;
+                let cc = PICKER_COLORS[i];
+                fb.draw_rect(cxr, cyr, cr.2, cr.3, cc);
+                fb.draw_rect_outline(cxr, cyr, cr.2, cr.3, Color::BORDER);
+                if self.color == cc {
+                    fb.draw_rect_outline(cxr.saturating_sub(1), cyr.saturating_sub(1), cr.2 + 2, cr.3 + 2, Color::WHITE);
+                }
+            }
+        }
 
         // Fırça Boyutu: "Fırça: {}px [-] [+]"
         let brush_label_x = x + 218;
@@ -445,7 +695,7 @@ impl PaintApp {
             x + 12,
             status_y + 4,
             self.status_text(),
-            if self.eraser { Color::ACCENT_BLUE } else { Color::ACCENT_GREEN },
+            if self.tool == PaintTool::Eraser { Color::ACCENT_BLUE } else { Color::ACCENT_GREEN },
             (x + 10, status_y + 2, status_w / 3, 18),
         );
 
@@ -519,6 +769,38 @@ impl PaintApp {
     pub fn swatch_rect(index: usize) -> (usize, usize, usize, usize) {
         (60 + index * 22, 58, 18, 18)
     }
+    /// Geri Al / İleri Al düğmeleri.
+    pub fn undo_btn_rect() -> (usize, usize, usize, usize) {
+        (74, 29, 50, 22)
+    }
+    pub fn redo_btn_rect() -> (usize, usize, usize, usize) {
+        (128, 29, 50, 22)
+    }
+
+    /// Araç düğmeleri.
+    pub fn tool_line_rect() -> (usize, usize, usize, usize) {
+        (346, 56, 44, 22)
+    }
+    pub fn tool_rect_rect() -> (usize, usize, usize, usize) {
+        (394, 56, 64, 22)
+    }
+    pub fn tool_circle_rect() -> (usize, usize, usize, usize) {
+        (462, 56, 50, 22)
+    }
+
+    /// Renk seçici düğmesi ve açılır grid.
+    pub fn picker_btn_rect() -> (usize, usize, usize, usize) {
+        (516, 56, 54, 22)
+    }
+    pub fn picker_rect() -> (usize, usize, usize, usize) {
+        (516, 82, 140, 96)
+    }
+    pub fn picker_cell_rect(index: usize) -> (usize, usize, usize, usize) {
+        let row = index / 6;
+        let col = index % 6;
+        (516 + 6 + col * 22, 82 + 6 + row * 22, 18, 18)
+    }
+
     /// Silgi düğmesi.
     pub fn eraser_rect() -> (usize, usize, usize, usize) {
         (154, 56, 56, 22)
@@ -578,6 +860,83 @@ impl PaintApp {
             self.zoom = self.zoom.saturating_sub(10).max(50);
         }
     }
+}
+
+/// Bresenham çizgi rasterleştiricisi.
+fn raster_line<F: FnMut(usize, usize)>(x0: isize, y0: isize, x1: isize, y1: isize, emit: &mut F) {
+    let mut x = x0;
+    let mut y = y0;
+    let dx = (x1 - x0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let dy = -(y1 - y0).abs();
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        if x >= 0 && y >= 0 {
+            emit(x as usize, y as usize);
+        }
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+/// Orta nokta algoritmasıyla daire çizer.
+fn raster_circle<F: FnMut(usize, usize)>(cx: isize, cy: isize, radius: isize, emit: &mut F) {
+    if radius <= 0 {
+        if cx >= 0 && cy >= 0 {
+            emit(cx as usize, cy as usize);
+        }
+        return;
+    }
+    let mut x = radius;
+    let mut y = 0isize;
+    let mut err = 1 - radius;
+    while x >= y {
+        for (px, py) in [
+            (cx + x, cy + y),
+            (cx + y, cy + x),
+            (cx - y, cy + x),
+            (cx - x, cy + y),
+            (cx - x, cy - y),
+            (cx - y, cy - x),
+            (cx + y, cy - x),
+            (cx + x, cy - y),
+        ] {
+            if px >= 0 && py >= 0 {
+                emit(px as usize, py as usize);
+            }
+        }
+        y += 1;
+        if err < 0 {
+            err += 2 * y + 1;
+        } else {
+            x -= 1;
+            err += 2 * (y - x) + 1;
+        }
+    }
+}
+
+fn integer_sqrt(value: usize) -> usize {
+    if value < 2 {
+        return value;
+    }
+    let mut guess = value;
+    let mut next = (guess + 1) / 2;
+    while next < guess {
+        guess = next;
+        next = (guess + value / guess) / 2;
+    }
+    guess
 }
 
 fn format_num<'a>(mut n: usize, buf: &'a mut [u8; 8]) -> &'a str {

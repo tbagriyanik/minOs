@@ -4,6 +4,7 @@ use crate::gui::{Color, MinGuiCompositor};
 pub struct ImageViewerApp {
     pub zoom_level: usize,
     pub image: alloc::sync::Arc<[u8]>,
+    pub rgb: alloc::sync::Arc<[u8]>,
     pub width: usize,
     pub height: usize,
     pub top_down: bool,
@@ -12,11 +13,72 @@ pub struct ImageViewerApp {
     pub status: &'static str,
     pub pan_x: isize,
     pub pan_y: isize,
+    pub format_label: &'static str,
 }
 
 impl ImageViewerApp {
     pub fn new() -> Self {
-        Self { zoom_level: 4, image: alloc::sync::Arc::from([]), width: 0, height: 0, top_down: false, data_offset: 0, file_name: "kedi_maskotu.bmp", status: "Ready", pan_x: 0, pan_y: 0 }
+        Self {
+            zoom_level: 4,
+            image: alloc::sync::Arc::from([]),
+            rgb: alloc::sync::Arc::from([]),
+            width: 0,
+            height: 0,
+            top_down: false,
+            data_offset: 0,
+            file_name: "kedi_maskotu.bmp",
+            status: "Ready",
+            pan_x: 0,
+            pan_y: 0,
+            format_label: "BMP (24-bit)",
+        }
+    }
+
+    pub fn open_image(&mut self, data: alloc::sync::Arc<[u8]>, file_name: &'static str) -> bool {
+        let bytes = &data[..];
+        if bytes.len() >= 8 && bytes[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+            if let Some(decoded) = crate::apps::imgdecode::decode_png(bytes) {
+                if decoded.rgb.is_empty() { return false; }
+                self.rgb = alloc::sync::Arc::from(decoded.rgb.into_boxed_slice());
+                self.image = alloc::sync::Arc::from([]);
+                self.pan_x = 0;
+                self.pan_y = 0;
+                self.data_offset = 0;
+                self.width = decoded.width;
+                self.height = decoded.height;
+                self.top_down = true;
+                self.file_name = file_name;
+                self.format_label = "PNG (RGB)";
+                self.status = crate::gui::ui_text("PNG açıldı", "PNG opened");
+                return true;
+            }
+            self.clear_image(file_name);
+            return false;
+        }
+        if bytes.len() >= 4 && bytes[0] == 0xFF && bytes[1] == 0xD8 {
+            if let Some(decoded) = crate::apps::imgdecode::decode_jpeg(bytes) {
+                if decoded.rgb.is_empty() { return false; }
+                self.rgb = alloc::sync::Arc::from(decoded.rgb.into_boxed_slice());
+                self.image = alloc::sync::Arc::from([]);
+                self.pan_x = 0;
+                self.pan_y = 0;
+                self.data_offset = 0;
+                self.width = decoded.width;
+                self.height = decoded.height;
+                self.top_down = true;
+                self.file_name = file_name;
+                self.format_label = "JPEG (RGB)";
+                self.status = crate::gui::ui_text("JPEG açıldı", "JPEG opened");
+                return true;
+            }
+            self.clear_image(file_name);
+            return false;
+        }
+        if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
+            return self.open_bmp(data);
+        }
+        self.clear_image(file_name);
+        false
     }
 
     pub fn open_bmp(&mut self, data: alloc::sync::Arc<[u8]>) -> bool {
@@ -41,6 +103,7 @@ impl ImageViewerApp {
         };
         let _ = bytes;
         self.image = data;
+        self.rgb = alloc::sync::Arc::from([]);
         self.pan_x = 0;
         self.pan_y = 0;
         self.data_offset = offset;
@@ -48,18 +111,21 @@ impl ImageViewerApp {
         self.height = height;
         self.top_down = raw_h < 0;
         self.file_name = "cizim.bmp";
+        self.format_label = "BMP (24-bit)";
         self.status = crate::gui::ui_text("BMP açıldı", "BMP opened");
         true
     }
 
     pub fn clear_image(&mut self, file_name: &'static str) {
         self.image = alloc::sync::Arc::from([]);
+        self.rgb = alloc::sync::Arc::from([]);
         self.pan_x = 0;
         self.pan_y = 0;
         self.width = 0;
         self.height = 0;
         self.data_offset = 0;
         self.file_name = file_name;
+        self.format_label = "BMP (24-bit)";
         self.status = crate::gui::ui_text("Resim yüklenemedi", "Image could not be loaded");
     }
 
@@ -144,21 +210,26 @@ impl ImageViewerApp {
             let scaled_h = src_h.saturating_mul(scale) / SCALE_UNIT;
             let left = (canvas_w as isize - scaled_w as isize) / 2 + self.pan_x;
             let top = (canvas_h as isize - scaled_h as isize) / 2 + self.pan_y;
+            let use_rgb = !self.rgb.is_empty();
 
             for dy in 0..canvas_h {
                 let image_y = dy as isize - top;
                 if image_y < 0 || image_y as usize >= scaled_h { continue; }
                 let sy = ((image_y as usize).saturating_mul(SCALE_UNIT) / scale).min(src_h - 1);
-                let bmp_y = if self.top_down { sy } else { src_h - 1 - sy };
+                let bmp_y = if use_rgb || self.top_down { sy } else { src_h - 1 - sy };
                 for dx in 0..canvas_w {
                     let image_x = dx as isize - left;
                     if image_x < 0 || image_x as usize >= scaled_w { continue; }
                     let sx = ((image_x as usize).saturating_mul(SCALE_UNIT) / scale).min(src_w - 1);
-                    let i = self.data_offset + bmp_y * row_bytes + sx * 3;
-                    if i + 2 >= self.image.len() { continue; }
-                    let color = (self.image[i + 2] as u32) << 16
-                        | (self.image[i + 1] as u32) << 8
-                        | self.image[i] as u32;
+                    let color = if use_rgb {
+                        let i = (bmp_y * src_w + sx) * 3;
+                        if i + 2 >= self.rgb.len() { continue; }
+                        ((self.rgb[i] as u32) << 16) | ((self.rgb[i + 1] as u32) << 8) | self.rgb[i + 2] as u32
+                    } else {
+                        let i = self.data_offset + bmp_y * row_bytes + sx * 3;
+                        if i + 2 >= self.image.len() { continue; }
+                        ((self.image[i + 2] as u32) << 16) | ((self.image[i + 1] as u32) << 8) | self.image[i] as u32
+                    };
                     fb.draw_rect(canvas_x + dx, canvas_y + dy, 1, 1, color);
                 }
             }
@@ -215,9 +286,12 @@ impl ImageViewerApp {
         let mut resolution = crate::gui::TextBuf::new();
         resolution.push_str(crate::gui::ui_text("Çözünürlük: ", "Resolution: "));
         resolution.push_usize(image_w); resolution.push_byte(b'x'); resolution.push_usize(image_h);
+        let mut format_line = crate::gui::TextBuf::new();
+        format_line.push_str("Format: ");
+        format_line.push_str(self.format_label);
         let info_lines = [
             resolution.as_str(),
-            "Format: BMP (24-bit)",
+            format_line.as_str(),
             crate::gui::ui_text("Boyut: RGB", "Data: RGB"),
             crate::gui::ui_text("Renk: 24-bit", "Color: 24-bit"),
         ];

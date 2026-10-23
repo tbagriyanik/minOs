@@ -6,6 +6,7 @@ pub mod notepad;
 pub mod browser;
 pub mod js;
 pub mod imageviewer;
+pub mod imgdecode;
 pub mod musicplayer;
 pub mod videoplayer;
 pub mod calc_core;

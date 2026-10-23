@@ -128,10 +128,10 @@ pub fn open_image_file(
     // check the shared payload store before `read_file`, which can return that
     // empty slice for the metadata row.
     if let Some(data) = vfs.read_large_file(path) {
-        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
+        if !viewer.open_image(data, if path.ends_with("cizim.bmp") { "cizim.bmp" } else { "Resim.bmp" }) { viewer.clear_image("cizim.bmp"); }
     } else if let Some(data) = vfs.read_file(path).filter(|data| !data.is_empty()) {
         let data: alloc::sync::Arc<[u8]> = alloc::sync::Arc::from(data);
-        if !viewer.open_bmp(data) { viewer.clear_image("cizim.bmp"); }
+        if !viewer.open_image(data, if path.ends_with("cizim.bmp") { "cizim.bmp" } else { "Resim.bmp" }) { viewer.clear_image("cizim.bmp"); }
     } else {
         viewer.clear_image(if path.ends_with("cizim.bmp") { "cizim.bmp" } else { "Image unavailable" });
     }

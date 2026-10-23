@@ -351,6 +351,18 @@ struct Huffman {
     symbols: Vec<u8>,
 }
 
+trait BitReaderLike {
+    fn bits(&mut self, n: u32) -> Option<u32>;
+}
+
+impl BitReaderLike for BitReader<'_> {
+    fn bits(&mut self, n: u32) -> Option<u32> { BitReader::bits(self, n) }
+}
+
+impl BitReaderLike for JBitReader<'_> {
+    fn bits(&mut self, n: u32) -> Option<u32> { JBitReader::bits(self, n) }
+}
+
 impl Huffman {
     fn from_lengths(lengths: &[u8]) -> Option<Self> {
         let mut counts = [0u16; 16];
@@ -388,7 +400,7 @@ impl Huffman {
         Some(Self { counts, first, offset, symbols })
     }
 
-    fn decode(&self, br: &mut BitReader) -> Option<u8> {
+    fn decode(&self, br: &mut impl BitReaderLike) -> Option<u8> {
         let mut code = 0u32;
         for len in 1..=16usize {
             code = (code << 1) | br.bits(1)?;

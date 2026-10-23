@@ -325,7 +325,11 @@ pub fn init_subsystems(
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
-    serial_print("[BOOT] PS/2 hazır.\n");
+    if drivers::ps2::present() {
+        serial_print("[BOOT] PS/2 hazır.\n");
+    } else {
+        serial_print("[BOOT] PS/2 denetleyicisi yok; girdi yalnızca USB HID üzerinden.\n");
+    }
 
     let usb_hid_count = drivers::usb_hid::device_count();
     if usb_hid_count == 0 {

@@ -138,7 +138,7 @@ fn render_device_inventory(
         line.number(crate::drivers::usb_hid::controller_count() as u64);
         line.push(if english { " controller(s) | " } else { " denetleyici | " });
         line.number(crate::drivers::usb_hid::device_count() as u64);
-        line.push(if english { " active device(s) | boot protocol" } else { " etkin aygıt | boot protokolü" });
+        line.push(if english { " active HID interface(s) | boot + report descriptor" } else { " etkin HID arayüzü | boot + rapor tanımlayıcısı" });
         draw(&line, Color::ACCENT_GREEN);
     }
 

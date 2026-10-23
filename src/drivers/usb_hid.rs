@@ -3,19 +3,24 @@
 //! USB HID (klavye + fare) sürücüsü — xHCI (USB 3.x) denetleyicileri üzerinden.
 //!
 //! Bu modül, PCI üzerinde bulunan xHCI denetleyicilerini başlatır, bağlı USB
-//! aygıtlarını numaralandırır ve HID Boot Protocol kullanan klavye/fare
-//! raporlarını okur. Raporlar mevcut PS/2 klavye/fare durumuna dönüştürülür;
-//! böylece masaüstü, uygulamalar ve kısayollar USB donanımıyla da çalışır.
+//! aygıtlarını numaralandırır ve HID raporlarını okur. Raporlar mevcut PS/2
+//! klavye/fare durumuna dönüştürülür; böylece masaüstü, uygulamalar ve
+//! kısayollar USB donanımıyla da çalışır.
 //!
-//! Kapsam ve sınırlar:
+//! Kapsam:
 //! - xHCI (USB 3.0/3.1/3.2) denetleyicileri desteklenir. USB 1.1/2.0 aygıtları
 //!   xHCI'nin USB 2.0 portları üzerinden çalışır.
-//! - Yalnızca HID sınıfı, alt sınıf 1 (Boot Interface) ve boot protokolü
-//!   (klavye protokol 1, fare protokol 2) desteklenir.
+//! - HID Boot Protocol (klavye protokol 1, fare protokol 2) ve boot protokolü
+//!   sunmayan aygıtlar için rapor tanımlayıcısı (Report Descriptor) çözümlemesi
+//!   desteklenir: Report ID, 8/12/16-bit eksenler, mutlak işaretçi, tekerlek
+//!   ve klavye tuş dizisi.
+//! - Tek aygıtta birden çok HID arayüzü (kablosuz klavye+fare alıcıları,
+//!   multimedya klavyeler) aynı slot içinde ayrı kesme uç noktalarıyla çalışır.
+//! - Caps Lock / Num Lock LED'leri SET_REPORT ile aygıta geri bildirilir.
 //! - Kesme (interrupt) yerine yoklama (polling) kullanılır; masaüstü döngüsü
 //!   olay halkasını her karede boşaltır.
-//! - UHCI/OHCI/EHCI için yerel sürücü henüz yoktur; bu denetleyicilerde
-//!   firmware'in 8042/USB Legacy emülasyonu PS/2 yoluyla çalışmaya devam eder.
+//! - UHCI/OHCI/EHCI ve USB hub'ları için yerel sürücü henüz yoktur; bu
+//!   donanımda firmware'in 8042/USB Legacy emülasyonu PS/2 yoluyla çalışır.
 //!
 //! TR: USB klavye ve fare desteği; EN: USB keyboard and mouse support.
 
@@ -77,6 +82,9 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
 
 const MAX_CONTROLLERS: usize = 4;
 const MAX_HID_DEVICES: usize = 8;
+/// Tek bir USB aygıtında (ör. kablosuz klavye+fare alıcısı) desteklenen HID
+/// arayüz sayısı. Her arayüz aynı slot içinde ayrı bir kesme uç noktası kullanır.
+const MAX_HID_INTERFACES: usize = 4;
 const MAX_PORTS: usize = 64;
 const TRBS_PER_RING: usize = 256;
 const RING_LINK_INDEX: usize = TRBS_PER_RING - 1;
@@ -364,6 +372,10 @@ struct XhciController {
     /// Port başına slot: 0 = boş, 0xFF = HID değil/başarısız, diğer = HID slotu.
     port_slot: [u8; MAX_PORTS],
     port_connected: [bool; MAX_PORTS],
+    /// Port başına aygıt başına ayrılan DMA bloğu (4 sayfa: input context,
+    /// device context, EP0 halkası ve kontrol tamponu). Sıcak çıkarmada geri
+    /// verilir; böylece tekrar tak/çıkar döngüleri bellek sızdırmaz.
+    port_base_dma: [u64; MAX_PORTS],
 }
 
 impl XhciController {
@@ -392,32 +404,37 @@ impl XhciController {
             present: false,
             port_slot: [0; MAX_PORTS],
             port_connected: [false; MAX_PORTS],
+            port_base_dma: [0; MAX_PORTS],
         }
     }
 
+    // MMIO erişimleri mutlak sanal adres alır. Capability alanı için
+    // `self.mmio + ofset`, operasyonel alan için `self.op + ofset` geçilir.
     #[inline]
-    unsafe fn rd32(&self, off: u64) -> u32 {
-        core::ptr::read_volatile((self.mmio + off) as *const u32)
+    unsafe fn rd32(&self, addr: u64) -> u32 {
+        core::ptr::read_volatile(addr as *const u32)
     }
 
     #[inline]
-    unsafe fn wr32(&self, off: u64, val: u32) {
-        core::ptr::write_volatile((self.mmio + off) as *mut u32, val);
+    unsafe fn wr32(&self, addr: u64, val: u32) {
+        core::ptr::write_volatile(addr as *mut u32, val);
     }
 
     #[inline]
-    unsafe fn rd64(&self, off: u64) -> u64 {
-        core::ptr::read_volatile((self.mmio + off) as *const u64)
+    unsafe fn rd64(&self, addr: u64) -> u64 {
+        core::ptr::read_volatile(addr as *const u64)
     }
 
     #[inline]
-    unsafe fn wr64(&self, off: u64, val: u64) {
-        core::ptr::write_volatile((self.mmio + off) as *mut u64, val);
+    unsafe fn wr64(&self, addr: u64, val: u64) {
+        core::ptr::write_volatile(addr as *mut u64, val);
     }
 
     #[inline]
     fn port_offset(port: u8) -> u64 {
-        PORTSC_BASE + (port.saturating_sub(1) as u64) * 4
+        // Her port 16 baytlık bir kayıt kümesine sahiptir; PORTSC bu kümenin
+        // ilk 4 baytıdır (PORTSC, PORTPMSC, PORTLI, PORTHLPMC).
+        PORTSC_BASE + (port.saturating_sub(1) as u64) * 0x10
     }
 
     unsafe fn doorbell(&self, slot: u8, target: u8) {
@@ -542,7 +559,13 @@ impl XhciController {
             status: 0,
             control: (TRB_ADDRESS_DEVICE << TRB_TYPE_SHIFT) | ((slot as u32) << 24),
         };
-        self.run_command(trb).code == COMP_SUCCESS
+        let result = self.run_command(trb);
+        if result.code != COMP_SUCCESS {
+            crate::serial::print("[USB-HID] Address Device tamamlanma kodu: ");
+            crate::serial::print_dec(result.code as u64);
+            crate::serial::print("\n");
+        }
+        result.code == COMP_SUCCESS
     }
 
     unsafe fn evaluate_context(&mut self, slot: u8, input_phys: u64) -> bool {
@@ -601,8 +624,9 @@ impl XhciController {
         ep0_ring: &TrbRing,
     ) {
         zero_page(input_phys);
-        // Input Control Context: yalnızca EP0 eklenecek (DCI 1 -> bit 1).
-        self.ctx_write(input_phys, 0, 1, 1 << 1);
+        // Input Control Context: A0 (Slot Context) ve A1 (EP0) birlikte
+        // eklenmelidir; Address Device yalnızca A1 ile Parameter Error verir.
+        self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
         // Slot Context (input index 1). Context Entries = son geçerli DCI (EP0 = 1).
         self.ctx_write(input_phys, 1, 0, ((speed as u32) << 20) | (1 << 27));
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
@@ -630,7 +654,7 @@ impl XhciController {
         ep0_ring: &TrbRing,
     ) -> bool {
         zero_page(input_phys);
-        self.ctx_write(input_phys, 0, 1, 1 << 1);
+        self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
         self.ctx_write(input_phys, 1, 0, ((speed as u32) << 20) | (1 << 27));
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
         self.ctx_write(input_phys, 2, 1, (3 << 1) | (4 << 3) | ((max_packet as u32) << 16));
@@ -753,7 +777,7 @@ impl XhciController {
 
     /// Portu sıfırlar ve bağlı aygıtın hız kimliğini döner.
     unsafe fn reset_port(&mut self, port: u8) -> Option<u8> {
-        let off = Self::port_offset(port);
+        let off = self.op + Self::port_offset(port);
         self.power_port(port);
         let mut status = self.rd32(off);
         if status & PORTSC_CCS == 0 {
@@ -801,7 +825,7 @@ impl XhciController {
     /// okunur; yazma zararsızdır. Güç verildikten sonra aygıtın bağlanması
     /// için kısa bir bekleme yapılır.
     unsafe fn power_port(&mut self, port: u8) {
-        let off = Self::port_offset(port);
+        let off = self.op + Self::port_offset(port);
         let status = self.rd32(off);
         if status & PORTSC_PP == 0 {
             self.wr32(off, (status & PORTSC_KEEP) | PORTSC_PP);
@@ -814,18 +838,19 @@ impl XhciController {
 
     unsafe fn init_hardware(&mut self, pmm: &mut PhysicalMemoryManager) -> bool {
         let caplen = core::ptr::read_volatile(self.mmio as *const u8) as u64;
-        let hcsparams1 = self.rd32(0x04);
-        let hcsparams2 = self.rd32(0x08);
-        let hccparams1 = self.rd32(0x10);
-        let dboff = self.rd32(0x14) as u64;
-        let rtsoff = self.rd32(0x18) as u64;
+        let hcsparams1 = self.rd32(self.mmio + 0x04);
+        let hcsparams2 = self.rd32(self.mmio + 0x08);
+        let hccparams1 = self.rd32(self.mmio + 0x10);
+        let dboff = self.rd32(self.mmio + 0x14) as u64;
+        let rtsoff = self.rd32(self.mmio + 0x18) as u64;
 
         self.op = self.mmio + caplen;
         self.db = self.mmio + dboff;
         self.rt = self.mmio + rtsoff;
         self.ctx_size = if hccparams1 & (1 << 2) != 0 { 64 } else { 32 };
         self.max_slots = ((hcsparams1 & 0xFF) as u8).max(1);
-        self.max_ports = ((hcsparams1 >> 16) & 0xFF) as u8;
+        // HCSPARAMS1: MaxPorts alanı bit 24..31'dedir (bit 16..23 değil).
+        self.max_ports = ((hcsparams1 >> 24) & 0xFF) as u8;
 
         crate::serial::print("[USB-HID] xHCI: slots=");
         crate::serial::print_dec(self.max_slots as u64);
@@ -867,10 +892,12 @@ impl XhciController {
             }
             core::hint::spin_loop();
         }
+        crate::serial::print("[USB-HID] xHCI denetleyici sıfırlandı.\n");
 
-        // Scratchpad buffer sayısı (HCSPARAMS2).
-        let scratch_lo = ((hcsparams2 >> 21) & 0x1F) as usize;
-        let scratch_hi = ((hcsparams2 >> 27) & 0x1F) as usize;
+        // Scratchpad buffer sayısı (HCSPARAMS2): Hi alanı bit 21..25,
+        // Lo alanı bit 27..31'dedir. Sayı = (Hi << 5) | Lo.
+        let scratch_hi = ((hcsparams2 >> 21) & 0x1F) as usize;
+        let scratch_lo = ((hcsparams2 >> 27) & 0x1F) as usize;
         let mut scratch_count = (scratch_hi << 5) | scratch_lo;
         if scratch_count > 64 {
             scratch_count = 64;
@@ -969,6 +996,7 @@ impl XhciController {
             }
             core::hint::spin_loop();
         }
+        crate::serial::print("[USB-HID] xHCI çalışıyor.\n");
 
         let state = self.rd32(self.op + USBSTS);
         if state & (USBSTS_HSE | (1 << 12)) != 0 {
@@ -983,7 +1011,7 @@ impl XhciController {
     /// xHCI USB Legacy Support: BIOS SMM devrini kapatır; böylece USB
     /// klavye/fare olayları 8042 emülasyonuyla ikinci kez üretilmez.
     unsafe fn legacy_handoff(&mut self) {
-        let hccparams1 = self.rd32(0x10);
+        let hccparams1 = self.rd32(self.mmio + 0x10);
         let mut offset = ((hccparams1 >> 16) & 0xFFFF) as u64;
         if offset == 0 {
             return;
@@ -994,13 +1022,14 @@ impl XhciController {
             if offset < 0x40 {
                 break;
             }
-            let val = self.rd32(offset);
+            let addr = self.mmio + offset;
+            let val = self.rd32(addr);
             let id = val & 0xFF;
             let next = ((val >> 8) & 0xFF) as u64;
             if id == 0x01 {
-                self.wr32(offset, val | (1 << 24)); // OS Owned Semaphore
+                self.wr32(addr, val | (1 << 24)); // OS Owned Semaphore
                 let start = crate::boot::time::monotonic_ms();
-                while self.rd32(offset) & (1 << 16) != 0 {
+                while self.rd32(addr) & (1 << 16) != 0 {
                     if crate::boot::time::monotonic_ms().wrapping_sub(start) > 1_000 {
                         crate::serial::print(
                             "[USB-HID] UYARI: BIOS USB legacy devri zaman aşımı; SMM kapatılıyor.\n",
@@ -1010,7 +1039,7 @@ impl XhciController {
                     core::hint::spin_loop();
                 }
                 // USB SMI'larını kapat (USBLEGCTLSTS).
-                self.wr32(offset + 4, 0);
+                self.wr32(addr + 4, 0);
                 crate::serial::print("[USB-HID] USB Legacy devri tamamlandı (SMM kapalı).\n");
                 return;
             }
@@ -1053,17 +1082,30 @@ struct HidDevice {
     port: u8,
     kind: HidKind,
     dci: u8,
+    interface: u8,
     ep_ring: TrbRing,
     report_phys: u64,
     report_len: usize,
     prev_modifiers: u8,
     prev_keys: [u8; 6],
-    /// Aygıt boot protokolünü kabul etmedi (SET_PROTOCOL başarısız); raporlar
-    /// aygıtın kendi biçiminde gelir ve `HidReportLayout` ile ayrıştırılır.
+    /// Aygıt boot protokolünü kabul etmedi (SET_PROTOCOL başarısız) veya
+    /// arayüz boot protokolü sunmuyor; raporlar aygıtın kendi biçiminde gelir
+    /// ve `HidReportLayout` ile ayrıştırılır.
     custom: bool,
     layout: HidReportLayout,
     /// Tanılama: ilk birkaç raporun hex dökümü seri günlüğe yazılır.
     samples: u8,
+    /// Bu aygıtın kesme halkası + rapor tamponu için ayrılan 2 sayfalık DMA.
+    /// Çıkarmada serbest bırakılır.
+    dma_phys: u64,
+    /// Klavye LED çıktısı için kontrol aktarımı durumu. Yalnızca bir slotun
+    /// ilk klavyesinde doludur (EP0 halkası slot genelinde ortaktır).
+    ep0_ring: TrbRing,
+    ctrl_phys: u64,
+    led_capable: bool,
+    led_report_id: u8,
+    /// Aygıta en son gönderilen LED değeri; 0xFF = henüz gönderilmedi.
+    leds: u8,
 }
 
 impl HidDevice {
@@ -1075,14 +1117,21 @@ impl HidDevice {
             port: 0,
             kind: HidKind::Keyboard,
             dci: 0,
+            interface: 0,
             ep_ring: TrbRing::empty(),
             report_phys: 0,
             report_len: 0,
             prev_modifiers: 0,
             prev_keys: [0; 6],
             custom: false,
-            layout: HidReportLayout::default(),
+            layout: HidReportLayout::mouse_boot(),
             samples: 0,
+            dma_phys: 0,
+            ep0_ring: TrbRing::empty(),
+            ctrl_phys: 0,
+            led_capable: false,
+            led_report_id: 0,
+            leds: 0xFF,
         }
     }
 }
@@ -1092,24 +1141,45 @@ static mut HID_DEVICES: [HidDevice; MAX_HID_DEVICES] = [HidDevice::empty(); MAX_
 #[derive(Clone, Copy)]
 struct HidCandidate {
     interface: u8,
-    kind: HidKind,
+    /// Protokol alanı veya rapor tanımlayıcısı ile belirlenir; `None` ise
+    /// arayüz HID klavye/fare değildir ve atlanır.
+    kind: Option<HidKind>,
     endpoint: u8,
     max_packet: usize,
     interval: u8,
     /// Arayüz boot protokolünü destekliyor (HID alt sınıf 1 + protokol 1/2).
     boot: bool,
-    /// Boot olmayan aygıtlar için rapor tanımlayıcısından çıkarılan düzen.
+    /// SET_PROTOCOL başarısız olduysa veya arayüz boot protokolü sunmuyorsa
+    /// raporlar özel düzenle ayrıştırılır.
+    custom: bool,
+    /// Rapor tanımlayıcısından çıkarılan düzen.
     layout: HidReportLayout,
 }
 
-/// Boot olmayan HID fare raporunun alan yerleşimi.
+impl HidCandidate {
+    const fn empty() -> Self {
+        Self {
+            interface: 0,
+            kind: None,
+            endpoint: 0,
+            max_packet: 8,
+            interval: 10,
+            boot: false,
+            custom: true,
+            layout: HidReportLayout::empty(),
+        }
+    }
+}
+
+/// HID rapor tanımlayıcısından çıkarılan alan yerleşimi.
 ///
-/// Laptop fareleri/dokunmatik yüzeyler tipik olarak düğme bitleri (1-5 bit),
-/// 12-16 bitlik işaretli X/Y ve 8 bit tekerlek alanları kullanır. Bu yapı rapor
-/// tanımlayıcısından çıkarılan bit yerleşimini taşır.
+/// Hem fare/işaretçi (düğmeler, X/Y, tekerlek, pan, mutlak/göreli) hem de
+/// klavye (modifier baytı, tuş dizisi) alanlarını taşır. Aynı aygıt iki top-level
+/// koleksiyon içerebilir; bu durumda her iki bayrak da set edilebilir.
 #[derive(Clone, Copy)]
 struct HidReportLayout {
-    /// Düğme bit sayısı (raporun ilk bitlerinden itibaren).
+    /// Düğme alanının başlangıç biti ve bit sayısı.
+    button_start: u8,
     buttons: u8,
     x_start: u8,
     x_size: u8,
@@ -1117,19 +1187,61 @@ struct HidReportLayout {
     y_size: u8,
     wheel_start: u8,
     wheel_size: u8,
-    /// Aygıt çoklu rapor kullanıyorsa raporun ilk baytı Report ID'dir.
+    pan_start: u8,
+    pan_size: u8,
+    /// Aygıt çoklu rapor kullanıyorsa rapor gövdesinden önceki Report ID.
     report_id: u8,
     /// X/Y alanının mutlak (Absolute) olup olmadığı ve mantıksal maksimumu.
     x_absolute: bool,
     y_absolute: bool,
     x_max: u32,
     y_max: u32,
+    /// Klavye alanları: modifier baytı ve tuş dizisinin bayt konumları.
+    modifier_offset: u8,
+    key_offset: u8,
+    key_count: u8,
+    /// LED çıktı raporu (Caps/Num/Scroll Lock) var mı?
+    led_output: bool,
+    led_offset: u8,
+    led_report_id: u8,
+    /// Rapor tanımlayıcısının içerdiği işlevsel sınıflar.
+    keyboard: bool,
+    pointer: bool,
 }
 
 impl HidReportLayout {
-    /// Ayrıştırılamayan aygıtlar için standart 3 baytlık (düğme, dX, dY) yerleşim.
-    const fn default() -> Self {
+    const fn empty() -> Self {
         Self {
+            button_start: 0,
+            buttons: 0,
+            x_start: 0,
+            x_size: 0,
+            y_start: 0,
+            y_size: 0,
+            wheel_start: 0,
+            wheel_size: 0,
+            pan_start: 0,
+            pan_size: 0,
+            report_id: 0,
+            x_absolute: false,
+            y_absolute: false,
+            x_max: 0,
+            y_max: 0,
+            modifier_offset: 0,
+            key_offset: 0,
+            key_count: 0,
+            led_output: false,
+            led_offset: 0,
+            led_report_id: 0,
+            keyboard: false,
+            pointer: false,
+        }
+    }
+
+    /// Ayrıştırılamayan fareler için standart 3 baytlık (düğme, dX, dY) yerleşim.
+    const fn mouse_boot() -> Self {
+        Self {
+            button_start: 0,
             buttons: 3,
             x_start: 8,
             x_size: 8,
@@ -1137,17 +1249,71 @@ impl HidReportLayout {
             y_size: 8,
             wheel_start: 0,
             wheel_size: 0,
+            pan_start: 0,
+            pan_size: 0,
             report_id: 0,
             x_absolute: false,
             y_absolute: false,
             x_max: 0,
             y_max: 0,
+            modifier_offset: 0,
+            key_offset: 0,
+            key_count: 0,
+            led_output: false,
+            led_offset: 0,
+            led_report_id: 0,
+            keyboard: false,
+            pointer: true,
         }
     }
 
-    /// Yerleşim gerçekten rapor tanımlayıcısından mı çıkarıldı?
-    const fn is_valid(&self) -> bool {
-        self.x_size > 0 && self.y_size > 0
+    /// Ayrıştırılamayan klavyeler için boot protokolü yerleşimi.
+    const fn keyboard_boot() -> Self {
+        Self {
+            button_start: 0,
+            buttons: 0,
+            x_start: 0,
+            x_size: 0,
+            y_start: 0,
+            y_size: 0,
+            wheel_start: 0,
+            wheel_size: 0,
+            pan_start: 0,
+            pan_size: 0,
+            report_id: 0,
+            x_absolute: false,
+            y_absolute: false,
+            x_max: 0,
+            y_max: 0,
+            modifier_offset: 0,
+            key_offset: 2,
+            key_count: 6,
+            led_output: true,
+            led_offset: 0,
+            led_report_id: 0,
+            keyboard: true,
+            pointer: false,
+        }
+    }
+
+    /// Fare/işaretçi alanları geçerli mi? Göreli farelerde mantıksal maksimum
+    /// bulunmaz; bu yüzden yalnızca X/Y alanlarının varlığı aranır.
+    const fn pointer_valid(&self) -> bool {
+        self.pointer && self.x_size > 0 && self.y_size > 0
+    }
+
+    /// Klavye alanları (8 bitlik tuş dizisi) geçerli mi?
+    const fn keyboard_valid(&self) -> bool {
+        self.keyboard && self.key_count > 0 && self.key_offset >= 1
+    }
+}
+
+/// İşaret alanı için mantıksal maksimumu bit genişliğinden türetir.
+const fn max_for_bits(bits: u8) -> u32 {
+    match bits {
+        0 => 0,
+        1..=15 => (1u32 << bits) - 1,
+        _ => u32::MAX,
     }
 }
 
@@ -1159,32 +1325,39 @@ impl HidReportLayout {
 /// Report ID, Collection/End Collection. Laptop yerleşik fareler ve
 /// dokunmatik yüzeyler için yeterlidir.
 fn parse_hid_report_descriptor(desc: &[u8]) -> HidReportLayout {
-    let mut layout = HidReportLayout::default();
-    let mut page = 0u16;
-    let mut usage = 0u16;
-    let mut count = 0u32;
-    let mut size = 0u32;
-    let mut bit = 0u32;
-    let mut wheel_bits = 0u32;
-    let mut x_start: u32 = 0;
-    let mut y_start: u32 = 0;
-    let mut wheel_start: u32 = 0;
-    let mut x_bits = 0u32;
-    let mut y_bits = 0u32;
-    let mut x_log_max: i32 = 0;
-    let mut y_log_max: i32 = 0;
-    let mut x_rel = true;
-    let mut y_rel = true;
-    let mut report_id = 0u8;
-    let mut buttons_bits = 0u32;
+    let mut layout = HidReportLayout::empty();
+    let mut page: u16 = 0;
+    let mut usage: u32 = 0;
+    // Bir Input öğesi birden çok kullanım bildirebilir (ör. X ve Y aynı
+    // Report Count=2 öğesinde). Bu durumda alanlar sırayla eşlenir.
+    let mut usages = [0u32; 8];
+    let mut usage_count = 0usize;
+    let mut usage_min: u32 = 0;
+    let mut usage_max: u32 = 0;
+    let mut logical_max: i32 = 0;
+    let mut report_size: u32 = 0;
+    let mut report_count: u32 = 0;
+    let mut report_id: u8 = 0;
+    let mut first_report_id: Option<u8> = None;
+    let mut modifier_found = false;
+    let mut key_found = false;
+    // Giriş raporu bit konumu; Report ID gövdeye dahil değildir.
+    let mut bit: u32 = 0;
+    // Çıkış raporu bit konumu (LED'ler).
+    let mut out_bit: u32 = 0;
+    let mut depth: u32 = 0;
+    let mut app_page: u16 = 0;
+    let mut app_usage: u32 = 0;
     let mut i = 0usize;
 
     while i < desc.len() {
         let prefix = desc[i];
         i += 1;
         if prefix == 0xFE {
-            // Long item; bu sürücü için gerekli değil.
-            if i >= desc.len() { break; }
+            // Long item: [0xFE][bDataSize][bLongItemTag][data...]
+            if i + 1 >= desc.len() {
+                break;
+            }
             let len = desc[i] as usize;
             i += 2 + len;
             continue;
@@ -1192,97 +1365,221 @@ fn parse_hid_report_descriptor(desc: &[u8]) -> HidReportLayout {
         let b_size = (prefix & 0x03) as usize;
         let item_type = (prefix >> 2) & 0x03;
         let tag = (prefix >> 4) & 0x0F;
-        if i + b_size > desc.len() { break; }
+        if i + b_size > desc.len() {
+            break;
+        }
         let mut value = 0u32;
         for k in 0..b_size {
             value |= (desc[i + k] as u32) << (8 * k);
         }
         i += b_size;
+        let signed = match b_size {
+            1 => value as u8 as i8 as i32,
+            2 => value as u16 as i16 as i32,
+            4 => value as i32,
+            _ => 0,
+        };
 
-        if item_type == 0x01 {
-            // Global öğeler.
-            match tag {
-                0x04 => page = value as u16,               // Usage Page
-                0x08 => usage = value as u16,              // Usage
-                0x09 => count = value,                     // Report Count
-                0x07 => size = value,                      // Report Size
-                0x0A => {}                                 // Logical Minimum
-                0x0B => {                                  // Logical Maximum
-                    if usage == 0x30 { x_log_max = value as i32; }
-                    if usage == 0x31 { y_log_max = value as i32; }
-                }
-                _ => {}
-            }
-        } else if item_type == 0x00 {
-            // Main öğeler.
-            match tag {
+        match item_type {
+            // ---- Global öğeler ----
+            0x01 => match tag {
+                0x00 => page = value as u16, // Usage Page
+                0x01 => {}                   // Logical Minimum (işaretli alanlar için gerekmez)
+                0x02 => logical_max = signed, // Logical Maximum
+                0x07 => report_size = value & 0xFFFF,
                 0x08 => {
-                    // Input: bit 0 = Data/Constant, bit 1 = Variable/Array,
-                    // bit 2 = Absolute/Relative.
-                    let is_data_var = value & 0x01 != 0 && value & 0x02 != 0;
-                    let relative = value & 0x04 != 0;
-                    if page == 0x09 {
-                        // Düğme (Button) sayfası: raporun başındadır.
-                        if buttons_bits == 0 {
-                            buttons_bits = count * size;
-                        }
-                        bit += count * size;
-                    } else if is_data_var && count == 1 {
-                        match usage {
-                            0x30 => {
-                                x_start = bit;
-                                x_bits = size;
-                                x_rel = relative;
-                            }
-                            0x31 => {
-                                y_start = bit;
-                                y_bits = size;
-                                y_rel = relative;
-                            }
-                            0x38 => {
-                                wheel_start = bit;
-                                wheel_bits = size;
-                            }
-                            _ => {}
+                    let id = value as u8;
+                    if let Some(first) = first_report_id {
+                        // Tanımlayıcı birden çok rapor içeriyorsa ilk raporun
+                        // alanlarını kullan; sonraki raporlara geçme.
+                        if id != first && (key_found || layout.pointer || layout.led_output) {
+                            break;
                         }
                     }
-                    bit += count * size;
+                    if first_report_id.is_none() {
+                        first_report_id = Some(id);
+                    }
+                    report_id = id;
                 }
-                0x85 => {
-                    report_id = value as u8;
-                }
+                0x09 => report_count = value & 0xFFFF,
                 _ => {}
-            }
-        } else if item_type == 0x01 {
-            // Global Logical Max değerlerini yakala (tag 0x0B yukarıda atlandı).
+            },
+            // ---- Local öğeler ----
+            0x02 => match tag {
+                0x00 => {
+                    if usage_count == 0 {
+                        usage = value;
+                    }
+                    if usage_count < usages.len() {
+                        usages[usage_count] = value;
+                        usage_count += 1;
+                    }
+                }
+                0x01 => usage_min = value,
+                0x02 => usage_max = value,
+                _ => {}
+            },
+            // ---- Main öğeler ----
+            0x00 => match tag {
+                0x08 => {
+                    // Input öğesi bayrakları: bit0 0 = Data / 1 = Constant,
+                    // bit1 1 = Variable / 0 = Array, bit2 0 = Absolute / 1 = Relative.
+                    let is_data = value & 0x01 == 0;
+                    let is_var = value & 0x02 != 0;
+                    let is_abs = value & 0x04 == 0;
+                    let bits = report_count.saturating_mul(report_size);
+                    if is_data && bits > 0 {
+                        // Düğmeler (Button sayfası, Variable).
+                        if page == 0x09 && is_var && layout.buttons == 0 {
+                            layout.button_start = bit.min(255) as u8;
+                            layout.buttons = bits.min(8) as u8;
+                        }
+                        // Klavye modifier baytı (E0..E7).
+                        else if page == 0x07
+                            && is_var
+                            && report_size == 1
+                            && !modifier_found
+                            && (usage == 0xE0
+                                || (usage_min >= 0xE0 && usage_max <= 0xE7 && usage_max > usage_min))
+                        {
+                            layout.modifier_offset = (bit / 8).min(255) as u8;
+                            modifier_found = true;
+                        }
+                        // Klavye tuş dizisi (Array, 8 bitlik kullanım kimlikleri).
+                        else if page == 0x07
+                            && !is_var
+                            && report_size == 8
+                            && report_count > 0
+                            && !key_found
+                        {
+                            layout.key_offset = (bit / 8).min(255) as u8;
+                            layout.key_count = report_count.min(6) as u8;
+                            key_found = true;
+                        }
+                        // Variable alanlar: her alan kendi kullanımına karşılık
+                        // gelir. X ve Y çoğu zaman tek Input öğesinde
+                        // (Report Count=2) birlikte bildirilir.
+                        else if is_var {
+                            let fields = report_count.min(16);
+                            for k in 0..fields {
+                                let index = k as usize;
+                                let field_usage = if index < usage_count {
+                                    usages[index]
+                                } else if usage_count > 0 {
+                                    usages[usage_count - 1]
+                                } else {
+                                    0
+                                };
+                                let field_bit = bit.saturating_add(k.saturating_mul(report_size));
+
+                                if (page == 0x01 || page == 0x0D)
+                                    && field_usage == 0x30
+                                    && layout.x_size == 0
+                                {
+                                    layout.x_start = field_bit.min(255) as u8;
+                                    layout.x_size = report_size.min(32) as u8;
+                                    layout.x_absolute = is_abs;
+                                    layout.pointer = true;
+                                    if is_abs {
+                                        layout.x_max = if logical_max > 0 {
+                                            logical_max as u32
+                                        } else {
+                                            max_for_bits(layout.x_size)
+                                        };
+                                    }
+                                } else if (page == 0x01 || page == 0x0D)
+                                    && field_usage == 0x31
+                                    && layout.y_size == 0
+                                {
+                                    layout.y_start = field_bit.min(255) as u8;
+                                    layout.y_size = report_size.min(32) as u8;
+                                    layout.y_absolute = is_abs;
+                                    layout.pointer = true;
+                                    if is_abs {
+                                        layout.y_max = if logical_max > 0 {
+                                            logical_max as u32
+                                        } else {
+                                            max_for_bits(layout.y_size)
+                                        };
+                                    }
+                                } else if page == 0x01
+                                    && field_usage == 0x38
+                                    && layout.wheel_size == 0
+                                {
+                                    layout.wheel_start = field_bit.min(255) as u8;
+                                    layout.wheel_size = report_size.min(32) as u8;
+                                } else if page == 0x0C
+                                    && field_usage == 0x0238
+                                    && layout.pan_size == 0
+                                {
+                                    layout.pan_start = field_bit.min(255) as u8;
+                                    layout.pan_size = report_size.min(32) as u8;
+                                }
+                            }
+                        }
+                    }
+                    bit = bit.saturating_add(bits);
+                }
+                0x09 => {
+                    // Output öğesi (LED'ler). Main item tag 0x9 = Output.
+                    let is_data = value & 0x01 == 0;
+                    let is_var = value & 0x02 != 0;
+                    let bits = report_count.saturating_mul(report_size);
+                    if page == 0x08 && is_data && is_var && !layout.led_output && out_bit / 8 < 256 {
+                        layout.led_output = true;
+                        layout.led_offset = (out_bit / 8).min(255) as u8;
+                        layout.led_report_id = report_id;
+                    }
+                    out_bit = out_bit.saturating_add(bits);
+                }
+                0x0A => {} // Feature öğesi: bu sürücü için kullanılmıyor.
+                0x0B => {
+                    if value == 1 && depth == 0 {
+                        app_page = page;
+                        app_usage = usage;
+                    }
+                    depth = depth.saturating_add(1);
+                }
+                0x0C => depth = depth.saturating_sub(1),
+                _ => {}
+            },
+            _ => {}
+        }
+
+        // Local kullanım değerleri her Main öğesinden sonra sıfırlanır.
+        if item_type == 0x00 {
+            usage = 0;
+            usage_count = 0;
+            usage_min = 0;
+            usage_max = 0;
         }
     }
 
-    // Logical Max değerlerini ikinci geçişte yakalayamadıysak mutlak
-    // alanların üst sınırını 0 bırakıyoruz (rapor işleyici tam bayt aralığı
-    // kullanır). İşaretli alanlar için tipik maksimumlar:
-    // 8 bit: 127, 12 bit: 2047, 16 bit: 32767.
-    if x_bits == 0 || y_bits == 0 {
-        return HidReportLayout::default();
+    // Top-level uygulama kullanımı klavye/fare sınıfını netleştirir.
+    if app_page == 0x01 && app_usage == 0x06 {
+        layout.keyboard = true;
     }
-    layout.buttons = buttons_bits.min(8) as u8;
-    layout.x_start = x_start as u8;
-    layout.x_size = x_bits as u8;
-    layout.y_start = y_start as u8;
-    layout.y_size = y_bits as u8;
-    layout.wheel_start = wheel_start as u8;
-    layout.wheel_size = wheel_bits as u8;
+    if app_page == 0x01 && app_usage == 0x02 {
+        layout.pointer = true;
+    }
+    if app_page == 0x0D {
+        layout.pointer = true;
+    }
+    if key_found {
+        layout.keyboard = true;
+    }
     layout.report_id = report_id;
-    layout.x_absolute = !x_rel;
-    layout.y_absolute = !y_rel;
-    // Mutlak alanlar için mantıksal maksimum tanımlayıcıdan gelir (0 = bilinmiyor,
-    // işleyici bu durumda 16 bitlik standart 32767 kabul eder).
-    layout.x_max = if layout.x_absolute && x_log_max > 0 { x_log_max as u32 }
-        else if layout.x_absolute { match x_bits { 1..=8 => 127, 9..=12 => 2047, 13..=16 => 32767, _ => 0 } }
-        else { 0 };
-    layout.y_max = if layout.y_absolute && y_log_max > 0 { y_log_max as u32 }
-        else if layout.y_absolute { match y_bits { 1..=8 => 127, 9..=12 => 2047, 13..=16 => 32767, _ => 0 } }
-        else { 0 };
+
+    // Mutlak eksenlerde mantıksal maksimum eksikse bit genişliğinden türet.
+    if layout.x_absolute && layout.x_max == 0 {
+        layout.x_max = max_for_bits(layout.x_size);
+    }
+    if layout.y_absolute && layout.y_max == 0 {
+        layout.y_max = max_for_bits(layout.y_size);
+    }
+    if layout.pointer && layout.buttons == 0 {
+        layout.buttons = 3;
+    }
     layout
 }
 
@@ -1295,23 +1592,24 @@ fn handle_custom_mouse_report(
     screen_w: i32,
     screen_h: i32,
 ) -> bool {
-    let mut data = data;
-    if layout.report_id != 0 {
+    let body = if layout.report_id != 0 {
+        // Report ID taşıyan raporlarda ilk bayt kimliktir; eşleşmiyorsa bu
+        // arayüzün ilgilendiğimiz raporu değildir.
         if data.is_empty() || data[0] != layout.report_id {
-            // İlk bayt Report ID ile eşleşmiyorsa bilinmeyen rapor türü.
-            if data.is_empty() {
-                return false;
-            }
+            return false;
         }
-        data = &data[1..];
-    }
+        &data[1..]
+    } else {
+        data
+    };
 
-    let bits_total = layout.x_start as usize
-        + layout.x_size as usize
-        + layout.y_size as usize
-        + layout.wheel_size as usize;
-    let bytes_needed = (bits_total + 7) / 8;
-    if data.len() < bytes_needed.max(3) {
+    let x_end = layout.x_start as u32 + layout.x_size as u32;
+    let y_end = layout.y_start as u32 + layout.y_size as u32;
+    let wheel_end = layout.wheel_start as u32 + layout.wheel_size as u32;
+    let button_end = layout.button_start as u32 + layout.buttons as u32;
+    let bits_total = x_end.max(y_end).max(wheel_end).max(button_end);
+    let bytes_needed = ((bits_total + 7) / 8) as usize;
+    if body.len() < bytes_needed.max(3) {
         return false;
     }
 
@@ -1320,7 +1618,10 @@ fn handle_custom_mouse_report(
         let mut v = 0u32;
         for k in 0..bits as usize {
             let idx = start as usize + k;
-            let bitv = (data[idx / 8] >> (idx % 8)) & 1;
+            if idx / 8 >= body.len() {
+                break;
+            }
+            let bitv = (body[idx / 8] >> (idx % 8)) & 1;
             v |= (bitv as u32) << k;
         }
         v
@@ -1333,31 +1634,43 @@ fn handle_custom_mouse_report(
         ((v << shift) as i32) >> shift
     };
 
-    let mut buttons = 0u8;
-    for b in 0..layout.buttons.min(8) {
-        let bitv = get_bits(b, 1);
-        buttons |= (bitv as u8) << b;
-    }
-
-    if layout.x_absolute && layout.y_absolute && layout.x_max > 0 {
-        // Mutlak konum (dokunmatik yüzey/digitizer).
-        let raw_x = get_bits(layout.x_start, layout.x_size);
-        let raw_y = get_bits(layout.y_start, layout.y_size);
-        mouse.x = ((raw_x as i32 * screen_w) / layout.x_max as i32).clamp(0, screen_w - 1);
-        mouse.y = ((raw_y as i32 * screen_h) / layout.y_max as i32).clamp(0, screen_h - 1);
+    let buttons = if layout.buttons > 0 {
+        get_bits(layout.button_start, layout.buttons.min(8)) as u8
     } else {
-        // Göreli hareket (klasik fare/dokunmatik yüzey akışı).
+        0
+    };
+
+    if layout.x_absolute && layout.y_absolute {
+        // Mutlak konum (dokunmatik yüzey / grafik tablet / QEMU usb-tablet).
+        let x_max = if layout.x_max > 0 { layout.x_max } else { max_for_bits(layout.x_size) };
+        let y_max = if layout.y_max > 0 { layout.y_max } else { max_for_bits(layout.y_size) };
+        if x_max == 0 || y_max == 0 || screen_w <= 0 || screen_h <= 0 {
+            return false;
+        }
         let raw_x = get_bits(layout.x_start, layout.x_size);
         let raw_y = get_bits(layout.y_start, layout.y_size);
-        let dx = sign_extend(raw_x, layout.x_size) as i8;
-        // HID'de pozitif Y aşağıdır; PS2 durumunda pozitif Y yukarı beklenir.
-        let dy = (sign_extend(raw_y, layout.y_size) as i8).wrapping_neg();
+        // Yuvarlayarak ölçekle: 16383/32767 gibi orta noktalar tam merkeze düşsün.
+        let scaled_x = (raw_x as i64 * screen_w as i64 + x_max as i64 / 2) / x_max as i64;
+        let scaled_y = (raw_y as i64 * screen_h as i64 + y_max as i64 / 2) / y_max as i64;
+        mouse.x = (scaled_x as i32).clamp(0, screen_w - 1);
+        mouse.y = (scaled_y as i32).clamp(0, screen_h - 1);
+
+        mouse.left_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_LEFT) != 0;
+        mouse.right_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_RIGHT) != 0;
+        mouse.middle_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_MIDDLE) != 0;
+    } else {
+        // Göreli hareket; 12/16 bit eksenler ±127 aralığına sıkıştırılır.
+        let raw_x = get_bits(layout.x_start, layout.x_size);
+        let raw_y = get_bits(layout.y_start, layout.y_size);
+        let dx = sign_extend(raw_x, layout.x_size).clamp(-127, 127) as i8;
+        // HID'de pozitif Y aşağıdır; PS/2 katmanı pozitif Y yukarı bekler.
+        let dy = (-sign_extend(raw_y, layout.y_size)).clamp(-127, 127) as i8;
         mouse.update_packet(buttons, dx, dy, screen_w, screen_h);
     }
 
     if layout.wheel_size > 0 {
         let raw_w = get_bits(layout.wheel_start, layout.wheel_size);
-        let wheel = sign_extend(raw_w, layout.wheel_size) as i8;
+        let wheel = sign_extend(raw_w, layout.wheel_size).clamp(-127, 127) as i8;
         if wheel != 0 {
             mouse.scroll_delta = mouse.scroll_delta.saturating_sub(wheel);
         }
@@ -1372,10 +1685,19 @@ fn handle_custom_mouse_report(
 /// (rapor tanımlayıcısıyla) > boot olmayan klavye. Laptop yerleşik
 /// dokunmatik yüzeyler ve modern fareler genellikle boot arayüzü sunmaz;
 /// bu aygıtlar için rapor tanımlayıcısı okunur ve düzen çıkarılır.
-fn parse_hid_interface(config: &[u8]) -> Option<HidCandidate> {
+/// Yapılandırma tanımlayıcısını tarayarak tüm HID arayüzlerini toplar.
+///
+/// Tek bir USB aygıtı (ör. kablosuz klavye+fare alıcısı veya multimedya
+/// klavye) birden çok HID arayüzü sunabilir. Her arayüz aynı slot içinde kendi
+/// kesme uç noktasına sahiptir; bu yüzden hepsi ayrı ayrı döndürülür.
+fn parse_hid_interfaces(
+    config: &[u8],
+    out: &mut [HidCandidate; MAX_HID_INTERFACES],
+) -> usize {
+    let mut count = 0usize;
     let mut i = 0usize;
     let mut current: Option<(u8, u8, u8, u8)> = None; // (iface, class, subclass, protocol)
-    let mut best: Option<HidCandidate> = None;
+    let mut endpoint_taken = false;
 
     while i + 2 <= config.len() {
         let len = config[i] as usize;
@@ -1385,42 +1707,45 @@ fn parse_hid_interface(config: &[u8]) -> Option<HidCandidate> {
         }
 
         if dtype == 0x04 && len >= 9 {
-            current = Some((config[i + 2], config[i + 5], config[i + 6], config[i + 7]));
+            // Yalnızca varsayılan alternatif ayarı (bAlternateSetting = 0)
+            // kullan; alternatif HID ayarlarındaki uç noktaları yapılandırma.
+            if config[i + 3] == 0 {
+                current = Some((config[i + 2], config[i + 5], config[i + 6], config[i + 7]));
+            } else {
+                current = None;
+            }
+            endpoint_taken = false;
         } else if dtype == 0x05 && len >= 7 {
             if let Some((interface, class, subclass, protocol)) = current {
-                if class == 0x03 {
+                if class == 0x03 && !endpoint_taken {
                     let endpoint = config[i + 2];
                     let attributes = config[i + 3];
-                    if endpoint & 0x80 != 0 && attributes & 0x03 == 0x03 {
-                        let max_packet = ((config[i + 4] as usize) | ((config[i + 5] as usize) << 8)) & 0x7FF;
-                        let boot = subclass == 0x01 && (protocol == 1 || protocol == 2);
-                        let kind = if boot && protocol == 1 {
-                            HidKind::Keyboard
-                        } else if boot && protocol == 2 {
-                            HidKind::Mouse
-                        } else if protocol == 1 {
-                            HidKind::Keyboard
-                        } else {
-                            HidKind::Mouse
-                        };
-                        let candidate = HidCandidate {
-                            interface,
-                            kind,
-                            endpoint,
-                            max_packet: max_packet.max(1),
-                            interval: config[i + 6],
-                            boot,
-                            layout: HidReportLayout::default(),
-                        };
-                        // Aday öncelik sıralaması:
-                        let rank = |c: &HidCandidate| match (c.boot, c.kind) {
-                            (true, HidKind::Keyboard) => 0,
-                            (true, HidKind::Mouse) => 1,
-                            (false, HidKind::Mouse) => 2,
-                            (false, HidKind::Keyboard) => 3,
-                        };
-                        if best.map_or(true, |b| rank(&candidate) < rank(&b)) {
-                            best = Some(candidate);
+                    if endpoint & 0x80 != 0 && attributes & 0x03 == 0x03 && endpoint & 0x0F != 0 {
+                        endpoint_taken = true;
+                        if count < MAX_HID_INTERFACES {
+                            let max_packet = ((config[i + 4] as usize)
+                                | ((config[i + 5] as usize) << 8))
+                                & 0x7FF;
+                            // Protokol 0 ("none") yaygın olarak boot dışı
+                            // klavye/farelerde görülür; sınıfı rapor
+                            // tanımlayıcısı belirleyecek.
+                            let kind = match protocol {
+                                1 => Some(HidKind::Keyboard),
+                                2 => Some(HidKind::Mouse),
+                                _ => None,
+                            };
+                            let boot = subclass == 0x01 && (protocol == 1 || protocol == 2);
+                            out[count] = HidCandidate {
+                                interface,
+                                kind,
+                                endpoint,
+                                max_packet: max_packet.max(1),
+                                interval: config[i + 6],
+                                boot,
+                                custom: !boot,
+                                layout: HidReportLayout::empty(),
+                            };
+                            count += 1;
                         }
                     }
                 }
@@ -1430,12 +1755,15 @@ fn parse_hid_interface(config: &[u8]) -> Option<HidCandidate> {
         i += len;
     }
 
-    best
+    count
 }
 
-/// Yapılandırmadan seçilen aday için HID rapor tanımlayıcısını okur ve
-/// boot olmayan farelerde alan yerleşimini çıkarır. Başarısız olursa
-/// standart boot düzeni korunur.
+/// Aday arayüzün HID rapor tanımlayıcısını okur, alan yerleşimini çıkarır ve
+/// sınıfı (klavye/fare) netleştirir.
+///
+/// Protokol alanı 1/2 olan arayüzler boot raporu kullanır; tanımlayıcı
+/// okunamazsa boot yerleşimine düşülür. Protokol 0 arayüzlerde ise sınıf
+/// yalnızca rapor tanımlayıcısından belirlenebilir.
 unsafe fn load_report_layout(
     c: &mut XhciController,
     ep0_ring: &mut TrbRing,
@@ -1443,230 +1771,67 @@ unsafe fn load_report_layout(
     candidate: &mut HidCandidate,
     buffer_phys: u64,
     buffer: *mut u8,
-) {
-    if candidate.boot || candidate.kind != HidKind::Mouse {
-        return;
+) -> bool {
+    let explicit_kind = candidate.kind;
+    let mut layout = HidReportLayout::empty();
+
+    core::ptr::write_bytes(buffer, 0, PAGE as usize);
+    if let Some(n) = c.control_in(
+        ep0_ring,
+        slot,
+        0x81,
+        0x06,
+        0x2200,
+        candidate.interface as u16,
+        buffer_phys,
+        PAGE as usize,
+    ) {
+        if n > 0 {
+            let desc = core::slice::from_raw_parts(buffer, n.min(PAGE as usize));
+            layout = parse_hid_report_descriptor(desc);
+        }
     }
-    // HID Tanımlayıcı (bDescriptorType = 0x21) uzunluğunu yapılandırma
-    // tanımlayıcısından okumak yerine doğrudan GET_DESCRIPTOR ile alınır.
-    let Some(n) = c.control_in(
-        ep0_ring, slot, 0x81, 0x06,
-        0x2200, candidate.interface as u16, buffer_phys, 512,
-    ) else {
-        return;
-    };
-    if n == 0 {
-        return;
-    }
-    let desc = core::slice::from_raw_parts(buffer, n.min(512));
-    let layout = parse_hid_report_descriptor(desc);
-    if layout.is_valid() {
-        candidate.layout = layout;
+
+    match explicit_kind {
+        Some(HidKind::Keyboard) => {
+            if layout.keyboard_valid() {
+                candidate.layout = layout;
+            } else {
+                // Boot protokolü (veya protocol=1) klavyesi: 8 baytlık boot raporu.
+                candidate.layout = HidReportLayout::keyboard_boot();
+                candidate.custom = !candidate.boot;
+            }
+            true
+        }
+        Some(HidKind::Mouse) => {
+            if layout.pointer_valid() {
+                candidate.layout = layout;
+            } else {
+                candidate.layout = HidReportLayout::mouse_boot();
+                candidate.custom = !candidate.boot;
+            }
+            true
+        }
+        None => {
+            if layout.keyboard_valid() {
+                candidate.kind = Some(HidKind::Keyboard);
+                candidate.layout = layout;
+                candidate.custom = true;
+                true
+            } else if layout.pointer_valid() {
+                candidate.kind = Some(HidKind::Mouse);
+                candidate.layout = layout;
+                candidate.custom = true;
+                true
+            } else {
+                false
+            }
+        }
     }
 }
 
 /// HID kullanım kimliğini PS/2 set-1 tarama koduna çevirir.
 /// Dönüş: (scancode, genişletilmiş mi?)
-fn hid_key_to_scancode(usage: u8) -> Option<(u8, bool)> {
-    Some(match usage {
-        0x04 => (0x1E, false), // a
-        0x05 => (0x30, false), // b
-        0x06 => (0x2E, false), // c
-        0x07 => (0x20, false), // d
-        0x08 => (0x12, false), // e
-        0x09 => (0x21, false), // f
-        0x0A => (0x22, false), // g
-        0x0B => (0x23, false), // h
-        0x0C => (0x17, false), // i
-        0x0D => (0x24, false), // j
-        0x0E => (0x25, false), // k
-        0x0F => (0x26, false), // l
-        0x10 => (0x32, false), // m
-        0x11 => (0x31, false), // n
-        0x12 => (0x18, false), // o
-        0x13 => (0x19, false), // p
-        0x14 => (0x10, false), // q
-        0x15 => (0x13, false), // r
-        0x16 => (0x1F, false), // s
-        0x17 => (0x14, false), // t
-        0x18 => (0x16, false), // u
-        0x19 => (0x2F, false), // v
-        0x1A => (0x11, false), // w
-        0x1B => (0x2D, false), // x
-        0x1C => (0x15, false), // y
-        0x1D => (0x2C, false), // z
-        0x1E => (0x02, false), // 1
-        0x1F => (0x03, false), // 2
-        0x20 => (0x04, false), // 3
-        0x21 => (0x05, false), // 4
-        0x22 => (0x06, false), // 5
-        0x23 => (0x07, false), // 6
-        0x24 => (0x08, false), // 7
-        0x25 => (0x09, false), // 8
-        0x26 => (0x0A, false), // 9
-        0x27 => (0x0B, false), // 0
-        0x28 => (0x1C, false), // Enter
-        0x29 => (0x01, false), // Escape
-        0x2A => (0x0E, false), // Backspace
-        0x2B => (0x0F, false), // Tab
-        0x2C => (0x39, false), // Space
-        0x2D => (0x0C, false), // -
-        0x2E => (0x0D, false), // =
-        0x2F => (0x1A, false), // [
-        0x30 => (0x1B, false), // ]
-        0x31 => (0x2B, false), // backslash
-        0x32 => (0x27, false), // ;
-        0x33 => (0x28, false), // '
-        0x34 => (0x29, false), // `
-        0x35 => (0x33, false), // ,
-        0x36 => (0x34, false), // .
-        0x37 => (0x35, false), // /
-        0x38 => (0x3A, false), // Caps Lock
-        0x39 => (0x3B, false), // F1
-        0x3A => (0x3C, false),
-        0x3B => (0x3D, false),
-        0x3C => (0x3E, false),
-        0x3D => (0x3F, false),
-        0x3E => (0x40, false),
-        0x3F => (0x41, false),
-        0x40 => (0x42, false),
-        0x41 => (0x43, false),
-        0x42 => (0x44, false), // F10
-        0x43 => (0x57, false), // F11
-        0x44 => (0x58, false), // F12
-        0x45 => (0x37, true),  // Print Screen
-        0x46 => (0x46, false), // Scroll Lock
-        0x47 => return None,   // Pause (E1 1D 45 dizisi ayrı ele alınmıyor)
-        0x48 => (0x52, true),  // Insert
-        0x49 => (0x47, true),  // Home
-        0x4A => (0x49, true),  // Page Up
-        0x4B => (0x53, true),  // Delete
-        0x4C => (0x4F, true),  // End
-        0x4D => (0x51, true),  // Page Down
-        0x4E => (0x4D, true),  // Right
-        0x4F => (0x4B, true),  // Left
-        0x50 => (0x50, true),  // Down
-        0x51 => (0x48, true),  // Up
-        0x52 => (0x45, false), // Num Lock
-        0x53 => (0x35, true),  // Keypad /
-        0x54 => (0x37, false), // Keypad *
-        0x55 => (0x4A, false), // Keypad -
-        0x56 => (0x4E, false), // Keypad +
-        0x57 => (0x1C, true),  // Keypad Enter
-        0x58 => (0x4F, false), // Keypad 1
-        0x59 => (0x50, false), // Keypad 2
-        0x5A => (0x51, false), // Keypad 3
-        0x5B => (0x4B, false), // Keypad 4
-        0x5C => (0x4C, false), // Keypad 5
-        0x5D => (0x4D, false), // Keypad 6
-        0x5E => (0x47, false), // Keypad 7
-        0x5F => (0x48, false), // Keypad 8
-        0x60 => (0x49, false), // Keypad 9
-        0x61 => (0x52, false), // Keypad 0
-        0x62 => (0x53, false), // Keypad .
-        0x63 => (0x59, false), // Keypad =
-        0x64 => (0x56, false), // < >
-        0x65 => (0x5D, true),  // Application
-        0x7F => (0x20, true),  // Mute
-        0x80 => (0x30, true),  // Volume Up
-        0x81 => (0x2E, true),  // Volume Down
-        _ => return None,
-    })
-}
-
-fn emit_key(kb: &mut KeyboardState, usage: u8, pressed: bool) {
-    let Some((code, extended)) = hid_key_to_scancode(usage) else { return; };
-    let code = if pressed { code } else { code | 0x80 };
-    if extended {
-        kb.handle_scancode(0xE0);
-    }
-    kb.handle_scancode(code);
-}
-
-fn emit_modifier(kb: &mut KeyboardState, bit: u8, pressed: bool) {
-    let (code, extended) = match bit {
-        0 => (0x1D, false), // Left Ctrl
-        1 => (0x2A, false), // Left Shift
-        2 => (0x38, false), // Left Alt
-        3 => (0x5B, false), // Left GUI
-        4 => (0x1D, true),  // Right Ctrl
-        5 => (0x36, false), // Right Shift
-        6 => (0x38, true),  // Right Alt
-        7 => (0x5C, true),  // Right GUI
-        _ => return,
-    };
-    let code = if pressed { code } else { code | 0x80 };
-    if extended {
-        kb.handle_scancode(0xE0);
-    }
-    kb.handle_scancode(code);
-}
-
-fn handle_keyboard_report(device: &mut HidDevice, data: &[u8], kb: &mut KeyboardState) -> bool {
-    if data.len() < 8 {
-        return false;
-    }
-
-    let modifiers = data[0];
-    let mut keys = [0u8; 6];
-    keys.copy_from_slice(&data[2..8]);
-
-    // Rollover (0x01) durumunda tuş listesini yoksay.
-    let rollover = keys.iter().any(|&k| k == 0x01);
-
-    if !rollover {
-        // Bırakılan tuşlar.
-        for i in 0..6 {
-            let old = device.prev_keys[i];
-            if old >= 0x02 && !keys.contains(&old) {
-                emit_key(kb, old, false);
-            }
-        }
-
-        // Modifier değişimleri (basılı tutulan shift yeni tuşlardan önce işlenir).
-        let changed = device.prev_modifiers ^ modifiers;
-        for bit in 0..8u8 {
-            if changed & (1 << bit) != 0 {
-                emit_modifier(kb, bit, modifiers & (1 << bit) != 0);
-            }
-        }
-
-        // Yeni basılan tuşlar.
-        for i in 0..6 {
-            let key = keys[i];
-            if key >= 0x02 && !device.prev_keys.contains(&key) {
-                emit_key(kb, key, true);
-            }
-        }
-
-        device.prev_keys = keys;
-    }
-
-    device.prev_modifiers = modifiers;
-    true
-}
-
-fn handle_mouse_report(
-    data: &[u8],
-    mouse: &mut MouseState,
-    screen_w: i32,
-    screen_h: i32,
-) -> bool {
-    if data.len() < 3 {
-        return false;
-    }
-    let buttons = data[0] & 0x07;
-    let dx = data[1] as i8;
-    // HID'de pozitif Y aşağıdır; PS/2 durumunda pozitif Y yukarı beklenir.
-    let dy = (data[2] as i8).wrapping_neg();
-    mouse.update_packet(buttons, dx, dy, screen_w, screen_h);
-    if data.len() >= 4 {
-        let wheel = data[3] as i8;
-        mouse.scroll_delta = mouse.scroll_delta.saturating_sub(wheel);
-    }
-    true
-}
-
 // ---------------------------------------------------------------------------
 // Aygıt numaralandırma
 // ---------------------------------------------------------------------------
@@ -1693,88 +1858,142 @@ unsafe fn find_free_hid_slot() -> Option<usize> {
     HID_DEVICES.iter().position(|d| !d.active)
 }
 
-unsafe fn mark_port_disconnected(controller: usize, port: u8) {
-    let c = &mut CONTROLLERS[controller];
-    let slot = c.port_slot[(port - 1) as usize];
-    c.port_slot[(port - 1) as usize] = 0;
-    c.port_connected[(port - 1) as usize] = false;
-    if slot == 0 || slot == 0xFF {
-        return;
+unsafe fn free_frames(pmm: &mut PhysicalMemoryManager, base: u64, pages: usize) {
+    for i in 0..pages {
+        pmm.free_frame(base + (i as u64) * PAGE);
     }
+}
+
+unsafe fn mark_port_disconnected(
+    controller: usize,
+    port: u8,
+    pmm: &mut PhysicalMemoryManager,
+) {
+    let idx = (port - 1) as usize;
+    let c = &mut CONTROLLERS[controller];
+    let slot = c.port_slot[idx];
+    let base = c.port_base_dma[idx];
+    c.port_slot[idx] = 0;
+    c.port_connected[idx] = false;
+    c.port_base_dma[idx] = 0;
+
+    // Slotu önce devre dışı bırak: hâlâ aygıt bağlamına erişiyor olabilir.
+    if slot != 0 && slot != 0xFF {
+        c.disable_slot(slot);
+    }
+
     for device in HID_DEVICES.iter_mut() {
         if device.active && device.controller == controller as u8 && device.slot == slot {
             device.active = false;
+            if device.dma_phys != 0 {
+                free_frames(pmm, device.dma_phys, 2);
+                device.dma_phys = 0;
+            }
             crate::serial::print("[USB-HID] Aygıt çıkarıldı (port ");
             crate::serial::print_dec(port as u64);
             crate::serial::print(").\n");
         }
     }
+
+    if base != 0 {
+        free_frames(pmm, base, 4);
+    }
+}
+
+/// Numaralandırma başarısız olduğunda slotu kapatır ve ayrılan DMA sayfalarını
+/// (aygıt başına 4 sayfa + arayüz başına 2 sayfa) geri verir.
+unsafe fn abort_port(
+    c: &mut XhciController,
+    pmm: &mut PhysicalMemoryManager,
+    port: u8,
+    slot: u8,
+    base: u64,
+    blocks: &[u64; MAX_HID_INTERFACES],
+    block_count: usize,
+) {
     c.disable_slot(slot);
+    let idx = (port - 1) as usize;
+    c.port_slot[idx] = 0xFF;
+    c.port_connected[idx] = false;
+    c.port_base_dma[idx] = 0;
+    for i in 0..block_count {
+        if blocks[i] != 0 {
+            free_frames(pmm, blocks[i], 2);
+        }
+    }
+    free_frames(pmm, base, 4);
 }
 
 unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryManager) {
     let c = &mut CONTROLLERS[controller];
+    let idx = (port - 1) as usize;
     crate::serial::print("[USB-HID] Port ");
     crate::serial::print_dec(port as u64);
     crate::serial::print(" taranıyor...\n");
 
     let Some(speed) = c.reset_port(port) else {
         crate::serial::print("[USB-HID] Port reset başarısız.\n");
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        c.port_slot[idx] = 0xFF;
         return;
     };
+    crate::serial::print("[USB-HID] Port ");
+    crate::serial::print_dec(port as u64);
+    crate::serial::print(" hız kodu=");
+    crate::serial::print_dec(speed as u64);
+    crate::serial::print("\n");
 
     let Some(slot) = c.enable_slot() else {
         crate::serial::print("[USB-HID] Slot ayrılamadı.\n");
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        c.port_slot[idx] = 0xFF;
         return;
     };
 
-    let Some(dma) = pmm.allocate_contiguous_frames(5) else {
+    // Aygıt başına kalıcı DMA: input context, device context, EP0 halkası ve
+    // kontrol/veri tamponu (4 sayfa). Arayüz halkaları ve rapor tamponları
+    // ayrıca ayrılır (arayüz başına 2 sayfa).
+    let Some(base) = pmm.allocate_contiguous_frames(4) else {
         crate::serial::print("[USB-HID] DMA belleği ayrılamadı.\n");
         c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        c.port_slot[idx] = 0xFF;
         return;
     };
-
-    let input_phys = dma;
-    let device_phys = dma + PAGE;
-    let ep0_phys = dma + 2 * PAGE;
-    let ep1_phys = dma + 3 * PAGE;
-    let buffer_phys = dma + 4 * PAGE;
-    for page in 0..5 {
-        zero_page(dma + page * PAGE);
+    let input_phys = base;
+    let device_phys = base + PAGE;
+    let ep0_phys = base + 2 * PAGE;
+    let buffer_phys = base + 3 * PAGE;
+    for page in 0..4 {
+        zero_page(base + page * PAGE);
     }
+
+    let mut blocks = [0u64; MAX_HID_INTERFACES];
+    let mut block_count = 0usize;
 
     // Cihaz bağlamı DCBAA'ya yazılmalı.
     let dcbaa = crate::drivers::phys_to_virt(c.dcbaa_phys) as *mut u64;
     core::ptr::write_volatile(dcbaa.add(slot as usize), device_phys);
 
     let mut ep0_ring = TrbRing::new(ep0_phys);
-    let ep1_ring = TrbRing::new(ep1_phys);
     let max_packet0 = initial_ep0_packet(speed);
     c.build_address_context(input_phys, speed, port, max_packet0, &ep0_ring);
 
     if !c.address_device(slot, input_phys) {
         crate::serial::print("[USB-HID] Address Device başarısız.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
-    // İlk 8 baytlık aygıt tanımlayıcısı (EP0 max packet boyutunu öğrenmek için).
     let buffer = crate::drivers::phys_to_virt(buffer_phys) as *mut u8;
+
+    // İlk 8 baytlık aygıt tanımlayıcısı (EP0 max packet boyutunu öğrenmek için).
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0100, 0, buffer_phys, 8) else {
         crate::serial::print("[USB-HID] Aygıt tanımlayıcısı okunamadı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     };
     if n < 8 {
         crate::serial::print("[USB-HID] Kısa aygıt tanımlayıcısı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
@@ -1787,8 +2006,7 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     if ep0_mps != max_packet0 {
         if !c.update_ep0_max_packet(slot, input_phys, speed, port, ep0_mps, &ep0_ring) {
             crate::serial::print("[USB-HID] EP0 max packet güncellenemedi.\n");
-            c.disable_slot(slot);
-            c.port_slot[(port - 1) as usize] = 0xFF;
+            abort_port(c, pmm, port, slot, base, &blocks, block_count);
             return;
         }
     }
@@ -1797,36 +2015,45 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0100, 0, buffer_phys, 18) else {
         crate::serial::print("[USB-HID] Tam aygıt tanımlayıcısı okunamadı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     };
     if n < 18 {
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
     let vendor = core::ptr::read_volatile(buffer.add(8)) as u16
         | ((core::ptr::read_volatile(buffer.add(9)) as u16) << 8);
     let product = core::ptr::read_volatile(buffer.add(10)) as u16
         | ((core::ptr::read_volatile(buffer.add(11)) as u16) << 8);
+    let device_class = core::ptr::read_volatile(buffer.add(4));
     crate::serial::print("[USB-HID] Aygıt VID:PID = ");
     crate::serial::print_hex(vendor as u64);
     crate::serial::print(":");
     crate::serial::print_hex(product as u64);
+    crate::serial::print(" sınıf=");
+    crate::serial::print_hex(device_class as u64);
     crate::serial::print("\n");
+
+    // Hub arkasındaki klavye/fareler için yerel hub sürücüsü henüz yok;
+    // firmware legacy emülasyonu (PS/2 yolu) bu durumda devreye girer.
+    if device_class == 0x09 {
+        crate::serial::print(
+            "[USB-HID] USB hub algılandı; hub arkasındaki aygıtlar için yerel sürücü yok.\n",
+        );
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        return;
+    }
 
     // Yapılandırma tanımlayıcısının başlığı.
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0200, 0, buffer_phys, 9) else {
         crate::serial::print("[USB-HID] Yapılandırma başlığı okunamadı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     };
     if n < 9 {
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
     let total = core::ptr::read_volatile(buffer.add(2)) as usize
@@ -1834,142 +2061,234 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let config_value = core::ptr::read_volatile(buffer.add(5));
     if total < 9 || total > PAGE as usize {
         crate::serial::print("[USB-HID] Yapılandırma boyutu geçersiz.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0200, 0, buffer_phys, total) else {
         crate::serial::print("[USB-HID] Yapılandırma tanımlayıcısı okunamadı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     };
     if n < 9 {
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
     let config_slice = core::slice::from_raw_parts(buffer, n.min(PAGE as usize));
-    let Some(mut candidate) = parse_hid_interface(config_slice) else {
-        crate::serial::print("[USB-HID] HID boot arayüzü bulunamadı; aygıt atlandı.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+    let mut candidates = [HidCandidate::empty(); MAX_HID_INTERFACES];
+    let found = parse_hid_interfaces(config_slice, &mut candidates);
+    if found == 0 {
+        crate::serial::print("[USB-HID] HID arayüzü bulunamadı; aygıt atlandı.\n");
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
-    };
+    }
 
-    // HID rapor tanımlayıcısını (Report Descriptor) oku; boot olmayan fareler
-    // için alan yerleşimini çıkar.
-    unsafe {
-        load_report_layout(
-            c, &mut ep0_ring, slot, &mut candidate,
-            buffer_phys, buffer,
-        );
+    // Her arayüzün rapor tanımlayıcısını oku ve klavye/fare sınıfını netleştir.
+    let mut usable = [HidCandidate::empty(); MAX_HID_INTERFACES];
+    let mut usable_count = 0usize;
+    for i in 0..found {
+        if load_report_layout(
+            c,
+            &mut ep0_ring,
+            slot,
+            &mut candidates[i],
+            buffer_phys,
+            buffer,
+        ) {
+            usable[usable_count] = candidates[i];
+            usable_count += 1;
+        } else {
+            crate::serial::print("[USB-HID] Arayüz ");
+            crate::serial::print_dec(candidates[i].interface as u64);
+            crate::serial::print(" HID klavye/fare değil; atlandı.\n");
+        }
+    }
+    if usable_count == 0 {
+        crate::serial::print("[USB-HID] Kullanılabilir HID klavye/fare arayüzü yok.\n");
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        return;
+    }
+
+    let free_slots = HID_DEVICES.iter().filter(|d| !d.active).count();
+    let count = usable_count.min(free_slots).min(MAX_HID_INTERFACES);
+    if count == 0 {
+        crate::serial::print("[USB-HID] Boş HID aygıt yuvası yok.\n");
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        return;
+    }
+    if count < usable_count {
+        crate::serial::print("[USB-HID] HID aygıt yuvası sınırı: bazı arayüzler atlandı.\n");
     }
 
     // Yapılandırmayı seç.
     if c.control_out(&mut ep0_ring, slot, 0x00, 0x09, config_value as u16, 0, 0, 0).is_none() {
         crate::serial::print("[USB-HID] SET_CONFIGURATION başarısız.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
-    // Boot protokollü arayüzlerde HID boot protokolüne geç (0 = boot).
-    // Boot olmayan aygıtlarda bu istek desteklenmeyebilir; başarısızlık
-    // aygıtı engellemez, raporlar kendi biçiminde ayrıştırılır.
-    let mut custom = false;
-    if candidate.boot {
-        if c.control_out(&mut ep0_ring, slot, 0x21, 0x0B, 0, candidate.interface as u16, 0, 0).is_none() {
-            crate::serial::print("[USB-HID] SET_PROTOCOL (boot) başarısız; özel rapor düzeni kullanılacak.\n");
-            custom = true;
+    // Boot protokollü arayüzlerde boot rapor biçimine geç (0 = boot).
+    // Başarısız olursa rapor tanımlayıcısından çıkarılan özel düzen kullanılır.
+    for i in 0..count {
+        if usable[i].boot {
+            if c.control_out(
+                &mut ep0_ring,
+                slot,
+                0x21,
+                0x0B,
+                0,
+                usable[i].interface as u16,
+                0,
+                0,
+            )
+            .is_none()
+            {
+                crate::serial::print(
+                    "[USB-HID] SET_PROTOCOL (boot) başarısız; rapor tanımlayıcısı kullanılacak.\n",
+                );
+                usable[i].custom = true;
+            } else {
+                usable[i].custom = false;
+            }
+        } else {
+            usable[i].custom = true;
         }
-    } else {
-        custom = true;
-        crate::serial::print("[USB-HID] Boot protokolü yok; rapor tanımlayıcısından düzen çıkarıldı.\n");
     }
 
-    // Kesme IN uç noktasını yapılandır.
-    let ep_number = candidate.endpoint & 0x0F;
-    let dci = ep_number * 2 + 1;
+    // Arayüz başına kesme halkası + rapor tamponu (2 sayfa).
+    for i in 0..count {
+        match pmm.allocate_contiguous_frames(2) {
+            Some(block) => {
+                zero_page(block);
+                zero_page(block + PAGE);
+                blocks[i] = block;
+                block_count = i + 1;
+            }
+            None => {
+                crate::serial::print("[USB-HID] Arayüz DMA belleği ayrılamadı.\n");
+                abort_port(c, pmm, port, slot, base, &blocks, block_count);
+                return;
+            }
+        }
+    }
+
+    // Tüm kesme IN uç noktalarını tek Configure Endpoint komutuyla kur.
     zero_page(input_phys);
-    // Slot bağlamı (A0) ve kesme IN uç noktası (A<DCI>) eklenir. EP0 zaten
-    // yapılandırıldığı için A1 (EP0) bayrağı ve EP0 bağlamı boş bırakılır.
-    c.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << dci));
+    let mut ctx_flags = 1u32; // A0: slot bağlamı.
+    let mut max_dci = 0u8;
+    for i in 0..count {
+        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        ctx_flags |= 1 << dci;
+        if dci > max_dci {
+            max_dci = dci;
+        }
+    }
+    c.ctx_write(input_phys, 0, 1, ctx_flags);
     c.ctx_write(
         input_phys,
         1,
         0,
-        ((speed as u32) << 20) | (((dci as u32) & 0x1F) << 27),
+        ((speed as u32) << 20) | (((max_dci as u32) & 0x1F) << 27),
     );
     c.ctx_write(input_phys, 1, 1, (port as u32) << 16);
-    let ep_index = dci as usize + 1;
-    c.ctx_write(
-        input_phys,
-        ep_index,
-        0,
-        report_interval(speed, candidate.interval) << 16,
-    );
-    c.ctx_write(
-        input_phys,
-        ep_index,
-        1,
-        (3 << 1) | (7 << 3) | ((candidate.max_packet as u32) << 16),
-    );
-    c.ctx_write(input_phys, ep_index, 2, (ep1_ring.phys as u32) | 1);
-    c.ctx_write(input_phys, ep_index, 3, (ep1_ring.phys >> 32) as u32);
+    for i in 0..count {
+        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        let ep_index = dci as usize + 1;
+        let ring_phys = blocks[i];
+        c.ctx_write(
+            input_phys,
+            ep_index,
+            0,
+            report_interval(speed, usable[i].interval) << 16,
+        );
+        c.ctx_write(
+            input_phys,
+            ep_index,
+            1,
+            (3 << 1) | (7 << 3) | ((usable[i].max_packet as u32) << 16),
+        );
+        c.ctx_write(input_phys, ep_index, 2, (ring_phys as u32) | 1);
+        c.ctx_write(input_phys, ep_index, 3, (ring_phys >> 32) as u32);
+    }
 
     if !c.configure_endpoint(slot, input_phys) {
         crate::serial::print("[USB-HID] Configure Endpoint başarısız.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
+        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
-    let Some(index) = find_free_hid_slot() else {
-        crate::serial::print("[USB-HID] Boş HID aygıt yuvası yok.\n");
-        c.disable_slot(slot);
-        c.port_slot[(port - 1) as usize] = 0xFF;
-        return;
-    };
+    c.port_base_dma[idx] = base;
+    c.port_slot[idx] = slot;
+    c.port_connected[idx] = true;
 
-    let report_len = candidate.max_packet.clamp(1, 64);
-    HID_DEVICES[index] = HidDevice {
-        active: true,
-        controller: controller as u8,
-        slot,
-        port,
-        kind: candidate.kind,
-        dci,
-        ep_ring: ep1_ring,
-        report_phys: buffer_phys,
-        report_len,
-        prev_modifiers: 0,
-        prev_keys: [0; 6],
-        custom,
-        layout: candidate.layout,
-        samples: 0,
-    };
-    c.port_slot[(port - 1) as usize] = slot;
-    c.port_connected[(port - 1) as usize] = true;
+    let mut led_owner = false;
+    for i in 0..count {
+        let Some(index) = find_free_hid_slot() else { break; };
+        let kind = usable[i].kind.unwrap_or(HidKind::Keyboard);
+        let ring_phys = blocks[i];
+        let report_phys = ring_phys + PAGE;
+        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        let report_len = usable[i].max_packet.clamp(1, 1024);
+        let custom = usable[i].custom;
+        let mut device = HidDevice {
+            active: true,
+            controller: controller as u8,
+            slot,
+            port,
+            kind,
+            dci,
+            interface: usable[i].interface,
+            ep_ring: TrbRing::new(ring_phys),
+            report_phys,
+            report_len,
+            prev_modifiers: 0,
+            prev_keys: [0; 6],
+            custom,
+            layout: usable[i].layout,
+            samples: 0,
+            dma_phys: ring_phys,
+            ep0_ring: TrbRing::empty(),
+            ctrl_phys: 0,
+            led_capable: false,
+            led_report_id: 0,
+            leds: 0xFF,
+        };
 
-    crate::serial::print("[USB-HID] HID ");
-    crate::serial::print(candidate.kind.label());
-    crate::serial::print(" hazır (slot ");
-    crate::serial::print_dec(slot as u64);
-    crate::serial::print(", rapor ");
-    crate::serial::print_dec(report_len as u64);
-    crate::serial::print(" bayt");
-    if custom {
-        crate::serial::print(", özel düzen (düğmeler=");
-        crate::serial::print_dec(candidate.layout.buttons as u64);
-        crate::serial::print(")");
+        // Slotun EP0 halkası ortaktır; LED senkronizasyonu için yalnızca ilk
+        // klavyeye devredilir. Boot klavyeler LED çıktısını zorunlu destekler.
+        if kind == HidKind::Keyboard
+            && !led_owner
+            && (usable[i].boot
+                || (usable[i].layout.led_output && usable[i].layout.led_offset == 0))
+        {
+            device.led_capable = true;
+            device.ep0_ring = ep0_ring;
+            device.ctrl_phys = buffer_phys;
+            device.led_report_id = if custom { usable[i].layout.led_report_id } else { 0 };
+            led_owner = true;
+        }
+
+        HID_DEVICES[index] = device;
+        queue_hid_transfer(&mut HID_DEVICES[index]);
+
+        crate::serial::print("[USB-HID] HID ");
+        crate::serial::print(kind.label());
+        crate::serial::print(" hazır (arayüz ");
+        crate::serial::print_dec(usable[i].interface as u64);
+        crate::serial::print(", slot ");
+        crate::serial::print_dec(slot as u64);
+        crate::serial::print(", rapor ");
+        crate::serial::print_dec(report_len as u64);
+        crate::serial::print(" bayt");
+        if custom {
+            crate::serial::print(", özel düzen (düğmeler=");
+            crate::serial::print_dec(usable[i].layout.buttons as u64);
+            crate::serial::print(")");
+        }
+        crate::serial::print(").\n");
     }
-    crate::serial::print(").\n");
-
-    queue_hid_transfer(&mut HID_DEVICES[index]);
 }
 
 unsafe fn queue_hid_transfer(device: &mut HidDevice) {
@@ -2024,13 +2343,49 @@ unsafe fn handle_transfer_event(
                             prev_keys: device.prev_keys,
                             leds: 0,
                         };
-                        if crate::drivers::usb_keyboard::process_keyboard_report(&mut kbd_dev, data, keyboard) {
+                        let ok = if device.custom {
+                            // Boot protokolü kullanılmıyorsa report ID ve alan
+                            // konumları rapor tanımlayıcısından gelir.
+                            let layout = crate::drivers::usb_keyboard::KeyboardReportLayout {
+                                report_id: device.layout.report_id,
+                                modifier_offset: device.layout.modifier_offset,
+                                key_offset: device.layout.key_offset,
+                                key_count: device.layout.key_count,
+                            };
+                            crate::drivers::usb_keyboard::process_keyboard_report_layout(
+                                &mut kbd_dev,
+                                data,
+                                &layout,
+                                keyboard,
+                            )
+                        } else {
+                            crate::drivers::usb_keyboard::process_keyboard_report(
+                                &mut kbd_dev,
+                                data,
+                                keyboard,
+                            )
+                        };
+                        if ok {
                             device.prev_modifiers = kbd_dev.prev_modifiers;
                             device.prev_keys = kbd_dev.prev_keys;
                             updated.keyboard = true;
                         }
+                        // Tanılama: ilk 8 klavye raporunun hex dökümü.
+                        if device.samples < 8 {
+                            device.samples += 1;
+                            crate::serial::print("[USB-HID] klavye raporu: ");
+                            for b in data.iter().take(8) {
+                                crate::serial::print_hex(*b as u64);
+                                crate::serial::print(" ");
+                            }
+                            crate::serial::print("\n");
+                        }
                     }
                     HidKind::Mouse => {
+                        // Mutlak/göreli karar rapor uzunluğuna göre değil,
+                        // rapor tanımlayıcısındaki Input öğesinin Absolute
+                        // bitine göre verilir. Boot protokolünde fare raporu
+                        // her zaman görelidir.
                         let ok = if device.custom {
                             handle_custom_mouse_report(
                                 data,
@@ -2042,11 +2397,7 @@ unsafe fn handle_transfer_event(
                         } else {
                             let mut mouse_dev = crate::drivers::usb_mouse::UsbMouseDevice {
                                 active: device.active,
-                                mode: if data.len() >= 6 && data.len() <= 8 {
-                                    crate::drivers::usb_mouse::UsbPointerMode::Absolute
-                                } else {
-                                    crate::drivers::usb_mouse::UsbPointerMode::Relative
-                                },
+                                mode: crate::drivers::usb_mouse::UsbPointerMode::Relative,
                                 last_buttons: 0,
                             };
                             crate::drivers::usb_mouse::process_mouse_report(
@@ -2060,8 +2411,8 @@ unsafe fn handle_transfer_event(
                         if ok {
                             updated.mouse = true;
                         }
-                        // Tanılama: özel düzende ilk 8 raporun hex dökümü.
-                        if device.custom && device.samples < 8 {
+                        // Tanılama: ilk 8 fare raporunun hex dökümü.
+                        if device.samples < 8 {
                             device.samples += 1;
                             crate::serial::print("[USB-HID] fare raporu: ");
                             for b in data.iter().take(8) {
@@ -2096,6 +2447,78 @@ unsafe fn handle_transfer_event(
     }
 
     updated
+}
+
+/// Klavye LED'lerini (Caps Lock / Num Lock) aygıtla eşitler.
+///
+/// HID LED çıktı raporu SET_REPORT (Output) kontrol aktarımıyla gönderilir.
+/// Yalnızca durum değiştiğinde çağrılır; böylece her karede kontrol aktarımı
+/// yapılmaz. EP0 halkası slot genelinde ortak olduğu için yalnızca slotun ilk
+/// klavyesi bu işi üstlenir (`led_capable`).
+unsafe fn sync_keyboard_leds(keyboard: &KeyboardState) {
+    let desired = crate::drivers::usb_keyboard::led_value(
+        keyboard.caps_lock,
+        keyboard.num_lock,
+        false,
+    );
+
+    for i in 0..HID_DEVICES.len() {
+        if !HID_DEVICES[i].active
+            || !HID_DEVICES[i].led_capable
+            || HID_DEVICES[i].leds == desired
+        {
+            continue;
+        }
+
+        let ci = HID_DEVICES[i].controller as usize;
+        let slot = HID_DEVICES[i].slot;
+        let interface = HID_DEVICES[i].interface;
+        let ctrl_phys = HID_DEVICES[i].ctrl_phys;
+        let report_id = HID_DEVICES[i].led_report_id;
+        if ci >= CONTROLLER_COUNT || ctrl_phys == 0 {
+            HID_DEVICES[i].led_capable = false;
+            continue;
+        }
+
+        let buffer = crate::drivers::phys_to_virt(ctrl_phys) as *mut u8;
+        let length = if report_id != 0 {
+            core::ptr::write_volatile(buffer, report_id);
+            core::ptr::write_volatile(buffer.add(1), desired);
+            2
+        } else {
+            core::ptr::write_volatile(buffer, desired);
+            1
+        };
+
+        let mut ring = HID_DEVICES[i].ep0_ring;
+        let c = &mut CONTROLLERS[ci];
+        let ok = c
+            .control_out(
+                &mut ring,
+                slot,
+                0x21,
+                0x09,
+                0x0200,
+                interface as u16,
+                ctrl_phys,
+                length,
+            )
+            .is_some();
+        HID_DEVICES[i].ep0_ring = ring;
+
+        if ok {
+            HID_DEVICES[i].leds = desired;
+            crate::serial::print("[USB-HID] Klavye LED güncellendi: ");
+            crate::serial::print_hex(desired as u64);
+            crate::serial::print("\n");
+        } else {
+            // Aygıt SET_REPORT'u reddetti; her karede yeniden denemeyi bırak.
+            HID_DEVICES[i].led_capable = false;
+            crate::serial::print(
+                "[USB-HID] Klavye LED raporu gönderilemedi; LED eşitleme kapatıldı.\n",
+            );
+        }
+    }
 }
 
 unsafe fn dispatch_event(
@@ -2217,10 +2640,10 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
                 continue;
             }
             // Port gücünü aç (PPC destekliyorsa).
-            let hccparams1 = c.rd32(0x10);
+            let hccparams1 = c.rd32(c.mmio + 0x10);
             if hccparams1 & (1 << 3) != 0 {
                 for port in 1..=c.max_ports.min(MAX_PORTS as u8) {
-                    let off = XhciController::port_offset(port);
+                    let off = c.op + XhciController::port_offset(port);
                     let status = c.rd32(off);
                     c.wr32(off, (status & PORTSC_KEEP) | PORTSC_PP);
                 }
@@ -2263,7 +2686,7 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
     for port in 1..=max_ports {
         let idx = (port - 1) as usize;
         let c = &mut CONTROLLERS[controller];
-        let off = XhciController::port_offset(port);
+        let off = c.op + XhciController::port_offset(port);
         let status = c.rd32(off);
         let connected = status & PORTSC_CCS != 0;
         let changed = status & PORTSC_CSC != 0;
@@ -2276,7 +2699,7 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
 
         if !connected {
             if was_connected || known_slot != 0 {
-                mark_port_disconnected(controller, port);
+                mark_port_disconnected(controller, port, pmm);
             }
             continue;
         }
@@ -2287,7 +2710,7 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
         if should_enumerate {
             if known_slot != 0 && known_slot != 0xFF {
                 // Port yeniden sıfırlandıysa eski aygıtı kapat.
-                mark_port_disconnected(controller, port);
+                mark_port_disconnected(controller, port, pmm);
             }
             enumerate_port(controller, port, pmm);
         }
@@ -2365,6 +2788,9 @@ pub fn poll_input(
                 update.keyboard |= changed.keyboard;
             }
         }
+
+        // Caps Lock / Num Lock LED'lerini klavye durumuyla eşitle.
+        sync_keyboard_leds(keyboard);
     }
     update
 }

@@ -74,6 +74,7 @@ pub const HID_KEY_KP1: u8 = 0x59;
 pub const HID_KEY_KP0: u8 = 0x62;
 pub const HID_KEY_KPDOT: u8 = 0x63;
 pub const HID_KEY_102ND: u8 = 0x64; // Non-US \ and |
+pub const HID_KEY_APPLICATION: u8 = 0x65; // Menü / Context Menu tuşu
 
 // Medya Tuşları (Usage Page 0x0C - Consumer Controls)
 pub const HID_CONSUMER_MUTE: u8 = 0x7F;
@@ -121,6 +122,34 @@ impl UsbKeyboardDevice {
         self.prev_modifiers = 0;
         self.prev_keys = [0; 6];
         self.leds = 0;
+    }
+}
+
+/// Rapor tanımlayıcısından (Report Descriptor) çıkarılan tuş alanı yerleşimi.
+///
+/// Boot protokolündeki klavyelerde rapor her zaman `[modifier, reserved, 6 tuş]`
+/// biçimindedir (`KeyboardReportLayout::boot`). Boot protokolü sunmayan
+/// klavyelerde modifier baytı ve tuş dizisi farklı konumlarda olabilir; ayrıca
+/// raporun ilk baytı Report ID olabilir.
+#[derive(Clone, Copy)]
+pub struct KeyboardReportLayout {
+    pub report_id: u8,
+    /// Modifier bitlerini taşıyan baytın rapor gövdesindeki indeksi.
+    pub modifier_offset: u8,
+    /// İlk tuş yuvasının rapor gövdesindeki bayt indeksi.
+    pub key_offset: u8,
+    /// Tuş yuvası sayısı (en fazla 6 tanesi işlenir).
+    pub key_count: u8,
+}
+
+impl KeyboardReportLayout {
+    pub const fn boot() -> Self {
+        Self {
+            report_id: 0,
+            modifier_offset: 0,
+            key_offset: 2,
+            key_count: 6,
+        }
     }
 }
 
@@ -232,6 +261,8 @@ pub fn hid_usage_to_scancode(usage: u8) -> Option<(u8, bool)> {
         0x62 => (0x52, false), // Keypad 0
         0x63 => (0x53, false), // Keypad .
         0x64 => (0x56, false), // Non-US < > |
+        0x65 => (0x5D, true),  // Application / Menu
+        0x67 => (0x59, false), // Keypad =
 
         // Multimedya ve Ses Kontrol
         0x7F => (0x20, true),  // Mute
@@ -290,18 +321,58 @@ pub fn process_keyboard_report(
     if report.len() < 8 {
         return false;
     }
+    apply_keyboard_report(dev, report[0], &report[2..8], kb)
+}
 
-    let modifiers = report[0];
-    let mut current_keys = [0u8; 6];
-    current_keys.copy_from_slice(&report[2..8]);
+/// Boot protokolü kullanmayan (Report ID ve/veya farklı alan yerleşimi olan)
+/// klavye raporunu ayrıştırır. `layout` rapor tanımlayıcısından çıkarılmıştır.
+pub fn process_keyboard_report_layout(
+    dev: &mut UsbKeyboardDevice,
+    report: &[u8],
+    layout: &KeyboardReportLayout,
+    kb: &mut KeyboardState,
+) -> bool {
+    let body = if layout.report_id != 0 {
+        if report.is_empty() || report[0] != layout.report_id {
+            return false;
+        }
+        &report[1..]
+    } else {
+        report
+    };
 
-    // Rollover kontrolü (Aynı anda izin verilenden fazla tuş basıldığında 0x01 gelir)
-    let is_rollover = current_keys.iter().any(|&k| k == HID_KEY_ERROR_ROLLOVER);
-    if is_rollover {
+    let modifier_index = layout.modifier_offset as usize;
+    if modifier_index >= body.len() {
+        return false;
+    }
+    let key_start = layout.key_offset as usize;
+    let key_count = (layout.key_count as usize).min(6);
+    if key_count == 0 || key_start + key_count > body.len() {
         return false;
     }
 
-    // 1. Bırakılan Tuşları Tespit Et ve Bırakma Olayı Üret
+    let modifiers = body[modifier_index];
+    apply_keyboard_report(dev, modifiers, &body[key_start..key_start + key_count], kb)
+}
+
+/// Ortak rapor uygulaması: modifier farkları, bırakılan ve yeni basılan tuşlar.
+/// `keys` en fazla 6 tuş yuvası içerir (boot protokolü sınırı).
+fn apply_keyboard_report(
+    dev: &mut UsbKeyboardDevice,
+    modifiers: u8,
+    keys: &[u8],
+    kb: &mut KeyboardState,
+) -> bool {
+    let mut current_keys = [0u8; 6];
+    let count = keys.len().min(6);
+    current_keys[..count].copy_from_slice(&keys[..count]);
+
+    // Rollover (0x01): aynı anda izin verilenden fazla tuş basıldı; bu raporu atla.
+    if current_keys.iter().any(|&k| k == HID_KEY_ERROR_ROLLOVER) {
+        return false;
+    }
+
+    // 1. Bırakılan tuşlar.
     for i in 0..6 {
         let old_key = dev.prev_keys[i];
         if old_key >= 0x04 && !current_keys.contains(&old_key) {
@@ -309,7 +380,7 @@ pub fn process_keyboard_report(
         }
     }
 
-    // 2. Değişen Modifier Tuşları (Shift, Ctrl, Alt, GUI)
+    // 2. Değişen modifier tuşları (Shift, Ctrl, Alt, GUI).
     let mod_changed = dev.prev_modifiers ^ modifiers;
     if mod_changed != 0 {
         for bit in 0..8u8 {
@@ -320,8 +391,8 @@ pub fn process_keyboard_report(
         }
     }
 
-    // 3. Yeni Basılan Tuşları Tespit Et ve Basma Olayı Üret
-    for i in 0..6 {
+    // 3. Yeni basılan tuşlar.
+    for i in 0..count {
         let new_key = current_keys[i];
         if new_key >= 0x04 && !dev.prev_keys.contains(&new_key) {
             emit_key_event(kb, new_key, true);
@@ -331,4 +402,20 @@ pub fn process_keyboard_report(
     dev.prev_keys = current_keys;
     dev.prev_modifiers = modifiers;
     true
+}
+
+/// Klavye durumundan HID LED çıktı raporu değerini üretir.
+/// HID LED sayfası: Num Lock = bit 0, Caps Lock = bit 1, Scroll Lock = bit 2.
+pub fn led_value(caps_lock: bool, num_lock: bool, scroll_lock: bool) -> u8 {
+    let mut value = 0u8;
+    if num_lock {
+        value |= LED_NUM_LOCK;
+    }
+    if caps_lock {
+        value |= LED_CAPS_LOCK;
+    }
+    if scroll_lock {
+        value |= LED_SCROLL_LOCK;
+    }
+    value
 }

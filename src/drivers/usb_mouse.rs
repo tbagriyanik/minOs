@@ -56,7 +56,11 @@ impl UsbMouseDevice {
 /// 1. Standart Boot Mouse (3 bayt): `[Buttons, dX, dY]`
 /// 2. IntelliMouse USB (4 bayt): `[Buttons, dX, dY, Wheel]`
 /// 3. 5-Butonlu Fare (5 bayt): `[Buttons, dX, dY, Wheel, Pan]`
-/// 4. Mutlak USB Tablet (6 bayt): `[Buttons, X_Lo, X_Hi, Y_Lo, Y_Hi]` (0..32767)
+/// 4. Mutlak USB Tablet (6 bayt): `[Buttons, X_Lo, X_Hi, Y_Lo, Y_Hi, Wheel]`
+///
+/// Mutlak/göreli ayrımı `dev.mode` ile yapılır; bu değer xHCI sürücüsünde rapor
+/// tanımlayıcısındaki Input öğesinin Absolute bitinden türetilir. Rapor
+/// uzunluğuna bakarak karar vermek 6 baytlık göreceli fareleri yanlış sınıflar.
 pub fn process_mouse_report(
     dev: &mut UsbMouseDevice,
     report: &[u8],
@@ -68,17 +72,22 @@ pub fn process_mouse_report(
         return false;
     }
 
-    // 1. Mutlak (Absolute) USB Tablet Raporu Kontrolü (6 bayt)
-    // QEMU `-device usb-tablet` veya dokunmatik ekran modunda X/Y mutlak 16-bit gelir.
-    if dev.mode == UsbPointerMode::Absolute || (report.len() >= 6 && report.len() <= 8) {
+    // 1. Mutlak (Absolute) USB Tablet Raporu
+    // Yalnızca aygıtın rapor tanımlayıcısı mutlak eksen bildirdiğinde bu yol
+    // kullanılır. Rapor uzunluğuna bakarak karar vermek, 6 baytlık göreceli
+    // fareleri (5 düğme + 16-bit dX/dY) yanlışlıkla tablet sanmaya yol açıyordu.
+    if dev.mode == UsbPointerMode::Absolute {
+        if report.len() < 5 {
+            return false;
+        }
         let buttons = report[0];
         let raw_x = (report[1] as u16) | ((report[2] as u16) << 8);
         let raw_y = (report[3] as u16) | ((report[4] as u16) << 8);
 
         // 0..32767 mutlak koordinatlarını ekran çözünürlüğüne orantıla
         if screen_w > 0 && screen_h > 0 {
-            mouse.x = ((raw_x as i32 * screen_w) / 32767).clamp(0, screen_w - 1);
-            mouse.y = ((raw_y as i32 * screen_h) / 32767).clamp(0, screen_h - 1);
+            mouse.x = (((raw_x as i32 * screen_w) + 16383) / 32767).clamp(0, screen_w - 1);
+            mouse.y = (((raw_y as i32 * screen_h) + 16383) / 32767).clamp(0, screen_h - 1);
         }
 
         mouse.left_button = (buttons & MOUSE_BTN_LEFT) != 0;
@@ -88,7 +97,7 @@ pub fn process_mouse_report(
         if report.len() >= 6 {
             let wheel = report[5] as i8;
             if wheel != 0 {
-                mouse.scroll_delta = mouse.scroll_delta.saturating_add(wheel);
+                mouse.scroll_delta = mouse.scroll_delta.saturating_sub(wheel);
             }
         }
 

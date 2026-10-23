@@ -47,6 +47,10 @@ fn wait_read() -> bool {
 static mut MOUSE_CYCLE: u8 = 0;
 static mut MOUSE_BYTE: [u8; 4] = [0; 4];
 static mut HAS_WHEEL: bool = false;
+// 8042 denetleyicisinin varlığı. QEMU `-machine ...,i8042=off` gibi
+// yapılandırmalarda 0x64 portu boşta 0xFF okur; bu durumda yoklama
+// döngüsü sonsuza kadar dönmemelidir.
+static mut PRESENT: Option<bool> = None;
 // Tanılama: yoklamada görülen son ham (status, data) çifti ve sayaç.
 static mut TRACE_STATUS: u8 = 0;
 static mut TRACE_DATA: u8 = 0;
@@ -54,6 +58,22 @@ static mut TRACE_COUNT: u64 = 0;
 
 pub fn trace_last() -> (u8, u8, u64) {
     unsafe { (TRACE_STATUS, TRACE_DATA, TRACE_COUNT) }
+}
+
+/// 8042 denetleyicisi mevcut mu? Sonuç ilk çağrıda ölçülüp önbelleğe alınır.
+///
+/// Denetleyici yoksa (ör. QEMU `i8042=off`), 0x64 durum portu 0xFF döndürür.
+/// Bu değer "çıkış arabelleği dolu" bitini (0x01) sürekli 1 yaptığı için
+/// `poll_input` sonsuz döngüye girer; bu yüzden önce varlık denetlenir.
+pub fn present() -> bool {
+    unsafe {
+        if let Some(present) = PRESENT {
+            return present;
+        }
+        let present = inb(0x64) != 0xFF;
+        PRESENT = Some(present);
+        present
+    }
 }
 
 pub fn mouse_wheel_enabled() -> bool {
@@ -71,6 +91,11 @@ fn mouse_write(cmd: u8) {
 }
 
 pub fn init() {
+    if !present() {
+        crate::serial::print("[PS/2] 8042 denetleyicisi bulunamadi; PS/2 girdisi devre disi.\n");
+        return;
+    }
+
     unsafe {
         // 1. Çıkış arabelleğinde kalan artık baytları temizle (sınırlı döngü)
         let mut flushes = 0;
@@ -162,6 +187,10 @@ pub fn init() {
 
 pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w: i32, screen_h: i32) -> InputUpdate {
     let mut updated = InputUpdate::default();
+
+    if !present() {
+        return updated;
+    }
 
     unsafe {
         loop {
@@ -269,7 +298,7 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
 /// PS/2 denetleyicisinde okunmayı bekleyen veri olup olmadığını bildirir (port 0x64 status bit 0).
 #[inline(always)]
 pub fn has_input() -> bool {
-    unsafe { inb(0x64) & 0x01 != 0 }
+    present() && unsafe { inb(0x64) & 0x01 != 0 }
 }
 
 /// Tanılama için 0x64 durum yazmacının ham değeri.

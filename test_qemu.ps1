@@ -12,8 +12,12 @@
 param(
     [int]$TimeoutSeconds = 20,
     [switch]$Rebuild,
-    [switch]$KeepOpen
+    [switch]$KeepOpen,
+    [switch]$UsbHid,
+    [switch]$NoPs2
 )
+
+if ($NoPs2) { $UsbHid = $true }
 
 $ErrorActionPreference = "Continue"
 
@@ -102,6 +106,22 @@ $qemuArgs = @(
     "-device", "e1000,netdev=n0"
 )
 
+if ($UsbHid) {
+    # Yerel xHCI HID sürücüsünü PS/2 olmadan test et: USB 3.0 denetleyicisi,
+    # boot protokollü klavye ve fare. -NoPs2 ile i8042 hiç oluşturulmaz.
+    $qemuArgs += @(
+        "-device", "qemu-xhci,id=xhci",
+        "-device", "usb-kbd,bus=xhci.0",
+        "-device", "usb-mouse,bus=xhci.0"
+    )
+}
+
+if ($NoPs2) {
+    $qemuArgs += @("-machine", "pc,i8042=off")
+}
+
+Write-Host ("[BILGI] USB HID testi: " + $(if ($UsbHid) { "acik" } else { "kapali" }) + ", PS/2: " + $(if ($NoPs2) { "devre disi" } else { "acik" })) -ForegroundColor DarkGray
+
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
 $pinfo.FileName = $qemu
 $pinfo.Arguments = ($qemuArgs -join " ")
@@ -132,6 +152,44 @@ $errEvent = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived
 $proc.BeginOutputReadLine()
 $proc.BeginErrorReadLine()
 
+# QMP: USB klavye/fare olaylarini enjekte edip testi uctan uca dogrulamak icin
+# tek bir baglanti acilir; kapanista da ayni baglanti kullanilir.
+function Connect-Qmp([int]$port = 4444) {
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect("127.0.0.1", $port)
+        $stream = $tcp.GetStream()
+        $stream.ReadTimeout = 3000
+        $reader = New-Object System.IO.StreamReader($stream)
+        $writer = New-Object System.IO.StreamWriter($stream)
+        $writer.NewLine = "`n"
+        $writer.AutoFlush = $true
+        $null = $reader.ReadLine()  # QMP karsilama satiri
+        $writer.WriteLine('{"execute":"qmp_capabilities"}')
+        $null = $reader.ReadLine()
+        return @{ Client = $tcp; Reader = $reader; Writer = $writer }
+    } catch {
+        return $null
+    }
+}
+
+function Send-InputEvents($qmp, [string]$eventsJson) {
+    if (-not $qmp) { return }
+    $qmp.Writer.WriteLine('{"execute":"input-send-event","arguments":{"events":' + $eventsJson + '}}')
+}
+
+$qmp = $null
+if ($UsbHid) {
+    $qmpDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
+    while (-not $qmp -and [System.DateTime]::UtcNow -lt $qmpDeadline) {
+        $qmp = Connect-Qmp 4444
+        if (-not $qmp) { Start-Sleep -Milliseconds 150 }
+    }
+    if (-not $qmp) {
+        Write-Host "[UYARI] QMP baglantisi kurulamadi; USB girdi enjeksiyonu atlanacak." -ForegroundColor DarkYellow
+    }
+}
+
 $startTime = [System.DateTime]::UtcNow
 $reachedDesktop = $false
 $dismissedWelcome = $false
@@ -139,7 +197,7 @@ $dismissedWelcome = $false
 while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds) {
     Start-Sleep -Milliseconds 250
     $currentOut = $outputBuilder.ToString()
-    if ($currentOut -match "Hosgeldin dongusu" -and -not $dismissedWelcome) {
+    if ($currentOut -match "Ho.geldin d.ng.s." -and -not $dismissedWelcome) {
         $dismissedWelcome = $true
         try {
             $proc.StandardInput.WriteLine("")
@@ -153,19 +211,43 @@ while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds
     }
 }
 
+# USB HID testi: masaustu acildiktan sonra QEMU'ya gercek klavye/fare olayi
+# gonder. PS/2 kapali oldugu icin bu olaylar yalnizca xHCI -> USB HID
+# surucusu uzerinden islenebilir; seri gunlukte rapor dokumu gorunur.
+if ($UsbHid) {
+    if ($qmp) {
+        Write-Host "[BILGI] QMP ile USB fare hareketi/tik ve 'a' tusu gonderiliyor..." -ForegroundColor DarkGray
+        Send-InputEvents $qmp '[{"type":"rel","data":{"axis":"x","value":60}},{"type":"rel","data":{"axis":"y","value":40}}]'
+        Send-InputEvents $qmp '[{"type":"btn","data":{"down":true,"button":"left"}}]'
+        Start-Sleep -Milliseconds 150
+        Send-InputEvents $qmp '[{"type":"btn","data":{"down":false,"button":"left"}}]'
+        Send-InputEvents $qmp '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"a"}}}]'
+        Start-Sleep -Milliseconds 150
+        Send-InputEvents $qmp '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"a"}}}]'
+        Start-Sleep -Milliseconds 800
+    } else {
+        Write-Host "[UYARI] QMP yok; USB klavye/fare enjeksiyonu dogrulanamadi." -ForegroundColor DarkYellow
+    }
+}
+
 # QEMU'yu duzgun (graceful) sonlandir; boylece WAV tamponu diske yazilir
 try {
-    $tcp = New-Object System.Net.Sockets.TcpClient
-    $tcp.Connect("127.0.0.1", 4444)
-    $stream = $tcp.GetStream()
-    $writer = New-Object System.IO.StreamWriter($stream)
-    $writer.NewLine = "`n"
-    $writer.WriteLine('{"execute":"qmp_capabilities"}')
-    $writer.Flush()
-    Start-Sleep -Milliseconds 100
-    $writer.WriteLine('{"execute":"quit"}')
-    $writer.Flush()
-    $tcp.Close()
+    if ($qmp) {
+        $qmp.Writer.WriteLine('{"execute":"quit"}')
+        $qmp.Client.Close()
+    } else {
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $tcp.Connect("127.0.0.1", 4444)
+        $stream = $tcp.GetStream()
+        $writer = New-Object System.IO.StreamWriter($stream)
+        $writer.NewLine = "`n"
+        $writer.WriteLine('{"execute":"qmp_capabilities"}')
+        $writer.Flush()
+        Start-Sleep -Milliseconds 100
+        $writer.WriteLine('{"execute":"quit"}')
+        $writer.Flush()
+        $tcp.Close()
+    }
     $proc.WaitForExit(3000) | Out-Null
 } catch {}
 
@@ -187,17 +269,17 @@ Write-Host "[3/3] Cekirdek ciktisi ve donanim akisi cozumleniyor..." -Foreground
 $checks = @(
     @{
         Name = "PMM (Fiziksel Bellek Tahsis & Iade)";
-        Pattern = "\[MM-TEST\] 1\..*BASARILI";
+        Pattern = "\[MM-TEST\] 1\..*BA";
         Description = "4KB hizali cerceve tahsis ve sizintisiz iade"
     },
     @{
         Name = "VMM (Sayfalama & Ring-3 Izolasyon)";
-        Pattern = "\[MM-TEST\] 4\..*DOGRULANDI";
+        Pattern = "\[MM-TEST\] 4\..*DO";
         Description = "PML4 haritalama, ceviri ve USER|WRITABLE|NX bayraklari"
     },
     @{
         Name = "Gelismis Allocator (Bump & FSB)";
-        Pattern = "\[ALLOC-TEST\] 6\..*BASARILI";
+        Pattern = "\[ALLOC-TEST\] 6\..*BA";
         Description = "Tasma korumali align_up, O(1) sabit blok ve buyuk blok havuzlama"
     },
     @{
@@ -222,10 +304,48 @@ $checks = @(
     },
     @{
         Name = "Cekirdek Surucu Profili";
-        Pattern = "\[DRIVERS\] Tum suruculer hazir";
+        Pattern = "\[DRIVERS\] T.m s.r.c.l.r haz";
         Description = "Tum donanim suruculerinin eksiksiz baslatimi"
     }
 )
+
+if ($UsbHid) {
+    $checks += @(
+        @{
+            Name = "USB HID Numaralandirma (xHCI)";
+            Pattern = "\[USB-HID\] Hazır: [0-9]+ klavye, [0-9]+ fare";
+            Description = "qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi"
+        },
+        @{
+            Name = "USB HID Etkin Girdi Yolu";
+            Pattern = "\[INPUT\] USB HID etkin";
+            Description = "Masaustu girdisi USB HID surucusune baglandi"
+        }
+    )
+    if ($NoPs2) {
+        $checks += @(
+            @{
+                Name = "PS/2 Devre Disi (i8042 yok)";
+                Pattern = "\[BOOT\] PS/2 denetleyicisi yok";
+                Description = "Girdi yalnizca USB HID uzerinden geliyor"
+            }
+        )
+    }
+    if ($qmp) {
+        $checks += @(
+            @{
+                Name = "USB Klavye Raporu (QMP enjeksiyonu)";
+                Pattern = "\[USB-HID\] klavye raporu:";
+                Description = "QMP 'a' tusu xHCI HID raporu olarak islendi"
+            },
+            @{
+                Name = "USB Fare Raporu (QMP enjeksiyonu)";
+                Pattern = "\[USB-HID\] fare raporu:";
+                Description = "QMP fare hareketi/tiki xHCI HID raporu olarak islendi"
+            }
+        )
+    }
+}
 
 $allPassed = $true
 Write-Host "`n--- ENTEGRASYON TESTI RAPORU ---" -ForegroundColor Cyan

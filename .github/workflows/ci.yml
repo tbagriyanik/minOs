@@ -121,8 +121,8 @@ jobs:
           cat serial.log || true
 
           echo "Verifying critical boot marker in serial log..."
-          if grep -q "\[BOOT\] Kritik denetimler tamamlandi" serial.log; then
-            echo "[OK] Found: [BOOT] Kritik denetimler tamamlandi"
+          if grep -q "\[BOOT\] CRITICAL_CHECKS_COMPLETE" serial.log; then
+            echo "[OK] Found: [BOOT] CRITICAL_CHECKS_COMPLETE"
           else
             echo "[FAIL] Critical boot marker was not found in serial.log"
             exit 1

@@ -4,6 +4,7 @@ param(
     [switch]$UsbDisks,
     [switch]$UsbDiskReadWrite,
     [switch]$UsbHid,
+    [switch]$NoPs2,
     [ValidateRange(1, 64)][int]$CpuCount = 2,
     [ValidatePattern('^[1-9][0-9]*(M|G)$')][string]$Memory = "512M",
     [string]$DiskImage = ".\disk.qcow2",
@@ -168,16 +169,30 @@ if ($UsbDisks -or $UsbDiskReadWrite) {
     }
 }
 
+if ($NoPs2) {
+    # PS/2 girdisini tamamen kapat: QEMU'da 8042 denetleyicisi oluşturulmaz.
+    # Böylece klavye/fare olayları yalnızca USB HID yoluyla gelebilir; test
+    # sırasında PS/2 yedeği sonucu gizlemez.
+    $UsbHid = $true
+}
+
 if ($UsbHid) {
     # Yerel xHCI HID sürücüsünü test etmek için USB 3.0 denetleyicisi ve
-    # boot protokollü klavye/fare ekle. QEMU varsayılan PS/2 girişini de
-    # sunmaya devam eder; bu nedenle aynı tuşlar iki yoldan da gelebilir.
+    # boot protokollü klavye/fare ekle. -NoPs2 verilmediyse QEMU varsayılan
+    # PS/2 girişini de sunar; bu nedenle aynı tuşlar iki yoldan da gelebilir.
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
         "-device", "usb-mouse,bus=xhci.0"
     )
     Write-Host "USB HID eklendi: qemu-xhci + usb-kbd + usb-mouse" -ForegroundColor Yellow
+}
+
+if ($NoPs2) {
+    # -machine pc: varsayılan i440FX makinesi; i8042=off ile PS/2 denetleyicisi
+    # hiç oluşturulmaz. Girdi tamamen USB HID üzerinden gelir.
+    $qemuArgs += @("-machine", "pc,i8042=off")
+    Write-Host "PS/2 (i8042) devre disi: girdi yalnizca USB HID uzerinden." -ForegroundColor Yellow
 }
 
 function Test-DiskBootable([string]$filePath) {

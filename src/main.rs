@@ -650,7 +650,7 @@ pub extern "C" fn _start() -> ! {
 
     serial_print("[BOOT] Grafik arayüz denetimleri tamamlandı.\n");
 
-    serial_print("[BOOT] Kritik denetimler tamamlandı; grafik arayüz başlatılıyor.\n");
+    serial_print("[BOOT] CRITICAL_CHECKS_COMPLETE - Kritik denetimler tamamlandı; grafik arayüz başlatılıyor.\n");
 
     boot::text_console::disable();
 

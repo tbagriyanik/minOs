@@ -1260,6 +1260,60 @@ impl NotepadApp {
     /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
     #[inline(always)]
     pub fn text_x() -> usize { gutter_w() + crate::gui::sp(12) }
+    /// Bul/Değiştir çubuğunun pencere içi (x, y, w, h) dikdörtgeni.
+    /// `render_content` ile aynı geometriyi kullanır (`by = win_y + 56`,
+    /// `bw = win_w - 12`).
+    pub fn find_bar_area_rect(win_w: usize, replace_active: bool) -> (usize, usize, usize, usize) {
+        let bar_h = if replace_active { crate::gui::sp(58) } else { crate::gui::sp(30) };
+        (6, 56, win_w.saturating_sub(12), bar_h)
+    }
+
+    /// Bul/Değiştir çubuğunun kapatma (X) düğmesi — çizimle aynı konum:
+    /// sağ kenara dayalı, `bw - 20`.
+    pub fn find_close_rect(win_w: usize) -> (usize, usize, usize, usize) {
+        let bw = win_w.saturating_sub(12);
+        let close_x = bw.saturating_sub(20);
+        (close_x, 56 + 4, 20, 20)
+    }
+
+    /// "Bul" giriş kutusu dikdörtgeni.
+    pub fn find_input_rect() -> (usize, usize, usize, usize) {
+        (crate::gui::sp(50), 56 + 4, crate::gui::sp(140), 20)
+    }
+
+    /// "Sonraki" düğmesi.
+    pub fn find_next_rect() -> (usize, usize, usize, usize) {
+        let f_box_x = crate::gui::sp(50);
+        let input_w = crate::gui::sp(140);
+        (f_box_x + input_w + 8, 56 + 4, 60, 20)
+    }
+
+    /// "Önceki" düğmesi.
+    pub fn find_prev_rect() -> (usize, usize, usize, usize) {
+        let f_box_x = crate::gui::sp(50);
+        let input_w = crate::gui::sp(140);
+        (f_box_x + input_w + 74, 56 + 4, 60, 20)
+    }
+
+    /// "Değiştir" giriş kutusu (replace aktifse).
+    pub fn replace_input_rect() -> (usize, usize, usize, usize) {
+        (crate::gui::sp(50), 56 + 34, crate::gui::sp(140), 20)
+    }
+
+    /// "Değiştir" düğmesi.
+    pub fn replace_btn_rect() -> (usize, usize, usize, usize) {
+        let f_box_x = crate::gui::sp(50);
+        let input_w = crate::gui::sp(140);
+        (f_box_x + input_w + 8, 56 + 34, 60, 20)
+    }
+
+    /// "Tümünü Değiştir" düğmesi.
+    pub fn replace_all_rect() -> (usize, usize, usize, usize) {
+        let f_box_x = crate::gui::sp(50);
+        let input_w = crate::gui::sp(140);
+        (f_box_x + input_w + 74, 56 + 34, 76, 20)
+    }
+
     /// Metin alanı başlangıcının pencere içi Y koordinatı (araç çubuğu + boşluk).
     #[inline(always)]
     pub fn text_y(&self) -> usize {

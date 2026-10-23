@@ -4094,37 +4094,69 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                } else if notepad_app.find_active && gui::in_rect(mx, my, (wx + 6, wy + 56, ww.saturating_sub(12), if notepad_app.replace_active { 58 } else { 30 })) {
-                                    let by = wy + 56;
-                                    let bw = ww.saturating_sub(12);
-                                    let input_w = crate::gui::sp(140);
-                                    let f_box_x = wx + crate::gui::sp(50);
-                                    let f_box_y = by + 4;
-                                    let close_x = wx + bw.saturating_sub(20);
-
-                                    // Close button
-                                    if mx >= close_x && mx <= close_x + 16 && my >= f_box_y && my <= f_box_y + 16 {
+                                } else if notepad_app.find_active {
+                                    let bar_r = apps::notepad::NotepadApp::find_bar_area_rect(ww, notepad_app.replace_active);
+                                    if gui::in_rect(mx, my, (wx + bar_r.0, wy + bar_r.1, bar_r.2, bar_r.3)) {
+                                        // Bul/Değiştir çubuğu içinde — düğme ve giriş kutuları.
+                                        let close_r = apps::notepad::NotepadApp::find_close_rect(ww);
+                                        if gui::in_rect(mx, my, (wx + close_r.0, wy + close_r.1, close_r.2, close_r.3)) {
+                                            notepad_app.close_find();
+                                        } else {
+                                            let fin_r = apps::notepad::NotepadApp::find_input_rect();
+                                            if gui::in_rect(mx, my, (wx + fin_r.0, wy + fin_r.1, fin_r.2, fin_r.3)) {
+                                                notepad_app.find_focused_replace = false;
+                                            } else {
+                                                let nxt_r = apps::notepad::NotepadApp::find_next_rect();
+                                                if gui::in_rect(mx, my, (wx + nxt_r.0, wy + nxt_r.1, nxt_r.2, nxt_r.3)) {
+                                                    notepad_app.find_next(true);
+                                                    notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                                } else {
+                                                    let prv_r = apps::notepad::NotepadApp::find_prev_rect();
+                                                    if gui::in_rect(mx, my, (wx + prv_r.0, wy + prv_r.1, prv_r.2, prv_r.3)) {
+                                                        notepad_app.find_next(false);
+                                                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                                    } else if notepad_app.replace_active {
+                                                        let rin_r = apps::notepad::NotepadApp::replace_input_rect();
+                                                        if gui::in_rect(mx, my, (wx + rin_r.0, wy + rin_r.1, rin_r.2, rin_r.3)) {
+                                                            notepad_app.find_focused_replace = true;
+                                                        } else {
+                                                            let rpl_r = apps::notepad::NotepadApp::replace_btn_rect();
+                                                            if gui::in_rect(mx, my, (wx + rpl_r.0, wy + rpl_r.1, rpl_r.2, rpl_r.3)) {
+                                                                notepad_app.replace_current();
+                                                                notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                                            } else {
+                                                                let rall_r = apps::notepad::NotepadApp::replace_all_rect();
+                                                                if gui::in_rect(mx, my, (wx + rall_r.0, wy + rall_r.1, rall_r.2, rall_r.3)) {
+                                                                    notepad_app.replace_all();
+                                                                    notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // Çubuğun dışına tıklandı: bul penceresini kapat ve metin alanına geç.
                                         notepad_app.close_find();
-                                    } else if mx >= f_box_x && mx <= f_box_x + input_w && my >= f_box_y && my <= f_box_y + 20 {
-                                        notepad_app.find_focused_replace = false;
-                                    } else if mx >= f_box_x + input_w + 8 && mx <= f_box_x + input_w + 68 && my >= f_box_y && my <= f_box_y + 20 {
-                                        notepad_app.find_next(true);
-                                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
-                                    } else if mx >= f_box_x + input_w + 74 && mx <= f_box_x + input_w + 134 && my >= f_box_y && my <= f_box_y + 20 {
-                                        notepad_app.find_next(false);
-                                        notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
-                                    } else if notepad_app.replace_active {
-                                        let ry = by + 30;
-                                        let r_box_y = ry + 4;
-                                        let rbtn_x = f_box_x + input_w + 8;
-                                        if mx >= f_box_x && mx <= f_box_x + input_w && my >= r_box_y && my <= r_box_y + 20 {
-                                            notepad_app.find_focused_replace = true;
-                                        } else if mx >= rbtn_x && mx <= rbtn_x + 60 && my >= r_box_y && my <= r_box_y + 20 {
-                                            notepad_app.replace_current();
-                                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
-                                        } else if mx >= rbtn_x + 66 && mx <= rbtn_x + 142 && my >= r_box_y && my <= r_box_y + 20 {
-                                            notepad_app.replace_all();
-                                            notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                                        if gui::in_rect(mx, my, (wx + 6, wy + notepad_app.text_y() - 4, ww.saturating_sub(12), wh.saturating_sub(notepad_app.text_y() + 28))) {
+                                            let at = notepad_app.index_at_scrolled(mx - wx, my - wy, ww, compositor.windows[idx].map(|w| w.scroll.y).unwrap_or(0));
+                                            notepad_app.cursor = at;
+                                            if keyboard.shift {
+                                                let anchor = notepad_app.selection_anchor.unwrap_or(at);
+                                                if anchor == at {
+                                                    notepad_app.selection_start = None;
+                                                    notepad_app.selection_end = None;
+                                                } else {
+                                                    notepad_app.selection_start = Some(anchor.min(at));
+                                                    notepad_app.selection_end = Some(anchor.max(at));
+                                                }
+                                            } else {
+                                                notepad_app.selection_anchor = Some(at);
+                                                notepad_app.selection_start = None;
+                                                notepad_app.selection_end = None;
+                                            }
+                                            notepad_app.menu = 0;
                                         }
                                     }
                                 } else if gui::in_rect(mx, my, (wx + 6, wy + notepad_app.text_y() - 4, ww.saturating_sub(12), wh.saturating_sub(notepad_app.text_y() + 28))) {

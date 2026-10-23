@@ -1128,11 +1128,30 @@ impl FileManagerApp {
         any
     }
 
+    /// UTF-8 tamponunda bir önceki karakterin başlangıç baytı.
+    fn prev_char_boundary(buf: &[u8], pos: usize) -> usize {
+        if pos == 0 { return 0; }
+        let mut i = pos - 1;
+        while i > 0 && (buf[i] & 0xC0) == 0x80 { i -= 1; }
+        i
+    }
+
+    /// UTF-8 tamponunda bir sonraki karakterin bitiş baytı (hariç).
+    fn next_char_boundary(buf: &[u8], pos: usize, len: usize) -> usize {
+        if pos >= len { return len; }
+        let mut i = pos + 1;
+        while i < len && (buf[i] & 0xC0) == 0x80 { i += 1; }
+        i
+    }
+
     pub fn begin_rename(&mut self) {
         if self.selected_idx >= self.file_count || self.files[self.selected_idx].display_name() == ".." { return; }
         if !self.selected_items[self.selected_idx] { self.selected_items = [false; MAX_ITEMS]; self.selected_items[self.selected_idx] = true; }
         let name = self.files[self.selected_idx].display_name().as_bytes();
-        self.rename_len = name.len().min(self.rename_buf.len());
+        let mut take = name.len().min(self.rename_buf.len());
+        // NAME_MAX'a sığmayan ad çok baytlı karakterin ortasından kesilmesin.
+        while take > 0 && take < name.len() && (name[take] & 0xC0) == 0x80 { take -= 1; }
+        self.rename_len = take;
         self.rename_buf[..self.rename_len].copy_from_slice(&name[..self.rename_len]);
         self.rename_cursor = self.rename_len;
         self.rename_active = true;
@@ -1143,9 +1162,34 @@ impl FileManagerApp {
         for &ch in s.as_bytes() { if self.rename_len < self.rename_buf.len() { self.rename_buf.copy_within(self.rename_cursor..self.rename_len, self.rename_cursor + 1); self.rename_buf[self.rename_cursor] = ch; self.rename_cursor += 1; self.rename_len += 1; } }
     }
 
-    pub fn rename_backspace(&mut self) { if self.rename_cursor > 0 { self.rename_cursor -= 1; self.rename_buf.copy_within(self.rename_cursor + 1..self.rename_len, self.rename_cursor); self.rename_len -= 1; } }
-    pub fn rename_delete(&mut self) { if self.rename_cursor < self.rename_len { self.rename_buf.copy_within(self.rename_cursor + 1..self.rename_len, self.rename_cursor); self.rename_len -= 1; } }
-    pub fn rename_move_cursor(&mut self, right: bool) { if right { self.rename_cursor = (self.rename_cursor + 1).min(self.rename_len); } else { self.rename_cursor = self.rename_cursor.saturating_sub(1); } }
+    /// İmleç her zaman bir karakter sınırında kalır; aksi halde çok baytlı
+    /// (Türkçe) harfler ortadan bölünüp ad geçersiz UTF-8 olurdu.
+    pub fn rename_backspace(&mut self) {
+        if self.rename_cursor > 0 {
+            let start = Self::prev_char_boundary(&self.rename_buf, self.rename_cursor);
+            let removed = self.rename_cursor - start;
+            self.rename_buf.copy_within(self.rename_cursor..self.rename_len, start);
+            self.rename_len -= removed;
+            self.rename_cursor = start;
+        }
+    }
+
+    pub fn rename_delete(&mut self) {
+        if self.rename_cursor < self.rename_len {
+            let end = Self::next_char_boundary(&self.rename_buf, self.rename_cursor, self.rename_len);
+            let removed = end - self.rename_cursor;
+            self.rename_buf.copy_within(end..self.rename_len, self.rename_cursor);
+            self.rename_len -= removed;
+        }
+    }
+
+    pub fn rename_move_cursor(&mut self, right: bool) {
+        if right {
+            self.rename_cursor = Self::next_char_boundary(&self.rename_buf, self.rename_cursor, self.rename_len);
+        } else {
+            self.rename_cursor = Self::prev_char_boundary(&self.rename_buf, self.rename_cursor);
+        }
+    }
 
     pub fn commit_rename(&mut self, vfs: &mut VirtualFileSystem) {
         if !self.rename_active { return; }

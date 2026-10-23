@@ -519,6 +519,6 @@ pub fn self_test() -> bool {
         ok = false; // yarım gövde reddedilmeli
     }
     crate::serial_print("[HTTP-TEST] url/status/chunked self-check: ");
-    crate::serial_print(if ok { "BASARILI\n" } else { "BASARISIZ\n" });
+    crate::serial_print(if ok { "BAŞARILI\n" } else { "BAŞARISIZ\n" });
     ok
 }

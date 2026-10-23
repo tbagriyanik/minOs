@@ -118,6 +118,25 @@ const FONT_8X8: [[u8; 8]; 95] = [
     [0x6C,0x36,0x00,0x00,0x00,0x00,0x00,0x00], // ~
 ];
 
+// Turkish letters used by the boot transcript (same 8x8, row-major format).
+fn turkish_glyph(ch: char) -> Option<[u8; 8]> {
+    Some(match ch {
+        'Ç' => [0x1C,0x36,0x03,0x03,0x03,0x36,0x1C,0x0C],
+        'ç' => [0x00,0x1E,0x33,0x03,0x33,0x1E,0x0C,0x18],
+        'Ğ' => [0x3C,0x66,0x03,0x03,0x73,0x66,0x7C,0x18],
+        'ğ' => [0x00,0x6E,0x33,0x33,0x3E,0x30,0x1F,0x18],
+        'İ' => [0x0C,0x00,0x1E,0x0C,0x0C,0x0C,0x1E,0x00],
+        'ı' => [0x00,0x00,0x0C,0x0C,0x0C,0x0C,0x0C,0x00],
+        'Ö' => [0x36,0x00,0x1C,0x36,0x63,0x63,0x36,0x1C],
+        'ö' => [0x36,0x00,0x1E,0x33,0x33,0x33,0x1E,0x00],
+        'Ş' => [0x1E,0x33,0x07,0x0E,0x38,0x33,0x1E,0x0C],
+        'ş' => [0x00,0x3E,0x03,0x1E,0x30,0x1F,0x0C,0x18],
+        'Ü' => [0x36,0x00,0x33,0x33,0x33,0x33,0x33,0x3F],
+        'ü' => [0x36,0x00,0x33,0x33,0x33,0x33,0x3F,0x00],
+        _ => return None,
+    })
+}
+
 pub fn is_active() -> bool { ACTIVE.load(Ordering::Acquire) }
 
 /// Mevcut ekran durumunu kaydet (GUI'den boot mesajlarına geçiş için)
@@ -166,8 +185,8 @@ pub unsafe fn show_boot_log() {
     screen.flush();
 
     let log_slice = &*core::ptr::addr_of!(BOOT_LOG_BUFFER);
-    for &byte in log_slice {
-        let ch = sanitize_char(byte as char);
+    let log_text = core::str::from_utf8(log_slice).unwrap_or("");
+    for ch in log_text.chars() {
         match ch {
             '\r' => CURSOR_X = 16,
             '\n' => {
@@ -177,7 +196,7 @@ pub unsafe fn show_boot_log() {
             '\t' => CURSOR_X = CURSOR_X.saturating_add(CHAR_W * 4),
             c if !c.is_control() => {
                 screen.draw_rect(CURSOR_X.saturating_sub(1), CURSOR_Y.saturating_sub(1), CHAR_W + 2, LINE_H, 0x000000);
-                draw_char(screen, CURSOR_X, CURSOR_Y, c as u8, 0xD8E1EE);
+                draw_char(screen, CURSOR_X, CURSOR_Y, c, 0xD8E1EE);
                 CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
             }
             _ => {}
@@ -196,10 +215,14 @@ pub unsafe fn show_boot_log() {
 }
 
 /// Basit bitmap font ile karakter çiz (2x ölçekli)
-fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: u8, color: u32) {
-    if ch >= 32 && ch < 127 {
-        let font_idx = (ch - 32) as usize;
-        let font_data = FONT_8X8[font_idx];
+fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: char, color: u32) {
+    let font_data = if let Some(glyph) = turkish_glyph(ch) {
+        glyph
+    } else if (ch as u32) >= 32 && (ch as u32) < 127 {
+        FONT_8X8[(ch as u8 - 32) as usize]
+    } else {
+        FONT_8X8[(b'?' - 32) as usize]
+    };
         
         for row in 0..8 {
             let row_data = font_data[row];
@@ -219,7 +242,6 @@ fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: u8, color: u32) {
                 }
             }
         }
-    }
 }
 
 /// Install a validated framebuffer as a text console before lengthy init work.
@@ -234,7 +256,7 @@ pub unsafe fn init(fb: Framebuffer) {
         let title_bytes = title.as_bytes();
         let mut tx = 16;
         for &b in title_bytes {
-            draw_char(screen, tx, 12, b, 0x62D6A8);
+            draw_char(screen, tx, 12, b as char, 0x62D6A8);
             tx += CHAR_W;
         }
         CURSOR_Y = 40;
@@ -244,28 +266,8 @@ pub unsafe fn init(fb: Framebuffer) {
 }
 
 /// Buffer'a kaydet ama ekrana çizme (sonsuz döngü önleme)
-fn write_to_buffer(text: &str) {
-    unsafe {
-        (*core::ptr::addr_of_mut!(BOOT_LOG_BUFFER)).extend_from_slice(text.as_bytes());
-    }
-}
-
-fn sanitize_char(c: char) -> char {
-    match c {
-        'ı' => 'i',
-        'İ' => 'I',
-        'ç' => 'c',
-        'Ç' => 'C',
-        'ö' => 'o',
-        'Ö' => 'O',
-        'ü' => 'u',
-        'Ü' => 'U',
-        'ğ' => 'g',
-        'Ğ' => 'G',
-        'ş' => 's',
-        'Ş' => 'S',
-        other => other,
-    }
+fn write_to_buffer(_text: &str) {
+    // Buffer growth and truncation are performed by write_color below.
 }
 
 /// Renkli metin çıktısı verir (hata, uyarı ve komut satırı için).
@@ -284,7 +286,7 @@ pub fn write_color(text: &str, color: u32) {
         log.extend_from_slice(text.as_bytes());
         let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else { return };
         for raw_ch in text.chars() {
-            let ch = sanitize_char(raw_ch);
+            let ch = raw_ch;
             match ch {
                 '\r' => CURSOR_X = 16,
                 '\n' => {
@@ -307,10 +309,8 @@ pub fn write_color(text: &str, color: u32) {
                     }
                 }
                 c if !c.is_control() => {
-                    let mut buf = [0u8; 4];
-                    let s = c.encode_utf8(&mut buf);
                     screen.draw_rect(CURSOR_X.saturating_sub(1), CURSOR_Y.saturating_sub(1), CHAR_W + 2, LINE_H, 0x000000);
-                    draw_char(screen, CURSOR_X, CURSOR_Y, s.as_bytes()[0], color);
+                    draw_char(screen, CURSOR_X, CURSOR_Y, c, color);
                     CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
                 }
                 _ => {}
@@ -451,18 +451,18 @@ pub fn interactive_error_prompt(message: &str) -> ! {
 
     write("\n\n");
     write_color("================================================================================\n", 0xFF6B6B);
-    write_color("[minOs - BOOT ERROR / KRITIK SURUCU HATASI]\n", 0xFF6B6B);
+    write_color("[minOs - BOOT ERROR / KRİTİK SÜRÜCÜ HATASI]\n", 0xFF6B6B);
     write_color("================================================================================\n", 0xFF6B6B);
     write("Hata / Error: ");
     write_color(message, 0xFFD43B);
     write("\n\n");
-    write_color("Kritik baslatma veya surucu hatasi tespit edildi.\n", 0xD8E1EE);
-    write_color("Grafik arayuzu ve Hosgeldin ekrani baslatilmadi (Halted before Welcome Screen).\n\n", 0xFA5252);
+    write_color("Kritik başlatma veya sürücü hatası tespit edildi.\n", 0xD8E1EE);
+    write_color("Grafik arayüzü ve Hoş Geldin ekranı başlatılmadı (Halted before Welcome Screen).\n\n", 0xFA5252);
     write_color("Kullanilabilir Komutlar / Available Commands:\n", 0x62D6A8);
-    write("  [Enter] / restart / r : Sistemi yeniden baslat (Restart system)\n");
+    write("  [Enter] / restart / r : Sistemi yeniden başlat (Restart system)\n");
     write("  halt / shutdown / h   : Sistemi kapat (Halt CPU)\n");
-    write("  help                  : Komut listesini goster\n\n");
-    write_color("Komut girin veya [Enter] tusuna basin:\n", 0x4DABF7);
+    write("  help                  : Komut listesini göster\n\n");
+    write_color("Komut girin veya [Enter] tuşuna basın:\n", 0x4DABF7);
     write_color("recovery# ", 0x62D6A8);
 
     let mut cmd_buf = [0u8; 32];
@@ -474,28 +474,28 @@ pub fn interactive_error_prompt(message: &str) -> ! {
                 write("\n");
                 let cmd_str = core::str::from_utf8(&cmd_buf[..cmd_len]).unwrap_or("").trim();
                 if cmd_str.is_empty() || cmd_str.eq_ignore_ascii_case("restart") || cmd_str.eq_ignore_ascii_case("reboot") || cmd_str.eq_ignore_ascii_case("r") {
-                    write_color("[RESTART] Sistem yeniden baslatiliyor (Restarting)...\n", 0x62D6A8);
-                    crate::serial::print("[BOOT] Komut alindi: restart. Sistem yeniden baslatiliyor...\n");
+                    write_color("[RESTART] Sistem yeniden başlatılıyor (Restarting)...\n", 0x62D6A8);
+                    crate::serial::print("[BOOT] Komut alındı: restart. Sistem yeniden başlatılıyor...\n");
                     for _ in 0..200_000 { core::hint::spin_loop(); }
                     crate::boot::console::restart_system();
                 } else if cmd_str.eq_ignore_ascii_case("halt") || cmd_str.eq_ignore_ascii_case("shutdown") || cmd_str.eq_ignore_ascii_case("h") {
-                    write_color("[HALT] Sistem guvenli sekilde durduruldu (Halted).\n", 0xFF6B6B);
-                    crate::serial::print("[BOOT] Komut alindi: halt. Sistem durduruldu.\n");
+                    write_color("[HALT] Sistem güvenli şekilde durduruldu (Halted).\n", 0xFF6B6B);
+                    crate::serial::print("[BOOT] Komut alındı: halt. Sistem durduruldu.\n");
                     unsafe {
                         core::arch::asm!("cli");
                         loop { core::arch::asm!("hlt"); }
                     }
                 } else if cmd_str.eq_ignore_ascii_case("help") || cmd_str == "?" {
                     write("Komutlar / Commands:\n");
-                    write("  [Enter] / restart / r : Sistemi hemen yeniden baslatir\n");
+                    write("  [Enter] / restart / r : Sistemi hemen yeniden başlatır\n");
                     write("  halt / shutdown / h   : Sistemi durdurur (CPU hlt)\n");
-                    write("  help                  : Bu yardim mesajini gosterir\n");
+                    write("  help                  : Bu yardım mesajını gösterir\n");
                     write_color("recovery# ", 0x62D6A8);
                     cmd_len = 0;
                 } else {
                     write("Bilinmeyen komut: '");
                     write(cmd_str);
-                    write("'. Yeniden baslatmak icin [Enter], yardim icin 'help' yazin.\n");
+                    write("'. Yeniden başlatmak için [Enter], yardım için 'help' yazın.\n");
                     write_color("recovery# ", 0x62D6A8);
                     cmd_len = 0;
                 }
@@ -521,7 +521,7 @@ pub fn interactive_error_prompt(message: &str) -> ! {
 pub fn fatal(message: &str) -> ! {
     crate::serial::print("\n[FATAL] ");
     crate::serial::print(message);
-    crate::serial::print("\n[BOOT] Kritik hata: grafik arayuzu baslatilmadi.\n");
+    crate::serial::print("\n[BOOT] Kritik hata: grafik arayüzü başlatılmadı.\n");
     interactive_error_prompt(message);
 }
 

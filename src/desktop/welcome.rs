@@ -28,11 +28,11 @@ pub fn run_welcome_screen(
     let mut _welcome_diag_iters: u64 = 0;
     let mut welcome_diag_last_trace: u64 = 0;
     let mut welcome_start_time = monotonic_ms();
-    let welcome_timeout_ms: u64 = 5_000; // 5 saniye icinde etkilesim olmazsa masaustune otomatik gec
+    let welcome_timeout_ms: u64 = 5_000; // 5 saniye içinde etkileşim olmazsa masaüstüne otomatik geç
 
     loop {
         if !welcome_announced {
-            serial_print("[BOOT] Hosgeldin dongusu: Enter/ESC/tik bekleniyor (5sn zaman asimi aktif).\n");
+            serial_print("[BOOT] Hoş geldin döngüsü: Enter/ESC/tıklama bekleniyor (5 sn zaman aşımı etkin).\n");
             welcome_announced = true;
         }
 
@@ -75,20 +75,20 @@ pub fn run_welcome_screen(
         let welcome_now = monotonic_ms();
         if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
             welcome_diag_last = welcome_now;
-            serial_print("[BOOT] Welcome loop tick: ms=");
+            serial_print("[BOOT] Hoş geldin döngüsü: geçen süre (ms)=");
             serial_print_dec(welcome_now.wrapping_sub(welcome_start_time) as u64);
-            serial_print(" iters=");
+            serial_print(" yineleme=");
             serial_print_dec(_welcome_diag_iters as u64);
             serial_print("\n");
         }
 
-        // 5 saniye zaman asimi: USB klavye veya fare algilanamasa bile sistemi kilitleme, dogrudan masaustune gec
+        // 5 saniye zaman aşımı: USB klavye veya fare algılanamasa bile sistemi kilitleme, doğrudan masaüstüne geç.
         if welcome_now.wrapping_sub(welcome_start_time) >= welcome_timeout_ms {
-            serial_print("[BOOT] Hosgeldin zamani asildi; otomatik masaustune geciliyor.\n");
+            serial_print("[BOOT] Hoş geldin zaman aşımı; otomatik olarak masaüstüne geçiliyor.\n");
             welcome_accepted = true;
         }
 
-        // Enter veya Escape ile hos geldin ekranini gec.
+        // Enter veya Escape ile hoş geldin ekranını geç.
         while let Some(action) = keyboard.take_last_action() {
             if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
                 welcome_accepted = true;
@@ -97,16 +97,16 @@ pub fn run_welcome_screen(
 
         while let Some(ch) = keyboard.take_last_char() {
             if ch == 'e' || ch == 'E' {
-                // E tusu ile boot mesajlarini goster/gizle
+                // E tuşu ile boot mesajlarını göster/gizle.
                 unsafe {
                     if !boot::text_console::is_active() {
                         boot::text_console::save_screen();
                         boot::text_console::toggle_active();
-                        serial_print("[BOOT] Boot mesajlari gosteriliyor (E tusu ile geri don)...\n");
+            serial_print("[BOOT] Önyükleme mesajları gösteriliyor (E tuşuyla geri dön)...\n");
                     } else {
                         boot::text_console::toggle_active();
                         boot::text_console::restore_screen();
-                        serial_print("[BOOT] GUI'ye geri donuldu.\n");
+                        serial_print("[BOOT] GUI'ye geri dönüldü.\n");
                         welcome_dirty = true;
                     }
                 }

@@ -271,17 +271,17 @@ pub extern "C" fn _start() -> ! {
 
     }
 
-    serial_print("[BOOT] UEFI metin konsolu aktif; donanim ve bellek hazirlaniyor.\n");
+    serial_print("[BOOT] UEFI metin konsolu etkin; donanım ve bellek hazırlanıyor.\n");
 
-    serial_print("[BOOT] PIT/TSC zaman tabani baslatiliyor...\n");
+    serial_print("[BOOT] PIT/TSC zaman tabanı başlatılıyor...\n");
 
     if init_timebase() {
 
-        serial_print("[BOOT] PIT/TSC zaman tabani hazir.\n");
+        serial_print("[BOOT] PIT/TSC zaman tabanı hazır.\n");
 
     } else {
 
-        serial_print("[BOOT] UYARI: PIT yanit vermedi; CPUID TSC tahmini kullaniliyor.\n");
+        serial_print("[BOOT] UYARI: PIT yanıt vermedi; CPUID TSC tahmini kullanılıyor.\n");
 
     }
 
@@ -292,11 +292,11 @@ pub extern "C" fn _start() -> ! {
 
     #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] Kernel _start reached!\n");
+    serial_print("[minOs] Çekirdek _start noktasına ulaştı.\n");
 
     #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] SSE enabled & PIC IRQs masked!\n");
+    serial_print("[minOs] SSE etkinleştirildi, PIC kesmeleri maskelendi.\n");
 
 
 
@@ -316,7 +316,7 @@ pub extern "C" fn _start() -> ! {
 
             #[cfg(minos_boot_log)]
 
-            serial_print("[minOs] HHDM offset okundu (0 yoksa gecerli).\n");
+            serial_print("[minOs] HHDM ofseti okundu (0 değilse geçerli).\n");
 
             off
 
@@ -324,7 +324,7 @@ pub extern "C" fn _start() -> ! {
 
             #[cfg(minos_boot_log)]
 
-            serial_print("[minOs] UYARI: HHDM response yok; MMIO erisimi calismaz!\n");
+            serial_print("[minOs] UYARI: HHDM yanıtı yok; MMIO erişimi çalışmaz!\n");
 
             0xFFFF_8000_0000_0000
 
@@ -359,7 +359,7 @@ pub extern "C" fn _start() -> ! {
 
     // 6. MinGUI Pencere Yoneticisi ve Tum Uygulamalar
 
-    serial_print("[BOOT] Pencere yoneticisi ve uygulamalar hazirlaniyor...\n");
+    serial_print("[BOOT] Pencere yöneticisi ve uygulamalar hazırlanıyor...\n");
 
     let mut compositor = gui::MinGuiCompositor::new();
 
@@ -414,7 +414,7 @@ pub extern "C" fn _start() -> ! {
                 width = fb.width;
                 height = fb.height;
                                 settings_app.display_res = target_res;
-                serial_print("[BOOT] Secili cozunurluk basariyla uygulandi: ");
+                serial_print("[BOOT] Seçili çözünürlük başarıyla uygulandı: ");
                 serial_print_dec(width as u64);
                 serial_print("x");
                 serial_print_dec(height as u64);
@@ -470,7 +470,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // 12 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
+    // 15 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
 
     // Acilista TuM pencereler kapalidir; kullanici temiz bir masaustuyle baslar
 
@@ -610,6 +610,24 @@ pub extern "C" fn _start() -> ! {
 
     ));
 
+    // 14: Kontrol Paneli (canli sistem / ag bilgileri)
+
+    let cp_w = 620.min(width.saturating_sub(20)).max(200);
+
+    let cp_h = 470.min(height.saturating_sub(gui::taskbar_h() + 10)).max(120);
+
+    compositor.add_window(gui::Window::new(
+
+        "Kontrol Paneli", "Kontrol",
+
+        width.saturating_sub(cp_w) / 2,
+
+        height.saturating_sub(cp_h + gui::taskbar_h()) / 2,
+
+        cp_w, cp_h, false,
+
+    ));
+
 
 
     // Acilista hicbir pencere odakli degildir (temiz masaustu).
@@ -620,7 +638,7 @@ pub extern "C" fn _start() -> ! {
 
     // Kurulu sistemse welcome ekranini atla, live ortam ise goster.
 
-    serial_print("[BOOT] Hosgeldin ekrani hazirlaniyor; grafik oz-denetimleri calistiriliyor.\n");
+    serial_print("[BOOT] Hoş geldin ekranı hazırlanıyor; grafik öz denetimleri çalıştırılıyor.\n");
 
     // Widget/Component agaci mimarisini (yerlesim, Tab odagi, olaylar) dogrula.
 
@@ -630,21 +648,21 @@ pub extern "C" fn _start() -> ! {
 
     }
 
-    serial_print("[BOOT] Grafik arayuz denetimleri tamamlandi.\n");
+    serial_print("[BOOT] Grafik arayüz denetimleri tamamlandı.\n");
 
-    serial_print("[BOOT] Kritik denetimler tamamlandi; grafik arayuz baslatiliyor.\n");
+    serial_print("[BOOT] Kritik denetimler tamamlandı; grafik arayüz başlatılıyor.\n");
 
     boot::text_console::disable();
 
     if installed {
 
-        serial_print("[BOOT] Kurulu sistem tespit edildi; masaustu hazirlaniyor...\n");
+        serial_print("[BOOT] Kurulu sistem tespit edildi; masaüstü hazırlanıyor...\n");
 
         for phase in 0..4 {
 
             gui::render_loading_transition(&mut fb, width, height, phase,
 
-                gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
+                gui::ui_text("Masaüstü hazırlanıyor", "Preparing desktop"));
 
             let frame_start = monotonic_ms();
 
@@ -658,7 +676,7 @@ pub extern "C" fn _start() -> ! {
 
             gui::render_loading_transition(&mut fb, width, height, phase,
 
-                gui::ui_text("Sistem yukleniyor", "Loading system"));
+                gui::ui_text("Sistem yükleniyor", "Loading system"));
 
             let frame_start = monotonic_ms();
 
@@ -680,7 +698,7 @@ pub extern "C" fn _start() -> ! {
             &mut fs_mgr,
             memory_mgr,
         );
-        serial_print("[BOOT] Hosgeldin kabul edildi; masaustune geciliyor.\n");
+        serial_print("[BOOT] Hoş geldin kabul edildi; masaüstüne geçiliyor.\n");
     }
 
 
@@ -693,7 +711,7 @@ pub extern "C" fn _start() -> ! {
 
         for phase in 0..6 {
 
-            gui::render_loading_transition(&mut fb, width, height, phase + 2, gui::ui_text("Masaustu hazirlaniyor", "Preparing desktop"));
+            gui::render_loading_transition(&mut fb, width, height, phase + 2, gui::ui_text("Masaüstü hazırlanıyor", "Preparing desktop"));
 
             let frame_start = monotonic_ms();
 
@@ -715,7 +733,7 @@ pub extern "C" fn _start() -> ! {
 
     #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] RTC clock online.\n");
+    serial_print("[minOs] RTC saati etkin.\n");
 
     // Save once the boot transcript is complete, including numeric fields.
 
@@ -775,6 +793,12 @@ pub extern "C" fn _start() -> ! {
 
     let mut last_music_beat: usize = 0;
 
+    // Muzik calar ilerleme cubugu icin gercek zaman tabani (ms).
+    let mut last_music_progress_ms = monotonic_ms();
+
+    // Video oynatıcı kare zaman tabanı (ms); ~30 FPS.
+    let mut last_video_frame_ms = monotonic_ms();
+
     let mut cpu_sample_start = read_cpu_cycles();
 
     let mut cpu_sample_total_cycles = 0u64;
@@ -813,7 +837,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-    // Dosya / Klasor ozellikler (Properties) Modali
+    // Dosya / Klasor özellikler (Properties) Modali
 
     let mut properties_open = false;
 
@@ -874,6 +898,8 @@ pub extern "C" fn _start() -> ! {
                              kbd: &drivers::keyboard::KeyboardState,
 
                              total_ram_bytes: u64,
+
+                             used_ram_bytes: u64,
 
                              tick: usize,
 
@@ -1041,9 +1067,9 @@ pub extern "C" fn _start() -> ! {
 
                         if drivers::hda::is_ready() { if drivers::hda::is_dma_progressing() { gui::ui_text("Intel HDA (DMA aktif)", "Intel HDA (DMA active)") } else { gui::ui_text("Intel HDA (DMA beklemede)", "Intel HDA (DMA standby)") } } else { gui::ui_text("PC Speaker (PWM fallback)", "PC Speaker (PWM fallback)") },
 
-                        if drivers::e1000::is_ready() { drivers::e1000::nic_name() } else { gui::ui_text("Bulunamadi", "Not found") },
+                        if drivers::e1000::is_ready() { drivers::e1000::nic_name() } else { gui::ui_text("Bulunamadı", "Not found") },
 
-                        if drivers::e1000::is_ready() { gui::ui_text("Hazir", "Ready") } else { gui::ui_text("Baslatilamadi / aygit yok", "Initialization failed / device missing") }),
+                        if drivers::e1000::is_ready() { gui::ui_text("Hazir", "Ready") } else { gui::ui_text("Başlatılamadı / aygıt yok", "Initialization failed / device missing") }),
 
                     2 => np.render_content(fb, win.x, win.y, win.width, win.height, tick, &win.scroll),
 
@@ -1068,6 +1094,8 @@ pub extern "C" fn _start() -> ! {
                     12 => v3d.render_content(fb, win.x, win.y, win.width, win.height),
 
                     13 => pkg.render_content(fb, win.x, win.y, win.width, win.height),
+
+                    14 => apps::controlpanel::render_content(fb, win.x, win.y, win.width, win.height, now, total_ram_bytes, used_ram_bytes, kbd.layout),
 
                     _ => {}
 
@@ -1165,7 +1193,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Dosya / Klasor ozellikler (Properties) Modali
+        // Dosya / Klasor özellikler (Properties) Modali
 
         // NOT: Gorev cubugu/katmanlarindan oNCE cizilir; boylece fare imleci
 
@@ -1197,7 +1225,7 @@ pub extern "C" fn _start() -> ! {
 
             fb.draw_rect(px, py, pw, 28, gui::Color::TITLE_BAR);
 
-            let prop_title = gui::ui_text("ozellikler", "Properties");
+            let prop_title = gui::ui_text("özellikler", "Properties");
 
             gui::MinGuiCompositor::draw_string(fb, px + 12, py + 7, prop_title, gui::Color::WHITE);
 
@@ -1331,11 +1359,11 @@ pub extern "C" fn _start() -> ! {
 
             gui::MinGuiCompositor::draw_string(fb, dx + 10, dy + 6,
 
-                gui::ui_text("calistir (Run)", "Run Program"), gui::Color::WHITE);
+                gui::ui_text("çalıştır (Run)", "Run Program"), gui::Color::WHITE);
 
             gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 34,
 
-                gui::ui_text("Komut veya uygulama adi:", "Command or app name:"), gui::Color::TEXT_MUTED);
+                gui::ui_text("Komut veya uygulama adı:", "Command or app name:"), gui::Color::TEXT_MUTED);
 
             // Giris kutusu
 
@@ -1369,7 +1397,7 @@ pub extern "C" fn _start() -> ! {
 
             gui::MinGuiCompositor::draw_string(fb, dx + 12, dy + 88,
 
-                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Ac  [Esc] cik",
+                gui::ui_text("cmd, not, ayar, task, calc, web  |  [Enter] Aç  [Esc] çık",
 
                               "cmd, not, ayar, task, calc, web  |  [Enter] Open  [Esc] Cancel"),
 
@@ -1413,9 +1441,9 @@ pub extern "C" fn _start() -> ! {
 
     // Karsilama bildirimi (Modern Toast)
 
-    let welcome_title = gui::ui_text("minOs'a Hos Geldiniz", "Welcome to minOs");
+    let welcome_title = gui::ui_text("minOs'a Hoş Geldiniz", "Welcome to minOs");
 
-    let welcome_msg = gui::ui_text("Sistem hazir. Baslat menusu ve kisayollar aktif.", "System is ready. Start menu and shortcuts active.");
+    let welcome_msg = gui::ui_text("Sistem hazır. Başlat menüsü ve kısayollar etkin.", "System is ready. Start menu and shortcuts active.");
 
     compositor.push_toast(gui::ToastKind::Info, welcome_title, welcome_msg, monotonic_ms(), 5500);
 
@@ -1429,7 +1457,7 @@ pub extern "C" fn _start() -> ! {
 
         &notepad_app, &browser_app, &imageviewer_app, &musicplayer_app,
 
-        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &pkgmgr_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick,
+        &videoplayer_app, &taskmgr_app, &calculator_app, &paint_apps, &terminal_app, &installer_app, &viewer3d_app, &pkgmgr_app, &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, memory_mgr.pmm.used_memory_bytes, anim_tick,
 
         &mut app_render_cycles,
 
@@ -1455,7 +1483,7 @@ pub extern "C" fn _start() -> ! {
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
-    serial_print("[BOOT] Masaustu dongusu basladi.\n");
+    serial_print("[BOOT] Masaüstü döngüsü başladı.\n");
 
     loop {
 
@@ -1821,7 +1849,7 @@ pub extern "C" fn _start() -> ! {
 
             }
 
-            // ozellikler (Properties) modali: modal acikken tum tiklamalari modal ustlenir.
+            // özellikler (Properties) modali: modal acikken tum tiklamalari modal ustlenir.
 
             // X / Tamam butonlari ve modal disina tiklama pencereyi kapatir.
 
@@ -2266,7 +2294,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                     if let Some(data) = data {
 
@@ -2278,7 +2306,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 } else if tag == "IMG" {
 
-                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                                     open_app(&mut compositor, 4);
 
@@ -2296,7 +2324,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 } else if tag == "3D" {
 
-                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                    let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                                     if let Some(data) = data {
 
@@ -2322,7 +2350,7 @@ pub extern "C" fn _start() -> ! {
 
                                             let path = filemanager_app.selected_full_path();
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -2368,7 +2396,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    8 => { // ozellikler
+                                    8 => { // özellikler
 
                                         if let Some(file_idx) = compositor.context_file_idx {
 
@@ -2438,7 +2466,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
+                                        taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
 
                                         if let Some(wi) = compositor.context_window {
 
@@ -2582,7 +2610,7 @@ pub extern "C" fn _start() -> ! {
 
             if compositor.start_search_len > 0 {
 
-                let mut matches = [0; 14];
+                let mut matches = [0; 15];
 
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
 
@@ -2592,7 +2620,7 @@ pub extern "C" fn _start() -> ! {
 
             if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
 
-                let mut matches = [0; 14];
+                let mut matches = [0; 15];
 
                 let count = compositor.start_search_matches(settings_app.language.is_english(), &mut matches);
 
@@ -2735,7 +2763,7 @@ pub extern "C" fn _start() -> ! {
 
                                     #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] System Shutdown confirmed via Start Menu!\n");
+    serial_print("[minOs] Başlat menüsünden sistem kapatma onaylandı.\n");
 
                                     unsafe {
 
@@ -2903,7 +2931,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.active_tab = 2;
 
-                    settings_app.status_msg = gui::ui_text("Ag ayarlari acildi.", "Network settings opened.");
+                    settings_app.status_msg = gui::ui_text("Ağ ayarları açıldı.", "Network settings opened.");
 
                     consumed = true;
 
@@ -3121,7 +3149,7 @@ pub extern "C" fn _start() -> ! {
 
                             if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&p));
 
                                 if let Some(data) = data { notepad_app.open_file(&p, data); }
 
@@ -3129,7 +3157,7 @@ pub extern "C" fn _start() -> ! {
 
                             } else if tag == "IMG" {
 
-                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&p, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                 open_app(&mut compositor, 4);
 
@@ -3143,7 +3171,7 @@ pub extern "C" fn _start() -> ! {
 
                             else if tag == "3D" {
 
-                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
+                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&p));
 
                                 if let Some(data) = data {
 
@@ -3415,7 +3443,7 @@ pub extern "C" fn _start() -> ! {
 
                                         if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -3427,7 +3455,7 @@ pub extern "C" fn _start() -> ! {
 
                                         } else if tag == "IMG" {
 
-                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                            with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                             open_app(&mut compositor, 4);
 
@@ -3445,7 +3473,7 @@ pub extern "C" fn _start() -> ! {
 
                                         } else if tag == "3D" {
 
-                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                            let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                             if let Some(data) = data {
 
@@ -3561,7 +3589,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                         if let Some(data) = data {
 
@@ -3573,7 +3601,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     } else if tag == "IMG" {
 
-                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                                         open_app(&mut compositor, 4);
 
@@ -3591,7 +3619,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     } else if tag == "3D" {
 
-                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                                         if let Some(data) = data {
 
@@ -3667,19 +3695,19 @@ pub extern "C" fn _start() -> ! {
 
                                     settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
 
-                                    settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinlestirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP secildi.", "Static IP selected.") };
+                                    settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_net_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ag testi yapiliyor...", "Running network test..."), || settings_app.run_network_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ağ testi yapılıyor...", "Running network test..."), || settings_app.run_network_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_ping_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gonderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ping gönderiliyor...", "Sending ping..."), || settings_app.run_ping_test());
 
                                 } else if settings_app.active_tab == 2 && gui::in_rect(mx, my, apps::settings::SystemSettings::test_http_btn_rect(wx, wy)) {
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP baglantisi test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("HTTP bağlantısı test ediliyor...", "Testing HTTP connection..."), || settings_app.run_http_test());
 
                                 } else if settings_app.active_tab == 0 {
 
@@ -3719,7 +3747,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.language.toggle();
 
-                                        settings_app.status_msg = gui::ui_text("Arayuz dili Turkce olarak ayarlandi.", "Interface language set to English.");
+                                        settings_app.status_msg = gui::ui_text("Arayüz dili Türkçe olarak ayarlandı.", "Interface language set to English.");
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::mute_btn_rect(wx, wy)) {
 
@@ -3768,7 +3796,7 @@ pub extern "C" fn _start() -> ! {
                                         if gui::in_rect(mx,my,apps::settings::SystemSettings::zoom_btn_rect(wx,wy,i)) {
                                             settings_app.zoom = [100,125,150][i];
                                             gui::set_font_zoom(settings_app.zoom);
-                                            settings_app.status_msg = gui::ui_text("Yazi yakinlastirmasi degistirildi.", "Font zoom changed.");
+                                            settings_app.status_msg = gui::ui_text("Yazı yakınlaştırması değiştirildi.", "Font zoom changed.");
                                             handled = true;
                                             break;
                                         }
@@ -3781,7 +3809,7 @@ pub extern "C" fn _start() -> ! {
                                                 if requested == (fb.width, fb.height) {
                                                     settings_app.screen_res = requested;
                                                     settings_app.display_res = requested;
-                                                    settings_app.status_msg = gui::ui_text("Bu cozunurluk zaten etkin.", "This resolution is already active.");
+                                                    settings_app.status_msg = gui::ui_text("Bu çözünürlük zaten etkin.", "This resolution is already active.");
                                                 } else if drivers::gpu::mode_supported(requested.0, requested.1) {
                                                     let (switched, pitch_opt) = drivers::gpu::try_set_resolution(requested.0, requested.1);
                                                     if switched {
@@ -3799,13 +3827,13 @@ pub extern "C" fn _start() -> ! {
                                                             crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
                                                             keep_windows_on_screen(&mut compositor, width, height);
                                                             force_render = true;
-                                                            settings_app.status_msg = gui::ui_text("cozunurluk degistirildi (BGA).", "Resolution changed (BGA).");
+                                                            settings_app.status_msg = gui::ui_text("Çözünürlük değiştirildi (BGA).", "Resolution changed (BGA).");
                                                         } else {
-                                                            settings_app.status_msg = gui::ui_text("cozunurluk uygulanamadi (bellek siniri).", "Resolution failed (memory limit).");
+                                                            settings_app.status_msg = gui::ui_text("Çözünürlük uygulanamadı (bellek sınırı).", "Resolution failed (memory limit).");
                                                         }
                                                     } else {
                                                         settings_app.screen_res = (fb.width, fb.height);
-                                                        settings_app.status_msg = gui::ui_text("cozunurluk acilista Limine tarafindan belirlenir.", "Resolution is set by Limine at boot.");
+                                                        settings_app.status_msg = gui::ui_text("Çözünürlük açılışta Limine tarafından belirlenir.", "Resolution is set by Limine at boot.");
                                                     }
                                                 }
                                                 handled = true;
@@ -3820,9 +3848,9 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.status_msg = if settings_app.night_light {
 
-                                            gui::ui_text("Mavi isik filtresi acildi.", "Blue light filter enabled.")
+                                            gui::ui_text("Mavi ışık filtresi açıldı.", "Blue light filter enabled.")
 
-                                        } else { gui::ui_text("Mavi isik filtresi kapatildi.", "Blue light filter disabled.") };
+                                        } else { gui::ui_text("Mavi ışık filtresi kapatıldı.", "Blue light filter disabled.") };
 
                                     }
 
@@ -3846,7 +3874,7 @@ pub extern "C" fn _start() -> ! {
 
                                             crate::gui::wallpaper::apply(settings_app.wallpaper, settings_app.wall_color);
 
-                                            settings_app.status_msg = gui::ui_text("Arka plan degistirildi.", "Background changed.");
+                                            settings_app.status_msg = gui::ui_text("Arka plan değiştirildi.", "Background changed.");
 
                                         }
 
@@ -3888,7 +3916,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if mouse_setting_changed {
 
-                                        settings_app.status_msg = gui::ui_text("Fare ayarlari degistirildi. Kalici olmasi icin Kaydet'e tiklayin.", "Mouse settings changed. Click Save to keep them.");
+                                        settings_app.status_msg = gui::ui_text("Fare ayarları değiştirildi. Kalıcı olması için Kaydet'e tıklayın.", "Mouse settings changed. Click Save to keep them.");
 
                                     }
 
@@ -3912,7 +3940,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_disk_btn_rect(wx, wy)) {
 
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi calisiyor...", "Running disk test..."), || settings_app.run_disk_test());
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk testi çalışıyor...", "Running disk test..."), || settings_app.run_disk_test());
 
                                     } else if gui::in_rect(mx, my, apps::settings::SystemSettings::test_audio_btn_rect(wx, wy)) {
 
@@ -3980,7 +4008,7 @@ pub extern "C" fn _start() -> ! {
 
                                                 let path = alloc::string::String::from(notepad_app.file_path_str());
 
-                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                                let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                                 if let Some(data) = data {
 
@@ -4206,7 +4234,7 @@ pub extern "C" fn _start() -> ! {
 
                                 // Video: oynat / durdur
 
-                                let ctrl_y = wy + 178;
+                                let ctrl_y = wy + apps::videoplayer::VideoPlayerApp::CONTROLS_Y;
 
                                 if my >= ctrl_y && my <= ctrl_y + 24 {
 
@@ -4280,7 +4308,7 @@ pub extern "C" fn _start() -> ! {
 
                                         if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
+                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
 
                                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -4372,11 +4400,11 @@ pub extern "C" fn _start() -> ! {
 
                                                 0 => paint_apps[idx].as_mut().unwrap().new_document(),
 
-                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
+                                                1 => { with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs)); }
 
                                                 2 => {
 
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
 
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -4396,7 +4424,7 @@ pub extern "C" fn _start() -> ! {
 
                                                     };
 
-                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farkli kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
+                                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Farklı kaydediliyor...", "Saving as..."), || paint_apps[idx].as_mut().unwrap().save_as(&mut fs_mgr.vfs, cw, ch, name.as_str())) {
 
                                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -4442,7 +4470,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if paint_apps[idx].is_none() { paint_apps[idx] = Some(apps::paint::PaintApp::new()); }
 
-                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP aciliyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("BMP açılıyor...", "Opening BMP..."), || paint_apps[idx].as_mut().unwrap().open_bmp(&fs_mgr.vfs));
 
                                 } else if gui::in_rect(mx, my, save_rect) {
 
@@ -4450,7 +4478,7 @@ pub extern "C" fn _start() -> ! {
 
                                     let (_, _, cw, ch) = apps::paint::PaintApp::canvas_rect(ww, wh);
 
-                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("cizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
+                                    if with_busy_progress(&mut fb, mx, my, gui::ui_text("Çizim kaydediliyor...", "Saving drawing..."), || paint_apps[idx].as_mut().unwrap().save_bmp(&mut fs_mgr.vfs, cw, ch)) {
 
                                         filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
@@ -4594,7 +4622,7 @@ pub extern "C" fn _start() -> ! {
 
                                     {
 
-                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk bicimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
+                                        let formatted = with_busy_progress(&mut fb, mx, my, gui::ui_text("Disk biçimlendiriliyor...", "Formatting disk..."), || installer_app.format_selected_drive());
 
                                         if formatted {
 
@@ -4642,7 +4670,7 @@ pub extern "C" fn _start() -> ! {
 
                                             installer_app.status_msg = (
 
-                                                "UYARI: Disk silinip bicimlendirilecek. Onaylamak icin tekrar tiklayin.",
+                                                "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.",
 
                                                 "WARNING: Disk will be erased and formatted. Click again to confirm.",
 
@@ -4678,6 +4706,28 @@ pub extern "C" fn _start() -> ! {
                                         &mut memory_mgr.pmm,
                                         &now,
                                     );
+                                }
+
+                            }
+
+                            14 => {
+
+                                for tab in 0..apps::controlpanel::TAB_COUNT {
+
+                                    if gui::in_rect(mx, my, apps::controlpanel::tab_rect(wx, wy, ww, tab)) {
+
+                                        apps::controlpanel::select_tab(tab);
+
+                                        break;
+
+                                    }
+
+                                }
+
+                                if gui::in_rect(mx, my, apps::controlpanel::theme_btn_rect(wx, wy, ww, wh)) {
+
+                                    settings_app.cycle_theme();
+
                                 }
 
                             }
@@ -4824,7 +4874,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.is_muted = false;
 
-                    settings_app.status_msg = gui::ui_text("Ses artirildi.", "Volume increased.");
+                    settings_app.status_msg = gui::ui_text("Ses artırıldı.", "Volume increased.");
 
                 }
 
@@ -4832,7 +4882,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.volume = settings_app.volume.saturating_sub(5);
 
-                    settings_app.status_msg = gui::ui_text("Ses azaltildi.", "Volume decreased.");
+                    settings_app.status_msg = gui::ui_text("Ses azaltıldı.", "Volume decreased.");
 
                 }
 
@@ -4840,7 +4890,7 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.is_muted = !settings_app.is_muted;
 
-                    settings_app.status_msg = if settings_app.is_muted { gui::ui_text("Ses kapatildi.", "Muted.") } else { gui::ui_text("Ses acildi.", "Unmuted.") };
+                    settings_app.status_msg = if settings_app.is_muted { gui::ui_text("Ses kapatıldı.", "Muted.") } else { gui::ui_text("Ses açıldı.", "Unmuted.") };
 
                 }
 
@@ -5302,7 +5352,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::Properties => {
 
-                    // Alt+Enter: secili dosyanin ozelliklerini durum cubugunda goster.
+                    // Alt+Enter: secili dosyanin özelliklerini durum cubugunda goster.
 
                     if app_is_focused(&compositor, 0) {
 
@@ -5330,7 +5380,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::EnterKey => {
 
-                    // Alt+Enter: ozellikler penceresini ac
+                    // Alt+Enter: özellikler penceresini ac
 
                     if keyboard.alt && app_is_focused(&compositor, 0) && filemanager_app.selected_idx < filemanager_app.file_count {
 
@@ -5427,7 +5477,7 @@ pub extern "C" fn _start() -> ! {
 
                                 #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] System Shutdown confirmed via Keyboard!\n");
+    serial_print("[minOs] Klavyeden sistem kapatma onaylandı.\n");
 
                                 unsafe {
 
@@ -5518,7 +5568,7 @@ pub extern "C" fn _start() -> ! {
 
                                 if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
+                                    taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
 
                                     terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -5566,7 +5616,7 @@ pub extern "C" fn _start() -> ! {
 
                                     if tag == "TXT" || tag == "LOG" || tag == "CFG" {
 
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                                         if let Some(data) = data {
 
@@ -5578,7 +5628,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if tag == "IMG" {
 
-                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim aciliyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
+                                        with_busy_progress(&mut fb, mx, my, gui::ui_text("Resim açılıyor...", "Opening image..."), || open_image_file(&path, &fs_mgr.vfs, &paint_apps, &mut imageviewer_app));
 
                                         open_app(&mut compositor, 4);
 
@@ -5596,7 +5646,7 @@ pub extern "C" fn _start() -> ! {
 
                                     } else if tag == "3D" {
 
-                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model aciliyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
+                                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("3D model açılıyor...", "Opening 3D model..."), || fs_mgr.vfs.read_file(&path));
 
                                         if let Some(data) = data {
 
@@ -5642,7 +5692,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.language.toggle();
 
-                                        settings_app.status_msg = gui::ui_text("Arayuz dili degistirildi.", "Interface language changed.");
+                                        settings_app.status_msg = gui::ui_text("Arayüz dili değiştirildi.", "Interface language changed.");
 
                                     }
 
@@ -5670,7 +5720,7 @@ pub extern "C" fn _start() -> ! {
 
                                         settings_app.dhcp_enabled = !settings_app.dhcp_enabled;
 
-                                        settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinlestirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP secildi.", "Static IP selected.") };
+                                        settings_app.status_msg = if settings_app.dhcp_enabled { gui::ui_text("DHCP etkinleştirildi.", "DHCP enabled.") } else { gui::ui_text("Statik IP seçildi.", "Static IP selected.") };
 
                                     }
 
@@ -5764,7 +5814,7 @@ pub extern "C" fn _start() -> ! {
 
                     #[cfg(minos_boot_log)]
 
-    serial_print("[minOs] System Shutdown requested!\n");
+    serial_print("[minOs] Sistem kapatma isteği alındı.\n");
 
                     unsafe {
 
@@ -5880,7 +5930,7 @@ pub extern "C" fn _start() -> ! {
 
                         notepad_app.clear();
 
-                        notepad_app.status_msg = gui::ui_text("Yeni belge olusturuldu", "New document created");
+                        notepad_app.status_msg = gui::ui_text("Yeni belge oluşturuldu", "New document created");
 
                     }
 
@@ -5892,7 +5942,7 @@ pub extern "C" fn _start() -> ! {
 
                         let path = alloc::string::String::from(notepad_app.file_path_str());
 
-                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya aciliyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
+                        let data = with_busy_progress(&mut fb, mx, my, gui::ui_text("Dosya açılıyor...", "Opening file..."), || fs_mgr.vfs.read_file(&path));
 
                         if let Some(data) = data {
 
@@ -6066,7 +6116,7 @@ pub extern "C" fn _start() -> ! {
 
                         if let Some(target) = taskmgr_app.selected_app_idx() {
 
-                            taskmgr_app.status = gui::ui_text("Uygulama sonlandirildi.", "Application terminated.");
+                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
 
                             terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
 
@@ -6146,7 +6196,33 @@ pub extern "C" fn _start() -> ! {
 
                 }
 
-                drivers::keyboard::KeyAction::Refresh => { /* TODO */ }
+                drivers::keyboard::KeyAction::Refresh => {
+
+                    // F5: odakli uygulamanin icerigini yenile.
+
+                    if app_is_focused(&compositor, 0) {
+
+                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+
+                    } else if app_is_focused(&compositor, 3) {
+
+                        browser_app.navigate();
+
+                    } else if app_is_focused(&compositor, 13) {
+
+                        pkgmgr_app.refresh_installed(&fs_mgr.vfs);
+
+                    } else if app_is_focused(&compositor, 7) {
+
+                        taskmgr_app.status = gui::ui_text("Görev listesi canlı güncelleniyor.", "Task list updates live.");
+
+                    } else if compositor.active_window_idx.is_none() {
+
+                        desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+
+                    }
+
+                }
 
                 drivers::keyboard::KeyAction::BrowserAddress => {
 
@@ -6198,7 +6274,7 @@ pub extern "C" fn _start() -> ! {
 
                         serial_print("[SCREENSHOT] HATA: Yetersiz bellek!\n");
 
-                        terminal_app.push_line(gui::ui_text("Ekran goruntusu alinamadi: Yetersiz bellek", "Screenshot failed: Out of memory"), gui::Color::ACCENT_RED);
+                        terminal_app.push_line(gui::ui_text("Ekran görüntüsü alınamadı: Yetersiz bellek", "Screenshot failed: Out of memory"), gui::Color::ACCENT_RED);
 
                     } else {
 
@@ -6276,7 +6352,7 @@ pub extern "C" fn _start() -> ! {
 
                         path.push_str(".bmp");
 
-                        serial_print("[SCREENSHOT] Ekran goruntusu aliniyor...\n");
+                        serial_print("[SCREENSHOT] Ekran görüntüsü alınıyor...\n");
 
                         screenshot_counter += 1;
 
@@ -6288,15 +6364,15 @@ pub extern "C" fn _start() -> ! {
 
                             filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
-                            terminal_app.push_line(gui::ui_text("Ekran goruntusu kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
+                            terminal_app.push_line(gui::ui_text("Ekran görüntüsü kaydedildi: /desktop/", "Screenshot saved to: /desktop/"), gui::Color::ACCENT_GREEN);
 
                             compositor.push_toast(
 
                                 gui::ToastKind::Success,
 
-                                gui::ui_text("Ekran Goruntusu Alindi", "Screenshot Captured"),
+                                gui::ui_text("Ekran Görüntüsü Alındı", "Screenshot Captured"),
 
-                                gui::ui_text("Goruntu /desktop/ klasorune kaydedildi.", "Image saved to /desktop/ folder."),
+                                gui::ui_text("Görüntü /desktop/ klasörüne kaydedildi.", "Image saved to /desktop/ folder."),
 
                                 monotonic_ms(),
 
@@ -6306,7 +6382,7 @@ pub extern "C" fn _start() -> ! {
 
                             force_render = true;
 
-                            serial_print("[SCREENSHOT] Basariyla kaydedildi: ");
+                            serial_print("[SCREENSHOT] Başarıyla kaydedildi: ");
 
                             serial_print(&path);
 
@@ -6318,9 +6394,9 @@ pub extern "C" fn _start() -> ! {
 
                                 gui::ToastKind::Error,
 
-                                gui::ui_text("Ekran Goruntusu Hatasi", "Screenshot Error"),
+                                gui::ui_text("Ekran Görüntüsü Hatası", "Screenshot Error"),
 
-                                gui::ui_text("Dosya diske yazilamadi!", "Failed to write file to disk!"),
+                                gui::ui_text("Dosya diske yazılamadı!", "Failed to write file to disk!"),
 
                                 monotonic_ms(),
 
@@ -6328,7 +6404,7 @@ pub extern "C" fn _start() -> ! {
 
                             );
 
-                            serial_print("[SCREENSHOT] HATA: VFS dosya yazilamadi!\n");
+                            serial_print("[SCREENSHOT] HATA: VFS dosyası yazılamadı!\n");
 
                         }
 
@@ -7037,11 +7113,11 @@ pub extern "C" fn _start() -> ! {
 
                             let msg = if keyboard.ctrl {
 
-                                gui::ui_text("Masaustune kopyalandi.", "Copied to Desktop.")
+                                gui::ui_text("Masaüstüne kopyalandı.", "Copied to Desktop.")
 
                             } else {
 
-                                gui::ui_text("Masaustune tasindi.", "Moved to Desktop.")
+                                gui::ui_text("Masaüstüne taşındı.", "Moved to Desktop.")
 
                             };
 
@@ -7181,6 +7257,8 @@ pub extern "C" fn _start() -> ! {
 
                         "3d" => Some(12),
 
+                        "panel" | "kontrol" | "control" => Some(14),
+
                         "pkg" | "minpak" | "paket" | "pkgmgr" => Some(13),
 
                         _ => None,
@@ -7221,7 +7299,7 @@ pub extern "C" fn _start() -> ! {
 
             // (pencere indeksini degil) — start_menu_app_idx ile eslenir.
 
-            // ozellikler modali acikken ESC ve Enter modali kapatir.
+            // özellikler modali acikken ESC ve Enter modali kapatir.
 
             if properties_open {
 
@@ -7348,7 +7426,7 @@ pub extern "C" fn _start() -> ! {
 
             } else if compositor.is_start_menu_open && (ch == 'a' || ch == 'A' || ch == 'b' || ch == 'B') {
 
-                let menu_index = if ch == 'a' || ch == 'A' { 9 } else { 10 };
+                let menu_index = if ch == 'a' || ch == 'A' { 10 } else { 11 };
 
                 if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
 
@@ -7669,6 +7747,25 @@ pub extern "C" fn _start() -> ! {
 
         musicplayer_app.volume = settings_app.volume as usize;
 
+        // Video kare sayaci gercek zamana bagli (~30 FPS) ve yalnizca oynatirken ilerler.
+        if videoplayer_app.is_playing {
+
+            let video_now_ms = monotonic_ms();
+
+            if video_now_ms.wrapping_sub(last_video_frame_ms) >= 33 {
+
+                last_video_frame_ms = video_now_ms;
+
+                videoplayer_app.frame = videoplayer_app.frame.wrapping_add(1);
+
+            }
+
+        } else {
+
+            last_video_frame_ms = monotonic_ms();
+
+        }
+
         if musicplayer_app.is_playing && !audio_dev.is_muted && audio_dev.volume_left > 0 {
 
             if anim_tick.wrapping_sub(last_music_beat) >= 24 {
@@ -7741,10 +7838,15 @@ pub extern "C" fn _start() -> ! {
 
                 music_note = (music_note + 1) % NOTES.len();
 
-                musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
-
                 last_music_beat = anim_tick;
 
+            }
+
+            // Parca 3:30 (210 sn) oldugu icin cubuk gercek zamanda her 2.1 sn'de %1 ilerler.
+            let progress_now_ms = monotonic_ms();
+            if progress_now_ms.wrapping_sub(last_music_progress_ms) >= 2_100 {
+                last_music_progress_ms = progress_now_ms;
+                musicplayer_app.progress = (musicplayer_app.progress + 1) % 101;
             }
 
         } else if speaker_on || audio_dev.is_muted || audio_dev.volume_left == 0 {
@@ -7756,6 +7858,8 @@ pub extern "C" fn _start() -> ! {
             speaker_on = false;
 
             last_music_beat = anim_tick;
+
+            last_music_progress_ms = monotonic_ms();
 
         }
 
@@ -7867,7 +7971,7 @@ pub extern "C" fn _start() -> ! {
 
                 &installer_app, &viewer3d_app, &pkgmgr_app,
 
-                &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, anim_tick, &mut app_render_cycles,
+                &now, &mouse, &keyboard, memory_mgr.pmm.total_memory_bytes, memory_mgr.pmm.used_memory_bytes, anim_tick, &mut app_render_cycles,
 
                 (run_dialog_open, &run_dialog_input),
 

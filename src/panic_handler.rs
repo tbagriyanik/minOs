@@ -43,7 +43,7 @@ fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
         let _ = writeln!(&mut PanicText, "{}:{}", location.file(), location.line());
     }
-    crate::boot::text_console::write("GUI baslatilmadi. Sistem guvenli sekilde durduruldu.\n");
+    crate::boot::text_console::write("Grafik arayüz başlatılamadı. Sistem güvenli şekilde durduruldu.\n");
 
     crate::boot::text_console::interactive_error_prompt("Kernel Panic");
 }

@@ -42,6 +42,7 @@ fn app_index(name: &str) -> Option<usize> {
         "install" | "installer" | "kur" => Some(11),
         "3d" | "viewer3d" => Some(12),
         "pkgmgr" | "packagemgr" | "packages" | "paket" => Some(13),
+        "panel" | "controlpanel" | "control" | "kontrol" => Some(14),
         _ => None,
     }
 }
@@ -53,10 +54,12 @@ fn app_name(index: usize) -> &'static str {
         (6,false) => "Video Oynatıcı", (7,false) => "Görev Yöneticisi", (8,false) => "Hesap Makinesi",
         (9,false) => "Çizim Tahtası", (10,false) => "Komut İstemi",
         (11,false) => "Kurulum Sihirbazı", (12,false) => "3D Gösterici", (13,false) => "Paket Yöneticisi",
+        (14,false) => "Kontrol Paneli",
         (0,true) => "File Manager", (1,true) => "Settings", (2,true) => "Notepad", (3,true) => "Browser",
         (4,true) => "Image Viewer", (5,true) => "Music Player", (6,true) => "Video Player",
         (7,true) => "Task Manager", (8,true) => "Calculator", (9,true) => "Paint",
-        (10,true) => "Terminal", (11,true) => "Installer", (12,true) => "3D Viewer", _ => "Package Manager",
+        (10,true) => "Terminal", (11,true) => "Installer", (12,true) => "3D Viewer", (13,true) => "Package Manager",
+        (14,true) => "Control Panel", _ => "Package Manager",
     }
 }
 
@@ -457,7 +460,7 @@ impl TerminalApp {
                 self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
                 self.push_line("hexdump <file> | nc <host> <port> [text] | fortune | benchmark", Color::ACCENT_BLUE);
                 self.push_line("minPak list|search|install|remove | exec <file> [args] | open <app>", Color::ACCENT_BLUE);
-                self.push_line("apps: files settings notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
+                self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
                 let mut buf = TextBuf::new();

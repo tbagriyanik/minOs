@@ -2,7 +2,7 @@
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 20 Ekim 2026 — TLS 1.2 istemcisi ve kripto ilkelleri (`src/drivers/crypto/`) tamamlandı; tüm fazlar (Faz 1-8) eksiksiz tamamlandı.
+> Son senkron: 20 Ekim 2026 — TLS 1.2/1.3, ECDHE (secp256r1) ve X.509 zaman/hostname doğrulaması tamamlandı; tüm fazlar (Faz 1-10) eksiksiz tamamlandı.
 
 ---
 
@@ -122,11 +122,11 @@ flowchart TD
 - **Paket Yöneticisi (`minpkg`) ✅:** Ağ (HTTP/curl) veya dahili repodan paket indirme, VFS `/bin` dizinine kurma (`minpkg install`), kurulu ikili paketleri arayıp listeleme (`minpkg list`), kaldırma (`minpkg remove`) ve terminal (MinShell) arayüz entegrasyonu tamamlandı.
 - **Donanım 2D Hızlandırma ✅:** GPU/BGA ve Framebuffer üzerinde 64-bit hizalı blok dolgu (`hw_accel_fill_rect`) ve kopyalama (`hw_accel_bit_blit`), `flush_rect` ve `draw_rect` hızlandırmaları tamamlandı.
 
-### Faz 9: Kriptografi ve TLS 1.2 ✅
+### Faz 9: Kriptografi ve TLS 1.2 / 1.3 ✅
 - **Kripto İlkelleri (`src/drivers/crypto/`, `no_std`, bağımlılıksız):** SHA-256 (`sha256.rs`), HMAC-SHA256 (`hmac.rs`), AES-128/256 (`aes.rs`), GCM (`gcm.rs`), RSA + PKCS#1 v1.5 (`rsa.rs`), minimal X.509 sertifika ayrıştırıcı (`x509.rs`).
-- **TLS 1.2 Oturumu:** `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) tek cipher suite; PRF (P_SHA256), master/pre-master secret türetme, GCM kayıt şifreleme/çözme, Finished doğrulama.
+- **TLS 1.2 / 1.3 Oturumları:** TLS 1.2'de `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) ve `ECDHE_RSA` suite'leri, TLS 1.3'te HKDF anahtar planı ve AES-GCM kayıtları; PRF (P_SHA256/P_SHA384), master/pre-master secret türetme, GCM şifreleme/çözme, Finished ve CertificateVerify doğrulaması.
 - **Entegrasyon:** Web Tarayıcısı `https://` şeması; şifreli yanıt şifresi çözülüp HTTP ayrıştırıcısına aktarılır.
-- **Bilinen sınırlar:** Sertifika zinciri ve hostname doğrulaması yapılmaz; TLS 1.3, ECDHE ve AEAD-GCM dışı cipher suite'ler desteklenmez.
+- **Bilinen sınırlar:** Sertifika zinciri (kök/ara CA imza doğrulaması) ve iptal kontrolü (OCSP/CRL) yapılmaz; buna karşılık sunucu sertifikasının geçerlilik tarihleri ile CN/SAN ana makine adı RFC 6125 kurallarıyla doğrulanır. TLS 1.2 ve TLS 1.3 el sıkışmaları (ECDHE secp256r1, RSA/ECDSA imza, AES-GCM, SHA-256/384) desteklenir; eski/zayıf cipher suite'ler desteklenmez.
 
 ### Faz 10: Gelişmiş Giriş ve Donanım Sürücüleri (USB HID, Touchpad, UVC Kamera, Wi-Fi) ✅
 - **Yerel xHCI USB HID Klavye ve Fare (`src/drivers/usb_hid.rs`):** PCI xHCI (USB 3.x) denetleyicisi, port reset ve aygıt numaralandırma, Boot Protocol klavye ve fare desteği; PS/2 ile birleşik olay döngüsü ve gecikmesiz olay kontrolü (`has_event`).

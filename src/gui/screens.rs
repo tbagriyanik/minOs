@@ -130,7 +130,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
         y += 26;
     }
 
-    let footer = "Yeniden baslatmak icin herhangi bir tusa basin.  /  Press any key to restart.";
+    let footer = "Yeniden başlatmak için herhangi bir tuşa basın.  /  Press any key to restart.";
     let footer_w = MinGuiCompositor::text_width(footer, 1);
     if footer_w <= width.saturating_sub(24) {
         MinGuiCompositor::draw_string(
@@ -141,7 +141,7 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
             Color::TEXT_MAIN,
         );
     } else {
-        MinGuiCompositor::draw_string(fb, 24, box_y + box_h + 18, "Yeniden baslatmak icin bir tusa basin / Press any key to restart", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(fb, 24, box_y + box_h + 18, "Yeniden başlatmak için bir tuşa basın / Press any key to restart", Color::TEXT_MAIN);
     }
 
     fb.flush();

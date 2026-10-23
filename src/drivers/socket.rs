@@ -797,7 +797,7 @@ pub fn self_test() -> bool {
     for fd in fds2 {
         close(fd);
     }
-    crate::serial_print("[SOCK-TEST] socket tahsis/port/self-check: ");
-    crate::serial_print(if ok { "BASARILI\n" } else { "BASARISIZ\n" });
+    crate::serial_print("[SOCK-TEST] soket tahsisi/bağlantı noktası/kendi kendini sınama: ");
+    crate::serial_print(if ok { "BAŞARILI\n" } else { "BAŞARISIZ\n" });
     ok
 }

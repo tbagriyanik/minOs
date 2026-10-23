@@ -354,14 +354,14 @@ static mut FSB_TEST_BUF: [u8; 32768] = [0; 32768];
 
 #[cfg(not(test))]
 pub fn test_allocator_subsystem() -> bool {
-    crate::serial_print("[ALLOC-TEST] --- Gelismis Bellek Tahsis Edici Dogrulama Testi ---\n");
+    crate::serial_print("[ALLOC-TEST] --- Gelişmiş bellek tahsis edici doğrulama testi ---\n");
 
     // 1. align_up_checked taşma ve sınır kontrolü
     if align_up_checked(usize::MAX - 3, 8).is_some() || align_up_checked(16, 0).is_some() {
-        crate::serial_print("[ALLOC-TEST] align_up taşma kontrolü: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] align_up taşma kontrolü: BAŞARISIZ\n");
         return false;
     }
-    crate::serial_print("[ALLOC-TEST] 1. Hizalama & Tasma Korumasi (align_up_checked): BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 1. Hizalama ve taşma koruması (align_up_checked): BAŞARILI\n");
 
     // 2. Bump Allocator LIFO ve Reset Testi (Yığın taşmasını önlemek için statik tampon)
     let bump_buf = unsafe { &mut *core::ptr::addr_of_mut!(BUMP_TEST_BUF) };
@@ -372,16 +372,16 @@ pub fn test_allocator_subsystem() -> bool {
     let p1 = bump.alloc(l1);
     let p2 = bump.alloc(l1);
     if p1.is_null() || p2.is_null() || (p1 as usize % 16 != 0) || (p2 as usize % 16 != 0) {
-        crate::serial_print("[ALLOC-TEST] Bump allocation: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] Bump allocation: BAŞARISIZ\n");
         return false;
     }
     bump.dealloc(p2, l1); // LIFO rewind
     bump.dealloc(p1, l1); // Full reset
     if bump.allocations_count() != 0 || bump.used_bytes() != 0 {
-        crate::serial_print("[ALLOC-TEST] Bump LIFO / Reset: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] Bump LIFO / Reset: BAŞARISIZ\n");
         return false;
     }
-    crate::serial_print("[ALLOC-TEST] 2. Bump Allocator LIFO & Sifirlama: BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 2. Bump Allocator LIFO & sıfırlama: BAŞARILI\n");
 
     // 3. Fixed-Size Block Allocator Blok Geri Kazanım (Free-List Reuse)
     let fsb_buf = unsafe { &mut *core::ptr::addr_of_mut!(FSB_TEST_BUF) };
@@ -392,40 +392,40 @@ pub fn test_allocator_subsystem() -> bool {
     let b1 = fsb.alloc(l8);
     let b2 = fsb.alloc(l8);
     if b1.is_null() || b2.is_null() || b1 == b2 {
-        crate::serial_print("[ALLOC-TEST] FSB blok tahsisi: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] FSB blok tahsisi: BAŞARISIZ\n");
         return false;
     }
     fsb.dealloc(b1, l8);
     let b3 = fsb.alloc(l8);
     if b3 != b1 {
-        crate::serial_print("[ALLOC-TEST] FSB blok geri kazanımı: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] FSB blok geri kazanımı: BAŞARISIZ\n");
         return false;
     }
     fsb.dealloc(b2, l8);
     fsb.dealloc(b3, l8);
-    crate::serial_print("[ALLOC-TEST] 3. Sabit Boyutlu Blok Geri Kazanim (Free-List Reuse): BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 3. Sabit Boyutlu Blok geri kazanım (Free-List Reuse): BAŞARILI\n");
 
     // 4. Büyük Blok (>2048) Havuzlama ve Geri Kazanım
     let l_large = Layout::from_size_align(4096, 4096).unwrap();
     let p_large1 = fsb.alloc(l_large);
     if p_large1.is_null() || (p_large1 as usize % 4096 != 0) {
-        crate::serial_print("[ALLOC-TEST] Büyük blok tahsisi: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] Büyük blok tahsisi: BAŞARISIZ\n");
         return false;
     }
     let used_after = fsb.used_bytes();
     fsb.dealloc(p_large1, l_large);
     let p_large2 = fsb.alloc(l_large);
     if p_large2 != p_large1 || fsb.used_bytes() != used_after {
-        crate::serial_print("[ALLOC-TEST] Büyük blok geri kazanımı: BASARISIZ\n");
+        crate::serial_print("[ALLOC-TEST] Büyük blok geri kazanımı: BAŞARISIZ\n");
         return false;
     }
     fsb.dealloc(p_large2, l_large);
-    crate::serial_print("[ALLOC-TEST] 4. Buyuk Blok (>2KB) Havuzlama & Geri Kazanim: BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 4. Buyuk Blok (>2KB) Havuzlama & geri kazanım: BAŞARILI\n");
 
     // 5. Yabancı / Sınır Dışı Gösterici Reddi
     let wild_ptr = 0x500 as *mut u8;
     fsb.dealloc(wild_ptr, l8); // Güvenle görmezden gelinmeli
-    crate::serial_print("[ALLOC-TEST] 5. Yabanci / Gecersiz Gosterici Reddi: BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 5. Yabancı / geçersiz gösterici reddi: BAŞARILI\n");
 
     // 6. Çok Boyutlu Stres Döngüsü
     let sizes = [8, 16, 32, 64, 128, 256, 512, 1024, 2048];
@@ -436,7 +436,7 @@ pub fn test_allocator_subsystem() -> bool {
             let l = Layout::from_size_align(sz, sz.min(64)).unwrap();
             let ptr = fsb.alloc(l);
             if ptr.is_null() {
-                crate::serial_print("[ALLOC-TEST] Stres döngüsü tahsis hatası: BASARISIZ\n");
+                crate::serial_print("[ALLOC-TEST] Stres döngüsü tahsis hatası: BAŞARISIZ\n");
                 return false;
             }
             if let Some(non_null) = core::ptr::NonNull::new(ptr) {
@@ -450,14 +450,14 @@ pub fn test_allocator_subsystem() -> bool {
             if let Some(non_null) = core::ptr::NonNull::new(ptr) {
                 let slice = unsafe { core::slice::from_raw_parts(non_null.as_ptr(), l.size()) };
                 if slice[0] != (cycle + i) as u8 {
-                    crate::serial_print("[ALLOC-TEST] Stres döngüsü bellek bozulması: BASARISIZ\n");
+                    crate::serial_print("[ALLOC-TEST] Stres döngüsü bellek bozulması: BAŞARISIZ\n");
                     return false;
                 }
             }
             fsb.dealloc(ptr, l);
         }
     }
-    crate::serial_print("[ALLOC-TEST] 6. Cok Boyutlu Blok Stres Dongusu (27 blok x 2 cevrim): BASARILI\n");
+    crate::serial_print("[ALLOC-TEST] 6. Çok boyutlu blok stres döngüsü (27 blok x 2 çevrim): BAŞARILI\n");
 
     true
 }

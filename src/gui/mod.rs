@@ -191,8 +191,8 @@ impl MinGuiCompositor {
     pub fn add_window(&mut self, mut win: Window) -> bool {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
-                // Sabit uygulama pencereleri 0..=13 arası slotlara eklenir (14 uygulama);
-                if win.app_id == u8::MAX && idx < 14 { win.app_id = idx as u8; }
+                // Sabit uygulama pencereleri 0..=14 arası slotlara eklenir (15 uygulama);
+                if win.app_id == u8::MAX && idx < 15 { win.app_id = idx as u8; }
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
@@ -204,7 +204,7 @@ impl MinGuiCompositor {
 
     /// Çizim Tahtası (Paint) dışındaki uygulamalar tek örnektir; var olan pencereyi öne getirir.
     pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
-        if app_id >= 14 { return None; }
+        if app_id >= 15 { return None; }
         let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
             slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
         });

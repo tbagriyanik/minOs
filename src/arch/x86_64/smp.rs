@@ -405,7 +405,7 @@ pub fn init() -> usize {
     let resp = match limine_response() {
         Some(r) => r,
         None => {
-            crate::serial_print("[SMP] Limine SMP yaniti yok; tek cekirdek modunda devam.\n");
+            crate::serial_print("[SMP] Limine SMP yanıtı yok; tek çekirdek modunda devam ediliyor.\n");
             return 1;
         }
     };
@@ -417,7 +417,7 @@ pub fn init() -> usize {
         )
     };
     if count <= 1 || cpus.is_null() {
-        crate::serial_print("[SMP] Tek CPU gorundu; SMP kapali.\n");
+        crate::serial_print("[SMP] Tek CPU görüldü; SMP kapalı.\n");
         return 1;
     }
     let detected_count = count;
@@ -427,7 +427,7 @@ pub fn init() -> usize {
     crate::serial::print_dec(supported_count as u64);
     crate::serial_print(" CPU bulundu (Limine raporu: ");
     crate::serial::print_dec(detected_count as u64);
-    crate::serial_print("); AP siniri: ");
+    crate::serial_print("); AP sınırı: ");
     crate::serial::print_dec(MAX_CPUS as u64);
     crate::serial_print(".\n");
 
@@ -448,10 +448,10 @@ pub fn init() -> usize {
         started += 1;
         crate::serial_print("[SMP] AP (LAPIC ");
         crate::serial::print_dec(lapic as u64);
-        crate::serial_print(") uyandirildi.\n");
+        crate::serial_print(") uyandırıldı.\n");
     }
     if started == 0 {
-        crate::serial_print("[SMP] AP baslatilamadi; 1 CPU modunda devam.\n");
+        crate::serial_print("[SMP] AP başlatılamadı; 1 CPU modunda devam ediliyor.\n");
         CPU_COUNT.store(1, Ordering::Release);
         return 1;
     }
@@ -478,11 +478,11 @@ pub fn wait_for_aps(timeout_spins: u32) -> usize {
         }
         spins += 1;
         if spins >= timeout_spins {
-            crate::serial_print("[SMP] AP bekleme zaman asimi; gelen AP sayisi: ");
+            crate::serial_print("[SMP] AP bekleme zaman aşımı; çevrimiçi AP sayısı: ");
             crate::serial::print_dec(online as u64);
             crate::serial_print("/ ");
             crate::serial::print_dec(count as u64);
-            crate::serial_print(". Tek CPU modunda devam.\n");
+            crate::serial_print(". Tek CPU modunda devam ediliyor.\n");
             // A partial AP set is treated as unsupported on this machine.
             // Park APs that did arrive and make the public topology unambiguously 1 CPU.
             for cpu in 1..count {

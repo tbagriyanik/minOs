@@ -28,13 +28,13 @@ pub fn init_subsystems(
     alloc_pmm_frame_global: fn() -> Option<u64>,
 ) -> BootSubsystems {
     // 2. Sanal Dosya Sistemi (VFS / TarFS) Baslatimi
-    serial_print("[BOOT] Sanal dosya sistemi baslatiliyor...\n");
+    serial_print("[BOOT] Sanal dosya sistemi başlatılıyor...\n");
     let mut fs_mgr = fs::FileSystemManager::new();
     let boot_log = Vec::with_capacity(4096);
     boot::console::save_boot_log(&mut fs_mgr.vfs);
 
     // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
-    serial_print("[BOOT] Donanim kesmeleri ve bellek yoneticisi baslatiliyor...\n");
+    serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatılıyor...\n");
     arch::x86_64::init_interrupts();
 
     unsafe {
@@ -89,30 +89,30 @@ pub fn init_subsystems(
         }
     }
 
-    serial_print("[PMM] Fiziksel bellek yoneticisi baslatildi.\n");
+    serial_print("[PMM] Fiziksel bellek yöneticisi başlatıldı.\n");
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
 
-    // VRAM MMIO araligini (16MB) sayfa tablolarina esle; cozunurluk veya cizim asla unmapped #PF uretmesin
+    // VRAM MMIO aralığını (16MB) sayfa tablolarına eşle; çözünürlük veya çizim unmapped #PF üretmesin.
     let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
     for off in (0..16 * 1024 * 1024).step_by(2 * 1024 * 1024) {
         arch::x86_64::mmio_map_2mb((fb_phys + off as u64) & !0x1F_FFFF);
     }
 
     // PMM Kendi Kendini Test Etme
-    serial_print("[BOOT] Bellek yoneticisi test ediliyor...\n");
+    serial_print("[BOOT] Bellek yöneticisi test ediliyor...\n");
     if let (Some(f1), Some(f2)) = (
         memory_mgr.pmm.allocate_frame(),
         memory_mgr.pmm.allocate_frame(),
     ) {
         if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
-            serial_print("[PMM] Cerceve tahsis testi basarili (cakismayan cerceveler dogrulandi).\n");
+            serial_print("[PMM] Çerçeve tahsis testi başarılı (çakışmayan çerçeveler doğrulandı).\n");
         }
         memory_mgr.pmm.free_frame(f2);
         memory_mgr.pmm.free_frame(f1);
     }
 
-    // VMM ve Guvenli Uygulama Yukleyicisi Dogrulamasi
-    serial_print("[BOOT] Sanal bellek yoneticisi test ediliyor...\n");
+    // VMM ve Güvenli Uygulama Yükleyicisi Doğrulaması
+    serial_print("[BOOT] Sanal bellek yöneticisi test ediliyor...\n");
     let mut address_space = memory_mgr.kernel_address_space();
     let test_vaddr = mm::loader::USER_CODE_BASE;
     if let Some(frame) = memory_mgr.pmm.allocate_frame() {
@@ -128,7 +128,7 @@ pub fn init_subsystems(
             if let Some(translated_phys) = address_space.translate(test_vaddr) {
                 if translated_phys == frame {
                     serial_print(
-                        "[VMM] 4-seviyeli sanal bellek esleme ve adres cozumleme aktif.\n",
+                        "[VMM] 4 seviyeli sanal bellek eşleme ve adres çözümleme etkin.\n",
                     );
                 }
             }
@@ -145,13 +145,13 @@ pub fn init_subsystems(
         &mut memory_mgr.pmm,
     ) {
         if loaded.entry_point >= mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
-            serial_print("[LOADER] Standart ELF64 ikilisi guvenli bellek izolasyonu ile yuklendi (W^X / NX aktif).\n");
+            serial_print("[LOADER] Standart ELF64 ikilisi güvenli bellek yalıtımıyla yüklendi (W^X / NX etkin).\n");
         }
         loaded.unmap_and_free(&mut address_space, &mut memory_mgr.pmm);
     }
 
-    // Surec Yoneticisi ve Sistem Cagrilarinin (Syscalls) Baslatimi
-    serial_print("[BOOT] Surec yoneticisi baslatiliyor...\n");
+    // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
+    serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
     memory_mgr.proc_mgr.init_kernel_process();
 
     let test_pid = mm::process::syscall_dispatch(
@@ -181,27 +181,27 @@ pub fn init_subsystems(
         );
     }
     if test_pid == 0 {
-        serial_print("[PROC] Surec tablosu ve sistem cagrilar (syscalls) aktif.\n");
+        serial_print("[PROC] Süreç tablosu ve sistem çağrıları (syscalls) etkin.\n");
     }
 
-    serial_print("[BOOT] Bellek testleri calistiriliyor...\n");
+    serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
     mm::allocator::test_allocator_subsystem();
 
-    serial_print("[BOOT] Surec testleri calistiriliyor...\n");
+    serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(
         &mut memory_mgr.proc_mgr,
         &mut memory_mgr.pmm,
     );
 
     // Hardware-safe mode: do not touch APIC/SMP until the laptop path is stable.
-    serial_print("[BOOT] Tek CPU modu secildi; APIC/SMP baslatmasi atlandi.\n");
-    serial_print("[SMP] BSP GDT yukleniyor...\n");
+    serial_print("[BOOT] Tek CPU modu seçildi; APIC/SMP başlatması atlandı.\n");
+    serial_print("[SMP] BSP GDT yükleniyor...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };
     serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
 
-    serial_print("[BOOT] APIC zamanlayici baslatiliyor...\n");
-    serial_print("[APIC] APIC timer atlandi; TSC monotonic saat kullaniliyor.\n");
+    serial_print("[BOOT] APIC zamanlayıcısı başlatılıyor...\n");
+    serial_print("[APIC] APIC zamanlayıcısı atlandı; TSC monotonik saati kullanılıyor.\n");
 
     // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
     {
@@ -225,13 +225,13 @@ pub fn init_subsystems(
                     4 * U64_PER_FRAME,
                 ) {
                     Some(got) if got == expected => {
-                        serial_print("[SMP] Paralel saglama toplami (AP+BSP) eslesti: BASARILI\n");
+                        serial_print("[SMP] Paralel sağlama toplamı (AP+BSP) eşleşti: BAŞARILI\n");
                     }
                     Some(_) => {
-                        serial_print("[SMP] Paralel saglama toplami UYUSMADI: BASARISIZ\n");
+                        serial_print("[SMP] Paralel sağlama toplamı UYUŞMADI: BAŞARISIZ\n");
                     }
                     None => {
-                        serial_print("[SMP] Paralel saglama toplami zaman asimi (tek cekirdek yedegi yok).\n");
+                        serial_print("[SMP] Paralel sağlama toplamı zaman aşımı (tek çekirdek yedeği yok).\n");
                     }
                 }
             }
@@ -242,7 +242,7 @@ pub fn init_subsystems(
     }
 
     // 3. Donanim suruculeri: Limine boot menusu bir profil secer.
-    serial_print("[BOOT] Donanim suruculeri baslatiliyor...\n");
+    serial_print("[BOOT] Donanım sürücüleri başlatılıyor...\n");
     let cmdline = limine_boot_cmdline().unwrap_or("");
     let driver_profile = if cmdline_has_token(cmdline, "full") {
         "full"
@@ -262,37 +262,37 @@ pub fn init_subsystems(
     let _ = fs_mgr.vfs.write_file("/root/Documents/boot.log", profile_line.as_bytes());
 
     if driver_profile == "audio" || driver_profile == "full" {
-        serial_print("[DRIVER] HDA audio surucusu baslatiliyor...\n");
+        serial_print("[DRIVER] HDA ses sürücüsü başlatılıyor...\n");
         let hda_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(6);
         let Some(hda_dma_phys) = hda_dma_phys else {
-            boot::text_console::fatal("HDA DMA bellek tahsisati basarisiz");
+            boot::text_console::fatal("HDA DMA bellek tahsisi başarısız");
         };
         drivers::hda::init(Some(hda_dma_phys));
-        serial_print("[DRIVER] HDA audio surucusu hazir.\n");
+        serial_print("[DRIVER] HDA ses sürücüsü hazır.\n");
     }
 
     if driver_profile == "hardware" || driver_profile == "full" {
-        serial_print("[DRIVER] e1000 ag surucusu baslatiliyor...\n");
+        serial_print("[DRIVER] e1000 ağ sürücüsü başlatılıyor...\n");
         let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
         let Some(e1000_dma_phys) = e1000_dma_phys else {
-            boot::text_console::fatal("e1000 DMA bellek tahsisati basarisiz");
+            boot::text_console::fatal("e1000 DMA bellek tahsisi başarısız");
         };
         drivers::e1000::init(Some(e1000_dma_phys));
-        serial_print("[DRIVER] e1000 ag surucusu hazir.\n");
+        serial_print("[DRIVER] e1000 ağ sürücüsü hazır.\n");
 
-        serial_print("[DRIVER] Ag protokolu baslatiliyor...\n");
+        serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
         drivers::netstack::init();
         let _ = drivers::netstack::dhcp_request();
         drivers::netstack::run_network_self_test();
-        serial_print("[DRIVER] Ag protokolu hazir.\n");
+        serial_print("[DRIVER] Ağ protokolü hazır.\n");
 
-        serial_print("[DRIVER] USB surucusu baslatiliyor...\n");
+        serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
         drivers::usb::init();
         drivers::usb::test_usb_subsystems();
-        serial_print("[DRIVER] USB HID (xHCI) surucusu baslatiliyor...\n");
+        serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
         drivers::usb_hid::init(&mut memory_mgr.pmm);
-        serial_print("[DRIVER] USB HID surucusu hazir.\n");
-        serial_print("[DRIVER] USB surucusu hazir.\n");
+        serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
+        serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }
 
     let _socket_timeout_task = task::spawn(
@@ -303,42 +303,42 @@ pub fn init_subsystems(
             task::TaskStatus::Yielded
         },
     );
-    serial_print("[TASK] Cooperative socket timeout task queued.\n");
+    serial_print("[TASK] İşbirlikçi soket zaman aşımı görevi kuyruğa alındı.\n");
 
     let _net_dev = drivers::net::NetworkInterface::new();
     let mut audio_dev = drivers::audio::AudioDevice::new();
     audio_dev.test_audio_subsystem();
 
-    serial_print("[DRIVERS] Tum suruculer hazir.\n");
+    serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
 
     // 4b. Gelismis grafik suruculeri: BGA/VMware/VGA yetenek taramasi.
     let gpu_caps = drivers::gpu::init();
     if gpu_caps.bga_present {
-        serial_print("[GPU] BGA algilandi, cozunurluk degisimi acik.\n");
+        serial_print("[GPU] BGA algılandı, çözünürlük değişimi açık.\n");
         fb.set_hw_cursor(false);
-        serial_print("[GPU] Hizlandirilmis yazilim imleci etkin.\n");
+        serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");
     } else {
-        serial_print("[GPU] BGA yok; cozunurluk Limine ile sabit, yazilim imleci.\n");
+        serial_print("[GPU] BGA yok; çözünürlük Limine ile sabit, yazılım imleci.\n");
     }
 
     // 5. PS/2 Donanim Suruculeri
     let mouse = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_MOUSE) };
     let keyboard = unsafe { &mut *core::ptr::addr_of_mut!(GLOBAL_KEYBOARD) };
     drivers::ps2::init();
-    serial_print("[BOOT] PS/2 hazir.\n");
+    serial_print("[BOOT] PS/2 hazır.\n");
 
     let usb_hid_count = drivers::usb_hid::device_count();
     if usb_hid_count == 0 {
-        serial_print("[INPUT] USB HID bulunamadi, PS/2 fallback kullaniliyor (BIOS Legacy USB/CSM kapaliysa klavye/fare algilanamayabilir).\n");
+        serial_print("[INPUT] USB HID bulunamadı, PS/2 yedeği kullanılıyor (BIOS Legacy USB/CSM kapalıysa klavye/fare algılanamayabilir).\n");
     } else {
-        serial_print("[INPUT] USB HID aktif: bagli aygitlar kullanima hazir.\n");
+        serial_print("[INPUT] USB HID etkin: bağlı aygıtlar kullanıma hazır.\n");
     }
 
-    // 5b. Tema motorunu baslat
+    // 5b. Tema motorunu başlat
     crate::gui::theme::init();
-    serial_print("[BOOT] Tema hazir.\n");
+    serial_print("[BOOT] Tema hazır.\n");
 
-    // 5c. onyukleme modu denetimi:
+    // 5c. önyükleme modu denetimi:
     let wants_installed = boot_wants_installed();
     let installed = fs::diskfs::is_installed();
     serial_print("[BOOT] Kurulum denetimi: wants_installed=");
@@ -348,11 +348,11 @@ pub fn init_subsystems(
     serial_print("\n");
 
     if wants_installed && !installed {
-        serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadi.\n");
-        boot::text_console::fatal("Kurulu sistem secildi ancak MINOS.SYS bulunamadi");
+        serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadı.\n");
+        boot::text_console::fatal("Kurulu sistem seçildi ancak MINOS.SYS bulunamadı");
     }
 
-    serial_print("[BOOT] Tum kritik alt sistemler baslatildi. GUI ve uygulamalar yukleniyor...\n");
+    serial_print("[BOOT] Tüm kritik alt sistemler başlatıldı. GUI ve uygulamalar yükleniyor...\n");
 
     BootSubsystems {
         fs_mgr,

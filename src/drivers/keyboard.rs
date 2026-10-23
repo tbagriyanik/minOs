@@ -234,6 +234,7 @@ impl KeyboardState {
                 }
             }
             0x3C => { self.push_action(KeyAction::RenameSelected); return None; } // F2
+            0x3F => { self.push_action(KeyAction::Refresh); return None; } // F5 (yenile)
             0x0F => { // Tab key
                 if self.alt {
                     self.push_action(KeyAction::CycleWindowFocus);

@@ -133,7 +133,7 @@ pub enum Sizing {
 }
 
 /// İstenen içerik boyutu (piksel).
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SizeHint {
     pub width: usize,
     pub height: usize,
@@ -380,6 +380,8 @@ fn text_top(rect: Rect) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Çocuk denetimleri tek eksende yerleştiren bileşen.
+pub const DEFAULT_PADDING: usize = 8;
+
 pub struct Container {
     id: u32,
     rect: Rect,
@@ -397,7 +399,7 @@ impl Container {
             id: next_id(),
             rect: Rect::default(),
             axis,
-            padding: Insets::default(),
+            padding: Insets::all(DEFAULT_PADDING),
             spacing: sp(6),
             width: Sizing::Content,
             height: Sizing::Content,
@@ -1550,7 +1552,7 @@ impl Ui {
 
 fn report(ok: bool, label: &str, all_ok: &mut bool) {
     if !ok {
-        crate::serial_print("[UI-TEST] BASARISIZ: ");
+        crate::serial_print("[UI-TEST] BAŞARISIZ: ");
         *all_ok = false;
         crate::serial_print(label);
         crate::serial_print("\n");
@@ -1710,7 +1712,7 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     );
 
     if !ok {
-        crate::serial_print("[UI-TEST] Sonuc: BASARISIZ TESTLER VAR\n");
+        crate::serial_print("[UI-TEST] Sonuç: BAŞARISIZ TESTLER VAR\n");
     }
     ok
 }

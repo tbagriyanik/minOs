@@ -694,26 +694,26 @@ impl TlsSession {
                         Ok(()) => {
                             self.cert_verified = true;
                             self.cert_error = None;
-                            crate::serial::print("[TLS] Sertifika dogrulandi: ");
+                            crate::serial::print("[TLS] Sertifika doğrulandı: ");
                             crate::serial::print(&self.hostname);
-                            crate::serial::print(" (süre + SNI/CN gecerli)\n");
+                            crate::serial::print(" (süre ve SNI/CN geçerli)\n");
                         }
                         Err(e) => {
                             self.cert_verified = false;
                             self.cert_error = Some(e);
-                            crate::serial::print("[TLS] Sertifika uyarisi: ");
+                            crate::serial::print("[TLS] Sertifika uyarısı: ");
                             match e {
                                 crate::drivers::crypto::x509::CertValidationError::NotYetValid => {
-                                    crate::serial::print("henuz gecerli degil (not_before)\n");
+                                    crate::serial::print("henüz geçerli değil (not_before)\n");
                                 }
                                 crate::drivers::crypto::x509::CertValidationError::Expired => {
-                                    crate::serial::print("suresi dolmus (not_after)\n");
+                                    crate::serial::print("süresi dolmuş (not_after)\n");
                                 }
                                 crate::drivers::crypto::x509::CertValidationError::HostnameMismatch => {
-                                    crate::serial::print("hostname/SNI eslesmedi\n");
+                                    crate::serial::print("hostname/SNI eşleşmedi\n");
                                 }
                                 crate::drivers::crypto::x509::CertValidationError::InvalidDer => {
-                                    crate::serial::print("gecersiz DER yapisi\n");
+                                    crate::serial::print("geçersiz DER yapısı\n");
                                 }
                             }
                         }

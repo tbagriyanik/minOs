@@ -80,6 +80,8 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 - **Çizim Tahtası Kullanımı:** Araç çubuğundan renk, **Silgi**, **Aç** veya **Kaydet** seçin; tuval üzerinde sol tuşu basılı tutarak çizin. `C` tuşu tuvali temizler, `E` tuşu silgiyi açıp kapatır. Çizimler 24-bit BMP olarak `/root/Documents/cizim.bmp` konumuna kaydedilir.
 - **Resim Görüntüleyici:** `+`/`=` yakınlaştırır, `-` uzaklaştırır, `0` varsayılan ölçeğe döner. Fare tekerleği de yakınlaştırma/uzaklaştırma için kullanılabilir; geçerli oran arayüzde gösterilir.
 - **Medya Tuşları:** Klavyedeki ses açma, ses kısma, susturma, oynat/duraklat, önceki parça ve sonraki parça tuşları çalışır. Ses düzeyi `%5` adımlarla değişir.
+- **Yenileme (`F5`):** Odaklı uygulamanın içeriğini tazeler: Dosya Yöneticisi listesi, Web Gezgini sayfası ve Paket Yöneticisi listesi yenilenir. Hiçbir pencere odaklı değilken masaüstü simgeleri güncellenir.
+- **Video Oynatıcı:** `Oynat/Durdur` düğmesi animasyonu ve zaman çizelgesini duraklatıp devam ettirir; `Durdur` görüntüyü başa sarar. Zaman çizelgesi 30 FPS kare sayacından hesaplanır.
 
 ---
 

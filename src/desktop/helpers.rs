@@ -146,6 +146,7 @@ pub fn terminate_app(
         11 => *installer = apps::installer::InstallerApp::new(),
         12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
         13 => *pkgmgr = apps::pkgmgr::PackageManagerApp::new(),
+        14 => apps::controlpanel::reset(),
         _ => return,
     } }
     compositor.focus_top_window();

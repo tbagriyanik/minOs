@@ -148,37 +148,43 @@ const VELVET_DARK: [u32; PALETTE_LEN] = [
     0x0A0A11, // shadow
 ];
 
+// Acik temada vurgu renkleri metin olarak da kullanilir (etiket, durum, surum
+// bilgisi). Bu yuzden tonlar beyaz/pasif baslik zemininde en az 4.5:1 kontrast
+// verecek kadar koyulastirildi (WCAG AA, normal metin).
 const DAYLIGHT: [u32; PALETTE_LEN] = [
     0xDCE0E9, // desktop bg
     0xFFFFFF, // window bg
     0xE7EAF0, // titlebar (aktif)
     0xD3D7E0, // titlebar (pasif)
     0xEDEFF4, // taskbar
-    0x1E66F5, // accent blue
-    0x40A02B, // accent green
-    0xD20F39, // accent red
-    0xDF8E1D, // accent yellow
-    0xEA76CB, // accent pink
+    0x1450C8, // accent blue  (en dusuk kontrast 4.84:1)
+    0x23651A, // accent green (en dusuk kontrast 4.94:1)
+    0xB31238, // accent red   (en dusuk kontrast 4.76:1)
+    0x7A4E00, // accent yellow (en dusuk kontrast 4.99:1)
+    0x93356F, // accent pink  (en dusuk kontrast 4.89:1)
     0xFFAA00, // accent cat
     0x1E2030, // text main (koyu)
-    0x5C5F66, // text muted
+    0x575A61, // text muted (pasif baslikta 4.79:1)
     0x2A2C3A, // cursor fill
     0xFFFFFF, // cursor outline
     0x9CA0B0, // border
     0xB8BDC9, // shadow
 ];
 
+// Nord'da vurgu renkleri de metin olarak kullanilir; resmi Nord tonlari koyu
+// baslik zemininde 2.1-4.3:1 kaliyordu. Tonlar ayni ton ailesinde kalinarak
+// en az 4.5:1 kontrast verecek sekilde acildi.
 const NORD: [u32; PALETTE_LEN] = [
     0x2E3440, // desktop bg
     0x3B4252, // window bg
     0x434C5E, // titlebar (aktif)
     0x353C4A, // titlebar (pasif)
     0x272C36, // taskbar
-    0x88C0D0, // accent blue
-    0xA3BE8C, // accent green
-    0xBF616A, // accent red
+    0x93C9D8, // accent blue  (en dusuk kontrast 4.76:1)
+    0xACCA96, // accent green (en dusuk kontrast 4.78:1)
+    0xF2B0B6, // accent red   (en dusuk kontrast 4.79:1)
     0xEBCB8B, // accent yellow
-    0xB48EAD, // accent pink
+    0xDAB6D5, // accent pink  (en dusuk kontrast 4.78:1)
     0xD08770, // accent cat
     0xECEFF4, // text main
     0xC8D0DC, // text muted (yüksek kontrast)
@@ -218,7 +224,7 @@ const SUNSET: [u32; PALETTE_LEN] = [
     0x1A1020, // taskbar
     0xFFB86B, // accent blue (amber)
     0x8BE9A5, // accent green
-    0xFF6B8B, // accent red (coral)
+    0xFF7E96, // accent red (coral; en dusuk kontrast 5.03:1)
     0xFFD479, // accent yellow
     0xE58BFF, // accent pink (orchid)
     0xFFA36B, // accent cat

@@ -74,7 +74,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 14] = [0, 1, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12];
+        const APP_IDX: [usize; 15] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -110,10 +110,10 @@ impl MinGuiCompositor {
         None
     }
 
-    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 14]) -> usize {
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 15]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() { return 0; }
-        const NAMES: [[&str; 2]; 14] = [
+        const NAMES: [[&str; 2]; 15] = [
             ["Dosya Yöneticisi", "File Manager"], ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"], ["Web Tarayıcısı", "Web Browser"],
             ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
@@ -121,9 +121,10 @@ impl MinGuiCompositor {
             ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
             ["Komut İstemi", "Terminal"], ["Tek Tıkla Kur", "One-Click Install"],
             ["3D Gösterici", "3D Viewer"], ["Paket Yöneticisi", "Package Manager"],
+            ["Kontrol Paneli", "Control Panel"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
-        let mut scored: [(usize, u8); 14] = [(0, 0); 14];
+        let mut scored: [(usize, u8); 15] = [(0, 0); 15];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
@@ -140,7 +141,7 @@ impl MinGuiCompositor {
             }
         }
         for k in 0..self.installed_apps_count {
-            if count >= 14 { break; }
+            if count >= scored.len() { break; }
             let name = self.installed_app_name(k);
             if let Some(s) = Self::start_search_score(name.as_bytes(), query) {
                 scored[count] = (100 + k, s);
@@ -315,7 +316,7 @@ impl MinGuiCompositor {
     }
 
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
-        let mut results = [0; 14];
+        let mut results = [0; 15];
         let count = self.start_search_matches(english, &mut results);
         if down {
             if count > 0 { self.selected_start_item = (self.selected_start_item + 1).min(count - 1); }
@@ -325,7 +326,7 @@ impl MinGuiCompositor {
     }
 
     pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
-        let mut results = [0; 14];
+        let mut results = [0; 15];
         let count = self.start_search_matches(english, &mut results);
         (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
@@ -445,7 +446,7 @@ impl MinGuiCompositor {
         if self.start_search_len == 0 {
             self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
         } else {
-            let mut results = [0; 14];
+            let mut results = [0; 15];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) = Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
@@ -454,8 +455,8 @@ impl MinGuiCompositor {
             fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
             Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
 
-            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur", "3D Gösterici", "Paket Yöneticisi"];
-            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install", "3D Viewer", "Package Manager"];
+            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur", "3D Gösterici", "Paket Yöneticisi", "Kontrol Paneli"];
+            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install", "3D Viewer", "Package Manager", "Control Panel"];
             if count == 0 {
                 Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
             }
@@ -572,9 +573,10 @@ impl MinGuiCompositor {
             return;
         }
 
-        let menu_items: [(&str, u32, usize); 14] = if english { [
+        let menu_items: [(&str, u32, usize); 15] = if english { [
             ("File Manager", Color::ACCENT_YELLOW, 0),
             ("Settings", Color::ACCENT_BLUE, 1usize),
+            ("Control Panel", Color::ACCENT_YELLOW, 14usize),
             ("Task Manager", Color::ACCENT_BLUE, 7),
             ("Terminal", Color::ACCENT_GREEN, 10),
             ("One-Click Install", Color::ACCENT_GREEN, 11),
@@ -590,6 +592,7 @@ impl MinGuiCompositor {
         ] } else { [
             ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
             ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
+            ("Kontrol Paneli", Color::ACCENT_YELLOW, 14usize),
             ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
             ("Komut İstemi", Color::ACCENT_GREEN, 10),
             ("Tek Tıkla Kur", Color::ACCENT_GREEN, 11),

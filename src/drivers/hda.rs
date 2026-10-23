@@ -1380,7 +1380,7 @@ pub fn play_test_tone() -> bool {
 
         } else {
 
-            serial_print("[HDA-TEST] DMA İlerlemesi Beklemede / Sanallaştırma Gecikmeli\n");
+            serial_print("[HDA-TEST] DMA İlerlemesi Beklemede / sanallaştırma nedeniyle gecikmeli\n");
 
         }
 

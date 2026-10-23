@@ -89,8 +89,15 @@ impl MusicPlayerApp {
         }
 
         // İlerleme Çubuğu (Timeline Scrubber)
+        // Parça süresi 3:30; ilerleme yüzdesinden geçen süre türetilir.
+        const TRACK_SECONDS: usize = 210;
         let prog_y = win_y + 158;
-        MinGuiCompositor::draw_string(fb, eq_x, prog_y, "01:42", Color::TEXT_MAIN);
+        let elapsed_s = TRACK_SECONDS * self.progress.min(100) / 100;
+        let mut elapsed_text = crate::gui::TextBuf::new();
+        elapsed_text.push_u2((elapsed_s / 60) as u32);
+        elapsed_text.push_str(":");
+        elapsed_text.push_u2((elapsed_s % 60) as u32);
+        MinGuiCompositor::draw_string(fb, eq_x, prog_y, elapsed_text.as_str(), Color::TEXT_MAIN);
         let bar_bg_x = eq_x + 44;
         let bar_bg_w = eq_w - 94;
         fb.draw_rect(bar_bg_x, prog_y + 2, bar_bg_w, 6, Color::DARK_BG);

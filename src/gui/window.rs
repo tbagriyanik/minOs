@@ -80,8 +80,10 @@ impl Window {
             height,
             min_width: 200,
             min_height: 120,
-            max_width: 800,
-            max_height: 600,
+            // Sürükleme ile yeniden boyutlandırma ekran sınırlarına kadar serbest
+            // olmalı; tam ekran (1280x720, 1920x1080, 2560x1600) ile tutarlılık için.
+            max_width: 4096,
+            max_height: 4096,
             is_focused: false,
             is_minimized: false,
             is_open,
@@ -252,11 +254,11 @@ pub const MENU_ITEM_STEP: usize = 20;
 /// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
 /// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
 pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
-    ("Sistem", 0, 6),
-    ("Üretkenlik", 6, 3),
-    ("Medya", 9, 5),
-    ("Kurulu", 14, 8),
-    ("Güç", 22, 2),
+    ("Sistem", 0, 7),
+    ("Üretkenlik", 7, 3),
+    ("Medya", 10, 5),
+    ("Kurulu", 15, 8),
+    ("Güç", 23, 2),
 ];
 
 impl MinGuiCompositor {
@@ -279,6 +281,7 @@ impl MinGuiCompositor {
             11 => 0,// Kurulum Sihirbazı -> Bilgisayarım / Disk
             12 => 1,// 3D Gösterici -> Görsel/Çizim
             13 => 5,// Paket Yöneticisi -> Paket / Kutu
+            14 => 4,// Kontrol Paneli -> Dişli
             _ => 0,
         }
     }
@@ -300,6 +303,7 @@ impl MinGuiCompositor {
                 11 => "One-Click Install",
                 12 => "3D Viewer",
                 13 => "Package Manager",
+                14 => "Control Panel",
                 _ => "Window",
             }
         } else {
@@ -318,6 +322,7 @@ impl MinGuiCompositor {
                 11 => "Tek Tıkla Kur",
                 12 => "3D Gösterici",
                 13 => "Paket Yöneticisi",
+                14 => "Kontrol Paneli",
                 _ => "Pencere",
             }
         }
@@ -329,14 +334,14 @@ impl MinGuiCompositor {
                 0 => "Files", 1 => "Settings", 2 => "Notes",
                 3 => "Web", 4 => "Image", 5 => "Music",
                 6 => "Video", 7 => "Tasks", 8 => "Calc",
-                9 => "Paint", 10 => "CMD", 11 => "Install", 12 => "3D", 13 => "Packages", _ => "Win",
+                9 => "Paint", 10 => "CMD", 11 => "Install", 12 => "3D", 13 => "Packages", 14 => "Control", _ => "Win",
             }
         } else {
             match win_idx {
                 0 => "Dosyalar", 1 => "Ayarlar", 2 => "Notlar",
                 3 => "Web", 4 => "Resim", 5 => "Müzik",
                 6 => "Video", 7 => "Görevler", 8 => "Hesap",
-                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", 12 => "3D", 13 => "Paketler", _ => "Pencere",
+                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", 12 => "3D", 13 => "Paketler", 14 => "Kontrol", _ => "Pencere",
             }
         }
     }

@@ -44,7 +44,7 @@ pub fn serial_print_hex(v: u64) {
 }
 
 pub fn restart_system() -> ! {
-    serial_print("[minOs] Restarting system...\n");
+    serial_print("[minOs] Sistem yeniden başlatılıyor...\n");
     unsafe {
         // 1. QEMU/PC reset control register
         core::arch::asm!("out dx, al", in("dx") 0xCF9u16, in("al") 0x06u8);

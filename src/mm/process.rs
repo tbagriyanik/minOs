@@ -372,7 +372,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
     proc_mgr: &mut ProcessManager,
     pmm: &mut PhysicalMemoryManager,
 ) -> bool {
-    crate::serial_print("[PROC-TEST] --- Surec cokmesi, Syscall Hatalari ve Kaynak Temizleme Testi ---\n");
+    crate::serial_print("[PROC-TEST] --- Süreç çökmesi, syscall hataları ve kaynak temizleme testi ---\n");
 
     let initial_free = pmm.free_memory_bytes;
     let initial_active = proc_mgr.active_count;
@@ -381,13 +381,13 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let pid = match proc_mgr.spawn("fault_test_proc", 0x1000, 0x7000_2000, 0x100000, 99, Some(99)) {
         Ok(id) => id,
         Err(_) => {
-            crate::serial_print("[PROC-TEST] Surec baslatma: BASARISIZ\n");
+            crate::serial_print("[PROC-TEST] Süreç başlatma: BAŞARISIZ\n");
             return false;
         }
     };
-    crate::serial_print("[PROC-TEST] 1. Test sureci baslatildi (PID ");
+    crate::serial_print("[PROC-TEST] 1. Test süreci başlatıldı (PID ");
     crate::serial::print_dec(pid as u64);
-    crate::serial_print("): BASARILI\n");
+    crate::serial_print("): BAŞARILI\n");
 
     // 2. Surece kaynak tahsis et (PMM cerceveleri)
     let frame1 = match pmm.allocate_frame() {
@@ -405,24 +405,24 @@ pub fn test_process_lifecycle_and_fault_recovery(
         p.resources.record_frame(frame1);
         p.resources.record_frame(frame2);
     }
-    crate::serial_print("[PROC-TEST] 2. Surece 2 sayfa cercevesi tahsis edildi (Kaynak takibi aktif)\n");
+    crate::serial_print("[PROC-TEST] 2. Sürece 2 sayfa çerçevesi tahsis edildi (Kaynak takibi aktif)\n");
 
     // 3. Hatali / Gecersiz Sistem cagrisi Testi (Gecersiz Syscall No)
     let invalid_res = syscall_dispatch(9999, 0, 0, 0, proc_mgr, pmm);
     let null_ptr_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 100, 0, proc_mgr, pmm);
     if invalid_res == u64::MAX && null_ptr_write == 100 {
-        crate::serial_print("[PROC-TEST] 3. Gecersiz syscall no ve NULL pointer sinir kontrolu: BASARILI\n");
+        crate::serial_print("[PROC-TEST] 3. Geçersiz syscall numarası ve NULL pointer sınır kontrolü: BAŞARILI\n");
     } else {
-        crate::serial_print("[PROC-TEST] Hatali sistem cagrisi sinir korumasi: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Hatalı sistem çağrısı sınır koruması: BAŞARISIZ\n");
         return false;
     }
 
     // 4. Surec cokmesi / Hata Simulasyonu (SIGSEGV / Fault Exit Code -11)
     let terminated = proc_mgr.terminate(pid, -11, pmm);
     if terminated {
-        crate::serial_print("[PROC-TEST] 4. Surec cokmesi simule edildi (Exit Code: -11 / SIGSEGV)\n");
+        crate::serial_print("[PROC-TEST] 4. Süreç çökmesi simüle edildi (Exit Code: -11 / SIGSEGV)\n");
     } else {
-        crate::serial_print("[PROC-TEST] Surec sonlandirma: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Süreç sonlandırma: BAŞARISIZ\n");
         return false;
     }
 
@@ -431,10 +431,10 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let active_after = proc_mgr.active_count;
 
     if free_after != initial_free || active_after != initial_active {
-        crate::serial_print("[PROC-TEST] Kaynak temizleme sizintisi: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BAŞARISIZ\n");
         return false;
     }
-    crate::serial_print("[PROC-TEST] 5. Surec kaynaklari PMM'e eksiksiz iade edildi (Sizinti: 0 bayt): BASARILI\n");
+    crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (sızıntı: 0 bayt): BAŞARILI\n");
 
     // 6. oncelikli Zamanlayici (Priority Preemptive Scheduler) Testi
     let p_low = proc_mgr.spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None).unwrap_or(0);
@@ -452,10 +452,10 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let _ = proc_mgr.terminate(p_high, 0, pmm);
 
     if sched_ok {
-        crate::serial_print("[PROC-TEST] 6. oncelik tabanli zamanlayici (High > Low): BASARILI\n");
+        crate::serial_print("[PROC-TEST] 6. öncelik tabanlı zamanlayıcı (High > Low): BAŞARILI\n");
         true
     } else {
-        crate::serial_print("[PROC-TEST] 6. Zamanlayici oncelik testi: BASARISIZ\n");
+        crate::serial_print("[PROC-TEST] 6. Zamanlayıcı öncelik testi: BAŞARISIZ\n");
         false
     }
 }

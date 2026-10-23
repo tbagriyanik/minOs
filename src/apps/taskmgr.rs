@@ -7,17 +7,17 @@ use crate::fs::vfs::VirtualFileSystem;
 pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
-pub const ALL_APP_COUNT: usize = 14;
+pub const ALL_APP_COUNT: usize = 15;
 const ALL_APP_LABELS: [&str; ALL_APP_COUNT] = [
     "Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Gezgini",
     "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi",
     "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Kurulum Sihirbazı",
-    "3D Gösterici", "Paket Yöneticisi",
+    "3D Gösterici", "Paket Yöneticisi", "Kontrol Paneli",
 ];
 const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
     "File Manager", "Settings", "Notepad", "Browser", "Image Viewer", "Music Player",
     "Video Player", "Task Manager", "Calculator", "Paint", "Command Prompt",
-    "Installer", "3D Viewer", "Package Manager",
+    "Installer", "3D Viewer", "Package Manager", "Control Panel",
 ];
 
 // "Program Aç" menüsü için Görev Yöneticisi (ID 7) hariç tutulmuş,
@@ -27,22 +27,24 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
 // 3. Dosya Yöneticisi (0)
 // 4. Hesap Makinesi (8)
 // 5. Komut İstemi (10)
-// 6. Kurulum Sihirbazı (11)
-// 7. Müzik Çalar (5)
-// 8. Not Defteri (2)
-// 9. Paket Yöneticisi (13)
-// 10. Resim Gösterici (4)
-// 11. Sistem Ayarları (1)
-// 12. Video Oynatıcı (6)
-// 13. Web Gezgini (3)
-pub const LAUNCH_APP_COUNT: usize = 13;
-const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [12, 9, 0, 8, 10, 11, 5, 2, 13, 4, 1, 6, 3];
+// 6. Kontrol Paneli (14)
+// 7. Kurulum Sihirbazı (11)
+// 8. Müzik Çalar (5)
+// 9. Not Defteri (2)
+// 10. Paket Yöneticisi (13)
+// 11. Resim Gösterici (4)
+// 12. Sistem Ayarları (1)
+// 13. Video Oynatıcı (6)
+// 14. Web Gezgini (3)
+pub const LAUNCH_APP_COUNT: usize = 14;
+const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [12, 9, 0, 8, 10, 14, 11, 5, 2, 13, 4, 1, 6, 3];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "3D Gösterici",
     "Çizim Tahtası",
     "Dosya Yöneticisi",
     "Hesap Makinesi",
     "Komut İstemi",
+    "Kontrol Paneli",
     "Kurulum Sihirbazı",
     "Müzik Çalar",
     "Not Defteri",
@@ -58,6 +60,7 @@ const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
     "File Manager",
     "Calculator",
     "Command Prompt",
+    "Control Panel",
     "Installer",
     "Music Player",
     "Notepad",
@@ -261,6 +264,7 @@ impl TaskManagerApp {
             11 => core::mem::size_of::<crate::apps::installer::InstallerApp>(),
             12 => core::mem::size_of::<crate::apps::viewer3d::Viewer3DApp>(),
             13 => core::mem::size_of::<crate::apps::pkgmgr::PackageManagerApp>(),
+            14 => 0, // Kontrol Paneli durumu global (sabit bellek kullanmaz)
             _ => 0,
         }
     }

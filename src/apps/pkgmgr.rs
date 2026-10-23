@@ -113,7 +113,7 @@ impl MinPkg {
                         crate::serial::print("\n");
                         return Err("Paket dogrulama hatasi (SHA-256 checksum uyusmuyor)");
                     }
-                    crate::serial::print("[PKG] SHA-256 checksum dogrulandi.\n");
+                    crate::serial::print("[PKG] SHA-256 checksum doğrulandı.\n");
                 }
 
                 let base_name = if let Some(idx) = pkg_name_or_url.rfind('/') {

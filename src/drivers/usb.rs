@@ -350,7 +350,7 @@ fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerTyp
                         let legsup = cap_val;
                         let bios_owned = (legsup & (1 << 16)) != 0;
                         let os_owned = (legsup & (1 << 24)) != 0;
-                        crate::serial::print("[USB-xHCI] Legacy Destegi: BIOS=");
+                        crate::serial::print("[USB-xHCI] Legacy desteği: BIOS=");
                         crate::serial::print(if bios_owned { "1" } else { "0" });
                         crate::serial::print(" OS=");
                         crate::serial::print(if os_owned { "1" } else { "0" });
@@ -371,7 +371,7 @@ fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerTyp
             let eecp = ((hccparams >> 8) & 0xFF) as u8;
             if eecp >= 0x40 {
                 let _legsup = pci_read32(bus, dev, func, eecp);
-                crate::serial::print("[USB-EHCI] Legacy Destegi tespit edildi (EECP=0x");
+                crate::serial::print("[USB-EHCI] Legacy desteği tespit edildi (EECP=0x");
                 crate::serial::print_hex(eecp as u64);
                 crate::serial::print(")\n");
             }
@@ -521,7 +521,7 @@ pub fn test_fat32_access() -> bool {
 
 /// 4. Aşama Testi: Yazılabilir Sanal Disk (Virtual / RAM Disk) Blok Okuma, Yazma ve İçerik Doğrulama
 pub fn test_virtual_disk() -> bool {
-    crate::serial::print("[VDISK-TEST] --- Yazilabilir Sanal Disk (RAM Disk) Dogrulama Testi ---\n");
+    crate::serial::print("[VDISK-TEST] --- Yazılabilir sanal disk (RAM disk) doğrulama testi ---\n");
     // 4KB sanal blok tamponu
     static mut VDISK_BLOCK: [u8; 512] = [0u8; 512];
     let test_pattern = b"minOs_VirtualDisk_Integrity_Verification_2026";
@@ -539,10 +539,10 @@ pub fn test_virtual_disk() -> bool {
         let matches_fill = read_back[test_pattern.len()..].iter().all(|&b| b == 0xAA);
 
         if matches_pattern && matches_fill {
-            crate::serial::print("[VDISK-TEST] Sanal Blok Yazma/Okuma ve Veri Bütünlüğü: BASARILI\n");
+            crate::serial::print("[VDISK-TEST] Sanal Blok Yazma/Okuma ve Veri Bütünlüğü: BAŞARILI\n");
             true
         } else {
-            crate::serial::print("[VDISK-TEST] Sanal Blok Veri Bozulması: BASARISIZ\n");
+            crate::serial::print("[VDISK-TEST] Sanal Blok Veri Bozulması: BAŞARISIZ\n");
             false
         }
     }
@@ -550,7 +550,7 @@ pub fn test_virtual_disk() -> bool {
 
 /// Tüm USB alt sistemlerini (Denetleyici, BOT/SCSI Protokolü, FAT32, Sanal Disk) ayrı ayrı test eder ve raporlar.
 pub fn test_usb_subsystems() -> (bool, bool, bool) {
-    crate::serial::print("[USB] --- USB ve Depolama Alt Sistemleri Dogrulama Testi ---\n");
+    crate::serial::print("[USB] --- USB ve depolama alt sistemleri doğrulama testi ---\n");
 
     // 1. USB Denetleyici Testi
     let ctrl_ok = if let Some(info) = test_usb_controller() {
@@ -563,27 +563,27 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
         crate::serial::print(" | Taban: ");
         crate::serial::print_hex(info.base_addr);
         crate::serial::print(if info.is_mmio { " (MMIO)" } else { " (I/O Port)" });
-        crate::serial::print(" -> BASARILI\n");
+        crate::serial::print(" -> BAŞARILI\n");
         true
     } else {
-        crate::serial::print("[USB-CTRL] PCI uzerinde harici USB Host Controller bulunamadi (IDE/ATA USB-mass-storage modu aktif).\n");
+        crate::serial::print("[USB-CTRL] PCI üzerinde harici USB host denetleyicisi bulunamadı (IDE/ATA USB yığın depolama modu etkin).\n");
         true
     };
 
     // 2. USB Mass Storage (BOT) Protokol Birim Testi
     let bot_ok = test_mass_storage_protocol();
     if bot_ok {
-        crate::serial::print("[USB-BOT] USB Mass Storage (BOT) & SCSI komut protokol dogrulamasi (Birim Testi) -> BASARILI\n");
+        crate::serial::print("[USB-BOT] USB Mass Storage (BOT) & SCSI komut protokol doğrulaması (Birim Testi) -> BAŞARILI\n");
     } else {
-        crate::serial::print("[USB-BOT] USB Mass Storage protokol dogrulamasi -> BASARISIZ\n");
+        crate::serial::print("[USB-BOT] USB Mass Storage protokol doğrulaması -> BAŞARISIZ\n");
     }
 
     // 3. FAT32 Dosya Sistemi Erişim Testi
     let fat_ok = test_fat32_access();
     if fat_ok {
-        crate::serial::print("[USB-FAT32] FAT32 BPB, kume zinciri ve /media/usb0 erisim mantigi -> BASARILI\n");
+        crate::serial::print("[USB-FAT32] FAT32 BPB, kume zinciri ve /media/usb0 erişim mantığı -> BAŞARILI\n");
     } else {
-        crate::serial::print("[USB-FAT32] FAT32 erisim testi -> BASARISIZ\n");
+        crate::serial::print("[USB-FAT32] FAT32 erisim testi -> BAŞARISIZ\n");
     }
 
     // 4. Yazılabilir Sanal Disk Testi

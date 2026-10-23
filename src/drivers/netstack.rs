@@ -821,10 +821,10 @@ pub fn init() {
 
 /// e1000 ağ kartı ve TCP/IP yığını için self-test çalıştırır ve seri porta raporlar.
 pub fn run_network_self_test() -> bool {
-    crate::serial_print("[NET-TEST] --- e1000 ve TCP/IP Yigini Dogrulama Testi ---\n");
+    crate::serial_print("[NET-TEST] --- e1000 ve TCP/IP yığını doğrulama testi ---\n");
 
     if !e1000::is_ready() {
-        crate::serial_print("[NET-TEST] e1000 surucusu hazir degil, ag testleri ATLANDI.\n");
+        crate::serial_print("[NET-TEST] e1000 sürücüsü hazır değil, ağ testleri ATLANDI.\n");
         return false;
     }
 
@@ -833,12 +833,12 @@ pub fn run_network_self_test() -> bool {
     if link_up {
         crate::serial_print("LINK UP (aktif)\n");
     } else {
-        crate::serial_print("LINK DOWN (kablo/ag baglantisi yok)\n");
+        crate::serial_print("LINK DOWN (kablo/ağ bağlantısı yok)\n");
     }
 
     // 1. ARP Istegi ve TX Ring iletim testi (Canlı ARP Yanıtı Bekleme)
     unsafe { LAST_ARP_REPLY_SRC = None; }
-    crate::serial_print("[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi gonderiliyor... ");
+    crate::serial_print("[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi gönderiliyor... ");
     send_arp_request(GATEWAY_IP);
     crate::serial_print("TX iletildi.\n");
 
@@ -851,16 +851,16 @@ pub fn run_network_self_test() -> bool {
         }
         core::hint::spin_loop();
     }
-    crate::serial_print("[NET-TEST] 1. ARP Yaniti: ");
+    crate::serial_print("[NET-TEST] 1. ARP yanıtı: ");
     if arp_replied {
-        crate::serial_print("GERCEK YANIT ALINDI (Gateway fiziksel MAC dogrulandi)\n");
+        crate::serial_print("GERÇEK YANIT ALINDI (gateway fiziksel MAC doğrulandı)\n");
     } else {
-        crate::serial_print("SLIRP statik/onbellek MAC aktif (zaman asimi)\n");
+        crate::serial_print("SLIRP statik/önbellek MAC etkin (zaman aşımı)\n");
     }
 
     // 2. ICMP Echo Request ve Echo Reply testi
     clear_ping_reply();
-    crate::serial_print("[NET-TEST] 2. ICMP: Gateway'e Ping paketi gonderiliyor... ");
+    crate::serial_print("[NET-TEST] 2. ICMP: Gateway'e Ping paketi gönderiliyor... ");
     let ping_sent = ping(GATEWAY_IP);
     if ping_sent {
         crate::serial_print("TX iletildi, Echo Reply bekleniyor... ");
@@ -874,16 +874,16 @@ pub fn run_network_self_test() -> bool {
             core::hint::spin_loop();
         }
         if echo_replied {
-            crate::serial_print("BASARILI (ICMP Echo Reply alindi)\n");
+            crate::serial_print("BAŞARILI (ICMP Echo Reply alındı)\n");
         } else {
-            crate::serial_print("YANIT BEKLENIYOR (QEMU gateway ICMP kapali veya gecikti)\n");
+            crate::serial_print("YANIT BEKLENİYOR (QEMU ağ geçidinde ICMP kapalı veya yanıt gecikti)\n");
         }
     } else {
-        crate::serial_print("BASARISIZ (TX kuyruk hatasi)\n");
+        crate::serial_print("BAŞARISIZ (TX kuyruk hatası)\n");
     }
 
     // 3. TCP Bağlantısı (3-Way Handshake) & HTTP Testi
-    crate::serial_print("[NET-TEST] 3. TCP: Gateway HTTP portuna (10.0.2.2:80) SYN gonderiliyor... ");
+    crate::serial_print("[NET-TEST] 3. TCP: Gateway HTTP portuna (10.0.2.2:80) SYN gönderiliyor... ");
     let tcp_init = tcp_begin(GATEWAY_IP, 80, 49200);
     if tcp_init {
         let mut tcp_synack = false;
@@ -896,12 +896,12 @@ pub fn run_network_self_test() -> bool {
             core::hint::spin_loop();
         }
         if tcp_synack {
-            crate::serial_print("BAGLANTI KURULDU (SYN-ACK alindi, ESTABLISHED)!\n");
+            crate::serial_print("BAĞLANTI KURULDU (SYN-ACK alındı, ESTABLISHED)!\n");
             // HTTP İsteği gönder
-            crate::serial_print("[NET-TEST] 4. HTTP: GET / HTTP/1.0 istegi gonderiliyor... ");
+            crate::serial_print("[NET-TEST] 4. HTTP: GET / HTTP/1.0 istegi gönderiliyor... ");
             let http_sent = tcp_send(b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n");
             if http_sent {
-                crate::serial_print("Iletildi, veri bekleniyor... ");
+                crate::serial_print("İletildi, veri bekleniyor... ");
                 for _ in 0..5_000 {
                     e1000::poll();
                     if unsafe { TCP_DATA_LEN > 0 || TCP_FIN_RECEIVED } {
@@ -911,18 +911,18 @@ pub fn run_network_self_test() -> bool {
                 }
                 let data_len = unsafe { TCP_DATA_LEN };
                 if data_len > 0 {
-                    crate::serial_print("BASARILI (HTTP yaniti alindi: ");
+                    crate::serial_print("BAŞARILI (HTTP yanıtı alındı: ");
                     crate::serial::print_dec(data_len as u64);
                     crate::serial_print(" bayt)\n");
                 } else {
-                    crate::serial_print("Yanit tamponu bos (sunucu yanit vermedi)\n");
+                    crate::serial_print("Yanıt tamponu boş (sunucu yanıt vermedi)\n");
                 }
             } else {
-                crate::serial_print("Gonderilemedi\n");
+                crate::serial_print("Gönderilemedi\n");
             }
             tcp_close();
         } else {
-            crate::serial_print("SYN-ACK ALINAMADI (Port 80 kapali veya dinleyici yok)\n");
+            crate::serial_print("SYN-ACK ALINAMADI (80 numaralı bağlantı noktası kapalı veya dinleyici yok)\n");
         }
     } else {
         crate::serial_print("TCP paketi iletilemedi\n");
@@ -932,9 +932,9 @@ pub fn run_network_self_test() -> bool {
     let sock_ok = crate::drivers::socket::self_test();
     let http_ok = crate::drivers::http::self_test();
     if sock_ok && http_ok {
-        crate::serial_print("[NET-TEST] Soket + HTTP mantik testleri: BASARILI\n");
+        crate::serial_print("[NET-TEST] Soket + HTTP mantık testleri: BAŞARILI\n");
     } else {
-        crate::serial_print("[NET-TEST] Soket/HTTP mantik testleri: BASARISIZ\n");
+        crate::serial_print("[NET-TEST] Soket/HTTP mantık testleri: BAŞARISIZ\n");
     }
 
     ping_sent

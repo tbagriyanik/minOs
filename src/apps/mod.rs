@@ -16,3 +16,4 @@ pub mod terminal;
 pub mod installer;
 pub mod viewer3d;
 pub mod pkgmgr;
+pub mod pkg_deps;

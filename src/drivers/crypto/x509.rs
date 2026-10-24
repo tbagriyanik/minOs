@@ -630,6 +630,11 @@ fn der_tag_is_known(tag: u8) -> bool {
 
 /// Let's Encrypt ISRG Root X1 Kök CA sertifikası (DER formatında).
 pub const ISRG_ROOT_X1_DER: &[u8] = include_bytes!("roots/isrgrootx1.der");
+pub const ISRG_ROOT_X2_DER: &[u8] = include_bytes!("roots/isrgrootx2.der");
+pub const DIGICERT_GLOBAL_ROOT_CA_DER: &[u8] = include_bytes!("roots/digicert_global_root_ca.der");
+pub const DIGICERT_GLOBAL_ROOT_G2_DER: &[u8] = include_bytes!("roots/digicert_global_root_g2.der");
+pub const GTS_ROOT_R1_DER: &[u8] = include_bytes!("roots/gts_root_r1.der");
+pub const GTS_ROOT_R2_DER: &[u8] = include_bytes!("roots/gts_root_r2.der");
 
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
@@ -766,7 +771,14 @@ impl<'a> ParsedX509Cert<'a> {
 }
 
 /// Gömülü kök CA listesi (ISRG Root X1).
-pub const TRUSTED_ROOTS: &[&[u8]] = &[ISRG_ROOT_X1_DER];
+pub const TRUSTED_ROOTS: &[&[u8]] = &[
+    ISRG_ROOT_X1_DER,
+    ISRG_ROOT_X2_DER,
+    DIGICERT_GLOBAL_ROOT_CA_DER,
+    DIGICERT_GLOBAL_ROOT_G2_DER,
+    GTS_ROOT_R1_DER,
+    GTS_ROOT_R2_DER,
+];
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.
 /// `chain`: Yaprak (leaf) sunucu sertifikasından ara sertifikalara doğru sıralı dizi.

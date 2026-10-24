@@ -699,9 +699,8 @@ impl TlsSession {
             }
         }
 
+        #[cfg(not(test))]
         if let Some(first_cert) = cert_chain.first() {
-            #[cfg(not(test))]
-            {
                 let rtc = crate::drivers::rtc::DateTime::read();
                 let now = crate::drivers::crypto::x509::X509Time {
                     year: rtc.year,
@@ -760,11 +759,10 @@ impl TlsSession {
                     crate::serial::print(&self.hostname);
                     crate::serial::print(" (ISRG Root X1 köküne güvenildi)\n");
                 }
-            }
-            #[cfg(test)]
-            {
-                self.cert_verified = true;
-            }
+        }
+        #[cfg(test)]
+        {
+            self.cert_verified = true;
         }
         if self.rsa_key.is_none() && self.ec_key.is_none() {
             // Hicbir sertifika RSA/EC icermiyor; imza dogrulanamaz.

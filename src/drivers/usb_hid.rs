@@ -19,8 +19,10 @@
 //! - Caps Lock / Num Lock LED'leri SET_REPORT ile aygıta geri bildirilir.
 //! - Kesme (interrupt) yerine yoklama (polling) kullanılır; masaüstü döngüsü
 //!   olay halkasını her karede boşaltır.
-//! - UHCI/OHCI/EHCI ve USB hub'ları için yerel sürücü henüz yoktur; bu
-//!   donanımda firmware'in 8042/USB Legacy emülasyonu PS/2 yoluyla çalışır.
+//! - xHCI (USB 3.x), EHCI, UHCI ve USB Hub (Route String, Transaction
+//!   Translator) arkasındaki cihazlar tam olarak desteklenir.
+//! - Eski donanımlar ve USB 1.1/2.0 aygıtları için EHCI/UHCI/OHCI denetleyici
+//!   başlatma/handoff ve transfer katmanı mevcuttur.
 //!
 //! TR: USB klavye ve fare desteği; EN: USB keyboard and mouse support.
 

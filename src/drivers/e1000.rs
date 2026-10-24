@@ -51,10 +51,11 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
     io_out32(PCI_CONFIG_DATA, val);
 }
 
-/// Intel, VMware ve Realtek PCI kimlikleri
+/// Intel, VMware, Realtek ve Broadcom PCI kimlikleri
 const E1000_VENDOR: u32 = 0x8086;
 const VMWARE_VENDOR: u32 = 0x15AD;
 const REALTEK_VENDOR: u32 = 0x10EC;
+const BROADCOM_VENDOR: u32 = 0x14E4;
 
 // Aynı descriptor/MMIO düzenini kullanan klasik 8254x ve 8257x denetleyicileri (Intel e1000 / e1000e).
 const E1000_DEVICES: [u32; 10] = [
@@ -90,11 +91,62 @@ const REALTEK_DEVICES: [u32; 10] = [
     0x8411, // RTL8411 Gigabit Ethernet
 ];
 
+// Broadcom NetXtreme / NetLink / NetXtreme II — PCI vendor 0x14E4.
+// MAC çekirdeği B57: 32-bit Genel Kayıt'lar (ARL) + genişletilmiş kayıtlar.
+const BROADCOM_DEVICES: [u32; 14] = [
+    0x1646, // NetXtreme BCM5701
+    0x1647, // NetXtreme BCM5701S
+    0x16A6, // NetXtreme BCM5702
+    0x16A7, // NetXtreme BCM5702S
+    0x16A8, // NetXtreme BCM5702 / 5703
+    0x164A, // NetXtreme BCM5703
+    0x1648, // NetXtreme BCM5704
+    0x1649, // NetXtreme BCM5704S
+    0x1659, // NetXtreme BCM5721
+    0x165A, // NetXtreme BCM5722
+    0x1668, // NetXtreme BCM5714/5715
+    0x1677, // NetXtreme BCM5751
+    0x1678, // NetXtreme BCM5714S
+    0x169A, // NetXtreme BCM5782
+];
+
+// ---------------------------------------------------------------------------
+// Broadcom B57 MAC kayıt ofsetleri
+// ---------------------------------------------------------------------------
+// Her 4 KiB'lik kayıt bloğu kendi adresinin bir bitini taşır; ARL (Address
+// Recognition Logic) bloğu tüm diğer bloklara ayna görevi görür. Bu nedenle
+// ayni adlı register'lara erişim daima bu blok üzerinden yapılır.
+const B57_BASE: u32           = 0xE000; // ARL: ortak kayıtlar
+const B57_HOST_CTRL: u32      = B57_BASE | 0x00; // Host Control (FW boot / sıfırlama)
+const B57_MAC_HASH0: u32      = B57_BASE | 0x08;
+const B57_MAC_HASH1: u32      = B57_BASE | 0x0C;
+/// Host Status Word: bit 0-15 TX indeksi, bit 16-31 RX indeksi.
+const B57_HOST_STAT: u32      = B57_BASE | 0x0C + 0; // 0x0C ARL bloğunda host status
+/// RX descriptor halkası tabanı (alma penceresi, 0xC000 + 0x40).
+const B57_RX_LIST_ADDR: u32   = 0xC000 | 0x40;
+/// TX descriptor halkası tabanı (gönderme penceresi, 0x1000 + 0x40).
+const B57_TX_LIST_ADDR: u32   = 0x1000 | 0x40;
+const B57_MAC_ADDR_HI: u32    = B57_BASE | 0x10;
+const B57_MAC_ADDR_LO: u32    = B57_BASE | 0x14;
+const B57_MISC_HOST_CTRL: u32 = B57_BASE | 0x2C; // bit 16: Register Access Enable
+const B57_TX_MAC_ADDR_CTRL: u32 = B57_BASE | 0x40;
+const B57_COMMAND: u32        = B57_BASE | 0x3C;
+const B57_PHY_STATUS: u32     = B57_BASE | 0xD4;
+const B57_MODE: u32           = B57_BASE | 0xF4; // MAC çalışma modu
+const B57_MISC_HOST_CTRL_ENABLE: u32 = 1 << 16;
+const B57_COMMAND_RX_ENABLE: u32 = 1 << 0;
+const B57_COMMAND_TX_ENABLE: u32 = 1 << 1;
+const B57_COMMAND_PURGE: u32 = 1 << 2;
+const B57_MODE_PROMISC: u32 = 1 << 0;
+const B57_MODE_NO_CRC: u32 = 1 << 2;
+const B57_PHY_LINK_UP: u32 = 1 << 10;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NicType {
     IntelE1000,
     VmwareVmxnet3,
     RealtekR8169,
+    BroadcomB57,
 }
 
 static mut DETECTED_NIC: NicType = NicType::IntelE1000;
@@ -108,6 +160,7 @@ pub fn nic_name() -> &'static str {
         NicType::IntelE1000 => "Intel e1000",
         NicType::VmwareVmxnet3 => "VMware VMXNET3",
         NicType::RealtekR8169 => "Realtek PCIe GbE (RTL8168/8169)",
+        NicType::BroadcomB57 => "Broadcom NetXtreme (BCM57xx/577xx)",
     }
 }
 
@@ -127,6 +180,8 @@ const RTL_REG_TCR: u32       = 0x0040; // Transmit Configuration Register
 const RTL_REG_RCR: u32       = 0x0044; // Receive Configuration Register
 const RTL_REG_9346CR: u32    = 0x0050; // 93C46 Command Register (Config write enable)
 const RTL_REG_CONFIG1: u32   = 0x0052; // Config1 Register
+const RTL_REG_CONFIG3: u32   = 0x0054; // Config3 Register (ASF / WOL)
+const RTL_REG_CONFIG4: u32   = 0x0056; // Config4 Register (MAC yedek)
 const RTL_REG_PHYSTATUS: u32 = 0x006C; // PHY Status Register (Link status = bit 1)
 const RTL_REG_RMS: u32       = 0x00DA; // Rx Max Packet Size (16-bit)
 const RTL_REG_RXADDR: u32    = 0x00E4; // RX Descriptor ring tabanı (64-bit: 0xE4..0xEB)
@@ -312,6 +367,7 @@ pub fn link_up() -> bool {
                 // PHY status bit 1: 1 = Link Up, 0 = Link Down
                 (mmio_read8(RTL_REG_PHYSTATUS) & 0x02) != 0
             }
+            NicType::BroadcomB57 => (mmio_read32(B57_PHY_STATUS) & B57_PHY_LINK_UP) != 0,
         }
     }
 }
@@ -374,8 +430,126 @@ unsafe fn read_mac_from_eeprom() -> [u8; 6] {
 }
 
 // ---------------------------------------------------------------------------
-// RX ring hazırlama
+// Broadcom B57 yardimcilari
 // ---------------------------------------------------------------------------
+
+/// Broadcom MAC adresi: yüksek kayıt bayt 0-1, düşük kayıt bayt 2-5 (büyük-endian sıra).
+unsafe fn read_mac_broadcom() -> [u8; 6] {
+    let hi = mmio_read32(B57_MAC_ADDR_HI);
+    let lo = mmio_read32(B57_MAC_ADDR_LO);
+    [
+        (hi >> 8) as u8,
+        (hi & 0xFF) as u8,
+        (lo >> 24) as u8,
+        (lo >> 16) as u8,
+        (lo >> 8) as u8,
+        lo as u8,
+    ]
+}
+
+/// Broadcom TX: Host Status Word (0x0C) sıradaki descriptor indeksini taşır.
+unsafe fn broadcom_transmit(packet: &[u8]) -> bool {
+    let r = rings();
+    let tail = TX_TAIL;
+    let buf_phys = RINGS_ADDR
+        + core::mem::offset_of!(E1000Rings, tx_bufs) as u64
+        + (tail as u64) * TX_BUF_SIZE as u64;
+    let buf_ptr = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
+    core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
+
+    let desc_u32 = &mut (*r).tx_ring[tail] as *mut TxDescriptor as *mut u32;
+    core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
+    core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
+    // Opak alan: B57 bu 16-bit alanı "flags/length" olarak kullanır (bit 0-15 uzunluk).
+    core::ptr::write_volatile(desc_u32.add(3), packet.len() as u32 & 0xFFFF);
+    core::ptr::write_volatile(desc_u32.add(2), 0);
+    core::sync::atomic::fence(Ordering::SeqCst);
+
+    TX_TAIL = (tail + 1) % TX_RING_SIZE;
+    // Gönderim kapısı: TX kayıt penceresindeki host status word'e indeks yaz.
+    mmio_write32(B57_HOST_STAT, TX_TAIL as u32);
+
+    let mut spins = 0;
+    loop {
+        let idx = mmio_read32(B57_HOST_STAT) & 0xFFFF;
+        if idx != TX_TAIL as u32 {
+            return true;
+        }
+        spins += 1;
+        if spins > 200_000 {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Broadcom RX: host status word alma tarafindaki descriptor indeksini verir.
+unsafe fn broadcom_receive(buf: &mut [u8]) -> usize {
+    let r = rings();
+    let mut received = 0usize;
+    loop {
+        let idx = (mmio_read32(B57_HOST_STAT) >> 16) as usize;
+        if idx == RX_TAIL {
+            break;
+        }
+        let idx = idx % RX_RING_SIZE;
+        let desc_u32 = &mut (*r).rx_ring[idx] as *mut RxDescriptor as *mut u32;
+        let len = (core::ptr::read_volatile(desc_u32.add(3)) & 0xFFFF) as usize;
+        let addr_lo = core::ptr::read_volatile(desc_u32.add(0)) as u64;
+        let addr_hi = core::ptr::read_volatile(desc_u32.add(1)) as u64;
+        let addr = addr_lo | (addr_hi << 32);
+        if received == 0 && len > 0 && len <= buf.len() {
+            let src = crate::drivers::phys_to_virt(addr) as *const u8;
+            core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
+            received = len;
+        }
+        // Tamponu yeniden karta ver ve statüyü temizle.
+        core::ptr::write_volatile(desc_u32.add(3), RX_BUF_SIZE as u32 & 0xFFFF);
+        mmio_write32(B57_HOST_STAT, ((idx as u32) << 16) | (TX_TAIL as u32));
+    }
+    received
+}
+
+unsafe fn init_broadcom(rings_addr: u64) {
+    // Register Access Enable: MISC_HOST_CTRL bit 16-17.
+    let mhc = mmio_read32(B57_MISC_HOST_CTRL);
+    mmio_write32(B57_MISC_HOST_CTRL, mhc | B57_MISC_HOST_CTRL_ENABLE);
+
+    // Sıfırlama: TX/RX durdur ve purge et.
+    mmio_write32(B57_COMMAND, 0);
+    mmio_write32(B57_COMMAND, B57_COMMAND_PURGE);
+
+    // MAC modu: promiscuous + (donanim CRC)
+    let mode = mmio_read32(B57_MODE);
+    mmio_write32(B57_MODE, mode | B57_MODE_PROMISC);
+    // Donanimsal filtre: tüm hash bitleri açık (promiscuous destek).
+    mmio_write32(B57_MAC_HASH0, 0xFFFF_FFFF);
+    mmio_write32(B57_MAC_HASH1, 0xFFFF_FFFF);
+    mmio_write32(B57_TX_MAC_ADDR_CTRL, 0xFFFF_FFFF);
+
+    // RX/TX descriptor halkasi taban adresleri
+    mmio_write32(B57_RX_LIST_ADDR, (rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) as u32);
+    mmio_write32(B57_TX_LIST_ADDR, (rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) as u32);
+
+    // RX descriptorlari hazirla
+    let r = rings();
+    for i in 0..RX_RING_SIZE {
+        let buf_phys = rings_addr
+            + core::mem::offset_of!(E1000Rings, rx_bufs) as u64
+            + (i as u64) * RX_BUF_SIZE as u64;
+        let desc_u32 = &mut (*r).rx_ring[i] as *mut RxDescriptor as *mut u32;
+        core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
+        core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
+        core::ptr::write_volatile(desc_u32.add(3), RX_BUF_SIZE as u32 & 0xFFFF);
+        core::ptr::write_volatile(desc_u32.add(2), 0);
+    }
+
+    // Host status word: RX indeksi = RX_TAIL, TX indeksi = TX_TAIL
+    mmio_write32(B57_HOST_STAT, ((RX_RING_SIZE as u32 - 1) << 16) | 0);
+
+    // TX/RX etkinleştir
+    mmio_write32(B57_COMMAND, B57_COMMAND_RX_ENABLE | B57_COMMAND_TX_ENABLE);
+}
 
 unsafe fn init_rx_ring() {
     let r = rings();
@@ -421,6 +595,9 @@ pub fn transmit(packet: &[u8]) -> bool {
         return false;
     }
     unsafe {
+        if DETECTED_NIC == NicType::BroadcomB57 {
+            return broadcom_transmit(packet);
+        }
         let r = rings();
         let tail = TX_TAIL;
         let desc = &mut (*r).tx_ring[tail];
@@ -428,7 +605,6 @@ pub fn transmit(packet: &[u8]) -> bool {
             + core::mem::offset_of!(E1000Rings, tx_bufs) as u64
             + (tail as u64) * TX_BUF_SIZE as u64;
 
-        // Tampona kopyala
         let buf_ptr = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
         core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
 
@@ -492,6 +668,9 @@ pub fn receive(buf: &mut [u8]) -> usize {
         return 0;
     }
     unsafe {
+        if DETECTED_NIC == NicType::BroadcomB57 {
+            return broadcom_receive(buf);
+        }
         let idx = RX_TAIL;
         let desc_ptr = &mut (*rings()).rx_ring[idx] as *mut RxDescriptor;
 
@@ -615,6 +794,23 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                             found = Some((bus, dev, func, base, NicType::RealtekR8169));
                             break;
                         }
+                    } else if vid == BROADCOM_VENDOR && BROADCOM_DEVICES.contains(&did) {
+                        // Broadcom NetXtreme: aygıtlar farklı sırada MMIO BAR taşıyabilir
+                        // (genelde BAR0 64-bit), bu yüzden ilk MMIO BAR seçilir.
+                        let mut base: u64 = 0;
+                        for bar_off in [0x10u8, 0x14u8, 0x18u8, 0x1C, 0x20, 0x24] {
+                            let bar = pci_read32(bus, dev, func, bar_off);
+                            if bar != 0 && (bar & 1) == 0 {
+                                let is_64 = (bar & 0x06) == 0x04;
+                                let bar_hi = if is_64 { pci_read32(bus, dev, func, bar_off + 4) as u64 } else { 0 };
+                                base = ((bar as u64) & 0xFFFF_FFF0) | (bar_hi << 32);
+                                break;
+                            }
+                        }
+                        if base != 0 {
+                            found = Some((bus, dev, func, base, NicType::BroadcomB57));
+                            break;
+                        }
                     }
                 }
                 if found.is_some() {
@@ -629,7 +825,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let (bus, dev, func, base_phys, ntype) = match found {
             Some(v) => v,
             None => {
-                e1000_print("[NET] Ag adaptoru (Intel / VMware / Realtek PCIe) PCI'da bulunamadi.\n");
+                e1000_print("[NET] Ag adaptoru (Intel / VMware / Realtek / Broadcom) PCI'da bulunamadi.\n");
                 return;
             }
         };
@@ -654,6 +850,13 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             }
             NicType::RealtekR8169 => {
                 e1000_print("[NET] Realtek PCIe Gigabit ag adaptoru bulundu (Vendor: 0x10EC). PCI ");
+                e1000_print_hex(bus);
+                e1000_print(":");
+                e1000_print_hex(dev);
+                e1000_print("\n");
+            }
+            NicType::BroadcomB57 => {
+                e1000_print("[NET] Broadcom NetXtreme ag adaptoru bulundu (Vendor: 0x14E4). PCI ");
                 e1000_print_hex(bus);
                 e1000_print(":");
                 e1000_print_hex(dev);
@@ -695,6 +898,10 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 // EEPROM/Config kilitlerini aç (93C46 unlock: 0xC0)
                 mmio_write8(RTL_REG_9346CR, 0xC0);
             }
+            NicType::BroadcomB57 => {
+                // B57: register access + MAC modu/ring hazırlığı `init_broadcom`
+                // içinde yapılır (ring belleği sıfırlandıktan sonra).
+            }
         }
 
         // Ring yapısını HHDM üzerinden sıfırla
@@ -706,6 +913,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             NicType::IntelE1000 => read_mac_from_eeprom(),
             NicType::VmwareVmxnet3 => read_mac_vmxnet3(),
             NicType::RealtekR8169 => read_mac_realtek(),
+            NicType::BroadcomB57 => read_mac_broadcom(),
         };
         MAC_ADDR = mac;
         e1000_print("[NET] MAC adresi: ");
@@ -785,9 +993,11 @@ pub fn init(pmm_dma_phys: Option<u64>) {
 
             // RX ve TX'i aktifleştir
             mmio_write8(RTL_REG_COMMAND, RTL_CMD_RX_EN | RTL_CMD_TX_EN);
+        } else if ntype == NicType::BroadcomB57 {
+            init_broadcom(phys);
         }
 
-        if ntype != NicType::RealtekR8169 {
+        if ntype != NicType::RealtekR8169 && ntype != NicType::BroadcomB57 {
             // Ring'leri hazırla (Intel / VMware)
             init_rx_ring();
             init_tx_ring();
@@ -802,6 +1012,9 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             }
             NicType::RealtekR8169 => {
                 e1000_print("[NET] Realtek PCIe GbE RX/TX ring'leri hazir, link acildi.\n");
+            }
+            NicType::BroadcomB57 => {
+                e1000_print("[NET] Broadcom NetXtreme RX/TX ring'leri hazir, link acildi.\n");
             }
         }
         E1000_READY.store(true, Ordering::Relaxed);

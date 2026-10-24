@@ -104,6 +104,50 @@ pub mod arch {
 #[path = "../src/mm/allocator/mod.rs"]
 pub mod allocator;
 
+// Cekirdekten bagimsiz saf mantik modulleri: paket bagimlilik cozumleyici
+// (dagitim oncesi surum/cevre analizi) ve sertifika iptal kontrolu (CRL/OCSP).
+#[path = "../src/apps/pkg_deps.rs"]
+pub mod pkg_deps;
+
+// Dosya sistemleri: `block` (blok aygiti + bellek ici aygit), `exfat_core`
+// (VBR yapisi, checksum ve upcase tablosu) ile `exfat_rw` / `ext4_rw`
+// suruculeri. Cekirdek ATA yerine `BlockDevice` kullandiklari icin host'ta
+// uctan uca test edilebilir. Suruculer `crate::fs::...` yoluyla birbirine
+// bagli oldugundan ayni yol host harness'inda da saglanir.
+#[path = "../src/fs/block.rs"]
+pub mod block;
+
+pub mod fs {
+    pub mod block {
+        pub use crate::block::*;
+    }
+    pub mod exfat {
+        pub use crate::exfat_core::*;
+    }
+    pub mod ext4 {
+        pub use crate::ext4_core::*;
+    }
+}
+
+#[path = "../src/fs/exfat.rs"]
+pub mod exfat_core;
+
+#[path = "../src/fs/exfat_rw.rs"]
+pub mod exfat_rw;
+
+/// Cekirdekte `crate::fs::exfat` altindaki kisa yol; host'ta `exfat_core`.
+pub mod exfat {
+    pub const EXFAT_OEM_NAME: &[u8; 8] = b"EXFAT   ";
+    pub const EXFAT_SIGNATURE: u16 = 0xAA55;
+    pub fn to_upper_exfat(c: u16) -> u16 { crate::exfat_core::to_upper_exfat(c) }
+}
+
+#[path = "../src/fs/ext4_rw.rs"]
+pub mod ext4_rw;
+
+#[path = "../src/fs/ext4.rs"]
+pub mod ext4_core;
+
 #[cfg(test)]
 #[path = "host_crypto_tests.rs"]
 mod crypto_tests;
@@ -115,4 +159,8 @@ mod host_allocator_tests;
 #[cfg(test)]
 #[path = "host_feature_tests.rs"]
 mod host_feature_tests;
+
+#[cfg(test)]
+#[path = "host_fs_tests.rs"]
+mod host_fs_tests;
 

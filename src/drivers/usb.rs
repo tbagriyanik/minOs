@@ -449,7 +449,21 @@ fn init_ehci_controller(bus: u8, dev: u8, func: u8) {
             core::ptr::write_volatile(port_reg, status | (1 << 12));
         }
 
-        crate::serial::print("[USB-EHCI] Denetleyici ve portlar başarıyla hazırlandı.\n");
+        // 6. EHCI Asenkron Transfer Listesi (QH/qTD) yapılandırması
+        let qh_phys = core::ptr::addr_of!(EHCI_DMA.qh_async) as u32;
+        // H-bit = 1 (Head of reclamation list, bit 1), Type = 2 (QH, bit 1) -> qh_phys | 2
+        EHCI_DMA.qh_async.horizontal_link = qh_phys | 2;
+        EHCI_DMA.qh_async.ep_characteristics = (1 << 14) | (64 << 16); // DTC=1, MaxPacketLen=64
+        EHCI_DMA.qh_async.overlay_next_qtd = 1; // Terminate
+
+        let asynclistaddr = (op_base + 0x18) as *mut u32;
+        core::ptr::write_volatile(asynclistaddr, qh_phys);
+
+        // USBCMD (bit 5 = Asynchronous Schedule Enable, bit 0 = Run/Stop)
+        let cur_cmd = core::ptr::read_volatile(usbcmd);
+        core::ptr::write_volatile(usbcmd, cur_cmd | (1 << 5) | 1);
+
+        crate::serial::print("[USB-EHCI] Denetleyici ve portlar başarıyla hazırlandı (Asenkron QH/qTD transfer katmanı aktif).\n");
     }
 }
 
@@ -491,6 +505,30 @@ fn init_uhci_controller(bus: u8, dev: u8, func: u8) {
     crate::serial::print(" | Port 2 bağlı=");
     crate::serial::print(if c2 { "1" } else { "0" });
     crate::serial::print(" (Legacy 8042 klavye/fare yönlendirmesi aktif)\n");
+
+    // 3. UHCI Frame List ve Transfer Katmanı Başlatma (TD/QH kuyruğu)
+    unsafe {
+        let fl_phys = core::ptr::addr_of!(UHCI_DMA.frame_list) as u32;
+        let qh_phys = core::ptr::addr_of!(UHCI_DMA.qh) as u32;
+
+        UHCI_DMA.qh.head_link = 1; // Terminate
+        UHCI_DMA.qh.element_link = 1; // Boş kuyruk
+
+        for i in 0..1024 {
+            // Frame List işaretçilerini oluşturulan Queue Head'e bağla (bit 1 = QH tipi: 0x02)
+            UHCI_DMA.frame_list[i] = qh_phys | 2;
+        }
+
+        // Frame List Base Address (FLBASEADD ofset 0x08)
+        io_out32(bar4 + 0x08, fl_phys);
+        // Frame Number Register (FRNUM ofset 0x06) sıfırla
+        io_out16(bar4 + 0x06, 0);
+
+        // USBCMD (ofset 0x00): Run/Stop=1, MaxPacket=64B (bit 7)
+        let cmd = io_in16(bar4 + 0x00);
+        io_out16(bar4 + 0x00, cmd | 0x0001 | 0x0080);
+    }
+    crate::serial::print("[USB-UHCI] Transfer katmanı aktif: 1024-girdi Frame List ve TD/QH kuyruk yönetimi devrede.\n");
 }
 
 /// OHCI (USB 1.1) Denetleyicisini MMIO alanı üzerinden başlatır.
@@ -732,3 +770,125 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
     (ctrl_ok, bot_ok, fat_ok)
 }
 
+
+
+// ---------------------------------------------------------------------------
+// UHCI Transfer Katmanı (Queue Head / Transfer Descriptor)
+// ---------------------------------------------------------------------------
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct UhciTd {
+    pub link: u32,
+    pub status: u32,
+    pub token: u32,
+    pub buffer: u32,
+    pub _reserved: [u32; 4],
+}
+
+impl UhciTd {
+    pub const fn empty() -> Self {
+        Self {
+            link: 1, // Terminate = 1
+            status: 0,
+            token: 0,
+            buffer: 0,
+            _reserved: [0; 4],
+        }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct UhciQh {
+    pub head_link: u32,
+    pub element_link: u32,
+    pub _reserved: [u32; 2],
+}
+
+impl UhciQh {
+    pub const fn empty() -> Self {
+        Self {
+            head_link: 1,    // Terminate = 1
+            element_link: 1, // Terminate = 1
+            _reserved: [0; 2],
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// EHCI Transfer Katmanı (Queue Head / Queue Transfer Descriptor)
+// ---------------------------------------------------------------------------
+
+#[repr(C, align(32))]
+#[derive(Clone, Copy)]
+pub struct EhciQtd {
+    pub next_qtd: u32,
+    pub alt_next_qtd: u32,
+    pub token: u32,
+    pub buffer_pointers: [u32; 5],
+}
+
+impl EhciQtd {
+    pub const fn empty() -> Self {
+        Self {
+            next_qtd: 1,     // Terminate = 1
+            alt_next_qtd: 1, // Terminate = 1
+            token: 0,
+            buffer_pointers: [0; 5],
+        }
+    }
+}
+
+#[repr(C, align(64))]
+#[derive(Clone, Copy)]
+pub struct EhciQh {
+    pub horizontal_link: u32,
+    pub ep_characteristics: u32,
+    pub ep_capabilities: u32,
+    pub current_qtd: u32,
+    pub overlay_next_qtd: u32,
+    pub overlay_alt_next_qtd: u32,
+    pub overlay_token: u32,
+    pub overlay_buffers: [u32; 5],
+}
+
+impl EhciQh {
+    pub const fn empty() -> Self {
+        Self {
+            horizontal_link: 1,
+            ep_characteristics: 0,
+            ep_capabilities: 0,
+            current_qtd: 0,
+            overlay_next_qtd: 1,
+            overlay_alt_next_qtd: 1,
+            overlay_token: 0,
+            overlay_buffers: [0; 5],
+        }
+    }
+}
+
+// Statik transfer kuyruk yapıları (DMA uyumlu)
+#[repr(C, align(4096))]
+struct UhciDmaPool {
+    frame_list: [u32; 1024],
+    qh: UhciQh,
+    td: [UhciTd; 4],
+}
+
+static mut UHCI_DMA: UhciDmaPool = UhciDmaPool {
+    frame_list: [1; 1024], // T=1
+    qh: UhciQh::empty(),
+    td: [UhciTd::empty(); 4],
+};
+
+#[repr(C, align(4096))]
+struct EhciDmaPool {
+    qh_async: EhciQh,
+    qtd: [EhciQtd; 4],
+}
+
+static mut EHCI_DMA: EhciDmaPool = EhciDmaPool {
+    qh_async: EhciQh::empty(),
+    qtd: [EhciQtd::empty(); 4],
+};

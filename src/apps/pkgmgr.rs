@@ -12,6 +12,9 @@ use alloc::vec::Vec;
 use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
+use crate::apps::pkg_deps::{
+    plan_names, resolve, InstallPlan, PkgEntry, ResolveError,
+};
 
 pub const DEFAULT_REPO_URL: &str = "http://repo.minos.org/packages";
 
@@ -180,6 +183,87 @@ impl MinPkg {
         let path3 = format!("/bin/{}.pkg", pkg_name);
         vfs.delete_file(&path1) || vfs.delete_file(&path2) || vfs.delete_file(&path3)
     }
+
+    /// Yerleşik depo kataloğunu bağımlılık çözümleyicinin girdi biçimine çevir.
+    pub fn catalog_entries() -> Vec<PkgEntry> {
+        REPO_CATALOG
+            .iter()
+            .map(|p| PkgEntry::new(p.name, p.version).with_deps(p.dependencies))
+            .collect()
+    }
+
+    /// VFS `/bin` içeriğinden kurulu paket listesi (ad, sürüm).
+    /// `.pkg` manifestinin 2. satırı paket adı, 3. satırı sürümdür.
+    pub fn installed_packages(vfs: &VirtualFileSystem) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for it in vfs.list_dir("/bin") {
+            if it.node_type != crate::fs::vfs::NodeType::File {
+                continue;
+            }
+            let name = it.name.as_str();
+            let (base, version) = if let Some(n) = name.strip_suffix(".pkg") {
+                let path = format!("/bin/{}", name);
+                let version = vfs
+                    .read_file(&path)
+                    .and_then(|data| {
+                        let text = core::str::from_utf8(&data).ok()?;
+                        let mut lines = text.lines();
+                        if lines.next()? != "MINOS-BUILTIN" {
+                            return None;
+                        }
+                        let _pkg = lines.next()?;
+                        Some(String::from(lines.next()?.trim()))
+                    })
+                    .unwrap_or_default();
+                (n, version)
+            } else if let Some(n) = name.strip_suffix(".elf") {
+                (n, String::new())
+            } else {
+                (name, String::new())
+            };
+            if base.is_empty() || out.iter().any(|(n, _)| n == base) {
+                continue;
+            }
+            out.push((String::from(base), version));
+        }
+        out
+    }
+
+    /// Paketin bağımlılık çözüm planını döner (kurulum yapmaz).
+    pub fn resolve_plan(
+        pkg_name: &str,
+        vfs: &VirtualFileSystem,
+    ) -> Result<InstallPlan, ResolveError> {
+        let installed = Self::installed_packages(vfs);
+        resolve(&Self::catalog_entries(), &installed, pkg_name)
+    }
+
+    /// Bağımlılıkları önce olacak şekilde, plana göre paketleri kurar.
+    /// Dönüş: kurulan yollar ve zaten kurulu olduğu için atlanan paketler.
+    pub fn install_with_dependencies(
+        pkg_name: &str,
+        vfs: &mut VirtualFileSystem,
+    ) -> Result<(Vec<String>, Vec<String>), String> {
+        let plan = match Self::resolve_plan(pkg_name, vfs) {
+            Ok(p) => p,
+            Err(e) => {
+                let msg = e.message();
+                crate::serial::print("[PKG] Bagimlilik hatasi: ");
+                crate::serial::print(&msg);
+                crate::serial::print("\n");
+                return Err(msg);
+            }
+        };
+        let names = plan_names(&plan);
+        let mut installed = Vec::new();
+        for name in names {
+            match Self::install_builtin(&name, vfs) {
+                Ok(path) => installed.push(path),
+                Err(_) => return Err(format!("{} paketi kurulamadi", name)),
+            }
+        }
+        Ok((installed, plan.already_installed))
+    }
 }
 
 /// Depo Katalog Paketi
@@ -192,6 +276,8 @@ pub struct RepoPackage {
     pub category: &'static str,
     pub size_kb: usize,
     pub sha256: Option<&'static str>,
+    /// Bağımlılık kuralları (`"ssl-lite>=1.2"` biçiminde).
+    pub dependencies: &'static [&'static str],
 }
 
 pub const REPO_CATALOG: &[RepoPackage] = &[
@@ -203,6 +289,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Sistem",
         size_kb: 0,
         sha256: None,
+        dependencies: &[],
     },
     RepoPackage {
         name: "netcat-lite",
@@ -212,6 +299,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Ağ",
         size_kb: 0,
         sha256: None,
+        dependencies: &[],
     },
     RepoPackage {
         name: "hexdump",
@@ -221,6 +309,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Geliştirici",
         size_kb: 0,
         sha256: None,
+        dependencies: &[],
     },
     RepoPackage {
         name: "tiny-editor",
@@ -230,6 +319,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Üretkenlik",
         size_kb: 0,
         sha256: None,
+        dependencies: &["hexdump>=1.0"],
     },
     RepoPackage {
         name: "benchmark",
@@ -239,6 +329,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Sistem",
         size_kb: 0,
         sha256: None,
+        dependencies: &["sarman-cli"],
     },
     RepoPackage {
         name: "fortune",
@@ -248,6 +339,7 @@ pub const REPO_CATALOG: &[RepoPackage] = &[
         category: "Eğlence",
         size_kb: 0,
         sha256: None,
+        dependencies: &[],
     },
 ];
 

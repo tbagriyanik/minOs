@@ -14,6 +14,10 @@ struct FaceOutput {
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(minos_boot_log)");
+    // Host testleri (`tests/host_tests.rs`) `fs::block` modülünü dogrudan
+    // `#[path]` ile baglar; o derlemede `cfg(test)` ayarlı olmadigi icin
+    // bellek ici blok aygiti ayri bir cfg ile acilir.
+    println!("cargo:rustc-check-cfg=cfg(host_fs_tests)");
     let faces = [
         FaceOutput {
             name: "INRIA",

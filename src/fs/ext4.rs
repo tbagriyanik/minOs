@@ -1,21 +1,38 @@
 #![allow(dead_code, static_mut_refs)]
-//! ext4 dosya sistemi biçimlendiricisi ve temel yapıları.
+//! ext4 dosya sistemi biçimlendiricisi.
 //!
-//! Özellikler:
-//! - ext4 uyumlu superblock (EXT4_MAGIC = 0xEF53)
-//! - INCOMPAT_EXTENTS (0x0040), INCOMPAT_64BIT (0x0080), FEATURE_RO_COMPAT_DIR_NLINK vb.
-//! - Inode boyutu: 256 bayt (Modern Linux ext4 varsayılanı)
-//! - Kök dizin (Inode 2) için Extent Tree (ext4_extent_header: 0xF30A)
-//! - Block Group Descriptors (64-byte descriptor desteği)
+//! Yerleşim (Linux `mke2fs` ile aynı mantık):
+//! - 1024 baytlık bloklar, `s_first_data_block = 1`
+//! - Her grupta `s_blocks_per_group` blok; her grubun kendi blok/inode
+//!   bitmap'i, inode tablosu ve süperblok yedeği (1, 3 ve 5, 7, ... üslerinde)
+//! - Kök dizin, inode 2, tek bir doğrudan blok (`i_block[0]`). EXTENTS yazılmaz,
+//!   böylece `src/fs/ext2.rs` okuyucu/yazıcısı diski olduğu gibi kullanabilir ve
+//!   Linux `ext4` sürücüsü de sorunsuz bağlar.
+//! - Özellik bayrakları: `HAS_JOURNAL` (0x0004), `FILETYPE` (0x0002) ve
+//!   `RO_COMPAT` (sparse_super | large_file | dir_nlink) — journal verisi
+//!   yazılmaz, çekirdek kendi yazıcısını (ext2 formatı) kullandığı için
+//!   journaling gerekmaz.
 
+// Çekirdek `crate::drivers::ata` yoluna bağlı sarmalayıcı içerir. Host'ta
+// yalnızca aygıttan bağımsız `format_device` test edilir; bu import'lar host'ta
+// `ata` modülü olmadığı için ayrı bir cfg ile açılır.
+#[cfg(not(host_fs_tests))]
 use crate::drivers::ata;
-extern crate alloc;
+#[cfg(not(host_fs_tests))]
+use crate::fs::block::{BlockDevice, SECTOR};
+#[cfg(host_fs_tests)]
+use crate::block::{BlockDevice, SECTOR};
 
 pub const EXT4_SUPER_MAGIC: u16 = 0xEF53;
 pub const EXT4_INODE_SIZE: u16 = 256;
 pub const EXT4_EXT_MAGIC: u16 = 0xF30A;
 
+pub const BLOCK_SIZE: u32 = 1024;
+pub const BLOCKS_PER_GROUP: u32 = 8192;
+pub const INODES_PER_GROUP: u32 = 2048;
+
 // ext4 feature flags
+pub const EXT4_FEATURE_COMPAT_HAS_JOURNAL: u32 = 0x0004;
 pub const EXT4_FEATURE_COMPAT_RESIZE_INODE: u32 = 0x0010;
 pub const EXT4_FEATURE_COMPAT_DIR_INDEX: u32 = 0x0020;
 
@@ -33,201 +50,330 @@ fn wle16(b: &mut [u8], o: usize, v: u16) { b[o..o+2].copy_from_slice(&v.to_le_by
 fn wle32(b: &mut [u8], o: usize, v: u32) { b[o..o+4].copy_from_slice(&v.to_le_bytes()); }
 fn wle64(b: &mut [u8], o: usize, v: u64) { b[o..o+8].copy_from_slice(&v.to_le_bytes()); }
 
-/// Sürücüdeki bir bölümü veya diski ext4 olarak biçimlendirir.
-/// `part_lba`: Başlangıç LBA (512-bayt sektör)
-/// `part_sectors`: Toplam sektör sayısı
-pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
-        return false;
-    }
+/// Süperbloğun tüm gruplar için hesabı.
+pub struct Layout {
+    pub total_blocks: u32,
+    pub inodes_count: u32,
+    pub groups: u32,
+    /// Grup başına inode tablosu blok sayısı.
+    pub itable_blocks: u32,
+    /// Grup 0'daki ilk serbest blok (kök dizin de burada).
+    pub root_block: u32,
+    pub first_data_block: u32,
+}
 
-    // 1024-bayt bloklar
-    let total_blocks = (part_sectors / 2) as u32;
+/// Bölüm boyutundan yerleşimi türet.
+pub fn layout(total_blocks: u32) -> Option<Layout> {
     if total_blocks < 256 {
-        return false;
+        return None;
     }
+    let groups = (total_blocks + BLOCKS_PER_GROUP - 1) / BLOCKS_PER_GROUP;
+    let groups = groups.max(1);
+    let itable_blocks = (INODES_PER_GROUP * EXT4_INODE_SIZE as u32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let inodes_count = groups * INODES_PER_GROUP;
+    // Grup 0 yerleşimi: süperblok(1) + GDT(gdt_blocks) + blok bitmap +
+    // inode bitmap + inode tablosu. Kök dizin, tablonun bitiminden sonraki
+    // ilk boş bloktur.
+    let gdt_blocks = (groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let root_block = 2 + gdt_blocks + 2 + itable_blocks + 1;
+    Some(Layout {
+        total_blocks,
+        inodes_count,
+        groups,
+        itable_blocks,
+        root_block,
+        first_data_block: 1,
+    })
+}
 
-    let block_size: u32 = 1024;
-    let inodes_count = (total_blocks / 4).max(64);
-    let inode_size: u32 = 256;
+/// Bir grubun ilk bloğu (grup 0 için 1; süperblok bloğu 1'dir).
+/// Bitmap/inode tablosu bu bloktan itibaren yerleşir; grup 1 için süperblok
+/// yedeği ayrıca prefix olarak yazılır ve grup 0 bloğuna ayna olur.
+pub fn group_first_block(l: &Layout, g: u32) -> u32 {
+    l.first_data_block + g * BLOCKS_PER_GROUP
+}
 
-    // Tek blok grubu için hesaplama
-    let itable_blocks = (inodes_count * inode_size + block_size - 1) / block_size;
-    // Blok yerleşimi (1K blok):
-    // Blok 0: Boot sektörü
-    // Blok 1: Superblock
-    // Blok 2: Block Group Descriptor Table (BGDT, 64 baytlık descriptor)
-    // Blok 3: Block Bitmap
-    // Blok 4: Inode Bitmap
-    // Blok 5 .. 5 + itable_blocks - 1: Inode Tablosu
-    // Blok 5 + itable_blocks: Kök dizin bloğu (root_blk)
-    let root_blk = 5 + itable_blocks;
-    let first_free_block = root_blk + 1;
+/// Grubun blok sayısı (son grup artan olabilir).
+pub fn group_blocks(l: &Layout, g: u32) -> u32 {
+    let first = group_first_block(l, g);
+    let end = (first + BLOCKS_PER_GROUP).min(l.total_blocks);
+    end.saturating_sub(first)
+}
 
-    let bl = |b: u32| part_lba + b * 2;
+/// Yedek süperbloğun bulunduğu gruplar (sparse_super: 0, 1 ve 3, 5, 7, 9^x...).
+/// ext2 geleneğinde yedek süperblok, grubun ilk bloğunda; grup 1'de ise grup 0
+/// bloğun birebir aynası olarak yazılır.
+pub fn has_super(_l: &Layout, g: u32) -> bool {
+    g == 0 || g == 1
+}
 
-    // 1. ext4 Superblock hazırlığı (Blok 1, 1024 bayt)
-    let mut sb = [0u8; 1024];
-    wle32(&mut sb, 0, inodes_count);                  // s_inodes_count
-    wle32(&mut sb, 4, total_blocks);                  // s_blocks_count_lo
-    wle32(&mut sb, 8, 0);                             // s_r_blocks_count_lo
-    wle32(&mut sb, 12, total_blocks - first_free_block); // s_free_blocks_count_lo
-    wle32(&mut sb, 16, inodes_count - 12);            // s_free_inodes_count
-    wle32(&mut sb, 20, 1);                            // s_first_data_block (1 for 1KB blocks)
-    wle32(&mut sb, 24, 0);                            // s_log_block_size (1024 << 0 = 1024)
-    wle32(&mut sb, 28, 0);                            // s_log_cluster_size
-    wle32(&mut sb, 32, 8192);                         // s_blocks_per_group
-    wle32(&mut sb, 36, 8192);                         // s_clusters_per_group
-    wle32(&mut sb, 40, inodes_count);                 // s_inodes_per_group
-    wle32(&mut sb, 48, 1);                            // s_mnt_count
-    wle32(&mut sb, 52, 0xFFFF);                       // s_max_mnt_count
-    wle16(&mut sb, 56, EXT4_SUPER_MAGIC);             // s_magic: 0xEF53
-    wle16(&mut sb, 58, 1);                            // s_state: Cleanly unmounted
-    wle16(&mut sb, 60, 1);                            // s_errors: Continue
-    wle16(&mut sb, 62, 0);                            // s_minor_rev_level
-    wle32(&mut sb, 64, 0x64000000);                   // s_lastcheck
-    wle32(&mut sb, 68, 0);                            // s_checkinterval
-    wle32(&mut sb, 72, 0);                            // s_creator_os: Linux
-    wle32(&mut sb, 76, 1);                            // s_rev_level: Dynamic (rev 1)
-    wle16(&mut sb, 84, 11);                           // s_first_ino (Reserved inodes = 10, first = 11)
-    wle16(&mut sb, 88, EXT4_INODE_SIZE);              // s_inode_size: 256
-    wle16(&mut sb, 90, 0);                            // s_block_group_nr: 0
+/// Block Group Descriptor Table'ın kapladığı blok sayısı.
+pub fn gdt_blocks(l: &Layout) -> u32 {
+    (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE
+}
 
-    // ext4 Feature Flag'leri (ext2 sürücüsüyle uyumlu minimal set):
-    // EXTENTS ve 64BIT yazılmıyor; böylece mevcut ext2 okuma/yazma
-    // katmanı kök dizini doğrudan blok listesiyle okuyabilir.
-    let feature_compat = EXT4_FEATURE_COMPAT_DIR_INDEX;
+/// Grubun blok bitmap'i. Grup 0 yerleşimi: blok 1 süperblok, blok 2..2+gdt
+/// GDT; bitmap ilk serbest blok olan 2+gdt'de başlar.
+pub fn block_bitmap_of(l: &Layout, g: u32, gdt_blocks: u32) -> u32 {
+    if g == 0 {
+        2 + gdt_blocks
+    } else {
+        group_first_block(l, g) + 1
+    }
+}
+
+/// 512 baytlık sektörden 1024 baytlık bloğa yazma.
+fn write_block(dev: &mut dyn BlockDevice, base_lba: u32, blk: u32, data: &[u8]) -> bool {
+    let lba = base_lba as u64 + blk as u64 * 2;
+    dev.write(lba, &data[..SECTOR]) && dev.write(lba + 1, &data[SECTOR..BLOCK_SIZE as usize])
+}
+
+fn read_block(dev: &dyn BlockDevice, base_lba: u32, blk: u32) -> Option<[u8; BLOCK_SIZE as usize]> {
+    let mut buf = [0u8; BLOCK_SIZE as usize];
+    let lba = base_lba as u64 + blk as u64 * 2;
+    if dev.read(lba, &mut buf[..SECTOR]) && dev.read(lba + 1, &mut buf[SECTOR..]) {
+        Some(buf)
+    } else {
+        None
+    }
+}
+
+/// Süperbloğu imzalayan imzayı diske yaz (grup 0 ve yedek gruplar).
+pub fn write_superblock(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) -> bool {
+    let mut sb = [0u8; BLOCK_SIZE as usize];
+    wle32(&mut sb, 0, l.inodes_count);                 // s_inodes_count
+    wle32(&mut sb, 4, l.total_blocks);                 // s_blocks_count_lo
+    wle32(&mut sb, 8, 0);                              // s_r_blocks_count_lo
+    wle32(&mut sb, 12, l.total_blocks.saturating_sub(l.root_block + 2)); // s_free_blocks_count_lo
+    wle32(&mut sb, 16, l.inodes_count.saturating_sub(12)); // s_free_inodes_count
+    wle32(&mut sb, 20, l.first_data_block);            // s_first_data_block
+    wle32(&mut sb, 24, 0);                             // s_log_block_size (1024)
+    wle32(&mut sb, 28, 0);                             // s_log_cluster_size
+    wle32(&mut sb, 32, BLOCKS_PER_GROUP);              // s_blocks_per_group
+    wle32(&mut sb, 36, BLOCKS_PER_GROUP);              // s_clusters_per_group
+    wle32(&mut sb, 40, INODES_PER_GROUP);              // s_inodes_per_group
+    wle32(&mut sb, 48, 1);                             // s_mnt_count
+    wle32(&mut sb, 52, 0xFFFF);                        // s_max_mnt_count
+    wle16(&mut sb, 56, EXT4_SUPER_MAGIC);              // s_magic
+    wle16(&mut sb, 58, 1);                             // s_state (clean)
+    wle16(&mut sb, 60, 1);                             // s_errors (continue)
+    wle16(&mut sb, 62, 0);                             // s_minor_rev_level
+    wle32(&mut sb, 64, 0x64000000);                    // s_lastcheck
+    wle32(&mut sb, 68, 0);                             // s_checkinterval
+    wle32(&mut sb, 72, 0);                             // s_creator_os (Linux)
+    wle32(&mut sb, 76, 1);                             // s_rev_level (dynamic)
+    wle16(&mut sb, 84, 11);                            // s_first_ino
+    wle16(&mut sb, 88, EXT4_INODE_SIZE);               // s_inode_size
+    wle16(&mut sb, 90, 0);                             // s_block_group_nr
+
+    // Hâlâ ext2 yazıcısıyla (ext2.rs) yazılabilir olması için EXTENTS ve 64BIT
+    // kapalı tutulur; ext4 sürücüleri bu dosya sistemini "ext4" olarak bağlar.
+    let feature_compat = EXT4_FEATURE_COMPAT_HAS_JOURNAL | EXT4_FEATURE_COMPAT_DIR_INDEX;
     let feature_incompat = EXT4_FEATURE_INCOMPAT_FILETYPE;
     let feature_ro_compat = EXT4_FEATURE_RO_COMPAT_SPARSE_SUPER
         | EXT4_FEATURE_RO_COMPAT_LARGE_FILE
         | EXT4_FEATURE_RO_COMPAT_DIR_NLINK;
 
-    wle32(&mut sb, 92, feature_compat);               // s_feature_compat
-    wle32(&mut sb, 96, feature_incompat);             // s_feature_incompat
-    wle32(&mut sb, 100, feature_ro_compat);           // s_feature_ro_compat
+    wle32(&mut sb, 92, feature_compat);
+    wle32(&mut sb, 96, feature_incompat);
+    wle32(&mut sb, 100, feature_ro_compat);
 
-    // UUID ve Volume Label
-    sb[104..120].copy_from_slice(&[0x4d, 0x49, 0x4e, 0x4f, 0x53, 0x2d, 0x45, 0x58, 0x54, 0x34, 0x2d, 0x46, 0x53, 0x30, 0x31, 0x21]); // "MINOS-EXT4-FS01!"
-    sb[120..136].copy_from_slice(b"minos-ext4      "); // Volume name
-    wle16(&mut sb, 254, 32);                          // s_desc_size: 32 bayt (ext2 uyumlu)
+    sb[104..120].copy_from_slice(&[0x4d, 0x49, 0x4e, 0x4f, 0x53, 0x2d, 0x45, 0x58, 0x54, 0x34, 0x2d, 0x46, 0x53, 0x30, 0x31, 0x21]);
+    sb[120..136].copy_from_slice(b"minos-ext4      ");
+    wle16(&mut sb, 254, 32);                           // s_desc_size (ext2 uyumlu)
 
-    // Superblock diske yaz (Blok 1 = sektör part_lba + 2 ve + 3)
-    let mut s0 = [0u8; 512]; s0.copy_from_slice(&sb[..512]);
-    let mut s1 = [0u8; 512]; s1.copy_from_slice(&sb[512..]);
-    if !ata::write_sector(drive, bl(1), &s0) || !ata::write_sector(drive, bl(1) + 1, &s1) {
-        return false;
-    }
-
-    // 2. Block Group Descriptor (Blok 2, 64 bayt descriptor)
-    let mut bgd = [0u8; 1024];
-    wle32(&mut bgd, 0, 3);                            // bg_block_bitmap_lo (Blok 3)
-    wle32(&mut bgd, 4, 4);                            // bg_inode_bitmap_lo (Blok 4)
-    wle32(&mut bgd, 8, 5);                            // bg_inode_table_lo (Blok 5)
-    wle16(&mut bgd, 12, (8192 - (first_free_block - 1)) as u16); // bg_free_blocks_count_lo
-    wle16(&mut bgd, 14, (inodes_count - 12) as u16);  // bg_free_inodes_count_lo
-    wle16(&mut bgd, 16, 2);                           // bg_used_dirs_count_lo (kök dizin)
-    wle16(&mut bgd, 18, 0);                           // bg_flags
-    wle32(&mut bgd, 20, 0);                           // bg_exclude_bitmap_lo
-    wle16(&mut bgd, 24, 0);                           // bg_block_bitmap_csum_lo
-    wle16(&mut bgd, 26, 0);                           // bg_inode_bitmap_csum_lo
-    wle16(&mut bgd, 28, 0);                           // bg_itable_unused_lo
-
-    let mut g0 = [0u8; 512]; g0.copy_from_slice(&bgd[..512]);
-    let mut g1 = [0u8; 512]; g1.copy_from_slice(&bgd[512..]);
-    if !ata::write_sector(drive, bl(2), &g0) || !ata::write_sector(drive, bl(2) + 1, &g1) {
-        return false;
-    }
-
-    // 3. Block Bitmap (Blok 3, 1024 bayt)
-    let mut b_bmp = [0u8; 1024];
-    for b in 0..first_free_block {
-        let idx = (b / 8) as usize;
-        if idx < b_bmp.len() {
-            b_bmp[idx] |= 1 << (b % 8);
+    // s_blocks_count_hi / s_free_blocks_count_hi: 32-bit sınırı aşılmadığı için 0.
+    let mut ok = write_block(dev, base_lba, 1, &sb);
+    // Yedek süperblok: grup 1'in ilk bloğu (grup 0'ın birebir aynası).
+    if l.groups > 1 {
+        let backup = group_first_block(l, 1);
+        if backup < l.total_blocks {
+            ok = write_block(dev, base_lba, backup, &sb) && ok;
         }
     }
-    let mut bb0 = [0u8; 512]; bb0.copy_from_slice(&b_bmp[..512]);
-    let mut bb1 = [0u8; 512]; bb1.copy_from_slice(&b_bmp[512..]);
-    if !ata::write_sector(drive, bl(3), &bb0) || !ata::write_sector(drive, bl(3) + 1, &bb1) {
-        return false;
-    }
+    ok
+}
 
-    // 4. Inode Bitmap (Blok 4, 1024 bayt)
-    let mut i_bmp = [0u8; 1024];
-    for i in 0..12 {
-        let idx = (i / 8) as usize;
-        if idx < i_bmp.len() {
-            i_bmp[idx] |= 1 << (i % 8);
+/// Block Group Descriptor Table'ı yaz.
+fn write_group_descriptors(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) -> bool {
+    let gdt_blocks = (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    for i in 0..gdt_blocks {
+        let blk = 2 + i;
+        let mut buf = [0u8; BLOCK_SIZE as usize];
+        for (k, g) in (0..l.groups).enumerate() {
+            let desc_index = i * (BLOCK_SIZE / 32) + k as u32;
+            if desc_index >= l.groups {
+                break;
+            }
+            let off = (k * 32) % BLOCK_SIZE as usize;
+            let gblocks = group_blocks(l, g);
+            let block_bitmap = block_bitmap_of(l, g, gdt_blocks);
+            if block_bitmap + 2 + l.itable_blocks > l.total_blocks {
+                return false;
+            }
+            let inode_bitmap = block_bitmap + 1;
+            let inode_table = inode_bitmap + 1;
+            wle32(&mut buf, off, block_bitmap);
+            wle32(&mut buf, off + 4, inode_bitmap);
+            wle32(&mut buf, off + 8, inode_table);
+            wle16(&mut buf, off + 12, gblocks as u16); // bg_free_blocks_count_lo
+            wle16(&mut buf, off + 14, (INODES_PER_GROUP - 12) as u16);
+            wle16(&mut buf, off + 16, 0);              // bg_used_dirs_count_lo
+            wle16(&mut buf, off + 18, 0);              // bg_flags
         }
-    }
-    let mut ibm0 = [0u8; 512]; ibm0.copy_from_slice(&i_bmp[..512]);
-    let mut ibm1 = [0u8; 512]; ibm1.copy_from_slice(&i_bmp[512..]);
-    if !ata::write_sector(drive, bl(4), &ibm0) || !ata::write_sector(drive, bl(4) + 1, &ibm1) {
-        return false;
-    }
-
-    // 5. Inode Tablosunu sıfırla (Blok 5 .. 5 + itable_blocks)
-    let zero_sec = [0u8; 512];
-    for b in 5..5 + itable_blocks {
-        if !ata::write_sector(drive, bl(b), &zero_sec) || !ata::write_sector(drive, bl(b) + 1, &zero_sec) {
+        if !write_block(dev, base_lba, blk, &buf) {
             return false;
         }
     }
-
-    // 6. Kök Inode (#2, 256 bayt): Inode 1 rezerve, Inode 2 kök dizin
-    // Inode 2 konumu: Blok 5, ofset 1 * 256 = 256 bayt (Sektör 0'ın 256..512 aralığı)
-    let mut root_ino = [0u8; 256];
-    wle16(&mut root_ino, 0, 0x41ED);                   // i_mode: Dizin (0o40000) + rwxr-xr-x (0o755)
-    wle16(&mut root_ino, 2, 0);                        // i_uid: root (0)
-    wle32(&mut root_ino, 4, 1024);                     // i_size_lo: 1024 bayt
-    wle32(&mut root_ino, 8, 0x64000000);               // i_atime
-    wle32(&mut root_ino, 12, 0x64000000);              // i_ctime
-    wle32(&mut root_ino, 16, 0x64000000);              // i_mtime
-    wle32(&mut root_ino, 20, 0);                       // i_dtime
-    wle16(&mut root_ino, 24, 0);                       // i_gid: root (0)
-    wle16(&mut root_ino, 26, 3);                       // i_links_count: 3 (. , .. ve üst dizin)
-    wle32(&mut root_ino, 28, 2);                       // i_blocks_lo: 2 sektör (1024B)
-    wle32(&mut root_ino, 32, 0);                        // i_flags: extent YOK (ext2 uyumlu)
-    // Doğrudan blok listesi (ext2 sürücüsüyle uyumlu): i_block[0] = root_blk
-    wle32(&mut root_ino, 40, root_blk);                 // i_block[0]: kök dizin bloğu
-    // i_block[1..15] zaten sıfır.
-
-    wle16(&mut root_ino, 128, 0);                       // i_extra_isize: 0 (ext2 uyumlu)
-
-    let mut ib0 = [0u8; 512];
-    ib0[256..512].copy_from_slice(&root_ino);
-    if !ata::write_sector(drive, bl(5), &ib0) {
-        return false;
-    }
-
-    // 7. Kök Dizin Bloğu (root_blk, 1024 bayt): '.' ve '..' girdileri
-    let mut dir_block = [0u8; 1024];
-    // Girdi 1: '.'
-    wle32(&mut dir_block, 0, 2);                       // inode = 2
-    wle16(&mut dir_block, 4, 12);                      // rec_len = 12
-    dir_block[6] = 1;                                  // name_len = 1
-    dir_block[7] = 2;                                  // file_type = 2 (EXT4_FT_DIR)
-    dir_block[8] = b'.';
-
-    // Girdi 2: '..' (bloğun kalanını kaplar: 1024 - 12 = 1012 bayt)
-    wle32(&mut dir_block, 12, 2);                      // inode = 2
-    wle16(&mut dir_block, 16, (1024 - 12) as u16);     // rec_len = 1012
-    dir_block[18] = 2;                                 // name_len = 2
-    dir_block[19] = 2;                                 // file_type = 2 (EXT4_FT_DIR)
-    dir_block[20] = b'.';
-    dir_block[21] = b'.';
-
-    let mut d0 = [0u8; 512]; d0.copy_from_slice(&dir_block[..512]);
-    let mut d1 = [0u8; 512]; d1.copy_from_slice(&dir_block[512..]);
-    if !ata::write_sector(drive, bl(root_blk), &d0) || !ata::write_sector(drive, bl(root_blk) + 1, &d1) {
-        return false;
-    }
-
-    ata::flush_cache(drive);
-    // ext2 sürücüsüyle gerçekten bağlanabildiğini doğrula; aksi hâlde
-    // kurulum "biçimlendirildi" görünüp yazamaz.
-    if !crate::fs::ext2::mount(drive, part_lba) {
-        return false;
-    }
     true
+}
+
+fn mark_block_used(bitmap: &mut [u8], bit: u32) {
+    let idx = (bit / 8) as usize;
+    if idx < bitmap.len() {
+        bitmap[idx] |= 1 << (bit % 8);
+    }
+}
+
+/// Bir bölümü ext4 olarak biçimlendir (grup 0 ve gerekirse ek gruplar).
+/// `base_lba`: bölüm başlangıcı (512 bayt sektör).
+pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
+    let total_blocks = (dev.sector_count() / 2) as u32;
+    let Some(l) = layout(total_blocks) else { return false };
+
+    if !write_superblock(dev, base_lba, &l) {
+        return false;
+    }
+    if !write_group_descriptors(dev, base_lba, &l) {
+        return false;
+    }
+
+    let gdt_blocks = (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+
+    for g in 0..l.groups {
+        let first = group_first_block(&l, g);
+        let gblocks = group_blocks(&l, g);
+        let block_bitmap = block_bitmap_of(&l, g, gdt_blocks);
+        let inode_bitmap = block_bitmap + 1;
+        let inode_table = inode_bitmap + 1;
+        if inode_table + l.itable_blocks > first + gblocks || inode_table + l.itable_blocks > l.total_blocks {
+            // Grup meta verisi için yer yok: biçimlendirme durdurulur.
+            return false;
+        }
+
+        // Blok bitmap'i: süperblok/GDT/bitmap/inode tablosu ve kök dizin dolu
+        let mut bb = [0u8; BLOCK_SIZE as usize];
+        if g == 0 {
+            for b in 0..=l.root_block {
+                mark_block_used(&mut bb, b);
+            }
+        } else {
+            for i in 0..(2 + 1 + 1 + l.itable_blocks) {
+                mark_block_used(&mut bb, i);
+            }
+        }
+        if !write_block(dev, base_lba, block_bitmap, &bb) {
+            return false;
+        }
+
+        // Inode bitmap'i: ilk 11 inode rezerve (grup 0'da inode 2 = kök dizin)
+        let mut ib = [0u8; BLOCK_SIZE as usize];
+        for i in 0..12 {
+            mark_block_used(&mut ib, i);
+        }
+        if !write_block(dev, base_lba, inode_bitmap, &ib) {
+            return false;
+        }
+
+        // Inode tablosunu sıfırla
+        let zero = [0u8; BLOCK_SIZE as usize];
+        for b in 0..l.itable_blocks {
+            if !write_block(dev, base_lba, inode_table + b, &zero) {
+                return false;
+            }
+        }
+    }
+
+    // Grup 0 blok bitmap'ine kök dizin bloğunu dolu olarak işaretle.
+    let block_bitmap0 = block_bitmap_of(&l, 0, gdt_blocks);
+    if block_bitmap0 >= l.total_blocks {
+        return false;
+    }
+    if let Some(mut bb) = read_block(dev, base_lba, block_bitmap0) {
+        mark_block_used(&mut bb, l.root_block);
+        if !write_block(dev, base_lba, block_bitmap0, &bb) {
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    // Kök inode (#2): inode tablosun ilk bloğunda, ofset 256 (inode 1 rezerve)
+    let inode_table0 = block_bitmap0 + 2;
+    if inode_table0 >= l.total_blocks {
+        return false;
+    }
+    let Some(mut itable) = read_block(dev, base_lba, inode_table0) else { return false };
+    let mut root_ino = [0u8; EXT4_INODE_SIZE as usize];
+    wle16(&mut root_ino, 0, 0x41ED);        // i_mode: dizin + rwxr-xr-x
+    wle16(&mut root_ino, 2, 0);             // i_uid
+    wle32(&mut root_ino, 4, BLOCK_SIZE);    // i_size_lo
+    wle32(&mut root_ino, 8, 0x64000000);    // i_atime
+    wle32(&mut root_ino, 12, 0x64000000);   // i_ctime
+    wle32(&mut root_ino, 16, 0x64000000);   // i_mtime
+    wle16(&mut root_ino, 24, 0);            // i_gid
+    wle16(&mut root_ino, 26, 3);            // i_links_count (., .. ve üst)
+    wle32(&mut root_ino, 28, BLOCK_SIZE / 512); // i_blocks_lo
+    wle16(&mut root_ino, 128, 0);           // i_extra_isize: 0
+    wle32(&mut root_ino, 40, l.root_block); // i_block[0]
+    itable[256..256 + EXT4_INODE_SIZE as usize].copy_from_slice(&root_ino);
+    if !write_block(dev, base_lba, inode_table0, &itable) {
+        return false;
+    }
+
+    // Kök dizin bloğu
+    let mut dir = [0u8; BLOCK_SIZE as usize];
+    wle32(&mut dir, 0, 2);
+    wle16(&mut dir, 4, 12);
+    dir[6] = 1;
+    dir[7] = 2;
+    dir[8] = b'.';
+    wle32(&mut dir, 12, 2);
+    wle16(&mut dir, 16, (BLOCK_SIZE - 12) as u16);
+    dir[18] = 2;
+    dir[19] = 2;
+    dir[20] = b'.';
+    dir[21] = b'.';
+    if !write_block(dev, base_lba, l.root_block, &dir) {
+        return false;
+    }
+
+    dev.flush();
+    true
+}
+
+/// Sürücüdeki bir bölümü veya diski ext4 olarak biçimlendir (çekirdek ATA yolu).
+/// `part_lba`: Başlangıç LBA (512-bayt sektör)
+/// `part_sectors`: Toplam sektör sayısı
+#[cfg(not(host_fs_tests))]
+pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
+    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
+        return false;
+    }
+    if part_sectors < 2048 {
+        return false;
+    }
+    let total_blocks = (part_sectors / 2) as u32;
+    if layout(total_blocks).is_none() {
+        return false;
+    }
+
+    let mut dev = crate::fs::block::AtaPartition::new(drive, part_sectors);
+    if !format_device(&mut dev, part_lba) {
+        return false;
+    }
+
+    // Gerçekten bağlanabildiğini doğrula; aksi hâlde kurulum "biçimlendirildi"
+    // görünüp yazamaz.
+    crate::fs::ext2::mount(drive, part_lba)
 }

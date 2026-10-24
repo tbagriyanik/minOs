@@ -59,7 +59,8 @@ $rustcArgs = @(
     "+nightly", "--edition", "2021", "--test", $harness,
     "--target", $hostTriple,
     "-o", $binary,
-    "--extern", "alloc"
+    "--extern", "alloc",
+    "--cfg", "host_fs_tests"
 )
 $output = & rustc @rustcArgs 2>&1
 $buildCode = $LASTEXITCODE

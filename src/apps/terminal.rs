@@ -1158,28 +1158,52 @@ impl TerminalApp {
                             let expected_sha256 = parts.next();
 
                             self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
-                            // Önce ağ üzerinden dene, ağ yoksa veya yerel simülasyonsa yerleşik paketi kur
-                            let res = if crate::drivers::e1000::is_ready() && target_pkg.starts_with("http://") {
-                                crate::apps::pkgmgr::MinPkg::install_from_url_with_checksum(target_pkg, expected_sha256, vfs)
-                            } else {
-                                crate::apps::pkgmgr::MinPkg::install_builtin(target_pkg, vfs)
-                            };
-                            match res {
-                                Ok(path) => {
-                                    let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
-                                    b.push_str(&path);
-                                    self.push_line(b.as_str(), Color::ACCENT_GREEN);
-                                    let mut exec_hint = TextBuf::new();
-                                    exec_hint.push_str(crate::gui::ui_text("Çalıştırmak için: exec ", "To execute: exec "));
-                                    exec_hint.push_str(&path);
-                                    self.push_line(exec_hint.as_str(), Color::ACCENT_BLUE);
+                            // Yerel katalog paketi ise bağımlılıkları önce çözüp kur; ağdan
+                            // indirilecek paketlerde bağımlılık bilgisi bulunmadığı için tek
+                            // olarak kurulur (checksum yolu korunur).
+                            if !target_pkg.starts_with("http://") {
+                                match crate::apps::pkgmgr::MinPkg::install_with_dependencies(target_pkg, vfs) {
+                                    Ok((paths, skipped)) => {
+                                        for p in &paths {
+                                            let mut b = TextBuf::new();
+                                            b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
+                                            b.push_str(p);
+                                            self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                                        }
+                                        for s in &skipped {
+                                            let mut b = TextBuf::new();
+                                            b.push_str(crate::gui::ui_text("Zaten kurulu, atlandı: ", "Already installed, skipped: "));
+                                            b.push_str(s);
+                                            self.push_line(b.as_str(), Color::ACCENT_BLUE);
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let mut b = TextBuf::new();
+                                        b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
+                                        b.push_str(&err);
+                                        self.push_line(b.as_str(), Color::ACCENT_RED);
+                                    }
                                 }
-                                Err(err) => {
-                                    let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
-                                    b.push_str(err);
-                                    self.push_line(b.as_str(), Color::ACCENT_RED);
+                            } else {
+                                // Ağdan kurulum: SHA-256 doğrulamalı URL yolu.
+                                let res = crate::apps::pkgmgr::MinPkg::install_from_url_with_checksum(
+                                    target_pkg,
+                                    expected_sha256,
+                                    vfs,
+                                );
+                                match res {
+                                    Ok(path) => {
+                                        let mut b = TextBuf::new();
+                                        b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
+                                        b.push_str(&path);
+                                        self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                                    }
+                                    Err(err) => {
+                                        let mut b = TextBuf::new();
+                                        b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
+                                        b.push_str(err);
+                                        self.push_line(b.as_str(), Color::ACCENT_RED);
+                                    }
                                 }
                             }
                         }
@@ -1229,6 +1253,36 @@ impl TerminalApp {
                             }
                         }
                     }
+                    "depends" | "deps" | "resolve" => {
+                        if subarg.is_empty() {
+                            self.push_line(crate::gui::ui_text("Kullanım: minPak depends <paket_adi>", "Usage: minPak depends <pkg_name>"), Color::ACCENT_YELLOW);
+                        } else {
+                            match crate::apps::pkgmgr::MinPkg::resolve_plan(subarg, vfs) {
+                                Ok(plan) => {
+                                    self.push_line(crate::gui::ui_text("--- BAĞIMLILIK PLANI ---", "--- DEPENDENCY PLAN ---"), Color::ACCENT_PINK);
+                                    for (i, line) in plan.to_install.iter().enumerate() {
+                                        let mut b = TextBuf::new();
+                                        b.push_str("  ");
+                                        if i + 1 == plan.to_install.len() {
+                                            b.push_str(crate::gui::ui_text("hedef: ", "target: "));
+                                        }
+                                        b.push_str(line);
+                                        self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                                    }
+                                    for s in &plan.already_installed {
+                                        let mut b = TextBuf::new();
+                                        b.push_str(crate::gui::ui_text("  zaten kurulu: ", "  already installed: "));
+                                        b.push_str(s);
+                                        self.push_line(b.as_str(), Color::ACCENT_BLUE);
+                                    }
+                                }
+                                Err(e) => {
+                                    let msg = e.message();
+                                    self.push_line(&msg, Color::ACCENT_RED);
+                                }
+                            }
+                        }
+                    }
                     "remove" | "uninstall" => {
                         if subarg.is_empty() {
                             self.push_line(crate::gui::ui_text("Kullanım: minPak remove <paket_adi>", "Usage: minPak remove <pkg_name>"), Color::ACCENT_YELLOW);
@@ -1241,7 +1295,8 @@ impl TerminalApp {
                         }
                     }
                     _ => {
-                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.0 (minPak)", "minOs Package Manager v1.0 (minPak)"), Color::ACCENT_PINK);
+                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.1 (minPak)", "minOs Package Manager v1.1 (minPak)"), Color::ACCENT_PINK);
+                        self.push_line(crate::gui::ui_text("minPak depends <paket>        - Bağımlılık çözüm planını gösterir", "minPak depends <package>      - Show dependency resolution plan"), Color::TEXT_MAIN);
                         self.push_line(crate::gui::ui_text("minPak list                   - Kurulu paketleri listeler", "minPak list                   - List installed packages"), Color::TEXT_MAIN);
                         self.push_line(crate::gui::ui_text("minPak search <paket>         - Kurulu paketlerde arama yapar", "minPak search <package>       - Search installed packages"), Color::TEXT_MAIN);
                         self.push_line(crate::gui::ui_text("minPak install <paket> [hash] - Paketi indirir, checksum'ı doğrular ve kurar", "minPak install <pkg> [hash]  - Download, verify checksum and install"), Color::TEXT_MAIN);

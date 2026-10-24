@@ -30,13 +30,14 @@ pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
     if context.is_null() { return; }
     let state = unsafe { &mut *(context as *mut BusyProgressContext) };
 
-    // 1. Girişi pompa'la: uzun işlem sürerken fare imleci donmasın.
+    // 1. Girişi pompala: uzun disk I/O ve dosya kaydetme/açma sürerken USB veya PS/2 fare asla donmaz.
     unsafe {
         let w = (*state.fb).width as i32;
         let h = (*state.fb).height as i32;
         let mouse_ptr = core::ptr::addr_of_mut!(GLOBAL_MOUSE);
         let kbd_ptr = core::ptr::addr_of_mut!(GLOBAL_KEYBOARD);
         drivers::ps2::poll_input(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
+        drivers::usb_hid::poll_events(&mut *mouse_ptr, &mut *kbd_ptr, w, h);
         state.mx = (*mouse_ptr).x.max(0) as usize;
         state.my = (*mouse_ptr).y.max(0) as usize;
     }

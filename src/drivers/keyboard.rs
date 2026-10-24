@@ -224,10 +224,10 @@ impl KeyboardState {
                 self.super_key_combo = false;
                 return None;
             }
-            0x20 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinShowDesktop); return None; } // Win+D
-            0x32 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinMinimizeAll); return None; } // Win+M
-            0x12 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinOpenFiles); return None; } // Win+E
-            0x13 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::RunDialog); return None; } // Win+R
+            0x20 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinShowDesktop); return None; } // Super+D
+            0x32 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinMinimizeAll); return None; } // Super+M
+            0x12 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinOpenFiles); return None; } // Super+E
+            0x13 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::RunDialog); return None; } // Super+R
             0x58 => { self.push_action(KeyAction::Screenshot); return None; } // F12 (Screenshot)
             0x3E => { // F4 key
                 if self.alt {

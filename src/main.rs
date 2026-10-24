@@ -1337,7 +1337,7 @@ pub extern "C" fn _start() -> ! {
 
 
 
-        // Hizli calistir (Run Dialog: Win+R) Diyalogu
+        // Hizli calistir (Run Dialog: Super+R) Diyalogu
 
         if run_dialog_state.0 {
 
@@ -2736,7 +2736,7 @@ pub extern "C" fn _start() -> ! {
             if !cat_clicked {
 
                 let count = if active_g == 3 {
-                    compositor.installed_apps_count
+                    1 + compositor.installed_apps_count
                 } else if active_g == 4 {
                     2
                 } else {
@@ -2810,35 +2810,24 @@ pub extern "C" fn _start() -> ! {
                         compositor.confirm_restart = false;
 
                         if active_g == 3 {
-
-                            let app_name = alloc::string::String::from(compositor.installed_app_name(k));
-
-                            if !app_name.is_empty() {
-
-                                desktop::helpers::launch_installed_pkg(
-
-                                    &app_name,
-
-                                    &mut compositor,
-
-                                    &mut terminal_app,
-
-                                    &mut notepad_app,
-
-                                    &mut calculator_app,
-
-                                    &mut paint_apps,
-
-                                    &mut fs_mgr.vfs,
-
-                                    &mut memory_mgr.pmm,
-
-                                    &now,
-
-                                );
-
+                            if k == 0 {
+                                open_app(&mut compositor, 13);
+                            } else {
+                                let app_name = alloc::string::String::from(compositor.installed_app_name(k - 1));
+                                if !app_name.is_empty() {
+                                    desktop::helpers::launch_installed_pkg(
+                                        &app_name,
+                                        &mut compositor,
+                                        &mut terminal_app,
+                                        &mut notepad_app,
+                                        &mut calculator_app,
+                                        &mut paint_apps,
+                                        &mut fs_mgr.vfs,
+                                        &mut memory_mgr.pmm,
+                                        &now,
+                                    );
+                                }
                             }
-
                         } else if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
 
                             open_app(&mut compositor, app_idx);
@@ -3685,7 +3674,7 @@ pub extern "C" fn _start() -> ! {
 
                                 if gui::in_rect(mx, my, apps::settings::SystemSettings::save_btn_rect(wx, wy, wh)) {
 
-                                    settings_app.save_all(&compositor, &mut fs_mgr.vfs);
+                                    with_busy_progress(&mut fb, mx, my, gui::ui_text("Ayarlar kaydediliyor...", "Saving settings..."), || settings_app.save_all(&compositor, &mut fs_mgr.vfs));
 
                                 } else if gui::in_rect(mx, my, apps::settings::SystemSettings::reset_btn_rect(wx, wy, wh)) {
 
@@ -5264,7 +5253,7 @@ pub extern "C" fn _start() -> ! {
                             let active_g = compositor.active_start_group;
 
                             let count = if active_g == 3 {
-                                compositor.installed_apps_count
+                                1 + compositor.installed_apps_count
                             } else if active_g == 4 {
                                 2
                             } else {
@@ -5736,19 +5725,23 @@ pub extern "C" fn _start() -> ! {
                         } else {
 
                             if active_g == 3 {
-                                let app_name = alloc::string::String::from(compositor.installed_app_name(item_k));
-                                if !app_name.is_empty() {
-                                    desktop::helpers::launch_installed_pkg(
-                                        &app_name,
-                                        &mut compositor,
-                                        &mut terminal_app,
-                                        &mut notepad_app,
-                                        &mut calculator_app,
-                                        &mut paint_apps,
-                                        &mut fs_mgr.vfs,
-                                        &mut memory_mgr.pmm,
-                                        &now,
-                                    );
+                                if item_k == 0 {
+                                    open_app(&mut compositor, 13);
+                                } else {
+                                    let app_name = alloc::string::String::from(compositor.installed_app_name(item_k - 1));
+                                    if !app_name.is_empty() {
+                                        desktop::helpers::launch_installed_pkg(
+                                            &app_name,
+                                            &mut compositor,
+                                            &mut terminal_app,
+                                            &mut notepad_app,
+                                            &mut calculator_app,
+                                            &mut paint_apps,
+                                            &mut fs_mgr.vfs,
+                                            &mut memory_mgr.pmm,
+                                            &now,
+                                        );
+                                    }
                                 }
                             } else if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(i) {
 
@@ -6697,7 +6690,7 @@ pub extern "C" fn _start() -> ! {
                 let active_g = compositor.active_start_group;
 
                 let count = if active_g == 3 {
-                    compositor.installed_apps_count
+                    1 + compositor.installed_apps_count
                 } else if active_g == 4 {
                     2
                 } else {

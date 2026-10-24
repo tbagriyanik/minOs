@@ -366,7 +366,7 @@ pub fn render_content(
                 "github.com/tbagriyanik/minos", Color::ACCENT_BLUE);
             y += step;
             draw_row(fb, left, y, row_w, crate::gui::ui_text("Kısayollar:", "Shortcuts:"),
-                crate::gui::ui_text("F5 yenile • Win+R çalıştır • Win+D masaüstü", "F5 refresh • Win+R run • Win+D desktop"), Color::TEXT_MAIN);
+                crate::gui::ui_text("F5 yenile • Super+R çalıştır • Super+D masaüstü", "F5 refresh • Super+R run • Super+D desktop"), Color::TEXT_MAIN);
             y += step;
             draw_row(fb, left, y, row_w, "",
                 crate::gui::ui_text("Alt+Tab pencere • Ctrl+R sayfayı yenile", "Alt+Tab windows • Ctrl+R reload page"), Color::TEXT_MUTED);

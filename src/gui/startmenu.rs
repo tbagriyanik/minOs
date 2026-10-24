@@ -502,31 +502,35 @@ impl MinGuiCompositor {
         Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
 
         if group_idx == 3 {
-            if self.installed_apps_count == 0 {
-                let r = (sub_x + sp(6), sub_y + sp(30), sub_w.saturating_sub(sp(12)), sp(25));
-                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::WINDOW_BG);
-                let text_y = r.1 + (r.3.saturating_sub(Self::text_height())) / 2;
-                Self::draw_string(fb, r.0 + 12, text_y, crate::gui::ui_text("Kurulu paket yok", "No installed packages"), Color::TEXT_MUTED);
-            } else {
-                for k in 0..self.installed_apps_count {
-                    let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
-                    let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
-                    let bg_col = if is_hovered { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-                    fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
-                    if is_hovered {
-                        fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
-                    }
-                    let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
-                    Self::draw_package_icon(fb, r.0 + sp(6), icon_y);
-
-                    let app_name = self.installed_app_name(k);
-                    let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
-                    let text_off = sp(6) + Self::icon_size() + sp(8);
-                    let text_x = r.0 + text_off;
-                    let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
-                    Self::draw_string_clipped(fb, text_x, text_y, app_name, text_col,
-                        (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+            // Toplam öğe sayısı: En üstte Paket Yöneticisi (1) + kurulu paketler
+            let total_count = 1 + self.installed_apps_count;
+            for k in 0..total_count {
+                let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
+                let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
+                let bg_col = if is_hovered { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
+                if is_hovered {
+                    fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
                 }
+                let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
+
+                let app_name;
+                if k == 0 {
+                    // En üstte Paket Yöneticisi
+                    let icon_idx = Self::window_icon_index(13);
+                    Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
+                    app_name = crate::gui::ui_text("Paket Yöneticisi", "Package Manager");
+                } else {
+                    Self::draw_package_icon(fb, r.0 + sp(6), icon_y);
+                    app_name = self.installed_app_name(k - 1);
+                }
+
+                let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+                let text_off = sp(6) + Self::icon_size() + sp(8);
+                let text_x = r.0 + text_off;
+                let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
+                Self::draw_string_clipped(fb, text_x, text_y, app_name, text_col,
+                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
             }
             return;
         }

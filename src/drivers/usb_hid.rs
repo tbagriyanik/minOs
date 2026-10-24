@@ -2718,6 +2718,62 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
 }
 
 /// Ana döngüden çağrılır: olay halkalarını boşaltır ve HID raporlarını uygular.
+/// Yalnızca USB olay halkalarını boşaltır ve fare/klavye raporlarını işler (port taraması yapmaz, PMM istemez).
+/// I/O ve dosya kaydetme/yükleme gibi bloke edici işlemlerde farenin donmaması için çağrılır.
+pub fn poll_events(
+    mouse: &mut MouseState,
+    keyboard: &mut KeyboardState,
+    screen_w: i32,
+    screen_h: i32,
+) -> InputUpdate {
+    let mut update = InputUpdate::default();
+    unsafe {
+        if !INITIALIZED || CONTROLLER_COUNT == 0 {
+            return update;
+        }
+
+        // Donanım olay halkalarını boşalt.
+        for ci in 0..CONTROLLER_COUNT {
+            if !CONTROLLERS[ci].present {
+                continue;
+            }
+            for _ in 0..64 {
+                let event = {
+                    let c = &mut CONTROLLERS[ci];
+                    c.pop_event()
+                };
+                let Some(event) = event else { break; };
+                let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
+                update.mouse |= changed.mouse;
+                update.keyboard |= changed.keyboard;
+            }
+        }
+
+        // Komut beklerken biriken olaylar.
+        for ci in 0..CONTROLLER_COUNT {
+            for _ in 0..64 {
+                let event = {
+                    let mut found = None;
+                    for entry in PENDING_EVENTS.iter_mut() {
+                        let Some(pending) = *entry else { continue; };
+                        if pending.controller as usize == ci {
+                            found = Some(pending.trb);
+                            *entry = None;
+                            break;
+                        }
+                    }
+                    found
+                };
+                let Some(event) = event else { break; };
+                let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
+                update.mouse |= changed.mouse;
+                update.keyboard |= changed.keyboard;
+            }
+        }
+    }
+    update
+}
+
 pub fn poll_input(
     mouse: &mut MouseState,
     keyboard: &mut KeyboardState,

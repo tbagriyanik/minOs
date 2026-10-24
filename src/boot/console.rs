@@ -5,7 +5,42 @@ use crate::{fs, serial};
 #[inline(never)]
 pub fn serial_print(s: &str) {
     serial::print(s);
-    crate::boot::text_console::write(s);
+    // Acilis ekraninda bulunamayan, hata veren veya uyari niteligindeki satirlari kirmizi renklendir
+    let is_alert = contains_str(s, "bulunamadı")
+        || contains_str(s, "bulunamadi")
+        || contains_str(s, "hata")
+        || contains_str(s, "HATA")
+        || contains_str(s, "başarısız")
+        || contains_str(s, "basarisiz")
+        || contains_str(s, "uyarı")
+        || contains_str(s, "uyari")
+        || contains_str(s, "UYARI")
+        || contains_str(s, "fail")
+        || contains_str(s, "FAIL")
+        || contains_str(s, "error")
+        || contains_str(s, "ERROR")
+        || contains_str(s, "not found");
+
+    let color = if is_alert {
+        0xFF6B6B // Kirmizi (Red)
+    } else {
+        0xD8E1EE // Varsayilan acik mavi/gri
+    };
+    crate::boot::text_console::write_color(s, color);
+}
+
+fn contains_str(haystack: &str, needle: &str) -> bool {
+    let h_bytes = haystack.as_bytes();
+    let n_bytes = needle.as_bytes();
+    if n_bytes.len() > h_bytes.len() {
+        return false;
+    }
+    for i in 0..=(h_bytes.len() - n_bytes.len()) {
+        if &h_bytes[i..i + n_bytes.len()] == n_bytes {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {

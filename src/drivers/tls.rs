@@ -665,6 +665,7 @@ impl TlsSession {
             return Err(());
         }
         let mut pos = list_start + 3;
+        let mut cert_chain: alloc::vec::Vec<&[u8]> = alloc::vec::Vec::new();
         while pos + 3 <= list_end {
             let cert_len = ((body[pos] as usize) << 16)
                 | ((body[pos + 1] as usize) << 8)
@@ -673,57 +674,10 @@ impl TlsSession {
             if pos + cert_len > list_end {
                 return Err(());
             }
+            let cert = &body[pos..pos + cert_len];
+            cert_chain.push(cert);
+
             if self.rsa_key.is_none() && self.ec_key.is_none() {
-                // Zincirdeki ilk sertifika RSA degilse (örn. ECDSA) hata
-                // vermek yerine siradaki sertifikalara bakilir; bazi sunucular
-                // zincirde RSA capraz-imzali bir sertifika da gonderir.
-                let cert = &body[pos..pos + cert_len];
-
-                #[cfg(not(test))]
-                {
-                    let rtc = crate::drivers::rtc::DateTime::read();
-                    let now = crate::drivers::crypto::x509::X509Time {
-                        year: rtc.year,
-                        month: rtc.month,
-                        day: rtc.day,
-                        hour: rtc.hour,
-                        minute: rtc.minute,
-                        second: rtc.second,
-                    };
-                    match crate::drivers::crypto::x509::verify_certificate_fields(cert, &self.hostname, &now) {
-                        Ok(()) => {
-                            self.cert_verified = true;
-                            self.cert_error = None;
-                            crate::serial::print("[TLS] Sertifika doğrulandı: ");
-                            crate::serial::print(&self.hostname);
-                            crate::serial::print(" (süre ve SNI/CN geçerli)\n");
-                        }
-                        Err(e) => {
-                            self.cert_verified = false;
-                            self.cert_error = Some(e);
-                            crate::serial::print("[TLS] Sertifika uyarısı: ");
-                            match e {
-                                crate::drivers::crypto::x509::CertValidationError::NotYetValid => {
-                                    crate::serial::print("henüz geçerli değil (not_before)\n");
-                                }
-                                crate::drivers::crypto::x509::CertValidationError::Expired => {
-                                    crate::serial::print("süresi dolmuş (not_after)\n");
-                                }
-                                crate::drivers::crypto::x509::CertValidationError::HostnameMismatch => {
-                                    crate::serial::print("hostname/SNI eşleşmedi\n");
-                                }
-                                crate::drivers::crypto::x509::CertValidationError::InvalidDer => {
-                                    crate::serial::print("geçersiz DER yapısı\n");
-                                }
-                            }
-                        }
-                    }
-                }
-                #[cfg(test)]
-                {
-                    self.cert_verified = true;
-                }
-
                 if let Ok(key) = parse_x509_rsa_public_key(cert) {
                     self.rsa_key = Some(key);
                 } else if let Ok(point) = parse_x509_ec_public_key(cert) {
@@ -742,6 +696,74 @@ impl TlsSession {
                 if pos > list_end {
                     return Err(());
                 }
+            }
+        }
+
+        if let Some(first_cert) = cert_chain.first() {
+            #[cfg(not(test))]
+            {
+                let rtc = crate::drivers::rtc::DateTime::read();
+                let now = crate::drivers::crypto::x509::X509Time {
+                    year: rtc.year,
+                    month: rtc.month,
+                    day: rtc.day,
+                    hour: rtc.hour,
+                    minute: rtc.minute,
+                    second: rtc.second,
+                };
+                let field_res = crate::drivers::crypto::x509::verify_certificate_fields(first_cert, &self.hostname, &now);
+                let chain_res = crate::drivers::crypto::x509::verify_certificate_chain(&cert_chain);
+
+                if let Err(e) = field_res {
+                    self.cert_verified = false;
+                    self.cert_error = Some(e);
+                    crate::serial::print("[TLS] Sertifika uyarısı: ");
+                    match e {
+                        crate::drivers::crypto::x509::CertValidationError::NotYetValid => {
+                            crate::serial::print("henüz geçerli değil (not_before)\n");
+                        }
+                        crate::drivers::crypto::x509::CertValidationError::Expired => {
+                            crate::serial::print("süresi dolmuş (not_after)\n");
+                        }
+                        crate::drivers::crypto::x509::CertValidationError::HostnameMismatch => {
+                            crate::serial::print("hostname/SNI eşleşmedi\n");
+                        }
+                        crate::drivers::crypto::x509::CertValidationError::InvalidDer => {
+                            crate::serial::print("geçersiz DER yapısı\n");
+                        }
+                        _ => {
+                            crate::serial::print("alan doğrulama hatası\n");
+                        }
+                    }
+                } else if let Err(e) = chain_res {
+                    self.cert_verified = false;
+                    self.cert_error = Some(e);
+                    crate::serial::print("[TLS] Sertifika zincir uyarısı: ");
+                    match e {
+                        crate::drivers::crypto::x509::CertValidationError::UntrustedRoot => {
+                            crate::serial::print("kök sertifika güvenilmiyor (ISRG Root X1 eşleşmedi)\n");
+                        }
+                        crate::drivers::crypto::x509::CertValidationError::InvalidSignature => {
+                            crate::serial::print("geçersiz CA imzası\n");
+                        }
+                        crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
+                            crate::serial::print("desteklenmeyen imza algoritması\n");
+                        }
+                        _ => {
+                            crate::serial::print("zincir doğrulama hatası\n");
+                        }
+                    }
+                } else {
+                    self.cert_verified = true;
+                    self.cert_error = None;
+                    crate::serial::print("[TLS] Sertifika ve CA kök zinciri başarıyla doğrulandı: ");
+                    crate::serial::print(&self.hostname);
+                    crate::serial::print(" (ISRG Root X1 köküne güvenildi)\n");
+                }
+            }
+            #[cfg(test)]
+            {
+                self.cert_verified = true;
             }
         }
         if self.rsa_key.is_none() && self.ec_key.is_none() {

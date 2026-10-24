@@ -413,7 +413,12 @@ pub extern "C" fn _start() -> ! {
             if fb.resize(target_res.0, target_res.1, p) {
                 width = fb.width;
                 height = fb.height;
-                                settings_app.display_res = target_res;
+                unsafe {
+                    boot::text_console::update_framebuffer(
+                        drivers::video::Framebuffer::new(fb_ptr, width, height, p, bpp),
+                    );
+                }
+                settings_app.display_res = target_res;
                 serial_print("[BOOT] Seçili çözünürlük başarıyla uygulandı: ");
                 serial_print_dec(width as u64);
                 serial_print("x");
@@ -1831,6 +1836,16 @@ pub extern "C" fn _start() -> ! {
 
             }
 
+                            if taskmgr_app.actions_menu_open {
+                                let in_menu = compositor.windows[7].map_or(false, |w| {
+                                    gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_menu_rect(w.x, w.y, w.width))
+                                });
+                                let in_button = compositor.windows[7].map_or(false, |w| {
+                                    gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_button_rect(w.x, w.y, w.width))
+                                });
+                                if !in_menu && !in_button { taskmgr_app.actions_menu_open = false; }
+                            }
+
             if run_dialog_open {
 
                 let rbox = (width.saturating_sub(320) / 2, height.saturating_sub(110) / 2, 320, 110);
@@ -1921,7 +1936,7 @@ pub extern "C" fn _start() -> ! {
 
                         (
 
-                            w.x + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu),
+                            w.x + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu, w.width),
 
                             w.y + crate::apps::notepad::NotepadApp::menu_box_y(),
 
@@ -1933,7 +1948,8 @@ pub extern "C" fn _start() -> ! {
 
                     );
 
-                    let in_tabs = my >= w.y + 30 && my < w.y + 30 + crate::gui::sp(24);
+                    let overflow = crate::apps::notepad::NotepadApp::overflow_button_rect(w.width);
+                    let in_tabs = gui::in_rect(mx, my, (w.x + overflow.0, w.y + 30 + overflow.1, overflow.2, overflow.3));
 
                     if !in_menu_box && !in_tabs {
 
@@ -3402,29 +3418,39 @@ pub extern "C" fn _start() -> ! {
 
                             0 => {
 
-                                // Dosya Yoneticisi: [Yenile], [+Dosya], [+Klasor], [Sil], [Ac], gezinti, liste
+                                let menu_button = apps::filemanager::FileManagerApp::actions_button_rect(wx, wy, ww);
+                                let mut menu_action = None;
+                                if gui::in_rect(mx, my, menu_button) {
+                                    filemanager_app.actions_menu_open = !filemanager_app.actions_menu_open;
+                                } else if filemanager_app.actions_menu_open {
+                                    menu_action = (0..7).find(|&i| gui::in_rect(mx, my,
+                                        apps::filemanager::FileManagerApp::actions_menu_item_rect(wx, wy, ww, i)));
+                                    filemanager_app.actions_menu_open = false;
+                                }
 
-                                if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::search_rect(wx, wy, ww)) {
+                                if gui::in_rect(mx, my, menu_button) {
+
+                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::search_rect(wx, wy, ww)) {
 
                                     filemanager_app.focused_control = 5;
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::refresh_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(0) {
 
                                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::new_file_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(1) {
 
                                     filemanager_app.new_file(&mut fs_mgr.vfs);
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::new_folder_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(2) {
 
                                     filemanager_app.new_folder(&mut fs_mgr.vfs);
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::delete_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(3) {
 
                                     filemanager_app.delete_selected(&mut fs_mgr.vfs);
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::open_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(4) {
 
                                     // Geri Donusum Kutusu'ndayken "Ac" dugmesi ogeyi geri yukler.
 
@@ -3480,7 +3506,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::view_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(5) {
 
                                     filemanager_app.toggle_view_mode();
 
@@ -3488,7 +3514,7 @@ pub extern "C" fn _start() -> ! {
 
                                     fm_ensure_selection_visible(&mut compositor, &filemanager_app);
 
-                                } else if gui::in_rect(mx, my, apps::filemanager::FileManagerApp::preview_button_rect(wx, wy, ww)) {
+                                } else if menu_action == Some(6) {
 
                                     filemanager_app.toggle_preview();
 
@@ -3977,35 +4003,16 @@ pub extern "C" fn _start() -> ! {
 
                                 // olcegi 100'den farkliyken de koordinatlar ortusur.
 
-                                let menu_tb_y = wy + 30;
+                                let overflow = crate::apps::notepad::NotepadApp::overflow_button_rect(ww);
+                                let overflow_rect = (wx + overflow.0, wy + 30 + overflow.1, overflow.2, overflow.3);
 
-                                let menu_tb_h = crate::gui::sp(24);
+                                if gui::in_rect(mx, my, overflow_rect) {
 
-                                let tb_hit = my >= menu_tb_y && my < menu_tb_y + menu_tb_h;
-
-                                let tab1 = crate::apps::notepad::NotepadApp::menu_tab_rect(1);
-
-                                let tab2 = crate::apps::notepad::NotepadApp::menu_tab_rect(2);
-
-                                let tab3 = crate::apps::notepad::NotepadApp::menu_tab_rect(3);
-
-
-
-                                if tb_hit && gui::in_rect(mx, my, (wx + tab1.0, menu_tb_y, tab1.1, menu_tb_h)) {
-
-                                    notepad_app.menu = if notepad_app.menu == 1 { 0 } else { 1 };
-
-                                } else if tb_hit && gui::in_rect(mx, my, (wx + tab2.0, menu_tb_y, tab2.1, menu_tb_h)) {
-
-                                    notepad_app.menu = if notepad_app.menu == 2 { 0 } else { 2 };
-
-                                } else if tb_hit && gui::in_rect(mx, my, (wx + tab3.0, menu_tb_y, tab3.1, menu_tb_h)) {
-
-                                    notepad_app.menu = if notepad_app.menu == 3 { 0 } else { 3 };
+                                    notepad_app.menu = if notepad_app.menu == 4 { 0 } else { 4 };
 
                                 } else if notepad_app.menu != 0
 
-                                    && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu), wy + crate::apps::notepad::NotepadApp::menu_box_y(), crate::apps::notepad::NotepadApp::menu_box_w(), crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu)))
+                                    && gui::in_rect(mx, my, (wx + crate::apps::notepad::NotepadApp::menu_box_x(notepad_app.menu, ww), wy + crate::apps::notepad::NotepadApp::menu_box_y(), crate::apps::notepad::NotepadApp::menu_box_w(), crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu)))
 
                                 {
 
@@ -4014,10 +4021,14 @@ pub extern "C" fn _start() -> ! {
                                     let item_idx = rel_y / crate::apps::notepad::NotepadApp::menu_item_h();
 
                                     let items = crate::apps::notepad::NotepadApp::menu_items(notepad_app.menu);
+                                    let menu_was_overflow = notepad_app.menu == 4;
 
                                     if let Some(def) = items.get(item_idx) {
 
                                         match def.action {
+                                            crate::apps::notepad::NotepadMenuAction::FileCategory => notepad_app.menu = 1,
+                                            crate::apps::notepad::NotepadMenuAction::EditCategory => notepad_app.menu = 2,
+                                            crate::apps::notepad::NotepadMenuAction::HelpCategory => notepad_app.menu = 3,
 
                                             crate::apps::notepad::NotepadMenuAction::Open => {
 
@@ -4063,7 +4074,7 @@ pub extern "C" fn _start() -> ! {
 
                                     }
 
-                                    notepad_app.menu = 0;
+                                    if !(menu_was_overflow && (1..=3).contains(&notepad_app.menu)) { notepad_app.menu = 0; }
 
                                 } else if notepad_app.menu != 0 {
 
@@ -4194,6 +4205,29 @@ pub extern "C" fn _start() -> ! {
 
                                     browser_app.find_next();
 
+                                } else if gui::in_rect(mx, my, apps::browser::BrowserApp::toolbar_menu_button_rect(wx, wy, ww)) {
+
+                                    browser_app.toolbar_menu_open = !browser_app.toolbar_menu_open;
+
+                                } else if browser_app.toolbar_menu_open {
+
+                                    let item = (0..4).find(|&i| gui::in_rect(mx, my, apps::browser::BrowserApp::toolbar_menu_item_rect(wx, wy, ww, i)));
+                                    browser_app.toolbar_menu_open = false;
+                                    match item {
+                                        Some(0) => browser_app.show_history(),
+                                        Some(1) => {
+                                            let current = core::str::from_utf8(&browser_app.url[..browser_app.url_len]).unwrap_or("");
+                                            if apps::browser::BOOKMARKS.iter().chain(browser_app.bookmarks_extra.iter()).any(|b| b.url == current) {
+                                                browser_app.remove_bookmark_current();
+                                            } else {
+                                                browser_app.add_bookmark_current();
+                                            }
+                                        }
+                                        Some(2) => { browser_app.save_current_download(&mut fs_mgr.vfs); }
+                                        Some(3) => browser_app.navigate(),
+                                        _ => {}
+                                    }
+
                                 } else if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
 
                                     browser_app.back();
@@ -4206,34 +4240,13 @@ pub extern "C" fn _start() -> ! {
 
                                     browser_app.navigate();
 
-                                } else if gui::in_rect(mx, my, (wx + ww - 124, wy + 32, 58, 20)) {
-
-                                    browser_app.show_history();
-
-                                } else if gui::in_rect(mx, my, apps::browser::BrowserApp::bookmark_btn_rect(wx, wy, ww)) {
-
-                                    let current = core::str::from_utf8(&browser_app.url[..browser_app.url_len]).unwrap_or("");
-                                    if apps::browser::BOOKMARKS.iter().chain(browser_app.bookmarks_extra.iter()).any(|b| b.url == current) {
-                                        browser_app.remove_bookmark_current();
-                                    } else {
-                                        browser_app.add_bookmark_current();
-                                    }
-
-                                } else if gui::in_rect(mx, my, apps::browser::BrowserApp::download_btn_rect(wx, wy, ww)) {
-
-                                    browser_app.save_current_download(&mut fs_mgr.vfs);
-
-                                } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(320), 20)) {
+                                } else if gui::in_rect(mx, my, (wx + 94, wy + 32, ww.saturating_sub(142), 20)) {
 
                                     browser_app.address_click_at(
                                         mx, my, wx + 100, monotonic_ms(),
                                         settings_app.double_click_ms as u64,
                                     );
                                     browser_address_dragging = true;
-
-                                } else if gui::in_rect(mx, my, (wx + ww - 60, wy + 32, 50, 20)) {
-
-                                    browser_app.navigate();
 
                                 } else if let Some(url) = browser_app.click_bookmark_at(mx, my, wx, wy, ww) {
 
@@ -4392,6 +4405,7 @@ pub extern "C" fn _start() -> ! {
                                     taskmgr_app.focused_control = 0;
 
                                     taskmgr_app.launch_menu_open = false;
+                                    taskmgr_app.actions_menu_open = false;
 
                                 } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::performance_tab_rect(wx, wy)) {
 
@@ -4400,6 +4414,7 @@ pub extern "C" fn _start() -> ! {
                                     taskmgr_app.focused_control = 1;
 
                                     taskmgr_app.launch_menu_open = false;
+                                    taskmgr_app.actions_menu_open = false;
 
                                 } else if taskmgr_app.launch_menu_open {
 
@@ -4423,30 +4438,27 @@ pub extern "C" fn _start() -> ! {
 
                                 } else if taskmgr_app.active_tab == 0 {
 
-                                    if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::launch_button_rect(wx, wy, ww)) {
+                                    if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_button_rect(wx, wy, ww)) {
 
                                         taskmgr_app.focused_control = 2;
 
-                                        taskmgr_app.launch_menu_open = true;
+                                        taskmgr_app.actions_menu_open = !taskmgr_app.actions_menu_open;
 
-                                        taskmgr_app.launch_selected = 0;
+                                    } else if taskmgr_app.actions_menu_open {
 
-                                    } else if gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww)) {
-
-                                        taskmgr_app.focused_control = 3;
-
-                                        if let Some(target) = taskmgr_app.selected_app_idx() {
-
-                                            taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
-
-                                            terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
-
-                                                &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
-
-                                                &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
-
-                                                &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
-
+                                        let action = (0..2).find(|&i| gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_menu_item_rect(wx, wy, ww, i)));
+                                        taskmgr_app.actions_menu_open = false;
+                                        match action {
+                                            Some(0) => { taskmgr_app.launch_menu_open = true; taskmgr_app.launch_selected = 0; }
+                                            Some(1) => if let Some(target) = taskmgr_app.selected_app_idx() {
+                                                taskmgr_app.focused_control = 3;
+                                                taskmgr_app.status = gui::ui_text("Uygulama sonlandırıldı.", "Application terminated.");
+                                                terminate_app(target, &mut compositor, &mut filemanager_app, &mut settings_app,
+                                                    &mut notepad_app, &mut browser_app, &mut imageviewer_app, &mut musicplayer_app,
+                                                    &mut videoplayer_app, &mut taskmgr_app, &mut calculator_app, &mut paint_apps[idx],
+                                                    &mut terminal_app, &mut installer_app, &mut viewer3d_app, &mut pkgmgr_app);
+                                            },
+                                            _ => {}
                                         }
 
                                     } else if let Some(i) = taskmgr_app.row_at(mx, my, wx, wy, ww) {
@@ -7589,6 +7601,10 @@ pub extern "C" fn _start() -> ! {
 
                 compositor.is_context_submenu_open = false;
 
+            } else if ch == '\x1b' && taskmgr_app.actions_menu_open {
+
+                taskmgr_app.actions_menu_open = false;
+
             } else if ch == '\x1b' && taskmgr_app.launch_menu_open {
 
                 taskmgr_app.launch_menu_open = false;
@@ -7598,6 +7614,10 @@ pub extern "C" fn _start() -> ! {
             } else if ch == '\x1b' && notepad_app.menu != 0 {
 
                 notepad_app.menu = 0;
+
+            } else if ch == '\x1b' && app_is_focused(&compositor, 3) && browser_app.toolbar_menu_open {
+
+                browser_app.toolbar_menu_open = false;
 
             } else if ch == '\x1b' && app_is_focused(&compositor, 3) && browser_app.find_active {
 

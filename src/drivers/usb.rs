@@ -214,6 +214,18 @@ fn io_in32(port: u16) -> u32 {
     ret
 }
 
+#[inline]
+fn io_out16(port: u16, val: u16) {
+    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
+}
+
+#[inline]
+fn io_in16(port: u16) -> u16 {
+    let ret: u16;
+    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
+    ret
+}
+
 const PCI_CONFIG_ADDR: u16 = 0xCF8;
 const PCI_CONFIG_DATA: u16 = 0xCFC;
 
@@ -331,12 +343,11 @@ pub fn test_usb_controller() -> Option<UsbControllerInfo> {
     None
 }
 
-/// xHCI ve EHCI denetleyicilerinde USB Legacy (Klavye & Fare) emülasyonunu doğrular.
-/// UEFI/BIOS'un USB fare ve touchpad olaylarını 8042 AUX portuna yönlendirmesini garanti eder.
+/// USB Host Denetleyicilerini (xHCI, EHCI, UHCI, OHCI) başlatır ve yapılandırır.
+/// Gerekli BIOS Legacy Handoff devirlerini ve port güç/reset yapılandırmalarını gerçekleştirir.
 fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerType) {
     match ctype {
         UsbControllerType::Xhci => {
-            // PCI Status register bit 4 = Capabilities Pointer var mı?
             let status = (pci_read32(bus, dev, func, 0x04) >> 16) & 0xFFFF;
             if status & 0x0010 != 0 {
                 let mut cap_ptr = (pci_read32(bus, dev, func, 0x34) & 0xFF) as u8;
@@ -345,7 +356,6 @@ fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerTyp
                     let cap_val = pci_read32(bus, dev, func, cap_ptr);
                     let cap_id = (cap_val & 0xFF) as u8;
                     let next = ((cap_val >> 8) & 0xFF) as u8;
-                    // xHCI Extended Capabilities: ID 1 = USB Legacy Support Capability (USBLEGSUP)
                     if cap_id == 0x01 {
                         let legsup = cap_val;
                         let bios_owned = (legsup & (1 << 16)) != 0;
@@ -366,17 +376,147 @@ fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerTyp
             }
         }
         UsbControllerType::Ehci => {
-            // EHCI EECP (EHCI Extended Capabilities Pointer)
-            let hccparams = pci_read32(bus, dev, func, 0x08);
-            let eecp = ((hccparams >> 8) & 0xFF) as u8;
-            if eecp >= 0x40 {
-                let _legsup = pci_read32(bus, dev, func, eecp);
-                crate::serial::print("[USB-EHCI] Legacy desteği tespit edildi (EECP=0x");
-                crate::serial::print_hex(eecp as u64);
-                crate::serial::print(")\n");
-            }
+            init_ehci_controller(bus, dev, func);
+        }
+        UsbControllerType::Uhci => {
+            init_uhci_controller(bus, dev, func);
+        }
+        UsbControllerType::Ohci => {
+            init_ohci_controller(bus, dev, func);
         }
         _ => {}
+    }
+}
+
+/// EHCI (USB 2.0) Denetleyicisini başlatır, BIOS devrini tamamlar ve portları yapılandırır.
+fn init_ehci_controller(bus: u8, dev: u8, func: u8) {
+    let bar0 = pci_read32(bus, dev, func, 0x10) & 0xFFFF_FFF0;
+    if bar0 == 0 {
+        return;
+    }
+    let mmio = crate::drivers::phys_to_virt(bar0 as u64);
+
+    unsafe {
+        // 1. EHCI Extended Capabilities Pointer (EECP) ile BIOS el sıkışması
+        let caplength = core::ptr::read_volatile(mmio as *const u8) as usize;
+        let hccparams = core::ptr::read_volatile((mmio + 0x08) as *const u32);
+        let eecp = ((hccparams >> 8) & 0xFF) as u8;
+        if eecp >= 0x40 {
+            let legsup = pci_read32(bus, dev, func, eecp);
+            let bios_owned = (legsup & (1 << 16)) != 0;
+            crate::serial::print("[USB-EHCI] Denetleyici bulundu (EECP=0x");
+            crate::serial::print_hex(eecp as u64);
+            crate::serial::print(", BIOS=");
+            crate::serial::print(if bios_owned { "1" } else { "0" });
+            crate::serial::print(")\n");
+
+            // OS Semaphore talep et (bit 24)
+            pci_write32(bus, dev, func, eecp, legsup | (1 << 24));
+        }
+
+        // 2. Operasyonel yazmaçlar: caplength ofsetinde başlar
+        let op_base = mmio + (caplength as u64);
+        let usbcmd = op_base as *mut u32;
+        let _usbsts = (op_base + 0x04) as *mut u32;
+        let configflag = (op_base + 0x40) as *mut u32;
+
+        // Port sayısı (HCSPARAMS bits 0..3)
+        let hcsparams = core::ptr::read_volatile((mmio + 0x04) as *const u32);
+        let n_ports = (hcsparams & 0x0F) as u8;
+        crate::serial::print("[USB-EHCI] Port sayısı = ");
+        crate::serial::print_dec(n_ports as u64);
+        crate::serial::print("\n");
+
+        // 3. Denetleyiciyi durdur ve sıfırla (HCRESET = bit 1)
+        let cmd = core::ptr::read_volatile(usbcmd);
+        core::ptr::write_volatile(usbcmd, cmd & !1); // Run/Stop = 0
+        core::ptr::write_volatile(usbcmd, (cmd & !1) | (1 << 1));
+        let start = crate::boot::time::monotonic_ms();
+        while (core::ptr::read_volatile(usbcmd) & (1 << 1)) != 0 {
+            if crate::boot::time::monotonic_ms().wrapping_sub(start) > 100 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+
+        // 4. Port yönlendirmesini EHCI'ye devret (CONFIGFLAG = 1)
+        core::ptr::write_volatile(configflag, 1);
+
+        // 5. Port güçlerini aç (PORTSC bit 12 = Port Power PP)
+        for p in 0..n_ports {
+            let port_reg = (op_base + 0x44 + (p as u64) * 4) as *mut u32;
+            let status = core::ptr::read_volatile(port_reg);
+            core::ptr::write_volatile(port_reg, status | (1 << 12));
+        }
+
+        crate::serial::print("[USB-EHCI] Denetleyici ve portlar başarıyla hazırlandı.\n");
+    }
+}
+
+/// UHCI (USB 1.1) Denetleyicisini I/O alanı üzerinden başlatır.
+fn init_uhci_controller(bus: u8, dev: u8, func: u8) {
+    let bar4 = (pci_read32(bus, dev, func, 0x20) & 0xFFE0) as u16;
+    if bar4 == 0 {
+        return;
+    }
+
+    crate::serial::print("[USB-UHCI] Denetleyici bulundu (I/O Port=0x");
+    crate::serial::print_hex(bar4 as u64);
+    crate::serial::print(")\n");
+
+    // 1. Global Reset (GRESET = bit 2) ve Host Controller Reset (HCRESET = bit 1)
+    io_out16(bar4 + 0x00, 4); // GRESET
+    let start = crate::boot::time::monotonic_ms();
+    while crate::boot::time::monotonic_ms().wrapping_sub(start) < 20 {
+        core::hint::spin_loop();
+    }
+    io_out16(bar4 + 0x00, 0);
+
+    io_out16(bar4 + 0x00, 2); // HCRESET
+    let start2 = crate::boot::time::monotonic_ms();
+    while (io_in16(bar4 + 0x00) & 2) != 0 {
+        if crate::boot::time::monotonic_ms().wrapping_sub(start2) > 50 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    // 2. Port durumlarını kontrol et (Port 1: 0x10, Port 2: 0x12)
+    let p1 = io_in16(bar4 + 0x10);
+    let p2 = io_in16(bar4 + 0x12);
+    let c1 = (p1 & 1) != 0;
+    let c2 = (p2 & 1) != 0;
+    crate::serial::print("[USB-UHCI] Port 1 bağlı=");
+    crate::serial::print(if c1 { "1" } else { "0" });
+    crate::serial::print(" | Port 2 bağlı=");
+    crate::serial::print(if c2 { "1" } else { "0" });
+    crate::serial::print(" (Legacy 8042 klavye/fare yönlendirmesi aktif)\n");
+}
+
+/// OHCI (USB 1.1) Denetleyicisini MMIO alanı üzerinden başlatır.
+fn init_ohci_controller(bus: u8, dev: u8, func: u8) {
+    let bar0 = pci_read32(bus, dev, func, 0x10) & 0xFFFF_FFF0;
+    if bar0 == 0 {
+        return;
+    }
+    let mmio = crate::drivers::phys_to_virt(bar0 as u64);
+
+    unsafe {
+        let rev = core::ptr::read_volatile(mmio as *const u32) & 0xFF;
+        let ctrl = (mmio + 0x04) as *mut u32;
+        let rh_desc_a = (mmio + 0x48) as *const u32;
+        let n_ports = (core::ptr::read_volatile(rh_desc_a) & 0xFF) as u8;
+
+        crate::serial::print("[USB-OHCI] Denetleyici bulundu (Rev 0x");
+        crate::serial::print_hex(rev as u64);
+        crate::serial::print(", Port sayısı=");
+        crate::serial::print_dec(n_ports as u64);
+        crate::serial::print(")\n");
+
+        // OHCI Operasyonel Duruma geçiş (HCFS = 2, bits 6..7)
+        let cur_ctrl = core::ptr::read_volatile(ctrl);
+        core::ptr::write_volatile(ctrl, (cur_ctrl & !(3 << 6)) | (2 << 6));
+        crate::serial::print("[USB-OHCI] Denetleyici operasyonel duruma geçirildi.\n");
     }
 }
 

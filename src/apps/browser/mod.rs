@@ -168,6 +168,7 @@ pub struct BrowserApp {
     address_redo_count: usize,
     pub active_tab: usize,
     pub focused_control: usize,
+    pub toolbar_menu_open: bool,
     pub find_active: bool,
     pub find_query: [u8; 64],
     pub find_len: usize,
@@ -238,7 +239,7 @@ impl BrowserApp {
             address_selection_anchor: None, address_last_click: (0, 0, 0), address_click_streak: 0,
             address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
             address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
-            active_tab: 0, focused_control: 0, find_active: false, find_query: [0; 64], find_len: 0,
+            active_tab: 0, focused_control: 0, toolbar_menu_open: false, find_active: false, find_query: [0; 64], find_len: 0,
             find_match_index: Cell::new(0), find_match_count: Cell::new(0), suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
             net_online: false, ping_ok: false,
             web_request_sent: false,
@@ -311,6 +312,19 @@ impl BrowserApp {
 
     pub fn download_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(194), win_y + 32, 22, 20)
+    }
+
+    pub fn toolbar_menu_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(38), win_y + 32, 28, 20)
+    }
+
+    pub fn toolbar_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 104)
+    }
+
+    pub fn toolbar_menu_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
+        let (x, y, w, _) = Self::toolbar_menu_rect(win_x, win_y, win_w);
+        (x + 4, y + 4 + index * 24, w - 8, 22)
     }
 
     pub fn find_bar_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -1778,25 +1792,49 @@ impl BrowserApp {
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
+                                    let current_scheme = if self.is_https { "https://" } else { "http://" };
+                                    let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+                                    let current_path = core::str::from_utf8(&self.request_path[..self.request_path_len]).unwrap_or("/");
+                                    let current_path = current_path.split('?').next().unwrap_or("/");
+                                    let base_path = current_path.rsplit_once('/').map(|(base, _)| base).unwrap_or("");
+                                    let mut target = String::new();
                                     if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
-                                        self.set_url(loc_slice);
-                                        self.navigate();
+                                        target.push_str(loc_str);
+                                    } else if loc_str.starts_with("//") {
+                                        target.push_str(if self.is_https { "https:" } else { "http:" });
+                                        target.push_str(loc_str);
                                     } else {
-                                        let path_bytes = loc_slice;
-                                        let p_len = path_bytes.len().min(256);
-                                        self.request_path = [0; 256];
-                                        if path_bytes.first() != Some(&b'/') {
-                                            self.request_path[0] = b'/';
-                                            self.request_path[1..1 + p_len.min(255)].copy_from_slice(&path_bytes[..p_len.min(255)]);
-                                            self.request_path_len = 1 + p_len.min(255);
-                                        } else {
-                                            self.request_path[..p_len].copy_from_slice(&path_bytes[..p_len]);
-                                            self.request_path_len = p_len;
+                                        target.push_str(current_scheme);
+                                        target.push_str(host);
+                                        let default_port = if self.is_https { 443 } else { 80 };
+                                        if self.request_port != default_port {
+                                            use core::fmt::Write as _;
+                                            let _ = write!(target, ":{}", self.request_port);
                                         }
+                                        if loc_str.starts_with('/') {
+                                            target.push_str(loc_str);
+                                        } else if loc_str.starts_with('?') {
+                                            target.push_str(current_path);
+                                            target.push_str(loc_str);
+                                        } else {
+                                            target.push_str(base_path);
+                                            target.push('/');
+                                            target.push_str(loc_str);
+                                        }
+                                    }
+                                    if target.len() <= self.url.len() {
+                                        self.set_url(target.as_bytes());
+                                        self.request_pending = false;
                                         self.request_state = 0;
-                                        self.request_pending = true;
-                                        self.request_deadline = now.wrapping_add(15000);
-                                        self.status = crate::gui::ui_text("Yönlendiriliyor...", "Redirecting...");
+                                        self.request_deadline = 0;
+                                        crate::drivers::netstack::tcp_clear_result();
+                                        self.suppress_history = true;
+                                        let redirect_count = self.redirect_count;
+                                        self.navigate();
+                                        // navigate() normal gezinme için sayacı sıfırlar.
+                                        self.redirect_count = redirect_count;
+                                    } else {
+                                        self.finish_network_error(crate::gui::ui_text("Yönlendirme adresi çok uzun.", "Redirect URL is too long."));
                                     }
                                     return;
                                 }
@@ -1926,7 +1964,7 @@ impl BrowserApp {
         let english = crate::gui::ui_english();
         // Bağlantı isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
         self.rendered_links.borrow_mut().clear();
-        // Araç çubuğu (üst sekmeler kaldırıldı): Geri, İleri, Yenile, Geçmiş, adres, GIT
+        // Araç çubuğu: gezinme, adres ve taşma menüsü.
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 30, Color::TITLE_BAR);
         fb.draw_rect(win_x + 12, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 36, "<", Color::TEXT_MAIN);
@@ -1940,14 +1978,8 @@ impl BrowserApp {
         MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 36, "R", Color::ACCENT_GREEN);
         if self.focused_control == 2 { fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
 
-        let hist_r = (win_x + win_w - 124, win_y + 32, 58, 20);
-        fb.draw_rect(hist_r.0, hist_r.1, hist_r.2, hist_r.3, Color::ACCENT_PINK);
-        MinGuiCompositor::draw_string(fb, hist_r.0 + 6, hist_r.1 + 4,
-            crate::gui::ui_text("Geçmiş", "HIST."), MinGuiCompositor::text_on(Color::ACCENT_PINK));
-        if self.focused_control == 3 { fb.draw_rect_outline(hist_r.0, hist_r.1, hist_r.2, hist_r.3, Color::ACCENT_YELLOW); }
-
         let url_x = win_x + 94;
-        let url_w = win_w.saturating_sub(320);
+        let url_w = win_w.saturating_sub(142);
         fb.draw_rect(url_x, win_y + 32, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
         let char_width = MinGuiCompositor::text_width("M", 1).max(1);
         let visible_chars = url_w.saturating_sub(12).checked_div(char_width).unwrap_or(1).max(1);
@@ -1987,25 +2019,10 @@ impl BrowserApp {
         }
         if self.focused_control == 4 { fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW); }
 
-        // Yer imi ekle/kaldır ve basit indirme düğmeleri
-        let bm_btn = Self::bookmark_btn_rect(win_x, win_y, win_w);
-        let current_url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
-        let is_bookmarked = BOOKMARKS.iter().chain(self.bookmarks_extra.iter()).any(|b| b.url == current_url);
-        fb.draw_rect(bm_btn.0, bm_btn.1, bm_btn.2, bm_btn.3,
-            if is_bookmarked { Color::ACCENT_YELLOW } else { Color::WINDOW_BG });
-        MinGuiCompositor::draw_string(fb, bm_btn.0 + 7, bm_btn.1 + 4, "*",
-            if is_bookmarked { MinGuiCompositor::text_on(Color::ACCENT_YELLOW) } else { Color::ACCENT_YELLOW });
-        if self.focused_control == 6 { fb.draw_rect_outline(bm_btn.0, bm_btn.1, bm_btn.2, bm_btn.3, Color::ACCENT_YELLOW); }
-
-        let dl_btn = Self::download_btn_rect(win_x, win_y, win_w);
-        fb.draw_rect(dl_btn.0, dl_btn.1, dl_btn.2, dl_btn.3, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, dl_btn.0 + 4, dl_btn.1 + 4, "DL", MinGuiCompositor::text_on(Color::ACCENT_GREEN));
-        if self.focused_control == 7 { fb.draw_rect_outline(dl_btn.0, dl_btn.1, dl_btn.2, dl_btn.3, Color::ACCENT_YELLOW); }
-
-        let git_r = (win_x + win_w - 60, win_y + 32, 50, 20);
-        fb.draw_rect(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 48, win_y + 36, "GIT", MinGuiCompositor::text_on(Color::ACCENT_BLUE));
-        if self.focused_control == 5 { fb.draw_rect_outline(git_r.0, git_r.1, git_r.2, git_r.3, Color::ACCENT_YELLOW); }
+        // Araç çubuğu seçenekleri taşma menüsünde sunulur.
+        let overflow = Self::toolbar_menu_button_rect(win_x, win_y, win_w);
+        fb.draw_rect(overflow.0, overflow.1, overflow.2, overflow.3, Color::WINDOW_BG);
+        for dot in 0..3 { fb.draw_rect(overflow.0 + 13, overflow.1 + 4 + dot * 5, 2, 2, Color::TEXT_MAIN); }
 
         // Sık Kullanılanlar / Yer İmleri Çubuğu (Bookmarks Bar)
         let bbar_y = win_y + 59;
@@ -2264,5 +2281,24 @@ impl BrowserApp {
             _ => self.status,
         };
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 3, status, Color::TEXT_MUTED);
+        if self.toolbar_menu_open {
+            let (menu_x, menu_y, menu_w, menu_h) = Self::toolbar_menu_rect(win_x, win_y, win_w);
+            fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+            fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
+            let current_url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
+            let is_bookmarked = BOOKMARKS.iter().chain(self.bookmarks_extra.iter()).any(|b| b.url == current_url);
+            let labels = [
+                crate::gui::ui_text("Geçmiş", "History"),
+                crate::gui::ui_text(if is_bookmarked { "Yer imini kaldır" } else { "Yer imi ekle" }, if is_bookmarked { "Remove bookmark" } else { "Add bookmark" }),
+                crate::gui::ui_text("İndirmeyi kaydet", "Save download"),
+                "GIT",
+            ];
+            for (i, label) in labels.iter().enumerate() {
+                let item = Self::toolbar_menu_item_rect(win_x, win_y, win_w, i);
+                fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string_clipped(fb, item.0 + 8, item.1 + 6, label, Color::TEXT_MAIN,
+                    (item.0 + 3, item.1 + 1, item.2.saturating_sub(6), item.3.saturating_sub(2)));
+            }
+        }
     }
 }

@@ -534,45 +534,8 @@ impl PaintApp {
         // 2. Üst Menü Çubuğu (Menu Bar: y + 28 .. y + 52)
         fb.draw_rect(x + 6, y + 28, w.saturating_sub(12), 24, Color::TITLE_BAR);
         let file_rect = Self::file_menu_rect(w);
-        let file_btn_bg = if self.file_menu_open { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
-        let file_btn_fg = if self.file_menu_open { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
-        fb.draw_rect(x + file_rect.0, y + file_rect.1, file_rect.2, file_rect.3, file_btn_bg);
-        fb.draw_rect_outline(x + file_rect.0, y + file_rect.1, file_rect.2, file_rect.3, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, x + file_rect.0 + 8, y + file_rect.1 + 4,
-            crate::gui::ui_text("Dosya", "File"), file_btn_fg);
-
-        // Geri Al / İleri Al (Ctrl+Z / Ctrl+Y)
-        let undo_rect = Self::undo_btn_rect();
-        let undo_enabled = self.can_undo();
-        fb.draw_rect(x + undo_rect.0, y + undo_rect.1, undo_rect.2, undo_rect.3, Color::WINDOW_BG);
-        fb.draw_rect_outline(x + undo_rect.0, y + undo_rect.1, undo_rect.2, undo_rect.3, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, x + undo_rect.0 + 6, y + undo_rect.1 + 4,
-            crate::gui::ui_text("Geri Al", "Undo"),
-            if undo_enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED });
-
-        let redo_rect = Self::redo_btn_rect();
-        let redo_enabled = self.can_redo();
-        fb.draw_rect(x + redo_rect.0, y + redo_rect.1, redo_rect.2, redo_rect.3, Color::WINDOW_BG);
-        fb.draw_rect_outline(x + redo_rect.0, y + redo_rect.1, redo_rect.2, redo_rect.3, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, x + redo_rect.0 + 6, y + redo_rect.1 + 4,
-            crate::gui::ui_text("Yinele", "Redo"),
-            if redo_enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED });
-
-        // Hızlı Aksiyon Butonları (Sağ Taraf)
-        let clear_x = x + w.saturating_sub(68);
-        fb.draw_rect(clear_x, y + 29, 60, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(clear_x, y + 29, 60, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, clear_x + 6, y + 33, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
-
-        let save_x = x + w.saturating_sub(134);
-        fb.draw_rect(save_x, y + 29, 62, 22, Color::ACCENT_BLUE);
-        fb.draw_rect_outline(save_x, y + 29, 62, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, save_x + 8, y + 33, crate::gui::ui_text("Kaydet", "Save"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
-
-        let open_x = x + w.saturating_sub(196);
-        fb.draw_rect(open_x, y + 29, 58, 22, Color::WINDOW_BG);
-        fb.draw_rect_outline(open_x, y + 29, 58, 22, Color::BORDER);
-        MinGuiCompositor::draw_string(fb, open_x + 10, y + 33, crate::gui::ui_text("Aç", "Open"), Color::TEXT_MAIN);
+        fb.draw_rect(x + file_rect.0, y + file_rect.1, file_rect.2, file_rect.3, Color::WINDOW_BG);
+        for dot in 0..3 { fb.draw_rect(x + file_rect.0 + 13, y + file_rect.1 + 4 + dot * 5, 2, 2, Color::TEXT_MAIN); }
 
         // 3. İkinci Satır: Araç ve Renk Çubuğu (Tools & Palette Strip: y + 54 .. y + 78)
         fb.draw_rect(x + 6, y + 54, w.saturating_sub(12), 26, MinGuiCompositor::shade(Color::TITLE_BAR, -10));
@@ -732,7 +695,7 @@ impl PaintApp {
             let drop_y = y + my;
             fb.draw_shadow(drop_x, drop_y, mw, mh, Color::SHADOW);
             fb.draw_rect(drop_x, drop_y, mw, mh, Color::WINDOW_BG);
-            fb.draw_rect_outline(drop_x, drop_y, mw, mh, Color::BORDER);
+        fb.draw_rect_outline(drop_x, drop_y, mw, mh, Color::BORDER);
 
             let labels = Self::file_menu_labels();
             for (i, label) in labels.iter().enumerate() {
@@ -750,8 +713,8 @@ impl PaintApp {
 
     /// "Dosya" menüsü düğmesinin pencere içi (x, y, w, h) ölçüleri.
     /// `render_content` içindeki menü çubuğu (y + 28) ile birebir aynıdır.
-    pub fn file_menu_rect(_w: usize) -> (usize, usize, usize, usize) {
-        (8, 28, 56, 22)
+    pub fn file_menu_rect(w: usize) -> (usize, usize, usize, usize) {
+        (w.saturating_sub(40), 28, 28, 22)
     }
 
     /// Hızlı aksiyon düğmeleri — `render_content` ile aynı koordinatlar.
@@ -822,26 +785,29 @@ impl PaintApp {
     }
 
     /// Açılır menü listesinin pencere içi (x, y, w, h) ölçüleri.
-    pub fn file_dropdown_rect(_w: usize) -> (usize, usize, usize, usize) {
-        (8, 52, 170, 96)
+    pub fn file_dropdown_rect(w: usize) -> (usize, usize, usize, usize) {
+        (w.saturating_sub(182), 52, 174, 166)
     }
 
     /// Menüdeki öğe sayısı.
-    pub const FILE_MENU_COUNT: usize = 4;
+    pub const FILE_MENU_COUNT: usize = 7;
 
     /// Menü öğelerinin etiketleri (iki dilli).
-    pub fn file_menu_labels() -> [&'static str; 4] {
+    pub fn file_menu_labels() -> [&'static str; 7] {
         [
             crate::gui::ui_text("Yeni (Ctrl+N)", "New (Ctrl+N)"),
             crate::gui::ui_text("Aç... (Ctrl+O)", "Open... (Ctrl+O)"),
             crate::gui::ui_text("Kaydet (Ctrl+S)", "Save (Ctrl+S)"),
             crate::gui::ui_text("Farklı Kaydet...", "Save As..."),
+            crate::gui::ui_text("Geri Al (Ctrl+Z)", "Undo (Ctrl+Z)"),
+            crate::gui::ui_text("Yinele (Ctrl+Y)", "Redo (Ctrl+Y)"),
+            crate::gui::ui_text("Temizle", "Clear"),
         ]
     }
 
     /// Açılır menüdeki öğe (x, y, w, h) koordinatlarını (pencere içi) döndürür.
-    pub fn file_menu_item_rect(_w: usize, index: usize) -> (usize, usize, usize, usize) {
-        let (mx, my, mw, _mh) = Self::file_dropdown_rect(0);
+    pub fn file_menu_item_rect(w: usize, index: usize) -> (usize, usize, usize, usize) {
+        let (mx, my, mw, _mh) = Self::file_dropdown_rect(w);
         (mx + 4, my + 4 + index * 22, mw.saturating_sub(8), 21)
     }
 

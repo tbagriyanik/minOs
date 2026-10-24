@@ -239,6 +239,7 @@ pub struct FileManagerApp {
     pub rename_buf: [u8; diskfs::NAME_MAX],
     pub rename_len: usize,
     pub focused_control: usize, // 0: Refresh, 1: New, 2: Folder, 3: Delete, 4: Open, 5: List
+    pub actions_menu_open: bool,
     pub last_click_idx: Option<usize>,
     pub last_click_ms: u64,
     pub drag_item: Option<usize>,
@@ -357,6 +358,19 @@ impl FileManagerApp {
 
     pub fn search_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + 122, win_y + 32, win_w.saturating_sub(540).max(72), 22)
+    }
+
+    pub fn actions_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(40), win_y + 32, 28, 22)
+    }
+
+    pub fn actions_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 176)
+    }
+
+    pub fn actions_menu_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
+        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w);
+        (x + 4, y + 4 + index * 24, w - 8, 22)
     }
 
     /// Sütun başlıkları dikdörtgenleri (isim, boyut, tür).
@@ -719,6 +733,7 @@ impl FileManagerApp {
             rename_buf: [0; diskfs::NAME_MAX],
             rename_len: 0,
             focused_control: 5,
+            actions_menu_open: false,
             last_click_idx: None,
             last_click_ms: 0,
             drag_item: None,
@@ -1651,50 +1666,10 @@ impl FileManagerApp {
                 (search_r.0 + 4, search_r.1 + 2, search_r.2.saturating_sub(8), search_r.3.saturating_sub(4)));
         }
 
-        // Aksiyon Butonları (Yenile, +Dosya, +Klasör, Sil, Aç)
-        let buttons = [
-            (Self::refresh_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Yenile", "Ref"), 0usize),
-            (Self::new_file_button_rect(win_x, win_y, win_w), crate::gui::ui_text("+Dosya", "+File"), 1usize),
-            (Self::new_folder_button_rect(win_x, win_y, win_w), crate::gui::ui_text("+Klasor", "+Dir"), 2usize),
-            (Self::delete_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Sil", "Del"), 3usize),
-            (Self::open_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Ac", "Open"), 4usize),
-        ];
-        for (r, label, ctrl_id) in buttons {
-            let is_focused = self.focused_control == ctrl_id;
-            let bg = if is_focused {
-                MinGuiCompositor::shade(Color::WINDOW_BG, 22)
-            } else {
-                MinGuiCompositor::shade(Color::WINDOW_BG, 8)
-            };
-            let border = if is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
-            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg);
-            fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, border);
-            let tw = MinGuiCompositor::text_width(label, 1);
-            let tx = r.0 + (r.2.saturating_sub(tw)) / 2;
-            let ty = r.1 + (r.3.saturating_sub(MinGuiCompositor::text_height())) / 2;
-            MinGuiCompositor::draw_string(fb, tx, ty, label, Color::TEXT_MAIN);
-        }
-
-        // Görünüm ve Önizleme düğmeleri
-        let view_label = if self.view_mode == ViewMode::Grid {
-            crate::gui::ui_text("Liste", "List")
-        } else {
-            crate::gui::ui_text("Izgara", "Grid")
-        };
-        let preview_active = self.preview_open;
-        let extra = [
-            (Self::view_button_rect(win_x, win_y, win_w), view_label, false, Color::ACCENT_GREEN),
-            (Self::preview_button_rect(win_x, win_y, win_w), crate::gui::ui_text("Önizle", "Preview"), preview_active, Color::ACCENT_BLUE),
-        ];
-        for (r, label, active, accent) in extra {
-            let bg = if active { MinGuiCompositor::shade(accent, -120) } else { MinGuiCompositor::shade(Color::WINDOW_BG, 8) };
-            fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg);
-            fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, if active { accent } else { Color::BORDER });
-            let tw = MinGuiCompositor::text_width(label, 1);
-            let tx = r.0 + (r.2.saturating_sub(tw)) / 2;
-            let ty = r.1 + (r.3.saturating_sub(MinGuiCompositor::text_height())) / 2;
-            MinGuiCompositor::draw_string(fb, tx, ty, label, Color::TEXT_MAIN);
-        }
+        // İşlemler, görünüm ve önizleme seçenekleri taşma menüsüne taşındı.
+        let actions = Self::actions_button_rect(win_x, win_y, win_w);
+        fb.draw_rect(actions.0, actions.1, actions.2, actions.3, Color::WINDOW_BG);
+        for dot in 0..3 { fb.draw_rect(actions.0 + 13, actions.1 + 5 + dot * 5, 2, 2, Color::TEXT_MAIN); }
 
         // Sol Gezinti Paneli (Sidebar) — Sürücüler ve Hızlı Klasörler
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
@@ -1964,6 +1939,25 @@ impl FileManagerApp {
             }
             sb.push_str(" | ");
             sb.push_str(self.path());
+        }
+        if self.actions_menu_open {
+            let (menu_x, menu_y, menu_w, menu_h) = Self::actions_menu_rect(win_x, win_y, win_w);
+            fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
+            fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+            fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
+            let labels = [
+                crate::gui::ui_text("Yenile", "Refresh"), crate::gui::ui_text("Yeni dosya", "New file"),
+                crate::gui::ui_text("Yeni klasör", "New folder"), crate::gui::ui_text("Sil", "Delete"),
+                crate::gui::ui_text("Aç", "Open"),
+                if self.view_mode == ViewMode::Grid { crate::gui::ui_text("Liste görünümü", "List view") } else { crate::gui::ui_text("Izgara görünümü", "Grid view") },
+                crate::gui::ui_text("Önizleme", "Preview"),
+            ];
+            for (i, label) in labels.iter().enumerate() {
+                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, i);
+                fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string_clipped(fb, item.0 + 8, item.1 + 6, label, Color::TEXT_MAIN,
+                    (item.0 + 4, item.1 + 1, item.2.saturating_sub(8), item.3.saturating_sub(2)));
+            }
         }
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);
         if self.rename_active {

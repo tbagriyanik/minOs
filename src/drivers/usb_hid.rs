@@ -622,14 +622,19 @@ impl XhciController {
         port: u8,
         max_packet: u16,
         ep0_ring: &TrbRing,
+        route_string: u32,
+        tt_hub_slot: u8,
+        tt_port: u8,
     ) {
         zero_page(input_phys);
-        // Input Control Context: A0 (Slot Context) ve A1 (EP0) birlikte
-        // eklenmelidir; Address Device yalnızca A1 ile Parameter Error verir.
+        // Input Control Context: A0 (Slot Context) ve A1 (EP0) birlikte eklenmelidir.
         self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
-        // Slot Context (input index 1). Context Entries = son geçerli DCI (EP0 = 1).
-        self.ctx_write(input_phys, 1, 0, ((speed as u32) << 20) | (1 << 27));
+        // Slot Context (input index 1). Route String | Speed | Context Entries = 1
+        self.ctx_write(input_phys, 1, 0, (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27));
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
+        if tt_hub_slot != 0 {
+            self.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+        }
         // EP0 Context (input index 2 = DCI 1 + 1).
         self.ctx_write(input_phys, 2, 0, 0);
         self.ctx_write(
@@ -652,11 +657,17 @@ impl XhciController {
         port: u8,
         max_packet: u16,
         ep0_ring: &TrbRing,
+        route_string: u32,
+        tt_hub_slot: u8,
+        tt_port: u8,
     ) -> bool {
         zero_page(input_phys);
         self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
-        self.ctx_write(input_phys, 1, 0, ((speed as u32) << 20) | (1 << 27));
+        self.ctx_write(input_phys, 1, 0, (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27));
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
+        if tt_hub_slot != 0 {
+            self.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+        }
         self.ctx_write(input_phys, 2, 1, (3 << 1) | (4 << 3) | ((max_packet as u32) << 16));
         let (deq, dcs) = ep0_ring.dequeue();
         self.ctx_write(input_phys, 2, 2, (deq as u32) | (dcs & 1));
@@ -1902,7 +1913,7 @@ unsafe fn mark_port_disconnected(
 
 /// Numaralandırma başarısız olduğunda slotu kapatır ve ayrılan DMA sayfalarını
 /// (aygıt başına 4 sayfa + arayüz başına 2 sayfa) geri verir.
-unsafe fn abort_port(
+unsafe fn abort_slot(
     c: &mut XhciController,
     pmm: &mut PhysicalMemoryManager,
     port: u8,
@@ -1910,12 +1921,17 @@ unsafe fn abort_port(
     base: u64,
     blocks: &[u64; MAX_HID_INTERFACES],
     block_count: usize,
+    is_root: bool,
 ) {
     c.disable_slot(slot);
-    let idx = (port - 1) as usize;
-    c.port_slot[idx] = 0xFF;
-    c.port_connected[idx] = false;
-    c.port_base_dma[idx] = 0;
+    if is_root && port > 0 {
+        let idx = (port - 1) as usize;
+        if idx < MAX_PORTS {
+            c.port_slot[idx] = 0xFF;
+            c.port_connected[idx] = false;
+            c.port_base_dma[idx] = 0;
+        }
+    }
     for i in 0..block_count {
         if blocks[i] != 0 {
             free_frames(pmm, blocks[i], 2);
@@ -1924,37 +1940,34 @@ unsafe fn abort_port(
     free_frames(pmm, base, 4);
 }
 
-unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryManager) {
+/// Bir USB aygıtını numaralandırır (kök portta veya bir USB hub arkasında).
+unsafe fn enumerate_device(
+    controller: usize,
+    root_port: u8,
+    speed: u8,
+    route_string: u32,
+    tt_hub_slot: u8,
+    tt_port: u8,
+    pmm: &mut PhysicalMemoryManager,
+) {
     let c = &mut CONTROLLERS[controller];
-    let idx = (port - 1) as usize;
-    crate::serial::print("[USB-HID] Port ");
-    crate::serial::print_dec(port as u64);
-    crate::serial::print(" taranıyor...\n");
-
-    let Some(speed) = c.reset_port(port) else {
-        crate::serial::print("[USB-HID] Port reset başarısız.\n");
-        c.port_slot[idx] = 0xFF;
-        return;
-    };
-    crate::serial::print("[USB-HID] Port ");
-    crate::serial::print_dec(port as u64);
-    crate::serial::print(" hız kodu=");
-    crate::serial::print_dec(speed as u64);
-    crate::serial::print("\n");
+    let is_root = route_string == 0;
+    let idx = (root_port - 1) as usize;
 
     let Some(slot) = c.enable_slot() else {
         crate::serial::print("[USB-HID] Slot ayrılamadı.\n");
-        c.port_slot[idx] = 0xFF;
+        if is_root && idx < MAX_PORTS {
+            c.port_slot[idx] = 0xFF;
+        }
         return;
     };
 
-    // Aygıt başına kalıcı DMA: input context, device context, EP0 halkası ve
-    // kontrol/veri tamponu (4 sayfa). Arayüz halkaları ve rapor tamponları
-    // ayrıca ayrılır (arayüz başına 2 sayfa).
     let Some(base) = pmm.allocate_contiguous_frames(4) else {
         crate::serial::print("[USB-HID] DMA belleği ayrılamadı.\n");
         c.disable_slot(slot);
-        c.port_slot[idx] = 0xFF;
+        if is_root && idx < MAX_PORTS {
+            c.port_slot[idx] = 0xFF;
+        }
         return;
     };
     let input_phys = base;
@@ -1968,32 +1981,40 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let mut blocks = [0u64; MAX_HID_INTERFACES];
     let mut block_count = 0usize;
 
-    // Cihaz bağlamı DCBAA'ya yazılmalı.
     let dcbaa = crate::drivers::phys_to_virt(c.dcbaa_phys) as *mut u64;
     core::ptr::write_volatile(dcbaa.add(slot as usize), device_phys);
 
     let mut ep0_ring = TrbRing::new(ep0_phys);
     let max_packet0 = initial_ep0_packet(speed);
-    c.build_address_context(input_phys, speed, port, max_packet0, &ep0_ring);
+    c.build_address_context(
+        input_phys,
+        speed,
+        root_port,
+        max_packet0,
+        &ep0_ring,
+        route_string,
+        tt_hub_slot,
+        tt_port,
+    );
 
     if !c.address_device(slot, input_phys) {
         crate::serial::print("[USB-HID] Address Device başarısız.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
     let buffer = crate::drivers::phys_to_virt(buffer_phys) as *mut u8;
 
-    // İlk 8 baytlık aygıt tanımlayıcısı (EP0 max packet boyutunu öğrenmek için).
+    // İlk 8 baytlık aygıt tanımlayıcısı
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0100, 0, buffer_phys, 8) else {
         crate::serial::print("[USB-HID] Aygıt tanımlayıcısı okunamadı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     };
     if n < 8 {
         crate::serial::print("[USB-HID] Kısa aygıt tanımlayıcısı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
@@ -2004,22 +2025,32 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
         max_packet0
     };
     if ep0_mps != max_packet0 {
-        if !c.update_ep0_max_packet(slot, input_phys, speed, port, ep0_mps, &ep0_ring) {
+        if !c.update_ep0_max_packet(
+            slot,
+            input_phys,
+            speed,
+            root_port,
+            ep0_mps,
+            &ep0_ring,
+            route_string,
+            tt_hub_slot,
+            tt_port,
+        ) {
             crate::serial::print("[USB-HID] EP0 max packet güncellenemedi.\n");
-            abort_port(c, pmm, port, slot, base, &blocks, block_count);
+            abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
             return;
         }
     }
 
-    // Tam aygıt tanımlayıcısı.
+    // Tam aygıt tanımlayıcısı
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0100, 0, buffer_phys, 18) else {
         crate::serial::print("[USB-HID] Tam aygıt tanımlayıcısı okunamadı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     };
     if n < 18 {
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
     let vendor = core::ptr::read_volatile(buffer.add(8)) as u16
@@ -2027,6 +2058,7 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let product = core::ptr::read_volatile(buffer.add(10)) as u16
         | ((core::ptr::read_volatile(buffer.add(11)) as u16) << 8);
     let device_class = core::ptr::read_volatile(buffer.add(4));
+    let device_protocol = core::ptr::read_volatile(buffer.add(6));
     crate::serial::print("[USB-HID] Aygıt VID:PID = ");
     crate::serial::print_hex(vendor as u64);
     crate::serial::print(":");
@@ -2035,25 +2067,34 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     crate::serial::print_hex(device_class as u64);
     crate::serial::print("\n");
 
-    // Hub arkasındaki klavye/fareler için yerel hub sürücüsü henüz yok;
-    // firmware legacy emülasyonu (PS/2 yolu) bu durumda devreye girer.
+    // USB Hub algılandı! Hub arkasındaki aygıtları yapılandır ve tara.
     if device_class == 0x09 {
-        crate::serial::print(
-            "[USB-HID] USB hub algılandı; hub arkasındaki aygıtlar için yerel sürücü yok.\n",
+        crate::serial::print("[USB-HID] USB hub algılandı; hub portları başlatılıyor...\n");
+        enumerate_hub(
+            controller,
+            root_port,
+            speed,
+            slot,
+            base,
+            buffer_phys,
+            buffer,
+            &mut ep0_ring,
+            route_string,
+            device_protocol,
+            pmm,
         );
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
         return;
     }
 
-    // Yapılandırma tanımlayıcısının başlığı.
+    // Yapılandırma tanımlayıcısının başlığı
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0200, 0, buffer_phys, 9) else {
         crate::serial::print("[USB-HID] Yapılandırma başlığı okunamadı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     };
     if n < 9 {
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
     let total = core::ptr::read_volatile(buffer.add(2)) as usize
@@ -2061,18 +2102,18 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let config_value = core::ptr::read_volatile(buffer.add(5));
     if total < 9 || total > PAGE as usize {
         crate::serial::print("[USB-HID] Yapılandırma boyutu geçersiz.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0200, 0, buffer_phys, total) else {
         crate::serial::print("[USB-HID] Yapılandırma tanımlayıcısı okunamadı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     };
     if n < 9 {
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
@@ -2081,11 +2122,10 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let found = parse_hid_interfaces(config_slice, &mut candidates);
     if found == 0 {
         crate::serial::print("[USB-HID] HID arayüzü bulunamadı; aygıt atlandı.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
-    // Her arayüzün rapor tanımlayıcısını oku ve klavye/fare sınıfını netleştir.
     let mut usable = [HidCandidate::empty(); MAX_HID_INTERFACES];
     let mut usable_count = 0usize;
     for i in 0..found {
@@ -2107,7 +2147,7 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     }
     if usable_count == 0 {
         crate::serial::print("[USB-HID] Kullanılabilir HID klavye/fare arayüzü yok.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
@@ -2115,22 +2155,17 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     let count = usable_count.min(free_slots).min(MAX_HID_INTERFACES);
     if count == 0 {
         crate::serial::print("[USB-HID] Boş HID aygıt yuvası yok.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
-    if count < usable_count {
-        crate::serial::print("[USB-HID] HID aygıt yuvası sınırı: bazı arayüzler atlandı.\n");
-    }
 
-    // Yapılandırmayı seç.
+    // Yapılandırmayı seç
     if c.control_out(&mut ep0_ring, slot, 0x00, 0x09, config_value as u16, 0, 0, 0).is_none() {
         crate::serial::print("[USB-HID] SET_CONFIGURATION başarısız.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
-    // Boot protokollü arayüzlerde boot rapor biçimine geç (0 = boot).
-    // Başarısız olursa rapor tanımlayıcısından çıkarılan özel düzen kullanılır.
     for i in 0..count {
         if usable[i].boot {
             if c.control_out(
@@ -2145,9 +2180,6 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
             )
             .is_none()
             {
-                crate::serial::print(
-                    "[USB-HID] SET_PROTOCOL (boot) başarısız; rapor tanımlayıcısı kullanılacak.\n",
-                );
                 usable[i].custom = true;
             } else {
                 usable[i].custom = false;
@@ -2157,7 +2189,6 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
         }
     }
 
-    // Arayüz başına kesme halkası + rapor tamponu (2 sayfa).
     for i in 0..count {
         match pmm.allocate_contiguous_frames(2) {
             Some(block) => {
@@ -2168,15 +2199,14 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
             }
             None => {
                 crate::serial::print("[USB-HID] Arayüz DMA belleği ayrılamadı.\n");
-                abort_port(c, pmm, port, slot, base, &blocks, block_count);
+                abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
                 return;
             }
         }
     }
 
-    // Tüm kesme IN uç noktalarını tek Configure Endpoint komutuyla kur.
     zero_page(input_phys);
-    let mut ctx_flags = 1u32; // A0: slot bağlamı.
+    let mut ctx_flags = 1u32;
     let mut max_dci = 0u8;
     for i in 0..count {
         let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
@@ -2190,9 +2220,12 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
         input_phys,
         1,
         0,
-        ((speed as u32) << 20) | (((max_dci as u32) & 0x1F) << 27),
+        (route_string & 0xFFFFF) | ((speed as u32) << 20) | (((max_dci as u32) & 0x1F) << 27),
     );
-    c.ctx_write(input_phys, 1, 1, (port as u32) << 16);
+    c.ctx_write(input_phys, 1, 1, (root_port as u32) << 16);
+    if tt_hub_slot != 0 {
+        c.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+    }
     for i in 0..count {
         let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
         let ep_index = dci as usize + 1;
@@ -2215,13 +2248,15 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
 
     if !c.configure_endpoint(slot, input_phys) {
         crate::serial::print("[USB-HID] Configure Endpoint başarısız.\n");
-        abort_port(c, pmm, port, slot, base, &blocks, block_count);
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
     }
 
-    c.port_base_dma[idx] = base;
-    c.port_slot[idx] = slot;
-    c.port_connected[idx] = true;
+    if is_root && idx < MAX_PORTS {
+        c.port_base_dma[idx] = base;
+        c.port_slot[idx] = slot;
+        c.port_connected[idx] = true;
+    }
 
     let mut led_owner = false;
     for i in 0..count {
@@ -2236,7 +2271,7 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
             active: true,
             controller: controller as u8,
             slot,
-            port,
+            port: root_port,
             kind,
             dci,
             interface: usable[i].interface,
@@ -2256,8 +2291,6 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
             leds: 0xFF,
         };
 
-        // Slotun EP0 halkası ortaktır; LED senkronizasyonu için yalnızca ilk
-        // klavyeye devredilir. Boot klavyeler LED çıktısını zorunlu destekler.
         if kind == HidKind::Keyboard
             && !led_owner
             && (usable[i].boot
@@ -2291,6 +2324,210 @@ unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryMa
     }
 }
 
+/// USB Hub sürücüsü: Hub'ı başlatır, portlarına güç verir ve arkasındaki cihazları numaralandırır.
+unsafe fn enumerate_hub(
+    controller: usize,
+    root_port: u8,
+    hub_speed: u8,
+    hub_slot: u8,
+    base: u64,
+    buffer_phys: u64,
+    buffer: *mut u8,
+    ep0_ring: &mut TrbRing,
+    parent_route_string: u32,
+    hub_protocol: u8,
+    pmm: &mut PhysicalMemoryManager,
+) {
+    let c = &mut CONTROLLERS[controller];
+    let is_root = parent_route_string == 0;
+    let idx = (root_port - 1) as usize;
+
+    // 1. Hub Yapılandırma tanımlayıcısını oku ve yapılandırmayı seç
+    core::ptr::write_bytes(buffer, 0, PAGE as usize);
+    let Some(n) = c.control_in(ep0_ring, hub_slot, 0x80, 0x06, 0x0200, 0, buffer_phys, 9) else {
+        crate::serial::print("[USB-HUB] Hub yapılandırma başlığı okunamadı.\n");
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    };
+    if n < 9 {
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    }
+    let config_val = core::ptr::read_volatile(buffer.add(5));
+
+    if c.control_out(ep0_ring, hub_slot, 0x00, 0x09, config_val as u16, 0, 0, 0).is_none() {
+        crate::serial::print("[USB-HUB] Hub SET_CONFIGURATION başarısız.\n");
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    }
+
+    // 2. Hub Tanımlayıcısını oku (GET_DESCRIPTOR: Type 0x29)
+    core::ptr::write_bytes(buffer, 0, PAGE as usize);
+    let Some(n) = c.control_in(ep0_ring, hub_slot, 0xA0, 0x06, 0x2900, 0, buffer_phys, 8) else {
+        crate::serial::print("[USB-HUB] Hub tanımlayıcısı okunamadı.\n");
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    };
+    if n < 3 {
+        crate::serial::print("[USB-HUB] Kısa hub tanımlayıcısı.\n");
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    }
+    let num_ports = core::ptr::read_volatile(buffer.add(2));
+    crate::serial::print("[USB-HUB] USB Hub port sayısı = ");
+    crate::serial::print_dec(num_ports as u64);
+    crate::serial::print("\n");
+
+    // 3. xHCI Slot Context içinde Hub=1 ve Number of Ports ayarla
+    let input_phys = base;
+    zero_page(input_phys);
+    c.ctx_write(input_phys, 0, 1, 1); // Add A0 (Slot Context)
+    let mtt = if hub_protocol == 2 { 1 << 25 } else { 0 };
+    c.ctx_write(
+        input_phys,
+        1,
+        0,
+        (parent_route_string & 0xFFFFF) | ((hub_speed as u32) << 20) | mtt | (1 << 26) | (1 << 27),
+    );
+    c.ctx_write(
+        input_phys,
+        1,
+        1,
+        ((root_port as u32) << 16) | ((num_ports as u32) << 24),
+    );
+    if !c.configure_endpoint(hub_slot, input_phys) {
+        crate::serial::print("[USB-HUB] Hub Configure Endpoint başarısız.\n");
+        c.disable_slot(hub_slot);
+        free_frames(pmm, base, 4);
+        return;
+    }
+
+    if is_root && idx < MAX_PORTS {
+        c.port_base_dma[idx] = base;
+        c.port_slot[idx] = hub_slot;
+        c.port_connected[idx] = true;
+    }
+
+    // 4. Her bir hub portuna güç ver (PORT_POWER = 8, SET_FEATURE = 0x03)
+    for p in 1..=num_ports {
+        c.control_out(ep0_ring, hub_slot, 0x23, 0x03, 8, p as u16, 0, 0);
+    }
+
+    // Port gücünün oturması için 50 ms bekle
+    let start_pwr = crate::boot::time::monotonic_ms();
+    while crate::boot::time::monotonic_ms().wrapping_sub(start_pwr) < 50 {
+        core::hint::spin_loop();
+    }
+
+    // 5. Hub portlarını tara ve bağlı aygıtları numaralandır
+    for p in 1..=num_ports.min(15) {
+        core::ptr::write_bytes(buffer, 0, PAGE as usize);
+        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4) else {
+            continue;
+        };
+        if len < 4 {
+            continue;
+        }
+        let port_status = core::ptr::read_volatile(buffer) as u16
+            | ((core::ptr::read_volatile(buffer.add(1)) as u16) << 8);
+
+        // Bit 0 = PORT_CONNECTION
+        if port_status & 1 == 0 {
+            continue;
+        }
+
+        crate::serial::print("[USB-HUB] Hub port ");
+        crate::serial::print_dec(p as u64);
+        crate::serial::print(" üzerinde aygıt algılandı, port sıfırlanıyor...\n");
+
+        // Portu sıfırla (PORT_RESET = 4)
+        c.control_out(ep0_ring, hub_slot, 0x23, 0x03, 4, p as u16, 0, 0);
+        let start_rst = crate::boot::time::monotonic_ms();
+        while crate::boot::time::monotonic_ms().wrapping_sub(start_rst) < 30 {
+            core::hint::spin_loop();
+        }
+
+        // Port durumunu tekrar oku
+        core::ptr::write_bytes(buffer, 0, PAGE as usize);
+        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4) else {
+            continue;
+        };
+        if len < 4 {
+            continue;
+        }
+        let post_reset_status = core::ptr::read_volatile(buffer) as u16
+            | ((core::ptr::read_volatile(buffer.add(1)) as u16) << 8);
+
+        // Hız tespiti: bit 9 = LOW_SPEED, bit 10 = HIGH_SPEED, aksi takdirde FULL_SPEED
+        let dev_speed = if post_reset_status & (1 << 9) != 0 {
+            SPEED_LOW // 1
+        } else if post_reset_status & (1 << 10) != 0 {
+            SPEED_HIGH // 3
+        } else {
+            SPEED_FULL // 2
+        };
+
+        crate::serial::print("[USB-HUB] Hub port ");
+        crate::serial::print_dec(p as u64);
+        crate::serial::print(" aygıt hızı=");
+        crate::serial::print_dec(dev_speed as u64);
+        crate::serial::print("\n");
+
+        // xHCI Route String hesaplama (4 bitlik katmanlı rota):
+        let mut route_str = parent_route_string;
+        let mut shift = 0;
+        while shift < 20 && (route_str & (0xF << shift)) != 0 {
+            shift += 4;
+        }
+        if shift < 20 {
+            route_str |= ((p as u32) & 0xF) << shift;
+        }
+
+        // Transaction Translator (TT) kuralları:
+        // Eğer hub High-Speed ise ve arkasındaki aygıt Low veya Full speed ise TT kullanılır.
+        let (tt_slot, tt_p) = if hub_speed == SPEED_HIGH && (dev_speed == SPEED_LOW || dev_speed == SPEED_FULL) {
+            (hub_slot, p)
+        } else {
+            (0, 0)
+        };
+
+        enumerate_device(
+            controller,
+            root_port,
+            dev_speed,
+            route_str,
+            tt_slot,
+            tt_p,
+            pmm,
+        );
+    }
+}
+
+unsafe fn enumerate_port(controller: usize, port: u8, pmm: &mut PhysicalMemoryManager) {
+    let c = &mut CONTROLLERS[controller];
+    let idx = (port - 1) as usize;
+    crate::serial::print("[USB-HID] Port ");
+    crate::serial::print_dec(port as u64);
+    crate::serial::print(" taranıyor...\n");
+
+    let Some(speed) = c.reset_port(port) else {
+        crate::serial::print("[USB-HID] Port reset başarısız.\n");
+        c.port_slot[idx] = 0xFF;
+        return;
+    };
+    crate::serial::print("[USB-HID] Port ");
+    crate::serial::print_dec(port as u64);
+    crate::serial::print(" hız kodu=");
+    crate::serial::print_dec(speed as u64);
+    crate::serial::print("\n");
+
+    enumerate_device(controller, port, speed, 0, 0, 0, pmm);
+}
 unsafe fn queue_hid_transfer(device: &mut HidDevice) {
     let c = &mut CONTROLLERS[device.controller as usize];
     let trb = Trb {

@@ -71,6 +71,9 @@ pub enum CertValidationError {
     NotYetValid,
     Expired,
     HostnameMismatch,
+    UntrustedRoot,
+    InvalidSignature,
+    UnsupportedSignatureAlgorithm,
 }
 
 /// DER length reader: returns (bytes_consumed, length). Handles long-form lengths.
@@ -623,6 +626,196 @@ fn der_tag_is_known(tag: u8) -> bool {
         tag,
         TAG_INTEGER | TAG_BIT_STRING | TAG_OCTET_STRING | TAG_OID | TAG_SEQUENCE
     )
+}
+
+/// Let's Encrypt ISRG Root X1 Kök CA sertifikası (DER formatında).
+pub const ISRG_ROOT_X1_DER: &[u8] = include_bytes!("roots/isrgrootx1.der");
+
+/// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
+pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+
+/// ECDSA with SHA-256 OID: 1.2.840.10045.4.3.2
+pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
+
+/// Ayrıştırılmış ham X.509 sertifika bileşenleri (zincir ve imza doğrulaması için).
+pub struct ParsedX509Cert<'a> {
+    pub tbs_raw: &'a [u8],
+    pub issuer_raw: &'a [u8],
+    pub subject_raw: &'a [u8],
+    pub sig_alg_oid: &'a [u8],
+    pub signature: &'a [u8],
+    pub cert_der: &'a [u8],
+}
+
+impl<'a> ParsedX509Cert<'a> {
+    /// DER sertifikasından temel alanları ayrıştırır.
+    pub fn parse(cert_der: &'a [u8]) -> Result<Self, CertValidationError> {
+        let (cert_tag, cert_vo, _, _) = read_der_tlv(cert_der, 0)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if cert_tag != TAG_SEQUENCE {
+            return Err(CertValidationError::InvalidDer);
+        }
+
+        // tbsCertificate ::= SEQUENCE
+        let (tbs_tag, tbs_vo, _tbs_vl, tbs_next) = read_der_tlv(cert_der, cert_vo)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if tbs_tag != TAG_SEQUENCE {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let tbs_raw = &cert_der[cert_vo..tbs_next];
+
+        // signatureAlgorithm AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY }
+        let (sa_tag, sa_vo, _, sa_next) = read_der_tlv(cert_der, tbs_next)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if sa_tag != TAG_SEQUENCE {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let (oid_tag, oid_vo, oid_vl, _) = read_der_tlv(cert_der, sa_vo)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if oid_tag != TAG_OID {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let sig_alg_oid = &cert_der[oid_vo..oid_vo + oid_vl];
+
+        // signatureValue BIT STRING
+        let (sv_tag, sv_vo, sv_vl, _) = read_der_tlv(cert_der, sa_next)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if sv_tag != TAG_BIT_STRING || sv_vl == 0 {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let unused_bits = cert_der[sv_vo];
+        if unused_bits != 0 {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let signature = &cert_der[sv_vo + 1..sv_vo + sv_vl];
+
+        // TBS alanları içinden issuer ve subject çıkarılır
+        let mut pos = tbs_vo;
+        let (first_tag, _, _, first_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if first_tag == TAG_CONTEXT_0 {
+            pos = first_next;
+        }
+        // serialNumber
+        let (_, _, _, serial_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        pos = serial_next;
+        // signature
+        let (_, _, _, sig_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        pos = sig_next;
+
+        // issuer
+        let iss_start = pos;
+        let (iss_tag, _, _, iss_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if iss_tag != TAG_SEQUENCE {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let issuer_raw = &cert_der[iss_start..iss_next];
+        pos = iss_next;
+
+        // validity
+        let (_, _, _, val_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        pos = val_next;
+
+        // subject
+        let sub_start = pos;
+        let (sub_tag, _, _, sub_next) = read_der_tlv(cert_der, pos)
+            .map_err(|_| CertValidationError::InvalidDer)?;
+        if sub_tag != TAG_SEQUENCE {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let subject_raw = &cert_der[sub_start..sub_next];
+
+        Ok(ParsedX509Cert {
+            tbs_raw,
+            issuer_raw,
+            subject_raw,
+            sig_alg_oid,
+            signature,
+            cert_der,
+        })
+    }
+
+    /// Bu sertifikanın imzasını veren (issuer) sertifikanın açık anahtarıyla doğrular.
+    pub fn verify_signature_with_issuer(&self, issuer_cert_der: &[u8]) -> Result<(), CertValidationError> {
+        if self.sig_alg_oid == OID_SHA256_WITH_RSA_ENCRYPTION {
+            let issuer_rsa_key = parse_x509_rsa_public_key(issuer_cert_der)
+                .map_err(|_| CertValidationError::InvalidDer)?;
+            crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha256(&issuer_rsa_key, self.tbs_raw, self.signature)
+                .map_err(|_| CertValidationError::InvalidSignature)
+        } else if self.sig_alg_oid == OID_ECDSA_WITH_SHA256 {
+            let issuer_ec_key = parse_x509_ec_public_key(issuer_cert_der)
+                .map_err(|_| CertValidationError::InvalidDer)?;
+            let mut h = crate::drivers::crypto::sha256::Sha256::new();
+            h.update(self.tbs_raw);
+            let digest = h.finalize();
+            let (r, s) = crate::drivers::crypto::ecc::parse_ecdsa_der_signature(self.signature)
+                .ok_or(CertValidationError::InvalidSignature)?;
+            if crate::drivers::crypto::ecc::ecdsa_verify_p256(&issuer_ec_key, &digest, &r, &s) {
+                Ok(())
+            } else {
+                Err(CertValidationError::InvalidSignature)
+            }
+        } else {
+            Err(CertValidationError::UnsupportedSignatureAlgorithm)
+        }
+    }
+}
+
+/// Gömülü kök CA listesi (ISRG Root X1).
+pub const TRUSTED_ROOTS: &[&[u8]] = &[ISRG_ROOT_X1_DER];
+
+/// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.
+/// `chain`: Yaprak (leaf) sunucu sertifikasından ara sertifikalara doğru sıralı dizi.
+pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationError> {
+    if chain.is_empty() {
+        return Err(CertValidationError::InvalidDer);
+    }
+
+    // 1. Her bir sertifikayı ayrıştır
+    let mut parsed_chain = Vec::with_capacity(chain.len());
+    for &cert_der in chain {
+        parsed_chain.push(ParsedX509Cert::parse(cert_der)?);
+    }
+
+    // 2. Yapraktan başlayarak zincirdeki her sertifikanın bir sonraki tarafından imzalandığını doğrula
+    for i in 0..parsed_chain.len() {
+        let current = &parsed_chain[i];
+
+        // Eğer mevcut sertifikanın vereni (issuer) güvenilen köklerimizden biriyle eşleşiyorsa
+        let mut matched_root = None;
+        for &root_der in TRUSTED_ROOTS {
+            if let Ok(root_parsed) = ParsedX509Cert::parse(root_der) {
+                if current.issuer_raw == root_parsed.subject_raw {
+                    matched_root = Some(root_der);
+                    break;
+                }
+            }
+        }
+
+        if let Some(root_der) = matched_root {
+            // Kök sertifika açık anahtarıyla mevcut sertifikanın imzasını doğrula
+            current.verify_signature_with_issuer(root_der)?;
+            return Ok(());
+        }
+
+        // Kök ile doğrudan eşleşmediyse, zincirdeki sıradaki ara (intermediate) sertifikaya bak
+        if i + 1 < parsed_chain.len() {
+            let next_issuer = &parsed_chain[i + 1];
+            if current.issuer_raw != next_issuer.subject_raw {
+                return Err(CertValidationError::UntrustedRoot);
+            }
+            current.verify_signature_with_issuer(chain[i + 1])?;
+        } else {
+            // Zincirin sonuna ulaşıldı ama güvenilen hiçbir kök bulunamadı
+            return Err(CertValidationError::UntrustedRoot);
+        }
+    }
+
+    Err(CertValidationError::UntrustedRoot)
 }
 
 #[cfg(test)]

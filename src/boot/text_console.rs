@@ -142,10 +142,15 @@ pub fn is_active() -> bool { ACTIVE.load(Ordering::Acquire) }
 /// Mevcut ekran durumunu kaydet (GUI'den boot mesajlarına geçiş için)
 pub unsafe fn save_screen() {
     if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-        let len = screen.width * screen.height;
+        let len = screen.width.checked_mul(screen.height).unwrap_or(usize::MAX);
         if len <= crate::drivers::video::BACKBUFFER_LEN {
-            for i in 0..len {
-                SAVED_SCREEN_BUF[i] = core::ptr::read_volatile(screen.address.offset(i as isize));
+            let pitch_words = screen.pitch / 4;
+            for y in 0..screen.height {
+                for x in 0..screen.width {
+                    let packed = y * screen.width + x;
+                    let visible = y * pitch_words + x;
+                    SAVED_SCREEN_BUF[packed] = core::ptr::read_volatile(screen.address.add(visible));
+                }
             }
             SAVED_SCREEN_DIM = Some((screen.width, screen.height));
         }
@@ -156,15 +161,27 @@ pub unsafe fn save_screen() {
 pub unsafe fn restore_screen() {
     if let Some((saved_w, saved_h)) = SAVED_SCREEN_DIM {
         if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-            let len = screen.width * screen.height;
+            let len = screen.width.checked_mul(screen.height).unwrap_or(usize::MAX);
             if len <= crate::drivers::video::BACKBUFFER_LEN && screen.width == saved_w && screen.height == saved_h {
-                for i in 0..len {
-                    core::ptr::write_volatile(screen.address.offset(i as isize), SAVED_SCREEN_BUF[i]);
+                let pitch_words = screen.pitch / 4;
+                for y in 0..screen.height {
+                    for x in 0..screen.width {
+                        let packed = y * screen.width + x;
+                        let visible = y * pitch_words + x;
+                        core::ptr::write_volatile(screen.address.add(visible), SAVED_SCREEN_BUF[packed]);
+                    }
                 }
-                screen.flush();
             }
         }
     }
+}
+
+/// Keep the boot console framebuffer in sync when the main GUI changes video mode.
+pub unsafe fn update_framebuffer(fb: Framebuffer) {
+    FB = Some(fb);
+    SAVED_SCREEN_DIM = None;
+    CURSOR_X = 16;
+    CURSOR_Y = 16;
 }
 
 /// Text console'u tekrar aktif hale getir (welcome ekranından boot mesajlarına dönüş için)

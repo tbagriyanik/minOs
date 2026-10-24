@@ -99,6 +99,7 @@ pub struct TaskManagerApp {
     /// Sonlandırma ve liste durumu mesajı.
     pub status: &'static str,
     pub launch_menu_open: bool,
+    pub actions_menu_open: bool,
     pub launch_selected: usize,
     pub active_tab: usize,
     pub focused_control: usize,
@@ -128,6 +129,7 @@ impl TaskManagerApp {
             ramdisk_used: 0, ramdisk_files: 0,
             status: "Ready",
             launch_menu_open: false,
+            actions_menu_open: false,
             launch_selected: 0,
             active_tab: 0,
             focused_control: 0,
@@ -161,6 +163,19 @@ impl TaskManagerApp {
         let width = 110.min(win_w.saturating_sub(20) / 2).max(1);
         let gap = 8;
         (kill.0.saturating_sub(gap + width), kill.1, width, kill.3)
+    }
+
+    pub fn actions_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(38), win_y + TM_ACTION_Y, 28, TM_ACTION_H)
+    }
+
+    pub fn actions_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+        (win_x + win_w.saturating_sub(190), win_y + TM_ACTION_Y + TM_ACTION_H + 4, 180, 52)
+    }
+
+    pub fn actions_menu_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
+        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w);
+        (x + 4, y + 4 + index * 22, w - 8, 20)
     }
 
     pub fn launch_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
@@ -356,19 +371,11 @@ impl TaskManagerApp {
             header.push_u2((self.alive_count().min(99)) as u32);
             MinGuiCompositor::draw_string(fb, win_x + 10, win_y + TM_ACTION_Y + 4, header.as_str(), Color::ACCENT_PINK);
 
-            // "Program Aç" ve "Sonlandır" düğmeleri (yalnızca ilk sekmede gösterilir)
-            let br = Self::kill_btn_rect(win_x, win_y, win_w);
-            fb.draw_rect(br.0, br.1, br.2, br.3, Color::ACCENT_RED);
-            MinGuiCompositor::draw_string_clipped(fb, br.0 + 8, br.1 + 5, crate::gui::ui_text("Sonlandır", "End Task"), MinGuiCompositor::text_on(Color::ACCENT_RED),
-                (br.0 + 2, br.1 + 1, br.2.saturating_sub(4), br.3.saturating_sub(2)));
-
-            let launch_button = Self::launch_button_rect(win_x, win_y, win_w);
-            fb.draw_rect(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_BLUE);
-            MinGuiCompositor::draw_string_clipped(fb, launch_button.0 + 8, launch_button.1 + 5, crate::gui::ui_text("Program Aç", "Run Program"), MinGuiCompositor::text_on(Color::ACCENT_BLUE),
-                (launch_button.0 + 2, launch_button.1 + 1, launch_button.2.saturating_sub(4), launch_button.3.saturating_sub(2)));
-
-            if self.focused_control == 2 { fb.draw_rect_outline(launch_button.0, launch_button.1, launch_button.2, launch_button.3, Color::ACCENT_YELLOW); }
-            if self.focused_control == 3 { fb.draw_rect_outline(br.0, br.1, br.2, br.3, Color::ACCENT_YELLOW); }
+            // Uygulama eylemleri taşma menüsüne alınır.
+            let actions = Self::actions_button_rect(win_x, win_y, win_w);
+            fb.draw_rect(actions.0, actions.1, actions.2, actions.3, Color::WINDOW_BG);
+            for dot in 0..3 { fb.draw_rect(actions.0 + 13, actions.1 + 5 + dot * 5, 2, 2, Color::TEXT_MAIN); }
+            if self.focused_control == 2 { fb.draw_rect_outline(actions.0, actions.1, actions.2, actions.3, Color::ACCENT_YELLOW); }
             // Sütun başlıkları (genişletilmiş ve ferah aralıklar)
             MinGuiCompositor::draw_string_clipped(fb, win_x + 12, win_y + TM_HEADER_Y + 2, crate::gui::ui_text("Uygulama", "Application"), Color::TEXT_MUTED,
                 (win_x + 10, win_y + TM_HEADER_Y, 160, TM_HEADER_H));
@@ -539,6 +546,18 @@ impl TaskManagerApp {
         resources.push_str(status);
         MinGuiCompositor::draw_string_clipped(fb, win_x + 10, status_y + 5, resources.as_str(), Color::TEXT_MUTED,
             (win_x + 8, status_y + 2, win_w.saturating_sub(16), status_h.saturating_sub(4)));
+
+        if self.actions_menu_open {
+            let (menu_x, menu_y, menu_w, menu_h) = Self::actions_menu_rect(win_x, win_y, win_w);
+            fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
+            fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
+            for (index, label) in [crate::gui::ui_text("Program Aç", "Run Program"), crate::gui::ui_text("Sonlandır", "End Task")].iter().enumerate() {
+                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, index);
+                fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
+                MinGuiCompositor::draw_string_clipped(fb, item.0 + 8, item.1 + 5, label, Color::TEXT_MAIN,
+                    (item.0 + 3, item.1 + 1, item.2.saturating_sub(6), item.3.saturating_sub(2)));
+            }
+        }
 
         if self.launch_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = Self::launch_menu_rect(win_x, win_y, win_w);

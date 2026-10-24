@@ -93,6 +93,9 @@ pub enum NotepadMenuAction {
     Replace,
     About,
     Shortcuts,
+    FileCategory,
+    EditCategory,
+    HelpCategory,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -127,6 +130,14 @@ const HELP_MENU_ITEMS: [MenuItemDef; 2] = [
     MenuItemDef { label_tr: "Kısayol Tuşları", label_en: "Shortcuts", shortcut: "", action: NotepadMenuAction::Shortcuts },
 ];
 
+const OVERFLOW_MENU_ITEMS: [MenuItemDef; 5] = [
+    MenuItemDef { label_tr: "Dosya işlemleri", label_en: "File actions", shortcut: "▶", action: NotepadMenuAction::FileCategory },
+    MenuItemDef { label_tr: "Düzenleme", label_en: "Edit", shortcut: "▶", action: NotepadMenuAction::EditCategory },
+    MenuItemDef { label_tr: "Yardım", label_en: "Help", shortcut: "▶", action: NotepadMenuAction::HelpCategory },
+    MenuItemDef { label_tr: "Temizle", label_en: "Clear", shortcut: "", action: NotepadMenuAction::Clear },
+    MenuItemDef { label_tr: "Kaydet", label_en: "Save", shortcut: "Ctrl+S", action: NotepadMenuAction::Save },
+];
+
 impl NotepadApp {
     // --- Menü geometrisi ---
     // Çizim (render) ile fare tıklama testlerinin aynı koordinatları
@@ -137,6 +148,7 @@ impl NotepadApp {
             1 => &FILE_MENU_ITEMS,
             2 => &EDIT_MENU_ITEMS,
             3 => &HELP_MENU_ITEMS,
+            4 => &OVERFLOW_MENU_ITEMS,
             _ => &[],
         }
     }
@@ -153,8 +165,12 @@ impl NotepadApp {
 
     /// Menü kutusunun sol üst köşesinin pencere içi X koordinatı.
     #[inline(always)]
-    pub fn menu_box_x(menu: u8) -> usize {
-        Self::menu_tab_rect(menu).0
+    pub fn menu_box_x(_menu: u8, win_w: usize) -> usize {
+        win_w.saturating_sub(Self::menu_box_w() + crate::gui::sp(8))
+    }
+
+    pub fn overflow_button_rect(win_w: usize) -> (usize, usize, usize, usize) {
+        (win_w.saturating_sub(crate::gui::sp(38)), crate::gui::sp(2), crate::gui::sp(28), toolbar_h().saturating_sub(crate::gui::sp(4)))
     }
 
     /// Menü kutusunun sol üst köşesinin pencere içi Y koordinatı.
@@ -271,6 +287,15 @@ impl NotepadApp {
             }
             NotepadMenuAction::Shortcuts => {
                 self.status_msg = crate::gui::ui_text("Ctrl+N Yeni, Ctrl+O Aç, Ctrl+S Kaydet, Ctrl+Z/Y Geri/İleri", "Ctrl+N New, Ctrl+O Open, Ctrl+S Save, Ctrl+Z/Y Undo/Redo");
+            }
+            NotepadMenuAction::FileCategory => {
+                self.menu = 1;
+            }
+            NotepadMenuAction::EditCategory => {
+                self.menu = 2;
+            }
+            NotepadMenuAction::HelpCategory => {
+                self.menu = 3;
             }
         }
     }
@@ -1414,25 +1439,11 @@ impl NotepadApp {
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, toolbar_h(), Color::TITLE_BAR);
         let english = crate::gui::ui_english();
 
-        let tab_defs = [
-            (1u8, crate::gui::ui_text("Dosya", "File")),
-            (2u8, crate::gui::ui_text("Düzen", "Edit")),
-            (3u8, crate::gui::ui_text("Yardım", "Help")),
-        ];
-        for &(m_id, label) in &tab_defs {
-            let (tx, tw) = Self::menu_tab_rect(m_id);
-            if self.menu == m_id {
-                fb.draw_rect(win_x + tx, win_y + 32, tw, toolbar_h().saturating_sub(4), Color::WINDOW_BG);
-                fb.draw_rect_outline(win_x + tx, win_y + 32, tw, toolbar_h().saturating_sub(4), Color::BORDER);
-            }
-            MinGuiCompositor::draw_string(fb, win_x + tx + crate::gui::sp(6), win_y + 36, label, Color::TEXT_MAIN);
+        let overflow = Self::overflow_button_rect(win_w);
+        fb.draw_rect(win_x + overflow.0, win_y + 30 + overflow.1, overflow.2, overflow.3, Color::WINDOW_BG);
+        for dot in 0..3 {
+            fb.draw_rect(win_x + overflow.0 + overflow.2 / 2 - 1, win_y + 30 + overflow.1 + 4 + dot * 5, 2, 2, Color::TEXT_MAIN);
         }
-
-        // Hızlı Aksiyon Düğmeleri (sağa hizalı)
-        fb.draw_rect(win_x + win_w.saturating_sub(130), win_y + 32, 56, 20, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(124), win_y + 36, crate::gui::ui_text("Temizle", "Clear"), Color::ACCENT_RED);
-        fb.draw_rect(win_x + win_w.saturating_sub(68), win_y + 32, 56, 20, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(60), win_y + 36, crate::gui::ui_text("Kaydet", "Save"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
 
         // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         // Bul / Değiştir Çubuğu (Find & Replace Bar)
@@ -1622,7 +1633,7 @@ impl NotepadApp {
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
-            let mx = win_x + Self::menu_box_x(self.menu);
+            let mx = win_x + Self::menu_box_x(self.menu, win_w);
             let box_y = win_y + Self::menu_box_y();
             let box_w = Self::menu_box_w();
             let box_h = Self::menu_box_h(self.menu);

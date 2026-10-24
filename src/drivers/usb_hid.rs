@@ -1659,13 +1659,13 @@ fn handle_custom_mouse_report(
         mouse.right_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_RIGHT) != 0;
         mouse.middle_button = (buttons & crate::drivers::usb_mouse::MOUSE_BTN_MIDDLE) != 0;
     } else {
-        // Göreli hareket; 12/16 bit eksenler ±127 aralığına sıkıştırılır.
+        // Göreli hareket; yüksek çözünürlüklü USB farelerdeki tam eksen verisi korunur.
         let raw_x = get_bits(layout.x_start, layout.x_size);
         let raw_y = get_bits(layout.y_start, layout.y_size);
-        let dx = sign_extend(raw_x, layout.x_size).clamp(-127, 127) as i8;
+        let dx = sign_extend(raw_x, layout.x_size).clamp(-2048, 2047);
         // HID'de pozitif Y aşağıdır; PS/2 katmanı pozitif Y yukarı bekler.
-        let dy = (-sign_extend(raw_y, layout.y_size)).clamp(-127, 127) as i8;
-        mouse.update_packet(buttons, dx, dy, screen_w, screen_h);
+        let dy = (-sign_extend(raw_y, layout.y_size)).clamp(-2048, 2047);
+        mouse.update_packet_i32(buttons, dx, dy, screen_w, screen_h);
     }
 
     if layout.wheel_size > 0 {

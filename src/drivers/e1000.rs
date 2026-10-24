@@ -51,9 +51,10 @@ fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
     io_out32(PCI_CONFIG_DATA, val);
 }
 
-/// Intel ve VMware PCI kimlikleri
+/// Intel, VMware ve Realtek PCI kimlikleri
 const E1000_VENDOR: u32 = 0x8086;
 const VMWARE_VENDOR: u32 = 0x15AD;
+const REALTEK_VENDOR: u32 = 0x10EC;
 
 // Aynı descriptor/MMIO düzenini kullanan klasik 8254x ve 8257x denetleyicileri (Intel e1000 / e1000e).
 const E1000_DEVICES: [u32; 10] = [
@@ -75,10 +76,25 @@ const VMWARE_DEVICES: [u32; 2] = [
     0x0720, // VMware VMXNET Virtual Ethernet Controller
 ];
 
+// Realtek PCIe Gigabit & Fast Ethernet Aygıtları (RTL8168, RTL8169, RTL8101, RTL8125 vb.)
+const REALTEK_DEVICES: [u32; 10] = [
+    0x8168, // RTL8111/8168/8411 PCI Express Gigabit Ethernet (En yaygın anakart PCIe NIC)
+    0x8169, // RTL8169 Gigabit Ethernet
+    0x8167, // RTL8169SC Gigabit Ethernet
+    0x8136, // RTL8101E/RTL8102E PCI Express Fast Ethernet
+    0x8125, // RTL8125 2.5GbE PCIe NIC
+    0x8161, // RTL8111G/8168G PCIe NIC
+    0x8162, // RTL8111EP PCIe NIC
+    0x8401, // RTL8401E Fast Ethernet
+    0x8402, // RTL8402 Fast Ethernet
+    0x8411, // RTL8411 Gigabit Ethernet
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NicType {
     IntelE1000,
     VmwareVmxnet3,
+    RealtekR8169,
 }
 
 static mut DETECTED_NIC: NicType = NicType::IntelE1000;
@@ -91,8 +107,39 @@ pub fn nic_name() -> &'static str {
     match unsafe { DETECTED_NIC } {
         NicType::IntelE1000 => "Intel e1000",
         NicType::VmwareVmxnet3 => "VMware VMXNET3",
+        NicType::RealtekR8169 => "Realtek PCIe GbE (RTL8168/8169)",
     }
 }
+
+// ---------------------------------------------------------------------------
+// Realtek RTL8168 / RTL8169 PCIe MMIO Kayıt Ofsetleri ve Sabitleri
+// ---------------------------------------------------------------------------
+const RTL_REG_IDR0: u32      = 0x0000; // MAC adresi bayt 0..3
+const RTL_REG_IDR4: u32      = 0x0004; // MAC adresi bayt 4..5
+const RTL_REG_MAR0: u32      = 0x0008; // Multicast filter 0..3
+const RTL_REG_MAR4: u32      = 0x000C; // Multicast filter 4..7
+const RTL_REG_TXADDR: u32    = 0x0020; // TX Descriptor ring tabanı (64-bit: 0x20..0x27)
+const RTL_REG_COMMAND: u32   = 0x0037; // Command Register (RST, RE, TE)
+const RTL_REG_TXPOLL: u32    = 0x0038; // Transmit Priority Polling (NPQ = bit 6)
+const RTL_REG_IMR: u32       = 0x003C; // Interrupt Mask Register (16-bit)
+const RTL_REG_ISR: u32       = 0x003E; // Interrupt Status Register (16-bit)
+const RTL_REG_TCR: u32       = 0x0040; // Transmit Configuration Register
+const RTL_REG_RCR: u32       = 0x0044; // Receive Configuration Register
+const RTL_REG_9346CR: u32    = 0x0050; // 93C46 Command Register (Config write enable)
+const RTL_REG_CONFIG1: u32   = 0x0052; // Config1 Register
+const RTL_REG_PHYSTATUS: u32 = 0x006C; // PHY Status Register (Link status = bit 1)
+const RTL_REG_RMS: u32       = 0x00DA; // Rx Max Packet Size (16-bit)
+const RTL_REG_RXADDR: u32    = 0x00E4; // RX Descriptor ring tabanı (64-bit: 0xE4..0xEB)
+
+const RTL_CMD_RESET: u8 = 0x10;
+const RTL_CMD_RX_EN: u8 = 0x08;
+const RTL_CMD_TX_EN: u8 = 0x04;
+
+// Realtek Descriptor Bitleri
+const RTL_DESC_OWN: u32  = 1 << 31;
+const RTL_DESC_EOR: u32  = 1 << 30; // Ring Sonu (End of Ring)
+const RTL_DESC_FS: u32   = 1 << 29; // First Segment
+const RTL_DESC_LS: u32   = 1 << 28; // Last Segment
 
 // ---------------------------------------------------------------------------
 // MMIO kayıt ofsetleri (Intel e1000)
@@ -215,6 +262,26 @@ static mut TX_TAIL: usize = 0;
 pub static mut MAC_ADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 
 #[inline(always)]
+unsafe fn mmio_read8(off: u32) -> u8 {
+    core::ptr::read_volatile((MMIO_BASE + off as u64) as *const u8)
+}
+
+#[inline(always)]
+unsafe fn mmio_write8(off: u32, val: u8) {
+    core::ptr::write_volatile((MMIO_BASE + off as u64) as *mut u8, val);
+}
+
+#[inline(always)]
+unsafe fn mmio_read16(off: u32) -> u16 {
+    core::ptr::read_volatile((MMIO_BASE + off as u64) as *const u16)
+}
+
+#[inline(always)]
+unsafe fn mmio_write16(off: u32, val: u16) {
+    core::ptr::write_volatile((MMIO_BASE + off as u64) as *mut u16, val);
+}
+
+#[inline(always)]
 unsafe fn mmio_read32(off: u32) -> u32 {
     core::ptr::read_volatile((MMIO_BASE + off as u64) as *const u32)
 }
@@ -241,6 +308,10 @@ pub fn link_up() -> bool {
                 let v = mmio_read32(VMXNET3_REG_CMD);
                 (v & 1) != 0
             }
+            NicType::RealtekR8169 => {
+                // PHY status bit 1: 1 = Link Up, 0 = Link Down
+                (mmio_read8(RTL_REG_PHYSTATUS) & 0x02) != 0
+            }
         }
     }
 }
@@ -248,6 +319,19 @@ pub fn link_up() -> bool {
 // ---------------------------------------------------------------------------
 // EEPROM / Register'dan MAC okuma
 // ---------------------------------------------------------------------------
+
+unsafe fn read_mac_realtek() -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    let idr0 = mmio_read32(RTL_REG_IDR0);
+    let idr4 = mmio_read32(RTL_REG_IDR4);
+    mac[0] = (idr0 & 0xFF) as u8;
+    mac[1] = ((idr0 >> 8) & 0xFF) as u8;
+    mac[2] = ((idr0 >> 16) & 0xFF) as u8;
+    mac[3] = ((idr0 >> 24) & 0xFF) as u8;
+    mac[4] = (idr4 & 0xFF) as u8;
+    mac[5] = ((idr4 >> 8) & 0xFF) as u8;
+    mac
+}
 
 unsafe fn read_mac_vmxnet3() -> [u8; 6] {
     let mut mac = [0u8; 6];
@@ -343,41 +427,66 @@ pub fn transmit(packet: &[u8]) -> bool {
         let buf_phys = RINGS_ADDR
             + core::mem::offset_of!(E1000Rings, tx_bufs) as u64
             + (tail as u64) * TX_BUF_SIZE as u64;
-        desc.addr = buf_phys;
 
-        // buf'a kopyala (HHDM üzerinden)
+        // Tampona kopyala
         let buf_ptr = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
         core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
-        desc.length = packet.len() as u16;
-        // EOP (bit 0 = 0x01), IFCS (bit 1 = 0x02), RS (bit 3 = 0x08)
-        desc.cmd = 0x01 | 0x02 | 0x08;
-        desc.status = 0;
-        desc.cso = 0;
-        desc.css = 0;
-        desc.special = 0;
 
-        TX_TAIL = (tail + 1) % TX_RING_SIZE;
-        mmio_write32(REG_TDT, TX_TAIL as u32);
+        if DETECTED_NIC == NicType::RealtekR8169 {
+            let eor = if tail == TX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+            let desc_u32 = desc as *mut TxDescriptor as *mut u32;
+            let opts1 = RTL_DESC_OWN | RTL_DESC_FS | RTL_DESC_LS | eor | (packet.len() as u32 & 0x3FFF);
+            core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
+            core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
+            core::ptr::write_volatile(desc_u32.add(3), 0);
+            core::ptr::write_volatile(desc_u32.add(2), opts1);
 
-        // DD (Descriptor Done - bit 0) kontrolü
-        let mut spins = 0;
-        let desc_ptr = &(*rings()).tx_ring[tail] as *const TxDescriptor;
-        loop {
-            let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
-            if status & 0x01 != 0 {
-                return true;
+            TX_TAIL = (tail + 1) % TX_RING_SIZE;
+            mmio_write8(RTL_REG_TXPOLL, 0x40);
+
+            let mut spins = 0;
+            loop {
+                let status_opts1 = core::ptr::read_volatile(desc_u32.add(2));
+                if (status_opts1 & RTL_DESC_OWN) == 0 {
+                    return true;
+                }
+                spins += 1;
+                if spins > 200_000 {
+                    return false;
+                }
+                core::hint::spin_loop();
             }
-            spins += 1;
-            if spins > 200_000 {
-                // Descriptor tamamlanmadı; çağırana başarılı iletim bildirme.
-                return false;
+        } else {
+            desc.addr = buf_phys;
+            desc.length = packet.len() as u16;
+            // EOP (bit 0 = 0x01), IFCS (bit 1 = 0x02), RS (bit 3 = 0x08)
+            desc.cmd = 0x01 | 0x02 | 0x08;
+            desc.status = 0;
+            desc.cso = 0;
+            desc.css = 0;
+            desc.special = 0;
+
+            TX_TAIL = (tail + 1) % TX_RING_SIZE;
+            mmio_write32(REG_TDT, TX_TAIL as u32);
+
+            // DD (Descriptor Done - bit 0) kontrolü
+            let mut spins = 0;
+            let desc_ptr = &(*rings()).tx_ring[tail] as *const TxDescriptor;
+            loop {
+                let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
+                if status & 0x01 != 0 {
+                    return true;
+                }
+                spins += 1;
+                if spins > 200_000 {
+                    return false;
+                }
+                core::hint::spin_loop();
             }
-            core::hint::spin_loop();
         }
     }
 }
 
-/// Gelen bir paketi okur (varsa), `buf` içine kopyalar, uzunluk döner.
 pub fn receive(buf: &mut [u8]) -> usize {
     if !is_ready() {
         return 0;
@@ -385,33 +494,56 @@ pub fn receive(buf: &mut [u8]) -> usize {
     unsafe {
         let idx = RX_TAIL;
         let desc_ptr = &mut (*rings()).rx_ring[idx] as *mut RxDescriptor;
-        let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
-        if status & 0x01 == 0 {
-            return 0; // DD biti ayarlanmadı
-        }
-        let len = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).length)) as usize;
-        let errors = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).errors));
-        let addr = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).addr));
 
-        if len == 0 || len > buf.len() || errors != 0 || status & 0x02 == 0 {
-            // Bu buffer'ı yeniden kullan
+        if DETECTED_NIC == NicType::RealtekR8169 {
+            let desc_u32 = desc_ptr as *mut u32;
+            let opts1 = core::ptr::read_volatile(desc_u32.add(2));
+            if (opts1 & RTL_DESC_OWN) != 0 {
+                return 0;
+            }
+            let len = (opts1 & 0x3FFF) as usize;
+            let eor = if idx == RX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+
+            if len == 0 || len > buf.len() || (opts1 & (RTL_DESC_FS | RTL_DESC_LS)) != (RTL_DESC_FS | RTL_DESC_LS) {
+                core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+                RX_TAIL = (idx + 1) % RX_RING_SIZE;
+                return 0;
+            }
+
+            let addr_lo = core::ptr::read_volatile(desc_u32.add(0)) as u64;
+            let addr_hi = core::ptr::read_volatile(desc_u32.add(1)) as u64;
+            let addr = addr_lo | (addr_hi << 32);
+            let src = crate::drivers::phys_to_virt(addr) as *const u8;
+            core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
+
+            core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+            RX_TAIL = (idx + 1) % RX_RING_SIZE;
+            len
+        } else {
+            let status = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).status));
+            if status & 0x01 == 0 {
+                return 0; // DD biti ayarlanmadı
+            }
+            let len = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).length)) as usize;
+            let errors = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).errors));
+            let addr = core::ptr::read_volatile(core::ptr::addr_of!((*desc_ptr).addr));
+
+            if len == 0 || len > buf.len() || errors != 0 || status & 0x02 == 0 {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*desc_ptr).status), 0);
+                mmio_write32(REG_RDT, idx as u32);
+                RX_TAIL = (idx + 1) % RX_RING_SIZE;
+                return 0;
+            }
+            let src = crate::drivers::phys_to_virt(addr) as *const u8;
+            core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
+
             core::ptr::write_volatile(core::ptr::addr_of_mut!((*desc_ptr).status), 0);
             mmio_write32(REG_RDT, idx as u32);
             RX_TAIL = (idx + 1) % RX_RING_SIZE;
-            return 0;
+            len
         }
-        let src = crate::drivers::phys_to_virt(addr) as *const u8;
-        core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
-
-        // Descriptoru temizle ve RDT'yi ilerlet
-        core::ptr::write_volatile(core::ptr::addr_of_mut!((*desc_ptr).status), 0);
-        mmio_write32(REG_RDT, idx as u32);
-        RX_TAIL = (idx + 1) % RX_RING_SIZE;
-        len
     }
 }
-
-/// Gelen tüm paketleri işler (poll döngüsünden çağrılır).
 pub fn poll() {
     let mut buf = [0u8; RX_BUF_SIZE];
     loop {
@@ -438,21 +570,54 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         };
         RINGS_ADDR = phys;
 
-        // PCI'da e1000 veya VMware VMXNET3'ü bul
+        // PCI'da Intel e1000, VMware VMXNET3 veya Realtek PCIe NIC (RTL8168/8169/8125) bul
         let mut found: Option<(u8, u8, u8, u64, NicType)> = None;
-        for dev in 0..32u8 {
-            for func in 0..8u8 {
-                let vid = pci_read32(0, dev, func, 0x00) & 0xFFFF;
-                let did = (pci_read32(0, dev, func, 0x00) >> 16) & 0xFFFF;
-                if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
-                    let bar0_lo = pci_read32(0, dev, func, 0x10);
-                    let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
-                    found = Some((0, dev, func, base, NicType::IntelE1000));
-                    break;
-                } else if vid == VMWARE_VENDOR && VMWARE_DEVICES.contains(&did) {
-                    let bar0_lo = pci_read32(0, dev, func, 0x10);
-                    let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
-                    found = Some((0, dev, func, base, NicType::VmwareVmxnet3));
+        for bus in 0..8u8 {
+            for dev in 0..32u8 {
+                let id0 = pci_read32(bus, dev, 0, 0x00);
+                if id0 == 0xFFFF_FFFF || id0 == 0 {
+                    continue;
+                }
+                let hdr = (pci_read32(bus, dev, 0, 0x0C) >> 16) & 0xFF;
+                let max_func = if (hdr & 0x80) != 0 { 8u8 } else { 1u8 };
+
+                for func in 0..max_func {
+                    let id = if func == 0 { id0 } else { pci_read32(bus, dev, func, 0x00) };
+                    if id == 0xFFFF_FFFF || id == 0 {
+                        continue;
+                    }
+                    let vid = (id & 0xFFFF) as u32;
+                    let did = (id >> 16) & 0xFFFF;
+
+                    if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
+                        let bar0_lo = pci_read32(bus, dev, func, 0x10);
+                        let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
+                        found = Some((bus, dev, func, base, NicType::IntelE1000));
+                        break;
+                    } else if vid == VMWARE_VENDOR && VMWARE_DEVICES.contains(&did) {
+                        let bar0_lo = pci_read32(bus, dev, func, 0x10);
+                        let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
+                        found = Some((bus, dev, func, base, NicType::VmwareVmxnet3));
+                        break;
+                    } else if vid == REALTEK_VENDOR && (REALTEK_DEVICES.contains(&did) || (did & 0xFF00) == 0x8100) {
+                        // Realtek PCIe NIC: BAR2 (0x18) veya BAR1 (0x14) MMIO olabilir, standart BAR2'dir (BAR0 genelde I/O porttur).
+                        let mut base: u64 = 0;
+                        for bar_off in [0x18u8, 0x14u8, 0x10u8] {
+                            let bar = pci_read32(bus, dev, func, bar_off);
+                            if bar != 0 && (bar & 1) == 0 { // MMIO bar
+                                let is_64 = (bar & 0x06) == 0x04;
+                                let bar_hi = if is_64 { pci_read32(bus, dev, func, bar_off + 4) as u64 } else { 0 };
+                                base = ((bar as u64) & 0xFFFF_FFF0) | (bar_hi << 32);
+                                break;
+                            }
+                        }
+                        if base != 0 {
+                            found = Some((bus, dev, func, base, NicType::RealtekR8169));
+                            break;
+                        }
+                    }
+                }
+                if found.is_some() {
                     break;
                 }
             }
@@ -464,38 +629,47 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let (bus, dev, func, base_phys, ntype) = match found {
             Some(v) => v,
             None => {
-                e1000_print("[NET] Ag adaptoru (e1000 / VMware VMXNET3) PCI'da bulunamadi.\n");
+                e1000_print("[NET] Ag adaptoru (Intel / VMware / Realtek PCIe) PCI'da bulunamadi.\n");
                 return;
             }
         };
         DETECTED_NIC = ntype;
         let base = crate::drivers::phys_to_virt(base_phys);
-        // Limine HHDM MMIO'yu map'lemediği için elle 2MB huge page ekliyoruz.
         crate::arch::x86_64::mmio_map_2mb(base_phys & !0x1F_FFFF);
 
         match ntype {
             NicType::IntelE1000 => {
-                e1000_print("[NET] Intel e1000 bulundu. PCI 00:");
+                e1000_print("[NET] Intel e1000 bulundu. PCI ");
+                e1000_print_hex(bus);
+                e1000_print(":");
                 e1000_print_hex(dev);
                 e1000_print("\n");
             }
             NicType::VmwareVmxnet3 => {
-                e1000_print("[NET] VMware VMXNET3 ag adaptoru bulundu (Vendor: 0x15AD). PCI 00:");
+                e1000_print("[NET] VMware VMXNET3 ag adaptoru bulundu. PCI ");
+                e1000_print_hex(bus);
+                e1000_print(":");
+                e1000_print_hex(dev);
+                e1000_print("\n");
+            }
+            NicType::RealtekR8169 => {
+                e1000_print("[NET] Realtek PCIe Gigabit ag adaptoru bulundu (Vendor: 0x10EC). PCI ");
+                e1000_print_hex(bus);
+                e1000_print(":");
                 e1000_print_hex(dev);
                 e1000_print("\n");
             }
         }
 
-        // PCI Komut: Bus Master + MMIO enable
+        // PCI Komut: Bus Master + MMIO enable + Memory Write and Invalidate
         let cmd = pci_read32(bus, dev, func, 0x04);
-        pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | 0x6);
+        pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | 0x16);
 
         MMIO_BASE = base;
 
-        // Reset ve yapılandırma
+        // Reset ve temel başlatma
         match ntype {
             NicType::IntelE1000 => {
-                // Global reset ve link-up (MAC ve register yapılandırmasından ÖNCE yapılmalı!)
                 mmio_write32(REG_CTRL, CTRL_LRST);
                 for _ in 0..100_000 {
                     core::hint::spin_loop();
@@ -509,6 +683,18 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 }
                 mmio_write32(VMXNET3_REG_CMD, VMXNET3_CMD_ENABLE);
             }
+            NicType::RealtekR8169 => {
+                // Realtek C+ modunda yazılım sıfırlaması
+                mmio_write8(RTL_REG_COMMAND, RTL_CMD_RESET);
+                for _ in 0..100_000 {
+                    if (mmio_read8(RTL_REG_COMMAND) & RTL_CMD_RESET) == 0 {
+                        break;
+                    }
+                    core::hint::spin_loop();
+                }
+                // EEPROM/Config kilitlerini aç (93C46 unlock: 0xC0)
+                mmio_write8(RTL_REG_9346CR, 0xC0);
+            }
         }
 
         // Ring yapısını HHDM üzerinden sıfırla
@@ -519,6 +705,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let mac = match ntype {
             NicType::IntelE1000 => read_mac_from_eeprom(),
             NicType::VmwareVmxnet3 => read_mac_vmxnet3(),
+            NicType::RealtekR8169 => read_mac_realtek(),
         };
         MAC_ADDR = mac;
         e1000_print("[NET] MAC adresi: ");
@@ -536,26 +723,75 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         e1000_print("\n");
 
         if ntype == NicType::IntelE1000 {
-            // RAL0/RAH0'a MAC yaz (Address Valid biti 0x8000_0000 ile)
             let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
             let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | 0x8000_0000;
             mmio_write32(REG_RAL0, ral);
             mmio_write32(REG_RAH0, rah);
 
-            // Multicast Table Array (MTA: 0x5200..0x5400 - 128 dword) sıfırla
             for i in 0..128u32 {
                 mmio_write32(0x5200 + i * 4, 0);
             }
 
-            // Tüm kesme kaynaklarını kapat: yoklamayla (polling) çalışıyoruz
             mmio_write32(REG_IMC, 0xFFFF_FFFF);
             mmio_write32(REG_CTRL, CTRL_SLU);
-            let _ = mmio_read32(REG_ICR); // bekleyen kesme nedenlerini temizle
+            let _ = mmio_read32(REG_ICR);
+        } else if ntype == NicType::RealtekR8169 {
+            // Kesmeleri kapat (polling kullanıyoruz)
+            mmio_write16(RTL_REG_IMR, 0x0000);
+            mmio_write16(RTL_REG_ISR, 0xFFFF); // W1C temizle
+
+            // Maksimum RX paket boyutu
+            mmio_write16(RTL_REG_RMS, (RX_BUF_SIZE as u16).min(16383));
+
+            // RX ve TX konfigürasyonu
+            // RCR: Accept Broadcast, Multicast, My Physical, Promiscuous, Unlimited DMA burst
+            mmio_write32(RTL_REG_RCR, 0x0000_000F | (7 << 8));
+            // TCR: Interframe gap (3 << 24), Unlimited DMA burst (7 << 8)
+            mmio_write32(RTL_REG_TCR, (3 << 24) | (7 << 8));
+
+            // Ring taban adreslerini bildir
+            let rx_ring_phys = phys + core::mem::offset_of!(E1000Rings, rx_ring) as u64;
+            let tx_ring_phys = phys + core::mem::offset_of!(E1000Rings, tx_ring) as u64;
+            mmio_write32(RTL_REG_RXADDR, rx_ring_phys as u32);
+            mmio_write32(RTL_REG_RXADDR + 4, (rx_ring_phys >> 32) as u32);
+            mmio_write32(RTL_REG_TXADDR, tx_ring_phys as u32);
+            mmio_write32(RTL_REG_TXADDR + 4, (tx_ring_phys >> 32) as u32);
+
+            // Realtek RX ring descriptorlarını hazırla
+            for i in 0..RX_RING_SIZE {
+                let buf_phys = phys
+                    + core::mem::offset_of!(E1000Rings, rx_bufs) as u64
+                    + (i as u64) * RX_BUF_SIZE as u64;
+                let desc_u32 = &mut (*r).rx_ring[i] as *mut RxDescriptor as *mut u32;
+                let eor = if i == RX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+                core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
+                core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
+                core::ptr::write_volatile(desc_u32.add(3), 0);
+                core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+            }
+
+            // Realtek TX ring descriptorlarını hazırla
+            for i in 0..TX_RING_SIZE {
+                let desc_u32 = &mut (*r).tx_ring[i] as *mut TxDescriptor as *mut u32;
+                let eor = if i == TX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+                core::ptr::write_volatile(desc_u32.add(0), 0);
+                core::ptr::write_volatile(desc_u32.add(1), 0);
+                core::ptr::write_volatile(desc_u32.add(3), 0);
+                core::ptr::write_volatile(desc_u32.add(2), eor);
+            }
+
+            // Config kilitlerini kapat (93C46 lock: 0x00)
+            mmio_write8(RTL_REG_9346CR, 0x00);
+
+            // RX ve TX'i aktifleştir
+            mmio_write8(RTL_REG_COMMAND, RTL_CMD_RX_EN | RTL_CMD_TX_EN);
         }
 
-        // Ring'leri hazırla
-        init_rx_ring();
-        init_tx_ring();
+        if ntype != NicType::RealtekR8169 {
+            // Ring'leri hazırla (Intel / VMware)
+            init_rx_ring();
+            init_tx_ring();
+        }
 
         match ntype {
             NicType::IntelE1000 => {
@@ -564,15 +800,13 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             NicType::VmwareVmxnet3 => {
                 e1000_print("[NET] VMware VMXNET3 RX/TX ring'leri hazir, link acildi.\n");
             }
+            NicType::RealtekR8169 => {
+                e1000_print("[NET] Realtek PCIe GbE RX/TX ring'leri hazir, link acildi.\n");
+            }
         }
         E1000_READY.store(true, Ordering::Relaxed);
     }
 }
-
-// ---------------------------------------------------------------------------
-// Yardımcı: Serial yazdırma
-// ---------------------------------------------------------------------------
-
 fn e1000_print(s: &str) {
     crate::serial::print(s);
 }

@@ -60,6 +60,9 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 
 ### 🆕 Modern Arayüz ve Kullanılabilirlik Yenilikleri
 
+- **🌐 Realtek PCIe Ethernet Kartı Desteği (RTL8168/8169/8125):** Intel e1000 ve VMware VMXNET3'e ek olarak anakartlardaki yerleşik Realtek PCIe ağ kartları (Vendor 0x10EC) için otomatik PCI taraması, C+ modunda TX/RX DMA halkaları ve anlık bağlantı algılaması sağlandı.
+- **🖱️ Yüksek Çözünürlükte (1080p+) Takılmasız Hızlı Fare & Balistik İvmelenme:** USB fare raporlarındaki hareket sınırlandırmaları kaldırıldı, ekran çözünürlüğüne bağlı dinamik ölçekleme (~2.8x) ve hızlı kaydırmada ekranı kat eden kademeli balistik ivmelenme entegre edildi.
+- **🎯 15-Piksel Orta Boyutlu & Çift Çerçeveli Net İmleç:** Yüksek çözünürlüklerde ne çok büyük ne çok küçük kalan ideal 15 piksellik modern ok imleci ve her zeminde görünürlük sağlayan 8-yönlü tam kontur çizgisi uygulandı.
 - **🖥️ Otomatik Açılış Çözünürlüğü ve BGA Donanım Geçişi:** Limine açılış menüsünden (`res=WxH`) veya `settings.cfg` dosyasından okunan çözünürlük tercihi çekirdek tarafından masaüstü açılmadan önce donanıma (BGA) uygulanır; sistem doğrudan seçili çözünürlükle başlatılır.
 - **🔄 Dinamik Çözünürlük ve Pencere Sınır Yönetimi:** Sistem çalışırken ekran çözünürlüğü değiştirildiğinde masaüstü sınırları, imleç hareket uzayı ve açık pencereler (`keep_windows_on_screen`) yeni geometriye anında uyarlanır; duvar kağıdı yeniden ölçeklenir ve tam ekran çizimi (`force_render`) tetiklenir.
 - **🔐 Statik BSS Bellek Mimarisi (CodeQL Sertifikasyonu):** `MemoryManager` yapısı statik `.bss` segmentine taşınarak yerel yığın işaretçilerinin küresel alana kaçması önlendi; CodeQL statik analiz uyarıları (Alert #25) giderildi.

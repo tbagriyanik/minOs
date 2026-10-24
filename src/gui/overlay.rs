@@ -83,19 +83,25 @@ impl MinGuiCompositor {
         }
         }
 
-        const CURSOR_PATTERN: [u8; 12] = [
-            0b10000000,
-            0b11000000,
-            0b11100000,
-            0b11110000,
-            0b11111000,
-            0b11111100,
-            0b11111110,
-            0b11110000,
-            0b10011000,
-            0b00011000,
-            0b00001100,
-            0b00001100,
+        // 16x10 piksel imleç deseni.
+        // 1080p ve yüksek çözünürlükler için net, keskin ve modern 19-piksel imleç deseni (16-bit genişlik)
+        // İdeal orta büyüklükte (15 piksel yüksekliğinde, zarif ve net) modern ok imleci
+        const CURSOR_PATTERN: [u16; 15] = [
+            0b1000_0000_0000_0000,
+            0b1100_0000_0000_0000,
+            0b1110_0000_0000_0000,
+            0b1111_0000_0000_0000,
+            0b1111_1000_0000_0000,
+            0b1111_1100_0000_0000,
+            0b1111_1110_0000_0000,
+            0b1111_1111_0000_0000,
+            0b1111_1000_0000_0000,
+            0b1101_1000_0000_0000,
+            0b1000_1100_0000_0000,
+            0b0000_1100_0000_0000,
+            0b0000_0110_0000_0000,
+            0b0000_0110_0000_0000,
+            0b0000_0010_0000_0000,
         ];
         let (cursor_fill, cursor_outline) = if pressed {
             (Color::CURSOR_OUTLINE, Color::CURSOR_FILL)
@@ -103,19 +109,26 @@ impl MinGuiCompositor {
             (Color::CURSOR_FILL, Color::CURSOR_OUTLINE)
         };
 
-        // Önce dış hat (outline), sonra dolgu — her zeminde görünür kalır.
-        for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
-            for col in 0..8 {
-                if (byte & (1 << (7 - col))) != 0 {
+        // 8-yönlü tam çevreleyen kalın dış hat (outline) ile koyu ve açık her zeminde kusursuz netlik:
+        for (row, &word) in CURSOR_PATTERN.iter().enumerate() {
+            for col in 0usize..16 {
+                if (word & (1 << (15 - col))) != 0 {
+                    // Çevre pikseller (3x3 kutu konturu)
+                    fb.put_pixel(mx + col.saturating_sub(1), my + row, cursor_outline);
                     fb.put_pixel(mx + col + 1, my + row, cursor_outline);
+                    fb.put_pixel(mx + col, my + row.saturating_sub(1), cursor_outline);
                     fb.put_pixel(mx + col, my + row + 1, cursor_outline);
                     fb.put_pixel(mx + col + 1, my + row + 1, cursor_outline);
+                    fb.put_pixel(mx + col.saturating_sub(1), my + row + 1, cursor_outline);
+                    fb.put_pixel(mx + col + 1, my + row.saturating_sub(1), cursor_outline);
+                    fb.put_pixel(mx + col.saturating_sub(1), my + row.saturating_sub(1), cursor_outline);
                 }
             }
         }
-        for (row, &byte) in CURSOR_PATTERN.iter().enumerate() {
-            for col in 0..8 {
-                if (byte & (1 << (7 - col))) != 0 {
+        // İç gövde dolgusu
+        for (row, &word) in CURSOR_PATTERN.iter().enumerate() {
+            for col in 0usize..16 {
+                if (word & (1 << (15 - col))) != 0 {
                     fb.put_pixel(mx + col, my + row, cursor_fill);
                 }
             }

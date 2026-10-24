@@ -4,8 +4,8 @@ pub const MAX_SCREEN_WIDTH: usize = 2560;
 pub const MAX_SCREEN_HEIGHT: usize = 1600;
 pub const BACKBUFFER_LEN: usize = MAX_SCREEN_WIDTH * MAX_SCREEN_HEIGHT;
 static mut BACKBUFFER: [u32; BACKBUFFER_LEN] = [0; BACKBUFFER_LEN];
-const CURSOR_SAVE_W: usize = 24;
-const CURSOR_SAVE_H: usize = 24;
+const CURSOR_SAVE_W: usize = 32;
+const CURSOR_SAVE_H: usize = 32;
 
 /// İki dikdörtgenin en küçük kapsayıcı birleşimini (bounding box) döndürür.
 #[inline(always)]

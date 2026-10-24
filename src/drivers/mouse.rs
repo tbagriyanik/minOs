@@ -41,18 +41,44 @@ impl MouseState {
     }
 
     pub fn update_packet(&mut self, flags: u8, dx: i8, dy: i8, max_w: i32, max_h: i32) {
+        self.update_packet_i32(flags, dx as i32, dy as i32, max_w, max_h);
+    }
+
+    /// Genişletilmiş (i32 dx/dy) hareket güncellemesi.
+    /// Yüksek çözünürlüklü ekranlarda (1920x1080 ve üzeri) takılmayı önlemek ve
+    /// pürüzsüz akıcılık sağlamak için çözünürlük tabanlı dinamik ölçekleme ve balistik ivmelenme uygular.
+    pub fn update_packet_i32(&mut self, flags: u8, dx: i32, dy: i32, max_w: i32, max_h: i32) {
         let raw_left = (flags & 0x01) != 0;
         self.right_button = (flags & 0x02) != 0;
         self.middle_button = (flags & 0x04) != 0;
 
         let speed = self.speed.clamp(1, 10) as i32;
-        let scale = |delta: i8| {
-            if delta == 0 { return 0; }
-            let scaled = delta as i32 * speed / 5;
-            if scaled == 0 { (delta as i32).signum() } else { scaled }
+
+        // 1080p ve üzeri çözünürlüklerde doğal ve kontrollü taban oran:
+        let (num, den) = if max_w >= 2560 || max_h >= 1440 {
+            (7, 5) // 2K / 4K için ~1.4x
+        } else if max_w >= 1920 || max_h >= 1080 {
+            (6, 5) // 1080p için ~1.2x (doğal, kontrollü)
+        } else {
+            (5, 5) // 1.0x (1024x768 vb.)
         };
+
+        let scale = |delta: i32| -> i32 {
+            if delta == 0 { return 0; }
+            let abs_d = delta.abs();
+            // Hafif, dengeli ivmelenme (uçuşa geçmeden rahat kontrol):
+            let accel = if abs_d > 12 {
+                2
+            } else {
+                1
+            };
+
+            let scaled = (delta * speed * num * accel) / (den * 5);
+            if scaled == 0 { delta.signum() } else { scaled }
+        };
+
         self.x += scale(dx);
-        self.y -= scale(dy); // PS/2 Y ekseni tersinedir
+        self.y -= scale(dy); // PS/2 ve ters Y uyumluluğu
 
         if self.x < 0 { self.x = 0; }
         if self.y < 0 { self.y = 0; }
@@ -68,7 +94,6 @@ impl MouseState {
         }
     }
 
-    /// Dokunmatik yüzey parmak temas / jest bildirimi (Touchpad Tap-to-Click)
     pub fn process_touch_event(&mut self, touching: bool, now_ms: u64) {
         if !self.tap_to_click {
             return;

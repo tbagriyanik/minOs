@@ -17,7 +17,7 @@ const CHAR_W: usize = 8; // 8x8 font * 1x scale
 const FONT_SCALE: usize = 1;
 const LOG_LINE_CAPACITY: usize = 4096;
 const MAX_VISIBLE_LINES: usize = 80;
-const LINE_PAUSE_MS: u64 = 45;
+const LINE_PAUSE_MS: u64 = 15;
 
 /// Basit 8x8 font bitmap (ASCII 32-126 için)
 const FONT_8X8: [[u8; 8]; 95] = [

@@ -35,7 +35,7 @@ Desteklenen donanım, sistem gereksinimleri ve çalıştırma adımları.
 | **Depolama** | Yalnızca CD/ISO (RAM tabanlı) | 64 MB+ qcow2 disk |
 | **Ekran** | 1024×768 32-bit framebuffer | 1024×768 veya daha yüksek |
 | **Ses** | — (isteğe bağlı) | HDA uyumlu |
-| **Ağ** | — (isteğe bağlı) | e1000 uyumlu Ethernet |
+| **Ağ** | — (isteğe bağlı) | Realtek PCIe (RTL8168/8169) / Intel e1000 / VMware VMXNET3 |
 
 > **Not:** minOs 4 MB RAM ile stabil çalışır; grafik arayüzü, font atlasları ve çekirdek tamponları bu alanda sığar. QEMU'da test için `-Memory 4M` parametresi yeterlidir. FAT32 disk yazma gibi özellikler için 32+ MB önerilir.
 

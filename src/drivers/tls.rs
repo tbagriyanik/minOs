@@ -1535,9 +1535,15 @@ pub fn build_client_hello(
     let kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
     ecdhe_secret_out.copy_from_slice(&kp.secret);
     let kp_len = kp.public.len();
-    let ks_ext_len = 2 + 2 + kp_len;
+    // RFC 8446 §4.2.8: ClientHello key_share uzantısı, bir veya daha fazla KeyShareEntry
+    // içeren bir vektördür (client_shares). Dolayısıyla uzantı verisi;
+    // client_shares_len (2 bayt) + [group (2 bayt) + key_exchange_len (2 bayt) + key_exchange]
+    // şeklinde paketlenmelidir.
+    let client_shares_len = (2 + 2 + kp_len) as u16;
+    let ks_ext_len = 2 + client_shares_len;
     extensions.extend_from_slice(&0x0033u16.to_be_bytes());
     extensions.extend_from_slice(&(ks_ext_len as u16).to_be_bytes());
+    extensions.extend_from_slice(&client_shares_len.to_be_bytes());
     extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
     extensions.extend_from_slice(&((kp_len as u16).to_be_bytes()));
     extensions.extend_from_slice(&kp.public);
@@ -1888,10 +1894,18 @@ mod tests {
             let el = u16::from_be_bytes([hs[pos + 2], hs[pos + 3]]) as usize;
             if et == 0x0033 {
                 let body = &hs[pos + 4..pos + 4 + el];
-                let group = u16::from_be_bytes([body[0], body[1]]);
-                let plen = u16::from_be_bytes([body[2], body[3]]) as usize;
-                if group == NAMED_CURVE_SECP256R1 && plen == 65 {
-                    return Some(body[4..4 + plen].to_vec());
+                if body.len() >= 2 {
+                    // ClientHello key_share (RFC 8446 §4.2.8): client_shares length (2 byte) + KeyShareEntry
+                    let shares_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+                    let mut bpos = 2;
+                    while bpos + 4 <= 2 + shares_len && bpos + 4 <= body.len() {
+                        let group = u16::from_be_bytes([body[bpos], body[bpos + 1]]);
+                        let plen = u16::from_be_bytes([body[bpos + 2], body[bpos + 3]]) as usize;
+                        if group == NAMED_CURVE_SECP256R1 && plen == 65 && bpos + 4 + plen <= body.len() {
+                            return Some(body[bpos + 4..bpos + 4 + plen].to_vec());
+                        }
+                        bpos += 4 + plen;
+                    }
                 }
             }
             pos += 4 + el;

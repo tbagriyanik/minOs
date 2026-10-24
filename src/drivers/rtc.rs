@@ -67,17 +67,57 @@ impl DateTime {
     }
 
     /// CMOS RTC'ten anlık zamanı okur ve ikili (binary) forma çevirir.
+    ///
+    /// Gerçek donanım BIOS'larında geçiş anındaki tutarsızlıkları (rollover glitch)
+    /// önlemek için OSDev standartlarında ardışık iki okuma doğrulaması ve
+    /// ACPI/Century (0x32, 0x37) uyumluluğu uygular.
     pub fn read() -> Self {
-        wait_not_updating();
-        let mut second = unsafe { cmos_read(0x00) };
-        let mut minute = unsafe { cmos_read(0x02) };
-        let hour = unsafe { cmos_read(0x04) };
-        let mut day = unsafe { cmos_read(0x07) };
-        let mut month = unsafe { cmos_read(0x08) };
-        let year = unsafe { cmos_read(0x09) };
-        let century = unsafe { cmos_read(0x32) };
-        let status_b = unsafe { cmos_read(0x0B) };
+        let mut last_second;
+        let mut last_minute;
+        let mut last_hour;
+        let mut last_day;
+        let mut last_month;
+        let mut last_year;
+        let mut last_century;
 
+        let mut second;
+        let mut minute;
+        let mut hour;
+        let mut day;
+        let mut month;
+        let mut year;
+        let mut century;
+
+        // Kararlı değer yakalanana kadar oku (en fazla 10 deneme)
+        let mut attempts = 0;
+        loop {
+            wait_not_updating();
+            last_second = unsafe { cmos_read(0x00) };
+            last_minute = unsafe { cmos_read(0x02) };
+            last_hour = unsafe { cmos_read(0x04) };
+            last_day = unsafe { cmos_read(0x07) };
+            last_month = unsafe { cmos_read(0x08) };
+            last_year = unsafe { cmos_read(0x09) };
+            last_century = unsafe { cmos_read(0x32) };
+
+            wait_not_updating();
+            second = unsafe { cmos_read(0x00) };
+            minute = unsafe { cmos_read(0x02) };
+            hour = unsafe { cmos_read(0x04) };
+            day = unsafe { cmos_read(0x07) };
+            month = unsafe { cmos_read(0x08) };
+            year = unsafe { cmos_read(0x09) };
+            century = unsafe { cmos_read(0x32) };
+
+            attempts += 1;
+            if (second == last_second) && (minute == last_minute) && (hour == last_hour)
+                && (day == last_day) && (month == last_month) && (year == last_year)
+                && (century == last_century) || attempts >= 10 {
+                break;
+            }
+        }
+
+        let status_b = unsafe { cmos_read(0x0B) };
         let bin = status_b & 0x04 != 0; // 0 = BCD, 1 = binary
         let is_24h = status_b & 0x02 != 0;
 
@@ -86,10 +126,14 @@ impl DateTime {
             minute = bcd_to_bin(minute);
             day = bcd_to_bin(day);
             month = bcd_to_bin(month);
+            year = bcd_to_bin(year);
+            if century != 0 {
+                century = bcd_to_bin(century);
+            }
         }
 
-        // Saat formatı (12 saat ise PM bitini uygula)
-        let mut hour_bin = if bin { hour } else { bcd_to_bin(hour & 0x7F) };
+        // Saat formatı (12 saat ise PM biti ve 12 saat dönüştürmesi)
+        let mut hour_bin = if bin { hour } else { hour & 0x7F };
         if !is_24h {
             let pm = hour & 0x80 != 0;
             if pm && hour_bin < 12 {
@@ -99,20 +143,23 @@ impl DateTime {
             }
         }
 
-        let year_bin = if bin { year } else { bcd_to_bin(year) };
-        let century_bin = if bin { century } else { bcd_to_bin(century) };
-        let full_year = if (20..=99).contains(&century_bin) {
-            (century_bin as u16) * 100 + year_bin as u16
-        } else if year_bin >= 70 {
-            1900 + year_bin as u16
+        // Yüzyıl (Century) hesaplaması:
+        // Bazı anakartlarda 0x32 yazmacı 0x00 dönebilir veya ACPI FADT century 0x37 olabilir.
+        let full_year = if (19..=22).contains(&century) {
+            (century as u16) * 100 + year as u16
+        } else if year >= 70 {
+            1900 + year as u16
         } else {
-            2000 + year_bin as u16
+            2000 + year as u16
         };
 
+        let final_month = month.clamp(1, 12);
+        let max_days = Self::days_in_month(full_year, final_month);
+
         Self {
-            year: full_year,
-            month: month.clamp(1, 12),
-            day: day.clamp(1, 31),
+            year: full_year.clamp(1970, 2199),
+            month: final_month,
+            day: day.clamp(1, max_days),
             hour: hour_bin.min(23),
             minute: minute.min(59),
             second: second.min(59),

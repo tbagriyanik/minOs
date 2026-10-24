@@ -1358,6 +1358,10 @@ pub fn play_test_tone() -> bool {
 
         let ok = lpib2 != lpib1 || bcis_seen;
 
+        // Test bittiğinde sesin dairesel DMA tamponunda sonsuz döngüde takılı kalmasını önle:
+        stream_stop();
+        silence();
+
         if ok {
 
             DMA_ADVANCES.fetch_add(1, Ordering::Relaxed);

@@ -95,7 +95,7 @@ impl AudioDevice {
     /// Başlangıç veya bildirim melodisi (chime).
     pub fn play_chime(&mut self) {
         if self.is_muted || self.volume_left == 0 { return; }
-        if self.is_hda {
+        if self.is_hda && crate::drivers::hda::is_ready() {
             const SINE_48: [i16; 48] = [
                 0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863,
                 16000, 15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088,
@@ -111,17 +111,24 @@ impl AudioDevice {
             for _ in 0..16 {
                 crate::drivers::hda::push_pcm(&pcm);
             }
-        }
-        // C5 (523Hz) -> E5 (659Hz) -> G5 (784Hz)
-        let notes = [523u32, 659, 784];
-        for &freq in &notes {
-            self.set_pc_speaker_tone(freq);
             let start = crate::monotonic_ms();
-            while crate::monotonic_ms().saturating_sub(start) < 45 {
+            while crate::monotonic_ms().saturating_sub(start) < 80 {
                 core::hint::spin_loop();
             }
+            // HDA DMA dairesel tamponunun takılı ses döngüsüne girmemesi için sustur
+            crate::drivers::hda::silence();
+        } else {
+            // HDA yoksa PC Speaker melodisi
+            let notes = [523u32, 659, 784];
+            for &freq in &notes {
+                self.set_pc_speaker_tone(freq);
+                let start = crate::monotonic_ms();
+                while crate::monotonic_ms().saturating_sub(start) < 45 {
+                    core::hint::spin_loop();
+                }
+            }
+            self.set_pc_speaker_tone(0);
         }
-        self.set_pc_speaker_tone(0);
     }
 
     /// Hızlı tıklama veya bildirim sesi (beep).

@@ -213,7 +213,6 @@ pub struct SystemSettings {
     pub kernel_debug_log: bool,
 
     // Donanım Testleri (Testler sekmesi)
-    pub test_screen_pattern: u8,
     pub test_ram_tested: bool,
     pub test_ram_ok: bool,
     pub test_ram_kib: u32,
@@ -274,7 +273,6 @@ impl SystemSettings {
             static_ip_digits: 0,
             vfs_mounted: true,
             kernel_debug_log: true,
-            test_screen_pattern: 0,
             test_ram_tested: false,
             test_ram_ok: false,
             test_ram_kib: 0,
@@ -457,30 +455,20 @@ impl SystemSettings {
     }
 
     // -----------------------------------------------------------------
-    // Ekran sekmesi (1) + Testler sekmesi (4) geometri yardımcıları
+    // Testler sekmesi (4) geometri yardımcıları
     // -----------------------------------------------------------------
-    /// Ekran testi desen düğmeleri.
-    pub fn test_screen_btn_rect(win_x: usize, win_y: usize, i: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X + i * sp(72), win_y + sp(UI_TOP_Y + UI_ROW_STEP), sp(66), sp(UI_BTN_H))
-    }
-    pub fn test_screen_btn_count() -> usize { 6 }
-    /// Seçili deseni gösteren önizleme dikdörtgeni.
-    pub fn test_screen_preview_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        let w = win_w.saturating_sub(CONTENT_X + 24).max(120);
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 2 * UI_ROW_STEP), w, sp(32))
-    }
     /// Fare test alanı: imleç içine girdiğinde konum/iz ve düğmeler sınanır.
     pub fn test_mouse_pad_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP), sp(260), sp(84))
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + UI_ROW_STEP), sp(260), sp(84))
     }
     pub fn test_ram_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP), sp(100), sp(UI_BTN_H))
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP), sp(100), sp(UI_BTN_H))
     }
     pub fn test_disk_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 8 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
     }
     pub fn test_audio_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
-        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 9 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
+        (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + 16), sp(100), sp(UI_BTN_H))
     }
     pub fn test_net_btn_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + CONTENT_X, win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP + 8), sp(110), sp(UI_BTN_H))
@@ -504,7 +492,6 @@ impl SystemSettings {
         *self = Self::default();
         self.screen_res = screen_res;
         self.display_res = display_res;
-        self.test_screen_pattern = 0;
         self.test_ram_tested = false;
         self.test_ram_ok = false;
         self.test_ram_kib = 0;
@@ -1276,7 +1263,7 @@ impl SystemSettings {
         MinGuiCompositor::draw_string(fb, win_x + sp(12), bar_y + sp(6), cur_status, Color::ACCENT_YELLOW);
     }
 
-    /// Testler sekmesi: fare, RAM, disk ve ses (ekran testi Ekran sekmesine tasindi).
+    /// Testler sekmesi: fare, RAM, disk ve ses donanım testleri.
     fn render_tests(
         &self,
         fb: &mut Framebuffer,
@@ -1288,48 +1275,8 @@ impl SystemSettings {
         let english = self.language.is_english();
         let cx = win_x + CONTENT_X;
 
-        // ---- Ekran testi (Satır 0: Başlık, Satır 1: Düğmeler, Satır 2: Önizleme) ----
+        // ---- Fare testi (Satır 0: Başlık, Satır 1..3: Pad) ----
         MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + UI_LABEL_OFFSET),
-            crate::gui::ui_text("Ekran: renk deseni seçin", "Display: choose a colour pattern"), Color::TEXT_MAIN);
-        let labels = if english {
-            ["Red", "Green", "Blue", "White", "Black", "Bars"]
-        } else {
-            ["Kırmızı", "Yeşil", "Mavi", "Beyaz", "Siyah", "Çubuk"]
-        };
-        for (i, label) in labels.iter().enumerate() {
-            let active = self.test_screen_pattern as usize == i;
-            let r = Self::test_screen_btn_rect(win_x, win_y, i);
-            MinGuiCompositor::draw_button(fb, r,
-                if active { Color::ACCENT_GREEN } else { Color::TITLE_BAR },
-                *label, Color::TEXT_MAIN, false);
-        }
-        let p = Self::test_screen_preview_rect(win_x, win_y, win_w);
-        fb.draw_rect_outline(p.0, p.1, p.2, p.3, Color::BORDER);
-        let (px, py, pw, ph) = (p.0 + 1, p.1 + 1, p.2.saturating_sub(2), p.3.saturating_sub(2));
-        match self.test_screen_pattern {
-            0 => fb.draw_rect(px, py, pw, ph, 0xFF0000),
-            1 => fb.draw_rect(px, py, pw, ph, 0x00C000),
-            2 => fb.draw_rect(px, py, pw, ph, 0x0000FF),
-            3 => fb.draw_rect(px, py, pw, ph, Color::WHITE),
-            4 => fb.draw_rect(px, py, pw, ph, Color::BLACK),
-            _ => {
-                let colors = [0xFF0000u32, 0x00C000, 0x0000FF, 0x00FFFF, 0xFF00FF, 0xFFFF00, Color::WHITE, Color::BLACK];
-                let bar_w = (pw / colors.len()).max(1);
-                for (i, c) in colors.iter().enumerate() {
-                    fb.draw_rect(px + i * bar_w, py, bar_w, ph / 2, *c);
-                }
-                let top = py + ph / 2;
-                let bottom_h = ph - ph / 2;
-                let seg = (pw / 16).max(1);
-                for i in 0..16 {
-                    let v = (i * 255 / 15) as u32;
-                    let c = (v << 16) | (v << 8) | v;
-                    fb.draw_rect(px + i * seg, top, seg, bottom_h, c);
-                }
-            }
-        }
-        // ---- Fare testi (Satır 3: Başlık, Satır 4..6: Pad) ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP + UI_LABEL_OFFSET),
             crate::gui::ui_text("Fare testi: imleci alana getirin, düğmeleri deneyin",
                 "Mouse test: move into pad, try buttons/wheel"), Color::TEXT_MAIN);
         let pad = Self::test_mouse_pad_rect(win_x, win_y);
@@ -1388,8 +1335,8 @@ impl SystemSettings {
         wheel.push_usize(self.test_wheel as usize);
         MinGuiCompositor::draw_string(fb, ix, iy + sp(80), wheel.as_str(), Color::ACCENT_BLUE);
 
-        // ---- RAM testi (Satır 7) ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 7 * UI_ROW_STEP + UI_LABEL_OFFSET),
+        // ---- RAM testi (Satır 4) ----
+        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 4 * UI_ROW_STEP + UI_LABEL_OFFSET),
             crate::gui::ui_text("RAM testi:", "RAM test:"), Color::ACCENT_YELLOW);
         let ram_btn = Self::test_ram_btn_rect(win_x, win_y);
         MinGuiCompositor::draw_button(fb, ram_btn, Color::ACCENT_BLUE,
@@ -1417,8 +1364,8 @@ impl SystemSettings {
         draw_device_line(fb, cx + 112, ram_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 124), &ram,
             if self.test_ram_tested && !self.test_ram_ok { Color::ACCENT_RED } else { Color::TEXT_MAIN });
 
-        // ---- Disk testi (Satır 8) ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 8 * UI_ROW_STEP + UI_LABEL_OFFSET),
+        // ---- Disk testi (Satır 5) ----
+        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 5 * UI_ROW_STEP + UI_LABEL_OFFSET),
             crate::gui::ui_text("Disk testi:", "Disk test:"), Color::ACCENT_YELLOW);
         let disk_btn = Self::test_disk_btn_rect(win_x, win_y);
         MinGuiCompositor::draw_button(fb, disk_btn, Color::ACCENT_BLUE,
@@ -1440,8 +1387,8 @@ impl SystemSettings {
         draw_device_line(fb, cx + 112, disk_btn.1 + 4, win_w.saturating_sub(CONTENT_X + 124), &disk,
             if self.test_disk_tested && !self.test_disk_ok { Color::ACCENT_RED } else { Color::TEXT_MAIN });
 
-        // ---- Ses alt sistemi testi (Satır 9) ----
-        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 9 * UI_ROW_STEP + UI_LABEL_OFFSET),
+        // ---- Ses alt sistemi testi (Satır 6) ----
+        MinGuiCompositor::draw_string(fb, cx, win_y + sp(UI_TOP_Y + 6 * UI_ROW_STEP + UI_LABEL_OFFSET),
             crate::gui::ui_text("Ses testi:", "Audio test:"), Color::ACCENT_YELLOW);
         let audio_btn = Self::test_audio_btn_rect(win_x, win_y);
         MinGuiCompositor::draw_button(fb, audio_btn, Color::ACCENT_BLUE,

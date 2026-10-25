@@ -3964,17 +3964,6 @@ pub extern "C" fn _start() -> ! {
                                 }
 
                                 if settings_app.active_tab == 4 {
-
-                                    for i in 0..apps::settings::SystemSettings::test_screen_btn_count() {
-
-                                        if gui::in_rect(mx, my, apps::settings::SystemSettings::test_screen_btn_rect(wx, wy, i)) {
-
-                                            settings_app.test_screen_pattern = i as u8;
-
-                                        }
-
-                                    }
-
                                     if gui::in_rect(mx, my, apps::settings::SystemSettings::test_ram_btn_rect(wx, wy)) {
 
                                         settings_app.run_ram_test();
@@ -8206,7 +8195,7 @@ pub extern "C" fn _start() -> ! {
 
         let night_light_active = settings_app.night_light;
 
-        // Ayarlar > Testler: ekran deseni disinda fare test verisini canli besle.
+        // Ayarlar > Testler: fare test verisini canli besle.
 
         let settings_test_active = app_is_focused(&compositor, 1) && settings_app.active_tab == 4;
 

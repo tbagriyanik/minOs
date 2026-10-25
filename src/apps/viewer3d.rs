@@ -2,9 +2,9 @@ use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use alloc::vec::Vec;
 
-const PI: f32 = 3.141592653589793;
-const TWO_PI: f32 = 6.283185307179586;
-const HALF_PI: f32 = 1.5707963267948966;
+const PI: f32 = core::f32::consts::PI;
+const TWO_PI: f32 = core::f32::consts::TAU;
+const HALF_PI: f32 = core::f32::consts::FRAC_PI_2;
 
 /// no_std ortamı için hızlı ve hassas sinüs fonksiyonu (Taylor serisi).
 pub fn sin(mut x: f32) -> f32 {

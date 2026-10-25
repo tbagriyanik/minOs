@@ -199,7 +199,9 @@ pub fn draw(fb: &mut Framebuffer) {
     } else {
         // Önbellek geçerli: yalnızca çerçeve (kirli) bölgesini tek memcpy ile geri yükle.
         let region = fb.base_clip();
-        fb.copy_region_from_raw(core::ptr::addr_of!(WALLPAPER_CACHE) as *const u32, region);
+        unsafe {
+            fb.copy_region_from_raw(core::ptr::addr_of!(WALLPAPER_CACHE) as *const u32, region);
+        }
     }
 }
 

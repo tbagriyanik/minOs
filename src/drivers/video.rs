@@ -410,18 +410,20 @@ impl Framebuffer {
         let pitch_words = self.pitch / 4;
         let src_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *const u32;
 
-        crate::drivers::gpu::hw_accel_bit_blit(
-            src_ptr,
-            self.width,
-            self.address,
-            pitch_words,
-            x,
-            y,
-            x,
-            y,
-            copy_w,
-            copy_h,
-        );
+        unsafe {
+            crate::drivers::gpu::hw_accel_bit_blit(
+                src_ptr,
+                self.width,
+                self.address,
+                pitch_words,
+                x,
+                y,
+                x,
+                y,
+                copy_w,
+                copy_h,
+            );
+        }
     }
 
     /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgeni çerçeve temel
@@ -480,7 +482,7 @@ impl Framebuffer {
 
     /// Kaynak arabellekten yalnızca `region` bölgesini backbuffer'a kopyalar.
     /// Kaynak, backbuffer ile aynı satır adımına (width) sahiptir.
-    pub fn copy_region_from_raw(&mut self, src: *const u32, region: ClipRect) {
+    pub unsafe fn copy_region_from_raw(&mut self, src: *const u32, region: ClipRect) {
         let stride = self.width;
         for y in region.y0..region.y1 {
             let start = y * stride + region.x0;
@@ -630,7 +632,9 @@ impl Framebuffer {
         let fill_h = y_end - y0;
         let dst_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32;
 
-        crate::drivers::gpu::hw_accel_fill_rect(dst_ptr, self.width, x0, y0, fill_w, fill_h, c);
+        unsafe {
+            crate::drivers::gpu::hw_accel_fill_rect(dst_ptr, self.width, x0, y0, fill_w, fill_h, c);
+        }
     }
 
     /// 1px kalınlığında içi boş dikdörtgen (çerçeve).

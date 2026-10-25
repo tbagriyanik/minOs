@@ -819,8 +819,7 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     for i in 0..12 {
         ibmp[(i / 8) as usize] |= 1 << (i % 8);
     } // 1..12 dolu (2=kök)
-    ibmp[1] = ibmp[1]; // 9..12
-    ibmp[1] |= 0x0F;
+    ibmp[1] |= 0x0F; // 9..12
     if !ata::write_sector(drive, bl(4), &ibmp) {
         return false;
     }

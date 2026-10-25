@@ -732,8 +732,9 @@ pub fn test_fat32_access() -> bool {
     let fat_lba = partition_lba + reserved_sectors;
     let data_lba = fat_lba + num_fats * fat_size;
 
-    // Küme 2 (Kök Dizin) LBA karşılığı tam olarak data_lba olmalı
-    let cluster_2_lba = data_lba + (2 - 2) * sectors_per_cluster;
+    // Küme 2 (Kök Dizin) LBA karşılığı tam olarak data_lba olmalı (cluster_offset = 2 - 2 = 0)
+    let cluster_2_offset = 2u32.saturating_sub(2);
+    let cluster_2_lba = data_lba + cluster_2_offset * sectors_per_cluster;
     if cluster_2_lba != data_lba {
         return false;
     }

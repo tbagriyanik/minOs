@@ -321,7 +321,7 @@ pub fn vsync_wait() {
 /// Donanım hızlandırmalı 2D dikdörtgen dolgusu (Hardware Rect Fill).
 /// Framebuffer veya Backbuffer üzerinde 64-bit / SSE talimatları ve önbellek hizalaması
 /// kullanarak ultra hızlı piksel blok dolgusu gerçekleştirir.
-pub fn hw_accel_fill_rect(
+pub unsafe fn hw_accel_fill_rect(
     dst: *mut u32,
     pitch_words: usize,
     x: usize,
@@ -345,7 +345,7 @@ pub fn hw_accel_fill_rect(
 
 /// Donanım hızlandırmalı 2D blok kopyalama (Hardware Bit Blit).
 /// Kaynak bellekten hedef ekrana/tampona satır satır optimize edilmiş veri kopyalama yapar.
-pub fn hw_accel_bit_blit(
+pub unsafe fn hw_accel_bit_blit(
     src: *const u32,
     src_pitch_words: usize,
     dst: *mut u32,

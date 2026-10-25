@@ -162,8 +162,7 @@ pub unsafe extern "C" fn int80_entry() {
 }
 
 #[no_mangle]
-
-pub extern "C" fn rust_int80(frame: *mut u64) -> u64 {
+pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
     let (no, a1, a2, a3) = unsafe {
         (
             core::ptr::read_volatile(frame.add(F_RAX)),
@@ -505,8 +504,7 @@ fault_entry!(pf_entry, 14u32, rust_fault);
 /// Çekirdek hatası: seriye yazıp dur (üçlü hata yerine kontrollü durma).
 
 #[no_mangle]
-
-pub extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
+pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
     let (cs, rip) = unsafe {
         (
             core::ptr::read_volatile(frame.add(EF_CS)),

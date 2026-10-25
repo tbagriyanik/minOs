@@ -8290,9 +8290,11 @@ pub extern "C" fn _start() -> ! {
                         for k in 0..n {
                             let t = (idx + k) as f32 / 48_000.0;
 
-                            let angle = 6.28318f32 * freq as f32 * t;
+                            let angle = core::f32::consts::TAU * freq as f32 * t;
 
-                            let x = angle - 6.28318 * ((angle / 6.28318) as i32) as f32;
+                            let x = angle
+                                - core::f32::consts::TAU
+                                    * ((angle / core::f32::consts::TAU) as i32) as f32;
 
                             let x2 = x * x;
 
@@ -8465,8 +8467,8 @@ pub extern "C" fn _start() -> ! {
                 &viewer3d_app,
                 &pkgmgr_app,
                 &now,
-                &mouse,
-                &keyboard,
+                mouse,
+                keyboard,
                 memory_mgr.pmm.total_memory_bytes,
                 memory_mgr.pmm.used_memory_bytes,
                 anim_tick,
@@ -8566,12 +8568,11 @@ pub extern "C" fn _start() -> ! {
         let sample_window = unsafe { TSC_CYCLES_PER_US }.saturating_mul(250_000);
 
         if now_cycles.wrapping_sub(cpu_sample_start) >= sample_window {
-            let bsp_pct = if cpu_sample_total_cycles == 0 {
-                0
-            } else {
-                (cpu_sample_active_cycles.saturating_mul(100) / cpu_sample_total_cycles).min(100)
-                    as usize
-            };
+            let bsp_pct = cpu_sample_active_cycles
+                .saturating_mul(100)
+                .checked_div(cpu_sample_total_cycles)
+                .unwrap_or(0)
+                .min(100) as usize;
 
             taskmgr_app.cpu_usage_pct = bsp_pct;
 

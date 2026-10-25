@@ -1,5 +1,7 @@
 # 🐱 minOs - Sarman Edition
 
+[Türkçe](README.md) | [English](README.en.md)
+
 [![Rust](https://img.shields.io/badge/Language-Rust%201.101.0--nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
@@ -9,7 +11,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-66.392%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-66%2C392%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.0.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -181,6 +183,7 @@ Ayrıntılı rehberler ve teknik başvuru kaynakları:
   - 🗺️ **[Sürüm Geçmişi ve Yol Haritası](https://github.com/tbagriyanik/minOs/wiki/Surum-Gecmisi)**: Sürüm notları ve gelecek planları.
 
 Yerel Markdown Dokümanları:
+- 🇬🇧 [English README](README.en.md)
 - [Özellikler ve Yol Haritası](docs/features.md)
 - [Komutlar, Kısayollar ve Proje Yapısı](docs/usage.md)
 - [Donanım, Gereksinimler ve Derleme](docs/building.md)

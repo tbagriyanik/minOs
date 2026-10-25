@@ -62,6 +62,13 @@ pub enum HtmlTagType {
     Heading2,
     Heading3,
     ListItem,
+    // Yeni eklenen tag'ler
+    Span,       // Inline container
+    Em,         // Emphasized text
+    Mark,       // Marked/highlighted text
+    Small,      // Smaller text
+    Sub,        // Subscript
+    Sup,        // Superscript
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,6 +176,13 @@ pub const BOOKMARKS: &[Bookmark] = &[
         url: "http://httpforever.com/",
         description: "Hafif ve saf HTTP test sitesi (port 80).",
         description_en: "Lightweight and pure HTTP test site (port 80).",
+    },
+    Bookmark {
+        title: "Example (HTTPS)",
+        title_en: "Example (HTTPS)",
+        url: "https://example.com/",
+        description: "Güvenli HTTPS/TLS test sitesi (port 443).",
+        description_en: "Secure HTTPS/TLS test site (port 443).",
     },
     Bookmark {
         title: "KediWiki",

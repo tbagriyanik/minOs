@@ -1542,6 +1542,41 @@ pub extern "C" fn _start() -> ! {
 
         let mut force_render = false;
 
+        // USB Hotplug (tak/çıkar) bildirimleri ve donanım envanteri canlı güncellemesi
+        while let Some(ev) = drivers::usb_hid::pop_hotplug_event() {
+            force_render = true;
+            let is_en = settings_app.language.is_english();
+            let action_str = match (ev.action, is_en) {
+                (drivers::usb_hid::HotplugAction::Connected, false) => "takıldı",
+                (drivers::usb_hid::HotplugAction::Connected, true) => "connected",
+                (drivers::usb_hid::HotplugAction::Disconnected, false) => "çıkarıldı",
+                (drivers::usb_hid::HotplugAction::Disconnected, true) => "disconnected",
+            };
+            let dev_str = match (ev.kind, is_en) {
+                (drivers::usb_hid::HidKind::Keyboard, false) => "USB Klavye",
+                (drivers::usb_hid::HidKind::Keyboard, true) => "USB Keyboard",
+                (drivers::usb_hid::HidKind::Mouse, false) => "USB Fare",
+                (drivers::usb_hid::HidKind::Mouse, true) => "USB Mouse",
+            };
+            let toast_title = if is_en { "USB Device Event" } else { "USB Aygıt Olayı" };
+            let mut toast_msg = [0u8; 96];
+            let mut msg_len = 0;
+            for b in dev_str.as_bytes() { if msg_len < toast_msg.len() { toast_msg[msg_len] = *b; msg_len += 1; } }
+            if msg_len < toast_msg.len() { toast_msg[msg_len] = b' '; msg_len += 1; }
+            for b in action_str.as_bytes() { if msg_len < toast_msg.len() { toast_msg[msg_len] = *b; msg_len += 1; } }
+            let msg_text = core::str::from_utf8(&toast_msg[..msg_len]).unwrap_or("USB Event");
+            compositor.push_toast(
+                if ev.action == drivers::usb_hid::HotplugAction::Connected { gui::ToastKind::Success } else { gui::ToastKind::Info },
+                toast_title,
+                msg_text,
+                monotonic_ms(),
+                3500,
+            );
+        }
+        if drivers::usb_hid::check_and_clear_hotplug_dirty() {
+            force_render = true;
+        }
+
         let clock_now_ms = monotonic_ms();
 
         if clock_now_ms.wrapping_sub(last_clock_update_ms) >= 1_000 {
@@ -5013,7 +5048,7 @@ pub extern "C" fn _start() -> ! {
 
                         compositor.is_start_menu_open = true;
 
-                        compositor.active_start_group = 3;
+                        compositor.active_start_group = 4;
 
                         compositor.selected_start_item = 0;
 

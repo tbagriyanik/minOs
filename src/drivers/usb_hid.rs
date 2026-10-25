@@ -1075,18 +1075,70 @@ static mut INITIALIZED: bool = false;
 // HID aygıtı ve rapor çözümleme
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HidKind {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HidKind {
     Keyboard,
     Mouse,
 }
 
 impl HidKind {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             HidKind::Keyboard => "klavye",
             HidKind::Mouse => "fare",
         }
+    }
+}
+
+/// Hotplug (tak/çıkar) olayı eylemi
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HotplugAction {
+    Connected,
+    Disconnected,
+}
+
+/// Hotplug olay kaydı
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UsbHotplugEvent {
+    pub action: HotplugAction,
+    pub kind: HidKind,
+    pub port: u8,
+}
+
+const MAX_HOTPLUG_EVENTS: usize = 16;
+static mut HOTPLUG_QUEUE: [Option<UsbHotplugEvent>; MAX_HOTPLUG_EVENTS] = [None; MAX_HOTPLUG_EVENTS];
+static mut HOTPLUG_HEAD: usize = 0;
+static mut HOTPLUG_TAIL: usize = 0;
+static mut HOTPLUG_DIRTY: bool = false;
+
+pub fn push_hotplug_event(action: HotplugAction, kind: HidKind, port: u8) {
+    unsafe {
+        let next = (HOTPLUG_TAIL + 1) % MAX_HOTPLUG_EVENTS;
+        if next != HOTPLUG_HEAD {
+            HOTPLUG_QUEUE[HOTPLUG_TAIL] = Some(UsbHotplugEvent { action, kind, port });
+            HOTPLUG_TAIL = next;
+        }
+        HOTPLUG_DIRTY = true;
+    }
+}
+
+pub fn pop_hotplug_event() -> Option<UsbHotplugEvent> {
+    unsafe {
+        if HOTPLUG_HEAD == HOTPLUG_TAIL {
+            None
+        } else {
+            let ev = HOTPLUG_QUEUE[HOTPLUG_HEAD].take();
+            HOTPLUG_HEAD = (HOTPLUG_HEAD + 1) % MAX_HOTPLUG_EVENTS;
+            ev
+        }
+    }
+}
+
+pub fn check_and_clear_hotplug_dirty() -> bool {
+    unsafe {
+        let dirty = HOTPLUG_DIRTY;
+        HOTPLUG_DIRTY = false;
+        dirty
     }
 }
 
@@ -1900,14 +1952,18 @@ unsafe fn mark_port_disconnected(
 
     for device in HID_DEVICES.iter_mut() {
         if device.active && device.controller == controller as u8 && device.slot == slot {
+            let removed_kind = device.kind;
             device.active = false;
             if device.dma_phys != 0 {
                 free_frames(pmm, device.dma_phys, 2);
                 device.dma_phys = 0;
             }
-            crate::serial::print("[USB-HID] Aygıt çıkarıldı (port ");
+            crate::serial::print("[USB-HID] Aygıt çıkarıldı: USB ");
+            crate::serial::print(removed_kind.label());
+            crate::serial::print(" (port ");
             crate::serial::print_dec(port as u64);
             crate::serial::print(").\n");
+            push_hotplug_event(HotplugAction::Disconnected, removed_kind, port);
         }
     }
 
@@ -2310,6 +2366,8 @@ unsafe fn enumerate_device(
 
         HID_DEVICES[index] = device;
         queue_hid_transfer(&mut HID_DEVICES[index]);
+
+        push_hotplug_event(HotplugAction::Connected, kind, root_port);
 
         crate::serial::print("[USB-HID] HID ");
         crate::serial::print(kind.label());
@@ -3119,6 +3177,22 @@ pub fn keyboard_count() -> usize {
 
 pub fn mouse_count() -> usize {
     unsafe { HID_DEVICES.iter().filter(|d| d.active && d.kind == HidKind::Mouse).count() }
+}
+
+/// Etkin bir HID cihazının tür ve port bilgisini döndürür.
+pub fn get_active_device_info(index: usize) -> Option<(HidKind, u8)> {
+    unsafe {
+        let mut active_idx = 0;
+        for dev in HID_DEVICES.iter() {
+            if dev.active {
+                if active_idx == index {
+                    return Some((dev.kind, dev.port));
+                }
+                active_idx += 1;
+            }
+        }
+        None
+    }
 }
 
 pub fn has_event() -> bool {

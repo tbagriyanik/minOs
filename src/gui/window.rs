@@ -359,7 +359,7 @@ impl MinGuiCompositor {
         // Çerçeve (border) ve Pencere Gövdesi (Yuvarlatılmış 6px)
         let border = if win.is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
         fb.draw_rounded_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, 6, border);
-        fb.draw_rounded_rect(win.x, win.y, win.width, win.height, 6, Color::WINDOW_BG);
+        fb.draw_rounded_rect_alpha(win.x, win.y, win.width, win.height, 6, Color::WINDOW_BG, 232);
 
         // Başlık Çubuğu (dikey gradyan — yuvarlatılmış)
         let (t_top, t_bottom) = if win.is_focused {
@@ -368,6 +368,7 @@ impl MinGuiCompositor {
             (Color::TITLE_BAR_INACTIVE, Self::shade(Color::TITLE_BAR_INACTIVE, -10))
         };
         fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 6, t_top, t_bottom);
+        fb.draw_rounded_rect_alpha(win.x, win.y, win.width, titlebar_h(), 6, t_top, 224);
         fb.draw_rect(win.x, win.y + titlebar_h() - 1, win.width, 1, border);
 
         // Pencereye özel ilgili program simgesi ve başlık (aktif ölçekte).

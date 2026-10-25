@@ -51,6 +51,7 @@ impl MinGuiCompositor {
 
         // Görev Çubuğu Zemin (gradyan)
         fb.draw_vgradient(0, tb_y, fb.width, taskbar_h(), Color::TASKBAR_BG, Self::shade(Color::TASKBAR_BG, 8));
+        fb.draw_rounded_rect_alpha(0, tb_y, fb.width, taskbar_h(), 0, Color::TASKBAR_BG, 224);
         fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
         // Tepsi öğeleri için ortak hover / basılı / açık-panel geri bildirimi.

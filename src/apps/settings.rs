@@ -137,9 +137,29 @@ fn render_device_inventory(
         line.push(if english { "USB HID (native xHCI): " } else { "USB HID (yerel xHCI): " });
         line.number(crate::drivers::usb_hid::controller_count() as u64);
         line.push(if english { " controller(s) | " } else { " denetleyici | " });
-        line.number(crate::drivers::usb_hid::device_count() as u64);
-        line.push(if english { " active HID interface(s) | boot + report descriptor" } else { " etkin HID arayüzü | boot + rapor tanımlayıcısı" });
+        let dev_count = crate::drivers::usb_hid::device_count();
+        line.number(dev_count as u64);
+        line.push(if english { " active HID interface(s)" } else { " etkin HID arayüzü" });
         draw(&line, Color::ACCENT_GREEN);
+
+        for i in 0..dev_count {
+            if let Some((kind, port)) = crate::drivers::usb_hid::get_active_device_info(i) {
+                let mut dev_line = DeviceLine::new();
+                dev_line.push("  -> ");
+                match kind {
+                    crate::drivers::usb_hid::HidKind::Keyboard => {
+                        dev_line.push(if english { "USB Keyboard" } else { "USB Klavye" });
+                    }
+                    crate::drivers::usb_hid::HidKind::Mouse => {
+                        dev_line.push(if english { "USB Mouse" } else { "USB Fare" });
+                    }
+                }
+                dev_line.push(if english { " | Port: " } else { " | Port: " });
+                dev_line.number(port as u64);
+                dev_line.push(if english { " (Hotplug Ready)" } else { " (Canlı Tak/Çıkar Aktif)" });
+                draw(&dev_line, Color::TEXT_MAIN);
+            }
+        }
     }
 
     for drive in 0..4u8 {

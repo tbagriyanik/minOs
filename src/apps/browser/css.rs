@@ -28,17 +28,50 @@ fn strip_css_comments(css: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-/// "16px" / "1.5em" / "24" gibi değerleri piksel cinsinden çözer.
-fn parse_px_value(val: &str) -> Option<usize> {
+/// Piksel, em, rem, %, vh, vw birimlerini piksel cinsinden çözer.
+/// 
+/// # Arguments
+/// 
+/// * `val` - Değer dizgesi (örnek: "16px", "2rem", "50%", "100vh")
+/// * `viewport_width` - Görünüm alanı genişliği piksel cinsinden (opsiyonel, `None` için varsayılan kullanılır)
+/// * `viewport_height` - Görünüm alanı yüksekliği piksel cinsinden (opsiyonel, `None` için varsayılan kullanılır)
+/// * `parent_width` - Vanem elementi genişliği yüzdesi için hesaplanacak genişlik (opsiyonel, `None` için %100 varsayılır)
+/// * `parent_height` - Vanem elementi yüksekliği yüzdesi için hesaplanacak yükseklik (opsiyonel, `None` için %100 varsayılır)
+fn parse_px_value(val: &str, viewport_width: Option<usize>, viewport_height: Option<usize>, parent_width: Option<usize>, parent_height: Option<usize>) -> Option<usize> {
     let t = val.trim().to_ascii_lowercase();
-    let (num_str, mul) = if let Some(r) = t.strip_suffix("px") { (r, 1.0f32) }
-        else if let Some(r) = t.strip_suffix("em") { (r, 16.0f32) }
-        else if let Some(r) = t.strip_suffix("rem") { (r, 16.0f32) }
-        else if t.ends_with('%') || t.ends_with("pt") || t.ends_with("vh") || t.ends_with("vw") { return None; }
-        else { (t.as_str(), 1.0f32) };
+    let (num_str, unit) = if let Some(n) = t.strip_suffix("px") { (n, "px") }
+        else if let Some(n) = t.strip_suffix("em") { (n, "em") }
+        else if let Some(n) = t.strip_suffix("rem") { (n, "rem") }
+        else if let Some(n) = t.strip_suffix("%") { (n, "%") }
+        else if let Some(n) = t.strip_suffix("vh") { (n, "vh") }
+        else if let Some(n) = t.strip_suffix("vw") { (n, "vw") }
+        else if let Some(n) = t.strip_suffix("pt") { (n, "pt") }
+        else { (t.as_str(), "") };
     let n: f32 = num_str.trim().parse().ok()?;
     if !n.is_finite() || n < 0.0 { return None; }
-    Some((n * mul) as usize)
+    
+    match unit {
+        "px" => Some(n as usize),
+        "em" => Some((n * 16.0f32) as usize), // 1em = 16px varsayımı
+        "rem" => Some((n * 16.0f32) as usize), // 1rem = 16px varsayımı
+        "%" => {
+            let parent_w = parent_width.unwrap_or(100);
+            let _parent_h = parent_height.unwrap_or(100);
+            // Yüzde değeri parent genişliğine/güksekliğine göre hesapla
+            // Bu fonksiyon çağrısında parent_boyutları sağlanmazsa None döner
+            if parent_w > 0 { Some((n * parent_w as f32 / 100.0) as usize) } else { None }
+        }
+        "vh" => {
+            let h = viewport_height.unwrap_or(768); // Varsayılan: 768p height
+            Some((n * h as f32 / 100.0) as usize)
+        }
+        "vw" => {
+            let w = viewport_width.unwrap_or(1024); // Varsayılan: 1024p width
+            Some((n * w as f32 / 100.0) as usize)
+        }
+        "pt" => Some((n * 1.25f32) as usize), // 1pt ≈ 1.25px
+        _ => None,
+    }
 }
 
 fn font_scale_from_size(val: &str) -> usize {
@@ -47,7 +80,8 @@ fn font_scale_from_size(val: &str) -> usize {
         return 2;
     }
     if l.contains("small") { return 1; }
-    match parse_px_value(&l) {
+    // Varsayılan viewport ve parent boyutları ile px değerini hesapla
+    match parse_px_value(&l, None, None, None, None) {
         Some(px) => if px >= 20 { 2 } else { 1 },
         None => 1,
     }
@@ -82,7 +116,8 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         "font-size" => style.font_scale = font_scale_from_size(val),
         "display" => { if val.eq_ignore_ascii_case("none") { style.display_none = true; } }
         "margin-left" | "padding-left" | "text-indent" => {
-            if let Some(px) = parse_px_value(val) { style.indent_px = px; }
+            // Varsayılan: viewport ve parent bilgis yok, direkt px/em/rem parse et
+            if let Some(px) = parse_px_value(val, None, None, None, None) { style.indent_px = px; }
         }
         "margin" | "padding" => {
             // Kısa gösterim: soldan itibaren ikinci değer sol kenar boşluğudur.
@@ -94,7 +129,9 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 _ => parts.get(3).copied(),
             };
             if let Some(v) = left {
-                if let Some(px) = parse_px_value(v) { style.indent_px = px; }
+                // Margin/padding için varsayılan: tam genişlik/yükseklik hesaplamak
+                // için viewport ve parent bilgisi lateri eklenebilir.
+                if let Some(px) = parse_px_value(v, None, None, None, None) { style.indent_px = px; }
             }
         }
         "font-weight" => style.bold = is_bold_weight(val),

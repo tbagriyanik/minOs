@@ -413,6 +413,36 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
                     cur_line_tag = HtmlTagType::Heading3;
                     if matched.color.is_none() { current_color = Color::ACCENT_GREEN; }
+                } else if eq_ascii(name, b"span") {
+                    // <span>: inline container, stilleri uygulamak için kullanılır
+                    // Renk/background/align/indent gibi CSS stilleri uygulanır
+                    if matched.color.is_none() { /* span varsayılan renk uygulanmaz, ebeveyne bakılır */ }
+                    if matched.align != TextAlign::Left {
+                        cur_line_align = matched.align;
+                    }
+                    if matched.display_none && hidden_until_close.is_none() {
+                        hidden_until_close = Some(name.to_vec());
+                    }
+                } else if eq_ascii(name, b"em") {
+                    // <em>: vurgulu metin
+                    if matched.color.is_none() { current_color = Color::ACCENT_BLUE; }
+                    if matched.underline {
+                        current_underline = true;
+                    }
+                } else if eq_ascii(name, b"mark") {
+                    // <mark>:Highlighted metin
+                    if current_bg.is_none() {
+                        current_bg = Some(0xFFFF00); // Sarı background
+                    }
+                } else if eq_ascii(name, b"small") {
+                    // <small>: Küçük metin
+                    // font_scale azaltılabilir, basit implementasyonda etkisiz
+                } else if eq_ascii(name, b"sub") {
+                    // <sub>: Alt indeks
+                    // Basit implementasyon: [ ] etiketleri gibi gösterilir
+                } else if eq_ascii(name, b"sup") {
+                    // <sup>: Üst indeks
+                    // Basit implementasyon: [ ] etiketleri gibi gösterilir
                 } else if eq_ascii(name, b"img") {
                     // <img>: bu motorda görsel çizilemez; erişilebilir bir metin karşılığı göster.
                     let label = extract_attr(attrs, b"alt")
@@ -499,6 +529,20 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     current_color = Color::TEXT_MAIN;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
+                } else if eq_ascii(name, b"span") {
+                    // <span> kapanıyor, stilleri sıfırla
+                    cur_line_indent.set(0);
+                    current_bold = false;
+                    current_underline = false;
+                } else if eq_ascii(name, b"em") {
+                    // <em> kapanıyor, renyi/altı çiziliyi sıfırla
+                    current_bold = false;
+                    current_underline = false;
+                } else if eq_ascii(name, b"mark") {
+                    // <mark> kapanıyor, background'ı sıfırla
+                    current_bg = None;
+                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup") {
+                    // <small>, <sub>, <sup> kapanıyor, hiçbir şey yapma
                 }
                 active_id = None;
             }

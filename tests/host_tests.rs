@@ -60,6 +60,16 @@ pub mod boot {
         }
     }
     pub mod limine {
+        pub fn is_canonical_ptr<T>(ptr: *const T) -> bool { !ptr.is_null() }
+        pub fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool { !ptr.is_null() }
+        pub unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
+            if slot.is_null() {
+                None
+            } else {
+                let p = *slot;
+                if p.is_null() { None } else { Some(p) }
+            }
+        }
         pub fn limine_rsdp_address() -> Option<*const u8> {
             None
         }

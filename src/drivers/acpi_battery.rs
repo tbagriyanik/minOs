@@ -165,16 +165,17 @@ pub static RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
 pub fn find_rsdp() -> Option<u64> {
     unsafe {
         // 1. Limine RSDP isteğini kontrol et
-        if !RSDP_REQUEST.response.is_null() {
-            let resp = RSDP_REQUEST.response;
-            let addr = (*resp).address as u64;
-            if addr != 0 {
-                let vaddr = if addr < 0xFFFF_8000_0000_0000 {
-                    crate::drivers::phys_to_virt(addr)
+        if let Some(resp) = crate::boot::limine::valid_limine_response(core::ptr::addr_of!(RSDP_REQUEST.response)) {
+            let addr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).address));
+            if !addr.is_null() && crate::boot::limine::is_canonical_ptr(addr) {
+                let p = addr as u64;
+                let vaddr = if p < 0xFFFF_8000_0000_0000 {
+                    crate::drivers::phys_to_virt(p)
                 } else {
-                    addr
+                    p
                 };
-                if validate_rsdp(vaddr) {
+                let vptr = vaddr as *const u8;
+                if crate::boot::limine::is_mapped_limine_ptr(vptr) && validate_rsdp(vaddr) {
                     return Some(vaddr);
                 }
             }
@@ -206,6 +207,10 @@ pub fn find_rsdp() -> Option<u64> {
 
 unsafe fn validate_rsdp(vaddr: u64) -> bool {
     let ptr = vaddr as *const u8;
+    if !crate::boot::limine::is_mapped_limine_ptr(ptr) {
+        return false;
+    }
+
     let sig = core::slice::from_raw_parts(ptr, 8);
     if sig != b"RSD PTR " {
         return false;
@@ -222,7 +227,11 @@ unsafe fn validate_rsdp(vaddr: u64) -> bool {
 
     let revision = ptr.add(15).read_volatile();
     if revision >= 2 {
-        let len = (ptr.add(20) as *const u32).read_volatile();
+        let len_ptr = ptr.add(20) as *const u32;
+        if !crate::boot::limine::is_mapped_limine_ptr(len_ptr) {
+            return false;
+        }
+        let len = len_ptr.read_volatile();
         if len >= 36 && len <= 4096 {
             let mut ext_sum: u8 = 0;
             for i in 0..len as usize {
@@ -237,6 +246,9 @@ unsafe fn validate_rsdp(vaddr: u64) -> bool {
 
 unsafe fn parse_acpi_tables(rsdp_vaddr: u64) -> bool {
     let ptr = rsdp_vaddr as *const RsdpDescriptor;
+    if !crate::boot::limine::is_mapped_limine_ptr(ptr) {
+        return false;
+    }
     let rsdp = ptr.read_unaligned();
 
     let (use_xsdt, root_vaddr) = if rsdp.revision >= 2 && rsdp.xsdt_address != 0 {
@@ -249,13 +261,20 @@ unsafe fn parse_acpi_tables(rsdp_vaddr: u64) -> bool {
         return false;
     };
 
-    let root_hdr = (root_vaddr as *const AcpiHeader).read_unaligned();
+    let root_ptr = root_vaddr as *const AcpiHeader;
+    if !crate::boot::limine::is_mapped_limine_ptr(root_ptr) {
+        return false;
+    }
+    let root_hdr = root_ptr.read_unaligned();
     if root_hdr.length < 36 || root_hdr.length > 0x100000 {
         return false;
     }
 
     let entries_len = root_hdr.length as usize - 36;
     let data_ptr = (root_vaddr + 36) as *const u8;
+    if !crate::boot::limine::is_mapped_limine_ptr(data_ptr) {
+        return false;
+    }
 
     SSDT_COUNT = 0;
 
@@ -287,7 +306,11 @@ unsafe fn parse_acpi_tables(rsdp_vaddr: u64) -> bool {
 }
 
 unsafe fn inspect_acpi_table(table_vaddr: u64) {
-    let hdr = (table_vaddr as *const AcpiHeader).read_unaligned();
+    let ptr = table_vaddr as *const AcpiHeader;
+    if !crate::boot::limine::is_mapped_limine_ptr(ptr) {
+        return;
+    }
+    let hdr = ptr.read_unaligned();
     if hdr.length < 36 || hdr.length > 0x100000 {
         return;
     }
@@ -309,10 +332,13 @@ unsafe fn inspect_acpi_table(table_vaddr: u64) {
 
             if dsdt_phys != 0 {
                 let dsdt_v = crate::drivers::phys_to_virt(dsdt_phys);
-                let dsdt_hdr = (dsdt_v as *const AcpiHeader).read_unaligned();
-                if &dsdt_hdr.signature == b"DSDT" && dsdt_hdr.length > 36 {
-                    DSDT_VADDR = dsdt_v + 36;
-                    DSDT_LEN = (dsdt_hdr.length - 36) as usize;
+                let dsdt_ptr = dsdt_v as *const AcpiHeader;
+                if crate::boot::limine::is_mapped_limine_ptr(dsdt_ptr) {
+                    let dsdt_hdr = dsdt_ptr.read_unaligned();
+                    if &dsdt_hdr.signature == b"DSDT" && dsdt_hdr.length > 36 {
+                        DSDT_VADDR = dsdt_v + 36;
+                        DSDT_LEN = (dsdt_hdr.length - 36) as usize;
+                    }
                 }
             }
         }
@@ -729,14 +755,20 @@ pub fn detect() -> bool {
         // DSDT ve SSDT tablolarında pil cihazını ara
         let mut parsed = BatteryParsedData::default();
         if DSDT_VADDR != 0 && DSDT_LEN > 0 {
-            let dsdt_slice = core::slice::from_raw_parts(DSDT_VADDR as *const u8, DSDT_LEN);
-            scan_aml_for_battery(dsdt_slice, &mut parsed);
+            let ptr = DSDT_VADDR as *const u8;
+            if crate::boot::limine::is_mapped_limine_ptr(ptr) {
+                let dsdt_slice = core::slice::from_raw_parts(ptr, DSDT_LEN);
+                scan_aml_for_battery(dsdt_slice, &mut parsed);
+            }
         }
 
         for i in 0..SSDT_COUNT {
             if SSDT_VADDRS[i] != 0 && SSDT_LENS[i] > 0 {
-                let ssdt_slice = core::slice::from_raw_parts(SSDT_VADDRS[i] as *const u8, SSDT_LENS[i]);
-                scan_aml_for_battery(ssdt_slice, &mut parsed);
+                let ptr = SSDT_VADDRS[i] as *const u8;
+                if crate::boot::limine::is_mapped_limine_ptr(ptr) {
+                    let ssdt_slice = core::slice::from_raw_parts(ptr, SSDT_LENS[i]);
+                    scan_aml_for_battery(ssdt_slice, &mut parsed);
+                }
             }
         }
 
@@ -833,14 +865,20 @@ pub fn update_status() -> bool {
 
         let mut parsed = BatteryParsedData::default();
         if DSDT_VADDR != 0 && DSDT_LEN > 0 {
-            let dsdt_slice = core::slice::from_raw_parts(DSDT_VADDR as *const u8, DSDT_LEN);
-            scan_aml_for_battery(dsdt_slice, &mut parsed);
+            let ptr = DSDT_VADDR as *const u8;
+            if crate::boot::limine::is_mapped_limine_ptr(ptr) {
+                let dsdt_slice = core::slice::from_raw_parts(ptr, DSDT_LEN);
+                scan_aml_for_battery(dsdt_slice, &mut parsed);
+            }
         }
 
         for i in 0..SSDT_COUNT {
             if SSDT_VADDRS[i] != 0 && SSDT_LENS[i] > 0 {
-                let ssdt_slice = core::slice::from_raw_parts(SSDT_VADDRS[i] as *const u8, SSDT_LENS[i]);
-                scan_aml_for_battery(ssdt_slice, &mut parsed);
+                let ptr = SSDT_VADDRS[i] as *const u8;
+                if crate::boot::limine::is_mapped_limine_ptr(ptr) {
+                    let ssdt_slice = core::slice::from_raw_parts(ptr, SSDT_LENS[i]);
+                    scan_aml_for_battery(ssdt_slice, &mut parsed);
+                }
             }
         }
 

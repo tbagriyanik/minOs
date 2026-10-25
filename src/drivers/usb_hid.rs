@@ -22,7 +22,10 @@
 //! - xHCI (USB 3.x), EHCI, UHCI ve USB Hub (Route String, Transaction
 //!   Translator) arkasındaki cihazlar tam olarak desteklenir.
 //! - Eski donanımlar ve USB 1.1/2.0 aygıtları için EHCI/UHCI/OHCI denetleyici
-//!   başlatma/handoff ve transfer katmanı mevcuttur.
+//!   başlatma/handoff ve transfer katmanı mevcuttur. UHCI/OHCI bugün HID
+//!   kesme uç noktası yoklamasını sürer; HID raporları bu denetleyicilerden
+//!   henüz ayrıştırılmaz (şimdilik firmware'in USB Legacy/8042 emülasyonu
+//!   yedek yol olarak kullanılır).
 //!
 //! TR: USB klavye ve fare desteği; EN: USB keyboard and mouse support.
 

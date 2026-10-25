@@ -551,10 +551,32 @@ fn init_ohci_controller(bus: u8, dev: u8, func: u8) {
         crate::serial::print_dec(n_ports as u64);
         crate::serial::print(")\n");
 
-        // OHCI Operasyonel Duruma geçiş (HCFS = 2, bits 6..7)
+        // OHCI HCCA (Host Controller Communications Area) ve ED/TD Transfer Katmanı
+        let hcca_phys = core::ptr::addr_of!(OHCI_DMA.hcca) as u32;
+        let ctrl_ed_phys = core::ptr::addr_of!(OHCI_DMA.control_ed) as u32;
+        let bulk_ed_phys = core::ptr::addr_of!(OHCI_DMA.bulk_ed) as u32;
+
+        OHCI_DMA.control_ed.flags = (64 << 16) | (1 << 14); // MPS=64, s=Low/Full speed
+        OHCI_DMA.bulk_ed.flags = 64 << 16;
+
+        // HCCA yazmacı (ofset 0x18)
+        let hcca_reg = (mmio + 0x18) as *mut u32;
+        core::ptr::write_volatile(hcca_reg, hcca_phys);
+
+        // HcControlHeadED (ofset 0x20) ve HcBulkHeadED (ofset 0x28)
+        let ctrl_head_reg = (mmio + 0x20) as *mut u32;
+        let bulk_head_reg = (mmio + 0x28) as *mut u32;
+        core::ptr::write_volatile(ctrl_head_reg, ctrl_ed_phys);
+        core::ptr::write_volatile(bulk_head_reg, bulk_ed_phys);
+
+        // HcPeriodicStart (ofset 0x40): standart 0x2A2F (frame süresinin %90'ı)
+        let periodic_start_reg = (mmio + 0x40) as *mut u32;
+        core::ptr::write_volatile(periodic_start_reg, 0x2A2F);
+
+        // OHCI Operasyonel Duruma geçiş (HCFS = 2, bits 6..7) + Control/Bulk/Periodic list enable (bits 2,3,4,5)
         let cur_ctrl = core::ptr::read_volatile(ctrl);
-        core::ptr::write_volatile(ctrl, (cur_ctrl & !(3 << 6)) | (2 << 6));
-        crate::serial::print("[USB-OHCI] Denetleyici operasyonel duruma geçirildi.\n");
+        core::ptr::write_volatile(ctrl, (cur_ctrl & !(3 << 6)) | (2 << 6) | (1 << 2) | (1 << 4) | (1 << 5));
+        crate::serial::print("[USB-OHCI] Denetleyici operasyonel duruma geçirildi (HCCA ve ED/TD transfer kuyruğu aktif).\n");
     }
 }
 
@@ -891,4 +913,85 @@ struct EhciDmaPool {
 static mut EHCI_DMA: EhciDmaPool = EhciDmaPool {
     qh_async: EhciQh::empty(),
     qtd: [EhciQtd::empty(); 4],
+};
+
+// ---------------------------------------------------------------------------
+// OHCI Transfer Katmanı (Endpoint Descriptor / General Transfer Descriptor)
+// ---------------------------------------------------------------------------
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct OhciEd {
+    pub flags: u32,       // Bit 0..6: FA, 7..10: EN, 11..12: d, 13: s, 14: k, 15: f, 16..26: MPS
+    pub tail_p: u32,      // TD Kuyruk Sonu Fiziksel Adresi
+    pub head_p: u32,      // TD Kuyruk Başı Fiziksel Adresi + Durum (bit 0: Halted, bit 1: Carry)
+    pub next_ed: u32,     // Sonraki ED Fiziksel Adresi
+}
+
+impl OhciEd {
+    pub const fn empty() -> Self {
+        Self {
+            flags: 0,
+            tail_p: 0,
+            head_p: 0,
+            next_ed: 0,
+        }
+    }
+}
+
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+pub struct OhciTd {
+    pub flags: u32,       // Bit 18..19: R/DP (0=SETUP, 1=OUT, 2=IN), 20: DI, 21..23: T, 24..27: EC, 28..31: CC
+    pub cbp: u32,         // Current Buffer Pointer
+    pub next_td: u32,     // Next TD
+    pub be: u32,          // Buffer End
+}
+
+impl OhciTd {
+    pub const fn empty() -> Self {
+        Self {
+            flags: 0,
+            cbp: 0,
+            next_td: 0,
+            be: 0,
+        }
+    }
+}
+
+/// OHCI Host Controller Communications Area (HCCA - 256 bayt hizalı)
+#[repr(C, align(256))]
+pub struct OhciHcca {
+    pub hcca_interrupt_table: [u32; 32], // 32 periyodik kesme listesi başlığı
+    pub hcca_frame_number: u16,          // Güncel frame numarası
+    pub hcca_pad1: u16,
+    pub hcca_done_head: u32,             // Tamamlanan TD listesi
+    pub reserved: [u8; 116],
+}
+
+impl OhciHcca {
+    pub const fn empty() -> Self {
+        Self {
+            hcca_interrupt_table: [0; 32],
+            hcca_frame_number: 0,
+            hcca_pad1: 0,
+            hcca_done_head: 0,
+            reserved: [0; 116],
+        }
+    }
+}
+
+#[repr(C, align(4096))]
+struct OhciDmaPool {
+    hcca: OhciHcca,
+    control_ed: OhciEd,
+    bulk_ed: OhciEd,
+    td: [OhciTd; 4],
+}
+
+static mut OHCI_DMA: OhciDmaPool = OhciDmaPool {
+    hcca: OhciHcca::empty(),
+    control_ed: OhciEd::empty(),
+    bulk_ed: OhciEd::empty(),
+    td: [OhciTd::empty(); 4],
 };

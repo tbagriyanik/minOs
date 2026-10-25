@@ -53,6 +53,32 @@ impl MinGuiCompositor {
         fb.draw_vgradient(0, tb_y, fb.width, taskbar_h(), Color::TASKBAR_BG, Self::shade(Color::TASKBAR_BG, 8));
         fb.draw_rect(0, tb_y, fb.width, 1, Color::BORDER);
 
+        // Tepsi öğeleri için ortak hover / basılı / açık-panel geri bildirimi.
+        // Böylece yalnızca metnin renk değiştirmesi yerine tıklanabilir alanın
+        // tamamı görünür olur; açık takvim ve ses panelinin sahibi de belli olur.
+        let tray_items = [
+            (l.kbd, false),
+            (l.theme, false),
+            (l.network, false),
+            (l.volume, self.is_volume_popup_open),
+            (l.clock, self.is_calendar_open),
+        ];
+        for (rect, panel_open) in tray_items {
+            if rect.2 == 0 { continue; }
+            let hovered = in_rect(mx, my, rect);
+            if !hovered && !panel_open { continue; }
+            let pressed = hovered && mouse.left_button;
+            let bg = if pressed {
+                Self::shade(Color::TITLE_BAR, -12)
+            } else {
+                Self::shade(Color::TITLE_BAR, 16)
+            };
+            fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+            if panel_open {
+                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::ACCENT_BLUE);
+            }
+        }
+
         // Başlat Menüsü Butonu
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
         let start_bg = if self.is_start_menu_open { Color::ACCENT_BLUE } else { Color::ACCENT_BLUE };

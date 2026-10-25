@@ -1476,7 +1476,11 @@ impl BrowserApp {
         match self.request_state {
             0 => {
                 let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
-                if let Some(ip) = crate::drivers::netstack::parse_ipv4(host) {
+                let clean_host = host.trim().trim_start_matches('[').trim_end_matches(']');
+                if let Some(_v6) = crate::drivers::netstack::parse_ipv6(clean_host) {
+                    // IPv6 adresi doğrudan girildiğinde (ör: http://[::1]/ veya http://[fe80::1]/)
+                    self.finish_network_error(crate::gui::ui_text("IPv6 yönlendirme hazır değil (IPv4 Gateway etkin).", "IPv6 routing not active (IPv4 Gateway active)."));
+                } else if let Some(ip) = crate::drivers::netstack::parse_ipv4(host) {
                     self.request_ip = ip;
                     let port = self.request_port;
                     if crate::drivers::netstack::tcp_begin(ip, port, 49153) {

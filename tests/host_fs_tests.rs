@@ -285,3 +285,76 @@ fn ext4_content_survives_remount() {
     let fs = Ext4Fs::mount(dev2, 0).unwrap();
     assert_eq!(fs.read_file("/kalici.bin").unwrap(), payload);
 }
+
+
+
+
+#[test]
+fn ext4_fragmentation_and_deep_directory_hierarchy() {
+    let dev = formatted_ext4(65536);
+    let mut fs = Ext4Fs::mount(dev, 0).unwrap();
+
+    // 1. Derin dizin hiyerarşisi oluştur
+    fs.mkdir("/a").unwrap();
+    fs.mkdir("/a/b").unwrap();
+    fs.mkdir("/a/b/c").unwrap();
+    fs.mkdir("/a/b/c/d").unwrap();
+
+    // 2. Parçalanma (fragmentasyon) simülasyonu: ardışık küçük dosyalar yaz ve bazılarını sil
+    for i in 0..10 {
+        let path = alloc::format!("/a/b/c/d/frag_{}.dat", i);
+        let data = pattern(1024 * (i + 1), i as u8);
+        fs.write_file(&path, &data).unwrap();
+    }
+
+    // Çift numaralı dosyaları silerek serbest blok delikleri aç
+    for i in (0..10).step_by(2) {
+        let path = alloc::format!("/a/b/c/d/frag_{}.dat", i);
+        fs.remove_file(&path).unwrap();
+    }
+
+    // 3. Delikli blokların arasına yeni büyük dosya yaz (delikleri doldurmalı)
+    let big_data = pattern(25_000, 42);
+    fs.write_file("/a/b/c/d/filler.bin", &big_data).unwrap();
+
+    // 4. Kalan tek numaralı dosyaları ve yeni büyük dosyayı doğrula
+    for i in (1..10).step_by(2) {
+        let path = alloc::format!("/a/b/c/d/frag_{}.dat", i);
+        let read = fs.read_file(&path).unwrap();
+        assert_eq!(read, pattern(1024 * (i + 1), i as u8));
+    }
+    assert_eq!(fs.read_file("/a/b/c/d/filler.bin").unwrap(), big_data);
+}
+
+#[test]
+fn exfat_fragmentation_and_cluster_chain_integrity() {
+    let dev = formatted_exfat(32768);
+    let mut fs = ExfatFs::mount(dev, 0).unwrap();
+
+    // Derin dizin yapısı
+    assert!(fs.create_dir(fs.root_cluster, "docs"));
+    let docs = fs.lookup("/docs").unwrap();
+    assert!(fs.create_dir(docs.first_cluster, "sub"));
+    let sub = fs.lookup("/docs/sub").unwrap();
+
+    // 8 adet dosya yaz (her biri küme sınırlarını aşan boyutlarda)
+    for i in 0..8 {
+        let name = alloc::format!("file_{}.bin", i);
+        assert!(fs.write_file(sub.first_cluster, &name, &pattern(6000, i as u8)));
+    }
+
+    // Bazılarını silerek FAT tablosunda parçalanma oluştur
+    assert!(fs.remove(sub.first_cluster, "file_1.bin"));
+    assert!(fs.remove(sub.first_cluster, "file_3.bin"));
+    assert!(fs.remove(sub.first_cluster, "file_5.bin"));
+
+    // Parçalanmış FAT üzerine büyük dosya yaz
+    let big = pattern(24_000, 99);
+    assert!(fs.write_file(sub.first_cluster, "merged.dat", &big));
+
+    // Bütünlüğü doğrula
+    assert_eq!(fs.read_file("/docs/sub/merged.dat").unwrap(), big);
+    assert_eq!(fs.read_file("/docs/sub/file_0.bin").unwrap(), pattern(6000, 0));
+    assert_eq!(fs.read_file("/docs/sub/file_2.bin").unwrap(), pattern(6000, 2));
+    assert_eq!(fs.read_file("/docs/sub/file_4.bin").unwrap(), pattern(6000, 4));
+}

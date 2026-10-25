@@ -6,7 +6,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-64.518%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-71.106%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v1.9.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -18,6 +18,10 @@
 
 ## Yenilikler (v1.9.0)
 
+- **OHCI & UHCI & EHCI Transfer Katmanı:** OHCI (`OhciEd`, `OhciTd`, `OhciHcca` ve DMA kuyruk yönetimi), UHCI (`UhciQh`, `UhciTd`) ve EHCI denetleyicileri için tam transfer katmanı ve port handoff altyapısı entegre edildi.
+- **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
+- **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
+- **Genişletilmiş Güven Deposu (Root CA):** ISRG Root X1'e ek olarak Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) ve DigiCert Global Root (CA & G2) kök sertifikaları çekirdeğe dahil edildi.
 - **ISRG Root X1 Kök CA & TLS Zincir Doğrulaması:** Let's Encrypt ISRG Root X1 kök sertifikası (`isrgrootx1.der`) çekirdeğe gömüldü. Sunucudan gelen sertifika zinciri RFC 5280 kurallarıyla taranarak yaprak ve ara sertifikaların RSA PKCS#1 v1.5 ve ECDSA P-256 imzaları güvenilen ISRG Root X1 açık anahtarına kadar eksiksiz doğrulanır.
 - **USB Hub Arkası Cihaz Desteği (xHCI):** Çok katmanlı USB hub mimarisi yerel olarak desteklenir. Hub tanımlayıcıları (`GET_DESCRIPTOR 0x29`), port güç kontrolü (`PORT_POWER`), port sıfırlama (`PORT_RESET`), xHCI 20-bit hiyerarşik `Route String` ve Transaction Translator (TT / Split Transaction) mekanizması entegre edildi. Hub arkasındaki klavye ve fareler otomatik olarak taranıp sürülür.
 - **EHCI (USB 2.0), UHCI (USB 1.1) ve OHCI Denetleyici Desteği:** xHCI denetleyicisi bulunmayan eski anakart ve laptop sistemlerinde USB portlarının ve BIOS legacy emülasyonunun sağlıklı çalışabilmesi için EHCI EECP OS handoff devri, CONFIGFLAG port yönlendirmesi, UHCI Global/Host Reset ve OHCI operasyonel mod geçişleri uygulandı.

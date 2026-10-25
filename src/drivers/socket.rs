@@ -10,9 +10,10 @@
 #![allow(dead_code, static_mut_refs)]
 
 use crate::drivers::e1000;
-use crate::drivers::netstack::{self, Ipv4Address};
+use crate::drivers::netstack::{self, Ipv4Address, Ipv6Address, IpAddress};
 
 pub const AF_INET: i32 = 2;
+pub const AF_INET6: i32 = 10;
 pub const SOCK_STREAM: i32 = 1;
 pub const SOCK_DGRAM: i32 = 2;
 
@@ -165,7 +166,10 @@ fn alloc_ephemeral() -> u16 {
 }
 
 /// `socket(AF_INET, SOCK_STREAM|SOCK_DGRAM)` — boş bir tanımlayıcı döner.
-pub fn socket(_domain: i32, stype: i32) -> Result<i32, i32> {
+pub fn socket(domain: i32, stype: i32) -> Result<i32, i32> {
+    if domain != AF_INET && domain != AF_INET6 {
+        return Err(E_NOSUPPORT);
+    }
     let t = match stype {
         SOCK_STREAM => SockType::Stream,
         SOCK_DGRAM => SockType::Dgram,
@@ -570,6 +574,24 @@ fn dns_cache_store(host: &str, ip: Ipv4Address) {
         DNS_CACHE[0].name_len = host.len();
         DNS_CACHE[0].ip = ip;
     }
+}
+
+/// Alan adını veya IP dizesini (IPv4 veya IPv6) çözer.
+pub fn resolve_ip(host: &str) -> Result<IpAddress, i32> {
+    let clean = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if let Some(v6) = netstack::parse_ipv6(clean) {
+        return Ok(IpAddress::V6(v6));
+    }
+    if let Some(v4) = netstack::parse_ipv4(clean) {
+        return Ok(IpAddress::V4(v4));
+    }
+    resolve_host(host).map(IpAddress::V4)
+}
+
+/// IPv6 adresi dizesini ayrıştırır.
+pub fn resolve_ipv6(host: &str) -> Result<Ipv6Address, i32> {
+    let clean = host.trim().trim_start_matches('[').trim_end_matches(']');
+    netstack::parse_ipv6(clean).ok_or(E_INVAL)
 }
 
 /// Alan adını IPv4'e çözer: önce önbellek, sonra dotted-quad, sonra DNS (5 sn).

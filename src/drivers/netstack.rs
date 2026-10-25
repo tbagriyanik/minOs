@@ -51,6 +51,7 @@ pub const MAC_BROADCAST: MacAddress = MacAddress([0xFF; 6]);
 // ---------------------------------------------------------------------------
 
 pub const ETHERTYPE_IPV4: u16 = 0x0800;
+pub const ETHERTYPE_IPV6: u16 = 0x86DD;
 pub const ETHERTYPE_ARP: u16 = 0x0806;
 
 const ARP_OP_REQUEST: u16 = 1;
@@ -404,6 +405,7 @@ pub fn on_packet(frame: &[u8]) {
     match ethertype {
         ETHERTYPE_ARP => handle_arp(payload),
         ETHERTYPE_IPV4 => handle_ipv4(payload),
+        ETHERTYPE_IPV6 => handle_ipv6(payload),
         _ => {}
     }
 }
@@ -971,4 +973,144 @@ fn handle_dhcp(src:Ipv4Address,data:&[u8]) {
 
 fn send_dhcp_request(offered:Ipv4Address) {
     let mac=unsafe{e1000::MAC_ADDR};let server=unsafe{DHCP_SERVER_IP};let mut p=[0u8;300];p[0]=1;p[1]=1;p[2]=6;p[4..8].copy_from_slice(&unsafe{DHCP_XID}.to_be_bytes());p[10..12].copy_from_slice(&0x8000u16.to_be_bytes());p[28..34].copy_from_slice(&mac);p[236..240].copy_from_slice(&[99,130,83,99]);let mut n=240;p[n]=53;p[n+1]=1;p[n+2]=3;n+=3;p[n]=50;p[n+1]=4;p[n+2..n+6].copy_from_slice(&offered.0);n+=6;p[n]=54;p[n+1]=4;p[n+2..n+6].copy_from_slice(&server.0);n+=6;p[n]=61;p[n+1]=7;p[n+2]=1;p[n+3..n+9].copy_from_slice(&mac);n+=9;p[n]=255;n+=1;let _=send_dhcp_bootstrap(&p[..n]);
+}
+
+
+/// IPv6 Adresi (128-bit / 16 bayt).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Ipv6Address(pub [u8; 16]);
+
+impl Ipv6Address {
+    pub const fn new(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const UNSPECIFIED: Self = Self([0; 16]);
+    pub const LOOPBACK: Self = Self([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+
+    /// Link-local olup olmadığını kontrol eder (fe80::/10).
+    pub fn is_link_local(&self) -> bool {
+        self.0[0] == 0xFE && (self.0[1] & 0xC0) == 0x80
+    }
+
+    /// Loopback (::1) olup olmadığını kontrol eder.
+    pub fn is_loopback(&self) -> bool {
+        *self == Self::LOOPBACK
+    }
+}
+
+/// IPv4 veya IPv6 adres kapsayıcısı.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IpAddress {
+    V4(Ipv4Address),
+    V6(Ipv6Address),
+}
+
+/// Standart veya sıkıştırılmış IPv6 adres dizesini ayrıştırır (Örn: "::1", "fe80::1", "2001:db8::1", "[::1]").
+pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
+    let clean = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if clean.is_empty() {
+        return None;
+    }
+
+    let mut parts: [u16; 8] = [0; 8];
+    if clean == "::" {
+        return Some(Ipv6Address::UNSPECIFIED);
+    }
+
+    if let Some(double_colon_pos) = clean.find("::") {
+        let left = &clean[..double_colon_pos];
+        let right = &clean[double_colon_pos + 2..];
+
+        let mut left_parts: [u16; 8] = [0; 8];
+        let mut left_count = 0;
+        if !left.is_empty() {
+            for s in left.split(':') {
+                if left_count >= 8 || s.len() > 4 { return None; }
+                left_parts[left_count] = u16::from_str_radix(s, 16).ok()?;
+                left_count += 1;
+            }
+        }
+
+        let mut right_parts: [u16; 8] = [0; 8];
+        let mut right_count = 0;
+        if !right.is_empty() {
+            for s in right.split(':') {
+                if right_count >= 8 || s.len() > 4 { return None; }
+                right_parts[right_count] = u16::from_str_radix(s, 16).ok()?;
+                right_count += 1;
+            }
+        }
+
+        if left_count + right_count >= 8 {
+            return None;
+        }
+
+        let zeros = 8 - (left_count + right_count);
+        let mut idx = 0;
+        for i in 0..left_count {
+            parts[idx] = left_parts[i];
+            idx += 1;
+        }
+        idx += zeros;
+        for i in 0..right_count {
+            parts[idx] = right_parts[i];
+            idx += 1;
+        }
+    } else {
+        let mut count = 0;
+        for s in clean.split(':') {
+            if count >= 8 || s.len() > 4 { return None; }
+            parts[count] = u16::from_str_radix(s, 16).ok()?;
+            count += 1;
+        }
+        if count != 8 {
+            return None;
+        }
+    }
+
+    let mut bytes = [0u8; 16];
+    for i in 0..8 {
+        let be = parts[i].to_be_bytes();
+        bytes[i * 2] = be[0];
+        bytes[i * 2 + 1] = be[1];
+    }
+    Some(Ipv6Address(bytes))
+}
+
+
+fn handle_ipv6(payload: &[u8]) {
+    // IPv6 başlığı en az 40 bayt olmalıdır
+    if payload.len() < 40 {
+        return;
+    }
+    let version = (payload[0] >> 4) & 0x0F;
+    if version != 6 {
+        return;
+    }
+    let payload_len = u16::from_be_bytes([payload[4], payload[5]]) as usize;
+    let next_header = payload[6];
+    let hop_limit = payload[7];
+    let _ = (payload_len, hop_limit);
+
+    let mut src = [0u8; 16];
+    let mut dst = [0u8; 16];
+    src.copy_from_slice(&payload[8..24]);
+    dst.copy_from_slice(&payload[24..40]);
+    let _src_ip = Ipv6Address(src);
+    let _dst_ip = Ipv6Address(dst);
+
+    // ICMPv6 (58), TCP (6), UDP (17)
+    match next_header {
+        58 => {
+            // ICMPv6 paketi
+        }
+        6 => {
+            // TCP over IPv6
+        }
+        17 => {
+            // UDP over IPv6
+        }
+        _ => {}
+    }
 }

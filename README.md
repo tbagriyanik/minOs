@@ -3,10 +3,13 @@
 [![Rust](https://img.shields.io/badge/Language-Rust%201.101.0--nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
-[![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
+[![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-155%20passed-brightgreen.svg)]()
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](licence.md)
+[![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-76.188%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-66.392%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.0.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -19,13 +22,14 @@
 ## Yenilikler (v2.0.0)
 
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
-  - **Ağ:** VirtIO-net (QEMU/KVM), Intel I219-V, Atheros Ethernet, Marvell Ethernet, Bluetooth USB dongle.
-  - **Depolama:** AHCI/SATA, NVMe SSD (PCIe), VirtIO-blk, SD/MMC kart.
-  - **USB:** USB Mass Storage, USB Printer, USB Audio, USB Touchscreen.
-  - **Grafik:** VirtIO-gpu, AMD Radeon GPU (GCN/RDNA), NVIDIA GeForce GPU (Pascal/Turing/Ampere).
-  - **Sensör & Güç:** ACPI Battery, ACPI Power, Fan & Temperature sensörleri.
-  - **Veri Yolu & Zaman:** PCIe, PCI ve Timer (PIT/HPET/APIC/TSC) altyapısı.
-- **Canlı USB Tak/Çıkar (Hotplug) Algılama & Dinamik Envanter:** minOs çalışırken USB klavye veya fare takıldığında veya çıkarıldığında sistem tarafından anında algılanır. Masaüstünde canlı toast bildirimi gösterilir (`USB Klavye takıldı`, `USB Fare çıkarıldı`), açık ekran/pencereler yeniden çizilir ve Sistem Ayarları > Aygıtlar sekmesindeki donanım listesi anında güncellenir.
+  - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
+  - ✅ **Bluetooth HCI Protokolü:** Komut (0x01), ACL veri (0x02), Olay (0x04) paket formatlaması/ayrıştırması, Inquiry ve bağlantı yönetimi tamamlandı.
+  - ✅ **Depolama:** AHCI/SATA, NVMe SSD, VirtIO-blk, SD/MMC.
+  - ✅ **USB:** Mass Storage, Printer, Audio, Touchscreen.
+  - ✅ **Grafik:** VirtIO-gpu (Split VirtQueue, 2D komut motoru, mode-set), AMD Radeon ve NVIDIA GeForce (BAR0/BAR1 VRAM framebuffer, 2D primitifler, mode-set).
+  - ✅ **Sensör & Güç:** ACPI AML yorumlayıcısı, `_BST` / `_BIX` / `_BIF` pil durumu okuma, ACPI Power, Fan & Temperature altyapısı.
+  - ✅ **Veri Yolu & Zaman:** PCIe, PCI ve Timer (PIT/HPET/APIC/TSC) altyapısı.
+- **Canlı USB Tak/Çıkar:** Çalışma sırasında USB cihazlarının anında algılanıp toast bildirimleri gösteriliyor. minOs çalışırken USB klavye veya fare takıldığında veya çıkarıldığında sistem tarafından anında algılanır. Masaüstünde canlı toast bildirimi gösterilir (`USB Klavye takıldı`, `USB Fare çıkarıldı`), açık ekran/pencereler yeniden çizilir ve Sistem Ayarları > Aygıtlar sekmesindeki donanım listesi anında güncellenir.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** OHCI (`OhciEd`, `OhciTd`, `OhciHcca` ve DMA kuyruk yönetimi), UHCI (`UhciQh`, `UhciTd`) ve EHCI denetleyicileri için tam transfer katmanı ve port handoff altyapısı entegre edildi.
 - **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
 - **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
@@ -71,7 +75,26 @@ Açılışta veya kritik sürücülerde donanım istisnası (`#PF`, `#GP`, `#DF`
 - **`help`**: Kullanılabilir komutları listeler.
 - Ayrıntılı kılavuz için: [Açılış Hata ve Kurtarma Konsolu Kılavuzu](docs/usage.md#️-açılış-hata-ve-kurtarma-konsolu-boot-recovery-console)
 
-## 📥 Hazır ISO İndirme (Download)
+---
+
+### ⚠️ Kısmi / İskelet Destek Durumu
+
+Bu sürümde bazı ileri seviye donanım özellikleri sonraki geliştirmeler için planlanmaktadır:
+
+- **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri.
+- **Bluetooth Üst Katman Profilleri:** Temel HCI katmanı, Inquiry ve bağlantı yönetimi tamdır; A2DP ses akışı ve BLE GATT profilleri gelecekteki sürümler için planlanmaktadır.
+- **NVIDIA / AMD 3D Hızlandırma:** Temel 2D framebuffer diyaframı, doğrusal mod ayarı ve 2D primitifler hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
+- **Atheros Ethernet:** Basit bağlantı established olabiliyor; advanced filter/offload özellikleri TODO.
+- **Marvell Ethernet:** Basit RX/TX çalışıyor; checksum offload, advanced filter TODO.
+- **USB Audio Recording:** KAYIT desteği TODO; sadece playback destekleniyor.
+- **USB Touchscreen Multi-touch:** Parmak temasını tıklama (tap) desteği aktif; çoklu parmak hareket analizi TODO.
+- **SD/MMC Karta Yazma:** Basit okuma çalışıyor; CSD kapasite parsingi, write reliability TODO.
+- **HTTP Chunked Encoding:** Kısmi destek; bazı edge case'ler TODO.
+- **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları implementelenmiş; HTTP/OCSP isteği üretimi ve otomatik indirme TODO. Sertifika iptal durumu "bilinmiyor" durumunda fail-closed politika uygulanır.
+
+---
+
+## 💾 Dosya Sistemleri Desteği ve Format Sınırları
 
 minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
 

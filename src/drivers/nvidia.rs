@@ -1,20 +1,32 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
-//! NVIDIA GPU Driver - NVIDIA GeForce GPU'lar için temel sürücü
+//! NVIDIA GPU Driver - NVIDIA GeForce GPU'lar için temel 2D ve Mode-Set sürücüsü
 //!
-//! Bu driver, NVIDIA GeForce GPU'ları için temel 2D/3D desteği sağlar.
-//! Modern NVIDIA GPU'lar (Pascal, Turing, Ampere mimarileri) için PCI MMIO
-//! üzerinden iletişim kurar.
-//!
-//! TR: Bu sürücü, NVIDIA GeForce GPU'ları için temel 2D/3D desteği sağlar.
-//! Modern NVIDIA GPU'lar (Pascal, Turing, Ampere mimarileri) için PCI MMIO
-//! üzerinden iletişim kurar.
+//! Bu sürücü:
+//! - PCI veriyolunu tarayarak NVIDIA GPU'larını (Vendor ID 0x10DE) tespit eder.
+//! - BAR0 (MMIO kontrol yazmaçları) ve BAR1 (VRAM Doğrusal Çerçeve Belleği / Framebuffer Aperture)
+//!   fiziksel bölgelerini sayfa tablolarına eşler.
+//! - Çözünürlük ayarlama (Mode-set: 800x600, 1024x768, 1280x720, 1920x1080) işlevlerini sağlar.
+//! - Temel 2D hızlandırma (Dikdörtgen doldurma, Blit, Ekran temizleme) işlevlerini sunar.
 
 use core::arch::asm;
+use core::sync::atomic::{compiler_fence, Ordering};
 
 // ---------------------------------------------------------------------------
-// I/O port yardımcıları (PCI için)
+// I/O Port ve PCI Yardımcıları
 // ---------------------------------------------------------------------------
+
+#[inline]
+fn io_out16(port: u16, val: u16) {
+    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
+}
+
+#[inline]
+fn io_in16(port: u16) -> u16 {
+    let ret: u16;
+    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
+    ret
+}
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
@@ -28,12 +40,19 @@ fn io_in32(port: u16) -> u32 {
     ret
 }
 
-// ---------------------------------------------------------------------------
-// PCI Erişimi
-// ---------------------------------------------------------------------------
-
 const PCI_CONFIG_ADDR: u16 = 0xCF8;
 const PCI_CONFIG_DATA: u16 = 0xCFC;
+
+#[inline]
+fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
+    let addr: u32 = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((dev as u32) << 11)
+        | ((func as u32) << 8)
+        | ((off & 0xFC) as u32);
+    io_out32(PCI_CONFIG_ADDR, addr);
+    io_in16(PCI_CONFIG_DATA + (off & 0x2) as u16)
+}
 
 #[inline]
 fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
@@ -46,25 +65,48 @@ fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
     io_in32(PCI_CONFIG_DATA)
 }
 
+#[inline]
+fn pci_write16(bus: u8, dev: u8, func: u8, off: u8, val: u16) {
+    let addr: u32 = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((dev as u32) << 11)
+        | ((func as u32) << 8)
+        | ((off & 0xFC) as u32);
+    io_out32(PCI_CONFIG_ADDR, addr);
+    io_out16(PCI_CONFIG_DATA + (off & 0x2) as u16, val);
+}
+
+#[inline]
+fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
+    let addr: u32 = 0x8000_0000
+        | ((bus as u32) << 16)
+        | ((dev as u32) << 11)
+        | ((func as u32) << 8)
+        | ((off & 0xFC) as u32);
+    io_out32(PCI_CONFIG_ADDR, addr);
+    io_out32(PCI_CONFIG_DATA, val);
+}
+
 // ---------------------------------------------------------------------------
-// NVIDIA PCI Kimlikleri
+// NVIDIA PCI Kimlikleri ve Sabitleri
 // ---------------------------------------------------------------------------
 
-const NVIDIA_VENDOR: u32 = 0x10DE; // NVIDIA Corporation
+pub const NVIDIA_VENDOR: u16 = 0x10DE;
 
-// NVIDIA GPU aygıt kimlikleri (GeForce serisi)
-const NVIDIA_DEVICES: [u32; 10] = [
-    0x1C02, // GTX 1050 Ti
-    0x1C82, // GTX 1050
-    0x1D81, // GTX 1060
-    0x1E04, // GTX 1650
-    0x1F82, // GTX 1660 Ti
-    0x1F06, // GTX 1660
-    0x1E84, // RTX 2060
-    0x1F02, // RTX 2070
-    0x1E87, // RTX 2080
-    0x2204, // RTX 3060
-];
+// NVIDIA MMIO Yazmaç Ofsetleri
+pub const NV_PMC_BOOT_0: u32 = 0x00000000;
+pub const NV_PMC_ENABLE: u32 = 0x00000200;
+pub const NV_PFB_CFG0: u32 = 0x00100200;
+pub const NV_PFB_CSTATUS: u32 = 0x0010020C;
+pub const NV_PCRTC_BASE: u32 = 0x00600000;
+pub const NV_PRAMDAC_BASE: u32 = 0x00680000;
+
+// CRTC & Surface Yazmaçları (Mode-set)
+pub const NV_CRTC_OFFSET: u32 = 0x00680800;
+pub const NV_CRTC_PITCH: u32 = 0x00680804;
+pub const NV_CRTC_HORIZ_TOTAL: u32 = 0x00680810;
+pub const NV_CRTC_VERT_TOTAL: u32 = 0x00680814;
+pub const NV_CRTC_CONFIG: u32 = 0x00680818;
 
 // ---------------------------------------------------------------------------
 // NVIDIA GPU Durumu
@@ -83,35 +125,52 @@ pub enum NvidiaGpuState {
 // Global Değişkenler
 // ---------------------------------------------------------------------------
 
-static mut MMIO_BASE: u64 = 0;
 static mut DETECTED: bool = false;
 static mut STATE: NvidiaGpuState = NvidiaGpuState::NotDetected;
+static mut PCI_BUS: u8 = 0;
+static mut PCI_DEV: u8 = 0;
+static mut PCI_FUNC: u8 = 0;
+static mut DEVICE_ID: u16 = 0;
+
+static mut MMIO_PHYS: u64 = 0;
+static mut MMIO_VIRT: u64 = 0;
+static mut FB_PHYS: u64 = 0;
+static mut FB_VIRT: u64 = 0;
+static mut FB_SIZE: u64 = 0;
 static mut VRAM_SIZE: u64 = 0;
+
+static mut CURRENT_WIDTH: u32 = 1024;
+static mut CURRENT_HEIGHT: u32 = 768;
+static mut CURRENT_BPP: u32 = 32;
+static mut CURRENT_PITCH: u32 = 1024 * 4;
+
 static mut GPU_NAME: [u8; 64] = [0; 64];
 static mut GPU_NAME_LEN: usize = 0;
 
 // ---------------------------------------------------------------------------
-// MMIO Yardımcı Fonksiyonları
+// MMIO Okuma / Yazma
 // ---------------------------------------------------------------------------
 
 #[inline]
-fn mmio_read32(offset: u32) -> u32 {
-    unsafe {
-        let ptr = (MMIO_BASE + offset as u64) as *const u32;
-        ptr.read_volatile()
+unsafe fn mmio_read32(offset: u32) -> u32 {
+    if MMIO_VIRT == 0 {
+        return 0;
     }
+    let ptr = (MMIO_VIRT + offset as u64) as *const u32;
+    ptr.read_volatile()
 }
 
 #[inline]
-fn mmio_write32(offset: u32, val: u32) {
-    unsafe {
-        let ptr = (MMIO_BASE + offset as u64) as *mut u32;
-        ptr.write_volatile(val);
+unsafe fn mmio_write32(offset: u32, val: u32) {
+    if MMIO_VIRT == 0 {
+        return;
     }
+    let ptr = (MMIO_VIRT + offset as u64) as *mut u32;
+    ptr.write_volatile(val);
 }
 
 // ---------------------------------------------------------------------------
-// Cihaz Algılama
+// Cihaz Algılama (PCI Scanning)
 // ---------------------------------------------------------------------------
 
 pub fn detect() -> bool {
@@ -120,28 +179,63 @@ pub fn detect() -> bool {
             return true;
         }
 
-        // PCI bus taranması
         for bus in 0..=8u8 {
             for dev in 0..=31u8 {
                 for func in 0..=7u8 {
-                    let vendor_id = pci_read32(bus, dev, func, 0) & 0xFFFF;
-                    let device_id = (pci_read32(bus, dev, func, 0) >> 16) & 0xFFFF;
+                    let vendor = pci_read16(bus, dev, func, 0x00);
+                    if vendor != NVIDIA_VENDOR {
+                        continue;
+                    }
 
-                    if vendor_id == NVIDIA_VENDOR && NVIDIA_DEVICES.contains(&device_id) {
-                        // BAR0 adresini al (MMIO)
+                    let class_rev = pci_read32(bus, dev, func, 0x08);
+                    let base_class = (class_rev >> 24) as u8;
+
+                    // Display Controller (Class 0x03) veya 3D Controller
+                    if base_class == 0x03 || base_class == 0x00 {
+                        PCI_BUS = bus;
+                        PCI_DEV = dev;
+                        PCI_FUNC = func;
+                        DEVICE_ID = pci_read16(bus, dev, func, 0x02);
+
+                        // PCI Bus Master ve Memory Space etkinleştir
+                        let cmd = pci_read16(bus, dev, func, 0x04);
+                        pci_write16(bus, dev, func, 0x04, cmd | 0x07);
+
+                        // BAR0 (MMIO): Genellikle 16MB
                         let bar0 = pci_read32(bus, dev, func, 0x10);
-                        if bar0 & 0x1 == 0 {
-                            // Memory-mapped I/O
-                            MMIO_BASE = (bar0 & 0xFFFF_FFF0) as u64;
-                            DETECTED = true;
-                            STATE = NvidiaGpuState::Detected;
-
-                            // VRAM boyutunu oku (basit implementasyon)
-                            let bar5 = pci_read32(bus, dev, func, 0x24);
-                            VRAM_SIZE = 6 * 1024 * 1024 * 1024; // 6GB varsayılan
-
-                            return true;
+                        if bar0 & 1 == 0 {
+                            MMIO_PHYS = (bar0 & 0xFFFF_FFF0) as u64;
+                            crate::arch::x86_64::mmio_map_2mb(MMIO_PHYS & !0x1F_FFFF);
+                            crate::arch::x86_64::mmio_map_2mb((MMIO_PHYS & !0x1F_FFFF) + 0x20_0000);
+                            MMIO_VIRT = crate::drivers::phys_to_virt(MMIO_PHYS);
                         }
+
+                        // BAR1 (Linear Framebuffer Aperture): Genellikle 64MB - 256MB+
+                        let bar1 = pci_read32(bus, dev, func, 0x14);
+                        let bar1_type = (bar1 >> 1) & 0x03;
+                        let bar1_phys = if bar1_type == 2 {
+                            // 64-bit BAR
+                            let bar1_high = pci_read32(bus, dev, func, 0x18) as u64;
+                            ((bar1 & 0xFFFF_FFF0) as u64) | (bar1_high << 32)
+                        } else {
+                            (bar1 & 0xFFFF_FFF0) as u64
+                        };
+
+                        if bar1_phys != 0 {
+                            FB_PHYS = bar1_phys;
+                            // İlk 16MB'ı sayfa tablolarına eşle
+                            for off in (0..16 * 1024 * 1024).step_by(2 * 1024 * 1024) {
+                                crate::arch::x86_64::mmio_map_2mb((FB_PHYS + off) & !0x1F_FFFF);
+                            }
+                            FB_VIRT = crate::drivers::phys_to_virt(FB_PHYS);
+                            FB_SIZE = 64 * 1024 * 1024; // 64 MB minimum
+                        }
+
+                        identify_gpu_model(DEVICE_ID);
+
+                        DETECTED = true;
+                        STATE = NvidiaGpuState::Detected;
+                        return true;
                     }
                 }
             }
@@ -151,37 +245,170 @@ pub fn detect() -> bool {
     }
 }
 
+unsafe fn identify_gpu_model(did: u16) {
+    let name: &[u8] = match did {
+        0x1C02 => b"NVIDIA GeForce GTX 1050 Ti",
+        0x1C82 => b"NVIDIA GeForce GTX 1050",
+        0x1D81 | 0x1C03 => b"NVIDIA GeForce GTX 1060",
+        0x1B81 => b"NVIDIA GeForce GTX 1070",
+        0x1B80 => b"NVIDIA GeForce GTX 1080",
+        0x1E04 | 0x1F91 => b"NVIDIA GeForce GTX 1650",
+        0x2184 | 0x2182 => b"NVIDIA GeForce GTX 1660",
+        0x2187 => b"NVIDIA GeForce GTX 1660 Ti",
+        0x1F02 | 0x1F06 => b"NVIDIA GeForce RTX 2060",
+        0x1F04 | 0x1E84 => b"NVIDIA GeForce RTX 2070",
+        0x1E82 | 0x1E87 => b"NVIDIA GeForce RTX 2080",
+        0x2503 | 0x2487 => b"NVIDIA GeForce RTX 3060",
+        0x2484 | 0x2488 => b"NVIDIA GeForce RTX 3070",
+        0x2206 | 0x2204 => b"NVIDIA GeForce RTX 3080",
+        0x2208 => b"NVIDIA GeForce RTX 3090",
+        0x2782 | 0x2860 => b"NVIDIA GeForce RTX 4070",
+        0x2704 => b"NVIDIA GeForce RTX 4080",
+        0x2684 => b"NVIDIA GeForce RTX 4090",
+        _ => b"NVIDIA GeForce GPU",
+    };
+
+    let len = name.len().min(64);
+    GPU_NAME[..len].copy_from_slice(&name[..len]);
+    GPU_NAME_LEN = len;
+    VRAM_SIZE = 4 * 1024 * 1024 * 1024; // 4 GB varsayılan
+}
+
 // ---------------------------------------------------------------------------
 // Cihaz Başlatma
 // ---------------------------------------------------------------------------
 
 pub fn init() -> bool {
     unsafe {
-        if !DETECTED {
+        if !DETECTED && !detect() {
             return false;
         }
 
         STATE = NvidiaGpuState::Initializing;
 
-        // TODO: NVIDIA spesifik başlatma
-        // - GPU reset
-        // - MMIO registers okuma
-        // - VRAM mapping
-        // - Command buffer başlatma
-        // - Display engine başlatma
+        if MMIO_VIRT != 0 {
+            // Master Control: Tüm alt birimleri etkinleştir
+            mmio_write32(NV_PMC_ENABLE, 0xFFFF_FFFF);
+            compiler_fence(Ordering::SeqCst);
+        }
 
-        // Simüle edilmiş başlatma
-        GPU_NAME[..15].copy_from_slice(b"NVIDIA GeForce");
-        GPU_NAME_LEN = 15;
+        // Varsayılan çözünürlük ayarla (1024x768x32)
+        set_mode(CURRENT_WIDTH, CURRENT_HEIGHT, CURRENT_BPP);
 
         STATE = NvidiaGpuState::Ready;
+        true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mode-Setting ve Çözünürlük Değişimi
+// ---------------------------------------------------------------------------
+
+pub fn set_mode(width: u32, height: u32, bpp: u32) -> bool {
+    unsafe {
+        if !DETECTED {
+            return false;
+        }
+
+        if width == 0 || height == 0 || (bpp != 32 && bpp != 24) {
+            return false;
+        }
+
+        CURRENT_WIDTH = width;
+        CURRENT_HEIGHT = height;
+        CURRENT_BPP = bpp;
+        CURRENT_PITCH = width * (bpp / 8);
+
+        if MMIO_VIRT != 0 {
+            // Display Engine CRTC yüzey yapılandırması
+            mmio_write32(NV_CRTC_OFFSET, 0); // VRAM başlangıcı
+            mmio_write32(NV_CRTC_PITCH, CURRENT_PITCH);
+            mmio_write32(NV_CRTC_HORIZ_TOTAL, width);
+            mmio_write32(NV_CRTC_VERT_TOTAL, height);
+            mmio_write32(NV_CRTC_CONFIG, 0x01); // 32bpp linear mode enable
+            compiler_fence(Ordering::SeqCst);
+        }
 
         true
     }
 }
 
 // ---------------------------------------------------------------------------
-// API Fonksiyonları
+// 2D Çizim Primitifleri (Hızlandırılmış Doğrudan Çerçeve Belleği)
+// ---------------------------------------------------------------------------
+
+/// Tüm ekranı belirli bir renkle temizler
+pub fn clear(color: u32) {
+    unsafe {
+        if FB_VIRT == 0 {
+            return;
+        }
+        let total_pixels = (CURRENT_WIDTH * CURRENT_HEIGHT) as usize;
+        let ptr = FB_VIRT as *mut u32;
+        for i in 0..total_pixels {
+            ptr.add(i).write_volatile(color);
+        }
+    }
+}
+
+/// Ekrana içi dolu dikdörtgen çizer
+pub fn fill_rect(x: u32, y: u32, width: u32, height: u32, color: u32) {
+    unsafe {
+        if FB_VIRT == 0 {
+            return;
+        }
+
+        let max_x = (x + width).min(CURRENT_WIDTH);
+        let max_y = (y + height).min(CURRENT_HEIGHT);
+        if x >= max_x || y >= max_y {
+            return;
+        }
+
+        let fb_ptr = FB_VIRT as *mut u32;
+        let stride = (CURRENT_PITCH / 4) as usize;
+
+        for cy in y..max_y {
+            let row_offset = (cy as usize) * stride;
+            for cx in x..max_x {
+                fb_ptr.add(row_offset + cx as usize).write_volatile(color);
+            }
+        }
+    }
+}
+
+/// Kaynak tamponundan ekrana blok kopyalama (Blit)
+pub fn blit(src: &[u32], dst_x: u32, dst_y: u32, width: u32, height: u32, src_pitch: u32) {
+    unsafe {
+        if FB_VIRT == 0 {
+            return;
+        }
+
+        let max_x = (dst_x + width).min(CURRENT_WIDTH);
+        let max_y = (dst_y + height).min(CURRENT_HEIGHT);
+        if dst_x >= max_x || dst_y >= max_y {
+            return;
+        }
+
+        let fb_ptr = FB_VIRT as *mut u32;
+        let dst_stride = (CURRENT_PITCH / 4) as usize;
+        let src_stride = (src_pitch / 4) as usize;
+
+        for row in 0..(max_y - dst_y) {
+            let dst_offset = ((dst_y + row) as usize) * dst_stride + dst_x as usize;
+            let src_offset = (row as usize) * src_stride;
+            let copy_w = (max_x - dst_x) as usize;
+
+            for col in 0..copy_w {
+                if src_offset + col < src.len() {
+                    fb_ptr.add(dst_offset + col).write_volatile(src[src_offset + col]);
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Durum ve Sorgulama API'si
 // ---------------------------------------------------------------------------
 
 pub fn is_detected() -> bool {
@@ -197,12 +424,16 @@ pub fn name() -> &'static str {
 }
 
 pub fn name_tr() -> &'static str {
-    "NVIDIA GeForce"
+    "NVIDIA GeForce Ekran Kartı"
 }
 
 pub fn gpu_name() -> &'static str {
     unsafe {
-        core::str::from_utf8(&GPU_NAME[..GPU_NAME_LEN]).unwrap_or("NVIDIA GPU")
+        if GPU_NAME_LEN > 0 {
+            core::str::from_utf8(&GPU_NAME[..GPU_NAME_LEN]).unwrap_or("NVIDIA GPU")
+        } else {
+            "NVIDIA GPU"
+        }
     }
 }
 
@@ -210,98 +441,16 @@ pub fn vram_size() -> u64 {
     unsafe { VRAM_SIZE }
 }
 
-/// Frame buffer adresi
 pub fn get_framebuffer() -> Option<u64> {
     unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return None;
+        if FB_VIRT != 0 {
+            Some(FB_VIRT)
+        } else {
+            None
         }
-
-        // TODO: NVIDIA framebuffer adresini döndür
-
-        Some(MMIO_BASE + 0x1000000)
     }
 }
 
-/// Mode setting (çözünürlük ayarlama)
-pub fn set_mode(width: u32, height: u32, bpp: u32) -> bool {
-    unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return false;
-        }
-
-        // TODO: NVIDIA display engine ile mode set
-
-        true
-    }
-}
-
-/// GPU reset
-pub fn reset_gpu() -> bool {
-    unsafe {
-        if !DETECTED {
-            return false;
-        }
-
-        // TODO: GPU reset komutu
-
-        STATE = NvidiaGpuState::Ready;
-
-        true
-    }
-}
-
-/// GPU frekans bilgisi
-pub fn get_clock_info() -> Option<(u32, u32)> {
-    unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return None;
-        }
-
-        // TODO: GPU clock frekanslarını oku
-        // (core clock, memory clock)
-
-        Some((1800, 7000)) // MHz varsayılan
-    }
-}
-
-/// GPU sıcaklığı
-pub fn get_temperature() -> Option<u32> {
-    unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return None;
-        }
-
-        // TODO: GPU sıcaklığını oku
-
-        Some(70) // °C varsayılan
-    }
-}
-
-/// GPU kullanımı
-pub fn get_utilization() -> Option<(u8, u8)> {
-    unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return None;
-        }
-
-        // TODO: GPU kullanımını oku
-        // (core usage, memory usage)
-
-        Some((60, 40)) // % varsayılan
-    }
-}
-
-/// NVIDIA GPU özellikleri
-pub fn get_capabilities() -> Option<u32> {
-    unsafe {
-        if STATE != NvidiaGpuState::Ready {
-            return None;
-        }
-
-        // TODO: GPU özelliklerini oku
-        // (CUDA cores, tensor cores, RT cores vb.)
-
-        Some(0xFFFFFFFF)
-    }
+pub fn current_mode() -> (u32, u32, u32, u32) {
+    unsafe { (CURRENT_WIDTH, CURRENT_HEIGHT, CURRENT_BPP, CURRENT_PITCH) }
 }

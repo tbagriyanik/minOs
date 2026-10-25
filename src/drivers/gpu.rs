@@ -78,9 +78,12 @@ pub struct GpuCaps {
     pub bga_version: u16,
     pub vmware_present: bool,
     pub vga_present: bool,
+    pub virtio_gpu_present: bool,
+    pub nvidia_present: bool,
+    pub amd_present: bool,
 }
 
-static mut CAPS: GpuCaps = GpuCaps { bga_present: false, bga_version: 0, vmware_present: false, vga_present: false };
+static mut CAPS: GpuCaps = GpuCaps { bga_present: false, bga_version: 0, vmware_present: false, vga_present: false, virtio_gpu_present: false, nvidia_present: false, amd_present: false };
 static mut HW_CURSOR_ENABLED: bool = false;
 static mut HW_CURSOR_X: u16 = 0;
 static mut HW_CURSOR_Y: u16 = 0;
@@ -111,7 +114,27 @@ pub fn init() -> GpuCaps {
     // Gerçek donanımda (Intel/AMD/Nvidia) I/O portları 0x1CE/0x1CF'ye dokunulmaz.
     let id = if bga_pci { bga_read(BGA_IDX_ID) } else { 0 };
     let bga = bga_pci && id >= BGA_VERSION_MIN && id < 0xB0C6;
-    let caps = GpuCaps { bga_present: bga, bga_version: if bga { id } else { 0 }, vmware_present: vmware, vga_present: vga || bga };
+    let virtio_gpu = crate::drivers::virtio_gpu::detect();
+    if virtio_gpu {
+        crate::drivers::virtio_gpu::init();
+    }
+    let nvidia = crate::drivers::nvidia::detect();
+    if nvidia {
+        crate::drivers::nvidia::init();
+    }
+    let amd = crate::drivers::amdgpu::detect();
+    if amd {
+        crate::drivers::amdgpu::init();
+    }
+    let caps = GpuCaps {
+        bga_present: bga,
+        bga_version: if bga { id } else { 0 },
+        vmware_present: vmware,
+        vga_present: vga || bga || virtio_gpu || nvidia || amd,
+        virtio_gpu_present: virtio_gpu,
+        nvidia_present: nvidia,
+        amd_present: amd,
+    };
     unsafe { CAPS = caps; }
     caps
 }
@@ -144,6 +167,21 @@ pub fn bga_set_mode(w: u16, h: u16, bpp: u16) -> Option<usize> {
 /// Dönüş: (fiziksel_değişti, pitch).
 pub fn try_set_resolution(w: usize, h: usize) -> (bool, Option<usize>) {
     if w > 1920 || h > 1080 || w == 0 || h == 0 { return (false, None); }
+    if unsafe { CAPS.virtio_gpu_present } {
+        if crate::drivers::virtio_gpu::set_mode(w as u32, h as u32) {
+            return (true, Some(w * 4));
+        }
+    }
+    if unsafe { CAPS.nvidia_present } {
+        if crate::drivers::nvidia::set_mode(w as u32, h as u32, 32) {
+            return (true, Some(w * 4));
+        }
+    }
+    if unsafe { CAPS.amd_present } {
+        if crate::drivers::amdgpu::set_mode(w as u32, h as u32, 32) {
+            return (true, Some(w * 4));
+        }
+    }
     if let Some(pitch) = bga_set_mode(w as u16, h as u16, 32) {
         // Kısa bir dikey-blank beklemesi: yırtılmayı azaltır.
         vsync_wait();

@@ -44,10 +44,24 @@ pub fn monotonic_ms() -> u64 {
     0
 }
 
+#[path = "../src/drivers/bluetooth.rs"]
+pub mod bluetooth_mod;
+
+#[path = "../src/drivers/virtio_gpu.rs"]
+pub mod virtio_gpu_mod;
+
+#[path = "../src/drivers/acpi_battery.rs"]
+pub mod acpi_battery_mod;
+
 pub mod boot {
     pub mod time {
         pub fn main_monotonic_ms() -> u64 {
             0
+        }
+    }
+    pub mod limine {
+        pub fn limine_rsdp_address() -> Option<*const u8> {
+            None
         }
     }
 }
@@ -60,10 +74,27 @@ pub mod tls;
 pub mod drivers {
     pub use crate::crypto;
     pub use crate::tls;
+    pub fn phys_to_virt(p: u64) -> u64 {
+        p
+    }
+    pub mod video {
+        pub static mut PANIC_FB_ADDR: usize = 0;
+    }
+    pub mod bluetooth {
+        pub use crate::bluetooth_mod::*;
+    }
+    pub mod virtio_gpu {
+        pub use crate::virtio_gpu_mod::*;
+    }
+    pub mod acpi_battery {
+        pub use crate::acpi_battery_mod::*;
+    }
 }
 
 pub mod arch {
     pub mod x86_64 {
+        pub fn mmio_map_2mb(_p: u64) {}
+
         pub mod sync {
             use core::cell::UnsafeCell;
             use core::ops::{Deref, DerefMut};
@@ -167,3 +198,6 @@ mod host_feature_tests;
 #[path = "host_fs_tests.rs"]
 mod host_fs_tests;
 
+#[cfg(test)]
+#[path = "host_driver_tests.rs"]
+mod host_driver_tests;

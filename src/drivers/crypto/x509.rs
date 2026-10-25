@@ -74,6 +74,8 @@ pub enum CertValidationError {
     UntrustedRoot,
     InvalidSignature,
     UnsupportedSignatureAlgorithm,
+    /// Sertifika zinciri izin verilen maksimum derinliği aşıyor.
+    ChainTooDeep,
 }
 
 /// DER length reader: returns (bytes_consumed, length). Handles long-form lengths.
@@ -782,9 +784,19 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.
 /// `chain`: Yaprak (leaf) sunucu sertifikasından ara sertifikalara doğru sıralı dizi.
+///
+/// Derinlik sınırı: zincir en fazla `MAX_CHAIN_DEPTH` sertifika içerebilir.
+/// Daha uzun zincirler `ChainTooDeep` ile reddedilir; bu hem kötü niyetli
+/// aşırı derin zincirleri hem de ara sertifika önbelleği olmayan çekirdekte
+/// uzun zincirlerin yol açacağı bellek/performans yükünü sınırlar.
+pub const MAX_CHAIN_DEPTH: usize = 6;
+
 pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationError> {
     if chain.is_empty() {
         return Err(CertValidationError::InvalidDer);
+    }
+    if chain.len() > MAX_CHAIN_DEPTH {
+        return Err(CertValidationError::ChainTooDeep);
     }
 
     // 1. Her bir sertifikayı ayrıştır
@@ -1015,5 +1027,25 @@ mod tests {
         assert!(!match_hostname("*.example.com", "bar.foo.example.com"));
         assert!(match_hostname("minos.org", "MINOS.ORG"));
         assert!(!match_hostname("minos.org", "other.org"));
+    }
+
+    #[test]
+    fn test_chain_depth_limit_rejects_long_chain() {
+        // Sinir asildiginda pahali DER ayristirmasina girmeden reddedilmelidir;
+        // ayni (gecerli) sertifikanin tekrarlanmasi yeterlidir.
+        let der = make_test_cert_der();
+        let too_deep = alloc::vec![der.as_slice(); MAX_CHAIN_DEPTH + 1];
+        assert_eq!(
+            verify_certificate_chain(&too_deep),
+            Err(CertValidationError::ChainTooDeep)
+        );
+
+        // Tam sinir uzunlugundaki zincir derinlik kontrolunu gecer (burada
+        // imza/kok kontrolu nedeniyle baska bir hata donebilir).
+        let at_limit = alloc::vec![der.as_slice(); MAX_CHAIN_DEPTH];
+        assert_ne!(
+            verify_certificate_chain(&at_limit),
+            Err(CertValidationError::ChainTooDeep)
+        );
     }
 }

@@ -6,18 +6,25 @@
 [![Display](https://img.shields.io/badge/Resolution-1280x720%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-71.106%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v1.9.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Kod%20Satırı-75.749%20(Rust)-lightgrey.svg)]()
+[![GitHub Release](https://img.shields.io/badge/Release-v2.0.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v1.9.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v2.0.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 > 📚 **Resmi Kılavuz ve Dokümantasyon:** Tüm donanım sürücüleri, uygulama kılavuzları, ağ/TLS yapılandırması ve geliştirici belgeleri için **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** sayfasını ziyaret edebilirsiniz.
 
 ---
 
-## Yenilikler (v1.9.0)
+## Yenilikler (v2.0.0)
 
+- **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
+  - **Ağ:** VirtIO-net (QEMU/KVM), Intel I219-V, Atheros Ethernet, Marvell Ethernet, Bluetooth USB dongle.
+  - **Depolama:** AHCI/SATA, NVMe SSD (PCIe), VirtIO-blk, SD/MMC kart.
+  - **USB:** USB Mass Storage, USB Printer, USB Audio, USB Touchscreen.
+  - **Grafik:** VirtIO-gpu, AMD Radeon GPU (GCN/RDNA), NVIDIA GeForce GPU (Pascal/Turing/Ampere).
+  - **Sensör & Güç:** ACPI Battery, ACPI Power, Fan & Temperature sensörleri.
+  - **Veri Yolu & Zaman:** PCIe, PCI ve Timer (PIT/HPET/APIC/TSC) altyapısı.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** OHCI (`OhciEd`, `OhciTd`, `OhciHcca` ve DMA kuyruk yönetimi), UHCI (`UhciQh`, `UhciTd`) ve EHCI denetleyicileri için tam transfer katmanı ve port handoff altyapısı entegre edildi.
 - **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
 - **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
@@ -32,6 +39,7 @@
 - **Yüksek Çözünürlüklü Ekranlarda (1080p+) Akıcı Fare & Balistik İvmelenme:** USB fare raporlarındaki 12/16-bit hareket verilerinin dar aralığa kırpılması engellenerek tam eksen duyarlılığı sağlandı. 1080p ve 2K/4K ekranlar için çözünürlük ölçekli dinamik taban hız (~2.8x) ve hassas piksel tıklamalarını bozmayan 4 kademeli balistik ivmelenme uygulandı.
 - **Yenilenen Orta Boyutlu & Yüksek Kontrastlı Fare İmleci:** 1080p ve üzeri çözünürlüklerde ideal boyuta sahip, modern 15 piksellik keskin ok imleci tasarlandı. 8 yönlü tam kutu konturu (outline) sayesinde açık ve koyu zeminlerin tamamında yüksek kontrast ve net görünürlük sunar; imleç arkası iz kalmasını önlemek için VRAM yedekleme arabelleği 32x32 piksele çıkarıldı.
 - **X.509 Sertifika Doğrulama (Zaman & SNI/CN):** TLS el sıkışmasında sunucu sertifikasının geçerlilik tarih aralığı (`not_before` / `not_after`) CMOS RTC saatiyle, hedef ana makine adı ise CN (`CommonName`) ve SAN (`Subject Alternative Name`) DNS kayıtları üzerinden RFC 6125 kurallarıyla (tek düzeyli joker `*.domain.com` dahil) doğrulanır.
+- **Sertifika Zinciri Derinlik Sınırı:** `src/drivers/crypto/x509.rs` içindeki `verify_certificate_chain`, ara sertifika önbelleği bulunmayan çekirdekte aşırı uzun kurumsal/özel CA zincirlerinin DER ayrıştırma maliyeti ve belleğini sınırlamak için zincir en fazla `MAX_CHAIN_DEPTH` (6) sertifika olacak şekilde doğrular; daha uzun zincirler ayrıştırmaya girmeden `ChainTooDeep` ile reddedilir.
 - **Sertifika İptal Kontrolü (CRL & OCSP ayrıştırma):** `src/drivers/crypto/revocation_core.rs` DER kodlu CRL (`CertificateList`) ve OCSP (`BasicOCSPResponse`) yanıtlarını ayrıştırır; iptal durumu, seri numarası, iptal zamanı/nedeni ve yanıt tazeliği kontrol edilir. `revocation.rs` fail-closed politika uygular: iptal durumu bilinmiyorsa bağlantı reddedilir. Sınırlar: CRL/OCSP yanıtlarının otomatik indirilmesi (HTTP/OCSP isteği üretimi) henüz yoktur; `Manual` kaynak ile elle işaretleme kullanılabilir.
 - **VMware VMXNET3 & Genişletilmiş Ağ Desteği:** Intel e1000 ailesine ek olarak VMware PCI vendor `0x15AD` ve aygıt kimlikleri (`0x07B0` VMXNET3, `0x0720` VMXNET) algılanır; MAC adresi, bağlantı (link) yoklaması ve donanım adı raporlaması entegre edildi.
 - **minPak / minpkg SHA-256 Bütünlük Doğrulaması:** Paket yöneticisine indirilen ve kurulan ikili paketlerin SHA-256 özetini kontrol etme özelliği eklendi (`minPak install <paket> [hash]`, `minPak sha256 <dosya>`, `minPak verify <dosya> <hash>`).
@@ -134,7 +142,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 ### ⚡ Çekirdek Mimarisi ve Donanım Durumu (UEFI, USB-HID, SMP)
 
 - **UEFI & BIOS Dual-Boot:** Limine v8 önyükleyici sayesinde sistem hem modern x86_64 UEFI sistemlerde hem de geleneksel BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
-- **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer. QEMU'da PS/2'yi tamamen kapatıp girdiyi yalnızca USB klavye/fare üzerinden test etmek için `.\run.ps1 -NoPs2`; QMP ile otomatik klavye/fare enjeksiyonu dahil uçtan uca doğrulama için `.\test_qemu.ps1 -NoPs2` kullanılabilir.
+- **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. EHCI/UHCI/OHCI denetleyicileri için başlatma/handoff ve transfer katmanı mevcuttur (bkz. `src/drivers/usb.rs`) ancak bu denetleyicilerde HID rapor ayrıştırma henüz yoktur; USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer. QEMU'da PS/2'yi tamamen kapatıp girdiyi yalnızca USB klavye/fare üzerinden test etmek için `.\run.ps1 -NoPs2`; QMP ile otomatik klavye/fare enjeksiyonu dahil uçtan uca doğrulama için `.\test_qemu.ps1 -NoPs2` kullanılabilir.
 - **SMP (Symmetric Multiprocessing) Altyapısı:** Çekirdekte Limine SMP protokolü, Local APIC timer/IPI, TTAS Spinlock senkronizasyonu ve Görev Yöneticisi per-core CPU izleme çubukları mevcuttur; fiziksel laptop açılış kararlılığı için varsayılan profilde tek çekirdek emniyetiyle başlar.
 
 ---
@@ -182,7 +190,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 Bu proje açık kaynaklıdır ve eğitim/araştırma amaçlı geliştirilmektedir.
 Katkıda bulunmaktan ve geliştirmeler önermekten çekinmeyin! 🐾
 
-## 🆕 Yeni Özellikler (v1.9.0)
+## 🆕 Yeni Özellikler (v2.0.0)
 
 - **Not Defteri – Bul ve Değiştir:** `Ctrl+F` ile **Bul** çubuğu, `Ctrl+H` ile **Değiştir** çubuğu açılır. Metin girişi aktif alanda yönlendirilir, `Esc` ile çubuk kapanır. Gelişmiş arama seçenekleri ve otomatik vurgulama desteklenir.
 - **Klavye Kısayolları Geliştirildi:** `FindText` ve `ReplaceText` eylemleri `src/main.rs` içinde tam olarak işlenmiştir; artık seçili metin içinde hızlı arama / değiştirme mümkündür.

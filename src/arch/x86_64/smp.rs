@@ -66,29 +66,42 @@ static SMP_REQUEST: SmpRequest = SmpRequest {
 struct AlignedApStack([u8; AP_STACK_SIZE]);
 
 static NEXT_AP: AtomicU32 = AtomicU32::new(0);
-static mut AP_STACKS: [AlignedApStack; MAX_CPUS] = [const { AlignedApStack([0; AP_STACK_SIZE]) }; MAX_CPUS];
+static mut AP_STACKS: [AlignedApStack; MAX_CPUS] =
+    [const { AlignedApStack([0; AP_STACK_SIZE]) }; MAX_CPUS];
 static AP_ONLINE: [AtomicBool; MAX_CPUS] = [
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
-    AtomicBool::new(false), AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
+    AtomicBool::new(false),
 ];
 #[repr(C, align(64))]
 struct PaddedCounter(AtomicU64);
 
 /// AP kalp atış sayaçları — her biri ayrı önbellek satırında (64B) false sharing önlenir.
 static HEARTBEAT: [PaddedCounter; MAX_CPUS] = [
-    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)), PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
+    PaddedCounter(AtomicU64::new(0)),
 ];
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
 static LAPIC_ID: [AtomicU32; MAX_CPUS] = [
-    AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0),
-    AtomicU32::new(0), AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
 ];
 
 static PRINT_LOCK: super::sync::Spinlock = super::sync::Spinlock::new();
@@ -405,7 +418,9 @@ pub fn init() -> usize {
     let resp = match limine_response() {
         Some(r) => r,
         None => {
-            crate::serial_print("[SMP] Limine SMP yanıtı yok; tek çekirdek modunda devam ediliyor.\n");
+            crate::serial_print(
+                "[SMP] Limine SMP yanıtı yok; tek çekirdek modunda devam ediliyor.\n",
+            );
             return 1;
         }
     };

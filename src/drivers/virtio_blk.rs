@@ -18,13 +18,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -92,7 +96,7 @@ const VIRTIO_STATUS_FAILED: u32 = 128;
 // VirtIO-Block Özellikleri
 // ---------------------------------------------------------------------------
 
-const VIRTIO_BLK_F_RO: u64 = 1 << 5;    // Read-only
+const VIRTIO_BLK_F_RO: u64 = 1 << 5; // Read-only
 const VIRTIO_BLK_F_BLK_SIZE: u64 = 1 << 6; // Block size
 const VIRTIO_BLK_F_FLUSH: u64 = 1 << 9; // Flush command
 const VIRTIO_BLK_F_TOPOLOGY: u64 = 1 << 10; // Topology
@@ -105,15 +109,15 @@ const VIRTIO_BLK_F_CONFIG_WCE: u64 = 1 << 11; // Writeback cache
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct VirtioBlkConfig {
-    capacity: u64,     // Total sectors
-    size_max: u32,     // Max segment size
-    seg_max: u32,      // Max segments
+    capacity: u64, // Total sectors
+    size_max: u32, // Max segment size
+    seg_max: u32,  // Max segments
     geometry: Geometry,
-    blk_size: u32,     // Block size
+    blk_size: u32, // Block size
     topology: Topology,
-    writeback: u8,     // Writeback cache
+    writeback: u8, // Writeback cache
     unused0: u8,
-    num_queues: u16,   // Number of queues
+    num_queues: u16, // Number of queues
     max_discard_sectors: u32,
     max_discard_seg: u32,
     discard_sector_alignment: u32,
@@ -268,7 +272,10 @@ pub fn init() -> bool {
 
         // Sürücü durumunu ayarla
         mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE);
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER,
+        );
 
         // Özellikleri oku
         let features = mmio_read32(VIRTIO_MMIO_DEVICE_FEATURES);
@@ -276,7 +283,10 @@ pub fn init() -> bool {
         mmio_write32(VIRTIO_MMIO_DRIVER_FEATURES, driver_features);
 
         // Özellikleri onayla
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK,
+        );
 
         let status = mmio_read32(VIRTIO_MMIO_STATUS);
         if status & VIRTIO_STATUS_FEATURES_OK == 0 {
@@ -293,7 +303,13 @@ pub fn init() -> bool {
         // TODO: Queue başlatma
 
         // Sürücü hazır
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE
+                | VIRTIO_STATUS_DRIVER
+                | VIRTIO_STATUS_FEATURES_OK
+                | VIRTIO_STATUS_DRIVER_OK,
+        );
 
         true
     }

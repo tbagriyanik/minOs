@@ -82,18 +82,18 @@ pub const HID_CONSUMER_VOLUP: u8 = 0x80;
 pub const HID_CONSUMER_VOLDOWN: u8 = 0x81;
 
 // Modifier Bitleri (Rapor Bayt 0)
-pub const MOD_LEFT_CTRL: u8   = 1 << 0;
-pub const MOD_LEFT_SHIFT: u8  = 1 << 1;
-pub const MOD_LEFT_ALT: u8    = 1 << 2;
-pub const MOD_LEFT_GUI: u8    = 1 << 3; // Windows Tuşu
-pub const MOD_RIGHT_CTRL: u8  = 1 << 4;
+pub const MOD_LEFT_CTRL: u8 = 1 << 0;
+pub const MOD_LEFT_SHIFT: u8 = 1 << 1;
+pub const MOD_LEFT_ALT: u8 = 1 << 2;
+pub const MOD_LEFT_GUI: u8 = 1 << 3; // Windows Tuşu
+pub const MOD_RIGHT_CTRL: u8 = 1 << 4;
 pub const MOD_RIGHT_SHIFT: u8 = 1 << 5;
-pub const MOD_RIGHT_ALT: u8   = 1 << 6; // AltGr
-pub const MOD_RIGHT_GUI: u8   = 1 << 7;
+pub const MOD_RIGHT_ALT: u8 = 1 << 6; // AltGr
+pub const MOD_RIGHT_GUI: u8 = 1 << 7;
 
 // Klavye LED Durumları (Output Report)
-pub const LED_NUM_LOCK: u8    = 1 << 0;
-pub const LED_CAPS_LOCK: u8   = 1 << 1;
+pub const LED_NUM_LOCK: u8 = 1 << 0;
+pub const LED_CAPS_LOCK: u8 = 1 << 1;
 pub const LED_SCROLL_LOCK: u8 = 1 << 2;
 
 // ---------------------------------------------------------------------------
@@ -265,9 +265,9 @@ pub fn hid_usage_to_scancode(usage: u8) -> Option<(u8, bool)> {
         0x67 => (0x59, false), // Keypad =
 
         // Multimedya ve Ses Kontrol
-        0x7F => (0x20, true),  // Mute
-        0x80 => (0x30, true),  // Volume Up
-        0x81 => (0x2E, true),  // Volume Down
+        0x7F => (0x20, true), // Mute
+        0x80 => (0x30, true), // Volume Up
+        0x81 => (0x2E, true), // Volume Down
         _ => return None,
     })
 }

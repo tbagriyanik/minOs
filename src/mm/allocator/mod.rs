@@ -9,9 +9,9 @@
 //!    2048 bayttan büyük bloklar için `large_free_list` serbest blok havuzu devreye girer;
 //!    böylece büyük tahsisler de serbest bırakıldığında yeniden kullanılabilir ve bellek tükenmez.
 
+use crate::arch::x86_64::sync::SpinMutex;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
-use crate::arch::x86_64::sync::SpinMutex;
 
 /// Hizalama yardımcısı: `addr` değerini `align` (2'nin kuvveti) katına yukarı yuvarlar.
 ///
@@ -181,7 +181,10 @@ impl FixedSizeBlockAllocator {
     fn list_index(layout: &Layout) -> Option<usize> {
         // A freed block stores a ListNode in its first bytes. The 8-byte class
         // is therefore too small on x86_64 and would overwrite the next block.
-        let required_block_size = layout.size().max(layout.align()).max(core::mem::size_of::<ListNode>());
+        let required_block_size = layout
+            .size()
+            .max(layout.align())
+            .max(core::mem::size_of::<ListNode>());
         BLOCK_SIZES.iter().position(|&s| s >= required_block_size)
     }
 
@@ -200,7 +203,7 @@ impl FixedSizeBlockAllocator {
                 None => {
                     let block_size = BLOCK_SIZES[index];
                     let block_align = block_size.max(core::mem::align_of::<ListNode>());
-                    
+
                     let alloc_start = match align_up_checked(self.next, block_align) {
                         Some(start) => start,
                         None => return null_mut(),
@@ -224,7 +227,9 @@ impl FixedSizeBlockAllocator {
 
     fn alloc_large(&mut self, layout: Layout) -> *mut u8 {
         let required_size = layout.size().max(core::mem::size_of::<LargeBlockHeader>());
-        let required_align = layout.align().max(core::mem::align_of::<LargeBlockHeader>());
+        let required_align = layout
+            .align()
+            .max(core::mem::align_of::<LargeBlockHeader>());
 
         // 1. Serbest büyük bloklar listesinde uygun bir blok ara (first-fit)
         let mut current = &mut self.large_free_list;
@@ -361,7 +366,9 @@ pub fn test_allocator_subsystem() -> bool {
         crate::serial_print("[ALLOC-TEST] align_up taşma kontrolü: BAŞARISIZ\n");
         return false;
     }
-    crate::serial_print("[ALLOC-TEST] 1. Hizalama ve taşma koruması (align_up_checked): BAŞARILI\n");
+    crate::serial_print(
+        "[ALLOC-TEST] 1. Hizalama ve taşma koruması (align_up_checked): BAŞARILI\n",
+    );
 
     // 2. Bump Allocator LIFO ve Reset Testi (Yığın taşmasını önlemek için statik tampon)
     let bump_buf = unsafe { &mut *core::ptr::addr_of_mut!(BUMP_TEST_BUF) };
@@ -403,7 +410,9 @@ pub fn test_allocator_subsystem() -> bool {
     }
     fsb.dealloc(b2, l8);
     fsb.dealloc(b3, l8);
-    crate::serial_print("[ALLOC-TEST] 3. Sabit Boyutlu Blok geri kazanım (Free-List Reuse): BAŞARILI\n");
+    crate::serial_print(
+        "[ALLOC-TEST] 3. Sabit Boyutlu Blok geri kazanım (Free-List Reuse): BAŞARILI\n",
+    );
 
     // 4. Büyük Blok (>2048) Havuzlama ve Geri Kazanım
     let l_large = Layout::from_size_align(4096, 4096).unwrap();
@@ -457,7 +466,9 @@ pub fn test_allocator_subsystem() -> bool {
             fsb.dealloc(ptr, l);
         }
     }
-    crate::serial_print("[ALLOC-TEST] 6. Çok boyutlu blok stres döngüsü (27 blok x 2 çevrim): BAŞARILI\n");
+    crate::serial_print(
+        "[ALLOC-TEST] 6. Çok boyutlu blok stres döngüsü (27 blok x 2 çevrim): BAŞARILI\n",
+    );
 
     true
 }

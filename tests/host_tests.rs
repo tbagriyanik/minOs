@@ -60,14 +60,22 @@ pub mod boot {
         }
     }
     pub mod limine {
-        pub fn is_canonical_ptr<T>(ptr: *const T) -> bool { !ptr.is_null() }
-        pub fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool { !ptr.is_null() }
+        pub fn is_canonical_ptr<T>(ptr: *const T) -> bool {
+            !ptr.is_null()
+        }
+        pub fn is_mapped_limine_ptr<T>(ptr: *const T) -> bool {
+            !ptr.is_null()
+        }
         pub unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*const T> {
             if slot.is_null() {
                 None
             } else {
                 let p = *slot;
-                if p.is_null() { None } else { Some(p) }
+                if p.is_null() {
+                    None
+                } else {
+                    Some(p)
+                }
             }
         }
         pub fn limine_rsdp_address() -> Option<*const u8> {
@@ -122,7 +130,9 @@ pub mod arch {
 
             impl<T> SpinMutex<T> {
                 pub const fn new(value: T) -> Self {
-                    Self { inner: UnsafeCell::new(value) }
+                    Self {
+                        inner: UnsafeCell::new(value),
+                    }
                 }
                 pub fn lock(&self) -> SpinGuard<'_, T> {
                     SpinGuard { lock: self }
@@ -183,7 +193,9 @@ pub mod exfat_rw;
 pub mod exfat {
     pub const EXFAT_OEM_NAME: &[u8; 8] = b"EXFAT   ";
     pub const EXFAT_SIGNATURE: u16 = 0xAA55;
-    pub fn to_upper_exfat(c: u16) -> u16 { crate::exfat_core::to_upper_exfat(c) }
+    pub fn to_upper_exfat(c: u16) -> u16 {
+        crate::exfat_core::to_upper_exfat(c)
+    }
 }
 
 #[path = "../src/fs/ext4_rw.rs"]

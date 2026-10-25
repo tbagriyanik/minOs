@@ -1,39 +1,39 @@
-pub mod font_render;
-pub mod theme;
-pub mod wallpaper;
 pub mod clipboard;
-pub mod scrollbar;
-pub mod widget;
+pub mod context;
+pub mod desktop;
+pub mod draw;
+pub mod font_render;
+pub mod icons;
+pub mod overlay;
 pub mod screens;
+pub mod scrollbar;
+pub mod startmenu;
+pub mod taskbar;
 pub mod textbuf;
 pub mod textedit;
+pub mod theme;
 pub mod timefmt;
-pub mod window;
-pub mod draw;
-pub mod icons;
-pub mod desktop;
-pub mod taskbar;
-pub mod tray;
 pub mod toast;
-pub mod context;
-pub mod overlay;
-pub mod startmenu;
+pub mod tray;
+pub mod wallpaper;
+pub mod widget;
+pub mod window;
 
+pub use context::*;
+pub use screens::*;
 pub use scrollbar::{ScrollState, ScrollbarGeom};
 pub use textbuf::TextBuf;
-pub use screens::*;
-pub use window::*;
-pub use context::*;
 pub use toast::*;
+pub use window::*;
 
-#[allow(unused_imports)]
-use crate::drivers::video::Framebuffer;
-#[allow(unused_imports)]
-use crate::drivers::mouse::MouseState;
 #[allow(unused_imports)]
 use crate::drivers::keyboard::KeyboardState;
 #[allow(unused_imports)]
+use crate::drivers::mouse::MouseState;
+#[allow(unused_imports)]
 use crate::drivers::rtc::DateTime;
+#[allow(unused_imports)]
+use crate::drivers::video::Framebuffer;
 
 /// Arayüz renkleri artık *tema jetonu* taşır. Gerçek RGB değeri çizim anında
 /// aktif temadan okunur (bkz. `theme::resolve`). Böylece tema değişimi tüm
@@ -67,34 +67,58 @@ static FONT_ZOOM: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::n
 #[inline(always)]
 pub fn set_font_zoom(percent: u8) {
     // Clamp to valid range: 100 (default), 125, or 150
-    let p = match percent { 125 => 125, 150 => 150, _ => 100 };
+    let p = match percent {
+        125 => 125,
+        150 => 150,
+        _ => 100,
+    };
     FONT_ZOOM.store(p, core::sync::atomic::Ordering::Relaxed);
 }
 
 #[inline(always)]
-pub fn font_zoom() -> u8 { FONT_ZOOM.load(core::sync::atomic::Ordering::Relaxed) }
+pub fn font_zoom() -> u8 {
+    FONT_ZOOM.load(core::sync::atomic::Ordering::Relaxed)
+}
 
 /// Aktif UI ölçek yüzdesi (100 = temel 12px font hücresi). Menü, liste ve
 /// düğme boyutları bu değerle otomatik ölçeklenir.
 #[inline(always)]
-pub fn ui_scale_percent() -> usize { font_zoom() as usize }
+pub fn ui_scale_percent() -> usize {
+    font_zoom() as usize
+}
 
 /// Temel bir piksel ölçüsünü aktif font ölçeğine göre büyütür.
 /// Font büyüdükçe menü, liste satırı ve düğme boyutları da orantılı büyür.
 #[inline(always)]
 pub fn sp(base: usize) -> usize {
     let z = ui_scale_percent();
-    if z == 100 { base } else { (base * z + 50) / 100 }
+    if z == 100 {
+        base
+    } else {
+        (base * z + 50) / 100
+    }
 }
 
 /// Aktif font ölçeğine göre satır yüksekliği/öğe adımı (px).
 #[inline(always)]
-pub fn item_step(base: usize) -> usize { sp(base) }
+pub fn item_step(base: usize) -> usize {
+    sp(base)
+}
 
 static UI_LANGUAGE_EN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
-pub fn set_ui_language_english(value: bool) { UI_LANGUAGE_EN.store(value, core::sync::atomic::Ordering::Relaxed); }
-pub fn ui_english() -> bool { UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed) }
-pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str { if ui_english() { en } else { tr } }
+pub fn set_ui_language_english(value: bool) {
+    UI_LANGUAGE_EN.store(value, core::sync::atomic::Ordering::Relaxed);
+}
+pub fn ui_english() -> bool {
+    UI_LANGUAGE_EN.load(core::sync::atomic::Ordering::Relaxed)
+}
+pub fn ui_text<'a>(tr: &'a str, en: &'a str) -> &'a str {
+    if ui_english() {
+        en
+    } else {
+        tr
+    }
+}
 
 const BASE_FONT_SIZE: f32 = 14.0;
 
@@ -194,7 +218,9 @@ impl MinGuiCompositor {
         for idx in 0..self.windows.len() {
             if self.windows[idx].is_none() {
                 // Sabit uygulama pencereleri 0..=14 arası slotlara eklenir (15 uygulama);
-                if win.app_id == u8::MAX && idx < 15 { win.app_id = idx as u8; }
+                if win.app_id == u8::MAX && idx < 15 {
+                    win.app_id = idx as u8;
+                }
                 self.z_counter = self.z_counter.wrapping_add(1);
                 win.z = self.z_counter;
                 self.windows[idx] = Some(win);
@@ -206,21 +232,28 @@ impl MinGuiCompositor {
 
     /// Çizim Tahtası (Paint) dışındaki uygulamalar tek örnektir; var olan pencereyi öne getirir.
     pub fn launch_app_window(&mut self, app_id: usize) -> Option<usize> {
-        if app_id >= 15 { return None; }
+        if app_id >= 15 {
+            return None;
+        }
         let existing = self.windows.iter().enumerate().find_map(|(idx, slot)| {
-            slot.filter(|w| w.app_id as usize == app_id && w.is_open).map(|_| idx)
+            slot.filter(|w| w.app_id as usize == app_id && w.is_open)
+                .map(|_| idx)
         });
         if app_id != 9 {
             if let Some(idx) = existing {
-                if let Some(win) = self.windows[idx].as_mut() { win.is_minimized = false; }
+                if let Some(win) = self.windows[idx].as_mut() {
+                    win.is_minimized = false;
+                }
                 self.focus_window(idx);
                 return Some(idx);
             }
         }
 
-        let source_idx = existing.or_else(|| self.windows.iter().position(|slot| {
-            slot.map_or(false, |w| w.app_id as usize == app_id)
-        }))?;
+        let source_idx = existing.or_else(|| {
+            self.windows
+                .iter()
+                .position(|slot| slot.map_or(false, |w| w.app_id as usize == app_id))
+        })?;
         if existing.is_none() {
             if let Some(win) = self.windows[source_idx].as_mut() {
                 win.is_open = true;
@@ -231,7 +264,11 @@ impl MinGuiCompositor {
             return Some(source_idx);
         }
         let mut win = self.windows[source_idx]?;
-        let instances = self.windows.iter().filter(|slot| slot.map_or(false, |w| w.app_id as usize == app_id)).count();
+        let instances = self
+            .windows
+            .iter()
+            .filter(|slot| slot.map_or(false, |w| w.app_id as usize == app_id))
+            .count();
         let offset = (instances % 8) * 24;
         win.x = win.x.saturating_add(offset);
         win.y = win.y.saturating_add(offset);
@@ -243,14 +280,19 @@ impl MinGuiCompositor {
         win.scroll.x = 0;
         win.scroll.y = 0;
         let idx = self.windows.iter().position(Option::is_none)?;
-        if !self.add_window(win) { return None; }
+        if !self.add_window(win) {
+            return None;
+        }
         self.focus_window(idx);
         Some(idx)
     }
 
     #[inline(always)]
     pub fn app_id_for_window(&self, idx: usize) -> usize {
-        self.windows.get(idx).and_then(|slot| *slot).map_or(idx, |win| win.app_id as usize)
+        self.windows
+            .get(idx)
+            .and_then(|slot| *slot)
+            .map_or(idx, |win| win.app_id as usize)
     }
 
     /// Belirtilen pencereyi odaklar ve z-sırasında en öne taşır.
@@ -310,11 +352,16 @@ impl MinGuiCompositor {
     pub fn cycle_focus(&mut self, reverse: bool) {
         if self.alt_tab_count == 0 {
             let (order, count) = self.switcher_order();
-            if count == 0 { return; }
+            if count == 0 {
+                return;
+            }
             self.alt_tab_order = order;
             self.alt_tab_count = count;
             let current = self.active_window_idx.unwrap_or(order[count - 1]);
-            self.alt_tab_selection = order[..count].iter().position(|&idx| idx == current).unwrap_or(count - 1);
+            self.alt_tab_selection = order[..count]
+                .iter()
+                .position(|&idx| idx == current)
+                .unwrap_or(count - 1);
         }
         let count = self.alt_tab_count;
         self.alt_tab_selection = if reverse {
@@ -323,7 +370,9 @@ impl MinGuiCompositor {
             (self.alt_tab_selection + 1) % count
         };
         let next = self.alt_tab_order[self.alt_tab_selection];
-        if let Some(win) = self.windows[next].as_mut() { win.is_minimized = false; }
+        if let Some(win) = self.windows[next].as_mut() {
+            win.is_minimized = false;
+        }
         self.focus_window(next);
     }
 
@@ -362,13 +411,20 @@ impl MinGuiCompositor {
         let mut order = [0; MAX_WINDOWS];
         let mut count = 0;
         for (i, slot) in self.windows.iter().enumerate() {
-            if slot.map_or(false, |w| w.is_open) { order[count] = i; count += 1; }
+            if slot.map_or(false, |w| w.is_open) {
+                order[count] = i;
+                count += 1;
+            }
         }
-        for i in 0..count { for j in i + 1..count {
-            let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
-            let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
-            if zj < zi { order.swap(i, j); }
-        }}
+        for i in 0..count {
+            for j in i + 1..count {
+                let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
+                let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
+                if zj < zi {
+                    order.swap(i, j);
+                }
+            }
+        }
         (order, count)
     }
 
@@ -408,7 +464,13 @@ impl MinGuiCompositor {
     }
 
     /// Pencereyi ekranın sol yarısına, sağ yarısına veya tam ekrana yaslar (Aero Snap).
-    pub fn snap_window(&mut self, idx: usize, snap: SnapPosition, screen_w: usize, screen_h: usize) {
+    pub fn snap_window(
+        &mut self,
+        idx: usize,
+        snap: SnapPosition,
+        screen_w: usize,
+        screen_h: usize,
+    ) {
         if let Some(ref mut win) = self.windows[idx] {
             let usable_h = screen_h.saturating_sub(taskbar_h());
             if !win.is_maximized && win.restore.is_none() {
@@ -457,7 +519,10 @@ impl MinGuiCompositor {
     }
 
     /// En üstteki pencerenin dikey kaydırma çubuğu (varsa) `(idx, track, content_h, view_h)`.
-    pub fn topmost_v_scrollbar(&self, content_h_of: impl Fn(usize) -> usize) -> Option<(usize, (usize, usize, usize, usize), usize, usize)> {
+    pub fn topmost_v_scrollbar(
+        &self,
+        content_h_of: impl Fn(usize) -> usize,
+    ) -> Option<(usize, (usize, usize, usize, usize), usize, usize)> {
         let (order, count) = self.draw_order();
         for k in (0..count).rev() {
             let idx = order[k];
@@ -465,8 +530,12 @@ impl MinGuiCompositor {
                 let (cx, cy, cw, ch) = win.content_rect();
                 let content_h = content_h_of(idx);
                 if content_h > ch {
-                    let track = (cx + cw - scrollbar::SCROLLBAR_THICKNESS, cy,
-                                 scrollbar::SCROLLBAR_THICKNESS, ch - scrollbar::SCROLLBAR_THICKNESS.min(ch));
+                    let track = (
+                        cx + cw - scrollbar::SCROLLBAR_THICKNESS,
+                        cy,
+                        scrollbar::SCROLLBAR_THICKNESS,
+                        ch - scrollbar::SCROLLBAR_THICKNESS.min(ch),
+                    );
                     return Some((idx, track, content_h, ch));
                 }
             }
@@ -475,7 +544,9 @@ impl MinGuiCompositor {
     }
 
     pub fn update_installed_app(&mut self, idx: usize, name: &str) {
-        if idx >= 8 { return; }
+        if idx >= 8 {
+            return;
+        }
         let bytes = name.as_bytes();
         let len = bytes.len().min(24);
         self.installed_apps[idx][..len].copy_from_slice(&bytes[..len]);
@@ -483,7 +554,9 @@ impl MinGuiCompositor {
     }
 
     pub fn installed_app_name(&self, idx: usize) -> &str {
-        if idx >= self.installed_apps_count { return ""; }
+        if idx >= self.installed_apps_count {
+            return "";
+        }
         let len = self.installed_apps_len[idx] as usize;
         core::str::from_utf8(&self.installed_apps[idx][..len]).unwrap_or("")
     }
@@ -497,7 +570,9 @@ impl MinGuiCompositor {
                 let clean_name = name.strip_suffix(".elf").unwrap_or(name);
                 self.update_installed_app(count, clean_name);
                 count += 1;
-                if count >= 8 { break; }
+                if count >= 8 {
+                    break;
+                }
             }
         }
         self.installed_apps_count = count;

@@ -18,10 +18,10 @@ use core::arch::asm;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TimerType {
-    PIT,     // Programmable Interval Timer (8254)
-    HPET,    // High Precision Event Timer
-    APIC,    // Local APIC Timer
-    TSC,     // Time Stamp Counter
+    PIT,  // Programmable Interval Timer (8254)
+    HPET, // High Precision Event Timer
+    APIC, // Local APIC Timer
+    TSC,  // Time Stamp Counter
 }
 
 // ---------------------------------------------------------------------------
@@ -70,13 +70,17 @@ const PIT_CMD_SELECT_CH0: u8 = 0x00;
 
 #[inline]
 fn pit_out8(port: u16, val: u8) {
-    unsafe { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn pit_in8(port: u16) -> u8 {
     let ret: u8;
-    unsafe { asm!("in al, dx", in("dx") port, out("al") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in al, dx", in("dx") port, out("al") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -298,9 +302,7 @@ pub fn read_ns() -> u64 {
             TimerType::HPET => {
                 hpet_read64(0xF0) // HPET nanosaniye olarak verir
             }
-            _ => {
-                (TICK_COUNT * 1_000_000_000) / TICK_FREQUENCY
-            }
+            _ => (TICK_COUNT * 1_000_000_000) / TICK_FREQUENCY,
         }
     }
 }
@@ -309,7 +311,9 @@ pub fn read_ns() -> u64 {
 pub fn sleep_ms(ms: u64) {
     let start = read_ms();
     while read_ms() - start < ms {
-        unsafe { asm!("pause", options(nomem, nostack)); }
+        unsafe {
+            asm!("pause", options(nomem, nostack));
+        }
     }
 }
 
@@ -317,7 +321,9 @@ pub fn sleep_ms(ms: u64) {
 pub fn sleep_ns(ns: u64) {
     let start = read_ns();
     while read_ns() - start < ns {
-        unsafe { asm!("pause", options(nomem, nostack)); }
+        unsafe {
+            asm!("pause", options(nomem, nostack));
+        }
     }
 }
 

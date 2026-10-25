@@ -22,9 +22,9 @@ use super::block::{BlockDevice, SECTOR};
 
 const ENTRY_SIZE: usize = 32;
 const DIR_ENTRY_END: u8 = 0x00;
-const ENTRY_FILE: u8 = 0x85;      // File Directory Entry (bit 6 = in use)
-const ENTRY_STREAM: u8 = 0xC0;    // Stream Extension Entry
-const ENTRY_NAME: u8 = 0xC1;      // File Name Entry
+const ENTRY_FILE: u8 = 0x85; // File Directory Entry (bit 6 = in use)
+const ENTRY_STREAM: u8 = 0xC0; // Stream Extension Entry
+const ENTRY_NAME: u8 = 0xC1; // File Name Entry
 const ENTRY_BITMAP: u8 = 0x81;
 const ENTRY_UPCASE: u8 = 0x82;
 const ENTRY_VOLUME_LABEL: u8 = 0x83;
@@ -61,14 +61,33 @@ pub struct ExfatFs<D: BlockDevice> {
     pub cluster_size: u32,
 }
 
-fn le16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes([b[o], b[o + 1]]) }
-fn le32(b: &[u8], o: usize) -> u32 { u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) }
-fn le64(b: &[u8], o: usize) -> u64 {
-    u64::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3], b[o + 4], b[o + 5], b[o + 6], b[o + 7]])
+fn le16(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
 }
-fn wle16(b: &mut [u8], o: usize, v: u16) { b[o..o + 2].copy_from_slice(&v.to_le_bytes()); }
-fn wle32(b: &mut [u8], o: usize, v: u32) { b[o..o + 4].copy_from_slice(&v.to_le_bytes()); }
-fn wle64(b: &mut [u8], o: usize, v: u64) { b[o..o + 8].copy_from_slice(&v.to_le_bytes()); }
+fn le32(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+fn le64(b: &[u8], o: usize) -> u64 {
+    u64::from_le_bytes([
+        b[o],
+        b[o + 1],
+        b[o + 2],
+        b[o + 3],
+        b[o + 4],
+        b[o + 5],
+        b[o + 6],
+        b[o + 7],
+    ])
+}
+fn wle16(b: &mut [u8], o: usize, v: u16) {
+    b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+}
+fn wle32(b: &mut [u8], o: usize, v: u32) {
+    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+}
+fn wle64(b: &mut [u8], o: usize, v: u64) {
+    b[o..o + 8].copy_from_slice(&v.to_le_bytes());
+}
 
 /// UTF-16 ad birimlerini kayipsiz metne cevir (bilinmeyen birimler U+FFFD).
 pub fn units_to_name(units: &[u16]) -> String {
@@ -181,8 +200,7 @@ impl<D: BlockDevice> ExfatFs<D> {
 
     /// Kümenin başlangıç LBA'si (bölüm başına göreli).
     pub fn cluster_lba(&self, cluster: u32) -> u64 {
-        self.cluster_heap_offset as u64
-            + (cluster as u64 - 2) * self.sectors_per_cluster_u64()
+        self.cluster_heap_offset as u64 + (cluster as u64 - 2) * self.sectors_per_cluster_u64()
     }
 
     /// FAT girdisi.
@@ -256,7 +274,8 @@ impl<D: BlockDevice> ExfatFs<D> {
     /// Kümeyi boşalt (yeni dosya/dizin için).
     fn zero_cluster(&mut self, cluster: u32) -> bool {
         let zero = alloc::vec![0u8; self.cluster_size as usize];
-        self.dev.write(self.base_lba + self.cluster_lba(cluster), &zero)
+        self.dev
+            .write(self.base_lba + self.cluster_lba(cluster), &zero)
     }
 
     /// FAT zincirini (veya süreklisini) küme listesine çöz.
@@ -274,7 +293,11 @@ impl<D: BlockDevice> ExfatFs<D> {
             }
             c = next;
         }
-        if out.is_empty() { None } else { Some(out) }
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     /// Bir küme zincirinin tüm baytlarını oku.
@@ -283,7 +306,10 @@ impl<D: BlockDevice> ExfatFs<D> {
         let mut bytes = alloc::vec![0u8; chunks.len() * self.cluster_size as usize];
         for (i, c) in chunks.iter().enumerate() {
             let off = i * self.cluster_size as usize;
-            if !self.dev.read(self.base_lba + self.cluster_lba(*c), &mut bytes[off..off + self.cluster_size as usize]) {
+            if !self.dev.read(
+                self.base_lba + self.cluster_lba(*c),
+                &mut bytes[off..off + self.cluster_size as usize],
+            ) {
                 return None;
             }
         }
@@ -292,7 +318,8 @@ impl<D: BlockDevice> ExfatFs<D> {
 
     /// İstenen uzunluk kadar veriyi (FAT zinciri veya sürekli) oku.
     fn read_cluster_data(&self, first: u32, size: u64, no_fat_chain: bool) -> Option<Vec<u8>> {
-        let need_clusters = ((size + self.cluster_size as u64 - 1) / self.cluster_size as u64).max(1) as usize;
+        let need_clusters =
+            ((size + self.cluster_size as u64 - 1) / self.cluster_size as u64).max(1) as usize;
         let mut chunks = Vec::with_capacity(need_clusters);
         if no_fat_chain {
             for i in 0..need_clusters {
@@ -308,7 +335,10 @@ impl<D: BlockDevice> ExfatFs<D> {
                 break;
             }
             let take = (bytes.len() - written).min(self.cluster_size as usize);
-            if !self.dev.read(self.base_lba + self.cluster_lba(c), &mut bytes[written..written + take]) {
+            if !self.dev.read(
+                self.base_lba + self.cluster_lba(c),
+                &mut bytes[written..written + take],
+            ) {
                 return None;
             }
             written += take;
@@ -345,7 +375,9 @@ impl<D: BlockDevice> ExfatFs<D> {
 
     /// Kök dizin girdilerini ayrıştır.
     pub fn list_dir(&self, dir_cluster: u32) -> Vec<ExfatEntry> {
-        let Some(root) = self.read_chain(dir_cluster) else { return Vec::new() };
+        let Some(root) = self.read_chain(dir_cluster) else {
+            return Vec::new();
+        };
         parse_dir_entries(&root.bytes)
     }
 
@@ -356,9 +388,9 @@ impl<D: BlockDevice> ExfatFs<D> {
     /// Adı verilen girdiyi bul.
     pub fn lookup_in(&self, dir_cluster: u32, name: &str) -> Option<ExfatEntry> {
         let wanted = name_to_units(name);
-        self.list_dir(dir_cluster).into_iter().find(|e| {
-            names_equal(&name_to_units(&e.name), &wanted)
-        })
+        self.list_dir(dir_cluster)
+            .into_iter()
+            .find(|e| names_equal(&name_to_units(&e.name), &wanted))
     }
 
     pub fn lookup(&self, path: &str) -> Option<ExfatEntry> {
@@ -373,13 +405,15 @@ impl<D: BlockDevice> ExfatFs<D> {
                 return Some(e.clone());
             }
         }
-        found.or_else(|| Some(ExfatEntry {
-            name: String::from("/"),
-            is_dir: true,
-            size: 0,
-            first_cluster: self.root_cluster,
-            attributes: ATTR_DIRECTORY,
-        }))
+        found.or_else(|| {
+            Some(ExfatEntry {
+                name: String::from("/"),
+                is_dir: true,
+                size: 0,
+                first_cluster: self.root_cluster,
+                attributes: ATTR_DIRECTORY,
+            })
+        })
     }
 
     /// Dosyanın tüm içeriğini oku.
@@ -390,7 +424,10 @@ impl<D: BlockDevice> ExfatFs<D> {
         if entry.size == 0 {
             return Some(Vec::new());
         }
-        let no_fat_chain = self.stream_flags(entry).map(|f| f & FLAG_NO_FAT_CHAIN != 0).unwrap_or(false);
+        let no_fat_chain = self
+            .stream_flags(entry)
+            .map(|f| f & FLAG_NO_FAT_CHAIN != 0)
+            .unwrap_or(false);
         self.read_cluster_data(entry.first_cluster, entry.size, no_fat_chain)
     }
 
@@ -425,11 +462,20 @@ impl<D: BlockDevice> ExfatFs<D> {
     /// Girdinin bulunduğu dizin kümesi (kök ise kök kümesi).
     fn find_parent_dir(&self, entry: &ExfatEntry) -> Option<u32> {
         // Doğrudan kökte mi?
-        if self.list_dir(self.root_cluster).iter().any(|e| e.name == entry.name) {
+        if self
+            .list_dir(self.root_cluster)
+            .iter()
+            .any(|e| e.name == entry.name)
+        {
             return Some(self.root_cluster);
         }
         for e in self.list_dir(self.root_cluster) {
-            if e.is_dir && self.list_dir(e.first_cluster).iter().any(|x| x.name == entry.name) {
+            if e.is_dir
+                && self
+                    .list_dir(e.first_cluster)
+                    .iter()
+                    .any(|x| x.name == entry.name)
+            {
                 return Some(e.first_cluster);
             }
         }
@@ -470,7 +516,9 @@ impl<D: BlockDevice> ExfatFs<D> {
         first_cluster: u32,
         no_fat_chain: bool,
     ) -> bool {
-        let Some(mut dir) = self.read_chain(dir_cluster) else { return false };
+        let Some(mut dir) = self.read_chain(dir_cluster) else {
+            return false;
+        };
         let name_entries = (name_units.len() + 14) / 15;
         let needed = 2 + name_entries;
         let Some(start) = Self::free_entries(&dir.bytes, needed) else {
@@ -491,7 +539,7 @@ impl<D: BlockDevice> ExfatFs<D> {
         wle64(b, s + 8, size);
         wle32(b, s + 20, first_cluster);
         wle64(b, s + 24, size.max(1)); // ValidDataLength
-        // File Name Entries
+                                       // File Name Entries
         for (i, chunk) in name_units.chunks(15).enumerate() {
             let n = s + ENTRY_SIZE * (i + 1);
             b[n] = ENTRY_NAME;
@@ -536,10 +584,13 @@ impl<D: BlockDevice> ExfatFs<D> {
             self.free_chain(e.first_cluster);
             self.delete_entry(dir_cluster, &units);
         }
-        let clusters_needed = ((data.len() as u64 + self.cluster_size as u64 - 1) / self.cluster_size as u64).max(1);
+        let clusters_needed =
+            ((data.len() as u64 + self.cluster_size as u64 - 1) / self.cluster_size as u64).max(1);
         let mut chain: Vec<u32> = Vec::new();
         for _ in 0..clusters_needed {
-            let Some(c) = self.alloc_cluster() else { return false };
+            let Some(c) = self.alloc_cluster() else {
+                return false;
+            };
             chain.push(c);
         }
         for i in 0..chain.len().saturating_sub(1) {
@@ -585,13 +636,17 @@ impl<D: BlockDevice> ExfatFs<D> {
         if self.lookup_in(parent_cluster, name).is_some() {
             return false;
         }
-        let Some(c) = self.alloc_cluster() else { return false };
+        let Some(c) = self.alloc_cluster() else {
+            return false;
+        };
         self.write_entry_set(parent_cluster, &units, true, 0, c, false)
     }
 
     /// Dizinden girdi kümesini işaretle silinmiş (in-use biti = 0).
     fn delete_entry(&mut self, dir_cluster: u32, name_units: &[u16]) -> bool {
-        let Some(mut dir) = self.read_chain(dir_cluster) else { return false };
+        let Some(mut dir) = self.read_chain(dir_cluster) else {
+            return false;
+        };
         let mut off = 0usize;
         while off + ENTRY_SIZE * 3 <= dir.bytes.len() {
             if dir.bytes[off] & 0x7F == (ENTRY_FILE & 0x7F) {
@@ -616,7 +671,9 @@ impl<D: BlockDevice> ExfatFs<D> {
     /// Dosyayı sil (kümeleri FAT/bitmap üzerinden boşalt).
     pub fn remove(&mut self, dir_cluster: u32, name: &str) -> bool {
         let units = name_to_units(name);
-        let Some(e) = self.lookup_in(dir_cluster, name) else { return false };
+        let Some(e) = self.lookup_in(dir_cluster, name) else {
+            return false;
+        };
         if e.is_dir {
             return false;
         }

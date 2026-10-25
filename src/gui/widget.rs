@@ -45,7 +45,12 @@ impl Rect {
     }
 
     pub const fn from_tuple(r: (usize, usize, usize, usize)) -> Self {
-        Self { x: r.0, y: r.1, w: r.2, h: r.3 }
+        Self {
+            x: r.0,
+            y: r.1,
+            w: r.2,
+            h: r.3,
+        }
     }
 
     pub const fn tuple(self) -> (usize, usize, usize, usize) {
@@ -89,15 +94,30 @@ pub struct Insets {
 
 impl Insets {
     pub const fn all(v: usize) -> Self {
-        Self { top: v, right: v, bottom: v, left: v }
+        Self {
+            top: v,
+            right: v,
+            bottom: v,
+            left: v,
+        }
     }
 
     pub const fn xy(x: usize, y: usize) -> Self {
-        Self { top: y, right: x, bottom: y, left: x }
+        Self {
+            top: y,
+            right: x,
+            bottom: y,
+            left: x,
+        }
     }
 
     pub const fn new(top: usize, right: usize, bottom: usize, left: usize) -> Self {
-        Self { top, right, bottom, left }
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
     }
 
     pub const fn horizontal(self) -> usize {
@@ -558,7 +578,12 @@ pub struct Label {
 
 impl Label {
     pub fn new(text: &'static str) -> Self {
-        Self { id: next_id(), rect: Rect::default(), text, color: Color::TEXT_MAIN }
+        Self {
+            id: next_id(),
+            rect: Rect::default(),
+            text,
+            color: Color::TEXT_MAIN,
+        }
     }
 
     pub fn color(mut self, color: u32) -> Self {
@@ -625,7 +650,13 @@ pub struct Button {
 
 impl Button {
     pub fn new(label: &'static str) -> Self {
-        Self { id: next_id(), rect: Rect::default(), label, bg: Color::ACCENT_BLUE, pressed: false }
+        Self {
+            id: next_id(),
+            rect: Rect::default(),
+            label,
+            bg: Color::ACCENT_BLUE,
+            pressed: false,
+        }
     }
 
     pub fn bg(mut self, color: u32) -> Self {
@@ -656,9 +687,20 @@ impl Widget for Button {
     }
 
     fn draw(&self, fb: &mut Framebuffer, ctx: &DrawCtx) {
-        let bg = if self.pressed { MinGuiCompositor::shade(self.bg, -20) } else { self.bg };
+        let bg = if self.pressed {
+            MinGuiCompositor::shade(self.bg, -20)
+        } else {
+            self.bg
+        };
         let hovered = ctx.is_hovered(self.id);
-        MinGuiCompositor::draw_button(fb, self.rect.tuple(), bg, self.label, Color::TEXT_MAIN, hovered);
+        MinGuiCompositor::draw_button(
+            fb,
+            self.rect.tuple(),
+            bg,
+            self.label,
+            Color::TEXT_MAIN,
+            hovered,
+        );
     }
 
     fn measure(&self, _cross_extent: usize, axis: Axis) -> usize {
@@ -722,7 +764,13 @@ pub struct CheckBox {
 
 impl CheckBox {
     pub fn new(label: &'static str) -> Self {
-        Self { id: next_id(), rect: Rect::default(), label, checked: false, pressed: false }
+        Self {
+            id: next_id(),
+            rect: Rect::default(),
+            label,
+            checked: false,
+            pressed: false,
+        }
     }
 
     pub fn checked(mut self, checked: bool) -> Self {
@@ -788,7 +836,12 @@ impl Widget for CheckBox {
             text_top(self.rect),
             self.label,
             Color::TEXT_MAIN,
-            (tx, self.rect.y, self.rect.right().saturating_sub(tx), self.rect.h),
+            (
+                tx,
+                self.rect.y,
+                self.rect.right().saturating_sub(tx),
+                self.rect.h,
+            ),
         );
     }
 
@@ -995,14 +1048,25 @@ impl Widget for TextBox {
 
     fn draw(&self, fb: &mut Framebuffer, ctx: &DrawCtx) {
         let focused = ctx.is_focused(self.id) || self.focused;
-        fb.draw_rounded_rect(self.rect.x, self.rect.y, self.rect.w, self.rect.h, 4, Color::DARK_BG);
+        fb.draw_rounded_rect(
+            self.rect.x,
+            self.rect.y,
+            self.rect.w,
+            self.rect.h,
+            4,
+            Color::DARK_BG,
+        );
         fb.draw_rounded_rect_outline(
             self.rect.x,
             self.rect.y,
             self.rect.w,
             self.rect.h,
             4,
-            if focused { Color::ACCENT_BLUE } else { Color::BORDER },
+            if focused {
+                Color::ACCENT_BLUE
+            } else {
+                Color::BORDER
+            },
         );
 
         let inner = self.inner_rect();
@@ -1021,14 +1085,27 @@ impl Widget for TextBox {
 
         let visible = self.visible_text();
         let text = core::str::from_utf8(&visible[..self.len]).unwrap_or("");
-        MinGuiCompositor::draw_string_clipped(fb, inner.x, ty, text, Color::TEXT_MAIN, inner.tuple());
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            inner.x,
+            ty,
+            text,
+            Color::TEXT_MAIN,
+            inner.tuple(),
+        );
 
         if focused {
             let prefix = &visible[..self.cursor.min(self.len)];
             let prefix_str = core::str::from_utf8(prefix).unwrap_or("");
             let caret_x = inner.x + MinGuiCompositor::text_width(prefix_str, 1);
             if caret_x < inner.right() {
-                fb.draw_rect(caret_x, ty, 1, MinGuiCompositor::text_height(), Color::ACCENT_BLUE);
+                fb.draw_rect(
+                    caret_x,
+                    ty,
+                    1,
+                    MinGuiCompositor::text_height(),
+                    Color::ACCENT_BLUE,
+                );
             }
         }
     }
@@ -1142,7 +1219,16 @@ pub struct Slider {
 impl Slider {
     pub fn new(label: &'static str, value: i32, min: i32, max: i32) -> Self {
         let value = value.clamp(min, max);
-        Self { id: next_id(), rect: Rect::default(), label, value, min, max, step: 1, dragging: false }
+        Self {
+            id: next_id(),
+            rect: Rect::default(),
+            label,
+            value,
+            min,
+            max,
+            step: 1,
+            dragging: false,
+        }
     }
 
     pub fn step(mut self, step: i32) -> Self {
@@ -1232,7 +1318,12 @@ impl Widget for Slider {
                 self.rect.y,
                 self.label,
                 Color::TEXT_MAIN,
-                (self.rect.x, self.rect.y, self.rect.w, MinGuiCompositor::text_height()),
+                (
+                    self.rect.x,
+                    self.rect.y,
+                    self.rect.w,
+                    MinGuiCompositor::text_height(),
+                ),
             );
         }
 
@@ -1244,13 +1335,31 @@ impl Widget for Slider {
             self.rect.right().saturating_sub(value_w),
             self.rect.y,
             value_text.as_str(),
-            if ctx.is_focused(self.id) { Color::ACCENT_BLUE } else { Color::TEXT_MUTED },
+            if ctx.is_focused(self.id) {
+                Color::ACCENT_BLUE
+            } else {
+                Color::TEXT_MUTED
+            },
         );
 
         let track = self.track_rect();
         let thumb = self.thumb_rect();
-        fb.draw_rounded_rect(track.x, track.y, track.w, track.h, track.h / 2, Color::DARK_BG);
-        fb.draw_rounded_rect_outline(track.x, track.y, track.w, track.h, track.h / 2, Color::BORDER);
+        fb.draw_rounded_rect(
+            track.x,
+            track.y,
+            track.w,
+            track.h,
+            track.h / 2,
+            Color::DARK_BG,
+        );
+        fb.draw_rounded_rect_outline(
+            track.x,
+            track.y,
+            track.w,
+            track.h,
+            track.h / 2,
+            Color::BORDER,
+        );
 
         let filled = thumb.x.saturating_add(thumb.w / 2).saturating_sub(track.x);
         if filled > 1 {
@@ -1260,10 +1369,21 @@ impl Widget for Slider {
                 filled.min(track.w),
                 track.h,
                 track.h / 2,
-                if self.dragging { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE },
+                if self.dragging {
+                    Color::ACCENT_GREEN
+                } else {
+                    Color::ACCENT_BLUE
+                },
             );
         }
-        fb.draw_rounded_rect(thumb.x, thumb.y, thumb.w, thumb.h, thumb.w / 2, Color::ACCENT_BLUE);
+        fb.draw_rounded_rect(
+            thumb.x,
+            thumb.y,
+            thumb.w,
+            thumb.h,
+            thumb.w / 2,
+            Color::ACCENT_BLUE,
+        );
         fb.draw_rounded_rect_outline(
             thumb.x,
             thumb.y,
@@ -1480,7 +1600,11 @@ impl Ui {
             }
             PointerKind::Move => {
                 self.hovered = hit_test(&self.root, event.x, event.y);
-                let target = if self.captured != 0 { self.captured } else { self.hovered };
+                let target = if self.captured != 0 {
+                    self.captured
+                } else {
+                    self.hovered
+                };
                 if target == 0 {
                     return WidgetEvent::Ignored;
                 }
@@ -1579,7 +1703,9 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     let mut row = Container::new(Axis::Horizontal).gap(sp(8));
     row.push(button).push(cancel);
 
-    let mut root = Container::new(Axis::Vertical).pad(Insets::all(sp(8))).gap(sp(6));
+    let mut root = Container::new(Axis::Vertical)
+        .pad(Insets::all(sp(8)))
+        .gap(sp(6));
     root.push(Label::new("minOs Widget Laboratuvari").color(Color::ACCENT_PINK));
     root.push(text);
     root.push(check);
@@ -1596,7 +1722,9 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     let cancel_r = ui.widget(cancel_id).unwrap().rect();
 
     report(
-        text_r.y >= 60 && text_r.h > 0 && text_r.w == 344
+        text_r.y >= 60
+            && text_r.h > 0
+            && text_r.w == 344
             && check_r.y >= text_r.bottom()
             && slider_r.y >= check_r.bottom()
             && button_r.y >= slider_r.bottom(),
@@ -1605,7 +1733,8 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     );
 
     report(
-        button_r.w > 0 && cancel_r.w > 0
+        button_r.w > 0
+            && cancel_r.w > 0
             && button_r.x + button_r.w <= cancel_r.x
             && cancel_r.right() <= 360,
         "Yatay kapsayici bosluklari (gap) dogru",
@@ -1624,9 +1753,17 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     ui.handle_key(Key::Tab);
     ui.handle_key(Key::Tab);
     ui.handle_key(Key::Tab);
-    report(ui.focused() == slider_id, "Tab ile odak ilerlemesi", &mut ok);
+    report(
+        ui.focused() == slider_id,
+        "Tab ile odak ilerlemesi",
+        &mut ok,
+    );
     ui.handle_key(Key::BackTab);
-    report(ui.focused() == check_id, "Shift+Tab ile odak gerilemesi", &mut ok);
+    report(
+        ui.focused() == check_id,
+        "Shift+Tab ile odak gerilemesi",
+        &mut ok,
+    );
 
     ui.set_focus(text_id);
     for ch in [b'm', b'i'] {
@@ -1634,7 +1771,8 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     }
     ui.handle_key(Key::Backspace);
     report(
-        ui.widget_as::<TextBox>(text_id).map_or(false, |t| t.text() == "m"),
+        ui.widget_as::<TextBox>(text_id)
+            .map_or(false, |t| t.text() == "m"),
         "Metin kutusu yazma ve geri silme",
         &mut ok,
     );
@@ -1648,7 +1786,9 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     let toggled = ui.handle_key(Key::Space);
     report(
         toggled == WidgetEvent::Toggled(check_id, true)
-            && ui.widget_as::<CheckBox>(check_id).map_or(false, |c| c.is_checked()),
+            && ui
+                .widget_as::<CheckBox>(check_id)
+                .map_or(false, |c| c.is_checked()),
         "Onay kutusu Space ile degisiyor",
         &mut ok,
     );
@@ -1663,7 +1803,11 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     );
 
     let track_y = slider_r.y + slider_r.h.saturating_sub(sp(11));
-    let down = ui.handle_pointer(PointerEvent::new(slider_r.x + 1, track_y, PointerKind::Down));
+    let down = ui.handle_pointer(PointerEvent::new(
+        slider_r.x + 1,
+        track_y,
+        PointerKind::Down,
+    ));
     let min_value = ui.widget_as::<Slider>(slider_id).map_or(-1, |s| s.value());
     let drag = ui.handle_pointer(PointerEvent::new(
         slider_r.right().saturating_sub(1),
@@ -1671,7 +1815,11 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
         PointerKind::Move,
     ));
     let max_value = ui.widget_as::<Slider>(slider_id).map_or(-1, |s| s.value());
-    ui.handle_pointer(PointerEvent::new(slider_r.right(), track_y, PointerKind::Up));
+    ui.handle_pointer(PointerEvent::new(
+        slider_r.right(),
+        track_y,
+        PointerKind::Up,
+    ));
     report(
         down == WidgetEvent::Changed(slider_id, 0)
             && min_value == 0
@@ -1681,8 +1829,16 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
         &mut ok,
     );
 
-    let click = ui.handle_pointer(PointerEvent::new(button_r.x + 2, button_r.y + 2, PointerKind::Down));
-    let released = ui.handle_pointer(PointerEvent::new(button_r.x + 2, button_r.y + 2, PointerKind::Up));
+    let click = ui.handle_pointer(PointerEvent::new(
+        button_r.x + 2,
+        button_r.y + 2,
+        PointerKind::Down,
+    ));
+    let released = ui.handle_pointer(PointerEvent::new(
+        button_r.x + 2,
+        button_r.y + 2,
+        PointerKind::Up,
+    ));
     report(
         click == WidgetEvent::Ignored
             && released == WidgetEvent::Clicked(button_id)

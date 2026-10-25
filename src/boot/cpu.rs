@@ -7,9 +7,15 @@ pub fn cpu_vendor() -> &'static str {
     let ebx = result.ebx;
     let edx = result.edx;
     let ecx = result.ecx;
-    if ebx == u32::from_le_bytes(*b"Genu") && edx == u32::from_le_bytes(*b"ineI") && ecx == u32::from_le_bytes(*b"ntel") {
+    if ebx == u32::from_le_bytes(*b"Genu")
+        && edx == u32::from_le_bytes(*b"ineI")
+        && ecx == u32::from_le_bytes(*b"ntel")
+    {
         "Intel"
-    } else if ebx == u32::from_le_bytes(*b"Auth") && edx == u32::from_le_bytes(*b"enti") && ecx == u32::from_le_bytes(*b"cAMD") {
+    } else if ebx == u32::from_le_bytes(*b"Auth")
+        && edx == u32::from_le_bytes(*b"enti")
+        && ecx == u32::from_le_bytes(*b"cAMD")
+    {
         "AMD"
     } else {
         "x86_64 uyumlu"

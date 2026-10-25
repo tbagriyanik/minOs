@@ -61,8 +61,12 @@ impl VersionOp {
 
     /// `candidate` sürümünü `required` sürümüne göre kurala uyup uymadığını döner.
     pub fn accepts(self, candidate: &str, required: &str) -> bool {
-        let Some(c) = parse_version(candidate) else { return false };
-        let Some(r) = parse_version(required) else { return false };
+        let Some(c) = parse_version(candidate) else {
+            return false;
+        };
+        let Some(r) = parse_version(required) else {
+            return false;
+        };
         let ord = c.cmp(&r);
         match self {
             VersionOp::Eq => ord == core::cmp::Ordering::Equal,
@@ -125,7 +129,11 @@ pub struct PkgEntry {
 
 impl PkgEntry {
     pub fn new(name: &str, version: &str) -> Self {
-        Self { name: name.to_string(), version: version.to_string(), deps: Vec::new() }
+        Self {
+            name: name.to_string(),
+            version: version.to_string(),
+            deps: Vec::new(),
+        }
     }
 
     pub fn with_deps(mut self, deps: &[&str]) -> Self {
@@ -156,9 +164,17 @@ pub enum ResolveError {
     /// Bağımlılık katalogda yok.
     MissingDependency { package: String, missing: String },
     /// Kurulu sürüm bağımlılık kuralını sağlamıyor (otomatik yükseltme yapılmaz).
-    VersionMismatch { package: String, installed: String, required: String },
+    VersionMismatch {
+        package: String,
+        installed: String,
+        required: String,
+    },
     /// İki paket aynı bağımlılık için farklı sürüm istiyor.
-    Conflict { package: String, wanted: String, also_wanted: String },
+    Conflict {
+        package: String,
+        wanted: String,
+        also_wanted: String,
+    },
     /// Bağımlılık döngüsü.
     Cycle { chain: String },
 }
@@ -173,13 +189,24 @@ impl ResolveError {
                 package, required
             ),
             ResolveError::MissingDependency { package, missing } => {
-                format!("{} paketinin bağımlılığı katalogda yok: {}", package, missing)
+                format!(
+                    "{} paketinin bağımlılığı katalogda yok: {}",
+                    package, missing
+                )
             }
-            ResolveError::VersionMismatch { package, installed, required } => format!(
+            ResolveError::VersionMismatch {
+                package,
+                installed,
+                required,
+            } => format!(
                 "{} paketinin kurulu sürümü ({}) bağımlılık kuralını sağlamıyor: {}",
                 package, installed, required
             ),
-            ResolveError::Conflict { package, wanted, also_wanted } => format!(
+            ResolveError::Conflict {
+                package,
+                wanted,
+                also_wanted,
+            } => format!(
                 "Çakışma: {} için iki farklı sürüm istendi ({} / {})",
                 package, wanted, also_wanted
             ),
@@ -244,10 +271,21 @@ pub fn resolve(
         return Err(ResolveError::UnknownPackage(root.to_string()));
     }
 
-    let mut plan = InstallPlan { to_install: Vec::new(), already_installed: Vec::new() };
+    let mut plan = InstallPlan {
+        to_install: Vec::new(),
+        already_installed: Vec::new(),
+    };
     let mut chosen: Vec<(String, String)> = Vec::new();
     let mut stack: Vec<String> = Vec::new();
-    visit(catalog, installed, root, None, &mut plan, &mut chosen, &mut stack)?;
+    visit(
+        catalog,
+        installed,
+        root,
+        None,
+        &mut plan,
+        &mut chosen,
+        &mut stack,
+    )?;
     Ok(plan)
 }
 
@@ -295,7 +333,9 @@ fn visit(
     if stack.iter().any(|s| s == name) {
         let mut chain = stack.clone();
         chain.push(name.to_string());
-        return Err(ResolveError::Cycle { chain: chain.join(" -> ") });
+        return Err(ResolveError::Cycle {
+            chain: chain.join(" -> "),
+        });
     }
 
     // Kurulu paket yeniden kurulmaz; sürümü kuralı sağlıyorsa atlanır,
@@ -311,7 +351,11 @@ fn visit(
                 });
             }
         }
-        let text = if v.is_empty() { name.to_string() } else { format!("{} {}", name, v) };
+        let text = if v.is_empty() {
+            name.to_string()
+        } else {
+            format!("{} {}", name, v)
+        };
         if !plan.already_installed.contains(&text) {
             plan.already_installed.push(text);
         }
@@ -343,15 +387,25 @@ fn visit(
 
     stack.push(name.to_string());
     for dep in &entry.deps {
-        match visit(catalog, installed, &dep.name, Some(dep), plan, chosen, stack) {
+        match visit(
+            catalog,
+            installed,
+            &dep.name,
+            Some(dep),
+            plan,
+            chosen,
+            stack,
+        ) {
             Ok(()) => {}
             Err(missing @ ResolveError::MissingDependency { .. }) => {
                 stack.pop();
                 return Err(match missing {
-                    ResolveError::MissingDependency { missing, .. } => ResolveError::MissingDependency {
-                        package: entry.name.clone(),
-                        missing,
-                    },
+                    ResolveError::MissingDependency { missing, .. } => {
+                        ResolveError::MissingDependency {
+                            package: entry.name.clone(),
+                            missing,
+                        }
+                    }
                     _ => unreachable!(),
                 });
             }
@@ -364,7 +418,8 @@ fn visit(
     stack.pop();
 
     chosen.push((entry.name.clone(), entry.version.clone()));
-    plan.to_install.push(format!("{} {}", entry.name, entry.version));
+    plan.to_install
+        .push(format!("{} {}", entry.name, entry.version));
     Ok(())
 }
 
@@ -382,7 +437,9 @@ fn missing_error(
     } else {
         ResolveError::MissingDependency {
             package: String::new(),
-            missing: constraint.map(|d| d.describe()).unwrap_or_else(|| name.to_string()),
+            missing: constraint
+                .map(|d| d.describe())
+                .unwrap_or_else(|| name.to_string()),
         }
     }
 }
@@ -457,7 +514,10 @@ mod tests {
         );
         assert!(plan.already_installed.is_empty());
         // En yüksek uygun sürüm seçilir (tls 1.3.0, 1.1.0 değil).
-        assert_eq!(plan_names(&plan), alloc::vec!["crypto", "tls", "ui", "browser"]);
+        assert_eq!(
+            plan_names(&plan),
+            alloc::vec!["crypto", "tls", "ui", "browser"]
+        );
     }
 
     #[test]
@@ -466,7 +526,10 @@ mod tests {
         let installed = alloc::vec![("crypto".to_string(), "1.0.9".to_string())];
         let plan = resolve(&cat, &installed, "tls").unwrap();
         assert_eq!(plan.to_install, alloc::vec!["tls 1.3.0".to_string()]);
-        assert_eq!(plan.already_installed, alloc::vec!["crypto 1.0.9".to_string()]);
+        assert_eq!(
+            plan.already_installed,
+            alloc::vec!["crypto 1.0.9".to_string()]
+        );
         // İkili ikile göre çözümler sürümü bilmediği için kuralı sağlamayan
         // kurulu bir paketi "kuralı sağlıyor" varsayarak atlar.
         let binaries = installed_from_paths(["/bin/crypto.elf"]);
@@ -499,7 +562,11 @@ mod tests {
         let cat = catalog();
         let installed = alloc::vec![("crypto".to_string(), "0.9.0".to_string())];
         match resolve(&cat, &installed, "tls") {
-            Err(ResolveError::VersionMismatch { package, installed, required }) => {
+            Err(ResolveError::VersionMismatch {
+                package,
+                installed,
+                required,
+            }) => {
                 assert_eq!(package, "crypto");
                 assert_eq!(installed, "0.9.0");
                 assert_eq!(required, "crypto>=1.0");
@@ -528,7 +595,10 @@ mod tests {
             PkgEntry::new("lib", "2.1.0"),
         ];
         let plan = resolve(&cat, &[], "app").unwrap();
-        assert_eq!(plan.to_install, alloc::vec!["lib 1.9.0".to_string(), "app 1.0.0".to_string()]);
+        assert_eq!(
+            plan.to_install,
+            alloc::vec!["lib 1.9.0".to_string(), "app 1.0.0".to_string()]
+        );
     }
 
     #[test]

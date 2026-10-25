@@ -5,8 +5,14 @@ use super::*;
 impl MinGuiCompositor {
     pub fn render_alt_tab_overlay(&self, fb: &mut Framebuffer) {
         let box_w = 470.min(fb.width.saturating_sub(24)).max(1);
-        let open_count = if self.is_alt_tab_open && self.alt_tab_count > 0 { self.alt_tab_count }
-            else { self.windows.iter().filter(|slot| slot.map_or(false, |win| win.is_open && !win.is_minimized)).count() };
+        let open_count = if self.is_alt_tab_open && self.alt_tab_count > 0 {
+            self.alt_tab_count
+        } else {
+            self.windows
+                .iter()
+                .filter(|slot| slot.map_or(false, |win| win.is_open && !win.is_minimized))
+                .count()
+        };
         let columns = (box_w.saturating_sub(24) / 58).max(1);
         let rows = open_count.saturating_add(columns - 1) / columns;
         let grid_h = rows * 66;
@@ -19,8 +25,15 @@ impl MinGuiCompositor {
         fb.draw_rect_outline(box_x, box_y, box_w, box_h, Color::BORDER);
         fb.draw_rect(box_x, box_y, box_w, 26, Color::TITLE_BAR);
         let english = ui_english();
-        Self::draw_string_shadow(fb, box_x + 12, box_y + 9,
-            ui_text("Uygulama Geçişi (Alt + Tab)", "Window Switcher (Alt + Tab)"), Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(
+            fb,
+            box_x + 12,
+            box_y + 9,
+            ui_text("Uygulama Geçişi (Alt + Tab)", "Window Switcher (Alt + Tab)"),
+            Color::TEXT_MAIN,
+            Color::SHADOW,
+            1,
+        );
 
         let mut active_app_title = ui_text("Pencere Seçilmedi", "No Window Selected");
 
@@ -38,49 +51,112 @@ impl MinGuiCompositor {
                 let card_x = box_x + box_w.saturating_sub(grid_w) / 2 + col * 58;
                 let card_y = box_y + 36 + row * 66;
                 let is_sel = win.is_focused;
-                let card_bg = if is_sel { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                let card_bg = if is_sel {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::WINDOW_BG
+                };
 
                 if is_sel {
-                    active_app_title = if english { Self::window_title(win.app_id as usize, true) } else { win.title };
+                    active_app_title = if english {
+                        Self::window_title(win.app_id as usize, true)
+                    } else {
+                        win.title
+                    };
                 }
 
                 fb.draw_rounded_rect(card_x, card_y, 50, 58, 6, card_bg);
                 if is_sel {
-                    fb.draw_rounded_rect_outline(card_x.saturating_sub(1), card_y.saturating_sub(1), 52, 60, 6, Color::ACCENT_PINK);
+                    fb.draw_rounded_rect_outline(
+                        card_x.saturating_sub(1),
+                        card_y.saturating_sub(1),
+                        52,
+                        60,
+                        6,
+                        Color::ACCENT_PINK,
+                    );
                 }
                 let icon_idx = Self::window_icon_index(win.app_id as usize);
                 Self::draw_icon_by_index(fb, card_x + 15, card_y + 9, icon_idx);
-                let tab_col = if is_sel { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
-                let tab_title = if english { Self::window_tab_title(win.app_id as usize, true) } else { win.tab_title };
-                Self::draw_string_clipped(fb, card_x + 2, card_y + 38, tab_title, tab_col, (card_x + 2, card_y + 36, 46, 20));
+                let tab_col = if is_sel {
+                    Self::text_on(Color::ACCENT_BLUE)
+                } else {
+                    Color::TEXT_MAIN
+                };
+                let tab_title = if english {
+                    Self::window_tab_title(win.app_id as usize, true)
+                } else {
+                    win.tab_title
+                };
+                Self::draw_string_clipped(
+                    fb,
+                    card_x + 2,
+                    card_y + 38,
+                    tab_title,
+                    tab_col,
+                    (card_x + 2, card_y + 36, 46, 20),
+                );
             }
         }
 
         let footer_y = box_y + box_h.saturating_sub(52);
-        fb.draw_rect(box_x + 12, footer_y, box_w.saturating_sub(24), 44, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(
+            box_x + 12,
+            footer_y,
+            box_w.saturating_sub(24),
+            44,
+            Color::TITLE_BAR_INACTIVE,
+        );
         let active_label = ui_text("Aktif Pencere:", "Active Window:");
         let active_label_w = Self::text_width(active_label, 1) + 8;
-        Self::draw_string_clipped(fb, box_x + 20, footer_y + 5, active_label, Color::TEXT_MUTED,
-            (box_x + 18, footer_y + 2, box_w.saturating_sub(36), 20));
-        Self::draw_string_clipped(fb, box_x + 20 + active_label_w, footer_y + 5, active_app_title, Color::ACCENT_GREEN,
-            (box_x + 20 + active_label_w, footer_y + 2, box_w.saturating_sub(active_label_w + 38), 20));
-        Self::draw_string_clipped(fb, box_x + 20, footer_y + 24,
-            ui_text("Alt tuşunu bıraktığınızda pencere öne gelir.", "Release Alt to bring the window forward."), Color::TEXT_MUTED,
-            (box_x + 18, footer_y + 21, box_w.saturating_sub(36), 20));
+        Self::draw_string_clipped(
+            fb,
+            box_x + 20,
+            footer_y + 5,
+            active_label,
+            Color::TEXT_MUTED,
+            (box_x + 18, footer_y + 2, box_w.saturating_sub(36), 20),
+        );
+        Self::draw_string_clipped(
+            fb,
+            box_x + 20 + active_label_w,
+            footer_y + 5,
+            active_app_title,
+            Color::ACCENT_GREEN,
+            (
+                box_x + 20 + active_label_w,
+                footer_y + 2,
+                box_w.saturating_sub(active_label_w + 38),
+                20,
+            ),
+        );
+        Self::draw_string_clipped(
+            fb,
+            box_x + 20,
+            footer_y + 24,
+            ui_text(
+                "Alt tuşunu bıraktığınızda pencere öne gelir.",
+                "Release Alt to bring the window forward.",
+            ),
+            Color::TEXT_MUTED,
+            (box_x + 18, footer_y + 21, box_w.saturating_sub(36), 20),
+        );
     }
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
         fb.save_cursor_background(mx, my);
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
-        let over_control = self.windows.iter().flatten().any(|win| {
-            win.is_open && !win.is_minimized && in_rect(mx, my, win.close_rect())
-        });
+        let over_control = self
+            .windows
+            .iter()
+            .flatten()
+            .any(|win| win.is_open && !win.is_minimized && in_rect(mx, my, win.close_rect()));
         if !over_control {
-        if let Some((_, edge)) = self.topmost_resize_edge(mx, my) {
-            self.draw_resize_cursor(fb, mx, my, edge);
-            return;
-        }
+            if let Some((_, edge)) = self.topmost_resize_edge(mx, my) {
+                self.draw_resize_cursor(fb, mx, my, edge);
+                return;
+            }
         }
 
         // 16x10 piksel imleç deseni.
@@ -121,7 +197,11 @@ impl MinGuiCompositor {
                     fb.put_pixel(mx + col + 1, my + row + 1, cursor_outline);
                     fb.put_pixel(mx + col.saturating_sub(1), my + row + 1, cursor_outline);
                     fb.put_pixel(mx + col + 1, my + row.saturating_sub(1), cursor_outline);
-                    fb.put_pixel(mx + col.saturating_sub(1), my + row.saturating_sub(1), cursor_outline);
+                    fb.put_pixel(
+                        mx + col.saturating_sub(1),
+                        my + row.saturating_sub(1),
+                        cursor_outline,
+                    );
                 }
             }
         }

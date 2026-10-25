@@ -14,7 +14,9 @@ pub struct Spinlock {
 
 impl Spinlock {
     pub const fn new() -> Self {
-        Self { locked: AtomicBool::new(false) }
+        Self {
+            locked: AtomicBool::new(false),
+        }
     }
 
     #[inline(always)]
@@ -48,7 +50,10 @@ pub struct SpinMutex<T> {
 
 impl<T> SpinMutex<T> {
     pub const fn new(data: T) -> Self {
-        Self { lock: Spinlock::new(), data: UnsafeCell::new(data) }
+        Self {
+            lock: Spinlock::new(),
+            data: UnsafeCell::new(data),
+        }
     }
 
     #[inline(always)]

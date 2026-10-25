@@ -18,7 +18,10 @@ fn strip_css_comments(css: &str) -> String {
     while p < b.len() {
         if p + 1 < b.len() && b[p] == b'/' && b[p + 1] == b'*' {
             match b[p + 2..].windows(2).position(|w| w == b"*/") {
-                Some(rel) => { p = p + 2 + rel + 2; continue; }
+                Some(rel) => {
+                    p = p + 2 + rel + 2;
+                    continue;
+                }
                 None => break,
             }
         }
@@ -29,27 +32,44 @@ fn strip_css_comments(css: &str) -> String {
 }
 
 /// Piksel, em, rem, %, vh, vw birimlerini piksel cinsinden çözer.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `val` - Değer dizgesi (örnek: "16px", "2rem", "50%", "100vh")
 /// * `viewport_width` - Görünüm alanı genişliği piksel cinsinden (opsiyonel, `None` için varsayılan kullanılır)
 /// * `viewport_height` - Görünüm alanı yüksekliği piksel cinsinden (opsiyonel, `None` için varsayılan kullanılır)
 /// * `parent_width` - Vanem elementi genişliği yüzdesi için hesaplanacak genişlik (opsiyonel, `None` için %100 varsayılır)
 /// * `parent_height` - Vanem elementi yüksekliği yüzdesi için hesaplanacak yükseklik (opsiyonel, `None` için %100 varsayılır)
-fn parse_px_value(val: &str, viewport_width: Option<usize>, viewport_height: Option<usize>, parent_width: Option<usize>, parent_height: Option<usize>) -> Option<usize> {
+fn parse_px_value(
+    val: &str,
+    viewport_width: Option<usize>,
+    viewport_height: Option<usize>,
+    parent_width: Option<usize>,
+    parent_height: Option<usize>,
+) -> Option<usize> {
     let t = val.trim().to_ascii_lowercase();
-    let (num_str, unit) = if let Some(n) = t.strip_suffix("px") { (n, "px") }
-        else if let Some(n) = t.strip_suffix("em") { (n, "em") }
-        else if let Some(n) = t.strip_suffix("rem") { (n, "rem") }
-        else if let Some(n) = t.strip_suffix("%") { (n, "%") }
-        else if let Some(n) = t.strip_suffix("vh") { (n, "vh") }
-        else if let Some(n) = t.strip_suffix("vw") { (n, "vw") }
-        else if let Some(n) = t.strip_suffix("pt") { (n, "pt") }
-        else { (t.as_str(), "") };
+    let (num_str, unit) = if let Some(n) = t.strip_suffix("px") {
+        (n, "px")
+    } else if let Some(n) = t.strip_suffix("em") {
+        (n, "em")
+    } else if let Some(n) = t.strip_suffix("rem") {
+        (n, "rem")
+    } else if let Some(n) = t.strip_suffix("%") {
+        (n, "%")
+    } else if let Some(n) = t.strip_suffix("vh") {
+        (n, "vh")
+    } else if let Some(n) = t.strip_suffix("vw") {
+        (n, "vw")
+    } else if let Some(n) = t.strip_suffix("pt") {
+        (n, "pt")
+    } else {
+        (t.as_str(), "")
+    };
     let n: f32 = num_str.trim().parse().ok()?;
-    if !n.is_finite() || n < 0.0 { return None; }
-    
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+
     match unit {
         "px" => Some(n as usize),
         "em" => Some((n * 16.0f32) as usize), // 1em = 16px varsayımı
@@ -59,7 +79,11 @@ fn parse_px_value(val: &str, viewport_width: Option<usize>, viewport_height: Opt
             let _parent_h = parent_height.unwrap_or(100);
             // Yüzde değeri parent genişliğine/güksekliğine göre hesapla
             // Bu fonksiyon çağrısında parent_boyutları sağlanmazsa None döner
-            if parent_w > 0 { Some((n * parent_w as f32 / 100.0) as usize) } else { None }
+            if parent_w > 0 {
+                Some((n * parent_w as f32 / 100.0) as usize)
+            } else {
+                None
+            }
         }
         "vh" => {
             let h = viewport_height.unwrap_or(768); // Varsayılan: 768p height
@@ -76,20 +100,34 @@ fn parse_px_value(val: &str, viewport_width: Option<usize>, viewport_height: Opt
 
 fn font_scale_from_size(val: &str) -> usize {
     let l = val.to_ascii_lowercase();
-    if l.contains("xxx-large") || l.contains("xx-large") || l.contains("x-large") || l.contains("large") {
+    if l.contains("xxx-large")
+        || l.contains("xx-large")
+        || l.contains("x-large")
+        || l.contains("large")
+    {
         return 2;
     }
-    if l.contains("small") { return 1; }
+    if l.contains("small") {
+        return 1;
+    }
     // Varsayılan viewport ve parent boyutları ile px değerini hesapla
     match parse_px_value(&l, None, None, None, None) {
-        Some(px) => if px >= 20 { 2 } else { 1 },
+        Some(px) => {
+            if px >= 20 {
+                2
+            } else {
+                1
+            }
+        }
         None => 1,
     }
 }
 
 fn is_bold_weight(val: &str) -> bool {
     let l = val.trim().to_ascii_lowercase();
-    if l == "bold" || l == "bolder" || l == "bolder " { return true; }
+    if l == "bold" || l == "bolder" || l == "bolder " {
+        return true;
+    }
     l.parse::<u32>().map_or(false, |w| w >= 600)
 }
 
@@ -100,9 +138,15 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         val = stripped.trim();
     }
     match prop {
-        "color" => { if let Some(c) = html_color(val.as_bytes()) { style.color = Some(c); } }
+        "color" => {
+            if let Some(c) = html_color(val.as_bytes()) {
+                style.color = Some(c);
+            }
+        }
         "background-color" | "background" => {
-            if let Some(c) = html_color(val.as_bytes()) { style.bg_color = Some(c); }
+            if let Some(c) = html_color(val.as_bytes()) {
+                style.bg_color = Some(c);
+            }
         }
         "text-align" => {
             style.align = if val.eq_ignore_ascii_case("center") {
@@ -114,10 +158,16 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             };
         }
         "font-size" => style.font_scale = font_scale_from_size(val),
-        "display" => { if val.eq_ignore_ascii_case("none") { style.display_none = true; } }
+        "display" => {
+            if val.eq_ignore_ascii_case("none") {
+                style.display_none = true;
+            }
+        }
         "margin-left" | "padding-left" | "text-indent" => {
             // Varsayılan: viewport ve parent bilgis yok, direkt px/em/rem parse et
-            if let Some(px) = parse_px_value(val, None, None, None, None) { style.indent_px = px; }
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.indent_px = px;
+            }
         }
         "margin" | "padding" => {
             // Kısa gösterim: soldan itibaren ikinci değer sol kenar boşluğudur.
@@ -131,12 +181,16 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             if let Some(v) = left {
                 // Margin/padding için varsayılan: tam genişlik/yükseklik hesaplamak
                 // için viewport ve parent bilgisi lateri eklenebilir.
-                if let Some(px) = parse_px_value(v, None, None, None, None) { style.indent_px = px; }
+                if let Some(px) = parse_px_value(v, None, None, None, None) {
+                    style.indent_px = px;
+                }
             }
         }
         "font-weight" => style.bold = is_bold_weight(val),
         "text-decoration" | "text-decoration-line" => {
-            if val.contains("underline") { style.underline = true; }
+            if val.contains("underline") {
+                style.underline = true;
+            }
         }
         _ => {}
     }
@@ -146,27 +200,45 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
 fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>) {
     let mut p = 0;
     while p < bytes.len() {
-        while p < bytes.len() && bytes[p].is_ascii_whitespace() { p += 1; }
-        if p >= bytes.len() { break; }
+        while p < bytes.len() && bytes[p].is_ascii_whitespace() {
+            p += 1;
+        }
+        if p >= bytes.len() {
+            break;
+        }
         let sel_start = p;
-        while p < bytes.len() && bytes[p] != b'{' && bytes[p] != b'<' { p += 1; }
-        if p >= bytes.len() || bytes[p] != b'{' { break; }
-        let selector = core::str::from_utf8(&bytes[sel_start..p]).unwrap_or("").trim();
+        while p < bytes.len() && bytes[p] != b'{' && bytes[p] != b'<' {
+            p += 1;
+        }
+        if p >= bytes.len() || bytes[p] != b'{' {
+            break;
+        }
+        let selector = core::str::from_utf8(&bytes[sel_start..p])
+            .unwrap_or("")
+            .trim();
 
         // Eşleşen süslü parantezi bul (iç içe bloklar için).
         let mut depth = 0usize;
         let mut block_end = bytes.len();
         let mut i = p;
         while i < bytes.len() {
-            if bytes[i] == b'{' { depth += 1; }
-            else if bytes[i] == b'}' {
+            if bytes[i] == b'{' {
+                depth += 1;
+            } else if bytes[i] == b'}' {
                 depth = depth.saturating_sub(1);
-                if depth == 0 { block_end = i; break; }
+                if depth == 0 {
+                    block_end = i;
+                    break;
+                }
             }
             i += 1;
         }
         let block = core::str::from_utf8(&bytes[p + 1..block_end]).unwrap_or("");
-        p = if block_end < bytes.len() { block_end + 1 } else { bytes.len() };
+        p = if block_end < bytes.len() {
+            block_end + 1
+        } else {
+            bytes.len()
+        };
 
         if selector.starts_with('@') {
             // @media / @supports / @layer: içindeki kuralları uygula.
@@ -203,12 +275,21 @@ pub fn parse_css(css_code: &str) -> Vec<CssRule> {
     rules
 }
 
-pub fn match_css_style(rules: &[CssRule], tag: &str, class: Option<&str>, id: Option<&str>, inline_style: Option<&str>) -> ElementStyle {
+pub fn match_css_style(
+    rules: &[CssRule],
+    tag: &str,
+    class: Option<&str>,
+    id: Option<&str>,
+    inline_style: Option<&str>,
+) -> ElementStyle {
     let mut resolved = ElementStyle::new();
     for rule in rules {
         let sel = rule.selector.as_str();
         let matches = if sel.starts_with('.') {
-            class.map_or(false, |c| c.split_whitespace().any(|part| part.eq_ignore_ascii_case(&sel[1..])))
+            class.map_or(false, |c| {
+                c.split_whitespace()
+                    .any(|part| part.eq_ignore_ascii_case(&sel[1..]))
+            })
         } else if sel.starts_with('#') {
             id.map_or(false, |i| i.eq_ignore_ascii_case(&sel[1..]))
         } else {

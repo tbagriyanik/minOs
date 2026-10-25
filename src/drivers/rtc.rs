@@ -52,15 +52,29 @@ impl DateTime {
         let mut hour = self.hour as i16 + offset as i16;
         while hour < 0 {
             hour += 24;
-            if self.day > 1 { self.day -= 1; }
-            else if self.month > 1 { self.month -= 1; self.day = Self::days_in_month(self.year, self.month); }
-            else { self.year = self.year.saturating_sub(1); self.month = 12; self.day = 31; }
+            if self.day > 1 {
+                self.day -= 1;
+            } else if self.month > 1 {
+                self.month -= 1;
+                self.day = Self::days_in_month(self.year, self.month);
+            } else {
+                self.year = self.year.saturating_sub(1);
+                self.month = 12;
+                self.day = 31;
+            }
         }
         while hour >= 24 {
             hour -= 24;
-            if self.day < Self::days_in_month(self.year, self.month) { self.day += 1; }
-            else if self.month < 12 { self.month += 1; self.day = 1; }
-            else { self.year = self.year.saturating_add(1); self.month = 1; self.day = 1; }
+            if self.day < Self::days_in_month(self.year, self.month) {
+                self.day += 1;
+            } else if self.month < 12 {
+                self.month += 1;
+                self.day = 1;
+            } else {
+                self.year = self.year.saturating_add(1);
+                self.month = 1;
+                self.day = 1;
+            }
         }
         self.hour = hour as u8;
         self
@@ -110,9 +124,15 @@ impl DateTime {
             century = unsafe { cmos_read(0x32) };
 
             attempts += 1;
-            if (second == last_second) && (minute == last_minute) && (hour == last_hour)
-                && (day == last_day) && (month == last_month) && (year == last_year)
-                && (century == last_century) || attempts >= 10 {
+            if (second == last_second)
+                && (minute == last_minute)
+                && (hour == last_hour)
+                && (day == last_day)
+                && (month == last_month)
+                && (year == last_year)
+                && (century == last_century)
+                || attempts >= 10
+            {
                 break;
             }
         }
@@ -212,7 +232,15 @@ impl DateTime {
     }
 
     pub fn weekday_name_en(w: u8) -> &'static str {
-        match w { 0 => "Monday", 1 => "Tuesday", 2 => "Wednesday", 3 => "Thursday", 4 => "Friday", 5 => "Saturday", _ => "Sunday" }
+        match w {
+            0 => "Monday",
+            1 => "Tuesday",
+            2 => "Wednesday",
+            3 => "Thursday",
+            4 => "Friday",
+            5 => "Saturday",
+            _ => "Sunday",
+        }
     }
 
     /// "Ocak" gibi tam ay adı (1..=12).
@@ -234,7 +262,20 @@ impl DateTime {
     }
 
     pub fn month_name_en(month: u8) -> &'static str {
-        match month { 1 => "January", 2 => "February", 3 => "March", 4 => "April", 5 => "May", 6 => "June", 7 => "July", 8 => "August", 9 => "September", 10 => "October", 11 => "November", _ => "December" }
+        match month {
+            1 => "January",
+            2 => "February",
+            3 => "March",
+            4 => "April",
+            5 => "May",
+            6 => "June",
+            7 => "July",
+            8 => "August",
+            9 => "September",
+            10 => "October",
+            11 => "November",
+            _ => "December",
+        }
     }
 
     /// Kısa gün adı (Pzt, Sal ...), takvim başlıkları için.
@@ -251,6 +292,14 @@ impl DateTime {
     }
 
     pub fn weekday_short_en(w: u8) -> &'static str {
-        match w { 0 => "Mo", 1 => "Tu", 2 => "We", 3 => "Th", 4 => "Fr", 5 => "Sa", _ => "Su" }
+        match w {
+            0 => "Mo",
+            1 => "Tu",
+            2 => "We",
+            3 => "Th",
+            4 => "Fr",
+            5 => "Sa",
+            _ => "Su",
+        }
     }
 }

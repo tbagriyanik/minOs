@@ -21,25 +21,51 @@ impl VideoPlayerApp {
         }
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, _win_h: usize, _tick: usize) {
+    pub fn render_content(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        _win_h: usize,
+        _tick: usize,
+    ) {
         // Araç Çubuğu / Başlık Bilgisi
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 22, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 34, "retro_drive.mp4 - 30 FPS MinVideo Engine", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            win_y + 34,
+            "retro_drive.mp4 - 30 FPS MinVideo Engine",
+            Color::TEXT_MAIN,
+        );
         // Durum etiketi oynatma durumuna göre değişir (sağa hizalı).
         let (status_text, status_color) = if self.is_playing {
-            (crate::gui::ui_text("● OYNATILIYOR", "● PLAYING"), Color::ACCENT_GREEN)
+            (
+                crate::gui::ui_text("● OYNATILIYOR", "● PLAYING"),
+                Color::ACCENT_GREEN,
+            )
         } else {
-            (crate::gui::ui_text("DURAKLATILDI", "PAUSED"), Color::TEXT_MUTED)
+            (
+                crate::gui::ui_text("DURAKLATILDI", "PAUSED"),
+                Color::TEXT_MUTED,
+            )
         };
         let status_w = MinGuiCompositor::text_width(status_text, 1);
-        MinGuiCompositor::draw_string(fb, win_x + win_w.saturating_sub(status_w + 12), win_y + 34, status_text, status_color);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + win_w.saturating_sub(status_w + 12),
+            win_y + 34,
+            status_text,
+            status_color,
+        );
 
         // Video Ekranı (Viewport)
         let vp_x = win_x + 8;
         let vp_y = win_y + 52;
         let vp_w = win_w - 16;
         let vp_h = 145;
-        
+
         // 1. Gökyüzü (Koyu Mor / Gece)
         let sky_color = 0x181028;
         fb.draw_rect(vp_x, vp_y, vp_w, vp_h / 2, sky_color);
@@ -62,7 +88,11 @@ impl VideoPlayerApp {
                     };
                     for px in (sun_cx.saturating_sub(hw))..=(sun_cx + hw) {
                         if px >= vp_x && px < vp_x + vp_w {
-                            let sun_color = if dy < -12 { Color::ACCENT_YELLOW } else { Color::ACCENT_PINK };
+                            let sun_color = if dy < -12 {
+                                Color::ACCENT_YELLOW
+                            } else {
+                                Color::ACCENT_PINK
+                            };
                             fb.put_pixel(px, line_y, sun_color);
                         }
                     }
@@ -100,7 +130,8 @@ impl VideoPlayerApp {
             let mut y = horizon_y + 2;
             while y < vp_y + vp_h {
                 let progress = y - horizon_y;
-                let px = (vanish_x as isize + (i * 40 * progress as isize) / ground_h as isize) as usize;
+                let px =
+                    (vanish_x as isize + (i * 40 * progress as isize) / ground_h as isize) as usize;
                 if px >= vp_x && px < vp_x + vp_w {
                     fb.put_pixel(px, y, 0x482070);
                 }
@@ -114,7 +145,7 @@ impl VideoPlayerApp {
         fb.draw_rect(car_x, car_y, 36, 12, Color::TITLE_BAR);
         fb.draw_rect(car_x + 6, car_y - 6, 24, 7, Color::WINDOW_BG); // Tavan / Cam
         fb.draw_rect(car_x + 8, car_y - 4, 20, 4, Color::ACCENT_BLUE); // Cam ışıltısı
-        // Arka neon stop lambaları
+                                                                       // Arka neon stop lambaları
         fb.draw_rect(car_x + 2, car_y + 4, 8, 4, Color::ACCENT_RED);
         fb.draw_rect(car_x + 26, car_y + 4, 8, 4, Color::ACCENT_RED);
 
@@ -128,22 +159,52 @@ impl VideoPlayerApp {
         elapsed_text.push_u2((elapsed_s / 60) as u32);
         elapsed_text.push_str(":");
         elapsed_text.push_u2((elapsed_s % 60) as u32);
-        MinGuiCompositor::draw_string(fb, win_x + 12, scrub_y, elapsed_text.as_str(), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            scrub_y,
+            elapsed_text.as_str(),
+            Color::TEXT_MAIN,
+        );
         let scrub_w = win_w - 110;
         let scrub_x = win_x + 54;
         fb.draw_rect(scrub_x, scrub_y + 2, scrub_w, 6, Color::DARK_BG);
         let filled_w = (scrub_w * progress) / 100;
         fb.draw_rect(scrub_x, scrub_y + 2, filled_w, 6, Color::ACCENT_RED);
-        fb.draw_rect(scrub_x + filled_w.saturating_sub(2), scrub_y, 5, 10, Color::WHITE);
-        MinGuiCompositor::draw_string(fb, scrub_x + scrub_w + 8, scrub_y, "01:30", Color::TEXT_MUTED);
+        fb.draw_rect(
+            scrub_x + filled_w.saturating_sub(2),
+            scrub_y,
+            5,
+            10,
+            Color::WHITE,
+        );
+        MinGuiCompositor::draw_string(
+            fb,
+            scrub_x + scrub_w + 8,
+            scrub_y,
+            "01:30",
+            Color::TEXT_MUTED,
+        );
 
         // Oynatıcı Kontrolleri
         let ctrl_y = win_y + Self::CONTROLS_Y;
         fb.draw_rect(win_x + 12, ctrl_y, 42, 22, Color::ACCENT_GREEN);
-        MinGuiCompositor::draw_string(fb, win_x + 18, ctrl_y + 6, if self.is_playing { "||" } else { ">" }, MinGuiCompositor::text_on(Color::ACCENT_GREEN));
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 18,
+            ctrl_y + 6,
+            if self.is_playing { "||" } else { ">" },
+            MinGuiCompositor::text_on(Color::ACCENT_GREEN),
+        );
 
         fb.draw_rect(win_x + 58, ctrl_y, 40, 22, Color::WINDOW_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 64, ctrl_y + 6, crate::gui::ui_text("Durdur", "Stop"), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 64,
+            ctrl_y + 6,
+            crate::gui::ui_text("Durdur", "Stop"),
+            Color::TEXT_MAIN,
+        );
 
         fb.draw_rect(win_x + 102, ctrl_y, 48, 22, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 108, ctrl_y + 6, "-10s", Color::TEXT_MAIN);
@@ -152,10 +213,25 @@ impl VideoPlayerApp {
         MinGuiCompositor::draw_string(fb, win_x + 160, ctrl_y + 6, "+10s", Color::TEXT_MAIN);
 
         fb.draw_rect(win_x + win_w - 76, ctrl_y, 64, 22, Color::ACCENT_BLUE);
-        MinGuiCompositor::draw_string(fb, win_x + win_w - 70, ctrl_y + 6, crate::gui::ui_text("Tam Ekran", "Full Screen"), MinGuiCompositor::text_on(Color::ACCENT_BLUE));
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + win_w - 70,
+            ctrl_y + 6,
+            crate::gui::ui_text("Tam Ekran", "Full Screen"),
+            MinGuiCompositor::text_on(Color::ACCENT_BLUE),
+        );
 
         // Durum Çubuğu
         fb.draw_rect(win_x + 6, win_y + 250, win_w - 12, 18, Color::TASKBAR_BG);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 254, crate::gui::ui_text("Donanım Çözücü: SSE2 Optimize | YUV to RGB Framebuffer", "Hardware Decoder: SSE2 Optimized | YUV to RGB Framebuffer"), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            win_y + 254,
+            crate::gui::ui_text(
+                "Donanım Çözücü: SSE2 Optimize | YUV to RGB Framebuffer",
+                "Hardware Decoder: SSE2 Optimized | YUV to RGB Framebuffer",
+            ),
+            Color::TEXT_MUTED,
+        );
     }
 }

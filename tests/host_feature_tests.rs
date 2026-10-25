@@ -75,15 +75,27 @@ fn calculator_percent_and_division_by_zero() {
 fn duration_splits_into_parts() {
     assert_eq!(
         timefmt::split_duration(0),
-        timefmt::DurationParts { hours: 0, minutes: 0, seconds: 0 }
+        timefmt::DurationParts {
+            hours: 0,
+            minutes: 0,
+            seconds: 0
+        }
     );
     assert_eq!(
         timefmt::split_duration(3661),
-        timefmt::DurationParts { hours: 1, minutes: 1, seconds: 1 }
+        timefmt::DurationParts {
+            hours: 1,
+            minutes: 1,
+            seconds: 1
+        }
     );
     assert_eq!(
         timefmt::split_duration(90_061),
-        timefmt::DurationParts { hours: 25, minutes: 1, seconds: 1 }
+        timefmt::DurationParts {
+            hours: 25,
+            minutes: 1,
+            seconds: 1
+        }
     );
 }
 
@@ -147,7 +159,12 @@ fn rename_edit_sequence_keeps_valid_utf8() {
     let mut cursor = len;
 
     // "Belge" + "ğ" -> "Belgeğ"
-    assert!(textedit::insert_char(&mut buf, &mut len, &mut cursor, '\u{011F}'));
+    assert!(textedit::insert_char(
+        &mut buf,
+        &mut len,
+        &mut cursor,
+        '\u{011F}'
+    ));
     assert_eq!(core::str::from_utf8(&buf[..len]).unwrap(), "Belge\u{011F}");
 
     // Tek backspace iki baytin tamamini siler.
@@ -199,7 +216,11 @@ fn all_themes_have_readable_body_text() {
 fn all_themes_have_readable_muted_text() {
     for id in theme::ThemeId::ALL {
         let p = theme::palette(id);
-        for bg_idx in [theme::IDX_WINDOW_BG, theme::IDX_TASKBAR_BG, theme::IDX_TITLEBAR] {
+        for bg_idx in [
+            theme::IDX_WINDOW_BG,
+            theme::IDX_TASKBAR_BG,
+            theme::IDX_TITLEBAR,
+        ] {
             let bg = p[bg_idx as usize];
             let text = p[theme::IDX_TEXT_MUTED as usize];
             let ratio = theme::contrast_ratio(bg, text);

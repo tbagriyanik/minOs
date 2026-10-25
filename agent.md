@@ -4,3 +4,4 @@
 - Do not run a build after every command. The user will run the build; only build when explicitly requested.
 - Yeni ve düzeltmelerde TR ENG çevrimler eklenmelidir
 - Temalarda yazılar okunaklı renklerde olmalıdır
+- cargo fmt ve cargo clippy uygun olmalı hatasız

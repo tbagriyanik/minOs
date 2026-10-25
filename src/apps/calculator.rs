@@ -23,7 +23,9 @@ pub struct CalculatorApp {
 
 impl CalculatorApp {
     pub const fn new() -> Self {
-        Self { core: CalcCore::new() }
+        Self {
+            core: CalcCore::new(),
+        }
     }
 
     pub fn insert(&mut self, c: char) {
@@ -64,13 +66,21 @@ impl CalculatorApp {
         let mut expression = [' '; crate::apps::calc_core::INPUT_CAP];
         let mut expression_len = 0;
         for ch in clipboard[..len].iter().copied() {
-            if ch.is_ascii_whitespace() { continue; }
-            if !(ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-' | '*' | '/')) { return; }
-            if expression_len >= expression.len() - 1 { break; }
+            if ch.is_ascii_whitespace() {
+                continue;
+            }
+            if !(ch.is_ascii_digit() || matches!(ch, '.' | '+' | '-' | '*' | '/')) {
+                return;
+            }
+            if expression_len >= expression.len() - 1 {
+                break;
+            }
             expression[expression_len] = ch;
             expression_len += 1;
         }
-        if expression_len == 0 { return; }
+        if expression_len == 0 {
+            return;
+        }
         self.core.clear();
         for ch in expression[..expression_len].iter().copied() {
             self.core.insert(ch);
@@ -88,7 +98,13 @@ impl CalculatorApp {
             expression[index] = *c as u8;
         }
         if let Ok(text) = core::str::from_utf8(&expression[..self.core.len]) {
-            MinGuiCompositor::draw_string(fb, display_x + 8, display_y + 7, text, Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(
+                fb,
+                display_x + 8,
+                display_y + 7,
+                text,
+                Color::TEXT_MUTED,
+            );
         }
         let mut result = [0u8; 64];
         let result_len = CalcCore::format_value(self.core.value(), &mut result);
@@ -101,7 +117,12 @@ impl CalculatorApp {
                 display_y + 32,
                 text,
                 Color::ACCENT_GREEN,
-                (display_x + 4, display_y + 28, display_w.saturating_sub(8), 24),
+                (
+                    display_x + 4,
+                    display_y + 28,
+                    display_w.saturating_sub(8),
+                    24,
+                ),
             );
         }
 
@@ -141,14 +162,19 @@ impl CalculatorApp {
         let gap_x = BUTTON_GAP_X;
         let button_w = display_w.saturating_sub(gap_x * 3) / 4;
         let button_y = wy + BUTTON_TOP;
-        if x < display_x || y < button_y { return None; }
+        if x < display_x || y < button_y {
+            return None;
+        }
         let row = (y - button_y) / (BUTTON_HEIGHT + BUTTON_GAP_Y);
-        if row >= BUTTONS.len() || (y - button_y) % (BUTTON_HEIGHT + BUTTON_GAP_Y) >= BUTTON_HEIGHT {
+        if row >= BUTTONS.len() || (y - button_y) % (BUTTON_HEIGHT + BUTTON_GAP_Y) >= BUTTON_HEIGHT
+        {
             return None;
         }
         let rel_x = x - display_x;
         let col = rel_x / (button_w + gap_x);
-        if col >= 4 || rel_x % (button_w + gap_x) >= button_w { return None; }
+        if col >= 4 || rel_x % (button_w + gap_x) >= button_w {
+            return None;
+        }
         Some(BUTTONS[row][col])
     }
 }

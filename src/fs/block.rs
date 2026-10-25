@@ -28,18 +28,36 @@ pub const SECTOR: usize = 512;
 // Testlerde sahiplenmeden (bölüm başına göreli) baglanabilmek icin referanslar
 // üzerinden de `BlockDevice` saglanir.
 impl<T: BlockDevice + ?Sized> BlockDevice for &T {
-    fn sector_count(&self) -> u64 { (**self).sector_count() }
-    fn read(&self, lba: u64, buf: &mut [u8]) -> bool { (**self).read(lba, buf) }
-    fn write(&mut self, _lba: u64, _buf: &[u8]) -> bool { false }
-    fn name(&self) -> &'static str { (**self).name() }
+    fn sector_count(&self) -> u64 {
+        (**self).sector_count()
+    }
+    fn read(&self, lba: u64, buf: &mut [u8]) -> bool {
+        (**self).read(lba, buf)
+    }
+    fn write(&mut self, _lba: u64, _buf: &[u8]) -> bool {
+        false
+    }
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
 }
 
 impl<T: BlockDevice + ?Sized> BlockDevice for &mut T {
-    fn sector_count(&self) -> u64 { (**self).sector_count() }
-    fn read(&self, lba: u64, buf: &mut [u8]) -> bool { (**self).read(lba, buf) }
-    fn write(&mut self, lba: u64, buf: &[u8]) -> bool { (**self).write(lba, buf) }
-    fn flush(&mut self) { (**self).flush() }
-    fn name(&self) -> &'static str { (**self).name() }
+    fn sector_count(&self) -> u64 {
+        (**self).sector_count()
+    }
+    fn read(&self, lba: u64, buf: &mut [u8]) -> bool {
+        (**self).read(lba, buf)
+    }
+    fn write(&mut self, lba: u64, buf: &[u8]) -> bool {
+        (**self).write(lba, buf)
+    }
+    fn flush(&mut self) {
+        (**self).flush()
+    }
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
 }
 
 /// `count` bayt için gereken sektör sayısı.
@@ -63,7 +81,9 @@ pub fn write_range(dev: &mut dyn BlockDevice, lba: u64, data: &[u8]) -> bool {
     let mut off = 0usize;
     let mut cur = lba;
     while off < data.len() {
-        let take = (data.len() - off).min(255 * SECTOR).min((data.len() - off) / SECTOR * SECTOR);
+        let take = (data.len() - off)
+            .min(255 * SECTOR)
+            .min((data.len() - off) / SECTOR * SECTOR);
         if take == 0 {
             // Kalan kısım yarım sektör: son sektörü okuyup birleştir.
             let mut tmp = [0u8; SECTOR];
@@ -124,7 +144,10 @@ pub struct MemoryBlockDevice {
 impl MemoryBlockDevice {
     pub fn new(sectors: u64) -> Self {
         let len = (sectors as usize) * SECTOR;
-        Self { data: alloc::vec![0u8; len], writes: 0 }
+        Self {
+            data: alloc::vec![0u8; len],
+            writes: 0,
+        }
     }
 
     /// Testlerde imajı hazırlamak için ham erişim.
@@ -134,7 +157,10 @@ impl MemoryBlockDevice {
 
     /// Var olan bir imajın kopyasıyla aygıt kur (yeniden baglanma testleri).
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        Self { data: bytes.to_vec(), writes: 0 }
+        Self {
+            data: bytes.to_vec(),
+            writes: 0,
+        }
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -191,7 +217,10 @@ pub struct AtaPartition {
 #[cfg(not(host_fs_tests))]
 impl AtaPartition {
     pub fn new(drive: u8, sector_count: u64) -> Self {
-        Self { drive, sector_count }
+        Self {
+            drive,
+            sector_count,
+        }
     }
 }
 

@@ -16,13 +16,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -56,29 +60,29 @@ const PCI_SUBCLASS_NVME: u8 = 0x08;
 // ---------------------------------------------------------------------------
 
 const NVME_CAP: u64 = 0x0000; // Controller Capabilities
-const NVME_VS: u64 = 0x0008;  // Version
-const NVME_CC: u64 = 0x0014;  // Controller Configuration
+const NVME_VS: u64 = 0x0008; // Version
+const NVME_CC: u64 = 0x0014; // Controller Configuration
 const NVME_CSTS: u64 = 0x001C; // Controller Status
-const NVME_AQA: u64 = 0x0024;  // Admin Queue Attributes
-const NVME_ASQ: u64 = 0x0028;  // Admin Submission Queue Base
-const NVME_ACQ: u64 = 0x0030;  // Admin Completion Queue Base
+const NVME_AQA: u64 = 0x0024; // Admin Queue Attributes
+const NVME_ASQ: u64 = 0x0028; // Admin Submission Queue Base
+const NVME_ACQ: u64 = 0x0030; // Admin Completion Queue Base
 
 // CAP bitleri
-const CAP_MQES_SHIFT: u32 = 0;  // Maximum Queue Entries
-const CAP_CQR: u32 = 1 << 16;   // Contiguous Queues Required
-const CAP_AMS_SHIFT: u32 = 17;   // Arbitration Mechanism Supported
-const CAP_TO_SHIFT: u32 = 24;    // Timeout
+const CAP_MQES_SHIFT: u32 = 0; // Maximum Queue Entries
+const CAP_CQR: u32 = 1 << 16; // Contiguous Queues Required
+const CAP_AMS_SHIFT: u32 = 17; // Arbitration Mechanism Supported
+const CAP_TO_SHIFT: u32 = 24; // Timeout
 
 // CC bitleri
-const CC_EN: u32 = 1 << 0;       // Enable
-const CC_CSS_SHIFT: u32 = 4;     // Command Set Selection
-const CC_MPS_SHIFT: u32 = 7;     // Memory Page Size
-const CC_AMS_SHIFT: u32 = 11;    // Arbitration Mechanism Selected
-const CC_SHN_SHIFT: u32 = 14;    // Shutdown Notification
+const CC_EN: u32 = 1 << 0; // Enable
+const CC_CSS_SHIFT: u32 = 4; // Command Set Selection
+const CC_MPS_SHIFT: u32 = 7; // Memory Page Size
+const CC_AMS_SHIFT: u32 = 11; // Arbitration Mechanism Selected
+const CC_SHN_SHIFT: u32 = 14; // Shutdown Notification
 
 // CSTS bitleri
-const CSTS_RDY: u32 = 1 << 0;    // Ready
-const CSTS_CFS: u32 = 1 << 1;    // Controller Fatal Status
+const CSTS_RDY: u32 = 1 << 0; // Ready
+const CSTS_CFS: u32 = 1 << 1; // Controller Fatal Status
 
 // ---------------------------------------------------------------------------
 // NVMe Komutları
@@ -128,12 +132,12 @@ struct SubmissionEntry {
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct CompletionEntry {
-    cdw0: u32,      // Command DWord 0
-    cdw1: u32,      // Command DWord 1
-    cdw2: u32,      // Command DWord 2
-    cdw3: u32,      // Command DWord 3
-    status: u16,    // Status
-    phase: u16,     // Phase Tag
+    cdw0: u32,   // Command DWord 0
+    cdw1: u32,   // Command DWord 1
+    cdw2: u32,   // Command DWord 2
+    cdw3: u32,   // Command DWord 3
+    status: u16, // Status
+    phase: u16,  // Phase Tag
 }
 
 // ---------------------------------------------------------------------------

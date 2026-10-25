@@ -13,11 +13,11 @@ use crate::drivers::mouse::MouseState;
 // USB Fare Buton Sabitleri
 // ---------------------------------------------------------------------------
 
-pub const MOUSE_BTN_LEFT: u8   = 1 << 0;
-pub const MOUSE_BTN_RIGHT: u8  = 1 << 1;
+pub const MOUSE_BTN_LEFT: u8 = 1 << 0;
+pub const MOUSE_BTN_RIGHT: u8 = 1 << 1;
 pub const MOUSE_BTN_MIDDLE: u8 = 1 << 2;
-pub const MOUSE_BTN_SIDE: u8   = 1 << 3; // Geri (Back)
-pub const MOUSE_BTN_EXTRA: u8  = 1 << 4; // İleri (Forward)
+pub const MOUSE_BTN_SIDE: u8 = 1 << 3; // Geri (Back)
+pub const MOUSE_BTN_EXTRA: u8 = 1 << 4; // İleri (Forward)
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum UsbPointerMode {
@@ -126,4 +126,3 @@ pub fn process_mouse_report(
     dev.last_buttons = buttons;
     true
 }
-

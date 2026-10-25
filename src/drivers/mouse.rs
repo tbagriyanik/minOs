@@ -64,26 +64,36 @@ impl MouseState {
         };
 
         let scale = |delta: i32| -> i32 {
-            if delta == 0 { return 0; }
+            if delta == 0 {
+                return 0;
+            }
             let abs_d = delta.abs();
             // Hafif, dengeli ivmelenme (uçuşa geçmeden rahat kontrol):
-            let accel = if abs_d > 12 {
-                2
-            } else {
-                1
-            };
+            let accel = if abs_d > 12 { 2 } else { 1 };
 
             let scaled = (delta * speed * num * accel) / (den * 5);
-            if scaled == 0 { delta.signum() } else { scaled }
+            if scaled == 0 {
+                delta.signum()
+            } else {
+                scaled
+            }
         };
 
         self.x += scale(dx);
         self.y -= scale(dy); // PS/2 ve ters Y uyumluluğu
 
-        if self.x < 0 { self.x = 0; }
-        if self.y < 0 { self.y = 0; }
-        if self.x >= max_w { self.x = max_w - 1; }
-        if self.y >= max_h { self.y = max_h - 1; }
+        if self.x < 0 {
+            self.x = 0;
+        }
+        if self.y < 0 {
+            self.y = 0;
+        }
+        if self.x >= max_w {
+            self.x = max_w - 1;
+        }
+        if self.y >= max_h {
+            self.y = max_h - 1;
+        }
 
         // Touchpad Tap-to-Click jest denetimi
         if self.synthetic_click_remaining > 0 {
@@ -123,6 +133,10 @@ impl MouseState {
     pub fn take_scroll_delta(&mut self) -> i8 {
         let val = self.scroll_delta;
         self.scroll_delta = 0;
-        if self.reverse_scroll { val.saturating_neg() } else { val }
+        if self.reverse_scroll {
+            val.saturating_neg()
+        } else {
+            val
+        }
     }
 }

@@ -130,19 +130,43 @@ impl Aes {
 
     fn shift_rows(state: &mut [u8; 16]) {
         let mut t = [0u8; 16];
-        t[0] = state[0]; t[1] = state[5]; t[2] = state[10]; t[3] = state[15];
-        t[4] = state[4]; t[5] = state[9]; t[6] = state[14]; t[7] = state[3];
-        t[8] = state[8]; t[9] = state[13]; t[10] = state[2]; t[11] = state[7];
-        t[12] = state[12]; t[13] = state[1]; t[14] = state[6]; t[15] = state[11];
+        t[0] = state[0];
+        t[1] = state[5];
+        t[2] = state[10];
+        t[3] = state[15];
+        t[4] = state[4];
+        t[5] = state[9];
+        t[6] = state[14];
+        t[7] = state[3];
+        t[8] = state[8];
+        t[9] = state[13];
+        t[10] = state[2];
+        t[11] = state[7];
+        t[12] = state[12];
+        t[13] = state[1];
+        t[14] = state[6];
+        t[15] = state[11];
         state.copy_from_slice(&t);
     }
 
     fn inv_shift_rows(state: &mut [u8; 16]) {
         let mut t = [0u8; 16];
-        t[0] = state[0]; t[1] = state[13]; t[2] = state[10]; t[3] = state[7];
-        t[4] = state[4]; t[5] = state[1]; t[6] = state[14]; t[7] = state[11];
-        t[8] = state[8]; t[9] = state[5]; t[10] = state[2]; t[11] = state[15];
-        t[12] = state[12]; t[13] = state[9]; t[14] = state[6]; t[15] = state[3];
+        t[0] = state[0];
+        t[1] = state[13];
+        t[2] = state[10];
+        t[3] = state[7];
+        t[4] = state[4];
+        t[5] = state[1];
+        t[6] = state[14];
+        t[7] = state[11];
+        t[8] = state[8];
+        t[9] = state[5];
+        t[10] = state[2];
+        t[11] = state[15];
+        t[12] = state[12];
+        t[13] = state[9];
+        t[14] = state[6];
+        t[15] = state[3];
         state.copy_from_slice(&t);
     }
 

@@ -3,20 +3,44 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub fn html_color(value:&[u8])->Option<u32> {
-    let mut v=value;
-    while v.first().map_or(false,|b|b.is_ascii_whitespace()||*b==b'\''||*b==b'"') { v=&v[1..]; }
-    if v.first()==Some(&b'#') && v.len()>=7 {
-        let mut rgb=0u32;
-        for &b in &v[1..7] { let d=match b {b'0'..=b'9'=>(b-b'0') as u32,b'a'..=b'f'=>(b-b'a'+10) as u32,b'A'..=b'F'=>(b-b'A'+10) as u32,_=>return None};rgb=(rgb<<4)|d; }
+pub fn html_color(value: &[u8]) -> Option<u32> {
+    let mut v = value;
+    while v.first().map_or(false, |b| {
+        b.is_ascii_whitespace() || *b == b'\'' || *b == b'"'
+    }) {
+        v = &v[1..];
+    }
+    if v.first() == Some(&b'#') && v.len() >= 7 {
+        let mut rgb = 0u32;
+        for &b in &v[1..7] {
+            let d = match b {
+                b'0'..=b'9' => (b - b'0') as u32,
+                b'a'..=b'f' => (b - b'a' + 10) as u32,
+                b'A'..=b'F' => (b - b'A' + 10) as u32,
+                _ => return None,
+            };
+            rgb = (rgb << 4) | d;
+        }
         return Some(rgb);
     }
     // #abc kısa formu
-    if v.first()==Some(&b'#') && v.len()>=4 {
-        let mut rgb=0u32;
-        for &b in &v[1..4] { let d=match b {b'0'..=b'9'=>(b-b'0') as u32,b'a'..=b'f'=>(b-b'a'+10) as u32,b'A'..=b'F'=>(b-b'A'+10) as u32,_=>return None}; rgb=(rgb<<4)|d; }
+    if v.first() == Some(&b'#') && v.len() >= 4 {
+        let mut rgb = 0u32;
+        for &b in &v[1..4] {
+            let d = match b {
+                b'0'..=b'9' => (b - b'0') as u32,
+                b'a'..=b'f' => (b - b'a' + 10) as u32,
+                b'A'..=b'F' => (b - b'A' + 10) as u32,
+                _ => return None,
+            };
+            rgb = (rgb << 4) | d;
+        }
         // 4-bit -> 8-bit genişletme (AA -> AA*17)
-        return Some((((rgb>>8)&0xF)*0x11)<<16 | ((((rgb>>4)&0xF)*0x11)<<8) | (((rgb)&0xF)*0x11));
+        return Some(
+            (((rgb >> 8) & 0xF) * 0x11) << 16
+                | ((((rgb >> 4) & 0xF) * 0x11) << 8)
+                | (((rgb) & 0xF) * 0x11),
+        );
     }
     // rgb(...) / rgba(...)
     if let Some(lp) = v.iter().position(|&b| b == b'(') {
@@ -28,32 +52,71 @@ pub fn html_color(value:&[u8])->Option<u32> {
             let mut n = 0usize;
             for part in s.split(|c| c == ',' || c == ' ' || c == '\t') {
                 let t = part.trim();
-                if t.is_empty() { continue; }
-                if n >= 3 { break; }
+                if t.is_empty() {
+                    continue;
+                }
+                if n >= 3 {
+                    break;
+                }
                 let num = if let Some(pc) = t.strip_suffix('%') {
                     pc.parse::<f32>().ok()? * 2.55
                 } else {
                     t.parse::<f32>().ok()?
                 };
-                if !num.is_finite() || num < 0.0 || num > 255.0 { return None; }
+                if !num.is_finite() || num < 0.0 || num > 255.0 {
+                    return None;
+                }
                 comps[n] = (num + 0.5) as u32;
                 n += 1;
             }
-            if n == 3 { return Some((comps[0] << 16) | (comps[1] << 8) | comps[2]); }
+            if n == 3 {
+                return Some((comps[0] << 16) | (comps[1] << 8) | comps[2]);
+            }
             return None;
         }
     }
-    match v.split(|b|*b==b';'||b.is_ascii_whitespace()||*b==b'\''||*b==b'"'||*b==b'(').next()? {
-        b"black"=>Some(0x101010),b"white"=>Some(0xFFFFFF),b"red"=>Some(0xD03030),b"green"=>Some(0x188040),b"blue"=>Some(0x2050C0),b"yellow"=>Some(0xD0A020),b"gray"|b"grey"=>Some(0x808080),
-        b"orange"=>Some(0xE07020),b"purple"=>Some(0x8020A0),b"cyan"=>Some(0x20A0C0),b"aqua"=>Some(0x20A0C0),b"teal"=>Some(0x208080),b"navy"=>Some(0x103060),b"maroon"=>Some(0x802020),b"olive"=>Some(0x808020),
-        b"lime"=>Some(0x40C020),b"silver"=>Some(0xC0C0C0),b"fuchsia"=>Some(0xC020C0),b"magenta"=>Some(0xC020C0),b"pink"=>Some(0xE06090),
-        b"lightgray"=>Some(0xD0D0D0),b"lightgrey"=>Some(0xD0D0D0),b"darkgray"=>Some(0x505050),b"darkgrey"=>Some(0x505050),b"dimgray"=>Some(0x696969),b"dimgrey"=>Some(0x696969),
-        b"whitesmoke"=>Some(0xF5F5F5),b"goldenrod"=>Some(0xDAA520),b"tomato"=>Some(0xFF6347),
-        b"coral"=>Some(0xF08060),b"salmon"=>Some(0xFA8072),b"khaki"=>Some(0xF0E68C),b"violet"=>Some(0xEE82EE),b"indigo"=>Some(0x4B0082),b"crimson"=>Some(0xDC143C),
-        _=>None,
+    match v
+        .split(|b| *b == b';' || b.is_ascii_whitespace() || *b == b'\'' || *b == b'"' || *b == b'(')
+        .next()?
+    {
+        b"black" => Some(0x101010),
+        b"white" => Some(0xFFFFFF),
+        b"red" => Some(0xD03030),
+        b"green" => Some(0x188040),
+        b"blue" => Some(0x2050C0),
+        b"yellow" => Some(0xD0A020),
+        b"gray" | b"grey" => Some(0x808080),
+        b"orange" => Some(0xE07020),
+        b"purple" => Some(0x8020A0),
+        b"cyan" => Some(0x20A0C0),
+        b"aqua" => Some(0x20A0C0),
+        b"teal" => Some(0x208080),
+        b"navy" => Some(0x103060),
+        b"maroon" => Some(0x802020),
+        b"olive" => Some(0x808020),
+        b"lime" => Some(0x40C020),
+        b"silver" => Some(0xC0C0C0),
+        b"fuchsia" => Some(0xC020C0),
+        b"magenta" => Some(0xC020C0),
+        b"pink" => Some(0xE06090),
+        b"lightgray" => Some(0xD0D0D0),
+        b"lightgrey" => Some(0xD0D0D0),
+        b"darkgray" => Some(0x505050),
+        b"darkgrey" => Some(0x505050),
+        b"dimgray" => Some(0x696969),
+        b"dimgrey" => Some(0x696969),
+        b"whitesmoke" => Some(0xF5F5F5),
+        b"goldenrod" => Some(0xDAA520),
+        b"tomato" => Some(0xFF6347),
+        b"coral" => Some(0xF08060),
+        b"salmon" => Some(0xFA8072),
+        b"khaki" => Some(0xF0E68C),
+        b"violet" => Some(0xEE82EE),
+        b"indigo" => Some(0x4B0082),
+        b"crimson" => Some(0xDC143C),
+        _ => None,
     }
 }
-
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum HtmlTagType {
@@ -63,12 +126,12 @@ pub enum HtmlTagType {
     Heading3,
     ListItem,
     // Yeni eklenen tag'ler
-    Span,       // Inline container
-    Em,         // Emphasized text
-    Mark,       // Marked/highlighted text
-    Small,      // Smaller text
-    Sub,        // Subscript
-    Sup,        // Superscript
+    Span,  // Inline container
+    Em,    // Emphasized text
+    Mark,  // Marked/highlighted text
+    Small, // Smaller text
+    Sub,   // Subscript
+    Sup,   // Superscript
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -110,14 +173,30 @@ impl ElementStyle {
     /// İki stilin birleşimi: son eşleşen kural kazanır.
     #[allow(dead_code)]
     pub fn merge_from(&mut self, other: &ElementStyle) {
-        if let Some(c) = other.color { self.color = Some(c); }
-        if let Some(bg) = other.bg_color { self.bg_color = Some(bg); }
-        if other.font_scale > 1 { self.font_scale = other.font_scale; }
-        if other.align != TextAlign::Left { self.align = other.align; }
-        if other.display_none { self.display_none = true; }
-        if other.indent_px > 0 { self.indent_px = other.indent_px; }
-        if other.bold { self.bold = true; }
-        if other.underline { self.underline = true; }
+        if let Some(c) = other.color {
+            self.color = Some(c);
+        }
+        if let Some(bg) = other.bg_color {
+            self.bg_color = Some(bg);
+        }
+        if other.font_scale > 1 {
+            self.font_scale = other.font_scale;
+        }
+        if other.align != TextAlign::Left {
+            self.align = other.align;
+        }
+        if other.display_none {
+            self.display_none = true;
+        }
+        if other.indent_px > 0 {
+            self.indent_px = other.indent_px;
+        }
+        if other.bold {
+            self.bold = true;
+        }
+        if other.underline {
+            self.underline = true;
+        }
     }
 }
 
@@ -240,4 +319,3 @@ mod tests {
         assert_eq!(html_color(b"red"), Some(0xd03030));
     }
 }
-

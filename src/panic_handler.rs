@@ -1,9 +1,9 @@
 //! Cekirdek panik isleyicisi: seri porta ve dogrudan framebuffer'a yazar.
 
-use core::fmt::Write as FmtWrite;
-use core::panic::PanicInfo;
 use crate::boot::console::serial_print;
 use crate::boot::text_console;
+use core::fmt::Write as FmtWrite;
+use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -30,7 +30,9 @@ fn panic(info: &PanicInfo) -> ! {
         );
     }
     serial_print("==========================================================\n");
-    unsafe { text_console::show_boot_log(); }
+    unsafe {
+        text_console::show_boot_log();
+    }
     crate::boot::text_console::write("\n\n[FATAL] KERNEL PANIC\n");
     struct PanicText;
     impl FmtWrite for PanicText {
@@ -43,7 +45,9 @@ fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
         let _ = writeln!(&mut PanicText, "{}:{}", location.file(), location.line());
     }
-    crate::boot::text_console::write("Grafik arayüz başlatılamadı. Sistem güvenli şekilde durduruldu.\n");
+    crate::boot::text_console::write(
+        "Grafik arayüz başlatılamadı. Sistem güvenli şekilde durduruldu.\n",
+    );
 
     crate::boot::text_console::interactive_error_prompt("Kernel Panic");
 }

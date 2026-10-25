@@ -102,7 +102,9 @@ pub fn run_welcome_screen(
                     if !boot::text_console::is_active() {
                         boot::text_console::save_screen();
                         boot::text_console::toggle_active();
-            serial_print("[BOOT] Önyükleme mesajları gösteriliyor (E tuşuyla geri dön)...\n");
+                        serial_print(
+                            "[BOOT] Önyükleme mesajları gösteriliyor (E tuşuyla geri dön)...\n",
+                        );
                     } else {
                         boot::text_console::toggle_active();
                         boot::text_console::restore_screen();

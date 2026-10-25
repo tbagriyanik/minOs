@@ -69,10 +69,18 @@ impl Ext4Error {
     }
 }
 
-fn le16(b: &[u8], o: usize) -> u16 { u16::from_le_bytes([b[o], b[o + 1]]) }
-fn le32(b: &[u8], o: usize) -> u32 { u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) }
-fn wle16(b: &mut [u8], o: usize, v: u16) { b[o..o + 2].copy_from_slice(&v.to_le_bytes()); }
-fn wle32(b: &mut [u8], o: usize, v: u32) { b[o..o + 4].copy_from_slice(&v.to_le_bytes()); }
+fn le16(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes([b[o], b[o + 1]])
+}
+fn le32(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]])
+}
+fn wle16(b: &mut [u8], o: usize, v: u16) {
+    b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+}
+fn wle32(b: &mut [u8], o: usize, v: u32) {
+    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+}
 
 #[derive(Clone, Debug)]
 pub struct Superblock {
@@ -119,11 +127,19 @@ pub fn parse_superblock(raw: &[u8]) -> Option<Superblock> {
     }
     let inode_size = {
         let v = le16(raw, 88) as u32;
-        if v < 128 { 128 } else { v }
+        if v < 128 {
+            128
+        } else {
+            v
+        }
     };
     let desc_size = {
         let v = le16(raw, 254) as u32;
-        if v < 32 { 32 } else { v }
+        if v < 32 {
+            32
+        } else {
+            v
+        }
     };
     Some(Superblock {
         inodes_count: le32(raw, 0),
@@ -146,7 +162,9 @@ impl<D: BlockDevice> Ext4Fs<D> {
     pub fn mount(dev: D, base_lba: u64) -> Result<Self, Ext4Error> {
         let mut raw = [0u8; 1024];
         // Süperblok her zaman 1024. bayttan başlar (base + 2 sektör).
-        if !dev.read(base_lba + 2, &mut raw[..SECTOR]) || !dev.read(base_lba + 3, &mut raw[SECTOR..]) {
+        if !dev.read(base_lba + 2, &mut raw[..SECTOR])
+            || !dev.read(base_lba + 3, &mut raw[SECTOR..])
+        {
             return Err(Ext4Error::Io);
         }
         let sb = parse_superblock(&raw).ok_or(Ext4Error::BadSuperblock)?;
@@ -160,7 +178,12 @@ impl<D: BlockDevice> Ext4Fs<D> {
             return Err(Ext4Error::UnsupportedFeatures(unsupported));
         }
         let sectors_per_block = sb.block_size / SECTOR as u32;
-        Ok(Self { dev, base_lba, sb, sectors_per_block })
+        Ok(Self {
+            dev,
+            base_lba,
+            sb,
+            sectors_per_block,
+        })
     }
 
     pub fn device(&self) -> &D {
@@ -201,7 +224,11 @@ impl<D: BlockDevice> Ext4Fs<D> {
     }
 
     fn gdt_block(&self) -> u32 {
-        if self.sb.block_size == 1024 { 2 } else { 1 }
+        if self.sb.block_size == 1024 {
+            2
+        } else {
+            1
+        }
     }
 
     /// Grup tanımlayıcısı (en az 32 bayt; 64-bit alanlar kullanılmaz).
@@ -355,7 +382,8 @@ impl<D: BlockDevice> Ext4Fs<D> {
                     break;
                 }
                 if ino != 0 && namelen > 0 && off + 8 + namelen <= bs {
-                    let name = String::from_utf8_lossy(&data[off + 8..off + 8 + namelen]).into_owned();
+                    let name =
+                        String::from_utf8_lossy(&data[off + 8..off + 8 + namelen]).into_owned();
                     if name != "." && name != ".." {
                         let is_dir = data[off + 7] == 2;
                         out.push((ino, name, is_dir));
@@ -375,7 +403,10 @@ impl<D: BlockDevice> Ext4Fs<D> {
                 return Err(Ext4Error::NotFound);
             }
             let entries = self.dir_entries(&raw)?;
-            let found = entries.iter().find(|(_, n, _)| n == comp).ok_or(Ext4Error::NotFound)?;
+            let found = entries
+                .iter()
+                .find(|(_, n, _)| n == comp)
+                .ok_or(Ext4Error::NotFound)?;
             inode_no = found.0;
             raw = self.read_inode(inode_no)?;
         }
@@ -535,10 +566,19 @@ impl<D: BlockDevice> Ext4Fs<D> {
     }
 
     /// İnodenin veri bloklarını `data` ile değiştir (gerekirse blok ayır/boşalt).
-    pub fn write_inode_data(&mut self, ino: u32, inode: &mut Vec<u8>, data: &[u8]) -> Result<(), Ext4Error> {
+    pub fn write_inode_data(
+        &mut self,
+        ino: u32,
+        inode: &mut Vec<u8>,
+        data: &[u8],
+    ) -> Result<(), Ext4Error> {
         let bs = self.sb.block_size as usize;
         let per_block = self.sb.block_size / 4;
-        let need = if data.is_empty() { 0 } else { (data.len() + bs - 1) / bs };
+        let need = if data.is_empty() {
+            0
+        } else {
+            (data.len() + bs - 1) / bs
+        };
         let single_capacity = 12 + per_block as usize;
         let double_capacity = single_capacity + per_block as usize * per_block as usize;
         if need > double_capacity {
@@ -557,7 +597,11 @@ impl<D: BlockDevice> Ext4Fs<D> {
 
         // Direct
         for i in 0..12 {
-            wle32(inode, 40 + i * 4, if i < blocks.len() { blocks[i] } else { 0 });
+            wle32(
+                inode,
+                40 + i * 4,
+                if i < blocks.len() { blocks[i] } else { 0 },
+            );
         }
         // Single indirect
         let old_single = le32(inode, 40 + 12 * 4);
@@ -682,7 +726,8 @@ impl<D: BlockDevice> Ext4Fs<D> {
                         wle16(&mut data, new_off + 4, (reclen - ideal) as u16);
                         data[new_off + 6] = name_bytes.len() as u8;
                         data[new_off + 7] = if is_dir { 2 } else { 1 };
-                        data[new_off + 8..new_off + 8 + name_bytes.len()].copy_from_slice(name_bytes);
+                        data[new_off + 8..new_off + 8 + name_bytes.len()]
+                            .copy_from_slice(name_bytes);
                         self.write_block(*blk, &data)?;
                         return Ok(());
                     }
@@ -723,7 +768,11 @@ impl<D: BlockDevice> Ext4Fs<D> {
             return Err(Ext4Error::NoSpace);
         }
         self.inode_set_size(dir_inode, (new_blocks.len() * bs) as u64);
-        wle32(dir_inode, 28, (new_blocks.len() * bs / SECTOR as usize) as u32);
+        wle32(
+            dir_inode,
+            28,
+            (new_blocks.len() * bs / SECTOR as usize) as u32,
+        );
         self.write_inode(dir_ino, dir_inode)
     }
 
@@ -828,7 +877,8 @@ impl<D: BlockDevice> Ext4Fs<D> {
                     break;
                 }
                 let namelen = data[off + 6] as usize;
-                if ino != 0 && namelen == name_bytes.len()
+                if ino != 0
+                    && namelen == name_bytes.len()
                     && &data[off + 8..off + 8 + namelen] == name_bytes
                 {
                     if let Some(p) = prev {
@@ -862,6 +912,11 @@ impl<D: BlockDevice> Ext4Fs<D> {
         }
         self.sb.free_blocks_count = free_blocks;
         self.sb.free_inodes_count = free_inodes;
-        [self.sb.blocks_count, free_blocks, self.sb.inodes_count, free_inodes]
+        [
+            self.sb.blocks_count,
+            free_blocks,
+            self.sb.inodes_count,
+            free_inodes,
+        ]
     }
 }

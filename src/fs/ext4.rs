@@ -16,12 +16,12 @@
 // Çekirdek `crate::drivers::ata` yoluna bağlı sarmalayıcı içerir. Host'ta
 // yalnızca aygıttan bağımsız `format_device` test edilir; bu import'lar host'ta
 // `ata` modülü olmadığı için ayrı bir cfg ile açılır.
+#[cfg(host_fs_tests)]
+use crate::block::{BlockDevice, SECTOR};
 #[cfg(not(host_fs_tests))]
 use crate::drivers::ata;
 #[cfg(not(host_fs_tests))]
 use crate::fs::block::{BlockDevice, SECTOR};
-#[cfg(host_fs_tests)]
-use crate::block::{BlockDevice, SECTOR};
 
 pub const EXT4_SUPER_MAGIC: u16 = 0xEF53;
 pub const EXT4_INODE_SIZE: u16 = 256;
@@ -46,9 +46,15 @@ pub const EXT4_FEATURE_INCOMPAT_EXTENTS: u32 = 0x0040;
 pub const EXT4_FEATURE_INCOMPAT_64BIT: u32 = 0x0080;
 pub const EXT4_FEATURE_INCOMPAT_FLEX_BG: u32 = 0x0200;
 
-fn wle16(b: &mut [u8], o: usize, v: u16) { b[o..o+2].copy_from_slice(&v.to_le_bytes()); }
-fn wle32(b: &mut [u8], o: usize, v: u32) { b[o..o+4].copy_from_slice(&v.to_le_bytes()); }
-fn wle64(b: &mut [u8], o: usize, v: u64) { b[o..o+8].copy_from_slice(&v.to_le_bytes()); }
+fn wle16(b: &mut [u8], o: usize, v: u16) {
+    b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+}
+fn wle32(b: &mut [u8], o: usize, v: u32) {
+    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+}
+fn wle64(b: &mut [u8], o: usize, v: u64) {
+    b[o..o + 8].copy_from_slice(&v.to_le_bytes());
+}
 
 /// Süperbloğun tüm gruplar için hesabı.
 pub struct Layout {
@@ -141,30 +147,30 @@ fn read_block(dev: &dyn BlockDevice, base_lba: u32, blk: u32) -> Option<[u8; BLO
 /// Süperbloğu imzalayan imzayı diske yaz (grup 0 ve yedek gruplar).
 pub fn write_superblock(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) -> bool {
     let mut sb = [0u8; BLOCK_SIZE as usize];
-    wle32(&mut sb, 0, l.inodes_count);                 // s_inodes_count
-    wle32(&mut sb, 4, l.total_blocks);                 // s_blocks_count_lo
-    wle32(&mut sb, 8, 0);                              // s_r_blocks_count_lo
+    wle32(&mut sb, 0, l.inodes_count); // s_inodes_count
+    wle32(&mut sb, 4, l.total_blocks); // s_blocks_count_lo
+    wle32(&mut sb, 8, 0); // s_r_blocks_count_lo
     wle32(&mut sb, 12, l.total_blocks.saturating_sub(l.root_block + 2)); // s_free_blocks_count_lo
     wle32(&mut sb, 16, l.inodes_count.saturating_sub(12)); // s_free_inodes_count
-    wle32(&mut sb, 20, l.first_data_block);            // s_first_data_block
-    wle32(&mut sb, 24, 0);                             // s_log_block_size (1024)
-    wle32(&mut sb, 28, 0);                             // s_log_cluster_size
-    wle32(&mut sb, 32, BLOCKS_PER_GROUP);              // s_blocks_per_group
-    wle32(&mut sb, 36, BLOCKS_PER_GROUP);              // s_clusters_per_group
-    wle32(&mut sb, 40, INODES_PER_GROUP);              // s_inodes_per_group
-    wle32(&mut sb, 48, 1);                             // s_mnt_count
-    wle32(&mut sb, 52, 0xFFFF);                        // s_max_mnt_count
-    wle16(&mut sb, 56, EXT4_SUPER_MAGIC);              // s_magic
-    wle16(&mut sb, 58, 1);                             // s_state (clean)
-    wle16(&mut sb, 60, 1);                             // s_errors (continue)
-    wle16(&mut sb, 62, 0);                             // s_minor_rev_level
-    wle32(&mut sb, 64, 0x64000000);                    // s_lastcheck
-    wle32(&mut sb, 68, 0);                             // s_checkinterval
-    wle32(&mut sb, 72, 0);                             // s_creator_os (Linux)
-    wle32(&mut sb, 76, 1);                             // s_rev_level (dynamic)
-    wle16(&mut sb, 84, 11);                            // s_first_ino
-    wle16(&mut sb, 88, EXT4_INODE_SIZE);               // s_inode_size
-    wle16(&mut sb, 90, 0);                             // s_block_group_nr
+    wle32(&mut sb, 20, l.first_data_block); // s_first_data_block
+    wle32(&mut sb, 24, 0); // s_log_block_size (1024)
+    wle32(&mut sb, 28, 0); // s_log_cluster_size
+    wle32(&mut sb, 32, BLOCKS_PER_GROUP); // s_blocks_per_group
+    wle32(&mut sb, 36, BLOCKS_PER_GROUP); // s_clusters_per_group
+    wle32(&mut sb, 40, INODES_PER_GROUP); // s_inodes_per_group
+    wle32(&mut sb, 48, 1); // s_mnt_count
+    wle32(&mut sb, 52, 0xFFFF); // s_max_mnt_count
+    wle16(&mut sb, 56, EXT4_SUPER_MAGIC); // s_magic
+    wle16(&mut sb, 58, 1); // s_state (clean)
+    wle16(&mut sb, 60, 1); // s_errors (continue)
+    wle16(&mut sb, 62, 0); // s_minor_rev_level
+    wle32(&mut sb, 64, 0x64000000); // s_lastcheck
+    wle32(&mut sb, 68, 0); // s_checkinterval
+    wle32(&mut sb, 72, 0); // s_creator_os (Linux)
+    wle32(&mut sb, 76, 1); // s_rev_level (dynamic)
+    wle16(&mut sb, 84, 11); // s_first_ino
+    wle16(&mut sb, 88, EXT4_INODE_SIZE); // s_inode_size
+    wle16(&mut sb, 90, 0); // s_block_group_nr
 
     // Hâlâ ext2 yazıcısıyla (ext2.rs) yazılabilir olması için EXTENTS ve 64BIT
     // kapalı tutulur; ext4 sürücüleri bu dosya sistemini "ext4" olarak bağlar.
@@ -178,9 +184,12 @@ pub fn write_superblock(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) ->
     wle32(&mut sb, 96, feature_incompat);
     wle32(&mut sb, 100, feature_ro_compat);
 
-    sb[104..120].copy_from_slice(&[0x4d, 0x49, 0x4e, 0x4f, 0x53, 0x2d, 0x45, 0x58, 0x54, 0x34, 0x2d, 0x46, 0x53, 0x30, 0x31, 0x21]);
+    sb[104..120].copy_from_slice(&[
+        0x4d, 0x49, 0x4e, 0x4f, 0x53, 0x2d, 0x45, 0x58, 0x54, 0x34, 0x2d, 0x46, 0x53, 0x30, 0x31,
+        0x21,
+    ]);
     sb[120..136].copy_from_slice(b"minos-ext4      ");
-    wle16(&mut sb, 254, 32);                           // s_desc_size (ext2 uyumlu)
+    wle16(&mut sb, 254, 32); // s_desc_size (ext2 uyumlu)
 
     // s_blocks_count_hi / s_free_blocks_count_hi: 32-bit sınırı aşılmadığı için 0.
     let mut ok = write_block(dev, base_lba, 1, &sb);
@@ -218,8 +227,8 @@ fn write_group_descriptors(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout)
             wle32(&mut buf, off + 8, inode_table);
             wle16(&mut buf, off + 12, gblocks as u16); // bg_free_blocks_count_lo
             wle16(&mut buf, off + 14, (INODES_PER_GROUP - 12) as u16);
-            wle16(&mut buf, off + 16, 0);              // bg_used_dirs_count_lo
-            wle16(&mut buf, off + 18, 0);              // bg_flags
+            wle16(&mut buf, off + 16, 0); // bg_used_dirs_count_lo
+            wle16(&mut buf, off + 18, 0); // bg_flags
         }
         if !write_block(dev, base_lba, blk, &buf) {
             return false;
@@ -239,7 +248,9 @@ fn mark_block_used(bitmap: &mut [u8], bit: u32) {
 /// `base_lba`: bölüm başlangıcı (512 bayt sektör).
 pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
     let total_blocks = (dev.sector_count() / 2) as u32;
-    let Some(l) = layout(total_blocks) else { return false };
+    let Some(l) = layout(total_blocks) else {
+        return false;
+    };
 
     if !write_superblock(dev, base_lba, &l) {
         return false;
@@ -256,7 +267,9 @@ pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
         let block_bitmap = block_bitmap_of(&l, g, gdt_blocks);
         let inode_bitmap = block_bitmap + 1;
         let inode_table = inode_bitmap + 1;
-        if inode_table + l.itable_blocks > first + gblocks || inode_table + l.itable_blocks > l.total_blocks {
+        if inode_table + l.itable_blocks > first + gblocks
+            || inode_table + l.itable_blocks > l.total_blocks
+        {
             // Grup meta verisi için yer yok: biçimlendirme durdurulur.
             return false;
         }
@@ -313,18 +326,20 @@ pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
     if inode_table0 >= l.total_blocks {
         return false;
     }
-    let Some(mut itable) = read_block(dev, base_lba, inode_table0) else { return false };
+    let Some(mut itable) = read_block(dev, base_lba, inode_table0) else {
+        return false;
+    };
     let mut root_ino = [0u8; EXT4_INODE_SIZE as usize];
-    wle16(&mut root_ino, 0, 0x41ED);        // i_mode: dizin + rwxr-xr-x
-    wle16(&mut root_ino, 2, 0);             // i_uid
-    wle32(&mut root_ino, 4, BLOCK_SIZE);    // i_size_lo
-    wle32(&mut root_ino, 8, 0x64000000);    // i_atime
-    wle32(&mut root_ino, 12, 0x64000000);   // i_ctime
-    wle32(&mut root_ino, 16, 0x64000000);   // i_mtime
-    wle16(&mut root_ino, 24, 0);            // i_gid
-    wle16(&mut root_ino, 26, 3);            // i_links_count (., .. ve üst)
+    wle16(&mut root_ino, 0, 0x41ED); // i_mode: dizin + rwxr-xr-x
+    wle16(&mut root_ino, 2, 0); // i_uid
+    wle32(&mut root_ino, 4, BLOCK_SIZE); // i_size_lo
+    wle32(&mut root_ino, 8, 0x64000000); // i_atime
+    wle32(&mut root_ino, 12, 0x64000000); // i_ctime
+    wle32(&mut root_ino, 16, 0x64000000); // i_mtime
+    wle16(&mut root_ino, 24, 0); // i_gid
+    wle16(&mut root_ino, 26, 3); // i_links_count (., .. ve üst)
     wle32(&mut root_ino, 28, BLOCK_SIZE / 512); // i_blocks_lo
-    wle16(&mut root_ino, 128, 0);           // i_extra_isize: 0
+    wle16(&mut root_ino, 128, 0); // i_extra_isize: 0
     wle32(&mut root_ino, 40, l.root_block); // i_block[0]
     itable[256..256 + EXT4_INODE_SIZE as usize].copy_from_slice(&root_ino);
     if !write_block(dev, base_lba, inode_table0, &itable) {
@@ -357,7 +372,11 @@ pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
 /// `part_sectors`: Toplam sektör sayısı
 #[cfg(not(host_fs_tests))]
 pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
+    if drive >= 4
+        || ata::device(drive)
+            .map(|d| d.kind != ata::DeviceKind::Ata)
+            .unwrap_or(true)
+    {
         return false;
     }
     if part_sectors < 2048 {

@@ -16,13 +16,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -267,7 +271,13 @@ pub fn read_bar(device: &PcieDevice, bar_index: u8) -> Option<u64> {
 /// Command register'ı ayarla
 pub fn set_command(device: &PcieDevice, commands: u16) {
     let current = pci_read32(device.bus, device.device, device.function, PCI_COMMAND) as u16;
-    pci_write32(device.bus, device.device, device.function, PCI_COMMAND, (current | commands) as u32);
+    pci_write32(
+        device.bus,
+        device.device,
+        device.function,
+        PCI_COMMAND,
+        (current | commands) as u32,
+    );
 }
 
 /// Bus master'ı etkinleştir

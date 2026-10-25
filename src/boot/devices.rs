@@ -3,4 +3,5 @@
 use crate::drivers;
 
 pub static mut GLOBAL_MOUSE: drivers::mouse::MouseState = drivers::mouse::MouseState::new();
-pub static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState = drivers::keyboard::KeyboardState::new();
+pub static mut GLOBAL_KEYBOARD: drivers::keyboard::KeyboardState =
+    drivers::keyboard::KeyboardState::new();

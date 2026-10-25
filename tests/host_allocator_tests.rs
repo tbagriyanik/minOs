@@ -1,8 +1,10 @@
 //! Host ortaminda bellek yoneticisi birim testleri (BumpAllocator & FixedSizeBlockAllocator).
 
+use crate::allocator::{
+    align_up, align_up_checked, BumpAllocator, FixedSizeBlockAllocator, Locked,
+};
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;
-use crate::allocator::{align_up, align_up_checked, BumpAllocator, FixedSizeBlockAllocator, Locked};
 
 #[test]
 fn test_align_up_normal() {
@@ -277,7 +279,12 @@ fn test_fixed_size_block_stress_cycle() {
             let align = sz.min(64);
             let l = Layout::from_size_align(sz, align).unwrap();
             let ptr = fsb.alloc(l);
-            assert!(!ptr.is_null(), "Dongu {} - Indeks {} tahsis basarisiz", cycle, i);
+            assert!(
+                !ptr.is_null(),
+                "Dongu {} - Indeks {} tahsis basarisiz",
+                cycle,
+                i
+            );
             if let Some(non_null) = core::ptr::NonNull::new(ptr) {
                 let slice = unsafe { core::slice::from_raw_parts_mut(non_null.as_ptr(), sz) };
                 slice.fill((cycle + i) as u8);
@@ -317,4 +324,3 @@ fn test_locked_global_alloc() {
         GlobalAlloc::dealloc(&locked, ptr, layout);
     }
 }
-

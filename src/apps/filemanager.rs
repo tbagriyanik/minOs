@@ -3,23 +3,34 @@
 //! Dosya Yöneticisi Uygulaması (File Manager) — Klasör Desteği, Dosya Açma, Yeni Dosya/Klasör ve Silme.
 
 extern crate alloc;
+use crate::drivers::video::Framebuffer;
+use crate::fs::diskfs::{self, FsKind};
+use crate::fs::vfs::{NodeType, VirtualFileSystem};
+use crate::gui::scrollbar::{self, ScrollState};
+use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use crate::gui::scrollbar::{self, ScrollState};
-use crate::fs::diskfs::{self, FsKind};
-use crate::fs::vfs::{VirtualFileSystem, NodeType};
 
 fn numbered_name(prefix: &str, mut value: usize, extension: &str) -> String {
     let mut digits = [0u8; 10];
     let mut len = 0;
-    if value == 0 { digits[0] = b'0'; len = 1; }
-    while value > 0 && len < digits.len() { digits[len] = b'0' + (value % 10) as u8; len += 1; value /= 10; }
+    if value == 0 {
+        digits[0] = b'0';
+        len = 1;
+    }
+    while value > 0 && len < digits.len() {
+        digits[len] = b'0' + (value % 10) as u8;
+        len += 1;
+        value /= 10;
+    }
     digits[..len].reverse();
     let mut name = String::from(prefix);
-    for _ in len..3 { name.push('0'); }
-    if let Ok(number) = core::str::from_utf8(&digits[..len]) { name.push_str(number); }
+    for _ in len..3 {
+        name.push('0');
+    }
+    if let Ok(number) = core::str::from_utf8(&digits[..len]) {
+        name.push_str(number);
+    }
     name.push_str(extension);
     name
 }
@@ -44,7 +55,13 @@ pub struct FileClipboard {
 }
 
 impl FileClipboard {
-    pub const fn new() -> Self { Self { paths: [TextBuf::new(); MAX_ITEMS], count: 0, cut: false } }
+    pub const fn new() -> Self {
+        Self {
+            paths: [TextBuf::new(); MAX_ITEMS],
+            count: 0,
+            cut: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -213,9 +230,8 @@ impl Thumb {
                 if i + 2 >= data.len() {
                     continue;
                 }
-                px[ty * tw + tx] = (data[i + 2] as u32) << 16
-                    | (data[i + 1] as u32) << 8
-                    | data[i] as u32;
+                px[ty * tw + tx] =
+                    (data[i + 2] as u32) << 16 | (data[i + 1] as u32) << 8 | data[i] as u32;
             }
         }
         Some(Thumb { w: tw, h: th, px })
@@ -273,17 +289,26 @@ pub struct FileManagerApp {
 
 impl FileManagerApp {
     pub fn search_matches(&self, idx: usize) -> bool {
-        if idx >= self.file_count { return false; }
-        if self.search_len == 0 { return true; }
+        if idx >= self.file_count {
+            return false;
+        }
+        if self.search_len == 0 {
+            return true;
+        }
         let name = self.files[idx].display_name().as_bytes();
         let needle = &self.search[..self.search_len];
         name.windows(needle.len()).any(|window| {
-            window.iter().zip(needle).all(|(a, b)| a.eq_ignore_ascii_case(b))
+            window
+                .iter()
+                .zip(needle)
+                .all(|(a, b)| a.eq_ignore_ascii_case(b))
         })
     }
 
     pub fn visible_count(&self) -> usize {
-        (0..self.file_count).filter(|&idx| self.search_matches(idx)).count()
+        (0..self.file_count)
+            .filter(|&idx| self.search_matches(idx))
+            .count()
     }
 
     pub fn search_char(&mut self, ch: char) {
@@ -295,17 +320,23 @@ impl FileManagerApp {
             }
         }
         self.selected_items = [false; MAX_ITEMS];
-        self.selected_idx = (0..self.file_count).find(|&idx| self.search_matches(idx)).unwrap_or(0);
+        self.selected_idx = (0..self.file_count)
+            .find(|&idx| self.search_matches(idx))
+            .unwrap_or(0);
     }
 
     pub fn search_backspace(&mut self) {
-        if self.search_len == 0 { return; }
+        if self.search_len == 0 {
+            return;
+        }
         self.search_len -= 1;
         while self.search_len > 0 && self.search[self.search_len] & 0xC0 == 0x80 {
             self.search_len -= 1;
         }
         self.selected_items = [false; MAX_ITEMS];
-        self.selected_idx = (0..self.file_count).find(|&idx| self.search_matches(idx)).unwrap_or(0);
+        self.selected_idx = (0..self.file_count)
+            .find(|&idx| self.search_matches(idx))
+            .unwrap_or(0);
     }
 
     pub fn clear_search(&mut self) {
@@ -314,11 +345,22 @@ impl FileManagerApp {
         self.selected_idx = 0;
     }
 
-    pub fn row_rect(win_x: usize, win_y: usize, win_w: usize, idx: usize) -> (usize, usize, usize, usize) {
+    pub fn row_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        idx: usize,
+    ) -> (usize, usize, usize, usize) {
         Self::row_rect_scrolled(win_x, win_y, win_w, idx, 0)
     }
 
-    pub fn row_rect_scrolled(win_x: usize, win_y: usize, win_w: usize, idx: usize, sy: usize) -> (usize, usize, usize, usize) {
+    pub fn row_rect_scrolled(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        idx: usize,
+        sy: usize,
+    ) -> (usize, usize, usize, usize) {
         let sidebar_w = 110;
         let list_x = win_x + sidebar_w + 14;
         let list_w = win_w.saturating_sub(sidebar_w + 22 + scrollbar::SCROLLBAR_THICKNESS);
@@ -326,67 +368,125 @@ impl FileManagerApp {
         (list_x, row_y, list_w, ROW_H)
     }
 
-    pub fn refresh_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn refresh_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(286), win_y + 32, 50, 22)
     }
 
-    pub fn new_file_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn new_file_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(230), win_y + 32, 50, 22)
     }
 
-    pub fn new_folder_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn new_folder_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(174), win_y + 32, 54, 22)
     }
 
-    pub fn delete_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn delete_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(114), win_y + 32, 46, 22)
     }
 
-    pub fn open_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn open_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(62), win_y + 32, 50, 22)
     }
 
     /// Görünüm değiştirme (Liste/Izgara) düğmesi.
-    pub fn view_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn view_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(348), win_y + 32, 54, 22)
     }
 
     /// Hızlı Önizleme panelini aç/kapat düğmesi.
-    pub fn preview_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn preview_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(408), win_y + 32, 54, 22)
     }
 
     pub fn search_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
-        (win_x + 122, win_y + 32, win_w.saturating_sub(540).max(72), 22)
+        (
+            win_x + 122,
+            win_y + 32,
+            win_w.saturating_sub(540).max(72),
+            22,
+        )
     }
 
-    pub fn actions_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn actions_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(40), win_y + 32, 28, 22)
     }
 
-    pub fn actions_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn actions_menu_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(190), win_y + 56, 180, 176)
     }
 
-    pub fn actions_menu_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
+    pub fn actions_menu_item_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        index: usize,
+    ) -> (usize, usize, usize, usize) {
         let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w);
         (x + 4, y + 4 + index * 24, w - 8, 22)
     }
 
     /// Sütun başlıkları dikdörtgenleri (isim, boyut, tür).
-    pub fn header_name_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn header_name_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         let lx = Self::list_x(win_x);
         let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
         (lx, win_y + 66, lw.saturating_sub(120), 20)
     }
 
-    pub fn header_size_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn header_size_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         let lx = Self::list_x(win_x);
         let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
         (lx + lw.saturating_sub(115), win_y + 66, 70, 20)
     }
 
-    pub fn header_type_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn header_type_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         let lx = Self::list_x(win_x);
         let lw = win_w.saturating_sub(110 + 22 + scrollbar::SCROLLBAR_THICKNESS);
         (lx + lw.saturating_sub(40), win_y + 66, 40, 20)
@@ -417,7 +517,9 @@ impl FileManagerApp {
         }
     }
 
-    pub fn is_grid(&self) -> bool { self.view_mode == ViewMode::Grid }
+    pub fn is_grid(&self) -> bool {
+        self.view_mode == ViewMode::Grid
+    }
 
     /// Sıralama kriterini döngüsel olarak değiştirir (İsim -> Boyut -> Tür -> İsim).
     pub fn cycle_sort_by(&mut self) {
@@ -537,7 +639,9 @@ impl FileManagerApp {
     }
 
     /// Liste alanının sol X konumu (pencereye göre).
-    pub fn list_x(win_x: usize) -> usize { win_x + 110 + 14 }
+    pub fn list_x(win_x: usize) -> usize {
+        win_x + 110 + 14
+    }
 
     /// Liste alanının genişliği. Önizleme paneli açıkken daralır.
     pub fn list_width(&self, win_w: usize) -> usize {
@@ -550,7 +654,13 @@ impl FileManagerApp {
     }
 
     /// Hızlı Önizleme panelinin ekran koordinatları (x, y, w, h).
-    pub fn preview_rect(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn preview_rect(
+        &self,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let thick = scrollbar::SCROLLBAR_THICKNESS;
         let w = PREVIEW_W.min(win_w.saturating_sub(150));
         let x = win_x + win_w.saturating_sub(thick + 14 + w);
@@ -560,7 +670,14 @@ impl FileManagerApp {
     }
 
     /// Bir öğenin ekran üzerindeki dikdörtgeni (geçerli görünüm moduna göre).
-    pub fn item_rect(&self, win_x: usize, win_y: usize, win_w: usize, idx: usize, sy: usize) -> (usize, usize, usize, usize) {
+    pub fn item_rect(
+        &self,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        idx: usize,
+        sy: usize,
+    ) -> (usize, usize, usize, usize) {
         let lx = Self::list_x(win_x);
         let lw = self.list_width(win_w);
         let top = win_y + LIST_TOP;
@@ -570,13 +687,27 @@ impl FileManagerApp {
                 let cols = Self::grid_columns(lw);
                 let col = idx % cols;
                 let row = idx / cols;
-                (lx + col * GRID_CELL_W, (top + row * GRID_CELL_H).saturating_sub(sy), GRID_CELL_W, GRID_CELL_H)
+                (
+                    lx + col * GRID_CELL_W,
+                    (top + row * GRID_CELL_H).saturating_sub(sy),
+                    GRID_CELL_W,
+                    GRID_CELL_H,
+                )
             }
         }
     }
 
     /// Fare konumundaki öğe indeksini döndürür (liste/ızgara bağımsız).
-    pub fn hit_test(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize, mx: usize, my: usize, sy: usize) -> Option<usize> {
+    pub fn hit_test(
+        &self,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        mx: usize,
+        my: usize,
+        sy: usize,
+    ) -> Option<usize> {
         let lx = Self::list_x(win_x);
         let lw = self.list_width(win_w);
         let top = win_y + LIST_TOP;
@@ -586,7 +717,9 @@ impl FileManagerApp {
         }
         let mut visible_idx = 0;
         for i in 0..self.file_count {
-            if !self.search_matches(i) { continue; }
+            if !self.search_matches(i) {
+                continue;
+            }
             if crate::gui::in_rect(mx, my, self.item_rect(win_x, win_y, win_w, visible_idx, sy)) {
                 return Some(i);
             }
@@ -624,11 +757,20 @@ impl FileManagerApp {
     }
 
     pub fn select_prev(&mut self) {
-        if let Some(prev) = (0..self.selected_idx).rev().find(|&i| self.search_matches(i)) { self.selected_idx = prev; }
+        if let Some(prev) = (0..self.selected_idx)
+            .rev()
+            .find(|&i| self.search_matches(i))
+        {
+            self.selected_idx = prev;
+        }
     }
 
     pub fn select_next(&mut self) {
-        if let Some(next) = (self.selected_idx + 1..self.file_count).find(|&i| self.search_matches(i)) { self.selected_idx = next; }
+        if let Some(next) =
+            (self.selected_idx + 1..self.file_count).find(|&i| self.search_matches(i))
+        {
+            self.selected_idx = next;
+        }
     }
 
     /// Yukarı ok: listede bir öğe, ızgarada bir satır (sütun kadar) yukarı.
@@ -640,7 +782,9 @@ impl FileManagerApp {
             ViewMode::List => 1,
             ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
         };
-        for _ in 0..step.max(1) { self.select_prev(); }
+        for _ in 0..step.max(1) {
+            self.select_prev();
+        }
     }
 
     /// Aşağı ok: listede bir öğe, ızgarada bir satır (sütun kadar) aşağı.
@@ -652,7 +796,9 @@ impl FileManagerApp {
             ViewMode::List => 1,
             ViewMode::Grid => Self::grid_columns(self.list_width(win_w)),
         };
-        for _ in 0..step.max(1) { self.select_next(); }
+        for _ in 0..step.max(1) {
+            self.select_next();
+        }
     }
 
     /// Sol ok: yalnızca ızgarada önceki hücre.
@@ -676,7 +822,9 @@ impl FileManagerApp {
             return scroll_y;
         }
         let max_off = self.content_height(win_w).saturating_sub(view_h);
-        let visible_idx = (0..self.selected_idx).filter(|&idx| self.search_matches(idx)).count();
+        let visible_idx = (0..self.selected_idx)
+            .filter(|&idx| self.search_matches(idx))
+            .count();
         let (item_top, item_h) = match self.view_mode {
             ViewMode::List => (visible_idx * ROW_H, ROW_H),
             ViewMode::Grid => {
@@ -696,23 +844,37 @@ impl FileManagerApp {
     }
 
     /// Satır yüksekliği (px) — kaydırma hesapları için.
-    pub fn row_h() -> usize { ROW_H }
+    pub fn row_h() -> usize {
+        ROW_H
+    }
 
     /// Listenin ilk öğesini seçer (Home).
     pub fn select_first(&mut self) {
-        if let Some(first) = (0..self.file_count).find(|&i| self.search_matches(i)) { self.selected_idx = first; }
+        if let Some(first) = (0..self.file_count).find(|&i| self.search_matches(i)) {
+            self.selected_idx = first;
+        }
     }
 
     /// Listenin son öğesini seçer (End).
     pub fn select_last(&mut self) {
-        if let Some(last) = (0..self.file_count).rev().find(|&i| self.search_matches(i)) { self.selected_idx = last; }
+        if let Some(last) = (0..self.file_count).rev().find(|&i| self.search_matches(i)) {
+            self.selected_idx = last;
+        }
     }
 
     /// Sayfa sayfa gezinme (PageUp / PageDown).
     pub fn select_page(&mut self, down: bool, rows: usize) {
-        if self.visible_count() == 0 { return; }
+        if self.visible_count() == 0 {
+            return;
+        }
         let step = rows.max(1);
-        for _ in 0..step { if down { self.select_next(); } else { self.select_prev(); } }
+        for _ in 0..step {
+            if down {
+                self.select_next();
+            } else {
+                self.select_prev();
+            }
+        }
     }
 
     pub const fn new() -> Self {
@@ -837,7 +999,9 @@ impl FileManagerApp {
 
         // Önce klasörler
         for it in items.iter().filter(|i| i.node_type == NodeType::Directory) {
-            if self.file_count >= MAX_ITEMS { break; }
+            if self.file_count >= MAX_ITEMS {
+                break;
+            }
             let mut row = FileItem::empty();
             let name_bytes = it.name.as_bytes();
             let take = name_bytes.len().min(diskfs::NAME_MAX);
@@ -853,7 +1017,9 @@ impl FileManagerApp {
 
         // Sonra dosyalar
         for it in items.iter().filter(|i| i.node_type == NodeType::File) {
-            if self.file_count >= MAX_ITEMS { break; }
+            if self.file_count >= MAX_ITEMS {
+                break;
+            }
             let mut row = FileItem::empty();
             let name_bytes = it.name.as_bytes();
             let take = name_bytes.len().min(diskfs::NAME_MAX);
@@ -906,12 +1072,20 @@ impl FileManagerApp {
                 continue;
             }
             let mut full = base.clone();
-            if !full.ends_with('/') { full.push('/'); }
+            if !full.ends_with('/') {
+                full.push('/');
+            }
             full.push_str(file.display_name());
             let thumb = vfs.read_file(&full).and_then(|d| {
-                if d.len() > THUMB_MAX_BYTES { None } else { Thumb::from_bmp(d) }
+                if d.len() > THUMB_MAX_BYTES {
+                    None
+                } else {
+                    Thumb::from_bmp(d)
+                }
             });
-            if thumb.is_some() { budget -= 1; }
+            if thumb.is_some() {
+                budget -= 1;
+            }
             self.thumbs.push(thumb);
         }
     }
@@ -920,7 +1094,9 @@ impl FileManagerApp {
     /// Yalnızca seçim/konum değiştiğinde gerçekten çalışır (önbellek anahtarı).
     /// Değişiklik olduysa `true` döner.
     pub fn update_preview(&mut self, vfs: &VirtualFileSystem) -> bool {
-        if !self.preview_open { return false; }
+        if !self.preview_open {
+            return false;
+        }
         let mut key = TextBuf::new();
         key.push_str(self.path());
         if self.selected_idx < self.file_count {
@@ -935,7 +1111,9 @@ impl FileManagerApp {
         self.preview_has_img = false;
         self.preview_title = TextBuf::new();
         self.preview_meta = TextBuf::new();
-        for l in self.preview_lines.iter_mut() { *l = TextBuf::new(); }
+        for l in self.preview_lines.iter_mut() {
+            *l = TextBuf::new();
+        }
 
         if self.selected_idx >= self.file_count {
             self.preview_kind = PreviewKind::Empty;
@@ -977,7 +1155,9 @@ impl FileManagerApp {
                         while i <= data.len() && self.preview_line_count < PREVIEW_LINES {
                             if i == data.len() || data[i] == b'\n' {
                                 let mut line = &data[start..i];
-                                if line.last() == Some(&b'\r') { line = &line[..line.len() - 1]; }
+                                if line.last() == Some(&b'\r') {
+                                    line = &line[..line.len() - 1];
+                                }
                                 if let Ok(s) = core::str::from_utf8(line) {
                                     self.preview_lines[self.preview_line_count].push_str(s);
                                 }
@@ -992,10 +1172,19 @@ impl FileManagerApp {
                     self.preview_kind = PreviewKind::Image;
                     // Önizleme sonradan (Space ile) açıldıysa küçük resim
                     // önbelleği henüz boş olabilir; gerekiyorsa üret.
-                    if self.thumbs.get(self.selected_idx).and_then(|t| t.as_ref()).is_none() {
+                    if self
+                        .thumbs
+                        .get(self.selected_idx)
+                        .and_then(|t| t.as_ref())
+                        .is_none()
+                    {
                         self.rebuild_thumbs(vfs);
                     }
-                    self.preview_has_img = self.thumbs.get(self.selected_idx).and_then(|t| t.as_ref()).is_some();
+                    self.preview_has_img = self
+                        .thumbs
+                        .get(self.selected_idx)
+                        .and_then(|t| t.as_ref())
+                        .is_some();
                 }
                 _ => {
                     self.preview_kind = PreviewKind::File;
@@ -1006,8 +1195,17 @@ impl FileManagerApp {
     }
 
     /// Küçük resmi ölçekli olarak çizer (merkezi `cx`, üst `cy`).
-    fn draw_thumb(fb: &mut Framebuffer, cx: usize, cy: usize, box_w: usize, box_h: usize, thumb: &Thumb) {
-        if thumb.w == 0 || thumb.h == 0 { return; }
+    fn draw_thumb(
+        fb: &mut Framebuffer,
+        cx: usize,
+        cy: usize,
+        box_w: usize,
+        box_h: usize,
+        thumb: &Thumb,
+    ) {
+        if thumb.w == 0 || thumb.h == 0 {
+            return;
+        }
         let scale = (box_w / thumb.w).min(box_h / thumb.h).max(1);
         let dw = thumb.w * scale;
         let dh = thumb.h * scale;
@@ -1023,7 +1221,9 @@ impl FileManagerApp {
     }
 
     pub fn select_row(&mut self, idx: usize, ctrl: bool, shift: bool) {
-        if idx >= self.file_count || !self.search_matches(idx) { return; }
+        if idx >= self.file_count || !self.search_matches(idx) {
+            return;
+        }
         if self.files[idx].display_name() == ".." {
             self.selected_items = [false; MAX_ITEMS];
             self.selected_idx = idx;
@@ -1034,7 +1234,9 @@ impl FileManagerApp {
             let start = self.selection_anchor.min(idx);
             let end = self.selection_anchor.max(idx);
             for i in start..=end.min(self.file_count.saturating_sub(1)) {
-                if self.search_matches(i) && self.files[i].display_name() != ".." { self.selected_items[i] = true; }
+                if self.search_matches(i) && self.files[i].display_name() != ".." {
+                    self.selected_items[i] = true;
+                }
             }
         } else if ctrl {
             self.selected_items[idx] = !self.selected_items[idx];
@@ -1053,15 +1255,21 @@ impl FileManagerApp {
 
     pub fn copy_selection(&mut self, clipboard: &mut FileClipboard, cut: bool) {
         if !self.selected_items.iter().any(|&s| s) {
-            if self.selected_idx >= self.file_count { return; }
+            if self.selected_idx >= self.file_count {
+                return;
+            }
             self.selected_items[self.selected_idx] = true;
         }
         clipboard.count = 0;
         let current = String::from(self.path());
         for i in 0..self.file_count {
-            if !self.selected_items[i] || self.files[i].display_name() == ".." { continue; }
+            if !self.selected_items[i] || self.files[i].display_name() == ".." {
+                continue;
+            }
             let mut path = current.clone();
-            if !path.ends_with('/') { path.push('/'); }
+            if !path.ends_with('/') {
+                path.push('/');
+            }
             path.push_str(self.files[i].display_name());
             let mut saved = TextBuf::new();
             saved.push_str(path.as_str());
@@ -1069,24 +1277,45 @@ impl FileManagerApp {
             clipboard.count += 1;
         }
         clipboard.cut = cut;
-        self.status = if cut { crate::gui::ui_text("Taşımak için seçildi.", "Selected to move.") }
-            else { crate::gui::ui_text("Kopyalamak için seçildi.", "Selected to copy.") };
+        self.status = if cut {
+            crate::gui::ui_text("Taşımak için seçildi.", "Selected to move.")
+        } else {
+            crate::gui::ui_text("Kopyalamak için seçildi.", "Selected to copy.")
+        };
     }
 
-    pub fn paste_selection(&mut self, clipboard: &mut FileClipboard, vfs: &mut VirtualFileSystem) -> usize {
+    pub fn paste_selection(
+        &mut self,
+        clipboard: &mut FileClipboard,
+        vfs: &mut VirtualFileSystem,
+    ) -> usize {
         let dest = String::from(self.path());
-        if dest == "/media/cdrom" { self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."); return 0; }
+        if dest == "/media/cdrom" {
+            self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only.");
+            return 0;
+        }
         let mut done = 0;
         for i in 0..clipboard.count {
             let src = String::from(clipboard.paths[i].as_str());
-            let result = if clipboard.cut { vfs.move_item(&src, &dest).map(|_| ()) }
-                else { vfs.copy_item(&src, &dest).map(|_| ()) };
-            if result.is_ok() { done += 1; }
+            let result = if clipboard.cut {
+                vfs.move_item(&src, &dest).map(|_| ())
+            } else {
+                vfs.copy_item(&src, &dest).map(|_| ())
+            };
+            if result.is_ok() {
+                done += 1;
+            }
         }
-        if clipboard.cut && done > 0 { clipboard.count = 0; clipboard.cut = false; }
+        if clipboard.cut && done > 0 {
+            clipboard.count = 0;
+            clipboard.cut = false;
+        }
         self.refresh_from_vfs(vfs);
-        self.status = if done > 0 { crate::gui::ui_text("Yapıştırma tamamlandı.", "Paste completed.") }
-            else { crate::gui::ui_text("Yapıştırılacak öğe yok.", "Nothing to paste.") };
+        self.status = if done > 0 {
+            crate::gui::ui_text("Yapıştırma tamamlandı.", "Paste completed.")
+        } else {
+            crate::gui::ui_text("Yapıştırılacak öğe yok.", "Nothing to paste.")
+        };
         done
     }
 
@@ -1095,7 +1324,13 @@ impl FileManagerApp {
         let mut counter = self.item_counter;
         let name = loop {
             let candidate = numbered_name("yeni_", counter, ".txt");
-            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            if !vfs
+                .list_dir(self.path())
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
             counter += 1;
         };
         self.item_counter = counter + 1;
@@ -1108,16 +1343,34 @@ impl FileManagerApp {
 
         let saved = vfs.write_file(&full_path, "Yeni oluşturulan dosya içeriği.\n".as_bytes());
         self.refresh_from_vfs(vfs);
-        self.status = if saved { crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.") }
-            else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
+        self.status = if saved {
+            crate::gui::ui_text("Yeni dosya oluşturuldu.", "New file created.")
+        } else {
+            crate::gui::ui_text(
+                "Dosya oluşturuldu; diske kaydedilemedi.",
+                "File created; disk save failed.",
+            )
+        };
     }
 
     /// Özel önek, uzantı ve başlangıç içeriği ile yeni dosya oluşturur.
-    pub fn new_custom_file(&mut self, prefix: &str, ext: &str, initial_content: &[u8], vfs: &mut VirtualFileSystem) {
+    pub fn new_custom_file(
+        &mut self,
+        prefix: &str,
+        ext: &str,
+        initial_content: &[u8],
+        vfs: &mut VirtualFileSystem,
+    ) {
         let mut counter = self.item_counter;
         let name = loop {
             let candidate = numbered_name(prefix, counter, ext);
-            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            if !vfs
+                .list_dir(self.path())
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
             counter += 1;
         };
         self.item_counter = counter + 1;
@@ -1130,8 +1383,14 @@ impl FileManagerApp {
 
         let saved = vfs.write_file(&full_path, initial_content);
         self.refresh_from_vfs(vfs);
-        self.status = if saved { crate::gui::ui_text("Yeni öğe oluşturuldu.", "New item created.") }
-            else { crate::gui::ui_text("Dosya oluşturuldu; diske kaydedilemedi.", "File created; disk save failed.") };
+        self.status = if saved {
+            crate::gui::ui_text("Yeni öğe oluşturuldu.", "New item created.")
+        } else {
+            crate::gui::ui_text(
+                "Dosya oluşturuldu; diske kaydedilemedi.",
+                "File created; disk save failed.",
+            )
+        };
     }
 
     /// Yeni klasör oluşturur.
@@ -1139,7 +1398,13 @@ impl FileManagerApp {
         let mut counter = self.item_counter;
         let name = loop {
             let candidate = numbered_name("klas_", counter, "");
-            if !vfs.list_dir(self.path()).iter().any(|item| item.name.eq_ignore_ascii_case(&candidate)) { break candidate; }
+            if !vfs
+                .list_dir(self.path())
+                .iter()
+                .any(|item| item.name.eq_ignore_ascii_case(&candidate))
+            {
+                break candidate;
+            }
             counter += 1;
         };
         self.item_counter = counter + 1;
@@ -1152,8 +1417,11 @@ impl FileManagerApp {
 
         let saved = vfs.create_dir(&full_path);
         self.refresh_from_vfs(vfs);
-        self.status = if saved { crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.") }
-            else { crate::gui::ui_text("Klasör oluşturulamadı.", "Folder creation failed.") };
+        self.status = if saved {
+            crate::gui::ui_text("Yeni klasör oluşturuldu.", "New folder created.")
+        } else {
+            crate::gui::ui_text("Klasör oluşturulamadı.", "Folder creation failed.")
+        };
     }
 
     /// Seçili dosya veya klasörü siler. Öğe kalıcı olarak silinmez; bunun yerine
@@ -1168,34 +1436,60 @@ impl FileManagerApp {
         }
         let mut any = false;
         for i in (0..self.file_count).rev() {
-            if !self.selected_items[i] || !self.search_matches(i) { continue; }
+            if !self.selected_items[i] || !self.search_matches(i) {
+                continue;
+            }
             let item = self.files[i];
             let name = item.display_name();
-            if name == ".." { continue; }
+            if name == ".." {
+                continue;
+            }
             let mut full_path = String::from(self.path());
-            if !full_path.ends_with('/') { full_path.push('/'); }
+            if !full_path.ends_with('/') {
+                full_path.push('/');
+            }
             full_path.push_str(name);
             let ok = if self.path() == crate::fs::vfs::TRASH_DIR {
-                if item.is_dir { vfs.delete_tree(&full_path) } else { vfs.delete_file(&full_path) }
-            } else { vfs.move_to_trash(&full_path) };
+                if item.is_dir {
+                    vfs.delete_tree(&full_path)
+                } else {
+                    vfs.delete_file(&full_path)
+                }
+            } else {
+                vfs.move_to_trash(&full_path)
+            };
             any |= ok;
         }
         if any {
             self.refresh_from_vfs(vfs);
             self.status = if self.path() == crate::fs::vfs::TRASH_DIR {
-                crate::gui::ui_text("Seçilen öğeler kalıcı olarak silindi.", "Selected items permanently deleted.")
+                crate::gui::ui_text(
+                    "Seçilen öğeler kalıcı olarak silindi.",
+                    "Selected items permanently deleted.",
+                )
             } else {
-                crate::gui::ui_text("Seçilen öğeler geri dönüşüm kutusuna taşındı.", "Selected items moved to Recycle Bin.")
+                crate::gui::ui_text(
+                    "Seçilen öğeler geri dönüşüm kutusuna taşındı.",
+                    "Selected items moved to Recycle Bin.",
+                )
             };
         } else {
-            self.status = crate::gui::ui_text("Silinemedi (klasör dolu olabilir).", "Delete failed.");
+            self.status =
+                crate::gui::ui_text("Silinemedi (klasör dolu olabilir).", "Delete failed.");
         }
         any
     }
 
     pub fn begin_rename(&mut self) {
-        if self.selected_idx >= self.file_count || self.files[self.selected_idx].display_name() == ".." { return; }
-        if !self.selected_items[self.selected_idx] { self.selected_items = [false; MAX_ITEMS]; self.selected_items[self.selected_idx] = true; }
+        if self.selected_idx >= self.file_count
+            || self.files[self.selected_idx].display_name() == ".."
+        {
+            return;
+        }
+        if !self.selected_items[self.selected_idx] {
+            self.selected_items = [false; MAX_ITEMS];
+            self.selected_items[self.selected_idx] = true;
+        }
         let name = self.files[self.selected_idx].display_name().as_bytes();
         // NAME_MAX'a sığmayan ad çok baytlı karakterin ortasından kesilmesin.
         let take = crate::gui::textedit::truncate_to_boundary(name, self.rename_buf.len());
@@ -1206,38 +1500,79 @@ impl FileManagerApp {
     }
 
     pub fn rename_char(&mut self, c: char) {
-        crate::gui::textedit::insert_char(&mut self.rename_buf, &mut self.rename_len, &mut self.rename_cursor, c);
+        crate::gui::textedit::insert_char(
+            &mut self.rename_buf,
+            &mut self.rename_len,
+            &mut self.rename_cursor,
+            c,
+        );
     }
 
     /// İmleç her zaman bir karakter sınırında kalır; aksi halde çok baytlı
     /// (Türkçe) harfler ortadan bölünüp ad geçersiz UTF-8 olurdu.
     pub fn rename_backspace(&mut self) {
-        crate::gui::textedit::backspace(&mut self.rename_buf, &mut self.rename_len, &mut self.rename_cursor);
+        crate::gui::textedit::backspace(
+            &mut self.rename_buf,
+            &mut self.rename_len,
+            &mut self.rename_cursor,
+        );
     }
 
     pub fn rename_delete(&mut self) {
-        crate::gui::textedit::delete_forward(&mut self.rename_buf, &mut self.rename_len, &mut self.rename_cursor);
+        crate::gui::textedit::delete_forward(
+            &mut self.rename_buf,
+            &mut self.rename_len,
+            &mut self.rename_cursor,
+        );
     }
 
     pub fn rename_move_cursor(&mut self, right: bool) {
         if right {
-            self.rename_cursor = crate::gui::textedit::next_char_boundary(&self.rename_buf, self.rename_cursor, self.rename_len);
+            self.rename_cursor = crate::gui::textedit::next_char_boundary(
+                &self.rename_buf,
+                self.rename_cursor,
+                self.rename_len,
+            );
         } else {
-            self.rename_cursor = crate::gui::textedit::prev_char_boundary(&self.rename_buf[..self.rename_len], self.rename_cursor);
+            self.rename_cursor = crate::gui::textedit::prev_char_boundary(
+                &self.rename_buf[..self.rename_len],
+                self.rename_cursor,
+            );
         }
     }
 
     pub fn commit_rename(&mut self, vfs: &mut VirtualFileSystem) {
-        if !self.rename_active { return; }
+        if !self.rename_active {
+            return;
+        }
         self.rename_active = false;
-        let name = core::str::from_utf8(&self.rename_buf[..self.rename_len]).unwrap_or("").trim();
-        if name.is_empty() || name == "." || name == ".." || name.contains('/') { self.status = crate::gui::ui_text("Geçersiz ad.", "Invalid name."); return; }
-        if self.selected_idx >= self.file_count { return; }
+        let name = core::str::from_utf8(&self.rename_buf[..self.rename_len])
+            .unwrap_or("")
+            .trim();
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+            self.status = crate::gui::ui_text("Geçersiz ad.", "Invalid name.");
+            return;
+        }
+        if self.selected_idx >= self.file_count {
+            return;
+        }
         let old_name = self.files[self.selected_idx].display_name();
-        let mut old_path = String::from(self.path()); if !old_path.ends_with('/') { old_path.push('/'); } old_path.push_str(old_name);
-        let mut new_path = String::from(self.path()); if !new_path.ends_with('/') { new_path.push('/'); } new_path.push_str(name);
-        if vfs.rename(&old_path, &new_path) { self.refresh_from_vfs(vfs); self.status = crate::gui::ui_text("Ad değiştirildi.", "Name changed."); }
-        else { self.status = crate::gui::ui_text("Ad değiştirilemedi.", "Rename failed."); }
+        let mut old_path = String::from(self.path());
+        if !old_path.ends_with('/') {
+            old_path.push('/');
+        }
+        old_path.push_str(old_name);
+        let mut new_path = String::from(self.path());
+        if !new_path.ends_with('/') {
+            new_path.push('/');
+        }
+        new_path.push_str(name);
+        if vfs.rename(&old_path, &new_path) {
+            self.refresh_from_vfs(vfs);
+            self.status = crate::gui::ui_text("Ad değiştirildi.", "Name changed.");
+        } else {
+            self.status = crate::gui::ui_text("Ad değiştirilemedi.", "Rename failed.");
+        }
     }
 
     /// Geri Dönüşüm Kutusu'nda seçili öğeyi önceki konumuna değil, `/root/Documents`
@@ -1276,7 +1611,10 @@ impl FileManagerApp {
         self.status = if n > 0 {
             crate::gui::ui_text("Geri dönüşüm kutusu boşaltıldı.", "Recycle Bin emptied.")
         } else {
-            crate::gui::ui_text("Geri dönüşüm kutusu zaten boş.", "Recycle Bin already empty.")
+            crate::gui::ui_text(
+                "Geri dönüşüm kutusu zaten boş.",
+                "Recycle Bin already empty.",
+            )
         };
         n
     }
@@ -1397,12 +1735,25 @@ impl FileManagerApp {
         }
     }
 
-    pub fn drop_target_at(&self, win_x: usize, win_y: usize, win_w: usize, win_h: usize, sy: usize, mx: usize, my: usize) -> Option<DropTarget> {
+    pub fn drop_target_at(
+        &self,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        sy: usize,
+        mx: usize,
+        my: usize,
+    ) -> Option<DropTarget> {
         let sidebar_w = 110;
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
 
         // Sidebar drop target check
-        if mx >= win_x + 6 && mx < win_x + 6 + sidebar_w && my >= win_y + 66 && my < win_y + 66 + 10 * 22 {
+        if mx >= win_x + 6
+            && mx < win_x + 6 + sidebar_w
+            && my >= win_y + 66
+            && my < win_y + 66 + 10 * 22
+        {
             let idx = (my.saturating_sub(win_y + 66)) / 22;
             if idx < 10 && (win_y + 66 + idx * 22 + 8) <= win_y + 60 + sidebar_h {
                 return Some(DropTarget::Sidebar(idx));
@@ -1450,7 +1801,9 @@ impl FileManagerApp {
                     }
                 } else {
                     let mut path = String::from(self.path());
-                    if !path.ends_with('/') { path.push('/'); }
+                    if !path.ends_with('/') {
+                        path.push('/');
+                    }
                     path.push_str(name);
                     Some(path)
                 }
@@ -1480,37 +1833,67 @@ impl FileManagerApp {
         vfs: &mut crate::fs::vfs::VirtualFileSystem,
     ) -> Result<String, &'static str> {
         if src_idx >= self.file_count {
-            return Err(crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found."));
+            return Err(crate::gui::ui_text(
+                "Kaynak öğe bulunamadı.",
+                "Source item not found.",
+            ));
         }
         if self.files[src_idx].display_name() == ".." {
-            return Err(crate::gui::ui_text("Üst klasör taşınamaz.", "Parent folder cannot be moved."));
+            return Err(crate::gui::ui_text(
+                "Üst klasör taşınamaz.",
+                "Parent folder cannot be moved.",
+            ));
         }
 
         let Some(target_dir) = self.target_directory(target) else {
-            return Err(crate::gui::ui_text("Hedef klasör geçersiz.", "Invalid target folder."));
+            return Err(crate::gui::ui_text(
+                "Hedef klasör geçersiz.",
+                "Invalid target folder.",
+            ));
         };
 
         if target_dir == "/media/cdrom" {
-            return Err(crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only."));
+            return Err(crate::gui::ui_text(
+                "CD-ROM salt okunurdur.",
+                "CD-ROM is read-only.",
+            ));
         }
 
         let target_disp = self.target_display_name(target);
-        if self.selected_items[src_idx] { self.drag_items = self.selected_items; }
-        else { self.drag_items = [false; MAX_ITEMS]; self.drag_items[src_idx] = true; }
+        if self.selected_items[src_idx] {
+            self.drag_items = self.selected_items;
+        } else {
+            self.drag_items = [false; MAX_ITEMS];
+            self.drag_items[src_idx] = true;
+        }
         let mut count = 0;
         let mut first_name = String::new();
         for i in 0..self.file_count {
-            if !self.drag_items[i] || self.files[i].display_name() == ".." { continue; }
+            if !self.drag_items[i] || self.files[i].display_name() == ".." {
+                continue;
+            }
             let src_name = self.files[i].display_name();
-            if first_name.is_empty() { first_name.push_str(src_name); }
+            if first_name.is_empty() {
+                first_name.push_str(src_name);
+            }
             let mut src_path = String::from(self.path());
-            if !src_path.ends_with('/') { src_path.push('/'); }
+            if !src_path.ends_with('/') {
+                src_path.push('/');
+            }
             src_path.push_str(src_name);
-            if is_copy && target_dir != crate::fs::vfs::TRASH_DIR { vfs.copy_item(&src_path, &target_dir)?; }
-            else { vfs.move_item(&src_path, &target_dir)?; }
+            if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
+                vfs.copy_item(&src_path, &target_dir)?;
+            } else {
+                vfs.move_item(&src_path, &target_dir)?;
+            }
             count += 1;
         }
-        if count == 0 { return Err(crate::gui::ui_text("Kaynak öğe bulunamadı.", "Source item not found.")); }
+        if count == 0 {
+            return Err(crate::gui::ui_text(
+                "Kaynak öğe bulunamadı.",
+                "Source item not found.",
+            ));
+        }
 
         let mut msg = TextBuf::new();
         if is_copy && target_dir != crate::fs::vfs::TRASH_DIR {
@@ -1521,7 +1904,10 @@ impl FileManagerApp {
             msg.push_str(crate::gui::ui_text("Taşındı: ", "Moved: "));
         }
         msg.push_str(&first_name);
-        if count > 1 { msg.push_str(" + "); msg.push_usize(count - 1); }
+        if count > 1 {
+            msg.push_str(" + ");
+            msg.push_usize(count - 1);
+        }
         msg.push_str(" -> ");
         msg.push_str(&target_disp);
         self.set_status_text(msg.as_str());
@@ -1530,8 +1916,12 @@ impl FileManagerApp {
     }
 
     pub fn draw_drag_badge(&self, fb: &mut Framebuffer, mx: usize, my: usize, is_copy: bool) {
-        let Some(item_idx) = self.drag_item else { return; };
-        if item_idx >= self.file_count { return; }
+        let Some(item_idx) = self.drag_item else {
+            return;
+        };
+        if item_idx >= self.file_count {
+            return;
+        }
         let file = &self.files[item_idx];
         let name = file.display_name();
 
@@ -1540,7 +1930,11 @@ impl FileManagerApp {
         } else {
             crate::gui::ui_text("-> Taşı: ", "-> Move: ")
         };
-        let accent_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
+        let accent_color = if is_copy {
+            Color::ACCENT_GREEN
+        } else {
+            Color::ACCENT_BLUE
+        };
 
         let mut text = TextBuf::new();
         text.push_str(op_prefix);
@@ -1567,7 +1961,13 @@ impl FileManagerApp {
             Self::draw_file_icon(fb, badge_x + 5, badge_y + 4, file.icon_tag);
         }
 
-        MinGuiCompositor::draw_string(fb, badge_x + 24, badge_y + 5, text.as_str(), Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            badge_x + 24,
+            badge_y + 5,
+            text.as_str(),
+            Color::TEXT_MAIN,
+        );
     }
 
     /// Klasör Simgesi: Arka sekme, gövde, parlak sarı/amber kapak ve yukarı oku (..) desteği
@@ -1581,13 +1981,25 @@ impl FileManagerApp {
         // Klasör Arka Sekmesi (Tab)
         fb.draw_rect(x + 1 * s, y, 6 * s, 3 * s, Color::ACCENT_YELLOW);
         // Klasör Arka Gövdesi (Back Body)
-        fb.draw_rect(x + 1 * s, y + 2 * s, 14 * s, 10 * s, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -30));
+        fb.draw_rect(
+            x + 1 * s,
+            y + 2 * s,
+            14 * s,
+            10 * s,
+            MinGuiCompositor::shade(Color::ACCENT_YELLOW, -30),
+        );
         // Klasör Ön Kapağı (Front Flap - canlı parlak sarı)
         fb.draw_rect(x, y + 4 * s, 16 * s, 9 * s, Color::ACCENT_YELLOW);
         // Üst kenar parıltısı (Highlight)
         fb.draw_line(x + 1 * s, y + 4 * s, x + 15 * s, y + 4 * s, 0xFFE082);
         // İnce alt kenarlık / gölge
-        fb.draw_line(x, y + 12 * s, x + 15 * s, y + 12 * s, MinGuiCompositor::shade(Color::ACCENT_YELLOW, -50));
+        fb.draw_line(
+            x,
+            y + 12 * s,
+            x + 15 * s,
+            y + 12 * s,
+            MinGuiCompositor::shade(Color::ACCENT_YELLOW, -50),
+        );
 
         // Eğer üst klasör ise (..) içine beyaz yukarı oku çiz
         if is_up {
@@ -1633,7 +2045,13 @@ impl FileManagerApp {
         // Kapak tutamacı (küçük çıkıntı)
         fb.draw_rect(x + 6, y, 4, 1, Color::ACCENT_GREEN);
         // Gövde (aşağı doğru daralan bir kutu)
-        fb.draw_rect(x + 3, y + 4, 10, 10, MinGuiCompositor::shade(Color::ACCENT_GREEN, -40));
+        fb.draw_rect(
+            x + 3,
+            y + 4,
+            10,
+            10,
+            MinGuiCompositor::shade(Color::ACCENT_GREEN, -40),
+        );
         // Gövde kenar çizgileri (dikey çizgiler)
         fb.draw_line(x + 6, y + 5, x + 6, y + 12, Color::ACCENT_GREEN);
         fb.draw_line(x + 10, y + 5, x + 10, y + 12, Color::ACCENT_GREEN);
@@ -1641,7 +2059,16 @@ impl FileManagerApp {
         fb.draw_line(x + 3, y + 13, x + 12, y + 13, Color::ACCENT_GREEN);
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &ScrollState, is_copy: bool) {
+    pub fn render_content(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        scroll: &ScrollState,
+        is_copy: bool,
+    ) {
         let sidebar_w = 110;
         let list_x = Self::list_x(win_x);
         let list_w = self.list_width(win_w);
@@ -1653,37 +2080,111 @@ impl FileManagerApp {
 
         // Üst Araç Çubuğu (Toolbar)
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 26, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 38, crate::gui::ui_text("Konum: ", "Location: "), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            win_y + 38,
+            crate::gui::ui_text("Konum: ", "Location: "),
+            Color::TEXT_MUTED,
+        );
         MinGuiCompositor::draw_string(fb, win_x + 65, win_y + 38, self.path(), Color::ACCENT_BLUE);
         let search_r = Self::search_rect(win_x, win_y, win_w);
-        fb.draw_rounded_rect(search_r.0, search_r.1, search_r.2, search_r.3, 4, Color::WINDOW_BG);
-        fb.draw_rounded_rect_outline(search_r.0, search_r.1, search_r.2, search_r.3, 4, Color::BORDER);
+        fb.draw_rounded_rect(
+            search_r.0,
+            search_r.1,
+            search_r.2,
+            search_r.3,
+            4,
+            Color::WINDOW_BG,
+        );
+        fb.draw_rounded_rect_outline(
+            search_r.0,
+            search_r.1,
+            search_r.2,
+            search_r.3,
+            4,
+            Color::BORDER,
+        );
         if self.search_len == 0 {
-            MinGuiCompositor::draw_string(fb, search_r.0 + 6, search_r.1 + 6,
-                crate::gui::ui_text("Ada göre filtrele", "Filter by name"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(
+                fb,
+                search_r.0 + 6,
+                search_r.1 + 6,
+                crate::gui::ui_text("Ada göre filtrele", "Filter by name"),
+                Color::TEXT_MUTED,
+            );
         } else if let Ok(query) = core::str::from_utf8(&self.search[..self.search_len]) {
-            MinGuiCompositor::draw_string_clipped(fb, search_r.0 + 6, search_r.1 + 6, query, Color::TEXT_MAIN,
-                (search_r.0 + 4, search_r.1 + 2, search_r.2.saturating_sub(8), search_r.3.saturating_sub(4)));
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                search_r.0 + 6,
+                search_r.1 + 6,
+                query,
+                Color::TEXT_MAIN,
+                (
+                    search_r.0 + 4,
+                    search_r.1 + 2,
+                    search_r.2.saturating_sub(8),
+                    search_r.3.saturating_sub(4),
+                ),
+            );
         }
 
         // İşlemler, görünüm ve önizleme seçenekleri taşma menüsüne taşındı.
         let actions = Self::actions_button_rect(win_x, win_y, win_w);
         fb.draw_rect(actions.0, actions.1, actions.2, actions.3, Color::WINDOW_BG);
-        for dot in 0..3 { fb.draw_rect(actions.0 + 13, actions.1 + 5 + dot * 5, 2, 2, Color::TEXT_MAIN); }
+        for dot in 0..3 {
+            fb.draw_rect(
+                actions.0 + 13,
+                actions.1 + 5 + dot * 5,
+                2,
+                2,
+                Color::TEXT_MAIN,
+            );
+        }
 
         // Sol Gezinti Paneli (Sidebar) — Sürücüler ve Hızlı Klasörler
         let sidebar_h = win_h.saturating_sub(STATUS_H + 60);
-        fb.draw_rect(win_x + 6, win_y + 60, sidebar_w, sidebar_h, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(
+            win_x + 6,
+            win_y + 60,
+            sidebar_w,
+            sidebar_h,
+            Color::TITLE_BAR_INACTIVE,
+        );
 
         let nav = if crate::gui::ui_english() {
-            ["Root (/)", "Desktop", "Documents", "Media", "Downloads", "System", "USB Drive", "Hard Disk", "CD-ROM", "Recycle Bin"]
+            [
+                "Root (/)",
+                "Desktop",
+                "Documents",
+                "Media",
+                "Downloads",
+                "System",
+                "USB Drive",
+                "Hard Disk",
+                "CD-ROM",
+                "Recycle Bin",
+            ]
         } else {
-            ["Kök (/)", "Masaüstü", "Belgeler", "Medyalar", "İndirilenler", "Sistem", "USB Disk", "Sabit Disk", "CD-ROM", "Geri Dönüşüm"]
+            [
+                "Kök (/)",
+                "Masaüstü",
+                "Belgeler",
+                "Medyalar",
+                "İndirilenler",
+                "Sistem",
+                "USB Disk",
+                "Sabit Disk",
+                "CD-ROM",
+                "Geri Dönüşüm",
+            ]
         };
 
         for (i, item) in nav.iter().enumerate() {
             let iy = win_y + 66 + i * 22;
-            if iy + 8 > win_y + 60 + sidebar_h { break; }
+            if iy + 8 > win_y + 60 + sidebar_h {
+                break;
+            }
             let cur = self.path();
             let is_active = match i {
                 0 => cur == "/",
@@ -1698,10 +2199,22 @@ impl FileManagerApp {
                 9 => cur == crate::fs::vfs::TRASH_DIR,
                 _ => false,
             };
-            let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Sidebar(i));
+            let is_drag_target =
+                self.drag_active && self.drag_target == Some(DropTarget::Sidebar(i));
             if is_drag_target {
-                let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
-                fb.draw_rounded_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                let target_color = if is_copy {
+                    Color::ACCENT_GREEN
+                } else {
+                    Color::ACCENT_BLUE
+                };
+                fb.draw_rounded_rect(
+                    win_x + 7,
+                    iy - 2,
+                    sidebar_w - 2,
+                    20,
+                    3,
+                    MinGuiCompositor::shade(Color::WINDOW_BG, 26),
+                );
                 fb.draw_rounded_rect_outline(win_x + 7, iy - 2, sidebar_w - 2, 20, 3, target_color);
             } else if is_active {
                 fb.draw_rect(win_x + 7, iy - 2, sidebar_w - 2, 20, Color::TITLE_BAR);
@@ -1725,15 +2238,31 @@ impl FileManagerApp {
                 Self::draw_trash_icon(fb, win_x + 9, iy + 2);
             }
             let col = if is_drag_target {
-                if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE }
+                if is_copy {
+                    Color::ACCENT_GREEN
+                } else {
+                    Color::ACCENT_BLUE
+                }
             } else if is_active {
                 Color::ACCENT_BLUE
             } else if i == 6 {
-                if diskfs::usb_available() { Color::ACCENT_GREEN } else { Color::TEXT_MUTED }
+                if diskfs::usb_available() {
+                    Color::ACCENT_GREEN
+                } else {
+                    Color::TEXT_MUTED
+                }
             } else if i == 7 {
-                if crate::drivers::usb::hdd_available() || diskfs::usb_available() { Color::ACCENT_YELLOW } else { Color::TEXT_MUTED }
+                if crate::drivers::usb::hdd_available() || diskfs::usb_available() {
+                    Color::ACCENT_YELLOW
+                } else {
+                    Color::TEXT_MUTED
+                }
             } else if i == 8 {
-                if diskfs::cd_available() { Color::ACCENT_PINK } else { Color::TEXT_MUTED }
+                if diskfs::cd_available() {
+                    Color::ACCENT_PINK
+                } else {
+                    Color::TEXT_MUTED
+                }
             } else {
                 Color::TEXT_MAIN
             };
@@ -1748,7 +2277,11 @@ impl FileManagerApp {
         fb.draw_rect(list_x, win_y + 60, list_w, 20, Color::TITLE_BAR);
         if self.view_mode == ViewMode::List {
             // Sıralama göstergesi (ok)
-            let sort_arrow = if self.sort_order == SortOrder::Ascending { " ▲" } else { " ▼" };
+            let sort_arrow = if self.sort_order == SortOrder::Ascending {
+                " ▲"
+            } else {
+                " ▼"
+            };
 
             let name_label = if self.sort_by == SortBy::Name {
                 crate::gui::ui_text("Ad", "Name")
@@ -1762,8 +2295,14 @@ impl FileManagerApp {
             } else {
                 String::from(name_label)
             };
-            MinGuiCompositor::draw_string_clipped(fb, col_name_x, win_y + 65, name_text.as_str(), Color::TEXT_MUTED,
-                (col_name_x, win_y + 60, 145, 20));
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                col_name_x,
+                win_y + 65,
+                name_text.as_str(),
+                Color::TEXT_MUTED,
+                (col_name_x, win_y + 60, 145, 20),
+            );
 
             if list_w > 210 {
                 let type_label = if self.sort_by == SortBy::Type {
@@ -1778,8 +2317,14 @@ impl FileManagerApp {
                 } else {
                     String::from(type_label)
                 };
-                MinGuiCompositor::draw_string_clipped(fb, col_type_x, win_y + 65, type_text.as_str(), Color::TEXT_MUTED,
-                    (col_type_x, win_y + 60, 95, 20));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    col_type_x,
+                    win_y + 65,
+                    type_text.as_str(),
+                    Color::TEXT_MUTED,
+                    (col_type_x, win_y + 60, 95, 20),
+                );
             }
             if list_w > 320 {
                 let size_header = crate::gui::ui_text("Boyut", "Size");
@@ -1790,20 +2335,35 @@ impl FileManagerApp {
                 } else {
                     String::from(size_header)
                 };
-                let header_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text.as_str(), 1) + 6);
-                MinGuiCompositor::draw_string_clipped(fb, header_x, win_y + 65, size_text.as_str(), Color::TEXT_MUTED,
-                    (col_size_x, win_y + 60, col_size_w, 20));
+                let header_x = col_size_x
+                    + col_size_w
+                        .saturating_sub(MinGuiCompositor::text_width(size_text.as_str(), 1) + 6);
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    header_x,
+                    win_y + 65,
+                    size_text.as_str(),
+                    Color::TEXT_MUTED,
+                    (col_size_x, win_y + 60, col_size_w, 20),
+                );
             }
         } else {
-            MinGuiCompositor::draw_string_clipped(fb, list_x + 8, win_y + 65,
-                crate::gui::ui_text("Izgara görünümü", "Grid view"), Color::TEXT_MUTED,
-                (list_x + 6, win_y + 60, list_w.saturating_sub(12), 20));
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                list_x + 8,
+                win_y + 65,
+                crate::gui::ui_text("Izgara görünümü", "Grid view"),
+                Color::TEXT_MUTED,
+                (list_x + 6, win_y + 60, list_w.saturating_sub(12), 20),
+            );
         }
 
         // Dosya ve Klasör Listesi / Izgarası.
         let mut visible_idx = 0usize;
         for i in 0..self.file_count {
-            if !self.search_matches(i) { continue; }
+            if !self.search_matches(i) {
+                continue;
+            }
             let (ix, draw_y, iw, ih) = self.item_rect(win_x, win_y, win_w, visible_idx, sy);
             visible_idx += 1;
             if draw_y + ih <= list_top || draw_y >= list_bottom {
@@ -1811,17 +2371,42 @@ impl FileManagerApp {
             }
             let file = &self.files[i];
             let is_sel = self.is_row_selected(i);
-            let is_drag_target = self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
+            let is_drag_target =
+                self.drag_active && self.drag_target == Some(DropTarget::Folder(i));
             let is_drag_source = self.drag_active && self.drag_item == Some(i);
             let is_up = file.display_name() == "..";
-            let target_color = if is_copy { Color::ACCENT_GREEN } else { Color::ACCENT_BLUE };
+            let target_color = if is_copy {
+                Color::ACCENT_GREEN
+            } else {
+                Color::ACCENT_BLUE
+            };
 
             if self.view_mode == ViewMode::List {
                 if is_drag_target {
-                    fb.draw_rounded_rect(list_x, draw_y, list_w, ROW_H - 2, 3, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
-                    fb.draw_rounded_rect_outline(list_x, draw_y, list_w, ROW_H - 2, 3, target_color);
+                    fb.draw_rounded_rect(
+                        list_x,
+                        draw_y,
+                        list_w,
+                        ROW_H - 2,
+                        3,
+                        MinGuiCompositor::shade(Color::WINDOW_BG, 26),
+                    );
+                    fb.draw_rounded_rect_outline(
+                        list_x,
+                        draw_y,
+                        list_w,
+                        ROW_H - 2,
+                        3,
+                        target_color,
+                    );
                 } else if is_drag_source {
-                    fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
+                    fb.draw_rect(
+                        list_x,
+                        draw_y,
+                        list_w,
+                        ROW_H - 2,
+                        MinGuiCompositor::shade(Color::WINDOW_BG, 14),
+                    );
                     fb.draw_rect_outline(list_x, draw_y, list_w, ROW_H - 2, Color::TEXT_MUTED);
                 } else if is_sel {
                     fb.draw_rect(list_x, draw_y, list_w, ROW_H - 2, Color::TITLE_BAR);
@@ -1843,26 +2428,59 @@ impl FileManagerApp {
                 } else {
                     Color::TEXT_MAIN
                 };
-                MinGuiCompositor::draw_string_clipped(fb, col_name_x, draw_y + 4, file.display_name(), name_col,
-                    (col_name_x, draw_y + 2, 145, ROW_H - 4));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    col_name_x,
+                    draw_y + 4,
+                    file.display_name(),
+                    name_col,
+                    (col_name_x, draw_y + 2, 145, ROW_H - 4),
+                );
 
                 if list_w > 210 {
-                    MinGuiCompositor::draw_string_clipped(fb, col_type_x, draw_y + 4, file.file_type, Color::TEXT_MUTED,
-                        (col_type_x, draw_y + 2, 95, ROW_H - 4));
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        col_type_x,
+                        draw_y + 4,
+                        file.file_type,
+                        Color::TEXT_MUTED,
+                        (col_type_x, draw_y + 2, 95, ROW_H - 4),
+                    );
                 }
                 if list_w > 320 {
                     let size_text = file.size_str.as_str();
-                    let size_x = col_size_x + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text, 1) + 6);
-                    MinGuiCompositor::draw_string_clipped(fb, size_x, draw_y + 4, size_text, Color::TEXT_MAIN,
-                        (col_size_x, draw_y + 2, col_size_w, ROW_H - 4));
+                    let size_x = col_size_x
+                        + col_size_w.saturating_sub(MinGuiCompositor::text_width(size_text, 1) + 6);
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        size_x,
+                        draw_y + 4,
+                        size_text,
+                        Color::TEXT_MAIN,
+                        (col_size_x, draw_y + 2, col_size_w, ROW_H - 4),
+                    );
                 }
             } else {
                 // Izgara kartı: büyük simge veya küçük resim + ad + tür.
                 if is_drag_target {
-                    fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, MinGuiCompositor::shade(Color::WINDOW_BG, 26));
+                    fb.draw_rounded_rect(
+                        ix,
+                        draw_y,
+                        iw,
+                        ih - 4,
+                        5,
+                        MinGuiCompositor::shade(Color::WINDOW_BG, 26),
+                    );
                     fb.draw_rounded_rect_outline(ix, draw_y, iw, ih - 4, 5, target_color);
                 } else if is_drag_source {
-                    fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, MinGuiCompositor::shade(Color::WINDOW_BG, 14));
+                    fb.draw_rounded_rect(
+                        ix,
+                        draw_y,
+                        iw,
+                        ih - 4,
+                        5,
+                        MinGuiCompositor::shade(Color::WINDOW_BG, 14),
+                    );
                     fb.draw_rounded_rect_outline(ix, draw_y, iw, ih - 4, 5, Color::TEXT_MUTED);
                 } else if is_sel {
                     fb.draw_rounded_rect(ix, draw_y, iw, ih - 4, 5, Color::TITLE_BAR);
@@ -1880,14 +2498,22 @@ impl FileManagerApp {
                     Self::draw_thumb(fb, icon_x, icon_y, icon_box_w, icon_box_h, t);
                 } else if file.is_dir {
                     let s = 3usize;
-                    Self::draw_folder_icon_sized(fb,
+                    Self::draw_folder_icon_sized(
+                        fb,
                         icon_x + icon_box_w.saturating_sub(16 * s) / 2,
-                        icon_y + icon_box_h.saturating_sub(13 * s) / 2, s, is_up);
+                        icon_y + icon_box_h.saturating_sub(13 * s) / 2,
+                        s,
+                        is_up,
+                    );
                 } else {
                     let s = 3usize;
-                    Self::draw_file_icon_sized(fb,
+                    Self::draw_file_icon_sized(
+                        fb,
                         icon_x + icon_box_w.saturating_sub(15 * s) / 2,
-                        icon_y + icon_box_h.saturating_sub(15 * s) / 2, s, file.icon_tag);
+                        icon_y + icon_box_h.saturating_sub(15 * s) / 2,
+                        s,
+                        file.icon_tag,
+                    );
                 }
 
                 let name_col = if is_drag_target {
@@ -1897,16 +2523,36 @@ impl FileManagerApp {
                 } else {
                     Color::TEXT_MAIN
                 };
-                let type_col = if is_sel { MinGuiCompositor::text_on(Color::TITLE_BAR) } else { Color::TEXT_MUTED };
+                let type_col = if is_sel {
+                    MinGuiCompositor::text_on(Color::TITLE_BAR)
+                } else {
+                    Color::TEXT_MUTED
+                };
                 let cell_clip_w = iw.saturating_sub(6);
                 let name = file.display_name();
                 let name_tw = MinGuiCompositor::text_width(name, 1).min(cell_clip_w);
-                MinGuiCompositor::draw_string_clipped(fb, ix + iw.saturating_sub(name_tw) / 2, draw_y + ih - 36,
-                    name, name_col, (ix + 3, draw_y + ih - 38, cell_clip_w, 16));
-                let ftype = if file.is_dir { crate::gui::ui_text("Klasör", "Folder") } else { file.file_type };
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    ix + iw.saturating_sub(name_tw) / 2,
+                    draw_y + ih - 36,
+                    name,
+                    name_col,
+                    (ix + 3, draw_y + ih - 38, cell_clip_w, 16),
+                );
+                let ftype = if file.is_dir {
+                    crate::gui::ui_text("Klasör", "Folder")
+                } else {
+                    file.file_type
+                };
                 let type_tw = MinGuiCompositor::text_width(ftype, 1).min(cell_clip_w);
-                MinGuiCompositor::draw_string_clipped(fb, ix + iw.saturating_sub(type_tw) / 2, draw_y + ih - 20,
-                    ftype, type_col, (ix + 3, draw_y + ih - 22, cell_clip_w, 16));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    ix + iw.saturating_sub(type_tw) / 2,
+                    draw_y + ih - 20,
+                    ftype,
+                    type_col,
+                    (ix + 3, draw_y + ih - 22, cell_clip_w, 16),
+                );
             }
         }
 
@@ -1921,8 +2567,13 @@ impl FileManagerApp {
         let mut sb = TextBuf::new();
         if self.rename_active {
             sb.push_str(crate::gui::ui_text("Yeni ad: ", "New name: "));
-            if let Ok(name) = core::str::from_utf8(&self.rename_buf[..self.rename_len]) { sb.push_str(name); }
-            sb.push_str(crate::gui::ui_text("  | Enter: kaydet  Esc: iptal", "  | Enter: save  Esc: cancel"));
+            if let Ok(name) = core::str::from_utf8(&self.rename_buf[..self.rename_len]) {
+                sb.push_str(name);
+            }
+            sb.push_str(crate::gui::ui_text(
+                "  | Enter: kaydet  Esc: iptal",
+                "  | Enter: save  Esc: cancel",
+            ));
         } else if !self.status_buf.is_empty() {
             sb.push_str(self.status_buf.as_str());
         } else if !self.status.is_empty() {
@@ -1930,8 +2581,13 @@ impl FileManagerApp {
         } else {
             sb.push_usize(self.visible_count());
             if self.search_len > 0 {
-                sb.push_str(crate::gui::ui_text(" eşleşme | Filtre: ", " matches | Filter: "));
-                if let Ok(query) = core::str::from_utf8(&self.search[..self.search_len]) { sb.push_str(query); }
+                sb.push_str(crate::gui::ui_text(
+                    " eşleşme | Filtre: ",
+                    " matches | Filter: ",
+                ));
+                if let Ok(query) = core::str::from_utf8(&self.search[..self.search_len]) {
+                    sb.push_str(query);
+                }
                 sb.push_str("  (Esc: ");
                 sb.push_str(crate::gui::ui_text("temizle)", "clear)"));
             } else {
@@ -1946,37 +2602,70 @@ impl FileManagerApp {
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
             let labels = [
-                crate::gui::ui_text("Yenile", "Refresh"), crate::gui::ui_text("Yeni dosya", "New file"),
-                crate::gui::ui_text("Yeni klasör", "New folder"), crate::gui::ui_text("Sil", "Delete"),
+                crate::gui::ui_text("Yenile", "Refresh"),
+                crate::gui::ui_text("Yeni dosya", "New file"),
+                crate::gui::ui_text("Yeni klasör", "New folder"),
+                crate::gui::ui_text("Sil", "Delete"),
                 crate::gui::ui_text("Aç", "Open"),
-                if self.view_mode == ViewMode::Grid { crate::gui::ui_text("Liste görünümü", "List view") } else { crate::gui::ui_text("Izgara görünümü", "Grid view") },
+                if self.view_mode == ViewMode::Grid {
+                    crate::gui::ui_text("Liste görünümü", "List view")
+                } else {
+                    crate::gui::ui_text("Izgara görünümü", "Grid view")
+                },
                 crate::gui::ui_text("Önizleme", "Preview"),
             ];
             for (i, label) in labels.iter().enumerate() {
                 let item = Self::actions_menu_item_rect(win_x, win_y, win_w, i);
                 fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string_clipped(fb, item.0 + 8, item.1 + 6, label, Color::TEXT_MAIN,
-                    (item.0 + 4, item.1 + 1, item.2.saturating_sub(8), item.3.saturating_sub(2)));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    item.0 + 8,
+                    item.1 + 6,
+                    label,
+                    Color::TEXT_MAIN,
+                    (
+                        item.0 + 4,
+                        item.1 + 1,
+                        item.2.saturating_sub(8),
+                        item.3.saturating_sub(2),
+                    ),
+                );
             }
         }
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, sb.as_str(), Color::TEXT_MUTED);
         if self.rename_active {
             let prefix = core::str::from_utf8(&self.rename_buf[..self.rename_cursor]).unwrap_or("");
-            let cx = win_x + 12 + MinGuiCompositor::text_width(crate::gui::ui_text("Yeni ad: ", "New name: "), 1)
+            let cx = win_x
+                + 12
+                + MinGuiCompositor::text_width(crate::gui::ui_text("Yeni ad: ", "New name: "), 1)
                 + MinGuiCompositor::text_width(prefix, 1);
             fb.draw_rect(cx, status_y + 4, 1, 12, Color::ACCENT_BLUE);
         }
     }
 
     /// Hızlı Önizleme panelini çizer (seçili öğe bilgisi + içerik/metin/küçük resim).
-    pub fn render_preview(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize) {
+    pub fn render_preview(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
         let (px, py, pw, ph) = self.preview_rect(win_x, win_y, win_w, win_h);
-        if pw < 40 || ph < 40 { return; }
+        if pw < 40 || ph < 40 {
+            return;
+        }
         fb.draw_rect(px, py, pw, ph, Color::TITLE_BAR_INACTIVE);
         fb.draw_rect(px, py, pw, 20, Color::TITLE_BAR);
-        MinGuiCompositor::draw_string_clipped(fb, px + 8, py + 4,
-            crate::gui::ui_text("Hızlı Önizleme", "Quick Preview"), Color::ACCENT_BLUE,
-            (px + 6, py + 2, pw.saturating_sub(12), 18));
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            px + 8,
+            py + 4,
+            crate::gui::ui_text("Hızlı Önizleme", "Quick Preview"),
+            Color::ACCENT_BLUE,
+            (px + 6, py + 2, pw.saturating_sub(12), 18),
+        );
 
         let inner_x = px + 8;
         let inner_w = pw.saturating_sub(16);
@@ -1984,8 +2673,14 @@ impl FileManagerApp {
         let mut yy = py + 26;
 
         if self.preview_kind == PreviewKind::Empty {
-            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy,
-                crate::gui::ui_text("Seçim yok", "No selection"), Color::TEXT_MUTED, clip);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                inner_x,
+                yy,
+                crate::gui::ui_text("Seçim yok", "No selection"),
+                Color::TEXT_MUTED,
+                clip,
+            );
             return;
         }
 
@@ -2002,34 +2697,66 @@ impl FileManagerApp {
             if is_dir {
                 Self::draw_folder_icon_sized(fb, inner_x, yy, 2, false);
             } else {
-                let tag = self.files.get(self.selected_idx).map(|f| f.icon_tag).unwrap_or("");
+                let tag = self
+                    .files
+                    .get(self.selected_idx)
+                    .map(|f| f.icon_tag)
+                    .unwrap_or("");
                 Self::draw_file_icon_sized(fb, inner_x, yy, 2, tag);
             }
             yy += 34;
         }
 
         // Başlık (ad), meta (tür/boyut), ayraç ve içerik satırları.
-        MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_title.as_str(), Color::TEXT_MAIN, clip);
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            inner_x,
+            yy,
+            self.preview_title.as_str(),
+            Color::TEXT_MAIN,
+            clip,
+        );
         yy += 16;
-        MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_meta.as_str(), Color::ACCENT_GREEN, clip);
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            inner_x,
+            yy,
+            self.preview_meta.as_str(),
+            Color::ACCENT_GREEN,
+            clip,
+        );
         yy += 16;
         fb.draw_rect(inner_x, yy, inner_w, 1, Color::BORDER);
         yy += 6;
 
         let line_h = 13usize;
         for k in 0..self.preview_line_count {
-            if yy + line_h > py + ph - 4 { break; }
+            if yy + line_h > py + ph - 4 {
+                break;
+            }
             let col = match self.preview_kind {
                 PreviewKind::Text => Color::TEXT_MAIN,
                 _ => Color::TEXT_MUTED,
             };
-            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy, self.preview_lines[k].as_str(), col, clip);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                inner_x,
+                yy,
+                self.preview_lines[k].as_str(),
+                col,
+                clip,
+            );
             yy += line_h;
         }
         if self.preview_kind == PreviewKind::File {
-            MinGuiCompositor::draw_string_clipped(fb, inner_x, yy,
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                inner_x,
+                yy,
                 crate::gui::ui_text("(ikili dosya - önizleme yok)", "(binary file - no preview)"),
-                Color::TEXT_MUTED, clip);
+                Color::TEXT_MUTED,
+                clip,
+            );
         }
     }
 }
@@ -2057,16 +2784,33 @@ pub fn file_kind(name: &str) -> &'static str {
             if matches_ext(b"3d") || matches_ext(b"obj") {
                 return "3D";
             }
-            if matches_ext(b"bmp") || matches_ext(b"png") || matches_ext(b"jpg") || matches_ext(b"jpeg") || matches_ext(b"gif") {
+            if matches_ext(b"bmp")
+                || matches_ext(b"png")
+                || matches_ext(b"jpg")
+                || matches_ext(b"jpeg")
+                || matches_ext(b"gif")
+            {
                 return "IMG";
             }
-            if matches_ext(b"wav") || matches_ext(b"mp3") || matches_ext(b"flac") || matches_ext(b"ogg") {
+            if matches_ext(b"wav")
+                || matches_ext(b"mp3")
+                || matches_ext(b"flac")
+                || matches_ext(b"ogg")
+            {
                 return "SND";
             }
-            if matches_ext(b"mp4") || matches_ext(b"avi") || matches_ext(b"mkv") || matches_ext(b"webm") {
+            if matches_ext(b"mp4")
+                || matches_ext(b"avi")
+                || matches_ext(b"mkv")
+                || matches_ext(b"webm")
+            {
                 return "VID";
             }
-            if matches_ext(b"htm") || matches_ext(b"html") || matches_ext(b"url") || matches_ext(b"xhtml") {
+            if matches_ext(b"htm")
+                || matches_ext(b"html")
+                || matches_ext(b"url")
+                || matches_ext(b"xhtml")
+            {
                 return "WEB";
             }
             return "BIN";

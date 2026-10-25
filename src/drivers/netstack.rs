@@ -37,11 +37,21 @@ static mut DHCP_OFFER: Option<(Ipv4Address, Ipv4Address, Ipv4Address)> = None;
 static mut DHCP_SERVER_IP: Ipv4Address = GATEWAY_IP;
 static mut DHCP_READY: bool = false;
 static mut DHCP_XID: u32 = 0x4D4F5301;
-pub fn local_ip() -> Ipv4Address { unsafe { ACTIVE_LOCAL_IP } }
-pub fn gateway_ip() -> Ipv4Address { unsafe { ACTIVE_GATEWAY_IP } }
-pub fn dns_server() -> Ipv4Address { unsafe { ACTIVE_DNS_IP } }
-pub fn dhcp_ready() -> bool { unsafe { DHCP_READY } }
-pub fn subnet_mask() -> Ipv4Address { unsafe { ACTIVE_SUBNET_MASK } }
+pub fn local_ip() -> Ipv4Address {
+    unsafe { ACTIVE_LOCAL_IP }
+}
+pub fn gateway_ip() -> Ipv4Address {
+    unsafe { ACTIVE_GATEWAY_IP }
+}
+pub fn dns_server() -> Ipv4Address {
+    unsafe { ACTIVE_DNS_IP }
+}
+pub fn dhcp_ready() -> bool {
+    unsafe { DHCP_READY }
+}
+pub fn subnet_mask() -> Ipv4Address {
+    unsafe { ACTIVE_SUBNET_MASK }
+}
 
 // Broadcast MAC
 pub const MAC_BROADCAST: MacAddress = MacAddress([0xFF; 6]);
@@ -65,22 +75,86 @@ struct ArpEntry {
 }
 
 static mut ARP_TABLE: [ArpEntry; 16] = [
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
-    ArpEntry { ip: Ipv4Address([0; 4]), mac: MacAddress([0; 6]), used: false },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    ArpEntry {
+        ip: Ipv4Address([0; 4]),
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
 ];
 
 pub fn arp_lookup(ip: Ipv4Address) -> Option<MacAddress> {
@@ -170,7 +244,8 @@ fn checksum(data: &[u8]) -> u16 {
 
 /// IPv4 paketi kurar ve Ethernet'e sarmalar, ardından e1000'den iletir.
 fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
-    let local = local_ip(); let gateway = gateway_ip();
+    let local = local_ip();
+    let gateway = gateway_ip();
     let mask = subnet_mask();
     let on_subnet = (0..4).all(|i| (dst_ip.0[i] & mask.0[i]) == (local.0[i] & mask.0[i]));
     let next_hop = if on_subnet { dst_ip } else { gateway };
@@ -239,7 +314,12 @@ fn send_ipv4(dst_ip: Ipv4Address, proto: u8, payload: &[u8]) -> bool {
     ip_packet[20..20 + payload.len()].copy_from_slice(payload);
 
     let mut frame = [0u8; 1514];
-    let len = build_ethernet(dst_mac, ETHERTYPE_IPV4, &ip_packet[..20 + payload.len()], &mut frame);
+    let len = build_ethernet(
+        dst_mac,
+        ETHERTYPE_IPV4,
+        &ip_packet[..20 + payload.len()],
+        &mut frame,
+    );
     e1000::transmit(&frame[..len])
 }
 
@@ -270,14 +350,23 @@ fn handle_arp(payload: &[u8]) {
     if payload.len() < 28 {
         return;
     }
-    if payload[0..2] != [0, 1] || payload[2..4] != ETHERTYPE_IPV4.to_be_bytes()
-        || payload[4] != 6 || payload[5] != 4
+    if payload[0..2] != [0, 1]
+        || payload[2..4] != ETHERTYPE_IPV4.to_be_bytes()
+        || payload[4] != 6
+        || payload[5] != 4
     {
         return;
     }
     let op = ((payload[6] as u16) << 8) | payload[7] as u16;
     let sender_ip = Ipv4Address([payload[14], payload[15], payload[16], payload[17]]);
-    let sender_mac = MacAddress([payload[8], payload[9], payload[10], payload[11], payload[12], payload[13]]);
+    let sender_mac = MacAddress([
+        payload[8],
+        payload[9],
+        payload[10],
+        payload[11],
+        payload[12],
+        payload[13],
+    ]);
     let target_ip = Ipv4Address([payload[24], payload[25], payload[26], payload[27]]);
 
     // Önbelleğe ekle
@@ -338,9 +427,7 @@ pub fn clear_ping_reply() {
 
 #[inline]
 pub fn has_ping_reply() -> bool {
-    unsafe {
-        core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_SRC)).is_some()
-    }
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_SRC)).is_some() }
 }
 
 pub fn take_ping_reply() -> Option<PingReply> {
@@ -351,7 +438,12 @@ pub fn take_ping_reply() -> Option<PingReply> {
             let len = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_LEN));
             let ttl = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING_REPLY_TTL));
             core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_PING_REPLY_SRC), None);
-            Some(PingReply { src: ip, seq, len, ttl })
+            Some(PingReply {
+                src: ip,
+                seq,
+                len,
+                ttl,
+            })
         } else {
             None
         }
@@ -425,12 +517,18 @@ fn handle_ipv4(payload: &[u8]) {
     let src_ip = Ipv4Address([payload[12], payload[13], payload[14], payload[15]]);
     let dst_ip = Ipv4Address([payload[16], payload[17], payload[18], payload[19]]);
     let total = u16::from_be_bytes([payload[2], payload[3]]) as usize;
-    if total < ihl || total > payload.len() { return; }
+    if total < ihl || total > payload.len() {
+        return;
+    }
     // IP fragment birleştirmesi yok; bozuk kısmi TCP/UDP datagramlarını işlemeden bırak.
     let fragment = u16::from_be_bytes([payload[6], payload[7]]);
-    if fragment & 0x3FFF != 0 { return; }
+    if fragment & 0x3FFF != 0 {
+        return;
+    }
     let end = total;
-    let is_dhcp = proto == IP_PROTO_UDP && end >= ihl + 4 && u16::from_be_bytes([payload[ihl+2],payload[ihl+3]]) == 68;
+    let is_dhcp = proto == IP_PROTO_UDP
+        && end >= ihl + 4
+        && u16::from_be_bytes([payload[ihl + 2], payload[ihl + 3]]) == 68;
     if dst_ip != local_ip() && !is_dhcp {
         return;
     }
@@ -438,9 +536,13 @@ fn handle_ipv4(payload: &[u8]) {
     match proto {
         IP_PROTO_ICMP => handle_icmp(src_ip, payload[8], l4),
         IP_PROTO_UDP => {
-            if l4.len() < 8 { return; }
+            if l4.len() < 8 {
+                return;
+            }
             let udp_len = u16::from_be_bytes([l4[4], l4[5]]) as usize;
-            if udp_len < 8 || udp_len > l4.len() { return; }
+            if udp_len < 8 || udp_len > l4.len() {
+                return;
+            }
             if (l4[6] != 0 || l4[7] != 0)
                 && transport_checksum(src_ip, dst_ip, IP_PROTO_UDP, &l4[..udp_len]) != 0
             {
@@ -453,7 +555,12 @@ fn handle_ipv4(payload: &[u8]) {
     }
 }
 
-pub(crate) fn transport_checksum(src: Ipv4Address, dst: Ipv4Address, proto: u8, data: &[u8]) -> u16 {
+pub(crate) fn transport_checksum(
+    src: Ipv4Address,
+    dst: Ipv4Address,
+    proto: u8,
+    data: &[u8],
+) -> u16 {
     let mut sum: u32 = 0;
     for pair in src.0.chunks(2).chain(dst.0.chunks(2)) {
         sum += ((pair[0] as u32) << 8) | pair[1] as u32;
@@ -461,9 +568,16 @@ pub(crate) fn transport_checksum(src: Ipv4Address, dst: Ipv4Address, proto: u8, 
     sum += proto as u32;
     sum += data.len() as u32;
     let mut i = 0;
-    while i + 1 < data.len() { sum += ((data[i] as u32) << 8) | data[i + 1] as u32; i += 2; }
-    if i < data.len() { sum += (data[i] as u32) << 8; }
-    while sum >> 16 != 0 { sum = (sum & 0xffff) + (sum >> 16); }
+    while i + 1 < data.len() {
+        sum += ((data[i] as u32) << 8) | data[i + 1] as u32;
+        i += 2;
+    }
+    if i < data.len() {
+        sum += (data[i] as u32) << 8;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
     !(sum as u16)
 }
 
@@ -513,9 +627,13 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
     let data = &payload[8..udp_len as usize];
     let src_port = u16::from_be_bytes([payload[0], payload[1]]);
     let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
-    if dst_port==68 && src_port==67 { handle_dhcp(src_ip,data); return; }
+    if dst_port == 68 && src_port == 67 {
+        handle_dhcp(src_ip, data);
+        return;
+    }
     // Soket UDP portuna gelen datagram soket tamponuna gider (DNS yolu korunur).
-    if dst_port != 68 && src_port != DNS_PORT
+    if dst_port != 68
+        && src_port != DNS_PORT
         && crate::drivers::socket::on_udp_datagram(src_ip, src_port, dst_port, data)
     {
         return;
@@ -549,89 +667,155 @@ fn handle_tcp(src_ip: Ipv4Address, payload: &[u8]) {
     if crate::drivers::socket::on_tcp_segment(src_ip, payload) {
         return;
     }
-    if payload.len() < 20 { return; }
-    if transport_checksum(src_ip, local_ip(), IP_PROTO_TCP, payload) != 0 { return; }
+    if payload.len() < 20 {
+        return;
+    }
+    if transport_checksum(src_ip, local_ip(), IP_PROTO_TCP, payload) != 0 {
+        return;
+    }
     let off = ((payload[12] >> 4) as usize) * 4;
-    if off < 20 || payload.len() < off { return; }
+    if off < 20 || payload.len() < off {
+        return;
+    }
     let src_port = u16::from_be_bytes([payload[0], payload[1]]);
     let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
     let seq = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
     let flags = payload[13];
     unsafe {
-        if dst_port != TCP_LOCAL_PORT || src_port != TCP_REMOTE_PORT || src_ip != TCP_REMOTE_IP { return; }
-        if flags & 0x04 != 0 { TCP_RESET = true; TCP_CONNECTED = false; return; }
+        if dst_port != TCP_LOCAL_PORT || src_port != TCP_REMOTE_PORT || src_ip != TCP_REMOTE_IP {
+            return;
+        }
+        if flags & 0x04 != 0 {
+            TCP_RESET = true;
+            TCP_CONNECTED = false;
+            return;
+        }
         let has_syn = flags & 0x02 != 0;
         let has_ack = flags & 0x10 != 0;
         let has_fin = flags & 0x01 != 0;
         let data = &payload[off..];
-            if has_syn && has_ack && !TCP_SYN_ACKED {
+        if has_syn && has_ack && !TCP_SYN_ACKED {
             TCP_REMOTE_SEQ = seq.wrapping_add(1);
             TCP_LOCAL_SEQ = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
             TCP_SYN_ACKED = true;
             TCP_CONNECTED = true;
-            let _ = send_tcp_segment(TCP_REMOTE_IP, TCP_REMOTE_PORT, TCP_LOCAL_PORT, TCP_LOCAL_SEQ, TCP_REMOTE_SEQ, 0x10, &[]);
+            let _ = send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x10,
+                &[],
+            );
         } else if TCP_CONNECTED && has_ack {
             let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
-            if ack.wrapping_sub(TCP_LOCAL_SEQ) < 0x8000_0000 { TCP_LOCAL_SEQ = ack; }
-        }
-            if TCP_CONNECTED && !has_ack && !has_syn {
-                let _ = send_tcp_segment(TCP_REMOTE_IP, TCP_REMOTE_PORT, TCP_LOCAL_PORT, TCP_LOCAL_SEQ, TCP_REMOTE_SEQ, 0x10, &[]);
+            if ack.wrapping_sub(TCP_LOCAL_SEQ) < 0x8000_0000 {
+                TCP_LOCAL_SEQ = ack;
             }
+        }
+        if TCP_CONNECTED && !has_ack && !has_syn {
+            let _ = send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x10,
+                &[],
+            );
+        }
         if TCP_CONNECTED && !data.is_empty() {
             let room = TCP_DATA.len().saturating_sub(TCP_DATA_LEN);
             let n = data.len().min(room);
-            TCP_DATA[TCP_DATA_LEN..TCP_DATA_LEN+n].copy_from_slice(&data[..n]);
+            TCP_DATA[TCP_DATA_LEN..TCP_DATA_LEN + n].copy_from_slice(&data[..n]);
             TCP_DATA_LEN += n;
             TCP_REMOTE_SEQ = seq.wrapping_add(data.len() as u32);
-            let _ = send_tcp_segment(TCP_REMOTE_IP, TCP_REMOTE_PORT, TCP_LOCAL_PORT, TCP_LOCAL_SEQ, TCP_REMOTE_SEQ, 0x10, &[]);
+            let _ = send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x10,
+                &[],
+            );
         }
         if TCP_CONNECTED && has_fin {
             TCP_REMOTE_SEQ = seq.wrapping_add(data.len() as u32).wrapping_add(1);
             TCP_FIN_RECEIVED = true;
-            let _ = send_tcp_segment(TCP_REMOTE_IP, TCP_REMOTE_PORT, TCP_LOCAL_PORT, TCP_LOCAL_SEQ, TCP_REMOTE_SEQ, 0x11, &[]);
+            let _ = send_tcp_segment(
+                TCP_REMOTE_IP,
+                TCP_REMOTE_PORT,
+                TCP_LOCAL_PORT,
+                TCP_LOCAL_SEQ,
+                TCP_REMOTE_SEQ,
+                0x11,
+                &[],
+            );
             TCP_CONNECTED = false;
         }
     }
 }
 
 fn dns_parse_a(data: &[u8], id: u16) -> Option<Ipv4Address> {
-    if data.len() < 12 || u16::from_be_bytes([data[0], data[1]]) != id { return None; }
+    if data.len() < 12 || u16::from_be_bytes([data[0], data[1]]) != id {
+        return None;
+    }
     let flags = u16::from_be_bytes([data[2], data[3]]);
     // Yanıt bayrağı (QR=1) ve RCODE == 0 (hata yok) olmalı
-    if (flags & 0x8000) == 0 || (flags & 0x000F) != 0 { return None; }
+    if (flags & 0x8000) == 0 || (flags & 0x000F) != 0 {
+        return None;
+    }
     let qd = u16::from_be_bytes([data[4], data[5]]) as usize;
     let an = u16::from_be_bytes([data[6], data[7]]) as usize;
     let mut p = 12usize;
     // Soru bölümünü atla
     for _ in 0..qd {
         loop {
-            if p >= data.len() { return None; }
+            if p >= data.len() {
+                return None;
+            }
             let n = data[p] as usize;
             p += 1;
-            if n == 0 { break; }
+            if n == 0 {
+                break;
+            }
             if (n & 0xC0) == 0xC0 {
                 // Sıkıştırılmış isim işaretçisi (2 bayt)
-                if p >= data.len() { return None; }
+                if p >= data.len() {
+                    return None;
+                }
                 p += 1;
                 break;
             } else if (n & 0xC0) != 0 {
                 return None; // Desteklenmeyen etiket formatı
             }
-            if p + n > data.len() { return None; }
+            if p + n > data.len() {
+                return None;
+            }
             p += n;
         }
-        if p + 4 > data.len() { return None; }
+        if p + 4 > data.len() {
+            return None;
+        }
         p += 4; // QTYPE (2) + QCLASS (2)
     }
     // Yanıt bölümünü ayrıştır ve A kaydını ara
     for _ in 0..an {
-        if p >= data.len() { return None; }
+        if p >= data.len() {
+            return None;
+        }
         // İsim alanını atla (pointer veya label listesi olabilir)
         loop {
-            if p >= data.len() { return None; }
+            if p >= data.len() {
+                return None;
+            }
             let n = data[p] as usize;
             if (n & 0xC0) == 0xC0 {
-                if p + 2 > data.len() { return None; }
+                if p + 2 > data.len() {
+                    return None;
+                }
                 p += 2;
                 break;
             } else if n == 0 {
@@ -639,37 +823,92 @@ fn dns_parse_a(data: &[u8], id: u16) -> Option<Ipv4Address> {
                 break;
             } else {
                 p += 1;
-                if p + n > data.len() { return None; }
+                if p + n > data.len() {
+                    return None;
+                }
                 p += n;
             }
         }
-        if p + 10 > data.len() { return None; }
-        let typ = u16::from_be_bytes([data[p], data[p+1]]);
-        let class = u16::from_be_bytes([data[p+2], data[p+3]]);
-        let rdlen = u16::from_be_bytes([data[p+8], data[p+9]]) as usize;
+        if p + 10 > data.len() {
+            return None;
+        }
+        let typ = u16::from_be_bytes([data[p], data[p + 1]]);
+        let class = u16::from_be_bytes([data[p + 2], data[p + 3]]);
+        let rdlen = u16::from_be_bytes([data[p + 8], data[p + 9]]) as usize;
         p += 10;
-        if p + rdlen > data.len() { return None; }
+        if p + rdlen > data.len() {
+            return None;
+        }
         // TYPE A (1) ve CLASS IN (1) ve RDLENGTH 4
         if typ == 1 && class == 1 && rdlen == 4 {
-            return Some(Ipv4Address([data[p], data[p+1], data[p+2], data[p+3]]));
+            return Some(Ipv4Address([
+                data[p],
+                data[p + 1],
+                data[p + 2],
+                data[p + 3],
+            ]));
         }
         p += rdlen;
     }
     None
 }
 
-pub fn take_dns_result() -> Option<Ipv4Address> { unsafe { if DNS_REPLY_LEN==0 { None } else { DNS_REPLY_LEN=0; Some(Ipv4Address(DNS_REPLY_IP)) } } }
-pub fn take_dns_packet(buf: &mut [u8]) -> usize { unsafe { let n=DNS_REPLY_LEN.min(buf.len()); buf[..n].copy_from_slice(&DNS_REPLY_DATA[..n]); DNS_REPLY_LEN=0; n } }
-pub fn take_tcp_data(buf: &mut [u8]) -> usize { unsafe { let n=TCP_DATA_LEN.min(buf.len()); buf[..n].copy_from_slice(&TCP_DATA[..n]); if n<TCP_DATA_LEN { TCP_DATA.copy_within(n..TCP_DATA_LEN,0); } TCP_DATA_LEN-=n; n } }
-pub fn tcp_connected() -> bool { unsafe { TCP_CONNECTED } }
-pub fn tcp_syn_acked() -> bool { unsafe { TCP_SYN_ACKED } }
-pub fn tcp_finished() -> bool { unsafe { TCP_FIN_RECEIVED } }
-pub fn tcp_reset_received() -> bool { unsafe { TCP_RESET } }
-pub fn tcp_clear_result() { unsafe { TCP_DATA_LEN=0; TCP_FIN_RECEIVED=false; TCP_RESET=false; TCP_CONNECTED=false; TCP_SYN_ACKED=false; } }
+pub fn take_dns_result() -> Option<Ipv4Address> {
+    unsafe {
+        if DNS_REPLY_LEN == 0 {
+            None
+        } else {
+            DNS_REPLY_LEN = 0;
+            Some(Ipv4Address(DNS_REPLY_IP))
+        }
+    }
+}
+pub fn take_dns_packet(buf: &mut [u8]) -> usize {
+    unsafe {
+        let n = DNS_REPLY_LEN.min(buf.len());
+        buf[..n].copy_from_slice(&DNS_REPLY_DATA[..n]);
+        DNS_REPLY_LEN = 0;
+        n
+    }
+}
+pub fn take_tcp_data(buf: &mut [u8]) -> usize {
+    unsafe {
+        let n = TCP_DATA_LEN.min(buf.len());
+        buf[..n].copy_from_slice(&TCP_DATA[..n]);
+        if n < TCP_DATA_LEN {
+            TCP_DATA.copy_within(n..TCP_DATA_LEN, 0);
+        }
+        TCP_DATA_LEN -= n;
+        n
+    }
+}
+pub fn tcp_connected() -> bool {
+    unsafe { TCP_CONNECTED }
+}
+pub fn tcp_syn_acked() -> bool {
+    unsafe { TCP_SYN_ACKED }
+}
+pub fn tcp_finished() -> bool {
+    unsafe { TCP_FIN_RECEIVED }
+}
+pub fn tcp_reset_received() -> bool {
+    unsafe { TCP_RESET }
+}
+pub fn tcp_clear_result() {
+    unsafe {
+        TCP_DATA_LEN = 0;
+        TCP_FIN_RECEIVED = false;
+        TCP_RESET = false;
+        TCP_CONNECTED = false;
+        TCP_SYN_ACKED = false;
+    }
+}
 
 /// UDP datagram gönderir. IPv4 UDP checksum'i isteğe bağlı olduğu için sıfır bırakılır.
 pub fn send_udp(dst: Ipv4Address, src_port: u16, dst_port: u16, data: &[u8]) -> bool {
-    if data.len() > 1400 { return false; }
+    if data.len() > 1400 {
+        return false;
+    }
     let mut packet = [0u8; 1500 - 14 - 20];
     let len = 8 + data.len();
     packet[0..2].copy_from_slice(&src_port.to_be_bytes());
@@ -683,25 +922,38 @@ pub fn send_udp(dst: Ipv4Address, src_port: u16, dst_port: u16, data: &[u8]) -> 
 /// DNS A sorgusu oluşturup gönderir; hem yapılandırılmış DNS sunucusuna hem de 1.1.1.1 yedek sunucuya iletir.
 pub fn dns_query(host: &str) -> bool {
     let bytes = host.as_bytes();
-    if bytes.is_empty() || bytes.len() > 96 { return false; }
+    if bytes.is_empty() || bytes.len() > 96 {
+        return false;
+    }
     let mut q = [0u8; 256];
     q[0..2].copy_from_slice(&0x4D4Du16.to_be_bytes());
     q[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Standard query, RD=1
     q[4..6].copy_from_slice(&1u16.to_be_bytes()); // QDCOUNT = 1
-    let mut p = 12; let mut start = 0;
+    let mut p = 12;
+    let mut start = 0;
     for i in 0..=bytes.len() {
         if i == bytes.len() || bytes[i] == b'.' {
             let n = i - start;
-            if n == 0 || n > 63 { return false; }
-            q[p] = n as u8; p += 1;
-            q[p..p+n].copy_from_slice(&bytes[start..i]); p += n;
+            if n == 0 || n > 63 {
+                return false;
+            }
+            q[p] = n as u8;
+            p += 1;
+            q[p..p + n].copy_from_slice(&bytes[start..i]);
+            p += n;
             start = i + 1;
         }
     }
-    q[p] = 0; p += 1;
-    q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p += 2; // QTYPE: A
-    q[p..p+2].copy_from_slice(&1u16.to_be_bytes()); p += 2; // QCLASS: IN
-    unsafe { DNS_REPLY_LEN = 0; DNS_REPLY_IP = [0; 4]; }
+    q[p] = 0;
+    p += 1;
+    q[p..p + 2].copy_from_slice(&1u16.to_be_bytes());
+    p += 2; // QTYPE: A
+    q[p..p + 2].copy_from_slice(&1u16.to_be_bytes());
+    p += 2; // QCLASS: IN
+    unsafe {
+        DNS_REPLY_LEN = 0;
+        DNS_REPLY_IP = [0; 4];
+    }
 
     let primary_dns = dns_server();
     let sent_primary = send_udp(primary_dns, 49152, DNS_PORT, &q[..p]);
@@ -715,69 +967,172 @@ pub fn dns_query(host: &str) -> bool {
 }
 
 pub fn resolve_ipv4(host: &str) -> Option<Ipv4Address> {
-    if let Some(ip)=parse_ipv4(host) { return Some(ip); }
-    if !dns_query(host) { return None; }
-    let mut spins=0usize;
+    if let Some(ip) = parse_ipv4(host) {
+        return Some(ip);
+    }
+    if !dns_query(host) {
+        return None;
+    }
+    let mut spins = 0usize;
     loop {
         e1000::poll();
-        if let Some(ip)=take_dns_result() { return Some(ip); }
-        spins+=1; if spins>=5_000_000 { return None; }
+        if let Some(ip) = take_dns_result() {
+            return Some(ip);
+        }
+        spins += 1;
+        if spins >= 5_000_000 {
+            return None;
+        }
         core::hint::spin_loop();
     }
 }
 
 pub fn parse_ipv4(host: &str) -> Option<Ipv4Address> {
-    let mut parts=host.split('.'); let mut ip=[0u8;4];
-    for octet in &mut ip { *octet=parts.next()?.parse().ok()?; }
-    if parts.next().is_some(){None}else{Some(Ipv4Address(ip))}
+    let mut parts = host.split('.');
+    let mut ip = [0u8; 4];
+    for octet in &mut ip {
+        *octet = parts.next()?.parse().ok()?;
+    }
+    if parts.next().is_some() {
+        None
+    } else {
+        Some(Ipv4Address(ip))
+    }
 }
 
-pub(crate) fn send_tcp_segment(dst: Ipv4Address, dst_port:u16, src_port:u16, seq:u32, ack:u32, flags:u8, data:&[u8]) -> bool {
-    if data.len()>1300{return false;}
-    let mut seg=[0u8;1400];
-    seg[0..2].copy_from_slice(&src_port.to_be_bytes()); seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
-    seg[4..8].copy_from_slice(&seq.to_be_bytes()); seg[8..12].copy_from_slice(&ack.to_be_bytes());
-    seg[12]=0x50; seg[13]=flags; seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
-    seg[20..20+data.len()].copy_from_slice(data);
-    let n=20+data.len(); let c=transport_checksum(local_ip(),dst,IP_PROTO_TCP,&seg[..n]); seg[16..18].copy_from_slice(&c.to_be_bytes());
-    send_ipv4(dst,IP_PROTO_TCP,&seg[..n])
+pub(crate) fn send_tcp_segment(
+    dst: Ipv4Address,
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    data: &[u8],
+) -> bool {
+    if data.len() > 1300 {
+        return false;
+    }
+    let mut seg = [0u8; 1400];
+    seg[0..2].copy_from_slice(&src_port.to_be_bytes());
+    seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    seg[4..8].copy_from_slice(&seq.to_be_bytes());
+    seg[8..12].copy_from_slice(&ack.to_be_bytes());
+    seg[12] = 0x50;
+    seg[13] = flags;
+    seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
+    seg[20..20 + data.len()].copy_from_slice(data);
+    let n = 20 + data.len();
+    let c = transport_checksum(local_ip(), dst, IP_PROTO_TCP, &seg[..n]);
+    seg[16..18].copy_from_slice(&c.to_be_bytes());
+    send_ipv4(dst, IP_PROTO_TCP, &seg[..n])
 }
 
-pub fn tcp_begin(dst: Ipv4Address, dst_port:u16, src_port:u16) -> bool {
-    unsafe { TCP_LOCAL_PORT=src_port; TCP_REMOTE_PORT=dst_port; TCP_REMOTE_IP=dst; TCP_LOCAL_SEQ=0x1020_3040; TCP_REMOTE_SEQ=0; TCP_DATA_LEN=0; TCP_CONNECTED=false; TCP_SYN_ACKED=false; TCP_FIN_RECEIVED=false; TCP_RESET=false; }
-    send_tcp_segment(dst,dst_port,src_port,0x1020_3040,0,0x02,&[])
+pub fn tcp_begin(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
+    unsafe {
+        TCP_LOCAL_PORT = src_port;
+        TCP_REMOTE_PORT = dst_port;
+        TCP_REMOTE_IP = dst;
+        TCP_LOCAL_SEQ = 0x1020_3040;
+        TCP_REMOTE_SEQ = 0;
+        TCP_DATA_LEN = 0;
+        TCP_CONNECTED = false;
+        TCP_SYN_ACKED = false;
+        TCP_FIN_RECEIVED = false;
+        TCP_RESET = false;
+    }
+    send_tcp_segment(dst, dst_port, src_port, 0x1020_3040, 0, 0x02, &[])
 }
 
-pub fn tcp_send(data:&[u8]) -> bool { unsafe { if !TCP_CONNECTED{return false;} let ok=send_tcp_segment(TCP_REMOTE_IP,TCP_REMOTE_PORT,TCP_LOCAL_PORT,TCP_LOCAL_SEQ,TCP_REMOTE_SEQ,0x18,data); if ok { TCP_LOCAL_SEQ=TCP_LOCAL_SEQ.wrapping_add(data.len() as u32); } ok } }
+pub fn tcp_send(data: &[u8]) -> bool {
+    unsafe {
+        if !TCP_CONNECTED {
+            return false;
+        }
+        let ok = send_tcp_segment(
+            TCP_REMOTE_IP,
+            TCP_REMOTE_PORT,
+            TCP_LOCAL_PORT,
+            TCP_LOCAL_SEQ,
+            TCP_REMOTE_SEQ,
+            0x18,
+            data,
+        );
+        if ok {
+            TCP_LOCAL_SEQ = TCP_LOCAL_SEQ.wrapping_add(data.len() as u32);
+        }
+        ok
+    }
+}
 
-pub fn tcp_close() -> bool { unsafe { if !TCP_CONNECTED{return false;} let ok=send_tcp_segment(TCP_REMOTE_IP,TCP_REMOTE_PORT,TCP_LOCAL_PORT,TCP_LOCAL_SEQ,TCP_REMOTE_SEQ,0x11,&[]); if ok { TCP_LOCAL_SEQ=TCP_LOCAL_SEQ.wrapping_add(1); TCP_CONNECTED=false; } ok } }
+pub fn tcp_close() -> bool {
+    unsafe {
+        if !TCP_CONNECTED {
+            return false;
+        }
+        let ok = send_tcp_segment(
+            TCP_REMOTE_IP,
+            TCP_REMOTE_PORT,
+            TCP_LOCAL_PORT,
+            TCP_LOCAL_SEQ,
+            TCP_REMOTE_SEQ,
+            0x11,
+            &[],
+        );
+        if ok {
+            TCP_LOCAL_SEQ = TCP_LOCAL_SEQ.wrapping_add(1);
+            TCP_CONNECTED = false;
+        }
+        ok
+    }
+}
 
 /// TCP SYN gönderir; gelen TCP yükleri `take_udp_data` üzerinden alınabilir.
 pub fn tcp_connect(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
     let mut seg = [0u8; 20];
-    seg[0..2].copy_from_slice(&src_port.to_be_bytes()); seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
-    seg[4..8].copy_from_slice(&0x1000u32.to_be_bytes()); seg[12] = 0x50; seg[13] = 0x02;
+    seg[0..2].copy_from_slice(&src_port.to_be_bytes());
+    seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    seg[4..8].copy_from_slice(&0x1000u32.to_be_bytes());
+    seg[12] = 0x50;
+    seg[13] = 0x02;
     seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
-    let c = transport_checksum(local_ip(), dst, IP_PROTO_TCP, &seg); seg[16..18].copy_from_slice(&c.to_be_bytes());
+    let c = transport_checksum(local_ip(), dst, IP_PROTO_TCP, &seg);
+    seg[16..18].copy_from_slice(&c.to_be_bytes());
     send_ipv4(dst, IP_PROTO_TCP, &seg)
 }
 
 /// Bağlantı kurulmuş bir TCP akışına HTTP/1.0 GET isteği hazırlayıp gönderir.
 /// `seq` ve `ack` çağıranın takip ettiği TCP sıra numaralarıdır.
 pub fn http_get(dst: Ipv4Address, host: &str, path: &str, seq: u32, ack: u32) -> bool {
-    let hb = host.as_bytes(); let pb = path.as_bytes();
-    if hb.len() > 96 || pb.len() > 180 { return false; }
+    let hb = host.as_bytes();
+    let pb = path.as_bytes();
+    if hb.len() > 96 || pb.len() > 180 {
+        return false;
+    }
     let mut seg = [0u8; 620];
-    let req = b"GET "; let mut n = 0;
-    seg[20..24].copy_from_slice(req); n += 4;
-    seg[20+n..20+n+pb.len()].copy_from_slice(pb); n += pb.len();
-    let tail = b" HTTP/1.0\r\nHost: "; seg[20+n..20+n+tail.len()].copy_from_slice(tail); n += tail.len();
-    seg[20+n..20+n+hb.len()].copy_from_slice(hb); n += hb.len();
-    let end = b"\r\nConnection: close\r\n\r\n"; seg[20+n..20+n+end.len()].copy_from_slice(end); n += end.len();
-    seg[0..2].copy_from_slice(&49153u16.to_be_bytes()); seg[2..4].copy_from_slice(&HTTP_PORT.to_be_bytes());
-    seg[4..8].copy_from_slice(&seq.to_be_bytes()); seg[8..12].copy_from_slice(&ack.to_be_bytes());
-    seg[12] = 0x50; seg[13] = 0x18; seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
-    let total = 20+n; let c = transport_checksum(local_ip(), dst, IP_PROTO_TCP, &seg[..total]); seg[16..18].copy_from_slice(&c.to_be_bytes());
+    let req = b"GET ";
+    let mut n = 0;
+    seg[20..24].copy_from_slice(req);
+    n += 4;
+    seg[20 + n..20 + n + pb.len()].copy_from_slice(pb);
+    n += pb.len();
+    let tail = b" HTTP/1.0\r\nHost: ";
+    seg[20 + n..20 + n + tail.len()].copy_from_slice(tail);
+    n += tail.len();
+    seg[20 + n..20 + n + hb.len()].copy_from_slice(hb);
+    n += hb.len();
+    let end = b"\r\nConnection: close\r\n\r\n";
+    seg[20 + n..20 + n + end.len()].copy_from_slice(end);
+    n += end.len();
+    seg[0..2].copy_from_slice(&49153u16.to_be_bytes());
+    seg[2..4].copy_from_slice(&HTTP_PORT.to_be_bytes());
+    seg[4..8].copy_from_slice(&seq.to_be_bytes());
+    seg[8..12].copy_from_slice(&ack.to_be_bytes());
+    seg[12] = 0x50;
+    seg[13] = 0x18;
+    seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
+    let total = 20 + n;
+    let c = transport_checksum(local_ip(), dst, IP_PROTO_TCP, &seg[..total]);
+    seg[16..18].copy_from_slice(&c.to_be_bytes());
     send_ipv4(dst, IP_PROTO_TCP, &seg[..total])
 }
 
@@ -839,7 +1194,9 @@ pub fn run_network_self_test() -> bool {
     }
 
     // 1. ARP Istegi ve TX Ring iletim testi (Canlı ARP Yanıtı Bekleme)
-    unsafe { LAST_ARP_REPLY_SRC = None; }
+    unsafe {
+        LAST_ARP_REPLY_SRC = None;
+    }
     crate::serial_print("[NET-TEST] 1. ARP: Gateway (10.0.2.2) icin ARP istegi gönderiliyor... ");
     send_arp_request(GATEWAY_IP);
     crate::serial_print("TX iletildi.\n");
@@ -878,14 +1235,18 @@ pub fn run_network_self_test() -> bool {
         if echo_replied {
             crate::serial_print("BAŞARILI (ICMP Echo Reply alındı)\n");
         } else {
-            crate::serial_print("YANIT BEKLENİYOR (QEMU ağ geçidinde ICMP kapalı veya yanıt gecikti)\n");
+            crate::serial_print(
+                "YANIT BEKLENİYOR (QEMU ağ geçidinde ICMP kapalı veya yanıt gecikti)\n",
+            );
         }
     } else {
         crate::serial_print("BAŞARISIZ (TX kuyruk hatası)\n");
     }
 
     // 3. TCP Bağlantısı (3-Way Handshake) & HTTP Testi
-    crate::serial_print("[NET-TEST] 3. TCP: Gateway HTTP portuna (10.0.2.2:80) SYN gönderiliyor... ");
+    crate::serial_print(
+        "[NET-TEST] 3. TCP: Gateway HTTP portuna (10.0.2.2:80) SYN gönderiliyor... ",
+    );
     let tcp_init = tcp_begin(GATEWAY_IP, 80, 49200);
     if tcp_init {
         let mut tcp_synack = false;
@@ -901,7 +1262,8 @@ pub fn run_network_self_test() -> bool {
             crate::serial_print("BAĞLANTI KURULDU (SYN-ACK alındı, ESTABLISHED)!\n");
             // HTTP İsteği gönder
             crate::serial_print("[NET-TEST] 4. HTTP: GET / HTTP/1.0 istegi gönderiliyor... ");
-            let http_sent = tcp_send(b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n");
+            let http_sent =
+                tcp_send(b"GET / HTTP/1.0\r\nHost: 10.0.2.2\r\nConnection: close\r\n\r\n");
             if http_sent {
                 crate::serial_print("İletildi, veri bekleniyor... ");
                 for _ in 0..5_000 {
@@ -924,7 +1286,9 @@ pub fn run_network_self_test() -> bool {
             }
             tcp_close();
         } else {
-            crate::serial_print("SYN-ACK ALINAMADI (80 numaralı bağlantı noktası kapalı veya dinleyici yok)\n");
+            crate::serial_print(
+                "SYN-ACK ALINAMADI (80 numaralı bağlantı noktası kapalı veya dinleyici yok)\n",
+            );
         }
     } else {
         crate::serial_print("TCP paketi iletilemedi\n");
@@ -943,38 +1307,161 @@ pub fn run_network_self_test() -> bool {
 }
 
 pub fn dhcp_request() -> bool {
-    unsafe { DHCP_READY=false; DHCP_OFFER=None; }
-    let mac=unsafe{e1000::MAC_ADDR}; let mut p=[0u8;300];
-    p[0]=1;p[1]=1;p[2]=6; p[4..8].copy_from_slice(&unsafe{DHCP_XID}.to_be_bytes()); p[10..12].copy_from_slice(&0x8000u16.to_be_bytes()); p[28..34].copy_from_slice(&mac);
-    p[236..240].copy_from_slice(&[99,130,83,99]); let mut n=240;
-    p[n]=53;p[n+1]=1;p[n+2]=1;n+=3;
-    p[n]=55;p[n+1]=4;p[n+2]=1;p[n+3]=3;p[n+4]=6;p[n+5]=51;n+=6;
-    p[n]=61;p[n+1]=7;p[n+2]=1;p[n+3..n+9].copy_from_slice(&mac);n+=9;
-    p[n]=255;n+=1;
+    unsafe {
+        DHCP_READY = false;
+        DHCP_OFFER = None;
+    }
+    let mac = unsafe { e1000::MAC_ADDR };
+    let mut p = [0u8; 300];
+    p[0] = 1;
+    p[1] = 1;
+    p[2] = 6;
+    p[4..8].copy_from_slice(&unsafe { DHCP_XID }.to_be_bytes());
+    p[10..12].copy_from_slice(&0x8000u16.to_be_bytes());
+    p[28..34].copy_from_slice(&mac);
+    p[236..240].copy_from_slice(&[99, 130, 83, 99]);
+    let mut n = 240;
+    p[n] = 53;
+    p[n + 1] = 1;
+    p[n + 2] = 1;
+    n += 3;
+    p[n] = 55;
+    p[n + 1] = 4;
+    p[n + 2] = 1;
+    p[n + 3] = 3;
+    p[n + 4] = 6;
+    p[n + 5] = 51;
+    n += 6;
+    p[n] = 61;
+    p[n + 1] = 7;
+    p[n + 2] = 1;
+    p[n + 3..n + 9].copy_from_slice(&mac);
+    n += 9;
+    p[n] = 255;
+    n += 1;
     send_dhcp_bootstrap(&p[..n])
 }
 
-fn send_dhcp_bootstrap(data:&[u8])->bool {
-    if data.len()>1200{return false;}
-    let mut udp=[0u8;1210];let len=data.len()+8;udp[0..2].copy_from_slice(&68u16.to_be_bytes());udp[2..4].copy_from_slice(&67u16.to_be_bytes());udp[4..6].copy_from_slice(&(len as u16).to_be_bytes());udp[8..len].copy_from_slice(data);
-    let mut ip=[0u8;1230];let total=len+20;ip[0]=0x45;ip[2..4].copy_from_slice(&(total as u16).to_be_bytes());ip[6]=0x40;ip[8]=64;ip[9]=IP_PROTO_UDP;ip[16..20].copy_from_slice(&[255;4]);let c=checksum(&ip[..20]);ip[10..12].copy_from_slice(&c.to_be_bytes());ip[20..total].copy_from_slice(&udp[..len]);
-    let mut frame=[0u8;1260];let n=build_ethernet(MAC_BROADCAST,ETHERTYPE_IPV4,&ip[..total],&mut frame);e1000::transmit(&frame[..n])
+fn send_dhcp_bootstrap(data: &[u8]) -> bool {
+    if data.len() > 1200 {
+        return false;
+    }
+    let mut udp = [0u8; 1210];
+    let len = data.len() + 8;
+    udp[0..2].copy_from_slice(&68u16.to_be_bytes());
+    udp[2..4].copy_from_slice(&67u16.to_be_bytes());
+    udp[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+    udp[8..len].copy_from_slice(data);
+    let mut ip = [0u8; 1230];
+    let total = len + 20;
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+    ip[6] = 0x40;
+    ip[8] = 64;
+    ip[9] = IP_PROTO_UDP;
+    ip[16..20].copy_from_slice(&[255; 4]);
+    let c = checksum(&ip[..20]);
+    ip[10..12].copy_from_slice(&c.to_be_bytes());
+    ip[20..total].copy_from_slice(&udp[..len]);
+    let mut frame = [0u8; 1260];
+    let n = build_ethernet(MAC_BROADCAST, ETHERTYPE_IPV4, &ip[..total], &mut frame);
+    e1000::transmit(&frame[..n])
 }
 
-fn handle_dhcp(src:Ipv4Address,data:&[u8]) {
-    if data.len()<240 || data[0]!=2 || data[1]!=1 || data[2]!=6 {return;}
-    let xid=u32::from_be_bytes([data[4],data[5],data[6],data[7]]); if xid!=unsafe{DHCP_XID} {return;}
-    let offered=Ipv4Address([data[16],data[17],data[18],data[19]]);
-    let mut mask=SUBNET_MASK; let mut router=src; let mut dns=DNS_SERVER; let mut server=src; let mut msg=0u8; let mut p=240;
-    while p<data.len() { let tag=data[p];p+=1;if tag==255{break;}if tag==0{continue;}if p>=data.len(){return;}let len=data[p] as usize;p+=1;if p+len>data.len(){return;}let v=&data[p..p+len];p+=len;match tag {53 if len==1=>msg=v[0],1 if len>=4=>mask=Ipv4Address([v[0],v[1],v[2],v[3]]),3 if len>=4=>router=Ipv4Address([v[0],v[1],v[2],v[3]]),6 if len>=4=>dns=Ipv4Address([v[0],v[1],v[2],v[3]]),54 if len>=4=>server=Ipv4Address([v[0],v[1],v[2],v[3]]),_=>{}}}
-    if msg==2 { unsafe{DHCP_OFFER=Some((offered,router,dns));DHCP_SERVER_IP=server;} send_dhcp_request(offered); }
-    else if msg==5 { unsafe{ACTIVE_LOCAL_IP=offered;ACTIVE_GATEWAY_IP=router;ACTIVE_DNS_IP=dns;ACTIVE_SUBNET_MASK=mask;DHCP_READY=true;} send_arp_request(router); }
+fn handle_dhcp(src: Ipv4Address, data: &[u8]) {
+    if data.len() < 240 || data[0] != 2 || data[1] != 1 || data[2] != 6 {
+        return;
+    }
+    let xid = u32::from_be_bytes([data[4], data[5], data[6], data[7]]);
+    if xid != unsafe { DHCP_XID } {
+        return;
+    }
+    let offered = Ipv4Address([data[16], data[17], data[18], data[19]]);
+    let mut mask = SUBNET_MASK;
+    let mut router = src;
+    let mut dns = DNS_SERVER;
+    let mut server = src;
+    let mut msg = 0u8;
+    let mut p = 240;
+    while p < data.len() {
+        let tag = data[p];
+        p += 1;
+        if tag == 255 {
+            break;
+        }
+        if tag == 0 {
+            continue;
+        }
+        if p >= data.len() {
+            return;
+        }
+        let len = data[p] as usize;
+        p += 1;
+        if p + len > data.len() {
+            return;
+        }
+        let v = &data[p..p + len];
+        p += len;
+        match tag {
+            53 if len == 1 => msg = v[0],
+            1 if len >= 4 => mask = Ipv4Address([v[0], v[1], v[2], v[3]]),
+            3 if len >= 4 => router = Ipv4Address([v[0], v[1], v[2], v[3]]),
+            6 if len >= 4 => dns = Ipv4Address([v[0], v[1], v[2], v[3]]),
+            54 if len >= 4 => server = Ipv4Address([v[0], v[1], v[2], v[3]]),
+            _ => {}
+        }
+    }
+    if msg == 2 {
+        unsafe {
+            DHCP_OFFER = Some((offered, router, dns));
+            DHCP_SERVER_IP = server;
+        }
+        send_dhcp_request(offered);
+    } else if msg == 5 {
+        unsafe {
+            ACTIVE_LOCAL_IP = offered;
+            ACTIVE_GATEWAY_IP = router;
+            ACTIVE_DNS_IP = dns;
+            ACTIVE_SUBNET_MASK = mask;
+            DHCP_READY = true;
+        }
+        send_arp_request(router);
+    }
 }
 
-fn send_dhcp_request(offered:Ipv4Address) {
-    let mac=unsafe{e1000::MAC_ADDR};let server=unsafe{DHCP_SERVER_IP};let mut p=[0u8;300];p[0]=1;p[1]=1;p[2]=6;p[4..8].copy_from_slice(&unsafe{DHCP_XID}.to_be_bytes());p[10..12].copy_from_slice(&0x8000u16.to_be_bytes());p[28..34].copy_from_slice(&mac);p[236..240].copy_from_slice(&[99,130,83,99]);let mut n=240;p[n]=53;p[n+1]=1;p[n+2]=3;n+=3;p[n]=50;p[n+1]=4;p[n+2..n+6].copy_from_slice(&offered.0);n+=6;p[n]=54;p[n+1]=4;p[n+2..n+6].copy_from_slice(&server.0);n+=6;p[n]=61;p[n+1]=7;p[n+2]=1;p[n+3..n+9].copy_from_slice(&mac);n+=9;p[n]=255;n+=1;let _=send_dhcp_bootstrap(&p[..n]);
+fn send_dhcp_request(offered: Ipv4Address) {
+    let mac = unsafe { e1000::MAC_ADDR };
+    let server = unsafe { DHCP_SERVER_IP };
+    let mut p = [0u8; 300];
+    p[0] = 1;
+    p[1] = 1;
+    p[2] = 6;
+    p[4..8].copy_from_slice(&unsafe { DHCP_XID }.to_be_bytes());
+    p[10..12].copy_from_slice(&0x8000u16.to_be_bytes());
+    p[28..34].copy_from_slice(&mac);
+    p[236..240].copy_from_slice(&[99, 130, 83, 99]);
+    let mut n = 240;
+    p[n] = 53;
+    p[n + 1] = 1;
+    p[n + 2] = 3;
+    n += 3;
+    p[n] = 50;
+    p[n + 1] = 4;
+    p[n + 2..n + 6].copy_from_slice(&offered.0);
+    n += 6;
+    p[n] = 54;
+    p[n + 1] = 4;
+    p[n + 2..n + 6].copy_from_slice(&server.0);
+    n += 6;
+    p[n] = 61;
+    p[n + 1] = 7;
+    p[n + 2] = 1;
+    p[n + 3..n + 9].copy_from_slice(&mac);
+    n += 9;
+    p[n] = 255;
+    n += 1;
+    let _ = send_dhcp_bootstrap(&p[..n]);
 }
-
 
 /// IPv6 Adresi (128-bit / 16 bayt).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1026,7 +1513,9 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
         let mut left_count = 0;
         if !left.is_empty() {
             for s in left.split(':') {
-                if left_count >= 8 || s.len() > 4 { return None; }
+                if left_count >= 8 || s.len() > 4 {
+                    return None;
+                }
                 left_parts[left_count] = u16::from_str_radix(s, 16).ok()?;
                 left_count += 1;
             }
@@ -1036,7 +1525,9 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
         let mut right_count = 0;
         if !right.is_empty() {
             for s in right.split(':') {
-                if right_count >= 8 || s.len() > 4 { return None; }
+                if right_count >= 8 || s.len() > 4 {
+                    return None;
+                }
                 right_parts[right_count] = u16::from_str_radix(s, 16).ok()?;
                 right_count += 1;
             }
@@ -1060,7 +1551,9 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
     } else {
         let mut count = 0;
         for s in clean.split(':') {
-            if count >= 8 || s.len() > 4 { return None; }
+            if count >= 8 || s.len() > 4 {
+                return None;
+            }
             parts[count] = u16::from_str_radix(s, 16).ok()?;
             count += 1;
         }
@@ -1077,7 +1570,6 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
     }
     Some(Ipv6Address(bytes))
 }
-
 
 fn handle_ipv6(payload: &[u8]) {
     // IPv6 başlığı en az 40 bayt olmalıdır

@@ -3,38 +3,57 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::gui::{Color, MinGuiCompositor};
 use super::css::{match_css_style, parse_css};
 use super::types::{BrowserLine, HtmlTagType, TextAlign, TextSpan};
+use crate::gui::{Color, MinGuiCompositor};
 
-pub fn find_bytes(haystack:&[u8], needle:&[u8])->Option<usize> {
-    if needle.is_empty() || needle.len()>haystack.len(){return None;}
-    haystack.windows(needle.len()).position(|w|w==needle)
+pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
-pub fn eq_ascii(a:&[u8], b:&[u8])->bool { a.eq_ignore_ascii_case(b) }
+pub fn eq_ascii(a: &[u8], b: &[u8]) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
 
 fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
     let mut i = 0;
     while i < attrs.len() {
-        while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') { i += 1; }
+        while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') {
+            i += 1;
+        }
         let k_start = i;
-        while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') { i += 1; }
+        while i < attrs.len() && (attrs[i].is_ascii_alphanumeric() || attrs[i] == b'-') {
+            i += 1;
+        }
         let cur_key = &attrs[k_start..i];
-        while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
+        while i < attrs.len() && attrs[i].is_ascii_whitespace() {
+            i += 1;
+        }
         if i < attrs.len() && attrs[i] == b'=' {
             i += 1;
-            while i < attrs.len() && attrs[i].is_ascii_whitespace() { i += 1; }
+            while i < attrs.len() && attrs[i].is_ascii_whitespace() {
+                i += 1;
+            }
             let quote = if i < attrs.len() && (attrs[i] == b'\'' || attrs[i] == b'"') {
                 let q = attrs[i];
                 i += 1;
                 q
-            } else { 0 };
+            } else {
+                0
+            };
             let v_start = i;
-            while i < attrs.len() && ((quote != 0 && attrs[i] != quote) || (quote == 0 && !attrs[i].is_ascii_whitespace() && attrs[i] != b'>')) {
+            while i < attrs.len()
+                && ((quote != 0 && attrs[i] != quote)
+                    || (quote == 0 && !attrs[i].is_ascii_whitespace() && attrs[i] != b'>'))
+            {
                 i += 1;
             }
             let val = &attrs[v_start..i];
-            if quote != 0 && i < attrs.len() { i += 1; }
+            if quote != 0 && i < attrs.len() {
+                i += 1;
+            }
             if eq_ascii(cur_key, key) {
                 return core::str::from_utf8(val).ok();
             }
@@ -47,7 +66,9 @@ fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
 
 /// Robust UTF-8, HTML entity, and Turkish ISO-8859-9/Windows-1254 character decoder
 fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
-    if p >= bytes.len() { return ('\0', 0); }
+    if p >= bytes.len() {
+        return ('\0', 0);
+    }
     let b0 = bytes[p];
 
     // HTML Entity &...;
@@ -79,9 +100,14 @@ fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
                 _ => {
                     if ent_str.starts_with('#') {
                         if ent_str.starts_with("#x") || ent_str.starts_with("#X") {
-                            u32::from_str_radix(&ent_str[2..], 16).ok().and_then(core::char::from_u32)
+                            u32::from_str_radix(&ent_str[2..], 16)
+                                .ok()
+                                .and_then(core::char::from_u32)
                         } else {
-                            ent_str[1..].parse::<u32>().ok().and_then(core::char::from_u32)
+                            ent_str[1..]
+                                .parse::<u32>()
+                                .ok()
+                                .and_then(core::char::from_u32)
                         }
                     } else {
                         None
@@ -109,7 +135,8 @@ fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
         let b1 = bytes[p + 1];
         let b2 = bytes[p + 2];
         if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 {
-            let cp = (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
+            let cp =
+                (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
             if let Some(ch) = core::char::from_u32(cp) {
                 return (ch, 3);
             }
@@ -119,7 +146,10 @@ fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
         let b2 = bytes[p + 2];
         let b3 = bytes[p + 3];
         if (b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80 {
-            let cp = (((b0 & 0x07) as u32) << 18) | (((b1 & 0x3F) as u32) << 12) | (((b2 & 0x3F) as u32) << 6) | ((b3 & 0x3F) as u32);
+            let cp = (((b0 & 0x07) as u32) << 18)
+                | (((b1 & 0x3F) as u32) << 12)
+                | (((b2 & 0x3F) as u32) << 6)
+                | ((b3 & 0x3F) as u32);
             if let Some(ch) = core::char::from_u32(cp) {
                 return (ch, 4);
             }
@@ -150,7 +180,9 @@ pub fn decode_bytes_to_string(bytes: &[u8]) -> String {
     let mut p = 0;
     while p < bytes.len() {
         let (ch, len) = decode_html_char(bytes, p);
-        if len == 0 { break; }
+        if len == 0 {
+            break;
+        }
         out.push(ch);
         p += len;
     }
@@ -158,7 +190,12 @@ pub fn decode_bytes_to_string(bytes: &[u8]) -> String {
 }
 
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
-pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut Vec<BrowserLine>, max_lines: usize) {
+pub fn render_html_to_lines(
+    body: &[u8],
+    wrap_width_px: usize,
+    out_lines: &mut Vec<BrowserLine>,
+    max_lines: usize,
+) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
     // script etiketleri ise çıktidan çıkarılır.
     let js_body = crate::apps::js::inline_scripts(body);
@@ -179,7 +216,9 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
         if body[p] == b'<' && p + 6 <= body.len() && eq_ascii(&body[p..p + 6], b"<style") {
             let start = p + 6;
             let mut close_tag = start;
-            while close_tag < body.len() && body[close_tag] != b'>' { close_tag += 1; }
+            while close_tag < body.len() && body[close_tag] != b'>' {
+                close_tag += 1;
+            }
             if close_tag < body.len() {
                 close_tag += 1;
                 let css_start = close_tag;
@@ -211,7 +250,12 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
         base.saturating_add(cur_line_indent.get())
     };
 
-    let flush_line = |lines: &mut Vec<BrowserLine>, spans: &mut Vec<TextSpan>, line_w: &mut usize, tag: HtmlTagType, align: TextAlign, max: usize| {
+    let flush_line = |lines: &mut Vec<BrowserLine>,
+                      spans: &mut Vec<TextSpan>,
+                      line_w: &mut usize,
+                      tag: HtmlTagType,
+                      align: TextAlign,
+                      max: usize| {
         if lines.len() < max && !spans.is_empty() {
             let indent = tag_indent(tag);
             lines.push(BrowserLine {
@@ -240,7 +284,9 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     tag: HtmlTagType,
                     align: TextAlign,
                     max: usize| {
-        if word.is_empty() { return; }
+        if word.is_empty() {
+            return;
+        }
         let scale = match tag {
             HtmlTagType::Heading1 => 2,
             HtmlTagType::Heading2 => 1,
@@ -272,7 +318,16 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
         } else {
             *line_w += space_w + word_w;
             if let Some(last) = spans.last_mut() {
-                if !is_button && last.color == color && last.bg_color == bg_color && last.is_link == is_link && last.link_url == link_url && !last.is_button && last.elem_id == elem_id && last.bold == bold && last.underline == underline {
+                if !is_button
+                    && last.color == color
+                    && last.bg_color == bg_color
+                    && last.is_link == is_link
+                    && last.link_url == link_url
+                    && !last.is_button
+                    && last.elem_id == elem_id
+                    && last.bold == bold
+                    && last.underline == underline
+                {
                     last.text.push(' ');
                     last.text.push_str(word);
                     return;
@@ -318,7 +373,10 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                       align: TextAlign,
                       max: usize| {
         if !buf.is_empty() {
-            add_word(lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, onclick, elem_id, bold, underline, tag, align, max);
+            add_word(
+                lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, onclick, elem_id,
+                bold, underline, tag, align, max,
+            );
             buf.clear();
         }
     };
@@ -327,12 +385,21 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
         if body[p] == b'<' {
             let start = p + 1;
             let mut end = start;
-            while end < body.len() && body[end] != b'>' { end += 1; }
-            if end == body.len() { break; }
+            while end < body.len() && body[end] != b'>' {
+                end += 1;
+            }
+            if end == body.len() {
+                break;
+            }
             let mut tag_content = &body[start..end];
             let closing = tag_content.first() == Some(&b'/');
-            if closing { tag_content = &tag_content[1..]; }
-            let name_end = tag_content.iter().position(|b| b.is_ascii_whitespace() || *b == b'/').unwrap_or(tag_content.len());
+            if closing {
+                tag_content = &tag_content[1..];
+            }
+            let name_end = tag_content
+                .iter()
+                .position(|b| b.is_ascii_whitespace() || *b == b'/')
+                .unwrap_or(tag_content.len());
             let name = &tag_content[..name_end];
 
             if let Some(ref h) = hidden_until_close {
@@ -352,7 +419,24 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
             let is_link = active_link.is_some();
             let onclick_str = active_onclick.as_deref().unwrap_or("");
             let elem_id_str = active_id.as_deref().unwrap_or("");
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, current_bold, current_underline, cur_line_tag, cur_line_align, max_lines);
+            flush_word(
+                out_lines,
+                &mut cur_line_spans,
+                &mut cur_line_w,
+                &mut word_buf,
+                current_color,
+                current_bg,
+                is_link,
+                link_target,
+                active_is_button,
+                onclick_str,
+                elem_id_str,
+                current_bold,
+                current_underline,
+                cur_line_tag,
+                cur_line_align,
+                max_lines,
+            );
 
             let tag_name_str = core::str::from_utf8(name).unwrap_or("");
             let attrs = &tag_content[name_end..];
@@ -362,11 +446,16 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
 
-            let matched = match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
+            let matched =
+                match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
 
             if !closing {
-                if let Some(c) = matched.color { current_color = c; }
-                if let Some(bg) = matched.bg_color { current_bg = Some(bg); }
+                if let Some(c) = matched.color {
+                    current_color = c;
+                }
+                if let Some(bg) = matched.bg_color {
+                    current_bg = Some(bg);
+                }
                 if matched.align != TextAlign::Left {
                     cur_line_align = matched.align;
                 }
@@ -402,21 +491,49 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                         current_bg = Some(0xE0E0E8);
                     }
                 } else if eq_ascii(name, b"h1") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Heading1;
-                    if matched.color.is_none() { current_color = Color::ACCENT_PINK; }
+                    if matched.color.is_none() {
+                        current_color = Color::ACCENT_PINK;
+                    }
                 } else if eq_ascii(name, b"h2") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Heading2;
-                    if matched.color.is_none() { current_color = Color::ACCENT_BLUE; }
+                    if matched.color.is_none() {
+                        current_color = Color::ACCENT_BLUE;
+                    }
                 } else if eq_ascii(name, b"h3") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Heading3;
-                    if matched.color.is_none() { current_color = Color::ACCENT_GREEN; }
+                    if matched.color.is_none() {
+                        current_color = Color::ACCENT_GREEN;
+                    }
                 } else if eq_ascii(name, b"span") {
                     // <span>: inline container, stilleri uygulamak için kullanılır
                     // Renk/background/align/indent gibi CSS stilleri uygulanır
-                    if matched.color.is_none() { /* span varsayılan renk uygulanmaz, ebeveyne bakılır */ }
+                    if matched.color.is_none() { /* span varsayılan renk uygulanmaz, ebeveyne bakılır */
+                    }
                     if matched.align != TextAlign::Left {
                         cur_line_align = matched.align;
                     }
@@ -425,7 +542,9 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     }
                 } else if eq_ascii(name, b"em") {
                     // <em>: vurgulu metin
-                    if matched.color.is_none() { current_color = Color::ACCENT_BLUE; }
+                    if matched.color.is_none() {
+                        current_color = Color::ACCENT_BLUE;
+                    }
                     if matched.underline {
                         current_underline = true;
                     }
@@ -450,23 +569,59 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                         .or_else(|| extract_attr(attrs, b"src"))
                         .unwrap_or("görsel");
                     if !word_buf.is_empty() {
-                        flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, current_bold, current_underline, cur_line_tag, cur_line_align, max_lines);
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
                     }
                     word_buf.push('[');
                     for ch in label.chars() {
-                        if !ch.is_control() { word_buf.push(ch); }
+                        if !ch.is_control() {
+                            word_buf.push(ch);
+                        }
                     }
                     word_buf.push(']');
                 } else if matches!(name, b"ul" | b"ol") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Normal;
                     list_stack.push((eq_ascii(name, b"ol"), 0usize));
                 } else if eq_ascii(name, b"li") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::ListItem;
                     // Liste işareti: <ol> için "1. ", <ul> için "• "
                     let (ordered, counter) = match list_stack.last_mut() {
-                        Some(entry) => { entry.1 += 1; (entry.0, entry.1) }
+                        Some(entry) => {
+                            entry.1 += 1;
+                            (entry.0, entry.1)
+                        }
                         None => (false, 1usize),
                     };
                     let mut marker = String::new();
@@ -474,9 +629,19 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                         let mut n = counter;
                         let mut digits = [0u8; 10];
                         let mut di = 0;
-                        if n == 0 { digits[0] = b'0'; di = 1; }
-                        while n > 0 { digits[di] = b'0' + (n % 10) as u8; n /= 10; di += 1; }
-                        while di > 0 { di -= 1; marker.push(digits[di] as char); }
+                        if n == 0 {
+                            digits[0] = b'0';
+                            di = 1;
+                        }
+                        while n > 0 {
+                            digits[di] = b'0' + (n % 10) as u8;
+                            n /= 10;
+                            di += 1;
+                        }
+                        while di > 0 {
+                            di -= 1;
+                            marker.push(digits[di] as char);
+                        }
                         marker.push_str(". ");
                     } else {
                         marker.push('\u{2022}');
@@ -485,9 +650,29 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     word_buf.push_str(&marker);
                 } else if matches!(name, b"td" | b"th") {
                     // Hücreleri yatay olarak ayraçla birleştir.
-                    if cur_line_w > 0 { word_buf.push('|'); }
-                } else if matches!(name, b"p" | b"div" | b"br" | b"hr" | b"tr" | b"table" | b"caption" | b"section" | b"article" | b"center") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    if cur_line_w > 0 {
+                        word_buf.push('|');
+                    }
+                } else if matches!(
+                    name,
+                    b"p" | b"div"
+                        | b"br"
+                        | b"hr"
+                        | b"tr"
+                        | b"table"
+                        | b"caption"
+                        | b"section"
+                        | b"article"
+                        | b"center"
+                ) {
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Normal;
                     if eq_ascii(name, b"center") {
                         cur_line_align = TextAlign::Center;
@@ -510,21 +695,53 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                     current_bg = None;
                 } else if eq_ascii(name, b"center") {
                     cur_line_align = TextAlign::Left;
-                } else if matches!(name, b"h1" | b"h2" | b"h3" | b"p" | b"div" | b"table" | b"caption" | b"section" | b"article") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                } else if matches!(
+                    name,
+                    b"h1"
+                        | b"h2"
+                        | b"h3"
+                        | b"p"
+                        | b"div"
+                        | b"table"
+                        | b"caption"
+                        | b"section"
+                        | b"article"
+                ) {
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Normal;
                     current_color = Color::TEXT_MAIN;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
                 } else if matches!(name, b"ul" | b"ol") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Normal;
                     current_color = Color::TEXT_MAIN;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
                     list_stack.pop();
                 } else if eq_ascii(name, b"li") {
-                    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                     cur_line_tag = HtmlTagType::Normal;
                     current_color = Color::TEXT_MAIN;
                     current_bg = None;
@@ -541,7 +758,8 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
                 } else if eq_ascii(name, b"mark") {
                     // <mark> kapanıyor, background'ı sıfırla
                     current_bg = None;
-                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup") {
+                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup")
+                {
                     // <small>, <sub>, <sup> kapanıyor, hiçbir şey yapma
                 }
                 active_id = None;
@@ -554,16 +772,37 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
         let (ch, clen) = decode_html_char(body, p);
         p += clen;
 
-        if ch == '\r' { continue; }
+        if ch == '\r' {
+            continue;
+        }
         if ch == '\n' || ch == '\t' || ch == ' ' {
             let link_target = active_link.as_deref().unwrap_or("");
             let is_link = active_link.is_some();
             let onclick_str = active_onclick.as_deref().unwrap_or("");
             let elem_id_str = active_id.as_deref().unwrap_or("");
-            flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, current_bold, current_underline, cur_line_tag, cur_line_align, max_lines);
+            flush_word(
+                out_lines,
+                &mut cur_line_spans,
+                &mut cur_line_w,
+                &mut word_buf,
+                current_color,
+                current_bg,
+                is_link,
+                link_target,
+                active_is_button,
+                onclick_str,
+                elem_id_str,
+                current_bold,
+                current_underline,
+                cur_line_tag,
+                cur_line_align,
+                max_lines,
+            );
             continue;
         }
-        if (ch as u32) < 0x20 { continue; }
+        if (ch as u32) < 0x20 {
+            continue;
+        }
         word_buf.push(ch);
     }
 
@@ -571,6 +810,30 @@ pub fn render_html_to_lines(body: &[u8], wrap_width_px: usize, out_lines: &mut V
     let is_link = active_link.is_some();
     let onclick_str = active_onclick.as_deref().unwrap_or("");
     let elem_id_str = active_id.as_deref().unwrap_or("");
-    flush_word(out_lines, &mut cur_line_spans, &mut cur_line_w, &mut word_buf, current_color, current_bg, is_link, link_target, active_is_button, onclick_str, elem_id_str, current_bold, current_underline, cur_line_tag, cur_line_align, max_lines);
-    flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+    flush_word(
+        out_lines,
+        &mut cur_line_spans,
+        &mut cur_line_w,
+        &mut word_buf,
+        current_color,
+        current_bg,
+        is_link,
+        link_target,
+        active_is_button,
+        onclick_str,
+        elem_id_str,
+        current_bold,
+        current_underline,
+        cur_line_tag,
+        cur_line_align,
+        max_lines,
+    );
+    flush_line(
+        out_lines,
+        &mut cur_line_spans,
+        &mut cur_line_w,
+        cur_line_tag,
+        cur_line_align,
+        max_lines,
+    );
 }

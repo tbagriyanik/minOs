@@ -76,7 +76,10 @@ impl PhysicalMemoryManager {
     /// Limine bellek haritasından gelen bölgeleri kaydeder.
     /// `Usable` bölgeler için çakışmayan 4KB hizalı gerçek çerçeveler indekslenir.
     pub fn add_region(&mut self, base: u64, length: u64, entry_type: MemoryEntryType) {
-        if entry_type != MemoryEntryType::Usable || length == 0 || self.total_managed_frames >= MAX_FRAMES {
+        if entry_type != MemoryEntryType::Usable
+            || length == 0
+            || self.total_managed_frames >= MAX_FRAMES
+        {
             return;
         }
 
@@ -98,10 +101,16 @@ impl PhysicalMemoryManager {
         // Store only the prefix that fits the bitmap. Later regions are
         // intentionally ignored once the managed frame limit is reached.
         let remaining_frames = MAX_FRAMES - self.total_managed_frames;
-        let frame_count = ((aligned_end - aligned_start) / PAGE_SIZE).min(remaining_frames as u64) as usize;
-        if frame_count == 0 { return; }
+        let frame_count =
+            ((aligned_end - aligned_start) / PAGE_SIZE).min(remaining_frames as u64) as usize;
+        if frame_count == 0 {
+            return;
+        }
         let managed_len = (frame_count as u64) * PAGE_SIZE;
-        self.usable_regions[self.region_count] = UsableRegion { base: aligned_start, length: managed_len };
+        self.usable_regions[self.region_count] = UsableRegion {
+            base: aligned_start,
+            length: managed_len,
+        };
         self.region_count += 1;
         self.total_managed_frames += frame_count;
 
@@ -121,7 +130,9 @@ impl PhysicalMemoryManager {
             let region = &self.usable_regions[i];
             let region_frames = (region.length / PAGE_SIZE) as usize;
             if index < region_frames {
-                return region.base.checked_add((index as u64).checked_mul(PAGE_SIZE)?);
+                return region
+                    .base
+                    .checked_add((index as u64).checked_mul(PAGE_SIZE)?);
             }
             index -= region_frames;
         }
@@ -143,7 +154,9 @@ impl PhysicalMemoryManager {
                 return (index < self.total_managed_frames && index < MAX_FRAMES).then_some(index);
             }
             base_index = base_index.checked_add((region.length / PAGE_SIZE) as usize)?;
-            if base_index >= self.total_managed_frames { break; }
+            if base_index >= self.total_managed_frames {
+                break;
+            }
         }
         None
     }
@@ -223,9 +236,9 @@ impl PhysicalMemoryManager {
             let end_addr = start_addr + (count as u64) * PAGE_SIZE;
 
             // start_addr ve end_addr aynı bölgede mi?
-            let in_same_region = self.usable_regions[..self.region_count].iter().any(|r| {
-                start_addr >= r.base && end_addr <= (r.base + r.length)
-            });
+            let in_same_region = self.usable_regions[..self.region_count]
+                .iter()
+                .any(|r| start_addr >= r.base && end_addr <= (r.base + r.length));
 
             if !in_same_region {
                 start_idx += 1;

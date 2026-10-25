@@ -17,12 +17,12 @@
 // sarmalayıcıları içerir. Host'ta yalnızca aygıttan bağımsız `*_device`
 // fonksiyonları test edilir; bu import'lar host'ta `ata` modülü olmadığı için
 // ayrı bir cfg ile açılır.
+#[cfg(host_fs_tests)]
+use crate::block::{BlockDevice, SECTOR};
 #[cfg(not(host_fs_tests))]
 use crate::drivers::ata;
 #[cfg(not(host_fs_tests))]
 use crate::fs::block::{BlockDevice, SECTOR};
-#[cfg(host_fs_tests)]
-use crate::block::{BlockDevice, SECTOR};
 
 pub const EXFAT_OEM_NAME: &[u8; 8] = b"EXFAT   ";
 pub const EXFAT_SIGNATURE: u16 = 0xAA55;
@@ -35,9 +35,15 @@ pub const EXFAT_ENTRY_FILE: u8 = 0x85;
 pub const EXFAT_ENTRY_STREAM: u8 = 0xC0;
 pub const EXFAT_ENTRY_NAME: u8 = 0xC1;
 
-fn wle16(b: &mut [u8], o: usize, v: u16) { b[o..o+2].copy_from_slice(&v.to_le_bytes()); }
-fn wle32(b: &mut [u8], o: usize, v: u32) { b[o..o+4].copy_from_slice(&v.to_le_bytes()); }
-fn wle64(b: &mut [u8], o: usize, v: u64) { b[o..o+8].copy_from_slice(&v.to_le_bytes()); }
+fn wle16(b: &mut [u8], o: usize, v: u16) {
+    b[o..o + 2].copy_from_slice(&v.to_le_bytes());
+}
+fn wle32(b: &mut [u8], o: usize, v: u32) {
+    b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+}
+fn wle64(b: &mut [u8], o: usize, v: u64) {
+    b[o..o + 8].copy_from_slice(&v.to_le_bytes());
+}
 
 /// exFAT boot checksum hesaplama fonksiyonu (Microsoft exFAT spesifikasyonu)
 pub fn exfat_boot_checksum(data: &[u8], is_first_sector: bool) -> u32 {
@@ -68,18 +74,18 @@ pub fn upcase_checksum(table: &[u8]) -> u32 {
 /// kalır (davranışsal fark: ASCII dışı bazı küçük harfler büyütülmez).
 pub fn to_upper_exfat(c: u16) -> u16 {
     match c {
-        0x0061..=0x007A => c - 0x20,                      // a-z
+        0x0061..=0x007A => c - 0x20,                                  // a-z
         0x00E0..=0x00F6 | 0x00F8..=0x00FE if c != 0x00F7 => c - 0x20, // à-þ (÷ hariç)
-        0x00FF => 0x0178,                                 // ÿ
-        0x00DF => 0x00DF,                                 // ß (tek baytlık büyüğü yok)
-        0x0131 => 0x0049,                                 // ı -> I
-        0x0130 => 0x0130,                                 // İ
-        0x011F => 0x011E,                                 // ğ -> Ğ
-        0x015F => 0x015E,                                 // ş -> Ş
-        0x0127 => 0x0126,                                 // ħ
-        0x0430..=0x044F => c - 0x20,                      // а-я
-        0x0450..=0x045F => c - 0x50,                      // ѐ-џ
-        0x03B1..=0x03C9 => c - 0x20,                      // α-ω
+        0x00FF => 0x0178,                                             // ÿ
+        0x00DF => 0x00DF,                                             // ß (tek baytlık büyüğü yok)
+        0x0131 => 0x0049,                                             // ı -> I
+        0x0130 => 0x0130,                                             // İ
+        0x011F => 0x011E,                                             // ğ -> Ğ
+        0x015F => 0x015E,                                             // ş -> Ş
+        0x0127 => 0x0126,                                             // ħ
+        0x0430..=0x044F => c - 0x20,                                  // а-я
+        0x0450..=0x045F => c - 0x50,                                  // ѐ-џ
+        0x03B1..=0x03C9 => c - 0x20,                                  // α-ω
         _ => c,
     }
 }
@@ -167,7 +173,10 @@ pub fn layout(part_sectors: u64) -> Option<Layout> {
 }
 
 /// VBR + yedek VBR + checksum sektörlerini hazırla (dizinin ilk 24 sektörü).
-pub fn build_vbr_sequence(l: &Layout, part_lba: u32) -> ([u8; SECTOR], [u8; SECTOR], [u8; SECTOR], [u8; SECTOR]) {
+pub fn build_vbr_sequence(
+    l: &Layout,
+    part_lba: u32,
+) -> ([u8; SECTOR], [u8; SECTOR], [u8; SECTOR], [u8; SECTOR]) {
     let _ = part_lba;
     let _ = l;
     ([0u8; SECTOR], [0u8; SECTOR], [0u8; SECTOR], [0u8; SECTOR])
@@ -188,12 +197,16 @@ pub fn exfat_boot_checksum_vbr_sequence(vbr: &[u8], boot_sec: &[u8], oem_sec: &[
 
 /// Dosya sistemini `dev` üzerine yaz.
 pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
-    let Some(l) = layout(dev.sector_count()) else { return false };
+    let Some(l) = layout(dev.sector_count()) else {
+        return false;
+    };
     let cluster_sectors = l.sectors_per_cluster as u64;
 
     // 1. Ana VBR (sektör 0)
     let mut vbr = [0u8; SECTOR];
-    vbr[0] = 0xEB; vbr[1] = 0x76; vbr[2] = 0x90;
+    vbr[0] = 0xEB;
+    vbr[1] = 0x76;
+    vbr[2] = 0x90;
     vbr[3..11].copy_from_slice(EXFAT_OEM_NAME);
     wle64(&mut vbr, 64, part_lba as u64);
     wle64(&mut vbr, 72, l.total_sectors);
@@ -210,19 +223,24 @@ pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
     vbr[110] = 1; // NumberOfFats
     vbr[111] = 0x80;
     vbr[112] = 0;
-    vbr[510] = 0x55; vbr[511] = 0xAA;
+    vbr[510] = 0x55;
+    vbr[511] = 0xAA;
 
     // 2. Önyükleme bölgesi sektörleri 1..8 ve OEM (9), rezerve (10)
     let mut boot_sec = [0u8; SECTOR];
-    boot_sec[510] = 0x55; boot_sec[511] = 0xAA;
+    boot_sec[510] = 0x55;
+    boot_sec[511] = 0xAA;
     let mut oem_sec = [0u8; SECTOR];
-    oem_sec[510] = 0x55; oem_sec[511] = 0xAA;
+    oem_sec[510] = 0x55;
+    oem_sec[511] = 0xAA;
     let zero = [0u8; SECTOR];
 
     // 3. Checksum sektörü (11): sektör 0..10 üzerinde birikimli
     let mut csum = 0u32;
     csum = fold_checksum(csum, &vbr, true);
-    for _ in 1..9 { csum = fold_checksum(csum, &boot_sec, false); }
+    for _ in 1..9 {
+        csum = fold_checksum(csum, &boot_sec, false);
+    }
     csum = fold_checksum(csum, &oem_sec, false);
     csum = fold_checksum(csum, &zero, false);
     let mut csum_sec = [0u8; SECTOR];
@@ -232,13 +250,23 @@ pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
 
     // 4. VBR dizisini yaz (ana: 0..11, yedek: 12..23)
     for base in [0u64, 12] {
-        if !dev.write(part_lba as u64 + base, &vbr) { return false; }
-        for s in 1..9u64 {
-            if !dev.write(part_lba as u64 + base + s, &boot_sec) { return false; }
+        if !dev.write(part_lba as u64 + base, &vbr) {
+            return false;
         }
-        if !dev.write(part_lba as u64 + base + 9, &oem_sec) { return false; }
-        if !dev.write(part_lba as u64 + base + 10, &zero) { return false; }
-        if !dev.write(part_lba as u64 + base + 11, &csum_sec) { return false; }
+        for s in 1..9u64 {
+            if !dev.write(part_lba as u64 + base + s, &boot_sec) {
+                return false;
+            }
+        }
+        if !dev.write(part_lba as u64 + base + 9, &oem_sec) {
+            return false;
+        }
+        if !dev.write(part_lba as u64 + base + 10, &zero) {
+            return false;
+        }
+        if !dev.write(part_lba as u64 + base + 11, &csum_sec) {
+            return false;
+        }
     }
 
     // 5. FAT: girdi 0 = 0xFFFFFFF8 (medya), 1 = 0xFFFFFFFF; tahsis edilen kümeler.
@@ -257,11 +285,17 @@ pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
     set(&mut fat, l.bitmap_cluster, 0xFFFFFFFF);
     for i in 0..upcase_clusters {
         let c = l.upcase_cluster + i;
-        let next = if i + 1 == upcase_clusters { 0xFFFFFFFF } else { c + 1 };
+        let next = if i + 1 == upcase_clusters {
+            0xFFFFFFFF
+        } else {
+            c + 1
+        };
         set(&mut fat, c, next);
     }
     set(&mut fat, l.root_cluster, 0xFFFFFFFF);
-    if !dev.write(part_lba as u64 + l.fat_offset as u64, &fat) { return false; }
+    if !dev.write(part_lba as u64 + l.fat_offset as u64, &fat) {
+        return false;
+    }
 
     let cluster_lba = |c: u32| -> u64 {
         part_lba as u64 + l.cluster_heap_offset as u64 + (c as u64 - 2) * cluster_sectors
@@ -280,18 +314,24 @@ pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
     }
     set_bit(&mut bitmap, l.bitmap_cluster);
     set_bit(&mut bitmap, l.root_cluster);
-    if !dev.write(cluster_lba(l.bitmap_cluster), &bitmap) { return false; }
+    if !dev.write(cluster_lba(l.bitmap_cluster), &bitmap) {
+        return false;
+    }
 
     // 7. Up-case tablosu
     let upcase = build_upcase_table();
     let upcase_checksum_value = upcase_checksum(&upcase);
-    if !dev.write(cluster_lba(l.upcase_cluster), &upcase) { return false; }
+    if !dev.write(cluster_lba(l.upcase_cluster), &upcase) {
+        return false;
+    }
 
     // 8. Kök dizin kümesi
     let mut root = alloc::vec![0u8; cluster_sectors as usize * SECTOR];
     // Girdi 0: Volume Label
     root[0] = EXFAT_ENTRY_VOL_LABEL;
-    let label: [u8; 18] = [b'M',0,b'i',0,b'n',0,b'O',0,b'S',0,b' ',0,b'U',0,b'S',0,b'B',0];
+    let label: [u8; 18] = [
+        b'M', 0, b'i', 0, b'n', 0, b'O', 0, b'S', 0, b' ', 0, b'U', 0, b'S', 0, b'B', 0,
+    ];
     root[1] = 9;
     root[2..2 + label.len()].copy_from_slice(&label);
     // Girdi 1: Allocation Bitmap
@@ -306,7 +346,9 @@ pub fn format_device(dev: &mut dyn BlockDevice, part_lba: u32) -> bool {
     wle32(&mut root, o2 + 4, upcase_checksum_value);
     wle32(&mut root, o2 + 20, l.upcase_cluster);
     wle64(&mut root, o2 + 24, l.upcase_length);
-    if !dev.write(cluster_lba(l.root_cluster), &root) { return false; }
+    if !dev.write(cluster_lba(l.root_cluster), &root) {
+        return false;
+    }
 
     dev.flush();
     true
@@ -327,7 +369,11 @@ fn fold_checksum(mut checksum: u32, data: &[u8], is_first_sector: bool) -> u32 {
 /// `part_sectors`: Bölümün toplam sektör sayısı
 #[cfg(not(host_fs_tests))]
 pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
+    if drive >= 4
+        || ata::device(drive)
+            .map(|d| d.kind != ata::DeviceKind::Ata)
+            .unwrap_or(true)
+    {
         return false;
     }
     if layout(part_sectors).is_none() {

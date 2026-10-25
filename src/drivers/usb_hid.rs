@@ -214,7 +214,11 @@ fn trb_residual(status: u32) -> usize {
 
 #[inline]
 unsafe fn zero_page(phys: u64) {
-    core::ptr::write_bytes(crate::drivers::phys_to_virt(phys) as *mut u8, 0, PAGE as usize);
+    core::ptr::write_bytes(
+        crate::drivers::phys_to_virt(phys) as *mut u8,
+        0,
+        PAGE as usize,
+    );
 }
 
 #[inline]
@@ -240,12 +244,20 @@ struct TrbRing {
 
 impl TrbRing {
     const fn empty() -> Self {
-        Self { phys: 0, idx: 0, cycle: 1 }
+        Self {
+            phys: 0,
+            idx: 0,
+            cycle: 1,
+        }
     }
 
     unsafe fn new(phys: u64) -> Self {
         zero_page(phys);
-        let mut ring = Self { phys, idx: 0, cycle: 1 };
+        let mut ring = Self {
+            phys,
+            idx: 0,
+            cycle: 1,
+        };
         ring.write_link(1);
         ring
     }
@@ -309,7 +321,10 @@ static mut PENDING_EVENTS: [Option<PendingEvent>; 64] = [None; 64];
 unsafe fn queue_pending(controller: usize, trb: Trb) {
     for entry in PENDING_EVENTS.iter_mut() {
         if entry.is_none() {
-            *entry = Some(PendingEvent { controller: controller as u8, trb });
+            *entry = Some(PendingEvent {
+                controller: controller as u8,
+                trb,
+            });
             return;
         }
     }
@@ -322,7 +337,9 @@ unsafe fn take_pending(
     endpoint: Option<u8>,
 ) -> Option<Trb> {
     for entry in PENDING_EVENTS.iter_mut() {
-        let Some(pending) = entry else { continue; };
+        let Some(pending) = entry else {
+            continue;
+        };
         if pending.controller as usize != controller {
             continue;
         }
@@ -477,7 +494,9 @@ impl XhciController {
     unsafe fn wait_for_command(&mut self, addr: u64) -> CmdResult {
         let start = crate::boot::time::monotonic_ms();
         loop {
-            if let Some(event) = take_pending(self.index as usize, TRB_COMMAND_COMPLETION, None, None) {
+            if let Some(event) =
+                take_pending(self.index as usize, TRB_COMMAND_COMPLETION, None, None)
+            {
                 if event.param == addr {
                     return CmdResult {
                         code: trb_completion(event.status),
@@ -497,7 +516,10 @@ impl XhciController {
             }
 
             if crate::boot::time::monotonic_ms().wrapping_sub(start) > 1_500 {
-                return CmdResult { code: 0xFF, slot: 0 };
+                return CmdResult {
+                    code: 0xFF,
+                    slot: 0,
+                };
             }
             core::hint::spin_loop();
         }
@@ -512,9 +534,12 @@ impl XhciController {
     unsafe fn wait_transfer(&mut self, slot: u8, dci: u8) -> Option<Trb> {
         let start = crate::boot::time::monotonic_ms();
         loop {
-            if let Some(event) =
-                take_pending(self.index as usize, TRB_TRANSFER_EVENT, Some(slot), Some(dci))
-            {
+            if let Some(event) = take_pending(
+                self.index as usize,
+                TRB_TRANSFER_EVENT,
+                Some(slot),
+                Some(dci),
+            ) {
                 return Some(event);
             }
 
@@ -635,10 +660,20 @@ impl XhciController {
         // Input Control Context: A0 (Slot Context) ve A1 (EP0) birlikte eklenmelidir.
         self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
         // Slot Context (input index 1). Route String | Speed | Context Entries = 1
-        self.ctx_write(input_phys, 1, 0, (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27));
+        self.ctx_write(
+            input_phys,
+            1,
+            0,
+            (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27),
+        );
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
         if tt_hub_slot != 0 {
-            self.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+            self.ctx_write(
+                input_phys,
+                1,
+                2,
+                (tt_hub_slot as u32) | ((tt_port as u32) << 8),
+            );
         }
         // EP0 Context (input index 2 = DCI 1 + 1).
         self.ctx_write(input_phys, 2, 0, 0);
@@ -668,12 +703,27 @@ impl XhciController {
     ) -> bool {
         zero_page(input_phys);
         self.ctx_write(input_phys, 0, 1, (1 << 0) | (1 << 1));
-        self.ctx_write(input_phys, 1, 0, (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27));
+        self.ctx_write(
+            input_phys,
+            1,
+            0,
+            (route_string & 0xFFFFF) | ((speed as u32) << 20) | (1 << 27),
+        );
         self.ctx_write(input_phys, 1, 1, (port as u32) << 16);
         if tt_hub_slot != 0 {
-            self.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+            self.ctx_write(
+                input_phys,
+                1,
+                2,
+                (tt_hub_slot as u32) | ((tt_port as u32) << 8),
+            );
         }
-        self.ctx_write(input_phys, 2, 1, (3 << 1) | (4 << 3) | ((max_packet as u32) << 16));
+        self.ctx_write(
+            input_phys,
+            2,
+            1,
+            (3 << 1) | (4 << 3) | ((max_packet as u32) << 16),
+        );
         let (deq, dcs) = ep0_ring.dequeue();
         self.ctx_write(input_phys, 2, 2, (deq as u32) | (dcs & 1));
         self.ctx_write(input_phys, 2, 3, (deq >> 32) as u32);
@@ -715,7 +765,11 @@ impl XhciController {
         let setup_trb = Trb {
             param: setup_word,
             status: 8,
-            control: (TRB_SETUP << TRB_TYPE_SHIFT) | TRB_IDT | TRB_CH | (trt << TRB_TRT_SHIFT) | slot_bits,
+            control: (TRB_SETUP << TRB_TYPE_SHIFT)
+                | TRB_IDT
+                | TRB_CH
+                | (trt << TRB_TRT_SHIFT)
+                | slot_bits,
         };
         ep0_ring.push(setup_trb);
 
@@ -771,7 +825,15 @@ impl XhciController {
         length: usize,
     ) -> Option<usize> {
         self.control_transfer(
-            ep0_ring, slot, true, request_type, request, value, index, data_phys, length,
+            ep0_ring,
+            slot,
+            true,
+            request_type,
+            request,
+            value,
+            index,
+            data_phys,
+            length,
         )
     }
 
@@ -787,7 +849,15 @@ impl XhciController {
         length: usize,
     ) -> Option<usize> {
         self.control_transfer(
-            ep0_ring, slot, false, request_type, request, value, index, data_phys, length,
+            ep0_ring,
+            slot,
+            false,
+            request_type,
+            request,
+            value,
+            index,
+            data_phys,
+            length,
         )
     }
 
@@ -921,7 +991,9 @@ impl XhciController {
         self.scratch_count = scratch_count;
 
         // Komut halkası, olay halkası, ERST ve DCBAA için fiziksel sayfalar.
-        let Some(cmd_phys) = pmm.allocate_frame() else { return false; };
+        let Some(cmd_phys) = pmm.allocate_frame() else {
+            return false;
+        };
         let Some(evt_phys) = pmm.allocate_frame() else {
             pmm.free_frame(cmd_phys);
             return false;
@@ -1067,7 +1139,8 @@ impl XhciController {
     }
 }
 
-static mut CONTROLLERS: [XhciController; MAX_CONTROLLERS] = [XhciController::empty(); MAX_CONTROLLERS];
+static mut CONTROLLERS: [XhciController; MAX_CONTROLLERS] =
+    [XhciController::empty(); MAX_CONTROLLERS];
 static mut CONTROLLER_COUNT: usize = 0;
 static mut INITIALIZED: bool = false;
 
@@ -1106,7 +1179,8 @@ pub struct UsbHotplugEvent {
 }
 
 const MAX_HOTPLUG_EVENTS: usize = 16;
-static mut HOTPLUG_QUEUE: [Option<UsbHotplugEvent>; MAX_HOTPLUG_EVENTS] = [None; MAX_HOTPLUG_EVENTS];
+static mut HOTPLUG_QUEUE: [Option<UsbHotplugEvent>; MAX_HOTPLUG_EVENTS] =
+    [None; MAX_HOTPLUG_EVENTS];
 static mut HOTPLUG_HEAD: usize = 0;
 static mut HOTPLUG_TAIL: usize = 0;
 static mut HOTPLUG_DIRTY: bool = false;
@@ -1451,8 +1525,8 @@ fn parse_hid_report_descriptor(desc: &[u8]) -> HidReportLayout {
         match item_type {
             // ---- Global öğeler ----
             0x01 => match tag {
-                0x00 => page = value as u16, // Usage Page
-                0x01 => {}                   // Logical Minimum (işaretli alanlar için gerekmez)
+                0x00 => page = value as u16,  // Usage Page
+                0x01 => {}                    // Logical Minimum (işaretli alanlar için gerekmez)
                 0x02 => logical_max = signed, // Logical Maximum
                 0x07 => report_size = value & 0xFFFF,
                 0x08 => {
@@ -1508,7 +1582,9 @@ fn parse_hid_report_descriptor(desc: &[u8]) -> HidReportLayout {
                             && report_size == 1
                             && !modifier_found
                             && (usage == 0xE0
-                                || (usage_min >= 0xE0 && usage_max <= 0xE7 && usage_max > usage_min))
+                                || (usage_min >= 0xE0
+                                    && usage_max <= 0xE7
+                                    && usage_max > usage_min))
                         {
                             layout.modifier_offset = (bit / 8).min(255) as u8;
                             modifier_found = true;
@@ -1593,7 +1669,8 @@ fn parse_hid_report_descriptor(desc: &[u8]) -> HidReportLayout {
                     let is_data = value & 0x01 == 0;
                     let is_var = value & 0x02 != 0;
                     let bits = report_count.saturating_mul(report_size);
-                    if page == 0x08 && is_data && is_var && !layout.led_output && out_bit / 8 < 256 {
+                    if page == 0x08 && is_data && is_var && !layout.led_output && out_bit / 8 < 256
+                    {
                         layout.led_output = true;
                         layout.led_offset = (out_bit / 8).min(255) as u8;
                         layout.led_report_id = report_id;
@@ -1710,8 +1787,16 @@ fn handle_custom_mouse_report(
 
     if layout.x_absolute && layout.y_absolute {
         // Mutlak konum (dokunmatik yüzey / grafik tablet / QEMU usb-tablet).
-        let x_max = if layout.x_max > 0 { layout.x_max } else { max_for_bits(layout.x_size) };
-        let y_max = if layout.y_max > 0 { layout.y_max } else { max_for_bits(layout.y_size) };
+        let x_max = if layout.x_max > 0 {
+            layout.x_max
+        } else {
+            max_for_bits(layout.x_size)
+        };
+        let y_max = if layout.y_max > 0 {
+            layout.y_max
+        } else {
+            max_for_bits(layout.y_size)
+        };
         if x_max == 0 || y_max == 0 || screen_w <= 0 || screen_h <= 0 {
             return false;
         }
@@ -1758,10 +1843,7 @@ fn handle_custom_mouse_report(
 /// Tek bir USB aygıtı (ör. kablosuz klavye+fare alıcısı veya multimedya
 /// klavye) birden çok HID arayüzü sunabilir. Her arayüz aynı slot içinde kendi
 /// kesme uç noktasına sahiptir; bu yüzden hepsi ayrı ayrı döndürülür.
-fn parse_hid_interfaces(
-    config: &[u8],
-    out: &mut [HidCandidate; MAX_HID_INTERFACES],
-) -> usize {
+fn parse_hid_interfaces(config: &[u8], out: &mut [HidCandidate; MAX_HID_INTERFACES]) -> usize {
     let mut count = 0usize;
     let mut i = 0usize;
     let mut current: Option<(u8, u8, u8, u8)> = None; // (iface, class, subclass, protocol)
@@ -1932,11 +2014,7 @@ unsafe fn free_frames(pmm: &mut PhysicalMemoryManager, base: u64, pages: usize) 
     }
 }
 
-unsafe fn mark_port_disconnected(
-    controller: usize,
-    port: u8,
-    pmm: &mut PhysicalMemoryManager,
-) {
+unsafe fn mark_port_disconnected(controller: usize, port: u8, pmm: &mut PhysicalMemoryManager) {
     let idx = (port - 1) as usize;
     let c = &mut CONTROLLERS[controller];
     let slot = c.port_slot[idx];
@@ -2168,7 +2246,16 @@ unsafe fn enumerate_device(
     }
 
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
-    let Some(n) = c.control_in(&mut ep0_ring, slot, 0x80, 0x06, 0x0200, 0, buffer_phys, total) else {
+    let Some(n) = c.control_in(
+        &mut ep0_ring,
+        slot,
+        0x80,
+        0x06,
+        0x0200,
+        0,
+        buffer_phys,
+        total,
+    ) else {
         crate::serial::print("[USB-HID] Yapılandırma tanımlayıcısı okunamadı.\n");
         abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
@@ -2221,7 +2308,18 @@ unsafe fn enumerate_device(
     }
 
     // Yapılandırmayı seç
-    if c.control_out(&mut ep0_ring, slot, 0x00, 0x09, config_value as u16, 0, 0, 0).is_none() {
+    if c.control_out(
+        &mut ep0_ring,
+        slot,
+        0x00,
+        0x09,
+        config_value as u16,
+        0,
+        0,
+        0,
+    )
+    .is_none()
+    {
         crate::serial::print("[USB-HID] SET_CONFIGURATION başarısız.\n");
         abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
         return;
@@ -2285,7 +2383,12 @@ unsafe fn enumerate_device(
     );
     c.ctx_write(input_phys, 1, 1, (root_port as u32) << 16);
     if tt_hub_slot != 0 {
-        c.ctx_write(input_phys, 1, 2, (tt_hub_slot as u32) | ((tt_port as u32) << 8));
+        c.ctx_write(
+            input_phys,
+            1,
+            2,
+            (tt_hub_slot as u32) | ((tt_port as u32) << 8),
+        );
     }
     for i in 0..count {
         let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
@@ -2321,7 +2424,9 @@ unsafe fn enumerate_device(
 
     let mut led_owner = false;
     for i in 0..count {
-        let Some(index) = find_free_hid_slot() else { break; };
+        let Some(index) = find_free_hid_slot() else {
+            break;
+        };
         let kind = usable[i].kind.unwrap_or(HidKind::Keyboard);
         let ring_phys = blocks[i];
         let report_phys = ring_phys + PAGE;
@@ -2354,13 +2459,16 @@ unsafe fn enumerate_device(
 
         if kind == HidKind::Keyboard
             && !led_owner
-            && (usable[i].boot
-                || (usable[i].layout.led_output && usable[i].layout.led_offset == 0))
+            && (usable[i].boot || (usable[i].layout.led_output && usable[i].layout.led_offset == 0))
         {
             device.led_capable = true;
             device.ep0_ring = ep0_ring;
             device.ctrl_phys = buffer_phys;
-            device.led_report_id = if custom { usable[i].layout.led_report_id } else { 0 };
+            device.led_report_id = if custom {
+                usable[i].layout.led_report_id
+            } else {
+                0
+            };
             led_owner = true;
         }
 
@@ -2420,7 +2528,9 @@ unsafe fn enumerate_hub(
     }
     let config_val = core::ptr::read_volatile(buffer.add(5));
 
-    if c.control_out(ep0_ring, hub_slot, 0x00, 0x09, config_val as u16, 0, 0, 0).is_none() {
+    if c.control_out(ep0_ring, hub_slot, 0x00, 0x09, config_val as u16, 0, 0, 0)
+        .is_none()
+    {
         crate::serial::print("[USB-HUB] Hub SET_CONFIGURATION başarısız.\n");
         c.disable_slot(hub_slot);
         free_frames(pmm, base, 4);
@@ -2490,7 +2600,8 @@ unsafe fn enumerate_hub(
     // 5. Hub portlarını tara ve bağlı aygıtları numaralandır
     for p in 1..=num_ports.min(15) {
         core::ptr::write_bytes(buffer, 0, PAGE as usize);
-        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4) else {
+        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4)
+        else {
             continue;
         };
         if len < 4 {
@@ -2517,7 +2628,8 @@ unsafe fn enumerate_hub(
 
         // Port durumunu tekrar oku
         core::ptr::write_bytes(buffer, 0, PAGE as usize);
-        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4) else {
+        let Some(len) = c.control_in(ep0_ring, hub_slot, 0xA3, 0x00, 0, p as u16, buffer_phys, 4)
+        else {
             continue;
         };
         if len < 4 {
@@ -2553,20 +2665,15 @@ unsafe fn enumerate_hub(
 
         // Transaction Translator (TT) kuralları:
         // Eğer hub High-Speed ise ve arkasındaki aygıt Low veya Full speed ise TT kullanılır.
-        let (tt_slot, tt_p) = if hub_speed == SPEED_HIGH && (dev_speed == SPEED_LOW || dev_speed == SPEED_FULL) {
-            (hub_slot, p)
-        } else {
-            (0, 0)
-        };
+        let (tt_slot, tt_p) =
+            if hub_speed == SPEED_HIGH && (dev_speed == SPEED_LOW || dev_speed == SPEED_FULL) {
+                (hub_slot, p)
+            } else {
+                (0, 0)
+            };
 
         enumerate_device(
-            controller,
-            root_port,
-            dev_speed,
-            route_str,
-            tt_slot,
-            tt_p,
-            pmm,
+            controller, root_port, dev_speed, route_str, tt_slot, tt_p, pmm,
         );
     }
 }
@@ -2596,10 +2703,7 @@ unsafe fn queue_hid_transfer(device: &mut HidDevice) {
     let trb = Trb {
         param: device.report_phys,
         status: device.report_len as u32,
-        control: (TRB_NORMAL << TRB_TYPE_SHIFT)
-            | TRB_IOC
-            | TRB_ISP
-            | ((device.slot as u32) << 24),
+        control: (TRB_NORMAL << TRB_TYPE_SHIFT) | TRB_IOC | TRB_ISP | ((device.slot as u32) << 24),
     };
     device.ep_ring.push(trb);
     c.doorbell(device.slot, device.dci);
@@ -2756,17 +2860,11 @@ unsafe fn handle_transfer_event(
 /// yapılmaz. EP0 halkası slot genelinde ortak olduğu için yalnızca slotun ilk
 /// klavyesi bu işi üstlenir (`led_capable`).
 unsafe fn sync_keyboard_leds(keyboard: &KeyboardState) {
-    let desired = crate::drivers::usb_keyboard::led_value(
-        keyboard.caps_lock,
-        keyboard.num_lock,
-        false,
-    );
+    let desired =
+        crate::drivers::usb_keyboard::led_value(keyboard.caps_lock, keyboard.num_lock, false);
 
     for i in 0..HID_DEVICES.len() {
-        if !HID_DEVICES[i].active
-            || !HID_DEVICES[i].led_capable
-            || HID_DEVICES[i].leds == desired
-        {
+        if !HID_DEVICES[i].active || !HID_DEVICES[i].led_capable || HID_DEVICES[i].leds == desired {
             continue;
         }
 
@@ -2907,7 +3005,11 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
                     continue;
                 }
                 let header = pci_read32(bus, dev, 0, 0x0C);
-                let functions = if ((header >> 16) as u8) & 0x80 != 0 { 8 } else { 1 };
+                let functions = if ((header >> 16) as u8) & 0x80 != 0 {
+                    8
+                } else {
+                    1
+                };
                 for func in 0..functions {
                     if CONTROLLER_COUNT >= MAX_CONTROLLERS {
                         break;
@@ -3042,7 +3144,9 @@ pub fn poll_events(
                     let c = &mut CONTROLLERS[ci];
                     c.pop_event()
                 };
-                let Some(event) = event else { break; };
+                let Some(event) = event else {
+                    break;
+                };
                 let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
                 update.mouse |= changed.mouse;
                 update.keyboard |= changed.keyboard;
@@ -3055,7 +3159,9 @@ pub fn poll_events(
                 let event = {
                     let mut found = None;
                     for entry in PENDING_EVENTS.iter_mut() {
-                        let Some(pending) = *entry else { continue; };
+                        let Some(pending) = *entry else {
+                            continue;
+                        };
                         if pending.controller as usize == ci {
                             found = Some(pending.trb);
                             *entry = None;
@@ -3064,7 +3170,9 @@ pub fn poll_events(
                     }
                     found
                 };
-                let Some(event) = event else { break; };
+                let Some(event) = event else {
+                    break;
+                };
                 let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
                 update.mouse |= changed.mouse;
                 update.keyboard |= changed.keyboard;
@@ -3115,7 +3223,9 @@ pub fn poll_input(
                     let c = &mut CONTROLLERS[ci];
                     c.pop_event()
                 };
-                let Some(event) = event else { break; };
+                let Some(event) = event else {
+                    break;
+                };
                 let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
                 update.mouse |= changed.mouse;
                 update.keyboard |= changed.keyboard;
@@ -3129,7 +3239,9 @@ pub fn poll_input(
                 let event = {
                     let mut found = None;
                     for entry in PENDING_EVENTS.iter_mut() {
-                        let Some(pending) = *entry else { continue; };
+                        let Some(pending) = *entry else {
+                            continue;
+                        };
                         if pending.controller as usize == ci {
                             found = Some(pending.trb);
                             *entry = None;
@@ -3138,7 +3250,9 @@ pub fn poll_input(
                     }
                     found
                 };
-                let Some(event) = event else { break; };
+                let Some(event) = event else {
+                    break;
+                };
                 let changed = dispatch_event(ci, event, mouse, keyboard, screen_w, screen_h);
                 update.mouse |= changed.mouse;
                 update.keyboard |= changed.keyboard;
@@ -3156,11 +3270,19 @@ pub fn ready() -> bool {
 }
 
 pub fn keyboard_present() -> bool {
-    unsafe { HID_DEVICES.iter().any(|d| d.active && d.kind == HidKind::Keyboard) }
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .any(|d| d.active && d.kind == HidKind::Keyboard)
+    }
 }
 
 pub fn mouse_present() -> bool {
-    unsafe { HID_DEVICES.iter().any(|d| d.active && d.kind == HidKind::Mouse) }
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .any(|d| d.active && d.kind == HidKind::Mouse)
+    }
 }
 
 pub fn device_count() -> usize {
@@ -3172,11 +3294,21 @@ pub fn controller_count() -> usize {
 }
 
 pub fn keyboard_count() -> usize {
-    unsafe { HID_DEVICES.iter().filter(|d| d.active && d.kind == HidKind::Keyboard).count() }
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .filter(|d| d.active && d.kind == HidKind::Keyboard)
+            .count()
+    }
 }
 
 pub fn mouse_count() -> usize {
-    unsafe { HID_DEVICES.iter().filter(|d| d.active && d.kind == HidKind::Mouse).count() }
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .filter(|d| d.active && d.kind == HidKind::Mouse)
+            .count()
+    }
 }
 
 /// Etkin bir HID cihazının tür ve port bilgisini döndürür.

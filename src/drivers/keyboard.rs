@@ -191,7 +191,8 @@ impl KeyboardState {
             return None;
         }
 
-        if scancode == 0x54 { // Alt+PrintScreen (SysRq make code)
+        if scancode == 0x54 {
+            // Alt+PrintScreen (SysRq make code)
             self.push_action(KeyAction::Screenshot);
             return None;
         }
@@ -219,35 +220,65 @@ impl KeyboardState {
                 self.alt_gr = true;
                 return None;
             }
-            0x5B | 0x5C => { // Left / Right Super (Windows) key
+            0x5B | 0x5C => {
+                // Left / Right Super (Windows) key
                 self.super_key = true;
                 self.super_key_combo = false;
                 return None;
             }
-            0x20 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinShowDesktop); return None; } // Super+D
-            0x32 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinMinimizeAll); return None; } // Super+M
-            0x12 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::WinOpenFiles); return None; } // Super+E
-            0x13 if self.super_key => { self.super_key_combo = true; self.push_action(KeyAction::RunDialog); return None; } // Super+R
-            0x58 => { self.push_action(KeyAction::Screenshot); return None; } // F12 (Screenshot)
-            0x3E => { // F4 key
+            0x20 if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::WinShowDesktop);
+                return None;
+            } // Super+D
+            0x32 if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::WinMinimizeAll);
+                return None;
+            } // Super+M
+            0x12 if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::WinOpenFiles);
+                return None;
+            } // Super+E
+            0x13 if self.super_key => {
+                self.super_key_combo = true;
+                self.push_action(KeyAction::RunDialog);
+                return None;
+            } // Super+R
+            0x58 => {
+                self.push_action(KeyAction::Screenshot);
+                return None;
+            } // F12 (Screenshot)
+            0x3E => {
+                // F4 key
                 if self.alt {
                     self.push_action(KeyAction::CloseActiveWindow);
                     return None;
                 }
             }
-            0x3C => { self.push_action(KeyAction::RenameSelected); return None; } // F2
-            0x3F => { self.push_action(KeyAction::Refresh); return None; } // F5 (yenile)
-            0x0F => { // Tab key
+            0x3C => {
+                self.push_action(KeyAction::RenameSelected);
+                return None;
+            } // F2
+            0x3F => {
+                self.push_action(KeyAction::Refresh);
+                return None;
+            } // F5 (yenile)
+            0x0F => {
+                // Tab key
                 if self.alt {
                     self.push_action(KeyAction::CycleWindowFocus);
                     return None;
                 }
             }
-            0x0E if self.ctrl => { // Ctrl+Backspace
+            0x0E if self.ctrl => {
+                // Ctrl+Backspace
                 self.push_action(KeyAction::DeleteWordBack);
                 return None;
             }
-            0x52 if !self.num_lock => { // Insert key / keypad 0
+            0x52 if !self.num_lock => {
+                // Insert key / keypad 0
                 if self.ctrl {
                     self.push_action(KeyAction::CopyText);
                     return None;
@@ -259,7 +290,8 @@ impl KeyboardState {
                 self.push_action(KeyAction::ToggleOverwrite);
                 return None;
             }
-            0x53 if !self.num_lock => { // Delete key / keypad decimal
+            0x53 if !self.num_lock => {
+                // Delete key / keypad decimal
                 if self.ctrl && self.alt {
                     self.push_action(KeyAction::OpenTaskManager);
                     return None;
@@ -275,40 +307,96 @@ impl KeyboardState {
                 self.push_action(KeyAction::Delete);
                 return None;
             }
-            0x47 if !self.num_lock => { self.push_action(KeyAction::HomeKey); return None; } // Home
-            0x4F if !self.num_lock => { self.push_action(KeyAction::EndKey); return None; }  // End
-            0x49 if !self.num_lock => { self.push_action(KeyAction::PageUpKey); return None; }   // Page Up
-            0x51 if !self.num_lock => { self.push_action(KeyAction::PageDownKey); return None; } // Page Down
-            0x2E if self.ctrl => { self.push_action(KeyAction::CopyText); return None; } // Ctrl+C
-            0x2F if self.ctrl => { self.push_action(KeyAction::PasteText); return None; } // Ctrl+V
-            0x2D if self.ctrl => { self.push_action(KeyAction::CutText); return None; } // Ctrl+X
-            0x1E if self.ctrl => { self.push_action(KeyAction::SelectAllText); return None; } // Ctrl+A
-            0x2C if self.ctrl => { self.push_action(KeyAction::Undo); return None; } // Ctrl+Z
-            0x15 if self.ctrl => { self.push_action(KeyAction::Redo); return None; } // Ctrl+Y
-            0x1F if self.ctrl => { self.push_action(KeyAction::SaveDocument); return None; } // Ctrl+S
-            0x31 if self.ctrl => { self.push_action(KeyAction::NewDocument); return None; } // Ctrl+N
-            0x18 if self.ctrl => { self.push_action(KeyAction::OpenDocument); return None; } // Ctrl+O
-            0x21 if self.ctrl => { self.push_action(KeyAction::FindText); return None; } // Ctrl+F
-            0x23 if self.ctrl => { self.push_action(KeyAction::ReplaceText); return None; } // Ctrl+H
-            0x26 if self.ctrl => { self.push_action(KeyAction::BrowserAddress); return None; } // Ctrl+L
-            0x13 if self.ctrl => { self.push_action(KeyAction::BrowserRefresh); return None; } // Ctrl+R
-            0x48 if !self.num_lock => { // Arrow Up / keypad 8
+            0x47 if !self.num_lock => {
+                self.push_action(KeyAction::HomeKey);
+                return None;
+            } // Home
+            0x4F if !self.num_lock => {
+                self.push_action(KeyAction::EndKey);
+                return None;
+            } // End
+            0x49 if !self.num_lock => {
+                self.push_action(KeyAction::PageUpKey);
+                return None;
+            } // Page Up
+            0x51 if !self.num_lock => {
+                self.push_action(KeyAction::PageDownKey);
+                return None;
+            } // Page Down
+            0x2E if self.ctrl => {
+                self.push_action(KeyAction::CopyText);
+                return None;
+            } // Ctrl+C
+            0x2F if self.ctrl => {
+                self.push_action(KeyAction::PasteText);
+                return None;
+            } // Ctrl+V
+            0x2D if self.ctrl => {
+                self.push_action(KeyAction::CutText);
+                return None;
+            } // Ctrl+X
+            0x1E if self.ctrl => {
+                self.push_action(KeyAction::SelectAllText);
+                return None;
+            } // Ctrl+A
+            0x2C if self.ctrl => {
+                self.push_action(KeyAction::Undo);
+                return None;
+            } // Ctrl+Z
+            0x15 if self.ctrl => {
+                self.push_action(KeyAction::Redo);
+                return None;
+            } // Ctrl+Y
+            0x1F if self.ctrl => {
+                self.push_action(KeyAction::SaveDocument);
+                return None;
+            } // Ctrl+S
+            0x31 if self.ctrl => {
+                self.push_action(KeyAction::NewDocument);
+                return None;
+            } // Ctrl+N
+            0x18 if self.ctrl => {
+                self.push_action(KeyAction::OpenDocument);
+                return None;
+            } // Ctrl+O
+            0x21 if self.ctrl => {
+                self.push_action(KeyAction::FindText);
+                return None;
+            } // Ctrl+F
+            0x23 if self.ctrl => {
+                self.push_action(KeyAction::ReplaceText);
+                return None;
+            } // Ctrl+H
+            0x26 if self.ctrl => {
+                self.push_action(KeyAction::BrowserAddress);
+                return None;
+            } // Ctrl+L
+            0x13 if self.ctrl => {
+                self.push_action(KeyAction::BrowserRefresh);
+                return None;
+            } // Ctrl+R
+            0x48 if !self.num_lock => {
+                // Arrow Up / keypad 8
                 self.push_action(KeyAction::ArrowUp);
                 return None;
             }
-            0x50 if !self.num_lock => { // Arrow Down / keypad 2
+            0x50 if !self.num_lock => {
+                // Arrow Down / keypad 2
                 self.push_action(KeyAction::ArrowDown);
                 return None;
             }
-            0x4B if !self.num_lock => { // Arrow Left / keypad 4
+            0x4B if !self.num_lock => {
+                // Arrow Left / keypad 4
                 self.push_action(KeyAction::ArrowLeft);
                 return None;
             }
-            0x4D if !self.num_lock => { // Arrow Right / keypad 6
+            0x4D if !self.num_lock => {
+                // Arrow Right / keypad 6
                 self.push_action(KeyAction::ArrowRight);
                 return None;
             }
-            0x1C => { // Enter key
+            0x1C => {
+                // Enter key
                 if self.alt {
                     self.push_action(KeyAction::Properties);
                     return None;
@@ -322,11 +410,20 @@ impl KeyboardState {
         let uppercase = self.shift ^ self.caps_lock;
         if self.num_lock {
             let keypad_char = match scancode {
-                0x47 => Some('7'), 0x48 => Some('8'), 0x49 => Some('9'),
-                0x4B => Some('4'), 0x4C => Some('5'), 0x4D => Some('6'),
-                0x4F => Some('1'), 0x50 => Some('2'), 0x51 => Some('3'),
-                0x52 => Some('0'), 0x53 => Some('.'),
-                0x37 => Some('*'), 0x4A => Some('-'), 0x4E => Some('+'),
+                0x47 => Some('7'),
+                0x48 => Some('8'),
+                0x49 => Some('9'),
+                0x4B => Some('4'),
+                0x4C => Some('5'),
+                0x4D => Some('6'),
+                0x4F => Some('1'),
+                0x50 => Some('2'),
+                0x51 => Some('3'),
+                0x52 => Some('0'),
+                0x53 => Some('.'),
+                0x37 => Some('*'),
+                0x4A => Some('-'),
+                0x4E => Some('+'),
                 _ => None,
             };
             if let Some(ch) = keypad_char {
@@ -335,7 +432,9 @@ impl KeyboardState {
             }
         }
         let ch = match self.layout {
-            KeyboardLayout::TurkishQ => Self::scancode_to_tr(scancode, uppercase, self.shift, self.alt_gr),
+            KeyboardLayout::TurkishQ => {
+                Self::scancode_to_tr(scancode, uppercase, self.shift, self.alt_gr)
+            }
             KeyboardLayout::EnglishUS => Self::scancode_to_us(scancode, uppercase, self.shift),
         };
 
@@ -348,8 +447,13 @@ impl KeyboardState {
     fn handle_extended_scancode(&mut self, scancode: u8) -> Option<char> {
         if scancode & 0x80 != 0 {
             let released = scancode & 0x7F;
-            if released == 0x1D { self.ctrl = false; }
-            if released == 0x38 { self.alt = false; self.alt_gr = false; }
+            if released == 0x1D {
+                self.ctrl = false;
+            }
+            if released == 0x38 {
+                self.alt = false;
+                self.alt_gr = false;
+            }
             if released == 0x5B || released == 0x5C {
                 self.super_key = false;
                 if !self.super_key_combo {
@@ -361,8 +465,15 @@ impl KeyboardState {
         }
 
         match scancode {
-            0x1D => { self.ctrl = true; return None; }
-            0x38 => { self.alt = true; self.alt_gr = true; return None; }
+            0x1D => {
+                self.ctrl = true;
+                return None;
+            }
+            0x38 => {
+                self.alt = true;
+                self.alt_gr = true;
+                return None;
+            }
             0x5B | 0x5C => {
                 self.super_key = true;
                 self.super_key_combo = false;
@@ -374,30 +485,93 @@ impl KeyboardState {
                 return None;
             }
             // Yaygın PS/2 multimedia tuşları (E0 öneki ile gelir).
-            0x37 => { self.push_action(KeyAction::Screenshot); return None; } // PrtScn
-            0x20 => { self.push_action(KeyAction::VolumeMute); return None; }
-            0x2E => { self.push_action(KeyAction::VolumeDown); return None; }
-            0x30 => { self.push_action(KeyAction::VolumeUp); return None; }
-            0x22 => { self.push_action(KeyAction::MediaPlayPause); return None; }
-            0x10 => { self.push_action(KeyAction::MediaPrevious); return None; }
-            0x19 => { self.push_action(KeyAction::MediaNext); return None; }
+            0x37 => {
+                self.push_action(KeyAction::Screenshot);
+                return None;
+            } // PrtScn
+            0x20 => {
+                self.push_action(KeyAction::VolumeMute);
+                return None;
+            }
+            0x2E => {
+                self.push_action(KeyAction::VolumeDown);
+                return None;
+            }
+            0x30 => {
+                self.push_action(KeyAction::VolumeUp);
+                return None;
+            }
+            0x22 => {
+                self.push_action(KeyAction::MediaPlayPause);
+                return None;
+            }
+            0x10 => {
+                self.push_action(KeyAction::MediaPrevious);
+                return None;
+            }
+            0x19 => {
+                self.push_action(KeyAction::MediaNext);
+                return None;
+            }
             // Insert tuşu:
-            0x52 if self.ctrl => { self.push_action(KeyAction::CopyText); return None; }
-            0x52 if self.shift => { self.push_action(KeyAction::PasteText); return None; }
-            0x52 => { self.push_action(KeyAction::ToggleOverwrite); return None; }
+            0x52 if self.ctrl => {
+                self.push_action(KeyAction::CopyText);
+                return None;
+            }
+            0x52 if self.shift => {
+                self.push_action(KeyAction::PasteText);
+                return None;
+            }
+            0x52 => {
+                self.push_action(KeyAction::ToggleOverwrite);
+                return None;
+            }
             // Delete tuşu:
-            0x53 if self.ctrl => { self.push_action(KeyAction::DeleteWordForward); return None; }
-            0x53 if self.shift => { self.push_action(KeyAction::CutText); return None; }
-            0x53 => { self.push_action(KeyAction::Delete); return None; }
+            0x53 if self.ctrl => {
+                self.push_action(KeyAction::DeleteWordForward);
+                return None;
+            }
+            0x53 if self.shift => {
+                self.push_action(KeyAction::CutText);
+                return None;
+            }
+            0x53 => {
+                self.push_action(KeyAction::Delete);
+                return None;
+            }
             // Navigasyon tuşları (E0 ile gelenler NumLock'tan bağımsızdır):
-            0x48 => { self.push_action(KeyAction::ArrowUp); return None; }
-            0x50 => { self.push_action(KeyAction::ArrowDown); return None; }
-            0x4B => { self.push_action(KeyAction::ArrowLeft); return None; }
-            0x4D => { self.push_action(KeyAction::ArrowRight); return None; }
-            0x47 => { self.push_action(KeyAction::HomeKey); return None; }
-            0x4F => { self.push_action(KeyAction::EndKey); return None; }
-            0x49 => { self.push_action(KeyAction::PageUpKey); return None; }
-            0x51 => { self.push_action(KeyAction::PageDownKey); return None; }
+            0x48 => {
+                self.push_action(KeyAction::ArrowUp);
+                return None;
+            }
+            0x50 => {
+                self.push_action(KeyAction::ArrowDown);
+                return None;
+            }
+            0x4B => {
+                self.push_action(KeyAction::ArrowLeft);
+                return None;
+            }
+            0x4D => {
+                self.push_action(KeyAction::ArrowRight);
+                return None;
+            }
+            0x47 => {
+                self.push_action(KeyAction::HomeKey);
+                return None;
+            }
+            0x4F => {
+                self.push_action(KeyAction::EndKey);
+                return None;
+            }
+            0x49 => {
+                self.push_action(KeyAction::PageUpKey);
+                return None;
+            }
+            0x51 => {
+                self.push_action(KeyAction::PageDownKey);
+                return None;
+            }
             0x1C => {
                 if self.alt {
                     self.push_action(KeyAction::Properties);
@@ -406,7 +580,10 @@ impl KeyboardState {
                 self.push_action(KeyAction::EnterKey);
                 return Some('\n');
             }
-            0x35 => { self.last_char = Some('/'); return Some('/'); } // Keypad /
+            0x35 => {
+                self.last_char = Some('/');
+                return Some('/');
+            } // Keypad /
             _ => {}
         }
         None

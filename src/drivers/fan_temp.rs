@@ -41,10 +41,10 @@ pub struct TemperatureSensor {
 pub struct FanSensor {
     pub id: u8,
     pub name: [u8; 32],
-    pub rpm: u32,         // Devir/dakika
+    pub rpm: u32,          // Devir/dakika
     pub speed_percent: u8, // Hız yüzdesi
-    pub min_rpm: u32,     // Minimum RPM
-    pub max_rpm: u32,     // Maksimum RPM
+    pub min_rpm: u32,      // Minimum RPM
+    pub max_rpm: u32,      // Maksimum RPM
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +225,8 @@ pub fn update_fan_speeds() -> bool {
         // Simüle edilmiş güncelleme
         for i in 0..FAN_SENSOR_COUNT {
             FAN_SENSORS[i].rpm = 1000 + (i as u32 * 500);
-            FAN_SENSORS[i].speed_percent = ((FAN_SENSORS[i].rpm * 100) / FAN_SENSORS[i].max_rpm) as u8;
+            FAN_SENSORS[i].speed_percent =
+                ((FAN_SENSORS[i].rpm * 100) / FAN_SENSORS[i].max_rpm) as u8;
         }
 
         true

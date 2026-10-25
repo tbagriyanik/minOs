@@ -12,13 +12,17 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -116,23 +120,23 @@ const BROADCOM_DEVICES: [u32; 14] = [
 // Her 4 KiB'lik kayıt bloğu kendi adresinin bir bitini taşır; ARL (Address
 // Recognition Logic) bloğu tüm diğer bloklara ayna görevi görür. Bu nedenle
 // ayni adlı register'lara erişim daima bu blok üzerinden yapılır.
-const B57_BASE: u32           = 0xE000; // ARL: ortak kayıtlar
-const B57_HOST_CTRL: u32      = B57_BASE | 0x00; // Host Control (FW boot / sıfırlama)
-const B57_MAC_HASH0: u32      = B57_BASE | 0x08;
-const B57_MAC_HASH1: u32      = B57_BASE | 0x0C;
+const B57_BASE: u32 = 0xE000; // ARL: ortak kayıtlar
+const B57_HOST_CTRL: u32 = B57_BASE | 0x00; // Host Control (FW boot / sıfırlama)
+const B57_MAC_HASH0: u32 = B57_BASE | 0x08;
+const B57_MAC_HASH1: u32 = B57_BASE | 0x0C;
 /// Host Status Word: bit 0-15 TX indeksi, bit 16-31 RX indeksi.
-const B57_HOST_STAT: u32      = B57_BASE | 0x0C + 0; // 0x0C ARL bloğunda host status
+const B57_HOST_STAT: u32 = B57_BASE | 0x0C + 0; // 0x0C ARL bloğunda host status
 /// RX descriptor halkası tabanı (alma penceresi, 0xC000 + 0x40).
-const B57_RX_LIST_ADDR: u32   = 0xC000 | 0x40;
+const B57_RX_LIST_ADDR: u32 = 0xC000 | 0x40;
 /// TX descriptor halkası tabanı (gönderme penceresi, 0x1000 + 0x40).
-const B57_TX_LIST_ADDR: u32   = 0x1000 | 0x40;
-const B57_MAC_ADDR_HI: u32    = B57_BASE | 0x10;
-const B57_MAC_ADDR_LO: u32    = B57_BASE | 0x14;
+const B57_TX_LIST_ADDR: u32 = 0x1000 | 0x40;
+const B57_MAC_ADDR_HI: u32 = B57_BASE | 0x10;
+const B57_MAC_ADDR_LO: u32 = B57_BASE | 0x14;
 const B57_MISC_HOST_CTRL: u32 = B57_BASE | 0x2C; // bit 16: Register Access Enable
 const B57_TX_MAC_ADDR_CTRL: u32 = B57_BASE | 0x40;
-const B57_COMMAND: u32        = B57_BASE | 0x3C;
-const B57_PHY_STATUS: u32     = B57_BASE | 0xD4;
-const B57_MODE: u32           = B57_BASE | 0xF4; // MAC çalışma modu
+const B57_COMMAND: u32 = B57_BASE | 0x3C;
+const B57_PHY_STATUS: u32 = B57_BASE | 0xD4;
+const B57_MODE: u32 = B57_BASE | 0xF4; // MAC çalışma modu
 const B57_MISC_HOST_CTRL_ENABLE: u32 = 1 << 16;
 const B57_COMMAND_RX_ENABLE: u32 = 1 << 0;
 const B57_COMMAND_TX_ENABLE: u32 = 1 << 1;
@@ -167,34 +171,34 @@ pub fn nic_name() -> &'static str {
 // ---------------------------------------------------------------------------
 // Realtek RTL8168 / RTL8169 PCIe MMIO Kayıt Ofsetleri ve Sabitleri
 // ---------------------------------------------------------------------------
-const RTL_REG_IDR0: u32      = 0x0000; // MAC adresi bayt 0..3
-const RTL_REG_IDR4: u32      = 0x0004; // MAC adresi bayt 4..5
-const RTL_REG_MAR0: u32      = 0x0008; // Multicast filter 0..3
-const RTL_REG_MAR4: u32      = 0x000C; // Multicast filter 4..7
-const RTL_REG_TXADDR: u32    = 0x0020; // TX Descriptor ring tabanı (64-bit: 0x20..0x27)
-const RTL_REG_COMMAND: u32   = 0x0037; // Command Register (RST, RE, TE)
-const RTL_REG_TXPOLL: u32    = 0x0038; // Transmit Priority Polling (NPQ = bit 6)
-const RTL_REG_IMR: u32       = 0x003C; // Interrupt Mask Register (16-bit)
-const RTL_REG_ISR: u32       = 0x003E; // Interrupt Status Register (16-bit)
-const RTL_REG_TCR: u32       = 0x0040; // Transmit Configuration Register
-const RTL_REG_RCR: u32       = 0x0044; // Receive Configuration Register
-const RTL_REG_9346CR: u32    = 0x0050; // 93C46 Command Register (Config write enable)
-const RTL_REG_CONFIG1: u32   = 0x0052; // Config1 Register
-const RTL_REG_CONFIG3: u32   = 0x0054; // Config3 Register (ASF / WOL)
-const RTL_REG_CONFIG4: u32   = 0x0056; // Config4 Register (MAC yedek)
+const RTL_REG_IDR0: u32 = 0x0000; // MAC adresi bayt 0..3
+const RTL_REG_IDR4: u32 = 0x0004; // MAC adresi bayt 4..5
+const RTL_REG_MAR0: u32 = 0x0008; // Multicast filter 0..3
+const RTL_REG_MAR4: u32 = 0x000C; // Multicast filter 4..7
+const RTL_REG_TXADDR: u32 = 0x0020; // TX Descriptor ring tabanı (64-bit: 0x20..0x27)
+const RTL_REG_COMMAND: u32 = 0x0037; // Command Register (RST, RE, TE)
+const RTL_REG_TXPOLL: u32 = 0x0038; // Transmit Priority Polling (NPQ = bit 6)
+const RTL_REG_IMR: u32 = 0x003C; // Interrupt Mask Register (16-bit)
+const RTL_REG_ISR: u32 = 0x003E; // Interrupt Status Register (16-bit)
+const RTL_REG_TCR: u32 = 0x0040; // Transmit Configuration Register
+const RTL_REG_RCR: u32 = 0x0044; // Receive Configuration Register
+const RTL_REG_9346CR: u32 = 0x0050; // 93C46 Command Register (Config write enable)
+const RTL_REG_CONFIG1: u32 = 0x0052; // Config1 Register
+const RTL_REG_CONFIG3: u32 = 0x0054; // Config3 Register (ASF / WOL)
+const RTL_REG_CONFIG4: u32 = 0x0056; // Config4 Register (MAC yedek)
 const RTL_REG_PHYSTATUS: u32 = 0x006C; // PHY Status Register (Link status = bit 1)
-const RTL_REG_RMS: u32       = 0x00DA; // Rx Max Packet Size (16-bit)
-const RTL_REG_RXADDR: u32    = 0x00E4; // RX Descriptor ring tabanı (64-bit: 0xE4..0xEB)
+const RTL_REG_RMS: u32 = 0x00DA; // Rx Max Packet Size (16-bit)
+const RTL_REG_RXADDR: u32 = 0x00E4; // RX Descriptor ring tabanı (64-bit: 0xE4..0xEB)
 
 const RTL_CMD_RESET: u8 = 0x10;
 const RTL_CMD_RX_EN: u8 = 0x08;
 const RTL_CMD_TX_EN: u8 = 0x04;
 
 // Realtek Descriptor Bitleri
-const RTL_DESC_OWN: u32  = 1 << 31;
-const RTL_DESC_EOR: u32  = 1 << 30; // Ring Sonu (End of Ring)
-const RTL_DESC_FS: u32   = 1 << 29; // First Segment
-const RTL_DESC_LS: u32   = 1 << 28; // Last Segment
+const RTL_DESC_OWN: u32 = 1 << 31;
+const RTL_DESC_EOR: u32 = 1 << 30; // Ring Sonu (End of Ring)
+const RTL_DESC_FS: u32 = 1 << 29; // First Segment
+const RTL_DESC_LS: u32 = 1 << 28; // Last Segment
 
 // ---------------------------------------------------------------------------
 // MMIO kayıt ofsetleri (Intel e1000)
@@ -264,7 +268,7 @@ const TX_BUF_SIZE: usize = 2048;
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct RxDescriptor {
-    pub addr: u64,   // buffer fiziksel adresi
+    pub addr: u64, // buffer fiziksel adresi
     pub length: u16,
     pub csum: u16,
     pub status: u8,
@@ -528,8 +532,14 @@ unsafe fn init_broadcom(rings_addr: u64) {
     mmio_write32(B57_TX_MAC_ADDR_CTRL, 0xFFFF_FFFF);
 
     // RX/TX descriptor halkasi taban adresleri
-    mmio_write32(B57_RX_LIST_ADDR, (rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) as u32);
-    mmio_write32(B57_TX_LIST_ADDR, (rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) as u32);
+    mmio_write32(
+        B57_RX_LIST_ADDR,
+        (rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) as u32,
+    );
+    mmio_write32(
+        B57_TX_LIST_ADDR,
+        (rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) as u32,
+    );
 
     // RX descriptorlari hazirla
     let r = rings();
@@ -561,13 +571,29 @@ unsafe fn init_rx_ring() {
         (*r).rx_ring[i].addr = buf_phys;
         (*r).rx_ring[i].status = 0;
     }
-    mmio_write32(REG_RDBAL, (rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) as u32);
-    mmio_write32(REG_RDBAH, ((rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) >> 32) as u32);
+    mmio_write32(
+        REG_RDBAL,
+        (rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) as u32,
+    );
+    mmio_write32(
+        REG_RDBAH,
+        ((rings_addr + core::mem::offset_of!(E1000Rings, rx_ring) as u64) >> 32) as u32,
+    );
     mmio_write32(REG_RDLEN, (RX_RING_SIZE * 16) as u32);
     mmio_write32(REG_RDH, 0);
     mmio_write32(REG_RDT, RX_RING_SIZE as u32 - 1);
     // RCTL: enable, broadcast accept, unicast promiscuous, strip CRC, buffer 2048
-    mmio_write32(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_BSIZE_2048 | RCTL_LPE | RCTL_SECRC);
+    mmio_write32(
+        REG_RCTL,
+        RCTL_EN
+            | RCTL_SBP
+            | RCTL_UPE
+            | RCTL_MPE
+            | RCTL_BAM
+            | RCTL_BSIZE_2048
+            | RCTL_LPE
+            | RCTL_SECRC,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -576,13 +602,22 @@ unsafe fn init_rx_ring() {
 
 unsafe fn init_tx_ring() {
     let rings_addr = RINGS_ADDR;
-    mmio_write32(REG_TDBAL, (rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) as u32);
-    mmio_write32(REG_TDBAH, ((rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) >> 32) as u32);
+    mmio_write32(
+        REG_TDBAL,
+        (rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) as u32,
+    );
+    mmio_write32(
+        REG_TDBAH,
+        ((rings_addr + core::mem::offset_of!(E1000Rings, tx_ring) as u64) >> 32) as u32,
+    );
     mmio_write32(REG_TDLEN, (TX_RING_SIZE * 16) as u32);
     mmio_write32(REG_TDH, 0);
     mmio_write32(REG_TDT, 0);
     // TCTL: enable, pad short packets, collision threshold 15, collision distance 64
-    mmio_write32(REG_TCTL, TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT));
+    mmio_write32(
+        REG_TCTL,
+        TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -609,9 +644,14 @@ pub fn transmit(packet: &[u8]) -> bool {
         core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
 
         if DETECTED_NIC == NicType::RealtekR8169 {
-            let eor = if tail == TX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+            let eor = if tail == TX_RING_SIZE - 1 {
+                RTL_DESC_EOR
+            } else {
+                0
+            };
             let desc_u32 = desc as *mut TxDescriptor as *mut u32;
-            let opts1 = RTL_DESC_OWN | RTL_DESC_FS | RTL_DESC_LS | eor | (packet.len() as u32 & 0x3FFF);
+            let opts1 =
+                RTL_DESC_OWN | RTL_DESC_FS | RTL_DESC_LS | eor | (packet.len() as u32 & 0x3FFF);
             core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
             core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
             core::ptr::write_volatile(desc_u32.add(3), 0);
@@ -681,10 +721,20 @@ pub fn receive(buf: &mut [u8]) -> usize {
                 return 0;
             }
             let len = (opts1 & 0x3FFF) as usize;
-            let eor = if idx == RX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+            let eor = if idx == RX_RING_SIZE - 1 {
+                RTL_DESC_EOR
+            } else {
+                0
+            };
 
-            if len == 0 || len > buf.len() || (opts1 & (RTL_DESC_FS | RTL_DESC_LS)) != (RTL_DESC_FS | RTL_DESC_LS) {
-                core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+            if len == 0
+                || len > buf.len()
+                || (opts1 & (RTL_DESC_FS | RTL_DESC_LS)) != (RTL_DESC_FS | RTL_DESC_LS)
+            {
+                core::ptr::write_volatile(
+                    desc_u32.add(2),
+                    RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                );
                 RX_TAIL = (idx + 1) % RX_RING_SIZE;
                 return 0;
             }
@@ -695,7 +745,10 @@ pub fn receive(buf: &mut [u8]) -> usize {
             let src = crate::drivers::phys_to_virt(addr) as *const u8;
             core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), len);
 
-            core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+            core::ptr::write_volatile(
+                desc_u32.add(2),
+                RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+            );
             RX_TAIL = (idx + 1) % RX_RING_SIZE;
             len
         } else {
@@ -761,7 +814,11 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 let max_func = if (hdr & 0x80) != 0 { 8u8 } else { 1u8 };
 
                 for func in 0..max_func {
-                    let id = if func == 0 { id0 } else { pci_read32(bus, dev, func, 0x00) };
+                    let id = if func == 0 {
+                        id0
+                    } else {
+                        pci_read32(bus, dev, func, 0x00)
+                    };
                     if id == 0xFFFF_FFFF || id == 0 {
                         continue;
                     }
@@ -778,14 +835,21 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                         let base: u64 = bar0_lo as u64 & 0xFFFF_FFF0;
                         found = Some((bus, dev, func, base, NicType::VmwareVmxnet3));
                         break;
-                    } else if vid == REALTEK_VENDOR && (REALTEK_DEVICES.contains(&did) || (did & 0xFF00) == 0x8100) {
+                    } else if vid == REALTEK_VENDOR
+                        && (REALTEK_DEVICES.contains(&did) || (did & 0xFF00) == 0x8100)
+                    {
                         // Realtek PCIe NIC: BAR2 (0x18) veya BAR1 (0x14) MMIO olabilir, standart BAR2'dir (BAR0 genelde I/O porttur).
                         let mut base: u64 = 0;
                         for bar_off in [0x18u8, 0x14u8, 0x10u8] {
                             let bar = pci_read32(bus, dev, func, bar_off);
-                            if bar != 0 && (bar & 1) == 0 { // MMIO bar
+                            if bar != 0 && (bar & 1) == 0 {
+                                // MMIO bar
                                 let is_64 = (bar & 0x06) == 0x04;
-                                let bar_hi = if is_64 { pci_read32(bus, dev, func, bar_off + 4) as u64 } else { 0 };
+                                let bar_hi = if is_64 {
+                                    pci_read32(bus, dev, func, bar_off + 4) as u64
+                                } else {
+                                    0
+                                };
                                 base = ((bar as u64) & 0xFFFF_FFF0) | (bar_hi << 32);
                                 break;
                             }
@@ -802,7 +866,11 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                             let bar = pci_read32(bus, dev, func, bar_off);
                             if bar != 0 && (bar & 1) == 0 {
                                 let is_64 = (bar & 0x06) == 0x04;
-                                let bar_hi = if is_64 { pci_read32(bus, dev, func, bar_off + 4) as u64 } else { 0 };
+                                let bar_hi = if is_64 {
+                                    pci_read32(bus, dev, func, bar_off + 4) as u64
+                                } else {
+                                    0
+                                };
                                 base = ((bar as u64) & 0xFFFF_FFF0) | (bar_hi << 32);
                                 break;
                             }
@@ -825,7 +893,9 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         let (bus, dev, func, base_phys, ntype) = match found {
             Some(v) => v,
             None => {
-                e1000_print("[NET] Ag adaptoru (Intel / VMware / Realtek / Broadcom) PCI'da bulunamadi.\n");
+                e1000_print(
+                    "[NET] Ag adaptoru (Intel / VMware / Realtek / Broadcom) PCI'da bulunamadi.\n",
+                );
                 return;
             }
         };
@@ -849,7 +919,9 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 e1000_print("\n");
             }
             NicType::RealtekR8169 => {
-                e1000_print("[NET] Realtek PCIe Gigabit ag adaptoru bulundu (Vendor: 0x10EC). PCI ");
+                e1000_print(
+                    "[NET] Realtek PCIe Gigabit ag adaptoru bulundu (Vendor: 0x10EC). PCI ",
+                );
                 e1000_print_hex(bus);
                 e1000_print(":");
                 e1000_print_hex(dev);
@@ -931,7 +1003,10 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         e1000_print("\n");
 
         if ntype == NicType::IntelE1000 {
-            let ral = (mac[0] as u32) | ((mac[1] as u32) << 8) | ((mac[2] as u32) << 16) | ((mac[3] as u32) << 24);
+            let ral = (mac[0] as u32)
+                | ((mac[1] as u32) << 8)
+                | ((mac[2] as u32) << 16)
+                | ((mac[3] as u32) << 24);
             let rah = (mac[4] as u32) | ((mac[5] as u32) << 8) | 0x8000_0000;
             mmio_write32(REG_RAL0, ral);
             mmio_write32(REG_RAH0, rah);
@@ -971,17 +1046,28 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                     + core::mem::offset_of!(E1000Rings, rx_bufs) as u64
                     + (i as u64) * RX_BUF_SIZE as u64;
                 let desc_u32 = &mut (*r).rx_ring[i] as *mut RxDescriptor as *mut u32;
-                let eor = if i == RX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+                let eor = if i == RX_RING_SIZE - 1 {
+                    RTL_DESC_EOR
+                } else {
+                    0
+                };
                 core::ptr::write_volatile(desc_u32.add(0), buf_phys as u32);
                 core::ptr::write_volatile(desc_u32.add(1), (buf_phys >> 32) as u32);
                 core::ptr::write_volatile(desc_u32.add(3), 0);
-                core::ptr::write_volatile(desc_u32.add(2), RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF));
+                core::ptr::write_volatile(
+                    desc_u32.add(2),
+                    RTL_DESC_OWN | eor | (RX_BUF_SIZE as u32 & 0x3FFF),
+                );
             }
 
             // Realtek TX ring descriptorlarını hazırla
             for i in 0..TX_RING_SIZE {
                 let desc_u32 = &mut (*r).tx_ring[i] as *mut TxDescriptor as *mut u32;
-                let eor = if i == TX_RING_SIZE - 1 { RTL_DESC_EOR } else { 0 };
+                let eor = if i == TX_RING_SIZE - 1 {
+                    RTL_DESC_EOR
+                } else {
+                    0
+                };
                 core::ptr::write_volatile(desc_u32.add(0), 0);
                 core::ptr::write_volatile(desc_u32.add(1), 0);
                 core::ptr::write_volatile(desc_u32.add(3), 0);

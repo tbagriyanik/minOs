@@ -1,16 +1,18 @@
-pub mod idt;
-pub mod sync;
-pub mod gdt;
-pub mod smp;
-pub mod ring3;
 pub mod apic;
+pub mod gdt;
+pub mod idt;
+pub mod ring3;
+pub mod smp;
+pub mod sync;
 
 pub static mut IDT: idt::InterruptDescriptorTable = idt::InterruptDescriptorTable::new();
 
 static mut MMIO_FRAME_ALLOCATOR: Option<fn() -> Option<u64>> = None;
 
 pub fn set_mmio_frame_allocator(alloc_fn: fn() -> Option<u64>) {
-    unsafe { MMIO_FRAME_ALLOCATOR = Some(alloc_fn); }
+    unsafe {
+        MMIO_FRAME_ALLOCATOR = Some(alloc_fn);
+    }
 }
 
 fn alloc_table_frame() -> Option<u64> {
@@ -40,7 +42,7 @@ pub fn enable_sse() {
         let mut cr4: u64;
         core::arch::asm!("mov {}, cr0", out(reg) cr0, options(nomem, nostack, preserves_flags));
         cr0 &= !(1 << 2); // EM = 0
-        cr0 |= 1 << 1;    // MP = 1
+        cr0 |= 1 << 1; // MP = 1
         core::arch::asm!("mov cr0, {}", in(reg) cr0, options(nomem, nostack, preserves_flags));
 
         core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack, preserves_flags));
@@ -82,7 +84,9 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
         }
 
         let pdpt_phys = pml4e & 0x000F_FFFF_FFFF_F000;
-        if pdpt_phys == 0 { return; }
+        if pdpt_phys == 0 {
+            return;
+        }
         let pdpt = (hhdm + pdpt_phys) as *mut u64;
 
         let i3 = ((v >> 30) & 511) as usize;
@@ -107,7 +111,9 @@ pub fn mmio_map_2mb(phys_2mb_aligned: u64) {
         }
 
         let pd_phys = pdpte & 0x000F_FFFF_FFFF_F000;
-        if pd_phys == 0 { return; }
+        if pd_phys == 0 {
+            return;
+        }
         let pd = (hhdm + pd_phys) as *mut u64;
 
         let i2 = ((v >> 21) & 511) as usize;

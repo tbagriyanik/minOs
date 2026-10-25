@@ -39,7 +39,14 @@ impl ToastNotification {
 
 impl MinGuiCompositor {
     /// Yeni bir toast bildirimi ekler veya kuyruktaki en eski olanı kaydırır.
-    pub fn push_toast(&mut self, kind: ToastKind, title: &str, message: &str, created_ms: u64, duration_ms: u64) {
+    pub fn push_toast(
+        &mut self,
+        kind: ToastKind,
+        title: &str,
+        message: &str,
+        created_ms: u64,
+        duration_ms: u64,
+    ) {
         let mut t = ToastNotification::empty();
         t.kind = kind;
         t.created_ms = created_ms;
@@ -82,9 +89,13 @@ impl MinGuiCompositor {
     pub fn toast_click(&mut self, fb_w: usize, tb_y: usize, mx: usize, my: usize) -> bool {
         let mut active_count = 0usize;
         for t in &self.toasts {
-            if t.is_some() { active_count += 1; }
+            if t.is_some() {
+                active_count += 1;
+            }
         }
-        if active_count == 0 { return false; }
+        if active_count == 0 {
+            return false;
+        }
 
         let toast_w = sp(280).min(fb_w.saturating_sub(sp(24)));
         let toast_h = sp(60);
@@ -110,9 +121,13 @@ impl MinGuiCompositor {
     pub fn render_toasts(&self, fb: &mut Framebuffer, tb_y: usize, mx: usize, my: usize) {
         let mut active_count = 0usize;
         for t in &self.toasts {
-            if t.is_some() { active_count += 1; }
+            if t.is_some() {
+                active_count += 1;
+            }
         }
-        if active_count == 0 { return; }
+        if active_count == 0 {
+            return;
+        }
 
         let toast_w = sp(280).min(fb.width.saturating_sub(sp(24)));
         let toast_h = sp(60);
@@ -129,7 +144,11 @@ impl MinGuiCompositor {
 
                 // 2. Kart Gövdesi (Modern Yarı Saydam/Koyu Zemin & İnce Çerçeve)
                 let is_hover = in_rect(mx, my, (toast_x, toast_y, toast_w, toast_h));
-                let bg_color = if is_hover { Self::shade(Color::TASKBAR_BG, 12) } else { Color::TASKBAR_BG };
+                let bg_color = if is_hover {
+                    Self::shade(Color::TASKBAR_BG, 12)
+                } else {
+                    Color::TASKBAR_BG
+                };
                 fb.draw_rounded_rect(toast_x, toast_y, toast_w, toast_h, 8, bg_color);
                 fb.draw_rounded_rect_outline(toast_x, toast_y, toast_w, toast_h, 8, Color::BORDER);
 
@@ -140,7 +159,14 @@ impl MinGuiCompositor {
                     ToastKind::Warning => Color::ACCENT_YELLOW,
                     ToastKind::Error => Color::ACCENT_RED,
                 };
-                fb.draw_rounded_rect(toast_x + 2, toast_y + 4, 4, toast_h.saturating_sub(8), 2, accent);
+                fb.draw_rounded_rect(
+                    toast_x + 2,
+                    toast_y + 4,
+                    4,
+                    toast_h.saturating_sub(8),
+                    2,
+                    accent,
+                );
 
                 // 4. Tür İkonu (16x16)
                 let icon_x = toast_x + sp(12);
@@ -182,16 +208,36 @@ impl MinGuiCompositor {
                 let text_x = icon_x + 22;
                 let text_max_w = toast_w.saturating_sub(sp(54));
 
-                Self::draw_string_clipped(fb, text_x, toast_y + sp(10), title_str, Color::TEXT_MAIN,
-                    (text_x, toast_y + 6, text_max_w, 18));
-                Self::draw_string_clipped(fb, text_x, toast_y + sp(30), msg_str, Color::TEXT_MUTED,
-                    (text_x, toast_y + 28, text_max_w, 20));
+                Self::draw_string_clipped(
+                    fb,
+                    text_x,
+                    toast_y + sp(10),
+                    title_str,
+                    Color::TEXT_MAIN,
+                    (text_x, toast_y + 6, text_max_w, 18),
+                );
+                Self::draw_string_clipped(
+                    fb,
+                    text_x,
+                    toast_y + sp(30),
+                    msg_str,
+                    Color::TEXT_MUTED,
+                    (text_x, toast_y + 28, text_max_w, 20),
+                );
 
                 // 6. Sağ üst kapatma "✕" ikonu
                 let close_x = toast_x + toast_w.saturating_sub(sp(18));
                 let close_y = toast_y + sp(8);
-                let close_hover = in_rect(mx, my, (close_x.saturating_sub(2), close_y.saturating_sub(2), 14, 14));
-                let close_col = if close_hover { Color::ACCENT_RED } else { Color::TEXT_MUTED };
+                let close_hover = in_rect(
+                    mx,
+                    my,
+                    (close_x.saturating_sub(2), close_y.saturating_sub(2), 14, 14),
+                );
+                let close_col = if close_hover {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TEXT_MUTED
+                };
                 fb.draw_rect(close_x, close_y, 2, 2, close_col);
                 fb.draw_rect(close_x + 6, close_y + 6, 2, 2, close_col);
                 fb.draw_rect(close_x + 6, close_y, 2, 2, close_col);

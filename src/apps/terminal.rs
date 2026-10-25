@@ -4,10 +4,10 @@
 //! `help`, `ls`, `cat`, `echo`, `clear`, `mem`, `ps`, `date`, `uname`, `theme`,
 //! `whoami` gibi yerleşik (built-in) komutlar. VFS ve PMM'e salt-okunur erişir.
 
-use crate::drivers::video::Framebuffer;
 use crate::drivers::rtc::DateTime;
+use crate::drivers::video::Framebuffer;
+use crate::fs::vfs::{NodeType, VirtualFileSystem};
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use crate::fs::vfs::{VirtualFileSystem, NodeType};
 use crate::mm::pmm::PhysicalMemoryManager;
 
 /// Çıktı satırı sayısı (kaydırma geçmişi).
@@ -16,15 +16,82 @@ pub const OUT_LINES: usize = 64;
 pub const LINE_MAX: usize = 256;
 
 const COMPLETION_COMMANDS: &[&str] = &[
-    "help", "ls", "cd", "pwd", "mkdir", "touch", "rm", "cat", "write", "disks", "df", "usb", "lsusb", "cam", "wifi",
-    "format", "mkfs", "echo", "clear", "mem", "ps", "apps", "ipconfig", "ping", "dns", "nslookup", "curl", "wget",
-    "date", "uname", "whoami", "theme", "uptime", "fetch", "neofetch", "hexdump", "nc", "fortune", "benchmark", "sarman-cli", "open", "run", "files", "settings", "notepad",
-    "browser", "image", "music", "video", "taskmgr", "calc", "paint", "cmd", "minPak",
-    "grep", "wc", "sort", "head", "tail", "tee",
+    "help",
+    "ls",
+    "cd",
+    "pwd",
+    "mkdir",
+    "touch",
+    "rm",
+    "cat",
+    "write",
+    "disks",
+    "df",
+    "usb",
+    "lsusb",
+    "cam",
+    "wifi",
+    "format",
+    "mkfs",
+    "echo",
+    "clear",
+    "mem",
+    "ps",
+    "apps",
+    "ipconfig",
+    "ping",
+    "dns",
+    "nslookup",
+    "curl",
+    "wget",
+    "date",
+    "uname",
+    "whoami",
+    "theme",
+    "uptime",
+    "fetch",
+    "neofetch",
+    "hexdump",
+    "nc",
+    "fortune",
+    "benchmark",
+    "sarman-cli",
+    "open",
+    "run",
+    "files",
+    "settings",
+    "notepad",
+    "browser",
+    "image",
+    "music",
+    "video",
+    "taskmgr",
+    "calc",
+    "paint",
+    "cmd",
+    "minPak",
+    "grep",
+    "wc",
+    "sort",
+    "head",
+    "tail",
+    "tee",
 ];
 const COMPLETION_APPS: &[&str] = &[
-    "files", "settings", "notepad", "browser", "image", "music", "video", "taskmgr",
-    "calc", "paint", "cmd", "installer", "3d", "pkgmgr",
+    "files",
+    "settings",
+    "notepad",
+    "browser",
+    "image",
+    "music",
+    "video",
+    "taskmgr",
+    "calc",
+    "paint",
+    "cmd",
+    "installer",
+    "3d",
+    "pkgmgr",
 ];
 
 fn app_index(name: &str) -> Option<usize> {
@@ -50,17 +117,37 @@ fn app_index(name: &str) -> Option<usize> {
 
 fn app_name(index: usize) -> &'static str {
     match (index, crate::gui::ui_english()) {
-        (0,false) => "Dosya Yöneticisi", (1,false) => "Ayarlar", (2,false) => "Not Defteri",
-        (3,false) => "Web Gezgini", (4,false) => "Resim Gösterici", (5,false) => "Müzik Çalar",
-        (6,false) => "Video Oynatıcı", (7,false) => "Görev Yöneticisi", (8,false) => "Hesap Makinesi",
-        (9,false) => "Çizim Tahtası", (10,false) => "Komut İstemi",
-        (11,false) => "Kurulum Sihirbazı", (12,false) => "3D Gösterici", (13,false) => "Paket Yöneticisi",
-        (14,false) => "Kontrol Paneli",
-        (0,true) => "File Manager", (1,true) => "Settings", (2,true) => "Notepad", (3,true) => "Browser",
-        (4,true) => "Image Viewer", (5,true) => "Music Player", (6,true) => "Video Player",
-        (7,true) => "Task Manager", (8,true) => "Calculator", (9,true) => "Paint",
-        (10,true) => "Terminal", (11,true) => "Installer", (12,true) => "3D Viewer", (13,true) => "Package Manager",
-        (14,true) => "Control Panel", _ => "Package Manager",
+        (0, false) => "Dosya Yöneticisi",
+        (1, false) => "Ayarlar",
+        (2, false) => "Not Defteri",
+        (3, false) => "Web Gezgini",
+        (4, false) => "Resim Gösterici",
+        (5, false) => "Müzik Çalar",
+        (6, false) => "Video Oynatıcı",
+        (7, false) => "Görev Yöneticisi",
+        (8, false) => "Hesap Makinesi",
+        (9, false) => "Çizim Tahtası",
+        (10, false) => "Komut İstemi",
+        (11, false) => "Kurulum Sihirbazı",
+        (12, false) => "3D Gösterici",
+        (13, false) => "Paket Yöneticisi",
+        (14, false) => "Kontrol Paneli",
+        (0, true) => "File Manager",
+        (1, true) => "Settings",
+        (2, true) => "Notepad",
+        (3, true) => "Browser",
+        (4, true) => "Image Viewer",
+        (5, true) => "Music Player",
+        (6, true) => "Video Player",
+        (7, true) => "Task Manager",
+        (8, true) => "Calculator",
+        (9, true) => "Paint",
+        (10, true) => "Terminal",
+        (11, true) => "Installer",
+        (12, true) => "3D Viewer",
+        (13, true) => "Package Manager",
+        (14, true) => "Control Panel",
+        _ => "Package Manager",
     }
 }
 
@@ -70,13 +157,17 @@ fn parse_ipv4(text: &str) -> Option<[u8; 4]> {
     for octet in &mut address {
         *octet = parts.next()?.parse::<u8>().ok()?;
     }
-    if parts.next().is_some() { return None; }
+    if parts.next().is_some() {
+        return None;
+    }
     Some(address)
 }
 
 fn push_ipv4(text: &mut TextBuf, address: [u8; 4]) {
     for (i, octet) in address.iter().enumerate() {
-        if i > 0 { text.push_byte(b'.'); }
+        if i > 0 {
+            text.push_byte(b'.');
+        }
         text.push_usize(*octet as usize);
     }
 }
@@ -193,7 +284,11 @@ pub struct OutLine {
 
 impl OutLine {
     pub const fn new() -> Self {
-        Self { text: [0; LINE_MAX], len: 0, color: 0 }
+        Self {
+            text: [0; LINE_MAX],
+            len: 0,
+            color: 0,
+        }
     }
 
     pub fn set(&mut self, s: &str, color: u32) {
@@ -293,8 +388,14 @@ impl TerminalApp {
 
     /// Başlangıç banner'ı.
     pub fn init_banner(&mut self) {
-        self.push_line(crate::gui::ui_text("Komut İstemi", "Command Prompt"), Color::ACCENT_PINK);
-        self.push_line(crate::gui::ui_text("Yardım için 'help' yazın.", "Type 'help' for commands."), Color::TEXT_MUTED);
+        self.push_line(
+            crate::gui::ui_text("Komut İstemi", "Command Prompt"),
+            Color::ACCENT_PINK,
+        );
+        self.push_line(
+            crate::gui::ui_text("Yardım için 'help' yazın.", "Type 'help' for commands."),
+            Color::TEXT_MUTED,
+        );
     }
 
     /// Çıktıya yeni bir satır ekler; tampon dolarsa en eskisini kaydırır.
@@ -322,7 +423,8 @@ impl TerminalApp {
     /// Terminal çıktı geçmişini fare tekeriyle kaydırır; giriş satırına dokunmaz.
     pub fn scroll_output(&mut self, delta: isize, view_lines: usize) {
         let max_scroll = self.out_count.saturating_sub(view_lines.max(1));
-        self.output_scroll = ((self.output_scroll as isize + delta).max(0) as usize).min(max_scroll);
+        self.output_scroll =
+            ((self.output_scroll as isize + delta).max(0) as usize).min(max_scroll);
     }
 
     /// Çıktının en eskisine (en üste) kaydırır (Home / Ctrl+Home).
@@ -387,8 +489,13 @@ impl TerminalApp {
         let mut pasted = ['\0'; crate::gui::clipboard::CAPACITY];
         let len = crate::gui::clipboard::copy_chars(&mut pasted);
         for &ch in &pasted[..len] {
-            if ch == '\0' || ch == '\r' { continue; }
-            if ch == '\n' { self.submit(); continue; }
+            if ch == '\0' || ch == '\r' {
+                continue;
+            }
+            if ch == '\n' {
+                self.submit();
+                continue;
+            }
             self.insert(ch);
         }
     }
@@ -478,14 +585,20 @@ impl TerminalApp {
             let command = &base[..token_start - 1];
             command.eq_ignore_ascii_case(b"open") || command.eq_ignore_ascii_case(b"run")
         };
-        let candidates = if app_arg { COMPLETION_APPS } else { COMPLETION_COMMANDS };
+        let candidates = if app_arg {
+            COMPLETION_APPS
+        } else {
+            COMPLETION_COMMANDS
+        };
         let mut match_count = 0usize;
         let mut selected = "";
         for candidate in candidates.iter().copied() {
             if candidate.as_bytes().len() >= prefix.len()
                 && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
             {
-                if match_count == self.completion_index { selected = candidate; }
+                if match_count == self.completion_index {
+                    selected = candidate;
+                }
                 match_count += 1;
             }
         }
@@ -506,7 +619,9 @@ impl TerminalApp {
             }
         }
         let new_len = token_start + selected.len();
-        if new_len >= LINE_MAX { return; }
+        if new_len >= LINE_MAX {
+            return;
+        }
         self.input[..token_start].copy_from_slice(&base[..token_start]);
         self.input[token_start..new_len].copy_from_slice(selected.as_bytes());
         self.input_len = new_len;
@@ -569,7 +684,13 @@ impl TerminalApp {
     /// `|`, `>` ve `>>` kabuk operatörlerini destekler. Her aşamanın çıktısı
     /// yakalanır; boru hattında bir sonraki komuta, yönlendirmede dosyaya,
     /// aksi halde ekrana aktarılır.
-    pub fn execute(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &mut PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
+    pub fn execute(
+        &mut self,
+        line: &str,
+        vfs: &mut VirtualFileSystem,
+        pmm: &mut PhysicalMemoryManager,
+        now: &DateTime,
+    ) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
             return None;
@@ -615,13 +736,18 @@ impl TerminalApp {
             if let Some((target, append)) = redirect {
                 if target.is_empty() {
                     self.push_line(
-                        crate::gui::ui_text("Hata: yonlendirme hedefi eksik.", "Error: missing redirection target."),
+                        crate::gui::ui_text(
+                            "Hata: yonlendirme hedefi eksik.",
+                            "Error: missing redirection target.",
+                        ),
                         Color::ACCENT_RED,
                     );
                 } else {
                     let path = self.resolve_path(&target);
                     let mut data = if append {
-                        vfs.read_file(&path).map(|bytes| alloc::vec::Vec::from(bytes)).unwrap_or_default()
+                        vfs.read_file(&path)
+                            .map(|bytes| alloc::vec::Vec::from(bytes))
+                            .unwrap_or_default()
                     } else {
                         alloc::vec::Vec::new()
                     };
@@ -633,7 +759,10 @@ impl TerminalApp {
                         self.push_line(msg.as_str(), Color::ACCENT_GREEN);
                     } else {
                         self.push_line(
-                            crate::gui::ui_text("Hata: dosyaya yazilamadi.", "Error: could not write file."),
+                            crate::gui::ui_text(
+                                "Hata: dosyaya yazilamadi.",
+                                "Error: could not write file.",
+                            ),
                             Color::ACCENT_RED,
                         );
                     }
@@ -650,7 +779,13 @@ impl TerminalApp {
     }
 
     /// Tek bir komutu (boru hattı olmadan) yürütür.
-    fn execute_single(&mut self, line: &str, vfs: &mut VirtualFileSystem, pmm: &mut PhysicalMemoryManager, now: &DateTime) -> Option<usize> {
+    fn execute_single(
+        &mut self,
+        line: &str,
+        vfs: &mut VirtualFileSystem,
+        pmm: &mut PhysicalMemoryManager,
+        now: &DateTime,
+    ) -> Option<usize> {
         let line = line.trim();
         if line.is_empty() {
             return None;
@@ -667,7 +802,10 @@ impl TerminalApp {
                 self.push_line(msg.as_str(), Color::ACCENT_GREEN);
                 return Some(app_idx);
             }
-            self.push_line(crate::gui::ui_text("Kullanım: open <uygulama>", "Usage: open <app>"), Color::ACCENT_YELLOW);
+            self.push_line(
+                crate::gui::ui_text("Kullanım: open <uygulama>", "Usage: open <app>"),
+                Color::ACCENT_YELLOW,
+            );
             return None;
         }
         if let Some(app_idx) = app_index(cmd) {
@@ -682,10 +820,22 @@ impl TerminalApp {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem ps exec", Color::TEXT_MAIN);
                 self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
-                self.push_line("hexdump <file> | nc <host> <port> [text] | fortune | benchmark", Color::ACCENT_BLUE);
-                self.push_line("minPak list|search|install|remove | exec <file> [args] | open <app>", Color::ACCENT_BLUE);
-                self.push_line("boru: cmd | grep <desen> | sort | wc   yonlendirme: cmd > dosya  cmd >> dosya", Color::ACCENT_YELLOW);
-                self.push_line("filtreler: cat grep wc sort head tail tee", Color::ACCENT_YELLOW);
+                self.push_line(
+                    "hexdump <file> | nc <host> <port> [text] | fortune | benchmark",
+                    Color::ACCENT_BLUE,
+                );
+                self.push_line(
+                    "minPak list|search|install|remove | exec <file> [args] | open <app>",
+                    Color::ACCENT_BLUE,
+                );
+                self.push_line(
+                    "boru: cmd | grep <desen> | sort | wc   yonlendirme: cmd > dosya  cmd >> dosya",
+                    Color::ACCENT_YELLOW,
+                );
+                self.push_line(
+                    "filtreler: cat grep wc sort head tail tee",
+                    Color::ACCENT_YELLOW,
+                );
                 self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
             }
             "pwd" => {
@@ -712,14 +862,26 @@ impl TerminalApp {
                         alloc::string::String::from(arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(arg);
                         p
                     };
-                    if vfs.is_dir(&target) || target == "/media/usb0" || target == "/media/cdrom" || target == "/media/hdd0" {
+                    if vfs.is_dir(&target)
+                        || target == "/media/usb0"
+                        || target == "/media/cdrom"
+                        || target == "/media/hdd0"
+                    {
                         self.set_cwd(&target);
                     } else {
-                        self.push_line(crate::gui::ui_text("Hata: Dizin bulunamadı.", "Error: Directory not found."), Color::ACCENT_RED);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Hata: Dizin bulunamadı.",
+                                "Error: Directory not found.",
+                            ),
+                            Color::ACCENT_RED,
+                        );
                     }
                 }
             }
@@ -727,7 +889,10 @@ impl TerminalApp {
                 let target = if arg.is_empty() { self.cwd_str() } else { arg };
                 let items = vfs.list_dir(target);
                 if items.is_empty() {
-                    self.push_line(crate::gui::ui_text("(boş dizin)", "(empty directory)"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text("(boş dizin)", "(empty directory)"),
+                        Color::TEXT_MUTED,
+                    );
                 } else {
                     for it in &items {
                         let mut buf = TextBuf::new();
@@ -751,58 +916,97 @@ impl TerminalApp {
             }
             "mkdir" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: mkdir <klasor>", "Usage: mkdir <dir>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: mkdir <klasor>", "Usage: mkdir <dir>"),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(arg);
                         p
                     };
                     if vfs.create_dir(&target) {
-                        self.push_line(crate::gui::ui_text("Klasör oluşturuldu.", "Directory created."), Color::ACCENT_GREEN);
+                        self.push_line(
+                            crate::gui::ui_text("Klasör oluşturuldu.", "Directory created."),
+                            Color::ACCENT_GREEN,
+                        );
                     } else {
-                        self.push_line(crate::gui::ui_text("Oluşturulamadı.", "Failed to create directory."), Color::ACCENT_RED);
+                        self.push_line(
+                            crate::gui::ui_text("Oluşturulamadı.", "Failed to create directory."),
+                            Color::ACCENT_RED,
+                        );
                     }
                 }
             }
             "touch" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: touch <dosya>", "Usage: touch <file>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: touch <dosya>", "Usage: touch <file>"),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(arg);
                         p
                     };
                     if vfs.create_file(&target, b"") {
-                        self.push_line(crate::gui::ui_text("Dosya oluşturuldu.", "File created."), Color::ACCENT_GREEN);
+                        self.push_line(
+                            crate::gui::ui_text("Dosya oluşturuldu.", "File created."),
+                            Color::ACCENT_GREEN,
+                        );
                     } else {
-                        self.push_line(crate::gui::ui_text("Oluşturulamadı.", "Failed to create file."), Color::ACCENT_RED);
+                        self.push_line(
+                            crate::gui::ui_text("Oluşturulamadı.", "Failed to create file."),
+                            Color::ACCENT_RED,
+                        );
                     }
                 }
             }
             "rm" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: rm <dosya_veya_klasör>", "Usage: rm <file_or_dir>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: rm <dosya_veya_klasör>",
+                            "Usage: rm <file_or_dir>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(arg);
                         p
                     };
                     if vfs.move_to_trash(&target) {
-                        self.push_line(crate::gui::ui_text("Geri dönüşüm kutusuna taşındı.", "Moved to Recycle Bin."), Color::ACCENT_GREEN);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Geri dönüşüm kutusuna taşındı.",
+                                "Moved to Recycle Bin.",
+                            ),
+                            Color::ACCENT_GREEN,
+                        );
                     } else {
-                        self.push_line(crate::gui::ui_text("Silinemedi.", "Remove failed."), Color::ACCENT_RED);
+                        self.push_line(
+                            crate::gui::ui_text("Silinemedi.", "Remove failed."),
+                            Color::ACCENT_RED,
+                        );
                     }
                 }
             }
@@ -811,25 +1015,45 @@ impl TerminalApp {
                 let file_arg = sp.next().unwrap_or("");
                 let text_arg = sp.next().unwrap_or("");
                 if file_arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: write <dosya> <metin>", "Usage: write <file> <text>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: write <dosya> <metin>",
+                            "Usage: write <file> <text>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
                     let target = if file_arg.starts_with('/') {
                         alloc::string::String::from(file_arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(file_arg);
                         p
                     };
                     if vfs.write_file(&target, text_arg.as_bytes()) {
-                        self.push_line(crate::gui::ui_text("Dosyaya yazıldı.", "Written to file."), Color::ACCENT_GREEN);
+                        self.push_line(
+                            crate::gui::ui_text("Dosyaya yazıldı.", "Written to file."),
+                            Color::ACCENT_GREEN,
+                        );
                     } else {
-                        self.push_line(crate::gui::ui_text("Yazılamadı.", "Write failed."), Color::ACCENT_RED);
+                        self.push_line(
+                            crate::gui::ui_text("Yazılamadı.", "Write failed."),
+                            Color::ACCENT_RED,
+                        );
                     }
                 }
             }
             "disks" | "df" => {
-                self.push_line(crate::gui::ui_text("--- BAĞLI DİSKLER VE SÜRÜCÜLER ---", "--- ATTACHED STORAGE DEVICES ---"), Color::ACCENT_PINK);
+                self.push_line(
+                    crate::gui::ui_text(
+                        "--- BAĞLI DİSKLER VE SÜRÜCÜLER ---",
+                        "--- ATTACHED STORAGE DEVICES ---",
+                    ),
+                    Color::ACCENT_PINK,
+                );
                 for drive in 0..4u8 {
                     if let Some(dev) = crate::drivers::ata::device(drive) {
                         let mut b = TextBuf::new();
@@ -837,9 +1061,15 @@ impl TerminalApp {
                         b.push_usize(drive as usize);
                         b.push_str(": ");
                         match dev.role {
-                            crate::drivers::ata::DriveRole::UsbStorage => b.push_str(crate::gui::ui_text("[USB / FAT32] ", "[USB / FAT32] ")),
-                            crate::drivers::ata::DriveRole::HardDisk => b.push_str(crate::gui::ui_text("[Sabit Disk] ", "[Hard Disk] ")),
-                            crate::drivers::ata::DriveRole::CdRom => b.push_str(crate::gui::ui_text("[CD-ROM / ISO] ", "[CD-ROM / ISO] ")),
+                            crate::drivers::ata::DriveRole::UsbStorage => {
+                                b.push_str(crate::gui::ui_text("[USB / FAT32] ", "[USB / FAT32] "))
+                            }
+                            crate::drivers::ata::DriveRole::HardDisk => {
+                                b.push_str(crate::gui::ui_text("[Sabit Disk] ", "[Hard Disk] "))
+                            }
+                            crate::drivers::ata::DriveRole::CdRom => b.push_str(
+                                crate::gui::ui_text("[CD-ROM / ISO] ", "[CD-ROM / ISO] "),
+                            ),
                             _ => b.push_str(crate::gui::ui_text("[Bilinmeyen] ", "[Unknown] ")),
                         }
                         b.push_str(dev.model_str());
@@ -849,10 +1079,22 @@ impl TerminalApp {
                         self.push_line(b.as_str(), Color::ACCENT_GREEN);
                     }
                 }
-                self.push_line(crate::gui::ui_text("Bağlantı: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO", "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO"), Color::TEXT_MUTED);
+                self.push_line(
+                    crate::gui::ui_text(
+                        "Bağlantı: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO",
+                        "Mounts: / -> RamFS | /media/usb0 -> FAT32 | /media/cdrom -> ISO",
+                    ),
+                    Color::TEXT_MUTED,
+                );
             }
             "usb" | "lsusb" => {
-                self.push_line(crate::gui::ui_text("--- USB DENETLEYICILERI VE AYGITLARI ---", "--- USB CONTROLLERS & DEVICES ---"), Color::ACCENT_PINK);
+                self.push_line(
+                    crate::gui::ui_text(
+                        "--- USB DENETLEYICILERI VE AYGITLARI ---",
+                        "--- USB CONTROLLERS & DEVICES ---",
+                    ),
+                    Color::ACCENT_PINK,
+                );
                 if let Some(ctrl) = crate::drivers::usb::controller_info() {
                     let mut b = TextBuf::new();
                     b.push_str("[Host] ");
@@ -863,7 +1105,13 @@ impl TerminalApp {
                     b.push_usize(ctrl.func as usize);
                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
                 } else {
-                    self.push_line(crate::gui::ui_text("[Host] Harici USB denetleyici yok (Emulasyon modu)", "[Host] No host controller (Emulation mode)"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "[Host] Harici USB denetleyici yok (Emulasyon modu)",
+                            "[Host] No host controller (Emulation mode)",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 }
 
                 if crate::drivers::usb_hid::ready() {
@@ -877,17 +1125,38 @@ impl TerminalApp {
                     b.push_str(crate::gui::ui_text(" fare)", " mouse)"));
                     self.push_line(b.as_str(), Color::ACCENT_BLUE);
                 } else {
-                    self.push_line(crate::gui::ui_text("[HID] PS/2 ve USB Legacy emulasyonu devrede", "[HID] PS/2 and USB Legacy fallback active"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "[HID] PS/2 ve USB Legacy emulasyonu devrede",
+                            "[HID] PS/2 and USB Legacy fallback active",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 }
 
                 if crate::drivers::usb::usb_available() {
-                    self.push_line(crate::gui::ui_text("[Disk] /media/usb0 (USB Bellek FAT32 bagli)", "[Disk] /media/usb0 (USB Drive FAT32 mounted)"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "[Disk] /media/usb0 (USB Bellek FAT32 bagli)",
+                            "[Disk] /media/usb0 (USB Drive FAT32 mounted)",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
-                    self.push_line(crate::gui::ui_text("[Disk] Bagli USB bellek yok (/media/usb0)", "[Disk] No USB drive attached (/media/usb0)"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "[Disk] Bagli USB bellek yok (/media/usb0)",
+                            "[Disk] No USB drive attached (/media/usb0)",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 }
             }
             "cam" | "camera" => {
-                self.push_line(crate::gui::ui_text("--- UVC KAMERA SURUCUSU ---", "--- UVC CAMERA DRIVER ---"), Color::ACCENT_PINK);
+                self.push_line(
+                    crate::gui::ui_text("--- UVC KAMERA SURUCUSU ---", "--- UVC CAMERA DRIVER ---"),
+                    Color::ACCENT_PINK,
+                );
                 if let Some(cam) = crate::drivers::camera::info() {
                     let mut b = TextBuf::new();
                     b.push_str(cam.name_str());
@@ -908,7 +1177,13 @@ impl TerminalApp {
                     b3.push_str(cam.format.name());
                     self.push_line(b3.as_str(), Color::ACCENT_YELLOW);
                 } else {
-                    self.push_line(crate::gui::ui_text("Kamera algilanamadi (UVC bekleniyor).", "No camera detected (UVC waiting)."), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kamera algilanamadi (UVC bekleniyor).",
+                            "No camera detected (UVC waiting).",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 }
             }
             "wifi" | "wlan" => {
@@ -916,7 +1191,13 @@ impl TerminalApp {
                 let sub = sp.next().unwrap_or("status");
                 match sub {
                     "scan" => {
-                        self.push_line(crate::gui::ui_text("--- KABLOSUZ AGLAR (802.11) ---", "--- WIRELESS NETWORKS (802.11) ---"), Color::ACCENT_PINK);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "--- KABLOSUZ AGLAR (802.11) ---",
+                                "--- WIRELESS NETWORKS (802.11) ---",
+                            ),
+                            Color::ACCENT_PINK,
+                        );
                         let aps = crate::drivers::wifi::scan_networks();
                         for ap_opt in aps {
                             if let Some(ap) = ap_opt {
@@ -935,25 +1216,49 @@ impl TerminalApp {
                         let target_ssid = sp.next().unwrap_or("");
                         let pass = sp.next().unwrap_or("");
                         if target_ssid.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanim: wifi connect <SSID> [sifre]", "Usage: wifi connect <SSID> [pass]"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanim: wifi connect <SSID> [sifre]",
+                                    "Usage: wifi connect <SSID> [pass]",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             let mut b = TextBuf::new();
                             b.push_str(crate::gui::ui_text("Baglaniliyor: ", "Connecting: "));
                             b.push_str(target_ssid);
                             self.push_line(b.as_str(), Color::ACCENT_YELLOW);
                             if crate::drivers::wifi::connect(target_ssid, pass) {
-                                self.push_line(crate::gui::ui_text("Baglanti basarili! IP: 192.168.1.105", "Connected! IP: 192.168.1.105"), Color::ACCENT_GREEN);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Baglanti basarili! IP: 192.168.1.105",
+                                        "Connected! IP: 192.168.1.105",
+                                    ),
+                                    Color::ACCENT_GREEN,
+                                );
                             } else {
-                                self.push_line(crate::gui::ui_text("Hata: Ag bulunamadi.", "Error: Network not found."), Color::ACCENT_RED);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Hata: Ag bulunamadi.",
+                                        "Error: Network not found.",
+                                    ),
+                                    Color::ACCENT_RED,
+                                );
                             }
                         }
                     }
                     "disconnect" => {
                         crate::drivers::wifi::disconnect();
-                        self.push_line(crate::gui::ui_text("Wi-Fi baglantisi kesildi.", "Wi-Fi disconnected."), Color::ACCENT_YELLOW);
+                        self.push_line(
+                            crate::gui::ui_text("Wi-Fi baglantisi kesildi.", "Wi-Fi disconnected."),
+                            Color::ACCENT_YELLOW,
+                        );
                     }
                     _ => {
-                        self.push_line(crate::gui::ui_text("--- WI-FI DURUMU ---", "--- WI-FI STATUS ---"), Color::ACCENT_PINK);
+                        self.push_line(
+                            crate::gui::ui_text("--- WI-FI DURUMU ---", "--- WI-FI STATUS ---"),
+                            Color::ACCENT_PINK,
+                        );
                         let st = crate::drivers::wifi::status();
                         match st.state {
                             crate::drivers::wifi::WifiState::Connected => {
@@ -964,15 +1269,30 @@ impl TerminalApp {
 
                                 let mut b2 = TextBuf::new();
                                 b2.push_str("IP: ");
-                                b2.push_usize(st.ip_addr[0] as usize); b2.push_str(".");
-                                b2.push_usize(st.ip_addr[1] as usize); b2.push_str(".");
-                                b2.push_usize(st.ip_addr[2] as usize); b2.push_str(".");
+                                b2.push_usize(st.ip_addr[0] as usize);
+                                b2.push_str(".");
+                                b2.push_usize(st.ip_addr[1] as usize);
+                                b2.push_str(".");
+                                b2.push_usize(st.ip_addr[2] as usize);
+                                b2.push_str(".");
                                 b2.push_usize(st.ip_addr[3] as usize);
                                 self.push_line(b2.as_str(), Color::ACCENT_BLUE);
                             }
                             _ => {
-                                self.push_line(crate::gui::ui_text("Durum: Bagli Degil", "Status: Disconnected"), Color::TEXT_MUTED);
-                                self.push_line(crate::gui::ui_text("Komutlar: wifi scan | wifi connect <SSID>", "Commands: wifi scan | wifi connect <SSID>"), Color::ACCENT_YELLOW);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Durum: Bagli Degil",
+                                        "Status: Disconnected",
+                                    ),
+                                    Color::TEXT_MUTED,
+                                );
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Komutlar: wifi scan | wifi connect <SSID>",
+                                        "Commands: wifi scan | wifi connect <SSID>",
+                                    ),
+                                    Color::ACCENT_YELLOW,
+                                );
                             }
                         }
                     }
@@ -983,22 +1303,51 @@ impl TerminalApp {
                 let fs_type = sp.next().unwrap_or("").to_ascii_lowercase();
                 let drive_str = sp.next().unwrap_or("");
                 let drive_num = if drive_str.starts_with("ide") || drive_str.starts_with("hd") {
-                    drive_str.chars().last().and_then(|c| c.to_digit(10)).map(|d| d as u8)
+                    drive_str
+                        .chars()
+                        .last()
+                        .and_then(|c| c.to_digit(10))
+                        .map(|d| d as u8)
                 } else {
                     drive_str.parse::<u8>().ok()
                 };
 
                 if fs_type.is_empty() || drive_num.is_none() {
-                    self.push_line(crate::gui::ui_text("Kullanım: format <fat32|ext4|exfat|ext2> <0..3>", "Usage: format <fat32|ext4|exfat|ext2> <0..3>"), Color::ACCENT_YELLOW);
-                    self.push_line(crate::gui::ui_text("Örnek: format ext4 1  veya  format exfat 0", "Example: format ext4 1  or  format exfat 0"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: format <fat32|ext4|exfat|ext2> <0..3>",
+                            "Usage: format <fat32|ext4|exfat|ext2> <0..3>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Örnek: format ext4 1  veya  format exfat 0",
+                            "Example: format ext4 1  or  format exfat 0",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 } else {
                     let drive = drive_num.unwrap();
-                    if drive >= 4 || crate::drivers::ata::device(drive).map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata).unwrap_or(true) {
-                        self.push_line(crate::gui::ui_text("Hata: Geçersiz veya bağlı olmayan ATA sürücü!", "Error: Invalid or unattached ATA drive!"), Color::ACCENT_RED);
+                    if drive >= 4
+                        || crate::drivers::ata::device(drive)
+                            .map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata)
+                            .unwrap_or(true)
+                    {
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Hata: Geçersiz veya bağlı olmayan ATA sürücü!",
+                                "Error: Invalid or unattached ATA drive!",
+                            ),
+                            Color::ACCENT_RED,
+                        );
                     } else {
                         let cap = crate::drivers::ata::drive_capacity_sectors(drive);
                         let mut b = TextBuf::new();
-                        b.push_str(crate::gui::ui_text("Biçimlendiriliyor: IDE ", "Formatting: IDE "));
+                        b.push_str(crate::gui::ui_text(
+                            "Biçimlendiriliyor: IDE ",
+                            "Formatting: IDE ",
+                        ));
                         b.push_usize(drive as usize);
                         b.push_str(" [");
                         b.push_str(&fs_type);
@@ -1011,25 +1360,46 @@ impl TerminalApp {
                             "ext2" => crate::fs::ext2::format(drive, 0, cap),
                             "fat32" | "fat" => crate::fs::diskfs::fat_format(drive),
                             _ => {
-                                self.push_line(crate::gui::ui_text("Desteklenmeyen dosya sistemi. (fat32, ext4, exfat, ext2)", "Unsupported filesystem. (fat32, ext4, exfat, ext2)"), Color::ACCENT_RED);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Desteklenmeyen dosya sistemi. (fat32, ext4, exfat, ext2)",
+                                        "Unsupported filesystem. (fat32, ext4, exfat, ext2)",
+                                    ),
+                                    Color::ACCENT_RED,
+                                );
                                 false
                             }
                         };
 
                         if success {
                             let mut res = TextBuf::new();
-                            res.push_str(crate::gui::ui_text("Başarıyla biçimlendirildi: ", "Successfully formatted: "));
+                            res.push_str(crate::gui::ui_text(
+                                "Başarıyla biçimlendirildi: ",
+                                "Successfully formatted: ",
+                            ));
                             res.push_str(&fs_type);
                             self.push_line(res.as_str(), Color::ACCENT_GREEN);
                         } else {
-                            self.push_line(crate::gui::ui_text("Biçimlendirme başarısız oldu!", "Formatting failed!"), Color::ACCENT_RED);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Biçimlendirme başarısız oldu!",
+                                    "Formatting failed!",
+                                ),
+                                Color::ACCENT_RED,
+                            );
                         }
                     }
                 }
             }
             "exec" => {
                 if arg.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: exec <ikili_dosya_yolu> [argümanlar]", "Usage: exec <binary_path> [arguments]"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: exec <ikili_dosya_yolu> [argümanlar]",
+                            "Usage: exec <binary_path> [arguments]",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else {
                     let mut exec_parts = arg.splitn(2, ' ');
                     let exec_path = exec_parts.next().unwrap_or("");
@@ -1038,40 +1408,68 @@ impl TerminalApp {
                         alloc::string::String::from(exec_path)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(exec_path);
                         p
                     };
                     match vfs.read_file(&target) {
                         Some(data) => {
                             let file_name = target.rsplit('/').next().unwrap_or("");
-                            let name = file_name.strip_suffix(".pkg").or_else(|| file_name.strip_suffix(".elf")).unwrap_or(file_name);
+                            let name = file_name
+                                .strip_suffix(".pkg")
+                                .or_else(|| file_name.strip_suffix(".elf"))
+                                .unwrap_or(file_name);
                             let manifest_name = data.split(|b| *b == b'\n').nth(1).unwrap_or(&[]);
                             let builtin_manifest = target.ends_with(".pkg")
                                 && data.starts_with(b"MINOS-BUILTIN\n")
                                 && manifest_name == name.as_bytes();
-                            let legacy_builtin = target.starts_with("/bin/") && target.ends_with(".elf");
+                            let legacy_builtin =
+                                target.starts_with("/bin/") && target.ends_with(".elf");
                             if target.starts_with("/bin/") && (builtin_manifest || legacy_builtin) {
                                 match name {
                                     "tiny-editor" => return Some(2),
-                                    "sarman-cli" => { self.run_sarman_cli(exec_args, pmm); return None; }
-                                    "netcat-lite" => { self.run_netcat_lite(exec_args); return None; }
-                                    "hexdump" => { self.run_hexdump(exec_args, vfs); return None; }
-                                    "benchmark" => { self.run_benchmark(pmm); return None; }
-                                    "fortune" => { self.run_fortune(); return None; }
+                                    "sarman-cli" => {
+                                        self.run_sarman_cli(exec_args, pmm);
+                                        return None;
+                                    }
+                                    "netcat-lite" => {
+                                        self.run_netcat_lite(exec_args);
+                                        return None;
+                                    }
+                                    "hexdump" => {
+                                        self.run_hexdump(exec_args, vfs);
+                                        return None;
+                                    }
+                                    "benchmark" => {
+                                        self.run_benchmark(pmm);
+                                        return None;
+                                    }
+                                    "fortune" => {
+                                        self.run_fortune();
+                                        return None;
+                                    }
                                     _ => {}
                                 }
                             }
                             let mut aspace = crate::mm::vmm::AddressSpace::current();
-                            match crate::mm::loader::AppLoader::load_binary(data, &mut aspace, pmm) {
+                            match crate::mm::loader::AppLoader::load_binary(data, &mut aspace, pmm)
+                            {
                                 Ok(loaded) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("[EXEC] ELF/İkili dosya yüklendi: RIP=0x", "[EXEC] ELF/Binary loaded: RIP=0x"));
+                                    b.push_str(crate::gui::ui_text(
+                                        "[EXEC] ELF/İkili dosya yüklendi: RIP=0x",
+                                        "[EXEC] ELF/Binary loaded: RIP=0x",
+                                    ));
                                     b.push_hex64(loaded.entry_point);
                                     self.push_line(b.as_str(), Color::ACCENT_GREEN);
 
-                                    let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
-                                    if let Some(out) = crate::arch::x86_64::ring3::take_last_output() {
+                                    let ok =
+                                        crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
+                                    if let Some(out) =
+                                        crate::arch::x86_64::ring3::take_last_output()
+                                    {
                                         let clean = out.trim_end_matches(['\r', '\n']);
                                         if !clean.is_empty() {
                                             self.push_line(clean, Color::ACCENT_BLUE);
@@ -1086,7 +1484,10 @@ impl TerminalApp {
                                 }
                                 Err(err) => {
                                     let mut b = TextBuf::new();
-                                    b.push_str(crate::gui::ui_text("Yükleme hatası: ", "Load error: "));
+                                    b.push_str(crate::gui::ui_text(
+                                        "Yükleme hatası: ",
+                                        "Load error: ",
+                                    ));
                                     b.push_str(err);
                                     self.push_line(b.as_str(), Color::ACCENT_RED);
                                 }
@@ -1094,7 +1495,10 @@ impl TerminalApp {
                         }
                         None => {
                             let mut b = TextBuf::new();
-                            b.push_str(crate::gui::ui_text("Dosya bulunamadı: ", "File not found: "));
+                            b.push_str(crate::gui::ui_text(
+                                "Dosya bulunamadı: ",
+                                "File not found: ",
+                            ));
                             b.push_str(&target);
                             self.push_line(b.as_str(), Color::ACCENT_RED);
                         }
@@ -1107,10 +1511,22 @@ impl TerminalApp {
                 let subarg = sp.next().unwrap_or("").trim();
                 match subcmd {
                     "list" => {
-                        self.push_line(crate::gui::ui_text("--- KURULU PAKETLER (/bin) ---", "--- INSTALLED PACKAGES (/bin) ---"), Color::ACCENT_PINK);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "--- KURULU PAKETLER (/bin) ---",
+                                "--- INSTALLED PACKAGES (/bin) ---",
+                            ),
+                            Color::ACCENT_PINK,
+                        );
                         let pkgs = crate::apps::pkgmgr::MinPkg::list_installed(vfs);
                         if pkgs.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kurulu paket bulunamadı.", "No packages installed."), Color::TEXT_MUTED);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kurulu paket bulunamadı.",
+                                    "No packages installed.",
+                                ),
+                                Color::TEXT_MUTED,
+                            );
                         } else {
                             for p in &pkgs {
                                 let mut b = TextBuf::new();
@@ -1125,9 +1541,21 @@ impl TerminalApp {
                     }
                     "search" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak search <paket_adi>", "Usage: minPak search <pkg_name>"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak search <paket_adi>",
+                                    "Usage: minPak search <pkg_name>",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
-                            self.push_line(crate::gui::ui_text("--- ARAMA SONUÇLARI ---", "--- SEARCH RESULTS ---"), Color::ACCENT_PINK);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "--- ARAMA SONUÇLARI ---",
+                                    "--- SEARCH RESULTS ---",
+                                ),
+                                Color::ACCENT_PINK,
+                            );
                             let needle = subarg.to_lowercase();
                             let mut found = 0;
                             for p in &crate::apps::pkgmgr::MinPkg::list_installed(vfs) {
@@ -1145,62 +1573,95 @@ impl TerminalApp {
                                 }
                             }
                             if found == 0 {
-                                self.push_line(crate::gui::ui_text("Eşleşen paket bulunamadı.", "No matching packages found."), Color::TEXT_MUTED);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Eşleşen paket bulunamadı.",
+                                        "No matching packages found.",
+                                    ),
+                                    Color::TEXT_MUTED,
+                                );
                             }
                         }
                     }
                     "install" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak install <paket_adi_veya_url> [sha256]", "Usage: minPak install <pkg_name_or_url> [sha256]"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak install <paket_adi_veya_url> [sha256]",
+                                    "Usage: minPak install <pkg_name_or_url> [sha256]",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             let mut parts = subarg.split_whitespace();
                             let target_pkg = parts.next().unwrap_or("");
                             let expected_sha256 = parts.next();
 
-                            self.push_line(crate::gui::ui_text("Paket kuruluyor...", "Installing package..."), Color::TEXT_MUTED);
+                            self.push_line(
+                                crate::gui::ui_text("Paket kuruluyor...", "Installing package..."),
+                                Color::TEXT_MUTED,
+                            );
                             // Yerel katalog paketi ise bağımlılıkları önce çözüp kur; ağdan
                             // indirilecek paketlerde bağımlılık bilgisi bulunmadığı için tek
                             // olarak kurulur (checksum yolu korunur).
                             if !target_pkg.starts_with("http://") {
-                                match crate::apps::pkgmgr::MinPkg::install_with_dependencies(target_pkg, vfs) {
+                                match crate::apps::pkgmgr::MinPkg::install_with_dependencies(
+                                    target_pkg, vfs,
+                                ) {
                                     Ok((paths, skipped)) => {
                                         for p in &paths {
                                             let mut b = TextBuf::new();
-                                            b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
+                                            b.push_str(crate::gui::ui_text(
+                                                "Başarıyla kuruldu: ",
+                                                "Successfully installed: ",
+                                            ));
                                             b.push_str(p);
                                             self.push_line(b.as_str(), Color::ACCENT_GREEN);
                                         }
                                         for s in &skipped {
                                             let mut b = TextBuf::new();
-                                            b.push_str(crate::gui::ui_text("Zaten kurulu, atlandı: ", "Already installed, skipped: "));
+                                            b.push_str(crate::gui::ui_text(
+                                                "Zaten kurulu, atlandı: ",
+                                                "Already installed, skipped: ",
+                                            ));
                                             b.push_str(s);
                                             self.push_line(b.as_str(), Color::ACCENT_BLUE);
                                         }
                                     }
                                     Err(err) => {
                                         let mut b = TextBuf::new();
-                                        b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
+                                        b.push_str(crate::gui::ui_text(
+                                            "Kurulum başarısız: ",
+                                            "Installation failed: ",
+                                        ));
                                         b.push_str(&err);
                                         self.push_line(b.as_str(), Color::ACCENT_RED);
                                     }
                                 }
                             } else {
                                 // Ağdan kurulum: SHA-256 doğrulamalı URL yolu.
-                                let res = crate::apps::pkgmgr::MinPkg::install_from_url_with_checksum(
-                                    target_pkg,
-                                    expected_sha256,
-                                    vfs,
-                                );
+                                let res =
+                                    crate::apps::pkgmgr::MinPkg::install_from_url_with_checksum(
+                                        target_pkg,
+                                        expected_sha256,
+                                        vfs,
+                                    );
                                 match res {
                                     Ok(path) => {
                                         let mut b = TextBuf::new();
-                                        b.push_str(crate::gui::ui_text("Başarıyla kuruldu: ", "Successfully installed: "));
+                                        b.push_str(crate::gui::ui_text(
+                                            "Başarıyla kuruldu: ",
+                                            "Successfully installed: ",
+                                        ));
                                         b.push_str(&path);
                                         self.push_line(b.as_str(), Color::ACCENT_GREEN);
                                     }
                                     Err(err) => {
                                         let mut b = TextBuf::new();
-                                        b.push_str(crate::gui::ui_text("Kurulum başarısız: ", "Installation failed: "));
+                                        b.push_str(crate::gui::ui_text(
+                                            "Kurulum başarısız: ",
+                                            "Installation failed: ",
+                                        ));
                                         b.push_str(err);
                                         self.push_line(b.as_str(), Color::ACCENT_RED);
                                     }
@@ -1210,7 +1671,13 @@ impl TerminalApp {
                     }
                     "sha256" | "checksum" | "hash" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak sha256 <dosya_veya_paket>", "Usage: minPak sha256 <file_or_pkg>"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak sha256 <dosya_veya_paket>",
+                                    "Usage: minPak sha256 <file_or_pkg>",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             let path = if subarg.starts_with('/') {
                                 alloc::string::String::from(subarg)
@@ -1224,7 +1691,10 @@ impl TerminalApp {
                                 b.push_str(&csum);
                                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
                             } else {
-                                self.push_line(crate::gui::ui_text("Dosya bulunamadı.", "File not found."), Color::ACCENT_RED);
+                                self.push_line(
+                                    crate::gui::ui_text("Dosya bulunamadı.", "File not found."),
+                                    Color::ACCENT_RED,
+                                );
                             }
                         }
                     }
@@ -1233,19 +1703,39 @@ impl TerminalApp {
                         let target_file = parts.next().unwrap_or("");
                         let expected = parts.next().unwrap_or("");
                         if target_file.is_empty() || expected.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak verify <dosya_veya_paket> <beklenen_sha256>", "Usage: minPak verify <file_or_pkg> <expected_sha256>"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak verify <dosya_veya_paket> <beklenen_sha256>",
+                                    "Usage: minPak verify <file_or_pkg> <expected_sha256>",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             let path = if target_file.starts_with('/') {
                                 alloc::string::String::from(target_file)
                             } else {
                                 alloc::format!("/bin/{}", target_file)
                             };
-                            match crate::apps::pkgmgr::MinPkg::verify_file_checksum(&path, expected, vfs) {
+                            match crate::apps::pkgmgr::MinPkg::verify_file_checksum(
+                                &path, expected, vfs,
+                            ) {
                                 Ok(true) => {
-                                    self.push_line(crate::gui::ui_text("Doğrulama başarılı: SHA-256 checksum eşleşti.", "Verification successful: SHA-256 matches."), Color::ACCENT_GREEN);
+                                    self.push_line(
+                                        crate::gui::ui_text(
+                                            "Doğrulama başarılı: SHA-256 checksum eşleşti.",
+                                            "Verification successful: SHA-256 matches.",
+                                        ),
+                                        Color::ACCENT_GREEN,
+                                    );
                                 }
                                 Ok(false) => {
-                                    self.push_line(crate::gui::ui_text("Doğrulama BAŞARISIZ: SHA-256 checksum uyuşmuyor!", "Verification FAILED: SHA-256 checksum mismatch!"), Color::ACCENT_RED);
+                                    self.push_line(
+                                        crate::gui::ui_text(
+                                            "Doğrulama BAŞARISIZ: SHA-256 checksum uyuşmuyor!",
+                                            "Verification FAILED: SHA-256 checksum mismatch!",
+                                        ),
+                                        Color::ACCENT_RED,
+                                    );
                                 }
                                 Err(e) => {
                                     self.push_line(e, Color::ACCENT_RED);
@@ -1255,11 +1745,23 @@ impl TerminalApp {
                     }
                     "depends" | "deps" | "resolve" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak depends <paket_adi>", "Usage: minPak depends <pkg_name>"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak depends <paket_adi>",
+                                    "Usage: minPak depends <pkg_name>",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             match crate::apps::pkgmgr::MinPkg::resolve_plan(subarg, vfs) {
                                 Ok(plan) => {
-                                    self.push_line(crate::gui::ui_text("--- BAĞIMLILIK PLANI ---", "--- DEPENDENCY PLAN ---"), Color::ACCENT_PINK);
+                                    self.push_line(
+                                        crate::gui::ui_text(
+                                            "--- BAĞIMLILIK PLANI ---",
+                                            "--- DEPENDENCY PLAN ---",
+                                        ),
+                                        Color::ACCENT_PINK,
+                                    );
                                     for (i, line) in plan.to_install.iter().enumerate() {
                                         let mut b = TextBuf::new();
                                         b.push_str("  ");
@@ -1271,7 +1773,10 @@ impl TerminalApp {
                                     }
                                     for s in &plan.already_installed {
                                         let mut b = TextBuf::new();
-                                        b.push_str(crate::gui::ui_text("  zaten kurulu: ", "  already installed: "));
+                                        b.push_str(crate::gui::ui_text(
+                                            "  zaten kurulu: ",
+                                            "  already installed: ",
+                                        ));
                                         b.push_str(s);
                                         self.push_line(b.as_str(), Color::ACCENT_BLUE);
                                     }
@@ -1285,24 +1790,84 @@ impl TerminalApp {
                     }
                     "remove" | "uninstall" => {
                         if subarg.is_empty() {
-                            self.push_line(crate::gui::ui_text("Kullanım: minPak remove <paket_adi>", "Usage: minPak remove <pkg_name>"), Color::ACCENT_YELLOW);
+                            self.push_line(
+                                crate::gui::ui_text(
+                                    "Kullanım: minPak remove <paket_adi>",
+                                    "Usage: minPak remove <pkg_name>",
+                                ),
+                                Color::ACCENT_YELLOW,
+                            );
                         } else {
                             if crate::apps::pkgmgr::MinPkg::remove(subarg, vfs) {
-                                self.push_line(crate::gui::ui_text("Paket başarıyla kaldırıldı.", "Package removed successfully."), Color::ACCENT_GREEN);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Paket başarıyla kaldırıldı.",
+                                        "Package removed successfully.",
+                                    ),
+                                    Color::ACCENT_GREEN,
+                                );
                             } else {
-                                self.push_line(crate::gui::ui_text("Paket bulunamadı veya silinemedi.", "Package not found or could not be removed."), Color::ACCENT_RED);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Paket bulunamadı veya silinemedi.",
+                                        "Package not found or could not be removed.",
+                                    ),
+                                    Color::ACCENT_RED,
+                                );
                             }
                         }
                     }
                     _ => {
-                        self.push_line(crate::gui::ui_text("minOs Paket Yöneticisi v1.1 (minPak)", "minOs Package Manager v1.1 (minPak)"), Color::ACCENT_PINK);
-                        self.push_line(crate::gui::ui_text("minPak depends <paket>        - Bağımlılık çözüm planını gösterir", "minPak depends <package>      - Show dependency resolution plan"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak list                   - Kurulu paketleri listeler", "minPak list                   - List installed packages"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak search <paket>         - Kurulu paketlerde arama yapar", "minPak search <package>       - Search installed packages"), Color::TEXT_MAIN);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minOs Paket Yöneticisi v1.1 (minPak)",
+                                "minOs Package Manager v1.1 (minPak)",
+                            ),
+                            Color::ACCENT_PINK,
+                        );
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak depends <paket>        - Bağımlılık çözüm planını gösterir",
+                                "minPak depends <package>      - Show dependency resolution plan",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak list                   - Kurulu paketleri listeler",
+                                "minPak list                   - List installed packages",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak search <paket>         - Kurulu paketlerde arama yapar",
+                                "minPak search <package>       - Search installed packages",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
                         self.push_line(crate::gui::ui_text("minPak install <paket> [hash] - Paketi indirir, checksum'ı doğrular ve kurar", "minPak install <pkg> [hash]  - Download, verify checksum and install"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak sha256 <dosya>         - Dosyanın SHA-256 özetini hesaplar", "minPak sha256 <file>          - Calculate file SHA-256 hash"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak verify <dosya> <hash>  - Dosyanın SHA-256 özetini doğrular", "minPak verify <file> <hash>   - Verify file SHA-256 checksum"), Color::TEXT_MAIN);
-                        self.push_line(crate::gui::ui_text("minPak remove <paket>         - Kurulu paketi siler", "minPak remove <package>       - Remove installed package"), Color::TEXT_MAIN);
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak sha256 <dosya>         - Dosyanın SHA-256 özetini hesaplar",
+                                "minPak sha256 <file>          - Calculate file SHA-256 hash",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak verify <dosya> <hash>  - Dosyanın SHA-256 özetini doğrular",
+                                "minPak verify <file> <hash>   - Verify file SHA-256 checksum",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "minPak remove <paket>         - Kurulu paketi siler",
+                                "minPak remove <package>       - Remove installed package",
+                            ),
+                            Color::TEXT_MAIN,
+                        );
                     }
                 }
             }
@@ -1315,14 +1880,19 @@ impl TerminalApp {
                             }
                         }
                     } else {
-                        self.push_line(crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"), Color::ACCENT_YELLOW);
+                        self.push_line(
+                            crate::gui::ui_text("Kullanım: cat <dosya>", "Usage: cat <file>"),
+                            Color::ACCENT_YELLOW,
+                        );
                     }
                 } else {
                     let target = if arg.starts_with('/') {
                         alloc::string::String::from(arg)
                     } else {
                         let mut p = alloc::string::String::from(self.cwd_str());
-                        if !p.ends_with('/') { p.push('/'); }
+                        if !p.ends_with('/') {
+                            p.push('/');
+                        }
                         p.push_str(arg);
                         p
                     };
@@ -1368,14 +1938,22 @@ impl TerminalApp {
                 let pattern = unquote_shell(sp.next().unwrap_or(""));
                 let file = sp.next().unwrap_or("").trim();
                 if pattern.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: grep <desen> [dosya]", "Usage: grep <pattern> [file]"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: grep <desen> [dosya]",
+                            "Usage: grep <pattern> [file]",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                     return None;
                 }
                 let source = if file.is_empty() {
                     self.stdin_text()
                 } else {
                     let path = self.resolve_path(file);
-                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                    vfs.read_file(&path).map(|data| {
+                        alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""))
+                    })
                 };
                 if let Some(text) = source {
                     let mut matches = 0usize;
@@ -1386,10 +1964,16 @@ impl TerminalApp {
                         }
                     }
                     if matches == 0 {
-                        self.push_line(crate::gui::ui_text("(eşleşme yok)", "(no matches)"), Color::TEXT_MUTED);
+                        self.push_line(
+                            crate::gui::ui_text("(eşleşme yok)", "(no matches)"),
+                            Color::TEXT_MUTED,
+                        );
                     }
                 } else {
-                    self.push_line(crate::gui::ui_text("grep: girdi yok", "grep: no input"), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text("grep: girdi yok", "grep: no input"),
+                        Color::ACCENT_RED,
+                    );
                 }
             }
             "wc" => {
@@ -1398,13 +1982,19 @@ impl TerminalApp {
                     self.stdin_text()
                 } else {
                     let path = self.resolve_path(file);
-                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                    vfs.read_file(&path).map(|data| {
+                        alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""))
+                    })
                 };
                 let Some(text) = source else {
-                    self.push_line(crate::gui::ui_text("Kullanım: wc [dosya]", "Usage: wc [file]"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: wc [dosya]", "Usage: wc [file]"),
+                        Color::ACCENT_YELLOW,
+                    );
                     return None;
                 };
-                let lines = text.matches('\n').count() + usize::from(!text.is_empty() && !text.ends_with('\n'));
+                let lines = text.matches('\n').count()
+                    + usize::from(!text.is_empty() && !text.ends_with('\n'));
                 let words = text.split_whitespace().count();
                 let mut b = TextBuf::new();
                 b.push_usize(lines);
@@ -1420,16 +2010,22 @@ impl TerminalApp {
                     self.stdin_text()
                 } else {
                     let path = self.resolve_path(file);
-                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                    vfs.read_file(&path).map(|data| {
+                        alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""))
+                    })
                 };
                 if let Some(text) = source {
-                    let mut lines: alloc::vec::Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+                    let mut lines: alloc::vec::Vec<&str> =
+                        text.lines().filter(|l| !l.is_empty()).collect();
                     lines.sort_unstable();
                     for l in lines {
                         self.push_line(l, Color::TEXT_MAIN);
                     }
                 } else {
-                    self.push_line(crate::gui::ui_text("sort: girdi yok", "sort: no input"), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text("sort: girdi yok", "sort: no input"),
+                        Color::ACCENT_RED,
+                    );
                 }
             }
             "head" | "tail" => {
@@ -1447,7 +2043,9 @@ impl TerminalApp {
                     self.stdin_text()
                 } else {
                     let path = self.resolve_path(file);
-                    vfs.read_file(&path).map(|data| alloc::string::String::from(core::str::from_utf8(data).unwrap_or("")))
+                    vfs.read_file(&path).map(|data| {
+                        alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""))
+                    })
                 };
                 if let Some(text) = source {
                     let lines: alloc::vec::Vec<&str> = text.lines().collect();
@@ -1462,13 +2060,19 @@ impl TerminalApp {
                         }
                     }
                 } else {
-                    self.push_line(crate::gui::ui_text("head/tail: girdi yok", "head/tail: no input"), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text("head/tail: girdi yok", "head/tail: no input"),
+                        Color::ACCENT_RED,
+                    );
                 }
             }
             "tee" => {
                 let file = unquote_shell(arg.trim());
                 if file.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: tee <dosya>", "Usage: tee <file>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: tee <dosya>", "Usage: tee <file>"),
+                        Color::ACCENT_YELLOW,
+                    );
                     return None;
                 }
                 let text = self.stdin_text().unwrap_or_default();
@@ -1493,7 +2097,10 @@ impl TerminalApp {
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
             }
             "ps" => {
-                self.push_line(crate::gui::ui_text("PID  İSİM", "PID  NAME"), Color::TEXT_MUTED);
+                self.push_line(
+                    crate::gui::ui_text("PID  İSİM", "PID  NAME"),
+                    Color::TEXT_MUTED,
+                );
                 self.push_line("1    kernel_core", Color::TEXT_MAIN);
                 self.push_line("2    mingui_compositor", Color::TEXT_MAIN);
                 self.push_line("3    net_stack", Color::TEXT_MAIN);
@@ -1507,31 +2114,53 @@ impl TerminalApp {
             }
             "ipconfig" => {
                 use crate::drivers::netstack::{dns_server, gateway_ip, local_ip, subnet_mask};
-                self.push_line(crate::gui::ui_text("Ethernet bağdaştırıcısı eth0:", "Ethernet adapter eth0:"), Color::ACCENT_GREEN);
+                self.push_line(
+                    crate::gui::ui_text("Ethernet bağdaştırıcısı eth0:", "Ethernet adapter eth0:"),
+                    Color::ACCENT_GREEN,
+                );
                 push_ipv4_line(self, "IPv4: ", local_ip().0);
-                push_ipv4_line(self, crate::gui::ui_text("Maske: ", "Mask: "), subnet_mask().0);
-                push_ipv4_line(self, crate::gui::ui_text("Ağ geçidi: ", "Gateway: "), gateway_ip().0);
+                push_ipv4_line(
+                    self,
+                    crate::gui::ui_text("Maske: ", "Mask: "),
+                    subnet_mask().0,
+                );
+                push_ipv4_line(
+                    self,
+                    crate::gui::ui_text("Ağ geçidi: ", "Gateway: "),
+                    gateway_ip().0,
+                );
                 push_ipv4_line(self, "DNS: ", dns_server().0);
-                self.push_line(if crate::drivers::netstack::dhcp_ready() {
-                    crate::gui::ui_text("DHCP: adres alındı", "DHCP: lease active")
-                } else {
-                    crate::gui::ui_text("DHCP: bekleniyor (yedek adres etkin)", "DHCP: waiting (fallback address active)")
-                }, Color::ACCENT_YELLOW);
+                self.push_line(
+                    if crate::drivers::netstack::dhcp_ready() {
+                        crate::gui::ui_text("DHCP: adres alındı", "DHCP: lease active")
+                    } else {
+                        crate::gui::ui_text(
+                            "DHCP: bekleniyor (yedek adres etkin)",
+                            "DHCP: waiting (fallback address active)",
+                        )
+                    },
+                    Color::ACCENT_YELLOW,
+                );
                 let mac = unsafe { crate::drivers::e1000::MAC_ADDR };
                 let mut b = TextBuf::new();
                 b.push_str("MAC: ");
                 for (i, octet) in mac.iter().enumerate() {
-                    if i > 0 { b.push_byte(b':'); }
+                    if i > 0 {
+                        b.push_byte(b':');
+                    }
                     const HEX: &[u8; 16] = b"0123456789ABCDEF";
                     b.push_byte(HEX[(octet >> 4) as usize]);
                     b.push_byte(HEX[(octet & 0x0F) as usize]);
                 }
                 self.push_line(b.as_str(), Color::TEXT_MAIN);
-                self.push_line(if crate::drivers::e1000::is_ready() {
-                    crate::gui::ui_text("Bağlantı: hazır", "Link: ready")
-                } else {
-                    crate::gui::ui_text("Bağlantı: kullanılamıyor", "Link: unavailable")
-                }, Color::ACCENT_YELLOW);
+                self.push_line(
+                    if crate::drivers::e1000::is_ready() {
+                        crate::gui::ui_text("Bağlantı: hazır", "Link: ready")
+                    } else {
+                        crate::gui::ui_text("Bağlantı: kullanılamıyor", "Link: unavailable")
+                    },
+                    Color::ACCENT_YELLOW,
+                );
             }
             "ping" => {
                 let mut sp = arg.split_whitespace();
@@ -1550,15 +2179,30 @@ impl TerminalApp {
                 }
 
                 if target.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: ping [-c adet] <hedef_veya_ip>", "Usage: ping [-c count] <target_or_ip>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: ping [-c adet] <hedef_veya_ip>",
+                            "Usage: ping [-c count] <target_or_ip>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else if !crate::drivers::e1000::is_ready() {
-                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Ağ bağdaştırıcısı bulunamadı.",
+                            "Network adapter is unavailable.",
+                        ),
+                        Color::ACCENT_RED,
+                    );
                 } else {
                     let target_ip = if let Some(ip) = parse_ipv4(target) {
                         Some(crate::drivers::netstack::Ipv4Address(ip))
                     } else {
                         let mut msg = TextBuf::new();
-                        msg.push_str(crate::gui::ui_text("Alan adı çözümleniyor: ", "Resolving host: "));
+                        msg.push_str(crate::gui::ui_text(
+                            "Alan adı çözümleniyor: ",
+                            "Resolving host: ",
+                        ));
                         msg.push_str(target);
                         msg.push_str("...");
                         self.push_line(msg.as_str(), Color::TEXT_MUTED);
@@ -1566,7 +2210,10 @@ impl TerminalApp {
                             Ok(ip) => Some(ip),
                             Err(_) => {
                                 let mut err = TextBuf::new();
-                                err.push_str(crate::gui::ui_text("Ping isteği hedef ana bilgisayarı bulamadı: ", "Ping request could not find host: "));
+                                err.push_str(crate::gui::ui_text(
+                                    "Ping isteği hedef ana bilgisayarı bulamadı: ",
+                                    "Ping request could not find host: ",
+                                ));
                                 err.push_str(target);
                                 self.push_line(err.as_str(), Color::ACCENT_RED);
                                 None
@@ -1579,7 +2226,10 @@ impl TerminalApp {
                         banner.push_str(target);
                         banner.push_str(" [");
                         push_ipv4(&mut banner, ip.0);
-                        banner.push_str(crate::gui::ui_text("] adresi 32 bayt veri ile pingleniyor:", "] with 32 bytes of data:"));
+                        banner.push_str(crate::gui::ui_text(
+                            "] adresi 32 bayt veri ile pingleniyor:",
+                            "] with 32 bytes of data:",
+                        ));
                         self.push_line(banner.as_str(), Color::TEXT_MAIN);
 
                         let mut recvd = 0usize;
@@ -1592,7 +2242,13 @@ impl TerminalApp {
                             let t_start = crate::monotonic_ms();
                             let sent = crate::drivers::netstack::ping_ex(ip, seq, 32);
                             if !sent {
-                                self.push_line(crate::gui::ui_text("İletim hatası (TX)", "Transmit failure (TX)"), Color::ACCENT_RED);
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "İletim hatası (TX)",
+                                        "Transmit failure (TX)",
+                                    ),
+                                    Color::ACCENT_RED,
+                                );
                             } else {
                                 let mut reply: Option<crate::drivers::netstack::PingReply> = None;
                                 while crate::monotonic_ms().wrapping_sub(t_start) < 1000 {
@@ -1615,7 +2271,10 @@ impl TerminalApp {
                                     max_rtt = max_rtt.max(rtt);
 
                                     let mut line = TextBuf::new();
-                                    line.push_str(crate::gui::ui_text("Yanıt geldi: ", "Reply from "));
+                                    line.push_str(crate::gui::ui_text(
+                                        "Yanıt geldi: ",
+                                        "Reply from ",
+                                    ));
                                     push_ipv4(&mut line, r.src.0);
                                     line.push_str(": bayt=");
                                     line.push_usize(r.len.max(32));
@@ -1625,7 +2284,13 @@ impl TerminalApp {
                                     line.push_usize(r.ttl as usize);
                                     self.push_line(line.as_str(), Color::ACCENT_GREEN);
                                 } else {
-                                    self.push_line(crate::gui::ui_text("İstek zaman aşımına uğradı.", "Request timed out."), Color::ACCENT_YELLOW);
+                                    self.push_line(
+                                        crate::gui::ui_text(
+                                            "İstek zaman aşımına uğradı.",
+                                            "Request timed out.",
+                                        ),
+                                        Color::ACCENT_YELLOW,
+                                    );
                                 }
                             }
 
@@ -1642,13 +2307,19 @@ impl TerminalApp {
                         let loss_pct = (lost * 100) / count.max(1);
 
                         let mut stat_hdr = TextBuf::new();
-                        stat_hdr.push_str(crate::gui::ui_text("--- Ping istatistiği: ", "--- Ping statistics for "));
+                        stat_hdr.push_str(crate::gui::ui_text(
+                            "--- Ping istatistiği: ",
+                            "--- Ping statistics for ",
+                        ));
                         push_ipv4(&mut stat_hdr, ip.0);
                         stat_hdr.push_str(" ---");
                         self.push_line(stat_hdr.as_str(), Color::TEXT_MUTED);
 
                         let mut stat_pkt = TextBuf::new();
-                        stat_pkt.push_str(crate::gui::ui_text("Paket: Gönderilen = ", "Packets: Sent = "));
+                        stat_pkt.push_str(crate::gui::ui_text(
+                            "Paket: Gönderilen = ",
+                            "Packets: Sent = ",
+                        ));
                         stat_pkt.push_usize(count);
                         stat_pkt.push_str(crate::gui::ui_text(", Alınan = ", ", Received = "));
                         stat_pkt.push_usize(recvd);
@@ -1657,16 +2328,28 @@ impl TerminalApp {
                         stat_pkt.push_str(" (%");
                         stat_pkt.push_usize(loss_pct);
                         stat_pkt.push_str(crate::gui::ui_text(" kayıp)", " loss)"));
-                        self.push_line(stat_pkt.as_str(), if lost == 0 { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW });
+                        self.push_line(
+                            stat_pkt.as_str(),
+                            if lost == 0 {
+                                Color::ACCENT_GREEN
+                            } else {
+                                Color::ACCENT_YELLOW
+                            },
+                        );
 
                         if recvd > 0 {
                             let avg_rtt = sum_rtt / (recvd as u64);
                             let mut stat_time = TextBuf::new();
-                            stat_time.push_str(crate::gui::ui_text("Gidiş-dönüş süreleri: En az = ", "Round trip times: Minimum = "));
+                            stat_time.push_str(crate::gui::ui_text(
+                                "Gidiş-dönüş süreleri: En az = ",
+                                "Round trip times: Minimum = ",
+                            ));
                             stat_time.push_usize(min_rtt as usize);
-                            stat_time.push_str(crate::gui::ui_text("ms, En çok = ", "ms, Maximum = "));
+                            stat_time
+                                .push_str(crate::gui::ui_text("ms, En çok = ", "ms, Maximum = "));
                             stat_time.push_usize(max_rtt as usize);
-                            stat_time.push_str(crate::gui::ui_text("ms, Ortalama = ", "ms, Average = "));
+                            stat_time
+                                .push_str(crate::gui::ui_text("ms, Ortalama = ", "ms, Average = "));
                             stat_time.push_usize(avg_rtt as usize);
                             stat_time.push_str("ms");
                             self.push_line(stat_time.as_str(), Color::TEXT_MAIN);
@@ -1701,13 +2384,34 @@ impl TerminalApp {
                 }
 
                 if raw_url.is_none() {
-                    self.push_line(crate::gui::ui_text("Kullanım: curl [-i|-I|-s] [-o dosya] <url>", "Usage: curl [-i|-I|-s] [-o file] <url>"), Color::ACCENT_YELLOW);
-                    self.push_line(crate::gui::ui_text("Örnek: curl 10.0.2.2  veya  curl -o sayfa.html http://10.0.2.2:8080/", "Example: curl 10.0.2.2  or  curl -o page.html http://10.0.2.2:8080/"), Color::TEXT_MUTED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: curl [-i|-I|-s] [-o dosya] <url>",
+                            "Usage: curl [-i|-I|-s] [-o file] <url>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Örnek: curl 10.0.2.2  veya  curl -o sayfa.html http://10.0.2.2:8080/",
+                            "Example: curl 10.0.2.2  or  curl -o page.html http://10.0.2.2:8080/",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
                 } else if !crate::drivers::e1000::is_ready() {
-                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Ağ bağdaştırıcısı bulunamadı.",
+                            "Network adapter is unavailable.",
+                        ),
+                        Color::ACCENT_RED,
+                    );
                 } else {
                     let target_url = raw_url.unwrap();
-                    let normalized_url = if target_url.starts_with("http://") || target_url.starts_with("https://") || target_url.contains("://") {
+                    let normalized_url = if target_url.starts_with("http://")
+                        || target_url.starts_with("https://")
+                        || target_url.contains("://")
+                    {
                         alloc::string::String::from(target_url)
                     } else {
                         let mut s = alloc::string::String::from("http://");
@@ -1717,7 +2421,10 @@ impl TerminalApp {
 
                     if is_wget && out_file.is_none() {
                         let last_seg = normalized_url.rsplit('/').next().unwrap_or("index.html");
-                        let fname = if last_seg.is_empty() || last_seg.contains('?') || last_seg.contains(':') {
+                        let fname = if last_seg.is_empty()
+                            || last_seg.contains('?')
+                            || last_seg.contains(':')
+                        {
                             "index.html"
                         } else {
                             last_seg
@@ -1727,7 +2434,10 @@ impl TerminalApp {
 
                     if !silent {
                         let mut msg = TextBuf::new();
-                        msg.push_str(crate::gui::ui_text("Ağdan veri çekiliyor: ", "Fetching from network: "));
+                        msg.push_str(crate::gui::ui_text(
+                            "Ağdan veri çekiliyor: ",
+                            "Fetching from network: ",
+                        ));
                         msg.push_str(&normalized_url);
                         msg.push_str("...");
                         self.push_line(msg.as_str(), Color::TEXT_MUTED);
@@ -1744,7 +2454,14 @@ impl TerminalApp {
                                 b.push_str("  (");
                                 b.push_usize(total as usize);
                                 b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
-                                self.push_line(b.as_str(), if status < 400 { Color::ACCENT_GREEN } else { Color::ACCENT_RED });
+                                self.push_line(
+                                    b.as_str(),
+                                    if status < 400 {
+                                        Color::ACCENT_GREEN
+                                    } else {
+                                        Color::ACCENT_RED
+                                    },
+                                );
                             }
 
                             let body = &buf[hlen.min(total)..total];
@@ -1754,7 +2471,9 @@ impl TerminalApp {
                                     dest
                                 } else {
                                     let mut p = alloc::string::String::from(self.cwd_str());
-                                    if !p.ends_with('/') { p.push('/'); }
+                                    if !p.ends_with('/') {
+                                        p.push('/');
+                                    }
                                     p.push_str(&dest);
                                     p
                                 };
@@ -1767,7 +2486,10 @@ impl TerminalApp {
 
                                 if saved {
                                     let mut ok_b = TextBuf::new();
-                                    ok_b.push_str(crate::gui::ui_text("Dosyaya kaydedildi: ", "Saved to file: "));
+                                    ok_b.push_str(crate::gui::ui_text(
+                                        "Dosyaya kaydedildi: ",
+                                        "Saved to file: ",
+                                    ));
                                     ok_b.push_str(&target_path);
                                     ok_b.push_str(" (");
                                     ok_b.push_usize(body.len());
@@ -1775,7 +2497,10 @@ impl TerminalApp {
                                     self.push_line(ok_b.as_str(), Color::ACCENT_GREEN);
                                 } else {
                                     let mut err_b = TextBuf::new();
-                                    err_b.push_str(crate::gui::ui_text("Dosyaya yazılamadı: ", "Failed to write file: "));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "Dosyaya yazılamadı: ",
+                                        "Failed to write file: ",
+                                    ));
                                     err_b.push_str(&target_path);
                                     self.push_line(err_b.as_str(), Color::ACCENT_RED);
                                 }
@@ -1793,7 +2518,10 @@ impl TerminalApp {
 
                                 if !head_only {
                                     if body.is_empty() {
-                                        self.push_line(crate::gui::ui_text("(boş gövde)", "(empty body)"), Color::TEXT_MUTED);
+                                        self.push_line(
+                                            crate::gui::ui_text("(boş gövde)", "(empty body)"),
+                                            Color::TEXT_MUTED,
+                                        );
                                     } else {
                                         let mut line = TextBuf::new();
                                         let mut lines = 0usize;
@@ -1802,16 +2530,34 @@ impl TerminalApp {
                                                 self.push_line(line.as_str(), Color::TEXT_MAIN);
                                                 line.clear();
                                                 lines += 1;
-                                                if lines >= 60 { break; }
-                                                if c == b'\n' { continue; }
+                                                if lines >= 60 {
+                                                    break;
+                                                }
+                                                if c == b'\n' {
+                                                    continue;
+                                                }
                                             }
-                                            if c == b'\r' { continue; }
-                                            line.push_byte(if c.is_ascii_graphic() || c == b' ' || c == b'\t' { c } else { b'?' });
+                                            if c == b'\r' {
+                                                continue;
+                                            }
+                                            line.push_byte(
+                                                if c.is_ascii_graphic() || c == b' ' || c == b'\t' {
+                                                    c
+                                                } else {
+                                                    b'?'
+                                                },
+                                            );
                                         }
                                         if lines < 60 && !line.is_empty() {
                                             self.push_line(line.as_str(), Color::TEXT_MAIN);
                                         } else if lines >= 60 {
-                                            self.push_line(crate::gui::ui_text("... (kısaltıldı)", "... (truncated)"), Color::TEXT_MUTED);
+                                            self.push_line(
+                                                crate::gui::ui_text(
+                                                    "... (kısaltıldı)",
+                                                    "... (truncated)",
+                                                ),
+                                                Color::TEXT_MUTED,
+                                            );
                                         }
                                     }
                                 }
@@ -1822,25 +2568,46 @@ impl TerminalApp {
                             err_b.push_str("curl: ");
                             match e {
                                 crate::drivers::socket::E_TIMEOUT => {
-                                    err_b.push_str(crate::gui::ui_text("(28) Bağlantı zaman aşımı: sunucudan yanıt alınamadı.", "(28) Connection timed out: no response from server."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(28) Bağlantı zaman aşımı: sunucudan yanıt alınamadı.",
+                                        "(28) Connection timed out: no response from server.",
+                                    ));
                                 }
                                 crate::drivers::socket::E_CONNREFUSED => {
-                                    err_b.push_str(crate::gui::ui_text("(7) Bağlantı reddedildi: hedef port kapalı.", "(7) Failed to connect: connection refused."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(7) Bağlantı reddedildi: hedef port kapalı.",
+                                        "(7) Failed to connect: connection refused.",
+                                    ));
                                 }
                                 crate::drivers::socket::E_NOTCONN => {
-                                    err_b.push_str(crate::gui::ui_text("(6) Ağ bağlantısı yok veya ana bilgisayar çözümlenemedi.", "(6) Could not resolve host or network unavailable."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(6) Ağ bağlantısı yok veya ana bilgisayar çözümlenemedi.",
+                                        "(6) Could not resolve host or network unavailable.",
+                                    ));
                                 }
                                 crate::drivers::http::E_URL => {
-                                    err_b.push_str(crate::gui::ui_text("(3) Geçersiz URL sözdizimi.", "(3) Invalid URL format."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(3) Geçersiz URL sözdizimi.",
+                                        "(3) Invalid URL format.",
+                                    ));
                                 }
                                 crate::drivers::http::E_REDIRECT => {
-                                    err_b.push_str(crate::gui::ui_text("(47) Çok fazla HTTP yönlendirmesi (maksimum 3).", "(47) Maximum redirection limit exceeded."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(47) Çok fazla HTTP yönlendirmesi (maksimum 3).",
+                                        "(47) Maximum redirection limit exceeded.",
+                                    ));
                                 }
                                 crate::drivers::http::E_HTTP => {
-                                    err_b.push_str(crate::gui::ui_text("(52) Sunucu geçersiz/boş HTTP yanıtı döndürdü.", "(52) Empty or invalid HTTP response from server."));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "(52) Sunucu geçersiz/boş HTTP yanıtı döndürdü.",
+                                        "(52) Empty or invalid HTTP response from server.",
+                                    ));
                                 }
                                 _ => {
-                                    err_b.push_str(crate::gui::ui_text("İndirme başarısız (hata kodu: ", "Download failed (error code: "));
+                                    err_b.push_str(crate::gui::ui_text(
+                                        "İndirme başarısız (hata kodu: ",
+                                        "Download failed (error code: ",
+                                    ));
                                     err_b.push_usize((-e).max(0) as usize);
                                     err_b.push_byte(b')');
                                 }
@@ -1853,9 +2620,21 @@ impl TerminalApp {
             "dns" | "nslookup" => {
                 let name = arg.trim();
                 if name.is_empty() {
-                    self.push_line(crate::gui::ui_text("Kullanım: dns <alan_adı>  veya  nslookup <alan_adı>", "Usage: dns <hostname>  or  nslookup <hostname>"), Color::ACCENT_YELLOW);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Kullanım: dns <alan_adı>  veya  nslookup <alan_adı>",
+                            "Usage: dns <hostname>  or  nslookup <hostname>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
                 } else if !crate::drivers::e1000::is_ready() {
-                    self.push_line(crate::gui::ui_text("Ağ bağdaştırıcısı bulunamadı.", "Network adapter is unavailable."), Color::ACCENT_RED);
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Ağ bağdaştırıcısı bulunamadı.",
+                            "Network adapter is unavailable.",
+                        ),
+                        Color::ACCENT_RED,
+                    );
                 } else {
                     let mut srv = TextBuf::new();
                     srv.push_str(crate::gui::ui_text("Sunucu: ", "Server: "));
@@ -1876,7 +2655,10 @@ impl TerminalApp {
                         }
                         Err(code) => {
                             let mut err_b = TextBuf::new();
-                            err_b.push_str(crate::gui::ui_text("DNS çözümlenemedi (hata kodu: ", "DNS resolution failed (error code: "));
+                            err_b.push_str(crate::gui::ui_text(
+                                "DNS çözümlenemedi (hata kodu: ",
+                                "DNS resolution failed (error code: ",
+                            ));
                             err_b.push_u2((-code).max(0) as u32);
                             err_b.push_byte(b')');
                             self.push_line(err_b.as_str(), Color::ACCENT_RED);
@@ -1888,7 +2670,11 @@ impl TerminalApp {
                 let mut b = TextBuf::new();
                 b.push_u2(now.day as u32);
                 b.push_byte(b' ');
-                b.push_str(if crate::gui::ui_english() { DateTime::month_name_en(now.month) } else { DateTime::month_name(now.month) });
+                b.push_str(if crate::gui::ui_english() {
+                    DateTime::month_name_en(now.month)
+                } else {
+                    DateTime::month_name(now.month)
+                });
                 b.push_byte(b' ');
                 b.push_u4(now.year as u32);
                 b.push_str("  ");
@@ -1903,11 +2689,8 @@ impl TerminalApp {
                 let ms = crate::monotonic_ms();
                 let secs = ms / 1000;
                 let mut text = [0u8; crate::gui::timefmt::MAX_TEXT];
-                let text_len = crate::gui::timefmt::format_duration(
-                    secs,
-                    crate::gui::ui_english(),
-                    &mut text,
-                );
+                let text_len =
+                    crate::gui::timefmt::format_duration(secs, crate::gui::ui_english(), &mut text);
                 let mut b = TextBuf::new();
                 b.push_str(crate::gui::ui_text("Çalışma Süresi: ", "Uptime: "));
                 for &byte in &text[..text_len] {
@@ -1919,9 +2702,15 @@ impl TerminalApp {
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
             }
             "fetch" | "neofetch" => {
-                self.push_line("   /\\_/\\     minOs Sarman Edition v2.0", Color::ACCENT_PINK);
+                self.push_line(
+                    "   /\\_/\\     minOs Sarman Edition v2.0",
+                    Color::ACCENT_PINK,
+                );
                 self.push_line("  ( o.o )    -------------------------", Color::ACCENT_PINK);
-                self.push_line("   > ^ <     OS: minOs x86_64 [Rust no_std]", Color::ACCENT_BLUE);
+                self.push_line(
+                    "   > ^ <     OS: minOs x86_64 [Rust no_std]",
+                    Color::ACCENT_BLUE,
+                );
                 self.push_line("             Arch: AMD64 / Long Mode", Color::TEXT_MAIN);
                 let mut m = TextBuf::new();
                 m.push_str("             RAM: ");
@@ -1935,14 +2724,23 @@ impl TerminalApp {
                 f.push_usize(vfs.items.len());
                 f.push_str(crate::gui::ui_text(" dosya/dizin", " nodes registered"));
                 self.push_line(f.as_str(), Color::ACCENT_GREEN);
-                self.push_line("             GUI: MinGuiCompositor 60FPS", Color::TEXT_MUTED);
+                self.push_line(
+                    "             GUI: MinGuiCompositor 60FPS",
+                    Color::TEXT_MUTED,
+                );
             }
             _ => {
                 let mut b = TextBuf::new();
-                b.push_str(crate::gui::ui_text("Bilinmeyen komut: ", "Unknown command: "));
+                b.push_str(crate::gui::ui_text(
+                    "Bilinmeyen komut: ",
+                    "Unknown command: ",
+                ));
                 b.push_str(cmd);
                 self.push_line(b.as_str(), Color::ACCENT_RED);
-                self.push_line(crate::gui::ui_text("'help' yazın.", "Type 'help'."), Color::TEXT_MUTED);
+                self.push_line(
+                    crate::gui::ui_text("'help' yazın.", "Type 'help'."),
+                    Color::TEXT_MUTED,
+                );
             }
         }
         None
@@ -2055,7 +2853,9 @@ impl TerminalApp {
                     self.push_line("nc: received binary data", Color::ACCENT_YELLOW);
                     let mut line = TextBuf::new();
                     for byte in buf[..n.min(24)].iter().copied() {
-                        if !line.is_empty() { line.push_byte(b' '); }
+                        if !line.is_empty() {
+                            line.push_byte(b' ');
+                        }
                         line.push_byte(b"0123456789abcdef"[(byte >> 4) as usize]);
                         line.push_byte(b"0123456789abcdef"[(byte & 0x0f) as usize]);
                     }
@@ -2116,7 +2916,14 @@ impl TerminalApp {
                 memory.push_usize((pmm.free_memory_bytes / 1024) as usize);
                 memory.push_str(" KB");
                 self.push_line(memory.as_str(), Color::TEXT_MAIN);
-                self.push_line(if crate::drivers::e1000::is_ready() { "Network: adapter ready" } else { "Network: adapter unavailable" }, Color::ACCENT_GREEN);
+                self.push_line(
+                    if crate::drivers::e1000::is_ready() {
+                        "Network: adapter ready"
+                    } else {
+                        "Network: adapter unavailable"
+                    },
+                    Color::ACCENT_GREEN,
+                );
             }
             "fortune" => self.run_fortune(),
             _ => self.push_line("Usage: sarman-cli status|fortune", Color::ACCENT_YELLOW),
@@ -2136,26 +2943,59 @@ impl TerminalApp {
         let term_bg = if is_light { 0xF5F7FA } else { 0x0C0D14 };
         let default_fg = if is_light { 0x1A1C23 } else { 0xE6E9F5 };
         let muted_fg = if is_light { 0x606575 } else { 0x8C92A4 };
-        let prompt_fg = if is_light { 0x1E8E3E } else { Color::ACCENT_GREEN };
-        let title_fg = if is_light { 0x188038 } else { Color::ACCENT_GREEN };
+        let prompt_fg = if is_light {
+            0x1E8E3E
+        } else {
+            Color::ACCENT_GREEN
+        };
+        let title_fg = if is_light {
+            0x188038
+        } else {
+            Color::ACCENT_GREEN
+        };
 
         // Terminal zemin (temaya duyarlı iç konsol kutusu)
-        fb.draw_rect(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), term_bg);
-        fb.draw_rect_outline(x + 8, y + 34, w.saturating_sub(16), h.saturating_sub(44), Color::BORDER);
+        fb.draw_rect(
+            x + 8,
+            y + 34,
+            w.saturating_sub(16),
+            h.saturating_sub(44),
+            term_bg,
+        );
+        fb.draw_rect_outline(
+            x + 8,
+            y + 34,
+            w.saturating_sub(16),
+            h.saturating_sub(44),
+            Color::BORDER,
+        );
 
         // Başlık
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, y + 44, crate::gui::ui_text("minOs Komut İstemi v2.0 (MinShell)", "minOs Command Prompt v2.0 (MinShell)"), title_fg);
+        MinGuiCompositor::draw_terminal_string(
+            fb,
+            x + 16,
+            y + 44,
+            crate::gui::ui_text(
+                "minOs Komut İstemi v2.0 (MinShell)",
+                "minOs Command Prompt v2.0 (MinShell)",
+            ),
+            title_fg,
+        );
 
         let line_height = crate::gui::font_render::text_height(
             crate::gui::font_render::Face::Geist,
             14.0 * crate::gui::font_zoom() as f32 / 100.0,
-        ).max(1);
+        )
+        .max(1);
         let line_gap = 5;
         let status_y = y + h.saturating_sub(line_height + 14);
         let prompt_y = status_y.saturating_sub(line_height + 8);
         let output_y = y + 60;
         let view_lines = prompt_y.saturating_sub(output_y) / (line_height + line_gap);
-        let first = self.out_count.saturating_sub(view_lines).saturating_sub(self.output_scroll);
+        let first = self
+            .out_count
+            .saturating_sub(view_lines)
+            .saturating_sub(self.output_scroll);
         let last = (first + view_lines).min(self.out_count);
         let mut ly = output_y;
         let content_clip = (x + 12, y + 36, w.saturating_sub(24), h.saturating_sub(48));
@@ -2167,7 +3007,14 @@ impl TerminalApp {
             } else {
                 self.out[i].color
             };
-            MinGuiCompositor::draw_terminal_string_clipped(fb, x + 16, ly, self.out[i].as_str(), col, content_clip);
+            MinGuiCompositor::draw_terminal_string_clipped(
+                fb,
+                x + 16,
+                ly,
+                self.out[i].as_str(),
+                col,
+                content_clip,
+            );
             ly += line_height + line_gap;
         }
 
@@ -2175,11 +3022,24 @@ impl TerminalApp {
         MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", prompt_fg);
         let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
         let input_clip = (x + 30, prompt_y, w.saturating_sub(42), line_height + 4);
-        MinGuiCompositor::draw_terminal_string_clipped(fb, x + 30, prompt_y, input_str, default_fg, input_clip);
+        MinGuiCompositor::draw_terminal_string_clipped(
+            fb,
+            x + 30,
+            prompt_y,
+            input_str,
+            default_fg,
+            input_clip,
+        );
         if is_focused {
             let caret_x = x + 30 + MinGuiCompositor::terminal_text_width(input_str);
             if caret_x < x + w.saturating_sub(16) {
-                fb.draw_rect(caret_x, prompt_y + 2, 3, line_height.saturating_sub(4).max(4), prompt_fg);
+                fb.draw_rect(
+                    caret_x,
+                    prompt_y + 2,
+                    3,
+                    line_height.saturating_sub(4).max(4),
+                    prompt_fg,
+                );
             }
         }
 
@@ -2187,7 +3047,10 @@ impl TerminalApp {
         let mut status = TextBuf::new();
         status.push_str(crate::gui::ui_text("geçmiş: ", "history: "));
         status.push_usize(self.history_count);
-        status.push_str(crate::gui::ui_text(" komut | UTF-8 / TR-Q", " commands | UTF-8 / TR-Q"));
+        status.push_str(crate::gui::ui_text(
+            " komut | UTF-8 / TR-Q",
+            " commands | UTF-8 / TR-Q",
+        ));
         MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), muted_fg);
     }
 }

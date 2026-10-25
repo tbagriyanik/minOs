@@ -118,10 +118,18 @@ pub fn init() {
                         } else {
                             StorageType::HardDisk
                         };
-                        disk.sector_size = if dev.kind == DeviceKind::Atapi { 2048 } else { 512 };
+                        disk.sector_size = if dev.kind == DeviceKind::Atapi {
+                            2048
+                        } else {
+                            512
+                        };
                         disk.size_mb = dev.size_mb();
                         disk.read_only = dev.kind == DeviceKind::Atapi;
-                        disk.mount_point = if dev.kind == DeviceKind::Atapi { "/media/cdrom" } else { "/media/hdd0" };
+                        disk.mount_point = if dev.kind == DeviceKind::Atapi {
+                            "/media/cdrom"
+                        } else {
+                            "/media/hdd0"
+                        };
                     }
                 }
 
@@ -204,25 +212,33 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
 #[inline]
 fn io_out16(port: u16, val: u16) {
-    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in16(port: u16) -> u16 {
     let ret: u16;
-    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -329,7 +345,9 @@ pub fn test_usb_controller() -> Option<UsbControllerInfo> {
                     base_addr,
                     is_mmio,
                 };
-                unsafe { DETECTED_CONTROLLER = Some(info); }
+                unsafe {
+                    DETECTED_CONTROLLER = Some(info);
+                }
 
                 // USB Fare/Klavye desteği için xHCI/EHCI Legacy BIOS Handoff kontrolü:
                 // BIOS USB emülasyonunun aktif kalmasını veya OS devralımında PS/2 8042
@@ -579,7 +597,10 @@ fn init_ohci_controller(bus: u8, dev: u8, func: u8) {
 
         // OHCI Operasyonel Duruma geçiş (HCFS = 2, bits 6..7) + Control/Bulk/Periodic list enable (bits 2,3,4,5)
         let cur_ctrl = core::ptr::read_volatile(ctrl);
-        core::ptr::write_volatile(ctrl, (cur_ctrl & !(3 << 6)) | (2 << 6) | (1 << 2) | (1 << 4) | (1 << 5));
+        core::ptr::write_volatile(
+            ctrl,
+            (cur_ctrl & !(3 << 6)) | (2 << 6) | (1 << 2) | (1 << 4) | (1 << 5),
+        );
         crate::serial::print("[USB-OHCI] Denetleyici operasyonel duruma geçirildi (HCCA ve ED/TD transfer kuyruğu aktif).\n");
     }
 }
@@ -588,23 +609,23 @@ fn init_ohci_controller(bus: u8, dev: u8, func: u8) {
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct CommandBlockWrapper {
-    pub signature: u32,       // 0x43425355 ("USBC")
-    pub tag: u32,             // Eşleşen işlem kimliği
-    pub transfer_len: u32,    // Transfer bayt uzunluğu
-    pub flags: u8,            // 0x80: Data-In, 0x00: Data-Out
-    pub lun: u8,              // LUN (0)
-    pub cmd_len: u8,          // SCSI komut uzunluğu (1..16)
-    pub cdb: [u8; 16],        // SCSI Command Descriptor Block
+    pub signature: u32,    // 0x43425355 ("USBC")
+    pub tag: u32,          // Eşleşen işlem kimliği
+    pub transfer_len: u32, // Transfer bayt uzunluğu
+    pub flags: u8,         // 0x80: Data-In, 0x00: Data-Out
+    pub lun: u8,           // LUN (0)
+    pub cmd_len: u8,       // SCSI komut uzunluğu (1..16)
+    pub cdb: [u8; 16],     // SCSI Command Descriptor Block
 }
 
 /// USB Mass Storage Bulk-Only Transport (BOT) Command Status Wrapper (CSW)
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 pub struct CommandStatusWrapper {
-    pub signature: u32,       // 0x53425355 ("USBS")
-    pub tag: u32,             // CBW tag ile eşleşmeli
-    pub data_residue: u32,    // Kalan aktarılmamış bayt
-    pub status: u8,           // 0 = Passed, 1 = Failed, 2 = Phase Error
+    pub signature: u32,    // 0x53425355 ("USBS")
+    pub tag: u32,          // CBW tag ile eşleşmeli
+    pub data_residue: u32, // Kalan aktarılmamış bayt
+    pub status: u8,        // 0 = Passed, 1 = Failed, 2 = Phase Error
 }
 
 pub const CBW_SIGNATURE: u32 = 0x43425355;
@@ -631,7 +652,10 @@ pub fn test_mass_storage_protocol() -> bool {
     cbw_inquiry.cdb[0] = SCSI_INQUIRY;
     cbw_inquiry.cdb[4] = 36; // allocation length
 
-    if cbw_inquiry.signature != CBW_SIGNATURE || cbw_inquiry.tag != 0xA1B2C3D4 || cbw_inquiry.cmd_len != 6 {
+    if cbw_inquiry.signature != CBW_SIGNATURE
+        || cbw_inquiry.tag != 0xA1B2C3D4
+        || cbw_inquiry.cmd_len != 6
+    {
         return false;
     }
 
@@ -725,7 +749,9 @@ pub fn test_fat32_access() -> bool {
 
 /// 4. Aşama Testi: Yazılabilir Sanal Disk (Virtual / RAM Disk) Blok Okuma, Yazma ve İçerik Doğrulama
 pub fn test_virtual_disk() -> bool {
-    crate::serial::print("[VDISK-TEST] --- Yazılabilir sanal disk (RAM disk) doğrulama testi ---\n");
+    crate::serial::print(
+        "[VDISK-TEST] --- Yazılabilir sanal disk (RAM disk) doğrulama testi ---\n",
+    );
     // 4KB sanal blok tamponu
     static mut VDISK_BLOCK: [u8; 512] = [0u8; 512];
     let test_pattern = b"minOs_VirtualDisk_Integrity_Verification_2026";
@@ -733,7 +759,11 @@ pub fn test_virtual_disk() -> bool {
     unsafe {
         // 1. Deseni yaz
         core::ptr::write_bytes(VDISK_BLOCK.as_mut_ptr(), 0xAA, 512);
-        core::ptr::copy_nonoverlapping(test_pattern.as_ptr(), VDISK_BLOCK.as_mut_ptr(), test_pattern.len());
+        core::ptr::copy_nonoverlapping(
+            test_pattern.as_ptr(),
+            VDISK_BLOCK.as_mut_ptr(),
+            test_pattern.len(),
+        );
 
         // 2. Deseni oku ve doğrula
         let mut read_back = [0u8; 512];
@@ -743,7 +773,9 @@ pub fn test_virtual_disk() -> bool {
         let matches_fill = read_back[test_pattern.len()..].iter().all(|&b| b == 0xAA);
 
         if matches_pattern && matches_fill {
-            crate::serial::print("[VDISK-TEST] Sanal Blok Yazma/Okuma ve Veri Bütünlüğü: BAŞARILI\n");
+            crate::serial::print(
+                "[VDISK-TEST] Sanal Blok Yazma/Okuma ve Veri Bütünlüğü: BAŞARILI\n",
+            );
             true
         } else {
             crate::serial::print("[VDISK-TEST] Sanal Blok Veri Bozulması: BAŞARISIZ\n");
@@ -766,7 +798,11 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
         crate::serial::print_dec(info.func as u64);
         crate::serial::print(" | Taban: ");
         crate::serial::print_hex(info.base_addr);
-        crate::serial::print(if info.is_mmio { " (MMIO)" } else { " (I/O Port)" });
+        crate::serial::print(if info.is_mmio {
+            " (MMIO)"
+        } else {
+            " (I/O Port)"
+        });
         crate::serial::print(" -> BAŞARILI\n");
         true
     } else {
@@ -785,7 +821,9 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
     // 3. FAT32 Dosya Sistemi Erişim Testi
     let fat_ok = test_fat32_access();
     if fat_ok {
-        crate::serial::print("[USB-FAT32] FAT32 BPB, kume zinciri ve /media/usb0 erişim mantığı -> BAŞARILI\n");
+        crate::serial::print(
+            "[USB-FAT32] FAT32 BPB, kume zinciri ve /media/usb0 erişim mantığı -> BAŞARILI\n",
+        );
     } else {
         crate::serial::print("[USB-FAT32] FAT32 erisim testi -> BAŞARISIZ\n");
     }
@@ -795,8 +833,6 @@ pub fn test_usb_subsystems() -> (bool, bool, bool) {
 
     (ctrl_ok, bot_ok, fat_ok)
 }
-
-
 
 // ---------------------------------------------------------------------------
 // UHCI Transfer Katmanı (Queue Head / Transfer Descriptor)
@@ -926,10 +962,10 @@ static mut EHCI_DMA: EhciDmaPool = EhciDmaPool {
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct OhciEd {
-    pub flags: u32,       // Bit 0..6: FA, 7..10: EN, 11..12: d, 13: s, 14: k, 15: f, 16..26: MPS
-    pub tail_p: u32,      // TD Kuyruk Sonu Fiziksel Adresi
-    pub head_p: u32,      // TD Kuyruk Başı Fiziksel Adresi + Durum (bit 0: Halted, bit 1: Carry)
-    pub next_ed: u32,     // Sonraki ED Fiziksel Adresi
+    pub flags: u32, // Bit 0..6: FA, 7..10: EN, 11..12: d, 13: s, 14: k, 15: f, 16..26: MPS
+    pub tail_p: u32, // TD Kuyruk Sonu Fiziksel Adresi
+    pub head_p: u32, // TD Kuyruk Başı Fiziksel Adresi + Durum (bit 0: Halted, bit 1: Carry)
+    pub next_ed: u32, // Sonraki ED Fiziksel Adresi
 }
 
 impl OhciEd {
@@ -946,10 +982,10 @@ impl OhciEd {
 #[repr(C, align(16))]
 #[derive(Clone, Copy)]
 pub struct OhciTd {
-    pub flags: u32,       // Bit 18..19: R/DP (0=SETUP, 1=OUT, 2=IN), 20: DI, 21..23: T, 24..27: EC, 28..31: CC
-    pub cbp: u32,         // Current Buffer Pointer
-    pub next_td: u32,     // Next TD
-    pub be: u32,          // Buffer End
+    pub flags: u32, // Bit 18..19: R/DP (0=SETUP, 1=OUT, 2=IN), 20: DI, 21..23: T, 24..27: EC, 28..31: CC
+    pub cbp: u32,   // Current Buffer Pointer
+    pub next_td: u32, // Next TD
+    pub be: u32,    // Buffer End
 }
 
 impl OhciTd {
@@ -969,7 +1005,7 @@ pub struct OhciHcca {
     pub hcca_interrupt_table: [u32; 32], // 32 periyodik kesme listesi başlığı
     pub hcca_frame_number: u16,          // Güncel frame numarası
     pub hcca_pad1: u16,
-    pub hcca_done_head: u32,             // Tamamlanan TD listesi
+    pub hcca_done_head: u32, // Tamamlanan TD listesi
     pub reserved: [u8; 116],
 }
 

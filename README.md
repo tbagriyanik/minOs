@@ -77,20 +77,61 @@ Açılışta veya kritik sürücülerde donanım istisnası (`#PF`, `#GP`, `#DF`
 
 ---
 
-### ⚠️ Kısmi / İskelet Destek Durumu
+## 🧭 Donanım ve Sürücü Destek Matrisi (Hardware & Driver Matrix)
 
-Bu sürümde bazı ileri seviye donanım özellikleri sonraki geliştirmeler için planlanmaktadır:
+minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının güncel durum tablosu:
 
+> **Durum Göstergeleri:**
+> - 🟢 **Tam Destek:** Günlük kullanımda kararlı, tüm temel ve gelişmiş işlevler eksiksiz devrede.
+> - 🟡 **Kısmi Destek:** Temel işlevsellik ve sürücü devrede; bazı ileri seviye profiller/özellikler geliştirme aşamasında.
+> - 🔴 **İskelet / WIP:** Aygıt algılama veya altyapı taslağı mevcut; tam protokol entegrasyonu planlama aşamasında.
+
+| Kategori | Donanım / Aygıt | Sürücü Modülü | Durum | Kapsam & Yetenekler |
+| :--- | :--- | :--- | :---: | :--- |
+| **Grafik & Ekran** | Bochs BGA / QEMU Standard VGA | `gpu.rs` | 🟢 Tam | 1080p+, dinamik çözünürlük değişimi, LFB |
+| | VirtIO-GPU (QEMU/KVM) | `virtio_gpu.rs` | 🟢 Tam | Split VirtQueue, 2D komut seti, scanout, mode-set |
+| | NVIDIA GeForce GPU | `nvidia.rs` | 🟡 Kısmi | BAR0/BAR1 VRAM LFB, 2D çizim, mode-set (3D hızlandırma planlanıyor) |
+| | AMD Radeon GPU | `amdgpu.rs` | 🟡 Kısmi | BAR0 64-bit VRAM LFB, 2D çizim, mode-set (3D hızlandırma planlanıyor) |
+| | VMware SVGA-II | `gpu.rs` | 🟡 Kısmi | PCI algılama, temel çözünürlük okuma |
+| **Ağ & İletişim** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS 1.3 |
+| | Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
+| | Realtek PCIe (RTL8168/8169/8125) | `net.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
+| | Broadcom NetXtreme (BCM57xx) | `net.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
+| | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
+| | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
+| | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |
+| | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
+| | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🔴 İskelet | PCI/USB arayüz tespiti (WPA el sıkışması WIP) |
+| **Giriş Aygıtları** | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce tuş eşleme |
+| | USB HID Klavye & Fare | `usb_hid.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI, 16-bit eksen, tekerlek, hotplug tak/çıkar |
+| | USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | Tek parmak dokunma/tıklama (Çoklu dokunma analizi TODO) |
+| **Depolama** | ATA / IDE / ATAPI | `ata.rs` | 🟢 Tam | LBA28/48, sabit disk ve CD/DVD-ROM |
+| | AHCI / SATA | `ahci.rs` | 🟢 Tam | SATA SSD ve HDD blok I/O |
+| | NVMe SSD (PCIe M.2) | `nvme.rs` | 🟢 Tam | NVMe komut kuyrukları ve blok okuma/yazma |
+| | VirtIO-blk (QEMU/KVM) | `virtio_blk.rs` | 🟢 Tam | Sanal blok aygıtı entegrasyonu |
+| | USB Mass Storage (Flash Disk) | `usb_mass_storage.rs` | 🟢 Tam | SCSI BOT transfer protokolü ile depolama |
+| | SD / MMC Kart | `sdmmc.rs` | 🟡 Kısmi | Sektör okuma aktif (CSD ayrıştırma ve güvenilir yazma WIP) |
+| **Dosya Sistemleri** | exFAT & ext4 | `exfat_rw.rs`, `ext4_rw.rs` | 🟢 Tam | Derin dizin hiyerarşisi, parçalanma (fragmentation) direnci, tam okuma/yazma |
+| | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Tam | Dosya okuma ve sistem dizinleri |
+| **Güç & Sensör** | ACPI AML Yorumlayıcısı & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML ayrıştırma, `_BST`/`_BIX`/`_BIF` canlı yüzde, voltaj, akım, döngü |
+| | ACPI Güç Yönetimi | `acpi_power.rs` | 🟡 Kısmi | Güç durumu okuma, S5 kapatma ve uyku geçişleri |
+| | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🔴 İskelet | Sensör tespiti (Donanıma özel EC profilleri WIP) |
+| | Veri Yolu & Zamanlayıcı | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Tam | PCI/PCIe konfigürasyonu, TSC/HPET/APIC zamanlayıcıları |
+| **Ses & Multimedya**| Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Tam | DMA akış halkaları, mikser, WAV/MP3 oynatma |
+| | PC Speaker (PWM) | `audio.rs` | 🟢 Tam | Donanımsal zamanlayıcı bip ve PWM tonları |
+| | USB Audio | `usb_audio.rs` | 🟡 Kısmi | Hoparlör/kulaklık çıkışı (Mikrofon kaydı TODO) |
+
+---
+
+### ⚠️ Yol Haritası & İleri Düzey Geliştirmeler
+
+- **Bluetooth Üst Katman Profilleri:** Temel HCI katmanı, Inquiry ve bağlantı yönetimi hazırdır; A2DP ses akışı ve BLE GATT profilleri gelecekteki sürümler için planlanmaktadır.
+- **NVIDIA / AMD 3D Hızlandırma:** Doğrusal çerçeve belleği (VRAM LFB), 2D çizim ve dinamik çözünürlük değişimi hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
 - **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri.
-- **Bluetooth Üst Katman Profilleri:** Temel HCI katmanı, Inquiry ve bağlantı yönetimi tamdır; A2DP ses akışı ve BLE GATT profilleri gelecekteki sürümler için planlanmaktadır.
-- **NVIDIA / AMD 3D Hızlandırma:** Temel 2D framebuffer diyaframı, doğrusal mod ayarı ve 2D primitifler hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
-- **Atheros Ethernet:** Basit bağlantı established olabiliyor; advanced filter/offload özellikleri TODO.
-- **Marvell Ethernet:** Basit RX/TX çalışıyor; checksum offload, advanced filter TODO.
-- **USB Audio Recording:** KAYIT desteği TODO; sadece playback destekleniyor.
-- **USB Touchscreen Multi-touch:** Parmak temasını tıklama (tap) desteği aktif; çoklu parmak hareket analizi TODO.
-- **SD/MMC Karta Yazma:** Basit okuma çalışıyor; CSD kapasite parsingi, write reliability TODO.
-- **HTTP Chunked Encoding:** Kısmi destek; bazı edge case'ler TODO.
-- **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları implementelenmiş; HTTP/OCSP isteği üretimi ve otomatik indirme TODO. Sertifika iptal durumu "bilinmiyor" durumunda fail-closed politika uygulanır.
+- **Atheros / Marvell Ethernet:** Temel RX/TX aktarımı aktiftir; donanımsal checksum offload ve gelişmiş paket filtreleri planlanmaktadır.
+- **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.
+- **SD/MMC Karta Yazma:** Sektör okuma aktiftir; CSD kayıt ayrıştırması ve blok yazma güvenilirliği WIP.
+- **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları entegre edilmiştir; otomatik HTTP/OCSP indirme isteği planlanmaktadır.
 
 ---
 

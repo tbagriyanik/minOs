@@ -128,11 +128,17 @@ mod tests {
         assert_eq!(cursor, 3);
 
         assert!(insert_char(&mut buf, &mut len, &mut cursor, '\u{0131}'));
-        assert_eq!(core::str::from_utf8(&buf[..len]).unwrap(), "a\u{011F}\u{0131}");
+        assert_eq!(
+            core::str::from_utf8(&buf[..len]).unwrap(),
+            "a\u{011F}\u{0131}"
+        );
 
         cursor = 0;
         assert!(delete_forward(&mut buf, &mut len, &mut cursor));
-        assert_eq!(core::str::from_utf8(&buf[..len]).unwrap(), "\u{011F}\u{0131}");
+        assert_eq!(
+            core::str::from_utf8(&buf[..len]).unwrap(),
+            "\u{011F}\u{0131}"
+        );
     }
 
     #[test]

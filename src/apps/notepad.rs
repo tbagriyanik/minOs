@@ -1,6 +1,6 @@
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use crate::gui::scrollbar::{self, ScrollState};
+use crate::gui::{Color, MinGuiCompositor, TextBuf};
 use alloc::vec::Vec;
 
 const INITIAL_BUFFER_CAPACITY: usize = 512;
@@ -8,19 +8,29 @@ const HISTORY_DEPTH: usize = 4;
 
 /// Metin satır yüksekliği (px) — aktif font ölçeğine göre büyür.
 #[inline(always)]
-fn line_h() -> usize { crate::gui::sp(16) }
+fn line_h() -> usize {
+    crate::gui::sp(16)
+}
 /// Karakter hücre ilerlemesi (px) — aktif font ölçeğine göre büyür.
 #[inline(always)]
-fn char_w() -> usize { MinGuiCompositor::terminal_text_width("M").max(1) }
+fn char_w() -> usize {
+    MinGuiCompositor::terminal_text_width("M").max(1)
+}
 /// Satır numarası şeridi (gutter) genişliği — font ölçeğine göre.
 #[inline(always)]
-fn gutter_w() -> usize { crate::gui::sp(44) }
+fn gutter_w() -> usize {
+    crate::gui::sp(44)
+}
 /// Araç çubuğu yüksekliği (px) — font ölçeğine göre.
 #[inline(always)]
-fn toolbar_h() -> usize { crate::gui::sp(24) }
+fn toolbar_h() -> usize {
+    crate::gui::sp(24)
+}
 /// Alt durum çubuğu yüksekliği (px) — font ölçeğine göre.
 #[inline(always)]
-fn status_h() -> usize { crate::gui::sp(22) }
+fn status_h() -> usize {
+    crate::gui::sp(22)
+}
 
 // --- Menü geometrisi ---
 // Aşağıdaki yardımcılar, menü kutusunun çizimi ile fare tıklama testlerinin
@@ -74,7 +84,10 @@ struct Snapshot {
     cursor: usize,
 }
 
-struct History { undo: Vec<Snapshot>, redo: Vec<Snapshot> }
+struct History {
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum NotepadMenuAction {
@@ -107,35 +120,135 @@ pub struct MenuItemDef {
 }
 
 const FILE_MENU_ITEMS: [MenuItemDef; 4] = [
-    MenuItemDef { label_tr: "Yeni Belge", label_en: "New Document", shortcut: "Ctrl+N", action: NotepadMenuAction::New },
-    MenuItemDef { label_tr: "Aç", label_en: "Open", shortcut: "Ctrl+O", action: NotepadMenuAction::Open },
-    MenuItemDef { label_tr: "Kaydet", label_en: "Save", shortcut: "Ctrl+S", action: NotepadMenuAction::Save },
-    MenuItemDef { label_tr: "Temizle", label_en: "Clear", shortcut: "", action: NotepadMenuAction::Clear },
+    MenuItemDef {
+        label_tr: "Yeni Belge",
+        label_en: "New Document",
+        shortcut: "Ctrl+N",
+        action: NotepadMenuAction::New,
+    },
+    MenuItemDef {
+        label_tr: "Aç",
+        label_en: "Open",
+        shortcut: "Ctrl+O",
+        action: NotepadMenuAction::Open,
+    },
+    MenuItemDef {
+        label_tr: "Kaydet",
+        label_en: "Save",
+        shortcut: "Ctrl+S",
+        action: NotepadMenuAction::Save,
+    },
+    MenuItemDef {
+        label_tr: "Temizle",
+        label_en: "Clear",
+        shortcut: "",
+        action: NotepadMenuAction::Clear,
+    },
 ];
 
 const EDIT_MENU_ITEMS: [MenuItemDef; 9] = [
-    MenuItemDef { label_tr: "Geri Al", label_en: "Undo", shortcut: "Ctrl+Z", action: NotepadMenuAction::Undo },
-    MenuItemDef { label_tr: "Yinele", label_en: "Redo", shortcut: "Ctrl+Y", action: NotepadMenuAction::Redo },
-    MenuItemDef { label_tr: "Kes", label_en: "Cut", shortcut: "Ctrl+X", action: NotepadMenuAction::Cut },
-    MenuItemDef { label_tr: "Kopyala", label_en: "Copy", shortcut: "Ctrl+C", action: NotepadMenuAction::Copy },
-    MenuItemDef { label_tr: "Yapıştır", label_en: "Paste", shortcut: "Ctrl+V", action: NotepadMenuAction::Paste },
-    MenuItemDef { label_tr: "Sil", label_en: "Delete", shortcut: "Del", action: NotepadMenuAction::Delete },
-    MenuItemDef { label_tr: "Tümünü Seç", label_en: "Select All", shortcut: "Ctrl+A", action: NotepadMenuAction::SelectAll },
-    MenuItemDef { label_tr: "Bul...", label_en: "Find...", shortcut: "Ctrl+F", action: NotepadMenuAction::Find },
-    MenuItemDef { label_tr: "Değiştir...", label_en: "Replace...", shortcut: "Ctrl+H", action: NotepadMenuAction::Replace },
+    MenuItemDef {
+        label_tr: "Geri Al",
+        label_en: "Undo",
+        shortcut: "Ctrl+Z",
+        action: NotepadMenuAction::Undo,
+    },
+    MenuItemDef {
+        label_tr: "Yinele",
+        label_en: "Redo",
+        shortcut: "Ctrl+Y",
+        action: NotepadMenuAction::Redo,
+    },
+    MenuItemDef {
+        label_tr: "Kes",
+        label_en: "Cut",
+        shortcut: "Ctrl+X",
+        action: NotepadMenuAction::Cut,
+    },
+    MenuItemDef {
+        label_tr: "Kopyala",
+        label_en: "Copy",
+        shortcut: "Ctrl+C",
+        action: NotepadMenuAction::Copy,
+    },
+    MenuItemDef {
+        label_tr: "Yapıştır",
+        label_en: "Paste",
+        shortcut: "Ctrl+V",
+        action: NotepadMenuAction::Paste,
+    },
+    MenuItemDef {
+        label_tr: "Sil",
+        label_en: "Delete",
+        shortcut: "Del",
+        action: NotepadMenuAction::Delete,
+    },
+    MenuItemDef {
+        label_tr: "Tümünü Seç",
+        label_en: "Select All",
+        shortcut: "Ctrl+A",
+        action: NotepadMenuAction::SelectAll,
+    },
+    MenuItemDef {
+        label_tr: "Bul...",
+        label_en: "Find...",
+        shortcut: "Ctrl+F",
+        action: NotepadMenuAction::Find,
+    },
+    MenuItemDef {
+        label_tr: "Değiştir...",
+        label_en: "Replace...",
+        shortcut: "Ctrl+H",
+        action: NotepadMenuAction::Replace,
+    },
 ];
 
 const HELP_MENU_ITEMS: [MenuItemDef; 2] = [
-    MenuItemDef { label_tr: "Not Defteri Hakkında", label_en: "About Notepad", shortcut: "", action: NotepadMenuAction::About },
-    MenuItemDef { label_tr: "Kısayol Tuşları", label_en: "Shortcuts", shortcut: "", action: NotepadMenuAction::Shortcuts },
+    MenuItemDef {
+        label_tr: "Not Defteri Hakkında",
+        label_en: "About Notepad",
+        shortcut: "",
+        action: NotepadMenuAction::About,
+    },
+    MenuItemDef {
+        label_tr: "Kısayol Tuşları",
+        label_en: "Shortcuts",
+        shortcut: "",
+        action: NotepadMenuAction::Shortcuts,
+    },
 ];
 
 const OVERFLOW_MENU_ITEMS: [MenuItemDef; 5] = [
-    MenuItemDef { label_tr: "Dosya işlemleri", label_en: "File actions", shortcut: "▶", action: NotepadMenuAction::FileCategory },
-    MenuItemDef { label_tr: "Düzenleme", label_en: "Edit", shortcut: "▶", action: NotepadMenuAction::EditCategory },
-    MenuItemDef { label_tr: "Yardım", label_en: "Help", shortcut: "▶", action: NotepadMenuAction::HelpCategory },
-    MenuItemDef { label_tr: "Temizle", label_en: "Clear", shortcut: "", action: NotepadMenuAction::Clear },
-    MenuItemDef { label_tr: "Kaydet", label_en: "Save", shortcut: "Ctrl+S", action: NotepadMenuAction::Save },
+    MenuItemDef {
+        label_tr: "Dosya işlemleri",
+        label_en: "File actions",
+        shortcut: "▶",
+        action: NotepadMenuAction::FileCategory,
+    },
+    MenuItemDef {
+        label_tr: "Düzenleme",
+        label_en: "Edit",
+        shortcut: "▶",
+        action: NotepadMenuAction::EditCategory,
+    },
+    MenuItemDef {
+        label_tr: "Yardım",
+        label_en: "Help",
+        shortcut: "▶",
+        action: NotepadMenuAction::HelpCategory,
+    },
+    MenuItemDef {
+        label_tr: "Temizle",
+        label_en: "Clear",
+        shortcut: "",
+        action: NotepadMenuAction::Clear,
+    },
+    MenuItemDef {
+        label_tr: "Kaydet",
+        label_en: "Save",
+        shortcut: "Ctrl+S",
+        action: NotepadMenuAction::Save,
+    },
 ];
 
 impl NotepadApp {
@@ -155,13 +268,19 @@ impl NotepadApp {
 
     /// Menü öğesi yüksekliği (px) — font ölçeğine göre.
     #[inline(always)]
-    pub fn menu_item_h() -> usize { crate::gui::sp(22) }
+    pub fn menu_item_h() -> usize {
+        crate::gui::sp(22)
+    }
     /// Menü kutusunun iç (dolgu) boşluğu (px).
     #[inline(always)]
-    pub fn menu_pad() -> usize { crate::gui::sp(4) }
+    pub fn menu_pad() -> usize {
+        crate::gui::sp(4)
+    }
     /// Menü kutusu genişliği (px).
     #[inline(always)]
-    pub fn menu_box_w() -> usize { crate::gui::sp(180) }
+    pub fn menu_box_w() -> usize {
+        crate::gui::sp(180)
+    }
 
     /// Menü kutusunun sol üst köşesinin pencere içi X koordinatı.
     #[inline(always)]
@@ -170,12 +289,19 @@ impl NotepadApp {
     }
 
     pub fn overflow_button_rect(win_w: usize) -> (usize, usize, usize, usize) {
-        (win_w.saturating_sub(crate::gui::sp(38)), crate::gui::sp(2), crate::gui::sp(28), toolbar_h().saturating_sub(crate::gui::sp(4)))
+        (
+            win_w.saturating_sub(crate::gui::sp(38)),
+            crate::gui::sp(2),
+            crate::gui::sp(28),
+            toolbar_h().saturating_sub(crate::gui::sp(4)),
+        )
     }
 
     /// Menü kutusunun sol üst köşesinin pencere içi Y koordinatı.
     #[inline(always)]
-    pub fn menu_box_y() -> usize { crate::gui::sp(54) }
+    pub fn menu_box_y() -> usize {
+        crate::gui::sp(54)
+    }
 
     /// Menü öğesi sayısı.
     #[inline(always)]
@@ -230,11 +356,16 @@ impl NotepadApp {
     }
 
     /// Menü aksiyonunu yürütür.
-    pub fn execute_action(&mut self, action: NotepadMenuAction, vfs: &mut crate::fs::vfs::VirtualFileSystem) {
+    pub fn execute_action(
+        &mut self,
+        action: NotepadMenuAction,
+        vfs: &mut crate::fs::vfs::VirtualFileSystem,
+    ) {
         match action {
             NotepadMenuAction::New => {
                 self.clear();
-                self.status_msg = crate::gui::ui_text("Yeni belge oluşturuldu", "New document created");
+                self.status_msg =
+                    crate::gui::ui_text("Yeni belge oluşturuldu", "New document created");
             }
             NotepadMenuAction::Open => {
                 let path = self.file_path_str();
@@ -246,7 +377,8 @@ impl NotepadApp {
                         self.open_file(p_str, &data);
                     }
                 } else {
-                    self.status_msg = crate::gui::ui_text("Dosya açılamadı!", "Could not open file!");
+                    self.status_msg =
+                        crate::gui::ui_text("Dosya açılamadı!", "Could not open file!");
                 }
             }
             NotepadMenuAction::Save => {
@@ -283,10 +415,14 @@ impl NotepadApp {
                 self.open_replace();
             }
             NotepadMenuAction::About => {
-                self.status_msg = crate::gui::ui_text("minOs Not Defteri v1.3", "minOs Notepad v1.3");
+                self.status_msg =
+                    crate::gui::ui_text("minOs Not Defteri v1.3", "minOs Notepad v1.3");
             }
             NotepadMenuAction::Shortcuts => {
-                self.status_msg = crate::gui::ui_text("Ctrl+N Yeni, Ctrl+O Aç, Ctrl+S Kaydet, Ctrl+Z/Y Geri/İleri", "Ctrl+N New, Ctrl+O Open, Ctrl+S Save, Ctrl+Z/Y Undo/Redo");
+                self.status_msg = crate::gui::ui_text(
+                    "Ctrl+N Yeni, Ctrl+O Aç, Ctrl+S Kaydet, Ctrl+Z/Y Geri/İleri",
+                    "Ctrl+N New, Ctrl+O Open, Ctrl+S Save, Ctrl+Z/Y Undo/Redo",
+                );
             }
             NotepadMenuAction::FileCategory => {
                 self.menu = 1;
@@ -324,7 +460,9 @@ impl NotepadApp {
         let amount = clipboard_len;
         if self.len + amount > self.buffer.len() {
             let needed = self.len + amount - self.buffer.len();
-            if self.buffer.try_reserve(needed).is_err() { return; }
+            if self.buffer.try_reserve(needed).is_err() {
+                return;
+            }
             self.buffer.resize(self.len + amount, ' ');
         }
         for i in (self.cursor..self.len).rev() {
@@ -394,7 +532,10 @@ impl NotepadApp {
             overwrite: false,
             undo_len: 0,
             redo_len: 0,
-            history: History { undo: Vec::new(), redo: Vec::new() },
+            history: History {
+                undo: Vec::new(),
+                redo: Vec::new(),
+            },
             find_active: false,
             replace_active: false,
             find_text: [0; 64],
@@ -426,7 +567,9 @@ impl NotepadApp {
     /// Değişiklikten önce mevcut durumu geri al yığınına iter ve
     /// ileri al (redo) yığınını temizler.
     fn push_history(&mut self) {
-        if self.history.undo.len() == HISTORY_DEPTH { self.history.undo.remove(0); }
+        if self.history.undo.len() == HISTORY_DEPTH {
+            self.history.undo.remove(0);
+        }
         self.history.undo.push(self.snapshot());
         self.undo_len = self.history.undo.len() as u8;
         self.history.redo.clear();
@@ -435,7 +578,11 @@ impl NotepadApp {
 
     fn snapshot(&self) -> Snapshot {
         let chars = self.buffer[..self.len].to_vec();
-        Snapshot { chars, len: self.len, cursor: self.cursor }
+        Snapshot {
+            chars,
+            len: self.len,
+            cursor: self.cursor,
+        }
     }
 
     fn restore(&mut self, s: &Snapshot) {
@@ -457,7 +604,9 @@ impl NotepadApp {
         }
         let cur = self.snapshot();
         let prev = self.history.undo.pop().unwrap();
-        if self.history.redo.len() == HISTORY_DEPTH { self.history.redo.remove(0); }
+        if self.history.redo.len() == HISTORY_DEPTH {
+            self.history.redo.remove(0);
+        }
         self.history.redo.push(cur);
         self.undo_len = self.history.undo.len() as u8;
         self.redo_len = self.history.redo.len() as u8;
@@ -471,7 +620,9 @@ impl NotepadApp {
         }
         let cur = self.snapshot();
         let next = self.history.redo.pop().unwrap();
-        if self.history.undo.len() == HISTORY_DEPTH { self.history.undo.remove(0); }
+        if self.history.undo.len() == HISTORY_DEPTH {
+            self.history.undo.remove(0);
+        }
         self.history.undo.push(cur);
         self.undo_len = self.history.undo.len() as u8;
         self.redo_len = self.history.redo.len() as u8;
@@ -486,7 +637,12 @@ impl NotepadApp {
             self.push_history();
         }
         // Üzerine yaz modu: seçim yokken satır ortasında karakteri eklemek yerine değiştir.
-        if !had_selection && self.overwrite && c != '\n' && self.cursor < self.len && self.buffer[self.cursor] != '\n' {
+        if !had_selection
+            && self.overwrite
+            && c != '\n'
+            && self.cursor < self.len
+            && self.buffer[self.cursor] != '\n'
+        {
             self.buffer[self.cursor] = c;
             self.cursor += 1;
             return;
@@ -497,10 +653,14 @@ impl NotepadApp {
     /// Geçmiş kaydı ve seçim silme yapmadan imlece tek karakter ekler (dahili).
     fn insert_raw(&mut self, c: char) {
         if self.len == self.buffer.len() {
-            if self.buffer.try_reserve(1).is_err() { return; }
+            if self.buffer.try_reserve(1).is_err() {
+                return;
+            }
             self.buffer.push(' ');
         }
-        for i in (self.cursor..self.len).rev() { self.buffer[i + 1] = self.buffer[i]; }
+        for i in (self.cursor..self.len).rev() {
+            self.buffer[i + 1] = self.buffer[i];
+        }
         self.buffer[self.cursor] = c;
         self.len += 1;
         self.cursor += 1;
@@ -520,18 +680,24 @@ impl NotepadApp {
     pub fn insert_indent(&mut self) {
         self.push_history();
         self.delete_selection();
-        for _ in 0..4 { self.insert_raw(' '); }
+        for _ in 0..4 {
+            self.insert_raw(' ');
+        }
     }
 
     /// Shift+Tab: geçerli satırın başındaki girintiyi (en çok 4 boşluk) kaldırır.
     pub fn unindent(&mut self) {
         let mut start = self.cursor.min(self.len);
-        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        while start > 0 && self.buffer[start - 1] != '\n' {
+            start -= 1;
+        }
         let mut remove = 0usize;
         while remove < 4 && start + remove < self.len && self.buffer[start + remove] == ' ' {
             remove += 1;
         }
-        if remove == 0 { return; }
+        if remove == 0 {
+            return;
+        }
         self.push_history();
         self.selection_anchor = None;
         self.selection_start = None;
@@ -547,7 +713,10 @@ impl NotepadApp {
     }
 
     pub fn backspace(&mut self) {
-        if self.has_selection() { self.delete_selection(); return; }
+        if self.has_selection() {
+            self.delete_selection();
+            return;
+        }
         if self.cursor > 0 {
             self.push_history();
             let deleted = self.cursor - 1;
@@ -576,7 +745,9 @@ impl NotepadApp {
             self.delete_selection();
             return;
         }
-        if self.cursor == 0 { return; }
+        if self.cursor == 0 {
+            return;
+        }
         let mut idx = self.cursor;
         while idx > 0 && self.buffer[idx - 1].is_whitespace() {
             idx -= 1;
@@ -585,8 +756,12 @@ impl NotepadApp {
             let is_alnum = self.buffer[idx - 1].is_alphanumeric() || self.buffer[idx - 1] == '_';
             while idx > 0 {
                 let prev = self.buffer[idx - 1];
-                if prev.is_whitespace() { break; }
-                if (prev.is_alphanumeric() || prev == '_') != is_alnum { break; }
+                if prev.is_whitespace() {
+                    break;
+                }
+                if (prev.is_alphanumeric() || prev == '_') != is_alnum {
+                    break;
+                }
                 idx -= 1;
             }
         }
@@ -601,7 +776,9 @@ impl NotepadApp {
             self.delete_selection();
             return;
         }
-        if self.cursor >= self.len { return; }
+        if self.cursor >= self.len {
+            return;
+        }
         let mut idx = self.cursor;
         if idx < self.len {
             let is_alnum = self.buffer[idx].is_alphanumeric() || self.buffer[idx] == '_';
@@ -609,8 +786,12 @@ impl NotepadApp {
             if !is_ws {
                 while idx < self.len {
                     let cur = self.buffer[idx];
-                    if cur.is_whitespace() { break; }
-                    if (cur.is_alphanumeric() || cur == '_') != is_alnum { break; }
+                    if cur.is_whitespace() {
+                        break;
+                    }
+                    if (cur.is_alphanumeric() || cur == '_') != is_alnum {
+                        break;
+                    }
                     idx += 1;
                 }
             }
@@ -627,28 +808,40 @@ impl NotepadApp {
     /// İmleci satır başına taşır (Home tuşu). `select` true ise seçimi genişletir.
     pub fn move_home_ext(&mut self, select: bool) {
         let mut start = self.cursor;
-        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        while start > 0 && self.buffer[start - 1] != '\n' {
+            start -= 1;
+        }
         self.move_to(start, select);
     }
 
     /// İmleci satır sonuna taşır (End tuşu). `select` true ise seçimi genişletir.
     pub fn move_end_ext(&mut self, select: bool) {
         let mut end = self.cursor;
-        while end < self.len && self.buffer[end] != '\n' { end += 1; }
+        while end < self.len && self.buffer[end] != '\n' {
+            end += 1;
+        }
         self.move_to(end, select);
     }
 
     /// İmleci satır başına taşır (Home tuşu).
-    pub fn move_home(&mut self) { self.move_home_ext(false); }
+    pub fn move_home(&mut self) {
+        self.move_home_ext(false);
+    }
 
     /// İmleci satır sonuna taşır (End tuşu).
-    pub fn move_end(&mut self) { self.move_end_ext(false); }
+    pub fn move_end(&mut self) {
+        self.move_end_ext(false);
+    }
 
     /// Belgenin en başına taşır (Ctrl+Home).
-    pub fn move_document_home(&mut self, select: bool) { self.move_to(0, select); }
+    pub fn move_document_home(&mut self, select: bool) {
+        self.move_to(0, select);
+    }
 
     /// Belgenin en sonuna taşır (Ctrl+End).
-    pub fn move_document_end(&mut self, select: bool) { self.move_to(self.len, select); }
+    pub fn move_document_end(&mut self, select: bool) {
+        self.move_to(self.len, select);
+    }
 
     /// Bir kelimenin (harf/rakam/alt çizgi dizisi) başlangıç ve bitiş
     /// dizinini döndürür (çift tık kelime seçimi için).
@@ -657,9 +850,13 @@ impl NotepadApp {
         let idx = idx.min(self.len);
         // İmleç bir kelimenin sonundaysa o kelimeyi seç.
         let mut start = idx;
-        while start > 0 && is_word(self.buffer[start - 1]) { start -= 1; }
+        while start > 0 && is_word(self.buffer[start - 1]) {
+            start -= 1;
+        }
         let mut end = idx;
-        while end < self.len && is_word(self.buffer[end]) { end += 1; }
+        while end < self.len && is_word(self.buffer[end]) {
+            end += 1;
+        }
         (start, end)
     }
 
@@ -688,7 +885,9 @@ impl NotepadApp {
             && self.last_click_pos.1.abs_diff(pos.1) < 4;
         self.click_streak = if same_target && self.click_streak < 3 {
             self.click_streak + 1
-        } else { 1 };
+        } else {
+            1
+        };
         self.last_click_tick = now_ms;
         self.last_click_pos = pos;
         self.click_streak
@@ -707,9 +906,13 @@ impl NotepadApp {
 
         let idx = idx.min(self.len);
         let mut start = idx;
-        while start > 0 && self.buffer[start - 1] != '\n' { start -= 1; }
+        while start > 0 && self.buffer[start - 1] != '\n' {
+            start -= 1;
+        }
         let mut end = idx;
-        while end < self.len && self.buffer[end] != '\n' { end += 1; }
+        while end < self.len && self.buffer[end] != '\n' {
+            end += 1;
+        }
 
         // A blank line is itself the paragraph target; do not absorb the
         // preceding or following paragraph when the caret is on it.
@@ -722,20 +925,33 @@ impl NotepadApp {
         while start > 0 {
             let previous_end = start - 1;
             let mut previous_start = previous_end;
-            while previous_start > 0 && self.buffer[previous_start - 1] != '\n' { previous_start -= 1; }
-            if previous_start == previous_end { break; }
+            while previous_start > 0 && self.buffer[previous_start - 1] != '\n' {
+                previous_start -= 1;
+            }
+            if previous_start == previous_end {
+                break;
+            }
             start = previous_start;
         }
 
         while end < self.len && self.buffer[end] == '\n' {
             let next_start = end + 1;
-            if next_start >= self.len { end = self.len; break; }
+            if next_start >= self.len {
+                end = self.len;
+                break;
+            }
             let mut next_end = next_start;
-            while next_end < self.len && self.buffer[next_end] != '\n' { next_end += 1; }
-            if next_start == next_end { break; }
+            while next_end < self.len && self.buffer[next_end] != '\n' {
+                next_end += 1;
+            }
+            if next_start == next_end {
+                break;
+            }
             end = next_end;
         }
-        if end < self.len && self.buffer[end] == '\n' { end += 1; }
+        if end < self.len && self.buffer[end] == '\n' {
+            end += 1;
+        }
         self.set_selection(start, end);
     }
 
@@ -788,8 +1004,12 @@ impl NotepadApp {
             let is_alnum = self.buffer[idx - 1].is_alphanumeric() || self.buffer[idx - 1] == '_';
             while idx > 0 {
                 let prev = self.buffer[idx - 1];
-                if prev.is_whitespace() { break; }
-                if (prev.is_alphanumeric() || prev == '_') != is_alnum { break; }
+                if prev.is_whitespace() {
+                    break;
+                }
+                if (prev.is_alphanumeric() || prev == '_') != is_alnum {
+                    break;
+                }
                 idx -= 1;
             }
         }
@@ -808,8 +1028,12 @@ impl NotepadApp {
             if !is_ws {
                 while idx < self.len {
                     let cur = self.buffer[idx];
-                    if cur.is_whitespace() { break; }
-                    if (cur.is_alphanumeric() || cur == '_') != is_alnum { break; }
+                    if cur.is_whitespace() {
+                        break;
+                    }
+                    if (cur.is_alphanumeric() || cur == '_') != is_alnum {
+                        break;
+                    }
                     idx += 1;
                 }
             }
@@ -836,17 +1060,25 @@ impl NotepadApp {
         self.move_to(target, select);
     }
 
-    pub fn move_left(&mut self) { self.move_left_ext(false); }
+    pub fn move_left(&mut self) {
+        self.move_left_ext(false);
+    }
 
-    pub fn move_right(&mut self) { self.move_right_ext(false); }
+    pub fn move_right(&mut self) {
+        self.move_right_ext(false);
+    }
 
-    pub fn move_vertical(&mut self, up: bool) { self.move_vertical_ext(up, false); }
+    pub fn move_vertical(&mut self, up: bool) {
+        self.move_vertical_ext(up, false);
+    }
 
     /// Bir konumdan bir satır yukarı/aşağı gidilecek indeksi hesaplar
     /// (sütun korunur, mutasyon yapmaz).
     fn vertical_target(&self, from: usize, up: bool) -> usize {
         let mut line_start = from;
-        while line_start > 0 && self.buffer[line_start - 1] != '\n' { line_start -= 1; }
+        while line_start > 0 && self.buffer[line_start - 1] != '\n' {
+            line_start -= 1;
+        }
         let column = from - line_start;
         if up {
             if line_start == 0 {
@@ -854,18 +1086,24 @@ impl NotepadApp {
             } else {
                 let previous_end = line_start - 1;
                 let mut previous_start = previous_end;
-                while previous_start > 0 && self.buffer[previous_start - 1] != '\n' { previous_start -= 1; }
+                while previous_start > 0 && self.buffer[previous_start - 1] != '\n' {
+                    previous_start -= 1;
+                }
                 (previous_start + column).min(previous_end)
             }
         } else {
             let mut line_end = from;
-            while line_end < self.len && self.buffer[line_end] != '\n' { line_end += 1; }
+            while line_end < self.len && self.buffer[line_end] != '\n' {
+                line_end += 1;
+            }
             if line_end == self.len {
                 self.len
             } else {
                 let next_start = line_end + 1;
                 let mut next_end = next_start;
-                while next_end < self.len && self.buffer[next_end] != '\n' { next_end += 1; }
+                while next_end < self.len && self.buffer[next_end] != '\n' {
+                    next_end += 1;
+                }
                 (next_start + column).min(next_end)
             }
         }
@@ -881,7 +1119,9 @@ impl NotepadApp {
         let mut target = self.cursor;
         for _ in 0..lines.max(1) {
             let next = self.vertical_target(target, up);
-            if next == target { break; }
+            if next == target {
+                break;
+            }
             target = next;
         }
         self.move_to(target, select);
@@ -898,7 +1138,10 @@ impl NotepadApp {
                 col = 0;
             } else {
                 col += 1;
-                if wrap_cols > 0 && col >= wrap_cols { line += 1; col = 0; }
+                if wrap_cols > 0 && col >= wrap_cols {
+                    line += 1;
+                    col = 0;
+                }
             }
         }
         (line, col)
@@ -906,7 +1149,12 @@ impl NotepadApp {
 
     /// İmleci görünür tutacak dikey kaydırma ofsetini (px) döndürür.
     /// Render ile aynı geometriyi kullanır, böylece imleç her zaman ekranda kalır.
-    pub fn ensure_cursor_visible(&self, win_w: usize, win_h: usize, current_scroll_y: usize) -> usize {
+    pub fn ensure_cursor_visible(
+        &self,
+        win_w: usize,
+        win_h: usize,
+        current_scroll_y: usize,
+    ) -> usize {
         let area_h = win_h.saturating_sub(58 + status_h() + scrollbar::SCROLLBAR_THICKNESS);
         let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
         let text_w = area_w.saturating_sub(gutter_w() + 10);
@@ -968,7 +1216,11 @@ impl NotepadApp {
             }
         } else {
             if content.len() > self.buffer.len() {
-                if self.buffer.try_reserve(content.len() - self.buffer.len()).is_err() {
+                if self
+                    .buffer
+                    .try_reserve(content.len() - self.buffer.len())
+                    .is_err()
+                {
                     self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
                     return;
                 }
@@ -997,7 +1249,8 @@ impl NotepadApp {
         }
         let ok = vfs.write_file(path, &utf8_buf);
         if ok {
-            self.status_msg = crate::gui::ui_text("Dosya başarıyla kaydedildi!", "File saved successfully!");
+            self.status_msg =
+                crate::gui::ui_text("Dosya başarıyla kaydedildi!", "File saved successfully!");
         } else {
             self.status_msg = crate::gui::ui_text("Kaydetme başarısız!", "Save failed!");
         }
@@ -1006,7 +1259,8 @@ impl NotepadApp {
 
     pub fn file_path_str(&self) -> &str {
         if self.file_path_len > 0 {
-            core::str::from_utf8(&self.file_path[..self.file_path_len]).unwrap_or("/root/Documents/notlar.txt")
+            core::str::from_utf8(&self.file_path[..self.file_path_len])
+                .unwrap_or("/root/Documents/notlar.txt")
         } else {
             "/root/Documents/notlar.txt"
         }
@@ -1023,13 +1277,19 @@ impl NotepadApp {
         self.find_active = true;
         self.replace_active = false;
         self.find_focused_replace = false;
-        self.status_msg = crate::gui::ui_text("Metin Ara (Enter: Sonraki, Esc: Kapat)", "Find Text (Enter: Next, Esc: Close)");
+        self.status_msg = crate::gui::ui_text(
+            "Metin Ara (Enter: Sonraki, Esc: Kapat)",
+            "Find Text (Enter: Next, Esc: Close)",
+        );
     }
 
     pub fn open_replace(&mut self) {
         self.find_active = true;
         self.replace_active = true;
-        self.status_msg = crate::gui::ui_text("Bul ve Değiştir (Tab: Geçiş, Enter: Değiştir)", "Find & Replace (Tab: Switch, Enter: Replace)");
+        self.status_msg = crate::gui::ui_text(
+            "Bul ve Değiştir (Tab: Geçiş, Enter: Değiştir)",
+            "Find & Replace (Tab: Switch, Enter: Replace)",
+        );
     }
 
     pub fn close_find(&mut self) {
@@ -1065,7 +1325,11 @@ impl NotepadApp {
 
     pub fn find_input_backspace(&mut self) {
         let is_rep = self.find_focused_replace;
-        let len = if is_rep { &mut self.replace_len } else { &mut self.find_len };
+        let len = if is_rep {
+            &mut self.replace_len
+        } else {
+            &mut self.find_len
+        };
         if *len > 0 {
             *len -= 1;
         }
@@ -1084,9 +1348,17 @@ impl NotepadApp {
         }
 
         let start_pos = if forward {
-            if let Some(e) = self.selection_end { e.min(self.len) } else { self.cursor }
+            if let Some(e) = self.selection_end {
+                e.min(self.len)
+            } else {
+                self.cursor
+            }
         } else {
-            if let Some(s) = self.selection_start { s.saturating_sub(1) } else { self.cursor.saturating_sub(1) }
+            if let Some(s) = self.selection_start {
+                s.saturating_sub(1)
+            } else {
+                self.cursor.saturating_sub(1)
+            }
         };
 
         let mut found = None;
@@ -1095,7 +1367,9 @@ impl NotepadApp {
             for i in start_pos..=(self.len.saturating_sub(n_len)) {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                    if self.buffer[i + j].to_ascii_lowercase()
+                        != needle_chars[j].to_ascii_lowercase()
+                    {
                         match_ok = false;
                         break;
                     }
@@ -1110,7 +1384,9 @@ impl NotepadApp {
                 for i in 0..start_pos.min(self.len.saturating_sub(n_len) + 1) {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                        if self.buffer[i + j].to_ascii_lowercase()
+                            != needle_chars[j].to_ascii_lowercase()
+                        {
                             match_ok = false;
                             break;
                         }
@@ -1127,7 +1403,9 @@ impl NotepadApp {
             for i in (0..=check_limit).rev() {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                    if self.buffer[i + j].to_ascii_lowercase()
+                        != needle_chars[j].to_ascii_lowercase()
+                    {
                         match_ok = false;
                         break;
                     }
@@ -1141,7 +1419,9 @@ impl NotepadApp {
                 for i in (start_pos..=(self.len - n_len)).rev() {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                        if self.buffer[i + j].to_ascii_lowercase()
+                            != needle_chars[j].to_ascii_lowercase()
+                        {
                             match_ok = false;
                             break;
                         }
@@ -1169,7 +1449,9 @@ impl NotepadApp {
 
     pub fn replace_current(&mut self) -> bool {
         let needle = self.find_str();
-        if needle.is_empty() { return false; }
+        if needle.is_empty() {
+            return false;
+        }
         let needle_chars: alloc::vec::Vec<char> = needle.chars().collect();
         let rep_chars: alloc::vec::Vec<char> = self.replace_str().chars().collect();
 
@@ -1178,7 +1460,9 @@ impl NotepadApp {
             if e - s == needle_chars.len() {
                 let mut ok = true;
                 for j in 0..needle_chars.len() {
-                    if self.buffer[s + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                    if self.buffer[s + j].to_ascii_lowercase()
+                        != needle_chars[j].to_ascii_lowercase()
+                    {
                         ok = false;
                         break;
                     }
@@ -1205,7 +1489,9 @@ impl NotepadApp {
             let add_len = rep_chars.len();
             if self.len + add_len > self.buffer.len() {
                 let needed = self.len + add_len - self.buffer.len();
-                if self.buffer.try_reserve(needed).is_err() { return false; }
+                if self.buffer.try_reserve(needed).is_err() {
+                    return false;
+                }
                 self.buffer.resize(self.len + add_len, ' ');
             }
             for i in (s..self.len).rev() {
@@ -1229,11 +1515,15 @@ impl NotepadApp {
 
     pub fn replace_all(&mut self) -> usize {
         let needle = self.find_str();
-        if needle.is_empty() { return 0; }
+        if needle.is_empty() {
+            return 0;
+        }
         let needle_chars: alloc::vec::Vec<char> = needle.chars().collect();
         let rep_chars: alloc::vec::Vec<char> = self.replace_str().chars().collect();
         let n_len = needle_chars.len();
-        if n_len == 0 { return 0; }
+        if n_len == 0 {
+            return 0;
+        }
 
         self.push_history();
         let mut count = 0usize;
@@ -1256,7 +1546,9 @@ impl NotepadApp {
                 let add_len = rep_chars.len();
                 if self.len + add_len > self.buffer.len() {
                     let needed = self.len + add_len - self.buffer.len();
-                    if self.buffer.try_reserve(needed).is_err() { break; }
+                    if self.buffer.try_reserve(needed).is_err() {
+                        break;
+                    }
                     self.buffer.resize(self.len + add_len, ' ');
                 }
                 for k in (i..self.len).rev() {
@@ -1284,12 +1576,18 @@ impl NotepadApp {
 
     /// Metin alanı başlangıcının pencere içi X koordinatı (gutter + boşluk).
     #[inline(always)]
-    pub fn text_x() -> usize { gutter_w() + crate::gui::sp(12) }
+    pub fn text_x() -> usize {
+        gutter_w() + crate::gui::sp(12)
+    }
     /// Bul/Değiştir çubuğunun pencere içi (x, y, w, h) dikdörtgeni.
     /// `render_content` ile aynı geometriyi kullanır (`by = win_y + 56`,
     /// `bw = win_w - 12`).
     pub fn find_bar_area_rect(win_w: usize, replace_active: bool) -> (usize, usize, usize, usize) {
-        let bar_h = if replace_active { crate::gui::sp(58) } else { crate::gui::sp(30) };
+        let bar_h = if replace_active {
+            crate::gui::sp(58)
+        } else {
+            crate::gui::sp(30)
+        };
         (6, 56, win_w.saturating_sub(12), bar_h)
     }
 
@@ -1343,7 +1641,11 @@ impl NotepadApp {
     #[inline(always)]
     pub fn text_y(&self) -> usize {
         if self.find_active {
-            if self.replace_active { crate::gui::sp(120) } else { crate::gui::sp(92) }
+            if self.replace_active {
+                crate::gui::sp(120)
+            } else {
+                crate::gui::sp(92)
+            }
         } else {
             crate::gui::sp(62)
         }
@@ -1353,16 +1655,14 @@ impl NotepadApp {
     /// `win_w` satır kaydırma (wrap) hesabı için, `scroll_y` dikey kaydırma
     /// ofseti için kullanılır. Windows Notepad gibi tıklanan karaktere imleci
     /// konumlandırır.
-    pub fn index_at_scrolled(
-        &self,
-        x: usize,
-        y: usize,
-        win_w: usize,
-        scroll_y: usize,
-    ) -> usize {
+    pub fn index_at_scrolled(&self, x: usize, y: usize, win_w: usize, scroll_y: usize) -> usize {
         // Metin alanı genişliği ve satır başına düşen karakter sayısı.
-        let text_w = win_w
-            .saturating_sub(crate::gui::sp(12) + gutter_w() + crate::gui::sp(16) + crate::gui::scrollbar::SCROLLBAR_THICKNESS);
+        let text_w = win_w.saturating_sub(
+            crate::gui::sp(12)
+                + gutter_w()
+                + crate::gui::sp(16)
+                + crate::gui::scrollbar::SCROLLBAR_THICKNESS,
+        );
         let wrap_cols = (text_w / char_w()).max(1);
 
         let click_col = x.saturating_sub(Self::text_x()) / char_w();
@@ -1375,16 +1675,23 @@ impl NotepadApp {
         let mut col = 0usize;
         let mut idx = 0usize;
         while idx < self.len {
-            if line == click_row && col >= click_col { break; }
+            if line == click_row && col >= click_col {
+                break;
+            }
             let ch = self.buffer[idx];
             if ch == '\n' {
-                if line == click_row { break; }
+                if line == click_row {
+                    break;
+                }
                 line += 1;
                 col = 0;
             } else {
                 col += 1;
                 if col >= wrap_cols {
-                    if line == click_row { idx += 1; break; }
+                    if line == click_row {
+                        idx += 1;
+                        break;
+                    }
                     line += 1;
                     col = 0;
                 }
@@ -1436,19 +1743,41 @@ impl NotepadApp {
         scroll: &ScrollState,
     ) {
         // Araç Çubuğu (Toolbar)
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, toolbar_h(), Color::TITLE_BAR);
+        fb.draw_rect(
+            win_x + 6,
+            win_y + 30,
+            win_w - 12,
+            toolbar_h(),
+            Color::TITLE_BAR,
+        );
         let english = crate::gui::ui_english();
 
         let overflow = Self::overflow_button_rect(win_w);
-        fb.draw_rect(win_x + overflow.0, win_y + 30 + overflow.1, overflow.2, overflow.3, Color::WINDOW_BG);
+        fb.draw_rect(
+            win_x + overflow.0,
+            win_y + 30 + overflow.1,
+            overflow.2,
+            overflow.3,
+            Color::WINDOW_BG,
+        );
         for dot in 0..3 {
-            fb.draw_rect(win_x + overflow.0 + overflow.2 / 2 - 1, win_y + 30 + overflow.1 + 4 + dot * 5, 2, 2, Color::TEXT_MAIN);
+            fb.draw_rect(
+                win_x + overflow.0 + overflow.2 / 2 - 1,
+                win_y + 30 + overflow.1 + 4 + dot * 5,
+                2,
+                2,
+                Color::TEXT_MAIN,
+            );
         }
 
         // Metin Editörü Alanı — pencere boyutuna göre DİNAMİK
         // Bul / Değiştir Çubuğu (Find & Replace Bar)
         let bar_h = if self.find_active {
-            if self.replace_active { crate::gui::sp(58) } else { crate::gui::sp(30) }
+            if self.replace_active {
+                crate::gui::sp(58)
+            } else {
+                crate::gui::sp(30)
+            }
         } else {
             0
         };
@@ -1460,27 +1789,63 @@ impl NotepadApp {
             fb.draw_rect_outline(win_x + 6, by, bw, bar_h, Color::BORDER);
 
             // Satır 1: Bul
-            MinGuiCompositor::draw_string(fb, win_x + 12, by + 6, crate::gui::ui_text("Bul:", "Find:"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + 12,
+                by + 6,
+                crate::gui::ui_text("Bul:", "Find:"),
+                Color::TEXT_MAIN,
+            );
             let input_w = crate::gui::sp(140);
             let f_box_x = win_x + crate::gui::sp(50);
             let f_box_y = by + 4;
             let f_box_h = 20;
             let find_foc = !self.find_focused_replace;
             fb.draw_rect(f_box_x, f_box_y, input_w, f_box_h, Color::DARK_BG);
-            fb.draw_rect_outline(f_box_x, f_box_y, input_w, f_box_h, if find_foc { Color::ACCENT_BLUE } else { Color::BORDER });
-            MinGuiCompositor::draw_string_clipped(fb, f_box_x + 4, f_box_y + 3, self.find_str(), Color::TEXT_MAIN, (f_box_x + 4, f_box_y, input_w - 8, f_box_h));
+            fb.draw_rect_outline(
+                f_box_x,
+                f_box_y,
+                input_w,
+                f_box_h,
+                if find_foc {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::BORDER
+                },
+            );
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                f_box_x + 4,
+                f_box_y + 3,
+                self.find_str(),
+                Color::TEXT_MAIN,
+                (f_box_x + 4, f_box_y, input_w - 8, f_box_h),
+            );
             if find_foc && (tick / 20) % 2 == 0 {
-                let tw = MinGuiCompositor::terminal_text_width(self.find_str()).min(input_w.saturating_sub(10));
+                let tw = MinGuiCompositor::terminal_text_width(self.find_str())
+                    .min(input_w.saturating_sub(10));
                 fb.draw_rect(f_box_x + 4 + tw, f_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
             }
 
             // Butonlar: Sonraki, Önceki, Kapat
             let mut btn_x = f_box_x + input_w + 8;
             fb.draw_rect(btn_x, f_box_y, 60, f_box_h, Color::WINDOW_BG);
-            MinGuiCompositor::draw_string(fb, btn_x + 6, f_box_y + 3, crate::gui::ui_text("Sonraki", "Next"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(
+                fb,
+                btn_x + 6,
+                f_box_y + 3,
+                crate::gui::ui_text("Sonraki", "Next"),
+                Color::TEXT_MAIN,
+            );
             btn_x += 66;
             fb.draw_rect(btn_x, f_box_y, 60, f_box_h, Color::WINDOW_BG);
-            MinGuiCompositor::draw_string(fb, btn_x + 6, f_box_y + 3, crate::gui::ui_text("Önceki", "Prev"), Color::TEXT_MAIN);
+            MinGuiCompositor::draw_string(
+                fb,
+                btn_x + 6,
+                f_box_y + 3,
+                crate::gui::ui_text("Önceki", "Prev"),
+                Color::TEXT_MAIN,
+            );
 
             let close_x = win_x + bw.saturating_sub(20);
             MinGuiCompositor::draw_string(fb, close_x, f_box_y + 2, "X", Color::ACCENT_RED);
@@ -1488,24 +1853,60 @@ impl NotepadApp {
             // Satır 2: Değiştir
             if self.replace_active {
                 let ry = by + 30;
-                MinGuiCompositor::draw_string(fb, win_x + 12, ry + 6, crate::gui::ui_text("Değiştir:", "Replace:"), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + 12,
+                    ry + 6,
+                    crate::gui::ui_text("Değiştir:", "Replace:"),
+                    Color::TEXT_MAIN,
+                );
                 let r_box_x = f_box_x;
                 let r_box_y = ry + 4;
                 let rep_foc = self.find_focused_replace;
                 fb.draw_rect(r_box_x, r_box_y, input_w, f_box_h, Color::DARK_BG);
-                fb.draw_rect_outline(r_box_x, r_box_y, input_w, f_box_h, if rep_foc { Color::ACCENT_BLUE } else { Color::BORDER });
-                MinGuiCompositor::draw_string_clipped(fb, r_box_x + 4, r_box_y + 3, self.replace_str(), Color::TEXT_MAIN, (r_box_x + 4, r_box_y, input_w - 8, f_box_h));
+                fb.draw_rect_outline(
+                    r_box_x,
+                    r_box_y,
+                    input_w,
+                    f_box_h,
+                    if rep_foc {
+                        Color::ACCENT_BLUE
+                    } else {
+                        Color::BORDER
+                    },
+                );
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    r_box_x + 4,
+                    r_box_y + 3,
+                    self.replace_str(),
+                    Color::TEXT_MAIN,
+                    (r_box_x + 4, r_box_y, input_w - 8, f_box_h),
+                );
                 if rep_foc && (tick / 20) % 2 == 0 {
-                    let tw = MinGuiCompositor::terminal_text_width(self.replace_str()).min(input_w.saturating_sub(10));
+                    let tw = MinGuiCompositor::terminal_text_width(self.replace_str())
+                        .min(input_w.saturating_sub(10));
                     fb.draw_rect(r_box_x + 4 + tw, r_box_y + 3, 2, 14, Color::ACCENT_YELLOW);
                 }
 
                 let mut rbtn_x = r_box_x + input_w + 8;
                 fb.draw_rect(rbtn_x, r_box_y, 60, f_box_h, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, rbtn_x + 6, r_box_y + 3, crate::gui::ui_text("Değiştir", "Replace"), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    rbtn_x + 6,
+                    r_box_y + 3,
+                    crate::gui::ui_text("Değiştir", "Replace"),
+                    Color::TEXT_MAIN,
+                );
                 rbtn_x += 66;
                 fb.draw_rect(rbtn_x, r_box_y, 76, f_box_h, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, rbtn_x + 6, r_box_y + 3, crate::gui::ui_text("Tümünü", "All"), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    rbtn_x + 6,
+                    r_box_y + 3,
+                    crate::gui::ui_text("Tümünü", "All"),
+                    Color::TEXT_MAIN,
+                );
             }
         }
 
@@ -1514,8 +1915,8 @@ impl NotepadApp {
         let area_y = win_y + 58 + bar_h;
         // İçerik alanı, kaydırma çubuğu ve durum çubuğu düşülerek hesaplanır.
         let area_w = win_w.saturating_sub(12 + scrollbar::SCROLLBAR_THICKNESS);
-        let area_h = win_h
-            .saturating_sub((area_y - win_y) + status_h() + scrollbar::SCROLLBAR_THICKNESS);
+        let area_h =
+            win_h.saturating_sub((area_y - win_y) + status_h() + scrollbar::SCROLLBAR_THICKNESS);
         fb.draw_rect(area_x, area_y, area_w, area_h, Color::DARK_BG);
 
         // Kaydırılabilir metin alanı sınırları.
@@ -1568,8 +1969,20 @@ impl NotepadApp {
                         _ => false,
                     };
                     let sel_h = line_h().saturating_sub(4).max(8);
-                    if selected { fb.draw_rect(cx, cy, char_w(), sel_h, Color::ACCENT_BLUE); }
-                    MinGuiCompositor::draw_terminal_string(fb, cx, cy, s, if selected { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
+                    if selected {
+                        fb.draw_rect(cx, cy, char_w(), sel_h, Color::ACCENT_BLUE);
+                    }
+                    MinGuiCompositor::draw_terminal_string(
+                        fb,
+                        cx,
+                        cy,
+                        s,
+                        if selected {
+                            MinGuiCompositor::text_on(Color::ACCENT_BLUE)
+                        } else {
+                            Color::TEXT_MAIN
+                        },
+                    );
                 }
             }
             if i == self.cursor.saturating_sub(1) {
@@ -1601,14 +2014,26 @@ impl NotepadApp {
                         MinGuiCompositor::draw_terminal_string(fb, cx, cy, s, Color::BLACK);
                     }
                 } else {
-                    fb.draw_rect(cx, cy, crate::gui::sp(2).max(1), cur_h, Color::ACCENT_YELLOW);
+                    fb.draw_rect(
+                        cx,
+                        cy,
+                        crate::gui::sp(2).max(1),
+                        cur_h,
+                        Color::ACCENT_YELLOW,
+                    );
                 }
             }
         }
 
         // Alt Durum Çubuğu — pencerenin en altına sabitlenir
         let status_y = win_y + win_h - status_h() + 4;
-        fb.draw_rect(win_x + 6, status_y, win_w - 12, status_h() - 4, Color::TASKBAR_BG);
+        fb.draw_rect(
+            win_x + 6,
+            status_y,
+            win_w - 12,
+            status_h() - 4,
+            Color::TASKBAR_BG,
+        );
         let mut status = TextBuf::new();
         if !self.status_msg.is_empty() {
             status.push_str(self.status_msg);
@@ -1625,10 +2050,16 @@ impl NotepadApp {
         status.push_u2(((sy + 1).min(total_lines)) as u32);
         status.push_byte(b'/');
         status.push_u2(total_lines.min(99) as u32);
-        status.push_str("  |  " );
+        status.push_str("  |  ");
         status.push_u2(self.len.min(99) as u32);
         status.push_str(crate::gui::ui_text(" karakter", " chars"));
-        MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, status.as_str(), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            status_y + 4,
+            status.as_str(),
+            Color::TEXT_MUTED,
+        );
 
         // Menü, metin alanının üst katmanında çizilmeli; aksi halde metin
         // editörü menü kutusunu kapatır.
@@ -1650,20 +2081,42 @@ impl NotepadApp {
                 let enabled = self.is_item_enabled(def.action);
                 let label = if english { def.label_en } else { def.label_tr };
 
-                let text_color = if enabled { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
+                let text_color = if enabled {
+                    Color::TEXT_MAIN
+                } else {
+                    Color::TEXT_MUTED
+                };
                 let sc_color = Color::TEXT_MUTED;
 
                 // Öğe satır zemini
-                fb.draw_rect(mx + crate::gui::sp(4), item_y, box_w.saturating_sub(crate::gui::sp(8)), item_h.saturating_sub(crate::gui::sp(2)), Color::TITLE_BAR_INACTIVE);
+                fb.draw_rect(
+                    mx + crate::gui::sp(4),
+                    item_y,
+                    box_w.saturating_sub(crate::gui::sp(8)),
+                    item_h.saturating_sub(crate::gui::sp(2)),
+                    Color::TITLE_BAR_INACTIVE,
+                );
 
                 // Sol: Menü öğesi metni
-                MinGuiCompositor::draw_string(fb, mx + crate::gui::sp(10), item_y + crate::gui::sp(4), label, text_color);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    mx + crate::gui::sp(10),
+                    item_y + crate::gui::sp(4),
+                    label,
+                    text_color,
+                );
 
                 // Sağ: Kısayol tuş bilgisi
                 if !def.shortcut.is_empty() {
                     let sc_w = MinGuiCompositor::text_width(def.shortcut, 1);
                     let sc_x = mx + box_w.saturating_sub(sc_w + crate::gui::sp(12));
-                    MinGuiCompositor::draw_string(fb, sc_x, item_y + crate::gui::sp(4), def.shortcut, sc_color);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        sc_x,
+                        item_y + crate::gui::sp(4),
+                        def.shortcut,
+                        sc_color,
+                    );
                 }
             }
         }

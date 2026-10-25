@@ -11,7 +11,10 @@ pub struct TextBuf {
 
 impl TextBuf {
     pub const fn new() -> Self {
-        Self { buf: [0; 128], len: 0 }
+        Self {
+            buf: [0; 128],
+            len: 0,
+        }
     }
 
     /// Sabit metinden hücreler arası (const) tampon oluşturur.
@@ -77,22 +80,40 @@ impl TextBuf {
     }
 
     pub fn push_usize(&mut self, mut v: usize) {
-        let mut tmp = [0u8; 20]; let mut n = 0;
-        if v == 0 { self.push_byte(b'0'); return; }
-        while v > 0 && n < tmp.len() { tmp[n] = b'0' + (v % 10) as u8; n += 1; v /= 10; }
-        while n > 0 { n -= 1; self.push_byte(tmp[n]); }
+        let mut tmp = [0u8; 20];
+        let mut n = 0;
+        if v == 0 {
+            self.push_byte(b'0');
+            return;
+        }
+        while v > 0 && n < tmp.len() {
+            tmp[n] = b'0' + (v % 10) as u8;
+            n += 1;
+            v /= 10;
+        }
+        while n > 0 {
+            n -= 1;
+            self.push_byte(tmp[n]);
+        }
     }
 
     pub fn push_hex64(&mut self, mut v: u64) {
-        if v == 0 { self.push_byte(b'0'); return; }
-        let mut tmp = [0u8; 16]; let mut n = 0;
+        if v == 0 {
+            self.push_byte(b'0');
+            return;
+        }
+        let mut tmp = [0u8; 16];
+        let mut n = 0;
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         while v > 0 && n < tmp.len() {
             tmp[n] = HEX[(v & 0xF) as usize];
             n += 1;
             v >>= 4;
         }
-        while n > 0 { n -= 1; self.push_byte(tmp[n]); }
+        while n > 0 {
+            n -= 1;
+            self.push_byte(tmp[n]);
+        }
     }
 
     pub fn as_str(&self) -> &str {

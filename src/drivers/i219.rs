@@ -14,13 +14,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -82,7 +86,7 @@ const I219_DEVICES: [u32; 12] = [
 // Control Register
 const REG_CTRL: u32 = 0x0000;
 const CTRL_RST: u32 = 1 << 26; // Device reset
-const CTRL_SLU: u32 = 1 << 6;  // Set Link Up
+const CTRL_SLU: u32 = 1 << 6; // Set Link Up
 const CTRL_LRST: u32 = 1 << 3; // Link reset
 
 // Status Register
@@ -96,34 +100,34 @@ const EERD_DONE: u32 = 1 << 4;
 
 // Receive Control
 const REG_RCTL: u32 = 0x0100;
-const RCTL_EN: u32 = 1 << 1;      // Receiver Enable
-const RCTL_SBP: u32 = 1 << 2;     // Store Bad Packets
-const RCTL_UPE: u32 = 1 << 3;     // Unicast Promiscuous
-const RCTL_MPE: u32 = 1 << 4;     // Multicast Promiscuous
-const RCTL_BAM: u32 = 1 << 15;    // Broadcast Accept
-const RCTL_BSIZE_2048: u32 = 0;   // Buffer size 2048
-const RCTL_SECRC: u32 = 1 << 26;  // Strip CRC
+const RCTL_EN: u32 = 1 << 1; // Receiver Enable
+const RCTL_SBP: u32 = 1 << 2; // Store Bad Packets
+const RCTL_UPE: u32 = 1 << 3; // Unicast Promiscuous
+const RCTL_MPE: u32 = 1 << 4; // Multicast Promiscuous
+const RCTL_BAM: u32 = 1 << 15; // Broadcast Accept
+const RCTL_BSIZE_2048: u32 = 0; // Buffer size 2048
+const RCTL_SECRC: u32 = 1 << 26; // Strip CRC
 
 // Transmit Control
 const REG_TCTL: u32 = 0x0400;
-const TCTL_EN: u32 = 1 << 1;      // Transmitter Enable
-const TCTL_PSP: u32 = 1 << 3;     // Pad Short Packets
-const TCTL_CT_SHIFT: u32 = 4;     // Collision Threshold
-const TCTL_COLD_SHIFT: u32 = 12;  // Collision Distance
+const TCTL_EN: u32 = 1 << 1; // Transmitter Enable
+const TCTL_PSP: u32 = 1 << 3; // Pad Short Packets
+const TCTL_CT_SHIFT: u32 = 4; // Collision Threshold
+const TCTL_COLD_SHIFT: u32 = 12; // Collision Distance
 
 // RX Descriptor Registers
 const REG_RDBAL: u32 = 0x2800; // RX Descriptor Base Low
 const REG_RDBAH: u32 = 0x2804; // RX Descriptor Base High
 const REG_RDLEN: u32 = 0x2808; // RX Descriptor Length
-const REG_RDH: u32 = 0x2810;   // RX Descriptor Head
-const REG_RDT: u32 = 0x2818;   // RX Descriptor Tail
+const REG_RDH: u32 = 0x2810; // RX Descriptor Head
+const REG_RDT: u32 = 0x2818; // RX Descriptor Tail
 
 // TX Descriptor Registers
 const REG_TDBAL: u32 = 0x3800; // TX Descriptor Base Low
 const REG_TDBAH: u32 = 0x3804; // TX Descriptor Base High
 const REG_TDLEN: u32 = 0x3808; // TX Descriptor Length
-const REG_TDH: u32 = 0x3810;   // TX Descriptor Head
-const REG_TDT: u32 = 0x3818;   // TX Descriptor Tail
+const REG_TDH: u32 = 0x3810; // TX Descriptor Head
+const REG_TDT: u32 = 0x3818; // TX Descriptor Tail
 
 // Interrupt Registers
 const REG_ICR: u32 = 0x00C0; // Interrupt Cause Read
@@ -326,9 +330,7 @@ pub fn init() -> bool {
             | ((MAC_ADDR[2] as u32) << 16)
             | ((MAC_ADDR[1] as u32) << 8)
             | (MAC_ADDR[0] as u32);
-        let mac_high = ((MAC_ADDR[5] as u32) << 8)
-            | (MAC_ADDR[4] as u32)
-            | (1 << 31); // Address Valid
+        let mac_high = ((MAC_ADDR[5] as u32) << 8) | (MAC_ADDR[4] as u32) | (1 << 31); // Address Valid
 
         mmio_write32(REG_RAL0, mac_low);
         mmio_write32(REG_RAH0, mac_high);
@@ -353,7 +355,10 @@ pub fn init() -> bool {
         let rx_ring_addr = RINGS_ADDR + core::mem::offset_of!(I219Rings, rx_ring) as u64;
         mmio_write32(REG_RDBAL, (rx_ring_addr & 0xFFFFFFFF) as u32);
         mmio_write32(REG_RDBAH, (rx_ring_addr >> 32) as u32);
-        mmio_write32(REG_RDLEN, (RX_RING_SIZE * core::mem::size_of::<RxDescriptor>()) as u32);
+        mmio_write32(
+            REG_RDLEN,
+            (RX_RING_SIZE * core::mem::size_of::<RxDescriptor>()) as u32,
+        );
         mmio_write32(REG_RDH, 0);
         mmio_write32(REG_RDT, (RX_RING_SIZE - 1) as u32);
 
@@ -361,13 +366,22 @@ pub fn init() -> bool {
         let tx_ring_addr = RINGS_ADDR + core::mem::offset_of!(I219Rings, tx_ring) as u64;
         mmio_write32(REG_TDBAL, (tx_ring_addr & 0xFFFFFFFF) as u32);
         mmio_write32(REG_TDBAH, (tx_ring_addr >> 32) as u32);
-        mmio_write32(REG_TDLEN, (TX_RING_SIZE * core::mem::size_of::<TxDescriptor>()) as u32);
+        mmio_write32(
+            REG_TDLEN,
+            (TX_RING_SIZE * core::mem::size_of::<TxDescriptor>()) as u32,
+        );
         mmio_write32(REG_TDH, 0);
         mmio_write32(REG_TDT, 0);
 
         // RX/TX kontrolü
-        mmio_write32(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC);
-        mmio_write32(REG_TCTL, TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT));
+        mmio_write32(
+            REG_RCTL,
+            RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC,
+        );
+        mmio_write32(
+            REG_TCTL,
+            TCTL_EN | TCTL_PSP | (0x0F << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT),
+        );
 
         // Link up
         mmio_write32(REG_CTRL, CTRL_SLU);
@@ -422,9 +436,8 @@ pub fn send_packet(data: &[u8]) -> bool {
         let buf_offset = TX_TAIL as usize * TX_BUF_SIZE;
         rings.tx_bufs[buf_offset..buf_offset + len].copy_from_slice(data);
 
-        let tx_buf_addr = RINGS_ADDR
-            + core::mem::offset_of!(I219Rings, tx_bufs) as u64
-            + buf_offset as u64;
+        let tx_buf_addr =
+            RINGS_ADDR + core::mem::offset_of!(I219Rings, tx_bufs) as u64 + buf_offset as u64;
 
         rings.tx_ring[TX_TAIL as usize].addr = tx_buf_addr;
         rings.tx_ring[TX_TAIL as usize].length = len as u16;

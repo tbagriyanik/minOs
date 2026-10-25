@@ -55,7 +55,12 @@ fn be32(d: &[u8], i: usize) -> Option<usize> {
     if i + 4 > d.len() {
         return None;
     }
-    Some(((d[i] as usize) << 24) | ((d[i + 1] as usize) << 16) | ((d[i + 2] as usize) << 8) | d[i + 3] as usize)
+    Some(
+        ((d[i] as usize) << 24)
+            | ((d[i + 1] as usize) << 16)
+            | ((d[i + 2] as usize) << 8)
+            | d[i + 3] as usize,
+    )
 }
 
 fn for_pixels(w: usize, h: usize) -> Option<usize> {
@@ -112,7 +117,13 @@ fn parse_png_header(data: &[u8]) -> Option<PngHeader> {
     if !ok_depth {
         return None;
     }
-    Some(PngHeader { width, height, bit_depth, color_type, interlace })
+    Some(PngHeader {
+        width,
+        height,
+        bit_depth,
+        color_type,
+        interlace,
+    })
 }
 
 pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
@@ -143,7 +154,8 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
             b"PLTE" => palette = Some(body.to_vec()),
             b"IDAT" => idat.extend_from_slice(body),
             b"IEND" => break,
-            b"IHDR" | b"tRNS" | b"gAMA" | b"cHRM" | b"sRGB" | b"pHYs" | b"tEXt" | b"iTXt" | b"zTXt" | b"bKGD" | b"hIST" | b"sBIT" => {}
+            b"IHDR" | b"tRNS" | b"gAMA" | b"cHRM" | b"sRGB" | b"pHYs" | b"tEXt" | b"iTXt"
+            | b"zTXt" | b"bKGD" | b"hIST" | b"sBIT" => {}
             _ => {}
         }
         pos += 12 + len;
@@ -235,7 +247,12 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
             out += 3;
         }
     }
-    Some(DecodedImage { width: hdr.width, height: hdr.height, rgb, format: "PNG" })
+    Some(DecodedImage {
+        width: hdr.width,
+        height: hdr.height,
+        rgb,
+        format: "PNG",
+    })
 }
 
 fn scale8(value: u32, bit_depth: u8) -> u8 {
@@ -273,11 +290,23 @@ fn unfilter_png(raw: &mut [u8], height: usize, stride: usize, bpp: usize) -> Opt
         let start = y * (stride + 1);
         let filter = raw[start];
         let row_start = start + 1;
-        let prev_start = if y > 0 { Some((y - 1) * (stride + 1) + 1) } else { None };
+        let prev_start = if y > 0 {
+            Some((y - 1) * (stride + 1) + 1)
+        } else {
+            None
+        };
         for x in 0..stride {
-            let a = if x >= bpp { raw[row_start + x - bpp] } else { 0 };
+            let a = if x >= bpp {
+                raw[row_start + x - bpp]
+            } else {
+                0
+            };
             let b = prev_start.map(|p| raw[p + x]).unwrap_or(0);
-            let c = if x >= bpp { prev_start.map(|p| raw[p + x - bpp]).unwrap_or(0) } else { 0 };
+            let c = if x >= bpp {
+                prev_start.map(|p| raw[p + x - bpp]).unwrap_or(0)
+            } else {
+                0
+            };
             let v = raw[row_start + x];
             raw[row_start + x] = match filter {
                 0 => v,
@@ -297,7 +326,13 @@ fn paeth(a: u8, b: u8, c: u8) -> u8 {
     let pa = (p - a as i16).abs();
     let pb = (p - b as i16).abs();
     let pc = (p - c as i16).abs();
-    if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c }
+    if pa <= pb && pa <= pc {
+        a
+    } else if pb <= pc {
+        b
+    } else {
+        c
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +348,12 @@ struct BitReader<'a> {
 
 impl<'a> BitReader<'a> {
     fn new(data: &'a [u8]) -> Self {
-        Self { data, pos: 0, buf: 0, cnt: 0 }
+        Self {
+            data,
+            pos: 0,
+            buf: 0,
+            cnt: 0,
+        }
     }
 
     fn fill(&mut self) -> bool {
@@ -356,11 +396,15 @@ trait BitReaderLike {
 }
 
 impl BitReaderLike for BitReader<'_> {
-    fn bits(&mut self, n: u32) -> Option<u32> { BitReader::bits(self, n) }
+    fn bits(&mut self, n: u32) -> Option<u32> {
+        BitReader::bits(self, n)
+    }
 }
 
 impl BitReaderLike for JBitReader<'_> {
-    fn bits(&mut self, n: u32) -> Option<u32> { JBitReader::bits(self, n) }
+    fn bits(&mut self, n: u32) -> Option<u32> {
+        JBitReader::bits(self, n)
+    }
 }
 
 impl Huffman {
@@ -397,7 +441,12 @@ impl Huffman {
                 symbols[idx as usize] = sym as u8;
             }
         }
-        Some(Self { counts, first, offset, symbols })
+        Some(Self {
+            counts,
+            first,
+            offset,
+            symbols,
+        })
     }
 
     fn decode(&self, br: &mut impl BitReaderLike) -> Option<u8> {
@@ -436,7 +485,9 @@ fn dynamic_tables(br: &mut BitReader) -> Option<(Huffman, Huffman)> {
     if hlit > 286 || hdist > 30 {
         return None;
     }
-    const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    const ORDER: [usize; 19] = [
+        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+    ];
     let mut cl = [0u8; 19];
     for i in 0..hclen {
         cl[ORDER[i]] = br.bits(3)? as u8;
@@ -488,8 +539,8 @@ fn dynamic_tables(br: &mut BitReader) -> Option<(Huffman, Huffman)> {
 }
 
 const LEN_BASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
-    131, 163, 195, 227, 258,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
 const LEN_EXTRA: [u8; 29] = [
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
@@ -499,8 +550,8 @@ const DIST_BASE: [u16; 30] = [
     2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 ];
 const DIST_EXTRA: [u8; 30] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
-    13, 13,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 ];
 
 /// zlib başlığını doğrular ve DEFLATE akışını açar.
@@ -552,7 +603,11 @@ pub fn inflate(data: &[u8], expected: usize) -> Option<Vec<u8>> {
                 }
             }
             1 | 2 => {
-                let (lit, dist) = if btype == 1 { fixed_tables()? } else { dynamic_tables(&mut br)? };
+                let (lit, dist) = if btype == 1 {
+                    fixed_tables()?
+                } else {
+                    dynamic_tables(&mut br)?
+                };
                 loop {
                     let sym = lit.decode(&mut br)? as usize;
                     if sym < 256 {
@@ -572,7 +627,8 @@ pub fn inflate(data: &[u8], expected: usize) -> Option<Vec<u8>> {
                         if dsym >= DIST_BASE.len() {
                             return None;
                         }
-                        let distance = DIST_BASE[dsym] as usize + br.bits(DIST_EXTRA[dsym] as u32)? as usize;
+                        let distance =
+                            DIST_BASE[dsym] as usize + br.bits(DIST_EXTRA[dsym] as u32)? as usize;
                         if distance > out.len() || out.len().checked_add(len)? > expected {
                             return None;
                         }
@@ -618,9 +674,9 @@ struct JFrame {
 }
 
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27,
-    20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
-    58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 struct JBitReader<'a> {
@@ -632,7 +688,12 @@ struct JBitReader<'a> {
 
 impl<'a> JBitReader<'a> {
     fn new(data: &'a [u8], pos: usize) -> Self {
-        Self { data, pos, buf: 0, cnt: 0 }
+        Self {
+            data,
+            pos,
+            buf: 0,
+            cnt: 0,
+        }
     }
 
     fn fill(&mut self) -> bool {
@@ -742,15 +803,30 @@ fn idct_1d(s: [i32; 8]) -> [i32; 8] {
     let t2 = t2 + p2 + p3;
     let t1 = t1 + p2 + p4;
     let t0 = t0 + p1 + p3;
-    [x0 + t3, x1 + t2, x2 + t1, x3 + t0, x3 - t0, x2 - t1, x1 - t2, x0 - t3]
+    [
+        x0 + t3,
+        x1 + t2,
+        x2 + t1,
+        x3 + t0,
+        x3 - t0,
+        x2 - t1,
+        x1 - t2,
+        x0 - t3,
+    ]
 }
 
 fn idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: usize) {
     let mut tmp = [0i32; 64];
     for col in 0..8 {
         let s = [
-            coeff[col], coeff[8 + col], coeff[16 + col], coeff[24 + col],
-            coeff[32 + col], coeff[40 + col], coeff[48 + col], coeff[56 + col],
+            coeff[col],
+            coeff[8 + col],
+            coeff[16 + col],
+            coeff[24 + col],
+            coeff[32 + col],
+            coeff[40 + col],
+            coeff[48 + col],
+            coeff[56 + col],
         ];
         let v = idct_1d(s);
         for row in 0..8 {
@@ -817,8 +893,21 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     comp.td = (tables >> 4) as usize;
                     comp.ta = (tables & 15) as usize;
                 }
-                let rgb = decode_jpeg_scan(data, pos, &fr, &quant, &dc_tables, &ac_tables, restart_interval)?;
-                return Some(DecodedImage { width: fr.width, height: fr.height, rgb, format: "JPEG" });
+                let rgb = decode_jpeg_scan(
+                    data,
+                    pos,
+                    &fr,
+                    &quant,
+                    &dc_tables,
+                    &ac_tables,
+                    restart_interval,
+                )?;
+                return Some(DecodedImage {
+                    width: fr.width,
+                    height: fr.height,
+                    rgb,
+                    format: "JPEG",
+                });
             }
             0xDB => {
                 let seg_len = be16(data, pos)?;
@@ -935,7 +1024,17 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     }
                     max_h = max_h.max(h);
                     max_v = max_v.max(v);
-                    comps.push(JComponent { id, h, v, tq, td: 0, ta: 0, bw: 0, bh: 0, plane: Vec::new() });
+                    comps.push(JComponent {
+                        id,
+                        h,
+                        v,
+                        tq,
+                        td: 0,
+                        ta: 0,
+                        bw: 0,
+                        bh: 0,
+                        plane: Vec::new(),
+                    });
                 }
                 let mcu_w = 8 * max_h;
                 let mcu_h = 8 * max_v;
@@ -951,7 +1050,13 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 if total_plane > 24 * 1024 * 1024 {
                     return None;
                 }
-                frame = Some(JFrame { width, height, comps, max_h, max_v });
+                frame = Some(JFrame {
+                    width,
+                    height,
+                    comps,
+                    max_h,
+                    max_v,
+                });
             }
             0xDD => {
                 let seg_len = be16(data, pos)?;

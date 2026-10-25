@@ -23,7 +23,11 @@ fn glyph(face: Face, character: char) -> Option<&'static GlyphRecord> {
 
 fn ceil_positive(value: f32) -> usize {
     let whole = value.max(0.0) as usize;
-    if (whole as f32) < value { whole.saturating_add(1) } else { whole }
+    if (whole as f32) < value {
+        whole.saturating_add(1)
+    } else {
+        whole
+    }
 }
 
 pub fn text_width(face: Face, text: &str, size: f32) -> usize {
@@ -37,7 +41,11 @@ pub fn text_width(face: Face, text: &str, size: f32) -> usize {
             line_width = 0.0;
             continue;
         }
-        let codepoint = if glyph(face, character).is_some() { character as u32 } else { b'?' as u32 };
+        let codepoint = if glyph(face, character).is_some() {
+            character as u32
+        } else {
+            b'?' as u32
+        };
         if let Ok(index) = glyphs.binary_search_by_key(&codepoint, |record| record.codepoint) {
             line_width += glyphs[index].advance * factor;
         }
@@ -70,8 +78,7 @@ pub fn draw(
             baseline += line_height * factor;
             continue;
         }
-        let record = glyph(face, character)
-            .or_else(|| glyph(face, '?'));
+        let record = glyph(face, character).or_else(|| glyph(face, '?'));
         let Some(record) = record else { continue };
         let dst_width = ceil_positive(record.width as f32 * factor);
         let dst_height = ceil_positive(record.height as f32 * factor);
@@ -79,11 +86,15 @@ pub fn draw(
         let top = baseline - (record.ymin + record.height as i16) as f32 * factor;
 
         for dy in 0..dst_height {
-            let source_y = ((dy as f32 / factor) as usize).min(record.height.saturating_sub(1) as usize);
+            let source_y =
+                ((dy as f32 / factor) as usize).min(record.height.saturating_sub(1) as usize);
             for dx in 0..dst_width {
-                let source_x = ((dx as f32 / factor) as usize).min(record.width.saturating_sub(1) as usize);
+                let source_x =
+                    ((dx as f32 / factor) as usize).min(record.width.saturating_sub(1) as usize);
                 let alpha = bitmap[record.offset + source_y * record.width as usize + source_x];
-                if alpha == 0 { continue; }
+                if alpha == 0 {
+                    continue;
+                }
                 let px = left as i32 + dx as i32;
                 let py = top as i32 + dy as i32;
                 if px >= 0 && py >= 0 {

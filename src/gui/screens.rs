@@ -3,16 +3,34 @@
 use super::*;
 
 /// Draw one frame of the centered minOs loading transition.
-pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usize, phase: usize, message: &str) {
+pub fn render_loading_transition(
+    fb: &mut Framebuffer,
+    width: usize,
+    height: usize,
+    phase: usize,
+    message: &str,
+) {
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
     let cx = width / 2;
     let cy = height / 2;
     let icon_size = 48 + (phase % 7) * 4;
-    MinGuiCompositor::draw_cat_icon_at_size(fb, cx.saturating_sub(icon_size / 2), cy.saturating_sub(78), icon_size);
+    MinGuiCompositor::draw_cat_icon_at_size(
+        fb,
+        cx.saturating_sub(icon_size / 2),
+        cy.saturating_sub(78),
+        icon_size,
+    );
 
     let brand = "minOs";
     let brand_w = MinGuiCompositor::text_width(brand, 3);
-    MinGuiCompositor::draw_string_scaled(fb, cx.saturating_sub(brand_w / 2), cy.saturating_sub(10), brand, Color::TEXT_MAIN, 3);
+    MinGuiCompositor::draw_string_scaled(
+        fb,
+        cx.saturating_sub(brand_w / 2),
+        cy.saturating_sub(10),
+        brand,
+        Color::TEXT_MAIN,
+        3,
+    );
 
     let bar_w = 220.min(width.saturating_sub(48));
     let bar_x = cx.saturating_sub(bar_w / 2);
@@ -23,7 +41,12 @@ pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usi
     let sweep_x = bar_x + (phase * 19 % (travel + 1));
     fb.draw_rounded_rect(sweep_x, bar_y + 1, sweep_w, 6, 3, Color::ACCENT_BLUE);
 
-    let dots = match phase % 4 { 0 => ".  ", 1 => ".. ", 2 => "...", _ => "   " };
+    let dots = match phase % 4 {
+        0 => ".  ",
+        1 => ".. ",
+        2 => "...",
+        _ => "   ",
+    };
     let text_w = MinGuiCompositor::text_width(message, 1);
     let dots_w = MinGuiCompositor::text_width(dots, 1);
     let group_w = text_w + 4 + dots_w;
@@ -36,7 +59,13 @@ pub fn render_loading_transition(fb: &mut Framebuffer, width: usize, height: usi
 
 /// Draw a short-lived busy panel before a synchronous operation begins.
 /// The static indicator remains visible until the current disk call returns.
-pub fn draw_busy_overlay(fb: &mut Framebuffer, _mx: usize, _my: usize, message: &str, progress: usize) {
+pub fn draw_busy_overlay(
+    fb: &mut Framebuffer,
+    _mx: usize,
+    _my: usize,
+    message: &str,
+    progress: usize,
+) {
     let w = 340.min(fb.width.saturating_sub(24));
     let h = 104;
     let x = fb.width.saturating_sub(w) / 2;
@@ -49,7 +78,14 @@ pub fn draw_busy_overlay(fb: &mut Framebuffer, _mx: usize, _my: usize, message: 
     let bw = w.saturating_sub(36);
     let pct = progress.min(100);
     fb.draw_rounded_rect(bx, by, bw, 14, 4, Color::DARK_BG);
-    fb.draw_rounded_rect(bx + 1, by + 1, bw.saturating_sub(2) * pct / 100, 12, 3, Color::ACCENT_BLUE);
+    fb.draw_rounded_rect(
+        bx + 1,
+        by + 1,
+        bw.saturating_sub(2) * pct / 100,
+        12,
+        3,
+        Color::ACCENT_BLUE,
+    );
     // Yüzde etiketi: çubukla tutarlı tek bir değer gösterir.
     let mut label = TextBuf::new();
     label.push_usize(pct);
@@ -64,13 +100,7 @@ pub fn draw_busy_hourglass(fb: &mut Framebuffer, mx: usize, my: usize) {
     fb.save_cursor_background(mx, my);
     // 8x9 kum saati deseni (bit 7 = sol sütun).
     const HOURGLASS: [u8; 8] = [
-        0b11111110,
-        0b01111100,
-        0b00111000,
-        0b00010000,
-        0b00111000,
-        0b01111100,
-        0b11111110,
+        0b11111110, 0b01111100, 0b00111000, 0b00010000, 0b00111000, 0b01111100, 0b11111110,
         0b00000000,
     ];
     for (row, bits) in HOURGLASS.iter().enumerate() {
@@ -112,14 +142,32 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
     fb.draw_rounded_rect_outline(box_x, box_y, box_w, box_h, 10, Color::ACCENT_RED);
 
     let lines: [(&str, u32); 8] = [
-        ("Diskte geçerli bir minOs kurulumu bulunamadı.", Color::TEXT_MAIN),
-        ("No valid minOs installation was found on disk.", Color::TEXT_MUTED),
+        (
+            "Diskte geçerli bir minOs kurulumu bulunamadı.",
+            Color::TEXT_MAIN,
+        ),
+        (
+            "No valid minOs installation was found on disk.",
+            Color::TEXT_MUTED,
+        ),
         ("", Color::TEXT_MUTED),
-        ("Bu önyükleme seçeneği yalnızca kurulu sistem içindir.", Color::TEXT_MAIN),
-        ("This boot option is only for the installed system.", Color::TEXT_MUTED),
+        (
+            "Bu önyükleme seçeneği yalnızca kurulu sistem içindir.",
+            Color::TEXT_MAIN,
+        ),
+        (
+            "This boot option is only for the installed system.",
+            Color::TEXT_MUTED,
+        ),
         ("", Color::TEXT_MUTED),
-        ("Kurulum için 'minOs Live Environment' ile açıp sihirbazı tamamlayın.", Color::ACCENT_YELLOW),
-        ("Boot 'minOs Live Environment' and complete the setup wizard.", Color::ACCENT_YELLOW),
+        (
+            "Kurulum için 'minOs Live Environment' ile açıp sihirbazı tamamlayın.",
+            Color::ACCENT_YELLOW,
+        ),
+        (
+            "Boot 'minOs Live Environment' and complete the setup wizard.",
+            Color::ACCENT_YELLOW,
+        ),
     ];
 
     let mut y = box_y + 24;
@@ -141,7 +189,13 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
             Color::TEXT_MAIN,
         );
     } else {
-        MinGuiCompositor::draw_string(fb, 24, box_y + box_h + 18, "Yeniden başlatmak için bir tuşa basın / Press any key to restart", Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            24,
+            box_y + box_h + 18,
+            "Yeniden başlatmak için bir tuşa basın / Press any key to restart",
+            Color::TEXT_MAIN,
+        );
     }
 
     fb.flush();
@@ -151,15 +205,28 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let w = 480.min(width.saturating_sub(24)).max(320);
     let h = 290.min(height.saturating_sub(24)).max(240);
-    ((width.saturating_sub(w)) / 2, (height.saturating_sub(h)) / 2, w, h)
+    (
+        (width.saturating_sub(w)) / 2,
+        (height.saturating_sub(h)) / 2,
+        w,
+        h,
+    )
 }
 
-pub fn welcome_language_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
+pub fn welcome_language_rect(
+    width: usize,
+    height: usize,
+    index: usize,
+) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
     (x + 28 + index * 140, y + 94, 126, 32)
 }
 
-pub fn welcome_theme_rect(width: usize, height: usize, index: usize) -> (usize, usize, usize, usize) {
+pub fn welcome_theme_rect(
+    width: usize,
+    height: usize,
+    index: usize,
+) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
     (x + 28 + index * 82, y + 164, 74, 50)
 }
@@ -169,39 +236,108 @@ pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usiz
     (x + w.saturating_sub(168), y + h.saturating_sub(50), 140, 36)
 }
 
-pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, english: bool, selected: theme::ThemeId, mouse: &MouseState) {
+pub fn render_welcome_screen(
+    fb: &mut Framebuffer,
+    width: usize,
+    height: usize,
+    english: bool,
+    selected: theme::ThemeId,
+    mouse: &MouseState,
+) {
     let (x, y, w, h) = welcome_panel(width, height);
     fb.draw_rect(0, 0, width, height, Color::DARK_BG);
     fb.draw_shadow(x, y, w, h, Color::SHADOW);
     fb.draw_rounded_rect(x, y, w, h, 10, Color::WINDOW_BG);
     fb.draw_rounded_vgradient(x, y, w, 48, 10, Color::TITLE_BAR, Color::TITLE_BAR_INACTIVE);
     MinGuiCompositor::draw_cat_icon_scaled(fb, x + 18, y + 12);
-    MinGuiCompositor::draw_string(fb, x + 50, y + 16, if english { "Welcome to minOs" } else { "minOs'a hoş geldiniz" }, Color::TEXT_MAIN);
+    MinGuiCompositor::draw_string(
+        fb,
+        x + 50,
+        y + 16,
+        if english {
+            "Welcome to minOs"
+        } else {
+            "minOs'a hoş geldiniz"
+        },
+        Color::TEXT_MAIN,
+    );
 
     // 1. Dil Seçimi Bölümü
-    MinGuiCompositor::draw_string(fb, x + 28, y + 70,
-        if english { "Interface Language" } else { "Arayüz Dili" }, Color::ACCENT_BLUE);
+    MinGuiCompositor::draw_string(
+        fb,
+        x + 28,
+        y + 70,
+        if english {
+            "Interface Language"
+        } else {
+            "Arayüz Dili"
+        },
+        Color::ACCENT_BLUE,
+    );
 
     for i in 0..2 {
         let rect = welcome_language_rect(width, height, i);
         let active = (i == 0 && !english) || (i == 1 && english);
-        fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6,
-            if active { Color::ACCENT_BLUE } else { Color::TASKBAR_BG });
-        fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3,
-            if active { Color::ACCENT_BLUE } else { Color::BORDER });
-        MinGuiCompositor::draw_string(fb, rect.0 + 26, rect.1 + 8,
+        fb.draw_rounded_rect(
+            rect.0,
+            rect.1,
+            rect.2,
+            rect.3,
+            6,
+            if active {
+                Color::ACCENT_BLUE
+            } else {
+                Color::TASKBAR_BG
+            },
+        );
+        fb.draw_rect_outline(
+            rect.0,
+            rect.1,
+            rect.2,
+            rect.3,
+            if active {
+                Color::ACCENT_BLUE
+            } else {
+                Color::BORDER
+            },
+        );
+        MinGuiCompositor::draw_string(
+            fb,
+            rect.0 + 26,
+            rect.1 + 8,
             if i == 0 { "Türkçe" } else { "English" },
-            if active { MinGuiCompositor::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN });
+            if active {
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE)
+            } else {
+                Color::TEXT_MAIN
+            },
+        );
     }
 
     // 2. Masaüstü Teması Bölümü
-    MinGuiCompositor::draw_string(fb, x + 28, y + 140,
-        if english { "Desktop Theme" } else { "Masaüstü Teması" }, Color::ACCENT_BLUE);
+    MinGuiCompositor::draw_string(
+        fb,
+        x + 28,
+        y + 140,
+        if english {
+            "Desktop Theme"
+        } else {
+            "Masaüstü Teması"
+        },
+        Color::ACCENT_BLUE,
+    );
     for (i, id) in theme::ThemeId::ALL.iter().enumerate() {
         let rect = welcome_theme_rect(width, height, i);
         let (background, accent) = theme::preview_colors(*id);
         fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 6, background);
-        fb.draw_rounded_rect(rect.0 + 6, rect.1 + 6, rect.2.saturating_sub(12), 6, 2, accent);
+        fb.draw_rounded_rect(
+            rect.0 + 6,
+            rect.1 + 6,
+            rect.2.saturating_sub(12),
+            6,
+            2,
+            accent,
+        );
         let name = if english {
             match id {
                 theme::ThemeId::VelvetDark => "Velvet",
@@ -210,11 +346,25 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
                 theme::ThemeId::TerminalGreen => "Terminal",
                 theme::ThemeId::Sunset => "Sunset",
             }
-        } else { id.short_name() };
-        MinGuiCompositor::draw_string(fb, rect.0 + 8, rect.1 + 25, name, MinGuiCompositor::text_on(background));
+        } else {
+            id.short_name()
+        };
+        MinGuiCompositor::draw_string(
+            fb,
+            rect.0 + 8,
+            rect.1 + 25,
+            name,
+            MinGuiCompositor::text_on(background),
+        );
         if *id == selected {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::ACCENT_BLUE);
-            fb.draw_rect_outline(rect.0.saturating_sub(1), rect.1.saturating_sub(1), rect.2 + 2, rect.3 + 2, Color::ACCENT_BLUE);
+            fb.draw_rect_outline(
+                rect.0.saturating_sub(1),
+                rect.1.saturating_sub(1),
+                rect.2 + 2,
+                rect.3 + 2,
+                Color::ACCENT_BLUE,
+            );
         } else {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::BORDER);
         }
@@ -226,18 +376,47 @@ pub fn render_welcome_screen(fb: &mut Framebuffer, width: usize, height: usize, 
     } else {
         "Enter'a basın veya bekleyin..."
     };
-    MinGuiCompositor::draw_string(fb, x + 28, y + h.saturating_sub(40), hint_text, Color::TEXT_MUTED);
+    MinGuiCompositor::draw_string(
+        fb,
+        x + 28,
+        y + h.saturating_sub(40),
+        hint_text,
+        Color::TEXT_MUTED,
+    );
 
     let button = welcome_continue_rect(width, height);
-    fb.draw_rounded_rect(button.0, button.1, button.2, button.3, 6, Color::ACCENT_GREEN);
+    fb.draw_rounded_rect(
+        button.0,
+        button.1,
+        button.2,
+        button.3,
+        6,
+        Color::ACCENT_GREEN,
+    );
     let btn_text = if english { "Get Started" } else { "Başla" };
     let text_col = MinGuiCompositor::text_on(Color::ACCENT_GREEN);
     MinGuiCompositor::draw_string(fb, button.0 + 20, button.1 + 10, btn_text, text_col);
     // Başlat menüsündeki gibi zarif antialiased sağ ok (chevron) simgesi
     let arrow_x = (button.0 + button.2 - 20) as f32;
     let arrow_y = (button.1 + button.3 / 2) as f32;
-    MinGuiCompositor::draw_antialiased_line(fb, arrow_x - 3.0, arrow_y - 4.5, arrow_x + 1.5, arrow_y, text_col, 2.0);
-    MinGuiCompositor::draw_antialiased_line(fb, arrow_x + 1.5, arrow_y, arrow_x - 3.0, arrow_y + 4.5, text_col, 2.0);
+    MinGuiCompositor::draw_antialiased_line(
+        fb,
+        arrow_x - 3.0,
+        arrow_y - 4.5,
+        arrow_x + 1.5,
+        arrow_y,
+        text_col,
+        2.0,
+    );
+    MinGuiCompositor::draw_antialiased_line(
+        fb,
+        arrow_x + 1.5,
+        arrow_y,
+        arrow_x - 3.0,
+        arrow_y + 4.5,
+        text_col,
+        2.0,
+    );
 
     let pointer_x = mouse.x.max(0) as usize;
     let pointer_y = mouse.y.max(0) as usize;

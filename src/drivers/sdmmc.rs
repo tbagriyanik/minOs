@@ -16,13 +16,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -130,9 +134,9 @@ const SDHCI_TRNS_MULTI: u16 = 1 << 5;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CardType {
     None,
-    SDSC,      // Standard Capacity (≤2GB)
-    SDHC,      // High Capacity (≤32GB)
-    SDXC,      // Extended Capacity (≤2TB)
+    SDSC, // Standard Capacity (≤2GB)
+    SDHC, // High Capacity (≤32GB)
+    SDXC, // Extended Capacity (≤2TB)
     MMC,
 }
 

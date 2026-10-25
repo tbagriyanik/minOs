@@ -78,7 +78,11 @@ const M256: U256 = from_be(&[
 fn cmp_limbs(a: &[u32], b: &[u32]) -> Ordering {
     for i in (0..a.len()).rev() {
         if a[i] != b[i] {
-            return if a[i] > b[i] { Ordering::Greater } else { Ordering::Less };
+            return if a[i] > b[i] {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
         }
     }
     Ordering::Equal
@@ -145,8 +149,14 @@ fn reduce_p(w: &[u32; 16]) -> U256 {
     // V = hi·2^256 + lo → V' = lo + hi·M = V - hi·p, her turda değer en az
     // p kadar azalır ve ~2^32 kat küçüldüğünden birkaç turda biter.
     loop {
-        if t[8] == 0 && t[9] == 0 && t[10] == 0 && t[11] == 0 && t[12] == 0 && t[13] == 0
-            && t[14] == 0 && t[15] == 0
+        if t[8] == 0
+            && t[9] == 0
+            && t[10] == 0
+            && t[11] == 0
+            && t[12] == 0
+            && t[13] == 0
+            && t[14] == 0
+            && t[15] == 0
         {
             break;
         }
@@ -300,7 +310,11 @@ struct Pt {
 }
 
 const fn infinity() -> Pt {
-    Pt { x: ZERO, y: ZERO, z: ZERO }
+    Pt {
+        x: ZERO,
+        y: ZERO,
+        z: ZERO,
+    }
 }
 
 fn is_inf(p: &Pt) -> bool {
@@ -308,7 +322,11 @@ fn is_inf(p: &Pt) -> bool {
 }
 
 fn base_point() -> Pt {
-    Pt { x: GX, y: GY, z: ONE }
+    Pt {
+        x: GX,
+        y: GY,
+        z: ONE,
+    }
 }
 
 /// Çiftleme (a = -3): M = 3·(X² - Z⁴), S = 4·X·Y².
@@ -343,7 +361,11 @@ fn pt_double(p: &Pt) -> Pt {
     let yz = mmul(&p.y, &p.z, &P);
     let z3 = madd(&yz, &yz, &P);
 
-    Pt { x: x3, y: y3, z: z3 }
+    Pt {
+        x: x3,
+        y: y3,
+        z: z3,
+    }
 }
 
 /// Toplama (EFD add-2007-bl, Jacobian + Jacobian).
@@ -386,7 +408,11 @@ fn pt_add(a: &Pt, b: &Pt) -> Pt {
     let inner = msub(&msub(&zsum2, &z1z1, &P), &z2z2, &P);
     let z3 = mmul(&inner, &h, &P);
 
-    Pt { x: x3, y: y3, z: z3 }
+    Pt {
+        x: x3,
+        y: y3,
+        z: z3,
+    }
 }
 
 /// k · P (çiftle-ve-ekle).
@@ -453,7 +479,10 @@ pub fn generate_keypair(seed: &[u8; 32]) -> Keypair {
     public[0] = 0x04;
     public[1..33].copy_from_slice(&xb);
     public[33..65].copy_from_slice(&yb);
-    Keypair { secret: to_be(&d), public }
+    Keypair {
+        secret: to_be(&d),
+        public,
+    }
 }
 
 /// Paylaşılan gizliyi üretir: X(d · Q_peer). Nokta doğrulanmazsa `None`.
@@ -534,12 +563,7 @@ pub fn ecdsa_sign_p256(
 /// `r`, `s`: ECDSA imza bileşenleri (big-endian, 32 bayt).
 ///
 /// Doğrulama: `X = u1·G + u2·Q` noktasının x bileşeni `r` ile eşleşmeli.
-pub fn ecdsa_verify_p256(
-    pubkey: &[u8; 65],
-    hash: &[u8; 32],
-    r: &[u8; 32],
-    s: &[u8; 32],
-) -> bool {
+pub fn ecdsa_verify_p256(pubkey: &[u8; 65], hash: &[u8; 32], r: &[u8; 32], s: &[u8; 32]) -> bool {
     if pubkey[0] != 0x04 {
         return false;
     }
@@ -698,7 +722,11 @@ mod tests {
 
     #[test]
     fn double_g_known_answer() {
-        let d = pt_double(&Pt { x: GX, y: GY, z: ONE });
+        let d = pt_double(&Pt {
+            x: GX,
+            y: GY,
+            z: ONE,
+        });
         let (x, y) = pt_affine(&d).unwrap();
         assert_eq!(to_be(&x), {
             let v = parse_hex("7CF27B188D034F7E8A52380304B51AC3C08969E277F21B35A60B48FC47669978");
@@ -716,19 +744,23 @@ mod tests {
 
     #[test]
     fn scalar_mult_known_answers() {
-        let cases = [(
-            "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
-            "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6",
-            "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299",
-        ), (
-            "1E6F2A8B9C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7",
-            "76BC9AE66B389722BD200A266ABC2259BDA43A82448179BD6EA841E625B3657B",
-            "C72A7975EF89038C37B59BBB0AE5F341037497533733D2A739C64D901D5BACE9",
-        ), (
-            "0000000000000000000000000000000000000000000000000000000000000007",
-            "8E533B6FA0BF7B4625BB30667C01FB607EF9F8B8A80FEF5B300628703187B2A3",
-            "73EB1DBDE03318366D069F83A6F5900053C73633CB041B21C55E1A86C1F400B4",
-        )];
+        let cases = [
+            (
+                "C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721",
+                "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6",
+                "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299",
+            ),
+            (
+                "1E6F2A8B9C3D4E5F60718293A4B5C6D7E8F90A1B2C3D4E5F60718293A4B5C6D7",
+                "76BC9AE66B389722BD200A266ABC2259BDA43A82448179BD6EA841E625B3657B",
+                "C72A7975EF89038C37B59BBB0AE5F341037497533733D2A739C64D901D5BACE9",
+            ),
+            (
+                "0000000000000000000000000000000000000000000000000000000000000007",
+                "8E533B6FA0BF7B4625BB30667C01FB607EF9F8B8A80FEF5B300628703187B2A3",
+                "73EB1DBDE03318366D069F83A6F5900053C73633CB041B21C55E1A86C1F400B4",
+            ),
+        ];
         for (k, qx, qy) in cases {
             let kp = generate_keypair(&{
                 let mut s = [0u8; 32];
@@ -759,7 +791,8 @@ mod tests {
         peer[33..65].copy_from_slice(&qy);
 
         let shared = shared_secret(&d0, &peer).expect("ECDHE paylaşılan secret");
-        let expected = parse_hex("EC87D440BE564C949D90D601AA01FF9776F01BF041D049E35DEA80C1BD5729FF");
+        let expected =
+            parse_hex("EC87D440BE564C949D90D601AA01FF9776F01BF041D049E35DEA80C1BD5729FF");
         assert_eq!(&shared[..], &expected[..]);
     }
 
@@ -816,7 +849,11 @@ mod tests {
         // 0) minv: a · a⁻¹ ≡ 1 (mod p)
         let zi = minv(&GY, &P);
         assert_eq!(mmul(&GY, &zi, &P), ONE, "minv bozuk: a*a^-1 != 1");
-        let g = Pt { x: GX, y: GY, z: ONE };
+        let g = Pt {
+            x: GX,
+            y: GY,
+            z: ONE,
+        };
         // 1) 1·G = G (pt_mul + minv + pt_affine)
         let one_g = pt_mul(&ONE, &g);
         assert!(!is_inf(&one_g), "1G sonsuz nokta");
@@ -847,12 +884,12 @@ mod tests {
         // P-256 ECDSA test vektörü (Python ile üretildi).
         let mut pubkey = [0u8; 65];
         pubkey[0] = 0x04;
-        pubkey[1..33].copy_from_slice(
-            &parse_hex("60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6"),
-        );
-        pubkey[33..65].copy_from_slice(
-            &parse_hex("7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299"),
-        );
+        pubkey[1..33].copy_from_slice(&parse_hex(
+            "60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6",
+        ));
+        pubkey[33..65].copy_from_slice(&parse_hex(
+            "7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299",
+        ));
 
         let hash = parse_hex("23A684D8E64D69E3B9F2568CF4C088087C6C63D11858DC02BEA2805828694645");
         let mut h = [0u8; 32];
@@ -865,7 +902,10 @@ mod tests {
         ra.copy_from_slice(&r);
         sa.copy_from_slice(&s);
 
-        assert!(ecdsa_verify_p256(&pubkey, &h, &ra, &sa), "gecerli imza reddedilmemeli");
+        assert!(
+            ecdsa_verify_p256(&pubkey, &h, &ra, &sa),
+            "gecerli imza reddedilmemeli"
+        );
 
         // Bozuk özet reddedilmeli.
         let mut bad_hash = h;

@@ -4,10 +4,18 @@ use super::*;
 
 impl MinGuiCompositor {
     /// minOs kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
-    fn draw_icon_bitmap(fb: &mut Framebuffer, x: usize, y: usize, size: usize, source: &[u32; 256]) {
+    fn draw_icon_bitmap(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        size: usize,
+        source: &[u32; 256],
+    ) {
         let mut resolved = [0u32; 256];
         for (output, input) in resolved.iter_mut().zip(source.iter()) {
-            if *input != 0 { *output = theme::resolve(*input); }
+            if *input != 0 {
+                *output = theme::resolve(*input);
+            }
         }
         for dy in 0..size {
             let sy0 = dy * 16;
@@ -24,11 +32,17 @@ impl MinGuiCompositor {
                 let mut green = 0u32;
                 let mut blue = 0u32;
                 for row in row_start..=row_end {
-                    let oy = sy1.min((row + 1) * size).saturating_sub(sy0.max(row * size));
+                    let oy = sy1
+                        .min((row + 1) * size)
+                        .saturating_sub(sy0.max(row * size));
                     for col in col_start..=col_end {
                         let color = resolved[row * 16 + col];
-                        if color == 0 { continue; }
-                        let ox = sx1.min((col + 1) * size).saturating_sub(sx0.max(col * size));
+                        if color == 0 {
+                            continue;
+                        }
+                        let ox = sx1
+                            .min((col + 1) * size)
+                            .saturating_sub(sx0.max(col * size));
                         let weight = (ox * oy) as u32;
                         covered += weight;
                         red += ((color >> 16) & 0xFF) * weight;
@@ -36,7 +50,9 @@ impl MinGuiCompositor {
                         blue += (color & 0xFF) * weight;
                     }
                 }
-                if covered == 0 { continue; }
+                if covered == 0 {
+                    continue;
+                }
                 let color = ((red / covered) << 16) | ((green / covered) << 8) | (blue / covered);
                 let alpha = ((covered * 255 + 128) / 256) as u8;
                 if alpha == 255 {
@@ -143,7 +159,9 @@ impl MinGuiCompositor {
         for (row, &mask) in CAT_ICON_MAP.iter().enumerate() {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
-                    let pixel_color = if (row == 4 || row == 5) && (col == 2 || col == 3 || col == 12 || col == 13) {
+                    let pixel_color = if (row == 4 || row == 5)
+                        && (col == 2 || col == 3 || col == 12 || col == 13)
+                    {
                         Color::ACCENT_BLUE
                     } else if row == 8 && (col == 7 || col == 8) {
                         Color::ACCENT_PINK
@@ -225,13 +243,15 @@ impl MinGuiCompositor {
         for (row, &mask) in ICON_MAP.iter().enumerate() {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
-                    let c = if (row == 5 || row == 7 || row == 9 || row == 11) && col >= 4 && col <= 10 {
-                        Color::ACCENT_BLUE
-                    } else if row <= 2 && col >= 9 {
-                        Color::ACCENT_YELLOW
-                    } else {
-                        Color::TEXT_MAIN
-                    };
+                    let c =
+                        if (row == 5 || row == 7 || row == 9 || row == 11) && col >= 4 && col <= 10
+                        {
+                            Color::ACCENT_BLUE
+                        } else if row <= 2 && col >= 9 {
+                            Color::ACCENT_YELLOW
+                        } else {
+                            Color::TEXT_MAIN
+                        };
                     bitmap[row * 16 + col] = c;
                 }
             }
@@ -356,13 +376,13 @@ impl MinGuiCompositor {
         let mut bitmap = [0u32; 16 * 16];
 
         // 3D Kutu Renk Paleti:
-        let c_top = 0xFFE5C07B;     // Üst yüzey (aydınlık karton)
-        let c_tape = 0xFFD19A66;    // Üst koli bandı / katlama çizgisi
-        let c_left = 0xFFC89248;    // Sol ön yüz (orta ton karton)
-        let c_right = 0xFF9E6822;   // Sağ ön yüz (gölgeli karton)
-        let c_edge = 0xFF3E2006;    // 3D kutu dış konturu ve köşe çizgileri
-        let c_label = 0xFFF0F0F0;   // Paket üzerindeki kargo etiketi
-        let c_bar = 0xFF2980B9;     // Etiket üzerindeki mavi barkod/şerit
+        let c_top = 0xFFE5C07B; // Üst yüzey (aydınlık karton)
+        let c_tape = 0xFFD19A66; // Üst koli bandı / katlama çizgisi
+        let c_left = 0xFFC89248; // Sol ön yüz (orta ton karton)
+        let c_right = 0xFF9E6822; // Sağ ön yüz (gölgeli karton)
+        let c_edge = 0xFF3E2006; // 3D kutu dış konturu ve köşe çizgileri
+        let c_label = 0xFFF0F0F0; // Paket üzerindeki kargo etiketi
+        let c_bar = 0xFF2980B9; // Etiket üzerindeki mavi barkod/şerit
 
         let mut set_px = |r: usize, c: usize, col: u32| {
             if r < 16 && c < 16 {
@@ -371,7 +391,9 @@ impl MinGuiCompositor {
         };
 
         // Row 1: Tepe noktası
-        for c in 7..=8 { set_px(1, c, c_edge); }
+        for c in 7..=8 {
+            set_px(1, c, c_edge);
+        }
 
         // Row 2
         set_px(2, 5, c_edge);
@@ -383,48 +405,68 @@ impl MinGuiCompositor {
 
         // Row 3
         set_px(3, 3, c_edge);
-        for c in 4..=6 { set_px(3, c, c_top); }
+        for c in 4..=6 {
+            set_px(3, c, c_top);
+        }
         set_px(3, 7, c_tape);
         set_px(3, 8, c_tape);
-        for c in 9..=11 { set_px(3, c, c_top); }
+        for c in 9..=11 {
+            set_px(3, c, c_top);
+        }
         set_px(3, 12, c_edge);
 
         // Row 4
         set_px(4, 1, c_edge);
-        for c in 2..=6 { set_px(4, c, c_top); }
+        for c in 2..=6 {
+            set_px(4, c, c_top);
+        }
         set_px(4, 7, c_tape);
         set_px(4, 8, c_tape);
-        for c in 9..=13 { set_px(4, c, c_top); }
+        for c in 9..=13 {
+            set_px(4, c, c_top);
+        }
         set_px(4, 14, c_edge);
 
         // Row 5: Üst yüzeyin yan yüzeylerle birleşimi
         set_px(5, 1, c_edge);
-        for c in 2..=5 { set_px(5, c, c_left); }
+        for c in 2..=5 {
+            set_px(5, c, c_left);
+        }
         set_px(5, 6, c_top);
         set_px(5, 7, c_tape);
         set_px(5, 8, c_tape);
         set_px(5, 9, c_top);
-        for c in 10..=13 { set_px(5, c, c_right); }
+        for c in 10..=13 {
+            set_px(5, c, c_right);
+        }
         set_px(5, 14, c_edge);
 
         // Row 6..7: Kutu gövdesi ve orta dikey kenar
         for r in 6..=7 {
             set_px(r, 1, c_edge);
-            for c in 2..=6 { set_px(r, c, c_left); }
+            for c in 2..=6 {
+                set_px(r, c, c_left);
+            }
             set_px(r, 7, c_edge);
             set_px(r, 8, c_edge);
-            for c in 9..=13 { set_px(r, c, c_right); }
+            for c in 9..=13 {
+                set_px(r, c, c_right);
+            }
             set_px(r, 14, c_edge);
         }
 
         // Row 8: Beyaz kargo etiketi
         set_px(8, 1, c_edge);
         set_px(8, 2, c_left);
-        for c in 3..=5 { set_px(8, c, c_label); }
+        for c in 3..=5 {
+            set_px(8, c, c_label);
+        }
         set_px(8, 6, c_left);
         set_px(8, 7, c_edge);
         set_px(8, 8, c_edge);
-        for c in 9..=13 { set_px(8, c, c_right); }
+        for c in 9..=13 {
+            set_px(8, c, c_right);
+        }
         set_px(8, 14, c_edge);
 
         // Row 9: Etiket barkod çizgisi
@@ -436,25 +478,35 @@ impl MinGuiCompositor {
         set_px(9, 6, c_left);
         set_px(9, 7, c_edge);
         set_px(9, 8, c_edge);
-        for c in 9..=13 { set_px(9, c, c_right); }
+        for c in 9..=13 {
+            set_px(9, c, c_right);
+        }
         set_px(9, 14, c_edge);
 
         // Row 10..11: Alt gövde
         for r in 10..=11 {
             set_px(r, 1, c_edge);
-            for c in 2..=6 { set_px(r, c, c_left); }
+            for c in 2..=6 {
+                set_px(r, c, c_left);
+            }
             set_px(r, 7, c_edge);
             set_px(r, 8, c_edge);
-            for c in 9..=13 { set_px(r, c, c_right); }
+            for c in 9..=13 {
+                set_px(r, c, c_right);
+            }
             set_px(r, 14, c_edge);
         }
 
         // Row 12: Alt taban eğimi
         set_px(12, 3, c_edge);
-        for c in 4..=6 { set_px(12, c, c_left); }
+        for c in 4..=6 {
+            set_px(12, c, c_left);
+        }
         set_px(12, 7, c_edge);
         set_px(12, 8, c_edge);
-        for c in 9..=11 { set_px(12, c, c_right); }
+        for c in 9..=11 {
+            set_px(12, c, c_right);
+        }
         set_px(12, 12, c_edge);
 
         // Row 13: Alt taban ucu
@@ -466,7 +518,9 @@ impl MinGuiCompositor {
         set_px(13, 10, c_edge);
 
         // Row 14: Taban tepe noktası
-        for c in 7..=8 { set_px(14, c, c_edge); }
+        for c in 7..=8 {
+            set_px(14, c, c_edge);
+        }
 
         Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }

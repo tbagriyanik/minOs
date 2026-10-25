@@ -344,7 +344,9 @@ pub fn test_memory_and_isolation(pmm: &mut PhysicalMemoryManager) -> bool {
     };
 
     if flags_valid {
-        crate::serial_print("[MM-TEST] 4. Kullanıcı kipi yalıtım bayrakları (USER | WRITABLE | NX): DOĞRULANDI\n");
+        crate::serial_print(
+            "[MM-TEST] 4. Kullanıcı kipi yalıtım bayrakları (USER | WRITABLE | NX): DOĞRULANDI\n",
+        );
     } else {
         crate::serial_print("[MM-TEST] Kullanıcı kipi güvenlik bayrakları eksik: BAŞARISIZ\n");
     }
@@ -355,7 +357,9 @@ pub fn test_memory_and_isolation(pmm: &mut PhysicalMemoryManager) -> bool {
     pmm.free_frame(test_frame);
 
     if unmapped == Some(test_frame) && after_unmap_trans.is_none() {
-        crate::serial_print("[MM-TEST] 5. VMM eşlemeyi kaldırma (unmap ve TLB geçersizleştirme): BAŞARILI\n");
+        crate::serial_print(
+            "[MM-TEST] 5. VMM eşlemeyi kaldırma (unmap ve TLB geçersizleştirme): BAŞARILI\n",
+        );
     } else {
         crate::serial_print("[MM-TEST] VMM eşlemeyi kaldırma işlemi başarısız: BAŞARISIZ\n");
         return false;

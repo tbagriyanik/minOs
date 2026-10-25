@@ -116,9 +116,25 @@ impl Process {
             state: ProcessState::Unused,
             priority: ProcessPriority::Normal,
             context: ProcessContext {
-                rax: 0, rbx: 0, rcx: 0, rdx: 0, rsi: 0, rdi: 0, rbp: 0, rsp: 0,
-                r8: 0, r9: 0, r10: 0, r11: 0, r12: 0, r13: 0, r14: 0, r15: 0,
-                rip: 0, rflags: 0x202, cr3: 0,
+                rax: 0,
+                rbx: 0,
+                rcx: 0,
+                rdx: 0,
+                rsi: 0,
+                rdi: 0,
+                rbp: 0,
+                rsp: 0,
+                r8: 0,
+                r9: 0,
+                r10: 0,
+                r11: 0,
+                r12: 0,
+                r13: 0,
+                r14: 0,
+                r15: 0,
+                rip: 0,
+                rflags: 0x202,
+                cr3: 0,
             },
             resources: ProcessResources::empty(),
             cpu_time_ticks: 0,
@@ -174,7 +190,10 @@ impl ProcessManager {
         app_id: usize,
         window_idx: Option<usize>,
     ) -> Result<usize, &'static str> {
-        let slot = self.processes.iter().position(|p| p.state == ProcessState::Unused || p.state == ProcessState::Terminated)
+        let slot = self
+            .processes
+            .iter()
+            .position(|p| p.state == ProcessState::Unused || p.state == ProcessState::Terminated)
             .ok_or("Surec tablosu dolu: Yeni surec baslatilamadi")?;
 
         let pid = self.next_pid;
@@ -205,13 +224,20 @@ impl ProcessManager {
     }
 
     /// Belirtilen PID'ye sahip sureci sonlandirir (Kill/Terminate) ve kaynaklarini serbest birakir.
-    pub fn terminate(&mut self, pid: usize, exit_code: i32, pmm: &mut PhysicalMemoryManager) -> bool {
+    pub fn terminate(
+        &mut self,
+        pid: usize,
+        exit_code: i32,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> bool {
         if pid == 0 {
             // cekirdek ana sureci sonlandirilamaz!
             return false;
         }
 
-        if let Some(p) = self.processes.iter_mut().find(|p| p.pid == pid && p.state != ProcessState::Unused && p.state != ProcessState::Terminated) {
+        if let Some(p) = self.processes.iter_mut().find(|p| {
+            p.pid == pid && p.state != ProcessState::Unused && p.state != ProcessState::Terminated
+        }) {
             p.state = ProcessState::Terminated;
             p.exit_code = exit_code;
 
@@ -233,9 +259,15 @@ impl ProcessManager {
 
     /// Pencere indeksine gore calisan sureci bulur ve sonlandirir.
     pub fn terminate_by_window(&mut self, win_idx: usize, pmm: &mut PhysicalMemoryManager) -> bool {
-        let target_pid = self.processes.iter().find(|p| {
-            p.state != ProcessState::Unused && p.state != ProcessState::Terminated && p.resources.window_idx == Some(win_idx)
-        }).map(|p| p.pid);
+        let target_pid = self
+            .processes
+            .iter()
+            .find(|p| {
+                p.state != ProcessState::Unused
+                    && p.state != ProcessState::Terminated
+                    && p.resources.window_idx == Some(win_idx)
+            })
+            .map(|p| p.pid);
 
         if let Some(pid) = target_pid {
             self.terminate(pid, 0, pmm)
@@ -253,15 +285,27 @@ impl ProcessManager {
         }
 
         // Mevcut calisan surecin slot indeksini bul
-        let curr_slot = self.processes.iter().position(|p| p.pid == self.current_pid && p.state != ProcessState::Unused).unwrap_or(0);
+        let curr_slot = self
+            .processes
+            .iter()
+            .position(|p| p.pid == self.current_pid && p.state != ProcessState::Unused)
+            .unwrap_or(0);
 
         // 1. once calistirilmaya hazir kullanici sureclerini oncelik sirasiyla ara (Realtime -> Low)
-        for target_prio in [ProcessPriority::Realtime, ProcessPriority::High, ProcessPriority::Normal, ProcessPriority::Low] {
+        for target_prio in [
+            ProcessPriority::Realtime,
+            ProcessPriority::High,
+            ProcessPriority::Normal,
+            ProcessPriority::Low,
+        ] {
             let total = MAX_PROCESSES;
             for i in 1..=total {
                 let slot = (curr_slot + i) % total;
                 let p = &mut self.processes[slot];
-                if p.pid != 0 && (p.state == ProcessState::Ready || p.state == ProcessState::Running) && p.priority == target_prio {
+                if p.pid != 0
+                    && (p.state == ProcessState::Ready || p.state == ProcessState::Running)
+                    && p.priority == target_prio
+                {
                     self.current_pid = p.pid;
                     p.state = ProcessState::Running;
                     p.cpu_time_ticks = p.cpu_time_ticks.saturating_add(1);
@@ -271,7 +315,9 @@ impl ProcessManager {
         }
 
         // 2. Baska calistirilabilir kullanici sureci yoksa cekirdek ana surecine (PID 0) don
-        if self.processes[0].state == ProcessState::Running || self.processes[0].state == ProcessState::Ready {
+        if self.processes[0].state == ProcessState::Running
+            || self.processes[0].state == ProcessState::Ready
+        {
             self.current_pid = 0;
             self.processes[0].state = ProcessState::Running;
             self.processes[0].cpu_time_ticks = self.processes[0].cpu_time_ticks.saturating_add(1);
@@ -283,7 +329,9 @@ impl ProcessManager {
 
     /// PID ile surec referansi alir.
     pub fn get_process(&self, pid: usize) -> Option<&Process> {
-        self.processes.iter().find(|p| p.pid == pid && p.state != ProcessState::Unused)
+        self.processes
+            .iter()
+            .find(|p| p.pid == pid && p.state != ProcessState::Unused)
     }
 }
 
@@ -330,9 +378,7 @@ pub fn syscall_dispatch(
             proc_mgr.terminate(current, exit_code, pmm);
             0
         }
-        sys_nos::SYS_GETPID => {
-            proc_mgr.current_pid as u64
-        }
+        sys_nos::SYS_GETPID => proc_mgr.current_pid as u64,
         sys_nos::SYS_ALLOC_FRAME => {
             if let Some(frame) = pmm.allocate_frame() {
                 // Mevcut surecin kaynaklarina kaydet
@@ -372,13 +418,22 @@ pub fn test_process_lifecycle_and_fault_recovery(
     proc_mgr: &mut ProcessManager,
     pmm: &mut PhysicalMemoryManager,
 ) -> bool {
-    crate::serial_print("[PROC-TEST] --- Süreç çökmesi, syscall hataları ve kaynak temizleme testi ---\n");
+    crate::serial_print(
+        "[PROC-TEST] --- Süreç çökmesi, syscall hataları ve kaynak temizleme testi ---\n",
+    );
 
     let initial_free = pmm.free_memory_bytes;
     let initial_active = proc_mgr.active_count;
 
     // 1. Yeni bir test sureci baslat (spawn)
-    let pid = match proc_mgr.spawn("fault_test_proc", 0x1000, 0x7000_2000, 0x100000, 99, Some(99)) {
+    let pid = match proc_mgr.spawn(
+        "fault_test_proc",
+        0x1000,
+        0x7000_2000,
+        0x100000,
+        99,
+        Some(99),
+    ) {
         Ok(id) => id,
         Err(_) => {
             crate::serial_print("[PROC-TEST] Süreç başlatma: BAŞARISIZ\n");
@@ -405,13 +460,17 @@ pub fn test_process_lifecycle_and_fault_recovery(
         p.resources.record_frame(frame1);
         p.resources.record_frame(frame2);
     }
-    crate::serial_print("[PROC-TEST] 2. Sürece 2 sayfa çerçevesi tahsis edildi (Kaynak takibi aktif)\n");
+    crate::serial_print(
+        "[PROC-TEST] 2. Sürece 2 sayfa çerçevesi tahsis edildi (Kaynak takibi aktif)\n",
+    );
 
     // 3. Hatali / Gecersiz Sistem cagrisi Testi (Gecersiz Syscall No)
     let invalid_res = syscall_dispatch(9999, 0, 0, 0, proc_mgr, pmm);
     let null_ptr_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 100, 0, proc_mgr, pmm);
     if invalid_res == u64::MAX && null_ptr_write == 100 {
-        crate::serial_print("[PROC-TEST] 3. Geçersiz syscall numarası ve NULL pointer sınır kontrolü: BAŞARILI\n");
+        crate::serial_print(
+            "[PROC-TEST] 3. Geçersiz syscall numarası ve NULL pointer sınır kontrolü: BAŞARILI\n",
+        );
     } else {
         crate::serial_print("[PROC-TEST] Hatalı sistem çağrısı sınır koruması: BAŞARISIZ\n");
         return false;
@@ -420,7 +479,9 @@ pub fn test_process_lifecycle_and_fault_recovery(
     // 4. Surec cokmesi / Hata Simulasyonu (SIGSEGV / Fault Exit Code -11)
     let terminated = proc_mgr.terminate(pid, -11, pmm);
     if terminated {
-        crate::serial_print("[PROC-TEST] 4. Süreç çökmesi simüle edildi (Exit Code: -11 / SIGSEGV)\n");
+        crate::serial_print(
+            "[PROC-TEST] 4. Süreç çökmesi simüle edildi (Exit Code: -11 / SIGSEGV)\n",
+        );
     } else {
         crate::serial_print("[PROC-TEST] Süreç sonlandırma: BAŞARISIZ\n");
         return false;
@@ -434,11 +495,17 @@ pub fn test_process_lifecycle_and_fault_recovery(
         crate::serial_print("[PROC-TEST] Kaynak temizleme sızıntısı: BAŞARISIZ\n");
         return false;
     }
-    crate::serial_print("[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (sızıntı: 0 bayt): BAŞARILI\n");
+    crate::serial_print(
+        "[PROC-TEST] 5. Süreç kaynakları PMM'e eksiksiz iade edildi (sızıntı: 0 bayt): BAŞARILI\n",
+    );
 
     // 6. oncelikli Zamanlayici (Priority Preemptive Scheduler) Testi
-    let p_low = proc_mgr.spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None).unwrap_or(0);
-    let p_high = proc_mgr.spawn("high_proc", 0x2000, 0x7000_2000, 0x100000, 1, None).unwrap_or(0);
+    let p_low = proc_mgr
+        .spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None)
+        .unwrap_or(0);
+    let p_high = proc_mgr
+        .spawn("high_proc", 0x2000, 0x7000_2000, 0x100000, 1, None)
+        .unwrap_or(0);
     if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == p_high) {
         p.priority = ProcessPriority::High;
     }

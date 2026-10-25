@@ -83,10 +83,14 @@ pub fn clear() {
 /// Dönen `Err(&'static str)` metni açılış/bağlantı günlüğüne yazılır.
 pub fn check_certificate() -> Result<(), &'static str> {
     match last_result() {
-        RevocationResult { status: RevocationStatus::Good, .. } => Ok(()),
-        RevocationResult { status: RevocationStatus::Revoked, .. } => {
-            Err("Sertifika iptal edilmis (revoked)")
-        }
+        RevocationResult {
+            status: RevocationStatus::Good,
+            ..
+        } => Ok(()),
+        RevocationResult {
+            status: RevocationStatus::Revoked,
+            ..
+        } => Err("Sertifika iptal edilmis (revoked)"),
         _ => Err("Sertifika iptal durumu bilinmiyor (OCSP/CRL yaniti yok)"),
     }
 }
@@ -107,7 +111,11 @@ pub fn apply_crl(
 
 /// Bir OCSP yanıtını ayrıştırıp depoya yazar (imza doğrulaması çağıranın
 /// sorumluluğundadır; `OcspResponseInfo::verify_signature`).
-pub fn apply_ocsp(ocsp_der: &[u8], leaf_serial: &[u8], now: &super::x509::X509Time) -> RevocationResult {
+pub fn apply_ocsp(
+    ocsp_der: &[u8],
+    leaf_serial: &[u8],
+    now: &super::x509::X509Time,
+) -> RevocationResult {
     let r = check_ocsp(ocsp_der, leaf_serial, now).unwrap_or_else(|_| RevocationResult::unknown());
     set_status(RevocationSource::Ocsp, r);
     r

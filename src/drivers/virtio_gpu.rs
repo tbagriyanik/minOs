@@ -22,37 +22,49 @@ use core::sync::atomic::{compiler_fence, Ordering};
 
 #[inline]
 fn io_out8(port: u16, val: u8) {
-    unsafe { asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in8(port: u16) -> u8 {
     let ret: u8;
-    unsafe { asm!("in al, dx", in("dx") port, out("al") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in al, dx", in("dx") port, out("al") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
 #[inline]
 fn io_out16(port: u16, val: u16) {
-    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in16(port: u16) -> u16 {
     let ret: u16;
-    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -358,7 +370,12 @@ static mut CURRENT_RESOURCE_ID: u32 = 1;
 static mut LAST_USED_IDX: u16 = 0;
 
 // VirtQueue tamponları
-static mut CONTROLQ_DESC: [VirtqDesc; QUEUE_SIZE] = [VirtqDesc { addr: 0, len: 0, flags: 0, next: 0 }; QUEUE_SIZE];
+static mut CONTROLQ_DESC: [VirtqDesc; QUEUE_SIZE] = [VirtqDesc {
+    addr: 0,
+    len: 0,
+    flags: 0,
+    next: 0,
+}; QUEUE_SIZE];
 static mut CONTROLQ_AVAIL: VirtqAvail = VirtqAvail {
     flags: 0,
     idx: 0,
@@ -454,7 +471,9 @@ pub fn detect() -> bool {
                     }
 
                     let device_id = pci_read16(bus, dev, func, 0x02);
-                    if device_id == VIRTIO_GPU_DEVICE_MODERN || device_id == VIRTIO_GPU_DEVICE_LEGACY {
+                    if device_id == VIRTIO_GPU_DEVICE_MODERN
+                        || device_id == VIRTIO_GPU_DEVICE_LEGACY
+                    {
                         DEVICE.bus = bus;
                         DEVICE.dev = dev;
                         DEVICE.func = func;
@@ -550,7 +569,10 @@ pub fn init() -> bool {
 
             // 2. ACKNOWLEDGE ve DRIVER durumlarını ayarla
             write_reg8(DEVICE.common_cfg_addr + 20, VIRTIO_STATUS_ACKNOWLEDGE);
-            write_reg8(DEVICE.common_cfg_addr + 20, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
+            write_reg8(
+                DEVICE.common_cfg_addr + 20,
+                VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER,
+            );
 
             // 3. Özellikleri oku ve doğrula
             write_reg32(DEVICE.common_cfg_addr + 0, 0); // device_feature_select = 0
@@ -590,10 +612,14 @@ pub fn init() -> bool {
 
             write_reg32(DEVICE.mmio_base + 0x70, 0); // Sıfırla
             write_reg32(DEVICE.mmio_base + 0x70, VIRTIO_STATUS_ACKNOWLEDGE as u32);
-            write_reg32(DEVICE.mmio_base + 0x70, (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER) as u32);
             write_reg32(
                 DEVICE.mmio_base + 0x70,
-                (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK) as u32,
+                (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER) as u32,
+            );
+            write_reg32(
+                DEVICE.mmio_base + 0x70,
+                (VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK)
+                    as u32,
             );
 
             init_control_queue();
@@ -653,13 +679,22 @@ unsafe fn init_control_queue() {
         let avail_phys = virt_to_phys(core::ptr::addr_of!(CONTROLQ_AVAIL) as u64);
         let used_phys = virt_to_phys(core::ptr::addr_of!(CONTROLQ_USED) as u64);
 
-        write_reg32(DEVICE.common_cfg_addr + 32, (desc_phys & 0xFFFF_FFFF) as u32);
+        write_reg32(
+            DEVICE.common_cfg_addr + 32,
+            (desc_phys & 0xFFFF_FFFF) as u32,
+        );
         write_reg32(DEVICE.common_cfg_addr + 36, (desc_phys >> 32) as u32);
 
-        write_reg32(DEVICE.common_cfg_addr + 40, (avail_phys & 0xFFFF_FFFF) as u32);
+        write_reg32(
+            DEVICE.common_cfg_addr + 40,
+            (avail_phys & 0xFFFF_FFFF) as u32,
+        );
         write_reg32(DEVICE.common_cfg_addr + 44, (avail_phys >> 32) as u32);
 
-        write_reg32(DEVICE.common_cfg_addr + 48, (used_phys & 0xFFFF_FFFF) as u32);
+        write_reg32(
+            DEVICE.common_cfg_addr + 48,
+            (used_phys & 0xFFFF_FFFF) as u32,
+        );
         write_reg32(DEVICE.common_cfg_addr + 52, (used_phys >> 32) as u32);
 
         write_reg16(DEVICE.common_cfg_addr + 28, 1); // queue_enable = 1
@@ -734,7 +769,8 @@ unsafe fn send_command(cmd_len: usize, resp_len: usize) -> Option<u32> {
 
 unsafe fn notify_queue(queue_idx: u16) {
     if DEVICE.notify_cfg_addr != 0 {
-        let notify_addr = DEVICE.notify_cfg_addr + (queue_idx as u64 * DEVICE.notify_off_multiplier as u64);
+        let notify_addr =
+            DEVICE.notify_cfg_addr + (queue_idx as u64 * DEVICE.notify_off_multiplier as u64);
         write_reg16(notify_addr, queue_idx);
     } else if DEVICE.mmio_mode && DEVICE.mmio_base != 0 {
         write_reg32(DEVICE.mmio_base + 0x50, queue_idx as u32);
@@ -851,7 +887,14 @@ pub fn attach_backing(resource_id: u32, phys_addr: u64, size: u32) -> bool {
 }
 
 /// Scanout'u (ekran çıkışını) ayarla
-pub fn set_scanout(scanout_id: u32, resource_id: u32, x: u32, y: u32, width: u32, height: u32) -> bool {
+pub fn set_scanout(
+    scanout_id: u32,
+    resource_id: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> bool {
     unsafe {
         if !DETECTED {
             return false;
@@ -868,7 +911,12 @@ pub fn set_scanout(scanout_id: u32, resource_id: u32, x: u32, y: u32, width: u32
                 ctx_id: 0,
                 padding: 0,
             },
-            rect: VirtioGpuRect { x, y, width, height },
+            rect: VirtioGpuRect {
+                x,
+                y,
+                width,
+                height,
+            },
             scanout_id,
             resource_id,
         };
@@ -901,7 +949,12 @@ pub fn transfer_to_host(resource_id: u32, x: u32, y: u32, width: u32, height: u3
                 ctx_id: 0,
                 padding: 0,
             },
-            rect: VirtioGpuRect { x, y, width, height },
+            rect: VirtioGpuRect {
+                x,
+                y,
+                width,
+                height,
+            },
             offset,
             resource_id,
             padding: 0,
@@ -932,7 +985,12 @@ pub fn resource_flush(resource_id: u32, x: u32, y: u32, width: u32, height: u32)
                 ctx_id: 0,
                 padding: 0,
             },
-            rect: VirtioGpuRect { x, y, width, height },
+            rect: VirtioGpuRect {
+                x,
+                y,
+                width,
+                height,
+            },
             resource_id,
             padding: 0,
         };

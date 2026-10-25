@@ -9,7 +9,12 @@ impl MinGuiCompositor {
         Self::tray_layout_with_devices(width, height, net_available, audio_available)
     }
 
-    pub fn tray_layout_with_devices(width: usize, height: usize, net_available: bool, audio_available: bool) -> TrayLayout {
+    pub fn tray_layout_with_devices(
+        width: usize,
+        height: usize,
+        net_available: bool,
+        audio_available: bool,
+    ) -> TrayLayout {
         let tb_y = height.saturating_sub(taskbar_h());
         let by = tb_y + 5;
         // Tray düğmeleri aktif font ölçeğine göre büyür.
@@ -26,7 +31,9 @@ impl MinGuiCompositor {
         let clock_w = sp(92);
         let vol_w = sp(44);
         let net_w = sp(68);
-        let theme_w = (sp(22) + MinGuiCompositor::text_width(theme::current().short_name(), 1) + sp(4)).max(sp(38));
+        let theme_w =
+            (sp(22) + MinGuiCompositor::text_width(theme::current().short_name(), 1) + sp(4))
+                .max(sp(38));
         let kbd_w = sp(50);
         let gap = sp(8);
 
@@ -68,7 +75,9 @@ impl MinGuiCompositor {
     pub fn calendar_rect(width: usize, layout: &TrayLayout) -> (usize, usize, usize, usize) {
         let w = 252;
         let h = 238;
-        let x = (layout.clock.0 + layout.clock.2).saturating_sub(w).min(width.saturating_sub(w));
+        let x = (layout.clock.0 + layout.clock.2)
+            .saturating_sub(w)
+            .min(width.saturating_sub(w));
         let y = layout.tb_y.saturating_sub(h + 6);
         (x, y, w, h)
     }
@@ -81,14 +90,31 @@ impl MinGuiCompositor {
         fb.draw_rect_outline(x, y, w, h, Color::BORDER);
 
         // Başlık: < Ay Yıl >
-        fb.draw_vgradient(x + 1, y + 1, w - 2, 30, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
+        fb.draw_vgradient(
+            x + 1,
+            y + 1,
+            w - 2,
+            30,
+            Color::TITLE_BAR,
+            Self::shade(Color::TITLE_BAR, -14),
+        );
         Self::draw_string(fb, x + 10, y + 11, "<", Color::ACCENT_BLUE);
         let mut title = TextBuf::new();
-        title.push_str(if ui_english() { DateTime::month_name_en(self.cal_month) } else { DateTime::month_name(self.cal_month) });
+        title.push_str(if ui_english() {
+            DateTime::month_name_en(self.cal_month)
+        } else {
+            DateTime::month_name(self.cal_month)
+        });
         title.push_byte(b' ');
         title.push_u4(self.cal_year as u32);
         let tw = Self::text_width(title.as_str(), 1);
-        Self::draw_string(fb, x + (w - tw) / 2, y + 11, title.as_str(), Color::TEXT_MAIN);
+        Self::draw_string(
+            fb,
+            x + (w - tw) / 2,
+            y + 11,
+            title.as_str(),
+            Color::TEXT_MAIN,
+        );
         Self::draw_string(fb, x + w - 22, y + 11, ">", Color::ACCENT_BLUE);
 
         // Gün başlıkları (Pt..Pz)
@@ -96,9 +122,19 @@ impl MinGuiCompositor {
         let grid_y = y + 40;
         let cell_w = (w - 20) / 7;
         for d in 0..7usize {
-            let label = if ui_english() { DateTime::weekday_short_en(d as u8) } else { DateTime::weekday_short(d as u8) };
+            let label = if ui_english() {
+                DateTime::weekday_short_en(d as u8)
+            } else {
+                DateTime::weekday_short(d as u8)
+            };
             let tw = Self::text_width(label, 1);
-            Self::draw_string(fb, grid_x + d * cell_w + cell_w.saturating_sub(tw) / 2, grid_y, label, Color::TEXT_MUTED);
+            Self::draw_string(
+                fb,
+                grid_x + d * cell_w + cell_w.saturating_sub(tw) / 2,
+                grid_y,
+                label,
+                Color::TEXT_MUTED,
+            );
         }
 
         // Ayın günleri
@@ -121,9 +157,19 @@ impl MinGuiCompositor {
             }
             let mut db = TextBuf::new();
             db.push_u2(day as u32);
-            let col_txt = if is_today { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN };
+            let col_txt = if is_today {
+                Self::text_on(Color::ACCENT_BLUE)
+            } else {
+                Color::TEXT_MAIN
+            };
             let tw = Self::text_width(db.as_str(), 1);
-            Self::draw_string(fb, cx + cell_w.saturating_sub(tw) / 2, cy + 6, db.as_str(), col_txt);
+            Self::draw_string(
+                fb,
+                cx + cell_w.saturating_sub(tw) / 2,
+                cy + 6,
+                db.as_str(),
+                col_txt,
+            );
         }
 
         // Alt bilgi: tam tarih ve saat
@@ -136,7 +182,11 @@ impl MinGuiCompositor {
         foot.push_u2(now.second as u32);
         foot.push_str("  ");
         let weekday = DateTime::weekday(now.year, now.month, now.day);
-        foot.push_str(if ui_english() { DateTime::weekday_name_en(weekday) } else { DateTime::weekday_name(weekday) });
+        foot.push_str(if ui_english() {
+            DateTime::weekday_name_en(weekday)
+        } else {
+            DateTime::weekday_name(weekday)
+        });
         Self::draw_string(fb, x + 12, y + h - 20, foot.as_str(), Color::ACCENT_GREEN);
     }
 
@@ -160,26 +210,57 @@ impl MinGuiCompositor {
         (panel.0 + panel.2 - 78, panel.1 + 66, 62, 20)
     }
 
-    pub fn render_volume_popup(&self, fb: &mut Framebuffer, layout: &TrayLayout, volume: u8, is_muted: bool) {
+    pub fn render_volume_popup(
+        &self,
+        fb: &mut Framebuffer,
+        layout: &TrayLayout,
+        volume: u8,
+        is_muted: bool,
+    ) {
         let panel = self.volume_slider_rect(layout);
         let (x, y, w, h) = panel;
 
         fb.draw_shadow(x, y, w, h, Color::SHADOW);
         fb.draw_rect(x, y, w, h, Color::TASKBAR_BG);
         fb.draw_rect_outline(x, y, w, h, Color::BORDER);
-        fb.draw_vgradient(x + 1, y + 1, w - 2, 26, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14));
-        Self::draw_string_shadow(fb, x + 12, y + 10, ui_text("Ses Düzeyi", "Volume"), Color::TEXT_MAIN, Color::SHADOW, 1);
+        fb.draw_vgradient(
+            x + 1,
+            y + 1,
+            w - 2,
+            26,
+            Color::TITLE_BAR,
+            Self::shade(Color::TITLE_BAR, -14),
+        );
+        Self::draw_string_shadow(
+            fb,
+            x + 12,
+            y + 10,
+            ui_text("Ses Düzeyi", "Volume"),
+            Color::TEXT_MAIN,
+            Color::SHADOW,
+            1,
+        );
 
         // Yüzde
         let mut pct = TextBuf::new();
         pct.push_byte(b'%');
         pct.push_u2(volume as u32);
-        let pc = if is_muted { Color::TEXT_MUTED } else { Color::ACCENT_GREEN };
+        let pc = if is_muted {
+            Color::TEXT_MUTED
+        } else {
+            Color::ACCENT_GREEN
+        };
         Self::draw_string(fb, x + w - 42, y + 10, pct.as_str(), pc);
 
         // Kaydırıcı yolu
         let track = self.volume_track_rect(layout);
-        fb.draw_rect(track.0, track.1, track.2, track.3, Color::TITLE_BAR_INACTIVE);
+        fb.draw_rect(
+            track.0,
+            track.1,
+            track.2,
+            track.3,
+            Color::TITLE_BAR_INACTIVE,
+        );
         let fill_w = (track.2 * volume as usize) / 100;
         if !is_muted {
             fb.draw_rect(track.0, track.1, fill_w, track.3, Color::ACCENT_BLUE);
@@ -190,10 +271,16 @@ impl MinGuiCompositor {
 
         // Sessiz düğmesi
         let mute = self.volume_mute_rect(layout);
-        let bg = if is_muted { Color::ACCENT_RED } else { Color::TITLE_BAR };
+        let bg = if is_muted {
+            Color::ACCENT_RED
+        } else {
+            Color::TITLE_BAR
+        };
         let label = match (is_muted, ui_english()) {
-            (true, true) => "Unmute", (false, true) => "Mute",
-            (true, false) => "Sesi Aç", (false, false) => "Sustur",
+            (true, true) => "Unmute",
+            (false, true) => "Mute",
+            (true, false) => "Sesi Aç",
+            (false, false) => "Sustur",
         };
         Self::draw_button(fb, mute, bg, label, Color::TEXT_MAIN, false);
     }

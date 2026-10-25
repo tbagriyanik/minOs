@@ -165,8 +165,16 @@ fn send_scsi_command(command: u8, cb: &[u8], data: Option<&mut [u8]>) -> bool {
         let mut cbw = CommandBlockWrapper {
             signature: CBW_SIGNATURE,
             tag: CURRENT_TAG,
-            data_transfer_length: if let Some(ref d) = data { d.len() as u32 } else { 0 },
-            flags: if data.is_some() { CBW_DIR_IN } else { CBW_DIR_OUT },
+            data_transfer_length: if let Some(ref d) = data {
+                d.len() as u32
+            } else {
+                0
+            },
+            flags: if data.is_some() {
+                CBW_DIR_IN
+            } else {
+                CBW_DIR_OUT
+            },
             lun: 0,
             cb_length: cb.len() as u8,
             cb: [0; 16],
@@ -193,8 +201,10 @@ fn read_capacity() -> bool {
         let mut response = [0u8; 8];
         if send_scsi_command(SCSI_READ_CAPACITY, &[0; 10], Some(&mut response)) {
             // Read Capacity response: 4 byte block count, 4 byte block size
-            let block_count = u32::from_be_bytes([response[0], response[1], response[2], response[3]]);
-            let block_size = u32::from_be_bytes([response[4], response[5], response[6], response[7]]);
+            let block_count =
+                u32::from_be_bytes([response[0], response[1], response[2], response[3]]);
+            let block_size =
+                u32::from_be_bytes([response[4], response[5], response[6], response[7]]);
 
             CAPACITY = block_count as u64 * block_size as u64;
             BLOCK_SIZE = block_size;

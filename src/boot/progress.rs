@@ -20,14 +20,20 @@ fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> u
     } else {
         5 + done.saturating_mul(90) / total
     };
-    if p < state.last_percent { p = state.last_percent; }
-    if p > 99 { p = 99; }
+    if p < state.last_percent {
+        p = state.last_percent;
+    }
+    if p > 99 {
+        p = 99;
+    }
     state.last_percent = p;
     p
 }
 
 pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
-    if context.is_null() { return; }
+    if context.is_null() {
+        return;
+    }
     let state = unsafe { &mut *(context as *mut BusyProgressContext) };
 
     // 1. Girişi pompala: uzun disk I/O ve dosya kaydetme/açma sürerken USB veya PS/2 fare asla donmaz.
@@ -45,7 +51,9 @@ pub fn draw_io_progress(context: *mut (), done: usize, total: usize) {
 
     // 2. Önceki kum saati imlecini temizle.
     if state.cursor_shown {
-        if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+        if let Some(rect) = fb.restore_cursor_background() {
+            fb.flush_rect(rect);
+        }
         state.cursor_shown = false;
     }
 
@@ -69,22 +77,34 @@ pub fn with_busy_progress<T>(
     operation: impl FnOnce() -> T,
 ) -> T {
     // Önceki karede çizilen ok imlecini kaldır (kum saati ile çakışmasın).
-    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+    if let Some(rect) = fb.restore_cursor_background() {
+        fb.flush_rect(rect);
+    }
     gui::draw_busy_overlay(fb, mx, my, message, 5);
     gui::draw_busy_hourglass(fb, mx, my);
 
     // `fb` işaretçisi bağlama devredilir; bundan sonraki çizimler üzerinden yapılır.
-    let mut state = BusyProgressContext { fb, mx, my, message, last_percent: 5, cursor_shown: true };
+    let mut state = BusyProgressContext {
+        fb,
+        mx,
+        my,
+        message,
+        last_percent: 5,
+        cursor_shown: true,
+    };
     drivers::ata::set_io_progress_hook(Some(draw_io_progress), &mut state as *mut _ as *mut ());
     let result = operation();
     drivers::ata::set_io_progress_hook(None, core::ptr::null_mut());
 
     // İşlem sonunda kum saatini temizle; ok imlecini ana döngü yeniden çizer.
     let fb = unsafe { &mut *state.fb };
-    if let Some(rect) = fb.restore_cursor_background() { fb.flush_rect(rect); }
+    if let Some(rect) = fb.restore_cursor_background() {
+        fb.flush_rect(rect);
+    }
     gui::draw_busy_overlay(fb, mx, my, message, 100);
     // Panel bir sonraki tam yeniden çizimde kalksın.
-    unsafe { BUSY_DIRTY = true; }
+    unsafe {
+        BUSY_DIRTY = true;
+    }
     result
 }
-

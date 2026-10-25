@@ -5,9 +5,9 @@
 //! patterns, so it also works for 2048-bit moduli (whose INTEGER TLV uses a
 //! long-form length).
 
+use crate::drivers::crypto::rsa::RsaPublicKey;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::drivers::crypto::rsa::RsaPublicKey;
 
 const TAG_INTEGER: u8 = 0x02;
 const TAG_BIT_STRING: u8 = 0x03;
@@ -192,7 +192,10 @@ pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
     // The OID must be rsaEncryption (1.2.840.113549.1.1.1).
     const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
     let (oid_tag, oid_vo, oid_vl, oid_next) = read_der_tlv(cert_der, alg_vo)?;
-    if oid_tag != TAG_OID || oid_vl != RSA_OID.len() || &cert_der[oid_vo..oid_vo + oid_vl] != RSA_OID {
+    if oid_tag != TAG_OID
+        || oid_vl != RSA_OID.len()
+        || &cert_der[oid_vo..oid_vo + oid_vl] != RSA_OID
+    {
         return Err(());
     }
     // Skip the optional parameters (usually NULL).
@@ -298,7 +301,10 @@ fn find_common_name(der: &[u8], sub_vo: usize, sub_vl: usize) -> Option<String> 
                 let (seq_tag, atv_vo, _atv_vl, atv_next) = read_der_tlv(der, inner).ok()?;
                 if seq_tag == TAG_SEQUENCE {
                     if let Ok((oid_tag, oid_vo, oid_vl, oid_next)) = read_der_tlv(der, atv_vo) {
-                        if oid_tag == TAG_OID && oid_vl == CN_OID.len() && &der[oid_vo..oid_vo + oid_vl] == CN_OID {
+                        if oid_tag == TAG_OID
+                            && oid_vl == CN_OID.len()
+                            && &der[oid_vo..oid_vo + oid_vl] == CN_OID
+                        {
                             if let Ok((_str_tag, str_vo, str_vl, _)) = read_der_tlv(der, oid_next) {
                                 if let Ok(s) = core::str::from_utf8(&der[str_vo..str_vo + str_vl]) {
                                     return Some(String::from(s));
@@ -334,7 +340,10 @@ fn find_san_dns_names(der: &[u8], ext_vo: usize, _ext_vl: usize) -> Vec<String> 
         if etag == TAG_SEQUENCE {
             let mut p = evo;
             if let Ok((oid_tag, oid_vo, oid_vl, oid_next)) = read_der_tlv(der, p) {
-                if oid_tag == TAG_OID && oid_vl == SAN_OID.len() && &der[oid_vo..oid_vo + oid_vl] == SAN_OID {
+                if oid_tag == TAG_OID
+                    && oid_vl == SAN_OID.len()
+                    && &der[oid_vo..oid_vo + oid_vl] == SAN_OID
+                {
                     p = oid_next;
                     // Optional critical BOOLEAN
                     if let Ok((btag, _, _, bnext)) = read_der_tlv(der, p) {
@@ -351,10 +360,14 @@ fn find_san_dns_names(der: &[u8], ext_vo: usize, _ext_vl: usize) -> Vec<String> 
                                     let mut gn_p = gn_vo;
                                     let gn_end = gn_vo + gn_vl;
                                     while gn_p < gn_end {
-                                        if let Ok((name_tag, nvo, nvl, nnext)) = read_der_tlv(der, gn_p) {
+                                        if let Ok((name_tag, nvo, nvl, nnext)) =
+                                            read_der_tlv(der, gn_p)
+                                        {
                                             // 0x82: context-specific tag 2 = dNSName
                                             if name_tag == 0x82 {
-                                                if let Ok(s) = core::str::from_utf8(&der[nvo..nvo + nvl]) {
+                                                if let Ok(s) =
+                                                    core::str::from_utf8(&der[nvo..nvo + nvl])
+                                                {
                                                     results.push(String::from(s));
                                                 }
                                             }
@@ -639,7 +652,8 @@ pub const GTS_ROOT_R1_DER: &[u8] = include_bytes!("roots/gts_root_r1.der");
 pub const GTS_ROOT_R2_DER: &[u8] = include_bytes!("roots/gts_root_r2.der");
 
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
-pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
+    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
 
 /// ECDSA with SHA-256 OID: 1.2.840.10045.4.3.2
 pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
@@ -657,36 +671,36 @@ pub struct ParsedX509Cert<'a> {
 impl<'a> ParsedX509Cert<'a> {
     /// DER sertifikasından temel alanları ayrıştırır.
     pub fn parse(cert_der: &'a [u8]) -> Result<Self, CertValidationError> {
-        let (cert_tag, cert_vo, _, _) = read_der_tlv(cert_der, 0)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (cert_tag, cert_vo, _, _) =
+            read_der_tlv(cert_der, 0).map_err(|_| CertValidationError::InvalidDer)?;
         if cert_tag != TAG_SEQUENCE {
             return Err(CertValidationError::InvalidDer);
         }
 
         // tbsCertificate ::= SEQUENCE
-        let (tbs_tag, tbs_vo, _tbs_vl, tbs_next) = read_der_tlv(cert_der, cert_vo)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (tbs_tag, tbs_vo, _tbs_vl, tbs_next) =
+            read_der_tlv(cert_der, cert_vo).map_err(|_| CertValidationError::InvalidDer)?;
         if tbs_tag != TAG_SEQUENCE {
             return Err(CertValidationError::InvalidDer);
         }
         let tbs_raw = &cert_der[cert_vo..tbs_next];
 
         // signatureAlgorithm AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY }
-        let (sa_tag, sa_vo, _, sa_next) = read_der_tlv(cert_der, tbs_next)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (sa_tag, sa_vo, _, sa_next) =
+            read_der_tlv(cert_der, tbs_next).map_err(|_| CertValidationError::InvalidDer)?;
         if sa_tag != TAG_SEQUENCE {
             return Err(CertValidationError::InvalidDer);
         }
-        let (oid_tag, oid_vo, oid_vl, _) = read_der_tlv(cert_der, sa_vo)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (oid_tag, oid_vo, oid_vl, _) =
+            read_der_tlv(cert_der, sa_vo).map_err(|_| CertValidationError::InvalidDer)?;
         if oid_tag != TAG_OID {
             return Err(CertValidationError::InvalidDer);
         }
         let sig_alg_oid = &cert_der[oid_vo..oid_vo + oid_vl];
 
         // signatureValue BIT STRING
-        let (sv_tag, sv_vo, sv_vl, _) = read_der_tlv(cert_der, sa_next)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (sv_tag, sv_vo, sv_vl, _) =
+            read_der_tlv(cert_der, sa_next).map_err(|_| CertValidationError::InvalidDer)?;
         if sv_tag != TAG_BIT_STRING || sv_vl == 0 {
             return Err(CertValidationError::InvalidDer);
         }
@@ -698,24 +712,24 @@ impl<'a> ParsedX509Cert<'a> {
 
         // TBS alanları içinden issuer ve subject çıkarılır
         let mut pos = tbs_vo;
-        let (first_tag, _, _, first_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (first_tag, _, _, first_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         if first_tag == TAG_CONTEXT_0 {
             pos = first_next;
         }
         // serialNumber
-        let (_, _, _, serial_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (_, _, _, serial_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         pos = serial_next;
         // signature
-        let (_, _, _, sig_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (_, _, _, sig_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         pos = sig_next;
 
         // issuer
         let iss_start = pos;
-        let (iss_tag, _, _, iss_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (iss_tag, _, _, iss_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         if iss_tag != TAG_SEQUENCE {
             return Err(CertValidationError::InvalidDer);
         }
@@ -723,14 +737,14 @@ impl<'a> ParsedX509Cert<'a> {
         pos = iss_next;
 
         // validity
-        let (_, _, _, val_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (_, _, _, val_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         pos = val_next;
 
         // subject
         let sub_start = pos;
-        let (sub_tag, _, _, sub_next) = read_der_tlv(cert_der, pos)
-            .map_err(|_| CertValidationError::InvalidDer)?;
+        let (sub_tag, _, _, sub_next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
         if sub_tag != TAG_SEQUENCE {
             return Err(CertValidationError::InvalidDer);
         }
@@ -747,12 +761,19 @@ impl<'a> ParsedX509Cert<'a> {
     }
 
     /// Bu sertifikanın imzasını veren (issuer) sertifikanın açık anahtarıyla doğrular.
-    pub fn verify_signature_with_issuer(&self, issuer_cert_der: &[u8]) -> Result<(), CertValidationError> {
+    pub fn verify_signature_with_issuer(
+        &self,
+        issuer_cert_der: &[u8],
+    ) -> Result<(), CertValidationError> {
         if self.sig_alg_oid == OID_SHA256_WITH_RSA_ENCRYPTION {
             let issuer_rsa_key = parse_x509_rsa_public_key(issuer_cert_der)
                 .map_err(|_| CertValidationError::InvalidDer)?;
-            crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha256(&issuer_rsa_key, self.tbs_raw, self.signature)
-                .map_err(|_| CertValidationError::InvalidSignature)
+            crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha256(
+                &issuer_rsa_key,
+                self.tbs_raw,
+                self.signature,
+            )
+            .map_err(|_| CertValidationError::InvalidSignature)
         } else if self.sig_alg_oid == OID_ECDSA_WITH_SHA256 {
             let issuer_ec_key = parse_x509_ec_public_key(issuer_cert_der)
                 .map_err(|_| CertValidationError::InvalidDer)?;

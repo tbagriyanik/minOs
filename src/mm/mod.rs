@@ -1,8 +1,8 @@
-pub mod pmm;
-pub mod vmm;
-pub mod loader;
-pub mod process;
 pub mod allocator;
+pub mod loader;
+pub mod pmm;
+pub mod process;
+pub mod vmm;
 
 pub struct MemoryManager {
     pub pmm: pmm::PhysicalMemoryManager,
@@ -22,4 +22,3 @@ impl MemoryManager {
         vmm::AddressSpace::current()
     }
 }
-

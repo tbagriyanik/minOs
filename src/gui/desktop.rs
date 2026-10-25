@@ -12,8 +12,18 @@ impl MinGuiCompositor {
     /// Hızlı simge etiketleri (TR + EN). Şerit genişliği dile göre değişmesin
     /// diye her iki dilin en uzun etiketi ölçülür.
     const DESKTOP_QUICK_LABELS: [&str; 12] = [
-        "Bilgisayarım", "Notlar", "SarmanNet", "Çalma Listesi", "Sistem Ayarları", "minOs'u Kur",
-        "Computer", "Notes", "SarmanNet", "Playlist", "Settings", "Install minOs",
+        "Bilgisayarım",
+        "Notlar",
+        "SarmanNet",
+        "Çalma Listesi",
+        "Sistem Ayarları",
+        "minOs'u Kur",
+        "Computer",
+        "Notes",
+        "SarmanNet",
+        "Playlist",
+        "Settings",
+        "Install minOs",
     ];
 
     pub fn desktop_quick_count() -> usize {
@@ -87,15 +97,25 @@ impl MinGuiCompositor {
         );
 
         // Masaüstü Hızlı İkonları (Sol Kenar)
-        let desk_icons = if ui_english() { [
-            ("Computer", 0), ("Notes", 1),
-            ("SarmanNet", 2), ("Playlist", 3),
-            ("Settings", 4), ("Install minOs", 0),
-        ] } else { [
-            ("Bilgisayarım", 0), ("Notlar", 1),
-            ("SarmanNet", 2), ("Çalma Listesi", 3),
-            ("Sistem Ayarları", 4), ("minOs'u Kur", 0),
-        ] };
+        let desk_icons = if ui_english() {
+            [
+                ("Computer", 0),
+                ("Notes", 1),
+                ("SarmanNet", 2),
+                ("Playlist", 3),
+                ("Settings", 4),
+                ("Install minOs", 0),
+            ]
+        } else {
+            [
+                ("Bilgisayarım", 0),
+                ("Notlar", 1),
+                ("SarmanNet", 2),
+                ("Çalma Listesi", 3),
+                ("Sistem Ayarları", 4),
+                ("minOs'u Kur", 0),
+            ]
+        };
 
         let card_w = sp(34);
         // Kurulu sistemde "minOs'u Kur" masaüstü kısayolu gösterilmez.
@@ -103,7 +123,15 @@ impl MinGuiCompositor {
         for (i, (lbl, icon_idx)) in desk_icons.iter().enumerate().take(desk_icon_count) {
             // Tıklama testiyle aynı kanonik konum (kayma/çakışma olmaz).
             let (card_x, dy, _hit_w, card_h) = Self::desktop_quick_rect(i);
-            fb.draw_rounded_rect_alpha(card_x, dy, card_w, card_h, 6, Self::shade(Color::WINDOW_BG, 8), 128);
+            fb.draw_rounded_rect_alpha(
+                card_x,
+                dy,
+                card_w,
+                card_h,
+                6,
+                Self::shade(Color::WINDOW_BG, 8),
+                128,
+            );
             fb.draw_rounded_rect_outline(card_x, dy, card_w, card_h, 6, Color::BORDER);
             let isz = Self::icon_size();
             let inner_x = card_x + (card_w.saturating_sub(isz)) / 2;
@@ -114,8 +142,23 @@ impl MinGuiCompositor {
             let label_y = dy + card_h.saturating_sub(Self::text_height()) / 2;
             let tw = Self::text_width(lbl, 1);
             let th = Self::text_height();
-            fb.draw_rounded_rect_alpha(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Self::shade(Color::WINDOW_BG, 8), 128);
-            fb.draw_rounded_rect_outline(label_x.saturating_sub(sp(4)), label_y.saturating_sub(sp(2)), tw + sp(8), th + sp(4), 4, Color::BORDER);
+            fb.draw_rounded_rect_alpha(
+                label_x.saturating_sub(sp(4)),
+                label_y.saturating_sub(sp(2)),
+                tw + sp(8),
+                th + sp(4),
+                4,
+                Self::shade(Color::WINDOW_BG, 8),
+                128,
+            );
+            fb.draw_rounded_rect_outline(
+                label_x.saturating_sub(sp(4)),
+                label_y.saturating_sub(sp(2)),
+                tw + sp(8),
+                th + sp(4),
+                4,
+                Color::BORDER,
+            );
             Self::draw_string(fb, label_x, label_y, lbl, Color::TEXT_MAIN);
         }
     }

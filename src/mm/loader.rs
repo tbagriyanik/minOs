@@ -196,7 +196,9 @@ impl AppLoader {
             }
 
             // Güvenlik kontrolü: Kullanıcı alanı sınırları (0 .. 0x0000_7FFF_FFFF_FFFF)
-            if ph.vaddr >= 0x0000_8000_0000_0000 || ph.vaddr.saturating_add(ph.mem_size) >= 0x0000_8000_0000_0000 {
+            if ph.vaddr >= 0x0000_8000_0000_0000
+                || ph.vaddr.saturating_add(ph.mem_size) >= 0x0000_8000_0000_0000
+            {
                 return Err("Segment cekirdek adres uzayiyla cakisan alanda bulunamaz");
             }
 
@@ -217,7 +219,9 @@ impl AppLoader {
 
             let mut page_vaddr = aligned_start;
             while page_vaddr < aligned_end {
-                let phys_frame = pmm.allocate_frame().ok_or("PMM: Yetersiz fiziksel bellek")?;
+                let phys_frame = pmm
+                    .allocate_frame()
+                    .ok_or("PMM: Yetersiz fiziksel bellek")?;
                 if allocated_pages < MAX_LOADED_FRAMES {
                     allocated_frames[allocated_pages] = phys_frame;
                     mapped_vaddrs[allocated_pages] = page_vaddr;
@@ -226,15 +230,22 @@ impl AppLoader {
 
                 // Çerçeveyi önce sıfırla
                 let virt_frame = phys_to_virt(phys_frame) as *mut u8;
-                unsafe { core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize); }
+                unsafe {
+                    core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize);
+                }
 
                 // Dosya içeriği bu sayfanın içine denk geliyorsa kopyala
                 let page_offset = page_vaddr.saturating_sub(ph.vaddr);
                 let file_offset = (ph.offset + page_offset) as usize;
-                let copy_start = if page_vaddr < ph.vaddr { (ph.vaddr - page_vaddr) as usize } else { 0 };
+                let copy_start = if page_vaddr < ph.vaddr {
+                    (ph.vaddr - page_vaddr) as usize
+                } else {
+                    0
+                };
                 let copy_avail = (PAGE_SIZE as usize).saturating_sub(copy_start);
                 let copy_len = if file_offset < (ph.offset + ph.file_size) as usize {
-                    let remaining = ((ph.offset + ph.file_size) as usize - file_offset).min(copy_avail);
+                    let remaining =
+                        ((ph.offset + ph.file_size) as usize - file_offset).min(copy_avail);
                     if file_offset + remaining <= data.len() {
                         unsafe {
                             core::ptr::copy_nonoverlapping(
@@ -244,8 +255,12 @@ impl AppLoader {
                             );
                         }
                         remaining
-                    } else { 0 }
-                } else { 0 };
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 let _ = copy_len;
 
                 // Sayfayı adres uzayına eşle
@@ -255,7 +270,13 @@ impl AppLoader {
         }
 
         // Kullanıcı yığınını (User Stack) ayır ve eşle
-        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages, &mut allocated_frames, &mut mapped_vaddrs)?;
+        let stack_pointer = Self::setup_user_stack(
+            address_space,
+            pmm,
+            &mut allocated_pages,
+            &mut allocated_frames,
+            &mut mapped_vaddrs,
+        )?;
 
         Ok(LoadedProgram {
             entry_point: header.entry,
@@ -282,7 +303,9 @@ impl AppLoader {
 
         for page_idx in 0..num_pages {
             let virt_addr = USER_CODE_BASE + (page_idx as u64) * PAGE_SIZE;
-            let phys_frame = pmm.allocate_frame().ok_or("PMM: Yetersiz fiziksel bellek")?;
+            let phys_frame = pmm
+                .allocate_frame()
+                .ok_or("PMM: Yetersiz fiziksel bellek")?;
             if allocated_pages < MAX_LOADED_FRAMES {
                 allocated_frames[allocated_pages] = phys_frame;
                 mapped_vaddrs[allocated_pages] = virt_addr;
@@ -290,17 +313,15 @@ impl AppLoader {
             allocated_pages += 1;
 
             let virt_frame = phys_to_virt(phys_frame) as *mut u8;
-            unsafe { core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize); }
+            unsafe {
+                core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize);
+            }
 
             // Kod verisini sayfaya kopyala
             let file_off = page_idx * (PAGE_SIZE as usize);
             let copy_len = (data.len() - file_off).min(PAGE_SIZE as usize);
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(file_off),
-                    virt_frame,
-                    copy_len,
-                );
+                core::ptr::copy_nonoverlapping(data.as_ptr().add(file_off), virt_frame, copy_len);
             }
 
             // Kod segmenti: Kullanıcı + Yürütülebilir (Yazma kapalı)
@@ -308,7 +329,13 @@ impl AppLoader {
         }
 
         // Kullanıcı yığını
-        let stack_pointer = Self::setup_user_stack(address_space, pmm, &mut allocated_pages, &mut allocated_frames, &mut mapped_vaddrs)?;
+        let stack_pointer = Self::setup_user_stack(
+            address_space,
+            pmm,
+            &mut allocated_pages,
+            &mut allocated_frames,
+            &mut mapped_vaddrs,
+        )?;
 
         Ok(LoadedProgram {
             entry_point: USER_CODE_BASE,
@@ -333,7 +360,9 @@ impl AppLoader {
 
         for i in 0..USER_STACK_PAGES {
             let virt_addr = stack_base + (i as u64) * PAGE_SIZE;
-            let phys_frame = pmm.allocate_frame().ok_or("PMM: Yigin icin yetersiz bellek")?;
+            let phys_frame = pmm
+                .allocate_frame()
+                .ok_or("PMM: Yigin icin yetersiz bellek")?;
             if *allocated_pages < MAX_LOADED_FRAMES {
                 allocated_frames[*allocated_pages] = phys_frame;
                 mapped_vaddrs[*allocated_pages] = virt_addr;
@@ -360,7 +389,11 @@ impl AppLoader {
     }
 
     /// Özel mesaj ve hedef dosya boyutu ile geçerli ELF64 ikili dosyası üretir.
-    pub fn create_sample_elf_with_msg(_name: &str, msg: &str, target_size: usize) -> alloc::vec::Vec<u8> {
+    pub fn create_sample_elf_with_msg(
+        _name: &str,
+        msg: &str,
+        target_size: usize,
+    ) -> alloc::vec::Vec<u8> {
         let mut bin = alloc::vec::Vec::new();
         let target_size = target_size.max(256);
         let mem_size = ((target_size as u64 + 0xFFF) & !0xFFF).max(0x1000);
@@ -368,11 +401,22 @@ impl AppLoader {
         // 1. ELF Header (64 bytes)
         let eh = Elf64Header {
             ident: [
-                0x7F, b'E', b'L', b'F', // Magic
-                ELF_CLASS_64,           // 64-bit
-                ELF_DATA_2LSB,          // Little-endian
-                1,                      // Version
-                0, 0, 0, 0, 0, 0, 0, 0, 0, // Padding
+                0x7F,
+                b'E',
+                b'L',
+                b'F',          // Magic
+                ELF_CLASS_64,  // 64-bit
+                ELF_DATA_2LSB, // Little-endian
+                1,             // Version
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0, // Padding
             ],
             elf_type: ELF_TYPE_EXEC,
             machine: ELF_MACHINE_X86_64,
@@ -402,12 +446,18 @@ impl AppLoader {
         };
 
         let eh_bytes = unsafe {
-            core::slice::from_raw_parts(&eh as *const _ as *const u8, core::mem::size_of::<Elf64Header>())
+            core::slice::from_raw_parts(
+                &eh as *const _ as *const u8,
+                core::mem::size_of::<Elf64Header>(),
+            )
         };
         bin.extend_from_slice(eh_bytes);
 
         let ph_bytes = unsafe {
-            core::slice::from_raw_parts(&ph as *const _ as *const u8, core::mem::size_of::<Elf64ProgramHeader>())
+            core::slice::from_raw_parts(
+                &ph as *const _ as *const u8,
+                core::mem::size_of::<Elf64ProgramHeader>(),
+            )
         };
         bin.extend_from_slice(ph_bytes);
 
@@ -418,19 +468,46 @@ impl AppLoader {
 
         let code_header: [u8; 34] = [
             // mov rax, 5 (SYS_WRITE)
-            0x48, 0xC7, 0xC0, 0x05, 0x00, 0x00, 0x00,
+            0x48,
+            0xC7,
+            0xC0,
+            0x05,
+            0x00,
+            0x00,
+            0x00,
             // lea rdi, [rip + 20] -> sonraki 20 bayt ilerisindeki mesaja
-            0x48, 0x8D, 0x3D, 0x14, 0x00, 0x00, 0x00,
+            0x48,
+            0x8D,
+            0x3D,
+            0x14,
+            0x00,
+            0x00,
+            0x00,
             // mov rsi, msg_len
-            0x48, 0xC7, 0xC6, len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3],
+            0x48,
+            0xC7,
+            0xC6,
+            len_bytes[0],
+            len_bytes[1],
+            len_bytes[2],
+            len_bytes[3],
             // int 0x80
-            0xCD, 0x80,
+            0xCD,
+            0x80,
             // mov rax, 1 (SYS_EXIT)
-            0x48, 0xC7, 0xC0, 0x01, 0x00, 0x00, 0x00,
+            0x48,
+            0xC7,
+            0xC0,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
             // int 0x80
-            0xCD, 0x80,
+            0xCD,
+            0x80,
             // jmp $
-            0xEB, 0xFE,
+            0xEB,
+            0xFE,
         ];
         bin.extend_from_slice(&code_header);
         bin.extend_from_slice(msg_bytes);
@@ -443,4 +520,3 @@ impl AppLoader {
         bin
     }
 }
-

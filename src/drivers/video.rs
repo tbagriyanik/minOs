@@ -9,7 +9,10 @@ const CURSOR_SAVE_H: usize = 32;
 
 /// İki dikdörtgenin en küçük kapsayıcı birleşimini (bounding box) döndürür.
 #[inline(always)]
-pub fn rect_union(r1: (usize, usize, usize, usize), r2: (usize, usize, usize, usize)) -> (usize, usize, usize, usize) {
+pub fn rect_union(
+    r1: (usize, usize, usize, usize),
+    r2: (usize, usize, usize, usize),
+) -> (usize, usize, usize, usize) {
     let x0 = r1.0.min(r2.0);
     let y0 = r1.1.min(r2.1);
     let x1 = (r1.0 + r1.2).max(r2.0 + r2.2);
@@ -73,15 +76,19 @@ fn readable_text_color(foreground: u32, background: u32) -> u32 {
 
     let white_contrast = 68_276 * 100 / (bg_luma + 3251);
     let black_contrast = (bg_luma + 3251) * 100 / 3251;
-    if white_contrast >= black_contrast { 0xFFFFFF } else { 0x000000 }
+    if white_contrast >= black_contrast {
+        0xFFFFFF
+    } else {
+        0x000000
+    }
 }
 
 /// 4x4 Bayer dither matrisi - renk geçişlerinde kademelenmeyi (color banding) tamamen ortadan kaldırır.
 const BAYER_4X4: [[i32; 4]; 4] = [
-    [-8,  0, -6,  2],
-    [ 4, -4,  6, -2],
-    [-5,  3, -7,  1],
-    [ 7, -1,  5, -3],
+    [-8, 0, -6, 2],
+    [4, -4, 6, -2],
+    [-5, 3, -7, 1],
+    [7, -1, 5, -3],
 ];
 
 /// Dithering destekli pürüzsüz renk geçişi (kademelenmeyi yok eder).
@@ -100,9 +107,12 @@ fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -
     let bg = (b >> 8) & 0xFF;
     let bb = b & 0xFF;
 
-    let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-    let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-    let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+    let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32)
+        .clamp(0, 255) as u32;
+    let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32)
+        .clamp(0, 255) as u32;
+    let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32)
+        .clamp(0, 255) as u32;
     (r << 16) | (g << 8) | bl
 }
 
@@ -113,7 +123,13 @@ pub static mut PANIC_FB_PITCH: usize = 0;
 pub static mut PANIC_FB_BPP: usize = 0;
 
 impl Framebuffer {
-    pub unsafe fn new(address: *mut u32, width: usize, height: usize, pitch: usize, bpp: usize) -> Self {
+    pub unsafe fn new(
+        address: *mut u32,
+        width: usize,
+        height: usize,
+        pitch: usize,
+        bpp: usize,
+    ) -> Self {
         PANIC_FB_ADDR = address;
         PANIC_FB_W = width;
         PANIC_FB_H = height;
@@ -125,8 +141,18 @@ impl Framebuffer {
             height,
             pitch,
             bpp,
-            clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
-            base_clip: ClipRect { x0: 0, y0: 0, x1: width, y1: height },
+            clip: ClipRect {
+                x0: 0,
+                y0: 0,
+                x1: width,
+                y1: height,
+            },
+            base_clip: ClipRect {
+                x0: 0,
+                y0: 0,
+                x1: width,
+                y1: height,
+            },
             cursor_under: [0; CURSOR_SAVE_W * CURSOR_SAVE_H],
             cursor_x: 0,
             cursor_y: 0,
@@ -143,18 +169,27 @@ impl Framebuffer {
     pub fn set_hw_cursor(&mut self, enable: bool) {
         self.hw_cursor = enable;
         crate::drivers::gpu::hw_cursor_enable(enable);
-        if enable { self.cursor_saved = false; }
+        if enable {
+            self.cursor_saved = false;
+        }
     }
 
     /// BGA/VESA mod değişimi sonrası geometriyi günceller.
     /// Adres aynı kalır (BGA LFB sabittir); backbuffer sınırları korunur.
     pub fn resize(&mut self, width: usize, height: usize, pitch: usize) -> bool {
-        if width == 0 || height == 0 { return false; }
+        if width == 0 || height == 0 {
+            return false;
+        }
         let total = match width.checked_mul(height) {
-            Some(p) => p, None => return false,
+            Some(p) => p,
+            None => return false,
         };
-        if total > BACKBUFFER_LEN { return false; }
-        if pitch < width * 4 || pitch % 4 != 0 { return false; }
+        if total > BACKBUFFER_LEN {
+            return false;
+        }
+        if pitch < width * 4 || pitch % 4 != 0 {
+            return false;
+        }
         self.width = width;
         self.height = height;
         self.pitch = pitch;
@@ -218,7 +253,9 @@ impl Framebuffer {
         let orig_last = unsafe { BACKBUFFER[last_pixel_idx] };
         self.put_pixel(last_x, last_y, 0x00AABBCC);
         let corner_written = unsafe { BACKBUFFER[last_pixel_idx] == 0x00AABBCC };
-        unsafe { BACKBUFFER[last_pixel_idx] = orig_last; }
+        unsafe {
+            BACKBUFFER[last_pixel_idx] = orig_last;
+        }
 
         if !corner_written {
             return false;
@@ -252,9 +289,22 @@ impl Framebuffer {
         self.draw_rect(self.width, self.height, 50, 50, 0x11223344);
         self.draw_rect(self.width + 20, 0, 100, self.height, 0x11223344);
         self.draw_rect(0, self.height + 20, self.width, 100, 0x11223344);
-        self.draw_line(self.width + 10, self.height + 10, self.width + 100, self.height + 100, 0x11223344);
+        self.draw_line(
+            self.width + 10,
+            self.height + 10,
+            self.width + 100,
+            self.height + 100,
+            0x11223344,
+        );
         self.draw_rounded_rect(self.width + 20, self.height + 20, 40, 40, 5, 0x11223344);
-        self.draw_vgradient(self.width + 30, self.height + 30, 20, 20, 0xFF0000, 0x0000FF);
+        self.draw_vgradient(
+            self.width + 30,
+            self.height + 30,
+            20,
+            20,
+            0xFF0000,
+            0x0000FF,
+        );
         self.draw_shadow(self.width + 10, self.height + 10, 50, 50, 0x000000);
 
         // Ekran dışı flush_rect güvenliği: x >= width veya y >= height iken VRAM kopyası yapılmadan dönmeli
@@ -309,7 +359,11 @@ impl Framebuffer {
             for col in 0..self.cursor_w {
                 let offset = (self.cursor_y + row) * self.width + self.cursor_x + col;
                 self.cursor_under[row * CURSOR_SAVE_W + col] = unsafe {
-                    if offset < BACKBUFFER_LEN { BACKBUFFER[offset] } else { 0 }
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset]
+                    } else {
+                        0
+                    }
                 };
             }
         }
@@ -318,7 +372,9 @@ impl Framebuffer {
 
     /// Önceki imlecin arka planını geri yükler ve güncellenmesi gereken alanı döndürür.
     pub fn restore_cursor_background(&mut self) -> Option<(usize, usize, usize, usize)> {
-        if !self.cursor_saved { return None; }
+        if !self.cursor_saved {
+            return None;
+        }
         for row in 0..self.cursor_h {
             for col in 0..self.cursor_w {
                 let offset = (self.cursor_y + row) * self.width + self.cursor_x + col;
@@ -346,7 +402,9 @@ impl Framebuffer {
         let (x, y, w, h) = rect;
         let x_end = x.saturating_add(w).min(self.width);
         let y_end = y.saturating_add(h).min(self.height);
-        if x >= x_end || y >= y_end { return; }
+        if x >= x_end || y >= y_end {
+            return;
+        }
         let copy_w = x_end - x;
         let copy_h = y_end - y;
         let pitch_words = self.pitch / 4;
@@ -393,7 +451,12 @@ impl Framebuffer {
                 let y1 = y.saturating_add(h).min(self.height).max(y0);
                 ClipRect { x0, y0, x1, y1 }
             }
-            None => ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height },
+            None => ClipRect {
+                x0: 0,
+                y0: 0,
+                x1: self.width,
+                y1: self.height,
+            },
         };
         self.clip = self.base_clip;
     }
@@ -406,7 +469,12 @@ impl Framebuffer {
 
     /// Çerçeve temel çizim bölgesini tüm ekrana geri alır.
     pub fn clear_frame_clip(&mut self) {
-        self.base_clip = ClipRect { x0: 0, y0: 0, x1: self.width, y1: self.height };
+        self.base_clip = ClipRect {
+            x0: 0,
+            y0: 0,
+            x1: self.width,
+            y1: self.height,
+        };
         self.clip = self.base_clip;
     }
 
@@ -419,7 +487,9 @@ impl Framebuffer {
             if start >= BACKBUFFER_LEN {
                 continue;
             }
-            let len = (y * stride + region.x1).min(BACKBUFFER_LEN).saturating_sub(start);
+            let len = (y * stride + region.x1)
+                .min(BACKBUFFER_LEN)
+                .saturating_sub(start);
             if len == 0 {
                 continue;
             }
@@ -477,18 +547,39 @@ impl Framebuffer {
         self.blend_subpixel_text(x, y, color, coverage, false);
     }
 
-    pub fn put_subpixel_text_contrast(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3]) {
+    pub fn put_subpixel_text_contrast(
+        &mut self,
+        x: usize,
+        y: usize,
+        color: u32,
+        coverage: [u8; 3],
+    ) {
         self.blend_subpixel_text(x, y, color, coverage, true);
     }
 
-    fn blend_subpixel_text(&mut self, x: usize, y: usize, color: u32, coverage: [u8; 3], ensure_contrast: bool) {
-        if !self.in_clip(x, y) { return; }
+    fn blend_subpixel_text(
+        &mut self,
+        x: usize,
+        y: usize,
+        color: u32,
+        coverage: [u8; 3],
+        ensure_contrast: bool,
+    ) {
+        if !self.in_clip(x, y) {
+            return;
+        }
         let fg = rgb(color);
         let offset = y * self.width + x;
         unsafe {
-            if offset >= BACKBUFFER_LEN { return; }
+            if offset >= BACKBUFFER_LEN {
+                return;
+            }
             let bg = BACKBUFFER[offset];
-            let fg = if ensure_contrast { readable_text_color(fg, bg) } else { fg };
+            let fg = if ensure_contrast {
+                readable_text_color(fg, bg)
+            } else {
+                fg
+            };
             let mut out = 0u32;
             for channel in 0..3 {
                 let shift = 16 - channel * 8;
@@ -539,15 +630,7 @@ impl Framebuffer {
         let fill_h = y_end - y0;
         let dst_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32;
 
-        crate::drivers::gpu::hw_accel_fill_rect(
-            dst_ptr,
-            self.width,
-            x0,
-            y0,
-            fill_w,
-            fill_h,
-            c,
-        );
+        crate::drivers::gpu::hw_accel_fill_rect(dst_ptr, self.width, x0, y0, fill_w, fill_h, c);
     }
 
     /// 1px kalınlığında içi boş dikdörtgen (çerçeve).
@@ -601,7 +684,15 @@ impl Framebuffer {
     }
 
     /// Yukarıdan aşağıya doğrusal renk geçişi (dikey gradyan).
-    pub fn draw_vgradient(&mut self, x: usize, y: usize, w: usize, h: usize, top: u32, bottom: u32) {
+    pub fn draw_vgradient(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        top: u32,
+        bottom: u32,
+    ) {
         if w == 0 || h == 0 {
             return;
         }
@@ -629,9 +720,15 @@ impl Framebuffer {
             let mut dither_pixels = [0u32; 4];
             for i in 0..4 {
                 let d = row_dither[i];
-                let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-                let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-                let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let r = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
+                let g = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
+                let bl = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
                 dither_pixels[i] = (r << 16) | (g << 8) | bl;
             }
 
@@ -651,7 +748,15 @@ impl Framebuffer {
     }
 
     /// Yuvarlatılmış köşeli dolu dikdörtgen.
-    pub fn draw_rounded_rect(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32) {
+    pub fn draw_rounded_rect(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: usize,
+        color: u32,
+    ) {
         if w == 0 || h == 0 {
             return;
         }
@@ -702,7 +807,16 @@ impl Framebuffer {
 
     /// Yuvarlatılmış köşeli yarı saydam (alpha blended) dolu dikdörtgen.
     /// `alpha`: 0 (tam şeffaf) .. 255 (tam opak). %50 saydamlık için 128 verilebilir.
-    pub fn draw_rounded_rect_alpha(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32, alpha: u8) {
+    pub fn draw_rounded_rect_alpha(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: usize,
+        color: u32,
+        alpha: u8,
+    ) {
         if w == 0 || h == 0 || alpha == 0 {
             return;
         }
@@ -748,8 +862,16 @@ impl Framebuffer {
         // Satır bazında alfa harmanlayıcı yardımcı
         let blend_row = |cy: usize, dy: isize, check_corners: bool| {
             let row_offset = cy * self.width;
-            let left_corner_end = if check_corners { (x + r).min(x_end) } else { x0 };
-            let right_corner_start = if check_corners { (x + w.saturating_sub(r)).max(x0) } else { x_end };
+            let left_corner_end = if check_corners {
+                (x + r).min(x_end)
+            } else {
+                x0
+            };
+            let right_corner_start = if check_corners {
+                (x + w.saturating_sub(r)).max(x0)
+            } else {
+                x_end
+            };
 
             if check_corners {
                 for cx in x0..left_corner_end {
@@ -866,7 +988,15 @@ impl Framebuffer {
     }
 
     /// Yuvarlatılmış köşeli 1px çerçeve.
-    pub fn draw_rounded_rect_outline(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, color: u32) {
+    pub fn draw_rounded_rect_outline(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: usize,
+        color: u32,
+    ) {
         if w == 0 || h == 0 {
             return;
         }
@@ -930,7 +1060,16 @@ impl Framebuffer {
     }
 
     /// Yuvarlatılmış köşeli dikey gradyan.
-    pub fn draw_rounded_vgradient(&mut self, x: usize, y: usize, w: usize, h: usize, r: usize, top: u32, bottom: u32) {
+    pub fn draw_rounded_vgradient(
+        &mut self,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: usize,
+        top: u32,
+        bottom: u32,
+    ) {
         if w == 0 || h == 0 {
             return;
         }
@@ -971,9 +1110,15 @@ impl Framebuffer {
             let mut dither_pixels = [0u32; 4];
             for i in 0..4 {
                 let d = row_dither[i];
-                let r_val = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-                let g_val = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
-                let b_val = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16) / n as i32).clamp(0, 255) as u32;
+                let r_val = (((ar * inv as u32 + br * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
+                let g_val = (((ag * inv as u32 + bg * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
+                let b_val = (((ab * inv as u32 + bb * t as u32) as i32 + d * (n as i32) / 16)
+                    / n as i32)
+                    .clamp(0, 255) as u32;
                 dither_pixels[i] = (r_val << 16) | (g_val << 8) | b_val;
             }
 
@@ -1064,7 +1209,9 @@ impl Framebuffer {
             }
             let x0 = x.saturating_sub(2).max(self.clip.x0);
             let x1 = (x + w + 3).min(self.width).min(self.clip.x1);
-            if x0 >= x1 { continue; }
+            if x0 >= x1 {
+                continue;
+            }
             let row_off = yy * self.width;
             for px in x0..x1 {
                 let off = row_off + px;
@@ -1118,7 +1265,11 @@ impl Framebuffer {
         unsafe {
             if pitch_words == self.width {
                 let total_pixels = (self.width * self.height).min(BACKBUFFER_LEN);
-                core::ptr::copy_nonoverlapping(core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32, self.address, total_pixels);
+                core::ptr::copy_nonoverlapping(
+                    core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32,
+                    self.address,
+                    total_pixels,
+                );
             } else {
                 for y in 0..self.height {
                     let src_offset = y * self.width;
@@ -1137,9 +1288,22 @@ impl Framebuffer {
     /// Mavi ışık filtresini seçilen yüzdeyle uygular (0 kapalı, 100 en sıcak).
     pub fn apply_night_light(&mut self, strength: u8) {
         let strength = strength.min(100) as u32;
-        if strength == 0 { return; }
-        let limit=(self.width*self.height).min(BACKBUFFER_LEN);
-        unsafe { for i in 0..limit { let c=BACKBUFFER[i]; let r=(c>>16)&255; let g=(c>>8)&255; let b=c&255; let nr=(r+((255-r)*12*strength/10_000)).min(255); let ng=(g+((255-g)*4*strength/10_000)).min(255); let nb=b*(100-45*strength/100)/100; BACKBUFFER[i]=(nr<<16)|(ng<<8)|nb; } }
+        if strength == 0 {
+            return;
+        }
+        let limit = (self.width * self.height).min(BACKBUFFER_LEN);
+        unsafe {
+            for i in 0..limit {
+                let c = BACKBUFFER[i];
+                let r = (c >> 16) & 255;
+                let g = (c >> 8) & 255;
+                let b = c & 255;
+                let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
+                let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
+                let nb = b * (100 - 45 * strength / 100) / 100;
+                BACKBUFFER[i] = (nr << 16) | (ng << 8) | nb;
+            }
+        }
     }
 
     /// Mavi ışık filtresini yalnızca verilen bölgeye uygular. Kirli dikdörtgen
@@ -1147,13 +1311,17 @@ impl Framebuffer {
     /// filtreler; kalan bölge önceki karedeki filtrelenmiş hâlini korur.
     pub fn apply_night_light_rect(&mut self, strength: u8, region: ClipRect) {
         let strength = strength.min(100) as u32;
-        if strength == 0 { return; }
+        if strength == 0 {
+            return;
+        }
         let stride = self.width;
         unsafe {
             for y in region.y0..region.y1 {
                 let start = y * stride + region.x0;
                 let end = (y * stride + region.x1).min(BACKBUFFER_LEN);
-                if start >= end { continue; }
+                if start >= end {
+                    continue;
+                }
                 for i in start..end {
                     let c = BACKBUFFER[i];
                     let r = (c >> 16) & 255;

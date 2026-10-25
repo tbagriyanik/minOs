@@ -318,8 +318,7 @@ pub const fn preview_colors(id: ThemeId) -> (u32, u32) {
 // ---------------------------------------------------------------------------
 // Global durum
 // ---------------------------------------------------------------------------
-static PALETTE: [AtomicU32; PALETTE_LEN] =
-    [const { AtomicU32::new(0) }; PALETTE_LEN];
+static PALETTE: [AtomicU32; PALETTE_LEN] = [const { AtomicU32::new(0) }; PALETTE_LEN];
 static CURRENT_THEME: AtomicU8 = AtomicU8::new(0);
 
 /// Aktif paleti başlangıç teması ile doldurur. `_start` içinde çağrılır.

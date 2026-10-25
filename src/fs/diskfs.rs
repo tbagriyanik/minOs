@@ -50,7 +50,12 @@ pub struct DiskEntry {
 
 impl DiskEntry {
     const fn empty() -> Self {
-        Self { name: [0; NAME_MAX], name_len: 0, size: 0, is_dir: false }
+        Self {
+            name: [0; NAME_MAX],
+            name_len: 0,
+            size: 0,
+            is_dir: false,
+        }
     }
 
     pub fn as_str(&self) -> &str {
@@ -127,7 +132,10 @@ fn le16(b: &[u8], off: usize) -> u16 {
 }
 
 fn le32(b: &[u8], off: usize) -> u32 {
-    (b[off] as u32) | ((b[off + 1] as u32) << 8) | ((b[off + 2] as u32) << 16) | ((b[off + 3] as u32) << 24)
+    (b[off] as u32)
+        | ((b[off + 1] as u32) << 8)
+        | ((b[off + 2] as u32) << 16)
+        | ((b[off + 3] as u32) << 24)
 }
 
 /// MBR/GPT bölüm tablosundan ilk FAT32 bölümünün başlangıç LBA'sını bulur.
@@ -181,22 +189,37 @@ fn fat_mount(drive: u8, partition_lba: u32) -> bool {
     let num_fats = bpb[16] as u32;
     let fat_size_16 = le16(&bpb, 22) as u32;
     let fat_size_32 = le32(&bpb, 36);
-    let fat_size = if fat_size_16 != 0 { fat_size_16 } else { fat_size_32 };
+    let fat_size = if fat_size_16 != 0 {
+        fat_size_16
+    } else {
+        fat_size_32
+    };
     if fat_size == 0 || num_fats == 0 {
         return false;
     }
     let root_cluster = le32(&bpb, 44);
     let total_sectors_16 = le16(&bpb, 19) as u32;
-    let total_sectors = if total_sectors_16 != 0 { total_sectors_16 } else { le32(&bpb, 32) };
-    let data_lba = partition_lba.saturating_add(reserved).saturating_add(num_fats.saturating_mul(fat_size));
+    let total_sectors = if total_sectors_16 != 0 {
+        total_sectors_16
+    } else {
+        le32(&bpb, 32)
+    };
+    let data_lba = partition_lba
+        .saturating_add(reserved)
+        .saturating_add(num_fats.saturating_mul(fat_size));
     let fat_entries = fat_size as u64 * 512 / 4;
-    if total_sectors == 0 || data_lba <= partition_lba || data_lba >= partition_lba.saturating_add(total_sectors)
-        || root_cluster < 2 || root_cluster as u64 >= fat_entries
+    if total_sectors == 0
+        || data_lba <= partition_lba
+        || data_lba >= partition_lba.saturating_add(total_sectors)
+        || root_cluster < 2
+        || root_cluster as u64 >= fat_entries
     {
         return false;
     }
     let capacity = ata::drive_capacity_sectors(drive);
-    if capacity > 0 && partition_lba as u64 + total_sectors as u64 > capacity { return false; }
+    if capacity > 0 && partition_lba as u64 + total_sectors as u64 > capacity {
+        return false;
+    }
     let fat_lba = partition_lba + reserved;
 
     unsafe {
@@ -263,9 +286,13 @@ fn fat_set_next(cluster: u32, value: u32) -> bool {
         let in_sector = (off % 512) as usize;
         for copy in 0..FAT.num_fats {
             let mut buf = [0u8; 512];
-            if !read_sector_cached(FAT.drive, sector + copy * FAT.fat_size, &mut buf) { return false; }
+            if !read_sector_cached(FAT.drive, sector + copy * FAT.fat_size, &mut buf) {
+                return false;
+            }
             buf[in_sector..in_sector + 4].copy_from_slice(&value.to_le_bytes());
-            if !ata::write_sector_unflushed(FAT.drive, sector + copy * FAT.fat_size, &buf) { return false; }
+            if !ata::write_sector_unflushed(FAT.drive, sector + copy * FAT.fat_size, &buf) {
+                return false;
+            }
         }
         true
     }
@@ -273,8 +300,12 @@ fn fat_set_next(cluster: u32, value: u32) -> bool {
 
 fn fat_allocate_chain(count: usize) -> Option<alloc::vec::Vec<u32>> {
     let mut chain = alloc::vec::Vec::new();
-    if count == 0 { return Some(chain); }
-    if chain.try_reserve_exact(count).is_err() { return None; }
+    if count == 0 {
+        return Some(chain);
+    }
+    if chain.try_reserve_exact(count).is_err() {
+        return None;
+    }
     let mut touched = alloc::vec::Vec::<(u32, [u8; 512])>::new();
     let max_cluster = unsafe {
         let data_rel = FAT.data_lba.saturating_sub(FAT.partition_lba);
@@ -291,15 +322,21 @@ fn fat_allocate_chain(count: usize) -> Option<alloc::vec::Vec<u32>> {
         if current_sector != sector_index {
             sector_index = current_sector;
             let lba = unsafe { FAT.fat_lba + current_sector };
-            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut fat_sector) { return None; }
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut fat_sector) {
+                return None;
+            }
         }
         let offset = (entry_offset % 512) as usize;
         if le32(&fat_sector, offset) & 0x0FFF_FFFF == 0 {
             chain.push(c);
-            if chain.len() == count { break; }
+            if chain.len() == count {
+                break;
+            }
         }
     }
-    if chain.len() != count { return None; }
+    if chain.len() != count {
+        return None;
+    }
     // Re-read only distinct FAT sectors and update them in memory, then write
     // each sector once to both FAT copies.
     for (i, &cluster) in chain.iter().enumerate() {
@@ -307,22 +344,29 @@ fn fat_allocate_chain(count: usize) -> Option<alloc::vec::Vec<u32>> {
         let entry_offset = cluster as u64 * 4;
         let idx = (entry_offset / 512) as u32;
         let pos = touched.iter().position(|(s, _)| *s == idx);
-        let slot = if let Some(p) = pos { p } else {
+        let slot = if let Some(p) = pos {
+            p
+        } else {
             touched.try_reserve(1).ok()?;
             let mut sec = [0u8; 512];
             let lba = unsafe { FAT.fat_lba + idx };
-            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) { return None; }
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) {
+                return None;
+            }
             touched.push((idx, sec));
             touched.len() - 1
         };
         let offset = (entry_offset % 512) as usize;
         let old = le32(&touched[slot].1, offset);
-        touched[slot].1[offset..offset + 4].copy_from_slice(&((old & 0xF000_0000) | value).to_le_bytes());
+        touched[slot].1[offset..offset + 4]
+            .copy_from_slice(&((old & 0xF000_0000) | value).to_le_bytes());
     }
     for (idx, sec) in touched.iter() {
         for copy in 0..unsafe { FAT.num_fats } {
             let lba = unsafe { FAT.fat_lba + *idx + copy * FAT.fat_size };
-            if !ata::write_sector_unflushed(unsafe { FAT.drive }, lba, sec) { return None; }
+            if !ata::write_sector_unflushed(unsafe { FAT.drive }, lba, sec) {
+                return None;
+            }
         }
     }
     Some(chain)
@@ -334,7 +378,10 @@ fn fat_free_chain(mut cluster: u32) {
         guard += 1;
         let next = fat_next(cluster);
         let _ = fat_set_next(cluster, 0);
-        match next { Some(n) => cluster = n, None => break }
+        match next {
+            Some(n) => cluster = n,
+            None => break,
+        }
     }
 }
 
@@ -345,30 +392,52 @@ fn fat_write_data(chain: &[u32], data: &[u8]) -> bool {
     let mut first = 0usize;
     while first < chain.len() {
         let mut end_cluster = first + 1;
-        while end_cluster < chain.len() && chain[end_cluster] == chain[end_cluster - 1] + 1 { end_cluster += 1; }
+        while end_cluster < chain.len() && chain[end_cluster] == chain[end_cluster - 1] + 1 {
+            end_cluster += 1;
+        }
         let start_byte = first * cluster_bytes;
         let run_sectors = (end_cluster - first) * sectors_per_cluster;
         let available = data.len().saturating_sub(start_byte).min(run_sectors * 512);
         let full_sectors = available / 512;
         let lba = cluster_to_lba(chain[first]);
-        if full_sectors > 0 && ata::write_sectors_unflushed(drive, lba, full_sectors, &data[start_byte..start_byte + full_sectors * 512]) != full_sectors {
+        if full_sectors > 0
+            && ata::write_sectors_unflushed(
+                drive,
+                lba,
+                full_sectors,
+                &data[start_byte..start_byte + full_sectors * 512],
+            ) != full_sectors
+        {
             return false;
         }
         let partial = available % 512;
         let mut next_sector = full_sectors;
         if partial > 0 {
             let mut sector = [0u8; 512];
-            sector[..partial].copy_from_slice(&data[start_byte + full_sectors * 512..start_byte + available]);
-            if !ata::write_sector_unflushed(drive, lba + next_sector as u32, &sector) { return false; }
+            sector[..partial]
+                .copy_from_slice(&data[start_byte + full_sectors * 512..start_byte + available]);
+            if !ata::write_sector_unflushed(drive, lba + next_sector as u32, &sector) {
+                return false;
+            }
             next_sector += 1;
         }
         let remaining_sectors = run_sectors.saturating_sub(next_sector);
         if remaining_sectors > 0 {
             let zero_bytes = remaining_sectors * 512;
             let mut zeros = alloc::vec::Vec::new();
-            if zeros.try_reserve_exact(zero_bytes).is_err() { return false; }
+            if zeros.try_reserve_exact(zero_bytes).is_err() {
+                return false;
+            }
             zeros.resize(zero_bytes, 0);
-            if ata::write_sectors_unflushed(drive, lba + next_sector as u32, remaining_sectors, &zeros) != remaining_sectors { return false; }
+            if ata::write_sectors_unflushed(
+                drive,
+                lba + next_sector as u32,
+                remaining_sectors,
+                &zeros,
+            ) != remaining_sectors
+            {
+                return false;
+            }
         }
         first = end_cluster;
     }
@@ -376,9 +445,7 @@ fn fat_write_data(chain: &[u32], data: &[u8]) -> bool {
 }
 
 fn cluster_to_lba(cluster: u32) -> u32 {
-    unsafe {
-        FAT.data_lba + (cluster.saturating_sub(2)) * FAT.sectors_per_cluster
-    }
+    unsafe { FAT.data_lba + (cluster.saturating_sub(2)) * FAT.sectors_per_cluster }
 }
 
 /// FAT kısa adını (8.3) okunabilir hâle getirir.
@@ -413,7 +480,11 @@ fn push_short_name(entry: &mut DiskEntry, raw: &[u8]) {
 }
 
 fn lower(b: u8) -> u8 {
-    if b.is_ascii_uppercase() { b + 32 } else { b }
+    if b.is_ascii_uppercase() {
+        b + 32
+    } else {
+        b
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -445,20 +516,31 @@ fn short_name_to_string(raw: &[u8]) -> alloc::string::String {
 /// UTF-16LE birimlerini (LFN) okunabilir bir metne çevirir.
 fn decode_lfn(units: &[u16]) -> Option<alloc::string::String> {
     let mut end = units.len();
-    while end > 0 && (units[end - 1] == 0 || units[end - 1] == 0xFFFF) { end -= 1; }
-    if end == 0 { return None; }
+    while end > 0 && (units[end - 1] == 0 || units[end - 1] == 0xFFFF) {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
     let mut s = alloc::string::String::new();
     let mut i = 0usize;
     while i < end {
         let u = units[i];
-        if (0xD800..0xDC00).contains(&u) && i + 1 < end && (0xDC00..0xE000).contains(&units[i + 1]) {
+        if (0xD800..0xDC00).contains(&u) && i + 1 < end && (0xDC00..0xE000).contains(&units[i + 1])
+        {
             let cp = 0x10000 + (((u - 0xD800) as u32) << 10) + ((units[i + 1] - 0xDC00) as u32);
-            if let Some(c) = char::from_u32(cp) { s.push(c); }
+            if let Some(c) = char::from_u32(cp) {
+                s.push(c);
+            }
             i += 2;
             continue;
         }
-        if u == 0 { break; }
-        if let Some(c) = char::from_u32(u as u32) { s.push(c); }
+        if u == 0 {
+            break;
+        }
+        if let Some(c) = char::from_u32(u as u32) {
+            s.push(c);
+        }
         i += 1;
     }
     Some(s)
@@ -476,16 +558,25 @@ fn fat_for_each_entry(dir_cluster: u32, mut cb: impl FnMut(u32, usize, &[u8; 32]
             for s in 0..FAT.sectors_per_cluster {
                 let lba = base + s;
                 let mut sec = [0u8; 512];
-                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                if !read_sector_cached(FAT.drive, lba, &mut sec) {
+                    return false;
+                }
                 for e in 0..16 {
                     let off = e * 32;
-                    if sec[off] == 0x00 { return true; }
+                    if sec[off] == 0x00 {
+                        return true;
+                    }
                     let mut arr = [0u8; 32];
                     arr.copy_from_slice(&sec[off..off + 32]);
-                    if !cb(lba, off, &arr) { return true; }
+                    if !cb(lba, off, &arr) {
+                        return true;
+                    }
                 }
             }
-            match fat_next(cluster) { Some(n) => cluster = n, None => return true }
+            match fat_next(cluster) {
+                Some(n) => cluster = n,
+                None => return true,
+            }
         }
         true
     }
@@ -493,17 +584,30 @@ fn fat_for_each_entry(dir_cluster: u32, mut cb: impl FnMut(u32, usize, &[u8; 32]
 
 /// Dizini mantıksal olarak gezinir: LFN parçalarını birleştirip gerçek adı verir.
 /// `cb(ad, is_dir, first_cluster, size, lba, off)`; `cb` false dönerse durur.
-fn fat_walk_dir(dir_cluster: u32, mut cb: impl FnMut(&str, bool, u32, u32, u32, usize) -> bool) -> bool {
+fn fat_walk_dir(
+    dir_cluster: u32,
+    mut cb: impl FnMut(&str, bool, u32, u32, u32, usize) -> bool,
+) -> bool {
     let mut lfn: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
     let mut have_lfn = false;
     fat_for_each_entry(dir_cluster, |lba, off, e| {
-        if e[0] == 0xE5 { have_lfn = false; lfn.clear(); return true; }
+        if e[0] == 0xE5 {
+            have_lfn = false;
+            lfn.clear();
+            return true;
+        }
         let attr = e[11];
         if attr == FAT_ATTR_LFN {
             let seq = (e[0] & 0x1F) as usize;
-            if seq == 0 || seq > 20 { have_lfn = false; lfn.clear(); return true; }
+            if seq == 0 || seq > 20 {
+                have_lfn = false;
+                lfn.clear();
+                return true;
+            }
             let need = seq * 13;
-            if lfn.len() < need { lfn.resize(need, 0); }
+            if lfn.len() < need {
+                lfn.resize(need, 0);
+            }
             let slots13: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
             for (k, &slot) in slots13.iter().enumerate() {
                 lfn[(seq - 1) * 13 + k] = (e[slot] as u16) | ((e[slot + 1] as u16) << 8);
@@ -511,9 +615,16 @@ fn fat_walk_dir(dir_cluster: u32, mut cb: impl FnMut(&str, bool, u32, u32, u32, 
             have_lfn = true;
             return true;
         }
-        if attr & FAT_ATTR_VOLUME_ID != 0 { have_lfn = false; lfn.clear(); return true; }
+        if attr & FAT_ATTR_VOLUME_ID != 0 {
+            have_lfn = false;
+            lfn.clear();
+            return true;
+        }
         let is_dir = attr & FAT_ATTR_DIRECTORY != 0;
-        let first = ((e[20] as u32) << 16) | ((e[21] as u32) << 24) | (e[26] as u32) | ((e[27] as u32) << 8);
+        let first = ((e[20] as u32) << 16)
+            | ((e[21] as u32) << 24)
+            | (e[26] as u32)
+            | ((e[27] as u32) << 8);
         let size = u32::from_le_bytes([e[28], e[29], e[30], e[31]]);
         let name = if have_lfn {
             decode_lfn(&lfn).unwrap_or_else(|| short_name_to_string(&e[..11]))
@@ -525,7 +636,9 @@ fn fat_walk_dir(dir_cluster: u32, mut cb: impl FnMut(&str, bool, u32, u32, u32, 
         // Nokta girdiler (`.` / `..`) mantıksal görünümde yoktur; özyinelemeli
         // ağaç işlemlerinin (kopyalama/silme/yükleme) sonsuz döngüye girmesini
         // önlemek için burada elenir.
-        if name == "." || name == ".." { return true; }
+        if name == "." || name == ".." {
+            return true;
+        }
         cb(&name, is_dir, first, size, lba, off)
     })
 }
@@ -534,26 +647,44 @@ fn fat_walk_dir(dir_cluster: u32, mut cb: impl FnMut(&str, bool, u32, u32, u32, 
 fn fat_dir_lookup(dir_cluster: u32, name: &str) -> Option<(bool, u32, u32)> {
     let mut res = None;
     fat_walk_dir(dir_cluster, |n, is_dir, first, size, _lba, _off| {
-        if name_eq(n, name) { res = Some((is_dir, first, size)); return false; }
+        if name_eq(n, name) {
+            res = Some((is_dir, first, size));
+            return false;
+        }
         true
     });
     res
 }
 
 /// Dizinde `name` girdisini ve ona ait LFN parçalarının konumlarını bulur.
-fn fat_find_entry_ex(dir_cluster: u32, name: &str) -> Option<(u32, usize, alloc::vec::Vec<(u32, usize)>)> {
+fn fat_find_entry_ex(
+    dir_cluster: u32,
+    name: &str,
+) -> Option<(u32, usize, alloc::vec::Vec<(u32, usize)>)> {
     let mut res = None;
     let mut lfn: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
     let mut lfn_pos: alloc::vec::Vec<(u32, usize)> = alloc::vec::Vec::new();
     let mut have = false;
     fat_for_each_entry(dir_cluster, |lba, off, e| {
-        if e[0] == 0xE5 { have = false; lfn.clear(); lfn_pos.clear(); return true; }
+        if e[0] == 0xE5 {
+            have = false;
+            lfn.clear();
+            lfn_pos.clear();
+            return true;
+        }
         let attr = e[11];
         if attr == FAT_ATTR_LFN {
             let seq = (e[0] & 0x1F) as usize;
-            if seq == 0 || seq > 20 { have = false; lfn.clear(); lfn_pos.clear(); return true; }
+            if seq == 0 || seq > 20 {
+                have = false;
+                lfn.clear();
+                lfn_pos.clear();
+                return true;
+            }
             let need = seq * 13;
-            if lfn.len() < need { lfn.resize(need, 0); }
+            if lfn.len() < need {
+                lfn.resize(need, 0);
+            }
             let slots13: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
             for (k, &slot) in slots13.iter().enumerate() {
                 lfn[(seq - 1) * 13 + k] = (e[slot] as u16) | ((e[slot + 1] as u16) << 8);
@@ -562,13 +693,24 @@ fn fat_find_entry_ex(dir_cluster: u32, name: &str) -> Option<(u32, usize, alloc:
             have = true;
             return true;
         }
-        if attr & FAT_ATTR_VOLUME_ID != 0 { have = false; lfn.clear(); lfn_pos.clear(); return true; }
-        let decoded = if have { decode_lfn(&lfn).unwrap_or_else(|| short_name_to_string(&e[..11])) } else { short_name_to_string(&e[..11]) };
+        if attr & FAT_ATTR_VOLUME_ID != 0 {
+            have = false;
+            lfn.clear();
+            lfn_pos.clear();
+            return true;
+        }
+        let decoded = if have {
+            decode_lfn(&lfn).unwrap_or_else(|| short_name_to_string(&e[..11]))
+        } else {
+            short_name_to_string(&e[..11])
+        };
         if name_eq(&decoded, name) {
             res = Some((lba, off, lfn_pos.clone()));
             return false;
         }
-        have = false; lfn.clear(); lfn_pos.clear();
+        have = false;
+        lfn.clear();
+        lfn_pos.clear();
         true
     });
     res
@@ -583,7 +725,11 @@ fn lfn_checksum(short: &[u8; 11]) -> u8 {
 }
 
 fn sanitize_short_char(b: u8) -> u8 {
-    if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' { b.to_ascii_uppercase() } else { b'_' }
+    if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+        b.to_ascii_uppercase()
+    } else {
+        b'_'
+    }
 }
 
 /// 8.3 kısa ad adayı üretir. `seq == 0` → temel ad (kırpılmış); aksi hâlde "~N".
@@ -595,18 +741,33 @@ fn build_short_alias(name: &str, seq: u32) -> [u8; 11] {
     let mut eb = [b' '; 3];
     let mut ei = 0usize;
     for &b in ext.as_bytes() {
-        if ei < 3 { eb[ei] = sanitize_short_char(b); ei += 1; }
+        if ei < 3 {
+            eb[ei] = sanitize_short_char(b);
+            ei += 1;
+        }
     }
-    let sampled: alloc::vec::Vec<u8> = base.as_bytes().iter().map(|&b| sanitize_short_char(b)).collect();
+    let sampled: alloc::vec::Vec<u8> = base
+        .as_bytes()
+        .iter()
+        .map(|&b| sanitize_short_char(b))
+        .collect();
     let mut bb = [b' '; 8];
     if seq == 0 {
         let n = sampled.len().min(8);
-        if n == 0 { bb[0] = b'_'; } else { bb[..n].copy_from_slice(&sampled[..n]); }
+        if n == 0 {
+            bb[0] = b'_';
+        } else {
+            bb[..n].copy_from_slice(&sampled[..n]);
+        }
     } else {
         let suffix = [b'~', b'0' + (seq % 10) as u8];
         let keep = 6usize;
         let n = sampled.len().min(keep);
-        if n == 0 { bb[0] = b'_'; } else { bb[..n].copy_from_slice(&sampled[..n]); }
+        if n == 0 {
+            bb[0] = b'_';
+        } else {
+            bb[..n].copy_from_slice(&sampled[..n]);
+        }
         bb[keep..keep + 2].copy_from_slice(&suffix);
     }
     let mut out = [b' '; 11];
@@ -618,10 +779,17 @@ fn build_short_alias(name: &str, seq: u32) -> [u8; 11] {
 fn fat_short_exists(dir_cluster: u32, short: &[u8; 11]) -> bool {
     let mut exists = false;
     fat_for_each_entry(dir_cluster, |_lba, _off, e| {
-        if e[0] == 0xE5 { return true; }
+        if e[0] == 0xE5 {
+            return true;
+        }
         let attr = e[11];
-        if attr == FAT_ATTR_LFN || attr & FAT_ATTR_VOLUME_ID != 0 { return true; }
-        if &e[..11] == short { exists = true; return false; }
+        if attr == FAT_ATTR_LFN || attr & FAT_ATTR_VOLUME_ID != 0 {
+            return true;
+        }
+        if &e[..11] == short {
+            exists = true;
+            return false;
+        }
         true
     });
     exists
@@ -632,7 +800,9 @@ fn fat_zero_cluster(cluster: u32) -> bool {
         let zero = [0u8; 512];
         let base = cluster_to_lba(cluster);
         for s in 0..FAT.sectors_per_cluster {
-            if !ata::write_sector_unflushed(FAT.drive, base + s, &zero) { return false; }
+            if !ata::write_sector_unflushed(FAT.drive, base + s, &zero) {
+                return false;
+            }
         }
         true
     }
@@ -641,7 +811,9 @@ fn fat_zero_cluster(cluster: u32) -> bool {
 fn write_dir_entry_at(lba: u32, off: usize, entry: &[u8; 32]) -> bool {
     unsafe {
         let mut sec = [0u8; 512];
-        if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+        if !read_sector_cached(FAT.drive, lba, &mut sec) {
+            return false;
+        }
         sec[off..off + 32].copy_from_slice(entry);
         ata::write_sector_unflushed(FAT.drive, lba, &sec)
     }
@@ -650,7 +822,9 @@ fn write_dir_entry_at(lba: u32, off: usize, entry: &[u8; 32]) -> bool {
 fn mark_entry_deleted(lba: u32, off: usize) -> bool {
     unsafe {
         let mut sec = [0u8; 512];
-        if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+        if !read_sector_cached(FAT.drive, lba, &mut sec) {
+            return false;
+        }
         sec[off] = 0xE5;
         ata::write_sector_unflushed(FAT.drive, lba, &sec)
     }
@@ -665,12 +839,16 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
         let mut guard = 0usize;
         loop {
             guard += 1;
-            if guard > 8192 { return None; }
+            if guard > 8192 {
+                return None;
+            }
             let base = cluster_to_lba(cluster);
             for s in 0..FAT.sectors_per_cluster {
                 let lba = base + s;
                 let mut sec = [0u8; 512];
-                if !read_sector_cached(FAT.drive, lba, &mut sec) { return None; }
+                if !read_sector_cached(FAT.drive, lba, &mut sec) {
+                    return None;
+                }
                 for e in 0..16 {
                     let off = e * 32;
                     if after_end || sec[off] == 0xE5 {
@@ -681,7 +859,10 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
                     }
                 }
             }
-            match fat_next(cluster) { Some(n) => cluster = n, None => break }
+            match fat_next(cluster) {
+                Some(n) => cluster = n,
+                None => break,
+            }
         }
         if free.len() < need {
             let slots_per_cluster = (FAT.sectors_per_cluster * 16) as usize;
@@ -689,15 +870,28 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
             let clusters_needed = (extra + slots_per_cluster - 1) / slots_per_cluster;
             // zincirin son kümesini bul
             let mut last = dir_cluster;
-            loop { match fat_next(last) { Some(n) => last = n, None => break } }
+            loop {
+                match fat_next(last) {
+                    Some(n) => last = n,
+                    None => break,
+                }
+            }
             for _ in 0..clusters_needed {
                 let newc = fat_allocate_chain(1)?[0];
-                if !fat_zero_cluster(newc) { return None; }
-                if !fat_set_next(last, newc) { return None; }
-                if !fat_set_next(newc, 0x0FFF_FFFF) { return None; }
+                if !fat_zero_cluster(newc) {
+                    return None;
+                }
+                if !fat_set_next(last, newc) {
+                    return None;
+                }
+                if !fat_set_next(newc, 0x0FFF_FFFF) {
+                    return None;
+                }
                 let nb = cluster_to_lba(newc);
                 for s in 0..FAT.sectors_per_cluster {
-                    for e in 0..16 { free.push((nb + s, e * 32)); }
+                    for e in 0..16 {
+                        free.push((nb + s, e * 32));
+                    }
                 }
                 last = newc;
             }
@@ -710,18 +904,29 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
 /// Dizine yeni girdi ekler (LFN + kısa ad).
 fn fat_dir_add_entry(parent: u32, name: &str, is_dir: bool, first: u32, size: u32) -> bool {
     {
-        if name.is_empty() { return false; }
+        if name.is_empty() {
+            return false;
+        }
         let units: alloc::vec::Vec<u16> = name.encode_utf16().collect();
         let lfn_count = (units.len() + 12) / 13;
         let mut short = [b' '; 11];
         let mut found = false;
         for seq in 0..10u32 {
             let cand = build_short_alias(name, seq);
-            if !fat_short_exists(parent, &cand) { short = cand; found = true; break; }
+            if !fat_short_exists(parent, &cand) {
+                short = cand;
+                found = true;
+                break;
+            }
         }
-        if !found { return false; }
+        if !found {
+            return false;
+        }
         let need = lfn_count + 1;
-        let slots = match fat_dir_alloc_slots(parent, need) { Some(s) => s, None => return false };
+        let slots = match fat_dir_alloc_slots(parent, need) {
+            Some(s) => s,
+            None => return false,
+        };
         let checksum = lfn_checksum(&short);
         let slots13: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
         for i in 0..lfn_count {
@@ -732,16 +937,28 @@ fn fat_dir_add_entry(parent: u32, name: &str, is_dir: bool, first: u32, size: u3
             e[13] = checksum;
             for (k, &slot) in slots13.iter().enumerate() {
                 let idx = (seq - 1) * 13 + k;
-                let u = if idx < units.len() { units[idx] } else if idx == units.len() { 0x0000 } else { 0xFFFF };
+                let u = if idx < units.len() {
+                    units[idx]
+                } else if idx == units.len() {
+                    0x0000
+                } else {
+                    0xFFFF
+                };
                 e[slot] = (u & 0xFF) as u8;
                 e[slot + 1] = (u >> 8) as u8;
             }
             let (lba, off) = slots[i];
-            if !write_dir_entry_at(lba, off, &e) { return false; }
+            if !write_dir_entry_at(lba, off, &e) {
+                return false;
+            }
         }
         let mut e = [0u8; 32];
         e[..11].copy_from_slice(&short);
-        e[11] = if is_dir { FAT_ATTR_DIRECTORY } else { FAT_ATTR_ARCHIVE };
+        e[11] = if is_dir {
+            FAT_ATTR_DIRECTORY
+        } else {
+            FAT_ATTR_ARCHIVE
+        };
         e[20] = (first >> 16) as u8;
         e[21] = (first >> 24) as u8;
         e[26] = (first & 0xFF) as u8;
@@ -755,9 +972,13 @@ fn fat_dir_add_entry(parent: u32, name: &str, is_dir: bool, first: u32, size: u3
 /// Var olan girdinin başlangıç kümesi ve boyutunu günceller.
 fn fat_update_entry(dir_cluster: u32, name: &str, first: u32, size: u32) -> bool {
     unsafe {
-        let Some((lba, off, _)) = fat_find_entry_ex(dir_cluster, name) else { return false };
+        let Some((lba, off, _)) = fat_find_entry_ex(dir_cluster, name) else {
+            return false;
+        };
         let mut sec = [0u8; 512];
-        if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+        if !read_sector_cached(FAT.drive, lba, &mut sec) {
+            return false;
+        }
         sec[off + 20] = (first >> 16) as u8;
         sec[off + 21] = (first >> 24) as u8;
         sec[off + 26] = (first & 0xFF) as u8;
@@ -769,10 +990,16 @@ fn fat_update_entry(dir_cluster: u32, name: &str, first: u32, size: u32) -> bool
 
 /// Dizinde `name` girdisini (LFN parçalarıyla birlikte) silinmiş olarak işaretler.
 fn fat_clear_entry(dir_cluster: u32, name: &str) -> bool {
-    let Some((lba, off, lfn_pos)) = fat_find_entry_ex(dir_cluster, name) else { return false };
-    if !mark_entry_deleted(lba, off) { return false; }
+    let Some((lba, off, lfn_pos)) = fat_find_entry_ex(dir_cluster, name) else {
+        return false;
+    };
+    if !mark_entry_deleted(lba, off) {
+        return false;
+    }
     for (l, o) in lfn_pos.iter() {
-        if !mark_entry_deleted(*l, *o) { return false; }
+        if !mark_entry_deleted(*l, *o) {
+            return false;
+        }
     }
     true
 }
@@ -780,11 +1007,19 @@ fn fat_clear_entry(dir_cluster: u32, name: &str) -> bool {
 /// Yeni dizin oluşturur (".", ".." girdileri dahil) ve ana dizine kaydını ekler.
 fn fat_mkdir_in(parent: u32, name: &str) -> Option<u32> {
     unsafe {
-        if name.is_empty() || fat_dir_lookup(parent, name).is_some() { return None; }
+        if name.is_empty() || fat_dir_lookup(parent, name).is_some() {
+            return None;
+        }
         let chain = fat_allocate_chain(1)?;
         let cl = chain[0];
-        if !fat_zero_cluster(cl) { return None; }
-        let parent_cluster = if parent == FAT.root_cluster { 0 } else { parent };
+        if !fat_zero_cluster(cl) {
+            return None;
+        }
+        let parent_cluster = if parent == FAT.root_cluster {
+            0
+        } else {
+            parent
+        };
         let mut dot = [0u8; 32];
         dot[..11].copy_from_slice(b".          ");
         dot[11] = FAT_ATTR_DIRECTORY;
@@ -803,7 +1038,9 @@ fn fat_mkdir_in(parent: u32, name: &str) -> Option<u32> {
         let mut sec = [0u8; 512];
         sec[..32].copy_from_slice(&dot);
         sec[32..64].copy_from_slice(&dotdot);
-        if !ata::write_sector_unflushed(FAT.drive, lba, &sec) { return None; }
+        if !ata::write_sector_unflushed(FAT.drive, lba, &sec) {
+            return None;
+        }
         if !fat_dir_add_entry(parent, name, true, cl, 0) {
             fat_free_chain(cl);
             return None;
@@ -819,11 +1056,17 @@ fn fat_resolve(start: u32, comps: &[&str], create: bool) -> Option<u32> {
     for c in comps {
         match fat_dir_lookup(cur, c) {
             Some((true, fc, _)) => {
-                cur = if fc < 2 { unsafe { FAT.root_cluster } } else { fc };
+                cur = if fc < 2 {
+                    unsafe { FAT.root_cluster }
+                } else {
+                    fc
+                };
             }
             Some((false, _, _)) => return None,
             None => {
-                if !create { return None; }
+                if !create {
+                    return None;
+                }
                 cur = fat_mkdir_in(cur, c)?;
             }
         }
@@ -834,8 +1077,12 @@ fn fat_resolve(start: u32, comps: &[&str], create: bool) -> Option<u32> {
 /// Bir küme zincirinden `size` bayt okur.
 fn fat_read_chain_data(mut cluster: u32, size: usize) -> Option<alloc::vec::Vec<u8>> {
     unsafe {
-        if size == 0 { return Some(alloc::vec::Vec::new()); }
-        if cluster < 2 { return None; }
+        if size == 0 {
+            return Some(alloc::vec::Vec::new());
+        }
+        if cluster < 2 {
+            return None;
+        }
         let mut out = alloc::vec::Vec::new();
         out.try_reserve_exact(size).ok()?;
         out.resize(size, 0);
@@ -849,17 +1096,23 @@ fn fat_read_chain_data(mut cluster: u32, size: usize) -> Option<alloc::vec::Vec<
             let full = (remaining / 512).min(spc);
             if full > 0 {
                 let end = written + full * 512;
-                if ata::read_sectors(FAT.drive, base, full, &mut out[written..end]) != full { return None; }
+                if ata::read_sectors(FAT.drive, base, full, &mut out[written..end]) != full {
+                    return None;
+                }
                 written = end;
             }
             if written < size && full < spc {
                 let mut sec = [0u8; 512];
-                if ata::read_sectors(FAT.drive, base + full as u32, 1, &mut sec) != 1 { return None; }
+                if ata::read_sectors(FAT.drive, base + full as u32, 1, &mut sec) != 1 {
+                    return None;
+                }
                 let take = (size - written).min(512);
                 out[written..written + take].copy_from_slice(&sec[..take]);
                 written += take;
             }
-            if written < size { cluster = fat_next(cluster)?; }
+            if written < size {
+                cluster = fat_next(cluster)?;
+            }
         }
         Some(out)
     }
@@ -868,19 +1121,34 @@ fn fat_read_chain_data(mut cluster: u32, size: usize) -> Option<alloc::vec::Vec<
 /// Belirli bir ana dizinde dosya oluşturur/üzerine yazar.
 fn fat_write_file_in(parent: u32, name: &str, data: &[u8]) -> bool {
     unsafe {
-        if name.is_empty() { return false; }
+        if name.is_empty() {
+            return false;
+        }
         if let Some((is_dir, fc, _)) = fat_dir_lookup(parent, name) {
-            if is_dir { return false; }
-            if fc >= 2 { fat_free_chain(fc); }
+            if is_dir {
+                return false;
+            }
+            if fc >= 2 {
+                fat_free_chain(fc);
+            }
         }
         let cluster_bytes = FAT.sectors_per_cluster as usize * 512;
-        let need = if data.is_empty() { 0 } else { (data.len() + cluster_bytes - 1) / cluster_bytes };
+        let need = if data.is_empty() {
+            0
+        } else {
+            (data.len() + cluster_bytes - 1) / cluster_bytes
+        };
         let chain = if need == 0 {
             alloc::vec::Vec::new()
         } else {
-            match fat_allocate_chain(need) { Some(c) => c, None => return false }
+            match fat_allocate_chain(need) {
+                Some(c) => c,
+                None => return false,
+            }
         };
-        if need > 0 && !fat_write_data(&chain, data) { return false; }
+        if need > 0 && !fat_write_data(&chain, data) {
+            return false;
+        }
         let first = chain.first().copied().unwrap_or(0);
         let size = data.len() as u32;
         let ok = if fat_dir_lookup(parent, name).is_some() {
@@ -888,29 +1156,42 @@ fn fat_write_file_in(parent: u32, name: &str, data: &[u8]) -> bool {
         } else {
             fat_dir_add_entry(parent, name, false, first, size)
         };
-        if ok { ata::flush_cache(FAT.drive); }
+        if ok {
+            ata::flush_cache(FAT.drive);
+        }
         ok
     }
 }
 
 /// Dizin ağacını (alt dizinler dahil) hedefe kopyalar.
 fn fat_copy_tree(src_dir: u32, dst_parent: u32, dst_name: &str) -> bool {
-    let newc = match fat_mkdir_in(dst_parent, dst_name) { Some(c) => c, None => return false };
-    let mut children: alloc::vec::Vec<(alloc::string::String, bool, u32, u32)> = alloc::vec::Vec::new();
+    let newc = match fat_mkdir_in(dst_parent, dst_name) {
+        Some(c) => c,
+        None => return false,
+    };
+    let mut children: alloc::vec::Vec<(alloc::string::String, bool, u32, u32)> =
+        alloc::vec::Vec::new();
     fat_walk_dir(src_dir, |n, is_dir, fc, size, _lba, _off| {
         children.push((alloc::string::String::from(n), is_dir, fc, size));
         true
     });
     for (n, is_dir, fc, size) in children {
         if is_dir {
-            if !fat_copy_tree(fc, newc, &n) { return false; }
+            if !fat_copy_tree(fc, newc, &n) {
+                return false;
+            }
         } else {
             let data = if size == 0 || fc < 2 {
                 alloc::vec::Vec::new()
             } else {
-                match fat_read_chain_data(fc, size as usize) { Some(d) => d, None => return false }
+                match fat_read_chain_data(fc, size as usize) {
+                    Some(d) => d,
+                    None => return false,
+                }
             };
-            if !fat_write_file_in(newc, &n, &data) { return false; }
+            if !fat_write_file_in(newc, &n, &data) {
+                return false;
+            }
         }
     }
     true
@@ -924,9 +1205,13 @@ fn fat_delete_dir_recursive(dir_cluster: u32) -> bool {
         true
     });
     for (is_dir, fc) in children {
-        if fc < 2 { continue; }
+        if fc < 2 {
+            continue;
+        }
         if is_dir {
-            if !fat_delete_dir_recursive(fc) { return false; }
+            if !fat_delete_dir_recursive(fc) {
+                return false;
+            }
         } else {
             fat_free_chain(fc);
         }
@@ -936,11 +1221,17 @@ fn fat_delete_dir_recursive(dir_cluster: u32) -> bool {
 }
 
 /// FAT32 bağlı mı?
-pub fn fat_ready() -> bool { unsafe { KIND0 == FsKind::Fat32 } }
+pub fn fat_ready() -> bool {
+    unsafe { KIND0 == FsKind::Fat32 }
+}
 
 /// Belirtilen yoldaki dizini listeler: (ad, is_dir, size)
-pub fn fat_list_dir_path(path: &str) -> Option<alloc::vec::Vec<(alloc::string::String, bool, usize)>> {
-    if !fat_ready() { return None; }
+pub fn fat_list_dir_path(
+    path: &str,
+) -> Option<alloc::vec::Vec<(alloc::string::String, bool, usize)>> {
+    if !fat_ready() {
+        return None;
+    }
     let comps = component_split(path);
     let dir = unsafe { fat_resolve(FAT.root_cluster, &comps, false) }?;
     let mut out: alloc::vec::Vec<(alloc::string::String, bool, usize)> = alloc::vec::Vec::new();
@@ -955,16 +1246,22 @@ pub fn fat_list_dir_path(path: &str) -> Option<alloc::vec::Vec<(alloc::string::S
 
 /// Yolu (eksik dizinleri oluşturarak) garanti eder.
 pub fn fat_create_dir_all(path: &str) -> bool {
-    if !fat_ready() { return false; }
+    if !fat_ready() {
+        return false;
+    }
     let comps = component_split(path);
     unsafe { fat_resolve(FAT.root_cluster, &comps, true).is_some() }
 }
 
 /// Yolda dosya oluşturur/üzerine yazar (eksik ana dizinleri oluşturur).
 pub fn fat_write_file_path(path: &str, data: &[u8]) -> bool {
-    if !fat_ready() { return false; }
+    if !fat_ready() {
+        return false;
+    }
     let comps = component_split(path);
-    if comps.is_empty() { return false; }
+    if comps.is_empty() {
+        return false;
+    }
     let name = comps[comps.len() - 1];
     let parent = match unsafe { fat_resolve(FAT.root_cluster, &comps[..comps.len() - 1], true) } {
         Some(p) => p,
@@ -975,21 +1272,33 @@ pub fn fat_write_file_path(path: &str, data: &[u8]) -> bool {
 
 /// Yoldaki dosyayı okur.
 pub fn fat_read_file_path(path: &str) -> Option<alloc::vec::Vec<u8>> {
-    if !fat_ready() { return None; }
+    if !fat_ready() {
+        return None;
+    }
     let comps = component_split(path);
-    if comps.is_empty() { return None; }
+    if comps.is_empty() {
+        return None;
+    }
     let name = comps[comps.len() - 1];
     let parent = unsafe { fat_resolve(FAT.root_cluster, &comps[..comps.len() - 1], false) }?;
     let (is_dir, fc, size) = fat_dir_lookup(parent, name)?;
-    if is_dir { return None; }
-    if size == 0 || fc < 2 { return Some(alloc::vec::Vec::new()); }
+    if is_dir {
+        return None;
+    }
+    if size == 0 || fc < 2 {
+        return Some(alloc::vec::Vec::new());
+    }
     fat_read_chain_data(fc, size as usize)
 }
 
 pub fn fat_path_exists(path: &str) -> bool {
-    if !fat_ready() { return false; }
+    if !fat_ready() {
+        return false;
+    }
     let comps = component_split(path);
-    if comps.is_empty() { return true; }
+    if comps.is_empty() {
+        return true;
+    }
     let name = comps[comps.len() - 1];
     match unsafe { fat_resolve(FAT.root_cluster, &comps[..comps.len() - 1], false) } {
         Some(parent) => fat_dir_lookup(parent, name).is_some(),
@@ -999,52 +1308,91 @@ pub fn fat_path_exists(path: &str) -> bool {
 
 /// Yoldaki dosya veya dizini (içeriğiyle) siler.
 pub fn fat_delete_path(path: &str) -> bool {
-    if !fat_ready() { return false; }
+    if !fat_ready() {
+        return false;
+    }
     let comps = component_split(path);
-    if comps.is_empty() { return false; }
+    if comps.is_empty() {
+        return false;
+    }
     let name = comps[comps.len() - 1];
     let parent = match unsafe { fat_resolve(FAT.root_cluster, &comps[..comps.len() - 1], false) } {
         Some(p) => p,
         None => return false,
     };
-    let Some((is_dir, fc, _)) = fat_dir_lookup(parent, name) else { return false; };
+    let Some((is_dir, fc, _)) = fat_dir_lookup(parent, name) else {
+        return false;
+    };
     if is_dir {
-        if fc >= 2 && !fat_delete_dir_recursive(fc) { return false; }
+        if fc >= 2 && !fat_delete_dir_recursive(fc) {
+            return false;
+        }
     } else if fc >= 2 {
         fat_free_chain(fc);
     }
-    if !fat_clear_entry(parent, name) { return false; }
-    unsafe { ata::flush_cache(FAT.drive); }
+    if !fat_clear_entry(parent, name) {
+        return false;
+    }
+    unsafe {
+        ata::flush_cache(FAT.drive);
+    }
     true
 }
 
 /// Dosya/dizini yeni bir yola taşır (kopyala + sil).
 pub fn fat_rename_path(from: &str, to: &str) -> bool {
-    if !fat_ready() { return false; }
+    if !fat_ready() {
+        return false;
+    }
     let f = component_split(from);
     let t = component_split(to);
-    if f.is_empty() || t.is_empty() { return false; }
+    if f.is_empty() || t.is_empty() {
+        return false;
+    }
     unsafe {
-        let Some(fp) = fat_resolve(FAT.root_cluster, &f[..f.len() - 1], false) else { return false; };
+        let Some(fp) = fat_resolve(FAT.root_cluster, &f[..f.len() - 1], false) else {
+            return false;
+        };
         let fname = f[f.len() - 1];
-        let Some((f_is_dir, f_fc, f_size)) = fat_dir_lookup(fp, fname) else { return false; };
-        let Some(tp) = fat_resolve(FAT.root_cluster, &t[..t.len() - 1], true) else { return false; };
+        let Some((f_is_dir, f_fc, f_size)) = fat_dir_lookup(fp, fname) else {
+            return false;
+        };
+        let Some(tp) = fat_resolve(FAT.root_cluster, &t[..t.len() - 1], true) else {
+            return false;
+        };
         let tname = t[t.len() - 1];
-        if fat_dir_lookup(tp, tname).is_some() { return false; }
+        if fat_dir_lookup(tp, tname).is_some() {
+            return false;
+        }
         if f_is_dir {
-            if f_fc < 2 { return false; }
-            if !fat_copy_tree(f_fc, tp, tname) { return false; }
-            if !fat_delete_dir_recursive(f_fc) { return false; }
+            if f_fc < 2 {
+                return false;
+            }
+            if !fat_copy_tree(f_fc, tp, tname) {
+                return false;
+            }
+            if !fat_delete_dir_recursive(f_fc) {
+                return false;
+            }
         } else {
             let data = if f_size == 0 || f_fc < 2 {
                 alloc::vec::Vec::new()
             } else {
-                match fat_read_chain_data(f_fc, f_size as usize) { Some(d) => d, None => return false }
+                match fat_read_chain_data(f_fc, f_size as usize) {
+                    Some(d) => d,
+                    None => return false,
+                }
             };
-            if !fat_write_file_in(tp, tname, &data) { return false; }
-            if f_fc >= 2 { fat_free_chain(f_fc); }
+            if !fat_write_file_in(tp, tname, &data) {
+                return false;
+            }
+            if f_fc >= 2 {
+                fat_free_chain(f_fc);
+            }
         }
-        if !fat_clear_entry(fp, fname) { return false; }
+        if !fat_clear_entry(fp, fname) {
+            return false;
+        }
         ata::flush_cache(FAT.drive);
         true
     }
@@ -1083,7 +1431,11 @@ struct IsoState {
     root_size: u32,
 }
 
-static mut ISO: IsoState = IsoState { drive: 1, root_lba: 0, root_size: 0 };
+static mut ISO: IsoState = IsoState {
+    drive: 1,
+    root_lba: 0,
+    root_size: 0,
+};
 
 fn iso_mount(drive: u8) -> bool {
     let mut pvd = [0u8; 2048];
@@ -1165,7 +1517,11 @@ fn iso_list_root() -> bool {
 }
 
 fn lower_iso(b: u8) -> u8 {
-    if b == b';' { b } else { lower(b) }
+    if b == b';' {
+        b
+    } else {
+        lower(b)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1179,7 +1535,11 @@ pub fn fat_format(drive: u8) -> bool {
 
 /// Sürücüdeki belirli bir LBA başlangıcına (örneğin LBA 2048 MBR bölümüne) FAT32 dosya sistemi kurar.
 pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) {
+    if drive >= 4
+        || ata::device(drive)
+            .map(|d| d.kind != ata::DeviceKind::Ata)
+            .unwrap_or(true)
+    {
         return false;
     }
     let total_drive_sectors = ata::drive_capacity_sectors(drive);
@@ -1198,14 +1558,20 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     let num_fats: u32 = 2;
     let mut fat_size = 1u32;
     loop {
-        let clusters = sectors_u32.saturating_sub(reserved_sectors)
-            .saturating_sub(num_fats.saturating_mul(fat_size)) / sectors_per_cluster as u32;
+        let clusters = sectors_u32
+            .saturating_sub(reserved_sectors)
+            .saturating_sub(num_fats.saturating_mul(fat_size))
+            / sectors_per_cluster as u32;
         let needed = (clusters.saturating_add(2).saturating_mul(4) + 511) / 512;
-        if needed <= fat_size { break; }
+        if needed <= fat_size {
+            break;
+        }
         fat_size = needed;
     }
-    let cluster_count = sectors_u32.saturating_sub(reserved_sectors)
-        .saturating_sub(num_fats.saturating_mul(fat_size)) / sectors_per_cluster as u32;
+    let cluster_count = sectors_u32
+        .saturating_sub(reserved_sectors)
+        .saturating_sub(num_fats.saturating_mul(fat_size))
+        / sectors_per_cluster as u32;
     if cluster_count < 65_525 {
         serial("[FS] Disk FAT32 icin yeterli kume sayisina sahip degil.\n");
         return false;
@@ -1213,17 +1579,23 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
 
     // 1. Sektör (partition_lba): FAT32 Volume Boot Record (BPB)
     let mut bpb = [0u8; 512];
-    bpb[0] = 0xEB; bpb[1] = 0x58; bpb[2] = 0x90; // jmp boot
+    bpb[0] = 0xEB;
+    bpb[1] = 0x58;
+    bpb[2] = 0x90; // jmp boot
     bpb[3..11].copy_from_slice(b"MINOSOS "); // OEM Name
-    bpb[11] = 0x00; bpb[12] = 0x02; // 512 bytes per sector (le16)
+    bpb[11] = 0x00;
+    bpb[12] = 0x02; // 512 bytes per sector (le16)
     bpb[13] = sectors_per_cluster;
-    bpb[14] = reserved_sectors as u8; bpb[15] = 0x00;
+    bpb[14] = reserved_sectors as u8;
+    bpb[15] = 0x00;
     bpb[16] = num_fats as u8;
     bpb[21] = 0xF8; // media descriptor: fixed disk
-    bpb[24] = 63; bpb[25] = 0; // sectors per track
-    bpb[26] = 255; bpb[27] = 0; // number of heads
+    bpb[24] = 63;
+    bpb[25] = 0; // sectors per track
+    bpb[26] = 255;
+    bpb[27] = 0; // number of heads
     bpb[28..32].copy_from_slice(&partition_lba.to_le_bytes()); // hidden sectors
-    // Total sectors 32:
+                                                               // Total sectors 32:
     bpb[32] = (sectors_u32 & 0xFF) as u8;
     bpb[33] = ((sectors_u32 >> 8) & 0xFF) as u8;
     bpb[34] = ((sectors_u32 >> 16) & 0xFF) as u8;
@@ -1234,23 +1606,34 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     bpb[38] = ((fat_size >> 16) & 0xFF) as u8;
     bpb[39] = ((fat_size >> 24) & 0xFF) as u8;
     // Root cluster: 2
-    bpb[44] = 2; bpb[45] = 0; bpb[46] = 0; bpb[47] = 0;
+    bpb[44] = 2;
+    bpb[45] = 0;
+    bpb[46] = 0;
+    bpb[47] = 0;
     // FSInfo sector: 1
-    bpb[48] = 1; bpb[49] = 0;
+    bpb[48] = 1;
+    bpb[49] = 0;
     // Backup boot sector: 6
-    bpb[50] = 6; bpb[51] = 0;
+    bpb[50] = 6;
+    bpb[51] = 0;
     bpb[64] = 0x80; // drive number
     bpb[66] = 0x29; // boot signature
-    bpb[67] = 0x78; bpb[68] = 0x56; bpb[69] = 0x34; bpb[70] = 0x12; // volume ID
+    bpb[67] = 0x78;
+    bpb[68] = 0x56;
+    bpb[69] = 0x34;
+    bpb[70] = 0x12; // volume ID
     bpb[71..82].copy_from_slice(b"MINOS DISK "); // Volume label
     bpb[82..90].copy_from_slice(b"FAT32   "); // System ID
-    bpb[510] = 0x55; bpb[511] = 0xAA; // Signature
+    bpb[510] = 0x55;
+    bpb[511] = 0xAA; // Signature
 
     if !ata::write_sector(drive, partition_lba, &bpb) {
         return false;
     }
     // Yedek boot sektörü (partition_lba + 6)
-    if !ata::write_sector(drive, partition_lba + 6, &bpb) { return false; }
+    if !ata::write_sector(drive, partition_lba + 6, &bpb) {
+        return false;
+    }
 
     // 2. FSInfo Sektörü (partition_lba + 1)
     let mut fsinfo = [0u8; 512];
@@ -1259,7 +1642,9 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     fsinfo[488..492].copy_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // Free clusters
     fsinfo[492..496].copy_from_slice(&3u32.to_le_bytes()); // Next free cluster: 3
     fsinfo[508..512].copy_from_slice(&0xAA550000u32.to_le_bytes()); // Trail sig
-    if !ata::write_sector(drive, partition_lba + 1, &fsinfo) { return false; }
+    if !ata::write_sector(drive, partition_lba + 1, &fsinfo) {
+        return false;
+    }
 
     // 3. FAT1 ve FAT2 Tablolari
     let fat1_lba = partition_lba + reserved_sectors;
@@ -1274,12 +1659,19 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     // Cluster 3 (Varsayılan benioku.txt): 0x0FFFFFFF
     fat_sec[12..16].copy_from_slice(&0x0FFFFFFFu32.to_le_bytes());
 
-    if !ata::write_sector(drive, fat1_lba, &fat_sec) || !ata::write_sector(drive, fat2_lba, &fat_sec) { return false; }
+    if !ata::write_sector(drive, fat1_lba, &fat_sec)
+        || !ata::write_sector(drive, fat2_lba, &fat_sec)
+    {
+        return false;
+    }
 
     let empty_sec = [0u8; 512];
     for s in 1..fat_size {
         if !ata::write_sector(drive, fat1_lba + s, &empty_sec)
-            || !ata::write_sector(drive, fat2_lba + s, &empty_sec) { return false; }
+            || !ata::write_sector(drive, fat2_lba + s, &empty_sec)
+        {
+            return false;
+        }
     }
 
     // 4. Kök Dizin (Root Directory - Cluster 2)
@@ -1294,32 +1686,44 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
     let default_msg = b"minOs Sabit Disk (QCOW2)\n========================\nDosya Yoneticisi ve Not Defteri ile bu diske dosya yazabilir, silebilir ve yeni klasorler olusturabilirsiniz.\n";
     root_sec[32..43].copy_from_slice(b"BENIOKU TXT"); // 8.3: 7 karakter ad + boşluk + TXT
     root_sec[32 + 11] = 0x20; // Normal dosya (Archive)
-    root_sec[32 + 20] = 0; root_sec[32 + 21] = 0; // High cluster
-    root_sec[32 + 26] = 3; root_sec[32 + 27] = 0; // Low cluster: 3
+    root_sec[32 + 20] = 0;
+    root_sec[32 + 21] = 0; // High cluster
+    root_sec[32 + 26] = 3;
+    root_sec[32 + 27] = 0; // Low cluster: 3
     let msg_len = default_msg.len() as u32;
     root_sec[32 + 28..32 + 32].copy_from_slice(&msg_len.to_le_bytes());
 
-    if !ata::write_sector(drive, root_lba, &root_sec) { return false; }
+    if !ata::write_sector(drive, root_lba, &root_sec) {
+        return false;
+    }
 
     // Kök dizinin kalan sektörlerini temizle
     for s in 1..sectors_per_cluster as u32 {
-        if !ata::write_sector(drive, root_lba + s, &empty_sec) { return false; }
+        if !ata::write_sector(drive, root_lba + s, &empty_sec) {
+            return false;
+        }
     }
 
     // 5. Cluster 3 Verisi: BENIOKU.TXT içeriğini yaz
     let cluster3_lba = root_lba + 2 * sectors_per_cluster as u32;
     let mut data_sec = [0u8; 512];
     data_sec[..default_msg.len()].copy_from_slice(default_msg);
-    if !ata::write_sector(drive, cluster3_lba, &data_sec) { return false; }
+    if !ata::write_sector(drive, cluster3_lba, &data_sec) {
+        return false;
+    }
     for s in 1..sectors_per_cluster as u32 {
-        if !ata::write_sector(drive, cluster3_lba + s, &empty_sec) { return false; }
+        if !ata::write_sector(drive, cluster3_lba + s, &empty_sec) {
+            return false;
+        }
     }
 
     ata::flush_cache(drive);
     let mut verify = [0u8; 512];
     if !ata::read_sector(drive, partition_lba, &mut verify)
-        || verify[510] != 0x55 || verify[511] != 0xAA
-        || le32(&verify, 36) != fat_size || verify[13] != sectors_per_cluster
+        || verify[510] != 0x55
+        || verify[511] != 0xAA
+        || le32(&verify, 36) != fat_size
+        || verify[13] != sectors_per_cluster
     {
         serial("[FS] FAT32 boot sektoru dogrulanamadi.\n");
         return false;
@@ -1343,14 +1747,21 @@ pub fn init() {
         let part = find_partition_lba(0);
         let candidate = if part > 0 { part } else { 0 };
         // Önce Ext2 dene (kalıcı Linux bölümü), sonra FAT32
-        if crate::fs::ext2::mount(0, candidate) || (candidate != 0 && crate::fs::ext2::mount(0, 0)) {
-            unsafe { KIND0 = FsKind::Ext2; }
+        if crate::fs::ext2::mount(0, candidate) || (candidate != 0 && crate::fs::ext2::mount(0, 0))
+        {
+            unsafe {
+                KIND0 = FsKind::Ext2;
+            }
             serial("[FS] Sabit Disk / USB Ext2 olarak baglandi.\n");
         } else if fat_mount(0, candidate) {
-            unsafe { KIND0 = FsKind::Fat32; }
+            unsafe {
+                KIND0 = FsKind::Fat32;
+            }
             serial("[FS] Sabit Disk / USB FAT32 olarak baglandi.\n");
         } else if candidate != 0 && fat_mount(0, 0) {
-            unsafe { KIND0 = FsKind::Fat32; }
+            unsafe {
+                KIND0 = FsKind::Fat32;
+            }
             serial("[FS] Sabit Disk / USB FAT32 (superfloppy) olarak baglandi.\n");
         } else if ata::drive_capacity_sectors(0) > 0 && disk_looks_blank(0) {
             // Yalnızca hiç dokunulmamış (boş) diskler otomatik biçimlendirilir.
@@ -1358,7 +1769,9 @@ pub fn init() {
             // yanlışlıkla ezilmez.
             serial("[FS] Bos sabit disk tespit edildi, FAT32 bicimlendiriliyor...\n");
             if fat_format(0) && fat_mount(0, 0) {
-                unsafe { KIND0 = FsKind::Fat32; }
+                unsafe {
+                    KIND0 = FsKind::Fat32;
+                }
                 serial("[FS] Sabit Disk (qcow2) FAT32 olarak hazirlandi ve yazmaya acildi!\n");
             }
         } else if ata::drive_capacity_sectors(0) > 0 {
@@ -1368,7 +1781,9 @@ pub fn init() {
         }
     } else if ata::master_kind() == ata::DeviceKind::Atapi {
         if iso_mount(0) {
-            unsafe { KIND0 = FsKind::Iso9660; }
+            unsafe {
+                KIND0 = FsKind::Iso9660;
+            }
             serial("[FS] Master ATAPI ISO9660 olarak baglandi.\n");
         }
     }
@@ -1376,7 +1791,9 @@ pub fn init() {
     // 2) Slave → CD-ROM (ISO9660)
     if ata::slave_kind() == ata::DeviceKind::Atapi {
         if iso_mount(1) {
-            unsafe { KIND1 = FsKind::Iso9660; }
+            unsafe {
+                KIND1 = FsKind::Iso9660;
+            }
             serial("[FS] CD-ROM ISO9660 olarak baglandi.\n");
         } else {
             serial("[FS] CD-ROM ATAPI bulundu ancak ISO9660 taninamadi.\n");
@@ -1388,19 +1805,26 @@ pub fn init() {
     if unsafe { KIND0 == FsKind::Fat32 } {
         refresh();
         unsafe {
-            INSTALLED = (0..ENTRY_COUNT).any(|i| {
-                ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS")
-            });
+            INSTALLED =
+                (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
         }
     }
 }
 
 /// Mount and validate any supported filesystem on the requested ATA drive after formatting.
 pub fn mount_drive(drive: u8) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
+    if drive >= 4
+        || ata::device(drive)
+            .map(|d| d.kind != ata::DeviceKind::Ata)
+            .unwrap_or(true)
+    {
+        return false;
+    }
     let candidate = find_partition_lba(drive);
     // 1) Ext2 / Ext4 bölümünü dene
-    if crate::fs::ext2::mount(drive, candidate) || (candidate != 0 && crate::fs::ext2::mount(drive, 0)) {
+    if crate::fs::ext2::mount(drive, candidate)
+        || (candidate != 0 && crate::fs::ext2::mount(drive, 0))
+    {
         unsafe {
             KIND0 = FsKind::Ext2;
             READY = true;
@@ -1410,7 +1834,8 @@ pub fn mount_drive(drive: u8) -> bool {
         }
         refresh();
         unsafe {
-            INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
+            INSTALLED =
+                (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
         }
         return true;
     }
@@ -1426,7 +1851,8 @@ pub fn mount_drive(drive: u8) -> bool {
         }
         refresh();
         unsafe {
-            INSTALLED = (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
+            INSTALLED =
+                (0..ENTRY_COUNT).any(|i| ENTRIES[i].as_str().eq_ignore_ascii_case("MINOS.SYS"));
         }
         return true;
     }
@@ -1444,16 +1870,33 @@ pub fn mount_fat32_drive(drive: u8) -> bool {
 /// Disk hiç biçimlendirilmemiş mi? (MBR imzası ve bölüm tablosu boş)
 fn disk_looks_blank(drive: u8) -> bool {
     let mut mbr = [0u8; 512];
-    if !ata::read_sector(drive, 0, &mut mbr) { return false; }
-    if mbr[510] == 0x55 && mbr[511] == 0xAA { return false; }
-    if mbr[..446].iter().any(|&b| b != 0) { return false; }
-    if mbr[0x1BE..0x1FE].iter().any(|&b| b != 0) { return false; }
+    if !ata::read_sector(drive, 0, &mut mbr) {
+        return false;
+    }
+    if mbr[510] == 0x55 && mbr[511] == 0xAA {
+        return false;
+    }
+    if mbr[..446].iter().any(|&b| b != 0) {
+        return false;
+    }
+    if mbr[0x1BE..0x1FE].iter().any(|&b| b != 0) {
+        return false;
+    }
     true
 }
 
 pub fn drive_formatted_on(drive: u8) -> bool {
-    if drive >= 4 || ata::device(drive).map(|d| d.kind != ata::DeviceKind::Ata).unwrap_or(true) { return false; }
-    if unsafe { (KIND0 == FsKind::Fat32 && FAT.drive == drive) || (KIND0 == FsKind::Ext2 && crate::fs::ext2::mounted()) } {
+    if drive >= 4
+        || ata::device(drive)
+            .map(|d| d.kind != ata::DeviceKind::Ata)
+            .unwrap_or(true)
+    {
+        return false;
+    }
+    if unsafe {
+        (KIND0 == FsKind::Fat32 && FAT.drive == drive)
+            || (KIND0 == FsKind::Ext2 && crate::fs::ext2::mounted())
+    } {
         return true;
     }
     // Diskin MBR bölümü var mı ve içi boş değil mi kontrol et
@@ -1509,12 +1952,18 @@ pub fn refresh() -> usize {
             FsKind::Iso9660 => iso_list_root(),
             FsKind::None => {
                 // USB yoksa CD-ROM'u dene
-                if KIND1 == FsKind::Iso9660 { iso_list_root() } else { false }
+                if KIND1 == FsKind::Iso9660 {
+                    iso_list_root()
+                } else {
+                    false
+                }
             }
         }
     };
     if !ok {
-        unsafe { ENTRY_COUNT = 0; }
+        unsafe {
+            ENTRY_COUNT = 0;
+        }
     }
     unsafe {
         LISTED = true;
@@ -1579,9 +2028,13 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
         }
         return None;
     }
-    if !unsafe { LISTED } { refresh(); }
+    if !unsafe { LISTED } {
+        refresh();
+    }
     let index = (0..unsafe { ENTRY_COUNT }).find(|&i| {
-        entry(i).map_or(false, |e| !e.is_dir && e.as_str().eq_ignore_ascii_case(name))
+        entry(i).map_or(false, |e| {
+            !e.is_dir && e.as_str().eq_ignore_ascii_case(name)
+        })
     })?;
     let meta = entry(index)?;
     let mut cluster = unsafe { FAT.root_cluster };
@@ -1592,11 +2045,20 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
         for s in 0..unsafe { FAT.sectors_per_cluster } {
             let lba = cluster_to_lba(cluster) + s;
             let mut sec = [0u8; 512];
-            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) { return None; }
+            if !read_sector_cached(unsafe { FAT.drive }, lba, &mut sec) {
+                return None;
+            }
             for e in 0..16 {
                 let off = e * 32;
-                if sec[off] == 0 { return None; }
-                if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                if sec[off] == 0 {
+                    return None;
+                }
+                if sec[off] == 0xE5
+                    || sec[off + 11] == FAT_ATTR_LFN
+                    || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0
+                {
+                    continue;
+                }
                 let mut item = DiskEntry::empty();
                 push_short_name(&mut item, &sec[off..off + 11]);
                 if item.as_str().eq_ignore_ascii_case(name) {
@@ -1606,13 +2068,22 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
                     break;
                 }
             }
-            if found.is_some() { break; }
+            if found.is_some() {
+                break;
+            }
         }
-        if found.is_some() { break; }
-        match fat_next(cluster) { Some(next) => cluster = next, None => break }
+        if found.is_some() {
+            break;
+        }
+        match fat_next(cluster) {
+            Some(next) => cluster = next,
+            None => break,
+        }
     }
     let mut cluster = found?;
-    if meta.size == 0 { return Some(alloc::vec::Vec::new()); }
+    if meta.size == 0 {
+        return Some(alloc::vec::Vec::new());
+    }
     let mut out = alloc::vec::Vec::new();
     out.try_reserve_exact(meta.size).ok()?;
     out.resize(meta.size, 0);
@@ -1625,18 +2096,30 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
         let full_count = ((meta.size - written) / 512).min(cluster_sector_count);
         if full_count > 0 {
             let end = written + full_count * 512;
-            if ata::read_sectors(unsafe { FAT.drive }, base, full_count, &mut out[written..end]) != full_count { return None; }
+            if ata::read_sectors(
+                unsafe { FAT.drive },
+                base,
+                full_count,
+                &mut out[written..end],
+            ) != full_count
+            {
+                return None;
+            }
             written = end;
         }
         let partial = meta.size - written;
         if partial > 0 && full_count < cluster_sector_count {
             let mut sec = [0u8; 512];
-            if ata::read_sectors(unsafe { FAT.drive }, base + full_count as u32, 1, &mut sec) != 1 { return None; }
+            if ata::read_sectors(unsafe { FAT.drive }, base + full_count as u32, 1, &mut sec) != 1 {
+                return None;
+            }
             let take = partial.min(512);
             out[written..written + take].copy_from_slice(&sec[..take]);
             written += take;
         }
-        if written < meta.size { cluster = fat_next(cluster)?; }
+        if written < meta.size {
+            cluster = fat_next(cluster)?;
+        }
     }
     (written == meta.size).then_some(out)
 }
@@ -1655,12 +2138,16 @@ fn load_file_body(index: usize, size: usize) -> usize {
 
 /// Ext2 kök dizin listesini VFS DiskEntry tablosuna doldurur.
 fn ext2_list_root() -> bool {
-    if !crate::fs::ext2::mounted() { return false; }
+    if !crate::fs::ext2::mounted() {
+        return false;
+    }
     let items = crate::fs::ext2::list_dir("/");
     unsafe {
         let mut count = 0usize;
         for (name, is_dir, size) in items.iter() {
-            if count >= MAX_ENTRIES { break; }
+            if count >= MAX_ENTRIES {
+                break;
+            }
             let mut e = DiskEntry::empty();
             let n = name.len().min(NAME_MAX);
             e.name[..n].copy_from_slice(&name[..n]);
@@ -1677,12 +2164,16 @@ fn ext2_list_root() -> bool {
 
 fn ext2_load_file(index: usize, size: usize) -> usize {
     let name = unsafe {
-        if index >= ENTRY_COUNT { return 0; }
+        if index >= ENTRY_COUNT {
+            return 0;
+        }
         ENTRIES[index].as_str().to_string()
     };
     let mut data = alloc::vec::Vec::new();
     let path = alloc::format!("/{}", name);
-    if !crate::fs::ext2::read_file(&path, &mut data) { return 0; }
+    if !crate::fs::ext2::read_file(&path, &mut data) {
+        return 0;
+    }
     unsafe {
         let take = data.len().min(size).min(CONTENT_MAX);
         CONTENT[..take].copy_from_slice(&data[..take]);
@@ -1692,28 +2183,36 @@ fn ext2_load_file(index: usize, size: usize) -> usize {
 }
 
 /// Bölümleme API'leri (MBR/GPT) — kalıcı disk hazırlığı için.
-pub use crate::fs::part::{probe as part_probe, table_kind, count as part_count, get as part_get};
-pub fn part_write_mbr(drive: u8, entries: &[(u64,u64,u8,bool)]) -> bool {
+pub use crate::fs::part::{count as part_count, get as part_get, probe as part_probe, table_kind};
+pub fn part_write_mbr(drive: u8, entries: &[(u64, u64, u8, bool)]) -> bool {
     crate::fs::part::write_mbr(drive, entries)
 }
-pub fn part_write_gpt(drive: u8, entries: &[(u64,u64)]) -> bool {
+pub fn part_write_gpt(drive: u8, entries: &[(u64, u64)]) -> bool {
     crate::fs::part::write_gpt(drive, entries)
 }
 pub fn ext2_format_drive(drive: u8, start_lba: u64, sectors: u64) -> bool {
     crate::fs::ext2::format(drive, start_lba as u32, sectors)
 }
-pub fn ext2_mounted() -> bool { crate::fs::ext2::mounted() }
+pub fn ext2_mounted() -> bool {
+    crate::fs::ext2::mounted()
+}
 pub fn ext2_list(path: &str) -> alloc::vec::Vec<(alloc::vec::Vec<u8>, bool, u32)> {
     crate::fs::ext2::list_dir(path)
 }
 pub fn ext2_read(path: &str) -> Option<alloc::vec::Vec<u8>> {
     let mut out = alloc::vec::Vec::new();
-    if crate::fs::ext2::read_file(path, &mut out) { Some(out) } else { None }
+    if crate::fs::ext2::read_file(path, &mut out) {
+        Some(out)
+    } else {
+        None
+    }
 }
 pub fn ext2_write(path: &str, data: &[u8]) -> bool {
     crate::fs::ext2::write_file(path, data)
 }
-pub fn ext2_mkdir(path: &str) -> bool { crate::fs::ext2::mkdir(path) }
+pub fn ext2_mkdir(path: &str) -> bool {
+    crate::fs::ext2::mkdir(path)
+}
 
 /// FAT32 kök dizinindeki `index`. girdinin içeriğini okur.
 fn fat_load_file(index: usize, size: usize) -> usize {
@@ -1776,7 +2275,9 @@ fn fat_read_chain(start_cluster: u32, size: usize) -> usize {
             }
             let mut sec = [0u8; 512];
             if !read_sector_cached(unsafe { FAT.drive }, base + s, &mut sec) {
-                unsafe { CONTENT_LEN = written; }
+                unsafe {
+                    CONTENT_LEN = written;
+                }
                 return written;
             }
             let take = (size - written).min(512);
@@ -1790,7 +2291,9 @@ fn fat_read_chain(start_cluster: u32, size: usize) -> usize {
             None => break,
         }
     }
-    unsafe { CONTENT_LEN = written; }
+    unsafe {
+        CONTENT_LEN = written;
+    }
     written
 }
 
@@ -1880,7 +2383,10 @@ pub fn delete_file_by_name(name: &str) -> bool {
         if KIND0 == FsKind::Ext2 {
             // Ext2: dosyayı sıfır baytla üzerine yaz (basit silme); dizin girdisi kalır
             let path = alloc::format!("/{}", name);
-            if crate::fs::ext2::write_file(&path, &[]) { refresh(); return true; }
+            if crate::fs::ext2::write_file(&path, &[]) {
+                refresh();
+                return true;
+            }
             return false;
         }
         if KIND0 != FsKind::Fat32 {
@@ -1913,9 +2419,12 @@ pub fn delete_file_by_name(name: &str) -> bool {
                     let mut entry = DiskEntry::empty();
                     push_short_name(&mut entry, &sec[off..off + 11]);
                     if entry.as_str().eq_ignore_ascii_case(name) {
-                        let start = (le16(&sec, off + 20) as u32) << 16 | le16(&sec, off + 26) as u32;
+                        let start =
+                            (le16(&sec, off + 20) as u32) << 16 | le16(&sec, off + 26) as u32;
                         sec[off] = 0xE5;
-                        if !ata::write_sector(FAT.drive, sector_lba, &sec) { return false; }
+                        if !ata::write_sector(FAT.drive, sector_lba, &sec) {
+                            return false;
+                        }
                         fat_free_chain(start);
                         ata::flush_cache(FAT.drive);
                         refresh();
@@ -1952,13 +2461,20 @@ fn valid_8_3_name(name: &str) -> bool {
     let base = parts.next().unwrap_or("");
     let ext = parts.next().unwrap_or("");
     parts.next().is_none()
-        && !base.is_empty() && base.len() <= 8 && ext.len() <= 3
-        && base.bytes().chain(ext.bytes()).all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        && !base.is_empty()
+        && base.len() <= 8
+        && ext.len() <= 3
+        && base
+            .bytes()
+            .chain(ext.bytes())
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 pub fn rename_by_name(old_name: &str, new_name: &str) -> bool {
     unsafe {
-        if KIND0 != FsKind::Fat32 || !valid_8_3_name(new_name) { return false; }
+        if KIND0 != FsKind::Fat32 || !valid_8_3_name(new_name) {
+            return false;
+        }
         let mut cluster = FAT.root_cluster;
         let mut guard = 0;
         while guard < 128 {
@@ -1966,23 +2482,40 @@ pub fn rename_by_name(old_name: &str, new_name: &str) -> bool {
             for s in 0..FAT.sectors_per_cluster {
                 let lba = cluster_to_lba(cluster) + s;
                 let mut sec = [0u8; 512];
-                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                if !read_sector_cached(FAT.drive, lba, &mut sec) {
+                    return false;
+                }
                 for e in 0..16 {
                     let off = e * 32;
-                    if sec[off] == 0 { return false; }
-                    if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    if sec[off] == 0 {
+                        return false;
+                    }
+                    if sec[off] == 0xE5
+                        || sec[off + 11] == FAT_ATTR_LFN
+                        || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0
+                    {
+                        continue;
+                    }
                     let mut item = DiskEntry::empty();
                     push_short_name(&mut item, &sec[off..off + 11]);
-                    if item.as_str().eq_ignore_ascii_case(new_name) { return false; }
+                    if item.as_str().eq_ignore_ascii_case(new_name) {
+                        return false;
+                    }
                     if item.as_str().eq_ignore_ascii_case(old_name) {
                         sec[off..off + 11].copy_from_slice(&to_8_3_name(new_name));
                         let ok = ata::write_sector(FAT.drive, lba, &sec);
-                        if ok { ata::flush_cache(FAT.drive); refresh(); }
+                        if ok {
+                            ata::flush_cache(FAT.drive);
+                            refresh();
+                        }
                         return ok;
                     }
                 }
             }
-            match fat_next(cluster) { Some(next) => cluster = next, None => return false }
+            match fat_next(cluster) {
+                Some(next) => cluster = next,
+                None => return false,
+            }
         }
         false
     }
@@ -1995,7 +2528,12 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
             // 8.3 kısıtı yok: Ext2 uzun isim destekler
             let path = alloc::format!("/{}", name);
             let ok = crate::fs::ext2::write_file(&path, data);
-            if ok { refresh(); if name.eq_ignore_ascii_case("MINOS.SYS") { INSTALLED = true; } }
+            if ok {
+                refresh();
+                if name.eq_ignore_ascii_case("MINOS.SYS") {
+                    INSTALLED = true;
+                }
+            }
             return ok;
         }
         if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) {
@@ -2047,18 +2585,29 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
             }
         }
 
-        let slot = existing.map(|(lba, off, _)| (lba, off as usize)).or(free_slot);
-        let Some((dir_lba, dir_off)) = slot else { return false; };
+        let slot = existing
+            .map(|(lba, off, _)| (lba, off as usize))
+            .or(free_slot);
+        let Some((dir_lba, dir_off)) = slot else {
+            return false;
+        };
         let cluster_bytes = FAT.sectors_per_cluster as usize * 512;
         let needed = data.len().max(1).saturating_add(cluster_bytes - 1) / cluster_bytes;
-        let chain = match fat_allocate_chain(needed) { Some(c) => c, None => return false };
+        let chain = match fat_allocate_chain(needed) {
+            Some(c) => c,
+            None => return false,
+        };
         if !fat_write_data(&chain, data) {
-            for c in chain { let _ = fat_set_next(c, 0); }
+            for c in chain {
+                let _ = fat_set_next(c, 0);
+            }
             ata::flush_cache(FAT.drive);
             return false;
         }
         let mut dir_sec = [0u8; 512];
-        if !read_sector_cached(FAT.drive, dir_lba, &mut dir_sec) { return false; }
+        if !read_sector_cached(FAT.drive, dir_lba, &mut dir_sec) {
+            return false;
+        }
         let off = dir_off;
         if existing.is_none() {
             dir_sec[off..off + 11].copy_from_slice(&to_8_3_name(name));
@@ -2070,17 +2619,24 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
                 guard += 1;
                 let next = fat_next(old);
                 let _ = fat_set_next(old, 0);
-                match next { Some(n) => old = n, None => break }
+                match next {
+                    Some(n) => old = n,
+                    None => break,
+                }
             }
         }
         let start = chain[0];
         dir_sec[off + 20..off + 22].copy_from_slice(&((start >> 16) as u16).to_le_bytes());
         dir_sec[off + 26..off + 28].copy_from_slice(&(start as u16).to_le_bytes());
         dir_sec[off + 28..off + 32].copy_from_slice(&(data.len() as u32).to_le_bytes());
-        if !ata::write_sector_unflushed(FAT.drive, dir_lba, &dir_sec) { return false; }
+        if !ata::write_sector_unflushed(FAT.drive, dir_lba, &dir_sec) {
+            return false;
+        }
         ata::flush_cache(FAT.drive);
         refresh();
-        if name.eq_ignore_ascii_case("MINOS.SYS") { INSTALLED = true; }
+        if name.eq_ignore_ascii_case("MINOS.SYS") {
+            INSTALLED = true;
+        }
         true
     }
 }
@@ -2088,7 +2644,9 @@ pub fn save_file_by_name(name: &str, data: &[u8]) -> bool {
 /// FAT32 kök dizininde boş bir klasör oluşturur.
 pub fn create_dir_by_name(name: &str) -> bool {
     unsafe {
-        if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) { return false; }
+        if KIND0 != FsKind::Fat32 || !valid_8_3_name(name) {
+            return false;
+        }
         let mut cluster = FAT.root_cluster;
         let mut free_slot = None;
         let mut guard = 0;
@@ -2097,40 +2655,65 @@ pub fn create_dir_by_name(name: &str) -> bool {
             for s in 0..FAT.sectors_per_cluster {
                 let lba = cluster_to_lba(cluster) + s;
                 let mut sec = [0u8; 512];
-                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                if !read_sector_cached(FAT.drive, lba, &mut sec) {
+                    return false;
+                }
                 for e in 0..16 {
                     let off = e * 32;
                     if sec[off] == 0 || sec[off] == 0xE5 {
-                        if free_slot.is_none() { free_slot = Some((lba, off)); }
-                        if sec[off] == 0 { break; }
+                        if free_slot.is_none() {
+                            free_slot = Some((lba, off));
+                        }
+                        if sec[off] == 0 {
+                            break;
+                        }
                         continue;
                     }
-                    if sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    if sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 {
+                        continue;
+                    }
                     let mut entry = DiskEntry::empty();
                     push_short_name(&mut entry, &sec[off..off + 11]);
-                    if entry.as_str().eq_ignore_ascii_case(name) { return entry.is_dir; }
+                    if entry.as_str().eq_ignore_ascii_case(name) {
+                        return entry.is_dir;
+                    }
                 }
             }
-            match fat_next(cluster) { Some(next) => cluster = next, None => break }
+            match fat_next(cluster) {
+                Some(next) => cluster = next,
+                None => break,
+            }
         }
-        let Some((dir_lba, off)) = free_slot else { return false; };
-        let Some(chain) = fat_allocate_chain(1) else { return false; };
+        let Some((dir_lba, off)) = free_slot else {
+            return false;
+        };
+        let Some(chain) = fat_allocate_chain(1) else {
+            return false;
+        };
         let child = chain[0];
         let mut child_sec = [0u8; 512];
-        child_sec[..11].copy_from_slice(b".          "); child_sec[11] = FAT_ATTR_DIRECTORY;
+        child_sec[..11].copy_from_slice(b".          ");
+        child_sec[11] = FAT_ATTR_DIRECTORY;
         child_sec[20..22].copy_from_slice(&((child >> 16) as u16).to_le_bytes());
         child_sec[26..28].copy_from_slice(&(child as u16).to_le_bytes());
-        child_sec[32..43].copy_from_slice(b"..         "); child_sec[43] = FAT_ATTR_DIRECTORY;
+        child_sec[32..43].copy_from_slice(b"..         ");
+        child_sec[43] = FAT_ATTR_DIRECTORY;
         let root = FAT.root_cluster;
         child_sec[52..54].copy_from_slice(&((root >> 16) as u16).to_le_bytes());
         child_sec[58..60].copy_from_slice(&(root as u16).to_le_bytes());
         let child_lba = cluster_to_lba(child);
-        if !ata::write_sector(FAT.drive, child_lba, &child_sec) { return false; }
+        if !ata::write_sector(FAT.drive, child_lba, &child_sec) {
+            return false;
+        }
         for s in 1..FAT.sectors_per_cluster {
-            if !ata::write_sector(FAT.drive, child_lba + s, &[0u8; 512]) { return false; }
+            if !ata::write_sector(FAT.drive, child_lba + s, &[0u8; 512]) {
+                return false;
+            }
         }
         let mut parent_sec = [0u8; 512];
-        if !read_sector_cached(FAT.drive, dir_lba, &mut parent_sec) { return false; }
+        if !read_sector_cached(FAT.drive, dir_lba, &mut parent_sec) {
+            return false;
+        }
         parent_sec[off..off + 11].copy_from_slice(&to_8_3_name(name));
         parent_sec[off + 11] = FAT_ATTR_DIRECTORY;
         parent_sec[off + 20..off + 22].copy_from_slice(&((child >> 16) as u16).to_le_bytes());
@@ -2144,7 +2727,9 @@ pub fn create_dir_by_name(name: &str) -> bool {
 
 pub fn delete_dir_by_name(name: &str) -> bool {
     unsafe {
-        if KIND0 != FsKind::Fat32 { return false; }
+        if KIND0 != FsKind::Fat32 {
+            return false;
+        }
         let mut cluster = FAT.root_cluster;
         let mut guard = 0;
         while guard < 128 {
@@ -2152,37 +2737,63 @@ pub fn delete_dir_by_name(name: &str) -> bool {
             for s in 0..FAT.sectors_per_cluster {
                 let lba = cluster_to_lba(cluster) + s;
                 let mut sec = [0u8; 512];
-                if !read_sector_cached(FAT.drive, lba, &mut sec) { return false; }
+                if !read_sector_cached(FAT.drive, lba, &mut sec) {
+                    return false;
+                }
                 for e in 0..16 {
                     let off = e * 32;
-                    if sec[off] == 0 { return false; }
-                    if sec[off] == 0xE5 || sec[off + 11] == FAT_ATTR_LFN || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0 { continue; }
+                    if sec[off] == 0 {
+                        return false;
+                    }
+                    if sec[off] == 0xE5
+                        || sec[off + 11] == FAT_ATTR_LFN
+                        || sec[off + 11] & FAT_ATTR_VOLUME_ID != 0
+                    {
+                        continue;
+                    }
                     let mut item = DiskEntry::empty();
                     push_short_name(&mut item, &sec[off..off + 11]);
-                    if !item.is_dir || !item.as_str().eq_ignore_ascii_case(name) { continue; }
+                    if !item.is_dir || !item.as_str().eq_ignore_ascii_case(name) {
+                        continue;
+                    }
                     let child = (le16(&sec, off + 20) as u32) << 16 | le16(&sec, off + 26) as u32;
-                    if child < 2 { return false; }
+                    if child < 2 {
+                        return false;
+                    }
                     let child_lba = cluster_to_lba(child);
                     let mut child_sec = [0u8; 512];
-                    if !read_sector_cached(FAT.drive, child_lba, &mut child_sec) { return false; }
+                    if !read_sector_cached(FAT.drive, child_lba, &mut child_sec) {
+                        return false;
+                    }
                     for pos in (0..512).step_by(32) {
                         let first = child_sec[pos];
-                        if first == 0 { break; }
-                        if first == 0xE5 { continue; }
-                        let dot = child_sec[pos..pos + 11] == *b".          " || child_sec[pos..pos + 11] == *b"..         ";
-                        if !dot { return false; }
+                        if first == 0 {
+                            break;
+                        }
+                        if first == 0xE5 {
+                            continue;
+                        }
+                        let dot = child_sec[pos..pos + 11] == *b".          "
+                            || child_sec[pos..pos + 11] == *b"..         ";
+                        if !dot {
+                            return false;
+                        }
                     }
                     sec[off] = 0xE5;
-                    if !ata::write_sector(FAT.drive, lba, &sec) { return false; }
+                    if !ata::write_sector(FAT.drive, lba, &sec) {
+                        return false;
+                    }
                     fat_free_chain(child);
                     ata::flush_cache(FAT.drive);
                     refresh();
                     return true;
                 }
             }
-            match fat_next(cluster) { Some(next) => cluster = next, None => return false }
+            match fat_next(cluster) {
+                Some(next) => cluster = next,
+                None => return false,
+            }
         }
         false
     }
 }
-

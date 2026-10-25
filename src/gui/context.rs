@@ -32,10 +32,15 @@ pub const CTX_DESKTOP: [(&str, u32); 8] = [
     ("Yeni Not Oluştur", Color::TEXT_MAIN),
 ];
 pub const CTX_DESKTOP_ITEM: [(&str, u32); 9] = [
-    ("Aç / Klasöre Gir", Color::ACCENT_GREEN), ("Not Defterinde Düzenle", Color::TEXT_MAIN),
-    ("Kes", Color::ACCENT_RED), ("Kopyala", Color::ACCENT_BLUE), ("Yapıştır", Color::ACCENT_GREEN),
+    ("Aç / Klasöre Gir", Color::ACCENT_GREEN),
+    ("Not Defterinde Düzenle", Color::TEXT_MAIN),
+    ("Kes", Color::ACCENT_RED),
+    ("Kopyala", Color::ACCENT_BLUE),
+    ("Yapıştır", Color::ACCENT_GREEN),
     ("Yeni >", Color::ACCENT_YELLOW),
-    ("Adını Değiştir", Color::ACCENT_YELLOW), ("Sil", Color::ACCENT_RED), ("Özellikler", Color::TEXT_MUTED),
+    ("Adını Değiştir", Color::ACCENT_YELLOW),
+    ("Sil", Color::ACCENT_RED),
+    ("Özellikler", Color::TEXT_MUTED),
 ];
 
 /// Dosya Yöneticisi'nde bir dosyaya veya klasöre sağ tık menüsü.
@@ -65,9 +70,7 @@ pub const CTX_NOTEPAD: [(&str, u32); 6] = [
 ];
 
 /// Görev Yöneticisi süreç satırına sağ tık menüsü.
-pub const CTX_TASKMANAGER: [(&str, u32); 1] = [
-    ("Sonlandır", Color::ACCENT_RED),
-];
+pub const CTX_TASKMANAGER: [(&str, u32); 1] = [("Sonlandır", Color::ACCENT_RED)];
 
 /// Pencere başlık çubuğuna sağ tık menüsü.
 pub const CTX_WINDOW: [(&str, u32); 4] = [
@@ -88,30 +91,44 @@ const CTX_DESKTOP_EN: [(&str, u32); 8] = [
     ("New Note", Color::TEXT_MAIN),
 ];
 const CTX_DESKTOP_ITEM_EN: [(&str, u32); 9] = [
-    ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
-    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
+    ("Open / Enter Folder", Color::ACCENT_GREEN),
+    ("Edit in Notepad", Color::TEXT_MAIN),
+    ("Cut", Color::ACCENT_RED),
+    ("Copy", Color::ACCENT_BLUE),
+    ("Paste", Color::ACCENT_GREEN),
     ("New >", Color::ACCENT_YELLOW),
-    ("Rename", Color::ACCENT_YELLOW), ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
+    ("Rename", Color::ACCENT_YELLOW),
+    ("Delete", Color::ACCENT_RED),
+    ("Properties", Color::TEXT_MUTED),
 ];
 const CTX_FILE_EN: [(&str, u32); 12] = [
-    ("Open / Enter Folder", Color::ACCENT_GREEN), ("Edit in Notepad", Color::TEXT_MAIN),
-    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
+    ("Open / Enter Folder", Color::ACCENT_GREEN),
+    ("Edit in Notepad", Color::TEXT_MAIN),
+    ("Cut", Color::ACCENT_RED),
+    ("Copy", Color::ACCENT_BLUE),
+    ("Paste", Color::ACCENT_GREEN),
     ("New >", Color::ACCENT_YELLOW),
-    ("Rename", Color::ACCENT_YELLOW), ("Delete", Color::ACCENT_RED), ("Properties", Color::TEXT_MUTED),
+    ("Rename", Color::ACCENT_YELLOW),
+    ("Delete", Color::ACCENT_RED),
+    ("Properties", Color::TEXT_MUTED),
     ("Sort: Name", Color::ACCENT_BLUE),
     ("Sort: Size", Color::ACCENT_BLUE),
     ("Sort: Type", Color::ACCENT_BLUE),
 ];
 const CTX_NOTEPAD_EN: [(&str, u32); 6] = [
-    ("Cut", Color::ACCENT_RED), ("Copy", Color::ACCENT_BLUE), ("Paste", Color::ACCENT_GREEN),
-    ("Delete", Color::ACCENT_YELLOW), ("Select All", Color::ACCENT_PINK), ("Clear All", Color::TEXT_MUTED),
+    ("Cut", Color::ACCENT_RED),
+    ("Copy", Color::ACCENT_BLUE),
+    ("Paste", Color::ACCENT_GREEN),
+    ("Delete", Color::ACCENT_YELLOW),
+    ("Select All", Color::ACCENT_PINK),
+    ("Clear All", Color::TEXT_MUTED),
 ];
-const CTX_TASKMANAGER_EN: [(&str, u32); 1] = [
-    ("End Task", Color::ACCENT_RED),
-];
+const CTX_TASKMANAGER_EN: [(&str, u32); 1] = [("End Task", Color::ACCENT_RED)];
 const CTX_WINDOW_EN: [(&str, u32); 4] = [
-    ("Minimize", Color::ACCENT_YELLOW), ("Maximize / Restore", Color::ACCENT_GREEN),
-    ("Center Window", Color::ACCENT_BLUE), ("Close", Color::ACCENT_RED),
+    ("Minimize", Color::ACCENT_YELLOW),
+    ("Maximize / Restore", Color::ACCENT_GREEN),
+    ("Center Window", Color::ACCENT_BLUE),
+    ("Close", Color::ACCENT_RED),
 ];
 
 pub const CONTEXT_MENU_W: usize = 226;
@@ -119,12 +136,15 @@ pub const CONTEXT_MENU_ITEM_H: usize = 26;
 
 /// Bağlam menüsü başlık (header) yüksekliği — aktif font ölçeğine göre.
 #[inline(always)]
-pub fn context_header_h() -> usize { crate::gui::sp(CONTEXT_MENU_ITEM_H - 4) }
+pub fn context_header_h() -> usize {
+    crate::gui::sp(CONTEXT_MENU_ITEM_H - 4)
+}
 
 /// Bağlam menüsü öğe yüksekliği — aktif font ölçeğine göre.
 #[inline(always)]
-pub fn context_item_h() -> usize { crate::gui::sp(CONTEXT_MENU_ITEM_H) }
-
+pub fn context_item_h() -> usize {
+    crate::gui::sp(CONTEXT_MENU_ITEM_H)
+}
 
 /// Masaüstü ve Dosya Yöneticisi için Yeni (New) alt menüsü öğeleri.
 pub const CTX_NEW: [(&str, u32); 4] = [
@@ -164,16 +184,26 @@ impl MinGuiCompositor {
     /// Öğe yüksekliği aktif font ölçeğine göre otomatik büyür.
     pub fn context_menu_geom(&self, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
         let items = self.context_items();
-        let widest_item = items.iter().map(|(label, _)| Self::text_width(label, 1)).max().unwrap_or(0);
+        let widest_item = items
+            .iter()
+            .map(|(label, _)| Self::text_width(label, 1))
+            .max()
+            .unwrap_or(0);
         let icon_pad = match self.context_kind {
             ContextKind::Desktop | ContextKind::DesktopItem | ContextKind::Notepad => sp(24),
             _ => 0,
         };
         let shortcut_pad = match self.context_kind {
-            ContextKind::Notepad | ContextKind::TaskManager | ContextKind::Desktop | ContextKind::DesktopItem | ContextKind::FileManager => sp(64),
+            ContextKind::Notepad
+            | ContextKind::TaskManager
+            | ContextKind::Desktop
+            | ContextKind::DesktopItem
+            | ContextKind::FileManager => sp(64),
             _ => 0,
         };
-        let w = sp(CONTEXT_MENU_W + 16).max(widest_item + sp(24) + icon_pad + shortcut_pad).min(fb_w);
+        let w = sp(CONTEXT_MENU_W + 16)
+            .max(widest_item + sp(24) + icon_pad + shortcut_pad)
+            .min(fb_w);
         // Başlık + öğeler (ölçekli) + alt boşluk
         let h = context_header_h() + items.len() * context_item_h();
         let x = self.context_menu_x.min(fb_w.saturating_sub(w));
@@ -200,16 +230,41 @@ impl MinGuiCompositor {
         };
         let hdr_h = context_header_h();
         let item_h = context_item_h();
-        Self::draw_string_clipped(fb, menu_x + 8, menu_y + sp(6), header, Color::TEXT_MUTED,
-            (menu_x + 6, menu_y + 2, menu_w.saturating_sub(12), hdr_h.saturating_sub(3)));
-        fb.draw_rect(menu_x + 4, menu_y + hdr_h - sp(4), menu_w - 8, 1, Color::BORDER);
+        Self::draw_string_clipped(
+            fb,
+            menu_x + 8,
+            menu_y + sp(6),
+            header,
+            Color::TEXT_MUTED,
+            (
+                menu_x + 6,
+                menu_y + 2,
+                menu_w.saturating_sub(12),
+                hdr_h.saturating_sub(3),
+            ),
+        );
+        fb.draw_rect(
+            menu_x + 4,
+            menu_y + hdr_h - sp(4),
+            menu_w - 8,
+            1,
+            Color::BORDER,
+        );
 
         for (i, (label, color)) in self.context_items().iter().enumerate() {
             let item_y = menu_y + hdr_h + i * item_h;
-            fb.draw_rect(menu_x + 4, item_y, menu_w - 8, item_h.saturating_sub(sp(4)), Color::WINDOW_BG);
+            fb.draw_rect(
+                menu_x + 4,
+                item_y,
+                menu_w - 8,
+                item_h.saturating_sub(sp(4)),
+                Color::WINDOW_BG,
+            );
 
             let mut text_x = menu_x + sp(10);
-            if self.context_kind == ContextKind::Desktop || self.context_kind == ContextKind::DesktopItem {
+            if self.context_kind == ContextKind::Desktop
+                || self.context_kind == ContextKind::DesktopItem
+            {
                 // Masaüstü sağ tık menüsü simgeleri (12x12 piksel)
                 let icon_x = menu_x + sp(10);
                 let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;
@@ -223,8 +278,19 @@ impl MinGuiCompositor {
                 text_x += sp(20);
             }
 
-            Self::draw_string_clipped(fb, text_x, item_y + sp(5), label, *color,
-                (text_x, item_y + 2, menu_w.saturating_sub(text_x - menu_x + sp(60)), item_h.saturating_sub(4)));
+            Self::draw_string_clipped(
+                fb,
+                text_x,
+                item_y + sp(5),
+                label,
+                *color,
+                (
+                    text_x,
+                    item_y + 2,
+                    menu_w.saturating_sub(text_x - menu_x + sp(60)),
+                    item_h.saturating_sub(4),
+                ),
+            );
 
             // Menü öğeleri için sağa hizalı kısayol etiketi (örn: Ctrl+C, Ctrl+V, Ctrl+X, Del, F2)
             let shortcut = match (self.context_kind, i) {
@@ -245,8 +311,14 @@ impl MinGuiCompositor {
             if !shortcut.is_empty() {
                 let sc_w = Self::text_width(shortcut, 1);
                 let sc_x = menu_x + menu_w.saturating_sub(sc_w + sp(12));
-                Self::draw_string_clipped(fb, sc_x, item_y + sp(5), shortcut, Color::TEXT_MUTED,
-                    (sc_x, item_y + 2, sc_w + sp(4), item_h.saturating_sub(4)));
+                Self::draw_string_clipped(
+                    fb,
+                    sc_x,
+                    item_y + sp(5),
+                    shortcut,
+                    Color::TEXT_MUTED,
+                    (sc_x, item_y + 2, sc_w + sp(4), item_h.saturating_sub(4)),
+                );
             }
         }
 
@@ -277,7 +349,11 @@ impl MinGuiCompositor {
     pub fn context_submenu_geom(&self, fb_w: usize, fb_h: usize) -> (usize, usize, usize, usize) {
         let (menu_x, menu_y, menu_w, _menu_h) = self.context_menu_geom(fb_w, fb_h);
         let items: &[(&str, u32)] = if ui_english() { &CTX_NEW_EN } else { &CTX_NEW };
-        let widest_item = items.iter().map(|(label, _)| Self::text_width(label, 1)).max().unwrap_or(0);
+        let widest_item = items
+            .iter()
+            .map(|(label, _)| Self::text_width(label, 1))
+            .max()
+            .unwrap_or(0);
         let sub_w = sp(180).max(widest_item + sp(36)).min(fb_w);
         let item_h = context_item_h();
         let hdr_h = context_header_h();
@@ -309,21 +385,55 @@ impl MinGuiCompositor {
         fb.draw_rect(sub_x, sub_y, sub_w, 2, Color::ACCENT_YELLOW);
 
         let sub_header = ui_text("Yeni Oluştur", "Create New");
-        Self::draw_string_clipped(fb, sub_x + 8, sub_y + sp(6), sub_header, Color::TEXT_MUTED,
-            (sub_x + 6, sub_y + 2, sub_w.saturating_sub(12), hdr_h.saturating_sub(3)));
-        fb.draw_rect(sub_x + 4, sub_y + hdr_h - sp(4), sub_w - 8, 1, Color::BORDER);
+        Self::draw_string_clipped(
+            fb,
+            sub_x + 8,
+            sub_y + sp(6),
+            sub_header,
+            Color::TEXT_MUTED,
+            (
+                sub_x + 6,
+                sub_y + 2,
+                sub_w.saturating_sub(12),
+                hdr_h.saturating_sub(3),
+            ),
+        );
+        fb.draw_rect(
+            sub_x + 4,
+            sub_y + hdr_h - sp(4),
+            sub_w - 8,
+            1,
+            Color::BORDER,
+        );
 
         for (i, (label, color)) in items.iter().enumerate() {
             let item_y = sub_y + hdr_h + i * item_h;
-            fb.draw_rect(sub_x + 4, item_y, sub_w - 8, item_h.saturating_sub(sp(4)), Color::WINDOW_BG);
+            fb.draw_rect(
+                sub_x + 4,
+                item_y,
+                sub_w - 8,
+                item_h.saturating_sub(sp(4)),
+                Color::WINDOW_BG,
+            );
 
             let icon_x = sub_x + sp(10);
             let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;
             Self::draw_new_submenu_icon(fb, icon_x, icon_y, i, *color);
 
             let text_x = sub_x + sp(30);
-            Self::draw_string_clipped(fb, text_x, item_y + sp(5), label, *color,
-                (text_x, item_y + 2, sub_w.saturating_sub(sp(36)), item_h.saturating_sub(4)));
+            Self::draw_string_clipped(
+                fb,
+                text_x,
+                item_y + sp(5),
+                label,
+                *color,
+                (
+                    text_x,
+                    item_y + 2,
+                    sub_w.saturating_sub(sp(36)),
+                    item_h.saturating_sub(4),
+                ),
+            );
         }
     }
 
@@ -359,7 +469,13 @@ impl MinGuiCompositor {
     }
 
     /// Yeni alt menüsünde tıklanan öğe indeksini döndürür.
-    pub fn context_submenu_hit(&self, fb_w: usize, fb_h: usize, mx: usize, my: usize) -> Option<usize> {
+    pub fn context_submenu_hit(
+        &self,
+        fb_w: usize,
+        fb_h: usize,
+        mx: usize,
+        my: usize,
+    ) -> Option<usize> {
         if !self.is_context_submenu_open || !self.has_context_submenu() {
             return None;
         }
@@ -381,7 +497,13 @@ impl MinGuiCompositor {
     }
 
     /// Not Defteri / Textarea sağ tık bağlam menüsü için 12x12 piksel simgeler çizer.
-    fn draw_notepad_context_icon(fb: &mut Framebuffer, x: usize, y: usize, index: usize, color: u32) {
+    fn draw_notepad_context_icon(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        index: usize,
+        color: u32,
+    ) {
         match index {
             0 => {
                 // Kes (Makas simgesi)
@@ -451,7 +573,13 @@ impl MinGuiCompositor {
     }
 
     /// Masaüstü sağ tık bağlam menüsü için 12x12 piksel simgeler çizer.
-    fn draw_desktop_context_icon(fb: &mut Framebuffer, x: usize, y: usize, index: usize, color: u32) {
+    fn draw_desktop_context_icon(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        index: usize,
+        color: u32,
+    ) {
         match index {
             0 => {
                 // Dosya Yöneticisi: Klasör simgesi

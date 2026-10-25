@@ -18,25 +18,33 @@ use core::sync::atomic::{compiler_fence, Ordering};
 
 #[inline]
 fn io_out16(port: u16, val: u16) {
-    unsafe { asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in16(port: u16) -> u16 {
     let ret: u16;
-    unsafe { asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in ax, dx", in("dx") port, out("ax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -389,7 +397,9 @@ pub fn blit(src: &[u32], dst_x: u32, dst_y: u32, width: u32, height: u32, src_pi
 
             for col in 0..copy_w {
                 if src_offset + col < src.len() {
-                    fb_ptr.add(dst_offset + col).write_volatile(src[src_offset + col]);
+                    fb_ptr
+                        .add(dst_offset + col)
+                        .write_volatile(src[src_offset + col]);
                 }
             }
         }

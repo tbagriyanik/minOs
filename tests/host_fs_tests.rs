@@ -10,7 +10,9 @@ use crate::exfat_rw::ExfatFs;
 use crate::ext4_rw::{Ext4Error, Ext4Fs};
 
 fn pattern(len: usize, seed: u8) -> Vec<u8> {
-    (0..len).map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed)).collect()
+    (0..len)
+        .map(|i| (i as u8).wrapping_mul(31).wrapping_add(seed))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -19,7 +21,10 @@ fn pattern(len: usize, seed: u8) -> Vec<u8> {
 
 fn formatted_exfat(sectors: u64) -> MemoryBlockDevice {
     let mut dev = MemoryBlockDevice::new(sectors);
-    assert!(exfat_core::format_device(&mut dev, 0), "exFAT bicimlendirme basarisiz");
+    assert!(
+        exfat_core::format_device(&mut dev, 0),
+        "exFAT bicimlendirme basarisiz"
+    );
     dev
 }
 
@@ -49,10 +54,19 @@ fn exfat_format_writes_valid_vbr_and_checkup() {
         }
     }
     let stored_bytes = dev.sector_bytes(11, 4);
-    let stored = u32::from_le_bytes([stored_bytes[0], stored_bytes[1], stored_bytes[2], stored_bytes[3]]);
+    let stored = u32::from_le_bytes([
+        stored_bytes[0],
+        stored_bytes[1],
+        stored_bytes[2],
+        stored_bytes[3],
+    ]);
     assert_eq!(
         stored,
-        exfat_core::exfat_boot_checksum_vbr_sequence(&vbr, &dev.sector_bytes(1, 512), &dev.sector_bytes(9, 512))
+        exfat_core::exfat_boot_checksum_vbr_sequence(
+            &vbr,
+            &dev.sector_bytes(1, 512),
+            &dev.sector_bytes(9, 512)
+        )
     );
 
     // Yedek VBR (12..23) ana VBR ile ayni olmali.
@@ -128,17 +142,26 @@ fn exfat_directories_and_unicode_names() {
 
     let data = b"not icerigi";
     assert!(fs.write_file(docs.first_cluster, "not defteri.txt", data));
-    assert_eq!(fs.read_file("/Belgeler/not defteri.txt").as_deref(), Some(&data[..]));
+    assert_eq!(
+        fs.read_file("/Belgeler/not defteri.txt").as_deref(),
+        Some(&data[..])
+    );
 
     // Unicode ad (UTF-16) ve buyuk/kucuk harf duyarsiz arama
     assert!(fs.write_file(docs.first_cluster, "Özet.md", b"# ozet"));
-    assert_eq!(fs.read_file("/Belgeler/Özet.md").as_deref(), Some(&b"# ozet"[..]));
+    assert_eq!(
+        fs.read_file("/Belgeler/Özet.md").as_deref(),
+        Some(&b"# ozet"[..])
+    );
     assert!(fs.lookup("/Belgeler/özet.MD").is_some());
 
     // Silme
     assert!(fs.remove(docs.first_cluster, "not defteri.txt"));
     assert!(fs.read_file("/Belgeler/not defteri.txt").is_none());
-    assert_eq!(fs.read_file("/Belgeler/Özet.md").as_deref(), Some(&b"# ozet"[..]));
+    assert_eq!(
+        fs.read_file("/Belgeler/Özet.md").as_deref(),
+        Some(&b"# ozet"[..])
+    );
 }
 
 #[test]
@@ -167,7 +190,10 @@ fn exfat_mount_rejects_foreign_image() {
 
 fn formatted_ext4(sectors: u64) -> MemoryBlockDevice {
     let mut dev = MemoryBlockDevice::new(sectors);
-    assert!(crate::ext4_core::format_device(&mut dev, 0), "ext4 bicimlendirme basarisiz");
+    assert!(
+        crate::ext4_core::format_device(&mut dev, 0),
+        "ext4 bicimlendirme basarisiz"
+    );
     dev
 }
 
@@ -212,18 +238,27 @@ fn ext4_mkdir_nested_files_and_remove() {
     let nested = fs.mkdir("/etc/minos").unwrap();
     assert!(etc >= 11 && nested >= 11);
 
-    fs.write_file("/etc/minos/api.conf", b"port=8080\n").unwrap();
+    fs.write_file("/etc/minos/api.conf", b"port=8080\n")
+        .unwrap();
     assert_eq!(fs.read_file("/etc/minos/api.conf").unwrap(), b"port=8080\n");
 
-    let names: Vec<_> = fs.dir_entries(&fs.read_inode(nested).unwrap()).unwrap()
-        .into_iter().map(|(_, n, _)| alloc::string::String::from(n)).collect();
+    let names: Vec<_> = fs
+        .dir_entries(&fs.read_inode(nested).unwrap())
+        .unwrap()
+        .into_iter()
+        .map(|(_, n, _)| alloc::string::String::from(n))
+        .collect();
     assert_eq!(names, alloc::vec![alloc::string::String::from("api.conf")]);
 
     fs.remove_file("/etc/minos/api.conf").unwrap();
-    assert!(matches!(fs.read_file("/etc/minos/api.conf"), Err(Ext4Error::NotFound)));
+    assert!(matches!(
+        fs.read_file("/etc/minos/api.conf"),
+        Err(Ext4Error::NotFound)
+    ));
 
     // Dosyayi olusturup yeniden okuma
-    fs.write_file("/etc/minos/api.conf", b"port=9090\n").unwrap();
+    fs.write_file("/etc/minos/api.conf", b"port=9090\n")
+        .unwrap();
     assert_eq!(fs.read_file("/etc/minos/api.conf").unwrap(), b"port=9090\n");
 }
 
@@ -285,9 +320,6 @@ fn ext4_content_survives_remount() {
     let fs = Ext4Fs::mount(dev2, 0).unwrap();
     assert_eq!(fs.read_file("/kalici.bin").unwrap(), payload);
 }
-
-
-
 
 #[test]
 fn ext4_fragmentation_and_deep_directory_hierarchy() {
@@ -354,7 +386,16 @@ fn exfat_fragmentation_and_cluster_chain_integrity() {
 
     // Bütünlüğü doğrula
     assert_eq!(fs.read_file("/docs/sub/merged.dat").unwrap(), big);
-    assert_eq!(fs.read_file("/docs/sub/file_0.bin").unwrap(), pattern(6000, 0));
-    assert_eq!(fs.read_file("/docs/sub/file_2.bin").unwrap(), pattern(6000, 2));
-    assert_eq!(fs.read_file("/docs/sub/file_4.bin").unwrap(), pattern(6000, 4));
+    assert_eq!(
+        fs.read_file("/docs/sub/file_0.bin").unwrap(),
+        pattern(6000, 0)
+    );
+    assert_eq!(
+        fs.read_file("/docs/sub/file_2.bin").unwrap(),
+        pattern(6000, 2)
+    );
+    assert_eq!(
+        fs.read_file("/docs/sub/file_4.bin").unwrap(),
+        pattern(6000, 4)
+    );
 }

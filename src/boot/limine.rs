@@ -40,15 +40,15 @@ unsafe impl Sync for LimineFramebufferRequest {}
 #[used]
 #[link_section = ".requests_start_marker"]
 pub static LIMINE_REQUESTS_START_MARKER: [u64; 4] = [
-    0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf,
-    0x785c6ed015d3e316, 0x181e920a7852b9d9,
+    0xf6b8f4b39de7d1ae,
+    0xfab91a6940fcb9cf,
+    0x785c6ed015d3e316,
+    0x181e920a7852b9d9,
 ];
 
 #[used]
 #[link_section = ".requests_base_revision"]
-pub static LIMINE_BASE_REVISION: [u64; 3] = [
-    0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 3,
-];
+pub static LIMINE_BASE_REVISION: [u64; 3] = [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc, 3];
 
 #[used]
 #[link_section = ".requests"]
@@ -65,12 +65,12 @@ pub static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequ
 
 #[used]
 #[link_section = ".requests_end_marker"]
-pub static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [
-    0xadc0e0531bb10d03, 0x9572709f31764c62,
-];
+pub static LIMINE_REQUESTS_END_MARKER: [u64; 2] = [0xadc0e0531bb10d03, 0x9572709f31764c62];
 
 // Panic anında ekrana doğrudan çizim yapabilmek için video sürücüsü statikleri kullanılır:
-pub use crate::drivers::video::{PANIC_FB_ADDR, PANIC_FB_W, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_BPP};
+pub use crate::drivers::video::{
+    PANIC_FB_ADDR, PANIC_FB_BPP, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_W,
+};
 
 // --- Limine HHDM (Higher-Half Direct Map) istegi: fiziksel<->sanal donusum ---
 #[repr(C, align(8))]
@@ -115,7 +115,12 @@ unsafe impl Sync for LimineHhdmRequest {}
 #[used]
 #[link_section = ".requests"]
 pub static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
-    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x48dcf1cb8ad2b852, 0x63984e959a98244b],
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x48dcf1cb8ad2b852,
+        0x63984e959a98244b,
+    ],
     revision: 0,
     response: core::ptr::null(),
 };
@@ -152,7 +157,12 @@ pub static STACK_SIZE_REQUEST: LimineStackSizeRequest = LimineStackSizeRequest {
 #[used]
 #[link_section = ".requests"]
 pub static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
-    id: [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b, 0x67cf3d9d378a806f, 0xe304acdfc50c3c62],
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x67cf3d9d378a806f,
+        0xe304acdfc50c3c62,
+    ],
     revision: 0,
     response: core::ptr::null(),
 };
@@ -304,5 +314,9 @@ pub(crate) unsafe fn valid_limine_response<T>(slot: *const *const T) -> Option<*
         return None;
     }
     let ptr = core::ptr::read_volatile(slot);
-    if !is_mapped_limine_ptr(ptr) { None } else { Some(ptr) }
+    if !is_mapped_limine_ptr(ptr) {
+        None
+    } else {
+        Some(ptr)
+    }
 }

@@ -43,10 +43,19 @@ pub struct ScrollbarGeom {
 /// Dikey kaydırma çubuğu geometrisini hesaplar.
 /// `view` = görünür pencere (uzunluk), `content` = toplam içerik uzunluğu,
 /// `offset` = mevcut kaydırma ofseti.
-pub fn v_geom(track: (usize, usize, usize, usize), content: usize, view: usize, offset: usize) -> ScrollbarGeom {
+pub fn v_geom(
+    track: (usize, usize, usize, usize),
+    content: usize,
+    view: usize,
+    offset: usize,
+) -> ScrollbarGeom {
     let (tx, ty, tw, th) = track;
     if content <= view || view == 0 {
-        return ScrollbarGeom { track, thumb: (tx, ty, tw, 0), ratio: 0.0 };
+        return ScrollbarGeom {
+            track,
+            thumb: (tx, ty, tw, 0),
+            ratio: 0.0,
+        };
     }
     let thumb_h = ((th * view) / content).max(16).min(th);
     let max_off = content - view;
@@ -60,10 +69,19 @@ pub fn v_geom(track: (usize, usize, usize, usize), content: usize, view: usize, 
 }
 
 /// Yatay kaydırma çubuğu geometrisini hesaplar.
-pub fn h_geom(track: (usize, usize, usize, usize), content: usize, view: usize, offset: usize) -> ScrollbarGeom {
+pub fn h_geom(
+    track: (usize, usize, usize, usize),
+    content: usize,
+    view: usize,
+    offset: usize,
+) -> ScrollbarGeom {
     let (tx, ty, tw, th) = track;
     if content <= view || view == 0 {
-        return ScrollbarGeom { track, thumb: (tx, ty, 0, th), ratio: 0.0 };
+        return ScrollbarGeom {
+            track,
+            thumb: (tx, ty, 0, th),
+            ratio: 0.0,
+        };
     }
     let thumb_w = ((tw * view) / content).max(16).min(tw);
     let max_off = content - view;
@@ -78,23 +96,49 @@ pub fn h_geom(track: (usize, usize, usize, usize), content: usize, view: usize, 
 
 /// Dikey kaydırma çubuğunun track dikdörtgenini, verilen içerik alanına göre üretir.
 /// İçerik alanının sağ kenarına yerleşir.
-pub fn v_track_for(content_rect: (usize, usize, usize, usize), needed: bool, h_scroll_present: bool) -> (usize, usize, usize, usize) {
+pub fn v_track_for(
+    content_rect: (usize, usize, usize, usize),
+    needed: bool,
+    h_scroll_present: bool,
+) -> (usize, usize, usize, usize) {
     let (cx, cy, cw, ch) = content_rect;
     if !needed {
         return (cx + cw, cy, 0, 0);
     }
-    let h = ch.saturating_sub(if h_scroll_present { SCROLLBAR_THICKNESS } else { 0 });
-    (cx + cw.saturating_sub(SCROLLBAR_THICKNESS), cy, SCROLLBAR_THICKNESS, h)
+    let h = ch.saturating_sub(if h_scroll_present {
+        SCROLLBAR_THICKNESS
+    } else {
+        0
+    });
+    (
+        cx + cw.saturating_sub(SCROLLBAR_THICKNESS),
+        cy,
+        SCROLLBAR_THICKNESS,
+        h,
+    )
 }
 
 /// Yatay kaydırma çubuğunun track dikdörtgenini üretir. İçerik alanının alt kenarına yerleşir.
-pub fn h_track_for(content_rect: (usize, usize, usize, usize), needed: bool, v_scroll_present: bool) -> (usize, usize, usize, usize) {
+pub fn h_track_for(
+    content_rect: (usize, usize, usize, usize),
+    needed: bool,
+    v_scroll_present: bool,
+) -> (usize, usize, usize, usize) {
     let (cx, cy, cw, ch) = content_rect;
     if !needed {
         return (cx, cy + ch, 0, 0);
     }
-    let w = cw.saturating_sub(if v_scroll_present { SCROLLBAR_THICKNESS } else { 0 });
-    (cx, cy + ch.saturating_sub(SCROLLBAR_THICKNESS), w, SCROLLBAR_THICKNESS)
+    let w = cw.saturating_sub(if v_scroll_present {
+        SCROLLBAR_THICKNESS
+    } else {
+        0
+    });
+    (
+        cx,
+        cy + ch.saturating_sub(SCROLLBAR_THICKNESS),
+        w,
+        SCROLLBAR_THICKNESS,
+    )
 }
 
 /// Kaydırma çubuğunu çizer (track + thumb + kenarlık).
@@ -107,7 +151,13 @@ pub fn draw_vertical(fb: &mut Framebuffer, g: &ScrollbarGeom) {
     fb.draw_rect_outline(tx, ty, tw, th, Color::BORDER);
     if g.thumb.3 > 0 {
         let (hx, hy, hw, hh) = g.thumb;
-        fb.draw_rect(hx + 1, hy + 1, hw.saturating_sub(2), hh.saturating_sub(2), Color::ACCENT_BLUE);
+        fb.draw_rect(
+            hx + 1,
+            hy + 1,
+            hw.saturating_sub(2),
+            hh.saturating_sub(2),
+            Color::ACCENT_BLUE,
+        );
     }
 }
 
@@ -120,7 +170,13 @@ pub fn draw_horizontal(fb: &mut Framebuffer, g: &ScrollbarGeom) {
     fb.draw_rect_outline(tx, ty, tw, th, Color::BORDER);
     if g.thumb.2 > 0 {
         let (hx, hy, hw, hh) = g.thumb;
-        fb.draw_rect(hx + 1, hy + 1, hw.saturating_sub(2), hh.saturating_sub(2), Color::ACCENT_BLUE);
+        fb.draw_rect(
+            hx + 1,
+            hy + 1,
+            hw.saturating_sub(2),
+            hh.saturating_sub(2),
+            Color::ACCENT_BLUE,
+        );
     }
 }
 

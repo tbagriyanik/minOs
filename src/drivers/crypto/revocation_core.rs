@@ -21,8 +21,8 @@
 //! Bilinmeyen bir durum "iyi" sayılmaz: çağıranın (TLS) eksik/ayrıştırılamayan
 //! iptal verisini reddetmesi (fail-closed) beklenir.
 
-use alloc::vec::Vec;
 use crate::drivers::crypto::x509::{parse_der_time, CertValidationError, ParsedX509Cert, X509Time};
+use alloc::vec::Vec;
 
 #[allow(dead_code)]
 const TAG_BOOLEAN: u8 = 0x01;
@@ -44,8 +44,7 @@ const TAG_CONTEXT_1: u8 = 0xA1;
 const OID_CE_PREFIX: &[u8] = &[0x55, 0x1D];
 
 /// OCSP imzalı yanıt: nesne tanımlayıcısı `1.3.6.1.5.5.7.48.1.1`.
-pub const OID_OCSP_BASIC_RESPONSE: &[u8] =
-    &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
+pub const OID_OCSP_BASIC_RESPONSE: &[u8] = &[0x2B, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
 
 /// Bir sertifikanın iptal durumu.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,13 +67,25 @@ pub struct RevocationResult {
 
 impl RevocationResult {
     pub fn good() -> Self {
-        Self { status: RevocationStatus::Good, revoked_at: None, reason: None }
+        Self {
+            status: RevocationStatus::Good,
+            revoked_at: None,
+            reason: None,
+        }
     }
     pub fn revoked(at: Option<X509Time>, reason: Option<u8>) -> Self {
-        Self { status: RevocationStatus::Revoked, revoked_at: at, reason }
+        Self {
+            status: RevocationStatus::Revoked,
+            revoked_at: at,
+            reason,
+        }
     }
     pub fn unknown() -> Self {
-        Self { status: RevocationStatus::Unknown, revoked_at: None, reason: None }
+        Self {
+            status: RevocationStatus::Unknown,
+            revoked_at: None,
+            reason: None,
+        }
     }
     /// "İyi" sonuç yalnızca açıkça `good` olduğunda döner.
     pub fn is_acceptable(&self) -> bool {
@@ -235,7 +246,20 @@ pub fn unix_to_x509_time(unix_secs: u64) -> X509Time {
         year += 1;
     }
     let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let months = [31u32, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31u32,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 0usize;
     let mut d = day_of_year;
     while month < 12 && d >= months[month] {
@@ -500,7 +524,9 @@ impl OcspResponseInfo {
     }
 
     pub fn find(&self, serial: &[u8]) -> Option<&OcspSingleResponse> {
-        self.responses.iter().find(|r| serials_equal(&r.serial, serial))
+        self.responses
+            .iter()
+            .find(|r| serials_equal(&r.serial, serial))
     }
 }
 
@@ -710,7 +736,12 @@ fn parse_single_response(der: &[u8], vo: usize) -> Result<OcspSingleResponse, ()
         _ => return Err(()),
     };
 
-    Ok(OcspSingleResponse { serial, status, revoked_at, reason })
+    Ok(OcspSingleResponse {
+        serial,
+        status,
+        revoked_at,
+        reason,
+    })
 }
 
 /// Sertifikanın OCSP yanıtına göre durumunu döner (imza doğrulaması ayrıca
@@ -775,19 +806,35 @@ mod tests {
     }
 
     fn t(y: u16, m: u8, d: u8) -> X509Time {
-        X509Time { year: y, month: m, day: d, hour: 0, minute: 0, second: 0 }
+        X509Time {
+            year: y,
+            month: m,
+            day: d,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
     }
 
     fn test_crl(serials: &[&[u8]]) -> Vec<u8> {
-        let issuer_cn = cat(&[der(0x31, &der(0x30, &cat(&[
-            der(0x06, &[0x55, 0x04, 0x03]),
-            der(0x0C, b"Test CA"),
-        ])))]);
+        let issuer_cn = cat(&[der(
+            0x31,
+            &der(
+                0x30,
+                &cat(&[der(0x06, &[0x55, 0x04, 0x03]), der(0x0C, b"Test CA")]),
+            ),
+        )]);
         let issuer = der(0x30, &issuer_cn);
-        let sig_alg = der(0x30, &cat(&[
-            der(0x06, &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]),
-            der(0x05, &[]),
-        ]));
+        let sig_alg = der(
+            0x30,
+            &cat(&[
+                der(
+                    0x06,
+                    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B],
+                ),
+                der(0x05, &[]),
+            ]),
+        );
         let mut tbs = cat(&[
             integer(&[1]),
             sig_alg.clone(),
@@ -800,49 +847,87 @@ mod tests {
             revoked.extend_from_slice(&der(0x30, &cat(&[integer(s), utc_time("250215120000Z")])));
         }
         tbs.extend_from_slice(&der(0x30, &revoked));
-        der(0x30, &cat(&[
-            der(0x30, &tbs),
-            sig_alg,
-            der(0x03, &[0x00, 0xAB, 0xCD]),
-        ]))
+        der(
+            0x30,
+            &cat(&[der(0x30, &tbs), sig_alg, der(0x03, &[0x00, 0xAB, 0xCD])]),
+        )
     }
 
     fn test_ocsp(serial: &[u8], status: u8) -> Vec<u8> {
-        let name = der(0x30, &der(0x31, &der(0x30, &cat(&[
-            der(0x06, &[0x55, 0x04, 0x03]),
-            der(0x0C, b"Test CA"),
-        ]))));
-        let cert_id = der(0x30, &cat(&[
-            der(0x30, &cat(&[der(0x06, &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01]), der(0x05, &[])])),
-            der(0x04, &[0u8; 32]),
-            der(0x04, &[1u8; 32]),
-            integer(serial),
-        ]));
+        let name = der(
+            0x30,
+            &der(
+                0x31,
+                &der(
+                    0x30,
+                    &cat(&[der(0x06, &[0x55, 0x04, 0x03]), der(0x0C, b"Test CA")]),
+                ),
+            ),
+        );
+        let cert_id = der(
+            0x30,
+            &cat(&[
+                der(
+                    0x30,
+                    &cat(&[
+                        der(
+                            0x06,
+                            &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01],
+                        ),
+                        der(0x05, &[]),
+                    ]),
+                ),
+                der(0x04, &[0u8; 32]),
+                der(0x04, &[1u8; 32]),
+                integer(serial),
+            ]),
+        );
         let cert_status = if status == 0 {
             der(0x80, &[])
         } else {
-            der(0xA1, &der(0x30, &cat(&[utc_time("250215120000Z"), der(0xA0, &der(0x0A, &[4]))])))
+            der(
+                0xA1,
+                &der(
+                    0x30,
+                    &cat(&[utc_time("250215120000Z"), der(0xA0, &der(0x0A, &[4]))]),
+                ),
+            )
         };
-        let single = der(0x30, &cat(&[
-            cert_id,
-            cert_status,
-            utc_time("250301000000Z"),
-            utc_time("250308000000Z"),
-        ]));
-        let response_data = der(0x30, &cat(&[
-            der(0xA1, &name),
-            utc_time("250301000000Z"),
-            der(0x30, &single),
-        ]));
-        let sig_alg = der(0x30, &cat(&[
-            der(0x06, &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B]),
-            der(0x05, &[]),
-        ]));
-        let basic = der(0x30, &cat(&[response_data, sig_alg, der(0x03, &[0x00, 0x11, 0x22])]));
-        let response_bytes = der(0x30, &cat(&[
-            der(0x06, OID_OCSP_BASIC_RESPONSE),
-            der(0x04, &basic),
-        ]));
+        let single = der(
+            0x30,
+            &cat(&[
+                cert_id,
+                cert_status,
+                utc_time("250301000000Z"),
+                utc_time("250308000000Z"),
+            ]),
+        );
+        let response_data = der(
+            0x30,
+            &cat(&[
+                der(0xA1, &name),
+                utc_time("250301000000Z"),
+                der(0x30, &single),
+            ]),
+        );
+        let sig_alg = der(
+            0x30,
+            &cat(&[
+                der(
+                    0x06,
+                    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B],
+                ),
+                der(0x05, &[]),
+            ]),
+        );
+        let basic = der(
+            0x30,
+            &cat(&[response_data, sig_alg, der(0x03, &[0x00, 0x11, 0x22])]),
+        );
+        let response_bytes = der(
+            0x30,
+            &cat(&[der(0x06, OID_OCSP_BASIC_RESPONSE), der(0x04, &basic)]),
+        );
         der(0x30, &cat(&[der(0x0A, &[0]), der(0xA0, &response_bytes)]))
     }
 
@@ -877,8 +962,14 @@ mod tests {
     fn crl_reports_revoked_and_good_serials() {
         let crl = test_crl(&[&[0x10]]);
         let now = t(2025, 6, 1);
-        assert_eq!(check_crl(&crl, &[0x10], &now).unwrap().status, RevocationStatus::Revoked);
-        assert_eq!(check_crl(&crl, &[0x11], &now).unwrap().status, RevocationStatus::Good);
+        assert_eq!(
+            check_crl(&crl, &[0x10], &now).unwrap().status,
+            RevocationStatus::Revoked
+        );
+        assert_eq!(
+            check_crl(&crl, &[0x11], &now).unwrap().status,
+            RevocationStatus::Good
+        );
     }
 
     #[test]
@@ -894,7 +985,10 @@ mod tests {
     fn ocsp_status_good_and_revoked() {
         let good = test_ocsp(&[0x10], 0);
         let now = t(2025, 3, 2);
-        assert_eq!(check_ocsp(&good, &[0x10], &now).unwrap().status, RevocationStatus::Good);
+        assert_eq!(
+            check_ocsp(&good, &[0x10], &now).unwrap().status,
+            RevocationStatus::Good
+        );
 
         let revoked = test_ocsp(&[0x10], 1);
         let r = check_ocsp(&revoked, &[0x10], &now).unwrap();

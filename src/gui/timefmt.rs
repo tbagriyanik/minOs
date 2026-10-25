@@ -79,7 +79,10 @@ fn push_str(out: &mut [u8], len: usize, text: &str) -> usize {
 fn push_u64(out: &mut [u8], len: usize, mut value: u64) -> usize {
     let mut digits = [0u8; 20];
     let mut count = 0;
-    if value == 0 { digits[count] = b'0'; count += 1; }
+    if value == 0 {
+        digits[count] = b'0';
+        count += 1;
+    }
     while value > 0 {
         digits[count] = b'0' + (value % 10) as u8;
         count += 1;
@@ -100,7 +103,10 @@ fn push_padded(out: &mut [u8], len: usize, value: u64, width: usize) -> usize {
     let mut digits = [0u8; 20];
     let mut count = 0;
     let mut v = value;
-    if v == 0 { digits[count] = b'0'; count += 1; }
+    if v == 0 {
+        digits[count] = b'0';
+        count += 1;
+    }
     while v > 0 {
         digits[count] = b'0' + (v % 10) as u8;
         count += 1;
@@ -109,7 +115,10 @@ fn push_padded(out: &mut [u8], len: usize, value: u64, width: usize) -> usize {
     let mut written = 0;
     for _ in count..width {
         let pos = len + written;
-        if pos < out.len() { out[pos] = b'0'; written += 1; }
+        if pos < out.len() {
+            out[pos] = b'0';
+            written += 1;
+        }
     }
     for index in (0..count).rev() {
         let pos = len + written;
@@ -127,9 +136,30 @@ mod tests {
 
     #[test]
     fn duration_parts_split() {
-        assert_eq!(split_duration(0), DurationParts { hours: 0, minutes: 0, seconds: 0 });
-        assert_eq!(split_duration(3661), DurationParts { hours: 1, minutes: 1, seconds: 1 });
-        assert_eq!(split_duration(90_061), DurationParts { hours: 25, minutes: 1, seconds: 1 });
+        assert_eq!(
+            split_duration(0),
+            DurationParts {
+                hours: 0,
+                minutes: 0,
+                seconds: 0
+            }
+        );
+        assert_eq!(
+            split_duration(3661),
+            DurationParts {
+                hours: 1,
+                minutes: 1,
+                seconds: 1
+            }
+        );
+        assert_eq!(
+            split_duration(90_061),
+            DurationParts {
+                hours: 25,
+                minutes: 1,
+                seconds: 1
+            }
+        );
     }
 
     #[test]

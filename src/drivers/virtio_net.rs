@@ -14,13 +14,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -331,7 +335,10 @@ pub fn init() -> bool {
 
         // Sürücü durumunu ayarla
         mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE);
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER,
+        );
 
         // Özellikleri oku
         let features = mmio_read32(VIRTIO_MMIO_DEVICE_FEATURES);
@@ -340,7 +347,10 @@ pub fn init() -> bool {
         mmio_write32(VIRTIO_MMIO_DRIVER_FEATURES, driver_features);
 
         // Özellikleri onayla
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK,
+        );
 
         // Özelliklerin kabul edildiğini kontrol et
         let status = mmio_read32(VIRTIO_MMIO_STATUS);
@@ -359,7 +369,13 @@ pub fn init() -> bool {
         }
 
         // Sürücü hazır
-        mmio_write32(VIRTIO_MMIO_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK);
+        mmio_write32(
+            VIRTIO_MMIO_STATUS,
+            VIRTIO_STATUS_ACKNOWLEDGE
+                | VIRTIO_STATUS_DRIVER
+                | VIRTIO_STATUS_FEATURES_OK
+                | VIRTIO_STATUS_DRIVER_OK,
+        );
 
         true
     }

@@ -6,9 +6,9 @@
 //! - `html`: HTML tokenize + yerleşim (`render_html_to_lines`)
 //! - `crate::apps::js`: minJs betik motoru
 //! - bu dosya: HTTP/TLS akışı, geçmiş ve `BrowserApp` pencere denetçisi
-mod types;
 mod css;
 mod html;
+mod types;
 
 pub use types::{
     html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedLink, TextAlign, TextSpan,
@@ -28,10 +28,18 @@ use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
 
 extern crate alloc;
 
-fn split_http_lines(body:&[u8])->impl Iterator<Item=&str> {
-    body.split(|b|*b==b'\n').filter_map(|line| {
-        let line=if line.last()==Some(&b'\r'){&line[..line.len()-1]}else{line};
-        if line.is_empty(){None}else{Some(core::str::from_utf8(line).unwrap_or("[binary or non-UTF8 content]"))}
+fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
+    body.split(|b| *b == b'\n').filter_map(|line| {
+        let line = if line.last() == Some(&b'\r') {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        if line.is_empty() {
+            None
+        } else {
+            Some(core::str::from_utf8(line).unwrap_or("[binary or non-UTF8 content]"))
+        }
     })
 }
 
@@ -50,9 +58,15 @@ static HISTORY_POS: AtomicUsize = AtomicUsize::new(0);
 /// Belirtilen geçmiş girdisini (0 = en eski) metne çevirir.
 fn history_copy(index: usize) -> Option<String> {
     let count = HISTORY_COUNT.load(Ordering::Acquire);
-    if index >= count || index >= HISTORY_MAX { return None; }
-    let len = HISTORY_LEN[index].load(Ordering::Acquire).min(HISTORY_URL_CAP);
-    if len == 0 { return None; }
+    if index >= count || index >= HISTORY_MAX {
+        return None;
+    }
+    let len = HISTORY_LEN[index]
+        .load(Ordering::Acquire)
+        .min(HISTORY_URL_CAP);
+    if len == 0 {
+        return None;
+    }
     let mut out = String::with_capacity(len);
     for slot in HISTORY[index].iter().take(len) {
         out.push(char::from_u32(slot.load(Ordering::Relaxed)).unwrap_or('\u{FFFD}'));
@@ -61,23 +75,33 @@ fn history_copy(index: usize) -> Option<String> {
 }
 
 /// Kayıtlı geçmiş girdisi sayısı.
-fn history_count() -> usize { HISTORY_COUNT.load(Ordering::Acquire) }
+fn history_count() -> usize {
+    HISTORY_COUNT.load(Ordering::Acquire)
+}
 
 /// Yeni bir adresi geçmişe ekler (art arda yinelemeleri atlar).
 fn history_push(url: &str) {
-    if url.is_empty() { return; }
+    if url.is_empty() {
+        return;
+    }
     let mut count = HISTORY_COUNT.load(Ordering::Acquire);
     // Atomic state can briefly be observed while a navigation update is in
     // progress. Always normalize it before using it as an array index.
     count = count.min(HISTORY_MAX);
-    let pos = HISTORY_POS.load(Ordering::Acquire).min(count.saturating_sub(1));
+    let pos = HISTORY_POS
+        .load(Ordering::Acquire)
+        .min(count.saturating_sub(1));
     if count > 0 && pos < count {
         if let Some(cur) = history_copy(pos) {
-            if cur == url { return; }
+            if cur == url {
+                return;
+            }
         }
     }
     // Geri gidildikten sonra yeni gezinme, ileri geçmişi budar.
-    if count > 0 { count = pos.saturating_add(1).min(count); }
+    if count > 0 {
+        count = pos.saturating_add(1).min(count);
+    }
     // Kapasite dolduysa en eski girdiyi düşür.
     if count >= HISTORY_MAX {
         for i in 1..HISTORY_MAX {
@@ -103,7 +127,9 @@ fn history_push(url: &str) {
 fn history_back() -> Option<String> {
     let count = HISTORY_COUNT.load(Ordering::Acquire);
     let pos = HISTORY_POS.load(Ordering::Acquire);
-    if count == 0 || pos == 0 || pos >= count { return None; }
+    if count == 0 || pos == 0 || pos >= count {
+        return None;
+    }
     let target = pos - 1;
     HISTORY_POS.store(target, Ordering::Release);
     history_copy(target)
@@ -113,7 +139,9 @@ fn history_back() -> Option<String> {
 fn history_forward() -> Option<String> {
     let count = HISTORY_COUNT.load(Ordering::Acquire);
     let pos = HISTORY_POS.load(Ordering::Acquire);
-    if count == 0 || pos >= count || pos.saturating_add(1) >= count { return None; }
+    if count == 0 || pos >= count || pos.saturating_add(1) >= count {
+        return None;
+    }
     let target = pos + 1;
     HISTORY_POS.store(target, Ordering::Release);
     history_copy(target)
@@ -131,7 +159,9 @@ pub fn history_clear() {
 /// Belirtilen indeksteki geçmiş kaydını siler ve kalanları kaydırır.
 pub fn history_remove(index: usize) -> bool {
     let count = HISTORY_COUNT.load(Ordering::Acquire).min(HISTORY_MAX);
-    if index >= count || count == 0 { return false; }
+    if index >= count || count == 0 {
+        return false;
+    }
     for i in index + 1..count {
         for j in 0..HISTORY_URL_CAP {
             HISTORY[i - 1][j].store(HISTORY[i][j].load(Ordering::Relaxed), Ordering::Relaxed);
@@ -218,41 +248,95 @@ pub struct BrowserApp {
 }
 
 impl BrowserApp {
-    pub fn open_find(&mut self) { self.find_active = true; self.find_len = 0; self.find_match_index.set(0); self.find_match_count.set(0); }
-    pub fn close_find(&mut self) { self.find_active = false; }
+    pub fn open_find(&mut self) {
+        self.find_active = true;
+        self.find_len = 0;
+        self.find_match_index.set(0);
+        self.find_match_count.set(0);
+    }
+    pub fn close_find(&mut self) {
+        self.find_active = false;
+    }
     pub fn find_char(&mut self, ch: char) {
         let mut buf = [0u8; 4];
-        for byte in ch.encode_utf8(&mut buf).bytes() { if self.find_len < self.find_query.len() { self.find_query[self.find_len] = byte; self.find_len += 1; } }
+        for byte in ch.encode_utf8(&mut buf).bytes() {
+            if self.find_len < self.find_query.len() {
+                self.find_query[self.find_len] = byte;
+                self.find_len += 1;
+            }
+        }
         self.find_match_index.set(0);
     }
     pub fn find_backspace(&mut self) {
-        if self.find_len == 0 { return; }
+        if self.find_len == 0 {
+            return;
+        }
         self.find_len -= 1;
-        while self.find_len > 0 && self.find_query[self.find_len] & 0xC0 == 0x80 { self.find_len -= 1; }
+        while self.find_len > 0 && self.find_query[self.find_len] & 0xC0 == 0x80 {
+            self.find_len -= 1;
+        }
         self.find_match_index.set(0);
     }
-    pub fn find_next(&mut self) { let count = self.find_match_count.get(); if count > 0 { self.find_match_index.set((self.find_match_index.get() + 1) % count); } }
+    pub fn find_next(&mut self) {
+        let count = self.find_match_count.get();
+        if count > 0 {
+            self.find_match_index
+                .set((self.find_match_index.get() + 1) % count);
+        }
+    }
 
     pub fn new() -> Self {
         let mut app = Self {
-            url: [0; 128], url_len: 0, address_focused: false, address_cursor: 0, address_scroll: 0, address_selection: None,
-            address_selection_anchor: None, address_last_click: (0, 0, 0), address_click_streak: 0,
-            address_undo: [[0; 128]; 16], address_undo_len: [0; 16], address_undo_count: 0,
-            address_redo: [[0; 128]; 16], address_redo_len: [0; 16], address_redo_count: 0,
-            active_tab: 0, focused_control: 0, toolbar_menu_open: false, find_active: false, find_query: [0; 64], find_len: 0,
-            find_match_index: Cell::new(0), find_match_count: Cell::new(0), suppress_history: false, page_loaded: true, status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
-            net_online: false, ping_ok: false,
+            url: [0; 128],
+            url_len: 0,
+            address_focused: false,
+            address_cursor: 0,
+            address_scroll: 0,
+            address_selection: None,
+            address_selection_anchor: None,
+            address_last_click: (0, 0, 0),
+            address_click_streak: 0,
+            address_undo: [[0; 128]; 16],
+            address_undo_len: [0; 16],
+            address_undo_count: 0,
+            address_redo: [[0; 128]; 16],
+            address_redo_len: [0; 16],
+            address_redo_count: 0,
+            active_tab: 0,
+            focused_control: 0,
+            toolbar_menu_open: false,
+            find_active: false,
+            find_query: [0; 64],
+            find_len: 0,
+            find_match_index: Cell::new(0),
+            find_match_count: Cell::new(0),
+            suppress_history: false,
+            page_loaded: true,
+            status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
+            net_online: false,
+            ping_ok: false,
             web_request_sent: false,
-            page_title: [0; 64], page_title_len: 0,
+            page_title: [0; 64],
+            page_title_len: 0,
             page_lines: Vec::new(),
             rendered_links: RefCell::new(Vec::new()),
             scroll_y: 0,
-            request_pending: false, request_host: [0; 128], request_host_len: 0,
-            request_path: [0; 256], request_path_len: 0, request_ip: crate::drivers::netstack::Ipv4Address([0; 4]), request_port: 80,
-            request_deadline: 0, request_state: 0, redirect_count: 0,
+            request_pending: false,
+            request_host: [0; 128],
+            request_host_len: 0,
+            request_path: [0; 256],
+            request_path_len: 0,
+            request_ip: crate::drivers::netstack::Ipv4Address([0; 4]),
+            request_port: 80,
+            request_deadline: 0,
+            request_state: 0,
+            redirect_count: 0,
             is_https: false,
-            is_post: false, post_body: Vec::new(), cookies: Vec::new(),
-            response_data: Vec::new(), response_len: 0,
+            is_post: false,
+            post_body: Vec::new(),
+            cookies: Vec::new(),
+            response_data: Vec::new(),
+            response_len: 0,
             tls_session: None,
             tls_app_data: Vec::new(),
             tls_pending_request: Vec::new(),
@@ -271,16 +355,23 @@ impl BrowserApp {
     }
 
     pub fn add_bookmark_current(&mut self) {
-        let current = alloc::string::String::from(core::str::from_utf8(&self.url[..self.url_len]).unwrap_or(""));
-        if current.is_empty() { return; }
-        let title = alloc::string::String::from(core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or(&current));
-        self.bookmarks_extra.push(crate::apps::browser::types::Bookmark {
-            title: Box::leak(title.clone().into_boxed_str()),
-            title_en: Box::leak(title.into_boxed_str()),
-            url: Box::leak(current.clone().into_boxed_str()),
-            description: "Kullanıcı yer imi",
-            description_en: "User bookmark",
-        });
+        let current = alloc::string::String::from(
+            core::str::from_utf8(&self.url[..self.url_len]).unwrap_or(""),
+        );
+        if current.is_empty() {
+            return;
+        }
+        let title = alloc::string::String::from(
+            core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or(&current),
+        );
+        self.bookmarks_extra
+            .push(crate::apps::browser::types::Bookmark {
+                title: Box::leak(title.clone().into_boxed_str()),
+                title_en: Box::leak(title.into_boxed_str()),
+                url: Box::leak(current.clone().into_boxed_str()),
+                description: "Kullanıcı yer imi",
+                description_en: "User bookmark",
+            });
         self.status = crate::gui::ui_text("Yer imi eklendi.", "Bookmark added.");
     }
 
@@ -298,31 +389,56 @@ impl BrowserApp {
         let path = alloc::format!("/root/Downloads/indirme_{}.bin", crate::monotonic_ms());
         if vfs.write_file(&path, &data) {
             self.download_path = Some(path);
-            self.status = crate::gui::ui_text("İndirme /root/Downloads klasörüne kaydedildi.", "Download saved to /root/Downloads.");
+            self.status = crate::gui::ui_text(
+                "İndirme /root/Downloads klasörüne kaydedildi.",
+                "Download saved to /root/Downloads.",
+            );
             true
         } else {
-            self.status = crate::gui::ui_text("İndirme kaydedilemedi.", "Download could not be saved.");
+            self.status =
+                crate::gui::ui_text("İndirme kaydedilemedi.", "Download could not be saved.");
             false
         }
     }
 
-    pub fn bookmark_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn bookmark_btn_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(220), win_y + 32, 22, 20)
     }
 
-    pub fn download_btn_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn download_btn_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(194), win_y + 32, 22, 20)
     }
 
-    pub fn toolbar_menu_button_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn toolbar_menu_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(38), win_y + 32, 28, 20)
     }
 
-    pub fn toolbar_menu_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn toolbar_menu_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(190), win_y + 56, 180, 104)
     }
 
-    pub fn toolbar_menu_item_rect(win_x: usize, win_y: usize, win_w: usize, index: usize) -> (usize, usize, usize, usize) {
+    pub fn toolbar_menu_item_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        index: usize,
+    ) -> (usize, usize, usize, usize) {
         let (x, y, w, _) = Self::toolbar_menu_rect(win_x, win_y, win_w);
         (x + 4, y + 4 + index * 24, w - 8, 22)
     }
@@ -382,7 +498,8 @@ impl BrowserApp {
     fn eval_js_expr(&self, expr: &str) -> String {
         let expr = expr.trim();
         if (expr.starts_with('\'') && expr.ends_with('\'') && expr.len() >= 2)
-            || (expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2) {
+            || (expr.starts_with('"') && expr.ends_with('"') && expr.len() >= 2)
+        {
             return String::from(&expr[1..expr.len() - 1]);
         }
         for (var, val) in &self.js_vars {
@@ -409,13 +526,20 @@ impl BrowserApp {
         } else if stmt.starts_with("console.log(") && stmt.ends_with(')') {
             // No-op
         } else if stmt.starts_with("document.title =") || stmt.starts_with("document.title=") {
-            let val_part = if stmt.starts_with("document.title =") { &stmt[16..] } else { &stmt[15..] };
+            let val_part = if stmt.starts_with("document.title =") {
+                &stmt[16..]
+            } else {
+                &stmt[15..]
+            };
             let val = self.eval_js_expr(val_part);
             let vb = val.as_bytes();
             self.page_title_len = vb.len().min(64);
             self.page_title[..self.page_title_len].copy_from_slice(&vb[..self.page_title_len]);
-        } else if stmt.starts_with("document.body.style.backgroundColor =") || stmt.starts_with("document.body.style.backgroundColor=")
-            || stmt.starts_with("document.body.style.background =") || stmt.starts_with("document.body.style.background=") {
+        } else if stmt.starts_with("document.body.style.backgroundColor =")
+            || stmt.starts_with("document.body.style.backgroundColor=")
+            || stmt.starts_with("document.body.style.background =")
+            || stmt.starts_with("document.body.style.background=")
+        {
             let val_part = stmt.split('=').nth(1).unwrap_or("");
             let val = self.eval_js_expr(val_part);
             if let Some(c) = html_color(val.as_bytes()) {
@@ -426,9 +550,13 @@ impl BrowserApp {
                 let id_expr = &stmt[24..close_paren];
                 let id = self.eval_js_expr(id_expr);
                 let rest = stmt[close_paren + 1..].trim();
-                if rest.starts_with(".innerText =") || rest.starts_with(".innerText=")
-                    || rest.starts_with(".innerHTML =") || rest.starts_with(".innerHTML=")
-                    || rest.starts_with(".textContent =") || rest.starts_with(".textContent=") {
+                if rest.starts_with(".innerText =")
+                    || rest.starts_with(".innerText=")
+                    || rest.starts_with(".innerHTML =")
+                    || rest.starts_with(".innerHTML=")
+                    || rest.starts_with(".textContent =")
+                    || rest.starts_with(".textContent=")
+                {
                     let val_part = rest.split('=').nth(1).unwrap_or("");
                     let val = self.eval_js_expr(val_part);
                     for line in &mut self.page_lines {
@@ -490,12 +618,15 @@ impl BrowserApp {
             if body[p] == b'<' && p + 7 <= body.len() && eq_ascii(&body[p..p + 7], b"<script") {
                 let start = p + 7;
                 let mut close_tag = start;
-                while close_tag < body.len() && body[close_tag] != b'>' { close_tag += 1; }
+                while close_tag < body.len() && body[close_tag] != b'>' {
+                    close_tag += 1;
+                }
                 if close_tag < body.len() {
                     close_tag += 1;
                     let script_start = close_tag;
                     if let Some(pos) = find_bytes(&body[script_start..], b"</script>") {
-                        let script_code = decode_bytes_to_string(&body[script_start..script_start + pos]);
+                        let script_code =
+                            decode_bytes_to_string(&body[script_start..script_start + pos]);
                         for stmt in script_code.split(';') {
                             let stmt = stmt.trim();
                             if stmt.starts_with("document.write(") && stmt.ends_with(')') {
@@ -515,7 +646,12 @@ impl BrowserApp {
             p += 1;
         }
 
-        render_html_to_lines(&preprocessed_html, wrap_width_px, &mut self.page_lines, max_lines);
+        render_html_to_lines(
+            &preprocessed_html,
+            wrap_width_px,
+            &mut self.page_lines,
+            max_lines,
+        );
     }
 
     pub fn focus_next_control(&mut self) {
@@ -550,14 +686,23 @@ impl BrowserApp {
         self.keep_address_cursor_visible();
     }
 
-    pub fn address_click_at(&mut self, x: usize, y: usize, field_x: usize, now_ms: u64, interval_ms: u64) -> u8 {
+    pub fn address_click_at(
+        &mut self,
+        x: usize,
+        y: usize,
+        field_x: usize,
+        now_ms: u64,
+        interval_ms: u64,
+    ) -> u8 {
         self.focus_address_at(x, field_x);
         let same_target = now_ms.abs_diff(self.address_last_click.0) <= interval_ms
             && self.address_last_click.1.abs_diff(x) < 4
             && self.address_last_click.2.abs_diff(y) < 4;
         self.address_click_streak = if same_target && self.address_click_streak < 3 {
             self.address_click_streak + 1
-        } else { 1 };
+        } else {
+            1
+        };
         self.address_last_click = (now_ms, x, y);
         match self.address_click_streak {
             2 => self.address_select_word_at(self.address_cursor),
@@ -573,24 +718,36 @@ impl BrowserApp {
         let target = (self.address_scroll + column).min(self.url_len);
         self.address_cursor = target;
         let anchor = self.address_selection_anchor.unwrap_or(target);
-        self.address_selection = if anchor == target { None } else {
+        self.address_selection = if anchor == target {
+            None
+        } else {
             Some((anchor.min(target), anchor.max(target)))
         };
         self.keep_address_cursor_visible();
     }
 
     pub fn address_select_word_at(&mut self, index: usize) {
-        if self.url_len == 0 { return; }
+        if self.url_len == 0 {
+            return;
+        }
         let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
         let mut at = index.min(self.url_len);
         if at == self.url_len || !is_word(self.url[at]) {
-            if at > 0 && is_word(self.url[at - 1]) { at -= 1; }
+            if at > 0 && is_word(self.url[at - 1]) {
+                at -= 1;
+            }
         }
-        if at >= self.url_len || !is_word(self.url[at]) { return; }
+        if at >= self.url_len || !is_word(self.url[at]) {
+            return;
+        }
         let mut start = at;
         let mut end = at + 1;
-        while start > 0 && is_word(self.url[start - 1]) { start -= 1; }
-        while end < self.url_len && is_word(self.url[end]) { end += 1; }
+        while start > 0 && is_word(self.url[start - 1]) {
+            start -= 1;
+        }
+        while end < self.url_len && is_word(self.url[end]) {
+            end += 1;
+        }
         self.address_selection_anchor = Some(start);
         self.address_selection = Some((start, end));
         self.address_cursor = end;
@@ -675,13 +832,16 @@ impl BrowserApp {
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
-            bold: false,
-            underline: false,
+                bold: false,
+                underline: false,
                 onclick: String::new(),
                 elem_id: String::new(),
             });
             header_spans.push(TextSpan {
-                text: String::from(crate::gui::ui_text("[ Tümünü Temizle ]", "[ Clear All History ]")),
+                text: String::from(crate::gui::ui_text(
+                    "[ Tümünü Temizle ]",
+                    "[ Clear All History ]",
+                )),
                 color: Color::ACCENT_RED,
                 bg_color: Some(Color::TITLE_BAR),
                 is_link: true,
@@ -769,8 +929,8 @@ impl BrowserApp {
                             is_link: false,
                             link_url: String::new(),
                             is_button: false,
-                    bold: false,
-                    underline: false,
+                            bold: false,
+                            underline: false,
                             onclick: String::new(),
                             elem_id: String::new(),
                         },
@@ -781,8 +941,8 @@ impl BrowserApp {
                             is_link: true,
                             link_url: url,
                             is_button: false,
-                    bold: false,
-                    underline: false,
+                            bold: false,
+                            underline: false,
                             onclick: String::new(),
                             elem_id: String::new(),
                         }
@@ -862,7 +1022,11 @@ impl BrowserApp {
                 spans: alloc::vec![
                     TextSpan {
                         text: String::from(if is_web { "* [WEB] " } else { "* [LOCAL] " }),
-                        color: if is_web { Color::ACCENT_YELLOW } else { Color::ACCENT_BLUE },
+                        color: if is_web {
+                            Color::ACCENT_YELLOW
+                        } else {
+                            Color::ACCENT_BLUE
+                        },
                         bg_color: None,
                         is_link: false,
                         link_url: String::new(),
@@ -939,7 +1103,14 @@ impl BrowserApp {
         !t_trimmed.is_empty() && c_trimmed.eq_ignore_ascii_case(t_trimmed)
     }
 
-    pub fn click_bookmark_at(&self, mx: usize, my: usize, win_x: usize, win_y: usize, win_w: usize) -> Option<&'static str> {
+    pub fn click_bookmark_at(
+        &self,
+        mx: usize,
+        my: usize,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> Option<&'static str> {
         let bbar_y = win_y + 59;
         let bbar_h = 22;
         if my < bbar_y || my >= bbar_y + bbar_h {
@@ -964,10 +1135,13 @@ impl BrowserApp {
 
     pub fn address_char(&mut self, ch: char) {
         if ch.is_ascii_graphic() || ch == ' ' {
-            if self.url_len < self.url.len() { self.address_push_undo(); }
+            if self.url_len < self.url.len() {
+                self.address_push_undo();
+            }
             self.address_delete_selection();
             if self.url_len < self.url.len() {
-                self.url.copy_within(self.address_cursor..self.url_len, self.address_cursor + 1);
+                self.url
+                    .copy_within(self.address_cursor..self.url_len, self.address_cursor + 1);
                 self.url[self.address_cursor] = ch as u8;
                 self.url_len += 1;
                 self.address_cursor += 1;
@@ -977,11 +1151,16 @@ impl BrowserApp {
     }
 
     pub fn address_backspace(&mut self) {
-        if self.address_selection.is_some() || self.address_cursor > 0 { self.address_push_undo(); }
-        if self.address_delete_selection() { return; }
+        if self.address_selection.is_some() || self.address_cursor > 0 {
+            self.address_push_undo();
+        }
+        if self.address_delete_selection() {
+            return;
+        }
         if self.address_cursor > 0 {
             self.address_cursor -= 1;
-            self.url.copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
+            self.url
+                .copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
             self.url_len -= 1;
             self.url[self.url_len] = 0;
             self.keep_address_cursor_visible();
@@ -989,10 +1168,15 @@ impl BrowserApp {
     }
 
     pub fn address_delete(&mut self) {
-        if self.address_selection.is_some() || self.address_cursor < self.url_len { self.address_push_undo(); }
-        if self.address_delete_selection() { return; }
+        if self.address_selection.is_some() || self.address_cursor < self.url_len {
+            self.address_push_undo();
+        }
+        if self.address_delete_selection() {
+            return;
+        }
         if self.address_cursor < self.url_len {
-            self.url.copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
+            self.url
+                .copy_within(self.address_cursor + 1..self.url_len, self.address_cursor);
             self.url_len -= 1;
             self.url[self.url_len] = 0;
             self.keep_address_cursor_visible();
@@ -1002,14 +1186,23 @@ impl BrowserApp {
     fn address_move_to(&mut self, target: usize, select: bool) {
         if select {
             let anchor = match self.address_selection {
-                Some((a, b)) => if self.address_cursor == b { a } else { b },
+                Some((a, b)) => {
+                    if self.address_cursor == b {
+                        a
+                    } else {
+                        b
+                    }
+                }
                 None => self.address_cursor,
             };
             self.address_cursor = target.min(self.url_len);
             if anchor == self.address_cursor {
                 self.address_selection = None;
             } else {
-                self.address_selection = Some((anchor.min(self.address_cursor), anchor.max(self.address_cursor)));
+                self.address_selection = Some((
+                    anchor.min(self.address_cursor),
+                    anchor.max(self.address_cursor),
+                ));
             }
         } else {
             self.address_cursor = target.min(self.url_len);
@@ -1086,8 +1279,12 @@ impl BrowserApp {
             let is_alnum = self.url[idx - 1].is_ascii_alphanumeric() || self.url[idx - 1] == b'_';
             while idx > 0 {
                 let prev = self.url[idx - 1];
-                if prev == b' ' { break; }
-                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum { break; }
+                if prev == b' ' {
+                    break;
+                }
+                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum {
+                    break;
+                }
                 idx -= 1;
             }
         }
@@ -1111,8 +1308,12 @@ impl BrowserApp {
             if !is_space {
                 while idx < self.url_len {
                     let cur = self.url[idx];
-                    if cur == b' ' { break; }
-                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum { break; }
+                    if cur == b' ' {
+                        break;
+                    }
+                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum {
+                        break;
+                    }
                     idx += 1;
                 }
             }
@@ -1129,7 +1330,9 @@ impl BrowserApp {
             self.address_delete_selection();
             return;
         }
-        if self.address_cursor == 0 { return; }
+        if self.address_cursor == 0 {
+            return;
+        }
         let mut idx = self.address_cursor;
         while idx > 0 && self.url[idx - 1] == b' ' {
             idx -= 1;
@@ -1138,8 +1341,12 @@ impl BrowserApp {
             let is_alnum = self.url[idx - 1].is_ascii_alphanumeric() || self.url[idx - 1] == b'_';
             while idx > 0 {
                 let prev = self.url[idx - 1];
-                if prev == b' ' { break; }
-                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum { break; }
+                if prev == b' ' {
+                    break;
+                }
+                if (prev.is_ascii_alphanumeric() || prev == b'_') != is_alnum {
+                    break;
+                }
                 idx -= 1;
             }
         }
@@ -1154,7 +1361,9 @@ impl BrowserApp {
             self.address_delete_selection();
             return;
         }
-        if self.address_cursor >= self.url_len { return; }
+        if self.address_cursor >= self.url_len {
+            return;
+        }
         let mut idx = self.address_cursor;
         if idx < self.url_len {
             let is_alnum = self.url[idx].is_ascii_alphanumeric() || self.url[idx] == b'_';
@@ -1162,8 +1371,12 @@ impl BrowserApp {
             if !is_space {
                 while idx < self.url_len {
                     let cur = self.url[idx];
-                    if cur == b' ' { break; }
-                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum { break; }
+                    if cur == b' ' {
+                        break;
+                    }
+                    if (cur.is_ascii_alphanumeric() || cur == b'_') != is_alnum {
+                        break;
+                    }
                     idx += 1;
                 }
             }
@@ -1222,7 +1435,9 @@ impl BrowserApp {
     }
 
     pub fn address_undo_edit(&mut self) {
-        if self.address_undo_count == 0 { return; }
+        if self.address_undo_count == 0 {
+            return;
+        }
         self.address_save_redo();
         self.address_undo_count -= 1;
         self.url = self.address_undo[self.address_undo_count];
@@ -1233,7 +1448,9 @@ impl BrowserApp {
     }
 
     pub fn address_redo_edit(&mut self) {
-        if self.address_redo_count == 0 { return; }
+        if self.address_redo_count == 0 {
+            return;
+        }
         self.address_record_undo();
         self.address_redo_count -= 1;
         self.url = self.address_redo[self.address_redo_count];
@@ -1268,17 +1485,23 @@ impl BrowserApp {
 
     pub fn address_cut(&mut self) {
         self.address_copy();
-        if self.address_selection.is_some() { self.address_push_undo(); }
+        if self.address_selection.is_some() {
+            self.address_push_undo();
+        }
         self.address_delete_selection();
     }
 
     pub fn address_paste(&mut self) {
-        if self.address_selection.is_some() { self.address_push_undo(); }
+        if self.address_selection.is_some() {
+            self.address_push_undo();
+        }
         self.address_delete_selection();
         let mut pasted = ['\0'; crate::gui::clipboard::CAPACITY];
         let len = crate::gui::clipboard::copy_chars(&mut pasted);
         for ch in pasted[..len].iter().copied() {
-            if ch.is_ascii_graphic() || ch == ' ' { self.address_char(ch); }
+            if ch.is_ascii_graphic() || ch == ' ' {
+                self.address_char(ch);
+            }
         }
     }
 
@@ -1287,7 +1510,9 @@ impl BrowserApp {
         self.suppress_history = false;
         let mut input = [0u8; 128];
         input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
-        let entered = core::str::from_utf8(&input[..self.url_len]).unwrap_or("").trim();
+        let entered = core::str::from_utf8(&input[..self.url_len])
+            .unwrap_or("")
+            .trim();
         let mut normalized = [0u8; 128];
         let mut normalized_len = entered.len().min(normalized.len());
         if !entered.is_empty() && !entered.contains("://") && !entered.starts_with("minos:") {
@@ -1312,7 +1537,9 @@ impl BrowserApp {
         };
 
         if let Some(rest) = rest_opt {
-            let authority_end = rest.find(|c| c == '/' || c == '?' || c == '#').unwrap_or(rest.len());
+            let authority_end = rest
+                .find(|c| c == '/' || c == '?' || c == '#')
+                .unwrap_or(rest.len());
             let authority = &rest[..authority_end];
             let suffix = &rest[authority_end..];
             let suffix = suffix.split('#').next().unwrap_or("");
@@ -1321,17 +1548,27 @@ impl BrowserApp {
                 ("", 0) // Bu ağ yığını şu an yalnızca IPv4 hedeflerini destekliyor.
             } else {
                 match authority.rsplit_once(':') {
-                    Some((h,p)) => match p.parse::<u16>() { Ok(n) if n>0 => (h,n), _ => ("",0) },
+                    Some((h, p)) => match p.parse::<u16>() {
+                        Ok(n) if n > 0 => (h, n),
+                        _ => ("", 0),
+                    },
                     _ => (authority, default_port),
                 }
             };
-            let path_len = if suffix.is_empty() { 1 } else if suffix.starts_with('?') { suffix.len() + 1 } else { suffix.len() };
+            let path_len = if suffix.is_empty() {
+                1
+            } else if suffix.starts_with('?') {
+                suffix.len() + 1
+            } else {
+                suffix.len()
+            };
             if host.is_empty() || host.len() > 128 || path_len > 256 || port == 0 {
                 self.page_loaded = false;
                 self.status = crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.");
             } else if !crate::drivers::e1000::is_ready() {
                 self.page_loaded = false;
-                self.status = crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable.");
+                self.status =
+                    crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable.");
             } else {
                 self.active_tab = 3;
                 self.page_loaded = false;
@@ -1365,14 +1602,19 @@ impl BrowserApp {
                 self.response_data.clear();
                 self.response_data.resize(65536, 0);
                 self.status = if is_https {
-                    crate::gui::ui_text("Güvenli bağlantı (HTTPS/TLS) başlatılıyor...", "Starting secure (HTTPS/TLS) connection...")
+                    crate::gui::ui_text(
+                        "Güvenli bağlantı (HTTPS/TLS) başlatılıyor...",
+                        "Starting secure (HTTPS/TLS) connection...",
+                    )
                 } else {
                     crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...")
                 };
                 self.page_title = [0; 64];
                 self.page_title_len = 0;
                 self.page_lines.clear();
-                if !suppress { history_push(value); }
+                if !suppress {
+                    history_push(value);
+                }
             }
             self.address_focused = false;
             return;
@@ -1381,26 +1623,39 @@ impl BrowserApp {
             "minos://help" => {
                 self.active_tab = 0;
                 self.page_loaded = true;
-                if !suppress { history_push(value); }
-                self.status = crate::gui::ui_text("Yerel minOs yardım sayfası açıldı.", "Local minOs help page opened.");
+                if !suppress {
+                    history_push(value);
+                }
+                self.status = crate::gui::ui_text(
+                    "Yerel minOs yardım sayfası açıldı.",
+                    "Local minOs help page opened.",
+                );
             }
             "minos://cats" => {
                 self.active_tab = 1;
                 self.page_loaded = true;
-                if !suppress { history_push(value); }
-                self.status = crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened.");
+                if !suppress {
+                    history_push(value);
+                }
+                self.status = crate::gui::ui_text(
+                    "Yerel KediWiki sayfası açıldı.",
+                    "Local KediWiki page opened.",
+                );
             }
             s if s.starts_with("minos://history") => {
                 if s == "minos://history?action=clear" {
                     history_clear();
-                    self.status = crate::gui::ui_text("Tüm geçmiş temizlendi.", "All history cleared.");
+                    self.status =
+                        crate::gui::ui_text("Tüm geçmiş temizlendi.", "All history cleared.");
                 } else if let Some(idx_str) = s.strip_prefix("minos://history?action=delete&idx=") {
                     if let Ok(idx) = idx_str.parse::<usize>() {
                         history_remove(idx);
-                        self.status = crate::gui::ui_text("Geçmiş kaydı silindi.", "History entry deleted.");
+                        self.status =
+                            crate::gui::ui_text("Geçmiş kaydı silindi.", "History entry deleted.");
                     }
                 } else {
-                    self.status = crate::gui::ui_text("Geçmiş sayfası açıldı.", "History page opened.");
+                    self.status =
+                        crate::gui::ui_text("Geçmiş sayfası açıldı.", "History page opened.");
                 }
                 self.active_tab = 3;
                 self.page_loaded = true;
@@ -1410,8 +1665,13 @@ impl BrowserApp {
             "minos://bookmarks" | "minos://favorites" => {
                 self.active_tab = 3;
                 self.page_loaded = true;
-                if !suppress { history_push(value); }
-                self.status = crate::gui::ui_text("Sık kullanılanlar sayfası açıldı.", "Bookmarks page opened.");
+                if !suppress {
+                    history_push(value);
+                }
+                self.status = crate::gui::ui_text(
+                    "Sık kullanılanlar sayfası açıldı.",
+                    "Bookmarks page opened.",
+                );
                 self.set_url(b"minos://bookmarks");
                 self.build_bookmarks_page();
             }
@@ -1421,16 +1681,24 @@ impl BrowserApp {
                 self.net_online = crate::drivers::e1000::is_ready();
                 if self.net_online {
                     // Gateway'e ARP çözümlemesi ve ICMP Echo gönder
-                    let gateway=crate::drivers::netstack::gateway_ip();
+                    let gateway = crate::drivers::netstack::gateway_ip();
                     let sent = crate::drivers::netstack::ping(gateway);
                     self.ping_ok = sent || crate::drivers::netstack::arp_lookup(gateway).is_some();
                     self.page_loaded = true;
-                    self.status = crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent).");
+                    self.status = crate::gui::ui_text(
+                        "Ağ durumu sayfası açıldı (sınama gönderildi).",
+                        "Network status page opened (test sent).",
+                    );
                 } else {
                     self.page_loaded = false;
-                    self.status = crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive.");
+                    self.status = crate::gui::ui_text(
+                        "e1000 ağ kartı bulunamadı; ağ yığını pasif.",
+                        "e1000 adapter unavailable; network stack is inactive.",
+                    );
                 }
-                if self.page_loaded && !suppress { history_push(value); }
+                if self.page_loaded && !suppress {
+                    history_push(value);
+                }
             }
             "minos://demo" | "minos://tr" => {
                 self.active_tab = 3;
@@ -1441,11 +1709,17 @@ impl BrowserApp {
                 self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
                 let demo_html = b"<html><head><style>h1 { color: #D03030; text-align: center; } .sub { color: #188040; text-align: center; } .btn { color: #FFFFFF; background-color: #2050C0; }</style></head><body><h1>minOs Web & TR Destegi</h1><p class='sub'>Turkce Karakterler: \xc3\xa7 \xc4\x9f \xc4\xb1 \xc3\xb6 \xc5\x9f \xc3\xbc - \xc3\x87 \xc4\x9e \xc4\xb0 \xc3\x96 \xc5\x9e \xc3\x9c</p><p id='counter_msg' style='color: #2050C0;'>Etkilesimli JavaScript Testi:</p><p><button class='btn' onclick=\"document.getElementById('counter_msg').innerText = 'Dugmeye tiklandi! JS calisiyor.'; alert('minOs JS Uyari: Dugmeye basildi!');\">Tikla (JS Test)</button></p><p><button onclick=\"document.getElementById('counter_msg').style.color = '#D03030';\">Kirmizi Yap</button> <button onclick=\"document.getElementById('counter_msg').style.color = '#188040';\">Yesil Yap</button></p><hr><script>document.write('<p style=\"color: #D0A020;\">Bu satir JavaScript document.write() ile olusturuldu!</p>');</script></body></html>";
                 self.load_html(demo_html, 600, 256);
-                self.status = crate::gui::ui_text("Türkçe & CSS & JS test sayfası yüklendi.", "Turkish & CSS & JS demo page loaded.");
+                self.status = crate::gui::ui_text(
+                    "Türkçe & CSS & JS test sayfası yüklendi.",
+                    "Turkish & CSS & JS demo page loaded.",
+                );
             }
             _ => {
                 self.page_loaded = false;
-                self.status = crate::gui::ui_text("Desteklenen: https://, http:// ve minos:// adresleri.", "Supported schemes: https://, http:// and minos://.");
+                self.status = crate::gui::ui_text(
+                    "Desteklenen: https://, http:// ve minos:// adresleri.",
+                    "Supported schemes: https://, http:// and minos://.",
+                );
             }
         }
         self.address_focused = false;
@@ -1461,13 +1735,20 @@ impl BrowserApp {
 
     /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
     pub fn poll_network(&mut self) {
-        if !self.request_pending { return; }
+        if !self.request_pending {
+            return;
+        }
         let now = crate::boot::time::main_monotonic_ms();
-        if self.request_deadline == 0 { self.request_deadline = now.wrapping_add(15000); }
+        if self.request_deadline == 0 {
+            self.request_deadline = now.wrapping_add(15000);
+        }
         if now.wrapping_sub(self.request_deadline) < usize::MAX / 2 {
             self.request_pending = false;
             self.page_loaded = false;
-            self.status = crate::gui::ui_text("Ağ isteği zaman aşımına uğradı.", "Network request timed out.");
+            self.status = crate::gui::ui_text(
+                "Ağ isteği zaman aşımına uğradı.",
+                "Network request timed out.",
+            );
             crate::drivers::netstack::tcp_clear_result();
             self.request_state = 0;
             self.request_deadline = 0;
@@ -1475,25 +1756,41 @@ impl BrowserApp {
         }
         match self.request_state {
             0 => {
-                let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+                let host =
+                    core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
                 let clean_host = host.trim().trim_start_matches('[').trim_end_matches(']');
                 if let Some(_v6) = crate::drivers::netstack::parse_ipv6(clean_host) {
                     // IPv6 adresi doğrudan girildiğinde (ör: http://[::1]/ veya http://[fe80::1]/)
-                    self.finish_network_error(crate::gui::ui_text("IPv6 yönlendirme hazır değil (IPv4 Gateway etkin).", "IPv6 routing not active (IPv4 Gateway active)."));
+                    self.finish_network_error(crate::gui::ui_text(
+                        "IPv6 yönlendirme hazır değil (IPv4 Gateway etkin).",
+                        "IPv6 routing not active (IPv4 Gateway active).",
+                    ));
                 } else if let Some(ip) = crate::drivers::netstack::parse_ipv4(host) {
                     self.request_ip = ip;
                     let port = self.request_port;
                     if crate::drivers::netstack::tcp_begin(ip, port, 49153) {
                         self.request_state = 1;
-                        self.status = crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP...");
+                        self.status = crate::gui::ui_text(
+                            "TCP bağlantısı kuruluyor...",
+                            "Connecting over TCP...",
+                        );
                     } else {
-                        self.finish_network_error(crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection."));
+                        self.finish_network_error(crate::gui::ui_text(
+                            "TCP bağlantısı başlatılamadı.",
+                            "Could not start TCP connection.",
+                        ));
                     }
                 } else if crate::drivers::netstack::dns_query(host) {
                     self.request_state = 4;
-                    self.status = crate::gui::ui_text("DNS yanıtı bekleniyor...", "Waiting for DNS response...");
+                    self.status = crate::gui::ui_text(
+                        "DNS yanıtı bekleniyor...",
+                        "Waiting for DNS response...",
+                    );
                 } else {
-                    self.finish_network_error(crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent."));
+                    self.finish_network_error(crate::gui::ui_text(
+                        "DNS sorgusu gönderilemedi.",
+                        "DNS query could not be sent.",
+                    ));
                 }
             }
             4 => {
@@ -1501,18 +1798,29 @@ impl BrowserApp {
                     self.request_ip = ip;
                     if crate::drivers::netstack::tcp_begin(ip, self.request_port, 49153) {
                         self.request_state = 1;
-                        self.status = crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP...");
+                        self.status = crate::gui::ui_text(
+                            "TCP bağlantısı kuruluyor...",
+                            "Connecting over TCP...",
+                        );
                     } else {
-                        self.finish_network_error(crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection."));
+                        self.finish_network_error(crate::gui::ui_text(
+                            "TCP bağlantısı başlatılamadı.",
+                            "Could not start TCP connection.",
+                        ));
                     }
                 }
             }
             1 => {
                 if crate::drivers::netstack::tcp_reset_received() {
-                    self.finish_network_error(crate::gui::ui_text("Sunucu bağlantıyı reddetti.", "Server rejected the connection."));
+                    self.finish_network_error(crate::gui::ui_text(
+                        "Sunucu bağlantıyı reddetti.",
+                        "Server rejected the connection.",
+                    ));
                 } else if crate::drivers::netstack::tcp_syn_acked() {
-                    let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
-                    let path = core::str::from_utf8(&self.request_path[..self.request_path_len]).unwrap_or("/");
+                    let host = core::str::from_utf8(&self.request_host[..self.request_host_len])
+                        .unwrap_or("");
+                    let path = core::str::from_utf8(&self.request_path[..self.request_path_len])
+                        .unwrap_or("/");
 
                     let mut req_buf: Vec<u8> = Vec::with_capacity(1024);
                     if self.is_post {
@@ -1546,7 +1854,9 @@ impl BrowserApp {
                     }
 
                     if self.is_post {
-                        req_buf.extend_from_slice(b"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: ");
+                        req_buf.extend_from_slice(
+                            b"Content-Type: application/x-www-form-urlencoded\r\nContent-Length: ",
+                        );
                         let mut len_digits = [0u8; 12];
                         let mut val = self.post_body.len();
                         let mut pos = 0;
@@ -1591,7 +1901,8 @@ impl BrowserApp {
                             &mut ecdhe_secret,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
-                        let mut tls_session = crate::drivers::tls::TlsSession::new(host, client_random);
+                        let mut tls_session =
+                            crate::drivers::tls::TlsSession::new(host, client_random);
                         tls_session.note_client_hello(ch_body);
                         // TLS 1.3 anahtar türetimi için istemci ECDHE gizlisi saklanır.
                         tls_session.set_client_ecdhe_secret(ecdhe_secret);
@@ -1599,15 +1910,24 @@ impl BrowserApp {
                             self.tls_session = Some(tls_session);
                             self.request_state = 2;
                             self.web_request_sent = true;
-                            self.status = crate::gui::ui_text("TLS el sıkışması ve yanıt bekleniyor...", "Waiting for TLS handshake & response...");
+                            self.status = crate::gui::ui_text(
+                                "TLS el sıkışması ve yanıt bekleniyor...",
+                                "Waiting for TLS handshake & response...",
+                            );
                         } else {
-                            self.finish_network_error(crate::gui::ui_text("TLS ClientHello gönderilemedi.", "Failed to send TLS ClientHello."));
+                            self.finish_network_error(crate::gui::ui_text(
+                                "TLS ClientHello gönderilemedi.",
+                                "Failed to send TLS ClientHello.",
+                            ));
                         }
                     } else {
                         if crate::drivers::netstack::tcp_send(&req_buf) {
                             self.request_state = 2;
                             self.web_request_sent = true;
-                            self.status = crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response...");
+                            self.status = crate::gui::ui_text(
+                                "HTTP yanıtı bekleniyor...",
+                                "Waiting for HTTP response...",
+                            );
                         }
                     }
                 }
@@ -1619,11 +1939,15 @@ impl BrowserApp {
                 }
                 let room = self.response_data.len().saturating_sub(self.response_len);
                 if room > 0 {
-                    let n = crate::drivers::netstack::take_tcp_data(&mut self.response_data[self.response_len..]);
+                    let n = crate::drivers::netstack::take_tcp_data(
+                        &mut self.response_data[self.response_len..],
+                    );
                     if n > 0 {
                         self.response_len += n;
                         if let Some(ref mut tls) = self.tls_session {
-                            tls.feed_tcp_data(&self.response_data[self.response_len - n..self.response_len]);
+                            tls.feed_tcp_data(
+                                &self.response_data[self.response_len - n..self.response_len],
+                            );
                         }
                     }
                 }
@@ -1652,7 +1976,10 @@ impl BrowserApp {
                 if let Some(alert) = tls_failed {
                     let detail: &'static str = match alert {
                         Some((_, desc)) => crate::drivers::tls::alert_description_text(desc),
-                        None => crate::gui::ui_text("TLS kayıt işleme hatası.", "TLS record processing error."),
+                        None => crate::gui::ui_text(
+                            "TLS kayıt işleme hatası.",
+                            "TLS record processing error.",
+                        ),
                     };
                     self.finish_network_error(detail);
                 }
@@ -1685,15 +2012,24 @@ impl BrowserApp {
                 }
 
                 // El sıkışma tamamlandıysa HTTP isteğini şifreleyip gönder.
-                let tls_established = self.tls_session.as_ref().map_or(false, |t| t.state() == crate::drivers::tls::TlsState::Established);
-                if tls_established && !self.tls_request_sent && !self.tls_pending_request.is_empty() {
+                let tls_established = self.tls_session.as_ref().map_or(false, |t| {
+                    t.state() == crate::drivers::tls::TlsState::Established
+                });
+                if tls_established && !self.tls_request_sent && !self.tls_pending_request.is_empty()
+                {
                     let request = core::mem::take(&mut self.tls_pending_request);
-                    let record = self.tls_session.as_mut().and_then(|t| t.encrypt_app_data(&request));
+                    let record = self
+                        .tls_session
+                        .as_mut()
+                        .and_then(|t| t.encrypt_app_data(&request));
                     match record {
                         Some(rec) => {
                             let _ = crate::drivers::netstack::tcp_send(&rec);
                             self.tls_request_sent = true;
-                            self.status = crate::gui::ui_text("Güvenli istek gönderildi, yanıt bekleniyor...", "Secure request sent, waiting for response...");
+                            self.status = crate::gui::ui_text(
+                                "Güvenli istek gönderildi, yanıt bekleniyor...",
+                                "Secure request sent, waiting for response...",
+                            );
                         }
                         None => {
                             self.finish_network_error(crate::gui::ui_text(
@@ -1720,30 +2056,56 @@ impl BrowserApp {
                         let status_line = &headers[..status_end];
 
                         // HTTP durum kodunu ayrıştır
-                        let status_code = if status_line.len() >= 12 && &status_line[..5] == b"HTTP/" {
+                        let status_code = if status_line.len() >= 12
+                            && &status_line[..5] == b"HTTP/"
+                        {
                             if let Some(sp) = status_line.iter().position(|&b| b == b' ') {
                                 if status_line.len() >= sp + 4 {
                                     let d = |c: u8| (c as char).to_digit(10).unwrap_or(0) as u16;
-                                    if status_line[sp + 1].is_ascii_digit() && status_line[sp + 2].is_ascii_digit() && status_line[sp + 3].is_ascii_digit() {
-                                        Some(d(status_line[sp + 1]) * 100 + d(status_line[sp + 2]) * 10 + d(status_line[sp + 3]))
-                                    } else { None }
-                                } else { None }
-                            } else { None }
-                        } else { None };
+                                    if status_line[sp + 1].is_ascii_digit()
+                                        && status_line[sp + 2].is_ascii_digit()
+                                        && status_line[sp + 3].is_ascii_digit()
+                                    {
+                                        Some(
+                                            d(status_line[sp + 1]) * 100
+                                                + d(status_line[sp + 2]) * 10
+                                                + d(status_line[sp + 3]),
+                                        )
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
 
                         // Set-Cookie başlıklarını ayrıştır ve sakla
-                        let current_host_str = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
+                        let current_host_str =
+                            core::str::from_utf8(&self.request_host[..self.request_host_len])
+                                .unwrap_or("");
                         for line in headers.split(|b| *b == b'\n') {
-                            let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+                            let l = if line.last() == Some(&b'\r') {
+                                &line[..line.len() - 1]
+                            } else {
+                                line
+                            };
                             if let Some(colon) = l.iter().position(|&b| b == b':') {
                                 if l[..colon].eq_ignore_ascii_case(b"Set-Cookie") {
-                                    let cookie_str = core::str::from_utf8(&l[colon + 1..]).unwrap_or("").trim();
+                                    let cookie_str =
+                                        core::str::from_utf8(&l[colon + 1..]).unwrap_or("").trim();
                                     if let Some(first_part) = cookie_str.split(';').next() {
                                         if let Some((k, v)) = first_part.split_once('=') {
                                             let name = k.trim();
                                             let val = v.trim();
                                             if !name.is_empty() {
-                                                if let Some(pos) = self.cookies.iter().position(|c| c.name == name) {
+                                                if let Some(pos) =
+                                                    self.cookies.iter().position(|c| c.name == name)
+                                                {
                                                     self.cookies[pos].value = String::from(val);
                                                 } else if self.cookies.len() < 32 {
                                                     self.cookies.push(HttpCookie {
@@ -1762,16 +2124,36 @@ impl BrowserApp {
 
                         // 3xx Yönlendirme (Redirect) Kontrolü
                         if let Some(code) = status_code {
-                            if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) && self.redirect_count < 3 {
+                            if (code == 301
+                                || code == 302
+                                || code == 303
+                                || code == 307
+                                || code == 308)
+                                && self.redirect_count < 3
+                            {
                                 let mut loc_target: Option<&[u8]> = None;
                                 for line in headers.split(|b| *b == b'\n') {
-                                    let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+                                    let l = if line.last() == Some(&b'\r') {
+                                        &line[..line.len() - 1]
+                                    } else {
+                                        line
+                                    };
                                     if let Some(colon) = l.iter().position(|&b| b == b':') {
                                         let key = &l[..colon];
                                         if key.eq_ignore_ascii_case(b"Location") {
                                             let mut val = &l[colon + 1..];
-                                            while val.first().map_or(false, |b| b.is_ascii_whitespace()) { val = &val[1..]; }
-                                            while val.last().map_or(false, |b| b.is_ascii_whitespace()) { val = &val[..val.len() - 1]; }
+                                            while val
+                                                .first()
+                                                .map_or(false, |b| b.is_ascii_whitespace())
+                                            {
+                                                val = &val[1..];
+                                            }
+                                            while val
+                                                .last()
+                                                .map_or(false, |b| b.is_ascii_whitespace())
+                                            {
+                                                val = &val[..val.len() - 1];
+                                            }
                                             loc_target = Some(val);
                                             break;
                                         }
@@ -1796,16 +2178,33 @@ impl BrowserApp {
 
                                     let loc_slice = &loc_buf[..loc_len];
                                     let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
-                                    let current_scheme = if self.is_https { "https://" } else { "http://" };
-                                    let host = core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
-                                    let current_path = core::str::from_utf8(&self.request_path[..self.request_path_len]).unwrap_or("/");
-                                    let current_path = current_path.split('?').next().unwrap_or("/");
-                                    let base_path = current_path.rsplit_once('/').map(|(base, _)| base).unwrap_or("");
+                                    let current_scheme =
+                                        if self.is_https { "https://" } else { "http://" };
+                                    let host = core::str::from_utf8(
+                                        &self.request_host[..self.request_host_len],
+                                    )
+                                    .unwrap_or("");
+                                    let current_path = core::str::from_utf8(
+                                        &self.request_path[..self.request_path_len],
+                                    )
+                                    .unwrap_or("/");
+                                    let current_path =
+                                        current_path.split('?').next().unwrap_or("/");
+                                    let base_path = current_path
+                                        .rsplit_once('/')
+                                        .map(|(base, _)| base)
+                                        .unwrap_or("");
                                     let mut target = String::new();
-                                    if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                                    if loc_str.starts_with("http://")
+                                        || loc_str.starts_with("https://")
+                                    {
                                         target.push_str(loc_str);
                                     } else if loc_str.starts_with("//") {
-                                        target.push_str(if self.is_https { "https:" } else { "http:" });
+                                        target.push_str(if self.is_https {
+                                            "https:"
+                                        } else {
+                                            "http:"
+                                        });
                                         target.push_str(loc_str);
                                     } else {
                                         target.push_str(current_scheme);
@@ -1838,7 +2237,10 @@ impl BrowserApp {
                                         // navigate() normal gezinme için sayacı sıfırlar.
                                         self.redirect_count = redirect_count;
                                     } else {
-                                        self.finish_network_error(crate::gui::ui_text("Yönlendirme adresi çok uzun.", "Redirect URL is too long."));
+                                        self.finish_network_error(crate::gui::ui_text(
+                                            "Yönlendirme adresi çok uzun.",
+                                            "Redirect URL is too long.",
+                                        ));
                                     }
                                     return;
                                 }
@@ -1848,11 +2250,13 @@ impl BrowserApp {
                         // Normal yanıt içeriği
                         self.page_title = [0; 64];
                         let title_len = self.request_host_len.min(64);
-                        self.page_title[..title_len].copy_from_slice(&self.request_host[..title_len]);
+                        self.page_title[..title_len]
+                            .copy_from_slice(&self.request_host[..title_len]);
                         self.page_title_len = title_len;
 
                         self.page_lines.clear();
-                        let status_str = core::str::from_utf8(status_line).unwrap_or("HTTP Response");
+                        let status_str =
+                            core::str::from_utf8(status_line).unwrap_or("HTTP Response");
                         self.page_lines.push(BrowserLine {
                             spans: alloc::vec![TextSpan {
                                 text: String::from(status_str),
@@ -1861,8 +2265,8 @@ impl BrowserApp {
                                 is_link: false,
                                 link_url: String::new(),
                                 is_button: false,
-                    bold: false,
-                    underline: false,
+                                bold: false,
+                                underline: false,
                                 onclick: String::new(),
                                 elem_id: String::new(),
                             }],
@@ -1874,22 +2278,31 @@ impl BrowserApp {
                         let body_start = end + 4;
                         let raw_body_len = data_to_parse.len().saturating_sub(body_start);
                         let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
-                        body_bytes.extend_from_slice(&data_to_parse[body_start..data_to_parse.len()]);
+                        body_bytes
+                            .extend_from_slice(&data_to_parse[body_start..data_to_parse.len()]);
 
                         // Transfer-Encoding: chunked kontrolü
                         let is_chunked = headers.split(|b| *b == b'\n').any(|line| {
-                            let l = if line.last() == Some(&b'\r') { &line[..line.len() - 1] } else { line };
+                            let l = if line.last() == Some(&b'\r') {
+                                &line[..line.len() - 1]
+                            } else {
+                                line
+                            };
                             if let Some(colon) = l.iter().position(|&b| b == b':') {
                                 if l[..colon].eq_ignore_ascii_case(b"Transfer-Encoding") {
                                     let val = &l[colon + 1..];
-                                    return val.windows(7).any(|w| w.eq_ignore_ascii_case(b"chunked"));
+                                    return val
+                                        .windows(7)
+                                        .any(|w| w.eq_ignore_ascii_case(b"chunked"));
                                 }
                             }
                             false
                         });
 
                         if is_chunked {
-                            if let Some(decoded_len) = crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len) {
+                            if let Some(decoded_len) =
+                                crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len)
+                            {
                                 body_bytes.truncate(decoded_len);
                             }
                         }
@@ -1909,8 +2322,8 @@ impl BrowserApp {
                                         is_link: false,
                                         link_url: String::new(),
                                         is_button: false,
-                    bold: false,
-                    underline: false,
+                                        bold: false,
+                                        underline: false,
                                         onclick: String::new(),
                                         elem_id: String::new(),
                                     }],
@@ -1923,25 +2336,46 @@ impl BrowserApp {
                         self.page_loaded = true;
                     }
                 }
-                if crate::drivers::netstack::tcp_finished() || self.response_len >= self.response_data.len() {
-                    if self.response_len > 0 && !self.page_loaded { self.finish_http_response(); }
+                if crate::drivers::netstack::tcp_finished()
+                    || self.response_len >= self.response_data.len()
+                {
+                    if self.response_len > 0 && !self.page_loaded {
+                        self.finish_http_response();
+                    }
                     if self.page_loaded {
-                        self.status = crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
+                        self.status =
+                            crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
                         self.request_pending = false;
                         self.request_state = 0;
                         self.request_deadline = 0;
                         crate::drivers::netstack::tcp_clear_result();
                     } else {
-                        self.finish_network_error(crate::gui::ui_text("HTTP yanıtı okunamadı.", "Could not parse HTTP response."));
+                        self.finish_network_error(crate::gui::ui_text(
+                            "HTTP yanıtı okunamadı.",
+                            "Could not parse HTTP response.",
+                        ));
                     }
                 }
             }
-            _ => self.finish_network_error(crate::gui::ui_text("Ağ isteği başarısız.", "Network request failed.")),
+            _ => self.finish_network_error(crate::gui::ui_text(
+                "Ağ isteği başarısız.",
+                "Network request failed.",
+            )),
         }
     }
 
-    fn finish_http_response(&mut self) { self.page_loaded=true; self.status=crate::gui::ui_text("HTTP yanıtı alındı.","HTTP response received."); }
-    fn finish_network_error(&mut self, status:&'static str) { self.request_pending=false; self.page_loaded=false; self.status=status; self.request_state=0; self.request_deadline=0; crate::drivers::netstack::tcp_clear_result(); }
+    fn finish_http_response(&mut self) {
+        self.page_loaded = true;
+        self.status = crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
+    }
+    fn finish_network_error(&mut self, status: &'static str) {
+        self.request_pending = false;
+        self.page_loaded = false;
+        self.status = status;
+        self.request_state = 0;
+        self.request_deadline = 0;
+        crate::drivers::netstack::tcp_clear_result();
+    }
 
     pub fn back(&mut self) {
         if let Some(url) = history_back() {
@@ -1964,7 +2398,15 @@ impl BrowserApp {
         self.navigate();
     }
 
-    pub fn render_content(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize, win_h: usize, scroll: &crate::gui::ScrollState) {
+    pub fn render_content(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+        scroll: &crate::gui::ScrollState,
+    ) {
         let english = crate::gui::ui_english();
         // Bağlantı isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
         self.rendered_links.borrow_mut().clear();
@@ -1972,61 +2414,129 @@ impl BrowserApp {
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 30, Color::TITLE_BAR);
         fb.draw_rect(win_x + 12, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 36, "<", Color::TEXT_MAIN);
-        if self.focused_control == 0 { fb.draw_rect_outline(win_x + 12, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
+        if self.focused_control == 0 {
+            fb.draw_rect_outline(win_x + 12, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
+        }
 
         fb.draw_rect(win_x + 38, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 44, win_y + 36, ">", Color::TEXT_MAIN);
-        if self.focused_control == 1 { fb.draw_rect_outline(win_x + 38, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
+        if self.focused_control == 1 {
+            fb.draw_rect_outline(win_x + 38, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
+        }
 
         fb.draw_rect(win_x + 64, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 36, "R", Color::ACCENT_GREEN);
-        if self.focused_control == 2 { fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW); }
+        if self.focused_control == 2 {
+            fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
+        }
 
         let url_x = win_x + 94;
         let url_w = win_w.saturating_sub(142);
-        fb.draw_rect(url_x, win_y + 32, url_w, 20, if self.address_focused { Color::WINDOW_BG } else { Color::DARK_BG });
+        fb.draw_rect(
+            url_x,
+            win_y + 32,
+            url_w,
+            20,
+            if self.address_focused {
+                Color::WINDOW_BG
+            } else {
+                Color::DARK_BG
+            },
+        );
         let char_width = MinGuiCompositor::text_width("M", 1).max(1);
-        let visible_chars = url_w.saturating_sub(12).checked_div(char_width).unwrap_or(1).max(1);
+        let visible_chars = url_w
+            .saturating_sub(12)
+            .checked_div(char_width)
+            .unwrap_or(1)
+            .max(1);
         let mut addr_scroll = self.address_scroll.min(self.url_len);
-        if self.address_focused && self.address_cursor < addr_scroll { addr_scroll = self.address_cursor; }
+        if self.address_focused && self.address_cursor < addr_scroll {
+            addr_scroll = self.address_cursor;
+        }
         if self.address_focused && self.address_cursor >= addr_scroll + visible_chars {
             addr_scroll = self.address_cursor + 1 - visible_chars;
         }
         let visible_end = (addr_scroll + visible_chars).min(self.url_len);
         let clip = (url_x + 4, win_y + 32, url_w.saturating_sub(8), 20);
         let text_x = url_x + 6;
-        let selection = self.address_selection.map(|(a,b)| (a.min(b).max(addr_scroll), a.max(b).min(visible_end)))
-            .filter(|(a,b)| a < b);
+        let selection = self
+            .address_selection
+            .map(|(a, b)| (a.min(b).max(addr_scroll), a.max(b).min(visible_end)))
+            .filter(|(a, b)| a < b);
         if let Some((sel_start, sel_end)) = selection {
             let prefix = core::str::from_utf8(&self.url[addr_scroll..sel_start]).unwrap_or("");
             let selected = core::str::from_utf8(&self.url[sel_start..sel_end]).unwrap_or("");
             let suffix = core::str::from_utf8(&self.url[sel_end..visible_end]).unwrap_or("");
-            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 36, prefix, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                text_x,
+                win_y + 36,
+                prefix,
+                Color::TEXT_MAIN,
+                clip,
+            );
             let selection_x = text_x + MinGuiCompositor::text_width(prefix, 1);
             let selection_w = MinGuiCompositor::text_width(selected, 1);
             fb.draw_rect(selection_x, win_y + 32, selection_w, 20, Color::ACCENT_BLUE);
-            MinGuiCompositor::draw_string_clipped(fb, selection_x, win_y + 36, selected,
-                MinGuiCompositor::text_on(Color::ACCENT_BLUE), clip);
-            MinGuiCompositor::draw_string_clipped(fb, selection_x + selection_w, win_y + 36, suffix, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                selection_x,
+                win_y + 36,
+                selected,
+                MinGuiCompositor::text_on(Color::ACCENT_BLUE),
+                clip,
+            );
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                selection_x + selection_w,
+                win_y + 36,
+                suffix,
+                Color::TEXT_MAIN,
+                clip,
+            );
         } else {
             let shown = core::str::from_utf8(&self.url[addr_scroll..visible_end]).unwrap_or("");
-            MinGuiCompositor::draw_string_clipped(fb, text_x, win_y + 36, shown, Color::TEXT_MAIN, clip);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                text_x,
+                win_y + 36,
+                shown,
+                Color::TEXT_MAIN,
+                clip,
+            );
         }
         if self.address_focused && selection.is_none() {
             let caret_end = self.address_cursor.min(self.url_len);
             let caret_start = addr_scroll.min(caret_end);
-            let caret_prefix = core::str::from_utf8(&self.url[caret_start..caret_end]).unwrap_or("");
+            let caret_prefix =
+                core::str::from_utf8(&self.url[caret_start..caret_end]).unwrap_or("");
             let caret_x = text_x + MinGuiCompositor::text_width(caret_prefix, 1);
             if caret_x < url_x + url_w.saturating_sub(2) {
                 fb.draw_rect(caret_x, win_y + 34, 1, 16, Color::ACCENT_YELLOW);
             }
         }
-        if self.focused_control == 4 { fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW); }
+        if self.focused_control == 4 {
+            fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW);
+        }
 
         // Araç çubuğu seçenekleri taşma menüsünde sunulur.
         let overflow = Self::toolbar_menu_button_rect(win_x, win_y, win_w);
-        fb.draw_rect(overflow.0, overflow.1, overflow.2, overflow.3, Color::WINDOW_BG);
-        for dot in 0..3 { fb.draw_rect(overflow.0 + 13, overflow.1 + 4 + dot * 5, 2, 2, Color::TEXT_MAIN); }
+        fb.draw_rect(
+            overflow.0,
+            overflow.1,
+            overflow.2,
+            overflow.3,
+            Color::WINDOW_BG,
+        );
+        for dot in 0..3 {
+            fb.draw_rect(
+                overflow.0 + 13,
+                overflow.1 + 4 + dot * 5,
+                2,
+                2,
+                Color::TEXT_MAIN,
+            );
+        }
 
         // Sık Kullanılanlar / Yer İmleri Çubuğu (Bookmarks Bar)
         let bbar_y = win_y + 59;
@@ -2047,7 +2557,11 @@ impl BrowserApp {
                 break;
             }
             let is_active = self.url_matches(bm.url);
-            let bg_col = if is_active { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+            let bg_col = if is_active {
+                Color::ACCENT_BLUE
+            } else {
+                Color::WINDOW_BG
+            };
             let fg_col = if is_active {
                 MinGuiCompositor::text_on(Color::ACCENT_BLUE)
             } else if bm.url.starts_with("http") {
@@ -2071,9 +2585,22 @@ impl BrowserApp {
         if self.page_loaded {
             if self.active_tab == 3 {
                 // Canlı Web Sayfası Render Paneli (HTML DOM)
-                fb.draw_rect(page_x + 8, page_y + 8, page_w.saturating_sub(16), 26, Color::TITLE_BAR);
-                let title_str = core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or("Web Document");
-                MinGuiCompositor::draw_string(fb, page_x + 16, page_y + 14, title_str, Color::ACCENT_GREEN);
+                fb.draw_rect(
+                    page_x + 8,
+                    page_y + 8,
+                    page_w.saturating_sub(16),
+                    26,
+                    Color::TITLE_BAR,
+                );
+                let title_str = core::str::from_utf8(&self.page_title[..self.page_title_len])
+                    .unwrap_or("Web Document");
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 16,
+                    page_y + 14,
+                    title_str,
+                    Color::ACCENT_GREEN,
+                );
 
                 // HTML Kağıt Alanı (CSS body bg_color desteğiyle)
                 let doc_x = page_x + 8;
@@ -2088,8 +2615,21 @@ impl BrowserApp {
 
                 // JS alert kutusu bildirimi
                 if let Some(ref alert_msg) = self.js_alert {
-                    fb.draw_rect(doc_x + 10, doc_y + 6, doc_w.saturating_sub(20), 24, Color::ACCENT_YELLOW);
-                    MinGuiCompositor::draw_string_clipped(fb, doc_x + 16, doc_y + 10, alert_msg, Color::BLACK, doc_clip);
+                    fb.draw_rect(
+                        doc_x + 10,
+                        doc_y + 6,
+                        doc_w.saturating_sub(20),
+                        24,
+                        Color::ACCENT_YELLOW,
+                    );
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        doc_x + 16,
+                        doc_y + 10,
+                        alert_msg,
+                        Color::BLACK,
+                        doc_clip,
+                    );
                 }
 
                 // Clear rendered links for hit testing
@@ -2111,22 +2651,26 @@ impl BrowserApp {
                         _ => 1,
                     };
 
-                    let visible = cur_line_y + line_h >= doc_y + scroll_y && cur_line_y <= doc_y + scroll_y + doc_h + 30;
+                    let visible = cur_line_y + line_h >= doc_y + scroll_y
+                        && cur_line_y <= doc_y + scroll_y + doc_h + 30;
                     let draw_y = cur_line_y.saturating_sub(scroll_y);
 
                     if visible {
-                        let total_line_w: usize = line.spans.iter().map(|s| {
-                            MinGuiCompositor::text_width(&s.text, scale) + if s.is_button { 16 } else { 0 }
-                        }).sum();
+                        let total_line_w: usize = line
+                            .spans
+                            .iter()
+                            .map(|s| {
+                                MinGuiCompositor::text_width(&s.text, scale)
+                                    + if s.is_button { 16 } else { 0 }
+                            })
+                            .sum();
 
                         let mut cur_x = match line.align {
                             TextAlign::Center => {
                                 let avail = doc_w.saturating_sub(24);
                                 doc_x + 12 + (avail.saturating_sub(total_line_w) / 2)
                             }
-                            TextAlign::Right => {
-                                doc_x + doc_w.saturating_sub(12 + total_line_w)
-                            }
+                            TextAlign::Right => doc_x + doc_w.saturating_sub(12 + total_line_w),
                             TextAlign::Left => doc_x + 12 + line.indent,
                         };
 
@@ -2152,7 +2696,15 @@ impl BrowserApp {
                                 let btn_bg = span.bg_color.unwrap_or(Color::TITLE_BAR);
                                 fb.draw_rect(cur_x, draw_y, span_w, line_h, btn_bg);
                                 fb.draw_rect_outline(cur_x, draw_y, span_w, line_h, Color::BORDER);
-                                MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 8, draw_y + 2, &span.text, span.color, scale, doc_clip);
+                                MinGuiCompositor::draw_string_scaled_clipped(
+                                    fb,
+                                    cur_x + 8,
+                                    draw_y + 2,
+                                    &span.text,
+                                    span.color,
+                                    scale,
+                                    doc_clip,
+                                );
                                 {
                                     links.push(RenderedLink {
                                         rect: (cur_x, draw_y, span_w, line_h),
@@ -2164,28 +2716,63 @@ impl BrowserApp {
                                 if let Some(bg) = span.bg_color {
                                     fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
                                 }
-                                let query = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("");
-                                let matched = self.find_active && !query.is_empty()
-                                    && span.text.to_ascii_lowercase().contains(&query.to_ascii_lowercase());
+                                let query = core::str::from_utf8(&self.find_query[..self.find_len])
+                                    .unwrap_or("");
+                                let matched = self.find_active
+                                    && !query.is_empty()
+                                    && span
+                                        .text
+                                        .to_ascii_lowercase()
+                                        .contains(&query.to_ascii_lowercase());
                                 if matched {
-                                    let active_match = find_span_index == self.find_match_index.get();
+                                    let active_match =
+                                        find_span_index == self.find_match_index.get();
                                     find_span_index += 1;
-                                    let match_color = if active_match { Color::ACCENT_GREEN } else { Color::ACCENT_YELLOW };
-                                    fb.draw_rect(cur_x, draw_y, span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x))), line_h, match_color);
-                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text,
-                                        MinGuiCompositor::text_on(match_color), scale, doc_clip);
+                                    let match_color = if active_match {
+                                        Color::ACCENT_GREEN
+                                    } else {
+                                        Color::ACCENT_YELLOW
+                                    };
+                                    fb.draw_rect(
+                                        cur_x,
+                                        draw_y,
+                                        span_w
+                                            .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x))),
+                                        line_h,
+                                        match_color,
+                                    );
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb,
+                                        cur_x,
+                                        draw_y,
+                                        &span.text,
+                                        MinGuiCompositor::text_on(match_color),
+                                        scale,
+                                        doc_clip,
+                                    );
                                 } else {
-                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip);
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb, cur_x, draw_y, &span.text, text_color, scale, doc_clip,
+                                    );
                                 }
                                 // Sentez kalın: 1px sağa ikinci geçiş
                                 if span.bold && !span.text.trim().is_empty() {
-                                    MinGuiCompositor::draw_string_scaled_clipped(fb, cur_x + 1, draw_y, &span.text, text_color, scale, doc_clip);
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb,
+                                        cur_x + 1,
+                                        draw_y,
+                                        &span.text,
+                                        text_color,
+                                        scale,
+                                        doc_clip,
+                                    );
                                 }
                                 // Altı çizili
                                 if span.underline && !span.text.trim().is_empty() {
                                     let ul_y = draw_y + line_h.saturating_sub(2);
                                     if ul_y >= doc_y && ul_y < doc_y + doc_h {
-                                        let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        let ul_w = span_w
+                                            .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
                                         fb.draw_rect(cur_x, ul_y, ul_w, 1, text_color);
                                     }
                                 }
@@ -2193,8 +2780,15 @@ impl BrowserApp {
                                 if span.is_link || !span.onclick.is_empty() {
                                     let underline_y = draw_y + line_h.saturating_sub(3);
                                     if underline_y >= doc_y && underline_y < doc_y + doc_h {
-                                        let ul_w = span_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                        fb.draw_rect(cur_x, underline_y, ul_w, 1, Color::ACCENT_BLUE);
+                                        let ul_w = span_w
+                                            .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        fb.draw_rect(
+                                            cur_x,
+                                            underline_y,
+                                            ul_w,
+                                            1,
+                                            Color::ACCENT_BLUE,
+                                        );
                                     }
                                     {
                                         links.push(RenderedLink {
@@ -2212,76 +2806,304 @@ impl BrowserApp {
                     cur_line_y += line_h;
                 }
                 if self.find_active && self.find_len > 0 {
-                    let needle = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("").to_ascii_lowercase();
+                    let needle = core::str::from_utf8(&self.find_query[..self.find_len])
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
                     let mut count = 0usize;
-                    for line in &self.page_lines { for span in &line.spans { if span.text.to_ascii_lowercase().contains(&needle) { count += 1; } } }
+                    for line in &self.page_lines {
+                        for span in &line.spans {
+                            if span.text.to_ascii_lowercase().contains(&needle) {
+                                count += 1;
+                            }
+                        }
+                    }
                     self.find_match_count.set(count);
-                } else { self.find_match_count.set(0); }
+                } else {
+                    self.find_match_count.set(0);
+                }
             } else if self.active_tab == 2 {
                 // Ağ durumu paneli
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Ağ Durumu (e1000)", "minOs | Network Status (e1000)"), Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("ICMP / ARP tabanlı sınama paneli", "ICMP / ARP test panel"), Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 16,
+                    crate::gui::ui_text(
+                        "minOs | Ağ Durumu (e1000)",
+                        "minOs | Network Status (e1000)",
+                    ),
+                    Color::ACCENT_PINK,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 32,
+                    crate::gui::ui_text(
+                        "ICMP / ARP tabanlı sınama paneli",
+                        "ICMP / ARP test panel",
+                    ),
+                    Color::ACCENT_BLUE,
+                );
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                let net_str = match (self.net_online, english) { (true,true) => "e1000: ONLINE (MMIO active)", (false,true) => "e1000: OFFLINE", (true,false) => "e1000: ÇEVRIMICI (MMIO aktif)", (false,false) => "e1000: ÇEVRIMDIŞI" };
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, net_str, Color::ACCENT_GREEN);
-                let ping_str = match (self.ping_ok, english) { (true,true) => "Gateway ARP: FOUND (10.0.2.2)", (false,true) => "Gateway ARP: WAITING / NO REPLY", (true,false) => "Gateway ARP: BULUNDU (10.0.2.2)", (false,false) => "Gateway ARP: BEKLIYOR / YANIT YOK" };
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, ping_str, Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, "IP: 10.0.2.15/24 GW: 10.0.2.2", Color::TEXT_MUTED);
+                let net_str = match (self.net_online, english) {
+                    (true, true) => "e1000: ONLINE (MMIO active)",
+                    (false, true) => "e1000: OFFLINE",
+                    (true, false) => "e1000: ÇEVRIMICI (MMIO aktif)",
+                    (false, false) => "e1000: ÇEVRIMDIŞI",
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 64,
+                    net_str,
+                    Color::ACCENT_GREEN,
+                );
+                let ping_str = match (self.ping_ok, english) {
+                    (true, true) => "Gateway ARP: FOUND (10.0.2.2)",
+                    (false, true) => "Gateway ARP: WAITING / NO REPLY",
+                    (true, false) => "Gateway ARP: BULUNDU (10.0.2.2)",
+                    (false, false) => "Gateway ARP: BEKLIYOR / YANIT YOK",
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 84,
+                    ping_str,
+                    Color::TEXT_MAIN,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 104,
+                    "IP: 10.0.2.15/24 GW: 10.0.2.2",
+                    Color::TEXT_MUTED,
+                );
             } else if self.active_tab == 0 {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("minOs | Yerel Yardım ve Sık Kullanılanlar", "minOs | Local Help and Bookmarks"), Color::ACCENT_PINK);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 16,
+                    crate::gui::ui_text(
+                        "minOs | Yerel Yardım ve Sık Kullanılanlar",
+                        "minOs | Local Help and Bookmarks",
+                    ),
+                    Color::ACCENT_PINK,
+                );
                 MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://bookmarks, minos://cats, minos://help, minos://net", "Local addresses: minos://bookmarks, minos://cats, minos://help, minos://net"), Color::ACCENT_BLUE);
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 110, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("★ Sık Kullanılan:(saf HTTP test sitesi)", "★ Favorite: (pure HTTP test site)"), Color::ACCENT_GREEN);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 84, crate::gui::ui_text("minos://net ile ağ durumunu, minos://history ile geçmişi açın.", "Check the network at minos://net, open history at minos://history."), Color::TEXT_MAIN);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 104, crate::gui::ui_text("Yer imleri çubuğundan veya minos://bookmarks ile tüm favorileri açın.", "Open bookmarks via the toolbar or visit minos://bookmarks."), Color::TEXT_MUTED);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 64,
+                    crate::gui::ui_text(
+                        "★ Sık Kullanılan:(saf HTTP test sitesi)",
+                        "★ Favorite: (pure HTTP test site)",
+                    ),
+                    Color::ACCENT_GREEN,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 84,
+                    crate::gui::ui_text(
+                        "minos://net ile ağ durumunu, minos://history ile geçmişi açın.",
+                        "Check the network at minos://net, open history at minos://history.",
+                    ),
+                    Color::TEXT_MAIN,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 104,
+                    crate::gui::ui_text(
+                        "Yer imleri çubuğundan veya minos://bookmarks ile tüm favorileri açın.",
+                        "Open bookmarks via the toolbar or visit minos://bookmarks.",
+                    ),
+                    Color::TEXT_MUTED,
+                );
             } else {
                 fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 16, crate::gui::ui_text("KediWiki | Yerel Sayfa", "KediWiki | Local Page"), Color::ACCENT_PINK);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 32, crate::gui::ui_text("Yerel adresler: minos://cats ve minos://help", "Local addresses: minos://cats and minos://help"), Color::ACCENT_BLUE);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 16,
+                    crate::gui::ui_text("KediWiki | Yerel Sayfa", "KediWiki | Local Page"),
+                    Color::ACCENT_PINK,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 32,
+                    crate::gui::ui_text(
+                        "Yerel adresler: minos://cats ve minos://help",
+                        "Local addresses: minos://cats and minos://help",
+                    ),
+                    Color::ACCENT_BLUE,
+                );
                 fb.draw_rect(page_x + 10, page_y + 54, page_w - 20, 92, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string(fb, page_x + 20, page_y + 64, crate::gui::ui_text("Kediler ve minOs!", "Cats and minOs!"), Color::TEXT_MAIN);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 64,
+                    crate::gui::ui_text("Kediler ve minOs!", "Cats and minOs!"),
+                    Color::TEXT_MAIN,
+                );
             }
         } else {
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 28, crate::gui::ui_text("Bu adres açılamadı.", "This address could not be opened."), Color::ACCENT_RED);
+            MinGuiCompositor::draw_string(
+                fb,
+                page_x + 18,
+                page_y + 28,
+                crate::gui::ui_text("Bu adres açılamadı.", "This address could not be opened."),
+                Color::ACCENT_RED,
+            );
             MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 50, crate::gui::ui_text("Desteklenen adresler: minos://help, minos://cats, minos://net, minos://history", "Supported: minos://help, minos://cats, minos://net, minos://history"), Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string(fb, page_x + 18, page_y + 72, crate::gui::ui_text("Yerel: minos://help | Ağ: minos://net", "Local: minos://help | Network: minos://net"), Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(
+                fb,
+                page_x + 18,
+                page_y + 72,
+                crate::gui::ui_text(
+                    "Yerel: minos://help | Ağ: minos://net",
+                    "Local: minos://help | Network: minos://net",
+                ),
+                Color::TEXT_MUTED,
+            );
         }
         if self.find_active {
             let (find_x, find_y, _, _) = Self::find_bar_rect(win_x, win_y, win_w);
             fb.draw_rect(find_x, find_y, 244, 24, Color::TITLE_BAR);
             fb.draw_rect_outline(find_x, find_y, 244, 24, Color::BORDER);
             let query = core::str::from_utf8(&self.find_query[..self.find_len]).unwrap_or("");
-            MinGuiCompositor::draw_string(fb, find_x + 6, find_y + 7, crate::gui::ui_text("Bul:", "Find:"), Color::TEXT_MAIN);
-            MinGuiCompositor::draw_string_clipped(fb, find_x + 48, find_y + 7,
-                if query.is_empty() { crate::gui::ui_text("Aramak için yaz", "type to search") } else { query }, Color::ACCENT_YELLOW,
-                (find_x + 46, find_y + 2, 132, 20));
-            let count_text = alloc::format!("{}/{}", if self.find_match_count.get() == 0 { 0 } else { self.find_match_index.get() + 1 }, self.find_match_count.get());
-            MinGuiCompositor::draw_string(fb, find_x + 184, find_y + 7, &count_text, Color::TEXT_MUTED);
+            MinGuiCompositor::draw_string(
+                fb,
+                find_x + 6,
+                find_y + 7,
+                crate::gui::ui_text("Bul:", "Find:"),
+                Color::TEXT_MAIN,
+            );
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                find_x + 48,
+                find_y + 7,
+                if query.is_empty() {
+                    crate::gui::ui_text("Aramak için yaz", "type to search")
+                } else {
+                    query
+                },
+                Color::ACCENT_YELLOW,
+                (find_x + 46, find_y + 2, 132, 20),
+            );
+            let count_text = alloc::format!(
+                "{}/{}",
+                if self.find_match_count.get() == 0 {
+                    0
+                } else {
+                    self.find_match_index.get() + 1
+                },
+                self.find_match_count.get()
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                find_x + 184,
+                find_y + 7,
+                &count_text,
+                Color::TEXT_MUTED,
+            );
         }
-        fb.draw_rect(win_x + 6, status_y, win_w.saturating_sub(12), status_h, Color::TASKBAR_BG);
+        fb.draw_rect(
+            win_x + 6,
+            status_y,
+            win_w.saturating_sub(12),
+            status_h,
+            Color::TASKBAR_BG,
+        );
         let status = match self.status {
-            "minOs yerel yardım sayfası" | "minOs local help page" => crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
-            "Yerel minOs yardım sayfası açıldı." | "Local minOs help page opened." => crate::gui::ui_text("Yerel minOs yardım sayfası açıldı.", "Local minOs help page opened."),
-            "Yerel KediWiki sayfası açıldı." | "Local KediWiki page opened." => crate::gui::ui_text("Yerel KediWiki sayfası açıldı.", "Local KediWiki page opened."),
-            "Ağ durumu sayfası açıldı (sınama gönderildi)." | "Network status page opened (test sent)." => crate::gui::ui_text("Ağ durumu sayfası açıldı (sınama gönderildi).", "Network status page opened (test sent)."),
-            "e1000 ağ kartı bulunamadı; ağ yığını pasif." | "e1000 adapter unavailable; network stack is inactive." => crate::gui::ui_text("e1000 ağ kartı bulunamadı; ağ yığını pasif.", "e1000 adapter unavailable; network stack is inactive."),
-            "Geçersiz web adresi." | "Invalid web address." => crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address."),
-            "Ağ kartı kullanılamıyor." | "Network adapter unavailable." => crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable."),
-            "DNS çözümlemesi bekleniyor..." | "Resolving host..." => crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host..."),
-            "DNS adı çözümlenemedi." | "DNS lookup failed." => crate::gui::ui_text("DNS adı çözümlenemedi.", "DNS lookup failed."),
-            "TCP bağlantısı kuruluyor..." | "Connecting over TCP..." => crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP..."),
-            "TCP bağlantısı başlatılamadı." | "Could not start TCP connection." => crate::gui::ui_text("TCP bağlantısı başlatılamadı.", "Could not start TCP connection."),
-            "Sunucu bağlantıyı reddetti." | "Server rejected the connection." => crate::gui::ui_text("Sunucu bağlantıyı reddetti.", "Server rejected the connection."),
-            "HTTP yanıtı bekleniyor..." | "Waiting for HTTP response..." => crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response..."),
-            "HTTP yanıtı alındı." | "HTTP response received." => crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received."),
-            "HTTP yanıtı okunamadı." | "Could not parse HTTP response." => crate::gui::ui_text("HTTP yanıtı okunamadı.", "Could not parse HTTP response."),
-            "Ağ isteği zaman aşımına uğradı." | "Network request timed out." => crate::gui::ui_text("Ağ isteği zaman aşımına uğradı.", "Network request timed out."),
-            "Desteklenen: https://, http:// ve minos:// adresleri." | "Supported schemes: https://, http:// and minos://." => crate::gui::ui_text("Desteklenen: https://, http:// ve minos:// adresleri.", "Supported schemes: https://, http:// and minos://."),
-            "HTTPS/TLS bu çekirdek motorunda desteklenmiyor." | "HTTPS/TLS is not supported by this kernel renderer." => crate::gui::ui_text("HTTPS/TLS bu çekirdek motorunda desteklenmiyor.", "HTTPS/TLS is not supported by this kernel renderer."),
-            "DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor." | "DNS query sent; preparing HTTP connection." => crate::gui::ui_text("DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor.", "DNS query sent; preparing HTTP connection."),
-            "DNS sorgusu gönderilemedi." | "DNS query could not be sent." => crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent."),
+            "minOs yerel yardım sayfası" | "minOs local help page" => {
+                crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page")
+            }
+            "Yerel minOs yardım sayfası açıldı." | "Local minOs help page opened." => {
+                crate::gui::ui_text(
+                    "Yerel minOs yardım sayfası açıldı.",
+                    "Local minOs help page opened.",
+                )
+            }
+            "Yerel KediWiki sayfası açıldı." | "Local KediWiki page opened." => {
+                crate::gui::ui_text(
+                    "Yerel KediWiki sayfası açıldı.",
+                    "Local KediWiki page opened.",
+                )
+            }
+            "Ağ durumu sayfası açıldı (sınama gönderildi)."
+            | "Network status page opened (test sent)." => crate::gui::ui_text(
+                "Ağ durumu sayfası açıldı (sınama gönderildi).",
+                "Network status page opened (test sent).",
+            ),
+            "e1000 ağ kartı bulunamadı; ağ yığını pasif."
+            | "e1000 adapter unavailable; network stack is inactive." => crate::gui::ui_text(
+                "e1000 ağ kartı bulunamadı; ağ yığını pasif.",
+                "e1000 adapter unavailable; network stack is inactive.",
+            ),
+            "Geçersiz web adresi." | "Invalid web address." => {
+                crate::gui::ui_text("Geçersiz web adresi.", "Invalid web address.")
+            }
+            "Ağ kartı kullanılamıyor." | "Network adapter unavailable." => {
+                crate::gui::ui_text("Ağ kartı kullanılamıyor.", "Network adapter unavailable.")
+            }
+            "DNS çözümlemesi bekleniyor..." | "Resolving host..." => {
+                crate::gui::ui_text("DNS çözümlemesi bekleniyor...", "Resolving host...")
+            }
+            "DNS adı çözümlenemedi." | "DNS lookup failed." => {
+                crate::gui::ui_text("DNS adı çözümlenemedi.", "DNS lookup failed.")
+            }
+            "TCP bağlantısı kuruluyor..." | "Connecting over TCP..." => {
+                crate::gui::ui_text("TCP bağlantısı kuruluyor...", "Connecting over TCP...")
+            }
+            "TCP bağlantısı başlatılamadı." | "Could not start TCP connection." => {
+                crate::gui::ui_text(
+                    "TCP bağlantısı başlatılamadı.",
+                    "Could not start TCP connection.",
+                )
+            }
+            "Sunucu bağlantıyı reddetti." | "Server rejected the connection." => {
+                crate::gui::ui_text(
+                    "Sunucu bağlantıyı reddetti.",
+                    "Server rejected the connection.",
+                )
+            }
+            "HTTP yanıtı bekleniyor..." | "Waiting for HTTP response..." => {
+                crate::gui::ui_text("HTTP yanıtı bekleniyor...", "Waiting for HTTP response...")
+            }
+            "HTTP yanıtı alındı." | "HTTP response received." => {
+                crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.")
+            }
+            "HTTP yanıtı okunamadı." | "Could not parse HTTP response." => {
+                crate::gui::ui_text("HTTP yanıtı okunamadı.", "Could not parse HTTP response.")
+            }
+            "Ağ isteği zaman aşımına uğradı." | "Network request timed out." => {
+                crate::gui::ui_text(
+                    "Ağ isteği zaman aşımına uğradı.",
+                    "Network request timed out.",
+                )
+            }
+            "Desteklenen: https://, http:// ve minos:// adresleri."
+            | "Supported schemes: https://, http:// and minos://." => crate::gui::ui_text(
+                "Desteklenen: https://, http:// ve minos:// adresleri.",
+                "Supported schemes: https://, http:// and minos://.",
+            ),
+            "HTTPS/TLS bu çekirdek motorunda desteklenmiyor."
+            | "HTTPS/TLS is not supported by this kernel renderer." => crate::gui::ui_text(
+                "HTTPS/TLS bu çekirdek motorunda desteklenmiyor.",
+                "HTTPS/TLS is not supported by this kernel renderer.",
+            ),
+            "DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor."
+            | "DNS query sent; preparing HTTP connection." => crate::gui::ui_text(
+                "DNS sorgusu gönderildi; HTTP bağlantısı hazırlanıyor.",
+                "DNS query sent; preparing HTTP connection.",
+            ),
+            "DNS sorgusu gönderilemedi." | "DNS query could not be sent." => {
+                crate::gui::ui_text("DNS sorgusu gönderilemedi.", "DNS query could not be sent.")
+            }
             _ => self.status,
         };
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 3, status, Color::TEXT_MUTED);
@@ -2290,18 +3112,43 @@ impl BrowserApp {
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
             let current_url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
-            let is_bookmarked = BOOKMARKS.iter().chain(self.bookmarks_extra.iter()).any(|b| b.url == current_url);
+            let is_bookmarked = BOOKMARKS
+                .iter()
+                .chain(self.bookmarks_extra.iter())
+                .any(|b| b.url == current_url);
             let labels = [
                 crate::gui::ui_text("Geçmiş", "History"),
-                crate::gui::ui_text(if is_bookmarked { "Yer imini kaldır" } else { "Yer imi ekle" }, if is_bookmarked { "Remove bookmark" } else { "Add bookmark" }),
+                crate::gui::ui_text(
+                    if is_bookmarked {
+                        "Yer imini kaldır"
+                    } else {
+                        "Yer imi ekle"
+                    },
+                    if is_bookmarked {
+                        "Remove bookmark"
+                    } else {
+                        "Add bookmark"
+                    },
+                ),
                 crate::gui::ui_text("İndirmeyi kaydet", "Save download"),
                 "GIT",
             ];
             for (i, label) in labels.iter().enumerate() {
                 let item = Self::toolbar_menu_item_rect(win_x, win_y, win_w, i);
                 fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
-                MinGuiCompositor::draw_string_clipped(fb, item.0 + 8, item.1 + 6, label, Color::TEXT_MAIN,
-                    (item.0 + 3, item.1 + 1, item.2.saturating_sub(6), item.3.saturating_sub(2)));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    item.0 + 8,
+                    item.1 + 6,
+                    label,
+                    Color::TEXT_MAIN,
+                    (
+                        item.0 + 3,
+                        item.1 + 1,
+                        item.2.saturating_sub(6),
+                        item.3.saturating_sub(2),
+                    ),
+                );
             }
         }
     }

@@ -22,11 +22,15 @@ pub const MAX_WINDOWS: usize = 32;
 
 /// Aktif font ölçeğine göre başlık çubuğu yüksekliği (px).
 #[inline(always)]
-pub fn titlebar_h() -> usize { sp(TITLEBAR_BASE) }
+pub fn titlebar_h() -> usize {
+    sp(TITLEBAR_BASE)
+}
 
 /// Aktif font ölçeğine göre görev çubuğu yüksekliği (px).
 #[inline(always)]
-pub fn taskbar_h() -> usize { sp(TASKBAR_BASE) }
+pub fn taskbar_h() -> usize {
+    sp(TASKBAR_BASE)
+}
 
 #[derive(Copy, Clone, Debug)]
 pub struct Window {
@@ -69,7 +73,15 @@ impl Window {
         (x, y, w, h)
     }
 
-    pub fn new(title: &'static str, tab_title: &'static str, x: usize, y: usize, width: usize, height: usize, is_open: bool) -> Self {
+    pub fn new(
+        title: &'static str,
+        tab_title: &'static str,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        is_open: bool,
+    ) -> Self {
         Self {
             app_id: u8::MAX,
             title,
@@ -121,15 +133,30 @@ impl Window {
     /// Boyutlar aktif font ölçeğine göre büyür; başlık çubuğunda dikey ortalanır.
     pub fn close_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
-        (self.x + self.width.saturating_sub(sp(26)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (
+            self.x + self.width.saturating_sub(sp(26)),
+            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            b,
+            b,
+        )
     }
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
-        (self.x + self.width.saturating_sub(sp(46)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (
+            self.x + self.width.saturating_sub(sp(46)),
+            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            b,
+            b,
+        )
     }
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
-        (self.x + self.width.saturating_sub(sp(66)), self.y + (titlebar_h().saturating_sub(b)) / 2, b, b)
+        (
+            self.x + self.width.saturating_sub(sp(66)),
+            self.y + (titlebar_h().saturating_sub(b)) / 2,
+            b,
+            b,
+        )
     }
     /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
@@ -148,7 +175,12 @@ impl Window {
         (left, self.y, right.saturating_sub(left), titlebar_h())
     }
     pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
-        (self.x, self.y, self.width.saturating_sub(sp(66)), titlebar_h())
+        (
+            self.x,
+            self.y,
+            self.width.saturating_sub(sp(66)),
+            titlebar_h(),
+        )
     }
 }
 
@@ -198,15 +230,25 @@ impl Window {
         let top = my <= self.y + TOP_RESIZE_GRIP;
         let edge_bottom = my + g >= self.y + self.height;
 
-        if top && left { Some(ResizeEdge::TopLeft) }
-        else if top && edge_right { Some(ResizeEdge::TopRight) }
-        else if edge_bottom && left { Some(ResizeEdge::BottomLeft) }
-        else if edge_bottom && edge_right { Some(ResizeEdge::BottomRight) }
-        else if left { Some(ResizeEdge::Left) }
-        else if edge_right { Some(ResizeEdge::Right) }
-        else if top { Some(ResizeEdge::Top) }
-        else if edge_bottom { Some(ResizeEdge::Bottom) }
-        else { None }
+        if top && left {
+            Some(ResizeEdge::TopLeft)
+        } else if top && edge_right {
+            Some(ResizeEdge::TopRight)
+        } else if edge_bottom && left {
+            Some(ResizeEdge::BottomLeft)
+        } else if edge_bottom && edge_right {
+            Some(ResizeEdge::BottomRight)
+        } else if left {
+            Some(ResizeEdge::Left)
+        } else if edge_right {
+            Some(ResizeEdge::Right)
+        } else if top {
+            Some(ResizeEdge::Top)
+        } else if edge_bottom {
+            Some(ResizeEdge::Bottom)
+        } else {
+            None
+        }
     }
 }
 
@@ -267,21 +309,21 @@ impl MinGuiCompositor {
     // -----------------------------------------------------------------------
     pub fn window_icon_index(win_idx: usize) -> usize {
         match win_idx {
-            0 => 0, // Dosya Yöneticisi -> Bilgisayarım
-            1 => 4, // Ayarlar -> Dişli
-            2 => 1, // Not Defteri -> Notlar
-            3 => 2, // Web Tarayıcısı -> SarmanNet
-            4 => 1, // Resim Gösterici -> Görsel
-            5 => 3, // Müzik Çalar -> Çalma Listesi
-            6 => 3, // Video Oynatıcı -> Medya
-            7 => 0, // Görev Yöneticisi -> Bilgisayarım
-            8 => 4, // Hesap Makinesi -> Dişli
-            9 => 1, // Çizim Tahtası -> Çizim
-            10 => 0,// Terminal -> Komut İstemi
-            11 => 0,// Kurulum Sihirbazı -> Bilgisayarım / Disk
-            12 => 1,// 3D Gösterici -> Görsel/Çizim
-            13 => 5,// Paket Yöneticisi -> Paket / Kutu
-            14 => 4,// Kontrol Paneli -> Dişli
+            0 => 0,  // Dosya Yöneticisi -> Bilgisayarım
+            1 => 4,  // Ayarlar -> Dişli
+            2 => 1,  // Not Defteri -> Notlar
+            3 => 2,  // Web Tarayıcısı -> SarmanNet
+            4 => 1,  // Resim Gösterici -> Görsel
+            5 => 3,  // Müzik Çalar -> Çalma Listesi
+            6 => 3,  // Video Oynatıcı -> Medya
+            7 => 0,  // Görev Yöneticisi -> Bilgisayarım
+            8 => 4,  // Hesap Makinesi -> Dişli
+            9 => 1,  // Çizim Tahtası -> Çizim
+            10 => 0, // Terminal -> Komut İstemi
+            11 => 0, // Kurulum Sihirbazı -> Bilgisayarım / Disk
+            12 => 1, // 3D Gösterici -> Görsel/Çizim
+            13 => 5, // Paket Yöneticisi -> Paket / Kutu
+            14 => 4, // Kontrol Paneli -> Dişli
             _ => 0,
         }
     }
@@ -331,22 +373,52 @@ impl MinGuiCompositor {
     pub(crate) fn window_tab_title(win_idx: usize, english: bool) -> &'static str {
         if english {
             match win_idx {
-                0 => "Files", 1 => "Settings", 2 => "Notes",
-                3 => "Web", 4 => "Image", 5 => "Music",
-                6 => "Video", 7 => "Tasks", 8 => "Calc",
-                9 => "Paint", 10 => "CMD", 11 => "Install", 12 => "3D", 13 => "Packages", 14 => "Control", _ => "Win",
+                0 => "Files",
+                1 => "Settings",
+                2 => "Notes",
+                3 => "Web",
+                4 => "Image",
+                5 => "Music",
+                6 => "Video",
+                7 => "Tasks",
+                8 => "Calc",
+                9 => "Paint",
+                10 => "CMD",
+                11 => "Install",
+                12 => "3D",
+                13 => "Packages",
+                14 => "Control",
+                _ => "Win",
             }
         } else {
             match win_idx {
-                0 => "Dosyalar", 1 => "Ayarlar", 2 => "Notlar",
-                3 => "Web", 4 => "Resim", 5 => "Müzik",
-                6 => "Video", 7 => "Görevler", 8 => "Hesap",
-                9 => "Çizim", 10 => "Komut", 11 => "Kurulum", 12 => "3D", 13 => "Paketler", 14 => "Kontrol", _ => "Pencere",
+                0 => "Dosyalar",
+                1 => "Ayarlar",
+                2 => "Notlar",
+                3 => "Web",
+                4 => "Resim",
+                5 => "Müzik",
+                6 => "Video",
+                7 => "Görevler",
+                8 => "Hesap",
+                9 => "Çizim",
+                10 => "Komut",
+                11 => "Kurulum",
+                12 => "3D",
+                13 => "Paketler",
+                14 => "Kontrol",
+                _ => "Pencere",
             }
         }
     }
 
-    pub fn render_window_frame(&self, fb: &mut Framebuffer, win: &Window, mouse: &MouseState, _win_idx: usize) {
+    pub fn render_window_frame(
+        &self,
+        fb: &mut Framebuffer,
+        win: &Window,
+        mouse: &MouseState,
+        _win_idx: usize,
+    ) {
         if !win.is_open || win.is_minimized {
             return;
         }
@@ -357,15 +429,37 @@ impl MinGuiCompositor {
         fb.draw_shadow(win.x, win.y, win.width, win.height, Color::SHADOW);
 
         // Çerçeve (border) ve Pencere Gövdesi (Yuvarlatılmış 6px)
-        let border = if win.is_focused { Color::ACCENT_BLUE } else { Color::BORDER };
-        fb.draw_rounded_rect(win.x.saturating_sub(1), win.y.saturating_sub(1), win.width + 2, win.height + 2, 6, border);
-        fb.draw_rounded_rect_alpha(win.x, win.y, win.width, win.height, 6, Color::WINDOW_BG, 232);
+        let border = if win.is_focused {
+            Color::ACCENT_BLUE
+        } else {
+            Color::BORDER
+        };
+        fb.draw_rounded_rect(
+            win.x.saturating_sub(1),
+            win.y.saturating_sub(1),
+            win.width + 2,
+            win.height + 2,
+            6,
+            border,
+        );
+        fb.draw_rounded_rect_alpha(
+            win.x,
+            win.y,
+            win.width,
+            win.height,
+            6,
+            Color::WINDOW_BG,
+            232,
+        );
 
         // Başlık Çubuğu (dikey gradyan — yuvarlatılmış)
         let (t_top, t_bottom) = if win.is_focused {
             (Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -14))
         } else {
-            (Color::TITLE_BAR_INACTIVE, Self::shade(Color::TITLE_BAR_INACTIVE, -10))
+            (
+                Color::TITLE_BAR_INACTIVE,
+                Self::shade(Color::TITLE_BAR_INACTIVE, -10),
+            )
         };
         fb.draw_rounded_vgradient(win.x, win.y, win.width, titlebar_h(), 6, t_top, t_bottom);
         fb.draw_rounded_rect_alpha(win.x, win.y, win.width, titlebar_h(), 6, t_top, 224);
@@ -376,9 +470,17 @@ impl MinGuiCompositor {
         let icon_sz = Self::icon_size();
         let icon_y = win.y + titlebar_h().saturating_sub(icon_sz) / 2;
         Self::draw_icon_by_index(fb, win.x + sp(8), icon_y, icon_idx);
-        let title_col = if win.is_focused { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
+        let title_col = if win.is_focused {
+            Color::TEXT_MAIN
+        } else {
+            Color::TEXT_MUTED
+        };
         let localized_title = Self::window_title(win.app_id as usize, ui_english());
-        let title = if !localized_title.is_empty() { localized_title } else { win.title };
+        let title = if !localized_title.is_empty() {
+            localized_title
+        } else {
+            win.title
+        };
         // Başlık metnini başlık çubuğunda dikey ortala (font ölçeğine duyarlı).
         // Başlık alanı, simge ile kontrol düğmeleri arasına kırpılır; uzun
         // başlıklar pencere dışına veya düğmelerin üzerine taşmaz.
@@ -390,8 +492,12 @@ impl MinGuiCompositor {
             let old_clip = fb.clip();
             fb.set_clip(title_x, win.y, title_area_w, titlebar_h());
             Self::draw_string(fb, title_x, title_y, title, title_col);
-            fb.set_clip(old_clip.x0, old_clip.y0,
-                old_clip.x1.saturating_sub(old_clip.x0), old_clip.y1.saturating_sub(old_clip.y0));
+            fb.set_clip(
+                old_clip.x0,
+                old_clip.y0,
+                old_clip.x1.saturating_sub(old_clip.x0),
+                old_clip.y1.saturating_sub(old_clip.y0),
+            );
         }
 
         // Kontrol Butonları (hover'da parlama — yuvarlatılmış)
@@ -400,11 +506,22 @@ impl MinGuiCompositor {
         let hover_close = in_rect(mx, my, win.close_rect());
         let pressed_close = mouse.left_button && hover_close;
         let press_inset = if pressed_close { 2 } else { 0 };
-        let (cx, cy, cb) = (cx + press_inset, cy + press_inset, base_cb.saturating_sub(press_inset * 2));
-        let close_bg = if pressed_close { Self::shade(Color::ACCENT_RED, -48) }
-            else if hover_close { Self::shade(Color::ACCENT_RED, 42) } else { Color::ACCENT_RED };
+        let (cx, cy, cb) = (
+            cx + press_inset,
+            cy + press_inset,
+            base_cb.saturating_sub(press_inset * 2),
+        );
+        let close_bg = if pressed_close {
+            Self::shade(Color::ACCENT_RED, -48)
+        } else if hover_close {
+            Self::shade(Color::ACCENT_RED, 42)
+        } else {
+            Color::ACCENT_RED
+        };
         fb.draw_rounded_rect(cx, cy, cb, cb, 4, close_bg);
-        if pressed_close { fb.draw_rounded_rect_outline(cx, cy, cb, cb, 4, Color::WHITE); }
+        if pressed_close {
+            fb.draw_rounded_rect_outline(cx, cy, cb, cb, 4, Color::WHITE);
+        }
         let close_mark_color = Self::text_on(close_bg);
         let mark_inset = cb as f32 * 0.29;
         let mark_left = cx as f32 + mark_inset;
@@ -412,18 +529,45 @@ impl MinGuiCompositor {
         let mark_top = cy as f32 + mark_inset;
         let mark_bottom = cy as f32 + cb as f32 - mark_inset;
         let mark_width = (sp(16) as f32 / 10.0).max(1.5);
-        Self::draw_antialiased_line(fb, mark_left, mark_top, mark_right, mark_bottom, close_mark_color, mark_width);
-        Self::draw_antialiased_line(fb, mark_right, mark_top, mark_left, mark_bottom, close_mark_color, mark_width);
+        Self::draw_antialiased_line(
+            fb,
+            mark_left,
+            mark_top,
+            mark_right,
+            mark_bottom,
+            close_mark_color,
+            mark_width,
+        );
+        Self::draw_antialiased_line(
+            fb,
+            mark_right,
+            mark_top,
+            mark_left,
+            mark_bottom,
+            close_mark_color,
+            mark_width,
+        );
 
         let (mxr, myr, base_mb, _) = win.max_rect();
         let hover_max = in_rect(mx, my, win.max_rect());
         let pressed_max = mouse.left_button && hover_max;
         let max_inset = if pressed_max { 2 } else { 0 };
-        let (mxr, myr, mb) = (mxr + max_inset, myr + max_inset, base_mb.saturating_sub(max_inset * 2));
-        let max_bg = if pressed_max { Self::shade(Color::ACCENT_GREEN, -48) }
-            else if hover_max { Self::shade(Color::ACCENT_GREEN, 42) } else { Color::ACCENT_GREEN };
+        let (mxr, myr, mb) = (
+            mxr + max_inset,
+            myr + max_inset,
+            base_mb.saturating_sub(max_inset * 2),
+        );
+        let max_bg = if pressed_max {
+            Self::shade(Color::ACCENT_GREEN, -48)
+        } else if hover_max {
+            Self::shade(Color::ACCENT_GREEN, 42)
+        } else {
+            Color::ACCENT_GREEN
+        };
         fb.draw_rounded_rect(mxr, myr, mb, mb, 4, max_bg);
-        if pressed_max { fb.draw_rounded_rect_outline(mxr, myr, mb, mb, 4, Color::WHITE); }
+        if pressed_max {
+            fb.draw_rounded_rect_outline(mxr, myr, mb, mb, 4, Color::WHITE);
+        }
         let max_mark_color = Self::text_on(max_bg);
         let inset = mb as f32 * 0.29;
         let left = mxr as f32 + inset;
@@ -447,9 +591,25 @@ impl MinGuiCompositor {
             // Arka pencere sağ kenarı
             Self::draw_antialiased_line(fb, back_r, back_t, back_r, back_b, max_mark_color, stroke);
             // Arka pencere sol kenarının açıkta kalan üst parçası
-            Self::draw_antialiased_line(fb, back_l, back_t, back_l, top + offset, max_mark_color, stroke);
+            Self::draw_antialiased_line(
+                fb,
+                back_l,
+                back_t,
+                back_l,
+                top + offset,
+                max_mark_color,
+                stroke,
+            );
             // Arka pencere alt kenarının açıkta kalan sağ parçası
-            Self::draw_antialiased_line(fb, left + size, back_b, back_r, back_b, max_mark_color, stroke);
+            Self::draw_antialiased_line(
+                fb,
+                left + size,
+                back_b,
+                back_r,
+                back_b,
+                max_mark_color,
+                stroke,
+            );
 
             // Ön pencere (sol-alt): tam dikdörtgen
             let front_l = left;
@@ -457,26 +617,101 @@ impl MinGuiCompositor {
             let front_r = front_l + size;
             let front_b = front_t + size;
 
-            Self::draw_antialiased_line(fb, front_l, front_t, front_r, front_t, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, front_r, front_t, front_r, front_b, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, front_r, front_b, front_l, front_b, max_mark_color, stroke);
-            Self::draw_antialiased_line(fb, front_l, front_b, front_l, front_t, max_mark_color, stroke);
+            Self::draw_antialiased_line(
+                fb,
+                front_l,
+                front_t,
+                front_r,
+                front_t,
+                max_mark_color,
+                stroke,
+            );
+            Self::draw_antialiased_line(
+                fb,
+                front_r,
+                front_t,
+                front_r,
+                front_b,
+                max_mark_color,
+                stroke,
+            );
+            Self::draw_antialiased_line(
+                fb,
+                front_r,
+                front_b,
+                front_l,
+                front_b,
+                max_mark_color,
+                stroke,
+            );
+            Self::draw_antialiased_line(
+                fb,
+                front_l,
+                front_b,
+                front_l,
+                front_t,
+                max_mark_color,
+                stroke,
+            );
         } else {
-            Self::draw_antialiased_line(fb, left, top, right, top, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
-            Self::draw_antialiased_line(fb, right, top, right, bottom, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
-            Self::draw_antialiased_line(fb, right, bottom, left, bottom, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
-            Self::draw_antialiased_line(fb, left, bottom, left, top, max_mark_color, (sp(14) as f32 / 10.0).max(1.4));
+            Self::draw_antialiased_line(
+                fb,
+                left,
+                top,
+                right,
+                top,
+                max_mark_color,
+                (sp(14) as f32 / 10.0).max(1.4),
+            );
+            Self::draw_antialiased_line(
+                fb,
+                right,
+                top,
+                right,
+                bottom,
+                max_mark_color,
+                (sp(14) as f32 / 10.0).max(1.4),
+            );
+            Self::draw_antialiased_line(
+                fb,
+                right,
+                bottom,
+                left,
+                bottom,
+                max_mark_color,
+                (sp(14) as f32 / 10.0).max(1.4),
+            );
+            Self::draw_antialiased_line(
+                fb,
+                left,
+                bottom,
+                left,
+                top,
+                max_mark_color,
+                (sp(14) as f32 / 10.0).max(1.4),
+            );
         }
 
         let (nx, ny, base_nb, _) = win.min_rect();
         let hover_min = in_rect(mx, my, win.min_rect());
         let pressed_min = mouse.left_button && hover_min;
         let min_inset = if pressed_min { 2 } else { 0 };
-        let (nx, ny, nb) = (nx + min_inset, ny + min_inset, base_nb.saturating_sub(min_inset * 2));
-        let min_bg = if pressed_min { Self::shade(Color::ACCENT_YELLOW, -48) }
-            else if hover_min { Self::shade(Color::ACCENT_YELLOW, 42) } else { Color::ACCENT_YELLOW };
+        let (nx, ny, nb) = (
+            nx + min_inset,
+            ny + min_inset,
+            base_nb.saturating_sub(min_inset * 2),
+        );
+        let min_bg = if pressed_min {
+            Self::shade(Color::ACCENT_YELLOW, -48)
+        } else if hover_min {
+            Self::shade(Color::ACCENT_YELLOW, 42)
+        } else {
+            Color::ACCENT_YELLOW
+        };
         fb.draw_rounded_rect(nx, ny, nb, nb, 4, min_bg);
-        if pressed_min { fb.draw_rounded_rect_outline(nx, ny, nb, nb, 4, Color::WHITE); }
+        if pressed_min {
+            fb.draw_rounded_rect_outline(nx, ny, nb, nb, 4, Color::WHITE);
+        }
         let bar_inset = nb as f32 * 0.24;
         let bar_y = ny as f32 + nb as f32 * 0.67;
         Self::draw_antialiased_line(

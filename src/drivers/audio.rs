@@ -44,11 +44,20 @@ impl AudioDevice {
         if self.is_muted || self.volume_left == 0 {
             crate::gui::ui_text("Ses kapalı (Sessiz)", "Audio muted")
         } else if self.is_hda && crate::drivers::hda::is_dma_progressing() {
-            crate::gui::ui_text("Intel HDA (DMA Aktif, 48kHz Stereo)", "Intel HDA (DMA Active, 48kHz Stereo)")
+            crate::gui::ui_text(
+                "Intel HDA (DMA Aktif, 48kHz Stereo)",
+                "Intel HDA (DMA Active, 48kHz Stereo)",
+            )
         } else if self.is_hda && !crate::drivers::hda::is_dma_stalled() {
-            crate::gui::ui_text("Intel HDA (Hazır / DMA Beklemede)", "Intel HDA (Ready / DMA Standby)")
+            crate::gui::ui_text(
+                "Intel HDA (Hazır / DMA Beklemede)",
+                "Intel HDA (Ready / DMA Standby)",
+            )
         } else {
-            crate::gui::ui_text("PC Speaker Yedeği Aktif (PWM)", "PC Speaker Fallback Active (PWM)")
+            crate::gui::ui_text(
+                "PC Speaker Yedeği Aktif (PWM)",
+                "PC Speaker Fallback Active (PWM)",
+            )
         }
     }
 
@@ -58,7 +67,13 @@ impl AudioDevice {
         if self.is_hda {
             let dma_ok = crate::drivers::hda::play_test_tone();
             if dma_ok {
-                return (crate::gui::ui_text("BAŞARILI: Intel HDA DMA İlerliyor (48kHz Stereo)", "PASS: Intel HDA DMA Progressing (48kHz Stereo)"), true);
+                return (
+                    crate::gui::ui_text(
+                        "BAŞARILI: Intel HDA DMA İlerliyor (48kHz Stereo)",
+                        "PASS: Intel HDA DMA Progressing (48kHz Stereo)",
+                    ),
+                    true,
+                );
             }
         }
         // Fallback: PC Speaker testi
@@ -68,7 +83,13 @@ impl AudioDevice {
             core::hint::spin_loop();
         }
         self.set_pc_speaker_tone(0);
-        (crate::gui::ui_text("YEDEK DEVREDE: PC Speaker PWM Fallback Çalışıyor", "FALLBACK: PC Speaker PWM Fallback Operating"), false)
+        (
+            crate::gui::ui_text(
+                "YEDEK DEVREDE: PC Speaker PWM Fallback Çalışıyor",
+                "FALLBACK: PC Speaker PWM Fallback Operating",
+            ),
+            false,
+        )
     }
 
     /// PIT kanal 2 / PC speaker üzerinden ton üretir; frekans 0 olursa susturur.
@@ -94,13 +115,15 @@ impl AudioDevice {
 
     /// Başlangıç veya bildirim melodisi (chime).
     pub fn play_chime(&mut self) {
-        if self.is_muted || self.volume_left == 0 { return; }
+        if self.is_muted || self.volume_left == 0 {
+            return;
+        }
         if self.is_hda && crate::drivers::hda::is_ready() {
             const SINE_48: [i16; 48] = [
-                0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863,
-                16000, 15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088,
-                0, -2088, -4141, -6122, -7999, -9740, -11313, -12693, -13856, -14782, -15454, -15863,
-                -16000, -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
+                0, 2088, 4141, 6122, 7999, 9740, 11313, 12693, 13856, 14782, 15454, 15863, 16000,
+                15863, 15454, 14782, 13856, 12693, 11313, 9740, 7999, 6122, 4141, 2088, 0, -2088,
+                -4141, -6122, -7999, -9740, -11313, -12693, -13856, -14782, -15454, -15863, -16000,
+                -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
             ];
             let mut pcm = [0i16; 384];
             for (idx, sample) in pcm.chunks_exact_mut(2).enumerate() {
@@ -133,7 +156,9 @@ impl AudioDevice {
 
     /// Hızlı tıklama veya bildirim sesi (beep).
     pub fn play_beep(&mut self, freq: u32, duration_ms: usize) {
-        if self.is_muted || self.volume_left == 0 { return; }
+        if self.is_muted || self.volume_left == 0 {
+            return;
+        }
         self.set_pc_speaker_tone(freq);
         let start = crate::monotonic_ms();
         while crate::monotonic_ms().saturating_sub(start) < duration_ms as u64 {

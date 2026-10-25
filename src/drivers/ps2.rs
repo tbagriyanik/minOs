@@ -1,5 +1,5 @@
-use crate::drivers::mouse::MouseState;
 use crate::drivers::keyboard::KeyboardState;
+use crate::drivers::mouse::MouseState;
 
 #[derive(Copy, Clone, Default)]
 pub struct InputUpdate {
@@ -21,7 +21,9 @@ unsafe fn outb(port: u16, val: u8) {
 
 #[inline(always)]
 fn io_wait() {
-    unsafe { outb(0x80, 0); }
+    unsafe {
+        outb(0x80, 0);
+    }
 }
 
 fn wait_write() -> bool {
@@ -81,12 +83,22 @@ pub fn mouse_wheel_enabled() -> bool {
 }
 
 fn mouse_write(cmd: u8) {
-    if !wait_write() { return; }
-    unsafe { outb(0x64, 0xD4); }
-    if !wait_write() { return; }
-    unsafe { outb(0x60, cmd); }
+    if !wait_write() {
+        return;
+    }
+    unsafe {
+        outb(0x64, 0xD4);
+    }
+    if !wait_write() {
+        return;
+    }
+    unsafe {
+        outb(0x60, cmd);
+    }
     if wait_read() {
-        unsafe { let _ = inb(0x60); }
+        unsafe {
+            let _ = inb(0x60);
+        }
     }
 }
 
@@ -121,8 +133,8 @@ pub fn init() {
             // klavye/fare kesme kapısı yoktur. Bitleri açmak, IOAPIC'li
             // makinelerde (VirtualBox SMP) vektörsüz kesme → #GP → donma
             // demektir; PIC maskesi IOAPIC yolunu kapatmaz.
-            status &= !0x03;  // IRQ1 ve IRQ12 bitlerini kapat
-            status &= !0x30;  // Saat hatlarını aç
+            status &= !0x03; // IRQ1 ve IRQ12 bitlerini kapat
+            status &= !0x30; // Saat hatlarını aç
             wait_write();
             outb(0x64, 0x60);
             wait_write();
@@ -136,7 +148,9 @@ pub fn init() {
         if wait_read() && inb(0x60) == 0xFA {
             wait_write();
             outb(0x60, 0x02);
-            if wait_read() { let _ = inb(0x60); }
+            if wait_read() {
+                let _ = inb(0x60);
+            }
         }
 
         // 5. Fareyi varsayılan ayarlara al
@@ -144,18 +158,27 @@ pub fn init() {
 
         // Laptop Touchpad / Standart Fare Çözünürlük ve Örnekleme Ayarı
         // 0xE8 0x03 -> Çözünürlük: 8 count/mm (Touchpad'lerde akıcı hassasiyet için)
-        mouse_write(0xE8); mouse_write(0x03);
+        mouse_write(0xE8);
+        mouse_write(0x03);
 
         // IntelliMouse (Scroll Wheel) etkinleştirme sihirli dizisi (Sample Rate: 200 -> 100 -> 80)
-        mouse_write(0xF3); mouse_write(200);
-        mouse_write(0xF3); mouse_write(100);
-        mouse_write(0xF3); mouse_write(80);
+        mouse_write(0xF3);
+        mouse_write(200);
+        mouse_write(0xF3);
+        mouse_write(100);
+        mouse_write(0xF3);
+        mouse_write(80);
 
         // Fare kimliğini (Device ID) kontrol et (0x03 / 0x04 ise scroll wheel destekli)
         flushes = 0;
-        while (inb(0x64) & 0x01 != 0) && flushes < 256 { let _ = inb(0x60); flushes += 1; }
-        wait_write(); outb(0x64, 0xD4);
-        wait_write(); outb(0x60, 0xF2);
+        while (inb(0x64) & 0x01 != 0) && flushes < 256 {
+            let _ = inb(0x60);
+            flushes += 1;
+        }
+        wait_write();
+        outb(0x64, 0xD4);
+        wait_write();
+        outb(0x60, 0xF2);
         if wait_read() {
             let _ = inb(0x60); // ACK
             if wait_read() {
@@ -167,7 +190,8 @@ pub fn init() {
         }
 
         // Örnekleme hızı: 100 örnek/saniye (Laptop touchpad ve fare için kararlı akış)
-        mouse_write(0xF3); mouse_write(100);
+        mouse_write(0xF3);
+        mouse_write(100);
 
         // Akış Modunu Etkinleştir (Set Stream Mode - 0xEA)
         mouse_write(0xEA);
@@ -184,8 +208,12 @@ pub fn init() {
     }
 }
 
-
-pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w: i32, screen_h: i32) -> InputUpdate {
+pub fn poll_input(
+    mouse: &mut MouseState,
+    keyboard: &mut KeyboardState,
+    screen_w: i32,
+    screen_h: i32,
+) -> InputUpdate {
     let mut updated = InputUpdate::default();
 
     if !present() {
@@ -248,8 +276,16 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                             let flags = MOUSE_BYTE[0];
                             let raw_x = MOUSE_BYTE[1] as i16;
                             let raw_y = MOUSE_BYTE[2] as i16;
-                            let dx = if flags & 0x10 != 0 { (raw_x | !0xFF) as i8 } else { raw_x as i8 };
-                            let dy = if flags & 0x20 != 0 { (raw_y | !0xFF) as i8 } else { raw_y as i8 };
+                            let dx = if flags & 0x10 != 0 {
+                                (raw_x | !0xFF) as i8
+                            } else {
+                                raw_x as i8
+                            };
+                            let dy = if flags & 0x20 != 0 {
+                                (raw_y | !0xFF) as i8
+                            } else {
+                                raw_y as i8
+                            };
                             // Overflow bitleri (0x40, 0x80) kontrolü
                             if flags & 0xC0 == 0 {
                                 mouse.update_packet(flags, dx, dy, screen_w, screen_h);
@@ -268,10 +304,20 @@ pub fn poll_input(mouse: &mut MouseState, keyboard: &mut KeyboardState, screen_w
                         // (işaretli). Bazı denetleyiciler tam bayt gönderir; 4 bitlik
                         // işaret genişletme her ikisini de doğru yorumlar.
                         let mut wheel = (MOUSE_BYTE[3] & 0x0F) as i8;
-                        if wheel & 0x08 != 0 { wheel -= 0x10; }
+                        if wheel & 0x08 != 0 {
+                            wheel -= 0x10;
+                        }
 
-                        let dx = if flags & 0x10 != 0 { (raw_x | !0xFF) as i8 } else { raw_x as i8 };
-                        let dy = if flags & 0x20 != 0 { (raw_y | !0xFF) as i8 } else { raw_y as i8 };
+                        let dx = if flags & 0x10 != 0 {
+                            (raw_x | !0xFF) as i8
+                        } else {
+                            raw_x as i8
+                        };
+                        let dy = if flags & 0x20 != 0 {
+                            (raw_y | !0xFF) as i8
+                        } else {
+                            raw_y as i8
+                        };
 
                         if flags & 0xC0 == 0 {
                             mouse.update_packet(flags, dx, dy, screen_w, screen_h);

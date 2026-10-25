@@ -26,7 +26,10 @@ impl MinGuiCompositor {
         (3, 0)
     }
 
-    pub fn start_menu_category_rect(menu_y: usize, group_index: usize) -> (usize, usize, usize, usize) {
+    pub fn start_menu_category_rect(
+        menu_y: usize,
+        group_index: usize,
+    ) -> (usize, usize, usize, usize) {
         let x = 6 + 6;
         let y = menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32) + sp(4);
         let w = sp(190) - 12;
@@ -34,7 +37,12 @@ impl MinGuiCompositor {
         (x, y, w, h)
     }
 
-    pub fn start_search_results_rect(menu_y: usize, group_index: usize, tb_y: usize, count: usize) -> (usize, usize, usize, usize) {
+    pub fn start_search_results_rect(
+        menu_y: usize,
+        group_index: usize,
+        tb_y: usize,
+        count: usize,
+    ) -> (usize, usize, usize, usize) {
         let sub_w = sp(240);
         let sub_h = sp(32) + count * sp(28) + sp(8);
         let sub_x = 6 + sp(190) + 4;
@@ -43,7 +51,11 @@ impl MinGuiCompositor {
         (sub_x, sub_y, sub_w, sub_h)
     }
 
-    pub fn start_menu_submenu_rect(menu_y: usize, group_index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+    pub fn start_menu_submenu_rect(
+        menu_y: usize,
+        group_index: usize,
+        tb_y: usize,
+    ) -> (usize, usize, usize, usize) {
         let sub_w = sp(240);
         let count = match group_index {
             3 => 6,
@@ -57,7 +69,12 @@ impl MinGuiCompositor {
         (sub_x, sub_y, sub_w, sub_h)
     }
 
-    pub fn start_menu_subitem_rect(menu_y: usize, group_index: usize, item_in_group: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+    pub fn start_menu_subitem_rect(
+        menu_y: usize,
+        group_index: usize,
+        item_in_group: usize,
+        tb_y: usize,
+    ) -> (usize, usize, usize, usize) {
         let (sub_x, sub_y, sub_w, _) = Self::start_menu_submenu_rect(menu_y, group_index, tb_y);
         let x = sub_x + sp(6);
         let y = sub_y + sp(30) + item_in_group * sp(28);
@@ -67,7 +84,11 @@ impl MinGuiCompositor {
     }
 
     /// Başlat menüsü öğesinin tıklanabilir dikdörtgeni.
-    pub fn start_menu_item_rect(menu_y: usize, index: usize, tb_y: usize) -> (usize, usize, usize, usize) {
+    pub fn start_menu_item_rect(
+        menu_y: usize,
+        index: usize,
+        tb_y: usize,
+    ) -> (usize, usize, usize, usize) {
         let (g, k) = Self::item_group_and_index(index);
         Self::start_menu_subitem_rect(menu_y, g, k, tb_y)
     }
@@ -112,15 +133,24 @@ impl MinGuiCompositor {
 
     pub fn start_search_matches(&self, english: bool, results: &mut [usize; 15]) -> usize {
         let query = &self.start_search[..self.start_search_len];
-        if query.is_empty() { return 0; }
+        if query.is_empty() {
+            return 0;
+        }
         const NAMES: [[&str; 2]; 15] = [
-            ["Dosya Yöneticisi", "File Manager"], ["Sistem Ayarları", "Settings"],
-            ["Not Defteri", "Notepad"], ["Web Tarayıcısı", "Web Browser"],
-            ["Resim Gösterici", "Image Viewer"], ["Müzik Çalar", "Music Player"],
-            ["Video Oynatıcı", "Video Player"], ["Görev Yöneticisi", "Task Manager"],
-            ["Hesap Makinesi", "Calculator"], ["Çizim Tahtası", "Paint"],
-            ["Komut İstemi", "Terminal"], ["Tek Tıkla Kur", "One-Click Install"],
-            ["3D Gösterici", "3D Viewer"], ["Paket Yöneticisi", "Package Manager"],
+            ["Dosya Yöneticisi", "File Manager"],
+            ["Sistem Ayarları", "Settings"],
+            ["Not Defteri", "Notepad"],
+            ["Web Tarayıcısı", "Web Browser"],
+            ["Resim Gösterici", "Image Viewer"],
+            ["Müzik Çalar", "Music Player"],
+            ["Video Oynatıcı", "Video Player"],
+            ["Görev Yöneticisi", "Task Manager"],
+            ["Hesap Makinesi", "Calculator"],
+            ["Çizim Tahtası", "Paint"],
+            ["Komut İstemi", "Terminal"],
+            ["Tek Tıkla Kur", "One-Click Install"],
+            ["3D Gösterici", "3D Viewer"],
+            ["Paket Yöneticisi", "Package Manager"],
             ["Kontrol Paneli", "Control Panel"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
@@ -141,7 +171,9 @@ impl MinGuiCompositor {
             }
         }
         for k in 0..self.installed_apps_count {
-            if count >= scored.len() { break; }
+            if count >= scored.len() {
+                break;
+            }
             let name = self.installed_app_name(k);
             if let Some(s) = Self::start_search_score(name.as_bytes(), query) {
                 scored[count] = (100 + k, s);
@@ -164,10 +196,15 @@ impl MinGuiCompositor {
     }
 
     pub fn push_start_search(&mut self, ch: char) {
-        if !ch.is_ascii_alphanumeric() { return; }
+        if !ch.is_ascii_alphanumeric() {
+            return;
+        }
         self.delete_start_search_selection();
         if self.start_search_len < self.start_search.len() {
-            self.start_search.copy_within(self.start_search_cursor..self.start_search_len, self.start_search_cursor + 1);
+            self.start_search.copy_within(
+                self.start_search_cursor..self.start_search_len,
+                self.start_search_cursor + 1,
+            );
             self.start_search[self.start_search_cursor] = ch.to_ascii_lowercase() as u8;
             self.start_search_len += 1;
             self.start_search_cursor += 1;
@@ -176,11 +213,16 @@ impl MinGuiCompositor {
     }
 
     fn delete_start_search_selection(&mut self) -> bool {
-        let Some((a, b)) = self.start_search_selection.take() else { return false };
+        let Some((a, b)) = self.start_search_selection.take() else {
+            return false;
+        };
         let start = a.min(b).min(self.start_search_len);
         let end = a.max(b).min(self.start_search_len);
-        if start >= end { return false; }
-        self.start_search.copy_within(end..self.start_search_len, start);
+        if start >= end {
+            return false;
+        }
+        self.start_search
+            .copy_within(end..self.start_search_len, start);
         self.start_search_len -= end - start;
         self.start_search[self.start_search_len..].fill(0);
         self.start_search_cursor = start;
@@ -189,10 +231,16 @@ impl MinGuiCompositor {
     }
 
     pub fn backspace_start_search(&mut self) {
-        if self.delete_start_search_selection() { self.selected_start_item = 0; return; }
+        if self.delete_start_search_selection() {
+            self.selected_start_item = 0;
+            return;
+        }
         if self.start_search_cursor > 0 {
             self.start_search_cursor -= 1;
-            self.start_search.copy_within(self.start_search_cursor + 1..self.start_search_len, self.start_search_cursor);
+            self.start_search.copy_within(
+                self.start_search_cursor + 1..self.start_search_len,
+                self.start_search_cursor,
+            );
             self.start_search_len -= 1;
             self.start_search[self.start_search_len] = 0;
             self.start_search_selection = None;
@@ -203,9 +251,14 @@ impl MinGuiCompositor {
     pub fn start_search_move_to(&mut self, target: usize, extend: bool) {
         let target = target.min(self.start_search_len);
         if extend {
-            let anchor = *self.start_search_anchor.get_or_insert(self.start_search_cursor);
-            self.start_search_selection = if anchor == target { None }
-                else { Some((anchor.min(target), anchor.max(target))) };
+            let anchor = *self
+                .start_search_anchor
+                .get_or_insert(self.start_search_cursor);
+            self.start_search_selection = if anchor == target {
+                None
+            } else {
+                Some((anchor.min(target), anchor.max(target)))
+            };
         } else {
             self.start_search_selection = None;
             self.start_search_anchor = None;
@@ -213,7 +266,14 @@ impl MinGuiCompositor {
         self.start_search_cursor = target;
     }
 
-    pub fn start_search_click_at(&mut self, x: usize, y: usize, field_x: usize, now_ms: u64, interval_ms: u64) -> u8 {
+    pub fn start_search_click_at(
+        &mut self,
+        x: usize,
+        y: usize,
+        field_x: usize,
+        now_ms: u64,
+        interval_ms: u64,
+    ) -> u8 {
         self.start_search_focused = true;
         let column = x.saturating_sub(field_x) / Self::text_width("M", 1).max(1);
         let at = column.min(self.start_search_len);
@@ -225,7 +285,9 @@ impl MinGuiCompositor {
             && self.start_search_last_click.2.abs_diff(y) < 4;
         self.start_search_click_streak = if same_target && self.start_search_click_streak < 3 {
             self.start_search_click_streak + 1
-        } else { 1 };
+        } else {
+            1
+        };
         self.start_search_last_click = (now_ms, x, y);
         match self.start_search_click_streak {
             2 => self.select_start_search_word(at),
@@ -240,21 +302,34 @@ impl MinGuiCompositor {
         let target = column.min(self.start_search_len);
         let anchor = self.start_search_anchor.unwrap_or(self.start_search_cursor);
         self.start_search_cursor = target;
-        self.start_search_selection = if anchor == target { None }
-            else { Some((anchor.min(target), anchor.max(target))) };
+        self.start_search_selection = if anchor == target {
+            None
+        } else {
+            Some((anchor.min(target), anchor.max(target)))
+        };
     }
 
     pub fn select_start_search_word(&mut self, index: usize) {
-        if self.start_search_len == 0 { return; }
+        if self.start_search_len == 0 {
+            return;
+        }
         let mut at = index.min(self.start_search_len);
         if at == self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() {
-            if at > 0 && self.start_search[at - 1].is_ascii_alphanumeric() { at -= 1; }
+            if at > 0 && self.start_search[at - 1].is_ascii_alphanumeric() {
+                at -= 1;
+            }
         }
-        if at >= self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() { return; }
+        if at >= self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() {
+            return;
+        }
         let mut start = at;
         let mut end = at + 1;
-        while start > 0 && self.start_search[start - 1].is_ascii_alphanumeric() { start -= 1; }
-        while end < self.start_search_len && self.start_search[end].is_ascii_alphanumeric() { end += 1; }
+        while start > 0 && self.start_search[start - 1].is_ascii_alphanumeric() {
+            start -= 1;
+        }
+        while end < self.start_search_len && self.start_search[end].is_ascii_alphanumeric() {
+            end += 1;
+        }
         self.start_search_anchor = Some(start);
         self.start_search_selection = Some((start, end));
         self.start_search_cursor = end;
@@ -281,7 +356,9 @@ impl MinGuiCompositor {
 
     pub fn cut_start_search(&mut self) {
         self.copy_start_search();
-        if self.delete_start_search_selection() { self.selected_start_item = 0; }
+        if self.delete_start_search_selection() {
+            self.selected_start_item = 0;
+        }
     }
 
     pub fn paste_start_search(&mut self) {
@@ -289,7 +366,11 @@ impl MinGuiCompositor {
         let len = crate::gui::clipboard::copy_chars(&mut chars);
         self.delete_start_search_selection();
         self.start_search_focused = true;
-        for ch in chars[..len].iter().copied().filter(|ch| ch.is_ascii_alphanumeric()) {
+        for ch in chars[..len]
+            .iter()
+            .copied()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+        {
             self.push_start_search(ch);
         }
     }
@@ -319,7 +400,9 @@ impl MinGuiCompositor {
         let mut results = [0; 15];
         let count = self.start_search_matches(english, &mut results);
         if down {
-            if count > 0 { self.selected_start_item = (self.selected_start_item + 1).min(count - 1); }
+            if count > 0 {
+                self.selected_start_item = (self.selected_start_item + 1).min(count - 1);
+            }
         } else {
             self.selected_start_item = self.selected_start_item.saturating_sub(1);
         }
@@ -342,16 +425,32 @@ impl MinGuiCompositor {
 
     /// Başlat menüsündeki arama kutusunun dikdörtgeni (x, y, w, h).
     /// Profil şeridinin hemen altına yerleşir; çizim ve tıklama testi bunu kullanır.
-    pub fn start_search_rect(menu_x: usize, menu_y: usize, menu_w: usize) -> (usize, usize, usize, usize) {
+    pub fn start_search_rect(
+        menu_x: usize,
+        menu_y: usize,
+        menu_w: usize,
+    ) -> (usize, usize, usize, usize) {
         let strip_h = sp(34) + Self::icon_size();
         let search_h = sp(22);
         // Arama alanını profil şeridinin altına ve kategori listesinin üstüne
         // koy; iki alan ölçek değişse de üst üste binmesin.
         let search_y = menu_y + strip_h + sp(4);
-        (menu_x + sp(8), search_y, menu_w.saturating_sub(sp(16)), search_h)
+        (
+            menu_x + sp(8),
+            search_y,
+            menu_w.saturating_sub(sp(16)),
+            search_h,
+        )
     }
 
-    pub fn render_start_menu(&self, fb: &mut Framebuffer, tb_y: usize, english: bool, mx: usize, my: usize) {
+    pub fn render_start_menu(
+        &self,
+        fb: &mut Framebuffer,
+        tb_y: usize,
+        english: bool,
+        mx: usize,
+        my: usize,
+    ) {
         let (menu_x, menu_y, menu_w, menu_h) = Self::start_menu_rect(tb_y);
         fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
         fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
@@ -359,25 +458,80 @@ impl MinGuiCompositor {
 
         // Profil Şeridi (gradyan)
         let strip_h = sp(34) + Self::icon_size();
-        fb.draw_vgradient(menu_x + 1, menu_y + 1, menu_w - 2, strip_h, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
+        fb.draw_vgradient(
+            menu_x + 1,
+            menu_y + 1,
+            menu_w - 2,
+            strip_h,
+            Color::TITLE_BAR,
+            Self::shade(Color::TITLE_BAR, -16),
+        );
         let icon_sz = Self::icon_size();
         Self::draw_cat_icon(fb, menu_x + sp(8), menu_y + sp(8));
         let title_x = menu_x + sp(8) + icon_sz + sp(6);
         let text_h2 = Self::text_height();
         let title_y = menu_y + (strip_h.saturating_sub(text_h2)) / 2;
-        Self::draw_string_shadow(fb, title_x, title_y, "minOs", Color::TEXT_MAIN, Color::SHADOW, 1);
+        Self::draw_string_shadow(
+            fb,
+            title_x,
+            title_y,
+            "minOs",
+            Color::TEXT_MAIN,
+            Color::SHADOW,
+            1,
+        );
         let settings_hover = in_rect(mx, my, (menu_x + menu_w - 34, menu_y + 6, 26, 22));
-        if settings_hover { fb.draw_rounded_rect(menu_x + menu_w - 34, menu_y + 6, 26, 22, 4, Color::ACCENT_BLUE); }
+        if settings_hover {
+            fb.draw_rounded_rect(
+                menu_x + menu_w - 34,
+                menu_y + 6,
+                26,
+                22,
+                4,
+                Color::ACCENT_BLUE,
+            );
+        }
         // Ayarlar menü öğesinde kullanılan mevcut uygulama simgesini yeniden kullan.
-        Self::draw_icon_by_index(fb, menu_x + menu_w - 28, menu_y + 9, Self::window_icon_index(1));
+        Self::draw_icon_by_index(
+            fb,
+            menu_x + menu_w - 28,
+            menu_y + 9,
+            Self::window_icon_index(1),
+        );
         let search_rect = Self::start_search_rect(menu_x, menu_y, menu_w);
-        fb.draw_rounded_rect(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::WINDOW_BG);
-        fb.draw_rounded_rect_outline(search_rect.0, search_rect.1, search_rect.2, search_rect.3, 4, Color::BORDER);
+        fb.draw_rounded_rect(
+            search_rect.0,
+            search_rect.1,
+            search_rect.2,
+            search_rect.3,
+            4,
+            Color::WINDOW_BG,
+        );
+        fb.draw_rounded_rect_outline(
+            search_rect.0,
+            search_rect.1,
+            search_rect.2,
+            search_rect.3,
+            4,
+            Color::BORDER,
+        );
         let search_x = search_rect.0 + 6;
         let search_y = search_rect.1 + 4;
-        let search_clip = (search_rect.0 + 4, search_rect.1 + 2, search_rect.2.saturating_sub(8), search_rect.3.saturating_sub(4));
+        let search_clip = (
+            search_rect.0 + 4,
+            search_rect.1 + 2,
+            search_rect.2.saturating_sub(8),
+            search_rect.3.saturating_sub(4),
+        );
         if self.start_search_len == 0 {
-            Self::draw_string_clipped(fb, search_x, search_y, ui_text("Uygulama ara...", "Search apps..."), Color::TEXT_MAIN, search_clip);
+            Self::draw_string_clipped(
+                fb,
+                search_x,
+                search_y,
+                ui_text("Uygulama ara...", "Search apps..."),
+                Color::TEXT_MAIN,
+                search_clip,
+            );
         } else {
             let visible = &self.start_search[..self.start_search_len];
             if let Some((a, b)) = self.start_search_selection {
@@ -386,21 +540,64 @@ impl MinGuiCompositor {
                 let prefix = core::str::from_utf8(&visible[..start]).unwrap_or("");
                 let selected = core::str::from_utf8(&visible[start..end]).unwrap_or("");
                 let suffix = core::str::from_utf8(&visible[end..]).unwrap_or("");
-                Self::draw_string_clipped(fb, search_x, search_y, prefix, Color::TEXT_MAIN, search_clip);
+                Self::draw_string_clipped(
+                    fb,
+                    search_x,
+                    search_y,
+                    prefix,
+                    Color::TEXT_MAIN,
+                    search_clip,
+                );
                 let selection_x = search_x + Self::text_width(prefix, 1);
                 let selection_w = Self::text_width(selected, 1);
-                fb.draw_rect(selection_x, search_rect.1 + 2, selection_w, search_rect.3.saturating_sub(4), Color::ACCENT_BLUE);
-                Self::draw_string_clipped(fb, selection_x, search_y, selected, Self::text_on(Color::ACCENT_BLUE), search_clip);
-                Self::draw_string_clipped(fb, selection_x + selection_w, search_y, suffix, Color::TEXT_MAIN, search_clip);
+                fb.draw_rect(
+                    selection_x,
+                    search_rect.1 + 2,
+                    selection_w,
+                    search_rect.3.saturating_sub(4),
+                    Color::ACCENT_BLUE,
+                );
+                Self::draw_string_clipped(
+                    fb,
+                    selection_x,
+                    search_y,
+                    selected,
+                    Self::text_on(Color::ACCENT_BLUE),
+                    search_clip,
+                );
+                Self::draw_string_clipped(
+                    fb,
+                    selection_x + selection_w,
+                    search_y,
+                    suffix,
+                    Color::TEXT_MAIN,
+                    search_clip,
+                );
             } else {
                 let text = core::str::from_utf8(visible).unwrap_or("");
-                Self::draw_string_clipped(fb, search_x, search_y, text, Color::TEXT_MAIN, search_clip);
+                Self::draw_string_clipped(
+                    fb,
+                    search_x,
+                    search_y,
+                    text,
+                    Color::TEXT_MAIN,
+                    search_clip,
+                );
             }
             if self.start_search_focused && self.start_search_selection.is_none() {
-                let prefix = core::str::from_utf8(&visible[..self.start_search_cursor.min(self.start_search_len)]).unwrap_or("");
+                let prefix = core::str::from_utf8(
+                    &visible[..self.start_search_cursor.min(self.start_search_len)],
+                )
+                .unwrap_or("");
                 let caret_x = search_x + Self::text_width(prefix, 1);
                 if caret_x < search_rect.0 + search_rect.2.saturating_sub(2) {
-                    fb.draw_rect(caret_x, search_rect.1 + 4, 1, search_rect.3.saturating_sub(8), Color::ACCENT_YELLOW);
+                    fb.draw_rect(
+                        caret_x,
+                        search_rect.1 + 4,
+                        1,
+                        search_rect.3.saturating_sub(8),
+                        Color::ACCENT_YELLOW,
+                    );
                 }
             }
         }
@@ -427,7 +624,11 @@ impl MinGuiCompositor {
                 Color::WINDOW_BG
             };
 
-            let fg_col = if is_active { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+            let fg_col = if is_active {
+                Self::text_on(bg_col)
+            } else {
+                Color::TEXT_MAIN
+            };
 
             fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 5, bg_col);
             if is_active {
@@ -438,8 +639,24 @@ impl MinGuiCompositor {
             let arrow_x = (r.0 + r.2 - 13) as f32;
             let arrow_y = (r.1 + r.3 / 2) as f32;
             let arrow_color = Self::text_on(bg_col);
-            Self::draw_antialiased_line(fb, arrow_x - 2.5, arrow_y - 4.0, arrow_x + 1.5, arrow_y, arrow_color, 1.7);
-            Self::draw_antialiased_line(fb, arrow_x + 1.5, arrow_y, arrow_x - 2.5, arrow_y + 4.0, arrow_color, 1.7);
+            Self::draw_antialiased_line(
+                fb,
+                arrow_x - 2.5,
+                arrow_y - 4.0,
+                arrow_x + 1.5,
+                arrow_y,
+                arrow_color,
+                1.7,
+            );
+            Self::draw_antialiased_line(
+                fb,
+                arrow_x + 1.5,
+                arrow_y,
+                arrow_x - 2.5,
+                arrow_y + 4.0,
+                arrow_color,
+                1.7,
+            );
         }
 
         // Yana Açılır Alt Menü
@@ -448,43 +665,132 @@ impl MinGuiCompositor {
         } else {
             let mut results = [0; 15];
             let count = self.start_search_matches(english, &mut results);
-            let (sub_x, sub_y, sub_w, sub_h) = Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
+            let (sub_x, sub_y, sub_w, sub_h) =
+                Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
             fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
             fb.draw_rounded_rect(sub_x, sub_y, sub_w, sub_h, 8, Color::TASKBAR_BG);
             fb.draw_rounded_rect_outline(sub_x, sub_y, sub_w, sub_h, 8, Color::BORDER);
-            fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
-            Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, ui_text("Arama Sonuçları", "Search Results"), Color::TEXT_MAIN, Color::SHADOW, 1);
+            fb.draw_vgradient(
+                sub_x + 1,
+                sub_y + 1,
+                sub_w - 2,
+                24,
+                Color::TITLE_BAR,
+                Self::shade(Color::TITLE_BAR, -16),
+            );
+            Self::draw_string_shadow(
+                fb,
+                sub_x + 8,
+                sub_y + 7,
+                ui_text("Arama Sonuçları", "Search Results"),
+                Color::TEXT_MAIN,
+                Color::SHADOW,
+                1,
+            );
 
-            let names = ["Dosya Yöneticisi", "Sistem Ayarları", "Not Defteri", "Web Tarayıcısı", "Resim Gösterici", "Müzik Çalar", "Video Oynatıcı", "Görev Yöneticisi", "Hesap Makinesi", "Çizim Tahtası", "Komut İstemi", "Tek Tıkla Kur", "3D Gösterici", "Paket Yöneticisi", "Kontrol Paneli"];
-            let en_names = ["File Manager", "Settings", "Notepad", "Web Browser", "Image Viewer", "Music Player", "Video Player", "Task Manager", "Calculator", "Paint", "Terminal", "One-Click Install", "3D Viewer", "Package Manager", "Control Panel"];
+            let names = [
+                "Dosya Yöneticisi",
+                "Sistem Ayarları",
+                "Not Defteri",
+                "Web Tarayıcısı",
+                "Resim Gösterici",
+                "Müzik Çalar",
+                "Video Oynatıcı",
+                "Görev Yöneticisi",
+                "Hesap Makinesi",
+                "Çizim Tahtası",
+                "Komut İstemi",
+                "Tek Tıkla Kur",
+                "3D Gösterici",
+                "Paket Yöneticisi",
+                "Kontrol Paneli",
+            ];
+            let en_names = [
+                "File Manager",
+                "Settings",
+                "Notepad",
+                "Web Browser",
+                "Image Viewer",
+                "Music Player",
+                "Video Player",
+                "Task Manager",
+                "Calculator",
+                "Paint",
+                "Terminal",
+                "One-Click Install",
+                "3D Viewer",
+                "Package Manager",
+                "Control Panel",
+            ];
             if count == 0 {
-                Self::draw_string(fb, sub_x + 12, sub_y + 38, ui_text("Sonuç bulunamadı", "No apps found"), Color::TEXT_MUTED);
+                Self::draw_string(
+                    fb,
+                    sub_x + 12,
+                    sub_y + 38,
+                    ui_text("Sonuç bulunamadı", "No apps found"),
+                    Color::TEXT_MUTED,
+                );
             }
             for row in 0..count {
-                let r = (sub_x + sp(6), sub_y + sp(30) + row * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
+                let r = (
+                    sub_x + sp(6),
+                    sub_y + sp(30) + row * sp(28),
+                    sub_w.saturating_sub(sp(12)),
+                    sp(25),
+                );
                 let is_selected = row == self.selected_start_item;
                 let is_hovered = in_rect(mx, my, r);
-                if is_selected { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::ACCENT_BLUE); }
-                else if is_hovered { fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR); }
+                if is_selected {
+                    fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::ACCENT_BLUE);
+                } else if is_hovered {
+                    fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR);
+                }
                 let app_id = results[row];
                 let (app_name, icon_idx) = if app_id >= 100 {
                     (self.installed_app_name(app_id - 100), 5)
                 } else {
-                    let n = if english { en_names[app_id] } else { names[app_id] };
+                    let n = if english {
+                        en_names[app_id]
+                    } else {
+                        names[app_id]
+                    };
                     (n, Self::window_icon_index(app_id))
                 };
                 let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
                 Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
                 let text_y = r.1 + (r.3.saturating_sub(Self::text_height())) / 2;
                 let text_off = sp(6) + Self::icon_size() + sp(8);
-                Self::draw_string_clipped(fb, r.0 + text_off, text_y, app_name,
-                    if is_selected { Self::text_on(Color::ACCENT_BLUE) } else { Color::TEXT_MAIN },
-                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+                Self::draw_string_clipped(
+                    fb,
+                    r.0 + text_off,
+                    text_y,
+                    app_name,
+                    if is_selected {
+                        Self::text_on(Color::ACCENT_BLUE)
+                    } else {
+                        Color::TEXT_MAIN
+                    },
+                    (
+                        r.0 + text_off - sp(2),
+                        r.1,
+                        r.2.saturating_sub(text_off),
+                        r.3,
+                    ),
+                );
             }
         }
     }
 
-    pub fn render_start_submenu(&self, fb: &mut Framebuffer, menu_y: usize, group_idx: usize, tb_y: usize, english: bool, mx: usize, my: usize) {
+    pub fn render_start_submenu(
+        &self,
+        fb: &mut Framebuffer,
+        menu_y: usize,
+        group_idx: usize,
+        tb_y: usize,
+        english: bool,
+        mx: usize,
+        my: usize,
+    ) {
         let (sub_x, sub_y, sub_w, sub_h) = Self::start_menu_submenu_rect(menu_y, group_idx, tb_y);
 
         fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
@@ -498,16 +804,41 @@ impl MinGuiCompositor {
             3 => crate::gui::ui_text("Kurulu Uygulamalar", "Installed Apps"),
             _ => crate::gui::ui_text("Güç Seçenekleri", "Power Options"),
         };
-        fb.draw_vgradient(sub_x + 1, sub_y + 1, sub_w - 2, 24, Color::TITLE_BAR, Self::shade(Color::TITLE_BAR, -16));
-        Self::draw_string_shadow(fb, sub_x + 8, sub_y + 7, sub_header_title, Color::TEXT_MAIN, Color::SHADOW, 1);
+        fb.draw_vgradient(
+            sub_x + 1,
+            sub_y + 1,
+            sub_w - 2,
+            24,
+            Color::TITLE_BAR,
+            Self::shade(Color::TITLE_BAR, -16),
+        );
+        Self::draw_string_shadow(
+            fb,
+            sub_x + 8,
+            sub_y + 7,
+            sub_header_title,
+            Color::TEXT_MAIN,
+            Color::SHADOW,
+            1,
+        );
 
         if group_idx == 3 {
             // Toplam öğe sayısı: En üstte Paket Yöneticisi (1) + kurulu paketler
             let total_count = 1 + self.installed_apps_count;
             for k in 0..total_count {
-                let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
-                let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
-                let bg_col = if is_hovered { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+                let r = (
+                    sub_x + sp(6),
+                    sub_y + sp(30) + k * sp(28),
+                    sub_w.saturating_sub(sp(12)),
+                    sp(25),
+                );
+                let is_hovered = in_rect(mx, my, r)
+                    || (self.start_menu_focus_submenu && self.selected_start_item == k);
+                let bg_col = if is_hovered {
+                    Color::ACCENT_BLUE
+                } else {
+                    Color::WINDOW_BG
+                };
                 fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
                 if is_hovered {
                     fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
@@ -525,12 +856,27 @@ impl MinGuiCompositor {
                     app_name = self.installed_app_name(k - 1);
                 }
 
-                let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+                let text_col = if is_hovered {
+                    Self::text_on(bg_col)
+                } else {
+                    Color::TEXT_MAIN
+                };
                 let text_off = sp(6) + Self::icon_size() + sp(8);
                 let text_x = r.0 + text_off;
                 let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
-                Self::draw_string_clipped(fb, text_x, text_y, app_name, text_col,
-                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+                Self::draw_string_clipped(
+                    fb,
+                    text_x,
+                    text_y,
+                    app_name,
+                    text_col,
+                    (
+                        r.0 + text_off - sp(2),
+                        r.1,
+                        r.2.saturating_sub(text_off),
+                        r.3,
+                    ),
+                );
             }
             return;
         }
@@ -543,15 +889,22 @@ impl MinGuiCompositor {
             };
             for k in 0..2 {
                 let (name, _code) = power_items[k];
-                let r = (sub_x + sp(6), sub_y + sp(30) + k * sp(28), sub_w.saturating_sub(sp(12)), sp(25));
-                let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
-                let bg_col = if (k == 0 && self.confirm_shutdown) || (k == 1 && self.confirm_restart) {
-                    Color::ACCENT_RED
-                } else if is_hovered {
-                    Color::ACCENT_BLUE
-                } else {
-                    Color::TITLE_BAR
-                };
+                let r = (
+                    sub_x + sp(6),
+                    sub_y + sp(30) + k * sp(28),
+                    sub_w.saturating_sub(sp(12)),
+                    sp(25),
+                );
+                let is_hovered = in_rect(mx, my, r)
+                    || (self.start_menu_focus_submenu && self.selected_start_item == k);
+                let bg_col =
+                    if (k == 0 && self.confirm_shutdown) || (k == 1 && self.confirm_restart) {
+                        Color::ACCENT_RED
+                    } else if is_hovered {
+                        Color::ACCENT_BLUE
+                    } else {
+                        Color::TITLE_BAR
+                    };
                 fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, bg_col);
                 if is_hovered {
                     fb.draw_rounded_rect_outline(r.0, r.1, r.2, r.3, 4, Color::WHITE);
@@ -560,56 +913,81 @@ impl MinGuiCompositor {
                 Self::draw_cat_icon_scaled(fb, r.0 + sp(6), icon_y);
 
                 let label = if k == 0 && self.confirm_shutdown {
-                    crate::gui::ui_text("KAPATMAYI ONAYLA (tekrar tıkla)", "CONFIRM SHUTDOWN (click again)")
+                    crate::gui::ui_text(
+                        "KAPATMAYI ONAYLA (tekrar tıkla)",
+                        "CONFIRM SHUTDOWN (click again)",
+                    )
                 } else if k == 1 && self.confirm_restart {
-                    crate::gui::ui_text("YENİDEN BAŞLAT? TEKRAR TIKLA", "CONFIRM RESTART (click again)")
+                    crate::gui::ui_text(
+                        "YENİDEN BAŞLAT? TEKRAR TIKLA",
+                        "CONFIRM RESTART (click again)",
+                    )
                 } else {
                     name
                 };
 
-                let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+                let text_col = if is_hovered {
+                    Self::text_on(bg_col)
+                } else {
+                    Color::TEXT_MAIN
+                };
                 let text_off = sp(6) + Self::icon_size() + sp(8);
                 let text_x = r.0 + text_off;
                 let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
-                Self::draw_string_clipped(fb, text_x, text_y, label, text_col,
-                    (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+                Self::draw_string_clipped(
+                    fb,
+                    text_x,
+                    text_y,
+                    label,
+                    text_col,
+                    (
+                        r.0 + text_off - sp(2),
+                        r.1,
+                        r.2.saturating_sub(text_off),
+                        r.3,
+                    ),
+                );
             }
             return;
         }
 
-        let menu_items: [(&str, u32, usize); 15] = if english { [
-            ("File Manager", Color::ACCENT_YELLOW, 0),
-            ("Settings", Color::ACCENT_BLUE, 1usize),
-            ("Control Panel", Color::ACCENT_YELLOW, 14usize),
-            ("Task Manager", Color::ACCENT_BLUE, 7),
-            ("Terminal", Color::ACCENT_GREEN, 10),
-            ("One-Click Install", Color::ACCENT_GREEN, 11),
-            ("Package Manager", Color::ACCENT_PINK, 13),
-            ("Notepad", Color::TEXT_MAIN, 2),
-            ("Calculator", Color::ACCENT_GREEN, 8),
-            ("Paint", Color::ACCENT_PINK, 9),
-            ("Web Browser", Color::ACCENT_GREEN, 3),
-            ("Image Viewer", Color::ACCENT_PINK, 4),
-            ("Music Player", Color::ACCENT_YELLOW, 5),
-            ("Video Player", Color::ACCENT_RED, 6),
-            ("3D Viewer", Color::ACCENT_BLUE, 12),
-        ] } else { [
-            ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
-            ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
-            ("Kontrol Paneli", Color::ACCENT_YELLOW, 14usize),
-            ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
-            ("Komut İstemi", Color::ACCENT_GREEN, 10),
-            ("Tek Tıkla Kur", Color::ACCENT_GREEN, 11),
-            ("Paket Yöneticisi", Color::ACCENT_PINK, 13),
-            ("Not Defteri", Color::TEXT_MAIN, 2),
-            ("Hesap Makinesi", Color::ACCENT_GREEN, 8),
-            ("Çizim Tahtası", Color::ACCENT_PINK, 9),
-            ("Web Tarayıcısı", Color::ACCENT_GREEN, 3),
-            ("Resim Gösterici", Color::ACCENT_PINK, 4),
-            ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
-            ("Video Oynatıcı", Color::ACCENT_RED, 6),
-            ("3D Gösterici", Color::ACCENT_BLUE, 12),
-        ] };
+        let menu_items: [(&str, u32, usize); 15] = if english {
+            [
+                ("File Manager", Color::ACCENT_YELLOW, 0),
+                ("Settings", Color::ACCENT_BLUE, 1usize),
+                ("Control Panel", Color::ACCENT_YELLOW, 14usize),
+                ("Task Manager", Color::ACCENT_BLUE, 7),
+                ("Terminal", Color::ACCENT_GREEN, 10),
+                ("One-Click Install", Color::ACCENT_GREEN, 11),
+                ("Package Manager", Color::ACCENT_PINK, 13),
+                ("Notepad", Color::TEXT_MAIN, 2),
+                ("Calculator", Color::ACCENT_GREEN, 8),
+                ("Paint", Color::ACCENT_PINK, 9),
+                ("Web Browser", Color::ACCENT_GREEN, 3),
+                ("Image Viewer", Color::ACCENT_PINK, 4),
+                ("Music Player", Color::ACCENT_YELLOW, 5),
+                ("Video Player", Color::ACCENT_RED, 6),
+                ("3D Viewer", Color::ACCENT_BLUE, 12),
+            ]
+        } else {
+            [
+                ("Dosya Yöneticisi", Color::ACCENT_YELLOW, 0),
+                ("Sistem Ayarları", Color::ACCENT_BLUE, 1usize),
+                ("Kontrol Paneli", Color::ACCENT_YELLOW, 14usize),
+                ("Görev Yöneticisi", Color::ACCENT_BLUE, 7),
+                ("Komut İstemi", Color::ACCENT_GREEN, 10),
+                ("Tek Tıkla Kur", Color::ACCENT_GREEN, 11),
+                ("Paket Yöneticisi", Color::ACCENT_PINK, 13),
+                ("Not Defteri", Color::TEXT_MAIN, 2),
+                ("Hesap Makinesi", Color::ACCENT_GREEN, 8),
+                ("Çizim Tahtası", Color::ACCENT_PINK, 9),
+                ("Web Tarayıcısı", Color::ACCENT_GREEN, 3),
+                ("Resim Gösterici", Color::ACCENT_PINK, 4),
+                ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
+                ("Video Oynatıcı", Color::ACCENT_RED, 6),
+                ("3D Gösterici", Color::ACCENT_BLUE, 12),
+            ]
+        };
 
         let (_, first, count) = MENU_GROUPS[group_idx];
 
@@ -618,7 +996,8 @@ impl MinGuiCompositor {
             let (name, _col, app_or_code) = menu_items[i];
             let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
 
-            let is_hovered = in_rect(mx, my, r) || (self.start_menu_focus_submenu && self.selected_start_item == k);
+            let is_hovered = in_rect(mx, my, r)
+                || (self.start_menu_focus_submenu && self.selected_start_item == k);
             let bg_col = if is_hovered {
                 Color::ACCENT_BLUE
             } else {
@@ -635,12 +1014,27 @@ impl MinGuiCompositor {
             let icon_idx = Self::window_icon_index(app_or_code);
             Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
 
-            let text_col = if is_hovered { Self::text_on(bg_col) } else { Color::TEXT_MAIN };
+            let text_col = if is_hovered {
+                Self::text_on(bg_col)
+            } else {
+                Color::TEXT_MAIN
+            };
             let text_off = sp(6) + Self::icon_size() + sp(8);
             let text_x = r.0 + text_off;
             let text_y = r.1 + r.3.saturating_sub(Self::text_height()) / 2;
-            Self::draw_string_clipped(fb, text_x, text_y, name, text_col,
-                (r.0 + text_off - sp(2), r.1, r.2.saturating_sub(text_off), r.3));
+            Self::draw_string_clipped(
+                fb,
+                text_x,
+                text_y,
+                name,
+                text_col,
+                (
+                    r.0 + text_off - sp(2),
+                    r.1,
+                    r.2.saturating_sub(text_off),
+                    r.3,
+                ),
+            );
         }
     }
 }

@@ -32,12 +32,12 @@ pub struct BatteryInfo {
     pub last_full_capacity: u32, // Son tam kapasite (mWh veya mAh)
     pub technology: [u8; 32],    // Pil teknolojisi (Li-Ion, LiP, vb.)
     pub technology_len: usize,
-    pub voltage: u32,            // Voltaj (mV)
-    pub current: i32,            // Akım / Güç oranı (mA veya mW, +: şarj, -: deşarj)
-    pub capacity: u32,           // Mevcut kalan kapasite (mWh veya mAh)
+    pub voltage: u32,             // Voltaj (mV)
+    pub current: i32,             // Akım / Güç oranı (mA veya mW, +: şarj, -: deşarj)
+    pub capacity: u32,            // Mevcut kalan kapasite (mWh veya mAh)
     pub remaining_percentage: u8, // Kalan yüzde (0-100)
     pub cycle_count: Option<u32>, // Pil döngü sayısı (_BIX)
-    pub power_unit: u32,         // 0: mWh, 1: mAh
+    pub power_unit: u32,          // 0: mWh, 1: mAh
     pub model_number: [u8; 32],
     pub model_number_len: usize,
     pub serial_number: [u8; 32],
@@ -75,7 +75,7 @@ pub struct RsdpDescriptor {
     pub signature: [u8; 8], // "RSD PTR "
     pub checksum: u8,
     pub oem_id: [u8; 6],
-    pub revision: u8,       // 0: ACPI 1.0, 2: ACPI 2.0+
+    pub revision: u8, // 0: ACPI 1.0, 2: ACPI 2.0+
     pub rsdt_address: u32,
     pub length: u32,
     pub xsdt_address: u64,
@@ -165,7 +165,9 @@ pub static RSDP_REQUEST: LimineRsdpRequest = LimineRsdpRequest {
 pub fn find_rsdp() -> Option<u64> {
     unsafe {
         // 1. Limine RSDP isteğini kontrol et
-        if let Some(resp) = crate::boot::limine::valid_limine_response(core::ptr::addr_of!(RSDP_REQUEST.response)) {
+        if let Some(resp) =
+            crate::boot::limine::valid_limine_response(core::ptr::addr_of!(RSDP_REQUEST.response))
+        {
             let addr = core::ptr::read_volatile(core::ptr::addr_of!((*resp).address));
             if !addr.is_null() && crate::boot::limine::is_canonical_ptr(addr) {
                 let p = addr as u64;
@@ -455,7 +457,9 @@ impl<'a> AmlParser<'a> {
 
     /// AML NameString (örn. `_BST`, `_BIX`, `BAT0`) okur
     pub fn parse_name_string(&mut self) -> Option<[u8; 4]> {
-        while self.cursor < self.data.len() && (self.data[self.cursor] == b'\\' || self.data[self.cursor] == b'^') {
+        while self.cursor < self.data.len()
+            && (self.data[self.cursor] == b'\\' || self.data[self.cursor] == b'^')
+        {
             self.cursor += 1;
         }
 
@@ -512,13 +516,13 @@ impl<'a> AmlParser<'a> {
         self.cursor += 1;
 
         match op {
-            0x00 => Some(AmlValue::Integer(0)),        // ZeroOp
-            0x01 => Some(AmlValue::Integer(1)),        // OneOp
-            0xFF => Some(AmlValue::Integer(!0)),       // OnesOp
+            0x00 => Some(AmlValue::Integer(0)),                      // ZeroOp
+            0x01 => Some(AmlValue::Integer(1)),                      // OneOp
+            0xFF => Some(AmlValue::Integer(!0)),                     // OnesOp
             0x0A => Some(AmlValue::Integer(self.read_u8()? as u64)), // BytePrefix
             0x0B => Some(AmlValue::Integer(self.read_u16()? as u64)), // WordPrefix
             0x0C => Some(AmlValue::Integer(self.read_u32()? as u64)), // DWordPrefix
-            0x0E => Some(AmlValue::Integer(self.read_u64()?)),        // QWordPrefix
+            0x0E => Some(AmlValue::Integer(self.read_u64()?)),       // QWordPrefix
             0x0D => {
                 // StringPrefix (NUL ile sonlanan ASCII)
                 let start = self.cursor;
@@ -544,7 +548,8 @@ impl<'a> AmlParser<'a> {
                 let data_len = end.saturating_sub(self.cursor).min(32);
                 let mut buf = [0u8; 32];
                 if self.cursor + data_len <= self.data.len() {
-                    buf[..data_len].copy_from_slice(&self.data[self.cursor..self.cursor + data_len]);
+                    buf[..data_len]
+                        .copy_from_slice(&self.data[self.cursor..self.cursor + data_len]);
                 }
                 self.cursor = end.min(self.data.len());
                 Some(AmlValue::Buffer(buf, data_len))
@@ -961,7 +966,8 @@ pub fn health_percentage() -> u8 {
             return 100;
         }
 
-        let health = ((BATTERY_INFO.last_full_capacity as u64 * 100) / BATTERY_INFO.design_capacity as u64) as u8;
+        let health = ((BATTERY_INFO.last_full_capacity as u64 * 100)
+            / BATTERY_INFO.design_capacity as u64) as u8;
         health.min(100)
     }
 }

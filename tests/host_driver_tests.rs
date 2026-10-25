@@ -1,8 +1,8 @@
 //! Host unit testleri: VirtIO-GPU, ACPI AML & Battery, Bluetooth HCI.
 
+use crate::drivers::acpi_battery::*;
 use crate::drivers::bluetooth::*;
 use crate::drivers::virtio_gpu::*;
-use crate::drivers::acpi_battery::*;
 
 // ---------------------------------------------------------------------------
 // 1. Bluetooth HCI Protokol Testleri
@@ -77,11 +77,20 @@ fn test_hci_event_processing_and_device_tracking() {
         HCI_EV_INQUIRY_RESULT,
         15,
         1, // 1 yanıt
-        0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, // MAC
-        0x01,                               // Page Scan Repetition
-        0x00, 0x00,                         // Reserved
-        0x04, 0x05, 0x24,                   // Class: Mouse
-        0x12, 0x34,                         // Clock Offset
+        0xAA,
+        0xBB,
+        0xCC,
+        0xDD,
+        0xEE,
+        0xFF, // MAC
+        0x01, // Page Scan Repetition
+        0x00,
+        0x00, // Reserved
+        0x04,
+        0x05,
+        0x24, // Class: Mouse
+        0x12,
+        0x34, // Clock Offset
     ];
 
     let processed = process_hci_event(&inq_event);
@@ -100,9 +109,15 @@ fn test_hci_event_processing_and_device_tracking() {
         HCI_EVENT_PKT,
         HCI_EV_CONN_COMPLETE,
         11,
-        0x00,       // Status: Success
-        0x42, 0x00, // Handle: 0x0042
-        0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+        0x00, // Status: Success
+        0x42,
+        0x00, // Handle: 0x0042
+        0xAA,
+        0xBB,
+        0xCC,
+        0xDD,
+        0xEE,
+        0xFF,
         0x01,
         0x00,
     ];
@@ -117,9 +132,10 @@ fn test_hci_event_processing_and_device_tracking() {
         HCI_EVENT_PKT,
         HCI_EV_DISCONN_COMPLETE,
         4,
-        0x00,       // Status: Success
-        0x42, 0x00, // Handle: 0x0042
-        0x13,       // Reason
+        0x00, // Status: Success
+        0x42,
+        0x00, // Handle: 0x0042
+        0x13, // Reason
     ];
 
     process_hci_event(&disconn_event);
@@ -149,11 +165,11 @@ fn test_aml_pkg_length_parsing() {
 #[test]
 fn test_aml_integer_parsing() {
     let data = [
-        0x00,                   // ZeroOp -> 0
-        0x01,                   // OneOp -> 1
-        0xFF,                   // OnesOp -> !0
-        0x0A, 0x2A,             // BytePrefix -> 42
-        0x0B, 0x34, 0x12,       // WordPrefix -> 0x1234
+        0x00, // ZeroOp -> 0
+        0x01, // OneOp -> 1
+        0xFF, // OnesOp -> !0
+        0x0A, 0x2A, // BytePrefix -> 42
+        0x0B, 0x34, 0x12, // WordPrefix -> 0x1234
         0x0C, 0x78, 0x56, 0x34, 0x12, // DWordPrefix -> 0x12345678
     ];
 
@@ -170,11 +186,11 @@ fn test_aml_integer_parsing() {
 fn test_aml_package_parsing() {
     // PackageOp (0x12) ile 4 elemanlı bir paket (örn. _BST)
     let data = [
-        0x12, 16, 4,            // PackageOp, PkgLen=16, NumElements=4
-        0x0A, 0x01,             // Eleman 0: Byte (1: Discharging)
-        0x0B, 0xE8, 0x03,       // Eleman 1: Word (1000: Present Rate 1000 mW)
+        0x12, 16, 4, // PackageOp, PkgLen=16, NumElements=4
+        0x0A, 0x01, // Eleman 0: Byte (1: Discharging)
+        0x0B, 0xE8, 0x03, // Eleman 1: Word (1000: Present Rate 1000 mW)
         0x0C, 0x20, 0x4E, 0x00, 0x00, // Eleman 2: DWord (20000: Remaining Capacity 20000 mWh)
-        0x0B, 0xE0, 0x2E,       // Eleman 3: Word (12000: Present Voltage 12000 mV)
+        0x0B, 0xE0, 0x2E, // Eleman 3: Word (12000: Present Voltage 12000 mV)
     ];
 
     let mut p = AmlParser::new(&data);
@@ -202,18 +218,16 @@ fn test_scan_aml_for_battery_bst_and_bix() {
     // 2. _BST
     aml.extend_from_slice(b"_BST");
     aml.extend_from_slice(&[
-        0x12, 16, 4,
-        0x0A, 0x02,             // State = 2 (Charging)
-        0x0B, 0xD0, 0x07,       // Present Rate = 2000 mW
+        0x12, 16, 4, 0x0A, 0x02, // State = 2 (Charging)
+        0x0B, 0xD0, 0x07, // Present Rate = 2000 mW
         0x0C, 0x40, 0x9C, 0x00, 0x00, // Remaining Capacity = 40000 mWh
-        0x0B, 0x60, 0x2E,       // Voltage = 11872 mV
+        0x0B, 0x60, 0x2E, // Voltage = 11872 mV
     ]);
 
     // 3. _BIX
     aml.extend_from_slice(b"_BIX");
     aml.extend_from_slice(&[
-        0x12, 50, 17,
-        0x0A, 0x00, // Revision = 0
+        0x12, 50, 17, 0x0A, 0x00, // Revision = 0
         0x0A, 0x00, // Power Unit = 0 (mWh)
         0x0C, 0x50, 0xC3, 0x00, 0x00, // Design Capacity = 50000 mWh
         0x0C, 0xE0, 0xB7, 0x00, 0x00, // Last Full Capacity = 47072 mWh
@@ -221,9 +235,9 @@ fn test_scan_aml_for_battery_bst_and_bix() {
         0x0B, 0xE0, 0x2E, // Design Voltage = 12000 mV
         0x0A, 0x00, // Warning
         0x0A, 0x00, // Low
-        0x0A, 125,  // Cycle count = 125
-        0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00,
-        0x0D, b'B', b'A', b'T', b'T', 0x00, // Model "BATT"
+        0x0A, 125, // Cycle count = 125
+        0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0A, 0x00, 0x0D,
+        b'B', b'A', b'T', b'T', 0x00, // Model "BATT"
     ]);
 
     let mut parsed = BatteryParsedData::default();
@@ -240,7 +254,8 @@ fn test_scan_aml_for_battery_bst_and_bix() {
     assert_eq!(parsed.bix_cycle_count, Some(125));
 
     // Kalan yüzde hesabı: (40000 * 100) / 47072 = 84%
-    let percentage = (parsed.bst_remaining_capacity as u64 * 100) / parsed.bix_last_full_capacity as u64;
+    let percentage =
+        (parsed.bst_remaining_capacity as u64 * 100) / parsed.bix_last_full_capacity as u64;
     assert_eq!(percentage, 84);
 }
 
@@ -277,4 +292,3 @@ fn test_virtio_gpu_structures() {
     // Format doğrulaması
     assert_eq!(VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM, 1);
 }
-

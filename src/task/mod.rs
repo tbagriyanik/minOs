@@ -6,11 +6,11 @@
 
 extern crate alloc;
 
+use crate::arch::x86_64::sync::SpinMutex;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use crate::arch::x86_64::sync::SpinMutex;
 
 static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
 // Keep a scheduler call bounded to one user callback by default. Callers may
@@ -21,7 +21,9 @@ const DEFAULT_STEP_BUDGET: usize = 1;
 pub struct TaskId(pub usize);
 
 impl TaskId {
-    pub fn new() -> Self { Self(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed)) }
+    pub fn new() -> Self {
+        Self(NEXT_TASK_ID.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,10 +42,19 @@ pub enum TaskStatus {
 pub struct TaskEvent(pub usize);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum TaskPriority { Low = 0, Normal = 1, High = 2, Realtime = 3 }
+pub enum TaskPriority {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    Realtime = 3,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskState { Ready, Blocked, Running }
+pub enum TaskState {
+    Ready,
+    Blocked,
+    Running,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSnapshot {
@@ -78,11 +89,22 @@ pub struct Task {
 
 impl Task {
     pub fn new<F>(name: &str, priority: TaskPriority, f: F) -> Self
-    where F: FnMut() -> TaskStatus + Send + 'static {
-        Self { id: TaskId::new(), name: String::from(name), priority,
-            step_fn: Box::new(f), run_count: 0, completed: false,
-            ready: true, cancelled: false, ready_age: 0, waiting_for: None,
-            deadline_ms: None }
+    where
+        F: FnMut() -> TaskStatus + Send + 'static,
+    {
+        Self {
+            id: TaskId::new(),
+            name: String::from(name),
+            priority,
+            step_fn: Box::new(f),
+            run_count: 0,
+            completed: false,
+            ready: true,
+            cancelled: false,
+            ready_age: 0,
+            waiting_for: None,
+            deadline_ms: None,
+        }
     }
 }
 
@@ -94,14 +116,25 @@ pub struct SimpleExecutor {
 }
 
 impl SimpleExecutor {
-    pub const fn new() -> Self { Self { tasks: Vec::new(), step_budget: DEFAULT_STEP_BUDGET } }
+    pub const fn new() -> Self {
+        Self {
+            tasks: Vec::new(),
+            step_budget: DEFAULT_STEP_BUDGET,
+        }
+    }
 
-    pub fn set_step_budget(&mut self, steps: usize) { self.step_budget = steps.max(1); }
+    pub fn set_step_budget(&mut self, steps: usize) {
+        self.step_budget = steps.max(1);
+    }
 
-    fn step_budget(&self) -> usize { self.step_budget }
+    fn step_budget(&self) -> usize {
+        self.step_budget
+    }
 
     pub fn spawn<F>(&mut self, name: &str, priority: TaskPriority, f: F) -> TaskId
-    where F: FnMut() -> TaskStatus + Send + 'static {
+    where
+        F: FnMut() -> TaskStatus + Send + 'static,
+    {
         let task = Task::new(name, priority, f);
         let id = task.id;
         self.tasks.push(task);
@@ -109,12 +142,18 @@ impl SimpleExecutor {
     }
 
     pub fn wake(&mut self, id: TaskId) -> bool {
-        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id && !t.cancelled && !t.completed) {
+        if let Some(task) = self
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == id && !t.cancelled && !t.completed)
+        {
             task.ready = true;
             task.waiting_for = None;
             task.deadline_ms = None;
             true
-        } else { false }
+        } else {
+            false
+        }
     }
 
     pub fn notify(&mut self, event: TaskEvent) -> usize {
@@ -140,8 +179,19 @@ impl SimpleExecutor {
         Some(self.tasks.swap_remove(index))
     }
 
-    pub fn task_count(&self) -> usize { self.tasks.iter().filter(|t| !t.cancelled && !t.completed).count() }
-    pub fn task_names(&self) -> Vec<String> { self.tasks.iter().filter(|t| !t.cancelled && !t.completed).map(|t| t.name.clone()).collect() }
+    pub fn task_count(&self) -> usize {
+        self.tasks
+            .iter()
+            .filter(|t| !t.cancelled && !t.completed)
+            .count()
+    }
+    pub fn task_names(&self) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|t| !t.cancelled && !t.completed)
+            .map(|t| t.name.clone())
+            .collect()
+    }
 }
 
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
@@ -156,11 +206,15 @@ static RUNNING_DEADLINE_SET: AtomicBool = AtomicBool::new(false);
 static RUNNING_INFO: SpinMutex<Option<TaskSnapshot>> = SpinMutex::new(None);
 
 pub fn spawn<F>(name: &str, priority: TaskPriority, f: F) -> TaskId
-where F: FnMut() -> TaskStatus + Send + 'static {
+where
+    F: FnMut() -> TaskStatus + Send + 'static,
+{
     EXECUTOR.lock().spawn(name, priority, f)
 }
 
-pub fn wake(id: TaskId) -> bool { EXECUTOR.lock().wake(id) }
+pub fn wake(id: TaskId) -> bool {
+    EXECUTOR.lock().wake(id)
+}
 pub fn notify(event: TaskEvent) -> usize {
     let mut executor = EXECUTOR.lock();
     let mut count = executor.notify(event);
@@ -168,7 +222,9 @@ pub fn notify(event: TaskEvent) -> usize {
         && RUNNING_WAIT_SET.load(Ordering::Acquire)
         && RUNNING_WAIT_EVENT.load(Ordering::Acquire) == event.0
     {
-        if !RUNNING_WOKEN.swap(true, Ordering::AcqRel) { count += 1; }
+        if !RUNNING_WOKEN.swap(true, Ordering::AcqRel) {
+            count += 1;
+        }
     }
     count
 }
@@ -190,7 +246,9 @@ pub fn block_until(event: TaskEvent, deadline_ms: u64) -> bool {
 
 fn register_wait(event: TaskEvent, deadline_ms: Option<u64>) -> bool {
     let executor = EXECUTOR.lock();
-    if RUNNING_TASK.load(Ordering::Acquire) == 0 { return false; }
+    if RUNNING_TASK.load(Ordering::Acquire) == 0 {
+        return false;
+    }
     RUNNING_WAIT_EVENT.store(event.0, Ordering::Relaxed);
     RUNNING_WOKEN.store(false, Ordering::Relaxed);
     if let Some(deadline) = deadline_ms {
@@ -215,18 +273,26 @@ pub fn cancel(id: TaskId) -> bool {
     drop(removed);
     found
 }
-pub fn set_step_budget(steps: usize) { EXECUTOR.lock().set_step_budget(steps); }
+pub fn set_step_budget(steps: usize) {
+    EXECUTOR.lock().set_step_budget(steps);
+}
 
 /// Return a read-only snapshot of queued and currently executing tasks.
 pub fn task_snapshots() -> Vec<TaskSnapshot> {
     let executor = EXECUTOR.lock();
-    let mut snapshots: Vec<TaskSnapshot> = executor.tasks.iter()
+    let mut snapshots: Vec<TaskSnapshot> = executor
+        .tasks
+        .iter()
         .filter(|task| !task.cancelled && !task.completed)
         .map(|task| TaskSnapshot {
             id: task.id,
             name: task.name.clone(),
             priority: task.priority,
-            state: if task.ready { TaskState::Ready } else { TaskState::Blocked },
+            state: if task.ready {
+                TaskState::Ready
+            } else {
+                TaskState::Blocked
+            },
             run_count: task.run_count,
             deadline_ms: task.deadline_ms,
         })
@@ -247,8 +313,16 @@ pub fn task_count() -> usize {
 pub fn task_state_counts() -> TaskStateCounts {
     let executor = EXECUTOR.lock();
     let mut counts = TaskStateCounts::default();
-    for task in executor.tasks.iter().filter(|task| !task.cancelled && !task.completed) {
-        if task.ready { counts.ready += 1; } else { counts.blocked += 1; }
+    for task in executor
+        .tasks
+        .iter()
+        .filter(|task| !task.cancelled && !task.completed)
+    {
+        if task.ready {
+            counts.ready += 1;
+        } else {
+            counts.blocked += 1;
+        }
     }
     counts.running = usize::from(RUNNING_TASK.load(Ordering::Acquire) != 0);
     counts
@@ -258,7 +332,9 @@ pub fn task_state_counts() -> TaskStateCounts {
 /// A single callback still cannot be preempted, so it must return quickly.
 pub fn poll_tasks() -> usize {
     // Prevent two CPUs from mutating/executing the same task simultaneously.
-    if IN_SCHEDULER.swap(true, Ordering::Acquire) { return EXECUTOR.lock().task_count(); }
+    if IN_SCHEDULER.swap(true, Ordering::Acquire) {
+        return EXECUTOR.lock().task_count();
+    }
     let budget = EXECUTOR.lock().step_budget();
     for _ in 0..budget {
         let task = {
@@ -276,7 +352,9 @@ pub fn poll_tasks() -> usize {
             // Drop queued cancellations promptly, including tasks cancelled
             // while blocked and therefore never selected for dispatch.
             executor.tasks.retain(|t| !t.cancelled && !t.completed);
-            let Some(index) = select_ready(&executor.tasks) else { break };
+            let Some(index) = select_ready(&executor.tasks) else {
+                break;
+            };
             for task in executor.tasks.iter_mut().filter(|t| t.ready) {
                 task.ready_age = task.ready_age.saturating_add(1);
             }
@@ -313,8 +391,13 @@ pub fn poll_tasks() -> usize {
                     task.ready = RUNNING_WOKEN.load(Ordering::Acquire);
                     task.deadline_ms = if RUNNING_DEADLINE_SET.load(Ordering::Acquire) {
                         Some(RUNNING_WAIT_DEADLINE.load(Ordering::Acquire))
-                    } else { None };
-                    if task.ready { task.waiting_for = None; task.deadline_ms = None; }
+                    } else {
+                        None
+                    };
+                    if task.ready {
+                        task.waiting_for = None;
+                        task.deadline_ms = None;
+                    }
                 }
             }
             TaskStatus::Completed => task.completed = true,
@@ -340,9 +423,15 @@ pub fn poll_tasks() -> usize {
 /// opportunities it waits, up to Realtime. This reduces starvation without
 /// claiming deadlines or wall-clock guarantees.
 fn select_ready(tasks: &[Task]) -> Option<usize> {
-    tasks.iter().enumerate()
+    tasks
+        .iter()
+        .enumerate()
         .filter(|(_, task)| task.ready && !task.cancelled && !task.completed)
-        .max_by_key(|(_, task)| ((task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32), task.ready_age))
+        .max_by_key(|(_, task)| {
+            (
+                (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32),
+                task.ready_age,
+            )
+        })
         .map(|(index, _)| index)
 }
-

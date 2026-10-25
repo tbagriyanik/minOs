@@ -4,11 +4,11 @@
 //! `drivers::tls` katmanı üzerinden gerçekleştirilir.
 #![allow(dead_code, static_mut_refs)]
 
-use alloc::vec::Vec;
 use crate::drivers::e1000;
 use crate::drivers::netstack::Ipv4Address;
 use crate::drivers::socket;
 use crate::drivers::tls::TlsSession;
+use alloc::vec::Vec;
 
 pub const E_URL: i32 = 1001;
 pub const E_TLS: i32 = 1002;
@@ -61,9 +61,7 @@ pub fn parse_url<'a>(
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|i| i + 4)
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
 }
 
 fn parse_status(buf: &[u8]) -> Option<u16> {
@@ -76,7 +74,10 @@ fn parse_status(buf: &[u8]) -> Option<u16> {
         return None;
     }
     let d = |c: u8| (c as char).to_digit(10).unwrap_or(0) as u16;
-    if !buf[sp + 1].is_ascii_digit() || !buf[sp + 2].is_ascii_digit() || !buf[sp + 3].is_ascii_digit() {
+    if !buf[sp + 1].is_ascii_digit()
+        || !buf[sp + 2].is_ascii_digit()
+        || !buf[sp + 3].is_ascii_digit()
+    {
         return None;
     }
     Some(d(buf[sp + 1]) * 100 + d(buf[sp + 2]) * 10 + d(buf[sp + 3]))
@@ -99,7 +100,10 @@ fn header_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         if let Some(colon) = line.iter().position(|&b| b == b':') {
             let key = trim(&line[..colon]);
             if key.len() == name.len()
-                && key.iter().zip(name.iter()).all(|(a, b)| a.to_ascii_lowercase() == *b)
+                && key
+                    .iter()
+                    .zip(name.iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
             {
                 return Some(trim(&line[colon + 1..]));
             }

@@ -6,15 +6,13 @@
 //! 3. Hem komut satırı (minPak) hem de grafiksel pencere arayüzü (PackageManagerApp) sağlar.
 //! 4. Paket arama, kurma (yerleşik araç manifesti veya HTTP GET) ve kaldırma işlevlerini destekler.
 
-use alloc::format;
-use alloc::string::String;
-use alloc::vec::Vec;
+use crate::apps::pkg_deps::{plan_names, resolve, InstallPlan, PkgEntry, ResolveError};
 use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use crate::apps::pkg_deps::{
-    plan_names, resolve, InstallPlan, PkgEntry, ResolveError,
-};
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 pub const DEFAULT_REPO_URL: &str = "http://repo.minos.org/packages";
 
@@ -59,8 +57,16 @@ impl MinPkg {
         for b in hash {
             let hi = b >> 4;
             let lo = b & 0x0F;
-            s.push(if hi < 10 { (b'0' + hi) as char } else { (b'a' + (hi - 10)) as char });
-            s.push(if lo < 10 { (b'0' + lo) as char } else { (b'a' + (lo - 10)) as char });
+            s.push(if hi < 10 {
+                (b'0' + hi) as char
+            } else {
+                (b'a' + (hi - 10)) as char
+            });
+            s.push(if lo < 10 {
+                (b'0' + lo) as char
+            } else {
+                (b'a' + (lo - 10)) as char
+            });
         }
         s
     }
@@ -99,7 +105,9 @@ impl MinPkg {
                 // Checksum kontrolü
                 let expected = expected_sha256.or_else(|| {
                     for pkg in REPO_CATALOG {
-                        if pkg_name_or_url == pkg.name || pkg_name_or_url.ends_with(&format!("/{}.elf", pkg.name)) {
+                        if pkg_name_or_url == pkg.name
+                            || pkg_name_or_url.ends_with(&format!("/{}.elf", pkg.name))
+                        {
                             return pkg.sha256;
                         }
                     }
@@ -163,9 +171,15 @@ impl MinPkg {
     }
 
     /// Depo kapalıyken kullanılabilen yerleşik araç paketini kurar.
-    pub fn install_builtin(name: &str, vfs: &mut VirtualFileSystem) -> Result<String, &'static str> {
+    pub fn install_builtin(
+        name: &str,
+        vfs: &mut VirtualFileSystem,
+    ) -> Result<String, &'static str> {
         let clean = name.strip_suffix(".elf").unwrap_or(name);
-        let version = REPO_CATALOG.iter().find(|pkg| pkg.name == clean).map(|pkg| pkg.version)
+        let version = REPO_CATALOG
+            .iter()
+            .find(|pkg| pkg.name == clean)
+            .map(|pkg| pkg.version)
             .ok_or("Yerlesik paket katalogda bulunamadi")?;
         let target_path = format!("/bin/{}.pkg", clean);
         let manifest = format!("MINOS-BUILTIN\n{}\n{}\n", clean, version);
@@ -364,7 +378,10 @@ impl PackageManagerApp {
             search_input: [0; 32],
             search_len: 0,
             search_focused: false,
-            status_msg: ("minPak Paket Yöneticisi hazır.", "minPak Package Manager ready."),
+            status_msg: (
+                "minPak Paket Yöneticisi hazır.",
+                "minPak Package Manager ready.",
+            ),
             status_is_err: false,
             installed_cache: Vec::new(),
             pending_launch: None,
@@ -421,13 +438,22 @@ impl PackageManagerApp {
         (x, y, 128, 26)
     }
 
-    pub fn search_bar_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
+    pub fn search_bar_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+    ) -> (usize, usize, usize, usize) {
         let x = win_x + win_w.saturating_sub(230);
         let y = win_y + 32;
         (x, y, 214, 26)
     }
 
-    pub fn list_area_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn list_area_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let x = win_x + 14;
         let y = win_y + 68;
         let w = win_w.saturating_sub(28);
@@ -435,7 +461,12 @@ impl PackageManagerApp {
         (x, y, w, h)
     }
 
-    pub fn open_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn open_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let w = 100;
         let h = 28;
         let x = win_x + win_w.saturating_sub(w + 14);
@@ -443,7 +474,12 @@ impl PackageManagerApp {
         (x, y, w, h)
     }
 
-    pub fn remove_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn remove_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let w = 100;
         let h = 28;
         let x = win_x + win_w.saturating_sub(w + 122);
@@ -451,7 +487,12 @@ impl PackageManagerApp {
         (x, y, w, h)
     }
 
-    pub fn action_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn action_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let w = 120;
         let h = 28;
         let x = win_x + win_w.saturating_sub(w + 14);
@@ -459,7 +500,12 @@ impl PackageManagerApp {
         (x, y, w, h)
     }
 
-    pub fn refresh_button_rect(win_x: usize, win_y: usize, win_w: usize, win_h: usize) -> (usize, usize, usize, usize) {
+    pub fn refresh_button_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
         let w = 100;
         let h = 28;
         let x = win_x + win_w.saturating_sub(w + 230);
@@ -557,7 +603,10 @@ impl PackageManagerApp {
                     };
                     match install_res {
                         Ok(_) => {
-                            self.status_msg = ("Paket başarıyla /bin altına kuruldu!", "Package installed successfully to /bin!");
+                            self.status_msg = (
+                                "Paket başarıyla /bin altına kuruldu!",
+                                "Package installed successfully to /bin!",
+                            );
                             self.status_is_err = false;
                             self.refresh_installed(vfs);
                         }
@@ -586,7 +635,8 @@ impl PackageManagerApp {
                 if let Some(pkg) = self.filtered_installed_item(self.selected_index) {
                     let name = String::from(pkg.name.as_str());
                     if MinPkg::remove(&name, vfs) {
-                        self.status_msg = ("Paket VFS'ten kaldırıldı.", "Package removed from VFS.");
+                        self.status_msg =
+                            ("Paket VFS'ten kaldırıldı.", "Package removed from VFS.");
                         self.status_is_err = false;
                         self.refresh_installed(vfs);
                     } else {
@@ -603,12 +653,15 @@ impl PackageManagerApp {
         if q.is_empty() {
             REPO_CATALOG.len()
         } else {
-            REPO_CATALOG.iter().filter(|p| {
-                p.name.to_lowercase().contains(&q)
-                    || p.description_tr.to_lowercase().contains(&q)
-                    || p.description_en.to_lowercase().contains(&q)
-                    || p.category.to_lowercase().contains(&q)
-            }).count()
+            REPO_CATALOG
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&q)
+                        || p.description_tr.to_lowercase().contains(&q)
+                        || p.description_en.to_lowercase().contains(&q)
+                        || p.category.to_lowercase().contains(&q)
+                })
+                .count()
         }
     }
 
@@ -617,12 +670,16 @@ impl PackageManagerApp {
         if q.is_empty() {
             REPO_CATALOG.get(idx).copied()
         } else {
-            REPO_CATALOG.iter().filter(|p| {
-                p.name.to_lowercase().contains(&q)
-                    || p.description_tr.to_lowercase().contains(&q)
-                    || p.description_en.to_lowercase().contains(&q)
-                    || p.category.to_lowercase().contains(&q)
-            }).nth(idx).copied()
+            REPO_CATALOG
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&q)
+                        || p.description_tr.to_lowercase().contains(&q)
+                        || p.description_en.to_lowercase().contains(&q)
+                        || p.category.to_lowercase().contains(&q)
+                })
+                .nth(idx)
+                .copied()
         }
     }
 
@@ -631,9 +688,12 @@ impl PackageManagerApp {
         if q.is_empty() {
             self.installed_cache.len()
         } else {
-            self.installed_cache.iter().filter(|p| {
-                p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
-            }).count()
+            self.installed_cache
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+                })
+                .count()
         }
     }
 
@@ -642,9 +702,13 @@ impl PackageManagerApp {
         if q.is_empty() {
             self.installed_cache.get(idx).cloned()
         } else {
-            self.installed_cache.iter().filter(|p| {
-                p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
-            }).nth(idx).cloned()
+            self.installed_cache
+                .iter()
+                .filter(|p| {
+                    p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+                })
+                .nth(idx)
+                .cloned()
         }
     }
 
@@ -662,8 +726,16 @@ impl PackageManagerApp {
         let t0 = Self::tab_rect(win_x, win_y, 0);
         let t1 = Self::tab_rect(win_x, win_y, 1);
 
-        let bg_t0 = if self.active_tab == 0 { Color::ACCENT_BLUE } else { Color::TASKBAR_BG };
-        let bg_t1 = if self.active_tab == 1 { Color::ACCENT_BLUE } else { Color::TASKBAR_BG };
+        let bg_t0 = if self.active_tab == 0 {
+            Color::ACCENT_BLUE
+        } else {
+            Color::TASKBAR_BG
+        };
+        let bg_t1 = if self.active_tab == 1 {
+            Color::ACCENT_BLUE
+        } else {
+            Color::TASKBAR_BG
+        };
 
         fb.draw_rounded_rect(t0.0, t0.1, t0.2, t0.3, 4, bg_t0);
         fb.draw_rounded_rect(t1.0, t1.1, t1.2, t1.3, 4, bg_t1);
@@ -673,24 +745,63 @@ impl PackageManagerApp {
             fb.draw_rounded_rect_outline(t1.0, t1.1, t1.2, t1.3, 4, Color::WHITE);
         }
 
-        let l0 = if english { "Repo Catalog" } else { "Depo Kataloğu" };
-        let l1 = if english { "Installed (VFS)" } else { "Kurulu Paketler" };
-        MinGuiCompositor::draw_string(fb, t0.0 + 12, t0.1 + 6, l0, MinGuiCompositor::text_on(bg_t0));
-        MinGuiCompositor::draw_string(fb, t1.0 + 12, t1.1 + 6, l1, MinGuiCompositor::text_on(bg_t1));
+        let l0 = if english {
+            "Repo Catalog"
+        } else {
+            "Depo Kataloğu"
+        };
+        let l1 = if english {
+            "Installed (VFS)"
+        } else {
+            "Kurulu Paketler"
+        };
+        MinGuiCompositor::draw_string(
+            fb,
+            t0.0 + 12,
+            t0.1 + 6,
+            l0,
+            MinGuiCompositor::text_on(bg_t0),
+        );
+        MinGuiCompositor::draw_string(
+            fb,
+            t1.0 + 12,
+            t1.1 + 6,
+            l1,
+            MinGuiCompositor::text_on(bg_t1),
+        );
 
         // 2. Arama Çubuğu
         let sb = Self::search_bar_rect(win_x, win_y, win_w);
         fb.draw_rounded_rect(sb.0, sb.1, sb.2, sb.3, 4, Color::DARK_BG);
-        let sb_border = if self.search_focused { Color::ACCENT_BLUE } else { Color::BORDER };
+        let sb_border = if self.search_focused {
+            Color::ACCENT_BLUE
+        } else {
+            Color::BORDER
+        };
         fb.draw_rounded_rect_outline(sb.0, sb.1, sb.2, sb.3, 4, sb_border);
 
         let search_display = if self.search_len > 0 {
             self.search_str()
         } else {
-            if english { "Search package..." } else { "Paket ara..." }
+            if english {
+                "Search package..."
+            } else {
+                "Paket ara..."
+            }
         };
-        let search_color = if self.search_len > 0 { Color::TEXT_MAIN } else { Color::TEXT_MUTED };
-        MinGuiCompositor::draw_string_clipped(fb, sb.0 + 8, sb.1 + 6, search_display, search_color, sb);
+        let search_color = if self.search_len > 0 {
+            Color::TEXT_MAIN
+        } else {
+            Color::TEXT_MUTED
+        };
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            sb.0 + 8,
+            sb.1 + 6,
+            search_display,
+            search_color,
+            sb,
+        );
 
         // 3. Liste Alanı
         let la = Self::list_area_rect(win_x, win_y, win_w, win_h);
@@ -700,15 +811,29 @@ impl PackageManagerApp {
         // Tablo Başlığı
         let th_bg = Color::TITLE_BAR;
         fb.draw_rounded_rect(la.0 + 1, la.1 + 1, la.2 - 2, 22, 3, th_bg);
-        let col1 = if english { "Package Name" } else { "Paket Adı" };
+        let col1 = if english {
+            "Package Name"
+        } else {
+            "Paket Adı"
+        };
         let col2 = if english { "Version" } else { "Sürüm" };
-        let col3 = if english { "Category / Path" } else { "Kategori / Yol" };
+        let col3 = if english {
+            "Category / Path"
+        } else {
+            "Kategori / Yol"
+        };
         let col4 = if english { "Size" } else { "Boyut" };
 
         MinGuiCompositor::draw_string(fb, la.0 + 10, la.1 + 4, col1, Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, la.0 + 160, la.1 + 4, col2, Color::TEXT_MAIN);
         MinGuiCompositor::draw_string(fb, la.0 + 240, la.1 + 4, col3, Color::TEXT_MAIN);
-        MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(80), la.1 + 4, col4, Color::TEXT_MAIN);
+        MinGuiCompositor::draw_string(
+            fb,
+            la.0 + la.2.saturating_sub(80),
+            la.1 + 4,
+            col4,
+            Color::TEXT_MAIN,
+        );
 
         // Satırlar
         let row_h = 28usize;
@@ -720,15 +845,42 @@ impl PackageManagerApp {
                 if let Some(p) = self.filtered_repo_item(i) {
                     let ry = la.1 + 25 + i * row_h;
                     let is_sel = i == self.selected_index;
-                    let row_bg = if is_sel { Color::ACCENT_BLUE } else if i % 2 == 1 { Color::TASKBAR_BG } else { Color::WINDOW_BG };
+                    let row_bg = if is_sel {
+                        Color::ACCENT_BLUE
+                    } else if i % 2 == 1 {
+                        Color::TASKBAR_BG
+                    } else {
+                        Color::WINDOW_BG
+                    };
                     fb.draw_rect(la.0 + 2, ry, la.2 - 4, row_h - 1, row_bg);
 
-                    let txt_col = if is_sel { Color::WHITE } else { Color::TEXT_MAIN };
-                    let desc = if english { p.description_en } else { p.description_tr };
+                    let txt_col = if is_sel {
+                        Color::WHITE
+                    } else {
+                        Color::TEXT_MAIN
+                    };
+                    let desc = if english {
+                        p.description_en
+                    } else {
+                        p.description_tr
+                    };
 
                     MinGuiCompositor::draw_string(fb, la.0 + 10, ry + 6, p.name, txt_col);
-                    MinGuiCompositor::draw_string(fb, la.0 + 160, ry + 6, p.version, Color::ACCENT_PINK);
-                    MinGuiCompositor::draw_string_clipped(fb, la.0 + 240, ry + 6, desc, Color::TEXT_MUTED, (la.0 + 240, ry, la.2.saturating_sub(330), row_h));
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        la.0 + 160,
+                        ry + 6,
+                        p.version,
+                        Color::ACCENT_PINK,
+                    );
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        la.0 + 240,
+                        ry + 6,
+                        desc,
+                        Color::TEXT_MUTED,
+                        (la.0 + 240, ry, la.2.saturating_sub(330), row_h),
+                    );
 
                     let mut sz_buf = TextBuf::new();
                     if p.size_kb == 0 {
@@ -737,12 +889,28 @@ impl PackageManagerApp {
                         sz_buf.push_usize(p.size_kb);
                         sz_buf.push_str(" KB");
                     }
-                    MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(80), ry + 6, sz_buf.as_str(), Color::ACCENT_GREEN);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        la.0 + la.2.saturating_sub(80),
+                        ry + 6,
+                        sz_buf.as_str(),
+                        Color::ACCENT_GREEN,
+                    );
                 }
             }
             if count == 0 {
-                let empty_msg = if english { "No matching packages found in repository." } else { "Depoda eşleşen paket bulunamadı." };
-                MinGuiCompositor::draw_string(fb, la.0 + 16, la.1 + 40, empty_msg, Color::TEXT_MUTED);
+                let empty_msg = if english {
+                    "No matching packages found in repository."
+                } else {
+                    "Depoda eşleşen paket bulunamadı."
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    la.0 + 16,
+                    la.1 + 40,
+                    empty_msg,
+                    Color::TEXT_MUTED,
+                );
             }
         } else {
             let count = self.filtered_installed_count();
@@ -750,13 +918,36 @@ impl PackageManagerApp {
                 if let Some(p) = self.filtered_installed_item(i) {
                     let ry = la.1 + 25 + i * row_h;
                     let is_sel = i == self.selected_index;
-                    let row_bg = if is_sel { Color::ACCENT_BLUE } else if i % 2 == 1 { Color::TASKBAR_BG } else { Color::WINDOW_BG };
+                    let row_bg = if is_sel {
+                        Color::ACCENT_BLUE
+                    } else if i % 2 == 1 {
+                        Color::TASKBAR_BG
+                    } else {
+                        Color::WINDOW_BG
+                    };
                     fb.draw_rect(la.0 + 2, ry, la.2 - 4, row_h - 1, row_bg);
 
-                    let txt_col = if is_sel { Color::WHITE } else { Color::TEXT_MAIN };
+                    let txt_col = if is_sel {
+                        Color::WHITE
+                    } else {
+                        Color::TEXT_MAIN
+                    };
                     MinGuiCompositor::draw_string(fb, la.0 + 10, ry + 6, &p.name, txt_col);
-                    MinGuiCompositor::draw_string(fb, la.0 + 160, ry + 6, &p.version, Color::ACCENT_PINK);
-                    MinGuiCompositor::draw_string_clipped(fb, la.0 + 240, ry + 6, &p.install_path, Color::ACCENT_YELLOW, (la.0 + 240, ry, la.2.saturating_sub(380), row_h));
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        la.0 + 160,
+                        ry + 6,
+                        &p.version,
+                        Color::ACCENT_PINK,
+                    );
+                    MinGuiCompositor::draw_string_clipped(
+                        fb,
+                        la.0 + 240,
+                        ry + 6,
+                        &p.install_path,
+                        Color::ACCENT_YELLOW,
+                        (la.0 + 240, ry, la.2.saturating_sub(380), row_h),
+                    );
 
                     let mut sz_buf = TextBuf::new();
                     if p.size_bytes >= 1024 * 1024 {
@@ -769,32 +960,67 @@ impl PackageManagerApp {
                         sz_buf.push_usize(p.size_bytes);
                         sz_buf.push_str(" B");
                     }
-                    MinGuiCompositor::draw_string(fb, la.0 + la.2.saturating_sub(130), ry + 6, sz_buf.as_str(), Color::ACCENT_GREEN);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        la.0 + la.2.saturating_sub(130),
+                        ry + 6,
+                        sz_buf.as_str(),
+                        Color::ACCENT_GREEN,
+                    );
 
                     // Aç rozeti (satır içi hızlı çalıştırma)
                     let badge_x = la.0 + la.2.saturating_sub(62);
                     let badge_y = ry + 3;
                     fb.draw_rounded_rect(badge_x, badge_y, 54, 20, 3, Color::ACCENT_GREEN);
                     let badge_txt = if english { "▶ Open" } else { "▶ Aç" };
-                    MinGuiCompositor::draw_string(fb, badge_x + 5, badge_y + 3, badge_txt, Color::WHITE);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        badge_x + 5,
+                        badge_y + 3,
+                        badge_txt,
+                        Color::WHITE,
+                    );
                 }
             }
             if count == 0 {
-                let empty_msg = if english { "No installed packages found in /bin." } else { "/bin dizininde kurulu paket bulunamadı." };
-                MinGuiCompositor::draw_string(fb, la.0 + 16, la.1 + 40, empty_msg, Color::TEXT_MUTED);
+                let empty_msg = if english {
+                    "No installed packages found in /bin."
+                } else {
+                    "/bin dizininde kurulu paket bulunamadı."
+                };
+                MinGuiCompositor::draw_string(
+                    fb,
+                    la.0 + 16,
+                    la.1 + 40,
+                    empty_msg,
+                    Color::TEXT_MUTED,
+                );
             }
         }
 
         // 4. Durum Çubuğu & Butonlar
-        let st_col = if self.status_is_err { Color::ACCENT_RED } else { Color::ACCENT_GREEN };
-        let status_text = if english { self.status_msg.1 } else { self.status_msg.0 };
+        let st_col = if self.status_is_err {
+            Color::ACCENT_RED
+        } else {
+            Color::ACCENT_GREEN
+        };
+        let status_text = if english {
+            self.status_msg.1
+        } else {
+            self.status_msg.0
+        };
         MinGuiCompositor::draw_string_clipped(
             fb,
             win_x + 16,
             win_y + win_h.saturating_sub(32),
             status_text,
             st_col,
-            (win_x + 16, win_y + win_h.saturating_sub(36), win_w.saturating_sub(340), 28),
+            (
+                win_x + 16,
+                win_y + win_h.saturating_sub(36),
+                win_w.saturating_sub(340),
+                28,
+            ),
         );
 
         if self.active_tab == 1 {

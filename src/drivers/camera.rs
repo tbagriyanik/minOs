@@ -53,9 +53,9 @@ pub const UVC_VS_COMMIT_CONTROL: u8 = 0x02;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VideoFormat {
     Unknown,
-    Yuy2,   // YUYV 4:2:2 (Sıkıştırmasız 16-bit)
-    Mjpeg,  // Motion JPEG
-    Nv12,   // YUV 4:2:0
+    Yuy2,  // YUYV 4:2:2 (Sıkıştırmasız 16-bit)
+    Mjpeg, // Motion JPEG
+    Nv12,  // YUV 4:2:0
 }
 
 impl VideoFormat {
@@ -241,7 +241,9 @@ pub fn init() {
         CAMERA_DEVICE = cam;
     }
 
-    crate::serial::print("[CAMERA] UVC sürücüsü hazır (640x480 @ 30 FPS, YUY2 / MJPEG destekli).\n");
+    crate::serial::print(
+        "[CAMERA] UVC sürücüsü hazır (640x480 @ 30 FPS, YUY2 / MJPEG destekli).\n",
+    );
 }
 
 pub fn is_present() -> bool {
@@ -267,4 +269,3 @@ pub fn set_streaming(active: bool) {
 pub fn is_streaming() -> bool {
     unsafe { CAMERA_DEVICE.is_streaming }
 }
-

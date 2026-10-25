@@ -1,8 +1,8 @@
 //! GCM mode (NIST SP 800-38D) built on AES — no_std.
 
+use crate::drivers::crypto::aes::Aes;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::drivers::crypto::aes::Aes;
 
 #[allow(dead_code)]
 const BLOCK_SIZE: usize = 16;
@@ -113,7 +113,7 @@ impl Gcm {
             padded[end - 8..].copy_from_slice(&nonce_bits.to_be_bytes());
 
             let mut blocks: Vec<&[u8]> = Vec::new();
-                for chunk in padded.chunks(16) {
+            for chunk in padded.chunks(16) {
                 blocks.push(chunk);
             }
             let mut y = [0u8; 16];

@@ -8,8 +8,12 @@ const HALF_PI: f32 = 1.5707963267948966;
 
 /// no_std ortamı için hızlı ve hassas sinüs fonksiyonu (Taylor serisi).
 pub fn sin(mut x: f32) -> f32 {
-    while x > PI { x -= TWO_PI; }
-    while x < -PI { x += TWO_PI; }
+    while x > PI {
+        x -= TWO_PI;
+    }
+    while x < -PI {
+        x += TWO_PI;
+    }
     let x2 = x * x;
     let x3 = x * x2;
     let x5 = x3 * x2;
@@ -24,7 +28,9 @@ pub fn cos(x: f32) -> f32 {
 
 /// no_std ortamı için Newton-Raphson karekök yaklaşımı (SSE `sqrtss` yok).
 pub fn sqrt(x: f32) -> f32 {
-    if x <= 0.0 { return 0.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
     // Başlangıç tahmini: 1.0 veya x'in kendisi (x>1 ise daha hızlı yakınsar).
     let mut g = if x >= 1.0 { x * 0.5 + 0.5 } else { 1.0 };
     for _ in 0..20 {
@@ -114,7 +120,8 @@ impl Viewer3DApp {
             let lower = text.to_ascii_lowercase();
             if lower.contains("cylinder") || lower.contains("silindir") {
                 self.set_shape(Shape3D::Cylinder);
-            } else if lower.contains("sphere") || lower.contains("kure") || lower.contains("küre") {
+            } else if lower.contains("sphere") || lower.contains("kure") || lower.contains("küre")
+            {
                 self.set_shape(Shape3D::Sphere);
             } else if lower.contains("pyramid") || lower.contains("piramit") {
                 self.set_shape(Shape3D::Pyramid);
@@ -150,19 +157,28 @@ impl Viewer3DApp {
                 let s = 1.0f32;
                 self.vertices = alloc::vec![
                     [-s, -s, -s],
-                    [ s, -s, -s],
-                    [ s,  s, -s],
-                    [-s,  s, -s],
-                    [-s, -s,  s],
-                    [ s, -s,  s],
-                    [ s,  s,  s],
-                    [-s,  s,  s],
+                    [s, -s, -s],
+                    [s, s, -s],
+                    [-s, s, -s],
+                    [-s, -s, s],
+                    [s, -s, s],
+                    [s, s, s],
+                    [-s, s, s],
                 ];
                 // 12 Kenar
                 self.edges = alloc::vec![
-                    (0, 1), (1, 2), (2, 3), (3, 0),
-                    (4, 5), (5, 6), (6, 7), (7, 4),
-                    (0, 4), (1, 5), (2, 6), (3, 7),
+                    (0, 1),
+                    (1, 2),
+                    (2, 3),
+                    (3, 0),
+                    (4, 5),
+                    (5, 6),
+                    (6, 7),
+                    (7, 4),
+                    (0, 4),
+                    (1, 5),
+                    (2, 6),
+                    (3, 7),
                 ];
                 // 6 Yüzey (Quad) — dışa bakan normaller için saat yönünün tersi (CCW) sarım
                 self.faces = alloc::vec![
@@ -184,7 +200,7 @@ impl Viewer3DApp {
                     let angle = (i as f32) * TWO_PI / (SEGMENTS as f32);
                     let x = cos(angle) * r;
                     let z = sin(angle) * r;
-                    self.vertices.push([x, h, z]);  // Üst (0..SEGMENTS)
+                    self.vertices.push([x, h, z]); // Üst (0..SEGMENTS)
                 }
                 for i in 0..SEGMENTS {
                     let angle = (i as f32) * TWO_PI / (SEGMENTS as f32);
@@ -204,7 +220,8 @@ impl Viewer3DApp {
                 // Yan Yüzeyler (Quad)
                 for i in 0..SEGMENTS {
                     let next = (i + 1) % SEGMENTS;
-                    self.faces.push(alloc::vec![i, next, SEGMENTS + next, SEGMENTS + i]);
+                    self.faces
+                        .push(alloc::vec![i, next, SEGMENTS + next, SEGMENTS + i]);
                 }
                 // Üst ve alt kapaklar — dışa bakan (+Y / -Y) CCW sarım
                 let mut top_cap = Vec::new();
@@ -258,15 +275,21 @@ impl Viewer3DApp {
                 let h = 1.3f32;
                 self.vertices = alloc::vec![
                     [-s, -h * 0.7, -s],
-                    [ s, -h * 0.7, -s],
-                    [ s, -h * 0.7,  s],
-                    [-s, -h * 0.7,  s],
-                    [0.0,  h * 0.9, 0.0], // Tepe
+                    [s, -h * 0.7, -s],
+                    [s, -h * 0.7, s],
+                    [-s, -h * 0.7, s],
+                    [0.0, h * 0.9, 0.0], // Tepe
                 ];
 
                 self.edges = alloc::vec![
-                    (0, 1), (1, 2), (2, 3), (3, 0), // Taban
-                    (0, 4), (1, 4), (2, 4), (3, 4), // Kenarlar
+                    (0, 1),
+                    (1, 2),
+                    (2, 3),
+                    (3, 0), // Taban
+                    (0, 4),
+                    (1, 4),
+                    (2, 4),
+                    (3, 4), // Kenarlar
                 ];
 
                 // Dışa bakan CCW sarımlar: taban -Y, yanlar tepeye doğru
@@ -285,9 +308,13 @@ impl Viewer3DApp {
     pub fn update(&mut self) {
         if self.auto_rotate && !self.drag_active {
             self.rot_y += 0.022;
-            if self.rot_y > TWO_PI { self.rot_y -= TWO_PI; }
+            if self.rot_y > TWO_PI {
+                self.rot_y -= TWO_PI;
+            }
             self.rot_x += 0.009;
-            if self.rot_x > TWO_PI { self.rot_x -= TWO_PI; }
+            if self.rot_x > TWO_PI {
+                self.rot_x -= TWO_PI;
+            }
         }
     }
 
@@ -338,7 +365,13 @@ impl Viewer3DApp {
     }
 
     /// Fare tıklaması işleme
-    pub fn handle_mouse_down(&mut self, rel_x: usize, rel_y: usize, win_w: usize, _win_h: usize) -> bool {
+    pub fn handle_mouse_down(
+        &mut self,
+        rel_x: usize,
+        rel_y: usize,
+        win_w: usize,
+        _win_h: usize,
+    ) -> bool {
         // Araç çubuğu düğmeleri: Y aralığı 30..54
         if rel_y >= 30 && rel_y <= 54 {
             // Şekil butonları
@@ -405,13 +438,23 @@ impl Viewer3DApp {
         win_h: usize,
     ) {
         // 1. Araç Çubuğu
-        fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, crate::gui::sp(24), Color::TITLE_BAR);
+        fb.draw_rect(
+            win_x + 6,
+            win_y + 30,
+            win_w - 12,
+            crate::gui::sp(24),
+            Color::TITLE_BAR,
+        );
 
         let btn_h = 20usize;
         let btn_y = win_y + 32;
 
         let draw_btn = |fb: &mut Framebuffer, x: usize, w: usize, text: &str, active: bool| {
-            let bg = if active { Color::ACCENT_BLUE } else { Color::WINDOW_BG };
+            let bg = if active {
+                Color::ACCENT_BLUE
+            } else {
+                Color::WINDOW_BG
+            };
             let fg = MinGuiCompositor::text_on(bg);
             fb.draw_rect(x, btn_y, w, btn_h, bg);
             fb.draw_rect_outline(x, btn_y, w, btn_h, Color::BORDER);
@@ -419,10 +462,34 @@ impl Viewer3DApp {
         };
 
         // Şekil Butonları
-        draw_btn(fb, win_x + 10, 50, crate::gui::ui_text("Küp", "Cube"), self.shape == Shape3D::Cube);
-        draw_btn(fb, win_x + 64, 62, crate::gui::ui_text("Silindir", "Cylinder"), self.shape == Shape3D::Cylinder);
-        draw_btn(fb, win_x + 130, 56, crate::gui::ui_text("Küre", "Sphere"), self.shape == Shape3D::Sphere);
-        draw_btn(fb, win_x + 190, 64, crate::gui::ui_text("Piramit", "Pyramid"), self.shape == Shape3D::Pyramid);
+        draw_btn(
+            fb,
+            win_x + 10,
+            50,
+            crate::gui::ui_text("Küp", "Cube"),
+            self.shape == Shape3D::Cube,
+        );
+        draw_btn(
+            fb,
+            win_x + 64,
+            62,
+            crate::gui::ui_text("Silindir", "Cylinder"),
+            self.shape == Shape3D::Cylinder,
+        );
+        draw_btn(
+            fb,
+            win_x + 130,
+            56,
+            crate::gui::ui_text("Küre", "Sphere"),
+            self.shape == Shape3D::Sphere,
+        );
+        draw_btn(
+            fb,
+            win_x + 190,
+            64,
+            crate::gui::ui_text("Piramit", "Pyramid"),
+            self.shape == Shape3D::Pyramid,
+        );
 
         // Otomatik Döndür Butonu
         let rot_text = if self.auto_rotate {
@@ -443,7 +510,13 @@ impl Viewer3DApp {
         // Sağdaki Zoom ve Sıfırla Düğmeleri
         draw_btn(fb, win_x + win_w.saturating_sub(110), 28, "+", false);
         draw_btn(fb, win_x + win_w.saturating_sub(80), 28, "-", false);
-        draw_btn(fb, win_x + win_w.saturating_sub(50), 42, crate::gui::ui_text("Sıfırla", "Reset"), false);
+        draw_btn(
+            fb,
+            win_x + win_w.saturating_sub(50),
+            42,
+            crate::gui::ui_text("Sıfırla", "Reset"),
+            false,
+        );
 
         // 2. 3D Render Alanı
         let render_x = win_x + 6;
@@ -466,7 +539,13 @@ impl Viewer3DApp {
             let gx1 = grid_center_x + i * 50;
             let gy1 = grid_center_y + 40;
             if gx0 >= render_x as isize && gx1 < (render_x + render_w) as isize {
-                fb.draw_line(gx0 as usize, gy0 as usize, gx1 as usize, gy1 as usize, grid_color);
+                fb.draw_line(
+                    gx0 as usize,
+                    gy0 as usize,
+                    gx1 as usize,
+                    gy1 as usize,
+                    grid_color,
+                );
             }
         }
 
@@ -509,15 +588,20 @@ impl Viewer3DApp {
         // 4. Çizim: Dolgulu (Solid) veya Tel Kafes (Wireframe)
         if !self.wireframe && !self.faces.is_empty() {
             // Yüzey derinlik sıralaması (Painter's Algorithm)
-            let mut face_order: Vec<(usize, f32)> = self.faces.iter().enumerate().map(|(idx, face)| {
-                let mut avg_z = 0.0f32;
-                for &v_idx in face {
-                    if v_idx < proj_points.len() {
-                        avg_z += proj_points[v_idx].2;
+            let mut face_order: Vec<(usize, f32)> = self
+                .faces
+                .iter()
+                .enumerate()
+                .map(|(idx, face)| {
+                    let mut avg_z = 0.0f32;
+                    for &v_idx in face {
+                        if v_idx < proj_points.len() {
+                            avg_z += proj_points[v_idx].2;
+                        }
                     }
-                }
-                (idx, avg_z / (face.len() as f32))
-            }).collect();
+                    (idx, avg_z / (face.len() as f32))
+                })
+                .collect();
 
             // Derinliğe göre uzaktan yakına sırala (kamera -Z'de: büyük z = uzak).
             // Uzak yüz önce boyanır, yakın yüz üstüne gelir; tersi iç-dış görüntü verir.
@@ -530,15 +614,21 @@ impl Viewer3DApp {
 
             for (face_idx, _) in face_order {
                 let face = &self.faces[face_idx];
-                if face.len() < 3 { continue; }
+                if face.len() < 3 {
+                    continue;
+                }
 
                 // Yüzey normali hesabı (Döndürülmüş 3D noktalar üzerinden)
                 let v0 = self.vertices[face[0]];
                 let v1 = self.vertices[face[1]];
                 let v2 = self.vertices[face[2]];
 
-                let ux = v1[0] - v0[0]; let uy = v1[1] - v0[1]; let uz = v1[2] - v0[2];
-                let vx = v2[0] - v0[0]; let vy = v2[1] - v0[1]; let vz = v2[2] - v0[2];
+                let ux = v1[0] - v0[0];
+                let uy = v1[1] - v0[1];
+                let uz = v1[2] - v0[2];
+                let vx = v2[0] - v0[0];
+                let vy = v2[1] - v0[1];
+                let vz = v2[2] - v0[2];
 
                 let nx = uy * vz - uz * vy;
                 let ny = uz * vx - ux * vz;
@@ -552,7 +642,9 @@ impl Viewer3DApp {
 
                 // Arka-yüz eleme: kamera -Z yönünde baktığı için yalnızca
                 // normali kameraya dönen (nz < 0) yüzler çizilir.
-                if nzr2 >= 0.0 { continue; }
+                if nzr2 >= 0.0 {
+                    continue;
+                }
                 let (nx1, ny2, nz2) = (nxr, nyr, nzr2);
 
                 // Normalize: uzunluk karekökü (Newton-Raphson) ile böl; önceki
@@ -580,7 +672,20 @@ impl Viewer3DApp {
                     let p0 = proj_points[face[0]];
                     let p1 = proj_points[face[k]];
                     let p2 = proj_points[face[k + 1]];
-                    Self::draw_filled_triangle(fb, p0.0, p0.1, p1.0, p1.1, p2.0, p2.1, shaded_color, render_x, render_y, render_w, render_h);
+                    Self::draw_filled_triangle(
+                        fb,
+                        p0.0,
+                        p0.1,
+                        p1.0,
+                        p1.1,
+                        p2.0,
+                        p2.1,
+                        shaded_color,
+                        render_x,
+                        render_y,
+                        render_w,
+                        render_h,
+                    );
                 }
 
                 // Yüzey kenarlarını belirgin çiz
@@ -588,7 +693,18 @@ impl Viewer3DApp {
                     let next = (k + 1) % face.len();
                     let p0 = proj_points[face[k]];
                     let p1 = proj_points[face[next]];
-                    Self::draw_clipped_line(fb, p0.0, p0.1, p1.0, p1.1, Color::WHITE, render_x, render_y, render_w, render_h);
+                    Self::draw_clipped_line(
+                        fb,
+                        p0.0,
+                        p0.1,
+                        p1.0,
+                        p1.1,
+                        Color::WHITE,
+                        render_x,
+                        render_y,
+                        render_w,
+                        render_h,
+                    );
                 }
             }
         } else {
@@ -604,15 +720,20 @@ impl Viewer3DApp {
                 if i0 < proj_points.len() && i1 < proj_points.len() {
                     let p0 = proj_points[i0];
                     let p1 = proj_points[i1];
-                    Self::draw_clipped_line(fb, p0.0, p0.1, p1.0, p1.1, line_color, render_x, render_y, render_w, render_h);
+                    Self::draw_clipped_line(
+                        fb, p0.0, p0.1, p1.0, p1.1, line_color, render_x, render_y, render_w,
+                        render_h,
+                    );
                 }
             }
         }
 
         // Köşe Noktaları (Görsel parlaklık)
         for p in &proj_points {
-            if p.0 >= render_x as isize && p.0 < (render_x + render_w) as isize
-                && p.1 >= render_y as isize && p.1 < (render_y + render_h) as isize
+            if p.0 >= render_x as isize
+                && p.0 < (render_x + render_w) as isize
+                && p.1 >= render_y as isize
+                && p.1 < (render_y + render_h) as isize
             {
                 fb.draw_rect(p.0 as usize, p.1 as usize, 2, 2, Color::WHITE);
             }
@@ -641,7 +762,13 @@ impl Viewer3DApp {
         status.push_str(crate::gui::ui_text(" Kenar: ", " Edges: "));
         status.push_usize(self.edges.len());
 
-        MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 4, status.as_str(), Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 12,
+            status_y + 4,
+            status.as_str(),
+            Color::TEXT_MUTED,
+        );
     }
 
     /// Kırpılmış çizgi çizimi
@@ -663,8 +790,10 @@ impl Viewer3DApp {
         let max_y = (ry + rh) as isize;
 
         // Basit kırpma kontrolü
-        if (x0 < min_x && x1 < min_x) || (x0 >= max_x && x1 >= max_x)
-            || (y0 < min_y && y1 < min_y) || (y0 >= max_y && y1 >= max_y)
+        if (x0 < min_x && x1 < min_x)
+            || (x0 >= max_x && x1 >= max_x)
+            || (y0 < min_y && y1 < min_y)
+            || (y0 >= max_y && y1 >= max_y)
         {
             return;
         }
@@ -680,11 +809,17 @@ impl Viewer3DApp {
     /// Basit taranmış dolu üçgen çizimi
     fn draw_filled_triangle(
         fb: &mut Framebuffer,
-        mut x0: isize, mut y0: isize,
-        mut x1: isize, mut y1: isize,
-        mut x2: isize, mut y2: isize,
+        mut x0: isize,
+        mut y0: isize,
+        mut x1: isize,
+        mut y1: isize,
+        mut x2: isize,
+        mut y2: isize,
         color: u32,
-        rx: usize, ry: usize, rw: usize, rh: usize,
+        rx: usize,
+        ry: usize,
+        rw: usize,
+        rh: usize,
     ) {
         let min_x = rx as isize;
         let max_x = (rx + rw) as isize;
@@ -692,20 +827,37 @@ impl Viewer3DApp {
         let max_y = (ry + rh) as isize;
 
         // Y'ye göre sırala: y0 <= y1 <= y2
-        if y0 > y1 { core::mem::swap(&mut y0, &mut y1); core::mem::swap(&mut x0, &mut x1); }
-        if y0 > y2 { core::mem::swap(&mut y0, &mut y2); core::mem::swap(&mut x0, &mut x2); }
-        if y1 > y2 { core::mem::swap(&mut y1, &mut y2); core::mem::swap(&mut x1, &mut x2); }
+        if y0 > y1 {
+            core::mem::swap(&mut y0, &mut y1);
+            core::mem::swap(&mut x0, &mut x1);
+        }
+        if y0 > y2 {
+            core::mem::swap(&mut y0, &mut y2);
+            core::mem::swap(&mut x0, &mut x2);
+        }
+        if y1 > y2 {
+            core::mem::swap(&mut y1, &mut y2);
+            core::mem::swap(&mut x1, &mut x2);
+        }
 
-        if y2 < min_y || y0 >= max_y { return; }
+        if y2 < min_y || y0 >= max_y {
+            return;
+        }
 
         let total_h = y2 - y0;
-        if total_h <= 0 { return; }
+        if total_h <= 0 {
+            return;
+        }
 
         for y in y0..=y2 {
-            if y < min_y || y >= max_y { continue; }
+            if y < min_y || y >= max_y {
+                continue;
+            }
             let second_half = y > y1 || y1 == y0;
             let segment_h = if second_half { y2 - y1 } else { y1 - y0 };
-            if segment_h <= 0 { continue; }
+            if segment_h <= 0 {
+                continue;
+            }
 
             let alpha = (y - y0) as f32 / total_h as f32;
             let beta = if second_half {
@@ -721,7 +873,9 @@ impl Viewer3DApp {
                 x0 + ((x1 - x0) as f32 * beta) as isize
             };
 
-            if ax > bx { core::mem::swap(&mut ax, &mut bx); }
+            if ax > bx {
+                core::mem::swap(&mut ax, &mut bx);
+            }
 
             let start_x = ax.clamp(min_x, max_x - 1) as usize;
             let end_x = bx.clamp(min_x, max_x - 1) as usize;

@@ -85,7 +85,8 @@ pub fn init_timer() {
     // 1. IDT vektörüne timer kapısını kur
     unsafe {
         let idt = &mut *core::ptr::addr_of_mut!(super::IDT);
-        idt.entries[APIC_TIMER_VECTOR as usize].set_handler_dpl(apic_timer_entry as *const () as usize, 0);
+        idt.entries[APIC_TIMER_VECTOR as usize]
+            .set_handler_dpl(apic_timer_entry as *const () as usize, 0);
     }
 
     // 2. Local APIC Timer yapılandır:

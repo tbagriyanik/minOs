@@ -10,7 +10,7 @@
 #![allow(dead_code, static_mut_refs)]
 
 use crate::drivers::e1000;
-use crate::drivers::netstack::{self, Ipv4Address, Ipv6Address, IpAddress};
+use crate::drivers::netstack::{self, IpAddress, Ipv4Address, Ipv6Address};
 
 pub const AF_INET: i32 = 2;
 pub const AF_INET6: i32 = 10;
@@ -109,7 +109,11 @@ impl Socket {
             udp_peer_port: 0,
             udp_pending: false,
             timeout_ms: DEFAULT_TIMEOUT_MS,
-            retry: Retry { kind: 0, at_ms: 0, interval_ms: 500 },
+            retry: Retry {
+                kind: 0,
+                at_ms: 0,
+                interval_ms: 500,
+            },
             error: 0,
         }
     }
@@ -295,8 +299,9 @@ pub fn connect(fd: i32, ip: Ipv4Address, port: u16) -> Result<(), i32> {
     if lport == 0 {
         return Err(E_BUSY);
     }
-    let iss =
-        (crate::monotonic_ms() as u32).wrapping_mul(2654435761).wrapping_add((fd as u32).wrapping_mul(7919) | 0x1000);
+    let iss = (crate::monotonic_ms() as u32)
+        .wrapping_mul(2654435761)
+        .wrapping_add((fd as u32).wrapping_mul(7919) | 0x1000);
     s.local_port = lport;
     s.remote_ip = ip;
     s.remote_port = port;
@@ -539,10 +544,30 @@ struct DnsCacheEntry {
     used: bool,
 }
 static mut DNS_CACHE: [DnsCacheEntry; DNS_CACHE_N] = [
-    DnsCacheEntry { name: [0; 64], name_len: 0, ip: Ipv4Address([0; 4]), used: false },
-    DnsCacheEntry { name: [0; 64], name_len: 0, ip: Ipv4Address([0; 4]), used: false },
-    DnsCacheEntry { name: [0; 64], name_len: 0, ip: Ipv4Address([0; 4]), used: false },
-    DnsCacheEntry { name: [0; 64], name_len: 0, ip: Ipv4Address([0; 4]), used: false },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        ip: Ipv4Address([0; 4]),
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        ip: Ipv4Address([0; 4]),
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        ip: Ipv4Address([0; 4]),
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        ip: Ipv4Address([0; 4]),
+        used: false,
+    },
 ];
 
 fn dns_cache_lookup(host: &str) -> Option<Ipv4Address> {
@@ -646,7 +671,13 @@ pub(crate) fn on_tcp_segment(src_ip: Ipv4Address, payload: &[u8]) -> bool {
     if payload.len() < 20 {
         return false;
     }
-    if netstack::transport_checksum(src_ip, netstack::local_ip(), netstack::IP_PROTO_TCP, payload) != 0 {
+    if netstack::transport_checksum(
+        src_ip,
+        netstack::local_ip(),
+        netstack::IP_PROTO_TCP,
+        payload,
+    ) != 0
+    {
         return false;
     }
     let off = ((payload[12] >> 4) as usize) * 4;

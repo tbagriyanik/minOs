@@ -18,13 +18,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -266,12 +270,19 @@ pub fn format_command_packet(opcode: u16, params: &[u8], out: &mut [u8]) -> usiz
 
 /// HCI ACL Data Paketi oluşturur:
 /// [0x02 (Indicator), Handle & Flags Low, Handle & Flags High, Data Length Low, Data Length High, Data...]
-pub fn format_acl_packet(handle: u16, pb_flag: u8, bc_flag: u8, data: &[u8], out: &mut [u8]) -> usize {
+pub fn format_acl_packet(
+    handle: u16,
+    pb_flag: u8,
+    bc_flag: u8,
+    data: &[u8],
+    out: &mut [u8],
+) -> usize {
     if out.len() < 5 + data.len() {
         return 0;
     }
 
-    let handle_and_flags = (handle & 0x0FFF) | (((pb_flag as u16) & 0x03) << 12) | (((bc_flag as u16) & 0x03) << 14);
+    let handle_and_flags =
+        (handle & 0x0FFF) | (((pb_flag as u16) & 0x03) << 12) | (((bc_flag as u16) & 0x03) << 14);
     let len = data.len().min(0xFFFF) as u16;
 
     out[0] = HCI_ACLDATA_PKT;
@@ -422,7 +433,10 @@ pub fn receive_hci_event() -> Option<&'static [u8]> {
 
 pub fn send_acl_data(handle: u16, data: &[u8]) -> bool {
     unsafe {
-        if STATE != BluetoothState::Ready && STATE != BluetoothState::Inquiring && STATE != BluetoothState::Connecting {
+        if STATE != BluetoothState::Ready
+            && STATE != BluetoothState::Inquiring
+            && STATE != BluetoothState::Connecting
+        {
             return false;
         }
 
@@ -643,14 +657,32 @@ unsafe fn add_or_update_device(mac: [u8; 6], class: [u8; 3], rssi: i8, name: &[u
 unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
     match opcode {
         HCI_OP_RESET => {
-            let resp = [HCI_EVENT_PKT, HCI_EV_CMD_COMPLETE, 4, 1, (HCI_OP_RESET & 0xFF) as u8, ((HCI_OP_RESET >> 8) & 0xFF) as u8, 0];
+            let resp = [
+                HCI_EVENT_PKT,
+                HCI_EV_CMD_COMPLETE,
+                4,
+                1,
+                (HCI_OP_RESET & 0xFF) as u8,
+                ((HCI_OP_RESET >> 8) & 0xFF) as u8,
+                0,
+            ];
             process_hci_event(&resp);
         }
         HCI_OP_READ_BD_ADDR => {
             let resp = [
-                HCI_EVENT_PKT, HCI_EV_CMD_COMPLETE, 10, 1,
-                (HCI_OP_READ_BD_ADDR & 0xFF) as u8, ((HCI_OP_READ_BD_ADDR >> 8) & 0xFF) as u8, 0,
-                MAC_ADDR[0], MAC_ADDR[1], MAC_ADDR[2], MAC_ADDR[3], MAC_ADDR[4], MAC_ADDR[5],
+                HCI_EVENT_PKT,
+                HCI_EV_CMD_COMPLETE,
+                10,
+                1,
+                (HCI_OP_READ_BD_ADDR & 0xFF) as u8,
+                ((HCI_OP_READ_BD_ADDR >> 8) & 0xFF) as u8,
+                0,
+                MAC_ADDR[0],
+                MAC_ADDR[1],
+                MAC_ADDR[2],
+                MAC_ADDR[3],
+                MAC_ADDR[4],
+                MAC_ADDR[5],
             ];
             process_hci_event(&resp);
         }
@@ -672,8 +704,20 @@ unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
                 let mut mac = [0u8; 6];
                 mac.copy_from_slice(&params[..6]);
                 let resp = [
-                    HCI_EVENT_PKT, HCI_EV_CONN_COMPLETE, 11,
-                    0, 0x40, 0x00, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 1, 0,
+                    HCI_EVENT_PKT,
+                    HCI_EV_CONN_COMPLETE,
+                    11,
+                    0,
+                    0x40,
+                    0x00,
+                    mac[0],
+                    mac[1],
+                    mac[2],
+                    mac[3],
+                    mac[4],
+                    mac[5],
+                    1,
+                    0,
                 ];
                 process_hci_event(&resp);
             }
@@ -682,7 +726,15 @@ unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
             if params.len() >= 2 {
                 let h_lo = params[0];
                 let h_hi = params[1];
-                let resp = [HCI_EVENT_PKT, HCI_EV_DISCONN_COMPLETE, 4, 0, h_lo, h_hi, 0x16];
+                let resp = [
+                    HCI_EVENT_PKT,
+                    HCI_EV_DISCONN_COMPLETE,
+                    4,
+                    0,
+                    h_lo,
+                    h_hi,
+                    0x16,
+                ];
                 process_hci_event(&resp);
             }
         }

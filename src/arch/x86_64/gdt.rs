@@ -66,8 +66,8 @@ impl CpuGdt {
             0x00CF_9200_0000_FFFF, // 0x10: Ring0 veri
             0x00AF_FA00_0000_FFFF, // 0x1B: Ring3 64-bit kod (DPL=3)
             0x00CF_F200_0000_FFFF, // 0x23: Ring3 veri (DPL=3)
-            0, // TSS düşük (init sırasında doldurulur)
-            0, // TSS yüksek
+            0,                     // TSS düşük (init sırasında doldurulur)
+            0,                     // TSS yüksek
         ])
     }
 }

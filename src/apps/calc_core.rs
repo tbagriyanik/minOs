@@ -16,7 +16,10 @@ pub struct CalcCore {
 
 impl CalcCore {
     pub const fn new() -> Self {
-        Self { input: [' '; INPUT_CAP], len: 0 }
+        Self {
+            input: [' '; INPUT_CAP],
+            len: 0,
+        }
     }
 
     pub fn insert(&mut self, c: char) {
@@ -24,7 +27,9 @@ impl CalcCore {
             if c == '.' {
                 let mut i = self.len;
                 while i > 0 && !Self::is_operator(self.input[i - 1]) {
-                    if self.input[i - 1] == '.' { return; }
+                    if self.input[i - 1] == '.' {
+                        return;
+                    }
                     i -= 1;
                 }
             }
@@ -43,7 +48,9 @@ impl CalcCore {
     }
 
     pub fn backspace(&mut self) {
-        if self.len > 0 { self.len -= 1; }
+        if self.len > 0 {
+            self.len -= 1;
+        }
     }
 
     pub fn clear(&mut self) {
@@ -52,7 +59,9 @@ impl CalcCore {
 
     pub fn set_expression(&mut self, expression: &str) {
         self.clear();
-        for ch in expression.chars() { self.insert(ch); }
+        for ch in expression.chars() {
+            self.insert(ch);
+        }
     }
 
     pub fn expression(&self) -> &[char] {
@@ -94,21 +103,31 @@ impl CalcCore {
         let mut has_digit = false;
 
         for index in 0..=self.len {
-            let c = if index == self.len { '+' } else { self.input[index] };
+            let c = if index == self.len {
+                '+'
+            } else {
+                self.input[index]
+            };
             if c.is_ascii_digit() {
                 let digit = c as i128 - '0' as i128;
                 if fraction_scale == 0 {
-                    number = number.saturating_mul(10).saturating_add(digit.saturating_mul(SCALE));
+                    number = number
+                        .saturating_mul(10)
+                        .saturating_add(digit.saturating_mul(SCALE));
                 } else if fraction_scale > 1 {
                     number = number.saturating_add(digit.saturating_mul(fraction_scale / 10));
                     fraction_scale /= 10;
                 }
                 has_digit = true;
             } else if c == '.' {
-                if fraction_scale == 0 { fraction_scale = SCALE; }
+                if fraction_scale == 0 {
+                    fraction_scale = SCALE;
+                }
             } else if Self::is_operator(c) {
                 if !has_digit {
-                    if c == '-' { number_sign = -number_sign; }
+                    if c == '-' {
+                        number_sign = -number_sign;
+                    }
                     continue;
                 }
                 number = number.saturating_mul(number_sign);
@@ -148,11 +167,15 @@ impl CalcCore {
     pub fn format_value(value: i128, output: &mut [u8; INPUT_CAP]) -> usize {
         let mut len = 0;
         let magnitude = value.saturating_abs() as u128;
-        if value < 0 { output[len] = b'-'; len += 1; }
+        if value < 0 {
+            output[len] = b'-';
+            len += 1;
+        }
         Self::append_unsigned(output, &mut len, magnitude / SCALE as u128);
         let mut fraction = (magnitude % SCALE as u128) as u32;
         if fraction != 0 {
-            output[len] = b'.'; len += 1;
+            output[len] = b'.';
+            len += 1;
             let mut divisor = 100_000;
             while divisor > 0 {
                 output[len] = b'0' + (fraction / divisor) as u8;
@@ -160,8 +183,12 @@ impl CalcCore {
                 fraction %= divisor;
                 divisor /= 10;
             }
-            while len > 0 && output[len - 1] == b'0' { len -= 1; }
-            if len > 0 && output[len - 1] == b'.' { len -= 1; }
+            while len > 0 && output[len - 1] == b'0' {
+                len -= 1;
+            }
+            if len > 0 && output[len - 1] == b'.' {
+                len -= 1;
+            }
         }
         len
     }
@@ -169,7 +196,10 @@ impl CalcCore {
     fn append_unsigned(output: &mut [u8; INPUT_CAP], len: &mut usize, mut value: u128) {
         let mut digits = [0u8; 39];
         let mut count = 0;
-        if value == 0 { digits[count] = b'0'; count += 1; }
+        if value == 0 {
+            digits[count] = b'0';
+            count += 1;
+        }
         while value > 0 {
             digits[count] = b'0' + (value % 10) as u8;
             count += 1;

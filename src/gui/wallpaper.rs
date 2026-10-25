@@ -20,7 +20,8 @@ static SOLID: AtomicU32 = AtomicU32::new(0x1E3A5F);
 // Duvar kağıdı önbelleği (prosedürel resimlerin ve gradyanların 60 FPS'de
 // her karede yeniden matematiksel olarak hesaplanıp çizilmesini önler; tek seferde
 // çizilir ve her karede doğrudan hafızadan blit edilir).
-static mut WALLPAPER_CACHE: [u32; crate::drivers::video::BACKBUFFER_LEN] = [0; crate::drivers::video::BACKBUFFER_LEN];
+static mut WALLPAPER_CACHE: [u32; crate::drivers::video::BACKBUFFER_LEN] =
+    [0; crate::drivers::video::BACKBUFFER_LEN];
 static mut CACHED_ID: u8 = 255;
 static mut CACHED_SOLID: u32 = 0;
 static mut CACHED_THEME: u8 = 255;
@@ -44,9 +45,13 @@ pub const SOLID_COLORS: [u32; 6] = [
     0x22262E, // koyu gri
 ];
 
-pub fn count() -> usize { COUNT }
+pub fn count() -> usize {
+    COUNT
+}
 
-pub fn get() -> u8 { CURRENT.load(Ordering::Relaxed).min((COUNT - 1) as u8) }
+pub fn get() -> u8 {
+    CURRENT.load(Ordering::Relaxed).min((COUNT - 1) as u8)
+}
 
 pub fn set(id: u8) {
     let old = CURRENT.swap(id.min((COUNT - 1) as u8), Ordering::Relaxed);
@@ -55,7 +60,9 @@ pub fn set(id: u8) {
     }
 }
 
-pub fn solid_color() -> u32 { SOLID.load(Ordering::Relaxed) }
+pub fn solid_color() -> u32 {
+    SOLID.load(Ordering::Relaxed)
+}
 
 pub fn set_solid(color: u32) {
     let col = color & 0xFFFFFF;
@@ -108,7 +115,11 @@ pub fn name_en(id: u8) -> &'static str {
 }
 
 pub fn name(id: u8, english: bool) -> &'static str {
-    if english { name_en(id) } else { name_tr(id) }
+    if english {
+        name_en(id)
+    } else {
+        name_tr(id)
+    }
 }
 
 fn shade(rgb: u32, delta: i16) -> u32 {
@@ -167,7 +178,10 @@ pub fn draw(fb: &mut Framebuffer) {
 
         // Çizilen pikselleri önbelleğe al
         unsafe {
-            fb.copy_backbuffer_to_raw(core::ptr::addr_of_mut!(WALLPAPER_CACHE) as *mut u32, crate::drivers::video::BACKBUFFER_LEN);
+            fb.copy_backbuffer_to_raw(
+                core::ptr::addr_of_mut!(WALLPAPER_CACHE) as *mut u32,
+                crate::drivers::video::BACKBUFFER_LEN,
+            );
             CACHED_ID = cur_id;
             CACHED_SOLID = cur_solid;
             CACHED_THEME = cur_theme;
@@ -176,7 +190,12 @@ pub fn draw(fb: &mut Framebuffer) {
             CACHE_VALID = true;
         }
         // Kırpmayı (varsa kirli dikdörtgeni) geri yükle.
-        fb.set_frame_clip(Some((saved.x0, saved.y0, saved.x1 - saved.x0, saved.y1 - saved.y0)));
+        fb.set_frame_clip(Some((
+            saved.x0,
+            saved.y0,
+            saved.x1 - saved.x0,
+            saved.y1 - saved.y0,
+        )));
     } else {
         // Önbellek geçerli: yalnızca çerçeve (kirli) bölgesini tek memcpy ile geri yükle.
         let region = fb.base_clip();
@@ -197,7 +216,9 @@ fn draw_starry(fb: &mut Framebuffer, w: usize, h: usize) {
         let dx = int_sqrt((mr * mr).saturating_sub((dy * dy) as usize)) as usize;
         let x0 = mx.saturating_sub(dx);
         let x1 = (mx + dx).min(w);
-        if x1 > x0 { fb.draw_rect(x0, y, x1 - x0, 1, 0xE8EDF7); }
+        if x1 > x0 {
+            fb.draw_rect(x0, y, x1 - x0, 1, 0xE8EDF7);
+        }
         y += 1;
     }
     let n = (w * h / 9000).clamp(120, 260);
@@ -207,7 +228,9 @@ fn draw_starry(fb: &mut Framebuffer, w: usize, h: usize) {
         let y = (v.rotate_right(13) as usize) % h.max(1);
         let b = 0x9AA8CC + (v & 0x202020);
         fb.put_pixel(x, y, b & 0xFFFFFF);
-        if v & 7 == 0 && x + 1 < w { fb.put_pixel(x + 1, y, b & 0xFFFFFF); }
+        if v & 7 == 0 && x + 1 < w {
+            fb.put_pixel(x + 1, y, b & 0xFFFFFF);
+        }
     }
     let hb = h / 6;
     fb.draw_rect(0, h.saturating_sub(hb), w, hb, 0x05070F);
@@ -277,17 +300,33 @@ fn draw_carbon_fiber(fb: &mut Framebuffer, w: usize, h: usize) {
             if is_horizontal {
                 // Yatay karbon ipliği: 4 satır, üst açık/parlak gri, alt gölgeli koyu gri
                 let bw = block.min(w - cx);
-                if cy < h { fb.draw_rect(cx, cy, bw, 1, 0x2A2C32); }
-                if cy + 1 < h { fb.draw_rect(cx, cy + 1, bw, 1, 0x222428); }
-                if cy + 2 < h { fb.draw_rect(cx, cy + 2, bw, 1, 0x1A1B1E); }
-                if cy + 3 < h { fb.draw_rect(cx, cy + 3, bw, 1, 0x121316); }
+                if cy < h {
+                    fb.draw_rect(cx, cy, bw, 1, 0x2A2C32);
+                }
+                if cy + 1 < h {
+                    fb.draw_rect(cx, cy + 1, bw, 1, 0x222428);
+                }
+                if cy + 2 < h {
+                    fb.draw_rect(cx, cy + 2, bw, 1, 0x1A1B1E);
+                }
+                if cy + 3 < h {
+                    fb.draw_rect(cx, cy + 3, bw, 1, 0x121316);
+                }
             } else {
                 // Dikey karbon ipliği: sol kenar aydınlık, sağ kenar gölgeli
                 let bh = block.min(h - cy);
-                if cx < w { fb.draw_rect(cx, cy, 1, bh, 0x282A30); }
-                if cx + 1 < w { fb.draw_rect(cx + 1, cy, 1, bh, 0x202226); }
-                if cx + 2 < w { fb.draw_rect(cx + 2, cy, 1, bh, 0x18191C); }
-                if cx + 3 < w { fb.draw_rect(cx + 3, cy, 1, bh, 0x101114); }
+                if cx < w {
+                    fb.draw_rect(cx, cy, 1, bh, 0x282A30);
+                }
+                if cx + 1 < w {
+                    fb.draw_rect(cx + 1, cy, 1, bh, 0x202226);
+                }
+                if cx + 2 < w {
+                    fb.draw_rect(cx + 2, cy, 1, bh, 0x18191C);
+                }
+                if cx + 3 < w {
+                    fb.draw_rect(cx + 3, cy, 1, bh, 0x101114);
+                }
             }
 
             cx += block;
@@ -331,7 +370,9 @@ fn draw_geometric(fb: &mut Framebuffer, w: usize, h: usize) {
     let r = (w.min(h) / 6).max(30);
     for dy in 0..=r * 2 {
         let y = cy.saturating_sub(r) + dy;
-        if y >= h { continue; }
+        if y >= h {
+            continue;
+        }
         let d = dy as isize - r as isize;
         let dx = int_sqrt((r * r).saturating_sub((d * d) as usize)) as usize;
         let x0 = cx.saturating_sub(dx);
@@ -344,7 +385,9 @@ fn draw_geometric(fb: &mut Framebuffer, w: usize, h: usize) {
 }
 
 pub fn draw_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize, id: u8) {
-    if w < 4 || h < 4 { return; }
+    if w < 4 || h < 4 {
+        return;
+    }
     match id {
         0 => {
             let (bg, _) = crate::gui::theme::preview_colors(crate::gui::theme::current());
@@ -416,7 +459,9 @@ fn int_sqrt(n: usize) -> usize {
 #[allow(dead_code)]
 #[inline(always)]
 fn pseudo(x: usize, mul: usize, range: usize) -> usize {
-    if range == 0 { return 0; }
+    if range == 0 {
+        return 0;
+    }
     let v = hash((x.wrapping_mul(mul).wrapping_add(0x51F3)) as u32);
     (v as usize) % range
 }

@@ -1,14 +1,14 @@
-use alloc::vec::Vec;
 use crate::arch;
 use crate::boot;
 use crate::boot::console::serial_print;
-use crate::boot::limine::*;
 use crate::boot::devices::{GLOBAL_KEYBOARD, GLOBAL_MOUSE};
+use crate::boot::limine::*;
 use crate::drivers;
 use crate::drivers::video::Framebuffer;
 use crate::fs;
 use crate::mm;
 use crate::task;
+use alloc::vec::Vec;
 
 pub struct BootSubsystems {
     pub fs_mgr: fs::FileSystemManager,
@@ -38,16 +38,20 @@ pub fn init_subsystems(
     arch::x86_64::init_interrupts();
 
     unsafe {
-        if let Some(response) = valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response))
-            .filter(|response| !response.is_null())
+        if let Some(response) =
+            valid_limine_response(core::ptr::addr_of!(MEMORY_MAP_REQUEST.response))
+                .filter(|response| !response.is_null())
         {
             let count = core::ptr::read_volatile(core::ptr::addr_of!((*response).entry_count));
             let entries = core::ptr::read_volatile(core::ptr::addr_of!((*response).entries));
             let count = count.min(256) as usize;
-            let array_bytes = count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
+            let array_bytes =
+                count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
             if count > 0 && is_mapped_limine_ptr(entries) && array_bytes.is_some() {
                 let array_end = (entries as usize).checked_add(array_bytes.unwrap());
-                if array_end.map_or(false, |end| is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)) {
+                if array_end.map_or(false, |end| {
+                    is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)
+                }) {
                     for i in 0..count {
                         let slot_addr = match (entries as usize)
                             .checked_add(i * core::mem::size_of::<*const LimineMemoryMapEntry>())
@@ -105,7 +109,9 @@ pub fn init_subsystems(
         memory_mgr.pmm.allocate_frame(),
     ) {
         if f1 != f2 && f1 % mm::pmm::PAGE_SIZE == 0 && f2 % mm::pmm::PAGE_SIZE == 0 {
-            serial_print("[PMM] Çerçeve tahsis testi başarılı (çakışmayan çerçeveler doğrulandı).\n");
+            serial_print(
+                "[PMM] Çerçeve tahsis testi başarılı (çakışmayan çerçeveler doğrulandı).\n",
+            );
         }
         memory_mgr.pmm.free_frame(f2);
         memory_mgr.pmm.free_frame(f1);
@@ -139,11 +145,9 @@ pub fn init_subsystems(
 
     // Test amacli standart ELF64 ikili dosyasini yukle ve dogrula
     let sample_elf_bin = mm::loader::AppLoader::create_sample_elf();
-    if let Ok(loaded) = mm::loader::AppLoader::load_binary(
-        &sample_elf_bin,
-        &mut address_space,
-        &mut memory_mgr.pmm,
-    ) {
+    if let Ok(loaded) =
+        mm::loader::AppLoader::load_binary(&sample_elf_bin, &mut address_space, &mut memory_mgr.pmm)
+    {
         if loaded.entry_point >= mm::loader::USER_CODE_BASE && loaded.stack_pointer > 0 {
             serial_print("[LOADER] Standart ELF64 ikilisi güvenli bellek yalıtımıyla yüklendi (W^X / NX etkin).\n");
         }
@@ -259,7 +263,9 @@ pub fn init_subsystems(
     serial_print(driver_profile);
     serial_print("\n");
     let profile_line = alloc::format!("[DRIVERS] profile: {}", driver_profile);
-    let _ = fs_mgr.vfs.write_file("/root/Documents/boot.log", profile_line.as_bytes());
+    let _ = fs_mgr
+        .vfs
+        .write_file("/root/Documents/boot.log", profile_line.as_bytes());
 
     if driver_profile == "audio" || driver_profile == "full" {
         serial_print("[DRIVER] HDA ses sürücüsü başlatılıyor...\n");
@@ -295,14 +301,10 @@ pub fn init_subsystems(
         serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }
 
-    let _socket_timeout_task = task::spawn(
-        "socket-timeouts",
-        task::TaskPriority::Normal,
-        || {
-            drivers::socket::poll_timeouts();
-            task::TaskStatus::Yielded
-        },
-    );
+    let _socket_timeout_task = task::spawn("socket-timeouts", task::TaskPriority::Normal, || {
+        drivers::socket::poll_timeouts();
+        task::TaskStatus::Yielded
+    });
     serial_print("[TASK] İşbirlikçi soket zaman aşımı görevi kuyruğa alındı.\n");
 
     let _net_dev = drivers::net::NetworkInterface::new();

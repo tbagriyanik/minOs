@@ -50,7 +50,10 @@ pub fn save_boot_log(vfs: &mut fs::vfs::VirtualFileSystem) {
 
 #[inline(never)]
 pub fn serial_print_dec(v: u64) {
-    if v == 0 { serial_print("0"); return; }
+    if v == 0 {
+        serial_print("0");
+        return;
+    }
     let mut value = v;
     let mut buf = [0u8; 20];
     let mut i = buf.len();
@@ -59,13 +62,18 @@ pub fn serial_print_dec(v: u64) {
         buf[i] = b'0' + (value % 10) as u8;
         value /= 10;
     }
-    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) {
+        serial_print(text);
+    }
 }
 
 #[inline(never)]
 pub fn serial_print_hex(v: u64) {
     serial_print("0x");
-    if v == 0 { serial_print("0"); return; }
+    if v == 0 {
+        serial_print("0");
+        return;
+    }
     let mut value = v;
     let mut buf = [0u8; 16];
     let mut i = buf.len();
@@ -75,7 +83,9 @@ pub fn serial_print_hex(v: u64) {
         buf[i] = hex[(value & 0xF) as usize];
         value >>= 4;
     }
-    if let Ok(text) = core::str::from_utf8(&buf[i..]) { serial_print(text); }
+    if let Ok(text) = core::str::from_utf8(&buf[i..]) {
+        serial_print(text);
+    }
 }
 
 pub fn restart_system() -> ! {
@@ -91,5 +101,7 @@ pub fn restart_system() -> ! {
         core::arch::asm!("int3");
         core::arch::asm!("cli");
     }
-    loop { core::hint::spin_loop(); }
+    loop {
+        core::hint::spin_loop();
+    }
 }

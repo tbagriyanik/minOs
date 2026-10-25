@@ -205,11 +205,19 @@ pub fn derive_ptk(
     data[..plen].copy_from_slice(prefix);
 
     // Min(AA, SPA) || Max(AA, SPA) || Min(ANonce, SNonce) || Max(ANonce, SNonce)
-    let (min_mac, max_mac) = if ap_mac < client_mac { (ap_mac, client_mac) } else { (client_mac, ap_mac) };
+    let (min_mac, max_mac) = if ap_mac < client_mac {
+        (ap_mac, client_mac)
+    } else {
+        (client_mac, ap_mac)
+    };
     data[plen..plen + 6].copy_from_slice(min_mac);
     data[plen + 6..plen + 12].copy_from_slice(max_mac);
 
-    let (min_nonce, max_nonce) = if anonce < snonce { (anonce, snonce) } else { (snonce, anonce) };
+    let (min_nonce, max_nonce) = if anonce < snonce {
+        (anonce, snonce)
+    } else {
+        (snonce, anonce)
+    };
     data[plen + 12..plen + 44].copy_from_slice(min_nonce);
     data[plen + 44..plen + 76].copy_from_slice(max_nonce);
     data[plen + 76] = 0; // counter
@@ -235,12 +243,16 @@ pub fn init() {
             return;
         }
         WIFI_INITIALIZED = true;
-        crate::serial::print("[WIFI] IEEE 802.11 / Wi-Fi kablosuz ağ alt sistemi başlatılıyor...\n");
+        crate::serial::print(
+            "[WIFI] IEEE 802.11 / Wi-Fi kablosuz ağ alt sistemi başlatılıyor...\n",
+        );
 
         // Varsayılan AP listesi (Simüle veya algılanan ağlar)
         populate_default_access_points();
 
-        crate::serial::print("[WIFI] Wi-Fi hazır (WPA2-PSK AES-CCMP & 802.11 MAC desteği aktif).\n");
+        crate::serial::print(
+            "[WIFI] Wi-Fi hazır (WPA2-PSK AES-CCMP & 802.11 MAC desteği aktif).\n",
+        );
     }
 }
 
@@ -248,9 +260,27 @@ unsafe fn populate_default_access_points() {
     SCAN_COUNT = 0;
 
     let ap_list: [(&str, [u8; 6], u8, i8, WifiSecurity); 3] = [
-        ("minOs-Guest", [0x00, 0x14, 0xD1, 0x22, 0x33, 0x44], 6, -48, WifiSecurity::Wpa2Psk),
-        ("Home-Fiber-5G", [0xAC, 0x84, 0xC6, 0x11, 0x22, 0x33], 36, -62, WifiSecurity::Wpa2Psk),
-        ("Public_Free_WiFi", [0x00, 0x18, 0x0A, 0x55, 0x66, 0x77], 1, -74, WifiSecurity::Open),
+        (
+            "minOs-Guest",
+            [0x00, 0x14, 0xD1, 0x22, 0x33, 0x44],
+            6,
+            -48,
+            WifiSecurity::Wpa2Psk,
+        ),
+        (
+            "Home-Fiber-5G",
+            [0xAC, 0x84, 0xC6, 0x11, 0x22, 0x33],
+            36,
+            -62,
+            WifiSecurity::Wpa2Psk,
+        ),
+        (
+            "Public_Free_WiFi",
+            [0x00, 0x18, 0x0A, 0x55, 0x66, 0x77],
+            1,
+            -74,
+            WifiSecurity::Open,
+        ),
     ];
 
     for (name, bssid, chan, rssi, sec) in ap_list {
@@ -304,7 +334,8 @@ pub fn connect(ssid: &str, _password: &str) -> bool {
                 if ap.ssid_str() == ssid {
                     WIFI_STATUS.state = WifiState::Authenticating;
                     WIFI_STATUS.connected_ssid_len = ap.ssid_len;
-                    WIFI_STATUS.connected_ssid[..ap.ssid_len].copy_from_slice(&ap.ssid[..ap.ssid_len]);
+                    WIFI_STATUS.connected_ssid[..ap.ssid_len]
+                        .copy_from_slice(&ap.ssid[..ap.ssid_len]);
                     WIFI_STATUS.bssid = ap.bssid;
                     WIFI_STATUS.channel = ap.channel;
                     WIFI_STATUS.rssi = ap.rssi;
@@ -330,4 +361,3 @@ pub fn disconnect() {
         crate::serial::print("[WIFI] Kablosuz ağ bağlantısı kesildi.\n");
     }
 }
-

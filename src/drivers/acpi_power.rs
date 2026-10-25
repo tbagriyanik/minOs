@@ -16,12 +16,12 @@
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PowerState {
-    S0,  // Working
-    S1,  // Sleep
-    S2,  // Sleep
-    S3,  // Sleep (Suspend to RAM)
-    S4,  // Hibernate (Suspend to Disk)
-    S5,  // Soft Off
+    S0, // Working
+    S1, // Sleep
+    S2, // Sleep
+    S3, // Sleep (Suspend to RAM)
+    S4, // Hibernate (Suspend to Disk)
+    S5, // Soft Off
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

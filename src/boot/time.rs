@@ -26,12 +26,16 @@ fn estimate_tsc_cycles_per_us() -> u64 {
         let ratio = core::arch::x86_64::__cpuid(0x15);
         if ratio.eax != 0 && ratio.ebx != 0 && ratio.ecx != 0 {
             let hz = (ratio.ecx as u64).saturating_mul(ratio.ebx as u64) / ratio.eax as u64;
-            if hz != 0 { return (hz / 1_000_000).max(1); }
+            if hz != 0 {
+                return (hz / 1_000_000).max(1);
+            }
         }
     }
     if max_leaf >= 0x16 {
         let mhz = core::arch::x86_64::__cpuid(0x16).eax as u64;
-        if mhz != 0 { return mhz; }
+        if mhz != 0 {
+            return mhz;
+        }
     }
     1_000
 }
@@ -39,7 +43,9 @@ fn estimate_tsc_cycles_per_us() -> u64 {
 /// TSC frekansını PIT kanal 2 ile kalibre eder.
 pub fn init_timebase() -> bool {
     let fallback_cycles_per_us = estimate_tsc_cycles_per_us();
-    unsafe { TSC_CYCLES_PER_US = fallback_cycles_per_us; }
+    unsafe {
+        TSC_CYCLES_PER_US = fallback_cycles_per_us;
+    }
     unsafe {
         let mut port61: u8;
         core::arch::asm!("in al, dx", in("dx") 0x61u16, out("al") port61, options(nomem, nostack, preserves_flags));
@@ -59,7 +65,9 @@ pub fn init_timebase() -> bool {
                 ready = true;
                 break;
             }
-            if read_cpu_cycles().wrapping_sub(start) >= timeout_cycles { break; }
+            if read_cpu_cycles().wrapping_sub(start) >= timeout_cycles {
+                break;
+            }
             core::hint::spin_loop();
         }
         if ready {
@@ -72,11 +80,15 @@ pub fn init_timebase() -> bool {
     }
 }
 
-pub fn is_ready() -> bool { TIMEBASE_READY.load(Ordering::Acquire) }
+pub fn is_ready() -> bool {
+    TIMEBASE_READY.load(Ordering::Acquire)
+}
 
 pub fn monotonic_ms() -> u64 {
     let cycles_per_us = unsafe { TSC_CYCLES_PER_US }.max(1);
     read_cpu_cycles() / cycles_per_us / 1_000
 }
 
-pub fn main_monotonic_ms() -> usize { monotonic_ms() as usize }
+pub fn main_monotonic_ms() -> usize {
+    monotonic_ms() as usize
+}

@@ -16,13 +16,17 @@ use core::arch::asm;
 
 #[inline]
 fn io_out32(port: u16, val: u32) {
-    unsafe { asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
+    }
 }
 
 #[inline]
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
-    unsafe { asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags)); }
+    unsafe {
+        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
+    }
     ret
 }
 
@@ -68,9 +72,9 @@ const PCI_SUBCLASS_AHCI: u8 = 0x06;
 
 const HBA_CAP: u32 = 0x00; // Host Capabilities
 const HBA_GHC: u32 = 0x04; // Global Host Control
-const HBA_IS: u32 = 0x08;  // Interrupt Status
-const HBA_PI: u32 = 0x0C;  // Ports Implemented
-const HBA_VS: u32 = 0x10;  // Version
+const HBA_IS: u32 = 0x08; // Interrupt Status
+const HBA_PI: u32 = 0x0C; // Ports Implemented
+const HBA_VS: u32 = 0x10; // Version
 
 // GHC bitleri
 const GHC_AE: u32 = 1 << 31; // AHCI Enable
@@ -95,7 +99,7 @@ const PORT_SERR: u32 = 0x30; // SATA Error
 const PORT_CI: u32 = 0x38; // Command Issue
 
 // PORT_CMD bitleri
-const PORT_CMD_ST: u32 = 1 << 0;  // Start
+const PORT_CMD_ST: u32 = 1 << 0; // Start
 const PORT_CMD_SUD: u32 = 1 << 1; // Spin Up Device
 const PORT_CMD_POD: u32 = 1 << 2; // Power On Device
 const PORT_CMD_CLO: u32 = 1 << 3; // Command List Override
@@ -167,11 +171,11 @@ struct FisRegH2D {
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct PrdtEntry {
-    dba: u32,   // Data Base Address
-    dbau: u32,  // Data Base Address Upper
+    dba: u32,  // Data Base Address
+    dbau: u32, // Data Base Address Upper
     reserved: u32,
-    dbc: u32,   // Byte Count (0-indexed)
-    i: u32,     // Interrupt on Completion
+    dbc: u32, // Byte Count (0-indexed)
+    i: u32,   // Interrupt on Completion
 }
 
 // ---------------------------------------------------------------------------

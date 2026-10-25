@@ -178,7 +178,7 @@ struct PrdtEntry {
 // Global Değişkenler
 // ---------------------------------------------------------------------------
 
-static mut ABAR: u64 = 0; // AHCI Base Memory Register
+static mut ABAR: u64 = 0; // HHDM sanal adresindeki AHCI Base Memory Register
 static mut DETECTED: bool = false;
 static mut PORT_COUNT: u32 = 0;
 static mut PORT_BASE: u64 = 0;
@@ -240,8 +240,9 @@ pub fn detect() -> bool {
                         // ABAR adresini al (BAR5)
                         let bar5 = pci_read32(bus, dev, func, 0x24);
                         if bar5 & 0x1 == 0 {
-                            // Memory-mapped I/O
-                            ABAR = (bar5 & 0xFFFF_FFF0) as u64;
+                            let abar_phys = (bar5 & 0xFFFF_FFF0) as u64;
+                            crate::arch::x86_64::mmio_map_2mb(abar_phys & !0x1F_FFFF);
+                            ABAR = crate::drivers::phys_to_virt(abar_phys);
                             DETECTED = true;
                             return true;
                         }

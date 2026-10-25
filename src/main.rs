@@ -303,34 +303,24 @@ pub extern "C" fn _start() -> ! {
     // HHDM ofsetini al (fiziksel MMIO ve sayfa tablosu sanal erisimi icin).
 
     let hhdm_offset = unsafe {
-
         // SAFETY: the response pointer is validated before being dereferenced.
-
-        if let Some(resp) = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response))
-
-            .filter(|resp| !resp.is_null())
-
-        {
-
-            let off = core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset));
-
-            #[cfg(minos_boot_log)]
-
-            serial_print("[minOs] HHDM ofseti okundu (0 değilse geçerli).\n");
-
-            off
-
-        } else {
-
-            #[cfg(minos_boot_log)]
-
-            serial_print("[minOs] UYARI: HHDM yanıtı yok; MMIO erişimi çalışmaz!\n");
-
-            0xFFFF_8000_0000_0000
-
+        let response_offset = valid_limine_response(core::ptr::addr_of!(HHDM_REQUEST.response))
+            .map(|resp| core::ptr::read_volatile(core::ptr::addr_of!((*resp).offset)));
+        match response_offset {
+            Some(offset) if is_mapped_limine_ptr(offset as *const u8) => offset,
+            Some(_) => {
+                serial_print("[BOOT] Invalid HHDM offset / gecersiz HHDM ofseti; using fallback.\n");
+                0xFFFF_8000_0000_0000
+            }
+            None => {
+                serial_print("[BOOT] HHDM response missing / HHDM yaniti yok; using fallback.\n");
+                0xFFFF_8000_0000_0000
+            }
         }
-
     };
+    serial_print("[BOOT] HHDM offset / ofset: ");
+    crate::boot::console::serial_print_hex(hhdm_offset);
+    serial_print("\n");
 
     drivers::set_hhdm_offset(hhdm_offset);
 

@@ -26,6 +26,9 @@ pub mod browser_types;
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 
+#[path = "../src/gui/textbuf.rs"]
+pub mod textbuf;
+
 #[path = "../src/gui/textedit.rs"]
 pub mod textedit;
 

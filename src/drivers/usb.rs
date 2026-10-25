@@ -394,7 +394,9 @@ fn init_ehci_controller(bus: u8, dev: u8, func: u8) {
     if bar0 == 0 {
         return;
     }
-    let mmio = crate::drivers::phys_to_virt(bar0 as u64);
+    let bar0_phys = bar0 as u64;
+    crate::arch::x86_64::mmio_map_2mb(bar0_phys & !0x1F_FFFF);
+    let mmio = crate::drivers::phys_to_virt(bar0_phys);
 
     unsafe {
         // 1. EHCI Extended Capabilities Pointer (EECP) ile BIOS el sıkışması
@@ -537,7 +539,9 @@ fn init_ohci_controller(bus: u8, dev: u8, func: u8) {
     if bar0 == 0 {
         return;
     }
-    let mmio = crate::drivers::phys_to_virt(bar0 as u64);
+    let bar0_phys = bar0 as u64;
+    crate::arch::x86_64::mmio_map_2mb(bar0_phys & !0x1F_FFFF);
+    let mmio = crate::drivers::phys_to_virt(bar0_phys);
 
     unsafe {
         let rev = core::ptr::read_volatile(mmio as *const u32) & 0xFF;

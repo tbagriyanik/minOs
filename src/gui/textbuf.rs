@@ -5,19 +5,19 @@
 // ---------------------------------------------------------------------------
 #[derive(Clone, Copy)]
 pub struct TextBuf {
-    buf: [u8; 64],
+    buf: [u8; 128],
     len: usize,
 }
 
 impl TextBuf {
     pub const fn new() -> Self {
-        Self { buf: [0; 64], len: 0 }
+        Self { buf: [0; 128], len: 0 }
     }
 
     /// Sabit metinden hücreler arası (const) tampon oluşturur.
-    /// Metin `buf`'a sığmazsa 64 baytta kırpılır.
+    /// Metin `buf`'a sığmazsa 128 baytta kırpılır.
     pub const fn from_str(s: &str) -> Self {
-        let mut buf = [0u8; 64];
+        let mut buf = [0u8; 128];
         let bytes = s.as_bytes();
         let n = if bytes.len() < 64 { bytes.len() } else { 64 };
         let mut i = 0;
@@ -97,5 +97,24 @@ impl TextBuf {
 
     pub fn as_str(&self) -> &str {
         core::str::from_utf8(&self.buf[..self.len]).unwrap_or("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TextBuf;
+
+    #[test]
+    fn keeps_complete_page_fault_diagnostics() {
+        let mut text = TextBuf::new();
+        text.push_str("KERNEL EXCEPTION: Vektor 14 (#PF - Sayfa Hatasi) | RIP: 0x");
+        text.push_hex64(0xFFFF_FFFF_8000_1234);
+        text.push_str(" | Err: 0x");
+        text.push_hex64(0x02);
+        text.push_str(" | CR2: 0x");
+        text.push_hex64(0xFFFF_9000_0000_5678);
+
+        assert!(text.as_str().ends_with("CR2: 0xFFFF900000005678"));
+        assert!(text.as_str().contains("RIP: 0xFFFFFFFF80001234"));
     }
 }

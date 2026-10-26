@@ -226,6 +226,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 qemu-system-x86_64 -m 512M -smp 2 \
   -cdrom minos.iso -boot d \
   -vga virtio \
+  -rtc base=utc,clock=host,driftfix=slew \
   -audiodev pa,id=snd0 \
   -device intel-hda -device hda-duplex,audiodev=snd0 \
   -netdev user,id=n0 -device e1000,netdev=n0
@@ -237,12 +238,14 @@ qemu-system-x86_64 -m 512M -smp 2 \
 qemu-system-x86_64.exe -m 512M -smp 2 `
   -cdrom .\minos.iso -boot d `
   -vga virtio `
+  -rtc base=utc,clock=host,driftfix=slew `
   -audiodev driver=sdl,id=snd0 `
   -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Not: DirectSound kullanıyorsanız `hda-duplex` yerine `hda-output` veya `-audiodev driver=sdl` kullanmak mikrofon yakalama aygıtı eksikliğinden kaynaklanan QEMU açılış çökmelerini önler.*
 > 💡 *Not: VirtIO-GPU (`-vga virtio`), QEMU/KVM ortamında doğrudan donanım 2D hızlandırma ve scanout flush mekanizması sunar. Standart VGA için `-vga std -global VGA.vgamem_mb=64` kullanılabilir.*
+> 💡 *Not: QEMU, VirtualBox ve VMware sanal makinelerinde gerçek zamanlı saat senkronizasyonu için donanım RTC saati UTC olarak çalışır ve minOs bölge/saat dilimi farkını (`settings.cfg: region`, varsayılan UTC+3) uygulayarak ana makine saati ile tam senkronize çalışır.*
 
 ---
 

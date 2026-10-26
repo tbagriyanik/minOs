@@ -103,6 +103,7 @@ $qemuArgs = @(
     "-boot", "d",
     "-display", "none",
     "-vga", $Vga,
+    "-rtc", "base=utc,clock=host,driftfix=slew",
 
     "-serial", "stdio",
     "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",

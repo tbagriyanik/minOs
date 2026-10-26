@@ -223,6 +223,7 @@ If you want to run directly from the QEMU command line without the `run.ps1` aut
 qemu-system-x86_64 -m 512M -smp 2 \
   -cdrom minos.iso -boot d \
   -vga virtio \
+  -rtc base=utc,clock=host,driftfix=slew \
   -audiodev pa,id=snd0 \
   -device intel-hda -device hda-duplex,audiodev=snd0 \
   -netdev user,id=n0 -device e1000,netdev=n0
@@ -234,12 +235,14 @@ qemu-system-x86_64 -m 512M -smp 2 \
 qemu-system-x86_64.exe -m 512M -smp 2 `
   -cdrom .\minos.iso -boot d `
   -vga virtio `
+  -rtc base=utc,clock=host,driftfix=slew `
   -audiodev driver=sdl,id=snd0 `
   -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Note: If you use DirectSound, using `hda-output` instead of `hda-duplex` or `-audiodev driver=sdl` prevents QEMU startup crashes caused by a missing microphone capture device.*
 > 💡 *Note: VirtIO-GPU (`-vga virtio`) provides direct 2D hardware acceleration and scanout flush queues in QEMU/KVM environments. For legacy/standard VGA, `-vga std -global VGA.vgamem_mb=64` can be used.*
+> 💡 *Note: In QEMU, VirtualBox, and VMware, hardware RTC operates in UTC and minOs applies the timezone offset (`settings.cfg: region`, default UTC+3) to ensure exact synchronization with host real time.*
 
 ---
 

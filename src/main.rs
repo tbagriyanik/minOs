@@ -3974,6 +3974,21 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(
                                         mx,
                                         my,
+                                        apps::settings::SystemSettings::region_btn_rect(wx, wy),
+                                    ) {
+                                        settings_app.cycle_region();
+                                        now = drivers::rtc::DateTime::read_for_region(
+                                            settings_app.region_offset(),
+                                        );
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
+                                        settings_app.status_msg = gui::ui_text(
+                                            "Bölge ve saat dilimi güncellendi.",
+                                            "Region and time zone updated.",
+                                        );
+                                    } else if gui::in_rect(
+                                        mx,
+                                        my,
                                         apps::settings::SystemSettings::mute_btn_rect(wx, wy),
                                     ) {
                                         settings_app.is_muted = !settings_app.is_muted;
@@ -6241,9 +6256,26 @@ pub extern "C" fn _start() -> ! {
                                         );
                                     }
 
-                                    7 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                    7 => {
+                                        settings_app.cycle_region();
+                                        now = drivers::rtc::DateTime::read_for_region(
+                                            settings_app.region_offset(),
+                                        );
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
+                                        settings_app.status_msg = gui::ui_text(
+                                            "Bölge ve saat dilimi güncellendi.",
+                                            "Region and time zone updated.",
+                                        );
+                                    }
 
                                     8 => {
+                                        settings_app.is_muted = !settings_app.is_muted;
+                                    }
+
+                                    9 => settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+
+                                    10 => {
                                         settings_app.reset_defaults();
                                         settings_app.apply_runtime(
                                             &mut *keyboard,

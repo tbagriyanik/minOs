@@ -595,7 +595,7 @@ impl SystemSettings {
                 }
                 "region" => {
                     if let Ok(v) = val.parse::<u8>() {
-                        self.region = v.min(2);
+                        self.region = v.min(4);
                     }
                 }
                 "res" => {
@@ -819,19 +819,28 @@ impl SystemSettings {
     pub fn wallpaper_count() -> usize {
         crate::gui::wallpaper::COUNT
     }
+    pub fn cycle_region(&mut self) {
+        self.region = (self.region + 1) % 5;
+    }
     pub fn region_offset(&self) -> i8 {
         match self.region {
             1 => 0,
             2 => -5,
+            3 => 1,
+            4 => 9,
             _ => 3,
         }
     }
     pub fn region_name(&self, english: bool) -> &'static str {
         match (self.region, english) {
-            (1, true) => "UTC",
-            (1, false) => "UTC",
+            (1, true) => "UTC / Hardware Local (+0)",
+            (1, false) => "UTC / Donanım Yerel (+0)",
             (2, true) => "US Eastern (UTC-5)",
             (2, false) => "ABD Doğu (UTC-5)",
+            (3, true) => "Central Europe (UTC+1)",
+            (3, false) => "Orta Avrupa (UTC+1)",
+            (4, true) => "Japan / Tokyo (UTC+9)",
+            (4, false) => "Japonya / Tokyo (UTC+9)",
             (_, true) => "Türkiye (UTC+3)",
             (_, false) => "Türkiye (UTC+3)",
         }
@@ -1450,7 +1459,7 @@ impl SystemSettings {
             },
         );
         put(&mut cfg, &mut n, b";region=");
-        put(&mut cfg, &mut n, &[b'0' + self.region.min(2)]);
+        put(&mut cfg, &mut n, &[b'0' + self.region.min(4)]);
         put(&mut cfg, &mut n, b";dhcp=");
         put(
             &mut cfg,
@@ -1526,11 +1535,11 @@ impl SystemSettings {
     }
 
     pub fn focus_next_control(&mut self) {
-        // Sekme 0 (Temel) 9 kontrol: 5 sekme + kbd + dil + bolge + sustur + kaydet + sifirla
+        // Sekme 0 (Temel) 11 kontrol: 5 sekme + kbd + dil + bolge + sustur + kaydet + sifirla
         // Sekme 1 (Ekran) 19 kontrol: 5 sekme + tema + 5 swatch + 4 cozunurluk + 3 zoom + mavi isik + 6 desen -> sadeleştirilmiş
         // Sekme 2 (Ag) 7 kontrol, digerleri 7 kontrol
         let total = match self.active_tab {
-            0 => 9,
+            0 => 11,
             1 => 32,
             2 => 7,
             3 => 7,
@@ -1739,6 +1748,18 @@ impl SystemSettings {
                     Color::TEXT_MAIN,
                     false,
                 );
+                if self.focused_control == 7 {
+                    fb.draw_rect_outline(reg_r.0, reg_r.1, reg_r.2, reg_r.3, Color::ACCENT_YELLOW);
+                }
+                if self.focused_control == 7 {
+                    fb.draw_rect_outline(
+                        reg_r.0,
+                        reg_r.1,
+                        reg_r.2,
+                        reg_r.3,
+                        Color::ACCENT_YELLOW,
+                    );
+                }
 
                 // --- Canlı Saat & Tarih (Satır 4) ---
                 let mut clock = TextBuf::new();
@@ -2502,7 +2523,7 @@ impl SystemSettings {
         );
 
         let (save_idx, reset_idx) = match self.active_tab {
-            0 => (7, 8),
+            0 => (9, 10),
             _ => (5, 6),
         };
         if self.focused_control == save_idx {

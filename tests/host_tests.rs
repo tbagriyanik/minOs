@@ -38,6 +38,9 @@ pub mod timefmt;
 #[path = "../src/gui/theme.rs"]
 pub mod theme;
 
+#[path = "../src/drivers/rtc.rs"]
+pub mod rtc;
+
 // TLS protokol katmani: `crate::boot::time` ve `crate::monotonic_ms`
 // cekirdekte var; host testlerinde sabit birer yedek (stub) saglanir.
 pub fn monotonic_ms() -> u64 {

@@ -1484,6 +1484,164 @@ impl Ipv6Address {
     pub fn is_loopback(&self) -> bool {
         *self == Self::LOOPBACK
     }
+
+    /// Multicast (ff00::/8) olup olmadığını kontrol eder.
+    pub fn is_multicast(&self) -> bool {
+        self.0[0] == 0xFF
+    }
+
+    /// IPv6 çok noktaya yayın (multicast) için hedef MAC adresini üretir (RFC 2464).
+    pub fn multicast_mac(&self) -> MacAddress {
+        MacAddress([0x33, 0x33, self.0[12], self.0[13], self.0[14], self.0[15]])
+    }
+
+    /// Adresi standart onaltılık metin biçiminde biçimlendirir.
+    pub fn format(&self) -> alloc::string::String {
+        use alloc::format;
+        format!(
+            "{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}",
+            u16::from_be_bytes([self.0[0], self.0[1]]),
+            u16::from_be_bytes([self.0[2], self.0[3]]),
+            u16::from_be_bytes([self.0[4], self.0[5]]),
+            u16::from_be_bytes([self.0[6], self.0[7]]),
+            u16::from_be_bytes([self.0[8], self.0[9]]),
+            u16::from_be_bytes([self.0[10], self.0[11]]),
+            u16::from_be_bytes([self.0[12], self.0[13]]),
+            u16::from_be_bytes([self.0[14], self.0[15]])
+        )
+    }
+}
+
+pub const ICMPV6_TYPE_DEST_UNREACH: u8 = 1;
+pub const ICMPV6_TYPE_PKT_TOO_BIG: u8 = 2;
+pub const ICMPV6_TYPE_TIME_EXCEEDED: u8 = 3;
+pub const ICMPV6_TYPE_PARAM_PROBLEM: u8 = 4;
+pub const ICMPV6_TYPE_ECHO_REQUEST: u8 = 128;
+pub const ICMPV6_TYPE_ECHO_REPLY: u8 = 129;
+pub const ICMPV6_TYPE_ROUTER_SOLICIT: u8 = 133;
+pub const ICMPV6_TYPE_ROUTER_ADVERT: u8 = 134;
+pub const ICMPV6_TYPE_NEIGHBOR_SOLICIT: u8 = 135;
+pub const ICMPV6_TYPE_NEIGHBOR_ADVERT: u8 = 136;
+
+/// Yerel ağ kartının donanım (MAC) adresini döndürür.
+pub fn local_mac() -> MacAddress {
+    MacAddress(unsafe { e1000::MAC_ADDR })
+}
+
+/// Yerel arayüz MAC adresinden otomatik link-local IPv6 (EUI-64) türetir.
+pub fn local_ipv6() -> Ipv6Address {
+    let mac = local_mac();
+    let mut bytes = [0u8; 16];
+    bytes[0] = 0xFE;
+    bytes[1] = 0x80;
+    // EUI-64: U/L bit ters çevrilir, ortaya 0xFFFE eklenir
+    bytes[8] = mac.0[0] ^ 0x02;
+    bytes[9] = mac.0[1];
+    bytes[10] = mac.0[2];
+    bytes[11] = 0xFF;
+    bytes[12] = 0xFE;
+    bytes[13] = mac.0[3];
+    bytes[14] = mac.0[4];
+    bytes[15] = mac.0[5];
+    Ipv6Address(bytes)
+}
+
+/// IPv6 sözde başlığı (pseudo-header) üzerinden 16-bit sağlama toplamı (checksum) hesaplar (RFC 8200).
+pub fn ipv6_pseudo_checksum(
+    src: &[u8; 16],
+    dst: &[u8; 16],
+    next_header: u8,
+    payload: &[u8],
+) -> u16 {
+    let mut sum: u32 = 0;
+    for i in 0..8 {
+        sum += u16::from_be_bytes([src[i * 2], src[i * 2 + 1]]) as u32;
+    }
+    for i in 0..8 {
+        sum += u16::from_be_bytes([dst[i * 2], dst[i * 2 + 1]]) as u32;
+    }
+    let len = payload.len() as u32;
+    sum += (len >> 16) & 0xFFFF;
+    sum += len & 0xFFFF;
+    sum += next_header as u32;
+
+    let mut i = 0;
+    while i + 1 < payload.len() {
+        sum += u16::from_be_bytes([payload[i], payload[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < payload.len() {
+        sum += (payload[i] as u32) << 8;
+    }
+
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    let res = !(sum as u16);
+    if res == 0 {
+        0xFFFF
+    } else {
+        res
+    }
+}
+
+/// IPv6 paketi gönderir (Ethernet çerçevesi içinde).
+pub fn send_ipv6(dst_ip: Ipv6Address, next_header: u8, payload: &[u8]) -> bool {
+    let src_ip = local_ipv6();
+    let dst_mac = if dst_ip.is_multicast() {
+        dst_ip.multicast_mac()
+    } else {
+        // Standart QEMU ağ geçidi MAC'i veya yayın fallback'i
+        MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02])
+    };
+
+    let mut ip_packet = [0u8; 1500 - 14];
+    if payload.len() > ip_packet.len() - 40 {
+        return false;
+    }
+    let total_payload_len = payload.len() as u16;
+
+    // IPv6 başlığı (40 bayt)
+    ip_packet[0] = 0x60; // Version 6
+    ip_packet[1] = 0x00; // Traffic Class
+    ip_packet[2] = 0x00; // Flow Label
+    ip_packet[3] = 0x00;
+    ip_packet[4] = (total_payload_len >> 8) as u8;
+    ip_packet[5] = (total_payload_len & 0xFF) as u8;
+    ip_packet[6] = next_header;
+    ip_packet[7] = 64; // Hop Limit
+    ip_packet[8..24].copy_from_slice(&src_ip.0);
+    ip_packet[24..40].copy_from_slice(&dst_ip.0);
+    ip_packet[40..40 + payload.len()].copy_from_slice(payload);
+
+    let mut frame = [0u8; 1514];
+    let len = build_ethernet(
+        dst_mac,
+        ETHERTYPE_IPV6,
+        &ip_packet[..40 + payload.len()],
+        &mut frame,
+    );
+    e1000::transmit(&frame[..len])
+}
+
+/// ICMPv6 Echo Request (Ping6) gönderir.
+pub fn send_icmpv6_echo(dst: Ipv6Address, id: u16, seq: u16, data: &[u8]) -> bool {
+    let mut pkt = [0u8; 128];
+    let total_len = (8 + data.len()).min(pkt.len());
+    pkt[0] = ICMPV6_TYPE_ECHO_REQUEST;
+    pkt[1] = 0;
+    pkt[2] = 0;
+    pkt[3] = 0;
+    pkt[4..6].copy_from_slice(&id.to_be_bytes());
+    pkt[6..8].copy_from_slice(&seq.to_be_bytes());
+    let copy_len = (total_len - 8).min(data.len());
+    pkt[8..8 + copy_len].copy_from_slice(&data[..copy_len]);
+
+    let src = local_ipv6();
+    let csum = ipv6_pseudo_checksum(&src.0, &dst.0, 58, &pkt[..total_len]);
+    pkt[2..4].copy_from_slice(&csum.to_be_bytes());
+
+    send_ipv6(dst, 58, &pkt[..total_len])
 }
 
 /// IPv4 veya IPv6 adres kapsayıcısı.
@@ -1589,19 +1747,77 @@ fn handle_ipv6(payload: &[u8]) {
     let mut dst = [0u8; 16];
     src.copy_from_slice(&payload[8..24]);
     dst.copy_from_slice(&payload[24..40]);
-    let _src_ip = Ipv6Address(src);
+    let src_ip = Ipv6Address(src);
     let _dst_ip = Ipv6Address(dst);
 
     // ICMPv6 (58), TCP (6), UDP (17)
     match next_header {
         58 => {
             // ICMPv6 paketi
+            if payload.len() >= 48 {
+                let icmp = &payload[40..];
+                let icmp_type = icmp[0];
+                if icmp_type == ICMPV6_TYPE_ECHO_REQUEST {
+                    // ICMPv6 Echo Reply (Type 129, Code 0)
+                    let mut reply = [0u8; 1400];
+                    let icmp_len = (payload.len() - 40).min(reply.len());
+                    reply[..icmp_len].copy_from_slice(&icmp[..icmp_len]);
+                    reply[0] = ICMPV6_TYPE_ECHO_REPLY;
+                    reply[1] = 0;
+                    reply[2] = 0; // Checksum sıfırla
+                    reply[3] = 0;
+                    let local = local_ipv6();
+                    let csum = ipv6_pseudo_checksum(&local.0, &src, 58, &reply[..icmp_len]);
+                    reply[2] = (csum >> 8) as u8;
+                    reply[3] = (csum & 0xFF) as u8;
+                    send_ipv6(src_ip, 58, &reply[..icmp_len]);
+                } else if icmp_type == ICMPV6_TYPE_NEIGHBOR_SOLICIT {
+                    // Neighbor Advertisement (Type 136)
+                    let icmp_len = payload.len() - 40;
+                    if icmp_len >= 24 {
+                        let target_ip = &icmp[8..24];
+                        let mut na = [0u8; 32];
+                        na[0] = ICMPV6_TYPE_NEIGHBOR_ADVERT;
+                        na[1] = 0;
+                        na[2] = 0;
+                        na[3] = 0;
+                        na[4] = 0x60; // Flags: Solicited (0x40) | Override (0x20)
+                        na[8..24].copy_from_slice(target_ip);
+                        na[24] = 2; // Option 2: Target Link-Layer Address
+                        na[25] = 1; // Length: 8 bytes (1 unit of 8 octets)
+                        na[26..32].copy_from_slice(&local_mac().0);
+
+                        let local = local_ipv6();
+                        let csum = ipv6_pseudo_checksum(&local.0, &src, 58, &na[..32]);
+                        na[2] = (csum >> 8) as u8;
+                        na[3] = (csum & 0xFF) as u8;
+                        send_ipv6(src_ip, 58, &na[..32]);
+                    }
+                }
+            }
         }
         6 => {
-            // TCP over IPv6
+            // TCP over IPv6: TCP segmenti 40. ofsetten başlar
+            if payload.len() >= 60 {
+                // TODO: TCP port ve segment eşleme
+            }
         }
         17 => {
-            // UDP over IPv6
+            // UDP over IPv6: UDP başlığı 8 bayt
+            if payload.len() >= 48 {
+                let src_port = u16::from_be_bytes([payload[40], payload[41]]);
+                let dst_port = u16::from_be_bytes([payload[42], payload[43]]);
+                let ulen = u16::from_be_bytes([payload[44], payload[45]]) as usize;
+                if ulen >= 8 && 40 + ulen <= payload.len() {
+                    let udata = &payload[48..40 + ulen];
+                    crate::drivers::socket::on_udp_datagram(
+                        Ipv4Address([127, 0, 0, 1]),
+                        src_port,
+                        dst_port,
+                        udata,
+                    );
+                }
+            }
         }
         _ => {}
     }

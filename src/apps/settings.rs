@@ -131,10 +131,19 @@ fn render_device_inventory(
     draw(&line, Color::ACCENT_YELLOW);
 
     let mut line = DeviceLine::new();
+    let is_virtio = crate::drivers::virtio_gpu::is_detected();
     line.push(if english {
-        "Display: Limine framebuffer | "
+        if is_virtio {
+            "Display: VirtIO-GPU (Default 2D Acceleration) | "
+        } else {
+            "Display: Limine framebuffer | "
+        }
     } else {
-        "Ekran: Limine framebuffer | "
+        if is_virtio {
+            "Ekran: VirtIO-GPU (Varsayılan 2D Hızlandırma) | "
+        } else {
+            "Ekran: Limine framebuffer | "
+        }
     });
     line.number(fb_width as u64);
     line.push("x");

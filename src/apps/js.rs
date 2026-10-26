@@ -143,12 +143,93 @@ impl JsDocumentRef {
     }
 }
 
+// ── JS Değer ve Fonksiyon Tipleri ──────────────────────────────────
+
+/// minJs içinde dinamik olarak temsil edilen değer tipleri.
+#[derive(Clone, Debug, PartialEq)]
+pub enum JsValue {
+    Undefined,
+    Null,
+    Bool(bool),
+    Number(i64),
+    String(String),
+    Array(Vec<JsValue>),
+    Object(BTreeMap<String, JsValue>),
+}
+
+impl JsValue {
+    pub fn to_str(&self) -> String {
+        match self {
+            JsValue::Undefined => String::from("undefined"),
+            JsValue::Null => String::from("null"),
+            JsValue::Bool(b) => if *b { String::from("true") } else { String::from("false") },
+            JsValue::Number(n) => n.to_string(),
+            JsValue::String(s) => s.clone(),
+            JsValue::Array(items) => {
+                let mut res = String::new();
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        res.push(',');
+                    }
+                    res.push_str(&item.to_str());
+                }
+                res
+            }
+            JsValue::Object(map) => {
+                let mut res = String::from("{");
+                for (i, (k, v)) in map.iter().enumerate() {
+                    if i > 0 {
+                        res.push_str(", ");
+                    }
+                    res.push_str(k);
+                    res.push_str(": ");
+                    res.push_str(&v.to_str());
+                }
+                res.push('}');
+                res
+            }
+        }
+    }
+
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            JsValue::Undefined | JsValue::Null => false,
+            JsValue::Bool(b) => *b,
+            JsValue::Number(n) => *n != 0,
+            JsValue::String(s) => !s.is_empty(),
+            JsValue::Array(_) | JsValue::Object(_) => true,
+        }
+    }
+}
+
+/// Kullanıcı tarafından tanımlanan fonksiyon.
+#[derive(Clone, Debug)]
+pub struct JsFunction {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: String,
+}
+
+/// Kayıtlı olay dinleyicisi (addEventListener).
+#[derive(Clone, Debug)]
+pub struct EventListener {
+    pub target: String,
+    pub event_type: String,
+    pub handler: String,
+}
+
 // Sayfa boyunca süren JS durumu: değişkenler ve konsol çıktısı.
+#[derive(Clone)]
 pub struct JsRuntime {
     pub vars: Vec<(String, String)>,
+    pub values: BTreeMap<String, JsValue>,
+    pub functions: BTreeMap<String, JsFunction>,
+    pub listeners: Vec<EventListener>,
     pub logs: Vec<String>,
     /// Son `if` koşulunun sonucu (`else` dalı için).
     last_cond: bool,
+    /// Son fonksiyon `return` değeri.
+    pub last_return: Option<JsValue>,
     /// Bağlı doc referansı (tarayıcı tarafından ayarlanır)
     doc: Option<JsDocumentRef>,
 }
@@ -157,8 +238,12 @@ impl JsRuntime {
     pub fn new() -> Self {
         Self {
             vars: Vec::new(),
+            values: BTreeMap::new(),
+            functions: BTreeMap::new(),
+            listeners: Vec::new(),
             logs: Vec::new(),
             last_cond: false,
+            last_return: None,
             doc: None,
         }
     }
@@ -167,23 +252,273 @@ impl JsRuntime {
         self.doc = Some(doc);
     }
 
-    fn var_get(&self, name: &str) -> Option<&str> {
+    pub fn var_get(&self, name: &str) -> Option<&str> {
         self.vars
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
     }
 
-    fn var_set(&mut self, name: &str, value: String) {
-        if let Some(entry) = self.vars.iter_mut().find(|(k, _)| k == name) {
-            entry.1 = value;
-        } else {
-            self.vars.push((String::from(name), value));
-        }
+    pub fn val_get(&self, name: &str) -> Option<&JsValue> {
+        self.values.get(name)
     }
 
-    /// String birleştirmeyi çözer: `"a" + x + 3`
-    fn eval_expr(&self, expr: &str) -> String {
+    pub fn var_set(&mut self, name: &str, value: String) {
+        let val = self.eval_val(&value);
+        self.var_set_val(name, val);
+    }
+
+    pub fn var_set_val(&mut self, name: &str, val: JsValue) {
+        let s = val.to_str();
+        if let Some(entry) = self.vars.iter_mut().find(|(k, _)| k == name) {
+            entry.1 = s;
+        } else {
+            self.vars.push((String::from(name), s));
+        }
+        self.values.insert(String::from(name), val);
+    }
+
+    pub fn define_function(&mut self, name: &str, params: Vec<String>, body: &str) {
+        self.functions.insert(
+            String::from(name),
+            JsFunction {
+                name: String::from(name),
+                params,
+                body: String::from(body),
+            },
+        );
+    }
+
+    pub fn call_function(&mut self, name: &str, args: &[JsValue], out: &mut Vec<u8>) -> JsValue {
+        let func = match self.functions.get(name).cloned() {
+            Some(f) => f,
+            None => return JsValue::Undefined,
+        };
+        let old_values = self.values.clone();
+        for (i, param) in func.params.iter().enumerate() {
+            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+            self.var_set_val(param, val);
+        }
+        self.last_return = None;
+        for stmt in split_statements(&func.body) {
+            self.exec(&stmt, out);
+            if self.last_return.is_some() {
+                break;
+            }
+        }
+        let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+        for param in &func.params {
+            if let Some(prev) = old_values.get(param) {
+                self.var_set_val(param, prev.clone());
+            } else {
+                self.values.remove(param);
+                self.vars.retain(|(k, _)| k != param);
+            }
+        }
+        ret
+    }
+
+    pub fn call_function_pure(&self, name: &str, args: &[JsValue]) -> JsValue {
+        let mut sub = self.clone();
+        let mut dummy = Vec::new();
+        sub.call_function(name, args, &mut dummy)
+    }
+
+    pub fn add_event_listener(&mut self, target: &str, event_type: &str, handler: &str) {
+        let clean_target = target.trim().trim_matches(|c| c == '\'' || c == '"');
+        let clean_event = event_type.trim().trim_matches(|c| c == '\'' || c == '"');
+        self.listeners.push(EventListener {
+            target: String::from(clean_target),
+            event_type: String::from(clean_event),
+            handler: String::from(handler.trim()),
+        });
+    }
+
+    pub fn dispatch_event(&mut self, target: &str, event_type: &str, out: &mut Vec<u8>) -> bool {
+        let clean_target = target.trim().trim_matches(|c| c == '\'' || c == '"');
+        let clean_event = event_type.trim().trim_matches(|c| c == '\'' || c == '"');
+        let matching: Vec<String> = self
+            .listeners
+            .iter()
+            .filter(|l| {
+                (l.target == clean_target
+                    || l.target == "window"
+                    || l.target == "document"
+                    || clean_target.is_empty())
+                    && l.event_type.eq_ignore_ascii_case(clean_event)
+            })
+            .map(|l| l.handler.clone())
+            .collect();
+
+        if matching.is_empty() {
+            return false;
+        }
+
+        for handler in matching {
+            let h = handler.trim();
+            if self.functions.contains_key(h) {
+                let _ = self.call_function(h, &[], out);
+            } else {
+                self.run(h, out);
+            }
+        }
+        true
+    }
+
+    /// İfadeleri `JsValue` olarak değerlendirir.
+    pub fn eval_val(&self, expr: &str) -> JsValue {
+        let e = expr
+            .trim()
+            .trim_end_matches(|c| c == ';' || c == '\n' || c == '\r')
+            .trim();
+        if e.is_empty() {
+            return JsValue::Undefined;
+        }
+
+        // Top-level '+' toplama veya string birleştirme kontrolü
+        if let Some(plus_idx) = find_top_level_char(e.as_bytes(), '+') {
+            let lhs = self.eval_val(&e[..plus_idx]);
+            let rhs = self.eval_val(&e[plus_idx + 1..]);
+            if let (JsValue::Number(a), JsValue::Number(b)) = (&lhs, &rhs) {
+                return JsValue::Number(a + b);
+            }
+            let mut s = lhs.to_str();
+            s.push_str(&rhs.to_str());
+            return JsValue::String(s);
+        }
+
+        // Dizi literali: [1, 2, 3]
+        if e.starts_with('[') && e.ends_with(']') && e.len() >= 2 {
+            let inner = &e[1..e.len() - 1].trim();
+            if inner.is_empty() {
+                return JsValue::Array(Vec::new());
+            }
+            let items: Vec<JsValue> = split_top_level_comma(inner)
+                .into_iter()
+                .map(|s| self.eval_val(s))
+                .collect();
+            return JsValue::Array(items);
+        }
+
+        // Nesne literali: { a: 1, b: "x" }
+        if e.starts_with('{') && e.ends_with('}') && e.len() >= 2 {
+            let inner = &e[1..e.len() - 1].trim();
+            let mut map = BTreeMap::new();
+            if !inner.is_empty() {
+                for pair in split_top_level_comma(inner) {
+                    if let Some(colon) = find_top_level_char(pair.as_bytes(), ':') {
+                        let k = pair[..colon].trim().trim_matches(|c| c == '\'' || c == '"');
+                        let v = self.eval_val(&pair[colon + 1..]);
+                        map.insert(String::from(k), v);
+                    }
+                }
+            }
+            return JsValue::Object(map);
+        }
+
+        // String literali
+        if (e.starts_with('"') && e.ends_with('"') && e.len() >= 2)
+            || (e.starts_with('\'') && e.ends_with('\'') && e.len() >= 2)
+            || (e.starts_with('`') && e.ends_with('`') && e.len() >= 2)
+        {
+            return JsValue::String(String::from(&e[1..e.len() - 1]));
+        }
+
+        // Temel literaller
+        if e == "true" {
+            return JsValue::Bool(true);
+        }
+        if e == "false" {
+            return JsValue::Bool(false);
+        }
+        if e == "null" {
+            return JsValue::Null;
+        }
+        if e == "undefined" {
+            return JsValue::Undefined;
+        }
+
+        // Tamsayı
+        if let Ok(n) = e.parse::<i64>() {
+            return JsValue::Number(n);
+        }
+
+        // Dizi/Nesne erişimi: expr[index]
+        if let Some(open_br) = e.find('[') {
+            if e.ends_with(']') {
+                let base_str = &e[..open_br];
+                let idx_str = &e[open_br + 1..e.len() - 1];
+                let base_val = self.eval_val(base_str);
+                let idx_val = self.eval_val(idx_str);
+                match base_val {
+                    JsValue::Array(items) => {
+                        let idx = match idx_val {
+                            JsValue::Number(n) => n as usize,
+                            _ => idx_val.to_str().trim().parse().unwrap_or(0),
+                        };
+                        return items.get(idx).cloned().unwrap_or(JsValue::Undefined);
+                    }
+                    JsValue::Object(map) => {
+                        let key = idx_val.to_str();
+                        return map.get(&key).cloned().unwrap_or(JsValue::Undefined);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Özellik erişimi: obj.prop veya arr.length
+        if let Some((lhs, rhs)) = e.split_once('.') {
+            if !lhs.contains(' ') && !rhs.contains(' ') && !lhs.is_empty() && !rhs.is_empty() {
+                let base_val = self.eval_val(lhs);
+                match base_val {
+                    JsValue::Array(items) => {
+                        if rhs == "length" {
+                            return JsValue::Number(items.len() as i64);
+                        }
+                    }
+                    JsValue::String(s) => {
+                        if rhs == "length" {
+                            return JsValue::Number(s.len() as i64);
+                        }
+                    }
+                    JsValue::Object(map) => {
+                        return map.get(rhs).cloned().unwrap_or(JsValue::Undefined);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Fonksiyon çağrısı: fname(args)
+        if let Some(open) = e.find('(') {
+            if e.ends_with(')') {
+                let fname = e[..open].trim();
+                if self.functions.contains_key(fname) {
+                    let arg_str = &e[open + 1..e.len() - 1];
+                    let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                        .into_iter()
+                        .map(|a| self.eval_val(a))
+                        .collect();
+                    return self.call_function_pure(fname, &args);
+                }
+            }
+        }
+
+        // Değişken tablosundan okuma
+        if let Some(v) = self.values.get(e) {
+            return v.clone();
+        }
+        if let Some(v) = self.var_get(e) {
+            return JsValue::String(String::from(v));
+        }
+
+        // Eski geri uyumluluk: eval_expr mantığı
+        JsValue::String(self.eval_expr_legacy(e))
+    }
+
+    /// String birleştirmeyi çözer (eski eval_expr mantığı ile tam uyumlu).
+    fn eval_expr_legacy(&self, expr: &str) -> String {
         let b = expr.as_bytes();
         let mut i = 0usize;
         let mut res = String::new();
@@ -225,14 +560,34 @@ impl JsRuntime {
                 }
                 let name = &expr[start..i];
                 if name.contains('.') {
-                    // Özellik erişimi okuma yönünde desteklenmiyor: dur.
-                    break;
+                    // Özellik erişimi
+                    if let Some((obj_name, prop)) = name.split_once('.') {
+                        if let Some(val) = self.values.get(obj_name) {
+                            match val {
+                                JsValue::Array(items) if prop == "length" => {
+                                    res.push_str(&items.len().to_string());
+                                }
+                                JsValue::String(s) if prop == "length" => {
+                                    res.push_str(&s.len().to_string());
+                                }
+                                JsValue::Object(map) => {
+                                    if let Some(prop_val) = map.get(prop) {
+                                        res.push_str(&prop_val.to_str());
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    continue;
                 }
                 match name {
                     "true" => res.push_str("true"),
                     "false" | "null" | "undefined" => {}
                     _ => {
-                        if let Some(v) = self.var_get(name) {
+                        if let Some(v) = self.values.get(name) {
+                            res.push_str(&v.to_str());
+                        } else if let Some(v) = self.var_get(name) {
                             res.push_str(v);
                         } else if name.bytes().all(|c| c.is_ascii_digit()) {
                             res.push_str(name);
@@ -241,10 +596,14 @@ impl JsRuntime {
                 }
                 continue;
             }
-            // Bilinmeyen token: ayrıştırmayı durdur.
             break;
         }
         res
+    }
+
+    /// String birleştirmeyi çözer: `"a" + x + 3`
+    fn eval_expr(&self, expr: &str) -> String {
+        self.eval_val(expr).to_str()
     }
 
     /// Koşulu değerlendirir: `!`, `&&`, `||`, karşılaştırmalar ve doğruluk.
@@ -302,17 +661,173 @@ impl JsRuntime {
         s = s.trim_start_matches(|c| {
             c == '{' || c == '}' || c == ')' || c == ',' || c == ';' || c == '\n' || c == '\r'
         });
+        s = s.trim_end_matches(|c| c == ';' || c == '\n' || c == '\r');
         s = s.trim();
         if s.is_empty() {
             return;
         }
 
-        // Tanım gövdeleri çalıştırılmaz.
-        if keyword(s, "function").is_some()
-            || keyword(s, "class").is_some()
-            || keyword(s, "return").is_some()
-        {
+        // Fonksiyon tanımı: function name(arg1, arg2) { body }
+        if let Some(rest) = keyword(s, "function") {
+            let r = rest.trim_start();
+            if let Some(open) = r.find('(') {
+                let fname = r[..open].trim();
+                if let Some((param_str, after_params)) = call_args(r, open) {
+                    let body_part = r[after_params..].trim_start();
+                    if let Some(body) = extract_block(body_part) {
+                        let params = split_top_level_comma(param_str)
+                            .into_iter()
+                            .map(|p| p.trim().to_string())
+                            .filter(|p| !p.is_empty())
+                            .collect();
+                        self.define_function(fname, params, body);
+                        return;
+                    }
+                }
+            }
             return;
+        }
+
+        // return deyimi
+        if let Some(rest) = keyword(s, "return") {
+            let val = self.eval_val(rest.trim());
+            self.last_return = Some(val);
+            return;
+        }
+
+        if keyword(s, "class").is_some() {
+            return;
+        }
+
+        // Olay dinleyici ekleme: target.addEventListener("click", handler)
+        if let Some(pos) = s.find("addEventListener(") {
+            let target = if pos > 0 && s.as_bytes()[pos - 1] == b'.' {
+                s[..pos - 1].trim()
+            } else {
+                "window"
+            };
+            let call_slice = &s[pos + "addEventListener".len()..];
+            if let Some((args_str, _)) = call_args(call_slice, 0) {
+                let parts = split_top_level_comma(args_str);
+                if parts.len() >= 2 {
+                    let ev_type = self.eval_expr(parts[0]);
+                    let handler_arg = parts[1].trim();
+                    if let Some(rest) = keyword(handler_arg, "function") {
+                        let anon_name = format!("__anon_evt_{}", self.listeners.len());
+                        let r = rest.trim_start();
+                        if let Some(open) = r.find('(') {
+                            if let Some((pstr, after_p)) = call_args(r, open) {
+                                let bpart = r[after_p..].trim_start();
+                                if let Some(b) = extract_block(bpart) {
+                                    let params = split_top_level_comma(pstr)
+                                        .into_iter()
+                                        .map(|p| p.trim().to_string())
+                                        .filter(|p| !p.is_empty())
+                                        .collect();
+                                    self.define_function(&anon_name, params, b);
+                                    self.add_event_listener(target, &ev_type, &anon_name);
+                                    return;
+                                }
+                            }
+                        }
+                    } else {
+                        let handler_name = handler_arg.trim_matches(|c| c == '\'' || c == '"');
+                        self.add_event_listener(target, &ev_type, handler_name);
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+
+        // Dizi push: arr.push(val)
+        if let Some(dot_push) = s.find(".push(") {
+            let var_name = s[..dot_push].trim();
+            if !var_name.contains(' ') {
+                if let Some((args_str, _)) = call_args(&s[dot_push + 5..], 0) {
+                    let val = self.eval_val(args_str.trim());
+                    if let Some(existing) = self.values.get_mut(var_name) {
+                        if let JsValue::Array(ref mut items) = existing {
+                            items.push(val);
+                            let new_str = existing.to_str();
+                            if let Some(v_entry) = self.vars.iter_mut().find(|(k, _)| k == var_name)
+                            {
+                                v_entry.1 = new_str;
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Dizi indeks ataması: arr[idx] = val
+        if let Some(open_br) = s.find('[') {
+            if let Some(close_br) = s[open_br..].find(']') {
+                let close_br = open_br + close_br;
+                let after = s[close_br + 1..].trim_start();
+                if let Some(eq) = after.strip_prefix('=') {
+                    if !eq.trim_start().starts_with('=') {
+                        let var_name = s[..open_br].trim();
+                        let idx_str = &s[open_br + 1..close_br];
+                        let evaluated_idx = self.eval_expr(idx_str);
+                        let val = self.eval_val(eq.trim());
+                        if let Some(existing) = self.values.get_mut(var_name) {
+                            match existing {
+                                JsValue::Array(ref mut items) => {
+                                    let idx: usize = evaluated_idx.trim().parse().unwrap_or(0);
+                                    if idx < items.len() {
+                                        items[idx] = val;
+                                    } else if idx == items.len() {
+                                        items.push(val);
+                                    }
+                                }
+                                JsValue::Object(ref mut map) => {
+                                    map.insert(evaluated_idx, val);
+                                }
+                                _ => {}
+                            }
+                            let new_str = existing.to_str();
+                            if let Some(v_entry) = self.vars.iter_mut().find(|(k, _)| k == var_name)
+                            {
+                                v_entry.1 = new_str;
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Nesne özellik ataması: obj.prop = val
+        if let Some(eq_pos) = s.find('=') {
+            if !s[eq_pos + 1..].trim_start().starts_with('=') {
+                let lhs = s[..eq_pos].trim();
+                let rhs = s[eq_pos + 1..].trim();
+                if let Some((obj_name, prop)) = lhs.split_once('.') {
+                    if !obj_name.contains(' ')
+                        && !prop.contains(' ')
+                        && !obj_name.is_empty()
+                        && !prop.is_empty()
+                        && !obj_name.starts_with("document.")
+                        && !obj_name.starts_with("element.")
+                    {
+                        let val = self.eval_val(rhs);
+                        if let Some(existing) = self.values.get_mut(obj_name) {
+                            if let JsValue::Object(ref mut map) = existing {
+                                map.insert(String::from(prop), val);
+                                let new_str = existing.to_str();
+                                if let Some(v_entry) =
+                                    self.vars.iter_mut().find(|(k, _)| k == obj_name)
+                                {
+                                    v_entry.1 = new_str;
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // if / while / for — tek gövde, basit döngü taklidi
@@ -339,6 +854,21 @@ impl JsRuntime {
         }
         if keyword(s, "do").is_some() {
             return;
+        }
+
+        // Kullanıcı tanımlı fonksiyon çağrısı: fname(args)
+        if let Some(open) = s.find('(') {
+            let fname = s[..open].trim();
+            if self.functions.contains_key(fname) && s.ends_with(')') {
+                if let Some((arg_str, _)) = call_args(s, open) {
+                    let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                        .into_iter()
+                        .map(|a| self.eval_val(a.trim()))
+                        .collect();
+                    let _ = self.call_function(fname, &args, out);
+                    return;
+                }
+            }
         }
 
         // Bilinen çağrılar
@@ -415,9 +945,6 @@ impl JsRuntime {
                     }
                 } else if name == "element.innerHTML" {
                     // innerHTML = değer (atama)
-                    // Bu basit implementasyonda alt metot olarak ele alınabilir
-                    // Dokunun sonundan değer okunabilir, ayarlanabilir
-                    // Gerçek uygulamada stack üzerinden eleman ve değer yönetilmeli
                     out.extend_from_slice(b"null"); // Placeholder
                 } else if name == "element.textContent" {
                     out.extend_from_slice(b"null"); // Placeholder
@@ -455,8 +982,8 @@ impl JsRuntime {
                 if !eq.trim_start().starts_with('=') {
                     let name = &rest[..n];
                     if !name.contains('.') {
-                        let value = self.eval_expr(eq);
-                        self.var_set(name, value);
+                        let value = self.eval_val(eq);
+                        self.var_set_val(name, value);
                         return;
                     }
                 }
@@ -674,6 +1201,90 @@ fn call_args(s: &str, open_idx: usize) -> Option<(&str, usize)> {
     let rest = s[open_idx + 1..]
         .trim_end_matches(|c| c == ')' || c == '}' || c == ';' || c == '\n' || c == '\r');
     Some((rest, b.len()))
+}
+
+/// En üst düzey süslü parantez `{ ... }` bloğunu ayıklar.
+fn extract_block(s: &str) -> Option<&str> {
+    let s = s.trim_start();
+    if !s.starts_with('{') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for i in 0..b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' && i + 1 < b.len() {
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&s[1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parantez ve dize dışındaki en üst düzey virgüllerden (`c = ','`) böler.
+fn split_top_level_comma(s: &str) -> Vec<&str> {
+    let mut res = Vec::new();
+    let b = s.as_bytes();
+    let mut start = 0;
+    let mut depth_paren = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut depth_brace = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' && i + 1 < b.len() {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b'(' => depth_paren += 1,
+            b')' => depth_paren -= 1,
+            b'[' => depth_bracket += 1,
+            b']' => depth_bracket -= 1,
+            b'{' => depth_brace += 1,
+            b'}' => depth_brace -= 1,
+            b',' if depth_paren == 0 && depth_bracket == 0 && depth_brace == 0 => {
+                let piece = s[start..i].trim();
+                if !piece.is_empty() {
+                    res.push(piece);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let tail = s[start..].trim();
+    if !tail.is_empty() {
+        res.push(tail);
+    }
+    res
 }
 
 const CALLS: [&str; 20] = [
@@ -982,5 +1593,83 @@ mod tests {
         let out = inline_scripts(html.as_bytes());
         let result = String::from_utf8_lossy(&out);
         assert!(result.contains("Değer") || result.is_empty());
+    }
+
+    #[test]
+    fn function_definition_and_execution() {
+        let code = r#"
+            function add(a, b) {
+                return a + b;
+            }
+            document.write("Toplam: " + add(15, 25));
+        "#;
+        assert_eq!(render(code), "Toplam: 40");
+
+        let code_side_effect = r#"
+            function greet(name) {
+                document.write("Selam " + name + "! ");
+            }
+            greet("minOs");
+            greet("Sarman");
+        "#;
+        assert_eq!(render(code_side_effect), "Selam minOs! Selam Sarman! ");
+    }
+
+    #[test]
+    fn arrays_literal_indexing_and_length() {
+        let code = r#"
+            var arr = [10, 20, 30];
+            document.write(arr[1] + " len=" + arr.length);
+        "#;
+        assert_eq!(render(code), "20 len=3");
+    }
+
+    #[test]
+    fn array_push_and_mutation() {
+        let code = r#"
+            var list = [1, 2];
+            list.push(3);
+            list[0] = 99;
+            document.write(list[0] + "," + list[1] + "," + list[2] + " len=" + list.length);
+        "#;
+        assert_eq!(render(code), "99,2,3 len=3");
+    }
+
+    #[test]
+    fn objects_literal_and_properties() {
+        let code = r#"
+            var user = { name: "minOs", ver: 2 };
+            document.write(user.name + " v" + user.ver);
+        "#;
+        assert_eq!(render(code), "minOs v2");
+
+        let code_mutation = r#"
+            var obj = { x: 1 };
+            obj.x = 42;
+            document.write(obj.x);
+        "#;
+        assert_eq!(render(code_mutation), "42");
+    }
+
+    #[test]
+    fn add_event_listener_and_dispatch() {
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        let code = r#"
+            function onBtnClick() {
+                document.write("Dugme tiklandi!");
+            }
+            document.addEventListener("click", onBtnClick);
+        "#;
+        rt.run(code, &mut out);
+        assert_eq!(rt.listeners.len(), 1);
+        assert_eq!(rt.listeners[0].target, "document");
+        assert_eq!(rt.listeners[0].event_type, "click");
+        assert_eq!(rt.listeners[0].handler, "onBtnClick");
+
+        // Olay tetikleme
+        let fired = rt.dispatch_event("document", "click", &mut out);
+        assert!(fired);
+        assert_eq!(String::from_utf8_lossy(&out), "Dugme tiklandi!");
     }
 }

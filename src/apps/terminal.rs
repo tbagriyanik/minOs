@@ -76,6 +76,22 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "head",
     "tail",
     "tee",
+    "dir",
+    "cls",
+    "type",
+    "md",
+    "rd",
+    "del",
+    "copy",
+    "move",
+    "mv",
+    "ren",
+    "edit",
+    "which",
+    "where",
+    "ver",
+    "set",
+    "exit",
 ];
 const COMPLETION_APPS: &[&str] = &[
     "files",
@@ -149,6 +165,94 @@ fn app_name(index: usize) -> &'static str {
         (14, true) => "Control Panel",
         _ => "Package Manager",
     }
+}
+
+/// Farkli kabuk geleneklerinden gelen komut adini tek bir kanonik ada esler.
+///
+/// CMD (Windows), Unix ve minOs adlari ayni komut isteminde birlikte
+/// kullanilabildigi icin (`dir`/`ls`, `cls`/`clear`, `type`/`cat`, `del`/`rm` ...)
+/// yurutmeden once bu tablo uygulanir.
+fn canonical_command(cmd: &str) -> &'static str {
+    const ALIASES: &[(&str, &str)] = &[
+        ("dir", "ls"),
+        ("cls", "clear"),
+        ("type", "cat"),
+        ("md", "mkdir"),
+        ("rd", "rm"),
+        ("rmdir", "rm"),
+        ("del", "rm"),
+        ("erase", "rm"),
+        ("copy", "cp"),
+        ("move", "mv"),
+        ("ren", "rename"),
+        ("chdir", "cd"),
+        ("cwd", "pwd"),
+        ("which", "where"),
+        ("ipconfig", "ipconfig"),
+        ("cat", "cat"),
+        ("mkdir", "mkdir"),
+        ("rm", "rm"),
+        ("cp", "cp"),
+        ("mv", "mv"),
+        ("rename", "rename"),
+        ("ls", "ls"),
+        ("clear", "clear"),
+        ("cd", "cd"),
+        ("pwd", "pwd"),
+    ];
+    for (alias, target) in ALIASES.iter().copied() {
+        if cmd.eq_ignore_ascii_case(alias) {
+            return target;
+        }
+    }
+    let bytes = cmd.as_bytes();
+    for candidate in COMPLETION_COMMANDS.iter().copied() {
+        if candidate.as_bytes().eq_ignore_ascii_case(bytes) {
+            return candidate;
+        }
+    }
+    // "minPak" gibi karisik buyuk/kucuk harfli komutlar icin referans kimligi
+    // kullanilir; cagiran taraf esitlik karsilastirmasini ASCII-duyarsiz yapar.
+    for candidate in COMPLETION_COMMANDS.iter().copied() {
+        if candidate == cmd {
+            return candidate;
+        }
+    }
+    ""
+}
+
+/// Kabuk satirini bosluklardan ayirir, tirnakli parcalari tek arguman sayar.
+fn split_args(text: &str) -> alloc::vec::Vec<alloc::string::String> {
+    let mut args = alloc::vec::Vec::new();
+    let mut current = alloc::string::String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in text.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch == ' ' || ch == '\t' => {
+                if !current.is_empty() {
+                    args.push(core::mem::take(&mut current));
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
 }
 
 fn parse_ipv4(text: &str) -> Option<[u8; 4]> {
@@ -338,6 +442,11 @@ pub struct TerminalApp {
     capture: Option<alloc::vec::Vec<(alloc::string::String, u32)>>,
     /// Boru hattından gelen standart girdi.
     stdin: Option<alloc::string::String>,
+    /// `edit`/`start` ile duzenlemek uzere acilmasi istenen dosya yolu.
+    open_request: Option<alloc::string::String>,
+    /// Boru hattındaki ilk komutun gercek adi (duyarlı hata iletileri icin).
+    invoked: [u8; 32],
+    invoked_len: usize,
 }
 
 impl TerminalApp {
@@ -363,6 +472,9 @@ impl TerminalApp {
             cwd_len: 1,
             capture: None,
             stdin: None,
+            open_request: None,
+            invoked: [0; 32],
+            invoked_len: 0,
         };
         app.cwd[0] = b'/';
         app
@@ -660,6 +772,65 @@ impl TerminalApp {
         text
     }
 
+    /// `edit <dosya>` gibi bir istekte bulunulan dosyayı (yolu mutlak) döndür.
+    pub fn take_open_request(&mut self) -> Option<alloc::string::String> {
+        self.open_request.take()
+    }
+
+    /// Verilen yolu uygun uygulamayla açar; metin dosyasında Not Defteri,
+    /// diğerlerinde Web Gezgini kullanılır. Hata durumunda terminale yazar.
+    fn launch_path(&mut self, cmd: &str, path_arg: &str) {
+        let path = self.resolve_path(path_arg);
+        let ext = path
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let is_text = matches!(
+            ext.as_str(),
+            "txt"
+                | "md"
+                | "rs"
+                | "c"
+                | "h"
+                | "cpp"
+                | "js"
+                | "json"
+                | "toml"
+                | "ini"
+                | "cfg"
+                | "log"
+                | "csv"
+                | "html"
+                | "htm"
+                | "css"
+                | "sh"
+                | "bat"
+                | "mlc"
+        );
+        let app_idx = if is_text || cmd == "edit" { 2 } else { 3 };
+        self.open_request = Some(path);
+        let mut msg = TextBuf::new();
+        msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
+        msg.push_str(app_name(app_idx));
+        msg.push_str("  ");
+        msg.push_str(path_arg);
+        self.push_line(msg.as_str(), Color::ACCENT_GREEN);
+    }
+
+    /// Argümandaki ilk yolu çözer; CMD'nin `/a` gibi anahtarlarını yok sayar.
+    fn first_path_arg(&mut self, arg: &str, usage: &str) -> Option<alloc::string::String> {
+        const SWITCHES: &[&str] = &["/a", "/b", "/s", "/q", "/f", "/d", "/y", "/w", "/p"];
+        for candidate in split_args(arg) {
+            if SWITCHES.iter().any(|s| s.eq_ignore_ascii_case(&candidate)) {
+                continue;
+            }
+            return Some(candidate);
+        }
+        self.push_line(usage, Color::ACCENT_YELLOW);
+        None
+    }
+
     /// Göreli bir yolu aktif çalışma dizinine göre çözer.
     fn resolve_path(&self, arg: &str) -> alloc::string::String {
         if arg.starts_with('/') {
@@ -791,16 +962,34 @@ impl TerminalApp {
             return None;
         }
         let mut parts = line.splitn(2, ' ');
-        let cmd = parts.next().unwrap_or("");
+        let typed = parts.next().unwrap_or("");
         let arg = parts.next().unwrap_or("").trim();
+        let alias = canonical_command(typed);
+        let cmd = if alias.is_empty() { typed } else { alias };
 
-        if cmd == "open" || cmd == "run" {
+        if cmd == "open" || cmd == "run" || cmd == "start" || cmd == "edit" {
+            // Dosya yolu verildiyse uygun uygulamayla ac (edit/start).
+            if app_index(arg).is_none()
+                && !arg.is_empty()
+                && !arg.contains(' ')
+                && (cmd == "edit" || cmd == "start")
+            {
+                self.launch_path(cmd, arg);
+                return None;
+            }
             if let Some(app_idx) = app_index(arg) {
                 let mut msg = TextBuf::new();
                 msg.push_str(crate::gui::ui_text("Açılıyor: ", "Opening: "));
                 msg.push_str(app_name(app_idx));
                 self.push_line(msg.as_str(), Color::ACCENT_GREEN);
                 return Some(app_idx);
+            }
+            if cmd == "edit" {
+                self.push_line(
+                    crate::gui::ui_text("Kullanım: edit <dosya>", "Usage: edit <file>"),
+                    Color::ACCENT_YELLOW,
+                );
+                return None;
             }
             self.push_line(
                 crate::gui::ui_text("Kullanım: open <uygulama>", "Usage: open <app>"),
@@ -815,6 +1004,12 @@ impl TerminalApp {
             self.push_line(msg.as_str(), Color::ACCENT_GREEN);
             return Some(app_idx);
         }
+
+        // Boru hatti/yonlendirmede hatalarin hangi komut adiyla olustugunu
+        // bilebilmek icin yazilan adi sakla.
+        let name: &[u8] = typed.as_bytes();
+        self.invoked_len = name.len().min(self.invoked.len());
+        self.invoked[..self.invoked_len].copy_from_slice(&name[..self.invoked_len]);
 
         match cmd {
             "help" => {
@@ -834,6 +1029,14 @@ impl TerminalApp {
                 );
                 self.push_line(
                     "filtreler: cat grep wc sort head tail tee",
+                    Color::ACCENT_YELLOW,
+                );
+                self.push_line(
+                    "karma (CMD/Unix): dir=ls  cls=clear  type=cat  md=mkdir  rd/del=rm",
+                    Color::ACCENT_YELLOW,
+                );
+                self.push_line(
+                    "  copy=cp  move=mv  ren <eski> <yeni>  edit <dosya>  where <komut>  ver  set",
                     Color::ACCENT_YELLOW,
                 );
                 self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
@@ -886,8 +1089,20 @@ impl TerminalApp {
                 }
             }
             "ls" => {
-                let target = if arg.is_empty() { self.cwd_str() } else { arg };
-                let items = vfs.list_dir(target);
+                // `dir /w`, `ls -l` gibi anahtarlar yok sayilir; ilk yol kullanilir.
+                let path_arg = if arg.is_empty() {
+                    None
+                } else {
+                    self.first_path_arg(
+                        arg,
+                        crate::gui::ui_text("Kullanım: ls [klasör]", "Usage: ls [dir]"),
+                    )
+                };
+                let target = match path_arg {
+                    Some(path) => self.resolve_path(&path),
+                    None => alloc::string::String::from(self.cwd_str()),
+                };
+                let items = vfs.list_dir(&target);
                 if items.is_empty() {
                     self.push_line(
                         crate::gui::ui_text("(boş dizin)", "(empty directory)"),
@@ -1872,6 +2087,24 @@ impl TerminalApp {
                 }
             }
             "cat" => {
+                // CMD `type /a dosya` ve `cat -n dosya` gibi anahtarlari yok say.
+                let arg = {
+                    let mut a = arg;
+                    while (a.starts_with('-') || a.starts_with('/'))
+                        && a.len() > 1
+                        && !a[1..].contains(' ')
+                    {
+                        let (flag, rest) = a.split_once(' ').unwrap_or((a, ""));
+                        if flag.len() > 3 {
+                            break;
+                        }
+                        a = rest.trim();
+                        if a.is_empty() {
+                            break;
+                        }
+                    }
+                    a
+                };
                 if arg.is_empty() {
                     if let Some(text) = self.stdin_text() {
                         for l in text.split('\n') {
@@ -2083,6 +2316,69 @@ impl TerminalApp {
                 }
                 let path = self.resolve_path(&file);
                 vfs.write_file(&path, text.as_bytes());
+            }
+            "cp" => self.run_copy_or_move(arg, vfs, false),
+            "mv" => self.run_copy_or_move(arg, vfs, true),
+            "rename" => {
+                let args = split_args(arg);
+                if args.len() != 2 {
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: ren <eski> <yeni>", "Usage: ren <old> <new>"),
+                        Color::ACCENT_YELLOW,
+                    );
+                } else {
+                    let from = self.resolve_path(&args[0]);
+                    let mut to = self.resolve_path(&args[1]);
+                    // `ren dosya yeni_ad` biciminde hedef ayni dizinde kalir.
+                    if !args[1].contains('/') && !args[1].contains('\\') {
+                        let parent = Self::parent_of(&from);
+                        to = alloc::format!("{}/{}", parent.trim_end_matches('/'), args[1]);
+                    }
+                    if vfs.rename(&from, &to) {
+                        let mut b = TextBuf::new();
+                        b.push_str(crate::gui::ui_text("Yeniden adlandırıldı: ", "Renamed: "));
+                        b.push_str(&args[1]);
+                        self.push_line(b.as_str(), Color::ACCENT_GREEN);
+                    } else {
+                        self.push_line(
+                            crate::gui::ui_text(
+                                "Yeniden adlandırılamadı.",
+                                "Rename failed.",
+                            ),
+                            Color::ACCENT_RED,
+                        );
+                    }
+                }
+            }
+            "where" => {
+                let name = unquote_shell(arg);
+                if name.is_empty() {
+                    self.push_line(
+                        crate::gui::ui_text("Kullanım: where <komut>", "Usage: where <command>"),
+                        Color::ACCENT_YELLOW,
+                    );
+                } else {
+                    self.run_where(&name, vfs);
+                }
+            }
+            "ver" => {
+                self.push_line(
+                    crate::gui::ui_text(
+                        "minOs 1.0 (MinShell 2.0 · karma kabuk)",
+                        "minOs 1.0 (MinShell 2.0 · hybrid shell)",
+                    ),
+                    Color::ACCENT_GREEN,
+                );
+            }
+            "set" => self.run_set(arg),
+            "exit" => {
+                self.push_line(
+                    crate::gui::ui_text(
+                        "Bu oturum kalıcıdır; pencereyi kapatmak için pencere düğmesini kullanın.",
+                        "This session is persistent; use the window button to close it.",
+                    ),
+                    Color::TEXT_MUTED,
+                );
             }
             "clear" => {
                 self.out_count = 0;
@@ -2746,6 +3042,181 @@ impl TerminalApp {
         None
     }
 
+    /// `cp`/`copy` ve `mv`/`move` komutlarini yurutur (kaynak... hedef).
+    fn run_copy_or_move(&mut self, arg: &str, vfs: &mut VirtualFileSystem, is_move: bool) {
+        const SWITCHES: &[&str] = &["/y", "/-y", "/s", "/q", "/f", "-r", "-f", "-v"];
+        let args: alloc::vec::Vec<alloc::string::String> = split_args(arg)
+            .into_iter()
+            .filter(|a| !SWITCHES.iter().any(|s| s.eq_ignore_ascii_case(a)))
+            .collect();
+        let name = if is_move { "mv" } else { "cp" };
+        if args.len() < 2 {
+            let mut usage = TextBuf::new();
+            usage.push_str("Kullanım: ");
+            usage.push_str(crate::gui::ui_text("cp <kaynak...> <hedef> | ", "cp <source...> <dest> | "));
+            usage.push_str(if is_move { "mv <kaynak> <hedef>" } else { "copy <kaynak> <hedef>" });
+            self.push_line(usage.as_str(), Color::ACCENT_YELLOW);
+            return;
+        }
+        let (last, sources) = args.split_last().expect("len >= 2");
+        let mut dest = self.resolve_path(last);
+        let dest_is_dir = vfs.is_dir(&dest) || sources.len() > 1;
+        if dest_is_dir && !dest.starts_with('/') {
+            dest = alloc::format!("/{}", dest);
+        }
+
+        for src in sources {
+            let from = self.resolve_path(src);
+            let mut target_dir = dest.clone();
+            let mut final_path: Option<alloc::string::String> = None;
+            if !vfs.is_dir(&target_dir) {
+                if sources.len() > 1 {
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Hedef klasor bulunamadi.",
+                            "Destination folder not found.",
+                        ),
+                        Color::ACCENT_RED,
+                    );
+                    continue;
+                }
+                // Tek kaynak + dosya hedefi: yeni ad olarak kullan.
+                if let Some(pos) = target_dir.rfind('/') {
+                    final_path = Some(target_dir.clone());
+                    target_dir = if pos == 0 {
+                        alloc::string::String::from("/")
+                    } else {
+                        alloc::string::String::from(&target_dir[..pos])
+                    };
+                } else {
+                    target_dir = alloc::string::String::from("/");
+                }
+            }
+            if !vfs.is_dir(&target_dir) {
+                self.push_line(
+                    crate::gui::ui_text(
+                        "Hedef klasor bulunamadi.",
+                        "Destination folder not found.",
+                    ),
+                    Color::ACCENT_RED,
+                );
+                continue;
+            }
+
+            let result = match vfs.copy_item(&from, &target_dir) {
+                Ok(path) => path,
+                Err(err) => {
+                    let mut b = TextBuf::new();
+                    b.push_str(name);
+                    b.push_str(": ");
+                    b.push_str(err);
+                    self.push_line(b.as_str(), Color::ACCENT_RED);
+                    continue;
+                }
+            };
+            let mut created = result.clone();
+            if let Some(want) = final_path.as_deref() {
+                if vfs.rename(&result, want) {
+                    created = alloc::string::String::from(want);
+                }
+            }
+            if is_move && !vfs.move_to_trash(&from) {
+                self.push_line(
+                    crate::gui::ui_text(
+                        "Kaynak silinemedi (kopya olustu).",
+                        "Could not remove source (copy kept).",
+                    ),
+                    Color::ACCENT_YELLOW,
+                );
+            }
+            let mut b = TextBuf::new();
+            b.push_str(if is_move {
+                crate::gui::ui_text("Taşındı: ", "Moved: ")
+            } else {
+                crate::gui::ui_text("Kopyalandı: ", "Copied: ")
+            });
+            b.push_str(&created);
+            self.push_line(b.as_str(), Color::ACCENT_GREEN);
+        }
+    }
+
+    /// `where`/`which`: komut yerlesik mi, degilse VFS'te calistirilabilir mi?
+    fn run_where(&mut self, name: &str, vfs: &VirtualFileSystem) {
+        let flag = crate::gui::ui_text("yerleşik", "built-in");
+        if !canonical_command(name).is_empty() || app_index(name).is_some() {
+            let mut b = TextBuf::new();
+            b.push_str(name);
+            b.push_str(": ");
+            b.push_str(flag);
+            self.push_line(b.as_str(), Color::ACCENT_GREEN);
+        }
+        let mut found = false;
+        for dir in ["/bin", "/usr/bin", "/system/bin"] {
+            let path = alloc::format!("{}/{}", dir, name);
+            if let Some(data) = vfs.read_file(&path) {
+                let mut b = TextBuf::new();
+                b.push_str(&path);
+                b.push_str("  (");
+                b.push_usize(data.len());
+                b.push_str(" B)");
+                self.push_line(b.as_str(), Color::ACCENT_BLUE);
+                found = true;
+            }
+        }
+        if !found && canonical_command(name).is_empty() && app_index(name).is_none() {
+            let mut b = TextBuf::new();
+            b.push_str("where: ");
+            b.push_str(name);
+            b.push_str(crate::gui::ui_text(" bulunamadi", " not found"));
+            self.push_line(b.as_str(), Color::ACCENT_YELLOW);
+        }
+    }
+
+    /// `set`: parametresiz cagrida ortam degiskenlerini listeler,
+    /// `set AD=deger` biciminde yalnizca onbellegi korur (kalici ortam yok).
+    fn run_set(&mut self, arg: &str) {
+        if arg.is_empty() {
+            let mut b = TextBuf::new();
+            b.push_str("PWD=");
+            b.push_str(self.cwd_str());
+            self.push_line(b.as_str(), Color::TEXT_MAIN);
+            self.push_line(
+                crate::gui::ui_text(
+                    "SHELL=MinShell  TERM=minOs  HOME=/root/Documents",
+                    "SHELL=MinShell  TERM=minOs  HOME=/root/Documents",
+                ),
+                Color::TEXT_MAIN,
+            );
+            let mut lang = TextBuf::new();
+            lang.push_str("LANG=");
+            lang.push_str(if crate::gui::ui_english() { "en" } else { "tr" });
+            self.push_line(lang.as_str(), Color::TEXT_MAIN);
+            return;
+        }
+        if arg.contains('=') {
+            self.push_line(
+                crate::gui::ui_text(
+                    "Ortam değişkenleri bu oturumda kalıcı ortam olarak saklanmaz.",
+                    "Environment variables are not persisted in this session.",
+                ),
+                Color::ACCENT_YELLOW,
+            );
+        } else {
+            self.push_line(
+                crate::gui::ui_text("Kullanım: set [AD=deger]", "Usage: set [NAME=value]"),
+                Color::ACCENT_YELLOW,
+            );
+        }
+    }
+
+    /// Bir yolun ust dizinini dondurur (`/a/b` -> `/a`).
+    fn parent_of(path: &str) -> &str {
+        match path.rfind('/') {
+            Some(0) | None => "/",
+            Some(pos) => &path[..pos],
+        }
+    }
+
     fn run_hexdump(&mut self, arg: &str, vfs: &VirtualFileSystem) {
         if arg.is_empty() {
             self.push_line("Usage: hexdump <file>", Color::ACCENT_YELLOW);
@@ -3018,20 +3489,35 @@ impl TerminalApp {
             ly += line_height + line_gap;
         }
 
-        // Aktif Istem + Girdi
-        MinGuiCompositor::draw_terminal_string(fb, x + 16, prompt_y, ">", prompt_fg);
-        let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
-        let input_clip = (x + 30, prompt_y, w.saturating_sub(42), line_height + 4);
+        // Aktif Istem + Girdi (CMD tarzi: C:\yol> )
+        let prompt = alloc::format!("{}>", self.cwd_str());
+        let prompt_w = MinGuiCompositor::terminal_text_width(&prompt) + 6;
         MinGuiCompositor::draw_terminal_string_clipped(
             fb,
-            x + 30,
+            x + 16,
+            prompt_y,
+            &prompt,
+            prompt_fg,
+            (x + 12, prompt_y, w.saturating_sub(24), line_height + 4),
+        );
+        let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
+        let input_x = x + 16 + prompt_w;
+        let input_clip = (
+            input_x,
+            prompt_y,
+            w.saturating_sub(prompt_w + 28),
+            line_height + 4,
+        );
+        MinGuiCompositor::draw_terminal_string_clipped(
+            fb,
+            input_x,
             prompt_y,
             input_str,
             default_fg,
             input_clip,
         );
         if is_focused {
-            let caret_x = x + 30 + MinGuiCompositor::terminal_text_width(input_str);
+            let caret_x = input_x + MinGuiCompositor::terminal_text_width(input_str);
             if caret_x < x + w.saturating_sub(16) {
                 fb.draw_rect(
                     caret_x,

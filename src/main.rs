@@ -4556,6 +4556,11 @@ pub extern "C" fn _start() -> ! {
                             }
 
                             3 => {
+                                let status_rect =
+                                    apps::browser::BrowserApp::status_bar_rect(wx, wy, ww, wh);
+                                if !gui::in_rect(mx, my, status_rect) {
+                                    browser_app.reset_status_click_streak();
+                                }
                                 if browser_app.find_active
                                     && gui::in_rect(
                                         mx,
@@ -4571,7 +4576,7 @@ pub extern "C" fn _start() -> ! {
                                 ) {
                                     browser_app.toolbar_menu_open = !browser_app.toolbar_menu_open;
                                 } else if browser_app.toolbar_menu_open {
-                                    let item = (0..4).find(|&i| {
+                                    let item = (0..5).find(|&i| {
                                         gui::in_rect(
                                             mx,
                                             my,
@@ -4602,7 +4607,17 @@ pub extern "C" fn _start() -> ! {
                                             browser_app.save_current_download(&mut fs_mgr.vfs);
                                         }
                                         Some(3) => browser_app.navigate(),
+                                        Some(4) => browser_app.show_console(),
                                         _ => {}
+                                    }
+                                } else if gui::in_rect(mx, my, status_rect) {
+                                    if browser_app.status_click_at(
+                                        mx,
+                                        my,
+                                        monotonic_ms(),
+                                        settings_app.double_click_ms as u64,
+                                    ) {
+                                        browser_app.show_console();
                                     }
                                 } else if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
                                     browser_app.back();
@@ -6346,6 +6361,14 @@ pub extern "C" fn _start() -> ! {
                                 open_app(&mut compositor, app_idx);
                             }
 
+                            handle_terminal_open_request(
+                                &mut terminal_app,
+                                &mut fs_mgr.vfs,
+                                &mut notepad_app,
+                                &mut browser_app,
+                                &mut compositor,
+                            );
+
                             filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -8067,6 +8090,14 @@ pub extern "C" fn _start() -> ! {
                         open_app(&mut compositor, app_idx);
                     }
 
+                    handle_terminal_open_request(
+                        &mut terminal_app,
+                        &mut fs_mgr.vfs,
+                        &mut notepad_app,
+                        &mut browser_app,
+                        &mut compositor,
+                    );
+
                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                 }
 
@@ -8592,6 +8623,65 @@ pub extern "C" fn _start() -> ! {
             cpu_sample_total_cycles = 0;
 
             cpu_sample_active_cycles = 0;
+        }
+    }
+}
+
+/// Terminalde `edit <dosya>` / `start <dosya>` calistirildiysa istenen
+/// dosyayi uygun uygulamada acar (metin -> Not Defteri, digerleri -> Gezgin).
+fn handle_terminal_open_request(
+    terminal_app: &mut apps::terminal::TerminalApp,
+    vfs: &mut fs::vfs::VirtualFileSystem,
+    notepad_app: &mut apps::notepad::NotepadApp,
+    browser_app: &mut apps::browser::BrowserApp,
+    compositor: &mut gui::MinGuiCompositor,
+) {
+    let Some(path) = terminal_app.take_open_request() else {
+        return;
+    };
+
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let is_web = matches!(ext.as_str(), "html" | "htm" | "xhtml");
+
+    if is_web {
+        match vfs.read_file(&path) {
+            Some(data) => {
+                let data: alloc::vec::Vec<u8> = alloc::vec::Vec::from(data);
+                let wrap = compositor
+                    .windows
+                    .iter()
+                    .flatten()
+                    .find(|w| w.app_id == 3u8)
+                    .map_or(700, |w| w.width.saturating_sub(40));
+                browser_app.set_url(path.as_bytes());
+                browser_app.load_html(&data, wrap, 256);
+                open_app(compositor, 3);
+                return;
+            }
+            None => {
+                browser_app.set_url(path.as_bytes());
+                browser_app.navigate();
+                open_app(compositor, 3);
+                return;
+            }
+        }
+    }
+
+    match vfs.read_file(&path) {
+        Some(data) => {
+            let data: alloc::vec::Vec<u8> = alloc::vec::Vec::from(data);
+            notepad_app.open_file(&path, &data);
+            open_app(compositor, 2);
+        }
+        None => {
+            // Dosya yoksa Not Defteri'ni bos olarak acip yolu hazirlar.
+            notepad_app.open_file(&path, b"");
+            open_app(compositor, 2);
         }
     }
 }

@@ -37,6 +37,8 @@ pub const HANDSHAKE_CERTIFICATE_VERIFY: u8 = 15;
 
 /// ECDHE + RSA sertifikası + AES-128-GCM + SHA-256.
 pub const TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: u16 = 0xC02F;
+/// ECDHE + ECDSA certificate + AES-128-GCM + SHA-256.
+pub const TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256: u16 = 0xC02B;
 pub const TLS_RSA_WITH_AES_128_GCM_SHA256: u16 = 0x009C;
 /// ECDHE + RSA + AES-256-GCM + SHA-384.
 pub const TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: u16 = 0xC030;
@@ -341,6 +343,31 @@ impl TlsSession {
         self.state
     }
 
+    pub fn diagnostic_context(&self) -> String {
+        let protocol = if self.tls13_mode {
+            "TLS 1.3"
+        } else if self.cipher_suite == 0 {
+            "TLS negotiation"
+        } else {
+            "TLS 1.2"
+        };
+        let certificate = if self.cert_verified {
+            String::from("verified")
+        } else if let Some(error) = self.cert_error {
+            alloc::format!("invalid:{:?}", error)
+        } else {
+            String::from("not-verified")
+        };
+        alloc::format!(
+            "host={} protocol={} state={:?} cipher=0x{:04X} cert={}",
+            self.hostname,
+            protocol,
+            self.state,
+            self.cipher_suite,
+            certificate
+        )
+    }
+
     fn process_handshake_records(
         &mut self,
         payload: &[u8],
@@ -417,7 +444,9 @@ impl TlsSession {
             TLS_AES_128_GCM_SHA256 => {
                 self.tls13_mode = true;
             }
-            TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 | TLS_RSA_WITH_AES_128_GCM_SHA256 => {
+            TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+            | TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+            | TLS_RSA_WITH_AES_128_GCM_SHA256 => {
                 self.tls13_mode = false;
             }
             // Desteklenmeyen paket: sessizce bozuk bir el sikisma kurmak yerine
@@ -922,8 +951,8 @@ impl TlsSession {
                 None => self.tls13_transcript_hash.clone().finalize(),
             };
             let expected = HmacSha256::sign(&finished_key, &transcript);
-            if body.len() < TLS_VERIFY_DATA_LEN
-                || &body[..TLS_VERIFY_DATA_LEN] != &expected[..TLS_VERIFY_DATA_LEN]
+            if body.len() != TLS13_HASH_LEN
+                || &body[..TLS13_HASH_LEN] != &expected[..TLS13_HASH_LEN]
             {
                 return Err(());
             }
@@ -983,12 +1012,12 @@ impl TlsSession {
 
         let verify_data = HmacSha256::sign(&finished_key, &transcript);
 
-        let mut finished = Vec::with_capacity(4 + TLS_VERIFY_DATA_LEN);
+        let mut finished = Vec::with_capacity(4 + TLS13_HASH_LEN);
         finished.push(HANDSHAKE_FINISHED);
         finished.push(0);
         finished.push(0);
-        finished.push(TLS_VERIFY_DATA_LEN as u8);
-        finished.extend_from_slice(&verify_data[..TLS_VERIFY_DATA_LEN]);
+        finished.push(TLS13_HASH_LEN as u8);
+        finished.extend_from_slice(&verify_data[..TLS13_HASH_LEN]);
 
         // İstemci Finished transcript hash'e eklenir.
         self.tls13_transcript_hash.update(&finished);
@@ -1439,6 +1468,14 @@ pub fn alert_description_text(desc: u8) -> &'static str {
     }
 }
 
+pub fn alert_level_text(level: u8) -> &'static str {
+    match level {
+        1 => "warning",
+        2 => "fatal",
+        _ => "unknown level",
+    }
+}
+
 pub fn parse_record_header(buf: &[u8]) -> Option<(u8, u16, usize)> {
     if buf.len() < 5 {
         return None;
@@ -1469,22 +1506,20 @@ pub fn build_client_hello(
     // paketler ilan edilir; sunucu listeden secmek zorundadir.
     //
     //  * TLS 1.3: TLS_AES_128_GCM_SHA256 (0x1301) — en yaygin modern paket.
-    //  * TLS 1.2: ECDHE_RSA_WITH_AES_128_GCM_SHA256 (0xC02F) — ECDHE + RSA
-    //    sertifikasi, ileri guvenlik (perfect forward secrecy).
+    //  * TLS 1.2: ECDHE_RSA / ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 — forward secrecy.
     //  * TLS 1.2: TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C) — yalnizca RSA
     //    sertifikasi olan eski sunucular icin son care.
     let ciphers = [
         TLS_AES_128_GCM_SHA256,
         TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         TLS_RSA_WITH_AES_128_GCM_SHA256,
     ];
-    let cipher_len = ((ciphers.len() + 1) * 2) as u16;
+    let cipher_len = (ciphers.len() * 2) as u16;
     handshake.extend_from_slice(&cipher_len.to_be_bytes());
     for c in &ciphers {
         handshake.extend_from_slice(&c.to_be_bytes());
     }
-    handshake.extend_from_slice(&0x00FFu16.to_be_bytes());
-
     handshake.push(1);
     handshake.push(0);
 
@@ -1542,10 +1577,6 @@ pub fn build_client_hello(
     extensions.push(1);
     extensions.push(0);
 
-    extensions.extend_from_slice(&0xff01u16.to_be_bytes());
-    extensions.extend_from_slice(&1u16.to_be_bytes());
-    extensions.push(0);
-
     let seed = crate::boot::time::main_monotonic_ms() as u64 ^ 0x2545_F491_4F6C_DD1D as u64;
     let mut state = seed;
     let mut ks_seed = [0u8; 32];
@@ -1582,7 +1613,8 @@ pub fn build_client_hello(
     handshake[3] = (hs_len & 0xFF) as u8;
 
     out.push(TLS_RECORD_HANDSHAKE);
-    out.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+    // TLS 1.3 compatibility requires the initial ClientHello record to use 0x0301.
+    out.extend_from_slice(&TLS_VERSION_1_0.to_be_bytes());
     let rec_len = handshake.len() as u16;
     out.extend_from_slice(&rec_len.to_be_bytes());
     out.extend_from_slice(&handshake);
@@ -1679,15 +1711,16 @@ mod tests {
         let mut ecdhe = [0u8; 32];
         build_client_hello("example.com", &random, &mut out, &mut ecdhe);
 
-        // Kayit basligi: handshake(22) + legacy version 0x0303
+        // TLS 1.3-compatible record version is 0x0301; ClientHello legacy_version is 0x0303.
         assert_eq!(out[0], TLS_RECORD_HANDSHAKE);
-        assert_eq!(u16::from_be_bytes([out[1], out[2]]), TLS_VERSION_1_2);
+        assert_eq!(u16::from_be_bytes([out[1], out[2]]), TLS_VERSION_1_0);
         let rec_len = u16::from_be_bytes([out[3], out[4]]) as usize;
         assert_eq!(rec_len, out.len() - 5);
 
         // El sikisma mesaji
         let hs = &out[5..];
         assert_eq!(hs[0], HANDSHAKE_CLIENT_HELLO);
+        assert_eq!(u16::from_be_bytes([hs[4], hs[5]]), TLS_VERSION_1_2);
         let hs_len = ((hs[1] as usize) << 16) | ((hs[2] as usize) << 8) | (hs[3] as usize);
         assert_eq!(hs_len, hs.len() - 4);
 
@@ -1696,6 +1729,8 @@ mod tests {
         let cs_start = 4 + 34 + 1 + 2;
         let mut has_tls13 = false;
         let mut has_ecdhe = false;
+        let mut has_ecdhe_ecdsa = false;
+        let mut has_renegotiation_scsv = false;
         let mut i = 0;
         while i + 1 < cs_len {
             let cs = u16::from_be_bytes([hs[cs_start + i], hs[cs_start + i + 1]]);
@@ -1705,10 +1740,55 @@ mod tests {
             if cs == TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
                 has_ecdhe = true;
             }
+            if cs == TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 {
+                has_ecdhe_ecdsa = true;
+            }
+            if cs == 0x00ff {
+                has_renegotiation_scsv = true;
+            }
             i += 2;
         }
         assert!(has_tls13, "TLS 1.3 cipher suite sunulmali");
         assert!(has_ecdhe, "ECDHE cipher suite sunulmali");
+        assert!(has_ecdhe_ecdsa, "ECDHE-ECDSA cipher suite sunulmali");
+
+        let compression_len_pos = cs_start + cs_len;
+        assert_eq!(hs[compression_len_pos], 1);
+        let ext_len_pos = compression_len_pos + 2;
+        let ext_len = u16::from_be_bytes([hs[ext_len_pos], hs[ext_len_pos + 1]]) as usize;
+        let ext_start = ext_len_pos + 2;
+        let ext_end = ext_start + ext_len;
+        let mut pos = ext_start;
+        while pos + 4 <= ext_end {
+            let ext_type = u16::from_be_bytes([hs[pos], hs[pos + 1]]);
+            let len = u16::from_be_bytes([hs[pos + 2], hs[pos + 3]]) as usize;
+            assert_ne!(
+                ext_type, 0xff01,
+                "TLS 1.3 ClientHello renegotiation_info olmamali"
+            );
+            assert!(
+                pos + 4 + len <= ext_end,
+                "extension uzunlugu ClientHello sinirinda kalmali"
+            );
+            pos += 4 + len;
+        }
+        assert_eq!(pos, ext_end, "extension listesi tam olarak ayrisabilmeli");
+        assert!(!has_renegotiation_scsv, "renegotiation SCSV sunulmamalı");
+    }
+
+    #[test]
+    fn tls12_accepts_ecdhe_ecdsa_cipher_suite() {
+        let mut session = TlsSession::new("example.com", [0; 32]);
+        let mut server_hello = Vec::new();
+        server_hello.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
+        server_hello.extend_from_slice(&[0x22; 32]);
+        server_hello.push(0);
+        server_hello.extend_from_slice(&TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256.to_be_bytes());
+        server_hello.push(0);
+
+        session.handle_server_hello(&server_hello).unwrap();
+        assert_eq!(session.state(), TlsState::ServerHelloReceived);
+        assert!(!session.tls13_mode);
     }
 
     /// TLS 1.3 nonce kurgusu: base_iv XOR sequence_number.
@@ -2339,7 +2419,7 @@ mod tests {
         let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
         let verify = HmacSha256::sign(&finished_key, &server.transcript_hash());
-        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS_VERIFY_DATA_LEN]);
+        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS13_HASH_LEN]);
         server.note(&fin);
         let fin_rec = server.encrypt_hs_record(&fin);
 
@@ -2376,10 +2456,11 @@ mod tests {
         let c_key: [u8; 32] = c_key.try_into().unwrap();
         let expected = HmacSha256::sign(&c_key, &th2);
         assert_eq!(
-            &plain[4..4 + TLS_VERIFY_DATA_LEN],
-            &expected[..TLS_VERIFY_DATA_LEN],
+            &plain[4..4 + TLS13_HASH_LEN],
+            &expected[..TLS13_HASH_LEN],
             "Istemci Finished dogrulanmaliydi"
         );
+        assert_eq!(plain.len(), 4 + TLS13_HASH_LEN);
         // Uygulama trafik sirlari, transcript "ClientHello..sunucu Finished"
         // uzerinden turetilir; istemci Finished bu noktadan sonra eklenir.
         server.derive_application_traffic();
@@ -2546,7 +2627,7 @@ mod tests {
         let finished_key = TlsSession::hkdf_expand_label(&s_finished, b"finished", b"", 32);
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
         let verify = HmacSha256::sign(&finished_key, &server.transcript_hash());
-        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS_VERIFY_DATA_LEN]);
+        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS13_HASH_LEN]);
         server.note(&fin);
         let fin_rec = server.encrypt_hs_record(&fin);
 
@@ -2571,5 +2652,7 @@ mod tests {
         assert_eq!(client.state(), TlsState::Established);
         let plain = server.decrypt_client_record(&client_finished, true);
         assert_eq!(plain[0], HANDSHAKE_FINISHED);
+        assert_eq!(plain[3] as usize, TLS13_HASH_LEN);
+        assert_eq!(plain.len(), 4 + TLS13_HASH_LEN);
     }
 }

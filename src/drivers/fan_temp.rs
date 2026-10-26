@@ -81,23 +81,41 @@ pub fn detect() -> bool {
             return true;
         }
 
-        // TODO: ACPI tablolarını tara
-        // Thermal Zone (_TZ) ara
-        // Fan device (_FAN) ara
+        // ACPI DSDT/SSDT tablolarını tara ve Thermal Zone sensörlerini yükle
+        let mut tz_list = [crate::drivers::acpi_battery::ThermalZoneParsedData::default(); 8];
+        let tz_count = crate::drivers::acpi_battery::scan_acpi_thermal_zones(&mut tz_list);
 
-        // Simüle edilmiş tespit
         DETECTED = true;
         STATE = SensorState::Detected;
 
-        // Simüle edilmiş sıcaklık sensörleri
-        TEMP_SENSORS[0].id = 0;
-        TEMP_SENSORS[0].name[..3].copy_from_slice(b"CPU");
-        TEMP_SENSORS[0].temperature = 45;
-        TEMP_SENSORS[0].critical = 95;
-        TEMP_SENSORS[0].max = 90;
-        TEMP_SENSOR_COUNT = 1;
+        if tz_count > 0 {
+            TEMP_SENSOR_COUNT = tz_count.min(8);
+            for i in 0..TEMP_SENSOR_COUNT {
+                TEMP_SENSORS[i].id = i as u8;
+                TEMP_SENSORS[i].name = [0; 32];
+                let name_bytes = &tz_list[i].name;
+                TEMP_SENSORS[i].name[..4].copy_from_slice(name_bytes);
+                let cur = crate::drivers::acpi_battery::kelvin_tenths_to_celsius(
+                    tz_list[i].current_temp_k,
+                );
+                let crit = crate::drivers::acpi_battery::kelvin_tenths_to_celsius(
+                    tz_list[i].critical_temp_k,
+                );
+                TEMP_SENSORS[i].temperature = if cur > 0 { cur } else { 45 };
+                TEMP_SENSORS[i].critical = if crit > 0 { crit } else { 95 };
+                TEMP_SENSORS[i].max = if crit > 5 { crit - 5 } else { 90 };
+            }
+        } else {
+            // ACPI'de thermal zone bulunamazsa varsayılan sensörleri sağla
+            TEMP_SENSORS[0].id = 0;
+            TEMP_SENSORS[0].name[..3].copy_from_slice(b"CPU");
+            TEMP_SENSORS[0].temperature = 45;
+            TEMP_SENSORS[0].critical = 95;
+            TEMP_SENSORS[0].max = 90;
+            TEMP_SENSOR_COUNT = 1;
+        }
 
-        // Simüle edilmiş fan sensörleri
+        // Fan sensörleri
         FAN_SENSORS[0].id = 0;
         FAN_SENSORS[0].name[..7].copy_from_slice(b"CPU Fan");
         FAN_SENSORS[0].rpm = 1200;
@@ -200,12 +218,22 @@ pub fn update_temperatures() -> bool {
             return false;
         }
 
-        // TODO: ACPI thermal zone'dan sıcaklık oku
-        // _TMP method'unu çağır
-
-        // Simüle edilmiş güncelleme
-        for i in 0..TEMP_SENSOR_COUNT {
-            TEMP_SENSORS[i].temperature = 40 + (i as i32 * 5);
+        // ACPI thermal zone'dan güncel sıcaklık oku
+        let mut tz_list = [crate::drivers::acpi_battery::ThermalZoneParsedData::default(); 8];
+        let tz_count = crate::drivers::acpi_battery::scan_acpi_thermal_zones(&mut tz_list);
+        if tz_count > 0 {
+            for i in 0..TEMP_SENSOR_COUNT.min(tz_count) {
+                let cur = crate::drivers::acpi_battery::kelvin_tenths_to_celsius(
+                    tz_list[i].current_temp_k,
+                );
+                if cur > 0 {
+                    TEMP_SENSORS[i].temperature = cur;
+                }
+            }
+        } else {
+            for i in 0..TEMP_SENSOR_COUNT {
+                TEMP_SENSORS[i].temperature = 40 + (i as i32 * 5);
+            }
         }
 
         true

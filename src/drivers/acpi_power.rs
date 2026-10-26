@@ -50,14 +50,18 @@ pub fn detect() -> bool {
             return true;
         }
 
-        // TODO: ACPI tablolarını tara
-        // FACP (Fixed ACPI Description Table) oku
-        // DSDT (Differentiated System Description Table) oku
+        // ACPI DSDT/SSDT tablolarını tara ve güç cihazlarını / uyku durumlarını keşfet
+        let mut pw_list = [crate::drivers::acpi_battery::PowerDeviceParsedData::default(); 8];
+        let (_pw_count, sleep_states) =
+            crate::drivers::acpi_battery::scan_acpi_power_devices(&mut pw_list);
 
-        // Simüle edilmiş tespit
         DETECTED = true;
         CURRENT_STATE = PowerState::S0;
-        SUPPORTED_STATES = 0b00011111; // S0-S5 destekleniyor
+        SUPPORTED_STATES = if sleep_states != 0 {
+            sleep_states
+        } else {
+            0b00011111 // S0-S5 varsayılan
+        };
 
         DETECTED
     }
@@ -114,7 +118,18 @@ pub fn update_power_source() -> bool {
             return false;
         }
 
-        // TODO: ACPI power source oku
+        if crate::drivers::acpi_battery::is_detected() {
+            let bstate = crate::drivers::acpi_battery::state();
+            if bstate == crate::drivers::acpi_battery::BatteryState::Discharging
+                || bstate == crate::drivers::acpi_battery::BatteryState::Critical
+            {
+                POWER_SOURCE = PowerSource::Battery;
+            } else {
+                POWER_SOURCE = PowerSource::AC;
+            }
+        } else {
+            POWER_SOURCE = PowerSource::AC;
+        }
 
         true
     }

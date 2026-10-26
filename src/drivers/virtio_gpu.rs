@@ -1020,6 +1020,24 @@ pub fn flush_framebuffer() -> bool {
     }
 }
 
+/// Belirli bir dikdörtgen bölgeyi host'a transfer et ve yenile (Hızlandırılmış Flush)
+pub fn flush_rect(x: u32, y: u32, width: u32, height: u32) -> bool {
+    unsafe {
+        if !DETECTED {
+            return false;
+        }
+        let res_id = CURRENT_RESOURCE_ID;
+        transfer_to_host(res_id, x, y, width, height);
+        resource_flush(res_id, x, y, width, height);
+        true
+    }
+}
+
+/// VirtIO-GPU'nun aktif ve yapılandırılmış olup olmadığını kontrol eder.
+pub fn is_active() -> bool {
+    unsafe { DETECTED && DEVICE.common_cfg_addr != 0 }
+}
+
 /// Çözünürlük değiştir (Mode-set)
 pub fn set_mode(width: u32, height: u32) -> bool {
     unsafe {

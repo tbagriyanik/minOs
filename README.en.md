@@ -28,12 +28,12 @@
   - ✅ **Bluetooth HCI Protocol:** Command (0x01), ACL data (0x02) and Event (0x04) packet formatting/parsing, inquiry and connection management completed.
   - ✅ **Storage:** AHCI/SATA, NVMe SSD, VirtIO-blk, SD/MMC.
   - ✅ **USB:** Mass Storage, Printer, Audio, Touchscreen.
-  - ✅ **Graphics:** VirtIO-gpu (split VirtQueue, 2D command engine, mode-set), AMD Radeon and NVIDIA GeForce (BAR0/BAR1 VRAM framebuffer, 2D primitives, mode-set).
-  - ✅ **Sensors & Power:** ACPI AML interpreter, `_BST` / `_BIX` / `_BIF` battery status reading, ACPI Power, Fan & Temperature infrastructure.
+  - ✅ **Graphics:** VirtIO-gpu (split VirtQueue, 2D command engine, default desktop hardware 2D render & flush path, mode-set), AMD Radeon and NVIDIA GeForce (BAR0/BAR1 VRAM framebuffer, 2D primitives, mode-set).
+  - ✅ **Sensors & Power:** ACPI AML interpreter (Method, Device, Scope, Math/Logic), `_BST` / `_BIX` / `_BIF` battery status reading, `_S0`..`_S5` sleep states and PowerResource management, ThermalZone (`_TZ_`, `_TMP`, `_CRT`) and fan sensors.
   - ✅ **Bus & Timing:** PCIe, PCI and Timer (PIT/HPET/APIC/TSC) infrastructure.
 - **Live USB Hot-plug:** USB devices are detected instantly while running and toast notifications are shown. When a USB keyboard or mouse is plugged in or removed while minOs is running, the system detects it immediately. A live toast notification is shown on the desktop (`USB keyboard connected`, `USB mouse removed`), open screens/windows are redrawn and the hardware list in System Settings > Devices is updated instantly.
 - **OHCI & UHCI & EHCI Transfer Layer:** A complete transfer layer and port handoff infrastructure was integrated for OHCI (`OhciEd`, `OhciTd`, `OhciHcca` and DMA queue management), UHCI (`UhciQh`, `UhciTd`) and EHCI controllers.
-- **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress` (V4/V6), an RFC 4291 address parser (`::` compression and `[...]` format) and `ETHERTYPE_IPV6` (0x86DD) support were added to the `netstack.rs` layer; `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` and IPv6 address validation in the web browser were added to the `socket.rs` layer.
+- **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress` (V4/V6), an RFC 4291 address parser (`::` compression and `[...]` format), RFC 2464 Multicast MAC mapping, RFC 8200 pseudo-header checksum, ICMPv6 Echo Request/Reply (ping6), Neighbor Discovery (Solicitation/Advertisement) and `ETHERTYPE_IPV6` (0x86DD) support were added to the `netstack.rs` layer; `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` and IPv6 address validation in the web browser were added to the `socket.rs` layer.
 - **exFAT and ext4 Fragmentation & Deep Directory Integrity:** The ability to create files in deep directory trees, punch holes by deleting files and consistently allocate new files that fill fragmented block/cluster chains on ext4 and exFAT was verified with host stress tests (`host_fs_tests.rs`).
 - **Expanded Trust Store (Root CA):** In addition to ISRG Root X1, the Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) and DigiCert Global Root (CA & G2) root certificates were embedded into the kernel.
 - **ISRG Root X1 Root CA & TLS Chain Verification:** The Let's Encrypt ISRG Root X1 root certificate (`isrgrootx1.der`) is embedded in the kernel. The certificate chain received from the server is scanned with RFC 5280 rules and the RSA PKCS#1 v1.5 and ECDSA P-256 signatures of leaf and intermediate certificates are fully verified up to the trusted ISRG Root X1 public key.
@@ -91,11 +91,11 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | Category | Hardware / Device | Driver Module | Status | Scope & Capabilities |
 | :--- | :--- | :--- | :---: | :--- |
 | **Graphics & Display** | Bochs BGA / QEMU Standard VGA | `gpu.rs` | 🟢 Full | 1080p+, dynamic resolution change, LFB |
-| | VirtIO-GPU (QEMU/KVM) | `virtio_gpu.rs` | 🟢 Full | Split VirtQueue, 2D command set, scanout, mode-set |
+| | VirtIO-GPU (QEMU/KVM) | `virtio_gpu.rs` | 🟢 Full | Split VirtQueue, 2D command set, scanout, default desktop hardware 2D render & flush path, mode-set |
 | | NVIDIA GeForce GPU | `nvidia.rs` | 🟡 Partial | BAR0/BAR1 VRAM LFB, 2D drawing, mode-set (3D acceleration planned) |
 | | AMD Radeon GPU | `amdgpu.rs` | 🟡 Partial | BAR0 64-bit VRAM LFB, 2D drawing, mode-set (3D acceleration planned) |
 | | VMware SVGA-II | `gpu.rs` | 🟡 Partial | PCI detection, basic resolution reading |
-| **Network & Communication** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Full | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS 1.3 |
+| **Network & Communication** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Full | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | | Intel I219-V Ethernet | `i219.rs` | 🟢 Full | Gigabit Ethernet link and packet transfer |
 | | Realtek PCIe (RTL8168/8169/8125) | `net.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
 | | Broadcom NetXtreme (BCM57xx) | `net.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
@@ -105,7 +105,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
 | | Wi-Fi (802.11 Wireless) | `wifi.rs` | 🔴 Skeleton | PCI/USB interface detection (WPA handshake WIP) |
 | **Input Devices** | PS/2 Keyboard & Mouse | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Full | Interrupt-driven input, Turkish Q / English key mapping |
-| | USB HID Keyboard & Mouse | `usb_hid.rs` | 🟢 Full | xHCI/EHCI/UHCI/OHCI, 16-bit axes, wheel, hotplug |
+| | USB HID Keyboard & Mouse | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Full | xHCI/EHCI/UHCI/OHCI full transfer layer (QH, TD, ED, HCCA), 16-bit axes, wheel, hotplug |
 | | USB Touchscreen | `usb_touchscreen.rs` | 🟡 Partial | Single-finger touch/click (multi-touch analysis TODO) |
 | **Storage** | ATA / IDE / ATAPI | `ata.rs` | 🟢 Full | LBA28/48, hard disk and CD/DVD-ROM |
 | | AHCI / SATA | `ahci.rs` | 🟢 Full | SATA SSD and HDD block I/O |
@@ -115,9 +115,9 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | SD / MMC Card | `sdmmc.rs` | 🟡 Partial | Sector reading active (CSD parsing and reliable writes WIP) |
 | **File Systems** | exFAT & ext4 | `exfat_rw.rs`, `ext4_rw.rs` | 🟢 Full | Deep directory hierarchy, fragmentation resistance, full read/write |
 | | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Full | File reading and system directories |
-| **Power & Sensors** | ACPI AML Interpreter & Battery | `acpi_battery.rs` | 🟢 Full | DSDT/SSDT AML parsing, `_BST`/`_BIX`/`_BIF` live percentage, voltage, current, cycles |
-| | ACPI Power Management | `acpi_power.rs` | 🟡 Partial | Power state reading, S5 shutdown and sleep transitions |
-| | Fan & Temperature Sensors | `fan_temp.rs` | 🔴 Skeleton | Sensor detection (hardware-specific EC profiles WIP) |
+| **Power & Sensors** | ACPI AML Interpreter & Battery | `acpi_battery.rs` | 🟢 Full | DSDT/SSDT AML parsing (Method, Device, Scope, Math/Logic), `_BST`/`_BIX`/`_BIF` live percentage, voltage, current, cycles |
+| | ACPI Power Management | `acpi_power.rs` | 🟢 Full | `_S0`..`_S5` sleep states detection, PowerResource (`_ON_`/`_OFF`/`_STA`), dynamic AC/Battery status tracking |
+| | Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) parsing, Celsius conversion and fan RPM monitoring |
 | | Bus & Timers | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Full | PCI/PCIe configuration, TSC/HPET/APIC timers |
 | **Audio & Multimedia** | Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Full | DMA stream rings, mixer, WAV/MP3 playback |
 | | PC Speaker (PWM) | `audio.rs` | 🟢 Full | Hardware timer beeps and PWM tones |

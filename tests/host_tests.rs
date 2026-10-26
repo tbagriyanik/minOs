@@ -53,6 +53,18 @@ pub mod virtio_gpu_mod;
 #[path = "../src/drivers/acpi_battery.rs"]
 pub mod acpi_battery_mod;
 
+#[path = "../src/drivers/usb_transfer.rs"]
+pub mod usb_transfer_mod;
+
+#[path = "../src/drivers/netstack.rs"]
+pub mod netstack_mod;
+
+pub fn serial_print(_s: &str) {}
+
+pub mod serial {
+    pub fn print_dec(_v: u64) {}
+}
+
 pub mod boot {
     pub mod time {
         pub fn main_monotonic_ms() -> u64 {
@@ -106,6 +118,47 @@ pub mod drivers {
     }
     pub mod acpi_battery {
         pub use crate::acpi_battery_mod::*;
+    }
+    pub mod usb {
+        pub use crate::usb_transfer_mod::*;
+    }
+    pub mod e1000 {
+        pub static mut MAC_ADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        pub fn transmit(_data: &[u8]) -> bool {
+            true
+        }
+        pub fn is_ready() -> bool {
+            true
+        }
+        pub fn link_up() -> bool {
+            true
+        }
+        pub fn poll() {}
+    }
+    pub mod socket {
+        use super::netstack::Ipv4Address;
+        pub fn on_udp_datagram(
+            _src: Ipv4Address,
+            _sport: u16,
+            _dport: u16,
+            _data: &[u8],
+        ) -> bool {
+            false
+        }
+        pub fn on_tcp_segment(_src: Ipv4Address, _data: &[u8]) -> bool {
+            false
+        }
+        pub fn self_test() -> bool {
+            true
+        }
+    }
+    pub mod http {
+        pub fn self_test() -> bool {
+            true
+        }
+    }
+    pub mod netstack {
+        pub use crate::netstack_mod::*;
     }
 }
 

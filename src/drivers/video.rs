@@ -424,6 +424,15 @@ impl Framebuffer {
                 copy_h,
             );
         }
+
+        if crate::drivers::virtio_gpu::is_detected() {
+            crate::drivers::virtio_gpu::flush_rect(
+                x as u32,
+                y as u32,
+                copy_w as u32,
+                copy_h as u32,
+            );
+        }
     }
 
     /// Aktif kırpma bölgesini ayarlar (verilen dikdörtgeni çerçeve temel
@@ -1286,6 +1295,10 @@ impl Framebuffer {
                     );
                 }
             }
+        }
+
+        if crate::drivers::virtio_gpu::is_detected() {
+            crate::drivers::virtio_gpu::flush_framebuffer();
         }
     }
 

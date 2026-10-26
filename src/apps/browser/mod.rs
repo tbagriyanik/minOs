@@ -28,6 +28,8 @@ use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
 
 extern crate alloc;
 
+const BROWSER_ERROR_LOG_LIMIT: usize = 64;
+
 fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
     body.split(|b| *b == b'\n').filter_map(|line| {
         let line = if line.last() == Some(&b'\r') {
@@ -54,6 +56,27 @@ static HISTORY: [[AtomicU32; HISTORY_URL_CAP]; HISTORY_MAX] =
 static HISTORY_LEN: [AtomicUsize; HISTORY_MAX] = [const { AtomicUsize::new(0) }; HISTORY_MAX];
 static HISTORY_COUNT: AtomicUsize = AtomicUsize::new(0);
 static HISTORY_POS: AtomicUsize = AtomicUsize::new(0);
+
+// ── Ertelenmiş hata günlüğü ───────────────────────────────────────────────
+// Ağ döngüsü, yanıt tamponlarına ödünç verdiği `self` alanlarını tutarken
+// `record_network_error(&mut self)` çağıramaz (E0502). Hata mesajı bu halka
+// tampona yazılır, ardından `flush_network_errors()` ile günlüğe aktarılır.
+const PENDING_ERROR_CAP: usize = 8;
+const PENDING_ERROR_LEN: usize = 96;
+static PENDING_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PENDING_ERRORS: [[AtomicU32; PENDING_ERROR_LEN]; PENDING_ERROR_CAP] =
+    [const { [const { AtomicU32::new(0) }; PENDING_ERROR_LEN] }; PENDING_ERROR_CAP];
+
+fn defer_network_error(message: &str) {
+    let slot = PENDING_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) % PENDING_ERROR_CAP;
+    for cell in PENDING_ERRORS[slot].iter() {
+        cell.store(0, Ordering::Relaxed);
+    }
+    for (cell, byte) in PENDING_ERRORS[slot].iter().zip(message.bytes()) {
+        cell.store(u32::from(byte), Ordering::Relaxed);
+    }
+    // Son hücre ayırıcı olarak sıfırda bırakılır (güvenli kısa metin).
+}
 
 /// Belirtilen geçmiş girdisini (0 = en eski) metne çevirir.
 fn history_copy(index: usize) -> Option<String> {
@@ -190,6 +213,8 @@ pub struct BrowserApp {
     address_selection_anchor: Option<usize>,
     address_last_click: (u64, usize, usize),
     address_click_streak: u8,
+    status_last_click: (u64, usize, usize),
+    status_click_streak: u8,
     address_undo: [[u8; 128]; 16],
     address_undo_len: [usize; 16],
     address_undo_count: usize,
@@ -207,6 +232,7 @@ pub struct BrowserApp {
     suppress_history: bool,
     pub page_loaded: bool,
     pub status: &'static str,
+    pub error_logs: Vec<String>,
     pub net_online: bool,
     pub ping_ok: bool,
     pub web_request_sent: bool,
@@ -296,6 +322,8 @@ impl BrowserApp {
             address_selection_anchor: None,
             address_last_click: (0, 0, 0),
             address_click_streak: 0,
+            status_last_click: (0, 0, 0),
+            status_click_streak: 0,
             address_undo: [[0; 128]; 16],
             address_undo_len: [0; 16],
             address_undo_count: 0,
@@ -313,6 +341,7 @@ impl BrowserApp {
             suppress_history: false,
             page_loaded: true,
             status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
+            error_logs: Vec::new(),
             net_online: false,
             ping_ok: false,
             web_request_sent: false,
@@ -430,7 +459,7 @@ impl BrowserApp {
         win_y: usize,
         win_w: usize,
     ) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 104)
+        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 128)
     }
 
     pub fn toolbar_menu_item_rect(
@@ -445,6 +474,20 @@ impl BrowserApp {
 
     pub fn find_bar_rect(win_x: usize, win_y: usize, win_w: usize) -> (usize, usize, usize, usize) {
         (win_x + win_w.saturating_sub(258), win_y + 87, 244, 24)
+    }
+
+    pub fn status_bar_rect(
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
+        (
+            win_x + 6,
+            win_y + win_h.saturating_sub(24),
+            win_w.saturating_sub(12),
+            20,
+        )
     }
 
     pub fn content_height(&self) -> usize {
@@ -710,6 +753,28 @@ impl BrowserApp {
             _ => {}
         }
         self.address_click_streak
+    }
+
+    pub fn status_click_at(&mut self, x: usize, y: usize, now_ms: u64, interval_ms: u64) -> bool {
+        let same_target = now_ms.abs_diff(self.status_last_click.0) <= interval_ms
+            && self.status_last_click.1.abs_diff(x) < 8
+            && self.status_last_click.2.abs_diff(y) < 8;
+        self.status_click_streak = if same_target {
+            self.status_click_streak.saturating_add(1).min(2)
+        } else {
+            1
+        };
+        self.status_last_click = (now_ms, x, y);
+        if self.status_click_streak == 2 {
+            self.status_click_streak = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reset_status_click_streak(&mut self) {
+        self.status_click_streak = 0;
     }
 
     pub fn address_drag_to(&mut self, x: usize, field_x: usize) {
@@ -1675,6 +1740,15 @@ impl BrowserApp {
                 self.set_url(b"minos://bookmarks");
                 self.build_bookmarks_page();
             }
+            "minos://console" => {
+                self.active_tab = 4;
+                self.page_loaded = true;
+                if !suppress {
+                    history_push(value);
+                }
+                self.status =
+                    crate::gui::ui_text("Tarayıcı konsolu açıldı.", "Browser console opened.");
+            }
             "minos://net" | "net://status" => {
                 // Ağ durumu paneli — e1000 durumu + gateway ARP/ping testi
                 self.active_tab = 2;
@@ -1961,27 +2035,47 @@ impl BrowserApp {
                 }
 
                 // TLS kayıtlarını işle: el sıkışma mesajları ve şifreli application data.
-                let mut tls_failed: Option<Option<(u8, u8)>> = None;
+                let mut tls_failed: Option<(Option<(u8, u8)>, String)> = None;
                 if let Some(ref mut tls) = self.tls_session {
                     let mut hs_out = Vec::new();
                     let mut app_out = Vec::new();
                     match tls.process_records(&mut hs_out, &mut app_out) {
                         Ok(_) => {}
                         Err(()) => {
-                            tls_failed = Some(tls.last_alert());
+                            let alert = tls.last_alert();
+                            let context = tls.diagnostic_context();
+                            let detail = match alert {
+                                Some((level, desc)) => alloc::format!(
+                                    "{} (description={}, level={} ({}))\n{}",
+                                    crate::drivers::tls::alert_description_text(desc),
+                                    desc,
+                                    crate::drivers::tls::alert_level_text(level),
+                                    level,
+                                    context
+                                ),
+                                None => alloc::format!(
+                                    "{}\n{}",
+                                    crate::gui::ui_text(
+                                        "TLS kayıt işleme hatası",
+                                        "TLS record processing failed"
+                                    ),
+                                    context
+                                ),
+                            };
+                            tls_failed = Some((alert, detail));
                         }
                     }
                     self.tls_app_data.extend_from_slice(&app_out);
                 }
-                if let Some(alert) = tls_failed {
-                    let detail: &'static str = match alert {
+                if let Some((alert, detail)) = tls_failed {
+                    let status = match alert {
                         Some((_, desc)) => crate::drivers::tls::alert_description_text(desc),
                         None => crate::gui::ui_text(
                             "TLS kayıt işleme hatası.",
                             "TLS record processing error.",
                         ),
                     };
-                    self.finish_network_error(detail);
+                    self.finish_network_error_with_detail(status, &detail);
                 }
 
                 // TLS 1.3: sunucunun Finished mesajı doğrulandıysa istemci
@@ -2122,6 +2216,11 @@ impl BrowserApp {
 
                         // 3xx Yönlendirme (Redirect) Kontrolü
                         if let Some(code) = status_code {
+                            if code >= 400 {
+                                let mut http_error = String::from("HTTP status ");
+                                http_error.push_str(&alloc::format!("{}", code));
+                                defer_network_error(&http_error);
+                            }
                             if (code == 301
                                 || code == 302
                                 || code == 303
@@ -2334,6 +2433,7 @@ impl BrowserApp {
                         self.page_loaded = true;
                     }
                 }
+                self.flush_network_errors();
                 if crate::drivers::netstack::tcp_finished()
                     || self.response_len >= self.response_data.len()
                 {
@@ -2367,12 +2467,52 @@ impl BrowserApp {
         self.status = crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
     }
     fn finish_network_error(&mut self, status: &'static str) {
+        self.finish_network_error_with_detail(status, status);
+    }
+
+    fn finish_network_error_with_detail(&mut self, status: &'static str, detail: &str) {
+        self.record_network_error(detail);
         self.request_pending = false;
         self.page_loaded = false;
         self.status = status;
         self.request_state = 0;
         self.request_deadline = 0;
         crate::drivers::netstack::tcp_clear_result();
+    }
+
+    /// Ertelenmiş ağ hata mesajlarını hata günlüğüne aktarır.
+    fn flush_network_errors(&mut self) {
+        let mut pending: Vec<String> = Vec::new();
+        for slot in PENDING_ERRORS.iter() {
+            let mut buf = [0u8; PENDING_ERROR_LEN];
+            for (dst, cell) in buf.iter_mut().zip(slot.iter()) {
+                *dst = cell.load(Ordering::Relaxed) as u8;
+            }
+            if buf[0] == 0 {
+                continue;
+            }
+            if let Ok(text) = core::str::from_utf8(&buf) {
+                pending.push(String::from(text.trim_end_matches('\0')));
+            }
+            for cell in slot.iter() {
+                cell.store(0, Ordering::Relaxed);
+            }
+        }
+        for message in pending {
+            self.record_network_error(&message);
+        }
+    }
+
+    fn record_network_error(&mut self, message: &str) {
+        let url = String::from(
+            core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("(unknown URL)"),
+        );
+        let severity = crate::gui::ui_text("HATA", "ERROR");
+        self.error_logs
+            .push(alloc::format!("{} | {} | {}", severity, url, message));
+        if self.error_logs.len() > BROWSER_ERROR_LOG_LIMIT {
+            self.error_logs.remove(0);
+        }
     }
 
     pub fn back(&mut self) {
@@ -2393,6 +2533,11 @@ impl BrowserApp {
 
     pub fn show_history(&mut self) {
         self.set_url(b"minos://history");
+        self.navigate();
+    }
+
+    pub fn show_console(&mut self) {
+        self.set_url(b"minos://console");
         self.navigate();
     }
 
@@ -2581,7 +2726,83 @@ impl BrowserApp {
         let page_h = status_y.saturating_sub(page_y + 4).max(120);
         fb.draw_rect(page_x, page_y, page_w, page_h, Color::DARK_BG);
         if self.page_loaded {
-            if self.active_tab == 3 {
+            if self.active_tab == 4 {
+                fb.draw_rect(page_x + 10, page_y + 10, page_w - 20, 36, Color::TITLE_BAR);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 16,
+                    crate::gui::ui_text("minOs | Tarayıcı Konsolu", "minOs | Browser Console"),
+                    Color::ACCENT_PINK,
+                );
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + 20,
+                    page_y + 32,
+                    crate::gui::ui_text(
+                        "Ağ, TLS ve HTTP hata kayıtları",
+                        "Network, TLS, and HTTP errors",
+                    ),
+                    Color::ACCENT_BLUE,
+                );
+                let count = alloc::format!("{}", self.error_logs.len());
+                MinGuiCompositor::draw_string(
+                    fb,
+                    page_x + page_w.saturating_sub(48),
+                    page_y + 32,
+                    &count,
+                    Color::TEXT_MUTED,
+                );
+
+                if self.error_logs.is_empty() {
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        page_x + 20,
+                        page_y + 66,
+                        crate::gui::ui_text("Henüz hata kaydı yok.", "No errors recorded."),
+                        Color::TEXT_MUTED,
+                    );
+                } else {
+                    let visible_rows = page_h.saturating_sub(68) / 18;
+                    let total_rows: usize = self
+                        .error_logs
+                        .iter()
+                        .map(|entry| entry.lines().count())
+                        .sum();
+                    let first_row = total_rows.saturating_sub(visible_rows);
+                    let mut log_row = 0;
+                    for entry in &self.error_logs {
+                        for (part, line) in entry.lines().enumerate() {
+                            if log_row >= first_row {
+                                let row = log_row - first_row;
+                                let row_y = page_y + 62 + row * 18;
+                                if row % 2 == 0 {
+                                    fb.draw_rect(
+                                        page_x + 12,
+                                        row_y,
+                                        page_w.saturating_sub(24),
+                                        17,
+                                        Color::WINDOW_BG,
+                                    );
+                                }
+                                MinGuiCompositor::draw_string_clipped(
+                                    fb,
+                                    page_x + 18,
+                                    row_y + 4,
+                                    line,
+                                    if part == 0 {
+                                        Color::ACCENT_RED
+                                    } else {
+                                        Color::TEXT_MUTED
+                                    },
+                                    (page_x + 14, row_y, page_w.saturating_sub(28), 17),
+                                );
+                            }
+                            log_row += 1;
+                        }
+                    }
+                }
+            } else if self.active_tab == 3 {
                 // Canlı Web Sayfası Render Paneli (HTML DOM)
                 fb.draw_rect(
                     page_x + 8,
@@ -3130,6 +3351,7 @@ impl BrowserApp {
                 ),
                 crate::gui::ui_text("İndirmeyi kaydet", "Save download"),
                 "GIT",
+                crate::gui::ui_text("Konsol", "Console"),
             ];
             for (i, label) in labels.iter().enumerate() {
                 let item = Self::toolbar_menu_item_rect(win_x, win_y, win_w, i);

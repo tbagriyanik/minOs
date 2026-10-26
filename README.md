@@ -28,12 +28,12 @@
   - ✅ **Bluetooth HCI Protokolü:** Komut (0x01), ACL veri (0x02), Olay (0x04) paket formatlaması/ayrıştırması, Inquiry ve bağlantı yönetimi tamamlandı.
   - ✅ **Depolama:** AHCI/SATA, NVMe SSD, VirtIO-blk, SD/MMC.
   - ✅ **USB:** Mass Storage, Printer, Audio, Touchscreen.
-  - ✅ **Grafik:** VirtIO-gpu (Split VirtQueue, 2D komut motoru, mode-set), AMD Radeon ve NVIDIA GeForce (BAR0/BAR1 VRAM framebuffer, 2D primitifler, mode-set).
-  - ✅ **Sensör & Güç:** ACPI AML yorumlayıcısı, `_BST` / `_BIX` / `_BIF` pil durumu okuma, ACPI Power, Fan & Temperature altyapısı.
+  - ✅ **Grafik:** VirtIO-gpu (Split VirtQueue, 2D komut motoru, masaüstü varsayılan donanımsal 2D render & flush yolu, mode-set), AMD Radeon ve NVIDIA GeForce (BAR0/BAR1 VRAM framebuffer, 2D primitifler, mode-set).
+  - ✅ **Sensör & Güç:** ACPI AML yorumlayıcısı (Method, Device, Scope, Math/Logic), `_BST` / `_BIX` / `_BIF` pil durumu okuma, `_S0`..`_S5` uyku ve PowerResource yönetimi, ThermalZone (`_TZ_`, `_TMP`, `_CRT`) ve fan sensörleri.
   - ✅ **Veri Yolu & Zaman:** PCIe, PCI ve Timer (PIT/HPET/APIC/TSC) altyapısı.
 - **Canlı USB Tak/Çıkar:** Çalışma sırasında USB cihazlarının anında algılanıp toast bildirimleri gösteriliyor. minOs çalışırken USB klavye veya fare takıldığında veya çıkarıldığında sistem tarafından anında algılanır. Masaüstünde canlı toast bildirimi gösterilir (`USB Klavye takıldı`, `USB Fare çıkarıldı`), açık ekran/pencereler yeniden çizilir ve Sistem Ayarları > Aygıtlar sekmesindeki donanım listesi anında güncellenir.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** OHCI (`OhciEd`, `OhciTd`, `OhciHcca` ve DMA kuyruk yönetimi), UHCI (`UhciQh`, `UhciTd`) ve EHCI denetleyicileri için tam transfer katmanı ve port handoff altyapısı entegre edildi.
-- **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
+- **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı), RFC 2464 Multicast MAC haritalama, RFC 8200 sözde başlık checksum hesaplama, ICMPv6 Echo Request/Reply (ping6), Neighbor Discovery (Solicitation/Advertisement) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
 - **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
 - **Genişletilmiş Güven Deposu (Root CA):** ISRG Root X1'e ek olarak Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) ve DigiCert Global Root (CA & G2) kök sertifikaları çekirdeğe dahil edildi.
 - **ISRG Root X1 Kök CA & TLS Zincir Doğrulaması:** Let's Encrypt ISRG Root X1 kök sertifikası (`isrgrootx1.der`) çekirdeğe gömüldü. Sunucudan gelen sertifika zinciri RFC 5280 kurallarıyla taranarak yaprak ve ara sertifikaların RSA PKCS#1 v1.5 ve ECDSA P-256 imzaları güvenilen ISRG Root X1 açık anahtarına kadar eksiksiz doğrulanır.
@@ -91,11 +91,11 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | Kategori | Donanım / Aygıt | Sürücü Modülü | Durum | Kapsam & Yetenekler |
 | :--- | :--- | :--- | :---: | :--- |
 | **Grafik & Ekran** | Bochs BGA / QEMU Standard VGA | `gpu.rs` | 🟢 Tam | 1080p+, dinamik çözünürlük değişimi, LFB |
-| | VirtIO-GPU (QEMU/KVM) | `virtio_gpu.rs` | 🟢 Tam | Split VirtQueue, 2D komut seti, scanout, mode-set |
+| | VirtIO-GPU (QEMU/KVM) | `virtio_gpu.rs` | 🟢 Tam | Split VirtQueue, 2D komut seti, scanout, masaüstü varsayılan donanımsal 2D render & flush yolu, mode-set |
 | | NVIDIA GeForce GPU | `nvidia.rs` | 🟡 Kısmi | BAR0/BAR1 VRAM LFB, 2D çizim, mode-set (3D hızlandırma planlanıyor) |
 | | AMD Radeon GPU | `amdgpu.rs` | 🟡 Kısmi | BAR0 64-bit VRAM LFB, 2D çizim, mode-set (3D hızlandırma planlanıyor) |
 | | VMware SVGA-II | `gpu.rs` | 🟡 Kısmi | PCI algılama, temel çözünürlük okuma |
-| **Ağ & İletişim** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS 1.3 |
+| **Ağ & İletişim** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | | Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
 | | Realtek PCIe (RTL8168/8169/8125) | `net.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
 | | Broadcom NetXtreme (BCM57xx) | `net.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
@@ -105,7 +105,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
 | | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🔴 İskelet | PCI/USB arayüz tespiti (WPA el sıkışması WIP) |
 | **Giriş Aygıtları** | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce tuş eşleme |
-| | USB HID Klavye & Fare | `usb_hid.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI, 16-bit eksen, tekerlek, hotplug tak/çıkar |
+| | USB HID Klavye & Fare | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI tam transfer katmanı (QH, TD, ED, HCCA), 16-bit eksen, tekerlek, hotplug tak/çıkar |
 | | USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | Tek parmak dokunma/tıklama (Çoklu dokunma analizi TODO) |
 | **Depolama** | ATA / IDE / ATAPI | `ata.rs` | 🟢 Tam | LBA28/48, sabit disk ve CD/DVD-ROM |
 | | AHCI / SATA | `ahci.rs` | 🟢 Tam | SATA SSD ve HDD blok I/O |
@@ -115,9 +115,9 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | | SD / MMC Kart | `sdmmc.rs` | 🟡 Kısmi | Sektör okuma aktif (CSD ayrıştırma ve güvenilir yazma WIP) |
 | **Dosya Sistemleri** | exFAT & ext4 | `exfat_rw.rs`, `ext4_rw.rs` | 🟢 Tam | Derin dizin hiyerarşisi, parçalanma (fragmentation) direnci, tam okuma/yazma |
 | | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Tam | Dosya okuma ve sistem dizinleri |
-| **Güç & Sensör** | ACPI AML Yorumlayıcısı & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML ayrıştırma, `_BST`/`_BIX`/`_BIF` canlı yüzde, voltaj, akım, döngü |
-| | ACPI Güç Yönetimi | `acpi_power.rs` | 🟡 Kısmi | Güç durumu okuma, S5 kapatma ve uyku geçişleri |
-| | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🔴 İskelet | Sensör tespiti (Donanıma özel EC profilleri WIP) |
+| **Güç & Sensör** | ACPI AML Yorumlayıcısı & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML ayrıştırma (Method, Device, Scope, Math/Logic), `_BST`/`_BIX`/`_BIF` canlı yüzde, voltaj, akım, döngü |
+| | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | `_S0`..`_S5` uyku durumları tespiti, PowerResource (`_ON_`/`_OFF`/`_STA`), dinamik AC/Pil durum izleme |
+| | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) ayrıştırma, Celsius dönüşümü ve fan RPM izleme |
 | | Veri Yolu & Zamanlayıcı | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Tam | PCI/PCIe konfigürasyonu, TSC/HPET/APIC zamanlayıcıları |
 | **Ses & Multimedya**| Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Tam | DMA akış halkaları, mikser, WAV/MP3 oynatma |
 | | PC Speaker (PWM) | `audio.rs` | 🟢 Tam | Donanımsal zamanlayıcı bip ve PWM tonları |

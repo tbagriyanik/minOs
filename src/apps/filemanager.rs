@@ -2283,11 +2283,7 @@ impl FileManagerApp {
                 " ▼"
             };
 
-            let name_label = if self.sort_by == SortBy::Name {
-                crate::gui::ui_text("Ad", "Name")
-            } else {
-                crate::gui::ui_text("Ad", "Name")
-            };
+            let name_label = crate::gui::ui_text("Ad", "Name");
             let name_text = if self.sort_by == SortBy::Name {
                 let mut s = String::from(name_label);
                 s.push_str(sort_arrow);
@@ -2305,11 +2301,7 @@ impl FileManagerApp {
             );
 
             if list_w > 210 {
-                let type_label = if self.sort_by == SortBy::Type {
-                    crate::gui::ui_text("Tür", "Type")
-                } else {
-                    crate::gui::ui_text("Tür", "Type")
-                };
+                let type_label = crate::gui::ui_text("Tür", "Type");
                 let type_text = if self.sort_by == SortBy::Type {
                     let mut s = String::from(type_label);
                     s.push_str(sort_arrow);

@@ -2041,9 +2041,7 @@ impl BrowserApp {
                 }
                 // HTTPS'te ham (şifreli) kayıtlar HTTP olarak ayrıştırılmaz;
                 // yalnızca çözülmüş uygulama verisi kullanılır.
-                let data_to_parse: &[u8] = if self.is_https {
-                    &self.tls_app_data
-                } else if tls_established && !self.tls_app_data.is_empty() {
+                let data_to_parse: &[u8] = if self.is_https || (tls_established && !self.tls_app_data.is_empty()) {
                     &self.tls_app_data
                 } else {
                     &self.response_data[..self.response_len]

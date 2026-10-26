@@ -223,7 +223,6 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
                     let step = if depth == 16 { 2 } else { 1 };
                     let g = *row.get(x * 2 * step)?;
                     let a = *row.get(x * 2 * step + step)?;
-                    let g = if depth == 16 { g } else { g };
                     (blend_white(g, a), blend_white(g, a), blend_white(g, a))
                 }
                 6 => {

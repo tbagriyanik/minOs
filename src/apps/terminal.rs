@@ -1685,7 +1685,7 @@ impl TerminalApp {
                                 alloc::format!("/bin/{}", subarg)
                             };
                             if let Some(data) = vfs.read_file(&path) {
-                                let csum = crate::apps::pkgmgr::MinPkg::compute_sha256(&data);
+                                let csum = crate::apps::pkgmgr::MinPkg::compute_sha256(data);
                                 let mut b = TextBuf::new();
                                 b.push_str("SHA-256: ");
                                 b.push_str(&csum);

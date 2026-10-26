@@ -372,31 +372,31 @@ impl Viewer3DApp {
         win_w: usize,
         _win_h: usize,
     ) -> bool {
-        // Araç çubuğu düğmeleri: Y aralığı 30..54
-        if rel_y >= 30 && rel_y <= 54 {
+        // Araç çubuğu düğmeleri: Y aralığı 30..=54
+        if (30..=54).contains(&rel_y) {
             // Şekil butonları
-            if rel_x >= 10 && rel_x <= 60 {
+            if (10..=60).contains(&rel_x) {
                 self.set_shape(Shape3D::Cube);
                 return true;
-            } else if rel_x >= 64 && rel_x <= 126 {
+            } else if (64..=126).contains(&rel_x) {
                 self.set_shape(Shape3D::Cylinder);
                 return true;
-            } else if rel_x >= 130 && rel_x <= 186 {
+            } else if (130..=186).contains(&rel_x) {
                 self.set_shape(Shape3D::Sphere);
                 return true;
-            } else if rel_x >= 190 && rel_x <= 254 {
+            } else if (190..=254).contains(&rel_x) {
                 self.set_shape(Shape3D::Pyramid);
                 return true;
-            } else if rel_x >= 262 && rel_x <= 376 {
+            } else if (262..=376).contains(&rel_x) {
                 self.toggle_auto_rotate();
                 return true;
-            } else if rel_x >= 380 && rel_x <= 456 {
+            } else if (380..=456).contains(&rel_x) {
                 self.toggle_wireframe();
                 return true;
-            } else if rel_x >= win_w.saturating_sub(110) && rel_x <= win_w.saturating_sub(82) {
+            } else if (win_w.saturating_sub(110)..=win_w.saturating_sub(82)).contains(&rel_x) {
                 self.zoom_in();
                 return true;
-            } else if rel_x >= win_w.saturating_sub(80) && rel_x <= win_w.saturating_sub(52) {
+            } else if (win_w.saturating_sub(80)..=win_w.saturating_sub(52)).contains(&rel_x) {
                 self.zoom_out();
                 return true;
             } else if rel_x >= win_w.saturating_sub(50) && rel_x <= win_w.saturating_sub(8) {

@@ -166,7 +166,7 @@ impl MinPkg {
         let Some(data) = vfs.read_file(path) else {
             return Err("Dosya bulunamadi");
         };
-        let actual = Self::compute_sha256(&data);
+        let actual = Self::compute_sha256(data);
         Ok(actual.eq_ignore_ascii_case(expected_sha256.trim()))
     }
 
@@ -220,7 +220,7 @@ impl MinPkg {
                 let version = vfs
                     .read_file(&path)
                     .and_then(|data| {
-                        let text = core::str::from_utf8(&data).ok()?;
+                        let text = core::str::from_utf8(data).ok()?;
                         let mut lines = text.lines();
                         if lines.next()? != "MINOS-BUILTIN" {
                             return None;

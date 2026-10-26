@@ -374,7 +374,7 @@ impl NotepadApp {
                     let p_len = self.file_path_len;
                     path_buf[..p_len].copy_from_slice(&self.file_path[..p_len]);
                     if let Ok(p_str) = core::str::from_utf8(&path_buf[..p_len]) {
-                        self.open_file(p_str, &data);
+                        self.open_file(p_str, data);
                     }
                 } else {
                     self.status_msg =

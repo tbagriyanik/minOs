@@ -115,11 +115,7 @@ impl MinGuiCompositor {
 
         // Başlat Menüsü Butonu
         let start_hover = in_rect(mx, my, l.start) || self.is_start_menu_open;
-        let start_bg = if self.is_start_menu_open {
-            Color::ACCENT_BLUE
-        } else {
-            Color::ACCENT_BLUE
-        };
+        let start_bg = Color::ACCENT_BLUE;
         Self::draw_button(fb, l.start, start_bg, "", Color::WHITE, start_hover);
         // Kedi ikonu + "minOs" metni buton içinde yatay olarak ortalanır;
         // metin buton kenarlarına yapışmaz veya taşmaz.

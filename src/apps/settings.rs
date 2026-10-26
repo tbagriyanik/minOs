@@ -153,7 +153,7 @@ fn render_device_inventory(
         "Klavye: PS/2"
     });
     if crate::drivers::usb_hid::keyboard_present() {
-        line.push(if english { " + USB HID" } else { " + USB HID" });
+        line.push(" + USB HID");
     }
     line.push(" | ");
     line.push(match layout {
@@ -170,7 +170,7 @@ fn render_device_inventory(
     let mut line = DeviceLine::new();
     line.push(if english { "Mouse: PS/2" } else { "Fare: PS/2" });
     if crate::drivers::usb_hid::mouse_present() {
-        line.push(if english { " + USB HID" } else { " + USB HID" });
+        line.push(" + USB HID");
     }
     line.push(if english {
         " | 3 buttons | "
@@ -319,7 +319,7 @@ fn render_device_inventory(
                         dev_line.push(if english { "USB Mouse" } else { "USB Fare" });
                     }
                 }
-                dev_line.push(if english { " | Port: " } else { " | Port: " });
+                dev_line.push(" | Port: ");
                 dev_line.number(port as u64);
                 dev_line.push(if english {
                     " (Hotplug Ready)"
@@ -2419,7 +2419,7 @@ impl SystemSettings {
                     let link = crate::drivers::e1000::link_up();
                     if ready && link {
                         net_line.push(if english {
-                            "Intel 82540EM Link UP | 10.0.2.15 hazır"
+                            "Intel 82540EM Link UP | 10.0.2.15 ready"
                         } else {
                             "Intel 82540EM Link UP | 10.0.2.15 hazır"
                         });

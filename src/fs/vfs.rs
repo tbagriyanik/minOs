@@ -302,7 +302,7 @@ impl VirtualFileSystem {
                 if let Some((_, arc)) = large_files.iter().find(|(p, _)| *p == it.path) {
                     kind = 2;
                     owned = Some(arc.clone());
-                    data = &owned.as_ref().unwrap();
+                    data = owned.as_ref().unwrap();
                 }
             }
             out.push(kind);

@@ -1655,8 +1655,8 @@ pub extern "C" fn _start() -> ! {
         &viewer3d_app,
         &pkgmgr_app,
         &now,
-        &mouse,
-        &keyboard,
+        mouse,
+        keyboard,
         memory_mgr.pmm.total_memory_bytes,
         memory_mgr.pmm.used_memory_bytes,
         anim_tick,
@@ -3605,19 +3605,11 @@ pub extern "C" fn _start() -> ! {
                                     mx,
                                     my,
                                     apps::filemanager::FileManagerApp::header_name_rect(wx, wy, ww),
-                                ) {
-                                    filemanager_app.cycle_sort_by();
-
-                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-                                } else if gui::in_rect(
+                                ) || gui::in_rect(
                                     mx,
                                     my,
                                     apps::filemanager::FileManagerApp::header_size_rect(wx, wy, ww),
-                                ) {
-                                    filemanager_app.cycle_sort_by();
-
-                                    fm_ensure_selection_visible(&mut compositor, &filemanager_app);
-                                } else if gui::in_rect(
+                                ) || gui::in_rect(
                                     mx,
                                     my,
                                     apps::filemanager::FileManagerApp::header_type_rect(wx, wy, ww),
@@ -4736,8 +4728,7 @@ pub extern "C" fn _start() -> ! {
                                     } else if mx >= wx + 102 && mx <= wx + 150 {
                                         let fps = apps::videoplayer::VideoPlayerApp::FPS;
                                         if videoplayer_app.frame >= fps * 10 {
-                                            videoplayer_app.frame =
-                                                videoplayer_app.frame - fps * 10;
+                                            videoplayer_app.frame -= fps * 10;
                                         } else {
                                             videoplayer_app.frame = 0;
                                         }
@@ -5461,7 +5452,7 @@ pub extern "C" fn _start() -> ! {
 
                 drivers::keyboard::KeyAction::CloseActiveWindow => {
                     let active_window = compositor.active_window_idx.filter(|&idx| {
-                        compositor.windows[idx].map_or(false, |w| w.is_open && !w.is_minimized)
+                        compositor.windows[idx].is_some_and(|w| w.is_open && !w.is_minimized)
                     });
 
                     if let Some(idx) = active_window {
@@ -5517,12 +5508,10 @@ pub extern "C" fn _start() -> ! {
                         .flatten()
                         .any(|w| w.is_open && !w.is_minimized);
 
-                    for slot in compositor.windows.iter_mut() {
-                        if let Some(w) = slot {
-                            if w.is_open {
-                                w.is_minimized = show_desktop;
-                                w.is_focused = false;
-                            }
+                    for w in compositor.windows.iter_mut().flatten() {
+                        if w.is_open {
+                            w.is_minimized = show_desktop;
+                            w.is_focused = false;
                         }
                     }
 
@@ -5534,12 +5523,10 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::WinMinimizeAll => {
-                    for slot in compositor.windows.iter_mut() {
-                        if let Some(w) = slot {
-                            if w.is_open {
-                                w.is_minimized = true;
-                                w.is_focused = false;
-                            }
+                    for w in compositor.windows.iter_mut().flatten() {
+                        if w.is_open {
+                            w.is_minimized = true;
+                            w.is_focused = false;
                         }
                     }
 
@@ -6485,16 +6472,16 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::SaveDocument => {
-                    if app_is_focused(&compositor, 2) {
-                        if with_busy_progress(
+                    if app_is_focused(&compositor, 2)
+                        && with_busy_progress(
                             &mut fb,
                             mx,
                             my,
                             gui::ui_text("Dosya kaydediliyor...", "Saving file..."),
                             || notepad_app.save_file(&mut fs_mgr.vfs),
-                        ) {
-                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
-                        }
+                        )
+                    {
+                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                     }
                 }
 
@@ -6844,9 +6831,7 @@ pub extern "C" fn _start() -> ! {
                                 bmp_data.push(r);
                             }
 
-                            for _ in 0..(row_bytes - sw * 3) {
-                                bmp_data.push(0);
-                            }
+                            bmp_data.extend(core::iter::repeat_n(0, row_bytes - sw * 3));
                         }
 
                         let mut path = alloc::string::String::from("/desktop/ekran_");
@@ -7936,7 +7921,7 @@ pub extern "C" fn _start() -> ! {
                 compositor.start_search_focused = true;
 
                 compositor.push_start_search(ch);
-            } else if compositor.is_start_menu_open && (ch >= '1' && ch <= '9') {
+            } else if compositor.is_start_menu_open && ('1'..='9').contains(&ch) {
                 let menu_index = (ch as usize) - ('1' as usize);
 
                 if let Some(app_idx) = gui::MinGuiCompositor::start_menu_app_idx(menu_index) {
@@ -8442,10 +8427,8 @@ pub extern "C" fn _start() -> ! {
                 None
             } else if let Some(drag) = drag_dirty_rect {
                 Some(drag)
-            } else if let Some(app_dirty) = _app_dirty_rect {
-                Some(app_dirty)
             } else {
-                None
+                _app_dirty_rect
             };
 
             render_full_frame(

@@ -278,7 +278,7 @@ pub const OHCI_CC_NOT_ACCESSED: u32 = 15;
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OhciEd {
-    pub flags: u32,  // Bit 0..6: FA, 7..10: EN, 11..12: d, 13: s, 14: k, 15: f, 16..26: MPS
+    pub flags: u32, // Bit 0..6: FA, 7..10: EN, 11..12: d, 13: s, 14: k, 15: f, 16..26: MPS
     pub tail_p: u32, // TD Kuyruk Sonu Fiziksel Adresi
     pub head_p: u32, // TD Kuyruk Başı Fiziksel Adresi + Durum (bit 0: Halted, bit 1: Carry)
     pub next_ed: u32, // Sonraki ED Fiziksel Adresi

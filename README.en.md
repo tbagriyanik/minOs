@@ -33,7 +33,8 @@
   - ✅ **Bus & Timing:** PCIe, PCI and Timer (PIT/HPET/APIC/TSC) infrastructure.
 - **Live USB Hot-plug:** USB devices are detected instantly while running and toast notifications are shown. When a USB keyboard or mouse is plugged in or removed while minOs is running, the system detects it immediately. A live toast notification is shown on the desktop (`USB keyboard connected`, `USB mouse removed`), open screens/windows are redrawn and the hardware list in System Settings > Devices is updated instantly.
 - **OHCI & UHCI & EHCI Transfer Layer:** A complete transfer layer and port handoff infrastructure was integrated for OHCI (`OhciEd`, `OhciTd`, `OhciHcca` and DMA queue management), UHCI (`UhciQh`, `UhciTd`) and EHCI controllers.
-- **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress` (V4/V6), an RFC 4291 address parser (`::` compression and `[...]` format), RFC 2464 Multicast MAC mapping, RFC 8200 pseudo-header checksum, ICMPv6 Echo Request/Reply (ping6), Neighbor Discovery (Solicitation/Advertisement) and `ETHERTYPE_IPV6` (0x86DD) support were added to the `netstack.rs` layer; `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` and IPv6 address validation in the web browser were added to the `socket.rs` layer.
+- **minJs Advanced JavaScript Runtime:** The built-in `no_std` JavaScript engine for the web browser was expanded: binary arithmetic operators with operator precedence (`+`, `-`, `*`, `/`, `%`, `(...)`, unary `+`/`-`/`!`), loops (`for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`), variable mutations (`++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`), array methods (`.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`), object properties and bracket indexing (`obj.prop`, `obj["key"]`, `delete obj.prop`), `Object.keys()` / `Object.values()`, JSON parsing and serialization (`JSON.stringify()`, `JSON.parse()`), math and string helpers (`Math.{abs, min, max, pow, round, floor, ceil}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`) and global conversions (`parseInt`, `parseFloat`, `String`, `Number`, `Boolean`).
+- **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress` (V4/V6), an RFC 4291 address parser (`::` compression and `[...]` format), RFC 2464 Multicast MAC mapping, RFC 8200 pseudo-header checksum, ICMPv6 Echo Request/Reply (`ping6`), Neighbor Discovery (Solicitation/Advertisement) and `ETHERTYPE_IPV6` (0x86DD) support were added to the `netstack.rs` layer; terminal `ipconfig` local IPv6 (Link-Local EUI-64) display and dual-stack `ping`/`ping6` commands; `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` and IPv6 address validation in the web browser were added to the `socket.rs` layer.
 - **exFAT and ext4 Fragmentation & Deep Directory Integrity:** The ability to create files in deep directory trees, punch holes by deleting files and consistently allocate new files that fill fragmented block/cluster chains on ext4 and exFAT was verified with host stress tests (`host_fs_tests.rs`).
 - **Expanded Trust Store (Root CA):** In addition to ISRG Root X1, the Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) and DigiCert Global Root (CA & G2) root certificates were embedded into the kernel.
 - **ISRG Root X1 Root CA & TLS Chain Verification:** The Let's Encrypt ISRG Root X1 root certificate (`isrgrootx1.der`) is embedded in the kernel. The certificate chain received from the server is scanned with RFC 5280 rules and the RSA PKCS#1 v1.5 and ECDSA P-256 signatures of leaf and intermediate certificates are fully verified up to the trusted ISRG Root X1 public key.
@@ -134,6 +135,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 - **USB Audio Recording:** Speaker output (playback) is active; PCM recording via microphone is TODO.
 - **SD/MMC Card Writing:** Sector reading is active; CSD register parsing and block write reliability are WIP.
 - **CRL/OCSP Revocation Checking:** Parsing algorithms are integrated; automatic HTTP/OCSP download requests are planned.
+- **minJs JavaScript Limitations:** minJs supports functions, arrays, objects, loops (`for`/`while`), JSON, and core DOM APIs in a `no_std` environment; advanced ECMAScript features such as lexical closures, prototype inheritance chains, class inheritance, and async/await/Promises are not yet implemented.
 
 ---
 
@@ -220,7 +222,7 @@ If you want to run directly from the QEMU command line without the `run.ps1` aut
 ```bash
 qemu-system-x86_64 -m 512M -smp 2 \
   -cdrom minos.iso -boot d \
-  -vga std -global VGA.vgamem_mb=64 \
+  -vga virtio \
   -audiodev pa,id=snd0 \
   -device intel-hda -device hda-duplex,audiodev=snd0 \
   -netdev user,id=n0 -device e1000,netdev=n0
@@ -231,12 +233,13 @@ qemu-system-x86_64 -m 512M -smp 2 \
 # The SDL audio backend prevents the DirectSoundCapture (microphone open) error:
 qemu-system-x86_64.exe -m 512M -smp 2 `
   -cdrom .\minos.iso -boot d `
-  -vga std -global VGA.vgamem_mb=64 `
+  -vga virtio `
   -audiodev driver=sdl,id=snd0 `
   -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Note: If you use DirectSound, using `hda-output` instead of `hda-duplex` or `-audiodev driver=sdl` prevents QEMU startup crashes caused by a missing microphone capture device.*
+> 💡 *Note: VirtIO-GPU (`-vga virtio`) provides direct 2D hardware acceleration and scanout flush queues in QEMU/KVM environments. For legacy/standard VGA, `-vga std -global VGA.vgamem_mb=64` can be used.*
 
 ---
 

@@ -33,7 +33,8 @@
   - ✅ **Veri Yolu & Zaman:** PCIe, PCI ve Timer (PIT/HPET/APIC/TSC) altyapısı.
 - **Canlı USB Tak/Çıkar:** Çalışma sırasında USB cihazlarının anında algılanıp toast bildirimleri gösteriliyor. minOs çalışırken USB klavye veya fare takıldığında veya çıkarıldığında sistem tarafından anında algılanır. Masaüstünde canlı toast bildirimi gösterilir (`USB Klavye takıldı`, `USB Fare çıkarıldı`), açık ekran/pencereler yeniden çizilir ve Sistem Ayarları > Aygıtlar sekmesindeki donanım listesi anında güncellenir.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** OHCI (`OhciEd`, `OhciTd`, `OhciHcca` ve DMA kuyruk yönetimi), UHCI (`UhciQh`, `UhciTd`) ve EHCI denetleyicileri için tam transfer katmanı ve port handoff altyapısı entegre edildi.
-- **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı), RFC 2464 Multicast MAC haritalama, RFC 8200 sözde başlık checksum hesaplama, ICMPv6 Echo Request/Reply (ping6), Neighbor Discovery (Solicitation/Advertisement) ve `ETHERTYPE_IPV6` (0x86DD) desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
+- **minJs İleri Düzey JavaScript Çalışma Zamanı:** Web tarayıcısı için yerleşik `no_std` JavaScript motoru güçlendirildi: ikili aritmetik operatörler ve tam işlem önceliği (`+`, `-`, `*`, `/`, `%`, `(...)`, tekli `+`/`-`/`!`), döngüler (`for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`), değişken mutasyonları (`++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`), gelişmiş dizi metotları (`.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`), nesne özellikleri ve köşe parantezli erişim (`obj.prop`, `obj["key"]`, `delete obj.prop`), `Object.keys()` / `Object.values()`, JSON ayrıştırma ve serileştirme (`JSON.stringify()`, `JSON.parse()`), matematiksel ve dize yardımcıları (`Math.{abs, min, max, pow, round, floor, ceil}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`) ve global dönüşümler (`parseInt`, `parseFloat`, `String`, `Number`, `Boolean`).
+- **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı), RFC 2464 Multicast MAC haritalama, RFC 8200 sözde başlık checksum hesaplama, ICMPv6 Echo Request/Reply (`ping6`), Neighbor Discovery (Solicitation/Advertisement) ve `ETHERTYPE_IPV6` (0x86DD) desteği; terminalde `ipconfig` yerel IPv6 (Link-Local EUI-64) gösterimi ve `ping`/`ping6` çift yığın desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
 - **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
 - **Genişletilmiş Güven Deposu (Root CA):** ISRG Root X1'e ek olarak Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) ve DigiCert Global Root (CA & G2) kök sertifikaları çekirdeğe dahil edildi.
 - **ISRG Root X1 Kök CA & TLS Zincir Doğrulaması:** Let's Encrypt ISRG Root X1 kök sertifikası (`isrgrootx1.der`) çekirdeğe gömüldü. Sunucudan gelen sertifika zinciri RFC 5280 kurallarıyla taranarak yaprak ve ara sertifikaların RSA PKCS#1 v1.5 ve ECDSA P-256 imzaları güvenilen ISRG Root X1 açık anahtarına kadar eksiksiz doğrulanır.
@@ -134,6 +135,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 - **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.
 - **SD/MMC Karta Yazma:** Sektör okuma aktiftir; CSD kayıt ayrıştırması ve blok yazma güvenilirliği WIP.
 - **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları entegre edilmiştir; otomatik HTTP/OCSP indirme isteği planlanmaktadır.
+- **minJs JavaScript Sınırları:** minJs `no_std` ortamında fonksiyonlar, diziler, nesneler, döngüler (`for`/`while`), JSON ve temel DOM işlemlerini destekler; tam ECMAScript motorlarının sağladığı karmaşık closures/lexical scoping, prototip kalıtım zinciri (prototype chain), `class` kalıtımı ve `async`/`await`/Promise mekanizmaları henüz tam olarak yer almamaktadır.
 
 ---
 
@@ -223,7 +225,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 ```bash
 qemu-system-x86_64 -m 512M -smp 2 \
   -cdrom minos.iso -boot d \
-  -vga std -global VGA.vgamem_mb=64 \
+  -vga virtio \
   -audiodev pa,id=snd0 \
   -device intel-hda -device hda-duplex,audiodev=snd0 \
   -netdev user,id=n0 -device e1000,netdev=n0
@@ -234,12 +236,13 @@ qemu-system-x86_64 -m 512M -smp 2 \
 # SDL ses arka ucu DirectSoundCapture (mikrofon açma) hatasını önler:
 qemu-system-x86_64.exe -m 512M -smp 2 `
   -cdrom .\minos.iso -boot d `
-  -vga std -global VGA.vgamem_mb=64 `
+  -vga virtio `
   -audiodev driver=sdl,id=snd0 `
   -device intel-hda -device hda-output,audiodev=snd0 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Not: DirectSound kullanıyorsanız `hda-duplex` yerine `hda-output` veya `-audiodev driver=sdl` kullanmak mikrofon yakalama aygıtı eksikliğinden kaynaklanan QEMU açılış çökmelerini önler.*
+> 💡 *Not: VirtIO-GPU (`-vga virtio`), QEMU/KVM ortamında doğrudan donanım 2D hızlandırma ve scanout flush mekanizması sunar. Standart VGA için `-vga std -global VGA.vgamem_mb=64` kullanılabilir.*
 
 ---
 

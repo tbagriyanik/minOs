@@ -1072,10 +1072,7 @@ fn extract_temp_methods(slice: &[u8], tz: &mut ThermalZoneParsedData) {
 }
 
 /// AML bayt dizisi içinde ThermalZone ve ilişkili _TMP, _CRT sıcaklık metotlarını arar.
-pub fn scan_aml_for_thermal_zones(
-    aml_bytes: &[u8],
-    out: &mut [ThermalZoneParsedData; 8],
-) -> usize {
+pub fn scan_aml_for_thermal_zones(aml_bytes: &[u8], out: &mut [ThermalZoneParsedData; 8]) -> usize {
     let mut count = 0;
     if aml_bytes.is_empty() {
         return 0;
@@ -1151,7 +1148,8 @@ pub fn scan_aml_for_power_devices(
         }
 
         // PowerResource (0x5B 0x84)
-        if i + 8 < aml_bytes.len() && aml_bytes[i] == 0x5B && aml_bytes[i + 1] == 0x84 && count < 8 {
+        if i + 8 < aml_bytes.len() && aml_bytes[i] == 0x5B && aml_bytes[i + 1] == 0x84 && count < 8
+        {
             let mut parser = AmlParser::new(&aml_bytes[i + 2..]);
             if let Some(pkg_len) = parser.parse_pkg_length() {
                 if let Some(name) = parser.parse_name_string() {
@@ -1183,7 +1181,8 @@ pub fn scan_aml_for_power_devices(
         }
 
         // DeviceOp (0x5B 0x82) with Power capabilities
-        if i + 8 < aml_bytes.len() && aml_bytes[i] == 0x5B && aml_bytes[i + 1] == 0x82 && count < 8 {
+        if i + 8 < aml_bytes.len() && aml_bytes[i] == 0x5B && aml_bytes[i + 1] == 0x82 && count < 8
+        {
             let mut parser = AmlParser::new(&aml_bytes[i + 2..]);
             if let Some(pkg_len) = parser.parse_pkg_length() {
                 if let Some(name) = parser.parse_name_string() {

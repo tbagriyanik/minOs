@@ -1172,7 +1172,7 @@ impl SystemSettings {
         crate::gui::wallpaper::apply(self.wallpaper, self.wall_color);
         keyboard.layout = self.keyboard_layout;
         crate::gui::set_ui_language_english(self.language.is_english());
-        *now = DateTime::read().with_hour_offset(self.region_offset());
+        *now = DateTime::read_for_region(self.region_offset());
         compositor.cal_year = now.year;
         compositor.cal_month = now.month;
     }

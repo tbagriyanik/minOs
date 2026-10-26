@@ -1614,6 +1614,11 @@ pub fn send_ipv6(dst_ip: Ipv6Address, next_header: u8, payload: &[u8]) -> bool {
     ip_packet[24..40].copy_from_slice(&dst_ip.0);
     ip_packet[40..40 + payload.len()].copy_from_slice(payload);
 
+    if dst_ip.is_loopback() || dst_ip == src_ip {
+        handle_ipv6(&ip_packet[..40 + payload.len()]);
+        return true;
+    }
+
     let mut frame = [0u8; 1514];
     let len = build_ethernet(
         dst_mac,
@@ -1642,6 +1647,67 @@ pub fn send_icmpv6_echo(dst: Ipv6Address, id: u16, seq: u16, data: &[u8]) -> boo
     pkt[2..4].copy_from_slice(&csum.to_be_bytes());
 
     send_ipv6(dst, 58, &pkt[..total_len])
+}
+
+/// ICMPv6 Echo Reply (Ping6) yanıt kapsayıcısı.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PingReply6 {
+    pub src: Ipv6Address,
+    pub seq: u16,
+    pub len: usize,
+    pub hop_limit: u8,
+}
+
+static mut LAST_PING6_REPLY_SRC: Option<Ipv6Address> = None;
+static mut LAST_PING6_REPLY_SEQ: u16 = 0;
+static mut LAST_PING6_REPLY_LEN: usize = 0;
+static mut LAST_PING6_REPLY_HOP_LIMIT: u8 = 0;
+
+#[inline]
+pub fn clear_ping6_reply() {
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_PING6_REPLY_SRC), None);
+    }
+}
+
+#[inline]
+pub fn has_ping6_reply() -> bool {
+    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING6_REPLY_SRC)).is_some() }
+}
+
+pub fn take_ping6_reply() -> Option<PingReply6> {
+    unsafe {
+        let src = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING6_REPLY_SRC));
+        if let Some(ip) = src {
+            let seq = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING6_REPLY_SEQ));
+            let len = core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING6_REPLY_LEN));
+            let hop_limit =
+                core::ptr::read_volatile(core::ptr::addr_of!(LAST_PING6_REPLY_HOP_LIMIT));
+            core::ptr::write_volatile(core::ptr::addr_of_mut!(LAST_PING6_REPLY_SRC), None);
+            Some(PingReply6 {
+                src: ip,
+                seq,
+                len,
+                hop_limit,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// ICMPv6 Echo Request paketi gönderir (Ping6).
+pub fn ping6_ex(target: Ipv6Address, seq: u16, payload_len: usize) -> bool {
+    let mut data = [0u8; 64];
+    let plen = payload_len.min(64);
+    for i in 0..plen {
+        data[i] = b'a' + ((i % 26) as u8);
+    }
+    send_icmpv6_echo(target, 0x1234, seq, &data[..plen])
+}
+
+pub fn ping6(target: Ipv6Address) -> bool {
+    ping6_ex(target, 1, 32)
 }
 
 /// IPv4 veya IPv6 adres kapsayıcısı.
@@ -1729,7 +1795,7 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
     Some(Ipv6Address(bytes))
 }
 
-fn handle_ipv6(payload: &[u8]) {
+pub fn handle_ipv6(payload: &[u8]) {
     // IPv6 başlığı en az 40 bayt olmalıdır
     if payload.len() < 40 {
         return;
@@ -1771,6 +1837,31 @@ fn handle_ipv6(payload: &[u8]) {
                     reply[2] = (csum >> 8) as u8;
                     reply[3] = (csum & 0xFF) as u8;
                     send_ipv6(src_ip, 58, &reply[..icmp_len]);
+                } else if icmp_type == ICMPV6_TYPE_ECHO_REPLY {
+                    let seq = if icmp.len() >= 8 {
+                        u16::from_be_bytes([icmp[6], icmp[7]])
+                    } else {
+                        0
+                    };
+                    let data_len = (payload.len() - 40).saturating_sub(8);
+                    unsafe {
+                        core::ptr::write_volatile(
+                            core::ptr::addr_of_mut!(LAST_PING6_REPLY_SRC),
+                            Some(src_ip),
+                        );
+                        core::ptr::write_volatile(
+                            core::ptr::addr_of_mut!(LAST_PING6_REPLY_SEQ),
+                            seq,
+                        );
+                        core::ptr::write_volatile(
+                            core::ptr::addr_of_mut!(LAST_PING6_REPLY_LEN),
+                            data_len,
+                        );
+                        core::ptr::write_volatile(
+                            core::ptr::addr_of_mut!(LAST_PING6_REPLY_HOP_LIMIT),
+                            hop_limit,
+                        );
+                    }
                 } else if icmp_type == ICMPV6_TYPE_NEIGHBOR_SOLICIT {
                     // Neighbor Advertisement (Type 136)
                     let icmp_len = payload.len() - 40;

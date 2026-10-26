@@ -186,6 +186,16 @@ impl DateTime {
         }
     }
 
+    pub fn read_for_region(offset: i8) -> Self {
+        let time = Self::read();
+        let hypervisor_present = core::arch::x86_64::__cpuid(1).ecx & (1 << 31) != 0;
+        if hypervisor_present {
+            time
+        } else {
+            time.with_hour_offset(offset)
+        }
+    }
+
     pub fn is_leap_year(year: u16) -> bool {
         (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
     }

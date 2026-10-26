@@ -16,6 +16,16 @@ use crate::drivers::crypto::x509::{parse_x509_ec_public_key, parse_x509_rsa_publ
 use alloc::string::String;
 use alloc::vec::Vec;
 
+/// Seri port tanılama çıktısı. Host testlerinde (`--test` modu) `crate::serial`
+/// bulunmadığından çağrı sessizce atlanır.
+#[cfg(not(test))]
+fn serial_print(text: &str) {
+    crate::serial::print(text);
+}
+
+#[cfg(test)]
+fn serial_print(_text: &str) {}
+
 pub const TLS_RECORD_CHANGE_CIPHER_SPEC: u8 = 20;
 pub const TLS_RECORD_ALERT: u8 = 21;
 pub const TLS_RECORD_HANDSHAKE: u8 = 22;
@@ -376,6 +386,12 @@ impl TlsSession {
         let mut buf = core::mem::take(&mut self.hs_buffer);
         buf.extend_from_slice(payload);
 
+        // El sıkışma mesajı kayıt sınırını aşabilir: tek bir 0x16 kaydında
+        // birden fazla mesaj olabildiği gibi (sunucular sık sık böyle yapar)
+        // bir mesaj da birden fazla kayda bölünebilir. Transcript hash'e mesaj
+        // gövdesi değil, tam çerçevesi (tür + 3 bayt uzunluk + gövde) eklenir;
+        // bu yüzden parça parça gelen mesajlar tamponda birleştirilip
+        // tamamlanınca eşzamanlı olarak güncellenir.
         let mut pos = 0;
         while pos + 4 <= buf.len() {
             let msg_type = buf[pos];
@@ -385,18 +401,17 @@ impl TlsSession {
             if pos + 4 + msg_len > buf.len() {
                 break;
             }
-            let msg_frame = &buf[pos..pos + 4 + msg_len];
-            let msg_body = &buf[pos + 4..pos + 4 + msg_len];
+            let frame_start = pos;
+            let frame_end = pos + 4 + msg_len;
+            pos = frame_end;
 
-            // TLS 1.3'te Finished doğrulaması, mesajın *eklenmeden önceki*
-            // transcript hash ile yapılır. Bu yüzden hash'in anlık kopyası
-            // saklanır.
-            let pre_transcript = if self.tls13_mode {
-                Some(self.tls13_transcript_hash.clone())
-            } else {
-                None
-            };
+            // TLS 1.3'te Finished ve CertificateVerify doğrulaması, mesajın
+            // *eklenmeden önceki* transcript hash ile yapılır. Bu yüzden hash'in
+            // anlık kopyası saklanır.
+            let pre_transcript = Some(self.tls13_transcript_hash.clone());
 
+            let msg_frame = &buf[frame_start..frame_end];
+            let msg_body = &buf[frame_start + 4..frame_end];
             if !self.tls13_mode {
                 self.handshake_hash.update(msg_frame);
             }
@@ -420,12 +435,15 @@ impl TlsSession {
                 }
                 _ => {}
             }
-            pos += 4 + msg_len;
         }
         self.hs_buffer.extend_from_slice(&buf[pos..]);
         Ok(())
     }
 
+    /// TLS 1.3 el sıkışma anahtarları, RFC 8446 uyarınca
+    /// Transcript-Hash(ClientHello..ServerHello) üzerinden türetilir; bu hash
+    /// `tls13_transcript_hash` içinde hazırdır (ServerHello çerçevesi
+    /// `process_handshake_records` tarafından bu fonksiyondan önce eklenmiştir).
     fn handle_server_hello(&mut self, body: &[u8]) -> Result<(), ()> {
         if body.len() < 34 + 1 + 2 + 1 {
             return Err(());
@@ -538,24 +556,34 @@ impl TlsSession {
             match ext_type {
                 0x002b => {
                     // supported_versions: check if server selected TLS 1.3.
-                    if ext_len >= 2 {
-                        let selected = u16::from_be_bytes([ext_body[0], ext_body[1]]);
-                        if selected == TLS_VERSION_1_3 {
-                            self.tls13_mode = true;
-                        }
+                    // Tek seçilen sürüm 2 baytlık bir değerdir; farklı bir sürüm
+                    // (TLS 1.2 ve altı) seçildiyse tls13_mode kapalı kalır.
+                    if ext_len != 2 {
+                        return Err(());
                     }
+                    let selected = u16::from_be_bytes([ext_body[0], ext_body[1]]);
+                    self.tls13_mode = selected == TLS_VERSION_1_3;
                 }
                 0x0033 => {
                     // key_share: server's ECDHE share.
-                    if ext_len >= 4 {
-                        let group = u16::from_be_bytes([ext_body[0], ext_body[1]]);
-                        if group == NAMED_CURVE_SECP256R1 {
-                            let point_len = u16::from_be_bytes([ext_body[2], ext_body[3]]) as usize;
-                            if ext_len >= 4 + point_len && point_len == 65 {
-                                self.ecdhe_point = ext_body[4..4 + point_len].to_vec();
-                            }
-                        }
+                    // Duz nokta (uncompressed, 0x04 ile baslayan 65 bayt) beklenir;
+                    // destekledigimiz tek grup secp256r1'dir.
+                    if ext_len < 4 {
+                        return Err(());
                     }
+                    let group = u16::from_be_bytes([ext_body[0], ext_body[1]]);
+                    if group != NAMED_CURVE_SECP256R1 {
+                        return Err(());
+                    }
+                    let point_len = u16::from_be_bytes([ext_body[2], ext_body[3]]) as usize;
+                    if point_len != 65 || ext_len != 4 + point_len {
+                        return Err(());
+                    }
+                    let point = &ext_body[4..4 + point_len];
+                    if point[0] != 0x04 {
+                        return Err(());
+                    }
+                    self.ecdhe_point = point.to_vec();
                 }
                 _ => {}
             }
@@ -729,17 +757,15 @@ impl TlsSession {
             }
         }
 
+        // Sertifika zinciri sertifika "uyarısı" değil, sertifika hatasıdır:
+        // doğrulama başarısızsa el sıkışma durdurulur. Tanılama bilgisi
+        // (cert_verified / cert_error) tarayıcıya raporlanır.
+        // Host testlerinde (`--test`) bu bölüm derlenmez: el sıkışma düzeneği
+        // gerçek bir zincir değil, imza yollarını sınayan sentetik sertifikalar
+        // kullanır. Üretim derlemesinde sertifika doğrulaması zorunludur.
         #[cfg(not(test))]
         if let Some(first_cert) = cert_chain.first() {
-            let rtc = crate::drivers::rtc::DateTime::read();
-            let now = crate::drivers::crypto::x509::X509Time {
-                year: rtc.year,
-                month: rtc.month,
-                day: rtc.day,
-                hour: rtc.hour,
-                minute: rtc.minute,
-                second: rtc.second,
-            };
+            let now = crate::drivers::crypto::x509::X509Time::now();
             let field_res = crate::drivers::crypto::x509::verify_certificate_fields(
                 first_cert,
                 &self.hostname,
@@ -750,48 +776,50 @@ impl TlsSession {
             if let Err(e) = field_res {
                 self.cert_verified = false;
                 self.cert_error = Some(e);
-                crate::serial::print("[TLS] Sertifika uyarısı: ");
+                serial_print("[TLS] Sertifika hatası: ");
                 match e {
                     crate::drivers::crypto::x509::CertValidationError::NotYetValid => {
-                        crate::serial::print("henüz geçerli değil (not_before)\n");
+                        serial_print("henüz geçerli değil (not_before)\n");
                     }
                     crate::drivers::crypto::x509::CertValidationError::Expired => {
-                        crate::serial::print("süresi dolmuş (not_after)\n");
+                        serial_print("süresi dolmuş (not_after)\n");
                     }
                     crate::drivers::crypto::x509::CertValidationError::HostnameMismatch => {
-                        crate::serial::print("hostname/SNI eşleşmedi\n");
+                        serial_print("hostname/SNI eşleşmedi\n");
                     }
                     crate::drivers::crypto::x509::CertValidationError::InvalidDer => {
-                        crate::serial::print("geçersiz DER yapısı\n");
+                        serial_print("geçersiz DER yapısı\n");
                     }
                     _ => {
-                        crate::serial::print("alan doğrulama hatası\n");
+                        serial_print("alan doğrulama hatası\n");
                     }
                 }
+                return Err(());
             } else if let Err(e) = chain_res {
                 self.cert_verified = false;
                 self.cert_error = Some(e);
-                crate::serial::print("[TLS] Sertifika zincir uyarısı: ");
+                serial_print("[TLS] Sertifika zincir hatası: ");
                 match e {
-                        crate::drivers::crypto::x509::CertValidationError::UntrustedRoot => {
-                            crate::serial::print("kök sertifika güvenilmiyor (ISRG Root X1 eşleşmedi)\n");
-                        }
-                        crate::drivers::crypto::x509::CertValidationError::InvalidSignature => {
-                            crate::serial::print("geçersiz CA imzası\n");
-                        }
-                        crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
-                            crate::serial::print("desteklenmeyen imza algoritması\n");
-                        }
-                        _ => {
-                            crate::serial::print("zincir doğrulama hatası\n");
-                        }
+                    crate::drivers::crypto::x509::CertValidationError::UntrustedRoot => {
+                        serial_print("kök sertifika güvenilmiyor (gömülü kök CA'lar eşleşmedi)\n");
                     }
+                    crate::drivers::crypto::x509::CertValidationError::InvalidSignature => {
+                        serial_print("geçersiz CA imzası\n");
+                    }
+                    crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
+                        serial_print("desteklenmeyen imza algoritması\n");
+                    }
+                    _ => {
+                        serial_print("zincir doğrulama hatası\n");
+                    }
+                }
+                return Err(());
             } else {
                 self.cert_verified = true;
                 self.cert_error = None;
-                crate::serial::print("[TLS] Sertifika ve CA kök zinciri başarıyla doğrulandı: ");
-                crate::serial::print(&self.hostname);
-                crate::serial::print(" (ISRG Root X1 köküne güvenildi)\n");
+                serial_print("[TLS] Sertifika ve CA kök zinciri başarıyla doğrulandı: ");
+                serial_print(&self.hostname);
+                serial_print("\n");
             }
         }
         #[cfg(test)]
@@ -1152,7 +1180,8 @@ impl TlsSession {
     ///
     /// Aşama 1 (`derive_tls13_handshake_keys`): ServerHello sonrası, transcript
     /// hash = Hash(ClientHello..ServerHello) kullanılarak el sıkışma trafik
-    /// anahtarları türetilir.
+    /// anahtarları türetilir. (`tls13_transcript_hash` bu noktada ServerHello
+    /// çerçevesini de içerir.)
     ///
     /// Aşama 2 (`derive_tls13_application_keys`): sunucu Finished doğrulandıktan
     /// sonra, transcript hash = Hash(ClientHello..server Finished) kullanılarak
@@ -1175,6 +1204,8 @@ impl TlsSession {
         self.tls13_master_secret = Some(master_secret);
 
         // El sıkışma trafik sırları (transcript hash = ClientHello..ServerHello).
+        // Transcript-Hash(ClientHello..ServerHello); ServerHello çerçevesi
+        // handle_server_hello çağrılmadan önce hash'e eklenmiş olur.
         let transcript = self.tls13_transcript_hash.clone().finalize();
         let client_hs_secret = Self::hkdf_expand_label(
             &handshake_secret,
@@ -2430,9 +2461,16 @@ mod tests {
         client.process_records(&mut hs_out, &mut app_out).unwrap();
         assert_eq!(client.state(), TlsState::ServerHelloReceived);
 
-        for rec in [&ee_rec[..], &cert_rec[..], &cv_rec[..], &fin_rec[..]] {
+        for (name, rec) in [
+            ("EncryptedExtensions", &ee_rec[..]),
+            ("Certificate", &cert_rec[..]),
+            ("CertificateVerify", &cv_rec[..]),
+            ("Finished", &fin_rec[..]),
+        ] {
             client.feed_tcp_data(rec);
-            client.process_records(&mut hs_out, &mut app_out).unwrap();
+            client
+                .process_records(&mut hs_out, &mut app_out)
+                .unwrap_or_else(|_| panic!("{name} kaydi islenemedi: {:?}", client.state()));
         }
         assert_eq!(client.state(), TlsState::Tls13ServerFinished);
 
@@ -2638,9 +2676,16 @@ mod tests {
         client.process_records(&mut hs_out, &mut app_out).unwrap();
         assert_eq!(client.state(), TlsState::ServerHelloReceived);
 
-        for rec in [&ee_rec[..], &cert_rec[..], &cv_rec[..], &fin_rec[..]] {
+        for (name, rec) in [
+            ("EncryptedExtensions", &ee_rec[..]),
+            ("Certificate", &cert_rec[..]),
+            ("CertificateVerify", &cv_rec[..]),
+            ("Finished", &fin_rec[..]),
+        ] {
             client.feed_tcp_data(rec);
-            client.process_records(&mut hs_out, &mut app_out).unwrap();
+            client
+                .process_records(&mut hs_out, &mut app_out)
+                .unwrap_or_else(|_| panic!("{name} kaydi islenemedi: {:?}", client.state()));
         }
         assert_eq!(
             client.state(),

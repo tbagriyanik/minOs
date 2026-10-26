@@ -41,7 +41,12 @@ pub mod theme;
 // TLS protokol katmani: `crate::boot::time` ve `crate::monotonic_ms`
 // cekirdekte var; host testlerinde sabit birer yedek (stub) saglanir.
 pub fn monotonic_ms() -> u64 {
-    0
+    // 2024-01-01 00:00:00 UTC in milliseconds
+    // This date is after nearly all TLS certificates issued (2016+),
+    // and before most certificate expiry dates (typically 1-39 months validity).
+    // Works across different timezones and avoids "6 hours ahead" issues
+    // that can occur with QEMU when using specific calendar dates.
+    1704067200000
 }
 
 #[path = "../src/drivers/bluetooth.rs"]
@@ -68,7 +73,12 @@ pub mod serial {
 pub mod boot {
     pub mod time {
         pub fn main_monotonic_ms() -> u64 {
-            0
+            // 2024-01-01 00:00:00 UTC in milliseconds
+            // This date is after nearly all TLS certificates issued (2016+),
+            // and before most certificate expiry dates (typically 1-39 months validity).
+            // Works across different timezones and avoids "6 hours ahead" issues
+            // that can occur with QEMU when using specific calendar dates.
+            1704067200000
         }
     }
     pub mod limine {
@@ -137,12 +147,7 @@ pub mod drivers {
     }
     pub mod socket {
         use super::netstack::Ipv4Address;
-        pub fn on_udp_datagram(
-            _src: Ipv4Address,
-            _sport: u16,
-            _dport: u16,
-            _data: &[u8],
-        ) -> bool {
+        pub fn on_udp_datagram(_src: Ipv4Address, _sport: u16, _dport: u16, _data: &[u8]) -> bool {
             false
         }
         pub fn on_tcp_segment(_src: Ipv4Address, _data: &[u8]) -> bool {

@@ -425,7 +425,7 @@ impl Framebuffer {
             );
         }
 
-        if crate::drivers::virtio_gpu::is_detected() {
+        if crate::drivers::virtio_gpu::is_active() {
             crate::drivers::virtio_gpu::flush_rect(
                 x as u32,
                 y as u32,
@@ -1297,7 +1297,7 @@ impl Framebuffer {
             }
         }
 
-        if crate::drivers::virtio_gpu::is_detected() {
+        if crate::drivers::virtio_gpu::is_active() {
             crate::drivers::virtio_gpu::flush_framebuffer();
         }
     }

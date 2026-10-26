@@ -348,9 +348,7 @@ fn test_uhci_build_control_transfer() {
 
     // Verili kontrol transferi (GET_DESCRIPTOR: Setup -> IN -> Status OUT)
     let count = uhci_build_control_transfer(
-        &mut tds,
-        &mut qh,
-        0x1000, // td_base_phys
+        &mut tds, &mut qh, 0x1000, // td_base_phys
         1,      // dev_addr
         false,  // full-speed
         0x5000, // setup buffer
@@ -377,9 +375,8 @@ fn test_uhci_build_control_transfer() {
     assert_eq!(tds[2].link, 1); // Terminate
 
     // Verisiz kontrol transferi (SET_ADDRESS: Setup -> Status IN)
-    let count0 = uhci_build_control_transfer(
-        &mut tds, &mut qh, 0x1000, 0, false, 0x5000, 0, 0, false,
-    );
+    let count0 =
+        uhci_build_control_transfer(&mut tds, &mut qh, 0x1000, 0, false, 0x5000, 0, 0, false);
     assert_eq!(count0, 2);
     assert_eq!((tds[1].token & 0xFF) as u8, UHCI_PID_IN);
 }
@@ -425,9 +422,7 @@ fn test_ohci_build_control_transfer() {
     let mut ed = OhciEd::empty();
 
     let count = ohci_build_control_transfer(
-        &mut tds,
-        &mut ed,
-        0x2000, // td_base_phys
+        &mut tds, &mut ed, 0x2000, // td_base_phys
         0x5000, // setup_phys
         0x6000, // data_phys
         18,     // data_len
@@ -463,7 +458,9 @@ fn test_aml_thermal_zone_parsing() {
     // ThermalZoneOp (0x5B 0x85), PkgLength = 26, Name = "TZ01"
     aml.extend_from_slice(&[0x5B, 0x85, 26, b'T', b'Z', b'0', b'1']);
     // Method(_TMP, 0): 0x14, len 7, _TMP, flags 0, Return(WordConst 3012 = 0x0BC4)
-    aml.extend_from_slice(&[0x14, 0x07, b'_', b'T', b'M', b'P', 0x00, 0xA4, 0x0B, 0xC4, 0x0B]);
+    aml.extend_from_slice(&[
+        0x14, 0x07, b'_', b'T', b'M', b'P', 0x00, 0xA4, 0x0B, 0xC4, 0x0B,
+    ]);
     // Name(_CRT, WordConst 3656 = 0x0E48): 0x08, _CRT, 0x0B, 0x48, 0x0E
     aml.extend_from_slice(&[0x08, b'_', b'C', b'R', b'T', 0x0B, 0x48, 0x0E]);
 
@@ -563,7 +560,9 @@ fn test_ipv6_multicast_mac() {
 
 #[test]
 fn test_ipv6_pseudo_header_checksum() {
-    let src = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x50, 0x54, 0, 0xff, 0xfe, 0x12, 0x34, 0x56];
+    let src = [
+        0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0x50, 0x54, 0, 0xff, 0xfe, 0x12, 0x34, 0x56,
+    ];
     let dst = [0xff, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
     let payload = [0x80, 0x00, 0x00, 0x00, 0x12, 0x34, 0x00, 0x01]; // Echo Request dummy
     let csum = ipv6_pseudo_checksum(&src, &dst, 58, &payload);
@@ -574,4 +573,18 @@ fn test_ipv6_pseudo_header_checksum() {
     verified_payload[2..4].copy_from_slice(&csum.to_be_bytes());
     let verify = ipv6_pseudo_checksum(&src, &dst, 58, &verified_payload);
     assert_eq!(verify, 0xFFFF);
+}
+
+#[test]
+fn test_ipv6_ping6_loopback_and_reply() {
+    clear_ping6_reply();
+    assert!(!has_ping6_reply());
+    let sent = ping6_ex(Ipv6Address::LOOPBACK, 42, 32);
+    assert!(sent);
+    assert!(has_ping6_reply());
+    let rep = take_ping6_reply().expect("Ping6 reply should be present");
+    assert_eq!(rep.seq, 42);
+    assert_eq!(rep.len, 32);
+    assert_eq!(rep.hop_limit, 64);
+    assert!(!has_ping6_reply());
 }

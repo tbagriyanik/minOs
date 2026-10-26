@@ -726,7 +726,7 @@ pub extern "C" fn _start() -> ! {
 
     // RTC - gercek zamanli saat
 
-    let mut now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+    let mut now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
 
     compositor.cal_year = now.year;
 
@@ -1789,7 +1789,7 @@ pub extern "C" fn _start() -> ! {
         if clock_now_ms.wrapping_sub(last_clock_update_ms) >= 1_000 {
             last_clock_update_ms = clock_now_ms;
 
-            now = drivers::rtc::DateTime::read().with_hour_offset(settings_app.region_offset());
+            now = drivers::rtc::DateTime::read_for_region(settings_app.region_offset());
 
             force_render = true;
         }
@@ -8640,11 +8640,7 @@ fn handle_terminal_open_request(
         return;
     };
 
-    let ext = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
 
     let is_web = matches!(ext.as_str(), "html" | "htm" | "xhtml");
 

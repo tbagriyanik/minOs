@@ -1008,7 +1008,7 @@ pub fn resource_flush(resource_id: u32, x: u32, y: u32, width: u32, height: u32)
 /// Tüm ekranı transfer et ve yenile (Flush)
 pub fn flush_framebuffer() -> bool {
     unsafe {
-        if !DETECTED {
+        if !DETECTED || !INITIALIZED {
             return false;
         }
         let w = SCANOUT_WIDTH;
@@ -1023,7 +1023,7 @@ pub fn flush_framebuffer() -> bool {
 /// Belirli bir dikdörtgen bölgeyi host'a transfer et ve yenile (Hızlandırılmış Flush)
 pub fn flush_rect(x: u32, y: u32, width: u32, height: u32) -> bool {
     unsafe {
-        if !DETECTED {
+        if !DETECTED || !INITIALIZED {
             return false;
         }
         let res_id = CURRENT_RESOURCE_ID;
@@ -1035,7 +1035,7 @@ pub fn flush_rect(x: u32, y: u32, width: u32, height: u32) -> bool {
 
 /// VirtIO-GPU'nun aktif ve yapılandırılmış olup olmadığını kontrol eder.
 pub fn is_active() -> bool {
-    unsafe { DETECTED && DEVICE.common_cfg_addr != 0 }
+    unsafe { DETECTED && INITIALIZED && DEVICE.common_cfg_addr != 0 }
 }
 
 /// Çözünürlük değiştir (Mode-set)

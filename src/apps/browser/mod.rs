@@ -2075,6 +2075,40 @@ impl BrowserApp {
                             "TLS record processing error.",
                         ),
                     };
+                    // Sertifika doğrulaması başarısızsa el sıkışma burada durur;
+                    // kullanıcıya sunucunun uyarısı yerine asıl nedeni göster.
+                    let cert_error = self.tls_session.as_ref().and_then(|t| t.cert_error());
+                    let status = match cert_error {
+                        Some(crate::drivers::crypto::x509::CertValidationError::Expired) => {
+                            crate::gui::ui_text(
+                                "Sertifikanın süresi dolmuş.",
+                                "The certificate has expired.",
+                            )
+                        }
+                        Some(crate::drivers::crypto::x509::CertValidationError::NotYetValid) => {
+                            crate::gui::ui_text(
+                                "Sertifika henüz geçerli değil (sistem saati hatalı olabilir).",
+                                "The certificate is not valid yet (system clock may be wrong).",
+                            )
+                        }
+                        Some(
+                            crate::drivers::crypto::x509::CertValidationError::HostnameMismatch,
+                        ) => crate::gui::ui_text(
+                            "Sertifika bu site adıyla eşleşmiyor.",
+                            "The certificate does not match this host name.",
+                        ),
+                        Some(crate::drivers::crypto::x509::CertValidationError::UntrustedRoot) => {
+                            crate::gui::ui_text(
+                                "Sertifika güvenilir bir kök CA zincirine bağlanamadı.",
+                                "The certificate does not chain to a trusted root CA.",
+                            )
+                        }
+                        Some(_) => crate::gui::ui_text(
+                            "Sertifika doğrulanamadı.",
+                            "Could not verify the certificate.",
+                        ),
+                        None => status,
+                    };
                     self.finish_network_error_with_detail(status, &detail);
                 }
 
@@ -2135,11 +2169,12 @@ impl BrowserApp {
                 }
                 // HTTPS'te ham (şifreli) kayıtlar HTTP olarak ayrıştırılmaz;
                 // yalnızca çözülmüş uygulama verisi kullanılır.
-                let data_to_parse: &[u8] = if self.is_https || (tls_established && !self.tls_app_data.is_empty()) {
-                    &self.tls_app_data
-                } else {
-                    &self.response_data[..self.response_len]
-                };
+                let data_to_parse: &[u8] =
+                    if self.is_https || (tls_established && !self.tls_app_data.is_empty()) {
+                        &self.tls_app_data
+                    } else {
+                        &self.response_data[..self.response_len]
+                    };
 
                 if data_to_parse.len() > 0 {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {

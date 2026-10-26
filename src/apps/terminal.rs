@@ -40,6 +40,7 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "apps",
     "ipconfig",
     "ping",
+    "ping6",
     "dns",
     "nslookup",
     "curl",
@@ -280,6 +281,18 @@ fn push_ipv4_line(terminal: &mut TerminalApp, label: &str, address: [u8; 4]) {
     let mut line = TextBuf::new();
     line.push_str(label);
     push_ipv4(&mut line, address);
+    terminal.push_line(line.as_str(), Color::TEXT_MAIN);
+}
+
+fn push_ipv6_line(
+    terminal: &mut TerminalApp,
+    label: &str,
+    address: crate::drivers::netstack::Ipv6Address,
+) {
+    let mut line = TextBuf::new();
+    line.push_str(label);
+    let s = address.format();
+    line.push_str(&s);
     terminal.push_line(line.as_str(), Color::TEXT_MAIN);
 }
 
@@ -781,11 +794,7 @@ impl TerminalApp {
     /// diğerlerinde Web Gezgini kullanılır. Hata durumunda terminale yazar.
     fn launch_path(&mut self, cmd: &str, path_arg: &str) {
         let path = self.resolve_path(path_arg);
-        let ext = path
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         let is_text = matches!(
             ext.as_str(),
             "txt"
@@ -949,6 +958,137 @@ impl TerminalApp {
         launched
     }
 
+    fn execute_ping_v6(
+        &mut self,
+        target: &str,
+        ip: crate::drivers::netstack::Ipv6Address,
+        count: usize,
+    ) {
+        let mut banner = TextBuf::new();
+        banner.push_str(target);
+        banner.push_str(" [");
+        let v6_formatted = ip.format();
+        banner.push_str(&v6_formatted);
+        banner.push_str(crate::gui::ui_text(
+            "] adresi 32 bayt veri ile pingleniyor:",
+            "] with 32 bytes of data:",
+        ));
+        self.push_line(banner.as_str(), Color::TEXT_MAIN);
+
+        let mut recvd = 0usize;
+        let mut min_rtt = u64::MAX;
+        let mut max_rtt = 0u64;
+        let mut sum_rtt = 0u64;
+
+        for seq in 1..=(count as u16) {
+            crate::drivers::netstack::clear_ping6_reply();
+            let t_start = crate::monotonic_ms();
+            let sent = crate::drivers::netstack::ping6_ex(ip, seq, 32);
+            if !sent {
+                self.push_line(
+                    crate::gui::ui_text("İletim hatası (TX)", "Transmit failure (TX)"),
+                    Color::ACCENT_RED,
+                );
+            } else {
+                let mut reply: Option<crate::drivers::netstack::PingReply6> = None;
+                while crate::monotonic_ms().wrapping_sub(t_start) < 1000 {
+                    crate::drivers::e1000::poll();
+                    crate::drivers::socket::pump_all();
+                    if let Some(r) = crate::drivers::netstack::take_ping6_reply() {
+                        if r.src == ip || ip.is_loopback() {
+                            reply = Some(r);
+                            break;
+                        }
+                    }
+                    core::hint::spin_loop();
+                }
+
+                if let Some(r) = reply {
+                    let rtt = crate::monotonic_ms().wrapping_sub(t_start).max(1);
+                    recvd += 1;
+                    sum_rtt += rtt;
+                    min_rtt = min_rtt.min(rtt);
+                    max_rtt = max_rtt.max(rtt);
+
+                    let mut line = TextBuf::new();
+                    line.push_str(crate::gui::ui_text("Yanıt geldi: ", "Reply from "));
+                    let r_src_str = r.src.format();
+                    line.push_str(&r_src_str);
+                    line.push_str(": bayt=");
+                    line.push_usize(r.len.max(32));
+                    line.push_str(crate::gui::ui_text(" süre=", " time="));
+                    line.push_usize(rtt as usize);
+                    line.push_str("ms HopLimit=");
+                    line.push_usize(r.hop_limit as usize);
+                    self.push_line(line.as_str(), Color::ACCENT_GREEN);
+                } else {
+                    self.push_line(
+                        crate::gui::ui_text("İstek zaman aşımına uğradı.", "Request timed out."),
+                        Color::ACCENT_YELLOW,
+                    );
+                }
+            }
+
+            if (seq as usize) < count {
+                let pause_until = crate::monotonic_ms().wrapping_add(150);
+                while crate::monotonic_ms() < pause_until {
+                    crate::drivers::socket::pump_all();
+                    core::hint::spin_loop();
+                }
+            }
+        }
+
+        let lost = count.saturating_sub(recvd);
+        let loss_pct = (lost * 100) / count.max(1);
+
+        let mut stat_hdr = TextBuf::new();
+        stat_hdr.push_str(crate::gui::ui_text(
+            "--- Ping istatistiği: ",
+            "--- Ping statistics for ",
+        ));
+        stat_hdr.push_str(&v6_formatted);
+        stat_hdr.push_str(" ---");
+        self.push_line(stat_hdr.as_str(), Color::TEXT_MUTED);
+
+        let mut stat_pkt = TextBuf::new();
+        stat_pkt.push_str(crate::gui::ui_text(
+            "Paket: Gönderilen = ",
+            "Packets: Sent = ",
+        ));
+        stat_pkt.push_usize(count);
+        stat_pkt.push_str(crate::gui::ui_text(", Alınan = ", ", Received = "));
+        stat_pkt.push_usize(recvd);
+        stat_pkt.push_str(crate::gui::ui_text(", Kayıp = ", ", Lost = "));
+        stat_pkt.push_usize(lost);
+        stat_pkt.push_str(" (%");
+        stat_pkt.push_usize(loss_pct);
+        stat_pkt.push_str(crate::gui::ui_text(" kayıp)", " loss)"));
+        self.push_line(
+            stat_pkt.as_str(),
+            if lost == 0 {
+                Color::ACCENT_GREEN
+            } else {
+                Color::ACCENT_YELLOW
+            },
+        );
+
+        if recvd > 0 {
+            let avg_rtt = sum_rtt / (recvd as u64);
+            let mut stat_time = TextBuf::new();
+            stat_time.push_str(crate::gui::ui_text(
+                "Gidiş-dönüş süreleri: En az = ",
+                "Round trip times: Minimum = ",
+            ));
+            stat_time.push_usize(min_rtt as usize);
+            stat_time.push_str(crate::gui::ui_text("ms, En çok = ", "ms, Maximum = "));
+            stat_time.push_usize(max_rtt as usize);
+            stat_time.push_str(crate::gui::ui_text("ms, Ortalama = ", "ms, Average = "));
+            stat_time.push_usize(avg_rtt as usize);
+            stat_time.push_str("ms");
+            self.push_line(stat_time.as_str(), Color::TEXT_MAIN);
+        }
+    }
+
     /// Tek bir komutu (boru hattı olmadan) yürütür.
     fn execute_single(
         &mut self,
@@ -1014,7 +1154,10 @@ impl TerminalApp {
         match cmd {
             "help" => {
                 self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem ps exec", Color::TEXT_MAIN);
-                self.push_line("uptime fetch neofetch date uname whoami theme ipconfig ping dns nslookup curl wget cam wifi", Color::ACCENT_GREEN);
+                self.push_line(
+                    "uptime fetch neofetch date uname whoami theme ipconfig ping ping6 dns nslookup curl wget cam wifi",
+                    Color::ACCENT_GREEN,
+                );
                 self.push_line(
                     "hexdump <file> | nc <host> <port> [text] | fortune | benchmark",
                     Color::ACCENT_BLUE,
@@ -2323,7 +2466,10 @@ impl TerminalApp {
                 let args = split_args(arg);
                 if args.len() != 2 {
                     self.push_line(
-                        crate::gui::ui_text("Kullanım: ren <eski> <yeni>", "Usage: ren <old> <new>"),
+                        crate::gui::ui_text(
+                            "Kullanım: ren <eski> <yeni>",
+                            "Usage: ren <old> <new>",
+                        ),
                         Color::ACCENT_YELLOW,
                     );
                 } else {
@@ -2341,10 +2487,7 @@ impl TerminalApp {
                         self.push_line(b.as_str(), Color::ACCENT_GREEN);
                     } else {
                         self.push_line(
-                            crate::gui::ui_text(
-                                "Yeniden adlandırılamadı.",
-                                "Rename failed.",
-                            ),
+                            crate::gui::ui_text("Yeniden adlandırılamadı.", "Rename failed."),
                             Color::ACCENT_RED,
                         );
                     }
@@ -2426,6 +2569,11 @@ impl TerminalApp {
                     gateway_ip().0,
                 );
                 push_ipv4_line(self, "DNS: ", dns_server().0);
+                push_ipv6_line(
+                    self,
+                    crate::gui::ui_text("IPv6 (Bağlantı-Yerel): ", "IPv6 (Link-Local): "),
+                    crate::drivers::netstack::local_ipv6(),
+                );
                 self.push_line(
                     if crate::drivers::netstack::dhcp_ready() {
                         crate::gui::ui_text("DHCP: adres alındı", "DHCP: lease active")
@@ -2458,7 +2606,7 @@ impl TerminalApp {
                     Color::ACCENT_YELLOW,
                 );
             }
-            "ping" => {
+            "ping" | "ping6" => {
                 let mut sp = arg.split_whitespace();
                 let mut count = 4usize;
                 let mut target = "";
@@ -2490,6 +2638,8 @@ impl TerminalApp {
                         ),
                         Color::ACCENT_RED,
                     );
+                } else if let Some(v6_ip) = crate::drivers::netstack::parse_ipv6(target) {
+                    self.execute_ping_v6(target, v6_ip, count);
                 } else {
                     let target_ip = if let Some(ip) = parse_ipv4(target) {
                         Some(crate::drivers::netstack::Ipv4Address(ip))
@@ -3053,8 +3203,15 @@ impl TerminalApp {
         if args.len() < 2 {
             let mut usage = TextBuf::new();
             usage.push_str("Kullanım: ");
-            usage.push_str(crate::gui::ui_text("cp <kaynak...> <hedef> | ", "cp <source...> <dest> | "));
-            usage.push_str(if is_move { "mv <kaynak> <hedef>" } else { "copy <kaynak> <hedef>" });
+            usage.push_str(crate::gui::ui_text(
+                "cp <kaynak...> <hedef> | ",
+                "cp <source...> <dest> | ",
+            ));
+            usage.push_str(if is_move {
+                "mv <kaynak> <hedef>"
+            } else {
+                "copy <kaynak> <hedef>"
+            });
             self.push_line(usage.as_str(), Color::ACCENT_YELLOW);
             return;
         }
@@ -3509,12 +3666,7 @@ impl TerminalApp {
             line_height + 4,
         );
         MinGuiCompositor::draw_terminal_string_clipped(
-            fb,
-            input_x,
-            prompt_y,
-            input_str,
-            default_fg,
-            input_clip,
+            fb, input_x, prompt_y, input_str, default_fg, input_clip,
         );
         if is_focused {
             let caret_x = input_x + MinGuiCompositor::terminal_text_width(input_str);

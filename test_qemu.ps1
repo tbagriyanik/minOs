@@ -14,7 +14,8 @@ param(
     [switch]$Rebuild,
     [switch]$KeepOpen,
     [switch]$UsbHid,
-    [switch]$NoPs2
+    [switch]$NoPs2,
+    [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio"
 )
 
 if ($NoPs2) { $UsbHid = $true }
@@ -101,8 +102,8 @@ $qemuArgs = @(
     "-cdrom", $isoPath,
     "-boot", "d",
     "-display", "none",
-    "-vga", "std",
-    "-global", "VGA.vgamem_mb=64",
+    "-vga", $Vga,
+
     "-serial", "stdio",
     "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",
     "-device", "intel-hda",
@@ -111,6 +112,10 @@ $qemuArgs = @(
     "-netdev", "user,id=n0",
     "-device", "e1000,netdev=n0"
 )
+
+if ($Vga -eq "std") {
+    $qemuArgs += @("-global", "VGA.vgamem_mb=64")
+}
 
 if ($UsbHid) {
     # Yerel xHCI HID sürücüsünü PS/2 olmadan test et: USB 3.0 denetleyicisi,

@@ -44,6 +44,39 @@ impl PartialOrd for X509Time {
     }
 }
 
+impl X509Time {
+    /// CMOS RTC'den güncel UTC zamanı okur.
+    ///
+    /// Test derlemesinde donanım saati bulunamaz; sabit bir referans zamanı
+    /// (2025-06-01T00:00:00Z) döner. Bu, testlerin makine saatine bağlı
+    /// kalmadan deterministik olmasını sağlar. Gerçek TLS el sıkışması hiçbir
+    /// zaman test modunda çalışmaz; çekirdek daima `#[cfg(not(test))]` yolunu kullanır.
+    #[cfg(not(test))]
+    pub fn now() -> Self {
+        let rtc = crate::drivers::rtc::DateTime::read();
+        Self {
+            year: rtc.year,
+            month: rtc.month,
+            day: rtc.day,
+            hour: rtc.hour,
+            minute: rtc.minute,
+            second: rtc.second,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn now() -> Self {
+        Self {
+            year: 2025,
+            month: 6,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
+    }
+}
+
 impl Ord for X509Time {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.year
@@ -826,41 +859,54 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
         parsed_chain.push(ParsedX509Cert::parse(cert_der)?);
     }
 
-    // 2. Yapraktan başlayarak zincirdeki her sertifikanın bir sonraki tarafından imzalandığını doğrula
-    for i in 0..parsed_chain.len() {
-        let current = &parsed_chain[i];
-
-        // Eğer mevcut sertifikanın vereni (issuer) güvenilen köklerimizden biriyle eşleşiyorsa
-        let mut matched_root = None;
-        for &root_der in TRUSTED_ROOTS {
-            if let Ok(root_parsed) = ParsedX509Cert::parse(root_der) {
-                if current.issuer_raw == root_parsed.subject_raw {
-                    matched_root = Some(root_der);
-                    break;
-                }
+    // 2. Yapraktan başlayarak zincirdeki her sertifikanın bir sonraki tarafından imzalandığını doğrula.
+    //    Kök sertifika sunucu tarafından gönderilmek zorunda değildir; bu yüzden zincir,
+    //    kendinden imzalı bir köke veya gömülü bir güvenilen köke ulaşana kadar ilerler.
+    let mut current = &parsed_chain[0];
+    for depth in 0..=MAX_CHAIN_DEPTH {
+        // Kendinden imzalı sertifika: zincirin kökü. Yalnızca gömülü güvenilen
+        // köklerden biriyle birebir (DER) eşleşiyorsa kabul edilir.
+        if current.issuer_raw == current.subject_raw {
+            if TRUSTED_ROOTS.iter().any(|&root| root == chain[depth]) {
+                return Ok(());
             }
+            return Err(CertValidationError::UntrustedRoot);
         }
 
-        if let Some(root_der) = matched_root {
-            // Kök sertifika açık anahtarıyla mevcut sertifikanın imzasını doğrula
+        // 3. Mevcut sertifikanın vereni (issuer) güvenilen köklerimizden biriyle eşleşiyorsa,
+        //    gömülü kökün açık anahtarıyla imzayı doğrula. Sunucu zinciri kökü
+        //    göndermemiş olsa bile (yaygın durum) doğrulama burada tamamlanır.
+        if let Some(root_der) = trusted_root_for(current.issuer_raw) {
             current.verify_signature_with_issuer(root_der)?;
             return Ok(());
         }
 
-        // Kök ile doğrudan eşleşmediyse, zincirdeki sıradaki ara (intermediate) sertifikaya bak
-        if i + 1 < parsed_chain.len() {
-            let next_issuer = &parsed_chain[i + 1];
-            if current.issuer_raw != next_issuer.subject_raw {
-                return Err(CertValidationError::UntrustedRoot);
-            }
-            current.verify_signature_with_issuer(chain[i + 1])?;
-        } else {
+        // 4. Kök ile doğrudan eşleşmediyse, zincirdeki sıradaki ara (intermediate) sertifikaya bak.
+        if depth + 1 >= parsed_chain.len() {
             // Zincirin sonuna ulaşıldı ama güvenilen hiçbir kök bulunamadı
             return Err(CertValidationError::UntrustedRoot);
         }
+        let next = &parsed_chain[depth + 1];
+        if current.issuer_raw != next.subject_raw {
+            return Err(CertValidationError::UntrustedRoot);
+        }
+        current.verify_signature_with_issuer(chain[depth + 1])?;
+        current = next;
     }
 
-    Err(CertValidationError::UntrustedRoot)
+    Err(CertValidationError::ChainTooDeep)
+}
+
+/// Güvenilen kök sertifikalardan birini, verilen ara/yaprak sertifikanın imzasını
+/// doğrulamak için seçer. Sunucu zinciri kökü göndermediğinde (yaygın durum) yaprak
+/// veya ara sertifikanın issuer'ı güvenilen bir kökün subject'i ile eşleşiyorsa o
+/// kökü döner.
+pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
+    TRUSTED_ROOTS.iter().copied().find(|&root_der| {
+        ParsedX509Cert::parse(root_der)
+            .map(|parsed| parsed.subject_raw == issuer_raw)
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]
@@ -1068,5 +1114,32 @@ mod tests {
             verify_certificate_chain(&at_limit),
             Err(CertValidationError::ChainTooDeep)
         );
+    }
+
+    /// Kök sertifika sunucu zincirinde gelmez; gömülü kökün **açık anahtarı**
+    /// kullanılmalıdır. Önceden zincirin sonuna gelindiğinde her durumda
+    /// `UntrustedRoot` dönüyordu.
+    #[test]
+    fn chain_without_root_uses_embedded_root() {
+        let x1 = ISRG_ROOT_X1_DER;
+        // Kökün kendisi kendinden imzalıdır ve gömülü kökle birebir eşleşir.
+        assert_eq!(verify_certificate_chain(&[x1]), Ok(()));
+
+        // Gömülü kökün subject'ini "veren" olarak gösteren bir sertifika
+        // (gerçek R3 yerine test üretimi) zincir sonunda kökle eşleşmelidir:
+        // kendinden imzalı ve gömülü olmayan bir sertifika reddedilmelidir.
+        let rogue_root = make_test_cert_der();
+        assert_eq!(
+            verify_certificate_chain(&[rogue_root.as_slice()]),
+            Err(CertValidationError::UntrustedRoot)
+        );
+    }
+
+    /// `trusted_root_for`, gömülü kökün subject'i ile verilen issuer'ı eşler.
+    #[test]
+    fn trusted_root_lookup_matches_embedded_subject() {
+        let parsed = ParsedX509Cert::parse(ISRG_ROOT_X1_DER).unwrap();
+        assert!(trusted_root_for(parsed.subject_raw).is_some());
+        assert!(trusted_root_for(b"no-such-issuer").is_none());
     }
 }

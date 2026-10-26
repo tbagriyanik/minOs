@@ -313,9 +313,13 @@ pub fn init_subsystems(
 
     serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
 
-    // 4b. Gelismis grafik suruculeri: BGA/VMware/VGA yetenek taramasi.
+    // 4b. Gelismis grafik suruculeri: VirtIO-GPU/BGA/VMware/VGA yetenek taramasi.
     let gpu_caps = drivers::gpu::init();
-    if gpu_caps.bga_present {
+    if gpu_caps.virtio_gpu_present {
+        serial_print("[GPU] VirtIO-GPU algılandı (Varsayılan 2D Donanım Hızlandırma etkin).\n");
+        fb.set_hw_cursor(false);
+        serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");
+    } else if gpu_caps.bga_present {
         serial_print("[GPU] BGA algılandı, çözünürlük değişimi açık.\n");
         fb.set_hw_cursor(false);
         serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");

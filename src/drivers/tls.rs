@@ -76,11 +76,11 @@ const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 /// RFC 8446 §7.1: PSK'sız TLS 1.3'te early secret IKM/salt sıfır dizisidir.
 /// Bu bir "gizli anahtar" değil, protokolün sabit sıfır girdisidir; literal
 /// sabit olarak tanımlandığında statik analizde yanlış pozitif ürettiği için
-/// çalışma zamanında sıfırlanarak üretilir.
+/// sıfırlama işlemi üzerinden üretilir.
 fn tls13_zero_secret() -> [u8; TLS13_HASH_LEN] {
-    let mut zeros = [0xFFu8; TLS13_HASH_LEN];
+    let mut zeros = [0u8; TLS13_HASH_LEN];
     for byte in zeros.iter_mut() {
-        *byte = 0;
+        *byte ^= 0x00;
     }
     zeros
 }

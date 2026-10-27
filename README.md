@@ -12,16 +12,16 @@
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-89%2C619%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v2.0.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.0.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v2.1.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 > 📚 **Resmi Kılavuz ve Dokümantasyon:** Tüm donanım sürücüleri, uygulama kılavuzları, ağ/TLS yapılandırması ve geliştirici belgeleri için **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** sayfasını ziyaret edebilirsiniz.
 
 ---
 
-## Yenilikler (v2.0.0)
+## Yenilikler (v2.1.0)
 
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
   - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.

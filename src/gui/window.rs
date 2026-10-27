@@ -140,6 +140,18 @@ impl Window {
             b,
         )
     }
+    /// Kapat düğmesi tıklama alanı (hit rect).
+    /// Düğme basılıyken görsel olarak küçülür (inset) ancak tıklama alanı
+    /// pencere sağ üst köşesini kapsayacak şekilde geniş kalır ve asla küçülmez.
+    pub fn close_hit_rect(&self) -> (usize, usize, usize, usize) {
+        let w = sp(34);
+        (
+            self.x + self.width.saturating_sub(w),
+            self.y,
+            w,
+            titlebar_h(),
+        )
+    }
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
         (
@@ -149,6 +161,15 @@ impl Window {
             b,
         )
     }
+    pub fn max_hit_rect(&self) -> (usize, usize, usize, usize) {
+        let w = sp(22);
+        (
+            self.x + self.width.saturating_sub(sp(56)),
+            self.y,
+            w,
+            titlebar_h(),
+        )
+    }
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
         (
@@ -156,6 +177,15 @@ impl Window {
             self.y + (titlebar_h().saturating_sub(b)) / 2,
             b,
             b,
+        )
+    }
+    pub fn min_hit_rect(&self) -> (usize, usize, usize, usize) {
+        let w = sp(22);
+        (
+            self.x + self.width.saturating_sub(sp(78)),
+            self.y,
+            w,
+            titlebar_h(),
         )
     }
     /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
@@ -228,7 +258,7 @@ impl Window {
         let left = mx <= self.x + g;
         let edge_right = mx + g >= self.x + self.width;
         let top = my <= self.y + TOP_RESIZE_GRIP;
-        let edge_bottom = my + g >= self.y + self.height;
+        let edge_bottom = my + 4 >= self.y + self.height;
 
         if top && left {
             Some(ResizeEdge::TopLeft)
@@ -503,7 +533,7 @@ impl MinGuiCompositor {
         // Kontrol Butonları (hover'da parlama — yuvarlatılmış)
         // Boyut, scale'li rect'ten türetilir; bu sayede font büyüdükçe düğmeler de büyür.
         let (cx, cy, base_cb, _) = win.close_rect();
-        let hover_close = in_rect(mx, my, win.close_rect());
+        let hover_close = in_rect(mx, my, win.close_hit_rect());
         let pressed_close = mouse.left_button && hover_close;
         let press_inset = if pressed_close { 2 } else { 0 };
         let (cx, cy, cb) = (
@@ -549,7 +579,7 @@ impl MinGuiCompositor {
         );
 
         let (mxr, myr, base_mb, _) = win.max_rect();
-        let hover_max = in_rect(mx, my, win.max_rect());
+        let hover_max = in_rect(mx, my, win.max_hit_rect());
         let pressed_max = mouse.left_button && hover_max;
         let max_inset = if pressed_max { 2 } else { 0 };
         let (mxr, myr, mb) = (
@@ -693,7 +723,7 @@ impl MinGuiCompositor {
         }
 
         let (nx, ny, base_nb, _) = win.min_rect();
-        let hover_min = in_rect(mx, my, win.min_rect());
+        let hover_min = in_rect(mx, my, win.min_hit_rect());
         let pressed_min = mouse.left_button && hover_min;
         let min_inset = if pressed_min { 2 } else { 0 };
         let (nx, ny, nb) = (

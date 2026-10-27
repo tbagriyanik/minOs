@@ -135,6 +135,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 - **USB Audio Recording:** Speaker output (playback) is active; PCM recording via microphone is TODO.
 - **SD/MMC Card Writing:** Sector reading is active; CSD register parsing and block write reliability are WIP.
 - **CRL/OCSP Revocation Checking:** Parsing algorithms are integrated; automatic HTTP/OCSP download requests are planned.
+- **IPv6 DNS (AAAA) Resolution:** The IPv6 data path and `resolve_ipv6()` are ready, but they only parse **address literals** (`[2001:db8::1]`). `dns_query()` emits only **QTYPE=A (1)** queries and `dns_parse_a()` accepts only A records in the response; **no AAAA (28) query is sent and AAAA answers are not parsed**. Host names therefore resolve to IPv4 only, and IPv6-only (AAAA-only) targets cannot be reached by name; the `dns`/`nslookup` output reports A records only.
 - **minJs JavaScript Limitations:** minJs supports functions, arrays, objects, loops (`for`/`while`), JSON, and core DOM APIs in a `no_std` environment; advanced ECMAScript features such as lexical closures, prototype inheritance chains, class inheritance, and async/await/Promises are not yet implemented.
 
 ---

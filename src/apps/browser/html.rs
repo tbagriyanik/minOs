@@ -556,12 +556,329 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"small") {
                     // <small>: Küçük metin
                     // font_scale azaltılabilir, basit implementasyonda etkisiz
+                } else if eq_ascii(name, b"input") {
+                    // <input>: Form girişi elementi
+                    // type attribute'e göre farklı davranır
+                    let type_attr = extract_attr(attrs, b"type");
+                    let input_label = extract_attr(attrs, b"value")
+                        .or_else(|| extract_attr(attrs, b"placeholder"))
+                        .unwrap_or("input");
+                    
+                    if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("text"))
+                        || type_attr.is_none()
+                    {
+                        // Tek satır text input
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('"');
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('"');
+                    } else if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("password")) {
+                        // Password input - gizli metin
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('●');
+                        for ch in input_label.chars() {
+                            if !ch.is_control() {
+                                word_buf.push(ch);
+                            }
+                        }
+                        word_buf.push('●');
+                    } else if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("checkbox"))
+                        || type_attr.map_or(false, |t| t.eq_ignore_ascii_case("radio"))
+                    {
+                        // Checkbox/radio - basit gösterim
+                        if !word_buf.is_empty() {
+                            flush_word(
+                                out_lines,
+                                &mut cur_line_spans,
+                                &mut cur_line_w,
+                                &mut word_buf,
+                                current_color,
+                                current_bg,
+                                is_link,
+                                link_target,
+                                active_is_button,
+                                onclick_str,
+                                elem_id_str,
+                                current_bold,
+                                current_underline,
+                                cur_line_tag,
+                                cur_line_align,
+                                max_lines,
+                            );
+                        }
+                        word_buf.push('☐'); // Checkbox simgesi
+                    }
+                } else if eq_ascii(name, b"textarea") {
+                    // <textarea>: Çok satırlı text input
+                    let textarea_content = extract_attr(attrs, b"placeholder")
+                        .unwrap_or("");
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('"');
+                    for ch in textarea_content.chars() {
+                        if !ch.is_control() {
+                            word_buf.push(ch);
+                        }
+                    }
+                    word_buf.push('"');
+                    word_buf.push('\n');
+                } else if eq_ascii(name, b"select") {
+                    // <select>: Dropdown liste
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('▼'); // Dropdown simgesi
+                } else if eq_ascii(name, b"option") {
+                    // <option>: Dropdown seçenekleri
+                    let option_label = extract_attr(attrs, b"value")
+                        .or_else(|| extract_attr(attrs, b"label"))
+                        .unwrap_or("option");
+                    word_buf.push(' ');
+                    word_buf.push_str(option_label);
+                } else if eq_ascii(name, b"label") {
+                    // <label>: Form etiketi
+                    let label_text = extract_attr(attrs, b"for")
+                        .or_else(|| extract_attr(attrs, b"value"))
+                        .unwrap_or("");
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('ℹ'); // Etiket simgesi
+                    for ch in label_text.chars() {
+                        if !ch.is_control() {
+                            word_buf.push(ch);
+                        }
+                    }
+                } else if eq_ascii(name, b"form") {
+                    // <form>: Form elementi (basit gösterim)
+                } else if eq_ascii(name, b"header") {
+                    // <header>: Sayfa başlığı
+                } else if eq_ascii(name, b"nav") {
+                    // <nav>: Navigation menüsü
+                } else if eq_ascii(name, b"main") {
+                    // <main>: Ana içerik alanı
+                } else if eq_ascii(name, b"article") {
+                    // <article>: Makale/artikel
+                } else if eq_ascii(name, b"aside") {
+                    // <aside>: Yan/Ic sidebar
+                    // <pre>: Önceden formatlanmış metin
+                    // Boşluklar ve satır sonları korunur
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('\n');
+                    word_buf.push('\n');
+                    // Satır sonu karakterleri preservation
+                    word_buf.push('\n');
                 } else if eq_ascii(name, b"sub") {
                     // <sub>: Alt indeks
                     // Basit implementasyon: [ ] etiketleri gibi gösterilir
                 } else if eq_ascii(name, b"sup") {
                     // <sup>: Üst indeks
                     // Basit implementasyon: [ ] etiketleri gibi gösterilir
+                } else if eq_ascii(name, b"input") {
+                    // <input> kapanıyor, normal metin moduna
+                } else if eq_ascii(name, b"textarea") {
+                    // <textarea> kapanıyor, normal metin moduna
+                    word_buf.push('\n');
+                } else if eq_ascii(name, b"select") {
+                    // <select> kapanıyor, normal moduna
+                } else if eq_ascii(name, b"option") {
+                    // <option> kapanıyor, zaten metin eklendi
+                } else if eq_ascii(name, b"label") {
+                    // <label> kapanıyor, normal moduna
+                } else if eq_ascii(name, b"form") {
+                    // <form> kapanıyor
+                } else if eq_ascii(name, b"header") | eq_ascii(name, b"nav")
+                    | eq_ascii(name, b"main") | eq_ascii(name, b"article")
+                    | eq_ascii(name, b"aside")
+                {
+                    // Semantic elementler kapanıyor, normal moduna
+                } else if eq_ascii(name, b"table") {
+                    // <table>: Tablo elementi
+                } else if eq_ascii(name, b"tr") {
+                    // <tr>: Satir elementi
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('|'); // Satir ayracı
+                } else if eq_ascii(name, b"th") {
+                    // <th>: Tablo baslik hucresi
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('['); // Baslik simgesi
+                    word_buf.push('[');
+                } else if eq_ascii(name, b"td") {
+                    // <td>: Tablo veri hucresi
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push(']'); // Veri simgesi
+                } else if eq_ascii(name, b"caption") {
+                    // <caption>: Tablo basligi
                 } else if eq_ascii(name, b"img") {
                     // <img>: bu motorda görsel çizilemez; erişilebilir bir metin karşılığı göster.
                     let label = extract_attr(attrs, b"alt")
@@ -751,6 +1068,31 @@ pub fn render_html_to_lines(
                     cur_line_indent.set(0);
                     current_bold = false;
                     current_underline = false;
+                } else if eq_ascii(name, b"pre") {
+                    // <pre> kapanıyor, halini sıfırla
+                    cur_line_indent.set(0);
+                    current_bold = false;
+                    current_underline = false;
+                } else if eq_ascii(name, b"code") {
+                    // <code> kapanıyor, yine normal metin moduna
+                    cur_line_indent.set(0);
+                    current_bold = false;
+                    current_underline = false;
+                } else if eq_ascii(name, b"kbd") {
+                    // <kbd> kapanıyor, normal metin moduna
+                    cur_line_indent.set(0);
+                    current_bold = false;
+                    current_underline = false;
+                    word_buf.push(']');
+                } else if eq_ascii(name, b"samp") {
+                    // <samp> kapanıyor
+                    word_buf.push('>');
+                } else if eq_ascii(name, b"dl") {
+                    // <dl> kapanıyor
+                } else if eq_ascii(name, b"dt") {
+                    // <dt> kapanıyor
+                } else if eq_ascii(name, b"dd") {
+                    // <dd> kapanıyor
                 } else if eq_ascii(name, b"em") {
                     // <em> kapanıyor, renyi/altı çiziliyi sıfırla
                     current_bold = false;
@@ -758,9 +1100,124 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"mark") {
                     // <mark> kapanıyor, background'ı sıfırla
                     current_bg = None;
-                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup")
-                {
+                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup") {
                     // <small>, <sub>, <sup> kapanıyor, hiçbir şey yapma
+                } else if eq_ascii(name, b"code") {
+                    // <code>: Kod metni
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('>');
+                    word_buf.push('<');
+                    // Basit kod etiketini metin olarak göster
+                } else if eq_ascii(name, b"kbd") {
+                    // <kbd>: Klavye tuşu girişi
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('[');
+                    word_buf.push('[');
+                } else if eq_ascii(name, b"samp") {
+                    // <samp>: Program çıktı örneği
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('<');
+                    word_buf.push('s');
+                    word_buf.push('a');
+                    word_buf.push('m');
+                    word_buf.push('p');
+                    word_buf.push('>');
+                } else if eq_ascii(name, b"dl") {
+                    // <dl>: Tanım listesi
+                } else if eq_ascii(name, b"dt") {
+                    // <dt>: Tanım başlığı
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+                    word_buf.push('>'); // Tanım başlığı simgesi
+                } else if eq_ascii(name, b"dd") {
+                    // <dd>: Tanım defini
+                    word_buf.push(' '); // Giriş boşluğu
+                } else if eq_ascii(name, b"table") {
+                    // <table> kapanıyor
+                } else if eq_ascii(name, b"tr") {
+                    // <tr> kapanıyor, satır sonu
+                    word_buf.push('\n');
+                } else if eq_ascii(name, b"th") {
+                    // <th> kapanıyor, zaten metin eklendi
+                    word_buf.push(']');
+                } else if eq_ascii(name, b"td") {
+                    // <td> kapanıyor, zaten metin eklendi
+                    word_buf.push('[');
                 }
                 active_id = None;
             }

@@ -240,6 +240,10 @@ pub struct BrowserApp {
     pub page_title_len: usize,
     pub page_lines: Vec<BrowserLine>,
     pub rendered_links: RefCell<Vec<RenderedLink>>,
+    pub page_selection_anchor: Option<(usize, usize)>,
+    pub page_selection_start: Option<(usize, usize)>,
+    pub page_selection_end: Option<(usize, usize)>,
+    pub page_dragging: bool,
     pub scroll_y: usize,
     pub request_pending: bool,
     pub request_host: [u8; 128],
@@ -349,6 +353,10 @@ impl BrowserApp {
             page_title_len: 0,
             page_lines: Vec::new(),
             rendered_links: RefCell::new(Vec::new()),
+            page_selection_anchor: None,
+            page_selection_start: None,
+            page_selection_end: None,
+            page_dragging: false,
             scroll_y: 0,
             request_pending: false,
             request_host: [0; 128],
@@ -508,7 +516,205 @@ impl BrowserApp {
         }
     }
 
+    pub fn point_to_page_pos(
+        &self,
+        mx: usize,
+        my: usize,
+        doc_x: usize,
+        doc_y: usize,
+        doc_w: usize,
+        doc_h: usize,
+        scroll_y: usize,
+    ) -> Option<(usize, usize)> {
+        if mx < doc_x || mx >= doc_x + doc_w || my < doc_y || my >= doc_y + doc_h {
+            return None;
+        }
+        let my_doc = my.saturating_sub(doc_y).saturating_add(scroll_y);
+        let mut cur_line_y = 12 + if self.js_alert.is_some() { 28 } else { 0 };
+
+        for (line_idx, line) in self.page_lines.iter().enumerate() {
+            let line_h = match line.tag {
+                HtmlTagType::Heading1 => 26,
+                HtmlTagType::Heading2 => 22,
+                HtmlTagType::Heading3 => 20,
+                _ => 18,
+            };
+            let scale = match line.tag {
+                HtmlTagType::Heading1 => 2,
+                _ => 1,
+            };
+
+            if my_doc >= cur_line_y && my_doc < cur_line_y + line_h {
+                let total_line_w: usize = line
+                    .spans
+                    .iter()
+                    .map(|s| {
+                        MinGuiCompositor::text_width(&s.text, scale)
+                            + if s.is_button { 16 } else { 0 }
+                    })
+                    .sum();
+
+                let mut cur_x = match line.align {
+                    TextAlign::Center => {
+                        let avail = doc_w.saturating_sub(24);
+                        doc_x + 12 + (avail.saturating_sub(total_line_w) / 2)
+                    }
+                    TextAlign::Right => doc_x + doc_w.saturating_sub(12 + total_line_w),
+                    TextAlign::Left => doc_x + 12 + line.indent,
+                };
+
+                let mut char_offset = 0usize;
+                for span in &line.spans {
+                    let span_w = MinGuiCompositor::text_width(&span.text, scale)
+                        + if span.is_button { 16 } else { 0 };
+                    if mx < cur_x {
+                        return Some((line_idx, char_offset));
+                    } else if mx >= cur_x && mx < cur_x + span_w {
+                        let rel_x = mx - cur_x - if span.is_button { 8 } else { 0 };
+                        let mut acc = 0;
+                        let mut best = 0;
+                        for (idx, ch) in span.text.char_indices() {
+                            let mut tmp = [0u8; 4];
+                            let cw = MinGuiCompositor::text_width(ch.encode_utf8(&mut tmp), scale);
+                            if rel_x < acc + cw / 2 {
+                                break;
+                            }
+                            acc += cw;
+                            best = idx + ch.len_utf8();
+                        }
+                        return Some((line_idx, char_offset + best));
+                    }
+                    char_offset += span.text.len();
+                    cur_x += span_w;
+                }
+                return Some((line_idx, char_offset));
+            }
+
+            cur_line_y += line_h;
+        }
+
+        if !self.page_lines.is_empty() {
+            let last_idx = self.page_lines.len() - 1;
+            let last_len = self.page_lines[last_idx]
+                .spans
+                .iter()
+                .map(|s| s.text.len())
+                .sum();
+            Some((last_idx, last_len))
+        } else {
+            None
+        }
+    }
+
+    pub fn start_page_selection_at(
+        &mut self,
+        mx: usize,
+        my: usize,
+        doc_x: usize,
+        doc_y: usize,
+        doc_w: usize,
+        doc_h: usize,
+        scroll_y: usize,
+    ) {
+        if let Some(pos) = self.point_to_page_pos(mx, my, doc_x, doc_y, doc_w, doc_h, scroll_y) {
+            self.page_selection_anchor = Some(pos);
+            self.page_selection_start = Some(pos);
+            self.page_selection_end = Some(pos);
+            self.page_dragging = true;
+        } else {
+            self.clear_page_selection();
+        }
+    }
+
+    pub fn update_page_selection_at(
+        &mut self,
+        mx: usize,
+        my: usize,
+        doc_x: usize,
+        doc_y: usize,
+        doc_w: usize,
+        doc_h: usize,
+        scroll_y: usize,
+    ) {
+        if let Some(anchor) = self.page_selection_anchor {
+            if let Some(pos) =
+                self.point_to_page_pos(mx, my, doc_x, doc_y, doc_w, doc_h, scroll_y)
+            {
+                if pos < anchor {
+                    self.page_selection_start = Some(pos);
+                    self.page_selection_end = Some(anchor);
+                } else {
+                    self.page_selection_start = Some(anchor);
+                    self.page_selection_end = Some(pos);
+                }
+            }
+        }
+    }
+
+    pub fn clear_page_selection(&mut self) {
+        self.page_selection_anchor = None;
+        self.page_selection_start = None;
+        self.page_selection_end = None;
+        self.page_dragging = false;
+    }
+
+    pub fn has_page_selection(&self) -> bool {
+        match (self.page_selection_start, self.page_selection_end) {
+            (Some(s), Some(e)) => s != e,
+            _ => false,
+        }
+    }
+
+    pub fn selected_page_text(&self) -> String {
+        let mut result = String::new();
+        if let (Some((start_line, start_col)), Some((end_line, end_col))) =
+            (self.page_selection_start, self.page_selection_end)
+        {
+            for line_idx in start_line..=end_line.min(self.page_lines.len().saturating_sub(1)) {
+                let line = &self.page_lines[line_idx];
+                let mut line_text = String::new();
+                for span in &line.spans {
+                    line_text.push_str(&span.text);
+                }
+
+                let len = line_text.len();
+                let s_col = if line_idx == start_line {
+                    start_col.min(len)
+                } else {
+                    0
+                };
+                let e_col = if line_idx == end_line {
+                    end_col.min(len)
+                } else {
+                    len
+                };
+
+                if s_col < e_col && s_col < len {
+                    let slice = &line_text[s_col..e_col.min(len)];
+                    if !result.is_empty() {
+                        result.push('\n');
+                    }
+                    result.push_str(slice);
+                }
+            }
+        }
+        result
+    }
+
+    pub fn copy_page_selection(&self) -> bool {
+        let text = self.selected_page_text();
+        if !text.is_empty() {
+            crate::gui::clipboard::set_str(&text);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn click_link_at(&mut self, mx: usize, my: usize) -> Option<String> {
+        if self.has_page_selection() {
+            return None;
+        }
         let mut clicked_url = None;
         let mut clicked_js = None;
         for link in self.rendered_links.borrow().iter() {
@@ -567,7 +773,7 @@ impl BrowserApp {
             let val = self.eval_js_expr(inner);
             self.js_alert = Some(val);
         } else if stmt.starts_with("console.log(") && stmt.ends_with(')') {
-            // No-op
+            // No-op (logs are collected but not displayed in this simple env)
         } else if stmt.starts_with("document.title =") || stmt.starts_with("document.title=") {
             let val_part = if stmt.starts_with("document.title =") {
                 &stmt[16..]
@@ -620,6 +826,29 @@ impl BrowserApp {
                                 }
                             }
                         }
+                    }
+                } else if rest.starts_with(".className =") || rest.starts_with(".className=") {
+                    let val_part = rest.split('=').nth(1).unwrap_or("");
+                    let val = self.eval_js_expr(val_part);
+                    for line in &mut self.page_lines {
+                        for span in &mut line.spans {
+                            if span.elem_id == id {
+                                span.text = val.clone();
+                            }
+                        }
+                    }
+                } else if rest.starts_with(".setAttribute(") || rest.starts_with(".setAttribute(") {
+                    // setAttribute support - parse attr="value"
+                    if let Some(open_paren) = rest.find('(') {
+                        if let Some(close_paren) = rest[open_paren+1..].rfind(')') {
+                            // Simple attribute setting - store in a lookup
+                            let _attr_part = &rest[open_paren + 1..open_paren + 1 + close_paren];
+                        }
+                    }
+                } else if rest.starts_with(".remove()") {
+                    // Remove element - find and filter out spans with this elem_id
+                    for line in &mut self.page_lines {
+                        line.spans.retain(|s| s.elem_id != id);
                     }
                 }
             }
@@ -719,11 +948,70 @@ impl BrowserApp {
         self.address_click_streak = 0;
     }
 
+    /// Adres alanı metninin başladığı x konumu (alan başlangıcı + sol iç boşluk).
+    const ADDRESS_TEXT_INSET: usize = 6;
+
+    /// Adres çubuğunda aynı anda görülebilen karakter sayısı.
+    pub fn address_visible_chars(field_w: usize) -> usize {
+        let char_width = MinGuiCompositor::text_width("M", 1).max(1);
+        field_w
+            .saturating_sub(12)
+            .checked_div(char_width)
+            .unwrap_or(1)
+            .max(1)
+    }
+
+    /// Fare x konumunu imleç indeksine çevirir. Karakter genişlikleri değişken
+    /// olduğu için her karakterin gerçek piksel genişliği kullanılır; tıklanan
+    /// noktaya en yakın karakter sınırı seçilir.
+    fn address_index_at_x(&self, x: usize, field_x: usize, scroll: usize) -> usize {
+        let text_x = field_x.saturating_add(Self::ADDRESS_TEXT_INSET);
+        let rel = x.saturating_sub(text_x);
+        let start = scroll.min(self.url_len);
+        let mut best = start;
+        let mut best_dist = rel;
+        let mut acc = 0usize;
+        for i in start..self.url_len {
+            let ch_len = core::str::from_utf8(&self.url[i..i + 1])
+                .map(|s| s.len())
+                .unwrap_or(1);
+            let ch = core::str::from_utf8(&self.url[i..(i + ch_len).min(self.url_len)])
+                .unwrap_or("");
+            acc += MinGuiCompositor::text_width(ch, 1);
+            let dist = rel.abs_diff(acc);
+            if dist <= best_dist {
+                best_dist = dist;
+                best = i + ch_len;
+            }
+        }
+        best.min(self.url_len)
+    }
+
+    /// Adres çubuğunun görünür kaydırma ofseti (çizim ve isabet testi ortak kullanır).
+    pub fn address_effective_scroll(&self, field_w: usize) -> usize {
+        let visible_chars = Self::address_visible_chars(field_w);
+        let mut addr_scroll = self.address_scroll.min(self.url_len);
+        if self.address_focused && self.address_cursor < addr_scroll {
+            addr_scroll = self.address_cursor;
+        }
+        if self.address_focused && self.address_cursor >= addr_scroll + visible_chars {
+            addr_scroll = self.address_cursor + 1 - visible_chars;
+        }
+        addr_scroll
+    }
+
     pub fn focus_address_at(&mut self, x: usize, field_x: usize) {
+        self.focus_address_at_in(x, field_x, 0);
+    }
+
+    /// Adres alanına tıklama: imleç tıklanan karakter sınırına taşınır.
+    /// `field_w`, alanın piksel genişliğidir (kaydırma hesabı için).
+    pub fn focus_address_at_in(&mut self, x: usize, field_x: usize, field_w: usize) {
         self.address_focused = true;
         self.focused_control = 4;
-        let column = x.saturating_sub(field_x) / MinGuiCompositor::text_width("M", 1).max(1);
-        self.address_cursor = (self.address_scroll + column).min(self.url_len);
+        let scroll = self.address_effective_scroll(field_w);
+        self.address_scroll = scroll;
+        self.address_cursor = self.address_index_at_x(x, field_x, scroll);
         self.address_selection_anchor = Some(self.address_cursor);
         self.address_selection = None;
         self.keep_address_cursor_visible();
@@ -734,10 +1022,11 @@ impl BrowserApp {
         x: usize,
         y: usize,
         field_x: usize,
+        field_w: usize,
         now_ms: u64,
         interval_ms: u64,
     ) -> u8 {
-        self.focus_address_at(x, field_x);
+        self.focus_address_at_in(x, field_x, field_w);
         let same_target = now_ms.abs_diff(self.address_last_click.0) <= interval_ms
             && self.address_last_click.1.abs_diff(x) < 4
             && self.address_last_click.2.abs_diff(y) < 4;
@@ -778,9 +1067,8 @@ impl BrowserApp {
     }
 
     pub fn address_drag_to(&mut self, x: usize, field_x: usize) {
-        let char_width = MinGuiCompositor::text_width("M", 1).max(1);
-        let column = x.saturating_sub(field_x) / char_width;
-        let target = (self.address_scroll + column).min(self.url_len);
+        let scroll = self.address_scroll;
+        let target = self.address_index_at_x(x, field_x, scroll);
         self.address_cursor = target;
         let anchor = self.address_selection_anchor.unwrap_or(target);
         self.address_selection = if anchor == target {
@@ -2621,19 +2909,8 @@ impl BrowserApp {
                 Color::DARK_BG
             },
         );
-        let char_width = MinGuiCompositor::text_width("M", 1).max(1);
-        let visible_chars = url_w
-            .saturating_sub(12)
-            .checked_div(char_width)
-            .unwrap_or(1)
-            .max(1);
-        let mut addr_scroll = self.address_scroll.min(self.url_len);
-        if self.address_focused && self.address_cursor < addr_scroll {
-            addr_scroll = self.address_cursor;
-        }
-        if self.address_focused && self.address_cursor >= addr_scroll + visible_chars {
-            addr_scroll = self.address_cursor + 1 - visible_chars;
-        }
+        let visible_chars = Self::address_visible_chars(url_w);
+        let addr_scroll = self.address_effective_scroll(url_w);
         let visible_end = (addr_scroll + visible_chars).min(self.url_len);
         let clip = (url_x + 4, win_y + 32, url_w.saturating_sub(8), 20);
         let text_x = url_x + 6;
@@ -2892,7 +3169,7 @@ impl BrowserApp {
 
                 let mut cur_line_y = doc_y + 12 + if self.js_alert.is_some() { 28 } else { 0 };
                 let mut find_span_index = 0usize;
-                for line in &self.page_lines {
+                for (line_idx, line) in self.page_lines.iter().enumerate() {
                     let line_h = match line.tag {
                         HtmlTagType::Heading1 => 26,
                         HtmlTagType::Heading2 => 22,
@@ -2937,6 +3214,7 @@ impl BrowserApp {
                             }
                         }
 
+                        let mut span_char_start = 0usize;
                         for span in &line.spans {
                             let raw_text_w = MinGuiCompositor::text_width(&span.text, scale);
                             let span_w = raw_text_w + if span.is_button { 16 } else { 0 };
@@ -2945,6 +3223,39 @@ impl BrowserApp {
                             } else {
                                 span.color
                             };
+                            let span_len = span.text.len();
+                            let span_char_end = span_char_start + span_len;
+
+                            let sel_range =
+                                match (self.page_selection_start, self.page_selection_end) {
+                                    (Some((sl, sc)), Some((el, ec))) if sl != el || sc != ec => {
+                                        if line_idx < sl || line_idx > el {
+                                            None
+                                        } else {
+                                            let line_sel_s = if line_idx == sl { sc } else { 0 };
+                                            let line_sel_e =
+                                                if line_idx == el { ec } else { usize::MAX };
+                                            if span_char_end > line_sel_s
+                                                && span_char_start < line_sel_e
+                                            {
+                                                let s = line_sel_s
+                                                    .saturating_sub(span_char_start)
+                                                    .min(span_len);
+                                                let e = line_sel_e
+                                                    .saturating_sub(span_char_start)
+                                                    .min(span_len);
+                                                if s < e {
+                                                    Some((s, e))
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        }
+                                    }
+                                    _ => None,
+                                };
 
                             if span.is_button {
                                 let btn_bg = span.bg_color.unwrap_or(Color::TITLE_BAR);
@@ -2965,6 +3276,76 @@ impl BrowserApp {
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
                                     });
+                                }
+                            } else if let Some((s, e)) = sel_range {
+                                if let Some(bg) = span.bg_color {
+                                    fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
+                                }
+                                let prefix = &span.text[..s];
+                                let selected = &span.text[s..e];
+                                let suffix = &span.text[e..];
+                                let prefix_w = MinGuiCompositor::text_width(prefix, scale);
+                                let sel_w = MinGuiCompositor::text_width(selected, scale);
+
+                                if !prefix.is_empty() {
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb, cur_x, draw_y, prefix, text_color, scale, doc_clip,
+                                    );
+                                }
+                                if !selected.is_empty() {
+                                    fb.draw_rect(
+                                        cur_x + prefix_w,
+                                        draw_y,
+                                        sel_w,
+                                        line_h,
+                                        Color::ACCENT_BLUE,
+                                    );
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb,
+                                        cur_x + prefix_w,
+                                        draw_y,
+                                        selected,
+                                        Color::WHITE,
+                                        scale,
+                                        doc_clip,
+                                    );
+                                }
+                                if !suffix.is_empty() {
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb,
+                                        cur_x + prefix_w + sel_w,
+                                        draw_y,
+                                        suffix,
+                                        text_color,
+                                        scale,
+                                        doc_clip,
+                                    );
+                                }
+                            } else if let Some((s, e)) = sel_range {
+                                if let Some(bg) = span.bg_color {
+                                    fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
+                                }
+                                let prefix = &span.text[..s];
+                                let selected = &span.text[s..e];
+                                let suffix = &span.text[e..];
+                                let prefix_w = MinGuiCompositor::text_width(prefix, scale);
+                                let sel_w = MinGuiCompositor::text_width(selected, scale);
+
+                                if !prefix.is_empty() {
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb, cur_x, draw_y, prefix, text_color, scale, doc_clip,
+                                    );
+                                }
+                                if !selected.is_empty() {
+                                    fb.draw_rect(cur_x + prefix_w, draw_y, sel_w, line_h, Color::ACCENT_BLUE);
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb, cur_x + prefix_w, draw_y, selected, Color::WHITE, scale, doc_clip,
+                                    );
+                                }
+                                if !suffix.is_empty() {
+                                    MinGuiCompositor::draw_string_scaled_clipped(
+                                        fb, cur_x + prefix_w + sel_w, draw_y, suffix, text_color, scale, doc_clip,
+                                    );
                                 }
                             } else {
                                 if let Some(bg) = span.bg_color {
@@ -3053,6 +3434,7 @@ impl BrowserApp {
                                     }
                                 }
                             }
+                            span_char_start = span_char_end;
                             cur_x += span_w;
                         }
                     }

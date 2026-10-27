@@ -400,7 +400,10 @@ pub struct SystemSettings {
     pub theme: ThemeId,
     pub keyboard_layout: KeyboardLayout,
     pub language: UiLanguage,
-    pub region: u8,
+    pub utc_offset: i8,
+    pub utc_editing: bool,
+    pub utc_input: [u8; 3],
+    pub utc_input_len: u8,
     pub volume: u8,
     pub is_muted: bool,
     pub mouse_speed: u8,
@@ -466,7 +469,10 @@ impl SystemSettings {
             theme: ThemeId::VelvetDark,
             keyboard_layout: KeyboardLayout::TurkishQ,
             language: UiLanguage::English,
-            region: 0,
+            utc_offset: 3,
+            utc_editing: false,
+            utc_input: [b'3', 0, 0],
+            utc_input_len: 1,
             volume: 75,
             is_muted: false,
             mouse_speed: 5,
@@ -595,7 +601,19 @@ impl SystemSettings {
                 }
                 "region" => {
                     if let Ok(v) = val.parse::<u8>() {
-                        self.region = v.min(4);
+                        self.utc_offset = match v.min(5) {
+                            1 => 0,
+                            2 => -5,
+                            3 => 1,
+                            4 => 9,
+                            5 => -3,
+                            _ => 3,
+                        };
+                    }
+                }
+                "utc_offset" => {
+                    if let Ok(v) = val.parse::<i8>() {
+                        self.utc_offset = v.clamp(-12, 14);
                     }
                 }
                 "res" => {
@@ -631,6 +649,7 @@ impl SystemSettings {
                 _ => {}
             }
         }
+        self.sync_utc_input();
         crate::gui::wallpaper::apply(self.wallpaper, self.wall_color);
         self.status_msg = crate::gui::ui_text(
             "Ayarlar kalıcı depolamadan yüklendi.",
@@ -678,9 +697,25 @@ impl SystemSettings {
     }
     pub fn region_btn_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
         (
+            x + CONTENT_X + 208,
+            y + sp(UI_TOP_Y + 3 * UI_ROW_STEP),
+            sp(110),
+            sp(UI_BTN_H),
+        )
+    }
+    pub fn utc_dec_btn_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
+        (
             x + CONTENT_X + 170,
             y + sp(UI_TOP_Y + 3 * UI_ROW_STEP),
-            sp(210),
+            sp(32),
+            sp(UI_BTN_H),
+        )
+    }
+    pub fn utc_inc_btn_rect(x: usize, y: usize) -> (usize, usize, usize, usize) {
+        (
+            x + CONTENT_X + 324,
+            y + sp(UI_TOP_Y + 3 * UI_ROW_STEP),
+            sp(32),
             sp(UI_BTN_H),
         )
     }
@@ -819,31 +854,86 @@ impl SystemSettings {
     pub fn wallpaper_count() -> usize {
         crate::gui::wallpaper::COUNT
     }
-    pub fn cycle_region(&mut self) {
-        self.region = (self.region + 1) % 5;
+    pub fn begin_utc_edit(&mut self) {
+        self.utc_input = [0; 3];
+        self.utc_input_len = 0;
+        self.utc_editing = true;
     }
+
+    pub fn step_utc_offset(&mut self, delta: i8) -> i8 {
+        self.utc_offset = self.utc_offset.saturating_add(delta).clamp(-12, 14);
+        self.utc_editing = false;
+        self.sync_utc_input();
+        self.utc_offset
+    }
+
+    pub fn utc_input_text(&self) -> &str {
+        core::str::from_utf8(&self.utc_input[..self.utc_input_len as usize]).unwrap_or("")
+    }
+
+    pub fn utc_input_char(&mut self, ch: char) {
+        if !self.utc_editing || self.utc_input_len >= self.utc_input.len() as u8 {
+            return;
+        }
+        if ch == '-' {
+            if self.utc_input_len == 0 {
+                self.utc_input[0] = b'-';
+                self.utc_input_len = 1;
+            }
+        } else if ch.is_ascii_digit() {
+            self.utc_input[self.utc_input_len as usize] = ch as u8;
+            self.utc_input_len += 1;
+        }
+    }
+
+    pub fn utc_input_backspace(&mut self) {
+        if self.utc_editing && self.utc_input_len > 0 {
+            self.utc_input_len -= 1;
+        }
+    }
+
+    pub fn cancel_utc_edit(&mut self) {
+        self.utc_editing = false;
+        self.sync_utc_input();
+    }
+
+    pub fn commit_utc_edit(&mut self) -> Option<i8> {
+        let value = self.utc_input_text().parse::<i8>().ok();
+        match value {
+            Some(offset) if (-12..=14).contains(&offset) => {
+                self.utc_offset = offset;
+                self.utc_editing = false;
+                self.sync_utc_input();
+                Some(offset)
+            }
+            _ => {
+                self.status_msg = crate::gui::ui_text(
+                    "UTC farkı -12 ile +14 arasında olmalı.",
+                    "UTC offset must be between -12 and +14.",
+                );
+                None
+            }
+        }
+    }
+
+    fn sync_utc_input(&mut self) {
+        self.utc_input = [0; 3];
+        self.utc_input_len = 0;
+        let magnitude = self.utc_offset.abs() as u8;
+        if self.utc_offset < 0 {
+            self.utc_input[0] = b'-';
+            self.utc_input_len = 1;
+        }
+        if magnitude >= 10 {
+            self.utc_input[self.utc_input_len as usize] = b'0' + magnitude / 10;
+            self.utc_input_len += 1;
+        }
+        self.utc_input[self.utc_input_len as usize] = b'0' + magnitude % 10;
+        self.utc_input_len += 1;
+    }
+
     pub fn region_offset(&self) -> i8 {
-        match self.region {
-            1 => 0,
-            2 => -5,
-            3 => 1,
-            4 => 9,
-            _ => 3,
-        }
-    }
-    pub fn region_name(&self, english: bool) -> &'static str {
-        match (self.region, english) {
-            (1, true) => "UTC / Hardware Local (+0)",
-            (1, false) => "UTC / Donanım Yerel (+0)",
-            (2, true) => "US Eastern (UTC-5)",
-            (2, false) => "ABD Doğu (UTC-5)",
-            (3, true) => "Central Europe (UTC+1)",
-            (3, false) => "Orta Avrupa (UTC+1)",
-            (4, true) => "Japan / Tokyo (UTC+9)",
-            (4, false) => "Japonya / Tokyo (UTC+9)",
-            (_, true) => "Türkiye (UTC+3)",
-            (_, false) => "Türkiye (UTC+3)",
-        }
+        self.utc_offset
     }
 
     // --- Tab 2 (Ağ) Geometri ---
@@ -1458,8 +1548,11 @@ impl SystemSettings {
                 _ => b"100",
             },
         );
-        put(&mut cfg, &mut n, b";region=");
-        put(&mut cfg, &mut n, &[b'0' + self.region.min(4)]);
+        put(&mut cfg, &mut n, b";utc_offset=");
+        if self.utc_offset < 0 {
+            put(&mut cfg, &mut n, b"-");
+        }
+        put_num(&mut cfg, &mut n, self.utc_offset.unsigned_abs());
         put(&mut cfg, &mut n, b";dhcp=");
         put(
             &mut cfg,
@@ -1733,33 +1826,49 @@ impl SystemSettings {
                     win_x + CONTENT_X,
                     win_y + sp(UI_TOP_Y + 3 * UI_ROW_STEP + UI_LABEL_OFFSET),
                     if self.language.is_english() {
-                        "Time Zone:"
+                        "UTC Offset:"
                     } else {
-                        "Bölge / Saat:"
+                        "UTC Farkı:"
                     },
                     Color::TEXT_MAIN,
                 );
-                let reg_r = Self::region_btn_rect(win_x, win_y);
+                let utc_dec = Self::utc_dec_btn_rect(win_x, win_y);
+                let utc_inc = Self::utc_inc_btn_rect(win_x, win_y);
                 MinGuiCompositor::draw_button(
                     fb,
-                    reg_r,
-                    Color::ACCENT_BLUE,
-                    self.region_name(self.language.is_english()),
+                    utc_dec,
+                    Color::TITLE_BAR,
+                    "-",
                     Color::TEXT_MAIN,
                     false,
                 );
-                if self.focused_control == 7 {
-                    fb.draw_rect_outline(reg_r.0, reg_r.1, reg_r.2, reg_r.3, Color::ACCENT_YELLOW);
-                }
-                if self.focused_control == 7 {
-                    fb.draw_rect_outline(
-                        reg_r.0,
-                        reg_r.1,
-                        reg_r.2,
-                        reg_r.3,
-                        Color::ACCENT_YELLOW,
-                    );
-                }
+                let reg_r = Self::region_btn_rect(win_x, win_y);
+                fb.draw_rect_outline(
+                    reg_r.0,
+                    reg_r.1,
+                    reg_r.2,
+                    reg_r.3,
+                    if self.utc_editing || self.focused_control == 7 {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::BORDER
+                    },
+                );
+                let utc_text = self.utc_input_text();
+                let text_x = reg_r.0
+                    + reg_r
+                        .2
+                        .saturating_sub(MinGuiCompositor::text_width(utc_text, 1))
+                        / 2;
+                MinGuiCompositor::draw_string(fb, text_x, reg_r.1 + 6, utc_text, Color::TEXT_MAIN);
+                MinGuiCompositor::draw_button(
+                    fb,
+                    utc_inc,
+                    Color::TITLE_BAR,
+                    "+",
+                    Color::TEXT_MAIN,
+                    false,
+                );
 
                 // --- Canlı Saat & Tarih (Satır 4) ---
                 let mut clock = TextBuf::new();

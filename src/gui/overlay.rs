@@ -147,11 +147,13 @@ impl MinGuiCompositor {
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.
-        let over_control = self
-            .windows
-            .iter()
-            .flatten()
-            .any(|win| win.is_open && !win.is_minimized && in_rect(mx, my, win.close_rect()));
+        let over_control = self.windows.iter().flatten().any(|win| {
+            win.is_open
+                && !win.is_minimized
+                && (in_rect(mx, my, win.close_hit_rect())
+                    || in_rect(mx, my, win.max_hit_rect())
+                    || in_rect(mx, my, win.min_hit_rect()))
+        });
         if !over_control {
             if let Some((_, edge)) = self.topmost_resize_edge(mx, my) {
                 self.draw_resize_cursor(fb, mx, my, edge);

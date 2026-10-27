@@ -460,6 +460,11 @@ pub struct TerminalApp {
     /// Boru hattındaki ilk komutun gercek adi (duyarlı hata iletileri icin).
     invoked: [u8; 32],
     invoked_len: usize,
+    /// Fare ile metin seçimi (satır, karakter ofseti)
+    pub selection_anchor: Option<(usize, usize)>,
+    pub selection_start: Option<(usize, usize)>,
+    pub selection_end: Option<(usize, usize)>,
+    pub is_selecting: bool,
 }
 
 impl TerminalApp {
@@ -488,6 +493,10 @@ impl TerminalApp {
             open_request: None,
             invoked: [0; 32],
             invoked_len: 0,
+            selection_anchor: None,
+            selection_start: None,
+            selection_end: None,
+            is_selecting: false,
         };
         app.cwd[0] = b'/';
         app
@@ -598,9 +607,194 @@ impl TerminalApp {
         }
     }
 
-    /// Panoya terminal giriş satırını veya son satırı kopyalar.
+    pub fn point_to_line_col(
+        &self,
+        mx: usize,
+        my: usize,
+        x: usize,
+        y: usize,
+        _w: usize,
+        h: usize,
+    ) -> Option<(usize, usize)> {
+        let line_height = crate::gui::font_render::text_height(
+            crate::gui::font_render::Face::Geist,
+            14.0 * crate::gui::font_zoom() as f32 / 100.0,
+        )
+        .max(1);
+        let line_gap = 5;
+        let status_y = y + h.saturating_sub(line_height + 14);
+        let prompt_y = status_y.saturating_sub(line_height + 8);
+        let output_y = y + 60;
+        let view_lines = prompt_y.saturating_sub(output_y) / (line_height + line_gap);
+        let first = self
+            .out_count
+            .saturating_sub(view_lines)
+            .saturating_sub(self.output_scroll);
+        let last = (first + view_lines).min(self.out_count);
+
+        if my >= prompt_y && my <= prompt_y + line_height + 4 {
+            let prompt = alloc::format!("{}>", self.cwd_str());
+            let prompt_w = MinGuiCompositor::terminal_text_width(&prompt) + 6;
+            let input_x = x + 16 + prompt_w;
+            let input_str = core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("");
+            let col = if mx <= input_x {
+                0
+            } else {
+                let rel = mx - input_x;
+                let mut best_col = 0;
+                let mut acc = 0;
+                for (idx, ch) in input_str.char_indices() {
+                    let mut tmp = [0u8; 4];
+                    let cw = MinGuiCompositor::terminal_text_width(ch.encode_utf8(&mut tmp));
+                    if rel < acc + cw / 2 {
+                        break;
+                    }
+                    acc += cw;
+                    best_col = idx + ch.len_utf8();
+                }
+                best_col
+            };
+            return Some((self.out_count, col));
+        }
+
+        if my >= output_y && my < prompt_y {
+            let row = (my - output_y) / (line_height + line_gap);
+            let line_idx = first + row;
+            if line_idx < last {
+                let line_str = self.out[line_idx].as_str();
+                let text_x = x + 16;
+                let col = if mx <= text_x {
+                    0
+                } else {
+                    let rel = mx - text_x;
+                    let mut best_col = 0;
+                    let mut acc = 0;
+                    for (idx, ch) in line_str.char_indices() {
+                        let mut tmp = [0u8; 4];
+                        let cw = MinGuiCompositor::terminal_text_width(ch.encode_utf8(&mut tmp));
+                        if rel < acc + cw / 2 {
+                            break;
+                        }
+                        acc += cw;
+                        best_col = idx + ch.len_utf8();
+                    }
+                    best_col
+                };
+                return Some((line_idx, col));
+            }
+        }
+
+        None
+    }
+
+    pub fn start_selection_at(
+        &mut self,
+        mx: usize,
+        my: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        if let Some(pos) = self.point_to_line_col(mx, my, x, y, w, h) {
+            self.selection_anchor = Some(pos);
+            self.selection_start = Some(pos);
+            self.selection_end = Some(pos);
+            self.is_selecting = true;
+        } else {
+            self.clear_selection();
+        }
+    }
+
+    pub fn update_selection_at(
+        &mut self,
+        mx: usize,
+        my: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        if let Some(anchor) = self.selection_anchor {
+            if let Some(pos) = self.point_to_line_col(mx, my, x, y, w, h) {
+                if pos < anchor {
+                    self.selection_start = Some(pos);
+                    self.selection_end = Some(anchor);
+                } else {
+                    self.selection_start = Some(anchor);
+                    self.selection_end = Some(pos);
+                }
+            }
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+        self.selection_start = None;
+        self.selection_end = None;
+        self.is_selecting = false;
+    }
+
+    pub fn has_selection(&self) -> bool {
+        match (self.selection_start, self.selection_end) {
+            (Some(s), Some(e)) => s != e,
+            _ => false,
+        }
+    }
+
+    pub fn selected_text(&self) -> alloc::string::String {
+        let mut result = alloc::string::String::new();
+        if let (Some((start_line, start_col)), Some((end_line, end_col))) =
+            (self.selection_start, self.selection_end)
+        {
+            for line_idx in start_line..=end_line {
+                let line_str = if line_idx < self.out_count {
+                    self.out[line_idx].as_str()
+                } else if line_idx == self.out_count {
+                    core::str::from_utf8(&self.input[..self.input_len]).unwrap_or("")
+                } else {
+                    ""
+                };
+
+                let len = line_str.len();
+                let s_col = if line_idx == start_line {
+                    start_col.min(len)
+                } else {
+                    0
+                };
+                let e_col = if line_idx == end_line {
+                    end_col.min(len)
+                } else {
+                    len
+                };
+
+                if s_col < e_col && s_col < len {
+                    let slice = &line_str[s_col..e_col.min(len)];
+                    if !result.is_empty() {
+                        result.push('\n');
+                    }
+                    result.push_str(slice);
+                }
+            }
+        }
+        result
+    }
+
+    pub fn copy_selection(&self) -> bool {
+        let text = self.selected_text();
+        if !text.is_empty() {
+            crate::gui::clipboard::set_str(&text);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Panoya seçili metni veya aktif giriş/son satırı kopyalar.
     pub fn copy_input(&self) {
-        if self.input_len > 0 {
+        if self.has_selection() {
+            self.copy_selection();
+        } else if self.input_len > 0 {
             if let Ok(s) = core::str::from_utf8(&self.input[..self.input_len]) {
                 crate::gui::clipboard::set_str(s);
             }
@@ -3635,14 +3829,80 @@ impl TerminalApp {
             } else {
                 self.out[i].color
             };
-            MinGuiCompositor::draw_terminal_string_clipped(
-                fb,
-                x + 16,
-                ly,
-                self.out[i].as_str(),
-                col,
-                content_clip,
-            );
+            let line_text = self.out[i].as_str();
+
+            let sel_range = match (self.selection_start, self.selection_end) {
+                (Some((sl, sc)), Some((el, ec))) if sl != el || sc != ec => {
+                    if i < sl || i > el {
+                        None
+                    } else {
+                        let len = line_text.len();
+                        let s = if i == sl { sc.min(len) } else { 0 };
+                        let e = if i == el { ec.min(len) } else { len };
+                        if s < e {
+                            Some((s, e))
+                        } else {
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some((s, e)) = sel_range {
+                let prefix = &line_text[..s];
+                let selected = &line_text[s..e];
+                let suffix = &line_text[e..];
+                let prefix_w = MinGuiCompositor::terminal_text_width(prefix);
+                let sel_w = MinGuiCompositor::terminal_text_width(selected);
+
+                if !prefix.is_empty() {
+                    MinGuiCompositor::draw_terminal_string_clipped(
+                        fb,
+                        x + 16,
+                        ly,
+                        prefix,
+                        col,
+                        content_clip,
+                    );
+                }
+                if !selected.is_empty() {
+                    fb.draw_rect(
+                        x + 16 + prefix_w,
+                        ly,
+                        sel_w,
+                        line_height + 2,
+                        Color::ACCENT_BLUE,
+                    );
+                    MinGuiCompositor::draw_terminal_string_clipped(
+                        fb,
+                        x + 16 + prefix_w,
+                        ly,
+                        selected,
+                        Color::WHITE,
+                        content_clip,
+                    );
+                }
+                if !suffix.is_empty() {
+                    MinGuiCompositor::draw_terminal_string_clipped(
+                        fb,
+                        x + 16 + prefix_w + sel_w,
+                        ly,
+                        suffix,
+                        col,
+                        content_clip,
+                    );
+                }
+            } else {
+                MinGuiCompositor::draw_terminal_string_clipped(
+                    fb,
+                    x + 16,
+                    ly,
+                    line_text,
+                    col,
+                    content_clip,
+                );
+            }
             ly += line_height + line_gap;
         }
 
@@ -3665,9 +3925,73 @@ impl TerminalApp {
             w.saturating_sub(prompt_w + 28),
             line_height + 4,
         );
-        MinGuiCompositor::draw_terminal_string_clipped(
-            fb, input_x, prompt_y, input_str, default_fg, input_clip,
-        );
+
+        let sel_input = match (self.selection_start, self.selection_end) {
+            (Some((sl, sc)), Some((el, ec))) if sl != el || sc != ec => {
+                if sl <= self.out_count && self.out_count <= el {
+                    let len = input_str.len();
+                    let s = if self.out_count == sl { sc.min(len) } else { 0 };
+                    let e = if self.out_count == el {
+                        ec.min(len)
+                    } else {
+                        len
+                    };
+                    if s < e {
+                        Some((s, e))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        if let Some((s, e)) = sel_input {
+            let prefix = &input_str[..s];
+            let selected = &input_str[s..e];
+            let suffix = &input_str[e..];
+            let prefix_w = MinGuiCompositor::terminal_text_width(prefix);
+            let sel_w = MinGuiCompositor::terminal_text_width(selected);
+
+            if !prefix.is_empty() {
+                MinGuiCompositor::draw_terminal_string_clipped(
+                    fb, input_x, prompt_y, prefix, default_fg, input_clip,
+                );
+            }
+            if !selected.is_empty() {
+                fb.draw_rect(
+                    input_x + prefix_w,
+                    prompt_y,
+                    sel_w,
+                    line_height + 2,
+                    Color::ACCENT_BLUE,
+                );
+                MinGuiCompositor::draw_terminal_string_clipped(
+                    fb,
+                    input_x + prefix_w,
+                    prompt_y,
+                    selected,
+                    Color::WHITE,
+                    input_clip,
+                );
+            }
+            if !suffix.is_empty() {
+                MinGuiCompositor::draw_terminal_string_clipped(
+                    fb,
+                    input_x + prefix_w + sel_w,
+                    prompt_y,
+                    suffix,
+                    default_fg,
+                    input_clip,
+                );
+            }
+        } else {
+            MinGuiCompositor::draw_terminal_string_clipped(
+                fb, input_x, prompt_y, input_str, default_fg, input_clip,
+            );
+        }
         if is_focused {
             let caret_x = input_x + MinGuiCompositor::terminal_text_width(input_str);
             if caret_x < x + w.saturating_sub(16) {

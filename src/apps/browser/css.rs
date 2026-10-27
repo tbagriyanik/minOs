@@ -191,6 +191,183 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             if val.contains("underline") {
                 style.underline = true;
             }
+            if val.contains("line-through") || val.contains("overline") {
+                style.line_through = true;
+            }
+        }
+        "vertical-align" => {
+            if val.eq_ignore_ascii_case("baseline") {
+                style.vertical_align = false;
+            } else if val.eq_ignore_ascii_case("middle") {
+                style.vertical_align = true;
+            } else if val.eq_ignore_ascii_case("top") {
+                style.vertical_align = false;
+            } else if val.eq_ignore_ascii_case("bottom") {
+                style.vertical_align = true;
+            }
+        }
+        "line-height" => {
+            // Basit bir çözüm: bir sayı veya "normal" kabul et
+            if val.eq_ignore_ascii_case("normal") {
+                style.line_height = 1.2; // Sabit çarpan
+            } else if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.line_height = px as f32 / 16.0; // 16px varsayılan font size
+            }
+        }
+        "cursor" => {
+            // Cursor stilleri sadece tanıtım amacı; burada doğrudan etkisi yok
+        }
+        "overflow" => {
+            //overflow stilleri basitçe göz ardı ediliyor veya varsayılan ayarlanıyor
+        }
+        "white-space" => {
+            // white-space stilleri
+            if val.eq_ignore_ascii_case("nowrap") {
+                style.no_wrap = true;
+            } else if val.eq_ignore_ascii_case("pre") {
+                style.pre_formatted = true;
+            }
+        }
+        "border" => {
+            // Sınır stilleri basitçe işleniyor
+        }
+        "border-top" | "border-right" | "border-bottom" | "border-left" => {}
+        "border-width" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.border_width = px;
+            }
+        }
+        "border-color" => {
+            if let Some(c) = html_color(val.as_bytes()) {
+                style.border_color = Some(c);
+            }
+        }
+        "border-style" => {
+            // Sınır stili (solid, dashed vb.)
+            if val.eq_ignore_ascii_case("solid") {
+                style.border_style = 1; // solid
+            } else if val.eq_ignore_ascii_case("dashed") {
+                style.border_style = 2; // dashed
+            } else if val.eq_ignore_ascii_case("dotted") {
+                style.border_style = 3; // dotted
+            }
+        }
+        "border-radius" => {
+            // Sınır radius'i (basit uygulama)
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.border_radius = px;
+            }
+        }
+        "box-shadow" => {
+            // Box shadow - basit uygulama, sadece renk ayrıştırılıyor
+            if let Some(c) = html_color(val.as_bytes()) {
+                style.box_shadow_color = Some(c);
+            }
+        }
+        "text-shadow" => {
+            // Text shadow - basit uygulama
+            if let Some(c) = html_color(val.as_bytes()) {
+                style.text_shadow_color = Some(c);
+            }
+        }
+        "display" => {
+            if val.eq_ignore_ascii_case("flex") || val.eq_ignore_ascii_case("inline-flex") {
+                style.display = Some(1); // flex modu
+            } else if val.eq_ignore_ascii_case("grid") || val.eq_ignore_ascii_case("inline-grid") {
+                style.display = Some(2); // grid modu
+            } else if val.eq_ignore_ascii_case("block") {
+                style.display = Some(3); // block
+            } else if val.eq_ignore_ascii_case("inline") {
+                style.display = Some(4); // inline
+            } else if val.eq_ignore_ascii_case("none") {
+                style.display_none = true;
+            }
+        }
+        "position" => {
+            if val.eq_ignore_ascii_case("static") {
+                style.position = 0; // static
+            } else if val.eq_ignore_ascii_case("relative") {
+                style.position = 1; // relative
+            } else if val.eq_ignore_ascii_case("absolute") {
+                style.position = 2; // absolute
+            } else if val.eq_ignore_ascii_case("fixed") {
+                style.position = 3; // fixed
+            } else if val.eq_ignore_ascii_case("sticky") {
+                style.position = 4; // sticky
+            }
+        }
+        "z-index" => {
+            if let Ok(n) = val.parse::<i32>() {
+                style.z_index = n;
+            }
+        }
+        "overflow" => {
+            if val.eq_ignore_ascii_case("visible") {
+                style.overflow = 0;
+            } else if val.eq_ignore_ascii_case("hidden") {
+                style.overflow = 1;
+            } else if val.eq_ignore_ascii_case("scroll") {
+                style.overflow = 2;
+            }
+        }
+        "width" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.width = px;
+            }
+        }
+        "height" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.height = px;
+            }
+        }
+        "max-width" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.max_width = px;
+            }
+        }
+        "max-height" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.max_height = px;
+            }
+        }
+        "min-width" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.min_width = px;
+            }
+        }
+        "min-height" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.min_height = px;
+            }
+        }
+        "background-image" => {
+            // Background image - basit tanımla
+        }
+        "background-gradient" => {
+            // Background gradient - gelecek geliştirme
+        }
+        "list-style-type" => {
+            if val.eq_ignore_ascii_case("none") {
+                style.list_style_type = 0;
+            } else if val.eq_ignore_ascii_case("disc") {
+                style.list_style_type = 1;
+            } else if val.eq_ignore_ascii_case("circle") {
+                style.list_style_type = 2;
+            } else if val.eq_ignore_ascii_case("square") {
+                style.list_style_type = 3;
+            }
+        }
+        "float" => {
+            if val.eq_ignore_ascii_case("left") {
+                style.float_left = true;
+            } else if val.eq_ignore_ascii_case("right") {
+                style.float_right = true;
+            }
+        }
+        "clear" => {
+            if val.eq_ignore_ascii_case("both") {
+                style.clear_both = true;
+            }
         }
         _ => {}
     }

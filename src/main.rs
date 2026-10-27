@@ -819,6 +819,8 @@ pub extern "C" fn _start() -> ! {
 
     let mut notepad_dragging = false;
     let mut browser_address_dragging = false;
+    let mut browser_page_dragging = false;
+    let mut terminal_dragging = false;
     let mut start_search_dragging = false;
 
     let mut image_drag_last: Option<(usize, usize)> = None;
@@ -1862,6 +1864,31 @@ pub extern "C" fn _start() -> ! {
 
                     if my < win.y + gui::titlebar_h() {
                         hit_window = Some((idx, gui::ContextKind::Window));
+                    } else if idx == 10 {
+                        // Terminal / CMD: Sağ tık seçimi panoya kopyalar veya panoyu yapıştırır
+                        compositor.focus_window(idx);
+                        if terminal_app.has_selection() {
+                            terminal_app.copy_selection();
+                            terminal_app.clear_selection();
+                            compositor.is_context_menu_open = false;
+                            break;
+                        } else if crate::gui::clipboard::len() > 0 {
+                            terminal_app.paste_clipboard();
+                            compositor.is_context_menu_open = false;
+                            break;
+                        } else {
+                            hit_window = Some((idx, gui::ContextKind::Window));
+                        }
+                    } else if idx == 3 {
+                        // Tarayıcı: Seçili metin varsa sağ tık panoya kopyalar
+                        compositor.focus_window(idx);
+                        if browser_app.has_page_selection() {
+                            browser_app.copy_page_selection();
+                            compositor.is_context_menu_open = false;
+                            break;
+                        } else {
+                            hit_window = Some((idx, gui::ContextKind::Window));
+                        }
                     } else if idx == 2 {
                         compositor.focus_window(idx);
 
@@ -3349,11 +3376,12 @@ pub extern "C" fn _start() -> ! {
                     }
 
                     // Window controls activate on release so their pressed state is visible.
-                    let control = if gui::in_rect(mx, my, win.close_rect()) {
+                    // Hit alanları düğme basılıyken görsel olarak küçülse dahi tam boyutta kalır.
+                    let control = if gui::in_rect(mx, my, win.close_hit_rect()) {
                         Some(0)
-                    } else if gui::in_rect(mx, my, win.max_rect()) {
+                    } else if gui::in_rect(mx, my, win.max_hit_rect()) {
                         Some(1)
-                    } else if gui::in_rect(mx, my, win.min_rect()) {
+                    } else if gui::in_rect(mx, my, win.min_hit_rect()) {
                         Some(2)
                     } else {
                         None
@@ -3386,40 +3414,40 @@ pub extern "C" fn _start() -> ! {
                             // Saga tam dayali dikey scrollbar track'i
 
                             let track = (ccx + ccw - t, ccy, t, view_h);
+                            let track_hit = (ccx + ccw.saturating_sub(t + 4), ccy, t + 4, view_h);
 
-                            if gui::in_rect(mx, my, track) {
+                            if gui::in_rect(mx, my, track_hit) {
                                 let g = gui::scrollbar::v_geom(track, c_h, view_h, win.scroll.y);
 
-                                // Tutamac yakinindaysa tutamacin ustunu koru, degilse aninda zipla.
-
+                                // Tutamaç üzerindeyse tıklanan ofseti koru (zıplama olmadan akıcı sürükleme)
                                 if gui::in_rect(mx, my, g.thumb) {
-                                    vscroll_drag = Some((
-                                        idx,
-                                        g.thumb.1.saturating_sub(my),
-                                        g.thumb.3,
-                                        track.3,
-                                        c_h,
-                                        view_h,
-                                    ));
+                                    let grab = my.saturating_sub(g.thumb.1);
+                                    vscroll_drag =
+                                        Some((idx, grab, g.thumb.3, track.3, c_h, view_h));
                                 } else {
-                                    // Track uzerinde tiklanan konumdan kaydirmayi hesapla.
-
-                                    let ratio =
-                                        (my.saturating_sub(track.1)) as f32 / track.3.max(1) as f32;
-
+                                    // Track üzerinde tıklanan konuma tutamacın merkezini getir
+                                    let thumb_h = g.thumb.3.max(16);
+                                    let click_y = my.saturating_sub(track.1);
+                                    let new_top = click_y.saturating_sub(thumb_h / 2);
+                                    let max_thumb_travel = track.3.saturating_sub(thumb_h);
+                                    let ratio = if max_thumb_travel == 0 {
+                                        0.0
+                                    } else {
+                                        (new_top as f32 / max_thumb_travel as f32).clamp(0.0, 1.0)
+                                    };
                                     let max_off = c_h.saturating_sub(view_h);
+                                    let new_scroll_y =
+                                        ((ratio * max_off as f32) as usize).min(max_off);
 
                                     if let Some(wm) = compositor.windows[idx].as_mut() {
-                                        wm.scroll.y =
-                                            ((ratio * max_off as f32) as usize).min(max_off);
+                                        wm.scroll.y = new_scroll_y;
                                     }
 
-                                    vscroll_drag =
-                                        Some((idx, g.thumb.3 / 2, g.thumb.3, track.3, c_h, view_h));
+                                    let grab = (thumb_h / 2).min(thumb_h);
+                                    vscroll_drag = Some((idx, grab, thumb_h, track.3, c_h, view_h));
                                 }
 
                                 compositor.focus_window(idx);
-
                                 break;
                             }
                         }
@@ -3797,16 +3825,25 @@ pub extern "C" fn _start() -> ! {
                                     my,
                                     apps::settings::SystemSettings::save_btn_rect(wx, wy, wh),
                                 ) {
-                                    with_busy_progress(
-                                        &mut fb,
-                                        mx,
-                                        my,
-                                        gui::ui_text(
-                                            "Ayarlar kaydediliyor...",
-                                            "Saving settings...",
-                                        ),
-                                        || settings_app.save_all(&compositor, &mut fs_mgr.vfs),
-                                    );
+                                    let utc_valid = !settings_app.utc_editing
+                                        || settings_app.commit_utc_edit().is_some();
+                                    if utc_valid {
+                                        now = drivers::rtc::DateTime::read_for_region(
+                                            settings_app.region_offset(),
+                                        );
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
+                                        with_busy_progress(
+                                            &mut fb,
+                                            mx,
+                                            my,
+                                            gui::ui_text(
+                                                "Ayarlar kaydediliyor...",
+                                                "Saving settings...",
+                                            ),
+                                            || settings_app.save_all(&compositor, &mut fs_mgr.vfs),
+                                        );
+                                    }
                                 } else if gui::in_rect(
                                     mx,
                                     my,
@@ -3974,18 +4011,28 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(
                                         mx,
                                         my,
-                                        apps::settings::SystemSettings::region_btn_rect(wx, wy),
+                                        apps::settings::SystemSettings::utc_dec_btn_rect(wx, wy),
                                     ) {
-                                        settings_app.cycle_region();
-                                        now = drivers::rtc::DateTime::read_for_region(
-                                            settings_app.region_offset(),
-                                        );
+                                        let offset = settings_app.step_utc_offset(-1);
+                                        now = drivers::rtc::DateTime::read_for_region(offset);
                                         compositor.cal_year = now.year;
                                         compositor.cal_month = now.month;
-                                        settings_app.status_msg = gui::ui_text(
-                                            "Bölge ve saat dilimi güncellendi.",
-                                            "Region and time zone updated.",
-                                        );
+                                    } else if gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::utc_inc_btn_rect(wx, wy),
+                                    ) {
+                                        let offset = settings_app.step_utc_offset(1);
+                                        now = drivers::rtc::DateTime::read_for_region(offset);
+                                        compositor.cal_year = now.year;
+                                        compositor.cal_month = now.month;
+                                    } else if gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::settings::SystemSettings::region_btn_rect(wx, wy),
+                                    ) {
+                                        settings_app.begin_utc_edit();
+                                        settings_app.focused_control = 7;
                                     } else if gui::in_rect(
                                         mx,
                                         my,
@@ -4648,7 +4695,8 @@ pub extern "C" fn _start() -> ! {
                                     browser_app.address_click_at(
                                         mx,
                                         my,
-                                        wx + 100,
+                                        wx + 94,
+                                        ww.saturating_sub(142),
                                         monotonic_ms(),
                                         settings_app.double_click_ms as u64,
                                     );
@@ -4667,6 +4715,22 @@ pub extern "C" fn _start() -> ! {
                                     browser_app.navigate();
                                 } else {
                                     browser_app.address_focused = false;
+                                    if browser_app.active_tab == 3 {
+                                        let doc_x = wx + 8;
+                                        let doc_y = wy + 38;
+                                        let doc_w = ww.saturating_sub(16);
+                                        let doc_h = wh.saturating_sub(46);
+                                        browser_app.start_page_selection_at(
+                                            mx,
+                                            my,
+                                            doc_x,
+                                            doc_y,
+                                            doc_w,
+                                            doc_h,
+                                            win.scroll.y,
+                                        );
+                                        browser_page_dragging = true;
+                                    }
                                 }
                             }
 
@@ -5384,6 +5448,11 @@ pub extern "C" fn _start() -> ! {
                                         }
                                     }
                                 }
+                            }
+
+                            10 => {
+                                terminal_app.start_selection_at(mx, my, wx, wy, ww, wh);
+                                terminal_dragging = true;
                             }
 
                             12 => {
@@ -6257,16 +6326,7 @@ pub extern "C" fn _start() -> ! {
                                     }
 
                                     7 => {
-                                        settings_app.cycle_region();
-                                        now = drivers::rtc::DateTime::read_for_region(
-                                            settings_app.region_offset(),
-                                        );
-                                        compositor.cal_year = now.year;
-                                        compositor.cal_month = now.month;
-                                        settings_app.status_msg = gui::ui_text(
-                                            "Bölge ve saat dilimi güncellendi.",
-                                            "Region and time zone updated.",
-                                        );
+                                        settings_app.begin_utc_edit();
                                     }
 
                                     8 => {
@@ -6377,31 +6437,36 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 10) {
                         enter_char_consumed = true;
 
-                        terminal_app.submit();
+                        if terminal_app.has_selection() {
+                            terminal_app.copy_selection();
+                            terminal_app.clear_selection();
+                        } else {
+                            terminal_app.submit();
 
-                        if let Some(cmd) = terminal_app.take_pending() {
-                            let n = terminal_app.pending_len();
+                            if let Some(cmd) = terminal_app.take_pending() {
+                                let n = terminal_app.pending_len();
 
-                            let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
+                                let line = core::str::from_utf8(&cmd[..n]).unwrap_or("");
 
-                            if let Some(app_idx) = terminal_app.execute(
-                                line,
-                                &mut fs_mgr.vfs,
-                                &mut memory_mgr.pmm,
-                                &now,
-                            ) {
-                                open_app(&mut compositor, app_idx);
+                                if let Some(app_idx) = terminal_app.execute(
+                                    line,
+                                    &mut fs_mgr.vfs,
+                                    &mut memory_mgr.pmm,
+                                    &now,
+                                ) {
+                                    open_app(&mut compositor, app_idx);
+                                }
+
+                                handle_terminal_open_request(
+                                    &mut terminal_app,
+                                    &mut fs_mgr.vfs,
+                                    &mut notepad_app,
+                                    &mut browser_app,
+                                    &mut compositor,
+                                );
+
+                                filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                             }
-
-                            handle_terminal_open_request(
-                                &mut terminal_app,
-                                &mut fs_mgr.vfs,
-                                &mut notepad_app,
-                                &mut browser_app,
-                                &mut compositor,
-                            );
-
-                            filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
                         enter_char_consumed = true;
@@ -6428,8 +6493,12 @@ pub extern "C" fn _start() -> ! {
                 drivers::keyboard::KeyAction::CopyText => {
                     if app_is_focused(&compositor, 2) {
                         notepad_app.copy_selection();
-                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
-                        browser_app.address_copy();
+                    } else if app_is_focused(&compositor, 3) {
+                        if browser_app.address_focused {
+                            browser_app.address_copy();
+                        } else if browser_app.has_page_selection() {
+                            browser_app.copy_page_selection();
+                        }
                     } else if compositor.is_start_menu_open && compositor.start_search_focused {
                         compositor.copy_start_search();
                     } else if app_is_focused(&compositor, 0) {
@@ -7235,7 +7304,29 @@ pub extern "C" fn _start() -> ! {
             if browser_address_dragging {
                 if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
                     if w.is_focused {
-                        browser_app.address_drag_to(mx, w.x + 100);
+                        browser_app.address_drag_to(mx, w.x + 94);
+                    }
+                }
+            }
+
+            if browser_page_dragging {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                    if w.is_focused {
+                        let doc_x = w.x + 8;
+                        let doc_y = w.y + 38;
+                        let doc_w = w.width.saturating_sub(16);
+                        let doc_h = w.height.saturating_sub(46);
+                        browser_app.update_page_selection_at(
+                            mx, my, doc_x, doc_y, doc_w, doc_h, w.scroll.y,
+                        );
+                    }
+                }
+            }
+
+            if terminal_dragging {
+                if let Some((_, w)) = focused_window_for_app(&compositor, 10) {
+                    if w.is_focused {
+                        terminal_app.update_selection_at(mx, my, w.x, w.y, w.width, w.height);
                     }
                 }
             }
@@ -7350,6 +7441,8 @@ pub extern "C" fn _start() -> ! {
 
                 if let Some(wm) = compositor.windows[idx].as_mut() {
                     wm.scroll.y = new_off;
+                    let (cx, cy, cw, ch) = wm.content_rect();
+                    drag_dirty_rect = Some((cx, cy, cw, ch));
                 }
             } else if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
@@ -7542,9 +7635,9 @@ pub extern "C" fn _start() -> ! {
             if let Some((idx, control)) = pending_window_control.take() {
                 if let Some(win) = compositor.windows.get(idx).and_then(|slot| *slot) {
                     let release_rect = match control {
-                        0 => win.close_rect(),
-                        1 => win.max_rect(),
-                        _ => win.min_rect(),
+                        0 => win.close_hit_rect(),
+                        1 => win.max_hit_rect(),
+                        _ => win.min_hit_rect(),
                     };
                     if win.is_open && !win.is_minimized && gui::in_rect(mx, my, release_rect) {
                         match control {
@@ -7598,6 +7691,8 @@ pub extern "C" fn _start() -> ! {
 
             notepad_dragging = false;
             browser_address_dragging = false;
+            browser_page_dragging = false;
+            terminal_dragging = false;
             start_search_dragging = false;
 
             let (is_drag_active, drag_item, drag_target) = if desktop_drag_source {
@@ -7887,6 +7982,26 @@ pub extern "C" fn _start() -> ! {
                 && ch != '\x7f'
             {
                 browser_app.find_char(ch);
+            } else if app_is_focused(&compositor, 1) && settings_app.utc_editing && ch == '\x1b' {
+                settings_app.cancel_utc_edit();
+            } else if app_is_focused(&compositor, 1) && settings_app.utc_editing && ch == '\x08' {
+                settings_app.utc_input_backspace();
+            } else if app_is_focused(&compositor, 1)
+                && settings_app.utc_editing
+                && (ch == '\r' || ch == '\n')
+            {
+                if let Some(offset) = settings_app.commit_utc_edit() {
+                    now = drivers::rtc::DateTime::read_for_region(offset);
+                    compositor.cal_year = now.year;
+                    compositor.cal_month = now.month;
+                    settings_app.status_msg =
+                        gui::ui_text("UTC farkı güncellendi.", "UTC offset updated.");
+                }
+            } else if app_is_focused(&compositor, 1)
+                && settings_app.utc_editing
+                && (ch == '-' || ch.is_ascii_digit())
+            {
+                settings_app.utc_input_char(ch);
             } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x1b'
             {
                 settings_app.static_ip_edit = false;
@@ -8101,10 +8216,17 @@ pub extern "C" fn _start() -> ! {
 
                 if term_focused {
                     if ch == '\x08' {
+                        terminal_app.clear_selection();
                         terminal_app.backspace();
                     } else if ch == '\n' {
-                        terminal_app.submit();
+                        if terminal_app.has_selection() {
+                            terminal_app.copy_selection();
+                            terminal_app.clear_selection();
+                        } else {
+                            terminal_app.submit();
+                        }
                     } else if ch >= ' ' {
+                        terminal_app.clear_selection();
                         terminal_app.insert(ch);
                     }
                 }
@@ -8244,6 +8366,8 @@ pub extern "C" fn _start() -> ! {
             || resizing_win.is_some()
             || vscroll_drag.is_some()
             || notepad_dragging
+            || browser_page_dragging
+            || terminal_dragging
             || filemanager_app.drag_active
             || v3d_dragging;
 

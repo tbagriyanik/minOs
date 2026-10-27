@@ -135,6 +135,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 - **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.
 - **SD/MMC Karta Yazma:** Sektör okuma aktiftir; CSD kayıt ayrıştırması ve blok yazma güvenilirliği WIP.
 - **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları entegre edilmiştir; otomatik HTTP/OCSP indirme isteği planlanmaktadır.
+- **IPv6 DNS (AAAA) Çözümlemesi:** IPv6 veri yolu ve `resolve_ipv6()` hazırdır, ancak bunlar yalnızca **adres literalini** (`[2001:db8::1]`) ayrıştırır. `dns_query()` yalnızca **QTYPE=A (1)** sorgusu üretir ve `dns_parse_a()` yanıtta yalnızca A kayıtlarını kabul eder; **AAAA (28) sorgusu gönderilmez ve AAAA yanıtları ayrıştırılmaz**. Bu nedenle alan adları yalnızca IPv4'e çözülebilir, IPv6-only (AAAA-only) hedeflere alan adı üzerinden erişilemez; `dns`/`nslookup` çıktısı da yalnızca A kaydını raporlar.
 - **minJs JavaScript Sınırları:** minJs `no_std` ortamında fonksiyonlar, diziler, nesneler, döngüler (`for`/`while`), JSON ve temel DOM işlemlerini destekler; tam ECMAScript motorlarının sağladığı karmaşık closures/lexical scoping, prototip kalıtım zinciri (prototype chain), `class` kalıtımı ve `async`/`await`/Promise mekanizmaları henüz tam olarak yer almamaktadır.
 
 ---

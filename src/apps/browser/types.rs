@@ -154,6 +154,55 @@ pub struct ElementStyle {
     pub bold: bool,
     /// Üstü çizili.
     pub underline: bool,
+    /// Altı çizili.
+    pub line_through: bool,
+    /// Vertical align durumu.
+    pub vertical_align: bool,
+    /// Satır yüksekliği çarpanı (normal için 1.2, pixel cinsinden için 16px varsayımı).
+    pub line_height: f32,
+    /// Koluşturma önleme (nowrap).
+    pub no_wrap: bool,
+    /// Önceden formatlanmış metin (pre).
+    pub pre_formatted: bool,
+    /// Yön belirtilmesi (float left/right).
+    pub float_left: bool,
+    pub float_right: bool,
+    /// Temizleme (clear: both).
+    pub clear_both: bool,
+    /// Sınır genliği (px cinsinden).
+    pub border_width: usize,
+    /// Sınır rengi.
+    pub border_color: Option<u32>,
+    /// Sınır stili (solid, dashed vb. - basit implementasyon).
+    pub border_style: usize,
+    /// Sınır radius'i (px cinsinden).
+    pub border_radius: usize,
+    /// Box shadow rengi.
+    pub box_shadow_color: Option<u32>,
+    /// Text shadow rengi.
+    pub text_shadow_color: Option<u32>,
+    /// Liste stili türü.
+    pub list_style_type: usize,
+    /// Display tipi.
+    pub display: Option<usize>,
+    /// Konumlama tipi.
+    pub position: usize,
+    /// Z-index değeri.
+    pub z_index: i32,
+    /// Overflow durumu.
+    pub overflow: usize,
+    /// Genişlik (px cinsinden).
+    pub width: usize,
+    /// Yükseklik (px cinsinden).
+    pub height: usize,
+    /// Maksimum genişlik (px cinsinden).
+    pub max_width: usize,
+    /// Maksimum yükseklik (px cinsinden).
+    pub max_height: usize,
+    /// Minimum genişlik (px cinsinden).
+    pub min_width: usize,
+    /// Minimum yükseklik (px cinsinden).
+    pub min_height: usize,
 }
 
 impl ElementStyle {
@@ -167,6 +216,31 @@ impl ElementStyle {
             indent_px: 0,
             bold: false,
             underline: false,
+            line_through: false,
+            vertical_align: false,
+            line_height: 1.2,
+            no_wrap: false,
+            pre_formatted: false,
+            float_left: false,
+            float_right: false,
+            clear_both: false,
+            border_width: 0,
+            border_color: None,
+            border_style: 0,
+            border_radius: 0,
+            box_shadow_color: None,
+            text_shadow_color: None,
+            list_style_type: 0,
+            display: None,
+            position: 0,
+            z_index: 0,
+            overflow: 0,
+            width: 0,
+            height: 0,
+            max_width: 0,
+            max_height: 0,
+            min_width: 0,
+            min_height: 0,
         }
     }
 
@@ -196,6 +270,81 @@ impl ElementStyle {
         }
         if other.underline {
             self.underline = true;
+        }
+        if other.line_through {
+            self.line_through = true;
+        }
+        if other.vertical_align {
+            self.vertical_align = other.vertical_align;
+        }
+        if other.line_height > 0.0 {
+            self.line_height = other.line_height;
+        }
+        if other.no_wrap {
+            self.no_wrap = true;
+        }
+        if other.pre_formatted {
+            self.pre_formatted = true;
+        }
+        if other.float_left {
+            self.float_left = true;
+        }
+        if other.float_right {
+            self.float_right = true;
+        }
+        if other.clear_both {
+            self.clear_both = true;
+        }
+        if other.border_width > 0 {
+            self.border_width = other.border_width;
+        }
+        if let Some(c) = other.border_color {
+            self.border_color = Some(c);
+        }
+        if other.border_style > 0 {
+            self.border_style = other.border_style;
+        }
+        if other.border_radius > 0 {
+            self.border_radius = other.border_radius;
+        }
+        if let Some(c) = other.box_shadow_color {
+            self.box_shadow_color = Some(c);
+        }
+        if let Some(c) = other.text_shadow_color {
+            self.text_shadow_color = Some(c);
+        }
+        if other.list_style_type > 0 {
+            self.list_style_type = other.list_style_type;
+        }
+        if other.display.is_some() {
+            self.display = other.display;
+        }
+        if other.position > 0 {
+            self.position = other.position;
+        }
+        if other.z_index != 0 {
+            self.z_index = other.z_index;
+        }
+        if other.overflow > 0 {
+            self.overflow = other.overflow;
+        }
+        if other.width > 0 {
+            self.width = other.width;
+        }
+        if other.height > 0 {
+            self.height = other.height;
+        }
+        if other.max_width > 0 {
+            self.max_width = other.max_width;
+        }
+        if other.max_height > 0 {
+            self.max_height = other.max_height;
+        }
+        if other.min_width > 0 {
+            self.min_width = other.min_width;
+        }
+        if other.min_height > 0 {
+            self.min_height = other.min_height;
         }
     }
 }

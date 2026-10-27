@@ -625,6 +625,40 @@ pub fn parse_x509_ec_public_key(cert_der: &[u8]) -> Result<[u8; 65], ()> {
     Ok(point)
 }
 
+fn parse_x509_p384_public_key(cert_der: &[u8]) -> Result<[u8; 97], ()> {
+    let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+    const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+    const SECP384R1_OID: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
+
+    let (oid_tag, oid_vo, oid_vl, oid_next) = read_der_tlv(cert_der, alg_vo)?;
+    if oid_tag != TAG_OID
+        || oid_vl != EC_PUBLIC_KEY_OID.len()
+        || &cert_der[oid_vo..oid_vo + oid_vl] != EC_PUBLIC_KEY_OID
+    {
+        return Err(());
+    }
+
+    let (curve_tag, curve_vo, curve_vl, _) = read_der_tlv(cert_der, oid_next)?;
+    if curve_tag != TAG_OID
+        || curve_vl != SECP384R1_OID.len()
+        || &cert_der[curve_vo..curve_vo + curve_vl] != SECP384R1_OID
+    {
+        return Err(());
+    }
+
+    let point_start = bs_vo.checked_add(1).ok_or(())?;
+    if bs_vo >= cert_der.len()
+        || cert_der[bs_vo] != 0
+        || point_start + 97 > cert_der.len()
+        || cert_der[point_start] != 0x04
+    {
+        return Err(());
+    }
+    let mut point = [0u8; 97];
+    point.copy_from_slice(&cert_der[point_start..point_start + 97]);
+    Ok(point)
+}
+
 /// Parse an RSAPublicKey out of a BIT STRING value.
 /// RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }
 fn parse_rsa_public_key_bits(data: &[u8], bitstring_vo: usize) -> Result<RsaPublicKey, ()> {
@@ -683,6 +717,8 @@ pub const DIGICERT_GLOBAL_ROOT_CA_DER: &[u8] = include_bytes!("roots/digicert_gl
 pub const DIGICERT_GLOBAL_ROOT_G2_DER: &[u8] = include_bytes!("roots/digicert_global_root_g2.der");
 pub const GTS_ROOT_R1_DER: &[u8] = include_bytes!("roots/gts_root_r1.der");
 pub const GTS_ROOT_R2_DER: &[u8] = include_bytes!("roots/gts_root_r2.der");
+pub const SSLCOM_TLS_ECC_ROOT_CA_2022_DER: &[u8] =
+    include_bytes!("roots/sslcom_tls_ecc_root_ca_2022.der");
 
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
@@ -690,6 +726,8 @@ pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
 
 /// ECDSA with SHA-256 OID: 1.2.840.10045.4.3.2
 pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
+/// ECDSA with SHA-384 OID: 1.2.840.10045.4.3.3
+pub const OID_ECDSA_WITH_SHA384: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03];
 
 /// Ayrıştırılmış ham X.509 sertifika bileşenleri (zincir ve imza doğrulaması için).
 pub struct ParsedX509Cert<'a> {
@@ -820,6 +858,27 @@ impl<'a> ParsedX509Cert<'a> {
             } else {
                 Err(CertValidationError::InvalidSignature)
             }
+        } else if self.sig_alg_oid == OID_ECDSA_WITH_SHA384 {
+            #[cfg(not(test))]
+            {
+                let issuer_key = parse_x509_p384_public_key(issuer_cert_der)
+                    .map_err(|_| CertValidationError::InvalidDer)?;
+                let verifying_key = p384::ecdsa::VerifyingKey::from_sec1_bytes(&issuer_key)
+                    .map_err(|_| CertValidationError::InvalidDer)?;
+                let signature = p384::ecdsa::Signature::from_der(self.signature)
+                    .map_err(|_| CertValidationError::InvalidSignature)?;
+                let digest = crate::drivers::crypto::sha384::Sha384::hash(self.tbs_raw);
+                p384::ecdsa::signature::hazmat::PrehashVerifier::verify_prehash(
+                    &verifying_key,
+                    &digest,
+                    &signature,
+                )
+                .map_err(|_| CertValidationError::InvalidSignature)
+            }
+            #[cfg(test)]
+            {
+                Err(CertValidationError::UnsupportedSignatureAlgorithm)
+            }
         } else {
             Err(CertValidationError::UnsupportedSignatureAlgorithm)
         }
@@ -834,6 +893,7 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     DIGICERT_GLOBAL_ROOT_G2_DER,
     GTS_ROOT_R1_DER,
     GTS_ROOT_R2_DER,
+    SSLCOM_TLS_ECC_ROOT_CA_2022_DER,
 ];
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.
@@ -1141,5 +1201,17 @@ mod tests {
         let parsed = ParsedX509Cert::parse(ISRG_ROOT_X1_DER).unwrap();
         assert!(trusted_root_for(parsed.subject_raw).is_some());
         assert!(trusted_root_for(b"no-such-issuer").is_none());
+    }
+
+    #[test]
+    fn sslcom_tls_ecc_root_is_trusted_and_uses_p384() {
+        let parsed = ParsedX509Cert::parse(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).unwrap();
+        assert_eq!(parsed.sig_alg_oid, OID_ECDSA_WITH_SHA384);
+        assert!(parse_x509_p384_public_key(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).is_ok());
+        assert!(trusted_root_for(parsed.subject_raw).is_some());
+        assert_eq!(
+            verify_certificate_chain(&[SSLCOM_TLS_ECC_ROOT_CA_2022_DER]),
+            Ok(())
+        );
     }
 }

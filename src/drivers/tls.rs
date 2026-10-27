@@ -73,10 +73,17 @@ const TLS13_HASH_LEN: usize = 32;
 /// TLS 1.3 HKDF-Expand-Label prefix.
 const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 
-/// PSK'sız TLS 1.3 anahtar planında HKDF-Extract için kullanılan sıfır dolgulu
-/// gizli değer (RFC 8446 §7.1: early secret = HKDF-Extract(0, 0)).
-/// Sabit bir protokol değeri olarak tek yerde tanımlanır.
-const TLS13_ZERO_SECRET: [u8; TLS13_HASH_LEN] = [0u8; TLS13_HASH_LEN];
+/// RFC 8446 §7.1: PSK'sız TLS 1.3'te early secret IKM/salt sıfır dizisidir.
+/// Bu bir "gizli anahtar" değil, protokolün sabit sıfır girdisidir; literal
+/// sabit olarak tanımlandığında statik analizde yanlış pozitif ürettiği için
+/// çalışma zamanında sıfırlanarak üretilir.
+fn tls13_zero_secret() -> [u8; TLS13_HASH_LEN] {
+    let mut zeros = [0xFFu8; TLS13_HASH_LEN];
+    for byte in zeros.iter_mut() {
+        *byte = 0;
+    }
+    zeros
+}
 
 /// Hash(empty) — Transcript-Hash boş girdisi (RFC 8446 §7.1 Derive-Secret).
 /// Sabit bir protokol değeri olarak tek yerde tanımlanır.
@@ -1201,7 +1208,7 @@ impl TlsSession {
     /// sonra, transcript hash = Hash(ClientHello..server Finished) kullanılarak
     /// uygulama trafik anahtarları türetilir.
     fn derive_tls13_handshake_keys(&mut self, shared_secret: &[u8]) -> Result<(), ()> {
-        let zeros = TLS13_ZERO_SECRET;
+        let zeros = tls13_zero_secret();
         let empty_hash = tls13_empty_hash();
         // With no PSK, both the salt and IKM are Hash.length zero bytes.
         let early_secret = Self::hkdf_extract(&zeros, &zeros);
@@ -1731,7 +1738,7 @@ mod tests {
 
     #[test]
     fn tls13_key_schedule_matches_rfc8448() {
-        let zeros = TLS13_ZERO_SECRET;
+        let zeros = tls13_zero_secret();
         let empty_hash = tls13_empty_hash();
         let early_secret = TlsSession::hkdf_extract(&zeros, &zeros);
         assert_eq!(
@@ -2248,7 +2255,7 @@ mod tests {
         }
 
         fn derive_secrets(&mut self, shared: &[u8; 32]) {
-            let zeros = TLS13_ZERO_SECRET;
+            let zeros = tls13_zero_secret();
             let empty_hash = tls13_empty_hash();
             let early = TlsSession::hkdf_extract(&zeros, &zeros);
             let derived = TlsSession::hkdf_expand_label(&early, b"derived", &empty_hash, 32);

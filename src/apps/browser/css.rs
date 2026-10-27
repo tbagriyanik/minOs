@@ -132,6 +132,7 @@ fn is_bold_weight(val: &str) -> bool {
 }
 
 /// Tek bir `prop: value` bildirimini stile uygular.
+#[allow(unreachable_patterns)]
 fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
     let mut val = raw_val.trim();
     if let Some(stripped) = val.strip_suffix("!important") {

@@ -717,6 +717,8 @@ impl BrowserApp {
         }
         let mut clicked_url = None;
         let mut clicked_js = None;
+        
+        // Check rendered links first
         for link in self.rendered_links.borrow().iter() {
             let (rx, ry, rw, rh) = link.rect;
             if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
@@ -728,6 +730,39 @@ impl BrowserApp {
                 break;
             }
         }
+        
+        // If no JS from links, check page lines spans for onclick handlers
+        if clicked_js.is_none() {
+            // Iterate through page lines and spans to find the clicked element
+            for (line_idx, line) in self.page_lines.iter().enumerate() {
+                let mut span_idx = 0usize; // Reset for each line
+                let mut char_offset = 0usize;
+                for span in &line.spans {
+                    let span_w = MinGuiCompositor::text_width(&span.text, 1) + if span.is_button { 16 } else { 0 };
+                    // Check if mouse is within this span's area
+                    if line_idx < self.page_lines.len() {
+                        // Simple check: if we have roughly the right number of spans before this one
+                        let span_count_before = line.spans[..span_idx].iter().map(|s| s.text.len() + 1).sum::<usize>();
+                        if span_count_before > 0 {
+                            // Check bounds
+                            if mx >= char_offset && mx < char_offset + span_w {
+                                // Check if this span has an onclick handler
+                                if !span.onclick.is_empty() {
+                                    clicked_js = Some(span.onclick.clone());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    char_offset += span.text.len() + 1; // +1 for space
+                    span_idx += 1;
+                }
+                if clicked_js.is_some() {
+                    break;
+                }
+            }
+        }
+        
         if let Some(js_code) = clicked_js {
             self.execute_js(&js_code);
             return None;

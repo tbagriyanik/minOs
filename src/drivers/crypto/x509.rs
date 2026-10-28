@@ -1646,8 +1646,8 @@ mod tests {
             let parsed = ParsedX509Cert::parse(root).expect("embedded root must parse");
             assert!(
                 trusted_root_for(parsed.subject_raw).is_some(),
-                "root not found by subject: {:?}",
-                parsed.subject_raw
+                "root not found by subject (len={})",
+                parsed.subject_raw.len()
             );
             assert_eq!(
                 trust_anchor_spki_for(parsed.subject_raw),

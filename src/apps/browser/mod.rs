@@ -3250,13 +3250,18 @@ impl BrowserApp {
                     26,
                     Color::TITLE_BAR,
                 );
-                let title_str = core::str::from_utf8(&self.page_title[..self.page_title_len])
-                    .unwrap_or("Web Document");
+                let title_str = if self.page_title_len > 0 {
+                    let page = core::str::from_utf8(&self.page_title[..self.page_title_len])
+                        .unwrap_or("");
+                    alloc::format!("SarmanNet - {}", page)
+                } else {
+                    alloc::format!("SarmanNet - Title")
+                };
                 MinGuiCompositor::draw_string(
                     fb,
                     page_x + 16,
                     page_y + 14,
-                    title_str,
+                    &title_str,
                     Color::ACCENT_GREEN,
                 );
 

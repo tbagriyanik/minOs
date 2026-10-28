@@ -546,10 +546,9 @@ fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>, keyframes: &mut Vec<K
                                 }
                                 j += 1;
                             }
-                            let block_content = core::str::from_utf8(
-                                &b[i + 1..close.unwrap_or(b.len())],
-                            )
-                            .unwrap_or("");
+                            let block_content =
+                                core::str::from_utf8(&b[i + 1..close.unwrap_or(b.len())])
+                                    .unwrap_or("");
                             for decl in block_content.split(';') {
                                 if let Some((prop, val)) = decl.split_once(':') {
                                     let prop = prop.trim().to_ascii_lowercase();
@@ -612,7 +611,11 @@ pub struct ParsedCss {
 pub fn parse_css(css_code: &str) -> ParsedCss {
     let mut rules = Vec::new();
     let mut keyframes = Vec::new();
-    parse_css_rules(strip_css_comments(css_code).as_bytes(), &mut rules, &mut keyframes);
+    parse_css_rules(
+        strip_css_comments(css_code).as_bytes(),
+        &mut rules,
+        &mut keyframes,
+    );
     ParsedCss { rules, keyframes }
 }
 

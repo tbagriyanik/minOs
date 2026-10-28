@@ -796,6 +796,21 @@ fn der_tag_is_known(tag: u8) -> bool {
 
 /// Let's Encrypt ISRG Root X1 Kök CA sertifikası (DER formatında).
 pub const ISRG_ROOT_X1_DER: &[u8] = include_bytes!("roots/isrgrootx1.der");
+/// Baltimore CyberTrust Root (RSA-2048, SHA-1 imza). Hâlâ eski cihaz/işletim
+/// sistemlerinde ve DigiCert G2 zincirlerinde ara kök olarak görülür.
+pub const BALTIMORE_CYBER_TRUST_ROOT_DER: &[u8] =
+    include_bytes!("roots/BaltimoreCyberTrustRoot.der");
+/// Cybertrust Global Root (RSA-2048, SHA-1 imza).
+pub const CYBERTRUST_GLOBAL_ROOT_DER: &[u8] = include_bytes!("roots/CybertrustGlobalRoot.der");
+/// DigiCert Assured ID Root CA (RSA-2048).
+pub const DIGICERT_ASSURED_ID_ROOT_CA_DER: &[u8] =
+    include_bytes!("roots/DigiCertAssuredIDRootCA.der");
+/// DigiCert Assured ID Root G2 (RSA-2048).
+pub const DIGICERT_ASSURED_ID_ROOT_G2_DER: &[u8] =
+    include_bytes!("roots/DigiCertAssuredIDRootG2.der");
+/// DigiCert Assured ID Root G3 (EC P-384).
+pub const DIGICERT_ASSURED_ID_ROOT_G3_DER: &[u8] =
+    include_bytes!("roots/DigiCertAssuredIDRootG3.der");
 pub const ISRG_ROOT_X2_DER: &[u8] = include_bytes!("roots/isrgrootx2.der");
 pub const DIGICERT_GLOBAL_ROOT_CA_DER: &[u8] = include_bytes!("roots/digicert_global_root_ca.der");
 pub const DIGICERT_GLOBAL_ROOT_G2_DER: &[u8] = include_bytes!("roots/digicert_global_root_g2.der");
@@ -837,6 +852,72 @@ pub const ROOT_X2_BY_X1_DER: &[u8] = include_bytes!("roots/root-x2-by-x1.der");
 // ISRG Root X1 cross-signed
 pub const ISRG_ROOT_X1_CROSS_SIGNED_DER: &[u8] =
     include_bytes!("roots/isrg-root-x1-cross-signed.der");
+
+// Additional widely-used root CAs to expand HTTPS certificate coverage.
+/// GlobalSign Root R46 (RSA-2048).
+pub const GLOBALSIGN_ROOT_R46_DER: &[u8] = include_bytes!("roots/globalsign_root_r46.der");
+/// Go Daddy Root Certificate Authority - G2 (RSA-2048).
+pub const GODADDY_ROOT_G2_DER: &[u8] = include_bytes!("roots/godaddy_root_g2.der");
+/// Starfield Root Certificate Authority - G2 (RSA-2048).
+pub const STARFIELD_ROOT_G2_DER: &[u8] = include_bytes!("roots/starfield_root_g2.der");
+/// IdenTrust Commercial Root CA 1 (RSA-2048).
+pub const IDENTRUST_COMMERCIAL_ROOT_CA_1_DER: &[u8] =
+    include_bytes!("roots/identrust_commercial_root_ca_1.der");
+/// IdenTrust Public Sector Root CA 1 (RSA-2048).
+pub const IDENTRUST_PUBLIC_SECTOR_ROOT_CA_1_DER: &[u8] =
+    include_bytes!("roots/identrust_public_sector_root_ca_1.der");
+/// QuoVadis Root CA 1 G3 (RSA-2048).
+pub const QUOVADIS_ROOT_CA_1_G3_DER: &[u8] = include_bytes!("roots/quovadis_root_ca_1_g3.der");
+/// QuoVadis Root CA 2 G3 (RSA-2048).
+pub const QUOVADIS_ROOT_CA_2_G3_DER: &[u8] = include_bytes!("roots/quovadis_root_ca_2_g3.der");
+/// QuoVadis Root CA 3 G3 (RSA-2048).
+pub const QUOVADIS_ROOT_CA_3_G3_DER: &[u8] = include_bytes!("roots/quovadis_root_ca_3_g3.der");
+/// Certum Trusted Root CA (RSA-2048).
+pub const CERTUM_TRUSTED_ROOT_CA_DER: &[u8] = include_bytes!("roots/certum_trusted_root_ca.der");
+/// Certum Trusted Network CA (RSA-2048).
+pub const CERTUM_TRUSTED_NETWORK_CA_DER: &[u8] =
+    include_bytes!("roots/certum_trusted_network_ca.der");
+/// Buypass Class 2 Root CA (RSA-2048).
+pub const BYPASS_CLASS_2_ROOT_CA_DER: &[u8] = include_bytes!("roots/buypass_class_2_root_ca.der");
+/// Buypass Class 3 Root CA (RSA-2048).
+pub const BYPASS_CLASS_3_ROOT_CA_DER: &[u8] = include_bytes!("roots/buypass_class_3_root_ca.der");
+/// Actalis Authentication Root CA (RSA-2048).
+pub const ACTALIS_AUTHENTICATION_ROOT_CA_DER: &[u8] =
+    include_bytes!("roots/actalis_authentication_root_ca.der");
+/// T-TeleSec GlobalRoot Class 3 (RSA-2048).
+pub const T_TELSEC_GLOBALROOT_CLASS_3_DER: &[u8] =
+    include_bytes!("roots/t_telsec_globalroot_class_3.der");
+/// T-TeleSec GlobalRoot Class 2 (RSA-2048).
+pub const T_TELSEC_GLOBALROOT_CLASS_2_DER: &[u8] =
+    include_bytes!("roots/t_telsec_globalroot_class_2.der");
+/// Microsoft RSA Root Certificate Authority 2017 (RSA-2048).
+pub const MICROSOFT_RSA_ROOT_CA_2017_DER: &[u8] =
+    include_bytes!("roots/microsoft_rsa_root_ca_2017.der");
+/// Microsoft ECC Root Certificate Authority 2017 (ECC P-384).
+pub const MICROSOFT_ECC_ROOT_CA_2017_DER: &[u8] =
+    include_bytes!("roots/microsoft_ecc_root_ca_2017.der");
+/// D-TRUST Root Class 3 CA 2 2009 (RSA-2048).
+pub const D_TRUST_ROOT_CLASS_3_CA_2_2009_DER: &[u8] =
+    include_bytes!("roots/d_trust_root_class_3_ca_2_2009.der");
+/// D-TRUST Root Class 3 CA 2 EV 2009 (RSA-2048).
+pub const D_TRUST_ROOT_CLASS_3_CA_2_EV_2009_DER: &[u8] =
+    include_bytes!("roots/d_trust_root_class_3_ca_2_ev_2009.der");
+/// Telia Root CA v2 (RSA-2048).
+pub const TELIA_ROOT_CA_V2_DER: &[u8] = include_bytes!("roots/telia_root_ca_v2.der");
+/// SwissSign RSA TLS Root CA 2022 - 1 (RSA-2048).
+pub const SWISSSIGN_RSA_TLS_ROOT_CA_2022_1_DER: &[u8] =
+    include_bytes!("roots/swisssign_rsa_tls_root_ca_2022_1.der");
+/// OISTE WISeKey Global Root GB CA (ECC P-384).
+pub const OISTE_WISEKEY_GLOBAL_ROOT_GB_CA_DER: &[u8] =
+    include_bytes!("roots/oiste_wisekey_global_root_gb_ca.der");
+/// OISTE WISeKey Global Root GC CA (ECC P-384).
+pub const OISTE_WISEKEY_GLOBAL_ROOT_GC_CA_DER: &[u8] =
+    include_bytes!("roots/oiste_wisekey_global_root_gc_ca.der");
+/// FNMT-RCM AC RAIZ (RSA-2048).
+pub const FNMT_RCM_AC_RAIZ_DER: &[u8] = include_bytes!("roots/fnmt_rcm_ac_raiz.der");
+/// SECOM Security Communication RootCA2 (RSA-2048).
+pub const SECOM_SECURITY_COMMUNICATION_ROOTCA2_DER: &[u8] =
+    include_bytes!("roots/secom_security_communication_rootca2.der");
 
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
@@ -1036,6 +1117,11 @@ impl<'a> ParsedX509Cert<'a> {
 pub const TRUSTED_ROOTS: &[&[u8]] = &[
     ISRG_ROOT_X1_DER,
     ISRG_ROOT_X2_DER,
+    BALTIMORE_CYBER_TRUST_ROOT_DER,
+    CYBERTRUST_GLOBAL_ROOT_DER,
+    DIGICERT_ASSURED_ID_ROOT_CA_DER,
+    DIGICERT_ASSURED_ID_ROOT_G2_DER,
+    DIGICERT_ASSURED_ID_ROOT_G3_DER,
     DIGICERT_GLOBAL_ROOT_CA_DER,
     DIGICERT_GLOBAL_ROOT_G2_DER,
     GTS_ROOT_R1_DER,
@@ -1054,6 +1140,31 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     ROOT_YE_DER,
     ROOT_X2_BY_X1_DER,
     ISRG_ROOT_X1_CROSS_SIGNED_DER,
+    GLOBALSIGN_ROOT_R46_DER,
+    GODADDY_ROOT_G2_DER,
+    STARFIELD_ROOT_G2_DER,
+    IDENTRUST_COMMERCIAL_ROOT_CA_1_DER,
+    IDENTRUST_PUBLIC_SECTOR_ROOT_CA_1_DER,
+    QUOVADIS_ROOT_CA_1_G3_DER,
+    QUOVADIS_ROOT_CA_2_G3_DER,
+    QUOVADIS_ROOT_CA_3_G3_DER,
+    CERTUM_TRUSTED_ROOT_CA_DER,
+    CERTUM_TRUSTED_NETWORK_CA_DER,
+    BYPASS_CLASS_2_ROOT_CA_DER,
+    BYPASS_CLASS_3_ROOT_CA_DER,
+    ACTALIS_AUTHENTICATION_ROOT_CA_DER,
+    T_TELSEC_GLOBALROOT_CLASS_3_DER,
+    T_TELSEC_GLOBALROOT_CLASS_2_DER,
+    MICROSOFT_RSA_ROOT_CA_2017_DER,
+    MICROSOFT_ECC_ROOT_CA_2017_DER,
+    D_TRUST_ROOT_CLASS_3_CA_2_2009_DER,
+    D_TRUST_ROOT_CLASS_3_CA_2_EV_2009_DER,
+    TELIA_ROOT_CA_V2_DER,
+    SWISSSIGN_RSA_TLS_ROOT_CA_2022_1_DER,
+    OISTE_WISEKEY_GLOBAL_ROOT_GB_CA_DER,
+    OISTE_WISEKEY_GLOBAL_ROOT_GC_CA_DER,
+    FNMT_RCM_AC_RAIZ_DER,
+    SECOM_SECURITY_COMMUNICATION_ROOTCA2_DER,
 ];
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.
@@ -1449,6 +1560,42 @@ mod tests {
         assert!(trust_anchor_spki_for(b"no-such-issuer").is_none());
     }
 
+    /// Yeni eklenen kökler güven deposunda çözülmeli, DER'leri ayrıştırılmalı
+    /// ve SPKI'leri imza doğrulamasında kullanılabilir olmalı.
+    #[test]
+    fn additional_digicert_and_legacy_roots_are_trusted() {
+        let roots: &[&[u8]] = &[
+            BALTIMORE_CYBER_TRUST_ROOT_DER,
+            CYBERTRUST_GLOBAL_ROOT_DER,
+            DIGICERT_ASSURED_ID_ROOT_CA_DER,
+            DIGICERT_ASSURED_ID_ROOT_G2_DER,
+            DIGICERT_ASSURED_ID_ROOT_G3_DER,
+        ];
+        for &root in roots {
+            let parsed = ParsedX509Cert::parse(root).expect("embedded root must parse");
+            assert!(trusted_root_for(parsed.subject_raw).is_some());
+            assert_eq!(
+                trust_anchor_spki_for(parsed.subject_raw),
+                spki_slice(root).ok()
+            );
+            // Kök, kendi subject'i ile veren olarak eşleştiği için doğrudan
+            // güvenilir kök olarak kabul edilir.
+            assert_eq!(verify_certificate_chain(&[root]), Ok(()));
+        }
+    }
+
+    /// DigiCert Assured ID Root G3 P-384 anahtar kullanır; SPKI'si P-384
+    /// olarak ayrıştırılabildiğinden SHA-384 imza doğrulamasına uygundur.
+    #[test]
+    fn digicert_assured_id_root_g3_uses_p384() {
+        let parsed = ParsedX509Cert::parse(DIGICERT_ASSURED_ID_ROOT_G3_DER).unwrap();
+        assert_eq!(parsed.sig_alg_oid, OID_ECDSA_WITH_SHA384);
+        assert!(
+            parse_spki_p384_public_key(spki_slice(DIGICERT_ASSURED_ID_ROOT_G3_DER).unwrap())
+                .is_ok()
+        );
+    }
+
     #[test]
     fn sslcom_tls_ecc_root_is_trusted_and_uses_p384() {
         let parsed = ParsedX509Cert::parse(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).unwrap();
@@ -1462,5 +1609,58 @@ mod tests {
             verify_certificate_chain(&[SSLCOM_TLS_ECC_ROOT_CA_2022_DER]),
             Ok(())
         );
+    }
+
+    /// Yeni eklenen geniş kapsamlı kök CA'lar güven deposunda çözümlenmeli,
+    /// DER'leri ayrıştırılmalı ve tek başına güvenilir kök olarak kabul edilmeli.
+    #[test]
+    fn additional_widely_used_roots_are_trusted() {
+        let roots: &[&[u8]] = &[
+            GLOBALSIGN_ROOT_R46_DER,
+            GODADDY_ROOT_G2_DER,
+            STARFIELD_ROOT_G2_DER,
+            IDENTRUST_COMMERCIAL_ROOT_CA_1_DER,
+            IDENTRUST_PUBLIC_SECTOR_ROOT_CA_1_DER,
+            QUOVADIS_ROOT_CA_1_G3_DER,
+            QUOVADIS_ROOT_CA_2_G3_DER,
+            QUOVADIS_ROOT_CA_3_G3_DER,
+            CERTUM_TRUSTED_ROOT_CA_DER,
+            CERTUM_TRUSTED_NETWORK_CA_DER,
+            BYPASS_CLASS_2_ROOT_CA_DER,
+            BYPASS_CLASS_3_ROOT_CA_DER,
+            ACTALIS_AUTHENTICATION_ROOT_CA_DER,
+            T_TELSEC_GLOBALROOT_CLASS_3_DER,
+            T_TELSEC_GLOBALROOT_CLASS_2_DER,
+            MICROSOFT_RSA_ROOT_CA_2017_DER,
+            MICROSOFT_ECC_ROOT_CA_2017_DER,
+            D_TRUST_ROOT_CLASS_3_CA_2_2009_DER,
+            D_TRUST_ROOT_CLASS_3_CA_2_EV_2009_DER,
+            TELIA_ROOT_CA_V2_DER,
+            SWISSSIGN_RSA_TLS_ROOT_CA_2022_1_DER,
+            OISTE_WISEKEY_GLOBAL_ROOT_GB_CA_DER,
+            OISTE_WISEKEY_GLOBAL_ROOT_GC_CA_DER,
+            FNMT_RCM_AC_RAIZ_DER,
+            SECOM_SECURITY_COMMUNICATION_ROOTCA2_DER,
+        ];
+        for &root in roots {
+            let parsed = ParsedX509Cert::parse(root).expect("embedded root must parse");
+            assert!(
+                trusted_root_for(parsed.subject_raw).is_some(),
+                "root not found by subject: {:?}",
+                parsed.subject_raw
+            );
+            assert_eq!(
+                trust_anchor_spki_for(parsed.subject_raw),
+                spki_slice(root).ok(),
+                "SPKI mismatch for root"
+            );
+            // Kök, kendi subject'i ile veren olarak eşleştiği için doğrudan
+            // güvenilir kök olarak kabul edilir.
+            assert_eq!(
+                verify_certificate_chain(&[root]),
+                Ok(()),
+                "self-signed root chain verification failed"
+            );
+        }
     }
 }

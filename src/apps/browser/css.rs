@@ -1,6 +1,7 @@
 //! CSS ayrıştırıcı ve stil eşleştirici (no_std).
 extern crate alloc;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use super::types::{html_color, ElementStyle, TextAlign};
@@ -9,6 +10,27 @@ use super::types::{html_color, ElementStyle, TextAlign};
 pub struct CssRule {
     pub selector: String,
     pub style: ElementStyle,
+}
+
+/// Tek bir @keyframes adımı: yüzde konumu ve stili.
+/// `percent`, zaman tabanlı animasyon eklenene kadar okunmaz (statik render
+/// ilk kareyi uygular); bu yüzden dead_code bastırılır.
+/// A single @keyframes step: percent position and style. `percent` is not read
+/// until time-based animation lands (static render applies the first frame),
+/// hence the dead_code allowance.
+#[derive(Clone)]
+pub struct Keyframe {
+    #[allow(dead_code)]
+    pub percent: f32,
+    pub style: ElementStyle,
+}
+
+/// İsimli @keyframes kümesi (isim + kare listesi).
+/// Named @keyframes set (name + frame list).
+#[derive(Clone)]
+pub struct Keyframes {
+    pub name: String,
+    pub frames: Vec<Keyframe>,
 }
 
 fn strip_css_comments(css: &str) -> String {
@@ -253,6 +275,10 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.border_style = 3; // dotted
             }
         }
+        "cursor" => {
+            // Cursor stilleri sadece tanıtım amacı; burada doğrudan etkisi yok
+            // ancak tanıtıp bilgi tutarız
+        }
         "border-radius" => {
             // Sınır radius'i (basit uygulama)
             if let Some(px) = parse_px_value(val, None, None, None, None) {
@@ -282,6 +308,8 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.display = Some(4); // inline
             } else if val.eq_ignore_ascii_case("none") {
                 style.display_none = true;
+            } else if val.eq_ignore_ascii_case("inline-block") {
+                style.display = Some(5); // inline-block
             }
         }
         "position" => {
@@ -347,6 +375,64 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         "background-gradient" => {
             // Background gradient - gelecek geliştirme
         }
+        "animation" => {
+            // CSS animation: animation-name <duration> <iteration-count> [easing]
+            // Örnek: "pulse 2s infinite" veya "pulse 2s ease-in-out infinite"
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(kf_name) = parts.first() {
+                if !kf_name.is_empty() && !kf_name.starts_with('@') {
+                    style.animation_name = Some(String::from(*kf_name));
+                }
+            }
+            for p in parts.iter().skip(1) {
+                if let Some((num_str, _unit)) = p.split_once("s") {
+                    if !num_str.is_empty() {
+                        style.animation_duration = num_str.trim().parse::<f32>().unwrap_or(1.0);
+                    }
+                }
+            }
+            for p in parts.iter().skip(1) {
+                if *p == "infinite"
+                    || *p == "infinite "
+                    || *p == "loop"
+                    || *p == "linear"
+                    || *p == "ease"
+                    || *p == "ease-in"
+                    || *p == "ease-out"
+                    || *p == "ease-in-out"
+                {
+                    style.animation_iterations = -1;
+                    break;
+                }
+                if let Ok(n) = p.parse::<f32>() {
+                    style.animation_iterations = if n >= 1.0 { n as i32 } else { -1 };
+                    break;
+                }
+            }
+        }
+        "transition" => {
+            // CSS transition: transition-property <duration> <timing-function>
+            // Örnek: "all 0.3s ease" veya "opacity 0.2s"
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let tp = parts.first().unwrap_or(&"");
+            if !tp.is_empty() && !tp.starts_with('@') {
+                style.transition_property = Some(String::from(*tp));
+            }
+            for p in parts.iter().skip(1) {
+                if let Some((num_str, _unit)) = p.split_once("s") {
+                    if !num_str.is_empty() {
+                        style.transition_duration = num_str.trim().parse::<f32>().unwrap_or(0.0);
+                        break;
+                    }
+                }
+            }
+        }
+        "opacity" => {
+            // CSS opacity: 0.0 - 1.0
+            if let Ok(n) = val.trim().parse::<f32>() {
+                style.opacity = n.clamp(0.0, 1.0);
+            }
+        }
         "list-style-type" => {
             if val.eq_ignore_ascii_case("none") {
                 style.list_style_type = 0;
@@ -375,7 +461,7 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
 }
 
 /// Seçicileri ve bildirim bloklarını ayrıştırır; `@media` gibi iç içe bloklar recursive işlenir.
-fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>) {
+fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>, keyframes: &mut Vec<Keyframes>) {
     let mut p = 0;
     while p < bytes.len() {
         while p < bytes.len() && bytes[p].is_ascii_whitespace() {
@@ -420,10 +506,80 @@ fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>) {
 
         if selector.starts_with('@') {
             // @media / @supports / @layer: içindeki kuralları uygula.
-            // @font-face, @keyframes, @import: atlanır.
+            // @font-face, @import: atlanır.
             let at = selector.split_whitespace().next().unwrap_or("");
             if at == "@media" || at == "@supports" || at == "@layer" || at == "@container" {
-                parse_css_rules(block.as_bytes(), rules);
+                parse_css_rules(block.as_bytes(), rules, keyframes);
+            } else if at == "@keyframes" {
+                // @keyframes NAME { 0% { opacity: 1 } 50% { opacity: 0.5 } }
+                let kf_name = selector
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if !kf_name.is_empty() && keyframes.len() < 64 {
+                    let mut frames: Vec<Keyframe> = Vec::new();
+                    // Keyframes block: "0% { opacity: 1 } 50% { opacity: 0.5 }"
+                    let b = block.as_bytes();
+                    let mut i: usize = 0;
+                    let mut frame_sel_start: usize = 0;
+                    while i < b.len() {
+                        if b[i] == b'{' {
+                            let sel_part = core::str::from_utf8(&b[frame_sel_start..i])
+                                .unwrap_or("")
+                                .trim()
+                                .to_string();
+                            let mut style = ElementStyle::new();
+                            let mut depth: usize = 1;
+                            let mut j = i + 1;
+                            let mut close: Option<usize> = None;
+                            while j < b.len() {
+                                if b[j] == b'{' {
+                                    depth += 1;
+                                } else if b[j] == b'}' {
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        close = Some(j);
+                                        break;
+                                    }
+                                }
+                                j += 1;
+                            }
+                            let block_content = core::str::from_utf8(
+                                &b[i + 1..close.unwrap_or(b.len())],
+                            )
+                            .unwrap_or("");
+                            for decl in block_content.split(';') {
+                                if let Some((prop, val)) = decl.split_once(':') {
+                                    let prop = prop.trim().to_ascii_lowercase();
+                                    apply_css_decl(&mut style, &prop, val);
+                                }
+                            }
+                            let percent = if sel_part.ends_with('%') {
+                                sel_part[..sel_part.len() - 1].parse::<f32>().unwrap_or(0.0)
+                            } else {
+                                100.0
+                            };
+                            frames.push(Keyframe { percent, style });
+                            if let Some(c) = close {
+                                i = c + 1;
+                                frame_sel_start = i;
+                                while i < b.len() && b[i] != b'{' && b[i] != b'}' && b[i] != b';' {
+                                    i += 1;
+                                }
+                            }
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    if !frames.is_empty() {
+                        keyframes.push(Keyframes {
+                            name: kf_name,
+                            frames,
+                        });
+                    }
+                }
             }
             continue;
         }
@@ -447,10 +603,17 @@ fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>) {
     }
 }
 
-pub fn parse_css(css_code: &str) -> Vec<CssRule> {
+#[derive(Clone)]
+pub struct ParsedCss {
+    pub rules: Vec<CssRule>,
+    pub keyframes: Vec<Keyframes>,
+}
+
+pub fn parse_css(css_code: &str) -> ParsedCss {
     let mut rules = Vec::new();
-    parse_css_rules(strip_css_comments(css_code).as_bytes(), &mut rules);
-    rules
+    let mut keyframes = Vec::new();
+    parse_css_rules(strip_css_comments(css_code).as_bytes(), &mut rules, &mut keyframes);
+    ParsedCss { rules, keyframes }
 }
 
 pub fn match_css_style(
@@ -486,4 +649,9 @@ pub fn match_css_style(
         }
     }
     resolved
+}
+
+/// Animasyon ismi ile keyframes kaydını bulur.
+pub fn find_keyframes<'a>(keyframes: &'a [Keyframes], name: &str) -> Option<&'a Keyframes> {
+    keyframes.iter().find(|k| k.name == name)
 }

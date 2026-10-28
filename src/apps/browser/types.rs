@@ -205,6 +205,18 @@ pub struct ElementStyle {
     pub min_width: usize,
     /// Minimum yükseklik (px cinsinden).
     pub min_height: usize,
+    /// CSS animation ismi.
+    pub animation_name: Option<String>,
+    /// CSS animation sure (saniye).
+    pub animation_duration: f32,
+    /// CSS animation tekrar sayisi (-1 = sonsuz).
+    pub animation_iterations: i32,
+    /// CSS transition suresi (san, 0 = yok).
+    pub transition_duration: f32,
+    /// CSS transition property adi.
+    pub transition_property: Option<String>,
+    /// CSS opacity degeri (1 = tam).
+    pub opacity: f32,
 }
 
 impl ElementStyle {
@@ -243,6 +255,12 @@ impl ElementStyle {
             max_height: 0,
             min_width: 0,
             min_height: 0,
+            animation_name: None,
+            animation_duration: 0.0,
+            animation_iterations: -1,
+            transition_duration: 0.0,
+            transition_property: None,
+            opacity: 1.0,
         }
     }
 
@@ -347,6 +365,24 @@ impl ElementStyle {
         }
         if other.min_height > 0 {
             self.min_height = other.min_height;
+        }
+        if let Some(name) = &other.animation_name {
+            self.animation_name = Some(name.clone());
+        }
+        if other.animation_duration > 0.0 {
+            self.animation_duration = other.animation_duration;
+        }
+        if other.animation_iterations != -1 {
+            self.animation_iterations = other.animation_iterations;
+        }
+        if other.transition_duration > 0.0 {
+            self.transition_duration = other.transition_duration;
+        }
+        if let Some(prop) = &other.transition_property {
+            self.transition_property = Some(prop.clone());
+        }
+        if other.opacity > 0.0 {
+            self.opacity = other.opacity;
         }
     }
 }

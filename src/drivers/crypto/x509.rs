@@ -241,13 +241,42 @@ fn locate_spki_parts(data: &[u8], spki_start: usize) -> Result<(usize, usize), (
     Ok((alg_vo, bs_vo))
 }
 
-/// Ham SubjectPublicKeyInfo DER'inden RSA açık anahtarını çıkarır.
-pub fn parse_spki_rsa_public_key(spki: &[u8]) -> Result<RsaPublicKey, ()> {
+/// AlgorithmIdentifier SEQUENCE'inin başlangıç ofsetini döndürür; hem tam
+/// SPKI hem de webpki-roots biçimini destekler.
+///
+/// webpki-roots güven çapaları SPKI'yi dış SEQUENCE sarmalayıcısı OLMADAN
+/// saklar (yalnızca AlgorithmIdentifier + BIT STRING). Gömülü DER kökleri ve
+/// sertifikalardan çıkarılan SPKI ise tam formdadır
+/// (SEQUENCE { AlgorithmIdentifier, BIT STRING }).
+///
+/// Returns the start offset of the AlgorithmIdentifier SEQUENCE; supports both
+/// the full SPKI layout and the webpki-roots layout. webpki-roots trust
+/// anchors store the SPKI WITHOUT the outer SEQUENCE wrapper
+/// (AlgorithmIdentifier + BIT STRING only), while embedded DER roots and
+/// certificate-derived SPKIs use the full form
+/// (SEQUENCE { AlgorithmIdentifier, BIT STRING }).
+fn spki_alg_sequence_offset(spki: &[u8]) -> Result<usize, ()> {
     let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
     if tag != TAG_SEQUENCE {
         return Err(());
     }
-    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    // Tam formda dış SEQUENCE'in içeriği AlgorithmIdentifier SEQUENCE (0x30)
+    // ile başlar; webpki biçiminde ise doğrudan algoritma OID'i (0x06) gelir.
+    // In the full form the outer SEQUENCE's content starts with the
+    // AlgorithmIdentifier SEQUENCE (0x30); in the webpki layout the algorithm
+    // OID (0x06) comes first instead.
+    let (inner_tag, _, _, _) = read_der_tlv(spki, vo)?;
+    if inner_tag == TAG_SEQUENCE {
+        Ok(vo)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Ham SubjectPublicKeyInfo DER'inden RSA açık anahtarını çıkarır.
+pub fn parse_spki_rsa_public_key(spki: &[u8]) -> Result<RsaPublicKey, ()> {
+    let alg_seq = spki_alg_sequence_offset(spki)?;
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, alg_seq)?;
     parse_rsa_public_key_at(spki, alg_vo, bs_vo)
 }
 
@@ -630,11 +659,8 @@ pub fn parse_x509_ec_public_key(cert_der: &[u8]) -> Result<[u8; 65], ()> {
 
 /// Ham SubjectPublicKeyInfo DER'inden P-256 açık anahtarını çıkarır.
 pub fn parse_spki_ec_public_key(spki: &[u8]) -> Result<[u8; 65], ()> {
-    let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
-    if tag != TAG_SEQUENCE {
-        return Err(());
-    }
-    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    let alg_seq = spki_alg_sequence_offset(spki)?;
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, alg_seq)?;
     parse_ec_p256_key_at(spki, alg_vo, bs_vo)
 }
 
@@ -679,11 +705,8 @@ fn parse_ec_p256_key_at(cert_der: &[u8], alg_vo: usize, bs_vo: usize) -> Result<
 }
 
 fn parse_spki_p384_public_key(spki: &[u8]) -> Result<[u8; 97], ()> {
-    let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
-    if tag != TAG_SEQUENCE {
-        return Err(());
-    }
-    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    let alg_seq = spki_alg_sequence_offset(spki)?;
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, alg_seq)?;
     parse_p384_key_at(spki, alg_vo, bs_vo)
 }
 
@@ -1114,6 +1137,26 @@ pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
     })
 }
 
+/// Bir Name (RDNSequence) DER'inden dış SEQUENCE başlığını atarak içeriğini döner.
+///
+/// webpki-roots, güven çapasının `subject` alanını rustls-webpki'nin
+/// `anchor_from_trusted_cert` çıktısından üretir; o gösterim Name'in yalnızca
+/// RDNSequence içeriğini saklar (dış SEQUENCE etiketi ve uzunluğu yoktur).
+/// Gelen sertifikadaki issuer/subject alanları ise tam TLV'dir; bu yüzden
+/// karşılaştırma başlık atıldıktan sonra yapılmalıdır.
+///
+/// webpki-roots stores a trust anchor's `subject` as the RDNSequence content of
+/// the Name (no outer SEQUENCE tag/length), while certificates carry the full
+/// TLV. Strip the header before comparing.
+#[cfg(not(test))]
+fn name_content(name_der: &[u8]) -> Option<&[u8]> {
+    let (tag, value_offset, value_len, _) = read_der_tlv(name_der, 0).ok()?;
+    if tag != TAG_SEQUENCE {
+        return None;
+    }
+    Some(&name_der[value_offset..value_offset + value_len])
+}
+
 /// Mozilla kök deposunda (webpki-roots) verilen issuer subject'ine karşılık
 /// gelen SubjectPublicKeyInfo'yu arar.
 // Mozilla kök listesi boş kalırsa tüm HTTPS bağlantıları `UntrustedRoot` ile
@@ -1123,9 +1166,10 @@ const _: () = assert!(webpki_roots::TLS_SERVER_ROOTS.len() > 100);
 
 #[cfg(not(test))]
 fn mozilla_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
+    let issuer_content = name_content(issuer_raw)?;
     webpki_roots::TLS_SERVER_ROOTS.iter().find_map(|anchor| {
         let subject: &'static [u8] = anchor.subject.as_ref();
-        if subject == issuer_raw {
+        if subject == issuer_content {
             Some(anchor.subject_public_key_info.as_ref())
         } else {
             None

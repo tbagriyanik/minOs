@@ -9,9 +9,10 @@
 #![allow(dead_code)]
 
 use crate::drivers::crypto::gcm::Gcm;
-use crate::drivers::crypto::hmac::HmacSha256;
+use crate::drivers::crypto::hmac::{HmacSha256, HmacSha384};
 use crate::drivers::crypto::rsa::{pkcs1_v1_5_encrypt, rsa_verify_pkcs1_sha256, RsaPublicKey};
 use crate::drivers::crypto::sha256::Sha256;
+use crate::drivers::crypto::sha384::Sha384;
 use crate::drivers::crypto::x509::{parse_x509_ec_public_key, parse_x509_rsa_public_key};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -69,11 +70,64 @@ const TLS_VERIFY_DATA_LEN: usize = 12;
 /// GCM kimlik dogrulama etiketinin uzunlugu (bayt).
 const GCM_TAG_LEN: usize = 16;
 
-/// TLS 1.3 hash output length (SHA-256).
-const TLS13_HASH_LEN: usize = 32;
+/// TLS 1.3 SHA-256 digest uzunluğu (TLS_AES_128_GCM_SHA256 paketi).
+const SHA256_HASH_LEN: usize = 32;
+/// TLS 1.3 SHA-384 digest uzunluğu (TLS_AES_256_GCM_SHA384 paketi).
+const SHA384_HASH_LEN: usize = 48;
 
 /// TLS 1.3 HKDF-Expand-Label prefix.
 const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
+
+/// TLS 1.3 el sıkışmasında kullanılan hash algoritması. Paketle birlikte
+/// seçilir (RFC 8446 §7.1): AES-128-GCM ⇒ SHA-256, AES-256-GCM ⇒ SHA-384.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tls13HashAlg {
+    Sha256,
+    Sha384,
+}
+
+impl Tls13HashAlg {
+    /// TLS 1.3 paketine karşılık gelen hash algoritması; bilinmiyorsa `None`.
+    fn for_cipher_suite(cipher_suite: u16) -> Option<Self> {
+        match cipher_suite {
+            TLS_AES_128_GCM_SHA256 => Some(Self::Sha256),
+            TLS_AES_256_GCM_SHA384 => Some(Self::Sha384),
+            _ => None,
+        }
+    }
+
+    /// Transcript-Hash / HMAC / HKDF çıktı uzunluğu.
+    fn hash_len(self) -> usize {
+        match self {
+            Self::Sha256 => SHA256_HASH_LEN,
+            Self::Sha384 => SHA384_HASH_LEN,
+        }
+    }
+
+    /// AEAD kayıt anahtarı uzunluğu (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
+    fn key_len(self) -> usize {
+        match self {
+            Self::Sha256 => 16,
+            Self::Sha384 => 32,
+        }
+    }
+
+    /// HKDF/HMAC primitifi (RFC 8446 §7.1).
+    fn hmac(self, key: &[u8], data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Sha256 => HmacSha256::sign(key, data).to_vec(),
+            Self::Sha384 => HmacSha384::sign(key, data).to_vec(),
+        }
+    }
+
+    /// Transcript-Hash (RFC 8446 §4.4.1).
+    fn hash(self, data: &[u8]) -> Vec<u8> {
+        match self {
+            Self::Sha256 => Sha256::hash(data).to_vec(),
+            Self::Sha384 => Sha384::hash(data).to_vec(),
+        }
+    }
+}
 
 /// RFC 8446 §7.1: PSK'sız TLS 1.3'te early secret IKM/salt'ı, Hash uzunluğunda
 /// bir sıfır dizisidir. Bu bir "gizli anahtar" değil, protokolün tanımlı sabit
@@ -81,14 +135,15 @@ const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 /// value" kuralı için yanlış pozitiftir. Literal bir bayt dizisi yerine
 /// `Default` ile üretilerek statik analizde sabit değer olarak işaretlenmesi
 /// önlenir.
-fn tls13_zero_secret() -> [u8; TLS13_HASH_LEN] {
-    Default::default()
+fn tls13_zero_secret(alg: Tls13HashAlg) -> Vec<u8> {
+    let zero: u8 = Default::default();
+    alloc::vec![zero; alg.hash_len()]
 }
 
 /// Hash(empty) — Transcript-Hash boş girdisi (RFC 8446 §7.1 Derive-Secret).
 /// Sabit bir protokol değeri olarak tek yerde tanımlanır.
-fn tls13_empty_hash() -> [u8; TLS13_HASH_LEN] {
-    Sha256::hash(&[])
+fn tls13_empty_hash(alg: Tls13HashAlg) -> Vec<u8> {
+    alg.hash(&[])
 }
 
 /// Signature algorithms supported.
@@ -123,21 +178,21 @@ pub struct TlsSession {
     ecdhe_point: Vec<u8>,
     pre_master_secret: Option<Vec<u8>>,
     master_secret: Option<[u8; 48]>,
-    /// TLS 1.3 handshake / master secret (32 byte).
-    tls13_handshake_secret: Option<[u8; 32]>,
-    tls13_master_secret: Option<[u8; 32]>,
+    /// TLS 1.3 el sıkışma / master secret (SHA-256 ⇒ 32, SHA-384 ⇒ 48 bayt).
+    tls13_handshake_secret: Option<Vec<u8>>,
+    tls13_master_secret: Option<Vec<u8>>,
     /// TLS 1.3 el sıkışma trafik sırları ve türetilmiş sunucu anahtarı/IV'si.
-    tls13_client_hs_secret: Option<[u8; 32]>,
-    tls13_server_hs_secret: Option<[u8; 32]>,
-    tls13_server_hs_key: Option<[u8; 16]>,
+    tls13_client_hs_secret: Option<Vec<u8>>,
+    tls13_server_hs_secret: Option<Vec<u8>>,
+    tls13_server_hs_key: Option<Vec<u8>>,
     tls13_server_hs_iv: Option<[u8; 12]>,
     /// TLS 1.2 sunucu el sıkışma kaydı sıra sayacı.
     tls13_server_hs_seq: u64,
     /// TLS 1.2'de istemci ChangeCipherSpec gönderdikten sonra sunucunun
     /// el sıkışma kayıtları da şifrelidir; çözülmeleri gerekir.
     tls12_cipher_active: bool,
-    client_write_key: Option<[u8; 16]>,
-    server_write_key: Option<[u8; 16]>,
+    client_write_key: Option<Vec<u8>>,
+    server_write_key: Option<Vec<u8>>,
     client_write_iv: Option<[u8; 4]>,
     server_write_iv: Option<[u8; 4]>,
     /// TLS 1.3 base IV (12 byte) — nonce = base_iv XOR sequence_number.
@@ -151,8 +206,13 @@ pub struct TlsSession {
     hs_buffer: Vec<u8>,
     /// TLS 1.2 handshake hash (hash of all handshake messages).
     handshake_hash: Sha256,
-    /// TLS 1.3 transcript hash (updated as handshake messages are processed).
-    tls13_transcript_hash: Sha256,
+    /// TLS 1.3 el sıkışmada kullanılan hash algoritması. ServerHello'daki paket
+    /// seçilene kadar SHA-256 varsayılır.
+    tls13_hash_alg: Tls13HashAlg,
+    /// TLS 1.3 transcript: ham el sıkışma mesaj çerçeveleri. Hash algoritması
+    /// paketle birlikte kesinleştiğinden (SHA-256 / SHA-384) ham baytlar
+    /// saklanır; Transcript-Hash gerektiğinde hesaplanır.
+    tls13_transcript: Vec<u8>,
     outgoing: Vec<u8>,
     /// Alınan son TLS uyarısı (seviye, açıklama).
     last_alert: Option<(u8, u8)>,
@@ -202,7 +262,8 @@ impl TlsSession {
             record_buffer: Vec::new(),
             hs_buffer: Vec::new(),
             handshake_hash: Sha256::new(),
-            tls13_transcript_hash: Sha256::new(),
+            tls13_hash_alg: Tls13HashAlg::Sha256,
+            tls13_transcript: Vec::new(),
             outgoing: Vec::new(),
             last_alert: None,
             peer_closed: false,
@@ -237,7 +298,9 @@ impl TlsSession {
 
     pub fn note_client_hello(&mut self, client_hello_body: &[u8]) {
         self.handshake_hash.update(client_hello_body);
-        self.tls13_transcript_hash.update(client_hello_body);
+        // TLS 1.3 transcript'i ham bayt olarak biriktirilir (hash algoritması
+        // ServerHello'daki paketle kesinleşir).
+        self.tls13_transcript.extend_from_slice(client_hello_body);
     }
 
     pub fn feed_tcp_data(&mut self, data: &[u8]) {
@@ -349,8 +412,8 @@ impl TlsSession {
     /// TLS 1.3 encrypted handshake record decryption.
     /// Uses server handshake traffic key derived after ServerHello.
     fn decrypt_tls13_handshake(&mut self, ciphertext: &[u8]) -> Result<Vec<u8>, ()> {
-        let key = self.tls13_server_hs_key.ok_or(())?;
-        let iv = self.tls13_server_hs_iv.ok_or(())?;
+        let key = self.tls13_server_hs_key.as_ref().ok_or(())?;
+        let iv = self.tls13_server_hs_iv.as_ref().ok_or(())?;
 
         let gcm = Gcm::new(&key).map_err(|_| ())?;
         let seq = self.tls13_server_hs_seq;
@@ -469,16 +532,17 @@ impl TlsSession {
             pos = frame_end;
 
             // TLS 1.3'te Finished ve CertificateVerify doğrulaması, mesajın
-            // *eklenmeden önceki* transcript hash ile yapılır. Bu yüzden hash'in
-            // anlık kopyası saklanır.
-            let pre_transcript = Some(self.tls13_transcript_hash.clone());
+            // *eklenmeden önceki* transcript ile yapılır. Transcript ham bayt
+            // olarak saklandığı için anlık kopyası alınır; gerektiğinde hash
+            // algoritmasıyla (SHA-256/SHA-384) Transcript-Hash hesaplanır.
+            let pre_transcript = self.tls13_transcript.clone();
 
             let msg_frame = &buf[frame_start..frame_end];
             let msg_body = &buf[frame_start + 4..frame_end];
             if !self.tls13_mode {
                 self.handshake_hash.update(msg_frame);
             }
-            self.tls13_transcript_hash.update(msg_frame);
+            self.tls13_transcript.extend_from_slice(msg_frame);
             out_handshake.extend_from_slice(msg_frame);
 
             serial_print("[TLS] HS mesajı geldi: tip=");
@@ -494,11 +558,9 @@ impl TlsSession {
                 }
                 HANDSHAKE_CERTIFICATE_VERIFY => {
                     // TLS 1.3: CertificateVerify - transcript hash üzerindeki imzayı doğrula.
-                    self.handle_certificate_verify(msg_body, pre_transcript.as_ref())?;
+                    self.handle_certificate_verify(msg_body, &pre_transcript)?;
                 }
-                HANDSHAKE_FINISHED => {
-                    self.handle_server_finished(msg_body, pre_transcript.as_ref())?
-                }
+                HANDSHAKE_FINISHED => self.handle_server_finished(msg_body, &pre_transcript)?,
                 _ => {}
             }
         }
@@ -507,8 +569,8 @@ impl TlsSession {
     }
 
     /// TLS 1.3 el sıkışma anahtarları, RFC 8446 uyarınca
-    /// Transcript-Hash(ClientHello..ServerHello) üzerinden türetilir; bu hash
-    /// `tls13_transcript_hash` içinde hazırdır (ServerHello çerçevesi
+    /// Transcript-Hash(ClientHello..ServerHello) üzerinden türetilir; ilgili ham
+    /// transcript `tls13_transcript` içinde hazırdır (ServerHello çerçevesi
     /// `process_handshake_records` tarafından bu fonksiyondan önce eklenmiştir).
     fn handle_server_hello(&mut self, body: &[u8]) -> Result<(), ()> {
         if body.len() < 34 + 1 + 2 + 1 {
@@ -525,8 +587,11 @@ impl TlsSession {
 
         // Check for TLS 1.3 cipher suites.
         match self.cipher_suite {
-            TLS_AES_128_GCM_SHA256 => {
+            TLS_AES_128_GCM_SHA256 | TLS_AES_256_GCM_SHA384 => {
                 self.tls13_mode = true;
+                // Paketle birlikte hash algoritması da kesinleşir
+                // (RFC 8446 §7.1: AES-128-GCM ⇒ SHA-256, AES-256-GCM ⇒ SHA-384).
+                self.tls13_hash_alg = Tls13HashAlg::for_cipher_suite(self.cipher_suite).ok_or(())?;
             }
             TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
             | TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
@@ -734,11 +799,7 @@ impl TlsSession {
     ///
     /// İmza içeriği (RFC 8446 §4.4.3):
     ///   64 × 0x20 || "TLS 1.3, server CertificateVerify" || 0x00 || Transcript-Hash
-    fn handle_certificate_verify(
-        &mut self,
-        body: &[u8],
-        pre_transcript: Option<&Sha256>,
-    ) -> Result<(), ()> {
+    fn handle_certificate_verify(&mut self, body: &[u8], pre_transcript: &[u8]) -> Result<(), ()> {
         if !self.tls13_mode {
             return Ok(());
         }
@@ -752,15 +813,12 @@ impl TlsSession {
         }
         let sig = &body[4..4 + sig_len];
 
-        // Transcript hash, CertificateVerify mesajı eklenmeden önceki hâli.
-        let transcript = match pre_transcript {
-            Some(h) => h.clone().finalize(),
-            None => self.tls13_transcript_hash.clone().finalize(),
-        };
+        // Transcript-Hash, CertificateVerify mesajı eklenmeden önceki hâli.
+        let transcript = self.tls13_hash_alg.hash(pre_transcript);
 
         // İmzalanan içerik: 64 boşluk + etiket + 0x00 + transcript hash.
         const CERT_VERIFY_CONTEXT: &[u8] = b"TLS 1.3, server CertificateVerify";
-        let mut signed = Vec::with_capacity(64 + CERT_VERIFY_CONTEXT.len() + 1 + 32);
+        let mut signed = Vec::with_capacity(64 + CERT_VERIFY_CONTEXT.len() + 1 + transcript.len());
         signed.extend_from_slice(&[0x20u8; 64]);
         signed.extend_from_slice(CERT_VERIFY_CONTEXT);
         signed.push(0);
@@ -1030,30 +1088,21 @@ impl TlsSession {
         Ok(shared)
     }
 
-    fn handle_server_finished(
-        &mut self,
-        body: &[u8],
-        pre_transcript: Option<&Sha256>,
-    ) -> Result<(), ()> {
+    fn handle_server_finished(&mut self, body: &[u8], pre_transcript: &[u8]) -> Result<(), ()> {
         if self.tls13_mode {
             // RFC 8446 §4.4.4: Finished doğrulama anahtarı doğrudan sunucunun
             // el sıkışma trafik sırrından türetilir (ara bir adım yoktur):
             //   finished_key = HKDF-Expand-Label(server_hs_traffic_secret, "finished", "")
             //   verify_data  = HMAC(finished_key, Transcript-Hash(ClientHello..CertificateVerify))
-            let server_hs = self.tls13_server_hs_secret.ok_or(())?;
+            let alg = self.tls13_hash_alg;
+            let server_hs = self.tls13_server_hs_secret.as_ref().ok_or(())?;
             let finished_key =
-                Self::hkdf_expand_label(&server_hs, b"finished", b"", TLS13_HASH_LEN);
-            let finished_key: [u8; TLS13_HASH_LEN] = finished_key.try_into().map_err(|_| ())?;
+                Self::hkdf_expand_label(alg, &server_hs, b"finished", b"", alg.hash_len());
 
-            // Transcript hash, sunucu Finished mesajı eklenmeden önceki hâli.
-            let transcript = match pre_transcript {
-                Some(h) => h.clone().finalize(),
-                None => self.tls13_transcript_hash.clone().finalize(),
-            };
-            let expected = HmacSha256::sign(&finished_key, &transcript);
-            if body.len() != TLS13_HASH_LEN
-                || &body[..TLS13_HASH_LEN] != &expected[..TLS13_HASH_LEN]
-            {
+            // Transcript-Hash, sunucu Finished mesajı eklenmeden önceki hâli.
+            let transcript = alg.hash(pre_transcript);
+            let expected = alg.hmac(&finished_key, &transcript);
+            if body.len() != alg.hash_len() || body[..alg.hash_len()] != expected[..] {
                 return Err(());
             }
 
@@ -1095,33 +1144,33 @@ impl TlsSession {
         if !self.tls13_mode {
             return None;
         }
-        let client_hs = self.tls13_client_hs_secret?;
+        let alg = self.tls13_hash_alg;
+        let client_hs = self.tls13_client_hs_secret.as_ref()?;
 
-        // Transcript hash: ClientHello..sunucu Finished (sunucu Finished
-        // transcript hash'e eklenmiş durumda).
-        let transcript = self.tls13_transcript_hash.clone().finalize();
+        // Transcript-Hash: ClientHello..sunucu Finished (sunucu Finished
+        // transcript'e eklenmiş durumda).
+        let transcript = alg.hash(&self.tls13_transcript);
 
         // RFC 8446 §4.4.4: finished_key = HKDF-Expand-Label(client_hs_traffic_secret, "finished", "")
         let finished_key =
-            Self::hkdf_expand_label(&client_hs, b"finished", b"", TLS13_HASH_LEN);
-        let finished_key: [u8; TLS13_HASH_LEN] = finished_key.try_into().ok()?;
+            Self::hkdf_expand_label(alg, &client_hs, b"finished", b"", alg.hash_len());
+        let verify_data = alg.hmac(&finished_key, &transcript);
 
-        let verify_data = HmacSha256::sign(&finished_key, &transcript);
-
-        let mut finished = Vec::with_capacity(4 + TLS13_HASH_LEN);
+        let hash_len = alg.hash_len();
+        let mut finished = Vec::with_capacity(4 + hash_len);
         finished.push(HANDSHAKE_FINISHED);
         finished.push(0);
         finished.push(0);
-        finished.push(TLS13_HASH_LEN as u8);
-        finished.extend_from_slice(&verify_data[..TLS13_HASH_LEN]);
+        finished.push(hash_len as u8);
+        finished.extend_from_slice(&verify_data);
 
-        // İstemci Finished transcript hash'e eklenir.
-        self.tls13_transcript_hash.update(&finished);
+        // İstemci Finished transcript'e eklenir.
+        self.tls13_transcript.extend_from_slice(&finished);
 
         // Kayıt anahtarı/IV'si client handshake traffic secret'tan türetilir.
-        let key = Self::hkdf_expand_label(&client_hs, b"key", b"", 16);
-        let iv = Self::hkdf_expand_label(&client_hs, b"iv", b"", 12);
-        let key: [u8; 16] = key.try_into().ok()?;
+        // Anahtar uzunluğu paketle belirlenir (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
+        let key = Self::hkdf_expand_label(alg, &client_hs, b"key", b"", alg.key_len());
+        let iv = Self::hkdf_expand_label(alg, &client_hs, b"iv", b"", 12);
         let iv: [u8; 12] = iv.try_into().ok()?;
 
         let gcm = Gcm::new(&key).ok()?;
@@ -1178,8 +1227,8 @@ impl TlsSession {
         let civ: [u8; 4] = kb.get(32..36).ok_or(())?.try_into().map_err(|_| ())?;
         let siv: [u8; 4] = kb.get(36..40).ok_or(())?.try_into().map_err(|_| ())?;
 
-        self.client_write_key = Some(cwk);
-        self.server_write_key = Some(swk);
+        self.client_write_key = Some(cwk.to_vec());
+        self.server_write_key = Some(swk.to_vec());
         self.client_write_iv = Some(civ);
         self.server_write_iv = Some(siv);
 
@@ -1193,26 +1242,18 @@ impl TlsSession {
     // TLS 1.3 HKDF key schedule (RFC 8446 Section 7)
     // ---------------------------------------------------------------------------
 
-    fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> [u8; TLS13_HASH_LEN] {
+    fn hkdf_extract(alg: Tls13HashAlg, salt: &[u8], ikm: &[u8]) -> Vec<u8> {
         if salt.is_empty() || ikm.is_empty() {
-            let default_buf: [u8; TLS13_HASH_LEN] = core::array::from_fn(|_| 0);
-            let actual_salt = if salt.is_empty() {
-                &default_buf[..]
-            } else {
-                salt
-            };
-            let actual_ikm = if ikm.is_empty() {
-                &default_buf[..]
-            } else {
-                ikm
-            };
-            HmacSha256::sign(actual_salt, actual_ikm)
+            let zeros = tls13_zero_secret(alg);
+            let actual_salt = if salt.is_empty() { &zeros[..] } else { salt };
+            let actual_ikm = if ikm.is_empty() { &zeros[..] } else { ikm };
+            alg.hmac(actual_salt, actual_ikm)
         } else {
-            HmacSha256::sign(salt, ikm)
+            alg.hmac(salt, ikm)
         }
     }
 
-    fn hkdf_expand(prk: &[u8; TLS13_HASH_LEN], info: &[u8], length: usize) -> Vec<u8> {
+    fn hkdf_expand(alg: Tls13HashAlg, prk: &[u8], info: &[u8], length: usize) -> Vec<u8> {
         let mut result = Vec::with_capacity(length);
         let mut t_prev = Vec::new();
         let mut counter: u8 = 1;
@@ -1221,9 +1262,9 @@ impl TlsSession {
             block_input.extend_from_slice(&t_prev);
             block_input.extend_from_slice(info);
             block_input.push(counter);
-            let t = HmacSha256::sign(prk, &block_input);
+            let t = alg.hmac(prk, &block_input);
             result.extend_from_slice(&t);
-            t_prev = t.to_vec();
+            t_prev = t;
             counter += 1;
         }
         result.truncate(length);
@@ -1231,7 +1272,8 @@ impl TlsSession {
     }
 
     fn hkdf_expand_label(
-        secret: &[u8; TLS13_HASH_LEN],
+        alg: Tls13HashAlg,
+        secret: &[u8],
         label: &[u8],
         context: &[u8],
         length: usize,
@@ -1245,64 +1287,70 @@ impl TlsSession {
         hkdf_label.extend_from_slice(label);
         hkdf_label.push(context.len() as u8);
         hkdf_label.extend_from_slice(context);
-        Self::hkdf_expand(secret, &hkdf_label, length)
+        Self::hkdf_expand(alg, secret, &hkdf_label, length)
     }
 
     /// TLS 1.3 anahtar planı (RFC 8446 §7.1).
     ///
     /// Aşama 1 (`derive_tls13_handshake_keys`): ServerHello sonrası, transcript
     /// hash = Hash(ClientHello..ServerHello) kullanılarak el sıkışma trafik
-    /// anahtarları türetilir. (`tls13_transcript_hash` bu noktada ServerHello
+    /// anahtarları türetilir. (`tls13_transcript` bu noktada ServerHello
     /// çerçevesini de içerir.)
     ///
     /// Aşama 2 (`derive_tls13_application_keys`): sunucu Finished doğrulandıktan
     /// sonra, transcript hash = Hash(ClientHello..server Finished) kullanılarak
     /// uygulama trafik anahtarları türetilir.
     fn derive_tls13_handshake_keys(&mut self, shared_secret: &[u8]) -> Result<(), ()> {
-        let zeros = tls13_zero_secret();
-        let empty_hash = tls13_empty_hash();
+        let alg = self.tls13_hash_alg;
+        let zeros = tls13_zero_secret(alg);
+        let empty_hash = tls13_empty_hash(alg);
         // With no PSK, both the salt and IKM are Hash.length zero bytes.
-        let early_secret = Self::hkdf_extract(&zeros, &zeros);
+        let early_secret = Self::hkdf_extract(alg, &zeros, &zeros);
         // Derive-Secret uses Transcript-Hash(empty), not an empty context.
         let derived =
-            Self::hkdf_expand_label(&early_secret, b"derived", &empty_hash, TLS13_HASH_LEN);
-        let derived_arr: [u8; TLS13_HASH_LEN] = derived.try_into().map_err(|_| ())?;
+            Self::hkdf_expand_label(alg, &early_secret, b"derived", &empty_hash, alg.hash_len());
 
         // handshake_secret = HKDF-Extract(derived, shared_secret)
-        let handshake_secret = Self::hkdf_extract(&derived_arr, shared_secret);
-        self.tls13_handshake_secret = Some(handshake_secret);
+        let handshake_secret = Self::hkdf_extract(alg, &derived, shared_secret);
 
         // Derive the master secret with the same empty-transcript context.
-        let derived2 =
-            Self::hkdf_expand_label(&handshake_secret, b"derived", &empty_hash, TLS13_HASH_LEN);
-        let derived2_arr: [u8; TLS13_HASH_LEN] = derived2.try_into().map_err(|_| ())?;
-        let master_secret = Self::hkdf_extract(&derived2_arr, &zeros);
+        let derived2 = Self::hkdf_expand_label(
+            alg,
+            &handshake_secret,
+            b"derived",
+            &empty_hash,
+            alg.hash_len(),
+        );
+        let master_secret = Self::hkdf_extract(alg, &derived2, &zeros);
         self.tls13_master_secret = Some(master_secret);
+        self.tls13_handshake_secret = Some(handshake_secret.clone());
 
         // El sıkışma trafik sırları (transcript hash = ClientHello..ServerHello).
         // Transcript-Hash(ClientHello..ServerHello); ServerHello çerçevesi
-        // handle_server_hello çağrılmadan önce hash'e eklenmiş olur.
-        let transcript = self.tls13_transcript_hash.clone().finalize();
+        // handle_server_hello çağrılmadan önce transcript'e eklenmiş olur.
+        let transcript = alg.hash(&self.tls13_transcript);
         let client_hs_secret = Self::hkdf_expand_label(
+            alg,
             &handshake_secret,
             b"c hs traffic",
             &transcript,
-            TLS13_HASH_LEN,
+            alg.hash_len(),
         );
         let server_hs_secret = Self::hkdf_expand_label(
+            alg,
             &handshake_secret,
             b"s hs traffic",
             &transcript,
-            TLS13_HASH_LEN,
+            alg.hash_len(),
         );
-        self.tls13_client_hs_secret = Some(client_hs_secret.try_into().map_err(|_| ())?);
-        self.tls13_server_hs_secret = Some(server_hs_secret.clone().try_into().map_err(|_| ())?);
+        self.tls13_client_hs_secret = Some(client_hs_secret);
+        self.tls13_server_hs_secret = Some(server_hs_secret.clone());
 
         // Sunucu el sıkışma kayıtlarını çözmek için anahtar/IV türet.
-        let server_hs_secret: [u8; TLS13_HASH_LEN] = server_hs_secret.try_into().map_err(|_| ())?;
-        let server_hs_key = Self::hkdf_expand_label(&server_hs_secret, b"key", b"", 16);
-        let server_hs_iv = Self::hkdf_expand_label(&server_hs_secret, b"iv", b"", 12);
-        self.tls13_server_hs_key = Some(server_hs_key.try_into().map_err(|_| ())?);
+        let server_hs_key =
+            Self::hkdf_expand_label(alg, &server_hs_secret, b"key", b"", alg.key_len());
+        let server_hs_iv = Self::hkdf_expand_label(alg, &server_hs_secret, b"iv", b"", 12);
+        self.tls13_server_hs_key = Some(server_hs_key);
         self.tls13_server_hs_iv = Some(server_hs_iv.try_into().map_err(|_| ())?);
 
         Ok(())
@@ -1310,31 +1358,42 @@ impl TlsSession {
 
     /// TLS 1.3 uygulama trafik anahtarları (sunucu Finished doğrulandıktan sonra).
     fn derive_tls13_application_keys(&mut self) -> Result<(), ()> {
-        let master_secret = self.tls13_master_secret.ok_or(())?;
-        // Transcript hash = ClientHello..sunucu Finished (sunucu Finished
-        // doğrulandığında hash'e eklenmiş olmalı).
-        let transcript = self.tls13_transcript_hash.clone().finalize();
+        let alg = self.tls13_hash_alg;
+        let master_secret = self.tls13_master_secret.as_ref().ok_or(())?;
+        // Transcript-Hash = ClientHello..sunucu Finished (sunucu Finished
+        // doğrulandığında transcript'e eklenmiş olmalı).
+        let transcript = alg.hash(&self.tls13_transcript);
 
-        let client_ap_secret =
-            Self::hkdf_expand_label(&master_secret, b"c ap traffic", &transcript, TLS13_HASH_LEN);
-        let server_ap_secret =
-            Self::hkdf_expand_label(&master_secret, b"s ap traffic", &transcript, TLS13_HASH_LEN);
+        let client_ap_secret = Self::hkdf_expand_label(
+            alg,
+            &master_secret,
+            b"c ap traffic",
+            &transcript,
+            alg.hash_len(),
+        );
+        let server_ap_secret = Self::hkdf_expand_label(
+            alg,
+            &master_secret,
+            b"s ap traffic",
+            &transcript,
+            alg.hash_len(),
+        );
 
-        let client_ap_secret: [u8; TLS13_HASH_LEN] = client_ap_secret.try_into().map_err(|_| ())?;
-        let server_ap_secret: [u8; TLS13_HASH_LEN] = server_ap_secret.try_into().map_err(|_| ())?;
+        let client_ap_key =
+            Self::hkdf_expand_label(alg, &client_ap_secret, b"key", b"", alg.key_len());
+        let client_ap_iv = Self::hkdf_expand_label(alg, &client_ap_secret, b"iv", b"", 12);
+        let server_ap_key =
+            Self::hkdf_expand_label(alg, &server_ap_secret, b"key", b"", alg.key_len());
+        let server_ap_iv = Self::hkdf_expand_label(alg, &server_ap_secret, b"iv", b"", 12);
 
-        let client_ap_key = Self::hkdf_expand_label(&client_ap_secret, b"key", b"", 16);
-        let client_ap_iv = Self::hkdf_expand_label(&client_ap_secret, b"iv", b"", 12);
-        let server_ap_key = Self::hkdf_expand_label(&server_ap_secret, b"key", b"", 16);
-        let server_ap_iv = Self::hkdf_expand_label(&server_ap_secret, b"iv", b"", 12);
-
-        self.client_write_key = Some(client_ap_key.try_into().map_err(|_| ())?);
-        self.server_write_key = Some(server_ap_key.try_into().map_err(|_| ())?);
+        self.client_write_key = Some(client_ap_key);
+        self.server_write_key = Some(server_ap_key);
         self.client_base_iv = Some(client_ap_iv.try_into().map_err(|_| ())?);
         self.server_base_iv = Some(server_ap_iv.try_into().map_err(|_| ())?);
 
-        self.client_gcm = Some(Gcm::new(&self.client_write_key.unwrap()).map_err(|_| ())?);
-        self.server_gcm = Some(Gcm::new(&self.server_write_key.unwrap()).map_err(|_| ())?);
+        // Kayıt şifreleme/çözme için AEAD bağlamları trafik anahtarlarından kurulur.
+        self.client_gcm = Some(Gcm::new(self.client_write_key.as_ref().unwrap()).map_err(|_| ())?);
+        self.server_gcm = Some(Gcm::new(self.server_write_key.as_ref().unwrap()).map_err(|_| ())?);
 
         Ok(())
     }
@@ -1610,20 +1669,20 @@ pub fn build_client_hello(
     handshake.extend_from_slice(client_random);
     handshake.push(0);
 
-    // Cipher suites. Yalnizca anahtar turetimini SHA-256 ile yapabilen
-    // paketler ilan edilir; sunucu listeden secmek zorundadir.
+    // Cipher suites. Sunucu listeden secmek zorundadir.
     //
-    //  * TLS 1.3: TLS_AES_128_GCM_SHA256 (0x1301).
+    //  * TLS 1.3: TLS_AES_128_GCM_SHA256 (0x1301), TLS_AES_256_GCM_SHA384 (0x1302).
     //  * TLS 1.2: ECDHE_RSA / ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 — forward secrecy.
     //  * TLS 1.2: TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C) — yalnizca RSA
     //    sertifikasi olan eski sunucular icin son care.
     //
-    // AES-256-GCM / SHA-384 paketleri (0xC030, 0xC02A) bilinçli olarak
-    // ilan edilmez: anahtar türetimi ve PRF yalnızca SHA-256 tabanlıdır.
-    // İlan edilirlerse sunucu kendi tercihiyle 256 bitlik paketi seçebilir ve
-    // istemci yanlış anahtarla şifreleme yaparak el sıkışmayı bozar.
+    // TLS 1.3'te her iki paket de desteklenir; hash algoritması (SHA-256/SHA-384)
+    // ve AEAD anahtar uzunluğu (16/32 bayt) ServerHello'daki pakete göre seçilir
+    // (RFC 8446 §7.1). Bazı sunucular yalnızca AES-256-GCM/SHA-384 kabul eder
+    // (örn. aa.com.tr), bu yüzden 0x1302 mutlaka ilan edilmelidir.
     let ciphers = [
         TLS_AES_128_GCM_SHA256,
+        TLS_AES_256_GCM_SHA384,
         TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
         TLS_RSA_WITH_AES_128_GCM_SHA256,
@@ -1764,12 +1823,12 @@ mod tests {
         let ikm = hex(b"0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
         let salt = hex(b"000102030405060708090a0b0c");
         let info = hex(b"f0f1f2f3f4f5f6f7f8f9");
-        let prk = TlsSession::hkdf_extract(&salt, &ikm);
+        let prk = TlsSession::hkdf_extract(Tls13HashAlg::Sha256, &salt, &ikm);
         assert_eq!(
             to_hex(&prk),
             "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"
         );
-        let okm = TlsSession::hkdf_expand(&prk, &info, 42);
+        let okm = TlsSession::hkdf_expand(Tls13HashAlg::Sha256, &prk, &info, 42);
         assert_eq!(
             to_hex(&okm),
             "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
@@ -1780,12 +1839,12 @@ mod tests {
     #[test]
     fn hkdf_rfc5869_case3() {
         let ikm = hex(b"0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
-        let prk = TlsSession::hkdf_extract(&[], &ikm);
+        let prk = TlsSession::hkdf_extract(Tls13HashAlg::Sha256, &[], &ikm);
         assert_eq!(
             to_hex(&prk),
             "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04"
         );
-        let okm = TlsSession::hkdf_expand(&prk, &[], 42);
+        let okm = TlsSession::hkdf_expand(Tls13HashAlg::Sha256, &prk, &[], 42);
         assert_eq!(
             to_hex(&okm),
             "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
@@ -1794,35 +1853,42 @@ mod tests {
 
     #[test]
     fn tls13_key_schedule_matches_rfc8448() {
-        let zeros = tls13_zero_secret();
-        let empty_hash = tls13_empty_hash();
-        let early_secret = TlsSession::hkdf_extract(&zeros, &zeros);
+        let alg = Tls13HashAlg::Sha256;
+        let zeros = tls13_zero_secret(alg);
+        let empty_hash = tls13_empty_hash(alg);
+        let early_secret = TlsSession::hkdf_extract(alg, &zeros, &zeros);
         assert_eq!(
             to_hex(&early_secret),
             "33ad0a1c607ec03b09e6cd9893680ce210adf300aa1f2660e1b22e10f170f92a"
         );
 
-        let derived =
-            TlsSession::hkdf_expand_label(&early_secret, b"derived", &empty_hash, TLS13_HASH_LEN);
+        let derived = TlsSession::hkdf_expand_label(
+            alg,
+            &early_secret,
+            b"derived",
+            &empty_hash,
+            alg.hash_len(),
+        );
         assert_eq!(
             to_hex(&derived),
             "6f2615a108c702c5678f54fc9dbab69716c076189c48250cebeac3576c3611ba"
         );
 
         let shared = hex(b"8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d");
-        let handshake_secret = TlsSession::hkdf_extract(&derived, &shared);
+        let handshake_secret = TlsSession::hkdf_extract(alg, &derived, &shared);
         assert_eq!(
             to_hex(&handshake_secret),
             "1dc826e93606aa6fdc0aadc12f741b01046aa6b99f691ed221a9f0ca043fbeac"
         );
 
         let derived_master = TlsSession::hkdf_expand_label(
+            alg,
             &handshake_secret,
             b"derived",
             &empty_hash,
-            TLS13_HASH_LEN,
+            alg.hash_len(),
         );
-        let master_secret = TlsSession::hkdf_extract(&derived_master, &zeros);
+        let master_secret = TlsSession::hkdf_extract(alg, &derived_master, &zeros);
         assert_eq!(
             to_hex(&master_secret),
             "18df06843d13a08bf2a449844c5f8a478001bc4d4c627984d5a41da8d0402919"
@@ -1847,8 +1913,9 @@ mod tests {
         info.push(context.len() as u8);
         info.extend_from_slice(context);
 
-        let expected = TlsSession::hkdf_expand(&secret, &info, len);
-        let actual = TlsSession::hkdf_expand_label(&secret, label, context, len);
+        let expected = TlsSession::hkdf_expand(Tls13HashAlg::Sha256, &secret, &info, len);
+        let actual =
+            TlsSession::hkdf_expand_label(Tls13HashAlg::Sha256, &secret, label, context, len);
         assert_eq!(actual, expected);
         assert_eq!(actual.len(), len);
     }
@@ -1879,6 +1946,7 @@ mod tests {
         let cs_len = u16::from_be_bytes([hs[4 + 34 + 1], hs[4 + 34 + 2]]) as usize;
         let cs_start = 4 + 34 + 1 + 2;
         let mut has_tls13 = false;
+        let mut has_tls13_aes256 = false;
         let mut has_ecdhe = false;
         let mut has_ecdhe_ecdsa = false;
         let mut has_renegotiation_scsv = false;
@@ -1887,6 +1955,9 @@ mod tests {
             let cs = u16::from_be_bytes([hs[cs_start + i], hs[cs_start + i + 1]]);
             if cs == TLS_AES_128_GCM_SHA256 {
                 has_tls13 = true;
+            }
+            if cs == TLS_AES_256_GCM_SHA384 {
+                has_tls13_aes256 = true;
             }
             if cs == TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
                 has_ecdhe = true;
@@ -1900,6 +1971,10 @@ mod tests {
             i += 2;
         }
         assert!(has_tls13, "TLS 1.3 cipher suite sunulmali");
+        assert!(
+            has_tls13_aes256,
+            "TLS_AES_256_GCM_SHA384 sunulmali (bazi sunucular yalnizca bunu kabul eder)"
+        );
         assert!(has_ecdhe, "ECDHE cipher suite sunulmali");
         assert!(has_ecdhe_ecdsa, "ECDHE-ECDSA cipher suite sunulmali");
 
@@ -1950,6 +2025,38 @@ mod tests {
         session.handle_server_hello(&server_hello).unwrap();
         assert_eq!(session.state(), TlsState::ServerHelloReceived);
         assert!(!session.tls13_mode);
+    }
+
+    /// TLS 1.3 paketi ile hash algoritması/AEAD anahtar uzunluğu eşlemesi
+    /// (RFC 8446 §7.1): AES-128-GCM ⇒ SHA-256/16 bayt, AES-256-GCM ⇒ SHA-384/32 bayt.
+    #[test]
+    fn tls13_cipher_suite_hash_alg_mapping() {
+        assert_eq!(
+            Tls13HashAlg::for_cipher_suite(TLS_AES_128_GCM_SHA256),
+            Some(Tls13HashAlg::Sha256)
+        );
+        assert_eq!(
+            Tls13HashAlg::for_cipher_suite(TLS_AES_256_GCM_SHA384),
+            Some(Tls13HashAlg::Sha384)
+        );
+        // Desteklenmeyen paket (ChaCha20) secilemez.
+        assert_eq!(
+            Tls13HashAlg::for_cipher_suite(TLS_CHACHA20_POLY1305_SHA256),
+            None
+        );
+
+        assert_eq!(Tls13HashAlg::Sha256.hash_len(), 32);
+        assert_eq!(Tls13HashAlg::Sha384.hash_len(), 48);
+        assert_eq!(Tls13HashAlg::Sha256.key_len(), 16);
+        assert_eq!(Tls13HashAlg::Sha384.key_len(), 32);
+
+        // HKDF/HMAC ve Transcript-Hash çıktıları paketin hash'ini izlemeli.
+        assert_eq!(Tls13HashAlg::Sha256.hmac(b"key", b"data").len(), 32);
+        assert_eq!(Tls13HashAlg::Sha384.hmac(b"key", b"data").len(), 48);
+        assert_eq!(Tls13HashAlg::Sha256.hash(b"data").len(), 32);
+        assert_eq!(Tls13HashAlg::Sha384.hash(b"data").len(), 48);
+        assert_eq!(tls13_zero_secret(Tls13HashAlg::Sha384).len(), 48);
+        assert_eq!(tls13_empty_hash(Tls13HashAlg::Sha384).len(), 48);
     }
 
     /// TLS 1.3 nonce kurgusu: base_iv XOR sequence_number.
@@ -2311,76 +2418,81 @@ mod tests {
         }
 
         fn derive_secrets(&mut self, shared: &[u8; 32]) {
-            let zeros = tls13_zero_secret();
-            let empty_hash = tls13_empty_hash();
-            let early = TlsSession::hkdf_extract(&zeros, &zeros);
-            let derived = TlsSession::hkdf_expand_label(&early, b"derived", &empty_hash, 32);
-            let derived: [u8; 32] = derived.try_into().unwrap();
-            let hs = TlsSession::hkdf_extract(&derived, shared);
-            self.handshake_secret = Some(hs);
+            // Test sunucusu yalnizca TLS_AES_128_GCM_SHA256 kullanir.
+            let alg = Tls13HashAlg::Sha256;
+            let zeros = tls13_zero_secret(alg);
+            let empty_hash = tls13_empty_hash(alg);
+            let early = TlsSession::hkdf_extract(alg, &zeros, &zeros);
+            let derived = TlsSession::hkdf_expand_label(alg, &early, b"derived", &empty_hash, 32);
+            let hs = TlsSession::hkdf_extract(alg, &derived, shared);
+            let derived2 = TlsSession::hkdf_expand_label(alg, &hs, b"derived", &empty_hash, 32);
+            self.handshake_secret = Some(hs.try_into().unwrap());
 
-            let derived2 = TlsSession::hkdf_expand_label(&hs, b"derived", &empty_hash, 32);
-            let derived2: [u8; 32] = derived2.try_into().unwrap();
-            self.master_secret = Some(TlsSession::hkdf_extract(&derived2, &zeros));
+            let master = TlsSession::hkdf_extract(alg, &derived2, &zeros);
+            self.master_secret = Some(master.try_into().unwrap());
         }
 
         fn derive_handshake_traffic(&mut self) {
+            let alg = Tls13HashAlg::Sha256;
             let th = self.transcript_hash();
             let hs_secret = self.handshake_secret.as_ref().unwrap();
-            let server_hs = TlsSession::hkdf_expand_label(hs_secret, b"s hs traffic", &th, 32);
+            let server_hs = TlsSession::hkdf_expand_label(alg, hs_secret, b"s hs traffic", &th, 32);
             let server_hs: [u8; 32] = server_hs.try_into().unwrap();
             self.server_hs_secret = Some(server_hs);
             self.server_hs_key = Some(
-                TlsSession::hkdf_expand_label(&server_hs, b"key", b"", 16)
+                TlsSession::hkdf_expand_label(alg, &server_hs, b"key", b"", 16)
                     .try_into()
                     .unwrap(),
             );
             self.server_hs_iv = Some(
-                TlsSession::hkdf_expand_label(&server_hs, b"iv", b"", 12)
+                TlsSession::hkdf_expand_label(alg, &server_hs, b"iv", b"", 12)
                     .try_into()
                     .unwrap(),
             );
 
-            let client_hs = TlsSession::hkdf_expand_label(hs_secret, b"c hs traffic", &th, 32);
+            let client_hs = TlsSession::hkdf_expand_label(alg, hs_secret, b"c hs traffic", &th, 32);
             let client_hs: [u8; 32] = client_hs.try_into().unwrap();
             self.client_hs_secret = Some(client_hs);
             self.client_hs_key = Some(
-                TlsSession::hkdf_expand_label(&client_hs, b"key", b"", 16)
+                TlsSession::hkdf_expand_label(alg, &client_hs, b"key", b"", 16)
                     .try_into()
                     .unwrap(),
             );
             self.client_hs_iv = Some(
-                TlsSession::hkdf_expand_label(&client_hs, b"iv", b"", 12)
+                TlsSession::hkdf_expand_label(alg, &client_hs, b"iv", b"", 12)
                     .try_into()
                     .unwrap(),
             );
         }
 
         fn derive_application_traffic(&mut self) {
+            let alg = Tls13HashAlg::Sha256;
             let th = self.transcript_hash();
             let master_secret = self.master_secret.as_ref().unwrap();
-            let client_ap = TlsSession::hkdf_expand_label(master_secret, b"c ap traffic", &th, 32);
+            let client_ap =
+                TlsSession::hkdf_expand_label(alg, master_secret, b"c ap traffic", &th, 32);
             let client_ap: [u8; 32] = client_ap.try_into().unwrap();
             self.client_ap_key = Some(
-                TlsSession::hkdf_expand_label(&client_ap, b"key", b"", 16)
+                TlsSession::hkdf_expand_label(alg, &client_ap, b"key", b"", 16)
                     .try_into()
                     .unwrap(),
             );
             self.client_ap_iv = Some(
-                TlsSession::hkdf_expand_label(&client_ap, b"iv", b"", 12)
+                TlsSession::hkdf_expand_label(alg, &client_ap, b"iv", b"", 12)
                     .try_into()
                     .unwrap(),
             );
 
-            let server_ap = TlsSession::hkdf_expand_label(master_secret, b"s ap traffic", &th, 32);
+            let server_ap =
+                TlsSession::hkdf_expand_label(alg, master_secret, b"s ap traffic", &th, 32);
             let server_ap: [u8; 32] = server_ap.try_into().unwrap();
             self.server_ap_key = Some(
-                TlsSession::hkdf_expand_label(&server_ap, b"key", b"", 16)
+                TlsSession::hkdf_expand_label(alg, &server_ap, b"key", b"", 16)
                     .try_into()
                     .unwrap(),
             );
             self.server_ap_iv = Some(
-                TlsSession::hkdf_expand_label(&server_ap, b"iv", b"", 12)
+                TlsSession::hkdf_expand_label(alg, &server_ap, b"iv", b"", 12)
                     .try_into()
                     .unwrap(),
             );
@@ -2569,6 +2681,7 @@ mod tests {
 
         // Finished (sunucu)
         let finished_key = TlsSession::hkdf_expand_label(
+            Tls13HashAlg::Sha256,
             server.server_hs_secret.as_ref().unwrap(),
             b"finished",
             b"",
@@ -2576,7 +2689,7 @@ mod tests {
         );
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
         let verify = HmacSha256::sign(&finished_key, &server.transcript_hash());
-        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS13_HASH_LEN]);
+        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..SHA256_HASH_LEN]);
         server.note(&fin);
         let fin_rec = server.encrypt_hs_record(&fin);
 
@@ -2613,6 +2726,7 @@ mod tests {
         let plain = server.decrypt_client_record(&client_finished, true);
         let th2 = server.transcript_hash();
         let c_key = TlsSession::hkdf_expand_label(
+            Tls13HashAlg::Sha256,
             server.client_hs_secret.as_ref().unwrap(),
             b"finished",
             b"",
@@ -2621,11 +2735,11 @@ mod tests {
         let c_key: [u8; 32] = c_key.try_into().unwrap();
         let expected = HmacSha256::sign(&c_key, &th2);
         assert_eq!(
-            &plain[4..4 + TLS13_HASH_LEN],
-            &expected[..TLS13_HASH_LEN],
+            &plain[4..4 + SHA256_HASH_LEN],
+            &expected[..SHA256_HASH_LEN],
             "Istemci Finished dogrulanmaliydi"
         );
-        assert_eq!(plain.len(), 4 + TLS13_HASH_LEN);
+        assert_eq!(plain.len(), 4 + SHA256_HASH_LEN);
         // Uygulama trafik sirlari, transcript "ClientHello..sunucu Finished"
         // uzerinden turetilir; istemci Finished bu noktadan sonra eklenir.
         server.derive_application_traffic();
@@ -2783,6 +2897,7 @@ mod tests {
 
         // Finished (sunucu)
         let finished_key = TlsSession::hkdf_expand_label(
+            Tls13HashAlg::Sha256,
             server.server_hs_secret.as_ref().unwrap(),
             b"finished",
             b"",
@@ -2790,7 +2905,7 @@ mod tests {
         );
         let finished_key: [u8; 32] = finished_key.try_into().unwrap();
         let verify = HmacSha256::sign(&finished_key, &server.transcript_hash());
-        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..TLS13_HASH_LEN]);
+        let fin = hs_message(HANDSHAKE_FINISHED, &verify[..SHA256_HASH_LEN]);
         server.note(&fin);
         let fin_rec = server.encrypt_hs_record(&fin);
 
@@ -2822,7 +2937,7 @@ mod tests {
         assert_eq!(client.state(), TlsState::Established);
         let plain = server.decrypt_client_record(&client_finished, true);
         assert_eq!(plain[0], HANDSHAKE_FINISHED);
-        assert_eq!(plain[3] as usize, TLS13_HASH_LEN);
-        assert_eq!(plain.len(), 4 + TLS13_HASH_LEN);
+        assert_eq!(plain[3] as usize, SHA256_HASH_LEN);
+        assert_eq!(plain.len(), 4 + SHA256_HASH_LEN);
     }
 }

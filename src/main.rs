@@ -3780,12 +3780,9 @@ pub extern "C" fn _start() -> ! {
                                                                 .iter()
                                                                 .flatten()
                                                                 .find(|w| w.app_id == 3u8)
-                                                                .map_or(
-                                                                    700,
-                                                                    |w| {
-                                                                        w.width.saturating_sub(40)
-                                                                    },
-                                                                );
+                                                                .map_or(700, |w| {
+                                                                    w.width.saturating_sub(40)
+                                                                });
                                                             browser_app.set_url(path.as_bytes());
                                                             browser_app.load_html(data, wrap, 256);
                                                         }

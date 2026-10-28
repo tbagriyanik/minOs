@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::css::{match_css_style, parse_css};
+use super::css::{find_keyframes, match_css_style, parse_css};
 use super::types::{BrowserLine, HtmlTagType, TextAlign, TextSpan};
 use crate::gui::{Color, MinGuiCompositor};
 
@@ -15,6 +15,23 @@ pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 pub fn eq_ascii(a: &[u8], b: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b)
+}
+
+/// Renk u32'undan opacity ile (0.0-1.0) blend edilerek yeni renk dondurur.
+fn blend_color_with_opacity(color: u32, opacity: f32) -> u32 {
+    if opacity >= 1.0 {
+        return color;
+    }
+    if opacity <= 0.0 {
+        return 0x101010;
+    }
+    let r = (((color >> 16) & 0xFF) as f32) * opacity;
+    let g = (((color >> 8) & 0xFF) as f32) * opacity;
+    let b = ((color & 0xFF) as f32) * opacity;
+    let ar = (r + 0.5) as u8;
+    let ag = (g + 0.5) as u8;
+    let ab = (b + 0.5) as u8;
+    ((ar as u32) << 16) | ((ag as u32) << 8) | (ab as u32)
 }
 
 fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
@@ -209,6 +226,7 @@ pub fn render_html_to_lines(
     let mut current_underline = false;
     let mut active_id: Option<String> = None;
     let mut css_rules = Vec::new();
+    let mut css_keyframes: Vec<super::css::Keyframes> = Vec::new();
 
     // 1. First extract all <style> blocks
     let mut p = 0;
@@ -224,7 +242,9 @@ pub fn render_html_to_lines(
                 let css_start = close_tag;
                 if let Some(pos) = find_bytes(&body[css_start..], b"</style>") {
                     let css_text = decode_bytes_to_string(&body[css_start..css_start + pos]);
-                    css_rules.extend(parse_css(&css_text));
+                    let parsed = parse_css(&css_text);
+                    css_rules.extend(parsed.rules);
+                    css_keyframes = parsed.keyframes;
                     p = css_start + pos + 8;
                     continue;
                 }
@@ -446,15 +466,23 @@ pub fn render_html_to_lines(
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
 
-            let matched =
-                match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
+            let mut matched = match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
+
+            // CSS animation: keyframes'ten frame bul ve uygula (statik render icin ilk frame)
+            if let Some(kf_name) = matched.animation_name.clone() {
+                if let Some(kf) = find_keyframes(&css_keyframes, &kf_name) {
+                    if let Some(frame) = kf.frames.first() {
+                        matched.opacity = frame.style.opacity;
+                    }
+                }
+            }
 
             if !closing {
                 if let Some(c) = matched.color {
-                    current_color = c;
+                    current_color = blend_color_with_opacity(c, matched.opacity);
                 }
                 if let Some(bg) = matched.bg_color {
-                    current_bg = Some(bg);
+                    current_bg = Some(blend_color_with_opacity(bg, matched.opacity));
                 }
                 if matched.align != TextAlign::Left {
                     cur_line_align = matched.align;
@@ -881,7 +909,7 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"caption") {
                     // <caption>: Tablo basligi
                 } else if eq_ascii(name, b"img") {
-                    // <img>: bu motorda görsel çizilemez; erişilebilir bir metin karşılığı göster.
+                    // <img>: Görsel çizilemez; erişilebilir metin + basit görsel placeholder göster.
                     let label = extract_attr(attrs, b"alt")
                         .or_else(|| extract_attr(attrs, b"title"))
                         .or_else(|| extract_attr(attrs, b"src"))
@@ -906,6 +934,7 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
+                    // Simple image placeholder box: show alt text
                     word_buf.push('[');
                     for ch in label.chars() {
                         if !ch.is_control() {
@@ -913,6 +942,7 @@ pub fn render_html_to_lines(
                         }
                     }
                     word_buf.push(']');
+                    word_buf.push(' ');
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,

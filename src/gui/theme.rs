@@ -129,13 +129,13 @@ impl ThemeId {
 
 // Palet sırası: yukarıdaki IDX_* sabitlerinin sırası ile birebir aynı olmalıdır.
 const VELVET_DARK: [u32; PALETTE_LEN] = [
-    0x181825, // desktop bg
-    0x1E1E2E, // window bg
-    0x313244, // titlebar (aktif)
+    0x181825, // desktop bg (mantle)
+    0x1E1E2E, // window bg (base; koyu, metin ile yuksek kontrast)
+    0x000000, // titlebar (aktif) (siyah)
     0x232336, // titlebar (pasif)
-    0x11111B, // taskbar
+    0x11111B, // taskbar (crust)
     0x89B4FA, // accent blue
-    0xA6E3A1, // accent green
+    0x94E2B5, // accent green (acik yesil, koyu zeminde okunabilir)
     0xF38BA8, // accent red
     0xF9E2AF, // accent yellow
     0xF5C2E7, // accent pink

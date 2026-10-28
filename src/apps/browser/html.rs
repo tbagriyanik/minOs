@@ -297,6 +297,7 @@ pub fn render_html_to_lines(
                     is_link: bool,
                     link_url: &str,
                     is_button: bool,
+                    is_image: bool,
                     onclick: &str,
                     elem_id: &str,
                     bold: bool,
@@ -312,7 +313,9 @@ pub fn render_html_to_lines(
             HtmlTagType::Heading2 => 1,
             _ => 1,
         };
-        let word_w = MinGuiCompositor::text_width(word, scale) + if is_button { 16 } else { 0 };
+        let word_w = MinGuiCompositor::text_width(word, scale)
+            + if is_button { 16 } else { 0 }
+            + if is_image { 64 } else { 0 };
         let space_w = MinGuiCompositor::text_width(" ", scale);
         let indent = tag_indent(tag);
         let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
@@ -330,6 +333,7 @@ pub fn render_html_to_lines(
                 is_link,
                 link_url: String::from(link_url),
                 is_button,
+                is_image,
                 bold,
                 underline,
                 onclick: String::from(onclick),
@@ -339,11 +343,13 @@ pub fn render_html_to_lines(
             *line_w += space_w + word_w;
             if let Some(last) = spans.last_mut() {
                 if !is_button
+                    && !is_image
                     && last.color == color
                     && last.bg_color == bg_color
                     && last.is_link == is_link
                     && last.link_url == link_url
                     && !last.is_button
+                    && !last.is_image
                     && last.elem_id == elem_id
                     && last.bold == bold
                     && last.underline == underline
@@ -362,6 +368,7 @@ pub fn render_html_to_lines(
                 is_link,
                 link_url: String::from(link_url),
                 is_button,
+                is_image,
                 bold,
                 underline,
                 onclick: String::from(onclick),
@@ -385,6 +392,7 @@ pub fn render_html_to_lines(
                       is_link: bool,
                       link_url: &str,
                       is_btn: bool,
+                      is_img: bool,
                       onclick: &str,
                       elem_id: &str,
                       bold: bool,
@@ -394,8 +402,8 @@ pub fn render_html_to_lines(
                       max: usize| {
         if !buf.is_empty() {
             add_word(
-                lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, onclick, elem_id,
-                bold, underline, tag, align, max,
+                lines, spans, line_w, buf, color, bg, is_link, link_url, is_btn, is_img, onclick,
+                elem_id, bold, underline, tag, align, max,
             );
             buf.clear();
         }
@@ -449,6 +457,7 @@ pub fn render_html_to_lines(
                 is_link,
                 link_target,
                 active_is_button,
+                false,
                 onclick_str,
                 elem_id_str,
                 current_bold,
@@ -607,6 +616,7 @@ pub fn render_html_to_lines(
                                 is_link,
                                 link_target,
                                 active_is_button,
+                                false,
                                 onclick_str,
                                 elem_id_str,
                                 current_bold,
@@ -636,6 +646,7 @@ pub fn render_html_to_lines(
                                 is_link,
                                 link_target,
                                 active_is_button,
+                                false,
                                 onclick_str,
                                 elem_id_str,
                                 current_bold,
@@ -667,6 +678,7 @@ pub fn render_html_to_lines(
                                 is_link,
                                 link_target,
                                 active_is_button,
+                                false,
                                 onclick_str,
                                 elem_id_str,
                                 current_bold,
@@ -692,6 +704,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -722,6 +735,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -755,6 +769,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -795,6 +810,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -849,6 +865,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -872,6 +889,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -896,6 +914,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -925,6 +944,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -1194,6 +1214,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -1219,6 +1240,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -1243,6 +1265,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -1273,6 +1296,7 @@ pub fn render_html_to_lines(
                             is_link,
                             link_target,
                             active_is_button,
+                            false,
                             onclick_str,
                             elem_id_str,
                             current_bold,
@@ -1326,6 +1350,7 @@ pub fn render_html_to_lines(
                 is_link,
                 link_target,
                 active_is_button,
+                false,
                 onclick_str,
                 elem_id_str,
                 current_bold,
@@ -1356,6 +1381,7 @@ pub fn render_html_to_lines(
         is_link,
         link_target,
         active_is_button,
+        false,
         onclick_str,
         elem_id_str,
         current_bold,

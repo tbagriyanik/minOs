@@ -1220,6 +1220,7 @@ impl BrowserApp {
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
+                    is_image: false,
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -1252,6 +1253,7 @@ impl BrowserApp {
             is_link: false,
             link_url: String::new(),
             is_button: false,
+            is_image: false,
             bold: false,
             underline: false,
             onclick: String::new(),
@@ -1266,6 +1268,7 @@ impl BrowserApp {
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
+                is_image: false,
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1281,6 +1284,7 @@ impl BrowserApp {
                 is_link: true,
                 link_url: String::from("minos://history?action=clear"),
                 is_button: true,
+                is_image: false,
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1304,6 +1308,7 @@ impl BrowserApp {
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
+                    is_image: false,
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -1351,6 +1356,7 @@ impl BrowserApp {
                             is_link: true,
                             link_url: remove_action,
                             is_button: true,
+                            is_image: false,
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1363,6 +1369,7 @@ impl BrowserApp {
                             is_link: false,
                             link_url: String::new(),
                             is_button: false,
+                            is_image: false,
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1375,6 +1382,7 @@ impl BrowserApp {
                             is_link: true,
                             link_url: url,
                             is_button: false,
+                            is_image: false,
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1409,6 +1417,7 @@ impl BrowserApp {
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
+                is_image: false,
                 bold: true,
                 underline: false,
                 onclick: String::new(),
@@ -1430,6 +1439,7 @@ impl BrowserApp {
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
+                is_image: false,
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1465,6 +1475,7 @@ impl BrowserApp {
                         is_link: false,
                         link_url: String::new(),
                         is_button: false,
+                        is_image: false,
                         bold: true,
                         underline: false,
                         onclick: String::new(),
@@ -1477,6 +1488,7 @@ impl BrowserApp {
                         is_link: true,
                         link_url: String::from(bm.url),
                         is_button: true,
+                        is_image: false,
                         bold: true,
                         underline: false,
                         onclick: String::new(),
@@ -1489,6 +1501,7 @@ impl BrowserApp {
                         is_link: true,
                         link_url: String::from(bm.url),
                         is_button: false,
+                        is_image: false,
                         bold: false,
                         underline: true,
                         onclick: String::new(),
@@ -1508,6 +1521,7 @@ impl BrowserApp {
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
+                    is_image: false,
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -2783,6 +2797,7 @@ impl BrowserApp {
                                 is_link: false,
                                 link_url: String::new(),
                                 is_button: false,
+                                is_image: false,
                                 bold: false,
                                 underline: false,
                                 onclick: String::new(),
@@ -2840,6 +2855,7 @@ impl BrowserApp {
                                         is_link: false,
                                         link_url: String::new(),
                                         is_button: false,
+                                        is_image: false,
                                         bold: false,
                                         underline: false,
                                         onclick: String::new(),
@@ -3243,12 +3259,17 @@ impl BrowserApp {
                 }
             } else if self.active_tab == 3 {
                 // Canlı Web Sayfası Render Paneli (HTML DOM)
+                // Tema bağımsız sabit renkler: site içerik alanı minOs
+                // temasından etkilenmez.
+                const BROWSER_TITLE_BG: u32 = 0x1A1A2E;
+                const BROWSER_TITLE_TEXT: u32 = 0x00FF88;
+                const BROWSER_PAPER_BG: u32 = 0xFFFFFF;
                 fb.draw_rect(
                     page_x + 8,
                     page_y + 8,
                     page_w.saturating_sub(16),
                     26,
-                    Color::TITLE_BAR,
+                    BROWSER_TITLE_BG,
                 );
                 let title_str = if self.page_title_len > 0 {
                     let page = core::str::from_utf8(&self.page_title[..self.page_title_len])
@@ -3262,7 +3283,7 @@ impl BrowserApp {
                     page_x + 16,
                     page_y + 14,
                     &title_str,
-                    Color::ACCENT_GREEN,
+                    BROWSER_TITLE_TEXT,
                 );
 
                 // HTML Kağıt Alanı (CSS body bg_color desteğiyle)
@@ -3270,7 +3291,7 @@ impl BrowserApp {
                 let doc_y = page_y + 38;
                 let doc_w = page_w.saturating_sub(16);
                 let doc_h = page_h.saturating_sub(46);
-                let paper_bg = self.page_bg_color.unwrap_or(Color::WINDOW_BG);
+                let paper_bg = self.page_bg_color.unwrap_or(BROWSER_PAPER_BG);
                 fb.draw_rect(doc_x, doc_y, doc_w, doc_h, paper_bg);
 
                 let doc_clip = (doc_x, doc_y, doc_w, doc_h);

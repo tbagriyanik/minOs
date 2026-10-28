@@ -781,6 +781,40 @@ pub const GTS_ROOT_R2_DER: &[u8] = include_bytes!("roots/gts_root_r2.der");
 pub const SSLCOM_TLS_ECC_ROOT_CA_2022_DER: &[u8] =
     include_bytes!("roots/sslcom_tls_ecc_root_ca_2022.der");
 
+/// DigiCert SM2 Root CA G5 (EBCCA root for Chinese government)
+pub const DIGICERT_SMIME_RSA4096_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertSMIMERSA4096RootG5.der");
+/// DigiCert SMIME ECC P384 Root G5
+pub const DIGICERT_SMIME_ECC_P384_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertSMIMEECCP384RootG5.der");
+/// DigiCert Client RSA 4096 Root G5
+pub const DIGICERT_CLIENT_RSA4096_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertClientRSA4096RootG5.der");
+/// DigiCert Client ECC P384 Root G5
+pub const DIGICERT_CLIENT_ECC_P384_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertClientECCP384RootG5.der");
+/// DigiCert C RSAs 4096 Root G5
+pub const DIGICERT_C_RSA4096_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertCSRSA4096RootG5.der");
+/// DigiCert C ECC P384 Root G5
+pub const DIGICERT_C_ECC_P384_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertCSECCP384RootG5.der");
+/// DigiCert TLS RSA 4096 Root G5
+pub const DIGICERT_TLS_RSA4096_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertTLSRSA4096RootG5.der");
+/// DigiCert TLS ECC P384 Root G5
+pub const DIGICERT_TLS_ECC_P384_ROOT_G5_DER: &[u8] =
+    include_bytes!("roots/DigiCertTLSECCP384RootG5.der");
+// Ye (Let's Encrypt) cross-signed root
+pub const INT_YE1_DER: &[u8] = include_bytes!("roots/int-ye1.der");
+// Additional Ye root certificates
+pub const ROOT_YE_BY_X2_DER: &[u8] = include_bytes!("roots/root-ye-by-x2.der");
+pub const ROOT_YE_DER: &[u8] = include_bytes!("roots/root-ye.der");
+pub const ROOT_X2_BY_X1_DER: &[u8] = include_bytes!("roots/root-x2-by-x1.der");
+// ISRG Root X1 cross-signed
+pub const ISRG_ROOT_X1_CROSS_SIGNED_DER: &[u8] =
+    include_bytes!("roots/isrg-root-x1-cross-signed.der");
+
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
     &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
@@ -984,6 +1018,19 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     GTS_ROOT_R1_DER,
     GTS_ROOT_R2_DER,
     SSLCOM_TLS_ECC_ROOT_CA_2022_DER,
+    DIGICERT_SMIME_RSA4096_ROOT_G5_DER,
+    DIGICERT_SMIME_ECC_P384_ROOT_G5_DER,
+    DIGICERT_CLIENT_RSA4096_ROOT_G5_DER,
+    DIGICERT_CLIENT_ECC_P384_ROOT_G5_DER,
+    DIGICERT_C_RSA4096_ROOT_G5_DER,
+    DIGICERT_C_ECC_P384_ROOT_G5_DER,
+    DIGICERT_TLS_RSA4096_ROOT_G5_DER,
+    DIGICERT_TLS_ECC_P384_ROOT_G5_DER,
+    INT_YE1_DER,
+    ROOT_YE_BY_X2_DER,
+    ROOT_YE_DER,
+    ROOT_X2_BY_X1_DER,
+    ISRG_ROOT_X1_CROSS_SIGNED_DER,
 ];
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.

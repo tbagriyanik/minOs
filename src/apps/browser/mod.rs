@@ -40,6 +40,7 @@ const DEMO_HTML_IMG: &[u8] = b"<html><head><style>body{font-family:sans-serif;ma
 /// Video oynatan demo HTML sayfası
 const DEMO_HTML_VIDEO: &[u8] = b"<html><head><style>body{font-family:sans-serif;margin:20px;background:#101018;color:#e0e0e0}h1{color:#d03030;text-align:center}.section{margin:20px 0}.video-container{border:2px solid #2050c0;padding:12px;margin:15px 0;background:#181820;text-align:center}video{max-width:100%;background:#000}.video-info{margin-top:8px;color:#aaa;font-size:0.9em}.btn{padding:6px 12px;background:#2050c0;color:white;border:none;border-radius:4px;cursor:pointer;margin:2px}.btn:hover{background:#184aae}.control{margin:8px 0}.counter{color:#2050c0;font-family:monospace;font-weight:bold}.p{line-height:1.6}</style></head><body><h1>minOs - Video Demo</h1><div class='section'><p>Shows video playback capability.</p><div class='video-container'><video id='demoVideo' controls autoplay><source src='minos://sample.mp4' type='video/mp4'>Your browser does not support the video tag or the video file was not found.</video><div class='video-info'>Sample video player</div></div><p><span class='counter' id='play_counter'>0</span> / 90 seconds</p><div class='control'><button class='btn' onclick='playPauseVideo()'>Play/Pause</button> <button class='btn' onclick='skipForward()'>+10s</button> <button class='btn' onclick='skipBackward()'>-10s</button></div><script>let playCounter = 0; let isPlaying = true; function playPauseVideo() { isPlaying = !isPlaying; const vid = document.getElementById('demoVideo'); if (isPlaying) { vid.play(); } else { vid.pause(); } document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } function skipForward() { const vid = document.getElementById('demoVideo'); vid.currentTime = Math.min(vid.currentTime + 10, 90); document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } function skipBackward() { const vid = document.getElementById('demoVideo'); vid.currentTime = Math.max(vid.currentTime - 10, 0); document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } // Simulated progress update setInterval(() => { const vid = document.getElementById('demoVideo'); if (isPlaying && vid.currentTime < 90) { vid.currentTime += 0.5; document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } }, 500);</script></div></body></html>";
 
+#[allow(dead_code)]
 // Örnek resim verisi (base64 encode PNG 64x64 kare)
 const SAMPLE_IMAGE_DATA: [u8; 29] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
@@ -3337,6 +3338,35 @@ impl BrowserApp {
                             let bullet_y = draw_y + (line_h / 2).saturating_sub(2);
                             if bullet_y >= doc_y && bullet_y + 5 <= doc_y + doc_h {
                                 fb.draw_rect(bullet_x, bullet_y, 4, 4, Color::TEXT_MUTED);
+                            }
+                        }
+
+                        // <hr> yatay ayraç çizgisi
+                        if line.tag == HtmlTagType::Rule {
+                            let rule_y = draw_y + line_h / 2;
+                            if rule_y >= doc_y && rule_y < doc_y + doc_h {
+                                let rule_x = doc_x + 12;
+                                let rule_w = doc_w.saturating_sub(24);
+                                if rule_w > 0 {
+                                    fb.draw_rect(rule_x, rule_y, rule_w, 1, Color::BORDER);
+                                }
+                            }
+                        }
+
+                        // <blockquote> sol dikey çubuk
+                        if line.tag == HtmlTagType::Quote {
+                            if draw_y + line_h > doc_y && draw_y < doc_y + doc_h {
+                                let bar_top = draw_y.max(doc_y);
+                                let bar_bottom = (draw_y + line_h).min(doc_y + doc_h);
+                                if bar_bottom > bar_top {
+                                    fb.draw_rect(
+                                        doc_x + 8,
+                                        bar_top,
+                                        3,
+                                        bar_bottom - bar_top,
+                                        Color::BORDER,
+                                    );
+                                }
                             }
                         }
 

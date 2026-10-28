@@ -132,6 +132,8 @@ pub enum HtmlTagType {
     Small, // Smaller text
     Sub,   // Subscript
     Sup,   // Superscript
+    Rule,  // <hr> yatay ayraç çizgisi
+    Quote, // <blockquote> — sol kenarlıklı alıntı bloğu
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

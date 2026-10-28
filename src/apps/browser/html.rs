@@ -971,11 +971,44 @@ pub fn render_html_to_lines(
                     if cur_line_w > 0 {
                         word_buf.push('|');
                     }
+                } else if eq_ascii(name, b"hr") {
+                    // <hr>: yatay ayraç — mevcut satırı bitir, boş bir Rule satırı ekle
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    if out_lines.len() < max_lines {
+                        out_lines.push(BrowserLine {
+                            spans: Vec::new(),
+                            tag: HtmlTagType::Rule,
+                            indent: 0,
+                            align: TextAlign::Left,
+                        });
+                    }
+                    cur_line_tag = HtmlTagType::Normal;
+                } else if eq_ascii(name, b"blockquote") {
+                    // <blockquote>: alıntı bloğu — sol dikey çubuk + girinti
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    cur_line_tag = HtmlTagType::Quote;
+                    cur_line_indent.set(matched.indent_px.max(16));
+                    if matched.color.is_none() {
+                        current_color = Color::TEXT_MUTED;
+                    }
                 } else if matches!(
                     name,
                     b"p" | b"div"
                         | b"br"
-                        | b"hr"
                         | b"tr"
                         | b"table"
                         | b"caption"
@@ -1037,6 +1070,20 @@ pub fn render_html_to_lines(
                     current_color = Color::TEXT_MAIN;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
+                } else if eq_ascii(name, b"blockquote") {
+                    // <blockquote> kapanıyor — alıntı bloğunu bitir
+                    cur_line_indent.set(matched.indent_px.max(16));
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    cur_line_tag = HtmlTagType::Normal;
+                    current_color = Color::TEXT_MAIN;
+                    cur_line_indent.set(0);
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,

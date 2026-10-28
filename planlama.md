@@ -1,8 +1,8 @@
-# minOs (v2.0.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs (v2.1.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 
-> Son senkron: 20 Ekim 2026 — TLS 1.2/1.3, ECDHE (secp256r1) ve X.509 zaman/hostname doğrulaması tamamlandı; tüm fazlar (Faz 1-10) eksiksiz tamamlandı.
+> Son senkron: 28 Ekim 2026 — TLS 1.3 (ECDHE secp256r1 + HKDF) el sıkışması tamamlandı; RFC 8446 AAD/`Finished`/`close_notify` düzeltmeleriyle `https://` bağlantıları yanıt gövdesini işleyebiliyor. X.509 zaman/hostname/zincir doğrulaması ve kök CA deposu aktiftir.
 
 ---
 
@@ -17,10 +17,10 @@
 | **Kesmeler** | IDT yapısı + Local APIC Timer (IRQ/0x20) + PIC maskeleme | Donanım APIC periyodik zamanlayıcı ve EOI yönetimi devrede |
 | **Çoklu Görev & Zamanlayıcı** | PCB + Öncelikli Preemptive / Round-Robin Zamanlayıcı | Realtime/High/Normal/Low öncelik seviyeleri ve CPU tick takibi aktif |
 | **Çekirdek Tipi** | Modüler Monolitik Çekirdek | Tek adres uzayı, modüler sürücü yapısı |
-| **Dosya Sistemi (VFS)** | Sanal Dosya Sistemi + FAT32 (r/w) + Ext2 (r/w) + ISO9660 (salt okunur) + MBR/GPT bölümleme | `VFS.DAT` anlık görüntüsüyle kalıcı depolama |
+| **Dosya Sistemi (VFS)** | Sanal Dosya Sistemi + FAT32 (r/w) + Ext2 (r/w) + Ext4/exFAT (r/w) + ISO9660 (salt okunur) + MBR/GPT bölümleme | `VFS.DAT` anlık görüntüsüyle kalıcı depolama |
 | **Grafik Altyapısı** | Limine Linear Framebuffer (32-bpp) + Donanım 2D Hızlandırma | Çift tamponlu compositor + BGA/VGA taraması + 64-bit donanımsal rect fill ve bit blit |
-| **Ağ Yığını** | Özel mikro TCP/IP (e1000) + soket API + HTTP istemcisi + TLS 1.2 istemcisi | ARP/IPv4/ICMP/UDP/DHCP/DNS, soket başına TCP durum makinesi, `curl`; RSA anahtar değişimi + AES-128-GCM ile şifreli HTTP (`https://`) |
-| **Kriptografi** | El yazımı `no_std` ilkeller: SHA-256, HMAC-SHA256, AES-128/256, GCM, RSA/PKCS#1 v1.5, X.509 | `src/drivers/crypto/` modülü; harici kütüphane bağımlılığı yok, TLS 1.2 PRF ve anahtar türetme bu ilkeller üzerine kurulu |
+| **Ağ Yığını** | Özel mikro TCP/IP (e1000) + soket API + HTTP istemcisi + TLS 1.3 / TLS 1.2 istemcisi | ARP/IPv4/IPv6/ICMP/UDP/DHCP/DNS, soket başına TCP durum makinesi, `curl`; TLS 1.3'te ECDHE (secp256r1) + HKDF, TLS 1.2'de RSA anahtar değişimi, AES-128-GCM ile şifreli HTTP (`https://`) |
+| **Kriptografi** | El yazımı `no_std` ilkeller: SHA-256/384/512, HMAC, AES-128/256, GCM, RSA/PKCS#1 v1.5, ECC/ECDSA (secp256r1), X.509 + gömülü kök CA deposu | `src/drivers/crypto/` modülü; harici kripto kütüphanesi bağımlılığı yok, TLS 1.3 HKDF ve TLS 1.2 PRF anahtar türetmesi bu ilkeller üzerine kurulu |
 | **Ses Alt Sistemi** | Intel HDA (DMA) + PC Speaker PWM yedeği | PCM çalma, ses düzeyi/karıştırma |
 
 ---
@@ -78,7 +78,7 @@ flowchart TD
 
 ### Faz 1: Çekirdek & Önyükleme İskeleti (Limine Tabanlı) ✅
 - Proje dizin yapısı (`src/{arch,drivers,gui,apps,mm,fs}/`, `boot/`) kuruldu.
-- Limine protokolü ile çekirdek yükleme (`limine.cfg`), framebuffer + HHDM + bellek haritası.
+- Limine protokolü ile çekirdek yükleme (`limine.conf`), framebuffer + HHDM + bellek haritası.
 - IDT yapısı, PIC maskeleme (polling G/Ç), SSE etkinleştirme.
 - PMM (fiziksel çerçeve yöneticisi) ve VMM (4-seviyeli paging, `USER`/`NX` bayrakları).
 - Kernel heap (`linked_list_allocator`, 2 MB) ve süreç tablosu iskeleti.
@@ -109,9 +109,9 @@ flowchart TD
 - ARP/IPv4/ICMP/DHCP/DNS, UDP, tek-bağlantılı TCP + tarayıcı HTTP yolu.
 - Soket başına durum makineli TCP (`socket`/`connect`/`send`/`recv`/`close`, UDP, DNS önbelleği).
 - HTTP istemcisi (chunked + yönlendirme) ve MinShell `curl` komutu.
-- **TLS 1.2 istemcisi** (`src/drivers/tls.rs`): ClientHello (SNI) → ServerHello → Certificate (X.509) → ServerHelloDone → ClientKeyExchange (RSA) → ChangeCipherSpec → Finished → şifreli Application Data; tarayıcıda `https://` desteği.
+- **TLS 1.3 / TLS 1.2 istemcisi** (`src/drivers/tls.rs`): TLS 1.3'te ClientHello (SNI) → ServerHello → EncryptedExtensions → Certificate (X.509) → CertificateVerify → Finished → şifreli Application Data; TLS 1.2'de RSA anahtar değişimli tam el sıkışma; tarayıcıda `https://` desteği.
 
-- **Web Tarayıcısı Sık Kullanılanlar & Yer İmleri:** Adres çubuğu altında interaktif Bookmarks Bar, hafif HTTP test sitesi, minos://bookmarks, minos://help ve minos://demo hızlı erişim çipleri ve sayfa entegrasyonu.
+- **Web Tarayıcısı Sık Kullanılanlar & Yer İmleri:** Adres çubuğu altında interaktif Bookmarks Bar, hafif HTTP test sitesi, minos://bookmarks, minos://help, minos://demo / minos://demo-img / minos://demo-video hızlı erişim çipleri ve sayfa entegrasyonu.
 ### Faz 7: Ring 3, SMP ve Ses Alt Sistemi Optimizasyonu ✅
 - **Ring 3 Kullanıcı Kipi İzolasyonu:** GDT TSS kullanıcı segmentleri, `int 0x80` sistem çağrıları (`SYS_GETPID`, `SYS_YIELD`, `SYS_WRITE`), #GP/#PF hata yakalama ve çekirdek koruması.
 - **SMP (Çok Çekirdekli Paralellik):** Limine SMP protokolü ile AP başlatımı, çekirdek başına 64 KiB yığın ve GDT, LAPIC kimliği, paralel atomik iş kuyruğu (`parallel_checksum`).
@@ -125,8 +125,8 @@ flowchart TD
 ### Faz 9: Kriptografi ve TLS 1.2 / 1.3 ✅
 - **Kripto İlkelleri (`src/drivers/crypto/`, `no_std`, bağımlılıksız):** SHA-256 (`sha256.rs`), HMAC-SHA256 (`hmac.rs`), AES-128/256 (`aes.rs`), GCM (`gcm.rs`), RSA + PKCS#1 v1.5 (`rsa.rs`), minimal X.509 sertifika ayrıştırıcı (`x509.rs`).
 - **TLS 1.2 / 1.3 Oturumları:** TLS 1.2'de `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) ve `ECDHE_RSA` suite'leri, TLS 1.3'te HKDF anahtar planı ve AES-GCM kayıtları; PRF (P_SHA256/P_SHA384), master/pre-master secret türetme, GCM şifreleme/çözme, Finished ve CertificateVerify doğrulaması.
-- **Entegrasyon:** Web Tarayıcısı `https://` şeması; şifreli yanıt şifresi çözülüp HTTP ayrıştırıcısına aktarılır.
-- **Bilinen sınırlar:** Sertifika zinciri (kök/ara CA imza doğrulaması) ve iptal kontrolü (OCSP/CRL) yapılmaz; buna karşılık sunucu sertifikasının geçerlilik tarihleri ile CN/SAN ana makine adı RFC 6125 kurallarıyla doğrulanır. TLS 1.2 ve TLS 1.3 el sıkışmaları (ECDHE secp256r1, RSA/ECDSA imza, AES-GCM, SHA-256/384) desteklenir; eski/zayıf cipher suite'ler desteklenmez.
+- **Entegrasyon:** Web Tarayıcısı `https://` şeması; şifreli yanıt şifresi çözülüp HTTP ayrıştırıcısına aktarılır. RFC 8446 §5.2 (AAD = 5 bayt), §4.4.4 (`finished_key` doğrudan trafik sırrından) ve §6.1 (`close_notify` zarif kapanış) düzeltmeleriyle el sıkışma `Established` aşamasına ulaşır.
+- **Bilinen sınırlar:** Sertifika zinciri doğrulaması (RFC 5280, gömülü kök CA deposu, `MAX_CHAIN_DEPTH` = 6) ve CRL/OCSP **ayrıştırma** aktiftir; ancak CRL/OCSP yanıtlarının otomatik indirilmesi (HTTP/OCSP isteği) henüz yoktur. Sunucu sertifikasının geçerlilik tarihleri (CMOS RTC) ile CN/SAN ana makine adı RFC 6125 kurallarıyla doğrulanır. TLS 1.2 ve TLS 1.3 el sıkışmaları (ECDHE secp256r1, RSA/ECDSA imza, AES-GCM, SHA-256/384) desteklenir; eski/zayıf cipher suite'ler ve CSPRNG tabanlı olmayan istemci random'ı bilinen kısıtlardır.
 
 ### Faz 10: Gelişmiş Giriş ve Donanım Sürücüleri (USB HID, Touchpad, UVC Kamera, Wi-Fi) ✅
 - **Yerel xHCI USB HID Klavye ve Fare (`src/drivers/usb_hid.rs`):** PCI xHCI (USB 3.x) denetleyicisi, port reset ve aygıt numaralandırma, Boot Protocol klavye ve fare desteği; PS/2 ile birleşik olay döngüsü ve gecikmesiz olay kontrolü (`has_event`).

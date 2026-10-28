@@ -122,13 +122,13 @@ minos/
 │   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
 │   ├── drivers/             # video (framebuffer), PS/2 fare & klavye, RTC (CMOS) saat,
 │   │                        #   e1000 + TCP/IP yığını (netstack) + soket API (socket.rs) + HTTP (http.rs),
-│   │                        #   TLS 1.2 istemcisi (tls.rs) + kripto ilkelleri (crypto/: SHA-256,
-│   │                        #   HMAC, AES, GCM, RSA, X.509),
+│   │                        #   TLS 1.2 / TLS 1.3 istemcisi (tls.rs) + kripto ilkelleri (crypto/: SHA-256,
+│   │                        #   HMAC, AES, GCM, RSA, ECC/ECDSA, X.509, kök CA deposu roots/),
 │   │                        #   HDA ses, ATA/ATAPI (PIO), USB durum katmanı ve xHCI HID
 │   │                        #   klavye/fare sürücüsü (usb_hid.rs)
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
-│   ├── apps/                # 14 Masaüstü uygulaması (Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
+│   ├── apps/                # 15 Masaüstü uygulaması (Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
 │   ├── desktop/             # Masaüstü oturumu (session.rs: DesktopState kurulumu + ana olay döngüsü) ve yardımcılar
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu ve ELF yükleyici
 │   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
@@ -136,7 +136,7 @@ minos/
 │   │                        #   + MBR/GPT bölümleme (part.rs)
 │   └── main.rs              # Çekirdek giriş noktası (_start): Limine istekleri, donanım kurulumu ve
 │                            #   DesktopState oluşturup masaüstü oturumunu (desktop/session.rs) başlatır
-├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.cfg)
+├── boot/                    # Limine bootloader yapılandırma dosyaları (limine.conf)
 ├── docs/screenshots/        # Masaüstü ve başlat menüsü ekran görüntüleri
 ├── build_iso.ps1            # El Torito yamalı hibrit ISO oluşturucu
 ├── run.ps1                  # Tek tıkla derleme ve QEMU başlatma betiği (-Debug, -BuildOnly, -UsbDisks, -UsbDiskReadWrite, -CpuCount, -Memory, -DiskImage)
@@ -149,15 +149,15 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 27 Ekim 2026 (v2.1.0)
+> Son güncelleme: 28 Ekim 2026 (v2.1.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 141 dosya (`src/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | ~87.850 satır (`src/**/*.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 147 dosya (`src/**/*.rs` + `tests/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | ~89.992 satır (`src/**/*.rs` + `tests/**/*.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri (`test_host.ps1`)** | 188 test (0 hata, %100 başarılı) |
-| **Yerleşik Uygulama Sayısı** | 14 masaüstü uygulaması + Pencere Yöneticisi |
+| **Birim Testleri (`test_host.ps1`)** | 190 test (0 hata, %100 başarılı) |
+| **Yerleşik Uygulama Sayısı** | 15 masaüstü uygulaması + Pencere Yöneticisi |
 | **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 
 ---

@@ -563,7 +563,7 @@ pub fn render_html_to_lines(
                     let input_label = extract_attr(attrs, b"value")
                         .or_else(|| extract_attr(attrs, b"placeholder"))
                         .unwrap_or("input");
-                    
+
                     if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("text"))
                         || type_attr.is_none()
                     {
@@ -652,8 +652,7 @@ pub fn render_html_to_lines(
                     }
                 } else if eq_ascii(name, b"textarea") {
                     // <textarea>: Çok satırlı text input
-                    let textarea_content = extract_attr(attrs, b"placeholder")
-                        .unwrap_or("");
+                    let textarea_content = extract_attr(attrs, b"placeholder").unwrap_or("");
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -800,8 +799,10 @@ pub fn render_html_to_lines(
                     // <label> kapanıyor, normal moduna
                 } else if eq_ascii(name, b"form") {
                     // <form> kapanıyor
-                } else if eq_ascii(name, b"header") | eq_ascii(name, b"nav")
-                    | eq_ascii(name, b"main") | eq_ascii(name, b"article")
+                } else if eq_ascii(name, b"header")
+                    | eq_ascii(name, b"nav")
+                    | eq_ascii(name, b"main")
+                    | eq_ascii(name, b"article")
                     | eq_ascii(name, b"aside")
                 {
                     // Semantic elementler kapanıyor, normal moduna
@@ -1100,7 +1101,8 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"mark") {
                     // <mark> kapanıyor, background'ı sıfırla
                     current_bg = None;
-                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup") {
+                } else if eq_ascii(name, b"small") | eq_ascii(name, b"sub") | eq_ascii(name, b"sup")
+                {
                     // <small>, <sub>, <sup> kapanıyor, hiçbir şey yapma
                 } else if eq_ascii(name, b"code") {
                     // <code>: Kod metni

@@ -13,6 +13,8 @@ static mut SAVED_SCREEN_BUF: [u32; crate::drivers::video::BACKBUFFER_LEN] =
     [0; crate::drivers::video::BACKBUFFER_LEN];
 static mut SAVED_SCREEN_DIM: Option<(usize, usize)> = None;
 static mut BOOT_LOG_BUFFER: alloc::vec::Vec<u8> = alloc::vec::Vec::new();
+/// Her baytın yazıldığı renk (BOOT_LOG_BUFFER ile paralel dizi).
+static mut BOOT_LOG_COLORS: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
 const LINE_H: usize = 14;
 const CHAR_W: usize = 8; // 8x8 font * 1x scale
 const FONT_SCALE: usize = 1;
@@ -220,8 +222,12 @@ pub unsafe fn show_boot_log() {
     screen.flush();
 
     let log_slice = &*core::ptr::addr_of!(BOOT_LOG_BUFFER);
+    let log_colors = &*core::ptr::addr_of!(BOOT_LOG_COLORS);
     let log_text = core::str::from_utf8(log_slice).unwrap_or("");
+    let mut byte_idx = 0usize;
     for ch in log_text.chars() {
+        let ch_color = log_colors.get(byte_idx).copied().unwrap_or(0xD8E1EE);
+        byte_idx += ch.len_utf8();
         match ch {
             '\r' => CURSOR_X = 16,
             '\n' => {
@@ -237,7 +243,7 @@ pub unsafe fn show_boot_log() {
                     LINE_H,
                     0x000000,
                 );
-                draw_char(screen, CURSOR_X, CURSOR_Y, c, 0xD8E1EE);
+                draw_char(screen, CURSOR_X, CURSOR_Y, c, ch_color);
                 CURSOR_X = CURSOR_X.saturating_add(CHAR_W);
             }
             _ => {}
@@ -327,6 +333,7 @@ pub fn write_color(text: &str, color: u32) {
     }
     unsafe {
         let log = &mut *core::ptr::addr_of_mut!(BOOT_LOG_BUFFER);
+        let colors = &mut *core::ptr::addr_of_mut!(BOOT_LOG_COLORS);
         if log.len().saturating_add(text.len()) > LOG_LINE_CAPACITY {
             let drop_len = log.len().saturating_add(text.len()) - LOG_LINE_CAPACITY;
             let drop_len = log
@@ -337,8 +344,10 @@ pub fn write_color(text: &str, color: u32) {
                 .map(|(i, _)| i + 1)
                 .unwrap_or(drop_len.min(log.len()));
             log.drain(..drop_len);
+            colors.drain(..drop_len.min(colors.len()));
         }
         log.extend_from_slice(text.as_bytes());
+        colors.extend(core::iter::repeat(color).take(text.len()));
         let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
             return;
         };

@@ -30,6 +30,26 @@ extern crate alloc;
 
 const BROWSER_ERROR_LOG_LIMIT: usize = 64;
 
+// ── HTML Demo içeriği ──────────────────────────────────────────────
+/// Tem demo HTML sayfası (basit tanıttık)
+const DEMO_HTML_BASIC: &[u8] = b"<html><head><style>body{font-family:sans-serif;margin:40px;background:#f0f0f0;color:#333}h1{color:#d03030;text-align:center}.section{margin:20px 0}.btn{padding:8px 16px;background:#2050c0;color:white;border:none;border-radius:4px;cursor:pointer}.btn:hover{background:#184aae}.card{border:1px solid #ddd;border-radius:8px;padding:16px;margin:16px 0;background:white}.tag{display:inline-block;padding:4px 8px;margin:2px;border:1px solid #ccc;border-radius:12px;background:#e0e0e0;color:#333;font-size:0.8em}.highlight{background:#fff3a0;padding:4px 8px;border-radius:4;margin:2px}</style></head><body><h1>minOs HTML CSS JS Demo</h1><div class='section'><p>This page shows HTML CSS JavaScript capabilities.</p><p>Image demo: <a href='minos://demo-img'>image demo</a> | Video demo: <a href='minos://demo-video'>video demo</a></p><span class='tag'>HTML</span><span class='tag'>CSS</span><span class='tag'>JS</span></div></body></html>";
+
+/// Resim gösteren demo HTML sayfası
+const DEMO_HTML_IMG: &[u8] = b"<html><head><style>body{font-family:sans-serif;margin:40px;background:#e0e0e0;color:#333}h1{color:#d03030;text-align:center}.section{margin:20px 0}.card{border:2px solid #2050c0;padding:20px;margin:20px 0;background:white;box-shadow:0 4px 12px rgba(0,0,0,0.15)}.img-container{border:2px solid #2050c0;padding:16px;margin:16px 0;background:#fafafa;text-align:center;border-radius:8}.img-container img{max-width:100%;height:auto;border:1px solid #ccc;border-radius:4}.img-info{margin-top:12px;color:#666;font-size:0.9em}.btn{padding:8px 16px;background:#2050c0;color:white;border:none;border-radius:4px;cursor:pointer;margin:4px}.btn:hover{background:#184aae}.tag{display:inline-block;padding:4px 8px;margin:2px;border:1px solid #ccc;border-radius:12px;background:#e0e0e0;color:#333;font-size:0.8em}.counter{color:#2050c0;font-family:monospace;font-weight:bold}.progress-bar{width:100%;height:8px;background:#e0e0e0;margin:16px 0;border-radius:4;overflow:hidden}.progress-fill{height:100%;width:0%;background:#2050c0;transition:width 0.1s linear}.tag-demo{animation:pulse 2s infinite}.@keyframes pulse{0%{opacity:1}.50%{opacity:0.5}.100%{opacity:1}}</style></head><body><h1>minOs - Image Demo</h1><div class='section'><p>Shows image loading and display capability with CSS enhancements.</p><div class='card'><div class='img-container'><img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+hHgAHggJ/chD2wbwAAAABJRU5ErkJggg==' alt='Sample PNG Image' /><div class='img-info'>PNG format, sample image data</div></div><p><span class='counter' id='frame_counter'>0</span> / 30 frame</p><p class='tag tag-demo'>Live Demo</p><div class='progress-bar'><div class='progress-fill' id='progress_bar' style='width:0%'></div></div><div class='control'><button class='btn' onclick='incrementCounter()'>Frame up</button> <button class='btn' onclick='decrementCounter()'>Frame down</button></div><script>let counter = 0; function incrementCounter() { counter++; document.getElementById('frame_counter').innerText = counter; document.getElementById('progress_bar').style.width = (counter * 100/30) + '%'; } function decrementCounter() { if (counter > 0) { counter--; document.getElementById('frame_counter').innerText = counter; document.getElementById('progress_bar').style.width = (counter * 100/30) + '%'; } }</script></div></body></html>";
+
+/// Video oynatan demo HTML sayfası
+const DEMO_HTML_VIDEO: &[u8] = b"<html><head><style>body{font-family:sans-serif;margin:20px;background:#101018;color:#e0e0e0}h1{color:#d03030;text-align:center}.section{margin:20px 0}.video-container{border:2px solid #2050c0;padding:12px;margin:15px 0;background:#181820;text-align:center}video{max-width:100%;background:#000}.video-info{margin-top:8px;color:#aaa;font-size:0.9em}.btn{padding:6px 12px;background:#2050c0;color:white;border:none;border-radius:4px;cursor:pointer;margin:2px}.btn:hover{background:#184aae}.control{margin:8px 0}.counter{color:#2050c0;font-family:monospace;font-weight:bold}.p{line-height:1.6}</style></head><body><h1>minOs - Video Demo</h1><div class='section'><p>Shows video playback capability.</p><div class='video-container'><video id='demoVideo' controls autoplay><source src='minos://sample.mp4' type='video/mp4'>Your browser does not support the video tag or the video file was not found.</video><div class='video-info'>Sample video player</div></div><p><span class='counter' id='play_counter'>0</span> / 90 seconds</p><div class='control'><button class='btn' onclick='playPauseVideo()'>Play/Pause</button> <button class='btn' onclick='skipForward()'>+10s</button> <button class='btn' onclick='skipBackward()'>-10s</button></div><script>let playCounter = 0; let isPlaying = true; function playPauseVideo() { isPlaying = !isPlaying; const vid = document.getElementById('demoVideo'); if (isPlaying) { vid.play(); } else { vid.pause(); } document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } function skipForward() { const vid = document.getElementById('demoVideo'); vid.currentTime = Math.min(vid.currentTime + 10, 90); document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } function skipBackward() { const vid = document.getElementById('demoVideo'); vid.currentTime = Math.max(vid.currentTime - 10, 0); document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } // Simulated progress update setInterval(() => { const vid = document.getElementById('demoVideo'); if (isPlaying && vid.currentTime < 90) { vid.currentTime += 0.5; document.getElementById('play_counter').innerText = Math.floor(vid.currentTime); } }, 500);</script></div></body></html>";
+
+// Örnek resim verisi (base64 encode PNG 64x64 kare)
+const SAMPLE_IMAGE_DATA: [u8; 29] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
+    0x00, 0x00, 0x00, 0x0d, // IHDR chunk length
+    0x49, 0x48, 0x44, 0x52, // IHDR chunk type
+    0x00, 0x00, 0x00, 0x40, // Width: 64
+    0x00, 0x00, 0x00, 0x40, // Height: 64
+    0x08, 0x02, 0x00, 0x00, 0x00, // Bit depth, color type, compression, filter, interlace
+];
+
 fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
     body.split(|b| *b == b'\n').filter_map(|line| {
         let line = if line.last() == Some(&b'\r') {
@@ -43,6 +63,28 @@ fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
             Some(core::str::from_utf8(line).unwrap_or("[binary or non-UTF8 content]"))
         }
     })
+}
+
+// URL'den path kısmını çıkar (minos://demo/img -> "/img")
+fn url_path(url: &[u8]) -> Option<&str> {
+    let url_str = core::str::from_utf8(url).ok()?;
+    // minos:// prefixini kaldır
+    let rest = if url_str.starts_with("minos://") {
+        &url_str[8..]
+    } else if url_str.starts_with("http://") || url_str.starts_with("https://") {
+        &url_str[7..]
+    } else {
+        return None;
+    };
+    // Sorguyu ve frammenti kaldır
+    let path = rest.split(|c: char| c == '?' || c == '#').next()?;
+    // Trailing slash'i temizle
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        Some("/")
+    } else {
+        Some(path)
+    }
 }
 
 // ── Tarayıcı geçmişi ──────────────────────────────────────────────────────
@@ -423,7 +465,7 @@ impl BrowserApp {
             self.status = crate::gui::ui_text("İndirilecek içerik yok.", "Nothing to download.");
             return false;
         };
-        let path = alloc::format!("/root/Downloads/indirme_{}.bin", crate::monotonic_ms());
+        let path = alloc::format!("/root/Downloads/indirme_{}.html", crate::monotonic_ms());
         if vfs.write_file(&path, &data) {
             self.download_path = Some(path);
             self.status = crate::gui::ui_text(
@@ -637,8 +679,7 @@ impl BrowserApp {
         scroll_y: usize,
     ) {
         if let Some(anchor) = self.page_selection_anchor {
-            if let Some(pos) =
-                self.point_to_page_pos(mx, my, doc_x, doc_y, doc_w, doc_h, scroll_y)
+            if let Some(pos) = self.point_to_page_pos(mx, my, doc_x, doc_y, doc_w, doc_h, scroll_y)
             {
                 if pos < anchor {
                     self.page_selection_start = Some(pos);
@@ -717,7 +758,7 @@ impl BrowserApp {
         }
         let mut clicked_url = None;
         let mut clicked_js = None;
-        
+
         // Check rendered links first
         for link in self.rendered_links.borrow().iter() {
             let (rx, ry, rw, rh) = link.rect;
@@ -730,7 +771,7 @@ impl BrowserApp {
                 break;
             }
         }
-        
+
         // If no JS from links, check page lines spans for onclick handlers
         if clicked_js.is_none() {
             // Iterate through page lines and spans to find the clicked element
@@ -738,11 +779,15 @@ impl BrowserApp {
                 let mut span_idx = 0usize; // Reset for each line
                 let mut char_offset = 0usize;
                 for span in &line.spans {
-                    let span_w = MinGuiCompositor::text_width(&span.text, 1) + if span.is_button { 16 } else { 0 };
+                    let span_w = MinGuiCompositor::text_width(&span.text, 1)
+                        + if span.is_button { 16 } else { 0 };
                     // Check if mouse is within this span's area
                     if line_idx < self.page_lines.len() {
                         // Simple check: if we have roughly the right number of spans before this one
-                        let span_count_before = line.spans[..span_idx].iter().map(|s| s.text.len() + 1).sum::<usize>();
+                        let span_count_before = line.spans[..span_idx]
+                            .iter()
+                            .map(|s| s.text.len() + 1)
+                            .sum::<usize>();
                         if span_count_before > 0 {
                             // Check bounds
                             if mx >= char_offset && mx < char_offset + span_w {
@@ -762,7 +807,7 @@ impl BrowserApp {
                 }
             }
         }
-        
+
         if let Some(js_code) = clicked_js {
             self.execute_js(&js_code);
             return None;
@@ -875,7 +920,7 @@ impl BrowserApp {
                 } else if rest.starts_with(".setAttribute(") || rest.starts_with(".setAttribute(") {
                     // setAttribute support - parse attr="value"
                     if let Some(open_paren) = rest.find('(') {
-                        if let Some(close_paren) = rest[open_paren+1..].rfind(')') {
+                        if let Some(close_paren) = rest[open_paren + 1..].rfind(')') {
                             // Simple attribute setting - store in a lookup
                             let _attr_part = &rest[open_paren + 1..open_paren + 1 + close_paren];
                         }
@@ -1010,8 +1055,8 @@ impl BrowserApp {
             let ch_len = core::str::from_utf8(&self.url[i..i + 1])
                 .map(|s| s.len())
                 .unwrap_or(1);
-            let ch = core::str::from_utf8(&self.url[i..(i + ch_len).min(self.url_len)])
-                .unwrap_or("");
+            let ch =
+                core::str::from_utf8(&self.url[i..(i + ch_len).min(self.url_len)]).unwrap_or("");
             acc += MinGuiCompositor::text_width(ch, 1);
             let dist = rel.abs_diff(acc);
             if dist <= best_dist {
@@ -2097,18 +2142,23 @@ impl BrowserApp {
                     history_push(value);
                 }
             }
-            "minos://demo" | "minos://tr" => {
+            "minos://demo" | "minos://demo-img" | "minos://demo-video" => {
                 self.active_tab = 3;
                 self.page_loaded = true;
-                let title = "minOs Türkçe & Web Motoru Testi";
+                let title = "minOs Web Demo - HTML/CSS/JS";
                 let tb = title.as_bytes();
                 self.page_title_len = tb.len().min(64);
                 self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
-                let demo_html = b"<html><head><style>h1 { color: #D03030; text-align: center; } .sub { color: #188040; text-align: center; } .btn { color: #FFFFFF; background-color: #2050C0; }</style></head><body><h1>minOs Web & TR Destegi</h1><p class='sub'>Turkce Karakterler: \xc3\xa7 \xc4\x9f \xc4\xb1 \xc3\xb6 \xc5\x9f \xc3\xbc - \xc3\x87 \xc4\x9e \xc4\xb0 \xc3\x96 \xc5\x9e \xc3\x9c</p><p id='counter_msg' style='color: #2050C0;'>Etkilesimli JavaScript Testi:</p><p><button class='btn' onclick=\"document.getElementById('counter_msg').innerText = 'Dugmeye tiklandi! JS calisiyor.'; alert('minOs JS Uyari: Dugmeye basildi!');\">Tikla (JS Test)</button></p><p><button onclick=\"document.getElementById('counter_msg').style.color = '#D03030';\">Kirmizi Yap</button> <button onclick=\"document.getElementById('counter_msg').style.color = '#188040';\">Yesil Yap</button></p><hr><script>document.write('<p style=\"color: #D0A020;\">Bu satir JavaScript document.write() ile olusturuldu!</p>');</script></body></html>";
+                // Demo sayfası seçimine göre farklı HTML içeriği göster
+                let demo_html = match url_path(&self.url) {
+                    Some(path) if path == "/img" => DEMO_HTML_IMG,
+                    Some(path) if path == "/video" => DEMO_HTML_VIDEO,
+                    _ => DEMO_HTML_BASIC,
+                };
                 self.load_html(demo_html, 600, 256);
                 self.status = crate::gui::ui_text(
-                    "Türkçe & CSS & JS test sayfası yüklendi.",
-                    "Turkish & CSS & JS demo page loaded.",
+                    "HTML/CSS/JS demo sayfası yüklendi.",
+                    "HTML/CSS/JS demo page loaded.",
                 );
             }
             _ => {
@@ -2363,7 +2413,13 @@ impl BrowserApp {
                     let mut hs_out = Vec::new();
                     let mut app_out = Vec::new();
                     match tls.process_records(&mut hs_out, &mut app_out) {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            if !app_out.is_empty() {
+                                crate::serial_print("[HTTPS] Çözülen uygulama verisi: ");
+                                crate::serial::print_dec(app_out.len() as u64);
+                                crate::serial_print(" bayt\n");
+                            }
+                        }
                         Err(()) => {
                             let alert = tls.last_alert();
                             let context = tls.diagnostic_context();
@@ -2433,6 +2489,9 @@ impl BrowserApp {
                         None => status,
                     };
                     self.finish_network_error_with_detail(status, &detail);
+                    crate::serial_print("[HTTPS] TLS işleme hatası ayrıntısı: ");
+                    crate::serial_print(&detail);
+                    crate::serial_print("\n");
                 }
 
                 // TLS 1.3: sunucunun Finished mesajı doğrulandıysa istemci
@@ -2477,6 +2536,9 @@ impl BrowserApp {
                         Some(rec) => {
                             let _ = crate::drivers::netstack::tcp_send(&rec);
                             self.tls_request_sent = true;
+                            crate::serial_print("[HTTPS] Şifreli HTTP isteği gönderildi: ");
+                            crate::serial::print_dec(rec.len() as u64);
+                            crate::serial_print(" bayt\n");
                             self.status = crate::gui::ui_text(
                                 "Güvenli istek gönderildi, yanıt bekleniyor...",
                                 "Secure request sent, waiting for response...",
@@ -2791,10 +2853,39 @@ impl BrowserApp {
                         self.page_loaded = true;
                     }
                 }
+                // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
+                // işlendiyse isteği başarıyla bitir. close_notify bir hata
+                // değil, düzgün bağlantı kapanışıdır (RFC 8446 §6.1).
+                let peer_closed = self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                if peer_closed && self.page_loaded {
+                    self.status =
+                        crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
+                    self.request_pending = false;
+                    self.request_state = 0;
+                    self.request_deadline = 0;
+                    crate::drivers::netstack::tcp_clear_result();
+                }
                 self.flush_network_errors();
                 if crate::drivers::netstack::tcp_finished()
                     || self.response_len >= self.response_data.len()
                 {
+                    crate::serial_print("[HTTPS] Bitiş: resp_len=");
+                    crate::serial::print_dec(self.response_len as u64);
+                    crate::serial_print(" app_len=");
+                    crate::serial::print_dec(self.tls_app_data.len() as u64);
+                    crate::serial_print(" page_loaded=");
+                    crate::serial_print(if self.page_loaded { "1" } else { "0" });
+                    crate::serial_print(" req_sent=");
+                    crate::serial_print(if self.tls_request_sent { "1" } else { "0" });
+                    crate::serial_print(" ctx=");
+                    crate::serial_print(
+                        &self
+                            .tls_session
+                            .as_ref()
+                            .map(|t| t.diagnostic_context())
+                            .unwrap_or_else(|| String::from("oturum yok")),
+                    );
+                    crate::serial_print("\n");
                     if self.response_len > 0 && !self.page_loaded {
                         self.finish_http_response();
                     }
@@ -3372,14 +3463,32 @@ impl BrowserApp {
                                     );
                                 }
                                 if !selected.is_empty() {
-                                    fb.draw_rect(cur_x + prefix_w, draw_y, sel_w, line_h, Color::ACCENT_BLUE);
+                                    fb.draw_rect(
+                                        cur_x + prefix_w,
+                                        draw_y,
+                                        sel_w,
+                                        line_h,
+                                        Color::ACCENT_BLUE,
+                                    );
                                     MinGuiCompositor::draw_string_scaled_clipped(
-                                        fb, cur_x + prefix_w, draw_y, selected, Color::WHITE, scale, doc_clip,
+                                        fb,
+                                        cur_x + prefix_w,
+                                        draw_y,
+                                        selected,
+                                        Color::WHITE,
+                                        scale,
+                                        doc_clip,
                                     );
                                 }
                                 if !suffix.is_empty() {
                                     MinGuiCompositor::draw_string_scaled_clipped(
-                                        fb, cur_x + prefix_w + sel_w, draw_y, suffix, text_color, scale, doc_clip,
+                                        fb,
+                                        cur_x + prefix_w + sel_w,
+                                        draw_y,
+                                        suffix,
+                                        text_color,
+                                        scale,
+                                        doc_clip,
                                     );
                                 }
                             } else {

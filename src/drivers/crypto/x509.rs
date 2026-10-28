@@ -150,11 +150,9 @@ fn read_der_tlv(data: &[u8], offset: usize) -> Result<(u8, usize, usize, usize),
     Ok((tag, value_offset, len, next_offset))
 }
 
-/// Parse a DER-encoded X.509 certificate and extract the RSA public key.
-/// SubjectPublicKeyInfo'nin konumunu bulur.
-///
-/// Dönen değer: (algoritma TLV'nin değer ofseti, BIT STRING'in değer ofseti).
-fn locate_spki(cert_der: &[u8]) -> Result<(usize, usize), ()> {
+/// Sertifika içindeki SubjectPublicKeyInfo TLV'sinin başlangıcını ve değer
+/// ofsetini döndürür.
+fn locate_spki_tlv(cert_der: &[u8]) -> Result<(usize, usize), ()> {
     // Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
     let (cert_tag, cert_vo, _, _) = read_der_tlv(cert_der, 0)?;
     if cert_tag != TAG_SEQUENCE {
@@ -201,16 +199,41 @@ fn locate_spki(cert_der: &[u8]) -> Result<(usize, usize), ()> {
     if spki_tag != TAG_SEQUENCE {
         return Err(());
     }
+    Ok((pos, spki_vo))
+}
 
+/// Bir sertifikadan SubjectPublicKeyInfo DER dilimini çıkarır.
+/// webpki-roots gibi yalnızca SPKI saklayan güven çapalarıyla karşılaştırmada
+/// ve imza doğrulamasında kullanılır.
+fn spki_slice(cert_der: &[u8]) -> Result<&[u8], ()> {
+    let (tlv_start, value_start) = locate_spki_tlv(cert_der)?;
+    let (_, _, len, _) = read_der_tlv(cert_der, tlv_start)?;
+    let end = value_start.checked_add(len).ok_or(())?;
+    if end > cert_der.len() {
+        return Err(());
+    }
+    Ok(&cert_der[tlv_start..end])
+}
+
+/// SubjectPublicKeyInfo'nun içindeki algoritma ve BIT STRING ofsetlerini bulur.
+///
+/// Dönen değer: (algoritma TLV'nin değer ofseti, BIT STRING'in değer ofseti).
+fn locate_spki(cert_der: &[u8]) -> Result<(usize, usize), ()> {
+    let (_, spki_vo) = locate_spki_tlv(cert_der)?;
+    locate_spki_parts(cert_der, spki_vo)
+}
+
+/// `spki_start` ofsetindeki SubjectPublicKeyInfo'dan algoritma ve BIT STRING
+/// ofsetlerini döndürür. Ham SPKI (ofset 0) için de kullanılır.
+fn locate_spki_parts(data: &[u8], spki_start: usize) -> Result<(usize, usize), ()> {
     // algorithm AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY }
-    let (alg_tag, alg_vo, alg_vl, alg_next) = read_der_tlv(cert_der, spki_vo)?;
+    let (alg_tag, alg_vo, _, alg_next) = read_der_tlv(data, spki_start)?;
     if alg_tag != TAG_SEQUENCE {
         return Err(());
     }
-    let _ = alg_vl;
 
     // subjectPublicKey BIT STRING
-    let (bs_tag, bs_vo, _, _) = read_der_tlv(cert_der, alg_next)?;
+    let (bs_tag, bs_vo, _, _) = read_der_tlv(data, alg_next)?;
     if bs_tag != TAG_BIT_STRING {
         return Err(());
     }
@@ -218,10 +241,27 @@ fn locate_spki(cert_der: &[u8]) -> Result<(usize, usize), ()> {
     Ok((alg_vo, bs_vo))
 }
 
+/// Ham SubjectPublicKeyInfo DER'inden RSA açık anahtarını çıkarır.
+pub fn parse_spki_rsa_public_key(spki: &[u8]) -> Result<RsaPublicKey, ()> {
+    let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
+    if tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    parse_rsa_public_key_at(spki, alg_vo, bs_vo)
+}
+
 /// Returns the RsaPublicKey (modulus + exponent).
 pub fn parse_x509_rsa_public_key(cert_der: &[u8]) -> Result<RsaPublicKey, ()> {
     let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+    parse_rsa_public_key_at(cert_der, alg_vo, bs_vo)
+}
 
+fn parse_rsa_public_key_at(
+    cert_der: &[u8],
+    alg_vo: usize,
+    bs_vo: usize,
+) -> Result<RsaPublicKey, ()> {
     // The OID must be rsaEncryption (1.2.840.113549.1.1.1).
     const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
     let (oid_tag, oid_vo, oid_vl, oid_next) = read_der_tlv(cert_der, alg_vo)?;
@@ -585,7 +625,20 @@ fn alg_next_of(cert_der: &[u8], alg_vo: usize) -> Result<usize, ()> {
 /// Dönen değer: `04 || X || Y` biçiminde 65 bayt.
 pub fn parse_x509_ec_public_key(cert_der: &[u8]) -> Result<[u8; 65], ()> {
     let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+    parse_ec_p256_key_at(cert_der, alg_vo, bs_vo)
+}
 
+/// Ham SubjectPublicKeyInfo DER'inden P-256 açık anahtarını çıkarır.
+pub fn parse_spki_ec_public_key(spki: &[u8]) -> Result<[u8; 65], ()> {
+    let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
+    if tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    parse_ec_p256_key_at(spki, alg_vo, bs_vo)
+}
+
+fn parse_ec_p256_key_at(cert_der: &[u8], alg_vo: usize, bs_vo: usize) -> Result<[u8; 65], ()> {
     // id-ecPublicKey (1.2.840.10045.2.1)
     const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
     // secp256r1 / prime256v1 (1.2.840.10045.3.1.7)
@@ -625,8 +678,16 @@ pub fn parse_x509_ec_public_key(cert_der: &[u8]) -> Result<[u8; 65], ()> {
     Ok(point)
 }
 
-fn parse_x509_p384_public_key(cert_der: &[u8]) -> Result<[u8; 97], ()> {
-    let (alg_vo, bs_vo) = locate_spki(cert_der)?;
+fn parse_spki_p384_public_key(spki: &[u8]) -> Result<[u8; 97], ()> {
+    let (tag, vo, _, _) = read_der_tlv(spki, 0)?;
+    if tag != TAG_SEQUENCE {
+        return Err(());
+    }
+    let (alg_vo, bs_vo) = locate_spki_parts(spki, vo)?;
+    parse_p384_key_at(spki, alg_vo, bs_vo)
+}
+
+fn parse_p384_key_at(cert_der: &[u8], alg_vo: usize, bs_vo: usize) -> Result<[u8; 97], ()> {
     const EC_PUBLIC_KEY_OID: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
     const SECP384R1_OID: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
 
@@ -723,6 +784,10 @@ pub const SSLCOM_TLS_ECC_ROOT_CA_2022_DER: &[u8] =
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
     &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
+
+/// SHA-384 with RSA Encryption OID: 1.2.840.113549.1.1.12
+pub const OID_SHA384_WITH_RSA_ENCRYPTION: &[u8] =
+    &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C];
 
 /// ECDSA with SHA-256 OID: 1.2.840.10045.4.3.2
 pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
@@ -836,8 +901,20 @@ impl<'a> ParsedX509Cert<'a> {
         &self,
         issuer_cert_der: &[u8],
     ) -> Result<(), CertValidationError> {
+        let spki = spki_slice(issuer_cert_der).map_err(|_| CertValidationError::InvalidDer)?;
+        self.verify_signature_with_spki(spki)
+    }
+
+    /// İmzayı, verenin SubjectPublicKeyInfo DER'i ile doğrular.
+    ///
+    /// Kök sertifikaların tam DER'i yerine yalnızca SPKI saklandığında
+    /// (webpki-roots / Mozilla kök deposu) kullanılır.
+    pub fn verify_signature_with_spki(
+        &self,
+        issuer_spki: &[u8],
+    ) -> Result<(), CertValidationError> {
         if self.sig_alg_oid == OID_SHA256_WITH_RSA_ENCRYPTION {
-            let issuer_rsa_key = parse_x509_rsa_public_key(issuer_cert_der)
+            let issuer_rsa_key = parse_spki_rsa_public_key(issuer_spki)
                 .map_err(|_| CertValidationError::InvalidDer)?;
             crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha256(
                 &issuer_rsa_key,
@@ -845,8 +922,17 @@ impl<'a> ParsedX509Cert<'a> {
                 self.signature,
             )
             .map_err(|_| CertValidationError::InvalidSignature)
+        } else if self.sig_alg_oid == OID_SHA384_WITH_RSA_ENCRYPTION {
+            let issuer_rsa_key = parse_spki_rsa_public_key(issuer_spki)
+                .map_err(|_| CertValidationError::InvalidDer)?;
+            crate::drivers::crypto::rsa::rsa_verify_pkcs1_sha384(
+                &issuer_rsa_key,
+                self.tbs_raw,
+                self.signature,
+            )
+            .map_err(|_| CertValidationError::InvalidSignature)
         } else if self.sig_alg_oid == OID_ECDSA_WITH_SHA256 {
-            let issuer_ec_key = parse_x509_ec_public_key(issuer_cert_der)
+            let issuer_ec_key = parse_spki_ec_public_key(issuer_spki)
                 .map_err(|_| CertValidationError::InvalidDer)?;
             let mut h = crate::drivers::crypto::sha256::Sha256::new();
             h.update(self.tbs_raw);
@@ -861,7 +947,7 @@ impl<'a> ParsedX509Cert<'a> {
         } else if self.sig_alg_oid == OID_ECDSA_WITH_SHA384 {
             #[cfg(not(test))]
             {
-                let issuer_key = parse_x509_p384_public_key(issuer_cert_der)
+                let issuer_key = parse_spki_p384_public_key(issuer_spki)
                     .map_err(|_| CertValidationError::InvalidDer)?;
                 let verifying_key = p384::ecdsa::VerifyingKey::from_sec1_bytes(&issuer_key)
                     .map_err(|_| CertValidationError::InvalidDer)?;
@@ -885,7 +971,11 @@ impl<'a> ParsedX509Cert<'a> {
     }
 }
 
-/// Gömülü kök CA listesi (ISRG Root X1).
+/// Gömülü kök CA listesi.
+///
+/// Bu liste, Mozilla kök deposunun (webpki-roots) yanında ek bir güven
+/// kaynağıdır; tam kapsam `mozilla_anchor_spki_for` üzerinden sağlanır.
+/// Buradaki DER'ler ayrıca testlerde birebir eşleşme için kullanılır.
 pub const TRUSTED_ROOTS: &[&[u8]] = &[
     ISRG_ROOT_X1_DER,
     ISRG_ROOT_X2_DER,
@@ -924,20 +1014,28 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
     //    kendinden imzalı bir köke veya gömülü bir güvenilen köke ulaşana kadar ilerler.
     let mut current = &parsed_chain[0];
     for depth in 0..=MAX_CHAIN_DEPTH {
-        // Kendinden imzalı sertifika: zincirin kökü. Yalnızca gömülü güvenilen
-        // köklerden biriyle birebir (DER) eşleşiyorsa kabul edilir.
+        // Kendinden imzalı sertifika: zincirin kökü. Gömülü DER ile birebir
+        // eşleşiyorsa ya da subject'i güvenilen bir kökle (Mozilla deposu dahil)
+        // eşleşip kendinden imzası o kökün anahtarıyla doğrulanıyorsa kabul edilir.
         if current.issuer_raw == current.subject_raw {
-            if TRUSTED_ROOTS.iter().any(|&root| root == chain[depth]) {
+            if chain
+                .get(depth)
+                .is_some_and(|cert| TRUSTED_ROOTS.iter().any(|&root| root == *cert))
+            {
+                return Ok(());
+            }
+            if let Some(spki) = trust_anchor_spki_for(current.subject_raw) {
+                current.verify_signature_with_spki(spki)?;
                 return Ok(());
             }
             return Err(CertValidationError::UntrustedRoot);
         }
 
         // 3. Mevcut sertifikanın vereni (issuer) güvenilen köklerimizden biriyle eşleşiyorsa,
-        //    gömülü kökün açık anahtarıyla imzayı doğrula. Sunucu zinciri kökü
+        //    kökün açık anahtarıyla imzayı doğrula. Sunucu zinciri kökü
         //    göndermemiş olsa bile (yaygın durum) doğrulama burada tamamlanır.
-        if let Some(root_der) = trusted_root_for(current.issuer_raw) {
-            current.verify_signature_with_issuer(root_der)?;
+        if let Some(spki) = trust_anchor_spki_for(current.issuer_raw) {
+            current.verify_signature_with_spki(spki)?;
             return Ok(());
         }
 
@@ -966,6 +1064,51 @@ pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
         ParsedX509Cert::parse(root_der)
             .map(|parsed| parsed.subject_raw == issuer_raw)
             .unwrap_or(false)
+    })
+}
+
+/// Mozilla kök deposunda (webpki-roots) verilen issuer subject'ine karşılık
+/// gelen SubjectPublicKeyInfo'yu arar.
+// Mozilla kök listesi boş kalırsa tüm HTTPS bağlantıları `UntrustedRoot` ile
+// reddedilir; bunu derleme zamanında yakala.
+#[cfg(not(test))]
+const _: () = assert!(webpki_roots::TLS_SERVER_ROOTS.len() > 100);
+
+#[cfg(not(test))]
+fn mozilla_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
+    webpki_roots::TLS_SERVER_ROOTS.iter().find_map(|anchor| {
+        let subject: &'static [u8] = anchor.subject.as_ref();
+        if subject == issuer_raw {
+            Some(anchor.subject_public_key_info.as_ref())
+        } else {
+            None
+        }
+    })
+}
+
+/// Host test koşucusu yalnızca `core`/`alloc` bağlar; Mozilla deposu
+/// çekirdek derlemesinde kullanılır. Testlerde gömülü kökler doğrulanır.
+#[cfg(test)]
+fn mozilla_anchor_spki_for(_issuer_raw: &[u8]) -> Option<&'static [u8]> {
+    None
+}
+
+/// Bir sertifikanın vereni için güven çapası anahtarını (SPKI) döndürür.
+///
+/// Önce Mozilla kök deposu, ardından gömülü DER kökleri denenir. Sunucu
+/// zinciri kökü göndermek zorunda olmadığı için bu arama, el sıkışmanın
+/// kök olmadan da doğrulanmasını sağlar.
+fn trust_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
+    if let Some(spki) = mozilla_anchor_spki_for(issuer_raw) {
+        return Some(spki);
+    }
+    TRUSTED_ROOTS.iter().find_map(|&root| {
+        let parsed = ParsedX509Cert::parse(root).ok()?;
+        if parsed.subject_raw == issuer_raw {
+            spki_slice(root).ok()
+        } else {
+            None
+        }
     })
 }
 
@@ -1203,11 +1346,26 @@ mod tests {
         assert!(trusted_root_for(b"no-such-issuer").is_none());
     }
 
+    /// Yeni SPKI tabanlı güven çapası araması gömülü kökleri çözebilmeli;
+    /// sunucu zinciri kökü göndermese de imza bu anahtarla doğrulanır.
+    #[test]
+    fn trust_anchor_spki_resolves_embedded_roots() {
+        let parsed = ParsedX509Cert::parse(ISRG_ROOT_X1_DER).unwrap();
+        let spki = trust_anchor_spki_for(parsed.subject_raw);
+        assert!(spki.is_some());
+        // Dönen anahtar gerçekten kökün SPKI'si olmalı.
+        assert_eq!(spki.unwrap(), spki_slice(ISRG_ROOT_X1_DER).unwrap());
+        assert!(trust_anchor_spki_for(b"no-such-issuer").is_none());
+    }
+
     #[test]
     fn sslcom_tls_ecc_root_is_trusted_and_uses_p384() {
         let parsed = ParsedX509Cert::parse(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).unwrap();
         assert_eq!(parsed.sig_alg_oid, OID_ECDSA_WITH_SHA384);
-        assert!(parse_x509_p384_public_key(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).is_ok());
+        assert!(
+            parse_spki_p384_public_key(spki_slice(SSLCOM_TLS_ECC_ROOT_CA_2022_DER).unwrap())
+                .is_ok()
+        );
         assert!(trusted_root_for(parsed.subject_raw).is_some());
         assert_eq!(
             verify_certificate_chain(&[SSLCOM_TLS_ECC_ROOT_CA_2022_DER]),

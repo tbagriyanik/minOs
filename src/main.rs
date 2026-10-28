@@ -3763,6 +3763,33 @@ pub extern "C" fn _start() -> ! {
                                                     } else if tag == "VID" {
                                                         open_app(&mut compositor, 6);
                                                     } else if tag == "WEB" {
+                                                        let data = with_busy_progress(
+                                                            &mut fb,
+                                                            mx,
+                                                            my,
+                                                            gui::ui_text(
+                                                                "Sayfa açılıyor...",
+                                                                "Opening page...",
+                                                            ),
+                                                            || fs_mgr.vfs.read_file(&path),
+                                                        );
+
+                                                        if let Some(data) = data {
+                                                            let wrap = compositor
+                                                                .windows
+                                                                .iter()
+                                                                .flatten()
+                                                                .find(|w| w.app_id == 3u8)
+                                                                .map_or(
+                                                                    700,
+                                                                    |w| {
+                                                                        w.width.saturating_sub(40)
+                                                                    },
+                                                                );
+                                                            browser_app.set_url(path.as_bytes());
+                                                            browser_app.load_html(data, wrap, 256);
+                                                        }
+
                                                         open_app(&mut compositor, 3);
                                                     } else if tag == "3D" {
                                                         let data = with_busy_progress(

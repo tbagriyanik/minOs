@@ -293,6 +293,36 @@ pub fn rsa_public_encrypt(key: &RsaPublicKey, msg: &[u8]) -> Result<Vec<u8>, ()>
 /// `sig^e mod n` ile şifre çözülür, elde edilen EM = 0x00||0x01||PS||0x00||
 /// DigestInfo yapısı ve SHA-256 özeti karşılaştırılır.
 pub fn rsa_verify_pkcs1_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+    let mut h = Sha256::new();
+    h.update(msg);
+    let digest = h.finalize();
+    rsa_verify_pkcs1_digest_info(key, sig, &SHA256_DIGEST_INFO_PREFIX, &digest)
+}
+
+/// SHA-384 DigestInfo prefix used by PKCS#1 v1.5 signatures.
+const SHA384_DIGEST_INFO_PREFIX: [u8; 19] = [
+    0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02, 0x05,
+    0x00, 0x04, 0x30,
+];
+
+/// PKCS#1 v1.5 + SHA-384 imza doğrulaması.
+///
+/// Bazı kök/ara CA'lar (ör. Sectigo/USERTrust zincirleri) alt
+/// sertifikaları sha384WithRSAEncryption ile imzalar; yalnızca SHA-256
+/// desteklendiğinde bu zincirler `UnsupportedSignatureAlgorithm` ile
+/// reddediliyordu.
+pub fn rsa_verify_pkcs1_sha384(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+    let digest = crate::drivers::crypto::sha384::Sha384::hash(msg);
+    rsa_verify_pkcs1_digest_info(key, sig, &SHA384_DIGEST_INFO_PREFIX, &digest)
+}
+
+/// PKCS#1 v1.5 imzasını açıp DigestInfo başlığını ve özeti karşılaştırır.
+fn rsa_verify_pkcs1_digest_info(
+    key: &RsaPublicKey,
+    sig: &[u8],
+    prefix: &[u8],
+    digest: &[u8],
+) -> Result<(), ()> {
     let k = key.n.len();
     if k < 11 || sig.len() != k {
         return Err(());
@@ -315,19 +345,12 @@ pub fn rsa_verify_pkcs1_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Re
         return Err(());
     }
     i += 1;
+
     let di = &em[i..];
-    // DigestInfo: ASN.1 başlığı (19 bayt) + 32 baytlık SHA-256 özeti.
-    let prefix: [u8; 19] = [
-        0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
-        0x05, 0x00, 0x04, 0x20,
-    ];
-    if di.len() != 19 + 32 || di[..19] != prefix[..] {
+    if di.len() != prefix.len() + digest.len() || di[..prefix.len()] != prefix[..] {
         return Err(());
     }
-    let mut h = Sha256::new();
-    h.update(msg);
-    let digest = h.finalize();
-    if di[19..] != digest[..] {
+    if di[prefix.len()..] != digest[..] {
         return Err(());
     }
     Ok(())

@@ -6,12 +6,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-188%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-190%20passed-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](licence.md)
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-89%2C619%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-89%2C992%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -23,6 +23,12 @@
 
 ## Yenilikler (v2.1.0)
 
+- **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
+  - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.
+  - **Finished anahtar türetimi (§4.4.4):** `server/client_hs_traffic_secret` üzerinden doğrudan `finished_key` türetiliyor; araya eklenen fazladan HKDF adımları `verify_data` uyuşmazlığına ve el sıkışmanın `CertificateReceived` aşamasında takılmasına neden oluyordu.
+  - **`close_notify` zarif kapanış (§6.1):** Sunucunun gönderdiği `close_notify` (Alert 0) artık fatal hata sayılmıyor; `peer_closed` durumu set edilerek aynı kayıtta gelen uygulama verisi kaybolmadan işleniyor. Böylece `state=Established` sonrası yanıt gövdeleri tarayıcıda görüntülenebiliyor.
+- **🌐 Tarayıcı Sayfa İndirme ve HTML Entegrasyonu:** Tarayıcıdan indirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir. Dosya Yöneticisi'nde `.html`, `.htm`, `.xhtml` ve `.url` dosyalarına çift tıklandığında dosya VFS'den okunup tarayıcıda `load_html` ile açılır.
+- **🐾 Tarayıcı Demo Sayfaları:** Tarayıcıya yerel, ağ bağlantısı gerektirmeyen üç demo sayfası eklendi: `minos://demo` (temel HTML/CSS), `minos://demo-img` (görsel yerleşimi) ve `minos://demo-video` (video yerleşimi). Bu sayfalar çevrimdışıyken HTML/CSS motorunu ve düzen yeteneklerini sınamak için kullanılabilir.
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
   - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
   - ✅ **Bluetooth HCI Protokolü:** Komut (0x01), ACL veri (0x02), Olay (0x04) paket formatlaması/ayrıştırması, Inquiry ve bağlantı yönetimi tamamlandı.
@@ -36,7 +42,7 @@
 - **minJs İleri Düzey JavaScript Çalışma Zamanı:** Web tarayıcısı için yerleşik `no_std` JavaScript motoru güçlendirildi: ikili aritmetik operatörler ve tam işlem önceliği (`+`, `-`, `*`, `/`, `%`, `(...)`, tekli `+`/`-`/`!`), döngüler (`for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`), değişken mutasyonları (`++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`), gelişmiş dizi metotları (`.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`), nesne özellikleri ve köşe parantezli erişim (`obj.prop`, `obj["key"]`, `delete obj.prop`), `Object.keys()` / `Object.values()`, JSON ayrıştırma ve serileştirme (`JSON.stringify()`, `JSON.parse()`), matematiksel ve dize yardımcıları (`Math.{abs, min, max, pow, round, floor, ceil}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`) ve global dönüşümler (`parseInt`, `parseFloat`, `String`, `Number`, `Boolean`).
 - **IPv6 Protokol & Soket Altyapısı:** `netstack.rs` katmanına `Ipv6Address`, `IpAddress` (V4/V6), RFC 4291 adres ayrıştırıcı (`::` sıkıştırma ve `[...]` formatı), RFC 2464 Multicast MAC haritalama, RFC 8200 sözde başlık checksum hesaplama, ICMPv6 Echo Request/Reply (`ping6`), Neighbor Discovery (Solicitation/Advertisement) ve `ETHERTYPE_IPV6` (0x86DD) desteği; terminalde `ipconfig` yerel IPv6 (Link-Local EUI-64) gösterimi ve `ping`/`ping6` çift yığın desteği; `socket.rs` katmanına `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` ve Web Tarayıcısında IPv6 adres doğrulaması eklendi.
 - **exFAT ve ext4 Parçalanma (Fragmentation) & Derin Dizin Bütünlüğü:** ext4 ve exFAT üzerinde derin dizin ağaçlarında dosya oluşturma, silerek delik (hole) açma ve parçalanmış blok/küme zincirlerini dolduracak yeni dosyaları tutarlı şekilde tahsis etme yetenekleri host stres testleriyle (`host_fs_tests.rs`) doğrulandı.
-- **Genişletilmiş Güven Deposu (Root CA):** ISRG Root X1'e ek olarak Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) ve DigiCert Global Root (CA & G2) kök sertifikaları çekirdeğe dahil edildi.
+- **Genişletilmiş Güven Deposu (Root CA):** Let's Encrypt ISRG Root X1 & X2, Google Trust Services (GTS Root R1 & R2), DigiCert Global Root (CA & G2) ve SSL.com TLS ECC Root CA 2022 kök sertifikaları çekirdeğe gömüldü (`src/drivers/crypto/roots/`).
 - **ISRG Root X1 Kök CA & TLS Zincir Doğrulaması:** Let's Encrypt ISRG Root X1 kök sertifikası (`isrgrootx1.der`) çekirdeğe gömüldü. Sunucudan gelen sertifika zinciri RFC 5280 kurallarıyla taranarak yaprak ve ara sertifikaların RSA PKCS#1 v1.5 ve ECDSA P-256 imzaları güvenilen ISRG Root X1 açık anahtarına kadar eksiksiz doğrulanır.
 - **USB Hub Arkası Cihaz Desteği (xHCI):** Çok katmanlı USB hub mimarisi yerel olarak desteklenir. Hub tanımlayıcıları (`GET_DESCRIPTOR 0x29`), port güç kontrolü (`PORT_POWER`), port sıfırlama (`PORT_RESET`), xHCI 20-bit hiyerarşik `Route String` ve Transaction Translator (TT / Split Transaction) mekanizması entegre edildi. Hub arkasındaki klavye ve fareler otomatik olarak taranıp sürülür.
 - **EHCI (USB 2.0), UHCI (USB 1.1) ve OHCI Denetleyici Desteği:** xHCI denetleyicisi bulunmayan eski anakart ve laptop sistemlerinde USB portlarının ve BIOS legacy emülasyonunun sağlıklı çalışabilmesi için EHCI EECP OS handoff devri, CONFIGFLAG port yönlendirmesi, UHCI Global/Host Reset ve OHCI operasyonel mod geçişleri uygulandı.
@@ -58,7 +64,7 @@
 - **Dinamik Çözünürlük ve Masaüstü Uyumlanması:** Çalışma zamanında çözünürlük değiştirildiğinde masaüstü sınırları, imleç hareket alanı, pencere konumları (`keep_windows_on_screen`) ve duvar kağıdı yeni çözünürlüğe anında uyarlanır; ekran tamamen yeniden çizilir (`force_render`).
 - **QEMU SDL / GTK Desteği & 64 MB VRAM:** `run.ps1` betiğine `-Display sdl` parametresi eklendi (GTK pixbuf uyarıları engellenir, daha düşük fare gecikmesi sunar). QEMU video belleği 64 MB'a yükseltildi (`-global VGA.vgamem_mb=64`).
 - **Statik BSS Bellek Mimarisi (CodeQL Alert #25 Düzeltmesi):** Çekirdek bellek yöneticisi (`MemoryManager`) statik BSS depolama alanına taşınarak yığın belleğin kaçışı ve raw pointer çözümlenmesi güvenli hale getirildi.
-- **Genişletilmiş Kripto & TLS 1.3:** SHA-384, SHA-512 ve ECDSA (secp256r1) imza doğrulama/üretme ilkelleri eklendi (57 host testi geçerli); TLS 1.3 tam el sıkışma döngüsü (RSA & ECDSA CertificateVerify, HKDF anahtar planı ve şifreli kayıt işleme) entegre edildi.
+- **Genişletilmiş Kripto & TLS 1.3:** SHA-384, SHA-512 ve ECDSA (secp256r1) imza doğrulama/üretme ilkelleri eklendi (190 host testi geçerli); TLS 1.3 tam el sıkışma döngüsü (RSA & ECDSA CertificateVerify, HKDF anahtar planı ve şifreli kayıt işleme) entegre edildi.
 - **Erken İstisna Yakalama & Donanımsal Triple Fault Koruması:** Çekirdeğin açılışının ilk anından itibaren BSP GDT+TSS (`IST1`) ve IDT istisna kapıları (`#DE`, `#UD`, `#DF`, `#SS`, `#GP`, `#PF`) yüklenir. Sürücü başlatma aşamasında oluşabilecek donanım hatalarında anakartın ani yeniden başlaması önlenir.
 - **Etkileşimli Metin Kurtarma Konsolu (`recovery#`):** Açılışta veya kritik sürücülerde hata meydana geldiğinde grafik karşılama ekranına geçilmeden önce ekranda hata ayrıntıları (vektör, RIP, CR2, hata kodu) gösterilir ve kullanıcıya interaktif komut istemi sunulur (`restart` / `reboot` / `r`, `halt` / `h`, `help`).
 - **Genişletilmiş Yüksek Çözünürlük ve 16:10 Desteği:** Çekirdek arka tamponu (backbuffer) `2560x1600` boyutuna genişletildi. 1920x1080 (FHD), 1920x1200 (16:10 WUXGA), 2560x1440 (2K) ve 2560x1600 ekranlar tam desteklenir; 1920 sınır doğrulama algoritması düzeltildi.
@@ -67,7 +73,7 @@
 - **Ayarlar Penceresi Tıklama İzolasyonu:** Yazı yakınlaştırma (%100, %125, %150) butonlarına tıklandığında çözünürlük butonlarının yanlışlıkla tetiklenmesi önlendi; gerçek donanımda BGA yazımları kısıtlanarak güvenli ekran modu yönetimi sağlandı.
 - **Varsayılan Donanım Sürücü Profili:** Normal Live ve Installed açılışlarında tam sürücü profili kullanılır; sürücüsüz açılış için Limine menüsündeki Safe Mode seçeneği korunur.
 - **Daha Okunabilir Boot Günlüğü:** Metin konsolu her tamamlanan satırı ekrana aktarır ve zaman tabanı hazır olduktan sonra sonraki satıra geçmeden önce 45 ms bekler. Böylece açılış tanılama mesajları daha rahat izlenir; zaman tabanı hazır olmadan yazılan erken mesajlar geciktirilmez.
-- **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
+- **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history`, `minos://demo` ve `minos://demo-img` / `minos://demo-video` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
 
 ### 🛡️ Açılış Kurtarma Konsolu (`recovery#`)
 
@@ -140,7 +146,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 
 ---
 
-## 💾 Dosya Sistemleri Desteği ve Format Sınırları
+## � Hazır ISO İmajı (Ready-to-Run ISO)
 
 minOs'u derlemeden doğrudan QEMU, VirtualBox (64bit) veya gerçek donanımda test etmek için hazır ISO imajı:
 
@@ -179,7 +185,7 @@ Ayrıntılı rehberler ve teknik başvuru kaynakları:
   - 🚀 **[Kurulum ve Çalıştırma](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` seçenekleri, Live USB oluşturma ve diske kurulum.
   - 💻 **[Desteklenen Donanım Listesi](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (Tap-to-click), UVC Kamera, e1000 ve Wi-Fi.
   - 📦 **[Yerleşik 15 Uygulama](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Kontrol Paneli, Paket Yöneticisi vb.
-  - 🌐 **[Ağ ve İnternet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP yığını, DNS, HTTP/1.1 ve TLS 1.2 (HTTPS).
+  - 🌐 **[Ağ ve İnternet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP yığını, DNS, HTTP/1.1 ve TLS 1.3 (HTTPS).
   - 💾 **[Dosya Sistemleri](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 ve kalıcılık (`VFS.DAT`).
   - ⌨️ **[Kullanıcı Rehberi ve Kısayollar](https://github.com/tbagriyanik/minOs/wiki/Kullanici-Rehberi)**: Masaüstü kısayolları ve MinShell komut referansı.
   - 🛠️ **[Geliştirici Rehberi](https://github.com/tbagriyanik/minOs/wiki/Gelistirici-Rehberi)**: Kaynak kod dizin haritası, birim testleri (`test_host.ps1`) ve derleme.
@@ -194,9 +200,7 @@ Yerel Markdown Dokümanları:
 
 ---
 
----
-
-### 💾 Dosya Sistemleri Desteği ve Format Sınırları
+## 💾 Dosya Sistemleri Desteği ve Format Sınırları
 
 minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sisteminin yetenek düzeyi farklıdır:
 

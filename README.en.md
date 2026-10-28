@@ -6,12 +6,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-188%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-190%20passed-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](licence.md)
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-89%2C619%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-89%2C992%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -23,6 +23,12 @@
 
 ## What's New (v2.1.0)
 
+- **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
+  - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.
+  - **Finished key derivation (§4.4.4):** `finished_key` is derived directly from `server/client_hs_traffic_secret`; the extra HKDF steps in between caused a `verify_data` mismatch and stalled the handshake at the `CertificateReceived` stage.
+  - **Graceful `close_notify` (§6.1):** The server's `close_notify` (Alert 0) is no longer treated as a fatal error; by setting the `peer_closed` state, application data delivered in the same record is preserved. Response bodies are therefore displayed in the browser after `state=Established`.
+- **🌐 Browser Page Download and HTML Integration:** Pages downloaded from the browser are saved under `/root/Downloads/` with the `.html` extension. Double-clicking `.html`, `.htm`, `.xhtml` and `.url` files in the File Manager reads the file from the VFS and opens it in the browser via `load_html`.
+- **🐾 Browser Demo Pages:** Three local, network-free demo pages were added to the browser: `minos://demo` (basic HTML/CSS), `minos://demo-img` (image layout) and `minos://demo-video` (video layout). These pages can be used to exercise the HTML/CSS engine and layout capabilities offline.
 - **Expanded Hardware Drivers (20+ New Drivers):**
   - ✅ **Networking:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
   - ✅ **Bluetooth HCI Protocol:** Command (0x01), ACL data (0x02) and Event (0x04) packet formatting/parsing, inquiry and connection management completed.
@@ -36,7 +42,7 @@
 - **minJs Advanced JavaScript Runtime:** The built-in `no_std` JavaScript engine for the web browser was expanded: binary arithmetic operators with operator precedence (`+`, `-`, `*`, `/`, `%`, `(...)`, unary `+`/`-`/`!`), loops (`for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`), variable mutations (`++`, `--`, `+=`, `-=`, `*=`, `/=`, `%=`), array methods (`.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`), object properties and bracket indexing (`obj.prop`, `obj["key"]`, `delete obj.prop`), `Object.keys()` / `Object.values()`, JSON parsing and serialization (`JSON.stringify()`, `JSON.parse()`), math and string helpers (`Math.{abs, min, max, pow, round, floor, ceil}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`) and global conversions (`parseInt`, `parseFloat`, `String`, `Number`, `Boolean`).
 - **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress` (V4/V6), an RFC 4291 address parser (`::` compression and `[...]` format), RFC 2464 Multicast MAC mapping, RFC 8200 pseudo-header checksum, ICMPv6 Echo Request/Reply (`ping6`), Neighbor Discovery (Solicitation/Advertisement) and `ETHERTYPE_IPV6` (0x86DD) support were added to the `netstack.rs` layer; terminal `ipconfig` local IPv6 (Link-Local EUI-64) display and dual-stack `ping`/`ping6` commands; `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()` and IPv6 address validation in the web browser were added to the `socket.rs` layer.
 - **exFAT and ext4 Fragmentation & Deep Directory Integrity:** The ability to create files in deep directory trees, punch holes by deleting files and consistently allocate new files that fill fragmented block/cluster chains on ext4 and exFAT was verified with host stress tests (`host_fs_tests.rs`).
-- **Expanded Trust Store (Root CA):** In addition to ISRG Root X1, the Let's Encrypt ISRG Root X2, Google Trust Services (GTS Root R1 & R2) and DigiCert Global Root (CA & G2) root certificates were embedded into the kernel.
+- **Expanded Trust Store (Root CA):** The Let's Encrypt ISRG Root X1 & X2, Google Trust Services (GTS Root R1 & R2), DigiCert Global Root (CA & G2) and SSL.com TLS ECC Root CA 2022 root certificates were embedded into the kernel (`src/drivers/crypto/roots/`).
 - **ISRG Root X1 Root CA & TLS Chain Verification:** The Let's Encrypt ISRG Root X1 root certificate (`isrgrootx1.der`) is embedded in the kernel. The certificate chain received from the server is scanned with RFC 5280 rules and the RSA PKCS#1 v1.5 and ECDSA P-256 signatures of leaf and intermediate certificates are fully verified up to the trusted ISRG Root X1 public key.
 - **Devices Behind a USB Hub (xHCI):** A multi-tier USB hub architecture is natively supported. Hub descriptors (`GET_DESCRIPTOR 0x29`), port power control (`PORT_POWER`), port reset (`PORT_RESET`), the xHCI 20-bit hierarchical `Route String` and the Transaction Translator (TT / Split Transaction) mechanism were integrated. Keyboards and mice behind a hub are automatically enumerated and driven.
 - **EHCI (USB 2.0), UHCI (USB 1.1) and OHCI Controller Support:** EHCI EECP OS handoff, CONFIGFLAG port routing, UHCI Global/Host Reset and OHCI operational mode transitions were implemented so that USB ports and BIOS legacy emulation work reliably on older motherboards and laptops that have no xHCI controller.
@@ -58,7 +64,7 @@
 - **Dynamic Resolution and Desktop Adaptation:** When the resolution is changed at runtime, the desktop bounds, cursor movement area, window positions (`keep_windows_on_screen`) and wallpaper adapt instantly to the new resolution; the screen is fully redrawn (`force_render`).
 - **QEMU SDL / GTK Support & 64 MB VRAM:** A `-Display sdl` parameter was added to the `run.ps1` script (GTK pixbuf warnings are suppressed, lower mouse latency). QEMU video memory was raised to 64 MB (`-global VGA.vgamem_mb=64`).
 - **Static BSS Memory Architecture (CodeQL Alert #25 Fix):** The kernel memory manager (`MemoryManager`) was moved to static BSS storage, making stack memory escapes and raw pointer resolution safe.
-- **Expanded Crypto & TLS 1.3:** SHA-384, SHA-512 and ECDSA (secp256r1) signature verification/generation primitives were added (57 host tests passing); the full TLS 1.3 handshake loop (RSA & ECDSA CertificateVerify, HKDF key schedule and encrypted record processing) was integrated.
+- **Expanded Crypto & TLS 1.3:** SHA-384, SHA-512 and ECDSA (secp256r1) signature verification/generation primitives were added (190 host tests passing); the full TLS 1.3 handshake loop (RSA & ECDSA CertificateVerify, HKDF key schedule and encrypted record processing) was integrated.
 - **Early Exception Catching & Hardware Triple Fault Protection:** From the very first moment of boot, the BSP GDT+TSS (`IST1`) and IDT exception gates (`#DE`, `#UD`, `#DF`, `#SS`, `#GP`, `#PF`) are loaded. Sudden reboots of the motherboard are prevented on hardware faults that may occur during driver initialization.
 - **Interactive Text Recovery Console (`recovery#`):** When an error occurs at boot or in critical drivers, error details (vector, RIP, CR2, error code) are shown on screen before switching to the graphical welcome screen and an interactive prompt is offered to the user (`restart` / `reboot` / `r`, `halt` / `h`, `help`).
 - **Expanded High Resolution and 16:10 Support:** The kernel backbuffer was enlarged to `2560x1600`. 1920x1080 (FHD), 1920x1200 (16:10 WUXGA), 2560x1440 (2K) and 2560x1600 screens are fully supported; the 1920 bound-check algorithm was fixed.
@@ -67,7 +73,7 @@
 - **Settings Window Click Isolation:** Clicking the text zoom (%100, %125, %150) buttons no longer accidentally triggers the resolution buttons; safe display mode management is provided by restricting BGA writes on real hardware.
 - **Default Hardware Driver Profile:** The full driver profile is used in normal Live and Installed boots; the Safe Mode option in the Limine menu is preserved for boots without drivers.
 - **More Readable Boot Log:** The text console flushes every completed line to the screen and waits 45 ms before moving to the next line once the time base is ready. Boot diagnostic messages are therefore easier to follow; early messages written before the time base is ready are not delayed.
-- **Browser Favorites (Bookmarks Bar):** An interactive bookmarks bar was added to the web browser; a pure HTTP test site and quick-access buttons for `minos://cats`, `minos://net`, `minos://history` and `minos://demo` plus the `minos://bookmarks` page were integrated.
+- **Browser Favorites (Bookmarks Bar):** An interactive bookmarks bar was added to the web browser; a pure HTTP test site and quick-access buttons for `minos://cats`, `minos://net`, `minos://history`, `minos://demo` and `minos://demo-img` / `minos://demo-video` plus the `minos://bookmarks` page were integrated.
 
 ### 🛡️ Boot Recovery Console (`recovery#`)
 
@@ -140,7 +146,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 
 ---
 
-## 💾 File System Support and Format Limits
+## 💽 Ready-to-Run ISO Image
 
 A ready ISO image for testing minOs directly on QEMU, VirtualBox (64bit) or real hardware without building:
 
@@ -179,7 +185,7 @@ Detailed guides and technical reference resources:
   - 🚀 **[Installation and Running](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` options, creating a Live USB and installing to disk.
   - 💻 **[Supported Hardware List](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (tap-to-click), UVC camera, e1000 and Wi-Fi.
   - 📦 **[15 Built-in Applications](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Browser, Notepad, File Manager, Control Panel, Package Manager etc.
-  - 🌐 **[Network and Internet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP stack, DNS, HTTP/1.1 and TLS 1.2 (HTTPS).
+  - 🌐 **[Network and Internet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP stack, DNS, HTTP/1.1 and TLS 1.3 (HTTPS).
   - 💾 **[File Systems](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 and persistence (`VFS.DAT`).
   - ⌨️ **[User Guide and Shortcuts](https://github.com/tbagriyanik/minOs/wiki/Kullanici-Rehberi)**: Desktop shortcuts and MinShell command reference.
   - 🛠️ **[Developer Guide](https://github.com/tbagriyanik/minOs/wiki/Gelistirici-Rehberi)**: Source tree map, unit tests (`test_host.ps1`) and building.
@@ -193,7 +199,7 @@ Local Markdown documents (Turkish):
 
 ---
 
-### 💾 File System Support and Format Limits
+## 💾 File System Support and Format Limits
 
 The minOs VFS layer supports several file systems, but each file system's capability level differs:
 

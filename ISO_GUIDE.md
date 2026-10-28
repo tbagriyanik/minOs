@@ -24,7 +24,7 @@ Modern x86_64 işletim sistemlerinde en yaygın kullanılan ISO üretim adımlar
 iso_root/
 ├── boot/
 │   ├── limine/
-│   │   ├── limine.cfg              # Bootloader ayar dosyası
+│   │   ├── limine.conf             # Bootloader ayar dosyası
 │   │   ├── limine-bios.sys         # BIOS bootloader ikilisi
 │   │   └── limine-bios-cd.bin      # CD/ISO El Torito önyükleme kaydı
 │   └── minos-kernel                # Derlenen minOs çekirdeğiniz

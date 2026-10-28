@@ -485,6 +485,21 @@ pub fn generate_keypair(seed: &[u8; 32]) -> Keypair {
     }
 }
 
+/// 32 baytlık gizli skalardan `04 || X || Y` biçiminde açık noktayı üretir.
+///
+/// `generate_keypair` tohumu mod n indirger; TLS 1.2 ClientKeyExchange'de
+/// gizliyle birlikte gönderilecek açık anahtar bu fonksiyonla elde edilir.
+pub fn public_key(secret: &[u8; 32]) -> [u8; 65] {
+    let d = limbs_from_be_bytes(secret);
+    let q = pt_mul(&d, &base_point());
+    let (x, y) = pt_affine(&q).unwrap_or((GX, GY));
+    let mut public = [0u8; 65];
+    public[0] = 0x04;
+    public[1..33].copy_from_slice(&to_be(&x));
+    public[33..65].copy_from_slice(&to_be(&y));
+    public
+}
+
 /// Paylaşılan gizliyi üretir: X(d · Q_peer). Nokta doğrulanmazsa `None`.
 pub fn shared_secret(secret: &[u8; 32], peer_public: &[u8]) -> Option<[u8; 32]> {
     if peer_public.len() != 65 || peer_public[0] != 0x04 {
@@ -703,6 +718,15 @@ mod tests {
     #[test]
     fn g_on_curve() {
         assert!(is_on_curve(&GX, &GY));
+    }
+
+    /// TLS 1.2 ClientKeyExchange'de gönderilen açık nokta, sunucuyla ortak
+    /// anahtar üreten gizliyle aynı anahtar çiftine ait olmalıdır.
+    #[test]
+    fn public_key_matches_generated_keypair() {
+        let seed = [7u8; 32];
+        let kp = generate_keypair(&seed);
+        assert_eq!(public_key(&kp.secret), kp.public);
     }
 
     #[test]

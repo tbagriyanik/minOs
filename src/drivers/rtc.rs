@@ -152,8 +152,11 @@ impl DateTime {
             }
         }
 
-        // Saat formatı (12 saat ise PM biti ve 12 saat dönüştürmesi)
-        let mut hour_bin = if bin { hour } else { hour & 0x7F };
+        // Saat formatı (12 saat ise PM biti ve 12 saat dönüştürmesi).
+        // BCD modunda saat alanı da ikiliye çevrilmelidir; aksi hâlde 14:00
+        // gibi değerler 0x14 -> 20 olarak okunur ve TLS sertifika süre
+        // denetimi yanlış saatle yapılır.
+        let mut hour_bin = if bin { hour } else { bcd_to_bin(hour & 0x7F) };
         if !is_24h {
             let pm = hour & 0x80 != 0;
             if pm && hour_bin < 12 {

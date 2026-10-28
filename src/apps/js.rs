@@ -34,6 +34,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::collections::btree_map::BTreeMap;
 use alloc::format;
 use alloc::string::String;
@@ -151,7 +152,7 @@ impl JsDocumentRef {
 // ── JS Değer ve Fonksiyon Tipleri ──────────────────────────────────
 
 /// minJs içinde dinamik olarak temsil edilen değer tipleri.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum JsValue {
     Undefined,
     Null,
@@ -160,6 +161,42 @@ pub enum JsValue {
     String(String),
     Array(Vec<JsValue>),
     Object(BTreeMap<String, JsValue>),
+    /// Promise değeri: beklemede / yerine geldi / reddedildi.
+    Promise(Box<PromiseObj>),
+}
+
+/// Promise durumu.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PromiseState {
+    Pending,
+    Fulfilled,
+    Rejected,
+}
+
+/// Bir Promise örneği.
+#[derive(Clone, Debug)]
+pub struct PromiseObj {
+    pub state: PromiseState,
+    pub value: Option<JsValue>,
+    /// .then() / .catch() ile kaydedilen işleyiciler.
+    pub handlers: Vec<PromiseHandler>,
+}
+
+/// Promise işleyicisi: .then(onFulfilled, onRejected) kaydı.
+#[derive(Clone, Debug)]
+pub struct PromiseHandler {
+    pub on_fulfilled: Option<String>, // JS kod parçası veya fonksiyon adı
+    pub on_rejected: Option<String>,
+}
+
+impl PromiseObj {
+    pub fn new() -> Self {
+        Self {
+            state: PromiseState::Pending,
+            value: None,
+            handlers: Vec::new(),
+        }
+    }
 }
 
 impl JsValue {
@@ -199,6 +236,14 @@ impl JsValue {
                 res.push('}');
                 res
             }
+            JsValue::Promise(p) => {
+                let state_str = match p.state {
+                    PromiseState::Pending => "pending",
+                    PromiseState::Fulfilled => "fulfilled",
+                    PromiseState::Rejected => "rejected",
+                };
+                format!("[object Promise:{}]", state_str)
+            }
         }
     }
 
@@ -208,7 +253,7 @@ impl JsValue {
             JsValue::Bool(b) => *b,
             JsValue::Number(n) => *n != 0,
             JsValue::String(s) => !s.is_empty(),
-            JsValue::Array(_) | JsValue::Object(_) => true,
+            JsValue::Array(_) | JsValue::Object(_) | JsValue::Promise(_) => true,
         }
     }
 
@@ -251,6 +296,16 @@ pub struct EventListener {
     pub handler: String,
 }
 
+/// Zamanlayıcı (setTimeout / setInterval).
+#[derive(Clone, Debug)]
+pub struct Timer {
+    pub id: u32,
+    pub callback: String, // fonksiyon adı veya JS kodu
+    pub delay_ms: u32,
+    pub repeat: bool, // true = setInterval, false = setTimeout
+    pub fire_at: u64,   // ticks'de ateşleme zamanı
+}
+
 // Sayfa boyunca süren JS durumu: değişkenler ve konsol çıktısı.
 #[derive(Clone)]
 pub struct JsRuntime {
@@ -265,6 +320,14 @@ pub struct JsRuntime {
     pub last_return: Option<JsValue>,
     /// Bağlı doc referansı (tarayıcı tarafından ayarlanır)
     doc: Option<JsDocumentRef>,
+    /// Promise microtask sırası: çalıştırılacak JS kod parçaları.
+    pub microtask_queue: Vec<String>,
+    /// Prototip zinciri: nesne_değişkeni -> prototip_değişkeni.
+    pub protos: BTreeMap<String, String>,
+    /// Zamanlayıcılar (setTimeout / setInterval).
+    pub timers: Vec<Timer>,
+    /// Bir sonraki zamanlayıcı kimliği.
+    pub next_timer_id: u32,
 }
 
 impl JsRuntime {
@@ -278,6 +341,10 @@ impl JsRuntime {
             last_cond: false,
             last_return: None,
             doc: None,
+            microtask_queue: Vec::new(),
+            protos: BTreeMap::new(),
+            timers: Vec::new(),
+            next_timer_id: 1,
         }
     }
 
@@ -319,6 +386,124 @@ impl JsRuntime {
             } else {
                 self.vars.push((String::from(name), s));
             }
+        }
+    }
+
+    // ── Prototip zinciri yardımcıları ──────────────────────────────
+
+    /// Nesnenin prototipini ayarlar: obj.__proto__ = proto
+    pub fn set_proto(&mut self, obj_name: &str, proto_name: &str) {
+        self.protos.insert(String::from(obj_name), String::from(proto_name));
+    }
+
+    /// Bir özelliği prototip zinciri boyunca arar. Önce kendi özellikleri,
+    /// sonra prototip, prototipin prototipi gibi yukarı doğru.
+    pub fn val_get_proto(&self, obj_name: &str, prop: &str) -> Option<JsValue> {
+        let mut current = String::from(obj_name);
+        let mut visited = alloc::collections::BTreeSet::new();
+        while !current.is_empty() && visited.insert(current.clone()) {
+            if let Some(JsValue::Object(map)) = self.values.get(&current) {
+                if let Some(v) = map.get(prop) {
+                    return Some(v.clone());
+                }
+            }
+            current = self.protos.get(&current).cloned().unwrap_or_default();
+        }
+        None
+    }
+
+    /// `obj instanceof Constructor` kontrolü: Constructor.prototype
+    /// prototip zincirinde mi?
+    pub fn instance_of(&self, obj_name: &str, constructor_name: &str) -> bool {
+        let proto_var = format!("{}.prototype", constructor_name);
+        let mut current = String::from(obj_name);
+        let mut visited = alloc::collections::BTreeSet::new();
+        while !current.is_empty() && visited.insert(current.clone()) {
+            if current == proto_var {
+                return true;
+            }
+            current = self.protos.get(&current).cloned().unwrap_or_default();
+        }
+        false
+    }
+
+    // ── Promise / microtask yardımcıları ───────────────────────────
+
+    /// Microtask sırasını çalıştırır (Promise .then() işleyicileri vb.).
+    /// Her microtask bir JS kod parçasıdır; sırayla çalıştırılır.
+    pub fn run_microtasks(&mut self, out: &mut Vec<u8>) {
+        while !self.microtask_queue.is_empty() {
+            let code = self.microtask_queue.remove(0);
+            let _ = self.run(&code, out);
+        }
+    }
+
+    /// Bir Promise'i yerine getirir ve kayıtlı .then() işleyicilerini
+    /// microtask sırasına ekler.
+    pub fn resolve_promise(&mut self, promise_var: &str, value: JsValue) {
+        if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
+            p.state = PromiseState::Fulfilled;
+            p.value = Some(value.clone());
+            for handler in &p.handlers {
+                if let Some(cb) = &handler.on_fulfilled {
+                    self.microtask_queue.push(cb.clone());
+                }
+            }
+        }
+    }
+
+    /// Bir Promise'i reddeder ve .catch() işleyicilerini microtask sırasına ekler.
+    pub fn reject_promise(&mut self, promise_var: &str, reason: JsValue) {
+        if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
+            p.state = PromiseState::Rejected;
+            p.value = Some(reason.clone());
+            for handler in &p.handlers {
+                if let Some(cb) = &handler.on_rejected {
+                    self.microtask_queue.push(cb.clone());
+                }
+            }
+        }
+    }
+
+    /// Zamanlayıcı ekler (setTimeout / setInterval).
+    pub fn add_timer(&mut self, callback: String, delay_ms: u32, repeat: bool) -> u32 {
+        let id = self.next_timer_id;
+        self.next_timer_id += 1;
+        self.timers.push(Timer {
+            id,
+            callback,
+            delay_ms,
+            repeat,
+            fire_at: 0, // caller tarafından ayarlanır
+        });
+        id
+    }
+
+    /// Zamanlayıcıyı kaldırır (clearTimeout / clearInterval).
+    pub fn remove_timer(&mut self, id: u32) {
+        self.timers.retain(|t| t.id != id);
+    }
+
+    /// Zamanlayıcıları kontrol eder ve hazır olanları çalıştırır.
+    pub fn check_timers(&mut self, now_ticks: u64, _ticks_per_ms: u64, _out: &mut Vec<u8>) {
+        let mut to_run: Vec<String> = Vec::new();
+        let mut to_remove: Vec<u32> = Vec::new();
+        for t in &self.timers {
+            if t.fire_at != 0 && now_ticks >= t.fire_at {
+                to_run.push(t.callback.clone());
+                if t.repeat {
+                    // tekrarlayan: tekrar programla
+                    // (basit implementasyon: fire_at'i güncelle)
+                } else {
+                    to_remove.push(t.id);
+                }
+            }
+        }
+        for id in &to_remove {
+            self.remove_timer(*id);
+        }
+        for cb in &to_run {
+            self.microtask_queue.push(cb.clone());
         }
     }
 
@@ -410,13 +595,26 @@ impl JsRuntime {
     }
 
     /// İfadeleri `JsValue` olarak değerlendirir.
-    pub fn eval_val(&self, expr: &str) -> JsValue {
+    pub fn eval_val(&mut self, expr: &str) -> JsValue {
         let e = expr
             .trim()
             .trim_end_matches(|c| c == ';' || c == '\n' || c == '\r')
             .trim();
         if e.is_empty() {
             return JsValue::Undefined;
+        }
+
+        // await expr — Promise değeri varsa çözümlenmiş değeri döndürür.
+        if let Some(rest) = e.strip_prefix("await ") {
+            let val = self.eval_val(rest);
+            if let JsValue::Promise(p) = &val {
+                match p.state {
+                    PromiseState::Fulfilled => return p.value.clone().unwrap_or(JsValue::Undefined),
+                    PromiseState::Rejected => return JsValue::Undefined,
+                    PromiseState::Pending => return JsValue::Undefined,
+                }
+            }
+            return val;
         }
 
         // Parantezleri temizle: ((expr)) -> expr
@@ -563,6 +761,61 @@ impl JsRuntime {
                         };
                         return JsValue::Array(vals);
                     }
+                    "create" => {
+                        // Object.create(proto) — yeni nesne, prototip zinciri kurulur.
+                        let proto_val = self.eval_val(args);
+                        let proto_name = match &proto_val {
+                            JsValue::String(s) => s.clone(),
+                            JsValue::Object(_) => {
+                                // Anonim nesne: bir değişken ismi olarak saklanamaz,
+                                // burada basitçe boş bir prototip kullanılır.
+                                String::new()
+                            }
+                            _ => String::new(),
+                        };
+                        let new_var = format!("__obj_{}", self.values.len());
+                        self.var_set_val(&new_var, JsValue::Object(BTreeMap::new()));
+                        if !proto_name.is_empty() {
+                            self.set_proto(&new_var, &proto_name);
+                        }
+                        return JsValue::Object(BTreeMap::new());
+                    }
+                    _ => {}
+                },
+                "Promise" => match method {
+                    "resolve" => {
+                        let v = self.eval_val(args);
+                        let pvar = format!("__promise_{}", self.values.len());
+                        let mut p = PromiseObj::new();
+                        p.state = PromiseState::Fulfilled;
+                        p.value = Some(v);
+                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+                        return JsValue::Object(BTreeMap::new());
+                    }
+                    "reject" => {
+                        let v = self.eval_val(args);
+                        let pvar = format!("__promise_{}", self.values.len());
+                        let mut p = PromiseObj::new();
+                        p.state = PromiseState::Rejected;
+                        p.value = Some(v);
+                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+                        return JsValue::Object(BTreeMap::new());
+                    }
+                    "all" => {
+                        let arr_val = self.eval_val(args);
+                        let pvar = format!("__promise_{}", self.values.len());
+                        let mut p = PromiseObj::new();
+                        p.state = PromiseState::Fulfilled;
+                        let mut results = Vec::new();
+                        if let JsValue::Array(items) = &arr_val {
+                            for item in items {
+                                results.push(item.clone());
+                            }
+                        }
+                        p.value = Some(JsValue::Array(results));
+                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+                        return JsValue::Object(BTreeMap::new());
+                    }
                     _ => {}
                 },
                 _ => {
@@ -589,7 +842,7 @@ impl JsRuntime {
                                 let needle_str = needle.to_str();
                                 let pos = items
                                     .iter()
-                                    .position(|it| it == &needle || it.to_str() == needle_str);
+                                    .position(|it| it.to_str() == needle_str);
                                 return JsValue::Number(pos.map(|p| p as i64).unwrap_or(-1));
                             }
                             "includes" => {
@@ -597,7 +850,7 @@ impl JsRuntime {
                                 let needle_str = needle.to_str();
                                 let has = items
                                     .iter()
-                                    .any(|it| it == &needle || it.to_str() == needle_str);
+                                    .any(|it| it.to_str() == needle_str);
                                 return JsValue::Bool(has);
                             }
                             "slice" => {
@@ -719,6 +972,32 @@ impl JsRuntime {
                                     .map(|c| c.to_string())
                                     .unwrap_or_default();
                                 return JsValue::String(ch);
+                            }
+                            _ => {}
+                        },
+                        JsValue::Promise(_p) => match method {
+                            "then" => {
+                                // .then(onFulfilled, onRejected) — işleyiciyi kaydet, yeni Promise döndür.
+                                let parts: Vec<&str> = split_top_level_comma(args);
+                                let on_fulfilled = parts.first().map(|s| s.trim().to_string());
+                                let _on_rejected = parts.get(1).map(|s| s.trim().to_string());
+                                let pvar = format!("__promise_{}", self.values.len());
+                                let new_p = PromiseObj::new();
+                                // Mevcut promise'in işleyicilerine ekle (bu promise zaten varsa)
+                                // Basit implementasyon: işleyiciyi microtask sırasına ekle.
+                                if let Some(cb) = &on_fulfilled {
+                                    self.microtask_queue.push(cb.clone());
+                                }
+                                self.values.insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
+                                // Promise değişkenini döndürmek yerine, şimdilik undefined döndürüyoruz.
+                                // Gerçek implementasyon promise değişken adını döndürür.
+                            }
+                            "catch" => {
+                                // .catch(onRejected) — hata işleyicisi kaydet.
+                                let parts: Vec<&str> = split_top_level_comma(args);
+                                if let Some(cb) = parts.first().map(|s| s.trim().to_string()) {
+                                    self.microtask_queue.push(cb);
+                                }
                             }
                             _ => {}
                         },
@@ -854,10 +1133,29 @@ impl JsRuntime {
                         }
                     }
                     JsValue::Object(map) => {
+                        if rhs == "__proto__" {
+                            // Prototip zincirinden prototip nesnesini döndür.
+                            let lhs_name = lhs.trim();
+                            if let Some(proto_name) = self.protos.get(lhs_name) {
+                                if let Some(JsValue::Object(proto_map)) = self.values.get(proto_name) {
+                                    return JsValue::Object(proto_map.clone());
+                                }
+                            }
+                            return JsValue::Undefined;
+                        }
                         if rhs == "length" {
                             return JsValue::Number(map.len() as i64);
                         }
-                        return map.get(rhs).cloned().unwrap_or(JsValue::Undefined);
+                        // Önce kendi özelliklerde, sonra prototip zincirinde ara.
+                        if let Some(v) = map.get(rhs) {
+                            return v.clone();
+                        }
+                        // Prototip zincirinde ara (lhs bir değişken ismiyse).
+                        let lhs_name = lhs.trim();
+                        if let Some(v) = self.val_get_proto(lhs_name, rhs) {
+                            return v;
+                        }
+                        return JsValue::Undefined;
                     }
                     _ => {}
                 }
@@ -934,7 +1232,7 @@ impl JsRuntime {
     }
 
     /// String birleştirmeyi çözer (eski eval_expr mantığı ile tam uyumlu).
-    fn eval_expr_legacy(&self, expr: &str) -> String {
+    fn eval_expr_legacy(&mut self, expr: &str) -> String {
         let b = expr.as_bytes();
         let mut i = 0usize;
         let mut res = String::new();
@@ -1018,12 +1316,12 @@ impl JsRuntime {
     }
 
     /// String birleştirmeyi çözer: `"a" + x + 3`
-    fn eval_expr(&self, expr: &str) -> String {
+    fn eval_expr(&mut self, expr: &str) -> String {
         self.eval_val(expr).to_str()
     }
 
     /// Koşulu değerlendirir: `!`, `&&`, `||`, karşılaştırmalar ve doğruluk.
-    fn eval_cond(&self, cond: &str) -> bool {
+    fn eval_cond(&mut self, cond: &str) -> bool {
         let c = cond.trim();
         if c.is_empty() {
             return true;
@@ -1083,6 +1381,24 @@ impl JsRuntime {
                 return if op == '<' { ln < rn } else { ln > rn };
             }
         }
+        // instanceof: obj instanceof Constructor
+        if let Some(idx) = find_top_level(c.as_bytes(), b"instanceof") {
+            let left = c[..idx].trim();
+            let right = c[idx + 10..].trim();
+            // left bir değişken ismi, right bir fonksiyon ismi olmalı.
+            if let Some(lhs_name) = left.strip_prefix('(') {
+                // (expr) instanceof Constructor — içteki ifadeyi değerlendir
+                if let Some(close) = lhs_name.rfind(')') {
+                    let inner = &lhs_name[..close];
+                    let base_val = self.eval_val(inner);
+                    if let JsValue::Object(_) = base_val {
+                        return self.instance_of(inner, right);
+                    }
+                }
+            } else {
+                return self.instance_of(left, right);
+            }
+        }
         self.eval_val(c).is_truthy()
     }
 
@@ -1099,19 +1415,31 @@ impl JsRuntime {
         }
 
         // Fonksiyon tanımı: function name(arg1, arg2) { body }
+        // async function name(arg1, arg2) { body } — Promise döndüren fonksiyon.
         if let Some(rest) = keyword(s, "function") {
             let r = rest.trim_start();
+            let is_async = r.starts_with("async ");
+            let r = if is_async { &r[6..] } else { r };
             if let Some(open) = r.find('(') {
                 let fname = r[..open].trim();
                 if let Some((param_str, after_params)) = call_args(r, open) {
                     let body_part = r[after_params..].trim_start();
                     if let Some(body) = extract_block(body_part) {
-                        let params = split_top_level_comma(param_str)
+                        let params: Vec<String> = split_top_level_comma(param_str)
                             .into_iter()
                             .map(|p| p.trim().to_string())
                             .filter(|p| !p.is_empty())
                             .collect();
-                        self.define_function(fname, params, body);
+                        self.define_function(fname, params.clone(), body);
+                        if is_async {
+                            // async fonksiyon: Promise dönen bir wrapper kaydet.
+                            let async_name = format!("__async_{}", fname);
+                            self.define_function(
+                                &async_name,
+                                params.clone(),
+                                &format!("var __p = new Promise(function(resolve, reject) {{ {}; resolve(__result); }}); return __p;", body),
+                            );
+                        }
                         return;
                     }
                 }
@@ -1123,6 +1451,13 @@ impl JsRuntime {
         if let Some(rest) = keyword(s, "return") {
             let val = self.eval_val(rest.trim());
             self.last_return = Some(val);
+            return;
+        }
+
+        // await deyimi: await expr;
+        if let Some(rest) = keyword(s, "await") {
+            let _ = self.eval_val(rest.trim());
+            // await ifadesinin geri kalanı microtask sırasına eklenir (basit implementasyon).
             return;
         }
 
@@ -1707,6 +2042,31 @@ impl JsRuntime {
                     out.extend_from_slice(b"");
                 } else if name == "element.getAttribute" {
                     out.extend_from_slice(b"null");
+                } else if name == "setTimeout" {
+                    // setTimeout(callback, ms) — microtask sırasına ekler.
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    if let Some(cb) = parts.first() {
+                        let ms = parts.get(1).map(|m| m.trim().parse::<u32>().unwrap_or(0)).unwrap_or(0);
+                        let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
+                        self.add_timer(cb_str.to_string(), ms, false);
+                    }
+                    out.extend_from_slice(b"0");
+                } else if name == "setInterval" {
+                    // setInterval(callback, ms) — tekrarlayan zamanlayıcı.
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    if let Some(cb) = parts.first() {
+                        let ms = parts.get(1).map(|m| m.trim().parse::<u32>().unwrap_or(0)).unwrap_or(0);
+                        let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
+                        self.add_timer(cb_str.to_string(), ms, true);
+                    }
+                    out.extend_from_slice(b"0");
+                } else if name == "clearTimeout" || name == "clearInterval" {
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    if let Some(id_str) = parts.first() {
+                        let id: u32 = id_str.trim().parse().unwrap_or(0);
+                        self.remove_timer(id);
+                    }
+                    out.extend_from_slice(b"");
                 } else {
                     out.extend_from_slice(value.as_bytes());
                 }
@@ -1749,6 +2109,8 @@ impl JsRuntime {
         for stmt in split_statements(code) {
             self.exec(&stmt, out);
         }
+        // Promise microtask'larını çalıştır (.then() işleyicileri vb.).
+        self.run_microtasks(out);
     }
 }
 
@@ -2208,6 +2570,7 @@ fn json_stringify(val: &JsValue) -> String {
             res.push('}');
             res
         }
+        JsValue::Promise(_) => String::from("Promise { <pending> }"),
     }
 }
 
@@ -2269,7 +2632,7 @@ fn extract_method_call<'a>(s: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
     Some((base, method, args))
 }
 
-const CALLS: [&str; 20] = [
+const CALLS: [&str; 24] = [
     "console.log",
     "console.info",
     "console.warn",
@@ -2290,6 +2653,10 @@ const CALLS: [&str; 20] = [
     "document.createElement",
     "element.appendChild",
     "element.remove",
+    "setTimeout",
+    "setInterval",
+    "clearTimeout",
+    "clearInterval",
 ];
 
 /// JS kaynak kodunu `;` ve satır sonlarına göre deyimlere böler

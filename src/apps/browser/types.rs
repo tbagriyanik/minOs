@@ -143,6 +143,14 @@ pub enum TextAlign {
     Right,
 }
 
+/// Grid izi (track) boyutu: piksel veya fr oranı.
+#[derive(Clone, Debug)]
+pub enum GridTrack {
+    Fixed(usize),   // Sabit piksel boyutu
+    Fraction(u32),  // esnek oran (1fr, 2fr vb.)
+    Auto,           // İçeriğe göre otomatik
+}
+
 #[derive(Clone)]
 pub struct ElementStyle {
     pub color: Option<u32>,
@@ -217,6 +225,14 @@ pub struct ElementStyle {
     pub transition_property: Option<String>,
     /// CSS opacity degeri (1 = tam).
     pub opacity: f32,
+    /// CSS Grid: sütun izleri (grid-template-columns).
+    pub grid_template_columns: Vec<GridTrack>,
+    /// CSS Grid: satir izleri (grid-template-rows).
+    pub grid_template_rows: Vec<GridTrack>,
+    /// CSS Grid: hucreler arasi bosluk (grid-gap / gap).
+    pub grid_gap: usize,
+    /// CSS Grid: otomatik yerlestirme etkin mi? (grid-auto-flow: row default).
+    pub grid_auto_flow: bool,
 }
 
 impl ElementStyle {
@@ -261,6 +277,10 @@ impl ElementStyle {
             transition_duration: 0.0,
             transition_property: None,
             opacity: 1.0,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_gap: 0,
+            grid_auto_flow: true,
         }
     }
 
@@ -384,6 +404,16 @@ impl ElementStyle {
         if other.opacity > 0.0 {
             self.opacity = other.opacity;
         }
+        if !other.grid_template_columns.is_empty() {
+            self.grid_template_columns = other.grid_template_columns.clone();
+        }
+        if !other.grid_template_rows.is_empty() {
+            self.grid_template_rows = other.grid_template_rows.clone();
+        }
+        if other.grid_gap > 0 {
+            self.grid_gap = other.grid_gap;
+        }
+        self.grid_auto_flow = other.grid_auto_flow;
     }
 }
 

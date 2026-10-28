@@ -1,6 +1,8 @@
 //! HTML tokenizer ve kelime sarma tabanlı yerleşim motoru (no_std).
 extern crate alloc;
+use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use super::css::{find_keyframes, match_css_style, parse_css};
@@ -262,6 +264,15 @@ pub fn render_html_to_lines(
     // Sol kenar boşluğu (CSS margin-left / padding-left) — kapanışta sıfırlanır.
     let cur_line_indent = core::cell::Cell::new(0usize);
 
+    // CSS Grid durumu
+    let mut in_grid = false;
+    let mut grid_columns: Vec<super::types::GridTrack> = Vec::new();
+    let mut grid_gap: usize = 0;
+    let mut grid_cells: Vec<Vec<Vec<TextSpan>>> = Vec::new(); // satir -> hucreler -> spanlar
+    let mut grid_current_row: usize = 0;
+    let mut grid_current_col: usize = 0;
+    let mut grid_col_count: usize = 0;
+
     let tag_indent = |t: HtmlTagType| -> usize {
         let base: usize = match t {
             HtmlTagType::ListItem => 18,
@@ -447,25 +458,55 @@ pub fn render_html_to_lines(
             let is_link = active_link.is_some();
             let onclick_str = active_onclick.as_deref().unwrap_or("");
             let elem_id_str = active_id.as_deref().unwrap_or("");
-            flush_word(
-                out_lines,
-                &mut cur_line_spans,
-                &mut cur_line_w,
-                &mut word_buf,
-                current_color,
-                current_bg,
-                is_link,
-                link_target,
-                active_is_button,
-                false,
-                onclick_str,
-                elem_id_str,
-                current_bold,
-                current_underline,
-                cur_line_tag,
-                cur_line_align,
-                max_lines,
-            );
+            // CSS Grid modu: kelimeyi grid hucreye ekle
+            if in_grid && !word_buf.is_empty() {
+                while grid_cells.len() <= grid_current_row {
+                    grid_cells.push(Vec::new());
+                }
+                while grid_cells[grid_current_row].len() <= grid_current_col {
+                    grid_cells[grid_current_row].push(Vec::new());
+                }
+                let cell_spans = &mut grid_cells[grid_current_row][grid_current_col];
+                cell_spans.push(TextSpan {
+                    text: core::mem::take(&mut word_buf),
+                    color: current_color,
+                    bg_color: current_bg,
+                    is_link,
+                    link_url: String::from(link_target),
+                    is_button: active_is_button,
+                    is_image: false,
+                    bold: current_bold,
+                    underline: current_underline,
+                    onclick: String::from(onclick_str),
+                    elem_id: String::from(elem_id_str),
+                });
+                grid_current_col += 1;
+                if grid_current_col >= grid_col_count.max(1) {
+                    grid_current_col = 0;
+                    grid_current_row += 1;
+                    grid_cells.push(Vec::new());
+                }
+            } else {
+                flush_word(
+                    out_lines,
+                    &mut cur_line_spans,
+                    &mut cur_line_w,
+                    &mut word_buf,
+                    current_color,
+                    current_bg,
+                    is_link,
+                    link_target,
+                    active_is_button,
+                    false,
+                    onclick_str,
+                    elem_id_str,
+                    current_bold,
+                    current_underline,
+                    cur_line_tag,
+                    cur_line_align,
+                    max_lines,
+                );
+            }
 
             let tag_name_str = core::str::from_utf8(name).unwrap_or("");
             let attrs = &tag_content[name_end..];
@@ -510,6 +551,28 @@ pub fn render_html_to_lines(
                 // display:none — içeriği gizle
                 if matched.display_none && hidden_until_close.is_none() {
                     hidden_until_close = Some(name.to_vec());
+                }
+
+                // CSS Grid konteynerı başlat
+                if matched.display == Some(2) && !in_grid {
+                    in_grid = true;
+                    grid_columns = matched.grid_template_columns.clone();
+                    grid_gap = matched.grid_gap;
+                    grid_cells = Vec::new();
+                    grid_current_row = 0;
+                    grid_current_col = 0;
+                    grid_col_count = if grid_columns.is_empty() { 1 } else { grid_columns.len() };
+                    // İlk satırı oluştur
+                    grid_cells.push(Vec::new());
+                    // Grid konteynerı için mevcut satırı temizle
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                 }
 
                 if eq_ascii(name, b"a") {
@@ -1084,6 +1147,35 @@ pub fn render_html_to_lines(
                     active_id = id_attr.map(String::from);
                 }
             } else {
+                // CSS Grid konteynerını kapat ve grid'i render et
+                if in_grid {
+                    render_grid(
+                        out_lines,
+                        &mut grid_cells,
+                        &grid_columns,
+                        grid_gap,
+                        grid_current_row,
+                        grid_current_col,
+                        wrap_width_px,
+                        max_lines,
+                    );
+                    in_grid = false;
+                    grid_cells = Vec::new();
+                    grid_columns = Vec::new();
+                    grid_gap = 0;
+                    grid_current_row = 0;
+                    grid_current_col = 0;
+                    grid_col_count = 0;
+                    // Grid sonrasi mevcut satiri temizle
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                }
                 cur_line_indent.set(0);
                 current_bold = false;
                 current_underline = false;
@@ -1398,4 +1490,111 @@ pub fn render_html_to_lines(
         cur_line_align,
         max_lines,
     );
+}
+
+/// CSS Grid render etme: hucreleri satir satir, sutunlara gore yerlestir.
+fn render_grid(
+    out_lines: &mut Vec<BrowserLine>,
+    grid_cells: &mut Vec<Vec<Vec<TextSpan>>>,
+    grid_columns: &[super::types::GridTrack],
+    grid_gap: usize,
+    _total_rows: usize,
+    _total_cols: usize,
+    wrap_width_px: usize,
+    max_lines: usize,
+) {
+    if grid_cells.is_empty() {
+        return;
+    }
+
+    let col_count = if grid_columns.is_empty() { 1 } else { grid_columns.len() };
+    let avail_w = wrap_width_px.saturating_sub(grid_gap.saturating_mul(col_count.saturating_sub(1)));
+
+    // Sutun genliklerini hesapla
+    let mut col_widths: Vec<usize> = vec![0; col_count];
+    let mut total_fr: u32 = 0;
+    let mut total_fixed: usize = 0;
+    for (i, track) in grid_columns.iter().enumerate() {
+        match track {
+            super::types::GridTrack::Fixed(w) => {
+                col_widths[i] = *w;
+                total_fixed += w;
+            }
+            super::types::GridTrack::Fraction(fr) => {
+                total_fr += fr;
+            }
+            super::types::GridTrack::Auto => {}
+        }
+    }
+
+    // Fr oranlarini piksele cevir
+    let remaining_w = avail_w.saturating_sub(total_fixed);
+    if total_fr > 0 && remaining_w > 0 {
+        let per_fr = remaining_w as f32 / total_fr as f32;
+        for (i, track) in grid_columns.iter().enumerate() {
+            if let super::types::GridTrack::Fraction(fr) = track {
+                col_widths[i] = (per_fr * *fr as f32) as usize;
+            }
+        }
+    }
+
+    // Her satiri render et
+    for row in 0..grid_cells.len() {
+        if out_lines.len() >= max_lines {
+            break;
+        }
+
+        let mut line_spans: Vec<TextSpan> = Vec::new();
+        let mut x_offset: usize = 0;
+
+        for col in 0..col_count {
+            if col > 0 {
+                x_offset += grid_gap;
+            }
+
+            // Bosluk ile hucre ayracı
+            if col > 0 && !line_spans.is_empty() {
+                line_spans.push(TextSpan {
+                    text: String::from(" "),
+                    color: 0x000000,
+                    bg_color: None,
+                    is_link: false,
+                    link_url: String::new(),
+                    is_button: false,
+                    is_image: false,
+                    bold: false,
+                    underline: false,
+                    onclick: String::new(),
+                    elem_id: String::new(),
+                });
+                x_offset += 1;
+            }
+
+            let cell_spans = if row < grid_cells.len() && col < grid_cells[row].len() {
+                &grid_cells[row][col]
+            } else {
+                &Vec::new()
+            };
+
+            for span in cell_spans.iter() {
+                let mut s = span.clone();
+                // Girinti ekle (basit: x_offset kadar bosluk onune)
+                if x_offset > 0 && s.text.starts_with(' ') == false {
+                    s.text = format!("{}{}", " ".repeat(x_offset.min(50)), s.text);
+                }
+                line_spans.push(s);
+            }
+
+            x_offset += col_widths[col];
+        }
+
+        if !line_spans.is_empty() {
+            out_lines.push(BrowserLine {
+                spans: line_spans,
+                tag: HtmlTagType::Normal,
+                indent: 0,
+                align: TextAlign::Left,
+            });
+        }
+    }
 }

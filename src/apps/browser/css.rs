@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use super::types::{html_color, ElementStyle, TextAlign};
+use super::types::{html_color, ElementStyle, GridTrack, TextAlign};
 
 #[derive(Clone)]
 pub struct CssRule {
@@ -456,8 +456,80 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.clear_both = true;
             }
         }
+        // CSS Grid ozellikleri
+        "grid-template-columns" => {
+            style.grid_template_columns = parse_grid_tracks(val);
+        }
+        "grid-template-rows" => {
+            style.grid_template_rows = parse_grid_tracks(val);
+        }
+        "grid-gap" | "gap" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.grid_gap = px;
+            }
+        }
+        "grid-area" => {
+            // grid-area: row-start / column-start / row-end / column-end
+            // Basit implementasyon: sadece ilk iki degeri kaydet (satir, sutun baslangici)
+            let parts: Vec<&str> = val.split('/').collect();
+            if let Some(first) = parts.first() {
+                if let Ok(_n) = first.trim().parse::<usize>() {
+                    // grid-area basit tutuluyor, html.rs'te kullanilacak
+                }
+            }
+        }
+        "grid-column" => {
+            // grid-column: start / end
+        }
+        "grid-row" => {
+            // grid-row: start / end
+        }
         _ => {}
     }
+}
+
+/// Grid iz listesini ayristir: "100px 1fr 2fr" veya "repeat(3, 1fr)"
+fn parse_grid_tracks(val: &str) -> Vec<GridTrack> {
+    let mut tracks = Vec::new();
+    let t = val.trim();
+
+    // repeat(n, track) duzeni
+    if let Some(inner) = t.strip_prefix("repeat(") {
+        if let Some(close) = inner.find(')') {
+            let args = &inner[..close];
+            let comma = args.find(',').unwrap_or(args.len());
+            let count: u32 = args[..comma].trim().parse().unwrap_or(1);
+            let track_str = args[comma + 1..].trim();
+            let track = parse_single_grid_track(track_str);
+            for _ in 0..count {
+                tracks.push(track.clone());
+            }
+            return tracks;
+        }
+    }
+
+    // Boşlukla ayrılmış izler
+    for part in t.split_whitespace() {
+        tracks.push(parse_single_grid_track(part));
+    }
+    tracks
+}
+
+/// Tek bir grid izini ayristir.
+fn parse_single_grid_track(part: &str) -> GridTrack {
+    let p = part.trim();
+    if p.eq_ignore_ascii_case("auto") {
+        return GridTrack::Auto;
+    }
+    if let Some(n) = p.strip_suffix("fr") {
+        if let Ok(fr) = n.trim().parse::<u32>() {
+            return GridTrack::Fraction(fr);
+        }
+    }
+    if let Some(px) = parse_px_value(p, None, None, None, None) {
+        return GridTrack::Fixed(px);
+    }
+    GridTrack::Auto
 }
 
 /// Seçicileri ve bildirim bloklarını ayrıştırır; `@media` gibi iç içe bloklar recursive işlenir.

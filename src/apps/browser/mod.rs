@@ -1215,7 +1215,7 @@ impl BrowserApp {
             self.page_lines.push(BrowserLine {
                 spans: alloc::vec![TextSpan {
                     text: String::from(line),
-                    color: Color::TEXT_MAIN,
+                    color: Color::BLACK,
                     bg_color: None,
                     is_link: false,
                     link_url: String::new(),
@@ -2850,7 +2850,7 @@ impl BrowserApp {
                                 self.page_lines.push(BrowserLine {
                                     spans: alloc::vec![TextSpan {
                                         text: String::from(line),
-                                        color: Color::TEXT_MAIN,
+                                        color: Color::BLACK,
                                         bg_color: None,
                                         is_link: false,
                                         link_url: String::new(),

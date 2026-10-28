@@ -217,7 +217,7 @@ pub fn render_html_to_lines(
     // script etiketleri ise çıktidan çıkarılır.
     let js_body = crate::apps::js::inline_scripts(body);
     let body: &[u8] = &js_body;
-    let mut current_color = Color::TEXT_MAIN;
+    let mut current_color = Color::BLACK;
     let mut current_bg: Option<u32> = None;
     let mut active_link: Option<String> = None;
     let mut active_onclick: Option<String> = None;
@@ -538,7 +538,7 @@ pub fn render_html_to_lines(
                     );
                     cur_line_tag = HtmlTagType::Heading1;
                     if matched.color.is_none() {
-                        current_color = Color::ACCENT_PINK;
+                        current_color = Color::BLACK;
                     }
                 } else if eq_ascii(name, b"h2") {
                     flush_line(
@@ -551,7 +551,7 @@ pub fn render_html_to_lines(
                     );
                     cur_line_tag = HtmlTagType::Heading2;
                     if matched.color.is_none() {
-                        current_color = Color::ACCENT_BLUE;
+                        current_color = Color::BLACK;
                     }
                 } else if eq_ascii(name, b"h3") {
                     flush_line(
@@ -564,7 +564,7 @@ pub fn render_html_to_lines(
                     );
                     cur_line_tag = HtmlTagType::Heading3;
                     if matched.color.is_none() {
-                        current_color = Color::ACCENT_GREEN;
+                        current_color = Color::BLACK;
                     }
                 } else if eq_ascii(name, b"span") {
                     // <span>: inline container, stilleri uygulamak için kullanılır
@@ -580,7 +580,7 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"em") {
                     // <em>: vurgulu metin
                     if matched.color.is_none() {
-                        current_color = Color::ACCENT_BLUE;
+                        current_color = Color::BLACK;
                     }
                     if matched.underline {
                         current_underline = true;
@@ -1053,7 +1053,7 @@ pub fn render_html_to_lines(
                     cur_line_tag = HtmlTagType::Quote;
                     cur_line_indent.set(matched.indent_px.max(16));
                     if matched.color.is_none() {
-                        current_color = Color::TEXT_MUTED;
+                        current_color = Color::BLACK;
                     }
                 } else if matches!(
                     name,
@@ -1117,7 +1117,7 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Normal;
-                    current_color = Color::TEXT_MAIN;
+                    current_color = Color::BLACK;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
                 } else if eq_ascii(name, b"blockquote") {
@@ -1132,7 +1132,7 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Normal;
-                    current_color = Color::TEXT_MAIN;
+                    current_color = Color::BLACK;
                     cur_line_indent.set(0);
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
@@ -1144,7 +1144,7 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Normal;
-                    current_color = Color::TEXT_MAIN;
+                    current_color = Color::BLACK;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
                     list_stack.pop();
@@ -1158,7 +1158,7 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Normal;
-                    current_color = Color::TEXT_MAIN;
+                    current_color = Color::BLACK;
                     current_bg = None;
                     cur_line_align = TextAlign::Left;
                 } else if eq_ascii(name, b"span") {

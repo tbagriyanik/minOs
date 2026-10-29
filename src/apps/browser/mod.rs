@@ -4,8 +4,10 @@
 //! - `types`: paylaşılan veri tipleri (`TextSpan`, `BrowserLine` ...)
 //! - `css`: CSS ayrıştırma ve stil eşleştirme
 //! - `html`: HTML tokenize + yerleşim (`render_html_to_lines`)
+//! - `color`: renk sabitleri ve dönüştürme yardımcıları
 //! - `crate::apps::js`: minJs betik motoru
 //! - bu dosya: HTTP/TLS akışı, geçmiş ve `BrowserApp` pencere denetçisi
+mod color;
 mod css;
 mod html;
 mod types;
@@ -431,6 +433,7 @@ impl BrowserApp {
             download_data: None,
         };
         app.set_url(b"minos://help");
+        app.navigate();
         app
     }
 
@@ -2111,7 +2114,7 @@ impl BrowserApp {
         }
         match value {
             "minos://help" => {
-                self.active_tab = 0;
+                self.active_tab = 3;
                 self.page_loaded = true;
                 if !suppress {
                     history_push(value);
@@ -2120,9 +2123,14 @@ impl BrowserApp {
                     "Yerel minOs yardım sayfası açıldı.",
                     "Local minOs help page opened.",
                 );
+                self.load_html(
+                    b"<html><body><h1>minOs Help</h1><p>This is the local minOs browser help page.</p><p>Features:</p><ul><li>HTML rendering</li><li>CSS styles</li><li>PNG image display (data: URLs)</li><li>Links and bookmarks</li></ul><p><a href='minos://demo'>Demo page</a> | <a href='minos://demo-img'>Image demo</a> | <a href='minos://demo-video'>Video demo</a></p></body></html>",
+                    600,
+                    256,
+                );
             }
             "minos://cats" => {
-                self.active_tab = 1;
+                self.active_tab = 3;
                 self.page_loaded = true;
                 if !suppress {
                     history_push(value);
@@ -2130,6 +2138,11 @@ impl BrowserApp {
                 self.status = crate::gui::ui_text(
                     "Yerel KediWiki sayfası açıldı.",
                     "Local KediWiki page opened.",
+                );
+                self.load_html(
+                    b"<html><body><h1>KediWiki</h1><p>Local cats and encyclopedia page.</p><p><img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+hHgAHggJ/chD2wbwAAAABJRU5ErkJggg==' alt='Cat' /></p><p><a href='minos://help'>Back to help</a></p></body></html>",
+                    600,
+                    256,
                 );
             }
             s if s.starts_with("minos://history") => {

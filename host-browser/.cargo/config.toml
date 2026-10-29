@@ -1,6 +1,0 @@
-[unstable]
-# build-std ile alloc ve core derlenir (no_std ortamı için)
-build-std = ["core", "alloc"]
-
-[target.x86_64-minos]
-linker = "rust-lld"

@@ -1,4 +1,8 @@
 //! Renk sabitleri ve dönüştürme yardımcıları (no_std).
+//! Taşındı: host-browser/src/color.rs
+
+#![allow(dead_code)]
+
 pub const BLACK: u32 = 0x000000;
 pub const WHITE: u32 = 0xFFFFFF;
 pub const RED: u32 = 0xFF0000;
@@ -24,6 +28,7 @@ pub const TEXT_MAIN: u32 = 0x000000;
 pub const TEXT_MUTED: u32 = 0x666666;
 pub const BORDER: u32 = 0x999999;
 
+#[allow(dead_code)]
 pub fn u32_to_rgb(c: u32) -> (u8, u8, u8) {
     (
         ((c >> 16) & 0xFF) as u8,
@@ -32,6 +37,7 @@ pub fn u32_to_rgb(c: u32) -> (u8, u8, u8) {
     )
 }
 
+#[allow(dead_code)]
 pub fn color32_to_u32(r: u8, g: u8, b: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }

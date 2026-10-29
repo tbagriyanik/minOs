@@ -79,30 +79,30 @@ pub fn html_color(value: &[u8]) -> Option<u32> {
         .split(|b| *b == b';' || b.is_ascii_whitespace() || *b == b'\'' || *b == b'"' || *b == b'(')
         .next()?
     {
-        b"black" => Some(0x101010),
+        b"black" => Some(0x000000),
         b"white" => Some(0xFFFFFF),
-        b"red" => Some(0xD03030),
-        b"green" => Some(0x188040),
-        b"blue" => Some(0x2050C0),
-        b"yellow" => Some(0xD0A020),
+        b"red" => Some(0xFF0000),
+        b"green" => Some(0x008000),
+        b"blue" => Some(0x0000FF),
+        b"yellow" => Some(0xFFFF00),
         b"gray" | b"grey" => Some(0x808080),
-        b"orange" => Some(0xE07020),
-        b"purple" => Some(0x8020A0),
-        b"cyan" => Some(0x20A0C0),
-        b"aqua" => Some(0x20A0C0),
-        b"teal" => Some(0x208080),
-        b"navy" => Some(0x103060),
-        b"maroon" => Some(0x802020),
-        b"olive" => Some(0x808020),
-        b"lime" => Some(0x40C020),
+        b"orange" => Some(0xFFA500),
+        b"purple" => Some(0x800080),
+        b"cyan" => Some(0x00FFFF),
+        b"aqua" => Some(0x00FFFF),
+        b"teal" => Some(0x008080),
+        b"navy" => Some(0x000080),
+        b"maroon" => Some(0x800000),
+        b"olive" => Some(0x808000),
+        b"lime" => Some(0x00FF00),
         b"silver" => Some(0xC0C0C0),
-        b"fuchsia" => Some(0xC020C0),
-        b"magenta" => Some(0xC020C0),
-        b"pink" => Some(0xE06090),
-        b"lightgray" => Some(0xD0D0D0),
-        b"lightgrey" => Some(0xD0D0D0),
-        b"darkgray" => Some(0x505050),
-        b"darkgrey" => Some(0x505050),
+        b"fuchsia" => Some(0xFF00FF),
+        b"magenta" => Some(0xFF00FF),
+        b"pink" => Some(0xFFC0CB),
+        b"lightgray" => Some(0xD3D3D3),
+        b"lightgrey" => Some(0xD3D3D3),
+        b"darkgray" => Some(0xA9A9A9),
+        b"darkgrey" => Some(0xA9A9A9),
         b"dimgray" => Some(0x696969),
         b"dimgrey" => Some(0x696969),
         b"whitesmoke" => Some(0xF5F5F5),
@@ -537,6 +537,6 @@ mod tests {
     #[test]
     fn test_html_colors() {
         assert_eq!(html_color(b"#ff0000"), Some(0xff0000));
-        assert_eq!(html_color(b"red"), Some(0xd03030));
+        assert_eq!(html_color(b"red"), Some(0xff0000));
     }
 }

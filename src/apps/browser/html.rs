@@ -19,6 +19,33 @@ pub fn eq_ascii(a: &[u8], b: &[u8]) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// Base64 decode (standard alphabet, with padding support). Whitespace is ignored.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+    for c in input.chars() {
+        let val = match c {
+            'A'..='Z' => c as u32 - b'A' as u32,
+            'a'..='z' => c as u32 - b'a' as u32 + 26,
+            '0'..='9' => c as u32 - b'0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            '=' => break,
+            _ if c.is_ascii_whitespace() => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1u32 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
 /// Renk u32'undan opacity ile (0.0-1.0) blend edilerek yeni renk dondurur.
 fn blend_color_with_opacity(color: u32, opacity: f32) -> u32 {
     if opacity >= 1.0 {
@@ -345,6 +372,9 @@ pub fn render_html_to_lines(
                 link_url: String::from(link_url),
                 is_button,
                 is_image,
+                image_width: 0,
+                image_height: 0,
+                image_rgb: None,
                 bold,
                 underline,
                 onclick: String::from(onclick),
@@ -380,6 +410,9 @@ pub fn render_html_to_lines(
                 link_url: String::from(link_url),
                 is_button,
                 is_image,
+                image_width: 0,
+                image_height: 0,
+                image_rgb: None,
                 bold,
                 underline,
                 onclick: String::from(onclick),
@@ -475,6 +508,9 @@ pub fn render_html_to_lines(
                     link_url: String::from(link_target),
                     is_button: active_is_button,
                     is_image: false,
+                    image_width: 0,
+                    image_height: 0,
+                    image_rgb: None,
                     bold: current_bold,
                     underline: current_underline,
                     onclick: String::from(onclick_str),
@@ -1022,15 +1058,91 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
-                    // Simple image placeholder box: show alt text
-                    word_buf.push('[');
-                    for ch in label.chars() {
-                        if !ch.is_control() {
-                            word_buf.push(ch);
+                    // Decode image from data URL or src attribute and render inline.
+                    let mut image_decoded: Option<(usize, usize, Vec<u8>)> = None;
+                    if let Some(src) = extract_attr(attrs, b"src") {
+                        if src.starts_with("data:image/") {
+                            if let Some(comma_pos) = src.find(',') {
+                                let data_part = &src[comma_pos + 1..];
+                                let is_base64 = src[..comma_pos].contains("base64");
+                                if is_base64 {
+                                    if let Some(decoded_bytes) = base64_decode(data_part) {
+                                        if let Some(img) = crate::apps::imgdecode::decode(&decoded_bytes) {
+                                            image_decoded = Some((img.width, img.height, img.rgb));
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
-                    word_buf.push(']');
-                    word_buf.push(' ');
+
+                    // Calculate display size (max 200px wide, maintain aspect ratio)
+                    let (img_w, _img_h) = image_decoded.as_ref().map_or((64, 64), |(w, h, _)| {
+                        let max_w = 200usize;
+                        if *w > max_w {
+                            let scale = max_w as f32 / *w as f32;
+                            (max_w, (*h as f32 * scale) as usize)
+                        } else {
+                            (*w, *h)
+                        }
+                    });
+
+                    // Check if image fits on current line, flush if needed
+                    let scale = match cur_line_tag {
+                        HtmlTagType::Heading1 => 2,
+                        _ => 1,
+                    };
+                    let space_w = MinGuiCompositor::text_width(" ", scale);
+                    let indent = tag_indent(cur_line_tag);
+                    let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+                    let img_w_px = img_w.max(1);
+
+                    if cur_line_w > 0 && cur_line_w + space_w + img_w_px > eff_wrap {
+                        flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                    }
+
+                    // Add image span
+                    cur_line_w += if cur_line_w > 0 { space_w + img_w_px } else { img_w_px };
+
+                    if let Some((w, h, rgb)) = image_decoded {
+                        cur_line_spans.push(TextSpan {
+                            text: format!("[{}]", label),
+                            color: current_color,
+                            bg_color: current_bg,
+                            is_link,
+                            link_url: String::from(link_target),
+                            is_button: active_is_button,
+                            is_image: true,
+                            image_width: w,
+                            image_height: h,
+                            image_rgb: Some(rgb),
+                            onclick: String::from(onclick_str),
+                            elem_id: String::from(elem_id_str),
+                            bold: current_bold,
+                            underline: current_underline,
+                        });
+                    } else {
+                        // Fallback: show alt text as placeholder
+                        let mut alt_text = String::from("[");
+                        alt_text.push_str(label);
+                        alt_text.push(']');
+                        cur_line_spans.push(TextSpan {
+                            text: alt_text,
+                            color: current_color,
+                            bg_color: current_bg,
+                            is_link,
+                            link_url: String::from(link_target),
+                            is_button: active_is_button,
+                            is_image: false,
+                            image_width: 0,
+                            image_height: 0,
+                            image_rgb: None,
+                            onclick: String::from(onclick_str),
+                            elem_id: String::from(elem_id_str),
+                            bold: current_bold,
+                            underline: current_underline,
+                        });
+                    }
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,
@@ -1578,6 +1690,9 @@ fn render_grid(
                     link_url: String::new(),
                     is_button: false,
                     is_image: false,
+                    image_width: 0,
+                    image_height: 0,
+                    image_rgb: None,
                     bold: false,
                     underline: false,
                     onclick: String::new(),

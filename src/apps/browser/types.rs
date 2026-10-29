@@ -426,6 +426,9 @@ pub struct TextSpan {
     pub link_url: String,
     pub is_button: bool,
     pub is_image: bool,
+    pub image_width: usize,
+    pub image_height: usize,
+    pub image_rgb: Option<Vec<u8>>,
     pub onclick: String,
     pub elem_id: String,
     /// CSS `font-weight: bold` karşılığı (sentez kalın çizim).

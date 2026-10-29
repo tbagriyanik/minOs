@@ -208,13 +208,13 @@ fn make_ocsp_revoked_der(_serial: &[u8]) -> Vec<u8> {
 #[test]
 fn ocsp_crl_root_serial_extraction() {
     let certs = list_root_certs();
-    assert!(certs.len() >= 40, "En az 40 kok CA bekleniyor, {} bulundu", certs.len());
+    assert!(certs.len() >= 40, "En az 40 kok CA bekleniyor");
 
     let mut parsed = 0;
-    for (i, cert_der) in certs.iter().enumerate() {
+    for cert_der in certs.iter() {
         match certificate_serial(cert_der) {
             Ok(serial) => {
-                assert!(!serial.is_empty(), "Kok CA #{}: seri numarasi bos", i);
+                assert!(!serial.is_empty(), "Kok CA seri numarasi bos");
                 parsed += 1;
             }
             Err(_) => {
@@ -359,7 +359,7 @@ fn ocsp_crl_check_all_roots() {
     let certs = list_root_certs();
     assert!(certs.len() >= 40);
 
-    for (i, cert_der) in certs.iter().enumerate() {
+    for cert_der in certs.iter() {
         let serial = match certificate_serial(cert_der) {
             Ok(s) => s,
             Err(_) => continue,
@@ -371,8 +371,7 @@ fn ocsp_crl_check_all_roots() {
             Ok(r) => assert_eq!(
                 r.status,
                 RevocationStatus::Unknown,
-                "Kok #{}: gecersiz CRL Unknown olmali",
-                i
+                "Kok CA: gecersiz CRL Unknown olmali"
             ),
             Err(_) => {},
         }
@@ -383,8 +382,7 @@ fn ocsp_crl_check_all_roots() {
             Ok(r) => assert_eq!(
                 r.status,
                 RevocationStatus::Unknown,
-                "Kok #{}: gecersiz OCSP Unknown olmali",
-                i
+                "Kok CA: gecersiz OCSP Unknown olmali"
             ),
             Err(_) => {}, // Ayrıştırma hatasi da kabul edilebilir
         }
@@ -422,7 +420,6 @@ fn ocsp_crl_root_count() {
     let certs = list_root_certs();
     assert!(
         certs.len() >= 40,
-        "En az 40 kok CA sertifikasi bekleniyor, {} bulundu",
-        certs.len()
+        "En az 40 kok CA sertifikasi bekleniyor"
     );
 }

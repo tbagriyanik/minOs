@@ -12,7 +12,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-100%2C971%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-103%2C111%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -209,9 +209,9 @@ The minOs VFS layer supports several file systems, but each file system's capabi
 | **FAT32** | **Full Read / Write / Format / Persistence** | Full file reading, writing, creation and deletion on MBR/GPT disks; `settings.cfg` and `VFS.DAT` system persistence. |
 | **Ext2** | **Read / Write / Format** | Mounting ATA disk partitions via `src/fs/ext2.rs`, directory listing and file read/write. |
 | **Ext4** | **Read / Write / Format** | `src/fs/ext4.rs` (format) + `src/fs/ext4_rw.rs` (read/write) with 1024-byte blocks, 256-byte inodes and multiple block groups. Block mapping is ext2-compatible (direct + single/double indirect); **extents tree, journal (JBD2), htree (dir_index) and inline data are not supported** — volumes with these features enabled are not mounted. The Linux `ext4` driver mounts the volume without problems. |
-| **exFAT** | **Read / Write / Format** | `src/fs/exfat.rs` (format: VBR, FAT, allocation bitmap, up-case table) + `src/fs/exfat_rw.rs` (read/write: root/sub directories, file creation/deletion, FAT-chained multi-cluster files, Unicode names). Full validation of long-name entries and timestamp/ACL writing are not yet available. |
+| **exFAT** | **Read / Write / Format** (default **disabled**) | `src/fs/exfat.rs` (format: VBR, FAT, allocation bitmap, up-case table) + `src/fs/exfat_rw.rs` (read/write: root/sub directories, file creation/deletion, FAT-chained multi-cluster files, Unicode names). Full validation of long-name entries and timestamp/ACL writing are not yet available. Requires `cargo build --features exfat` to build. |
 | **ISO9660** | **Read-only** | Read support for live CD/DVD and installation media contents. |
-| **exFAT Patent Note** | **Microsoft Patent License** | exFAT was published by Microsoft as an open specification in 2019. Microsoft provides a “free, irrevocable” patent license commitment for exFAT implementations (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). Although minOs is not a member of OIN (Open Invention Network), this license commitment is generally considered sufficient protection for personal/open-source use. |
+| **exFAT Patent Note** | **Microsoft Patent License** | exFAT was published by Microsoft as an open specification in 2019. Microsoft provides a “free, irrevocable” patent license commitment for exFAT implementations (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). Although minOs is not a member of OIN (Open Invention Network), this license commitment is generally considered sufficient protection for personal/open-source use. exFAT support is disabled by default; enabling it constitutes a conscious risk acceptance. |
 
 ---
 

@@ -12,7 +12,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-100%2C971%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-103%2C111%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -210,9 +210,9 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 | **FAT32** | **Tam Okuma / Yazma / Biçimlendirme / Kalıcılık** | MBR/GPT disklerde tam dosya okuma, yazma, oluşturma, silme; `settings.cfg` ve `VFS.DAT` sistem kalıcılığı. |
 | **Ext2** | **Okuma / Yazma / Biçimlendirme** | `src/fs/ext2.rs` üzerinden ATA disk bölümlerine mount etme, dizin listeleme ve dosya okuma/yazma. |
 | **Ext4** | **Okuma / Yazma / Biçimlendirme** | `src/fs/ext4.rs` (biçimlendirme) + `src/fs/ext4_rw.rs` (okuma/yazma) ile 1024 baytlık blok, 256 baytlık inode ve çoklu blok grubu desteklenir. Blok eşleme ext2 uyumludur (direct + single/double indirect); **extents ağacı, journal (JBD2), htree (dir_index) ve inline data desteklenmez** — bu özellikleri etkin birimler mount edilmez. Linux `ext4` sürücüsü birimi sorunsuz bağlar. |
-| **exFAT** | **Okuma / Yazma / Biçimlendirme** | `src/fs/exfat.rs` (biçimlendirme: VBR, FAT, allocation bitmap, up-case tablosu) + `src/fs/exfat_rw.rs` (okuma/yazma: kök/alt dizin, dosya oluşturma/silme, FAT zincirli çok kümeli dosyalar, Unicode adlar). Long-name girdilerinin tam doğrulaması ve timestamp/ACL yazımı henüz yoktur. |
+| **exFAT** | **Okuma / Yazma / Biçimlendirme** (varsayılan **kapalı**) | `src/fs/exfat.rs` (biçimlendirme: VBR, FAT, allocation bitmap, up-case tablosu) + `src/fs/exfat_rw.rs` (okuma/yazma: kök/alt dizin, dosya oluşturma/silme, FAT zincirli çok kümeli dosyalar, Unicode adlar). Long-name girdilerinin tam doğrulaması ve timestamp/ACL yazımı henüz yoktur. Derlemek için `cargo build --features exfat` gerekir. |
 | **ISO9660** | **Salt Okunur (Read-only)** | Canlı CD/DVD ve kurulum medyası içeriğini okuma desteği. |
-| **exFAT Patent Notu** | **Microsoft Patent Lisansı** | exFAT, Microsoft tarafından 2019'da açık spesifikasyon olarak yayımlanmıştır. Microsoft, exFAT uygulama için “ücretsiz, geri alınamaz” bir patent lisansı taahhüdünde bulunmuştur (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). minOs OIN (Open Invention Network) üyesi değil olsa da, bu lisans taahhüdü bireysel/açık kaynak kullanım için yeterli koruma sağlayacak niteliktedir. |
+| **exFAT Patent Notu** | **Microsoft Patent Lisansı** | exFAT, Microsoft tarafından 2019'da açık spesifikasyon olarak yayımlanmıştır. Microsoft, exFAT uygulama için “ücretsiz, geri alınamaz” bir patent lisansı taahhüdünde bulunmuştur (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). minOs OIN (Open Invention Network) üyesi değil olsa da, bu lisans taahhüdü bireysel/açık kaynak kullanım için yeterli koruma sağlayacak niteliktedir. exFAT desteği varsayılan olarak devre dışı bırakılmıştır; etkinleştirmek bilinçli bir risk kabulü anlamına gelir. |
 
 ---
 

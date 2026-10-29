@@ -5,6 +5,8 @@ edition = "2021"
 
 [features]
 boot-log = []
+# exFAT read/write support — disabled by default due to Microsoft patent considerations.
+# Enable with: cargo build --features exfat
 exfat = []
 
 [dependencies]

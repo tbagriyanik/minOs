@@ -1429,6 +1429,12 @@ pub fn render_html_to_lines(
         let (ch, clen) = decode_html_char(body, p);
         p += clen;
 
+        // <style> / <script> içindeki metin içeriğini gizle — sadece etiketler atlanıyordu,
+        // metin içeriği yine kelime buffer'ına eklenip ekrana yazdıyordu.
+        if hidden_until_close.is_some() {
+            continue;
+        }
+
         if ch == '\r' {
             continue;
         }

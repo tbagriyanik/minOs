@@ -142,28 +142,28 @@ fn main() {
         for &(start, end) in codepoint_ranges {
             for codepoint in start..=end {
                 let Some(character) = char::from_u32(codepoint) else {
-                continue;
-            };
-            let Some(tier) = sources.iter().position(|font| font.has_glyph(character)) else {
-                continue;
-            };
-            let (glyph, bitmap) = sources[tier].rasterize(character, FONT_SIZE);
-            if bitmap_data.len() + bitmap.len() > u32::MAX as usize {
-                panic!("font atlas is too large");
+                    continue;
+                };
+                let Some(tier) = sources.iter().position(|font| font.has_glyph(character)) else {
+                    continue;
+                };
+                let (glyph, bitmap) = sources[tier].rasterize(character, FONT_SIZE);
+                if bitmap_data.len() + bitmap.len() > u32::MAX as usize {
+                    panic!("font atlas is too large");
+                }
+                let offset = bitmap_data.len();
+                bitmap_data.extend_from_slice(&bitmap);
+                records.push((
+                    codepoint,
+                    tier as u8,
+                    offset,
+                    glyph.width,
+                    glyph.height,
+                    glyph.xmin,
+                    glyph.ymin,
+                    glyph.advance_width,
+                ));
             }
-            let offset = bitmap_data.len();
-            bitmap_data.extend_from_slice(&bitmap);
-            records.push((
-                codepoint,
-                tier as u8,
-                offset,
-                glyph.width,
-                glyph.height,
-                glyph.xmin,
-                glyph.ymin,
-                glyph.advance_width,
-            ));
-        }
         } // close for &(start, end)
 
         let bitmap_name = format!("{}_bitmap.bin", face_name.to_ascii_lowercase());

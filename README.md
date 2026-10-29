@@ -212,6 +212,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 | **Ext4** | **Okuma / Yazma / Biçimlendirme** | `src/fs/ext4.rs` (biçimlendirme) + `src/fs/ext4_rw.rs` (okuma/yazma) ile 1024 baytlık blok, 256 baytlık inode ve çoklu blok grubu desteklenir. Blok eşleme ext2 uyumludur (direct + single/double indirect); **extents ağacı, journal (JBD2), htree (dir_index) ve inline data desteklenmez** — bu özellikleri etkin birimler mount edilmez. Linux `ext4` sürücüsü birimi sorunsuz bağlar. |
 | **exFAT** | **Okuma / Yazma / Biçimlendirme** | `src/fs/exfat.rs` (biçimlendirme: VBR, FAT, allocation bitmap, up-case tablosu) + `src/fs/exfat_rw.rs` (okuma/yazma: kök/alt dizin, dosya oluşturma/silme, FAT zincirli çok kümeli dosyalar, Unicode adlar). Long-name girdilerinin tam doğrulaması ve timestamp/ACL yazımı henüz yoktur. |
 | **ISO9660** | **Salt Okunur (Read-only)** | Canlı CD/DVD ve kurulum medyası içeriğini okuma desteği. |
+| **exFAT Patent Notu** | **Microsoft Patent Lisansı** | exFAT, Microsoft tarafından 2019'da açık spesifikasyon olarak yayımlanmıştır. Microsoft, exFAT uygulama için “ücretsiz, geri alınamaz” bir patent lisansı taahhüdünde bulunmuştur (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). minOs OIN (Open Invention Network) üyesi değil olsa da, bu lisans taahhüdü bireysel/açık kaynak kullanım için yeterli koruma sağlayacak niteliktedir. |
 
 ---
 

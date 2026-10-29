@@ -91,3 +91,22 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | **Ext4** | Okuma / Yazma / Biçimlendirme | 1024 baytlık blok, 256 baytlık inode, çoklu blok grubu (extents, journal, htree desteklenmez) |
 | **exFAT** | Okuma / Yazma / Biçimlendirme | VBR, FAT, allocation bitmap, up-case tablosu, Unicode adlar |
 | **ISO9660** | Salt Okunur | Canlı CD/DVD ve kurulum medyası içeriği okuma |
+
+---
+
+## ⚠️ Bilinen Sınırlamalar ve Spesifasyon Uyumluluğu
+
+Aşağıdaki donanım spesifikasyonları minOs'da **kısmi veya eksik** olarak uygulanmıştır. Bu bölüm, şeffaflık ve planlama amacıyla bilinmeyen/eksik alanları belgelemektedir.
+
+| Spesifikasyon | Durum | Açıklama |
+| :--- | :---: | :--- |
+| **ACPI AML Yorumlayıcısı** | 🟡 Kısım | Sadece pil/güç metodlarına özel opcode desteği (`_BST`, `_BIX`, `_BIF`, `_S0`–`_S5`, ThermalZone). Microsoft ACPICA'nın kapsadığı yüzlerce opcode'dan yalnızca bir alt kümesi desteklenir. Gerçek ACPI uyumluluğu (tüm AML opcode'ları, yöntemler, cihazlar, kapsamlar) sağlanmamıştır. |
+| **USB 3.x SuperSpeed+ (10/20 Gbps)** | 🟡 Kısım | xHCI denetleyicisi mevcut ve temel USB 3.0/3.1 işlevleri çalışmaktadır, ancak USB 3.2 multi-lane (10/20 Gbps) protokol özellikleri kapsanmıyor mu belirsizdir. Tam USB 3.2 spesifikasyonu doğrulanmamıştır. |
+| **PCIe AER (Advanced Error Reporting)** | 🔴 Yok | PCI-SIG'in hata toleransı ve gelişmiş hata raporlama standardı uygulanmamıştır. Kurumsal/sunucu donanımında beklenebilecek AER desteği yoktur. |
+
+### Notlar
+
+- Bu sınırlamalar, minOs'un hobi/ağaç odaklı bir işletim sistemi olduğu ve üretim/sunucu ortamı için tasarlanmadığını göstermektedir.
+- ACPI AML yorumlayıcısı, laptop pil/güç yönetimi için yeterli düzeyde çalışmaktadır; genel amaçlı ACPI uyumluluğu hedeflenmemiştir.
+- USB 3.x desteği, QEMU xHCI ve yaygın USB klavye/fare/masaüstü depolama aygıtları üzerinde test edilmiştir.
+- PCIe AER, gelecek sürümlerde planlanabilir ancak şu anda öncelikli değildir.

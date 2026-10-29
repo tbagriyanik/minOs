@@ -11,6 +11,46 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **15 adet yerleşik uygul
 | **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
 | **🌐 Web Tarayıcısı** | Sık kullanılanlar (Bookmarks) çubuğu, hafif HTTP test sitesi, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` / `minos://demo-img` / `minos://demo-video` yerel demo sayfaları, sekmeli gezinme ve e1000 ARP/ping/DNS test paneli. `https://` adresleri (443 portu) **TLS 1.3** el sıkışması ile güvenli bağlantı kurar; sunucu yanıtı AES-128-GCM ile şifresi çözülüp HTTP olarak işlenir. İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir; Dosya Yöneticisi'nden `.html`/`.htm`/`.xhtml` dosyalarına çift tıklandığında tarayıcıda açılır. |
+
+---
+
+## 📜 minJs JavaScript Motoru
+
+minOs, tarayıcı `<script>` blokları için kullanılan minimal bir istemci tarafı JavaScript motoru içerir (`src/apps/js.rs`, `no_std`). Tam bir ECMAScript uygulaması değildir — sadece basit sayfa betikleri için gereken bir alt kümeyi destekler.
+
+### Desteklenen Özellikler
+
+- Değişkenler: `var`/`let`/`const` atama ve okuma
+- Aritmetik: `+`, `-`, `*`, `/`, `%`, parantezler, tekli `+`/`-`/`!`
+- Karşılaştırmalar: `!`, `&&`, `||`, `==`/`!=`/`===`/`!==`, `<=`, `>=`, `<`, `>`
+- Fonksiyonlar: `function name(a, b) { ... }`, `return`, çağrılar
+- Döngüler: `for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`
+- Diziler: litaller, indeksleme, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
+- Nesneler: litaller, özellik erişimi, `delete`, `Object.keys()`, `Object.values()`
+- JSON: `JSON.stringify()`, `JSON.parse()`
+- Küresel API'ler: `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`, `Math.*`, `String.prototype.*`
+- DOM: `getElementById`, `getElementsByClassName`, `innerHTML`, `textContent`, `createElement`, `appendChild`, `setAttribute`, `getAttribute`, `addEventListener`, `dispatchEvent`
+- Promises: `new Promise(executor)`, `.then()`, `.catch()`, `await`, `Promise.resolve()`, `Promise.reject()`, `Promise.all()`, `Promise.race()`, `Promise.allSettled()`
+- Strict mode: `"use strict"` yönergesi algılanır; bildirilmemiş değişkene atama reddedilir
+
+### Bilinen Sınırlamalar (ECMA-262'ye göre)
+
+| Özellik | Durum | Notlar |
+| :--- | :---: | :--- |
+| `class` sözdizimi | ✅ Desteklenir | `class Name [extends Parent] { constructor() { } method() { } }`, `new Name(args)`, örnek metod çağrıları |
+| Strict mode | ✅ Desteklenir | `"use strict"` algılanır; bildirilmemiş değişkene atama reddedilir |
+| `Promise.all/race/allSettled` | ✅ Desteklenir | Promise üzerinde statik metodlar |
+| `with` ifadesi | ❌ Desteklenmez | Ayrıştırıcıda yok |
+| `eval()` kapsam izolasyonu | ❌ Desteklenmez | `eval` geçerli kapsamı paylaşır |
+| `let`/`const` blok kapsamı | ⚠️ Kısım | `var` gibi davranır (fonksiyon/global kapsam) |
+| Şablon litalleri | ⚠️ Kısım | Backtick dizgileri desteklenir, `${}` interpolasyonu yok |
+| İsteğe bağlı zincirleme (`?.`) | ❌ Desteklenmez | |
+| Nullish birleşme (`??`) | ❌ Desteklenmez | |
+| Ok fonksiyonları | ❌ Desteklenmez | |
+| Üreteçler / async-await | ⚠️ Kısım | `await` Promise değerlerinde desteklenir; `async function` yok |
+
+> **Not:** minJs kasıtlı olarak küçüktür — amacı basit sayfa iyileştirme betiklerini çalıştırmak, tam web uygulaması uyumluluğu değil.
+
 | **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
 | **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |

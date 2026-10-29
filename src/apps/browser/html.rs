@@ -516,7 +516,8 @@ pub fn render_html_to_lines(
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
 
-            let mut matched = match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
+            let mut matched =
+                match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
 
             // CSS animation: keyframes'ten frame bul ve uygula (statik render icin ilk frame)
             if let Some(kf_name) = matched.animation_name.clone() {
@@ -561,7 +562,11 @@ pub fn render_html_to_lines(
                     grid_cells = Vec::new();
                     grid_current_row = 0;
                     grid_current_col = 0;
-                    grid_col_count = if grid_columns.is_empty() { 1 } else { grid_columns.len() };
+                    grid_col_count = if grid_columns.is_empty() {
+                        1
+                    } else {
+                        grid_columns.len()
+                    };
                     // İlk satırı oluştur
                     grid_cells.push(Vec::new());
                     // Grid konteynerı için mevcut satırı temizle
@@ -1507,8 +1512,13 @@ fn render_grid(
         return;
     }
 
-    let col_count = if grid_columns.is_empty() { 1 } else { grid_columns.len() };
-    let avail_w = wrap_width_px.saturating_sub(grid_gap.saturating_mul(col_count.saturating_sub(1)));
+    let col_count = if grid_columns.is_empty() {
+        1
+    } else {
+        grid_columns.len()
+    };
+    let avail_w =
+        wrap_width_px.saturating_sub(grid_gap.saturating_mul(col_count.saturating_sub(1)));
 
     // Sutun genliklerini hesapla
     let mut col_widths: Vec<usize> = vec![0; col_count];

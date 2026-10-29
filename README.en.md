@@ -211,6 +211,7 @@ The minOs VFS layer supports several file systems, but each file system's capabi
 | **Ext4** | **Read / Write / Format** | `src/fs/ext4.rs` (format) + `src/fs/ext4_rw.rs` (read/write) with 1024-byte blocks, 256-byte inodes and multiple block groups. Block mapping is ext2-compatible (direct + single/double indirect); **extents tree, journal (JBD2), htree (dir_index) and inline data are not supported** — volumes with these features enabled are not mounted. The Linux `ext4` driver mounts the volume without problems. |
 | **exFAT** | **Read / Write / Format** | `src/fs/exfat.rs` (format: VBR, FAT, allocation bitmap, up-case table) + `src/fs/exfat_rw.rs` (read/write: root/sub directories, file creation/deletion, FAT-chained multi-cluster files, Unicode names). Full validation of long-name entries and timestamp/ACL writing are not yet available. |
 | **ISO9660** | **Read-only** | Read support for live CD/DVD and installation media contents. |
+| **exFAT Patent Note** | **Microsoft Patent License** | exFAT was published by Microsoft as an open specification in 2019. Microsoft provides a “free, irrevocable” patent license commitment for exFAT implementations (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). Although minOs is not a member of OIN (Open Invention Network), this license commitment is generally considered sufficient protection for personal/open-source use. |
 
 ---
 

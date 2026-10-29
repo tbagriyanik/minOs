@@ -3272,8 +3272,8 @@ impl BrowserApp {
                     BROWSER_TITLE_BG,
                 );
                 let title_str = if self.page_title_len > 0 {
-                    let page = core::str::from_utf8(&self.page_title[..self.page_title_len])
-                        .unwrap_or("");
+                    let page =
+                        core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or("");
                     alloc::format!("SarmanNet - {}", page)
                 } else {
                     alloc::format!("SarmanNet - Title")

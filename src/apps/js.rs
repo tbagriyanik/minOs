@@ -189,6 +189,24 @@ pub struct PromiseHandler {
     pub on_rejected: Option<String>,
 }
 
+/// Sınıf tanımı: constructor ve metodlar.
+#[derive(Clone, Debug)]
+pub struct JsClass {
+    pub name: String,
+    pub extends: Option<String>,
+    pub methods: BTreeMap<String, JsFunction>,
+}
+
+impl JsClass {
+    pub fn new(name: String, extends: Option<String>) -> Self {
+        Self {
+            name,
+            extends,
+            methods: BTreeMap::new(),
+        }
+    }
+}
+
 impl PromiseObj {
     pub fn new() -> Self {
         Self {
@@ -303,7 +321,7 @@ pub struct Timer {
     pub callback: String, // fonksiyon adı veya JS kodu
     pub delay_ms: u32,
     pub repeat: bool, // true = setInterval, false = setTimeout
-    pub fire_at: u64,   // ticks'de ateşleme zamanı
+    pub fire_at: u64, // ticks'de ateşleme zamanı
 }
 
 // Sayfa boyunca süren JS durumu: değişkenler ve konsol çıktısı.
@@ -324,6 +342,10 @@ pub struct JsRuntime {
     pub microtask_queue: Vec<String>,
     /// Prototip zinciri: nesne_değişkeni -> prototip_değişkeni.
     pub protos: BTreeMap<String, String>,
+    /// Sınıf tanımları: sınıf_ismi -> JsClass.
+    pub classes: BTreeMap<String, JsClass>,
+    /// Strict mode (`"use strict"`) etkin mi.
+    pub strict_mode: bool,
     /// Zamanlayıcılar (setTimeout / setInterval).
     pub timers: Vec<Timer>,
     /// Bir sonraki zamanlayıcı kimliği.
@@ -343,6 +365,8 @@ impl JsRuntime {
             doc: None,
             microtask_queue: Vec::new(),
             protos: BTreeMap::new(),
+            classes: BTreeMap::new(),
+            strict_mode: false,
             timers: Vec::new(),
             next_timer_id: 1,
         }
@@ -393,7 +417,8 @@ impl JsRuntime {
 
     /// Nesnenin prototipini ayarlar: obj.__proto__ = proto
     pub fn set_proto(&mut self, obj_name: &str, proto_name: &str) {
-        self.protos.insert(String::from(obj_name), String::from(proto_name));
+        self.protos
+            .insert(String::from(obj_name), String::from(proto_name));
     }
 
     /// Bir özelliği prototip zinciri boyunca arar. Önce kendi özellikleri,
@@ -609,7 +634,9 @@ impl JsRuntime {
             let val = self.eval_val(rest);
             if let JsValue::Promise(p) = &val {
                 match p.state {
-                    PromiseState::Fulfilled => return p.value.clone().unwrap_or(JsValue::Undefined),
+                    PromiseState::Fulfilled => {
+                        return p.value.clone().unwrap_or(JsValue::Undefined)
+                    }
                     PromiseState::Rejected => return JsValue::Undefined,
                     PromiseState::Pending => return JsValue::Undefined,
                 }
@@ -785,36 +812,124 @@ impl JsRuntime {
                 "Promise" => match method {
                     "resolve" => {
                         let v = self.eval_val(args);
-                        let pvar = format!("__promise_{}", self.values.len());
                         let mut p = PromiseObj::new();
                         p.state = PromiseState::Fulfilled;
                         p.value = Some(v);
-                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
-                        return JsValue::Object(BTreeMap::new());
+                        return JsValue::Promise(Box::new(p));
                     }
                     "reject" => {
                         let v = self.eval_val(args);
-                        let pvar = format!("__promise_{}", self.values.len());
                         let mut p = PromiseObj::new();
                         p.state = PromiseState::Rejected;
                         p.value = Some(v);
-                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
-                        return JsValue::Object(BTreeMap::new());
+                        return JsValue::Promise(Box::new(p));
                     }
                     "all" => {
                         let arr_val = self.eval_val(args);
-                        let pvar = format!("__promise_{}", self.values.len());
+                        let mut p = PromiseObj::new();
+                        let mut results = Vec::new();
+                        let mut any_pending = false;
+                        let mut any_rejected = false;
+                        if let JsValue::Array(items) = &arr_val {
+                            for item in items {
+                                match item {
+                                    JsValue::Promise(promise) => match promise.state {
+                                        PromiseState::Fulfilled => {
+                                            results.push(promise.value.clone().unwrap_or(JsValue::Undefined));
+                                        }
+                                        PromiseState::Rejected => {
+                                            any_rejected = true;
+                                            results.push(promise.value.clone().unwrap_or(JsValue::Undefined));
+                                        }
+                                        PromiseState::Pending => {
+                                            any_pending = true;
+                                            results.push(JsValue::Undefined);
+                                        }
+                                    },
+                                    other => results.push(other.clone()),
+                                }
+                            }
+                        }
+                        if any_rejected {
+                            p.state = PromiseState::Rejected;
+                            p.value = results.first().cloned();
+                        } else if any_pending {
+                            p.state = PromiseState::Pending;
+                            p.value = Some(JsValue::Array(results));
+                        } else {
+                            p.state = PromiseState::Fulfilled;
+                            p.value = Some(JsValue::Array(results));
+                        }
+                        return JsValue::Promise(Box::new(p));
+                    }
+                    "race" => {
+                        let arr_val = self.eval_val(args);
+                        let mut p = PromiseObj::new();
+                        if let JsValue::Array(items) = &arr_val {
+                            for item in items {
+                                if let JsValue::Promise(promise) = item {
+                                    match promise.state {
+                                        PromiseState::Fulfilled => {
+                                            p.state = PromiseState::Fulfilled;
+                                            p.value = promise.value.clone();
+                                            return JsValue::Promise(Box::new(p));
+                                        }
+                                        PromiseState::Rejected => {
+                                            p.state = PromiseState::Rejected;
+                                            p.value = promise.value.clone();
+                                            return JsValue::Promise(Box::new(p));
+                                        }
+                                        PromiseState::Pending => {}
+                                    }
+                                } else {
+                                    p.state = PromiseState::Fulfilled;
+                                    p.value = Some(item.clone());
+                                    return JsValue::Promise(Box::new(p));
+                                }
+                            }
+                        }
+                        p.state = PromiseState::Pending;
+                        p.value = None;
+                        return JsValue::Promise(Box::new(p));
+                    }
+                    "allSettled" => {
+                        let arr_val = self.eval_val(args);
                         let mut p = PromiseObj::new();
                         p.state = PromiseState::Fulfilled;
                         let mut results = Vec::new();
                         if let JsValue::Array(items) = &arr_val {
                             for item in items {
-                                results.push(item.clone());
+                                match item {
+                                    JsValue::Promise(promise) => match promise.state {
+                                        PromiseState::Fulfilled => {
+                                            results.push(JsValue::Object(BTreeMap::from([
+                                                (String::from("status"), JsValue::String(String::from("fulfilled"))),
+                                                (String::from("value"), promise.value.clone().unwrap_or(JsValue::Undefined)),
+                                            ])));
+                                        }
+                                        PromiseState::Rejected => {
+                                            results.push(JsValue::Object(BTreeMap::from([
+                                                (String::from("status"), JsValue::String(String::from("rejected"))),
+                                                (String::from("reason"), promise.value.clone().unwrap_or(JsValue::Undefined)),
+                                            ])));
+                                        }
+                                        PromiseState::Pending => {
+                                            results.push(JsValue::Object(BTreeMap::from([
+                                                (String::from("status"), JsValue::String(String::from("pending"))),
+                                            ])));
+                                        }
+                                    },
+                                    other => {
+                                        results.push(JsValue::Object(BTreeMap::from([
+                                            (String::from("status"), JsValue::String(String::from("fulfilled"))),
+                                            (String::from("value"), other.clone()),
+                                        ])));
+                                    }
+                                }
                             }
                         }
                         p.value = Some(JsValue::Array(results));
-                        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
-                        return JsValue::Object(BTreeMap::new());
+                        return JsValue::Promise(Box::new(p));
                     }
                     _ => {}
                 },
@@ -840,17 +955,13 @@ impl JsRuntime {
                             "indexOf" => {
                                 let needle = self.eval_val(args);
                                 let needle_str = needle.to_str();
-                                let pos = items
-                                    .iter()
-                                    .position(|it| it.to_str() == needle_str);
+                                let pos = items.iter().position(|it| it.to_str() == needle_str);
                                 return JsValue::Number(pos.map(|p| p as i64).unwrap_or(-1));
                             }
                             "includes" => {
                                 let needle = self.eval_val(args);
                                 let needle_str = needle.to_str();
-                                let has = items
-                                    .iter()
-                                    .any(|it| it.to_str() == needle_str);
+                                let has = items.iter().any(|it| it.to_str() == needle_str);
                                 return JsValue::Bool(has);
                             }
                             "slice" => {
@@ -988,7 +1099,8 @@ impl JsRuntime {
                                 if let Some(cb) = &on_fulfilled {
                                     self.microtask_queue.push(cb.clone());
                                 }
-                                self.values.insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
+                                self.values
+                                    .insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
                                 // Promise değişkenini döndürmek yerine, şimdilik undefined döndürüyoruz.
                                 // Gerçek implementasyon promise değişken adını döndürür.
                             }
@@ -1137,7 +1249,9 @@ impl JsRuntime {
                             // Prototip zincirinden prototip nesnesini döndür.
                             let lhs_name = lhs.trim();
                             if let Some(proto_name) = self.protos.get(lhs_name) {
-                                if let Some(JsValue::Object(proto_map)) = self.values.get(proto_name) {
+                                if let Some(JsValue::Object(proto_map)) =
+                                    self.values.get(proto_name)
+                                {
                                     return JsValue::Object(proto_map.clone());
                                 }
                             }
@@ -1158,6 +1272,144 @@ impl JsRuntime {
                         return JsValue::Undefined;
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // `new ClassName(args)` — sınıf örneği oluşturur.
+        if let Some(rest) = e.strip_prefix("new ") {
+            let rest = rest.trim();
+            if let Some(open) = rest.find('(') {
+                if rest.ends_with(')') {
+                    let class_name = rest[..open].trim();
+                    let arg_str = &rest[open + 1..rest.len() - 1];
+                    // Clone class data to avoid borrow conflicts with self.
+                    let class_data = self.classes.get(class_name).map(|c| {
+                        (
+                            c.extends.clone(),
+                            c.methods.clone(),
+                        )
+                    });
+                    if let Some((extends_opt, methods)) = class_data {
+                        // Argümanları değerlendir
+                        let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                            .into_iter()
+                            .map(|a| self.eval_val(a))
+                            .collect();
+                        // Yeni nesne oluştur (boş Object)
+                        let mut obj = BTreeMap::new();
+                        obj.insert(String::from("__class__"), JsValue::String(class_name.to_string()));
+                        if let Some(extends) = &extends_opt {
+                            obj.insert(String::from("__extends__"), JsValue::String(extends.clone()));
+                            if let Some(parent_class) = self.classes.get(extends) {
+                                // Parent metodlarını miras al
+                                for (mname, mfunc) in &parent_class.methods {
+                                    obj.insert(mname.clone(), JsValue::Object(BTreeMap::from([
+                                        (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
+                                        (String::from("__params__"), JsValue::String(mfunc.params.join(","))),
+                                    ])));
+                                }
+                            }
+                        }
+                        // Sınıf metodlarını ekle
+                        for (mname, mfunc) in &methods {
+                            obj.insert(mname.clone(), JsValue::Object(BTreeMap::from([
+                                (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
+                                (String::from("__params__"), JsValue::String(mfunc.params.join(","))),
+                            ])));
+                        }
+                        // Constructor'ı çağır
+                        if let Some(ctor) = methods.get("constructor") {
+                            let _old_values = self.values.clone();
+                            for (i, param) in ctor.params.iter().enumerate() {
+                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                self.var_set_val(param, val);
+                            }
+                            self.last_return = None;
+                            for stmt in split_statements(&ctor.body) {
+                                self.exec(&stmt, &mut Vec::new());
+                                if self.last_return.is_some() {
+                                    break;
+                                }
+                            }
+                            // Constructor'da atanan özellikleri nesneye yansıt (basit: values'tan al)
+                            for (k, v) in &self.values {
+                                if !_old_values.contains_key(k) {
+                                    obj.insert(k.clone(), v.clone());
+                                }
+                            }
+                            for param in &ctor.params {
+                                self.values.remove(param);
+                            }
+                        }
+                        return JsValue::Object(obj);
+                    }
+                }
+            }
+        }
+
+        // `obj.method(args)` — nesne metod çağrısı.
+        if let Some(dot_open) = e.find(".(") {
+            if e.ends_with(')') {
+                let obj_name = e[..dot_open].trim();
+                // method_name is actually the args part; we need to split method from args
+                // Find the method name: it's between the dot and the opening paren
+                // e.g. "obj.method(arg1, arg2)" -> obj_name="obj", method_and_args="method(arg1, arg2)"
+                // We already have dot_open at the position of '.', so:
+                let after_dot = &e[dot_open + 1..];
+                if let Some(method_open) = after_dot.find('(') {
+                    let mname = after_dot[..method_open].trim();
+                    let arg_str = &after_dot[method_open + 1..after_dot.len() - 1];
+                    let base_val = self.eval_val(obj_name);
+                    if let JsValue::Object(map) = &base_val {
+                        if let Some(method_val) = map.get(mname) {
+                            match method_val {
+                                JsValue::Object(method_map) => {
+                                    if let Some(JsValue::String(body)) = method_map.get("__fn__") {
+                                        let params_str = method_map
+                                            .get("__params__")
+                                            .map(|s| s.to_str())
+                                            .unwrap_or("".to_string());
+                                        let params: Vec<String> = params_str
+                                            .split(',')
+                                            .map(|s| s.trim().to_string())
+                                            .filter(|s| !s.is_empty())
+                                            .collect();
+                                        let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                                            .into_iter()
+                                            .map(|a| self.eval_val(a))
+                                            .collect();
+                                        // 'this' binding: obj_name -> current object
+                                        let this_var = format!("__this_{}", obj_name);
+                                        self.values.insert(this_var.clone(), base_val.clone());
+                                        // Set params
+                                        for (i, param) in params.iter().enumerate() {
+                                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                            self.var_set_val(param, val);
+                                        }
+                                        // Also bind 'this' as a variable
+                                        self.var_set_val("this", JsValue::String(obj_name.to_string()));
+                                        self.last_return = None;
+                                        for stmt in split_statements(body) {
+                                            self.exec(&stmt, &mut Vec::new());
+                                            if self.last_return.is_some() {
+                                                break;
+                                            }
+                                        }
+                                        let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+                                        // Restore
+                                        for param in &params {
+                                            self.values.remove(param);
+                                        }
+                                        self.values.remove(&this_var);
+                                        self.var_set_val("this", JsValue::String(String::new()));
+                                        return ret;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1462,6 +1714,58 @@ impl JsRuntime {
         }
 
         if keyword(s, "class").is_some() {
+            // class ClassName [extends Parent] { constructor(...) { ... } method(...) { ... } }
+            let rest = s[5..].trim();
+            if let Some(brace_pos) = rest.find('{') {
+                let before_brace = rest[..brace_pos].trim();
+                let body = &rest[brace_pos + 1..];
+                // Find matching closing brace
+                if let Some(class_body) = extract_block(&(String::from("{") + body + "}")) {
+                    // Parse class name and extends
+                    let parts: Vec<&str> = before_brace.split_whitespace().collect();
+                    let name = parts.first().copied().unwrap_or("");
+                    let extends = if parts.len() >= 3 && parts[1] == "extends" {
+                        Some(parts[2].to_string())
+                    } else {
+                        None
+                    };
+                    let mut js_class = JsClass::new(name.to_string(), extends);
+                    // Parse methods: methodName(params) { body }
+                    let method_stmts = split_statements(class_body);
+                    for mstmt in &method_stmts {
+                        let m = mstmt.trim();
+                        if m.is_empty() {
+                            continue;
+                        }
+                        if let Some(rest) = keyword(m, "function") {
+                            // methodName(params) { body }
+                            let r = rest.trim_start();
+                            if let Some(open) = r.find('(') {
+                                let mname = r[..open].trim();
+                                if let Some((param_str, after_params)) = call_args(r, open) {
+                                    if let Some(body) = extract_block(&r[after_params..]) {
+                                        let params: Vec<String> = split_top_level_comma(param_str)
+                                            .into_iter()
+                                            .map(|p| p.trim().to_string())
+                                            .filter(|p| !p.is_empty())
+                                            .collect();
+                                        js_class.methods.insert(
+                                            mname.to_string(),
+                                            JsFunction {
+                                                name: mname.to_string(),
+                                                params,
+                                                body: body.to_string(),
+                                            },
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    self.classes.insert(name.to_string(), js_class);
+                    return;
+                }
+            }
             return;
         }
 
@@ -2046,7 +2350,10 @@ impl JsRuntime {
                     // setTimeout(callback, ms) — microtask sırasına ekler.
                     let parts: Vec<&str> = split_top_level_comma(args);
                     if let Some(cb) = parts.first() {
-                        let ms = parts.get(1).map(|m| m.trim().parse::<u32>().unwrap_or(0)).unwrap_or(0);
+                        let ms = parts
+                            .get(1)
+                            .map(|m| m.trim().parse::<u32>().unwrap_or(0))
+                            .unwrap_or(0);
                         let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
                         self.add_timer(cb_str.to_string(), ms, false);
                     }
@@ -2055,7 +2362,10 @@ impl JsRuntime {
                     // setInterval(callback, ms) — tekrarlayan zamanlayıcı.
                     let parts: Vec<&str> = split_top_level_comma(args);
                     if let Some(cb) = parts.first() {
-                        let ms = parts.get(1).map(|m| m.trim().parse::<u32>().unwrap_or(0)).unwrap_or(0);
+                        let ms = parts
+                            .get(1)
+                            .map(|m| m.trim().parse::<u32>().unwrap_or(0))
+                            .unwrap_or(0);
                         let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
                         self.add_timer(cb_str.to_string(), ms, true);
                     }
@@ -2076,9 +2386,11 @@ impl JsRuntime {
 
         // Atama: var/let/const name = expr  |  name = expr
         let mut rest = s;
+        let mut is_decl = false;
         for kw in ["var", "let", "const"] {
             if let Some(r) = keyword(s, kw) {
                 rest = r.trim_start();
+                is_decl = true;
                 break;
             }
         }
@@ -2095,6 +2407,19 @@ impl JsRuntime {
                 if !eq.trim_start().starts_with('=') {
                     let name = &rest[..n];
                     if !name.contains('.') {
+                        // Strict mode: atanacak değişken zaten bildirilmiş olmalı.
+                        if self.strict_mode && !is_decl {
+                            let already = self.values.contains_key(name)
+                                || self.var_get(name).is_some();
+                            if !already {
+                                // Referans hatası: değişken bildirilmemiş.
+                                self.logs.push(format!(
+                                    "ReferenceError: '{}' is not defined (strict mode)",
+                                    name
+                                ));
+                                return;
+                            }
+                        }
                         let value = self.eval_val(eq);
                         self.var_set_val(name, value);
                         return;
@@ -2106,7 +2431,15 @@ impl JsRuntime {
 
     /// Betiği sırayla çalıştırır; `document.write` çıktıları `out`'a eklenir.
     pub fn run(&mut self, code: &str, out: &mut Vec<u8>) {
-        for stmt in split_statements(code) {
+        // Strict mode algıla: ilk deyim "use strict" veya 'use strict' olmalı.
+        let stmts: Vec<String> = split_statements(code);
+        if let Some(first) = stmts.first() {
+            let trimmed = first.trim();
+            if trimmed == "\"use strict\"" || trimmed == "'use strict'" {
+                self.strict_mode = true;
+            }
+        }
+        for stmt in stmts {
             self.exec(&stmt, out);
         }
         // Promise microtask'larını çalıştır (.then() işleyicileri vb.).

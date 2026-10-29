@@ -91,3 +91,22 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | **Ext4** | Read / Write / Format | 1024-byte blocks, 256-byte inodes, multiple block groups (extents, journal, htree not supported) |
 | **exFAT** | Read / Write / Format | VBR, FAT, allocation bitmap, up-case table, Unicode names |
 | **ISO9660** | Read-only | Read support for live CD/DVD and installation media contents |
+
+---
+
+## ⚠️ Known Limitations and Specification Compliance
+
+The following hardware specifications are **partially or incompletely** implemented in minOs. This section documents gaps for transparency and planning purposes.
+
+| Specification | Status | Description |
+| :--- | :---: | :--- |
+| **ACPI AML Interpreter** | 🟡 Partial | Only battery/power-method-specific opcode support (`_BST`, `_BIX`, `_BIF`, `_S0`–`_S5`, ThermalZone). Only a subset of the hundreds of opcodes covered by Microsoft ACPICA is implemented. Full ACPI compliance (all AML opcodes, methods, devices, scopes) is not provided. |
+| **USB 3.x SuperSpeed+ (10/20 Gbps)** | 🟡 Partial | xHCI controller exists and basic USB 3.0/3.1 functions work, but USB 3.2 multi-lane (10/20 Gbps) protocol features coverage is uncertain. Full USB 3.2 specification is not verified. |
+| **PCIe AER (Advanced Error Reporting)** | 🔴 Missing | PCI-SIG's error tolerance and advanced error reporting standard is not implemented. AER support expected on enterprise/server hardware is absent. |
+
+### Notes
+
+- These limitations reflect that minOs is a hobby/tree-focused operating system, not designed for production/server environments.
+- The ACPI AML interpreter works sufficiently for laptop battery/power management; general-purpose ACPI compliance is not a goal.
+- USB 3.x support has been tested on QEMU xHCI and common USB keyboard/mouse/storage devices.
+- PCIe AER may be planned for future releases but is not a current priority.

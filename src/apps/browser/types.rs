@@ -146,9 +146,9 @@ pub enum TextAlign {
 /// Grid izi (track) boyutu: piksel veya fr oranı.
 #[derive(Clone, Debug)]
 pub enum GridTrack {
-    Fixed(usize),   // Sabit piksel boyutu
-    Fraction(u32),  // esnek oran (1fr, 2fr vb.)
-    Auto,           // İçeriğe göre otomatik
+    Fixed(usize),  // Sabit piksel boyutu
+    Fraction(u32), // esnek oran (1fr, 2fr vb.)
+    Auto,          // İçeriğe göre otomatik
 }
 
 #[derive(Clone)]

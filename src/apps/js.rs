@@ -194,7 +194,10 @@ pub struct PromiseHandler {
 pub struct JsClass {
     pub name: String,
     pub extends: Option<String>,
+    /// Örnek metotları (instance methods).
     pub methods: BTreeMap<String, JsFunction>,
+    /// Statik metotları (static methods), sınıf üzerinden çağrılır.
+    pub static_methods: BTreeMap<String, JsFunction>,
 }
 
 impl JsClass {
@@ -203,6 +206,7 @@ impl JsClass {
             name,
             extends,
             methods: BTreeMap::new(),
+            static_methods: BTreeMap::new(),
         }
     }
 }
@@ -454,6 +458,112 @@ impl JsRuntime {
         false
     }
 
+    /// Bir değerin verilen sınıfın (ya da miras aldığı bir atasının) örneği
+    /// olup olmadığını `__class__` / `__extends__` üzerinden kontrol eder.
+    fn value_instance_of(&self, val: &JsValue, class_name: &str) -> bool {
+        let map = match val {
+            JsValue::Object(map) => map,
+            _ => return false,
+        };
+        let mut current = match map.get("__class__") {
+            Some(JsValue::String(name)) => name.clone(),
+            _ => return false,
+        };
+        let mut depth = 0u32;
+        while depth < 32 {
+            if current == class_name {
+                return true;
+            }
+            let next = self
+                .classes
+                .get(&current)
+                .and_then(|c| c.extends.clone())
+                .or_else(|| match map.get("__extends__") {
+                    Some(JsValue::String(parent)) => Some(parent.clone()),
+                    _ => None,
+                });
+            match next {
+                Some(parent) if !parent.is_empty() && parent != current => {
+                    current = parent;
+                    depth += 1;
+                }
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Bir sınıfın miras zinciri boyunca tüm metodlarını toplar.
+    /// Alt sınıfın aynı adlı metodu ebeveyninkini geçersiz kılar.
+    fn class_methods(&self, class_name: &str) -> BTreeMap<String, JsFunction> {
+        let mut out = BTreeMap::new();
+        let mut current = Some(String::from(class_name));
+        let mut depth = 0u32;
+        while let Some(name) = current {
+            if depth >= 32 {
+                break;
+            }
+            depth += 1;
+            match self.classes.get(&name) {
+                Some(class) => {
+                    for (mname, mfunc) in &class.methods {
+                        out.entry(mname.clone()).or_insert_with(|| mfunc.clone());
+                    }
+                    current = class.extends.clone();
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// `class_name` sınıfının constructor'ını mevcut `this` üzerinde çalıştırır.
+    /// `extends` varsa ebeveyn constructor'ı `super(...)` ile ya da örtük
+    /// olarak (gövdede `super(` yoksa) çağrılır.
+    fn run_constructor(&mut self, class_name: &str, args: &[JsValue], depth: u32) {
+        if depth > 32 {
+            return;
+        }
+        let (extends, ctor) = match self.classes.get(class_name) {
+            Some(class) => (class.extends.clone(), class.methods.get("constructor").cloned()),
+            None => return,
+        };
+        let (params, body) = match ctor {
+            Some(ctor) => (ctor.params, ctor.body),
+            None => (Vec::new(), String::new()),
+        };
+        for (i, param) in params.iter().enumerate() {
+            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+            self.var_set_val(param, val);
+        }
+        let explicit_super = body.contains("super(");
+        if let (Some(parent), false) = (&extends, explicit_super) {
+            self.run_constructor(parent, &[], depth + 1);
+        }
+        for stmt in split_statements(&body) {
+            let t = stmt.trim();
+            if let Some(rest) = t.strip_prefix("super(") {
+                if let Some(close) = rest.rfind(')') {
+                    let parent_args: Vec<JsValue> = split_top_level_comma(&rest[..close])
+                        .into_iter()
+                        .map(|a| self.eval_val(a))
+                        .collect();
+                    if let Some(parent) = &extends {
+                        self.run_constructor(parent, &parent_args, depth + 1);
+                    }
+                    continue;
+                }
+            }
+            self.exec(&stmt, &mut Vec::new());
+            if self.last_return.is_some() {
+                break;
+            }
+        }
+        for param in &params {
+            self.values.remove(param);
+        }
+    }
+
     // ── Promise / microtask yardımcıları ───────────────────────────
 
     /// Microtask sırasını çalıştırır (Promise .then() işleyicileri vb.).
@@ -679,6 +789,14 @@ impl JsRuntime {
         let stripped = strip_matching_parens(e);
         if stripped != e {
             return self.eval_val(stripped);
+        }
+
+        // `obj instanceof Constructor` — sınıf/miras zinciri kontrolü.
+        if let Some(idx) = find_top_level_word(e.as_bytes(), b"instanceof") {
+            let left = e[..idx].trim();
+            let right = e[idx + "instanceof".len()..].trim();
+            let val = self.eval_val(left);
+            return JsValue::Bool(self.value_instance_of(&val, right));
         }
 
         // Top-level '+' ve '-' ikili işlemleri (en sağdan bölerek sol-ilişkili)
@@ -1371,18 +1489,20 @@ impl JsRuntime {
                 if rest.ends_with(')') {
                     let class_name = rest[..open].trim();
                     let arg_str = &rest[open + 1..rest.len() - 1];
-                    // Clone class data to avoid borrow conflicts with self.
-                    let class_data = self
+                    // Sınıf verisini ödünç çakışması olmadan klonla.
+                    let extends_opt = self
                         .classes
                         .get(class_name)
-                        .map(|c| (c.extends.clone(), c.methods.clone()));
-                    if let Some((extends_opt, methods)) = class_data {
+                        .and_then(|c| c.extends.clone());
+                    if self.classes.contains_key(class_name) {
+                        // Miras zinciri boyunca tüm metodları topla (alt sınıf kazanır).
+                        let methods = self.class_methods(class_name);
                         // Argümanları değerlendir
                         let args: Vec<JsValue> = split_top_level_comma(arg_str)
                             .into_iter()
                             .map(|a| self.eval_val(a))
                             .collect();
-                        // Yeni nesne oluştur (boş Object)
+                        // Yeni nesne oluştur.
                         let mut obj = BTreeMap::new();
                         obj.insert(
                             String::from("__class__"),
@@ -1393,60 +1513,30 @@ impl JsRuntime {
                                 String::from("__extends__"),
                                 JsValue::String(extends.clone()),
                             );
-                            if let Some(parent_class) = self.classes.get(extends) {
-                                // Parent metodlarını miras al
-                                for (mname, mfunc) in &parent_class.methods {
-                                    obj.insert(
-                                        mname.clone(),
-                                        JsValue::Object(BTreeMap::from([
-                                            (
-                                                String::from("__fn__"),
-                                                JsValue::String(mfunc.body.clone()),
-                                            ),
-                                            (
-                                                String::from("__params__"),
-                                                JsValue::String(mfunc.params.join(",")),
-                                            ),
-                                        ])),
-                                    );
-                                }
-                            }
                         }
-                        // Sınıf metodlarını ekle
+                        // Sınıf ve miras alınan metodları ekle.
                         for (mname, mfunc) in &methods {
-                            obj.insert(
-                                mname.clone(),
-                                JsValue::Object(BTreeMap::from([
-                                    (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
-                                    (
-                                        String::from("__params__"),
-                                        JsValue::String(mfunc.params.join(",")),
-                                    ),
-                                ])),
-                            );
+                            obj.insert(mname.clone(), method_object(mfunc));
                         }
-                        // Constructor'ı çağır
-                        if let Some(ctor) = methods.get("constructor") {
-                            let _old_values = self.values.clone();
-                            for (i, param) in ctor.params.iter().enumerate() {
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                self.var_set_val(param, val);
+                        // Constructor'ı `this` örneğe bağlı olarak çalıştır.
+                        // `extends` varsa ebeveyn constructor'ı `super()` ile ya da
+                        // örtük olarak çalışır.
+                        let old_this = self.values.get("this").cloned();
+                        self.values
+                            .insert(String::from("this"), JsValue::Object(obj.clone()));
+                        self.last_return = None;
+                        self.run_constructor(class_name, &args, 0);
+                        // `this` üzerinden yazılan özellikleri örneğe aktar.
+                        if let Some(JsValue::Object(mutated)) = self.values.get("this").cloned() {
+                            obj = mutated;
+                        }
+                        self.last_return = None;
+                        match old_this {
+                            Some(v) => {
+                                self.values.insert(String::from("this"), v);
                             }
-                            self.last_return = None;
-                            for stmt in split_statements(&ctor.body) {
-                                self.exec(&stmt, &mut Vec::new());
-                                if self.last_return.is_some() {
-                                    break;
-                                }
-                            }
-                            // Constructor'da atanan özellikleri nesneye yansıt (basit: values'tan al)
-                            for (k, v) in &self.values {
-                                if !_old_values.contains_key(k) {
-                                    obj.insert(k.clone(), v.clone());
-                                }
-                            }
-                            for param in &ctor.params {
-                                self.values.remove(param);
+                            None => {
+                                self.values.remove("this");
                             }
                         }
                         return JsValue::Object(obj);
@@ -1455,71 +1545,113 @@ impl JsRuntime {
             }
         }
 
-        // `obj.method(args)` — nesne metod çağrısı.
-        if let Some(dot_open) = e.find(".(") {
-            if e.ends_with(')') {
-                let obj_name = e[..dot_open].trim();
-                // method_name is actually the args part; we need to split method from args
-                // Find the method name: it's between the dot and the opening paren
-                // e.g. "obj.method(arg1, arg2)" -> obj_name="obj", method_and_args="method(arg1, arg2)"
-                // We already have dot_open at the position of '.', so:
-                let after_dot = &e[dot_open + 1..];
-                if let Some(method_open) = after_dot.find('(') {
-                    let mname = after_dot[..method_open].trim();
-                    let arg_str = &after_dot[method_open + 1..after_dot.len() - 1];
-                    let base_val = self.eval_val(obj_name);
-                    if let JsValue::Object(map) = &base_val {
-                        if let Some(method_val) = map.get(mname) {
-                            match method_val {
-                                JsValue::Object(method_map) => {
-                                    if let Some(JsValue::String(body)) = method_map.get("__fn__") {
-                                        let params_str = method_map
-                                            .get("__params__")
-                                            .map(|s| s.to_str())
-                                            .unwrap_or("".to_string());
-                                        let params: Vec<String> = params_str
-                                            .split(',')
-                                            .map(|s| s.trim().to_string())
-                                            .filter(|s| !s.is_empty())
-                                            .collect();
-                                        let args: Vec<JsValue> = split_top_level_comma(arg_str)
-                                            .into_iter()
-                                            .map(|a| self.eval_val(a))
-                                            .collect();
-                                        // 'this' binding: obj_name -> current object
-                                        let this_var = format!("__this_{}", obj_name);
-                                        self.values.insert(this_var.clone(), base_val.clone());
-                                        // Set params
-                                        for (i, param) in params.iter().enumerate() {
-                                            let val =
-                                                args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                            self.var_set_val(param, val);
-                                        }
-                                        // Also bind 'this' as a variable
-                                        self.var_set_val(
-                                            "this",
-                                            JsValue::String(obj_name.to_string()),
-                                        );
-                                        self.last_return = None;
-                                        for stmt in split_statements(body) {
-                                            self.exec(&stmt, &mut Vec::new());
-                                            if self.last_return.is_some() {
-                                                break;
-                                            }
-                                        }
-                                        let ret =
-                                            self.last_return.take().unwrap_or(JsValue::Undefined);
-                                        // Restore
-                                        for param in &params {
-                                            self.values.remove(param);
-                                        }
-                                        self.values.remove(&this_var);
-                                        self.var_set_val("this", JsValue::String(String::new()));
-                                        return ret;
-                                    }
-                                }
-                                _ => {}
+        // `obj.method(args)` — nesne/metot çağrısı. Yöntem gövdesi
+        // `this` örneğe bağlanarak çalıştırılır ve `this` üzerindeki
+        // değişiklikler geri yazılır.
+        if let Some(dot_open) = find_method_call_dot(e) {
+            let obj_name = e[..dot_open].trim();
+            let after_dot = &e[dot_open + 1..];
+            if let Some(method_open) = after_dot.find('(') {
+                let mname = after_dot[..method_open].trim();
+                let arg_str = &after_dot[method_open + 1..after_dot.len() - 1];
+
+                // Statik metot çağrısı: ClassName.staticMethod(args)
+                if let Some(class) = self.classes.get(obj_name) {
+                    if let Some(static_method) = class.static_methods.get(mname) {
+                        // Klonla: self.exec / self.var_set_val self'i değiştirir.
+                        let sm = static_method.clone();
+                        let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                            .into_iter()
+                            .map(|a| self.eval_val(a))
+                            .collect();
+                        let old_this = self.values.get("this").cloned();
+                        self.values
+                            .insert(String::from("this"), JsValue::Undefined);
+                        for (i, param) in sm.params.iter().enumerate() {
+                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                            self.var_set_val(param, val);
+                        }
+                        self.last_return = None;
+                        for stmt in split_statements(&sm.body) {
+                            self.exec(&stmt, &mut Vec::new());
+                            if self.last_return.is_some() {
+                                break;
                             }
+                        }
+                        let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+                        for param in &sm.params {
+                            self.values.remove(param);
+                        }
+                        match old_this {
+                            Some(v) => {
+                                self.values.insert(String::from("this"), v);
+                            }
+                            None => {
+                                self.values.remove("this");
+                            }
+                        }
+                        return ret;
+                    }
+                }
+
+                // Örnek metot çağrısı: obj.method(args)
+                let base_val = self.eval_val(obj_name);
+                if let JsValue::Object(map) = &base_val {
+                    if let Some(JsValue::Object(method_map)) = map.get(mname) {
+                        if let Some(JsValue::String(body)) = method_map.get("__fn__") {
+                            let params_str = method_map
+                                .get("__params__")
+                                .map(|s| s.to_str())
+                                .unwrap_or_default();
+                            let params: Vec<String> = params_str
+                                .split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                                .into_iter()
+                                .map(|a| self.eval_val(a))
+                                .collect();
+                            let old_this = self.values.get("this").cloned();
+                            self.values
+                                .insert(String::from("this"), JsValue::Object(map.clone()));
+                            for (i, param) in params.iter().enumerate() {
+                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                self.var_set_val(param, val);
+                            }
+                            self.last_return = None;
+                            for stmt in split_statements(body) {
+                                self.exec(&stmt, &mut Vec::new());
+                                if self.last_return.is_some() {
+                                    break;
+                                }
+                            }
+                            let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+                            // `this` üzerinden yapılan atamaları örneğe geri yaz.
+                            if let Some(JsValue::Object(mutated)) =
+                                self.values.get("this").cloned()
+                            {
+                                if is_simple_ident(obj_name) {
+                                    if let Some(existing) = self.values.get_mut(obj_name) {
+                                        if let JsValue::Object(target) = existing {
+                                            *target = mutated;
+                                        }
+                                    }
+                                    self.sync_var_from_val(obj_name);
+                                }
+                            }
+                            for param in &params {
+                                self.values.remove(param);
+                            }
+                            match old_this {
+                                Some(v) => {
+                                    self.values.insert(String::from("this"), v);
+                                }
+                                None => {
+                                    self.values.remove("this");
+                                }
+                            }
+                            return ret;
                         }
                     }
                 }
@@ -1842,11 +1974,22 @@ impl JsRuntime {
                         if m.is_empty() {
                             continue;
                         }
-                        if let Some(rest) = keyword(m, "function") {
-                            // methodName(params) { body }
-                            let r = rest.trim_start();
-                            if let Some(open) = r.find('(') {
-                                let mname = r[..open].trim();
+                        // Sınıf gövdesindeki yöntemler `ad(parametreler) { ... }`
+                        // veya `static ad(parametreler) { ... }` biçimindedir;
+                        // `function` anahtar sözcüğü isteğe bağlıdır.
+                        let (is_static, r) = match m.strip_prefix("static ") {
+                            Some(rest) => (true, rest.trim_start()),
+                            None => (false, m),
+                        };
+                        let r = match keyword(r, "function") {
+                            Some(rest) => rest.trim_start(),
+                            None => r,
+                        };
+                        if let Some(open) = r.find('(') {
+                            let mname = r[..open].trim();
+                            if !mname.is_empty()
+                                && !mname.contains(char::is_whitespace)
+                            {
                                 if let Some((param_str, after_params)) = call_args(r, open) {
                                     if let Some(body) = extract_block(&r[after_params..]) {
                                         let params: Vec<String> = split_top_level_comma(param_str)
@@ -1854,15 +1997,22 @@ impl JsRuntime {
                                             .map(|p| p.trim().to_string())
                                             .filter(|p| !p.is_empty())
                                             .collect();
-                                        js_class.methods.insert(
-                                            mname.to_string(),
-                                            JsFunction {
-                                                name: mname.to_string(),
-                                                params,
-                                                body: body.to_string(),
-                                                is_async: false,
-                                            },
-                                        );
+                                        let js_func = JsFunction {
+                                            name: mname.to_string(),
+                                            params,
+                                            body: body.to_string(),
+                                            is_async: false,
+                                        };
+                                        if is_static {
+                                            js_class
+                                                .static_methods
+                                                .insert(mname.to_string(), js_func);
+                                        } else {
+                                            js_class.methods.insert(
+                                                mname.to_string(),
+                                                js_func,
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -2533,6 +2683,12 @@ impl JsRuntime {
                 }
             }
         }
+
+        // Son çare: değerlendirilebilir bir ifade (ör. `obj.method()`,
+        // `c.inc()`, `this.next()`) ise çalıştır; dönüş değeri yok sayılır.
+        if s.ends_with(')') || s.ends_with(']') {
+            let _ = self.eval_val(s);
+        }
     }
 
     /// Betiği sırayla çalıştırır; `document.write` çıktıları `out`'a eklenir.
@@ -2661,6 +2817,47 @@ fn find_top_level(hay: &[u8], needle: &[u8]) -> Option<usize> {
                         continue;
                     }
                     return Some(i);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `instanceof`, `in` gibi bir sözcüğü tam sözcük olarak en üst düzeyde arar.
+fn find_top_level_word(hay: &[u8], word: &[u8]) -> Option<usize> {
+    let is_word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < hay.len() {
+        let c = hay[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            _ => {
+                if depth == 0
+                    && i + word.len() <= hay.len()
+                    && &hay[i..i + word.len()] == word
+                {
+                    let before_ok = i == 0 || !is_word(hay[i - 1]);
+                    let after_ok = hay.get(i + word.len()).map_or(true, |n| !is_word(*n));
+                    if before_ok && after_ok {
+                        return Some(i);
+                    }
                 }
             }
         }
@@ -3069,6 +3266,81 @@ fn extract_method_call<'a>(s: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
     }
     let args = s[open + 1..s.len() - 1].trim();
     Some((base, method, args))
+}
+
+/// `obj.method(args)` ifadesindeki `obj` ile `method` arasındaki noktanın
+/// konumunu döndürür. Nokta üst düzeyde (parantez/dize dışında) olmalı ve
+/// çağrı tamamen kapanmış olmalıdır.
+fn find_method_call_dot(s: &str) -> Option<usize> {
+    let s = s.trim();
+    if !s.ends_with(')') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut dot = None;
+    for i in (0..b.len()).rev() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                let mut slashes = 0usize;
+                let mut j = i;
+                while j > 0 && b[j - 1] == b'\\' {
+                    slashes += 1;
+                    j -= 1;
+                }
+                if slashes % 2 == 0 {
+                    quote = None;
+                }
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b')' | b']' => depth += 1,
+            b'(' | b'[' => {
+                if depth == 0 {
+                    // Çağrının açık parantezini geçtik; solda nokta yoksa
+                    // bu bir metot çağrısı değildir (ör. `(a + b) * c`).
+                    return None;
+                }
+                depth -= 1;
+            }
+            b'.' if depth == 0 => {
+                dot = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let dot = dot?;
+    let base = s[..dot].trim();
+    let rest = s[dot + 1..].trim();
+    let method = rest.split('(').next().unwrap_or("").trim();
+    if base.is_empty() || !is_simple_ident(method) {
+        return None;
+    }
+    Some(dot)
+}
+
+/// `a`, `a_b`, `$x1` gibi basit bir tanımlayıcı mı?
+fn is_simple_ident(s: &str) -> bool {
+    !s.is_empty()
+        && !s.chars().next().map_or(true, |c| c.is_ascii_digit())
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+}
+
+/// Bir sınıf metodunu nesne özelliği (`{ __fn__, __params__ }`) biçimine çevirir.
+fn method_object(mfunc: &JsFunction) -> JsValue {
+    JsValue::Object(BTreeMap::from([
+        (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
+        (
+            String::from("__params__"),
+            JsValue::String(mfunc.params.join(",")),
+        ),
+    ]))
 }
 
 const CALLS: [&str; 24] = [
@@ -3629,5 +3901,123 @@ mod tests {
             render(code),
             r#"MINOS minOsminOs min0S abcd {"k":"minOs","n":2,"ok":true}"#
         );
+    }
+
+    /// Sınıf kurucusu ve metodu: `this` bağlamı ve dönüş değeri.
+    #[test]
+    fn class_constructor_and_method() {
+        let code = r#"
+            class Point {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                }
+                getX() {
+                    return this.x;
+                }
+            }
+            var p = new Point(3, 4);
+            document.write(p.getX());
+        "#;
+        assert_eq!(render(code), "3");
+    }
+
+    /// Kurucu içinde yazılan özellikler örnekte okunabilir.
+    #[test]
+    fn class_constructor_writes_properties() {
+        let code = r#"
+            class Point {
+                constructor(x, y) {
+                    this.x = x;
+                    this.y = y;
+                }
+            }
+            var p = new Point(3, 4);
+            document.write(p.x + "," + p.y);
+        "#;
+        assert_eq!(render(code), "3,4");
+    }
+
+    /// Metottan `this` üzerinden yazımın kalıcılığı.
+    #[test]
+    fn class_method_mutation_persists() {
+        let code = r#"
+            class Counter {
+                constructor() {
+                    this.n = 0;
+                }
+                inc() {
+                    this.n = this.n + 1;
+                }
+            }
+            var c = new Counter();
+            c.inc();
+            c.inc();
+            document.write(c.n);
+        "#;
+        assert_eq!(render(code), "2");
+    }
+
+    /// Miras alınan metodun alt sınıf örneğinde çalışması ve örtük `super()`.
+    #[test]
+    fn class_inheritance_method() {
+        let code = r#"
+            class Shape {
+                constructor() {
+                    this.kind = "sekil";
+                }
+                describe() {
+                    return this.kind;
+                }
+            }
+            class Circle extends Shape {
+                constructor() {
+                    this.kind = "daire";
+                }
+            }
+            var c = new Circle();
+            document.write(c.describe());
+        "#;
+        assert_eq!(render(code), "daire");
+    }
+
+    /// Açık `super()` çağrısı ebeveyn kurucusunu çalıştırmalı.
+    #[test]
+    fn class_explicit_super_call() {
+        let code = r#"
+            class Base {
+                constructor(v) {
+                    this.v = v;
+                }
+            }
+            class Derived extends Base {
+                constructor() {
+                    super(41);
+                    this.v = this.v + 1;
+                }
+            }
+            var d = new Derived();
+            document.write(d.v);
+        "#;
+        assert_eq!(render(code), "42");
+    }
+
+    /// `instanceof` ile kurucu-türetilmiş ilişkisi (miras zinciri dahil).
+    #[test]
+    fn class_instanceof() {
+        let code = r#"
+            class Point {
+                constructor(x) { this.x = x; }
+            }
+            class Pixel extends Point {
+                constructor() { super(1); }
+            }
+            var p = new Point(1);
+            var q = new Pixel();
+            document.write(p instanceof Point);
+            document.write("," + (q instanceof Point));
+            document.write("," + (q instanceof Pixel));
+        "#;
+        assert_eq!(render(code), "true,true,true");
     }
 }

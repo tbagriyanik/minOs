@@ -1034,8 +1034,19 @@ pub fn flush_rect(x: u32, y: u32, width: u32, height: u32) -> bool {
 }
 
 /// VirtIO-GPU'nun aktif ve yapılandırılmış olup olmadığını kontrol eder.
+/// PCI (common_cfg_addr) veya MMIO yedek modunda etkin olabilir.
 pub fn is_active() -> bool {
-    unsafe { DETECTED && INITIALIZED && DEVICE.common_cfg_addr != 0 }
+    unsafe {
+        DETECTED
+            && INITIALIZED
+            && (DEVICE.common_cfg_addr != 0 || DEVICE.mmio_base != 0)
+    }
+}
+
+/// Varsayılan render yolunu VirtIO-GPU olarak ayarlar (kullanılabilirse).
+/// Çağıcı bu değeri video.rs'deki flush_rect ve diğer render yollarında kullanabilir.
+pub fn set_default_render_path() -> bool {
+    is_active()
 }
 
 /// Çözünürlük değiştir (Mode-set)

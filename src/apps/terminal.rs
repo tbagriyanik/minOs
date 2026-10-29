@@ -1867,11 +1867,27 @@ impl TerminalApp {
                 if fs_type.is_empty() || drive_num.is_none() {
                     self.push_line(
                         crate::gui::ui_text(
+                            "Kullanım: format <fat32|ext4|ext2> <0..3>",
+                            "Usage: format <fat32|ext4|ext2> <0..3>",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+                    #[cfg(feature = "exfat")]
+                    self.push_line(
+                        crate::gui::ui_text(
                             "Kullanım: format <fat32|ext4|exfat|ext2> <0..3>",
                             "Usage: format <fat32|ext4|exfat|ext2> <0..3>",
                         ),
                         Color::ACCENT_YELLOW,
                     );
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Örnek: format ext4 1  veya  format ext2 0",
+                            "Example: format ext4 1  or  format ext2 0",
+                        ),
+                        Color::TEXT_MUTED,
+                    );
+                    #[cfg(feature = "exfat")]
                     self.push_line(
                         crate::gui::ui_text(
                             "Örnek: format ext4 1  veya  format exfat 0",
@@ -1908,10 +1924,19 @@ impl TerminalApp {
 
                         let success = match fs_type.as_str() {
                             "ext4" => crate::fs::ext4::format(drive, 0, cap),
+                            #[cfg(feature = "exfat")]
                             "exfat" => crate::fs::exfat::format(drive, 0, cap),
                             "ext2" => crate::fs::ext2::format(drive, 0, cap),
                             "fat32" | "fat" => crate::fs::diskfs::fat_format(drive),
                             _ => {
+                                self.push_line(
+                                    crate::gui::ui_text(
+                                        "Desteklenmeyen dosya sistemi. (fat32, ext4, ext2)",
+                                        "Unsupported filesystem. (fat32, ext4, ext2)",
+                                    ),
+                                    Color::ACCENT_RED,
+                                );
+                                #[cfg(feature = "exfat")]
                                 self.push_line(
                                     crate::gui::ui_text(
                                         "Desteklenmeyen dosya sistemi. (fat32, ext4, exfat, ext2)",

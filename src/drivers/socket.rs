@@ -19,6 +19,7 @@ pub const SOCK_DGRAM: i32 = 2;
 
 // BSD errno benzeri negatif kodlar (dönen Result'un Err tarafı).
 pub const E_BADFD: i32 = 9;
+pub const E_IO: i32 = 5;
 pub const E_INVAL: i32 = 22;
 pub const E_NOMEM: i32 = 12;
 pub const E_NOTCONN: i32 = 107;

@@ -17,6 +17,7 @@ pub enum InstallState {
 pub enum FormatFsType {
     Fat32,
     Ext4,
+    #[cfg(feature = "exfat")]
     Exfat,
 }
 
@@ -25,6 +26,7 @@ impl FormatFsType {
         match self {
             Self::Fat32 => "FAT32",
             Self::Ext4 => "ext4",
+            #[cfg(feature = "exfat")]
             Self::Exfat => "exFAT",
         }
     }
@@ -71,7 +73,11 @@ impl InstallerApp {
     pub fn cycle_format_type(&mut self) {
         let next = match self.format_type {
             FormatFsType::Fat32 => FormatFsType::Ext4,
+            #[cfg(feature = "exfat")]
             FormatFsType::Ext4 => FormatFsType::Exfat,
+            #[cfg(not(feature = "exfat"))]
+            FormatFsType::Ext4 => FormatFsType::Fat32,
+            #[cfg(feature = "exfat")]
             FormatFsType::Exfat => FormatFsType::Fat32,
         };
         self.set_format_type(next);
@@ -219,6 +225,7 @@ impl InstallerApp {
         mbr[o + 4] = match self.format_type {
             FormatFsType::Fat32 => 0x0C, // FAT32 LBA
             FormatFsType::Ext4 => 0x83,  // Linux native
+            #[cfg(feature = "exfat")]
             FormatFsType::Exfat => 0x07, // IFS / exFAT
         };
         mbr[o + 5] = 0xFE;
@@ -250,6 +257,7 @@ impl InstallerApp {
                 crate::fs::ext4::format(drive, part_lba, part_sectors as u64)
                     && diskfs::mount_drive(drive)
             }
+            #[cfg(feature = "exfat")]
             FormatFsType::Exfat => {
                 // exFAT için okuma/yazma sürücüsü yok: VBR imzası doğrulanır,
                 // mount beklenmez. Kurulum bu biçimde desteklenmez.
@@ -288,6 +296,7 @@ impl InstallerApp {
                 "Disk başarıyla biçimlendirildi.",
                 "Disk formatted successfully.",
             ),
+            #[cfg(feature = "exfat")]
             FormatFsType::Exfat => (
                 "Disk başarıyla biçimlendirildi.",
                 "Disk formatted successfully.",
@@ -331,6 +340,7 @@ impl InstallerApp {
 
         // exFAT okuma/yazma sürücüsü olmadığı için kurulum desteklenmez.
         // Biçimlendirme başarılı olabilir ama dosya yazılamaz.
+        #[cfg(feature = "exfat")]
         if self.format_type == FormatFsType::Exfat {
             self.state = InstallState::Failed;
             self.status_msg = (
@@ -734,6 +744,7 @@ impl InstallerApp {
         let fs_options = [
             (FormatFsType::Fat32, "FAT32"),
             (FormatFsType::Ext4, "ext4"),
+            #[cfg(feature = "exfat")]
             (FormatFsType::Exfat, "exFAT"),
         ];
 
@@ -785,6 +796,7 @@ impl InstallerApp {
                     "Modern Linux dosya sistemi, 256B inode ve extent ağacı."
                 }
             }
+            #[cfg(feature = "exfat")]
             FormatFsType::Exfat => {
                 if english {
                     "Microsoft high-capacity format (VBR only; installation not supported yet)."

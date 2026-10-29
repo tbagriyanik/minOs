@@ -5368,7 +5368,7 @@ pub extern "C" fn _start() -> ! {
                                 let radio_ext4 =
                                     apps::installer::InstallerApp::radio_btn_rect(wx, wy + 20, 1);
 
-                                let radio_exfat =
+                                let _radio_exfat =
                                     apps::installer::InstallerApp::radio_btn_rect(wx, wy + 20, 2);
 
                                 let fmt_rect =
@@ -5385,10 +5385,13 @@ pub extern "C" fn _start() -> ! {
                                 } else if gui::in_rect(mx, my, radio_ext4) {
                                     installer_app
                                         .set_format_type(apps::installer::FormatFsType::Ext4);
-                                } else if gui::in_rect(mx, my, radio_exfat) {
+                                }
+                                #[cfg(feature = "exfat")]
+                                if gui::in_rect(mx, my, _radio_exfat) {
                                     installer_app
                                         .set_format_type(apps::installer::FormatFsType::Exfat);
-                                } else if gui::in_rect(mx, my, fmt_rect) {
+                                }
+                                if gui::in_rect(mx, my, fmt_rect) {
                                     // 2. Adim: Sadece bicimlendir.
 
                                     if installer_app.state

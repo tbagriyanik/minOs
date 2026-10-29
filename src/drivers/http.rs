@@ -526,3 +526,123 @@ pub fn self_test() -> bool {
     crate::serial_print(if ok { "BAŞARILI\n" } else { "BAŞARISIZ\n" });
     ok
 }
+
+// ---------------------------------------------------------------------------
+// HTTP/2 Desteği (RFC 7540) — Temel çerçeve altyapısı
+// ---------------------------------------------------------------------------
+
+/// HTTP/2 çerçeve türleri ve sabitleri.
+pub mod h2 {
+    /// HTTP/2 çerçeve türleri (RFC 7540 §5.1.1).
+    pub const FRAME_DATA: u8 = 0x0;
+    pub const FRAME_HEADERS: u8 = 0x1;
+    pub const FRAME_PRIORITY: u8 = 0x2;
+    pub const FRAME_RST_STREAM: u8 = 0x3;
+    pub const FRAME_SETTINGS: u8 = 0x4;
+    pub const FRAME_PUSH_PROMISE: u8 = 0x5;
+    pub const FRAME_PING: u8 = 0x6;
+    pub const FRAME_GOAWAY: u8 = 0x7;
+    pub const FRAME_WINDOW_UPDATE: u8 = 0x8;
+    pub const FRAME_CONTINUATION: u8 = 0x9;
+
+    /// İstemci bağlantı önyüzü (client connection preface).
+    pub const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
+    /// SETTINGS parametreleri (RFC 7540 §6.5.2).
+    pub const SETTINGS_HEADER_TABLE_SIZE: u16 = 0x1;
+    pub const SETTINGS_ENABLE_PUSH: u16 = 0x2;
+    pub const SETTINGS_MAX_CONCURRENT_STREAMS: u16 = 0x3;
+    pub const SETTINGS_INITIAL_WINDOW_SIZE: u16 = 0x4;
+    pub const SETTINGS_MAX_FRAME_SIZE: u16 = 0x5;
+    pub const SETTINGS_MAX_HEADER_LIST_SIZE: u16 = 0x6;
+
+    /// Çerçeve bayrakları.
+    pub const FLAG_END_STREAM: u8 = 0x1;
+    pub const FLAG_END_HEADERS: u8 = 0x4;
+    pub const FLAG_PADDED: u8 = 0x8;
+    pub const FLAG_PRIORITY: u8 = 0x20;
+    pub const FLAG_ACK: u8 = 0x1;
+
+    /// 9 baytlık HTTP/2 çerçeve başlığı (RFC 7540 §3).
+    #[repr(C, packed)]
+    #[derive(Clone, Copy, Debug)]
+    pub struct FrameHeader {
+        pub length: [u8; 3],   // 24-bit payload uzunluğu
+        pub r#type: u8,        // Çerçeve türü
+        pub flags: u8,         // Bayraklar
+        pub stream_id: [u8; 4], // 31-bit akış kimliği (bit 31 reserved)
+    }
+
+    impl FrameHeader {
+        /// Payload uzunluğunu döndürür.
+        pub fn payload_len(&self) -> u32 {
+            ((self.length[0] as u32) << 16)
+                | ((self.length[1] as u32) << 8)
+                | (self.length[2] as u32)
+        }
+
+        /// Akış kimliğini döndürür (bit 31 hariç).
+        pub fn stream_id(&self) -> u32 {
+            ((self.stream_id[0] as u32 & 0x7F) << 24)
+                | ((self.stream_id[1] as u32) << 16)
+                | ((self.stream_id[2] as u32) << 8)
+                | (self.stream_id[3] as u32)
+        }
+    }
+
+    /// HTTP/2 istemci bağlantı önyüzünü kontrol eder.
+    pub fn is_client_preface(data: &[u8]) -> bool {
+        data.len() >= PREFACE.len() && &data[..PREFACE.len()] == PREFACE
+    }
+
+    /// 9 baytlık bir tampondan HTTP/2 çerçeve başlığı ayrıştırır.
+    pub fn parse_frame_header(data: &[u8]) -> Option<FrameHeader> {
+        if data.len() < 9 {
+            return None;
+        }
+        Some(FrameHeader {
+            length: [data[0], data[1], data[2]],
+            r#type: data[3],
+            flags: data[4],
+            stream_id: [data[5], data[6], data[7], data[8]],
+        })
+    }
+
+    /// Boş bir SETTINGS çerçevesi oluşturur (istemci → sunucu el sıkışması).
+    pub fn build_client_settings() -> alloc::vec::Vec<u8> {
+        let mut frame = alloc::vec::Vec::new();
+        frame.push(0x00); // length >> 16
+        frame.push(0x00); // length >> 8
+        frame.push(0x00); // length & 0xFF
+        frame.push(FRAME_SETTINGS); // type
+        frame.push(0x00); // flags
+        frame.push(0x00); // stream ID >> 24
+        frame.push(0x00);
+        frame.push(0x00);
+        frame.push(0x00);
+        frame
+    }
+}
+
+/// Sunucu yanıtının HTTP/2 ile başlayıp başlamadığını kontrol eder.
+/// Sunucu bağlantı önyüzü göndermez; SETTINGS çerçevesi ile başlar.
+pub fn is_http2_response(data: &[u8]) -> bool {
+    if data.len() < 9 {
+        return false;
+    }
+    // Frame type = SETTINGS (0x4), stream ID = 0 (bağlantı çerçevesi)
+    data[3] == h2::FRAME_SETTINGS
+        && data[4] == 0
+        && data[5] == 0
+        && data[6] == 0
+        && data[7] == 0
+        && data[8] == 0
+}
+
+/// HTTP/2 istemci bağlantı önyüzünü gönderir (sunucuya bağlandıktan sonra).
+/// Bu, HTTP/2 protokolünün başlatılması için gereklidir.
+pub fn h2_send_preface(fd: i32) -> Result<(), i32> {
+    let _ = socket::send(fd, h2::PREFACE).map_err(|_| socket::E_IO)?;
+    let _ = socket::send(fd, &h2::build_client_settings()).map_err(|_| socket::E_IO)?;
+    Ok(())
+}

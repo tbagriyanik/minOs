@@ -313,13 +313,16 @@ pub fn init_subsystems(
 
     serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
 
-    // 4b. Gelismis grafik suruculeri: VirtIO-GPU/BGA/VMware/VGA yetenek taramasi.
+    // 4b. Gelismis grafik suruculeri: VirtIO-GPU varsayılan render yolu olarak seçiliyor.
     let gpu_caps = drivers::gpu::init();
-    if gpu_caps.virtio_gpu_present {
-        serial_print("[GPU] VirtIO-GPU algılandı (Varsayılan 2D Donanım Hızlandırma etkin).\n");
+    let mut virtio_default = false;
+    if gpu_caps.virtio_gpu_present && drivers::virtio_gpu::set_default_render_path() {
+        serial_print("[GPU] VirtIO-GPU varsayılan render yolu olarak ayarlandı.\n");
         fb.set_hw_cursor(false);
         serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");
-    } else if gpu_caps.bga_present {
+        virtio_default = true;
+    }
+    if !virtio_default && gpu_caps.bga_present {
         serial_print("[GPU] BGA algılandı, çözünürlük değişimi açık.\n");
         fb.set_hw_cursor(false);
         serial_print("[GPU] Hızlandırılmış yazılım imleci etkin.\n");

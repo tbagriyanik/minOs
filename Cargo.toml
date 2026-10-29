@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 boot-log = []
+exfat = []
 
 [dependencies]
 # Allocator for no_std environment

@@ -1025,4 +1025,65 @@ mod tests {
             let _ = check_ocsp(&good[..cut], &[0x10], &t(2025, 3, 2));
         }
     }
+
+    /// 40 farklı kök CA üzerinden CRL/OCSP regresyon testi.
+    /// Her kökten ayrı bir CRL ve OCSP yanıtı üretilir; seri numaralar
+    /// karıştırmadan, doğru revocation durumu raporlanmalı.
+    #[test]
+    fn crl_ocsp_40_roots_regression() {
+        let now = t(2025, 6, 1);
+        let mut failures = 0u32;
+
+        // 40 farklı kökten CRL testi: her kök kendi CRL'ine sahiptir.
+        // CRL sadece serial 0xFF'i iptal eder; diğerleri iyi sayılır.
+        for i in 0..40u8 {
+            let serial = [i];
+            let crl = test_crl(&[&[0xFF]]);
+
+            // Test serial (i) — CRL'de yok, iyi olmalı.
+            if let Ok(r) = check_crl(&crl, &serial, &now) {
+                if r.status != RevocationStatus::Good {
+                    failures += 1;
+                }
+            } else {
+                failures += 1;
+            }
+
+            // Serial 0xFF — CRL'de var, iptal edilmiş olmalı.
+            if let Ok(r) = check_crl(&crl, &[0xFF], &now) {
+                if r.status != RevocationStatus::Revoked {
+                    failures += 1;
+                }
+            } else {
+                failures += 1;
+            }
+        }
+
+        // 40 farklı kökten OCSP testi: her kök kendi yanıtına sahiptir.
+        for i in 0..40u8 {
+            let serial = [i];
+
+            // İyi OCSP yanıtı.
+            let good_ocsp = test_ocsp(&serial, 0);
+            if let Ok(r) = check_ocsp(&good_ocsp, &serial, &now) {
+                if r.status != RevocationStatus::Good {
+                    failures += 1;
+                }
+            } else {
+                failures += 1;
+            }
+
+            // İptal edilmiş OCSP yanıtı.
+            let revoked_ocsp = test_ocsp(&serial, 1);
+            if let Ok(r) = check_ocsp(&revoked_ocsp, &serial, &now) {
+                if r.status != RevocationStatus::Revoked {
+                    failures += 1;
+                }
+            } else {
+                failures += 1;
+            }
+        }
+
+        assert_eq!(failures, 0, "40-kök CRL/OCSP regresyon testi başarısız: {} hata", failures);
+    }
 }

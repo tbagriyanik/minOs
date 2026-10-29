@@ -468,26 +468,40 @@ impl JsRuntime {
     /// Bir Promise'i yerine getirir ve kayıtlı .then() işleyicilerini
     /// microtask sırasına ekler.
     pub fn resolve_promise(&mut self, promise_var: &str, value: JsValue) {
-        if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
-            p.state = PromiseState::Fulfilled;
-            p.value = Some(value.clone());
-            for handler in &p.handlers {
-                if let Some(cb) = &handler.on_fulfilled {
-                    self.microtask_queue.push(cb.clone());
-                }
+        let handlers = {
+            if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
+                p.state = PromiseState::Fulfilled;
+                p.value = Some(value.clone());
+                p.handlers.clone()
+            } else {
+                return;
+            }
+        };
+        // Çözümlenmiş değeri .then() işleyicilerinin erişebileceği bir değişkende sakla.
+        self.values.insert(String::from("__then_value"), value);
+        for handler in &handlers {
+            if let Some(cb) = &handler.on_fulfilled {
+                self.microtask_queue.push(cb.clone());
             }
         }
     }
 
     /// Bir Promise'i reddeder ve .catch() işleyicilerini microtask sırasına ekler.
     pub fn reject_promise(&mut self, promise_var: &str, reason: JsValue) {
-        if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
-            p.state = PromiseState::Rejected;
-            p.value = Some(reason.clone());
-            for handler in &p.handlers {
-                if let Some(cb) = &handler.on_rejected {
-                    self.microtask_queue.push(cb.clone());
-                }
+        let handlers = {
+            if let Some(JsValue::Promise(p)) = self.values.get_mut(promise_var) {
+                p.state = PromiseState::Rejected;
+                p.value = Some(reason.clone());
+                p.handlers.clone()
+            } else {
+                return;
+            }
+        };
+        // Reddedilme sebebini .catch() işleyicilerinin erişebileceği bir değişkende sakla.
+        self.values.insert(String::from("__catch_reason"), reason);
+        for handler in &handlers {
+            if let Some(cb) = &handler.on_rejected {
+                self.microtask_queue.push(cb.clone());
             }
         }
     }
@@ -1129,30 +1143,61 @@ impl JsRuntime {
                             }
                             _ => {}
                         },
-                        JsValue::Promise(_p) => match method {
+                        JsValue::Promise(mut p) => match method {
                             "then" => {
                                 // .then(onFulfilled, onRejected) — işleyiciyi kaydet, yeni Promise döndür.
                                 let parts: Vec<&str> = split_top_level_comma(args);
                                 let on_fulfilled = parts.first().map(|s| s.trim().to_string());
-                                let _on_rejected = parts.get(1).map(|s| s.trim().to_string());
-                                let pvar = format!("__promise_{}", self.values.len());
-                                let new_p = PromiseObj::new();
-                                // Mevcut promise'in işleyicilerine ekle (bu promise zaten varsa)
-                                // Basit implementasyon: işleyiciyi microtask sırasına ekle.
+                                let on_rejected = parts.get(1).map(|s| s.trim().to_string());
+
+                                // İşleyiciyi promise'in handler listesine kaydet (resolve/reject sırasında çağrılır).
                                 if let Some(cb) = &on_fulfilled {
-                                    self.microtask_queue.push(cb.clone());
+                                    p.handlers.push(PromiseHandler {
+                                        on_fulfilled: Some(cb.clone()),
+                                        on_rejected: None,
+                                    });
                                 }
+                                if let Some(cb) = &on_rejected {
+                                    if let Some(last) = p.handlers.last_mut() {
+                                        if last.on_rejected.is_none() {
+                                            last.on_rejected = Some(cb.clone());
+                                        } else {
+                                            p.handlers.push(PromiseHandler {
+                                                on_fulfilled: None,
+                                                on_rejected: Some(cb.clone()),
+                                            });
+                                        }
+                                    } else {
+                                        p.handlers.push(PromiseHandler {
+                                            on_fulfilled: None,
+                                            on_rejected: Some(cb.clone()),
+                                        });
+                                    }
+                                }
+
+                                // Yeni bir Promise döndür (zincirleme için).
+                                let new_p = PromiseObj::new();
+                                let pvar = format!("__promise_{}", self.values.len());
                                 self.values
                                     .insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
-                                // Promise değişkenini döndürmek yerine, şimdilik undefined döndürüyoruz.
-                                // Gerçek implementasyon promise değişken adını döndürür.
+                                return JsValue::String(pvar);
                             }
                             "catch" => {
-                                // .catch(onRejected) — hata işleyicisi kaydet.
+                                // .catch(onRejected) — hata işleyicisi kaydet, yeni Promise döndür.
                                 let parts: Vec<&str> = split_top_level_comma(args);
                                 if let Some(cb) = parts.first().map(|s| s.trim().to_string()) {
-                                    self.microtask_queue.push(cb);
+                                    p.handlers.push(PromiseHandler {
+                                        on_fulfilled: None,
+                                        on_rejected: Some(cb),
+                                    });
                                 }
+
+                                // Yeni bir Promise döndür.
+                                let new_p = PromiseObj::new();
+                                let pvar = format!("__promise_{}", self.values.len());
+                                self.values
+                                    .insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
+                                return JsValue::String(pvar);
                             }
                             _ => {}
                         },

@@ -1,6 +1,8 @@
 pub mod block;
 pub mod diskfs;
+#[cfg(feature = "exfat")]
 pub mod exfat;
+#[cfg(feature = "exfat")]
 pub mod exfat_rw;
 pub mod ext2;
 pub mod ext4;

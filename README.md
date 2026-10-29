@@ -10,7 +10,7 @@
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](licence.md)
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
-[![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
+[![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-103%2C210%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
@@ -253,6 +253,27 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
 > 💡 *Not: DirectSound kullanıyorsanız `hda-duplex` yerine `hda-output` veya `-audiodev driver=sdl` kullanmak mikrofon yakalama aygıtı eksikliğinden kaynaklanan QEMU açılış çökmelerini önler.*
 > 💡 *Not: VirtIO-GPU (`-vga virtio`), QEMU/KVM ortamında doğrudan donanım 2D hızlandırma ve scanout flush mekanizması sunar. Standart VGA için `-vga std -global VGA.vgamem_mb=64` kullanılabilir.*
 > 💡 *Not: QEMU, VirtualBox ve VMware sanal makinelerinde gerçek zamanlı saat senkronizasyonu için donanım RTC saati UTC olarak çalışır ve minOs bölge/saat dilimi farkını (`settings.cfg: region`, varsayılan UTC+3) uygulayarak ana makine saati ile tam senkronize çalışır.*
+
+#### Donanım Profilleri (Çok Düşük / Yüksek Donanım)
+
+`run.ps1` ve `test_qemu.ps1` iki ek QEMU yapılandırması sunar:
+
+| Profil | Parametre | vCPU | RAM | VRAM | Aygıtlar |
+|---|---|---|---|---|---|
+| Çok düşük donanım | `-Minimal` | 1 | 128 MB | 16 MB | Ses ve ağ kapalı |
+| Varsayılan | — | 2 | 512 MB | 64 MB | Intel HDA + e1000 |
+| Yüksek donanım | `-HighEnd` | 1 | 8 GB | 256 MB | Intel HDA + e1000 + USB HID (xHCI) |
+
+```powershell
+.\run.ps1 -Minimal          # çok düşük donanım
+.\run.ps1 -HighEnd          # yüksek donanım
+.\test_qemu.ps1 -Minimal    # çok düşük donanımda otomatik boot testi
+.\test_qemu.ps1 -HighEnd    # yüksek donanımda otomatik boot testi
+```
+
+> 💡 *Not: `-Memory` veya `-CpuCount` açıkça verilirse profil varsayılanlarını ezer. CI ayrıca `default`, `minimal` ve `high` profilleriyle QEMU boot doğrulaması çalıştırır.*
+> ⚠️ *Not: 64 MB ile çekirdek önyüklenemiyor (bellek hatası); doğrulanmış en düşük değer 128 MB'dır. `test_qemu.ps1` profil testleri varsayılan olarak yazılım VGA (`std`) kullanır; VirtIO-GPU için `-Vga virtio` verin.*
+> ℹ️ *Not: minOs çekirdeği şu anda tek çekirdek (SMP devre dışı) çalışır. `-CpuCount` ile vCPU artırmak hipervizörde boşta dönen AP'ler yüzünden host CPU tüketir ve fare/masaüstü tepkisini belirgin biçimde yavaşlatır; bu nedenle `-HighEnd` de 1 vCPU kullanır (8 GB RAM, 256 MB VRAM, USB HID ile ölçeklenir).*
 
 ---
 

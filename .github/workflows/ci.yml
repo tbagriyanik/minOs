@@ -56,9 +56,23 @@ jobs:
         run: cargo build --release
 
   qemu-boot-test:
-    name: QEMU ISO Boot & Log Verification
+    name: QEMU ISO Boot (${{ matrix.profile }})
     needs: [code-quality, kernel-build]
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Varsayılan, çok düşük donanım ve yüksek donanım profilleri.
+          - profile: default
+            memory: 512M
+            cpus: 2
+          - profile: minimal
+            memory: 128M
+            cpus: 1
+          - profile: high
+            memory: 8G
+            cpus: 1
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -109,10 +123,11 @@ jobs:
 
       - name: Run QEMU Headless Boot Test (15s Timeout)
         run: |
-          echo "Starting QEMU test..."
+          echo "Starting QEMU test (profile: ${{ matrix.profile }}, memory: ${{ matrix.memory }}, cpus: ${{ matrix.cpus }})..."
           timeout 15s qemu-system-x86_64 \
             -cdrom minos.iso \
-            -m 512M \
+            -m ${{ matrix.memory }} \
+            -smp ${{ matrix.cpus }} \
             -display none \
             -serial file:serial.log \
             -no-reboot || true

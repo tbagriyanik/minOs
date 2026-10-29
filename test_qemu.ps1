@@ -15,12 +15,46 @@ param(
     [switch]$KeepOpen,
     [switch]$UsbHid,
     [switch]$NoPs2,
+    [switch]$Minimal,
+    [switch]$HighEnd,
     [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio"
 )
+
+# --- Donanım profilleri -------------------------------------------------
+# -Minimal : çok düşük donanım (1 vCPU, 128 MB RAM)
+# -HighEnd : yüksek donanım (8 GB RAM, USB HID)
+#
+# Not: minOs çekirdeği tek çekirdek (SMP devre dışı) çalışır; fazladan vCPU
+# hipervizörde boşta dönen AP'leri çalıştırıp fare/masaüstü tepkisini
+# yavaşlattığı için profiller 1 vCPU kullanır.
+if ($Minimal -and $HighEnd) {
+    Write-Host "[HATA] -Minimal ve -HighEnd birlikte kullanilamaz." -ForegroundColor Red
+    exit 1
+}
+$memMb = 512
+$smpCpus = 2
+if ($Minimal) {
+    $memMb = 128
+    $smpCpus = 1
+    # Minimal profilde yazılım VGA (std) kullanılır; virtio-gpu yüksek
+    # donanım profiline bırakılır. Açıkça -Vga verilirse o kullanılır.
+    if (-not $PSBoundParameters.ContainsKey('Vga')) { $Vga = "std" }
+}
+if ($HighEnd) {
+    $memMb = 8192
+    $smpCpus = 1
+    $UsbHid = $true
+    # Yüksek donanım profili RAM/VRAM/USB HID ölçekler; VGA varsayılan olarak
+    # yazılım (std) kalır. VirtIO-GPU istenirse açıkça `-Vga virtio` verilir.
+    if (-not $PSBoundParameters.ContainsKey('Vga')) { $Vga = "std" }
+}
 
 if ($NoPs2) { $UsbHid = $true }
 
 $ErrorActionPreference = "Continue"
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+[Console]::InputEncoding = [System.Text.Encoding]::UTF8
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
@@ -97,25 +131,32 @@ $qmpPort = ([System.Net.IPEndPoint]$qmpProbe.LocalEndpoint).Port
 $qmpProbe.Stop()
 
 $qemuArgs = @(
-    "-m", "512M",
-    "-smp", "2",
+    "-m", "$($memMb)M",
+    "-smp", "$smpCpus",
     "-cdrom", $isoPath,
     "-boot", "d",
     "-display", "none",
     "-vga", $Vga,
     "-rtc", "base=utc,clock=host,driftfix=slew",
-
     "-serial", "stdio",
-    "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",
-    "-device", "intel-hda",
-    "-device", "hda-output,audiodev=snd0",
-    "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait",
-    "-netdev", "user,id=n0",
-    "-device", "e1000,netdev=n0"
+    "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait"
 )
 
+if (-not $Minimal) {
+    # Çok düşük donanım profilinde ses ve ağ aygıtları eklenmez; diğer
+    # profillerde gerçek HDA WAV akışı ve e1000 bağlantısı doğrulanır.
+    $qemuArgs += @(
+        "-audiodev", "driver=wav,id=snd0,path=$audioWavPath",
+        "-device", "intel-hda",
+        "-device", "hda-output,audiodev=snd0",
+        "-netdev", "user,id=n0",
+        "-device", "e1000,netdev=n0"
+    )
+}
+
 if ($Vga -eq "std") {
-    $qemuArgs += @("-global", "VGA.vgamem_mb=64")
+    $vgamem = if ($Minimal) { 16 } elseif ($HighEnd) { 256 } else { 64 }
+    $qemuArgs += @("-global", "VGA.vgamem_mb=$vgamem")
 }
 
 if ($UsbHid) {
@@ -130,6 +171,12 @@ if ($UsbHid) {
 
 if ($NoPs2) {
     $qemuArgs += @("-machine", "pc,i8042=off")
+}
+
+if ($Minimal) {
+    Write-Host "[BILGI] Minimal donanim profili: 1 vCPU, 128 MB RAM" -ForegroundColor Yellow
+} elseif ($HighEnd) {
+    Write-Host "[BILGI] Yuksek donanim profili: 1 vCPU (cekirdek tek cekirdek), 8 GB RAM, USB HID acik" -ForegroundColor Yellow
 }
 
 Write-Host ("[BILGI] USB HID testi: " + $(if ($UsbHid) { "acik" } else { "kapali" }) + ", PS/2: " + $(if ($NoPs2) { "devre disi" } else { "acik" })) -ForegroundColor DarkGray
@@ -275,6 +322,20 @@ if (-not $proc.HasExited) {
     $proc.Kill()
     $proc.WaitForExit(1000) | Out-Null
 }
+
+# QEMU cikisi tamamlandi; bekleyen olay isleyicilerinin islenmesi icin kisa bekleme
+Start-Sleep -Milliseconds 500
+
+# Kalan tampondaki seri cikisini oku (olay tabanli yakalama esliginda kaybolabilir)
+try {
+    while ($proc.StandardOutput.Peek() -ge 0) {
+        $line = $proc.StandardOutput.ReadLine()
+        if ($null -ne $line) {
+            $outputBuilder.AppendLine($line) | Out-Null
+        }
+    }
+} catch {}
+
 Unregister-Event -SourceIdentifier $outEvent.Name -ErrorAction SilentlyContinue
 Unregister-Event -SourceIdentifier $errEvent.Name -ErrorAction SilentlyContinue
 
@@ -328,6 +389,11 @@ $checks = @(
         Description = "Tum donanim suruculerinin eksiksiz baslatimi"
     }
 )
+
+if ($Minimal) {
+    # Minimal profilde ses/ağ aygıtı eklenmez; ilgili kontroller atlanır.
+    $checks = @($checks | Where-Object { $_.Name -notmatch 'Ag Adaptoru|Ses Denetleyicisi' })
+}
 
 if ($UsbHid) {
     $checks += @(
@@ -384,7 +450,9 @@ foreach ($check in $checks) {
 $audioFileCreated = (Test-Path $audioWavPath) -and ((Get-Item $audioWavPath).Length -ge 44)
 $hdaHardwareReady = $logOutput -match "\[HDA\] Intel HDA.*48kHz"
 
-if ($audioFileCreated -and $hdaHardwareReady) {
+if ($Minimal) {
+    Write-Host "  [SKIP] Gercek Ses Cikisi (minimal profilde HDA aygiti yok)" -ForegroundColor DarkGray
+} elseif ($audioFileCreated -and $hdaHardwareReady) {
     $audioBytes = (Get-Item $audioWavPath).Length
     Write-Host "  [OK] Gercek Ses Cikisi (Intel HDA WAV Aygiti & 48kHz DMA Akisi Hazir: $audioBytes bayt)" -ForegroundColor Green
 } elseif ($hdaHardwareReady) {

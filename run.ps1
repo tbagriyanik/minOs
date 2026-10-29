@@ -11,8 +11,32 @@ param(
     [switch]$Live,
     [switch]$NoIso,
     [switch]$ReprepareDisk,
+    [switch]$Minimal,
+    [switch]$HighEnd,
     [ValidateSet("default", "sdl", "gtk")][string]$Display = "default"
 )
+
+# --- Donanım profilleri -------------------------------------------------
+# -Minimal : çok düşük donanım (1 vCPU, 128 MB RAM, ses/ağ kapalı, 16 MB VRAM)
+# -HighEnd : yüksek donanım (8 GB RAM, 256 MB VRAM, ses + ağ + USB HID)
+#
+# Not: minOs çekirdeği şu anda tek çekirdek (SMP devre dışı) çalışır. Fazladan
+# vCPU vermek hipervizörde boşta dönen AP'leri çalıştırır, host CPU tüketir ve
+# masaüstü/fare tepkisini belirgin biçimde yavaşlatır. Bu yüzden her iki profilde
+# de varsayılan 1 vCPU'dur; -CpuCount ile açıkça artırılabilir.
+# Açıkça verilen -Memory / -CpuCount değerleri profil varsayılanlarını ezer.
+if ($Minimal -and $HighEnd) {
+    Write-Host "[HATA] -Minimal ve -HighEnd birlikte kullanilamaz." -ForegroundColor Red
+    exit 1
+}
+if ($Minimal) {
+    if (-not $PSBoundParameters.ContainsKey('Memory')) { $Memory = "128M" }
+    if (-not $PSBoundParameters.ContainsKey('CpuCount')) { $CpuCount = 1 }
+}
+if ($HighEnd) {
+    if (-not $PSBoundParameters.ContainsKey('Memory')) { $Memory = "8G" }
+    if (-not $PSBoundParameters.ContainsKey('CpuCount')) { $CpuCount = 1 }
+}
 
 # minOs Derle ve QEMU ile Çalistir (PowerShell)
 chcp 65001 | Out-Null
@@ -84,21 +108,37 @@ if ($BuildOnly) {
 Write-Host "[3/3] QEMU Baslatiliyor..." -ForegroundColor Yellow
 Write-Host "=========================================" -ForegroundColor Cyan
 
+$vgamem = if ($Minimal) { 16 } elseif ($HighEnd) { 256 } else { 64 }
 $qemuArgs = @(
     "-m", $Memory,
     "-smp", "$CpuCount",
     "-serial", "stdio",
     "-vga", "std",
-    "-global", "VGA.vgamem_mb=64",
-    # SDL ses çıkışı DirectSound'un zorunlu capture/mikrofon açma hatasını önler.
-    "-audiodev", "driver=sdl,id=snd0",
-    "-device", "intel-hda",
-    # Yalnızca çıkış codec'i: DirectSoundCapture / mikrofon başlatılmaz.
-    "-device", "hda-output,audiodev=snd0",
-    # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
-    "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
-    "-device", "e1000,netdev=n0"
+    "-global", "VGA.vgamem_mb=$vgamem"
 )
+
+if ($Minimal) {
+    Write-Host "[BILGI] Minimal donanim profili: $CpuCount vCPU, $Memory RAM, ${vgamem}MB VRAM (ses ve ag devre disi)." -ForegroundColor Yellow
+} else {
+    $qemuArgs += @(
+        # SDL ses çıkışı DirectSound'un zorunlu capture/mikrofon açma hatasını önler.
+        "-audiodev", "driver=sdl,id=snd0",
+        "-device", "intel-hda",
+        # Yalnızca çıkış codec'i: DirectSoundCapture / mikrofon başlatılmaz.
+        "-device", "hda-output,audiodev=snd0",
+        # --- Ağ: e1000 + QEMU user modu (SLIRP) — ARP/ping/TCP sağlar ---
+        "-netdev", "user,id=n0,hostfwd=tcp::8080-:80",
+        "-device", "e1000,netdev=n0"
+    )
+    if ($HighEnd) {
+        Write-Host "[BILGI] Yuksek donanim profili: $CpuCount vCPU (cekirdek tek cekirdek), $Memory RAM, ${vgamem}MB VRAM, ses + ag + USB HID." -ForegroundColor Yellow
+    }
+}
+
+if ($HighEnd) {
+    # Yüksek donanım profilinde xHCI + USB klavye/fare varsayılan olarak eklenir.
+    $UsbHid = $true
+}
 
 if ($Display -eq "sdl") {
     $qemuArgs += @("-display", "sdl")

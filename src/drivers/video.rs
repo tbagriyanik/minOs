@@ -116,10 +116,15 @@ fn lerp_color_dither(a: u32, b: u32, t: usize, n: usize, cx: usize, cy: usize) -
     (r << 16) | (g << 8) | bl
 }
 
+#[export_name = "PANIC_FB_ADDR"]
 pub static mut PANIC_FB_ADDR: *mut u32 = core::ptr::null_mut();
+#[export_name = "PANIC_FB_W"]
 pub static mut PANIC_FB_W: usize = 0;
+#[export_name = "PANIC_FB_H"]
 pub static mut PANIC_FB_H: usize = 0;
+#[export_name = "PANIC_FB_PITCH"]
 pub static mut PANIC_FB_PITCH: usize = 0;
+#[export_name = "PANIC_FB_BPP"]
 pub static mut PANIC_FB_BPP: usize = 0;
 
 impl Framebuffer {

@@ -104,8 +104,11 @@ pub struct HostBrowser {
     active_tab: usize,
     images: BTreeMap<usize, CachedImage>,
     bookmarks_extra: Vec<Bookmark>,
+    favorites: Vec<String>,
     history: Vec<String>,
+    history_pos: usize,
     scroll_offset: f32,
+    selected_text: String,
     next_image_id: usize,
 }
 
@@ -120,8 +123,11 @@ impl HostBrowser {
             active_tab: 0,
             images: BTreeMap::new(),
             bookmarks_extra: Vec::new(),
+            favorites: Vec::new(),
             history: Vec::new(),
+            history_pos: 0,
             scroll_offset: 0.0,
+            selected_text: String::new(),
             next_image_id: 1,
         }
     }
@@ -261,6 +267,7 @@ impl HostBrowser {
             );
             if !self.history.contains(&value) {
                 self.history.push(value.clone());
+                self.history_pos = self.history.len().saturating_sub(1);
             }
         } else {
             self.page_loaded = false;
@@ -386,6 +393,38 @@ impl HostBrowser {
     /// URL'ye git (dışarıdan çağrılır).
     pub fn go_to_url(&mut self, url: &str) {
         self.navigate(url);
+    }
+
+    pub fn page_down(&mut self) { self.scroll_offset += 1.0; }
+    pub fn page_up(&mut self) { if self.scroll_offset > 0.0 { self.scroll_offset -= 1.0; } }
+    pub fn select_all(&mut self) {
+        let mut text = String::new();
+        for line in &self.page_lines {
+            for span in &line.spans {
+                text.push_str(&span.text);
+                text.push(' ');
+            }
+            text.push('\n');
+        }
+        self.selected_text = text;
+    }
+    pub fn copy(&self) -> String { self.selected_text.clone() }
+    pub fn back(&mut self) {
+        if self.history_pos > 0 {
+            self.history_pos -= 1;
+            if let Some(url) = self.history.get(self.history_pos).cloned() { self.navigate(&url); }
+        }
+    }
+    pub fn forward(&mut self) {
+        if self.history_pos + 1 < self.history.len() {
+            self.history_pos += 1;
+            if let Some(url) = self.history.get(self.history_pos).cloned() { self.navigate(&url); }
+        }
+    }
+    pub fn add_favorite(&mut self) {
+        if !self.url.is_empty() && !self.favorites.contains(&self.url) {
+            self.favorites.push(self.url.clone());
+        }
     }
 }
 

@@ -31,6 +31,7 @@
 
 use core::sync::atomic::{fence, Ordering};
 
+use crate::boot::devices::GLOBAL_MOUSE;
 use crate::drivers::keyboard::KeyboardState;
 use crate::drivers::mouse::MouseState;
 use crate::drivers::ps2::InputUpdate;
@@ -2474,6 +2475,13 @@ unsafe fn enumerate_device(
 
         HID_DEVICES[index] = device;
         queue_hid_transfer(&mut HID_DEVICES[index]);
+
+        // USB HID fareleri için fare hızını düşür (daha kontrollü hareket).
+        if kind == HidKind::Mouse {
+            unsafe {
+                (*core::ptr::addr_of_mut!(GLOBAL_MOUSE)).usb_hid_speed_reduce = true;
+            }
+        }
 
         push_hotplug_event(HotplugAction::Connected, kind, root_port);
 

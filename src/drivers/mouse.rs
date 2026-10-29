@@ -7,6 +7,8 @@ pub struct MouseState {
     pub scroll_delta: i8,
     /// 1..=10; 5 is the raw PS/2 speed.
     pub speed: u8,
+    /// USB HID fareleri için hız indirimi (USB raporları daha sık/buyuk delta verebilir).
+    pub usb_hid_speed_reduce: bool,
     pub reverse_scroll: bool,
     /// Dokunmatik yüzey (touchpad) dokunarak tıklama (tap-to-click) ayarı
     pub tap_to_click: bool,
@@ -29,6 +31,7 @@ impl MouseState {
             middle_button: false,
             scroll_delta: 0,
             speed: 5,
+            usb_hid_speed_reduce: false,
             reverse_scroll: false,
             tap_to_click: true,
             is_touchpad: false,
@@ -52,7 +55,16 @@ impl MouseState {
         self.right_button = (flags & 0x02) != 0;
         self.middle_button = (flags & 0x04) != 0;
 
-        let speed = self.speed.clamp(1, 10) as i32;
+        let mut speed = self.speed.clamp(1, 10) as i32;
+
+        // USB HID fareleri daha sık ve daha büyük delta raporu gönderebilir;
+        // hızını %40 oranında indirerek kontrol edilebilir kılın.
+        if self.usb_hid_speed_reduce {
+            speed = speed * 3 / 5; // ~0.6x
+            if speed < 1 {
+                speed = 1;
+            }
+        }
 
         // 1080p ve üzeri çözünürlüklerde doğal ve kontrollü taban oran:
         let (num, den) = if max_w >= 2560 || max_h >= 1440 {

@@ -407,6 +407,19 @@ impl Framebuffer {
         }
         let copy_w = x_end - x;
         let copy_h = y_end - y;
+
+        if crate::drivers::virtio_gpu::is_active() {
+            // VirtIO-GPU etkinse CPU bit-blit atla; donanım doğrudan bölgeyi
+            // host'a transfer eder ve flush yapar.
+            crate::drivers::virtio_gpu::flush_rect(
+                x as u32,
+                y as u32,
+                copy_w as u32,
+                copy_h as u32,
+            );
+            return;
+        }
+
         let pitch_words = self.pitch / 4;
         let src_ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *const u32;
 
@@ -422,15 +435,6 @@ impl Framebuffer {
                 y,
                 copy_w,
                 copy_h,
-            );
-        }
-
-        if crate::drivers::virtio_gpu::is_active() {
-            crate::drivers::virtio_gpu::flush_rect(
-                x as u32,
-                y as u32,
-                copy_w as u32,
-                copy_h as u32,
             );
         }
     }
@@ -1274,6 +1278,13 @@ impl Framebuffer {
     }
 
     pub fn flush(&mut self) {
+        if crate::drivers::virtio_gpu::is_active() {
+            // VirtIO-GPU etkinse CPU memcpy atla; donanım doğrudan backbuffer'ı
+            // host'a transfer eder ve flush yapar.
+            crate::drivers::virtio_gpu::flush_framebuffer();
+            return;
+        }
+
         let pitch_words = self.pitch / 4;
         unsafe {
             if pitch_words == self.width {
@@ -1295,10 +1306,6 @@ impl Framebuffer {
                     );
                 }
             }
-        }
-
-        if crate::drivers::virtio_gpu::is_active() {
-            crate::drivers::virtio_gpu::flush_framebuffer();
         }
     }
 

@@ -1,5 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
+//! Maturity: SKELETON / WIP — Gerçek USB Audio cihaz tespiti yok,//! sadece Class sabitleri ve state machine mevcut.//! Bkz. docs/driver-maturity.md
+//! 
 //! USB Audio Driver - USB ses kartları desteği
 //!
 //! Bu driver, USB ses kartlarını destekler. USB Audio Class 1.0 ve 2.0

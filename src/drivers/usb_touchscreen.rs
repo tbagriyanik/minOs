@@ -1,5 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
+//! Maturity: SKELETON / WIP — Gerçek USB HID touchscreen tespiti yok,//! sadece Class sabitleri ve state machine mevcut.//! Bkz. docs/driver-maturity.md
+//! 
 //! USB Touchscreen Driver - USB dokunmatik ekran desteği
 //!
 //! Bu driver, USB dokunmatik ekranları destekler. USB HID (Human Interface

@@ -23,6 +23,7 @@ pub mod nvidia;
 pub mod nvme;
 pub mod pci;
 pub mod pcie;
+pub mod port_io;
 pub mod ps2;
 pub mod rtc;
 pub mod sdmmc;

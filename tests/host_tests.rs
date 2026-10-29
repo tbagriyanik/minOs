@@ -55,6 +55,9 @@ pub fn monotonic_ms() -> u64 {
 #[path = "../src/drivers/bluetooth.rs"]
 pub mod bluetooth_mod;
 
+#[path = "../src/drivers/port_io.rs"]
+pub mod port_io;
+
 #[path = "../src/drivers/virtio_gpu.rs"]
 pub mod virtio_gpu_mod;
 
@@ -125,6 +128,9 @@ pub mod drivers {
     }
     pub mod bluetooth {
         pub use crate::bluetooth_mod::*;
+    }
+    pub mod port_io {
+        pub use crate::port_io::*;
     }
     pub mod virtio_gpu {
         pub use crate::virtio_gpu_mod::*;

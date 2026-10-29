@@ -304,6 +304,8 @@ pub struct JsFunction {
     pub name: String,
     pub params: Vec<String>,
     pub body: String,
+    /// async işareti: true ise çağrıldığında sonuç Promise ile sarmalanır.
+    pub is_async: bool,
 }
 
 /// Kayıtlı olay dinleyicisi (addEventListener).
@@ -532,13 +534,14 @@ impl JsRuntime {
         }
     }
 
-    pub fn define_function(&mut self, name: &str, params: Vec<String>, body: &str) {
+    pub fn define_function(&mut self, name: &str, params: Vec<String>, body: &str, is_async: bool) {
         self.functions.insert(
             String::from(name),
             JsFunction {
                 name: String::from(name),
                 params,
                 body: String::from(body),
+                is_async,
             },
         );
     }
@@ -560,7 +563,21 @@ impl JsRuntime {
                 break;
             }
         }
-        let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+        let mut ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+        // async fonksiyon: sonucu her zaman Promise ile sarmala.
+        if func.is_async {
+            let pvar = format!("__async_promise_{}", self.values.len());
+            let mut p = PromiseObj::new();
+            p.state = PromiseState::Fulfilled;
+            p.value = Some(ret.clone());
+            self.values
+                .insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+            ret = JsValue::Promise(Box::new(PromiseObj {
+                state: PromiseState::Fulfilled,
+                value: Some(JsValue::String(pvar)),
+                handlers: Vec::new(),
+            }));
+        }
         for param in &func.params {
             if let Some(prev) = old_values.get(param) {
                 self.var_set_val(param, prev.clone());
@@ -632,16 +649,16 @@ impl JsRuntime {
         // await expr — Promise değeri varsa çözümlenmiş değeri döndürür.
         if let Some(rest) = e.strip_prefix("await ") {
             let val = self.eval_val(rest);
-            if let JsValue::Promise(p) = &val {
-                match p.state {
+            match val {
+                JsValue::Promise(p) => match p.state {
                     PromiseState::Fulfilled => {
                         return p.value.clone().unwrap_or(JsValue::Undefined)
                     }
                     PromiseState::Rejected => return JsValue::Undefined,
                     PromiseState::Pending => return JsValue::Undefined,
-                }
+                },
+                other => return other,
             }
-            return val;
         }
 
         // Parantezleri temizle: ((expr)) -> expr
@@ -835,11 +852,15 @@ impl JsRuntime {
                                 match item {
                                     JsValue::Promise(promise) => match promise.state {
                                         PromiseState::Fulfilled => {
-                                            results.push(promise.value.clone().unwrap_or(JsValue::Undefined));
+                                            results.push(
+                                                promise.value.clone().unwrap_or(JsValue::Undefined),
+                                            );
                                         }
                                         PromiseState::Rejected => {
                                             any_rejected = true;
-                                            results.push(promise.value.clone().unwrap_or(JsValue::Undefined));
+                                            results.push(
+                                                promise.value.clone().unwrap_or(JsValue::Undefined),
+                                            );
                                         }
                                         PromiseState::Pending => {
                                             any_pending = true;
@@ -903,25 +924,47 @@ impl JsRuntime {
                                     JsValue::Promise(promise) => match promise.state {
                                         PromiseState::Fulfilled => {
                                             results.push(JsValue::Object(BTreeMap::from([
-                                                (String::from("status"), JsValue::String(String::from("fulfilled"))),
-                                                (String::from("value"), promise.value.clone().unwrap_or(JsValue::Undefined)),
+                                                (
+                                                    String::from("status"),
+                                                    JsValue::String(String::from("fulfilled")),
+                                                ),
+                                                (
+                                                    String::from("value"),
+                                                    promise
+                                                        .value
+                                                        .clone()
+                                                        .unwrap_or(JsValue::Undefined),
+                                                ),
                                             ])));
                                         }
                                         PromiseState::Rejected => {
                                             results.push(JsValue::Object(BTreeMap::from([
-                                                (String::from("status"), JsValue::String(String::from("rejected"))),
-                                                (String::from("reason"), promise.value.clone().unwrap_or(JsValue::Undefined)),
+                                                (
+                                                    String::from("status"),
+                                                    JsValue::String(String::from("rejected")),
+                                                ),
+                                                (
+                                                    String::from("reason"),
+                                                    promise
+                                                        .value
+                                                        .clone()
+                                                        .unwrap_or(JsValue::Undefined),
+                                                ),
                                             ])));
                                         }
                                         PromiseState::Pending => {
-                                            results.push(JsValue::Object(BTreeMap::from([
-                                                (String::from("status"), JsValue::String(String::from("pending"))),
-                                            ])));
+                                            results.push(JsValue::Object(BTreeMap::from([(
+                                                String::from("status"),
+                                                JsValue::String(String::from("pending")),
+                                            )])));
                                         }
                                     },
                                     other => {
                                         results.push(JsValue::Object(BTreeMap::from([
-                                            (String::from("status"), JsValue::String(String::from("fulfilled"))),
+                                            (
+                                                String::from("status"),
+                                                JsValue::String(String::from("fulfilled")),
+                                            ),
                                             (String::from("value"), other.clone()),
                                         ])));
                                     }
@@ -1284,12 +1327,10 @@ impl JsRuntime {
                     let class_name = rest[..open].trim();
                     let arg_str = &rest[open + 1..rest.len() - 1];
                     // Clone class data to avoid borrow conflicts with self.
-                    let class_data = self.classes.get(class_name).map(|c| {
-                        (
-                            c.extends.clone(),
-                            c.methods.clone(),
-                        )
-                    });
+                    let class_data = self
+                        .classes
+                        .get(class_name)
+                        .map(|c| (c.extends.clone(), c.methods.clone()));
                     if let Some((extends_opt, methods)) = class_data {
                         // Argümanları değerlendir
                         let args: Vec<JsValue> = split_top_level_comma(arg_str)
@@ -1298,25 +1339,46 @@ impl JsRuntime {
                             .collect();
                         // Yeni nesne oluştur (boş Object)
                         let mut obj = BTreeMap::new();
-                        obj.insert(String::from("__class__"), JsValue::String(class_name.to_string()));
+                        obj.insert(
+                            String::from("__class__"),
+                            JsValue::String(class_name.to_string()),
+                        );
                         if let Some(extends) = &extends_opt {
-                            obj.insert(String::from("__extends__"), JsValue::String(extends.clone()));
+                            obj.insert(
+                                String::from("__extends__"),
+                                JsValue::String(extends.clone()),
+                            );
                             if let Some(parent_class) = self.classes.get(extends) {
                                 // Parent metodlarını miras al
                                 for (mname, mfunc) in &parent_class.methods {
-                                    obj.insert(mname.clone(), JsValue::Object(BTreeMap::from([
-                                        (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
-                                        (String::from("__params__"), JsValue::String(mfunc.params.join(","))),
-                                    ])));
+                                    obj.insert(
+                                        mname.clone(),
+                                        JsValue::Object(BTreeMap::from([
+                                            (
+                                                String::from("__fn__"),
+                                                JsValue::String(mfunc.body.clone()),
+                                            ),
+                                            (
+                                                String::from("__params__"),
+                                                JsValue::String(mfunc.params.join(",")),
+                                            ),
+                                        ])),
+                                    );
                                 }
                             }
                         }
                         // Sınıf metodlarını ekle
                         for (mname, mfunc) in &methods {
-                            obj.insert(mname.clone(), JsValue::Object(BTreeMap::from([
-                                (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
-                                (String::from("__params__"), JsValue::String(mfunc.params.join(","))),
-                            ])));
+                            obj.insert(
+                                mname.clone(),
+                                JsValue::Object(BTreeMap::from([
+                                    (String::from("__fn__"), JsValue::String(mfunc.body.clone())),
+                                    (
+                                        String::from("__params__"),
+                                        JsValue::String(mfunc.params.join(",")),
+                                    ),
+                                ])),
+                            );
                         }
                         // Constructor'ı çağır
                         if let Some(ctor) = methods.get("constructor") {
@@ -1384,11 +1446,15 @@ impl JsRuntime {
                                         self.values.insert(this_var.clone(), base_val.clone());
                                         // Set params
                                         for (i, param) in params.iter().enumerate() {
-                                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                            let val =
+                                                args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                             self.var_set_val(param, val);
                                         }
                                         // Also bind 'this' as a variable
-                                        self.var_set_val("this", JsValue::String(obj_name.to_string()));
+                                        self.var_set_val(
+                                            "this",
+                                            JsValue::String(obj_name.to_string()),
+                                        );
                                         self.last_return = None;
                                         for stmt in split_statements(body) {
                                             self.exec(&stmt, &mut Vec::new());
@@ -1396,7 +1462,8 @@ impl JsRuntime {
                                                 break;
                                             }
                                         }
-                                        let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
+                                        let ret =
+                                            self.last_return.take().unwrap_or(JsValue::Undefined);
                                         // Restore
                                         for param in &params {
                                             self.values.remove(param);
@@ -1682,16 +1749,7 @@ impl JsRuntime {
                             .map(|p| p.trim().to_string())
                             .filter(|p| !p.is_empty())
                             .collect();
-                        self.define_function(fname, params.clone(), body);
-                        if is_async {
-                            // async fonksiyon: Promise dönen bir wrapper kaydet.
-                            let async_name = format!("__async_{}", fname);
-                            self.define_function(
-                                &async_name,
-                                params.clone(),
-                                &format!("var __p = new Promise(function(resolve, reject) {{ {}; resolve(__result); }}); return __p;", body),
-                            );
-                        }
+                        self.define_function(fname, params.clone(), body, is_async);
                         return;
                     }
                 }
@@ -1708,8 +1766,10 @@ impl JsRuntime {
 
         // await deyimi: await expr;
         if let Some(rest) = keyword(s, "await") {
-            let _ = self.eval_val(rest.trim());
-            // await ifadesinin geri kalanı microtask sırasına eklenir (basit implementasyon).
+            let val = self.eval_val(rest.trim());
+            // await ifadesinin sonucu last_return'a yazılır; çağıran async
+            // fonksiyon bu değeri Promise ile sarmalayacaktır.
+            self.last_return = Some(val);
             return;
         }
 
@@ -1755,6 +1815,7 @@ impl JsRuntime {
                                                 name: mname.to_string(),
                                                 params,
                                                 body: body.to_string(),
+                                                is_async: false,
                                             },
                                         );
                                     }
@@ -2164,7 +2225,7 @@ impl JsRuntime {
                                         .map(|p| p.trim().to_string())
                                         .filter(|p| !p.is_empty())
                                         .collect();
-                                    self.define_function(&anon_name, params, b);
+                                    self.define_function(&anon_name, params, b, false);
                                     self.add_event_listener(target, &ev_type, &anon_name);
                                     return;
                                 }
@@ -2409,8 +2470,8 @@ impl JsRuntime {
                     if !name.contains('.') {
                         // Strict mode: atanacak değişken zaten bildirilmiş olmalı.
                         if self.strict_mode && !is_decl {
-                            let already = self.values.contains_key(name)
-                                || self.var_get(name).is_some();
+                            let already =
+                                self.values.contains_key(name) || self.var_get(name).is_some();
                             if !already {
                                 // Referans hatası: değişken bildirilmemiş.
                                 self.logs.push(format!(

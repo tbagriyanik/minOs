@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+//! Maturity: SKELETON / WIP — Gerçek 802.11 PHY tespiti yok,//! sadece çerçeve yapıları ve WPA2-PSK anahtar türetimi mevcut.//! Bkz. docs/driver-maturity.md
+//! 
 //! IEEE 802.11 Wi-Fi ve Kablosuz Ağ Sürücüsü Altyapısı.
 //!
 //! Bu modül, 802.11 çerçeve ayrıştırması (Beacon, Probe, Data), WPA2-PSK

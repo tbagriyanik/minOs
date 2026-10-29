@@ -133,3 +133,173 @@ flowchart TD
 - **Laptop Dokunmatik Yüzey (Touchpad) İyileştirmesi (`src/drivers/mouse.rs`, `src/drivers/ps2.rs`):** 8 count/mm çözünürlük, 100 sample/sec örnekleme, parmak temas ve dokunarak tıklama (Tap-to-Click, <180ms dokunma), çift parmak ve kaydırma tekerleği desteği.
 - **UVC Kamera Alt Sistemi (`src/drivers/camera.rs`):** USB Video Class (Class 0x0E), VideoControl ve VideoStreaming arayüzleri, YUY2 (4:2:2 uncompressed) piksel dönüşümü (`yuv_to_rgb32`), sentetik test deseni üretimi, MinShell `cam` / `camera` komutu ve Ayarlar entegrasyonu.
 - **IEEE 802.11 Wi-Fi ve WPA2-PSK Altyapısı (`src/drivers/wifi.rs`):** 802.11 MAC çerçeve yapısı (Beacon, Probe, Data), kablosuz ağ tarama tablosu (`scan_networks`), WPA2-PSK anahtar türetimi (PBKDF2-HMAC-SHA256 ile PMK ve PTK türetimi), MinShell `wifi scan/connect/disconnect/status` komutları.
+
+---
+
+## 5. Faz 11: Web Standartları Uyumluluğu (CSS / TLS / HTTP) 🔄
+
+Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu artırmayı hedefler. Mevcut CSS, TLS ve HTTP uygulamalarındaki eksiklikler giderilecek, karmaşık web sayfalarında doğru stil ve protokol davranışı sağlanacaktır.
+
+### 5.1 CSS — W3C CSS Working Group
+
+#### Durum Analizi
+| Özellik | Durum | Açıklama |
+| :--- | :---: | :--- |
+| `grid-template-areas` (isimli alan sözdizimi) | ❌ Eksik | CSS Grid Level 1'in önemli parçası; `src/apps/browser/css.rs` ve `html.rs`'de yok |
+| CSS Cascade / Specificity (id > class > tag) | ⚠️ Basitleştirilmiş | `match_css_style` sıralı kurallarla eşleştirir; tam W3C özgüllük algoritması yok |
+| Media queries (`@media`) | ❌ Eksik | Responsive tasarımın temeli; `@media` bloğu yok |
+
+#### Planlanan Geliştirmeler
+
+**A. `grid-template-areas` Desteği (CSS Grid Level 1)**
+- **Dosyalar:** `src/apps/browser/css.rs`, `src/apps/browser/html.rs`, `src/apps/browser/types.rs`
+- **Aşama 1 — Ayrıştırıcı:** `grid-template-areas` özelliğini `css.rs`'te ayır; isimli alan haritası oluştur (satır/sütun eşleştirmesi).
+- **Aşama 2 — Stil modeli:** `ElementStyle`'e `grid_template_areas: Vec<Vec<String>>` ve `grid_area: Option<(usize, usize, usize, usize)>` alanları ekle.
+- **Aşama 3 — Yerleşim motoru:** `html.rs`'te grid hücrelerini isimli alanlara göre yerleştir; `grid-area: header` gibi değerleri çöz.
+- **Aşama 4 — Test:** `minos://demo` sayfasına grid-template-areas örneği ekle; host testi yaz.
+
+**B. CSS Cascade / Specificity (W3C Algoritması)**
+- **Dosyalar:** `src/apps/browser/css.rs`
+- **Aşama 1 — Özgüllük hesaplama:** Her seçici için (id, class, tag) üçlüsü hesapla; `CssRule` yapısına `specificity: (u32, u32, u32)` ekle.
+- **Aşama 2 — Sıralama:** Kuralları özgüllüğe göre sırala; eş özgüllükte kaynak sırası (son kural kazanır) kuralı uygula.
+- **Aşama 3 — Öncekiler:** `!important` desteği mevcut; cascade katmanları (origin, importance, specificity, order) tam uygula.
+- **Aşama 4 — Test:** Karmaşık seçiciler (`#id .class tag`) içeren CSS ile doğru stil uygulanmasını doğrula.
+
+**C. Media Queries (`@media`)**
+- **Dosyalar:** `src/apps/browser/css.rs`, `src/apps/browser/html.rs`
+- **Aşama 1 — Ayrıştırıcı:** `@media` bloğunu `parse_css_rules` içinde tanıyıp içindeki kuralları ayrı bir listeye al.
+- **Aşama 2 — Koşul değerlendirmesi:** `min-width`, `max-width`, `min-height`, `max-height`, `orientation` media özelliklerini çöz.
+- **Aşama 3 — Uygulama:** Geçerli viewport boyutuna göre media query kurallarını etkinleştir/devre dışı bırak.
+- **Aşama 4 — Test:** Responsive demo sayfası (`minos://demo-responsive`) oluştur; farklı çözünürlüklerde stil değişikliğini doğrula.
+
+---
+
+### 5.2 TLS — RFC 8446 (TLS 1.3)
+
+#### Durum Analizi
+| Özellik | Durum | Açıklama |
+| :--- | :---: | :--- |
+| PSK (Pre-Shared Key) resumption | ❌ Eksik | RFC 8446 §2.2; 0-RTT / session resumption yok; her bağlantı tam el sıkışma |
+| ALPN (RFC 7301) | ❌ Eksik | HTTP/2 negotiation için gerekli; şu an sadece HTTP/1.1'e sabit |
+| `key_share` grupları | ⚠️ Kısım | Sadece P-256/X25519'dan biri; RFC 8446 istemcinin birden fazla grup önermesini önerir |
+| OCSP stapling (RFC 6066) | ⚠️ Kısım | Ayrı OCSP sorgusu yapılıyor; OCSP must-staple / gizlilik standardına uygun değil |
+
+#### Planlanan Geliştirmeler
+
+**A. PSK (Pre-Shared Key) Resumption (RFC 8446 §2.2)**
+- **Dosyalar:** `src/drivers/tls.rs`, `src/drivers/http.rs`
+- **Aşama 1 — PSK anahtar deposu:** `TlsSession` içinde önceki oturumların PSK anahtarlarını saklayan küçük bir önbellek ekle (max 16 giriş, LRU).
+- **Aşama 2 — ClientHello PSK uzantısı:** İstemci, daha önce bağlantı kurduğu sunucular için `pre_shared_key` uzantısı gönder; `psk_key_exchange_modes` ekle.
+- **Aşama 3 — 0-RTT / 1-RTT resumption:** Sunucu PSK kabul ederse el sıkışmayı kısalt; uygulama verisini daha erken gönder.
+- **Aşama 4 — Test:** Aynı sunucuya iki kez bağlan; ikinci bağlantıda PSK resumption kullanıldığını doğrula.
+
+**B. ALPN (Application-Layer Protocol Negotiation, RFC 7301)**
+- **Dosyalar:** `src/drivers/tls.rs`, `src/drivers/http.rs`
+- **Aşama 1 — ClientHello ALPN uzantısı:** `http/1.1` ve `http/2` protokol tanımlayıcılarını ClientHello'ya ekle.
+- **Aşama 2 — ServerHello ALPN işleme:** Sunucudan gelen ALPN uzantısını ayrıştır; seçilen protokolü kaydet.
+- **Aşama 3 — HTTP/2 uyarlaması:** ALPN sonucu `http/2` ise HTTP/2 yığınına geçiş kancası ekle (Faz 5.3).
+- **Aşama 4 — Test:** `https://example.com` bağlantısında ALPN negoşiasyonunun çalıştığını doğrula.
+
+**C. `key_share` Çoklu Grup Desteği**
+- **Dosyalar:** `src/drivers/tls.rs`, `src/drivers/crypto/ecc.rs`
+- **Aşama 1 — X25519 desteği:** `src/drivers/crypto/ecc.rs`'ye X25519 anahtar çifti ve shared secret üretimi ekle.
+- **Aşama 2 — Çoklu key_share:** ClientHello'da hem secp256r1 hem X25519 için `key_share` girişleri sun.
+- **Aşama 3 — Sunucu seçimi:** Sunucunun seçtiği grubu `key_share` uzantısından tanı; eşleşen grubu kullan.
+- **Aşama 4 — Test:** Farklı sunucularla (sadece X25519 destekleyenler dahil) bağlantı kur.
+
+**D. OCSP Stapling (RFC 6066) ve Gizlilik**
+- **Dosyalar:** `src/drivers/tls.rs`, `src/drivers/crypto/revocation_core.rs`
+- **Aşama 1 — OCSP stapling desteği:** Sunucunun `status_request` uzantısıyla gönderdiği OCSP yanıtını ayrıştır ve doğrula.
+- **Aşama 2 — OCSP must-staple:** Sunucu staplememesi durumunda bağlantıyı reddet (fail-closed) veya uyarı ver.
+- **Aşama 3 — Gizlilik iyileştirmesi:** Ayrı OCSP sorgusu yerine stapling tercih et; CA'ya site ziyaretini ifşa etmeyi azalt.
+- **Aşama 4 — Test:** OCSP stapling sunan bir sunucu ile bağlantı; stapling yoksa davranışı doğrula.
+
+---
+
+### 5.3 HTTP — RFC 9110 / 9112 / 9113
+
+#### Durum Analizi
+| Özellik | Durum | Açıklama |
+| :--- | :---: | :--- |
+| HTTP/2 (RFC 9113) | ❌ Eksik | 2015'ten beri standart; günümüz web trafiğinin çoğunluğu bunu kullanıyor |
+| `gzip` / `br` içerik kodlaması | ❌ Eksik | `Transfer-Encoding: chunked` dışında içerik kodlaması yok; RFC 9110 §8.4 |
+| Yönlendirme, çerez, POST | ✅ Var | Temel RFC 9110 uygunluğu sağlanmış |
+
+#### Planlanan Geliştirmeler
+
+**A. HTTP/2 (RFC 9113)**
+- **Dosyalar:** `src/drivers/http.rs` (yeni `http2.rs` modülü), `src/drivers/tls.rs` (ALPN entegrasyonu)
+- **Aşama 1 — HTTP/2 çerçeve katmanı:** `FRAME` yapısı (HEADERS, DATA, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE), 9 baytlık başlık + payload.
+- **Aşama 2 — HPACK sıkıştırması:** Header alanlarının HPACK ile sıkıştırılması/çözülmesi (static table + dynamic table).
+- **Aşama 3 — Akış (stream) yönetimi:** Çoklu eşzamanlı istek/yanıt için stream ID'leri ve durum makinesi.
+- **Aşama 4 — ALPN entegrasyonu:** `http/2` seçildiğinde HTTP/2 yığınına geçiş.
+- **Aşama 5 — Test:** HTTP/2 sunucusu ile çoklu eşzamanlı istek; HEADERS/DATA çerçevesi doğrulaması.
+
+**B. `gzip` / `br` İçerik Kodlaması (RFC 9110 §8.4)**
+- **Dosyalar:** `src/drivers/http.rs`, `src/drivers/crypto/` (yeni `deflate.rs` / `brotli.rs`)
+- **Aşama 1 — `Accept-Encoding` başlığı:** İstemci isteklerinde `gzip`, `br` kodlamalarını bildir.
+- **Aşama 2 — `Content-Encoding` çözümü:** Sunucu yanıtındaki `Content-Encoding: gzip` / `br` başlığını tanı; gövdeyi çöz.
+- **Aşama 3 — DEFLATE / gzip çözücü:** `src/drivers/crypto/deflate.rs` (RFC 1951) ve gzip sarmalayıcı (RFC 1952).
+- **Aşama 4 — Brotli çözücü (opsiyonel):** `br` için Brotli RFC 7932 çözücü (bellek kısıtlamaları göz önünde).
+- **Aşama 5 — Test:** Sıkıştırılmış içerik sunan bir siteye bağlan; gövde doğru çözülüp gösterilsin.
+
+---
+
+## 6. Uygulama Öncelikleri ve Zaman Çizelgesi
+
+| Öncelik | Özellik | Tahmini Çaba | Bağımlılıklar |
+| :---: | :--- | :---: | :--- |
+| 1 | CSS `grid-template-areas` | Orta | Faz 10 tamamlandı |
+| 2 | CSS Cascade / Specificity | Orta | Faz 10 tamamlandı |
+| 3 | Media queries (`@media`) | Orta | Faz 10 tamamlandı |
+| 4 | TLS PSK resumption | Yüksek | Faz 9 (TLS 1.3) |
+| 5 | TLS ALPN (RFC 7301) | Orta | Faz 9 (TLS 1.3) |
+| 6 | TLS `key_share` çoklu grup | Orta | Faz 9 (ECC) |
+| 7 | TLS OCSP stapling | Orta | Faz 9 (revocation) |
+| 8 | HTTP/2 (RFC 9113) | Yüksek | ALPN, TLS 1.3 |
+| 9 | `gzip` / `br` kodlama | Orta | HTTP/1.1 |
+
+---
+
+## 7. Test ve Doğrulama Planı
+
+### CSS Testleri
+- [ ] `grid-template-areas` ile 2 sütunlu düzen doğru render edilir.
+- [ ] `#id .class tag` seçicileri için özgüllük sırası doğru uygulanır.
+- [ ] `@media (max-width: 600px)` ile farklı ekran boyutlarında stil değişir.
+- [ ] `minos://demo-responsive` sayfası responsive olarak görüntülenir.
+
+### TLS Testleri
+- [ ] PSK resumption ile ikinci bağlantı daha hızlı kurulur (1-RTT).
+- [ ] ALPN negoşiasyonu `http/1.1` veya `http/2` döndürür.
+- [ ] ClientHello'da hem secp256r1 hem X25519 `key_share` gönderilir.
+- [ ] OCSP stapling yanıtı ayrıştırılır ve doğrulanır.
+
+### HTTP Testleri
+- [ ] HTTP/2 sunucusu ile HEADERS + DATA çerçeveleri işlenir.
+- [ ] `Content-Encoding: gzip` yanıtı çözülüp gösterilir.
+- [ ] `Accept-Encoding: gzip, br` başlığı isteklerde gönderilir.
+
+---
+
+## 8. Bilinen Sınırlar ve Gelecek
+
+- **CSS:** `@supports`, `@container`, CSS Variables (`var()`), Flexbox gelişmiş özellikleri, CSS Grid `subgrid` henüz planlanmadı.
+- **TLS:** TLS 1.3 post-handshake authentication, ESNI/ECH, QUIC/HTTP3 henüz planlanmadı.
+- **HTTP:** HTTP/2 server push, HTTP/3 (QUIC), WebSocket henüz planlanmadı.
+
+---
+
+## 9. Ek: Mevcut Kod Konumu
+
+| Bileşen | Dosya |
+| :--- | :--- |
+| CSS ayrıştırıcı | `src/apps/browser/css.rs` |
+| HTML render motoru | `src/apps/browser/html.rs` |
+| CSS/HTML tipleri | `src/apps/browser/types.rs` |
+| Tarayıcı uygulaması | `src/apps/browser/mod.rs` |
+| HTTP istemcisi | `src/drivers/http.rs` |
+| TLS 1.2 / 1.3 | `src/drivers/tls.rs` |
+| Kripto ilkelleri | `src/drivers/crypto/` |
+| Soket API | `src/drivers/socket.rs` |
+| Ağ yığını | `src/drivers/netstack.rs` |

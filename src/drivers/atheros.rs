@@ -1,50 +1,14 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
+//! Maturity: SKELETON / WIP — Gerçek MAC/RX/TX yok,//! sadece PCI vendor/device ID listesi mevcut.//! Bkz. docs/driver-maturity.md
+//! 
 //! Atheros Ethernet Driver - Atheros chip setleri için ağ sürücüsü
 //!
 //! Atheros, Qualcomm tarafından satın alınmış bir ağ chip seti üreticisidir.
 //! Özellikle AR8131, AR8132, AR8161, AR8171 gibi Gigabit Ethernet denetleyicileri
 //! için destek sağlar.
 
-use core::arch::asm;
-
-// ---------------------------------------------------------------------------
-// I/O port yardımcıları (PCI için)
-// ---------------------------------------------------------------------------
-
-#[inline]
-fn io_out32(port: u16, val: u32) {
-    unsafe {
-        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
-    }
-}
-
-#[inline]
-fn io_in32(port: u16) -> u32 {
-    let ret: u32;
-    unsafe {
-        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
-    }
-    ret
-}
-
-// ---------------------------------------------------------------------------
-// PCI Erişimi
-// ---------------------------------------------------------------------------
-
-const PCI_CONFIG_ADDR: u16 = 0xCF8;
-const PCI_CONFIG_DATA: u16 = 0xCFC;
-
-#[inline]
-fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
-    let addr: u32 = 0x8000_0000
-        | ((bus as u32) << 16)
-        | ((dev as u32) << 11)
-        | ((func as u32) << 8)
-        | ((off & 0xFC) as u32);
-    io_out32(PCI_CONFIG_ADDR, addr);
-    io_in32(PCI_CONFIG_DATA)
-}
+use crate::drivers::port_io::*;
 
 // ---------------------------------------------------------------------------
 // Atheros PCI Kimlikleri

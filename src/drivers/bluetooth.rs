@@ -1,5 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
+//! Maturity: KISMI / WIP — Gerçek USB/PCI Bluetooth tespiti yok,//! sadece HCI paketleme/ayrıştırma ve synthetic yanıtlar mevcut.//! Bkz. docs/driver-maturity.md
+//! 
 //! Bluetooth Driver - Bluetooth HCI (Host Controller Interface) Protokol Sürücüsü
 //!
 //! Bu sürücü:
@@ -10,41 +12,7 @@
 //! - Cihaz keşfi (Inquiry / Scan) tablosu ve bağlantı durumu yönetimi.
 //! - USB Bluetooth Dongle (Class 0xE0, Subclass 0x01, Protocol 0x01) taşıma katmanı entegrasyonu.
 
-use core::arch::asm;
-
-// ---------------------------------------------------------------------------
-// PCI ve Port Yardımcıları
-// ---------------------------------------------------------------------------
-
-#[inline]
-fn io_out32(port: u16, val: u32) {
-    unsafe {
-        asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
-    }
-}
-
-#[inline]
-fn io_in32(port: u16) -> u32 {
-    let ret: u32;
-    unsafe {
-        asm!("in eax, dx", in("dx") port, out("eax") ret, options(nomem, nostack, preserves_flags));
-    }
-    ret
-}
-
-const PCI_CONFIG_ADDR: u16 = 0xCF8;
-const PCI_CONFIG_DATA: u16 = 0xCFC;
-
-#[inline]
-fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
-    let addr: u32 = 0x8000_0000
-        | ((bus as u32) << 16)
-        | ((dev as u32) << 11)
-        | ((func as u32) << 8)
-        | ((off & 0xFC) as u32);
-    io_out32(PCI_CONFIG_ADDR, addr);
-    io_in32(PCI_CONFIG_DATA)
-}
+use crate::drivers::port_io::*;
 
 // ---------------------------------------------------------------------------
 // Bluetooth USB Device Sınıf Kodları

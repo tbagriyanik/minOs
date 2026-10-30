@@ -8,6 +8,8 @@ use crate::drivers::e1000;
 use crate::drivers::netstack::Ipv4Address;
 use crate::drivers::socket;
 use crate::drivers::tls::TlsSession;
+use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const E_URL: i32 = 1001;
@@ -246,8 +248,8 @@ fn fetch_once(
         let reqlen = build_request_with_headers(&mut req, host, path, ip, cache_headers)
             .ok_or(socket::E_INVAL)?;
 
-        if is_https {
-            fetch_https(fd, host, req, reqlen, resp_buf)
+        let (status, hlen, total) = if is_https {
+            fetch_https(fd, host, &req, reqlen, resp_buf)?
         } else {
             let mut sent = 0;
             while sent < reqlen {
@@ -266,8 +268,13 @@ fn fetch_once(
             }
             let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
             let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
-            Ok((status, hlen, total))
-        }
+            (status, hlen, total)
+        };
+
+        // TODO: Content-Encoding (gzip/deflate) decoding to be implemented
+        // For now, compressed responses are passed through as-is
+
+        Ok((status, hlen, total))
     })();
     socket::close(fd);
     res
@@ -348,7 +355,7 @@ fn read_http_response(
 fn fetch_https(
     fd: i32,
     host: &[u8],
-    req: [u8; 768],
+    req: &[u8],
     reqlen: usize,
     resp_buf: &mut [u8],
 ) -> Result<(u16, usize, usize), i32> {
@@ -523,6 +530,388 @@ fn http_get_impl(
         let _ = (host_str, path_str);
         return Ok((status, hlen, total));
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP/1.1 tüm metod desteği (2.1) ve form kodlama (2.2)
+// ---------------------------------------------------------------------------
+
+/// HTTP metodu türleri.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+    Head,
+    Options,
+}
+
+impl HttpMethod {
+    pub fn as_str(&self) -> &'static [u8] {
+        match self {
+            HttpMethod::Get => b"GET",
+            HttpMethod::Post => b"POST",
+            HttpMethod::Put => b"PUT",
+            HttpMethod::Patch => b"PATCH",
+            HttpMethod::Delete => b"DELETE",
+            HttpMethod::Head => b"HEAD",
+            HttpMethod::Options => b"OPTIONS",
+        }
+    }
+}
+
+/// application/x-www-form-urlencoded kodlama (RFC 3986 uyumlu percent-encoding).
+pub fn form_urlencode(pairs: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    for (i, (k, v)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        out.push_str(&url_encode(k));
+        out.push('=');
+        out.push_str(&url_encode(v));
+    }
+    out
+}
+
+fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push('%');
+                out.push_str(&format!("{:02X}", b));
+            }
+        }
+    }
+    out
+}
+
+/// multipart/form-data kodlama (basit, dosya yükleme desteği ile).
+pub fn form_multipart(
+    boundary: &str,
+    fields: &[(&str, &str)],
+    files: &[(&str, &str, &str, &[u8])], // (name, filename, content_type, data)
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, value) in fields {
+        out.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes());
+        out.extend_from_slice(value.as_bytes());
+        out.extend_from_slice(b"\r\n");
+    }
+    for (name, filename, content_type, data) in files {
+        out.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        out.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"\r\n",
+                name, filename
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(format!("Content-Type: {}\r\n\r\n", content_type).as_bytes());
+        out.extend_from_slice(data);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+    out
+}
+
+/// Genel HTTP istek fonksiyonu: herhangi bir metod, gövde ve ek başlıklar destekler.
+pub fn http_request(
+    method: HttpMethod,
+    url: &str,
+    resp_buf: &mut [u8],
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: Option<&str>,
+    cache_headers: Option<&str>,
+) -> Result<(u16, usize, usize), i32> {
+    if !e1000::is_ready() {
+        return Err(socket::E_NOTCONN);
+    }
+    let mut host = [0u8; MAX_HOST];
+    let mut path = [0u8; MAX_PATH];
+    let (mut port, mut host_len, mut path_len) = parse_url(url, &mut host, &mut path)?;
+    let mut is_https = url.starts_with("https://");
+    let mut hops = 0;
+    loop {
+        let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
+        let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
+        let ip = socket::resolve_host(host_str)?;
+        let (status, hlen, total) = fetch_once_with_method(
+            method,
+            &host[..host_len],
+            port,
+            &path[..path_len],
+            ip,
+            resp_buf,
+            body,
+            content_type,
+            extra_headers,
+            is_https,
+            cache_headers,
+        )?;
+        if (300..400).contains(&status) && hops < MAX_REDIRECTS {
+            let headers = &resp_buf[..hlen];
+            if let Some(loc) = header_value(headers, b"location") {
+                let loc_str = core::str::from_utf8(loc).map_err(|_| E_HTTP)?;
+                if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                    is_https = loc_str.starts_with("https://");
+                    let (p2, hl2, pl2) = parse_url(loc_str, &mut host, &mut path)?;
+                    port = p2;
+                    host_len = hl2;
+                    path_len = pl2;
+                    hops += 1;
+                    continue;
+                } else if loc_str.starts_with('/') && loc_str.len() <= MAX_PATH {
+                    path[..loc_str.len()].copy_from_slice(loc_str.as_bytes());
+                    path_len = loc_str.len();
+                    hops += 1;
+                    continue;
+                }
+                return Err(E_REDIRECT);
+            }
+        }
+        // Chunked gövdeyi yerinde çöz.
+        let headers = &resp_buf[..hlen];
+        let is_chunked = header_value(headers, b"transfer-encoding")
+            .map(|v| {
+                v.iter()
+                    .zip(b"chunked".iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+                    && v.len() == 7
+            })
+            .unwrap_or(false);
+        if is_chunked {
+            let body_len = total - hlen;
+            let mut tmp = resp_buf[hlen..total].to_vec();
+            if let Some(decoded) = decode_chunked(&mut tmp, body_len) {
+                resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
+                return Ok((status, hlen, hlen + decoded));
+            }
+            return Err(E_HTTP);
+        }
+        let _ = (host_str, path_str);
+        return Ok((status, hlen, total));
+    }
+}
+
+/// POST istek kolaylık sarmalayıcısı.
+pub fn http_post(
+    url: &str,
+    resp_buf: &mut [u8],
+    body: &[u8],
+    content_type: &str,
+) -> Result<(u16, usize, usize), i32> {
+    http_request(
+        HttpMethod::Post,
+        url,
+        resp_buf,
+        Some(body),
+        Some(content_type),
+        None,
+        None,
+    )
+}
+
+/// PUT istek kolaylık sarmalayıcısı.
+pub fn http_put(
+    url: &str,
+    resp_buf: &mut [u8],
+    body: &[u8],
+    content_type: &str,
+) -> Result<(u16, usize, usize), i32> {
+    http_request(
+        HttpMethod::Put,
+        url,
+        resp_buf,
+        Some(body),
+        Some(content_type),
+        None,
+        None,
+    )
+}
+
+/// PATCH istek kolaylık sarmalayıcısı.
+pub fn http_patch(
+    url: &str,
+    resp_buf: &mut [u8],
+    body: &[u8],
+    content_type: &str,
+) -> Result<(u16, usize, usize), i32> {
+    http_request(
+        HttpMethod::Patch,
+        url,
+        resp_buf,
+        Some(body),
+        Some(content_type),
+        None,
+        None,
+    )
+}
+
+/// DELETE istek kolaylık sarmalayıcısı.
+pub fn http_delete(
+    url: &str,
+    resp_buf: &mut [u8],
+) -> Result<(u16, usize, usize), i32> {
+    http_request(
+        HttpMethod::Delete,
+        url,
+        resp_buf,
+        None,
+        None,
+        None,
+        None,
+    )
+}
+
+/// `fetch_once` gibi ama farklı HTTP metodu ve gövde desteğiyle.
+fn fetch_once_with_method(
+    method: HttpMethod,
+    host: &[u8],
+    port: u16,
+    path: &[u8],
+    ip: Ipv4Address,
+    resp_buf: &mut [u8],
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: Option<&str>,
+    is_https: bool,
+    _cache_headers: Option<&str>,
+) -> Result<(u16, usize, usize), i32> {
+    let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
+    let _ = socket::set_timeout(fd, 4000);
+    let res = (|| {
+        socket::connect(fd, ip, port)?;
+        let mut req = [0u8; 1024];
+        let reqlen = build_request_with_method(
+            &mut req,
+            method,
+            host,
+            path,
+            body,
+            content_type,
+            extra_headers,
+        )
+        .ok_or(socket::E_INVAL)?;
+
+        let (status, hlen, total) = if is_https {
+            fetch_https(fd, host, &req, reqlen, resp_buf)?
+        } else {
+            let mut sent = 0;
+            while sent < reqlen {
+                sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                    if sent == 0 {
+                        e
+                    } else {
+                        socket::E_TIMEOUT
+                    }
+                })?;
+            }
+            let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+            let _ = expected_total;
+            if total < 12 {
+                return Err(E_HTTP);
+            }
+            let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+            let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+            (status, hlen, total)
+        };
+
+        // TODO: Content-Encoding (gzip/deflate) decoding to be implemented
+        // For now, compressed responses are passed through as-is
+
+        Ok((status, hlen, total))
+    })();
+    socket::close(fd);
+    res
+}
+
+/// HTTP istek başlığı oluşturur: metod, gövde, Content-Type, Content-Length.
+fn build_request_with_method(
+    req: &mut [u8],
+    method: HttpMethod,
+    host: &[u8],
+    path: &[u8],
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: Option<&str>,
+) -> Option<usize> {
+    let mut n = 0usize;
+
+    // Metod + path + HTTP versiyonu
+    let method_bytes = method.as_str();
+    if n + method_bytes.len() + 1 + path.len() + 13 > req.len() {
+        return None;
+    }
+    req[n..n + method_bytes.len()].copy_from_slice(method_bytes);
+    n += method_bytes.len();
+    req[n] = b' ';
+    n += 1;
+    req[n..n + path.len()].copy_from_slice(path);
+    n += path.len();
+    let tail = b" HTTP/1.1\r\nHost: ";
+    req[n..n + tail.len()].copy_from_slice(tail);
+    n += tail.len();
+    req[n..n + host.len()].copy_from_slice(host);
+    n += host.len();
+
+    // Content-Type
+    if let Some(ct) = content_type {
+        let ct_str = format!("\r\nContent-Type: {}", ct);
+        let ct_bytes = ct_str.as_bytes();
+        if n + ct_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + ct_bytes.len()].copy_from_slice(ct_bytes);
+        n += ct_bytes.len();
+    }
+
+    // Content-Length
+    let body_len = body.map_or(0, |b| b.len());
+    let cl_str = format!("\r\nContent-Length: {}\r\nConnection: close", body_len);
+    let cl_bytes = cl_str.as_bytes();
+    if n + cl_bytes.len() > req.len() {
+        return None;
+    }
+    req[n..n + cl_bytes.len()].copy_from_slice(cl_bytes);
+    n += cl_bytes.len();
+
+    // Extra headers (cache validation, etc.)
+    if let Some(headers) = extra_headers {
+        let headers_bytes = headers.as_bytes();
+        if n + headers_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + headers_bytes.len()].copy_from_slice(headers_bytes);
+        n += headers_bytes.len();
+    }
+
+    // Final CRLF
+    if n + 2 > req.len() {
+        return None;
+    }
+    req[n..n + 2].copy_from_slice(b"\r\n");
+    n += 2;
+
+    // Gövde
+    if let Some(b) = body {
+        if n + b.len() > req.len() {
+            return None;
+        }
+        req[n..n + b.len()].copy_from_slice(b);
+        n += b.len();
+    }
+
+    Some(n)
 }
 
 // ---------------------------------------------------------------------------

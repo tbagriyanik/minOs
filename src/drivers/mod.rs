@@ -8,6 +8,7 @@ pub mod audio;
 pub mod bluetooth;
 pub mod camera;
 pub mod cookie;
+pub mod compression;
 pub mod crypto;
 pub mod e1000;
 pub mod fan_temp;

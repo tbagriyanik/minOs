@@ -643,11 +643,22 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
         let flags = u16::from_be_bytes([data[2], data[3]]);
         if (id == 0x4D4D || id == 0x4D4E) && (flags & 0x8000 != 0) && (flags & 0x000F == 0) {
             unsafe {
-                if let Some(ip) = dns_parse_a(data, id) {
-                    let n = data.len().min(DNS_REPLY_DATA.len());
-                    DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
-                    DNS_REPLY_IP = ip.0;
-                    DNS_REPLY_LEN = n;
+                // Try A record first (id 0x4D4D), then AAAA (id 0x4D4E)
+                if id == 0x4D4D {
+                    if let Some(ip) = dns_parse_a(data, id) {
+                        let n = data.len().min(DNS_REPLY_DATA.len());
+                        DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
+                        DNS_REPLY_IP = ip.0;
+                        DNS_REPLY_LEN = n;
+                    }
+                } else if id == 0x4D4E {
+                    if let Some(ip) = dns_parse_aaaa(data, id) {
+                        let n = data.len().min(DNS_REPLY_DATA.len());
+                        DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
+                        // Store first 4 bytes of AAAA in DNS_REPLY_IP for compatibility
+                        DNS_REPLY_IP = [ip.0[0], ip.0[1], ip.0[2], ip.0[3]];
+                        DNS_REPLY_LEN = n;
+                    }
                 }
             }
         }
@@ -855,6 +866,54 @@ fn dns_parse_a(data: &[u8], id: u16) -> Option<Ipv4Address> {
 
 /// DNS yanıtındaki ilk AAAA kaydını ayrıştırır (RFC 3596).
 /// Soru bölümünü ve sıkıştırılmış DNS isimlerini güvenli şekilde atlar.
+pub fn dns_query_aaaa(host: &str) -> bool {
+    let bytes = host.as_bytes();
+    if bytes.is_empty() || bytes.len() > 96 {
+        return false;
+    }
+    let mut q = [0u8; 256];
+    q[0..2].copy_from_slice(&0x4D4Eu16.to_be_bytes());
+    q[2..4].copy_from_slice(&0x0100u16.to_be_bytes()); // Standard query, RD=1
+    q[4..6].copy_from_slice(&1u16.to_be_bytes()); // QDCOUNT = 1
+    let mut p = 12;
+    let mut start = 0;
+    for i in 0..=bytes.len() {
+        if i == bytes.len() || bytes[i] == b'.' {
+            let n = i - start;
+            if n == 0 || n > 63 {
+                return false;
+            }
+            q[p] = n as u8;
+            p += 1;
+            q[p..p + n].copy_from_slice(&bytes[start..i]);
+            p += n;
+            start = i + 1;
+        }
+    }
+    q[p] = 0;
+    p += 1;
+    q[p..p + 2].copy_from_slice(&28u16.to_be_bytes()); // QTYPE: AAAA
+    p += 2;
+    q[p..p + 2].copy_from_slice(&1u16.to_be_bytes()); // QCLASS: IN
+    p += 2;
+    unsafe {
+        DNS_REPLY_LEN = 0;
+        DNS_REPLY_IP = [0; 4];
+    }
+
+    let primary_dns = dns_server();
+    let sent_primary = send_udp(primary_dns, 49154, DNS_PORT, &q[..p]);
+
+    // Yedek olarak genel DNS (1.1.1.1) sunucusuna da ilet
+    let fallback_dns = Ipv4Address::new(1, 1, 1, 1);
+    if primary_dns != fallback_dns {
+        send_udp(fallback_dns, 49155, DNS_PORT, &q[..p]);
+    }
+    sent_primary
+}
+
+/// DNS yanıtındaki ilk AAAA kaydını ayrıştırır (RFC 3596).
+/// Soru bölümünü ve sıkıştırılmış DNS isimlerini güvenli şekilde atlar.
 pub fn dns_parse_aaaa(data: &[u8], id: u16) -> Option<Ipv6Address> {
     if data.len() < 12 || u16::from_be_bytes([data[0], data[1]]) != id {
         return None;
@@ -924,6 +983,25 @@ pub fn dns_parse_aaaa(data: &[u8], id: u16) -> Option<Ipv6Address> {
         p += len;
     }
     None
+}
+
+/// AAAA DNS yanıtını alır ve Ipv6Address döner.
+pub fn take_dns_result_aaaa() -> Option<Ipv6Address> {
+    unsafe {
+        if DNS_REPLY_LEN == 0 {
+            None
+        } else {
+            DNS_REPLY_LEN = 0;
+            let mut buf = [0u8; 512];
+            let n = take_dns_packet(&mut buf);
+            if n >= 12 {
+                if let Some(ip) = dns_parse_aaaa(&buf, 0x4D4E) {
+                    return Some(ip);
+                }
+            }
+            None
+        }
+    }
 }
 
 pub fn take_dns_result() -> Option<Ipv4Address> {

@@ -1028,6 +1028,7 @@ fn blend_styles(a: &ElementStyle, b: &ElementStyle, t: f32) -> ElementStyle {
 /// CSS geçiş (transition) ilerlemesini hesaplar.
 /// `elapsed_ms` geçişin başlangıcından geçen süre, `duration_ms` geçiş süresi.
 /// Döndürülen değer 0.0..=1.0 arası ilerleme.
+#[allow(dead_code)]
 pub fn transition_progress(elapsed_ms: u64, duration_ms: f32) -> Option<f32> {
     if duration_ms <= 0.0 {
         return None;

@@ -554,71 +554,177 @@ pub fn recvfrom(fd: i32, buf: &mut [u8]) -> Result<(usize, Ipv4Address, u16), i3
 }
 
 // ---------------------------------------------------------------------------
-// DNS (önbellekli çözümleme)
+// DNS (önbellekli çözümleme, TTL ve IPv6 desteği)
 // ---------------------------------------------------------------------------
 
-const DNS_CACHE_N: usize = 4;
+const DNS_CACHE_N: usize = 8;
+
+#[derive(Clone, Copy)]
+enum DnsCacheAddr {
+    V4(Ipv4Address),
+    V6(Ipv6Address),
+}
+
 struct DnsCacheEntry {
     name: [u8; 64],
     name_len: usize,
-    ip: Ipv4Address,
+    addr: DnsCacheAddr,
+    ttl: u64,        // Saniye cinsinden geçerlilik süresi (epoch seconds)
+    cached_at: u64,  // Önbelleğe alma zamanı (epoch seconds)
     used: bool,
 }
+
 static mut DNS_CACHE: [DnsCacheEntry; DNS_CACHE_N] = [
     DnsCacheEntry {
         name: [0; 64],
         name_len: 0,
-        ip: Ipv4Address([0; 4]),
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
         used: false,
     },
     DnsCacheEntry {
         name: [0; 64],
         name_len: 0,
-        ip: Ipv4Address([0; 4]),
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
         used: false,
     },
     DnsCacheEntry {
         name: [0; 64],
         name_len: 0,
-        ip: Ipv4Address([0; 4]),
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
         used: false,
     },
     DnsCacheEntry {
         name: [0; 64],
         name_len: 0,
-        ip: Ipv4Address([0; 4]),
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
+        used: false,
+    },
+    DnsCacheEntry {
+        name: [0; 64],
+        name_len: 0,
+        addr: DnsCacheAddr::V4(Ipv4Address([0; 4])),
+        ttl: 0,
+        cached_at: 0,
         used: false,
     },
 ];
 
 fn dns_cache_lookup(host: &str) -> Option<Ipv4Address> {
     unsafe {
+        let now = crate::monotonic_ms() / 1000;
         for e in DNS_CACHE.iter() {
             if e.used && e.name_len == host.len() && &e.name[..e.name_len] == host.as_bytes() {
-                return Some(e.ip);
+                if e.ttl > 0 && now >= e.cached_at + e.ttl {
+                    continue; // Expired
+                }
+                match e.addr {
+                    DnsCacheAddr::V4(ip) => return Some(ip),
+                    DnsCacheAddr::V6(_) => return None,
+                }
             }
         }
     }
     None
 }
 
-fn dns_cache_store(host: &str, ip: Ipv4Address) {
+fn dns_cache_lookup_aaaa(host: &str) -> Option<Ipv6Address> {
+    unsafe {
+        let now = crate::monotonic_ms() / 1000;
+        for e in DNS_CACHE.iter() {
+            if e.used && e.name_len == host.len() && &e.name[..e.name_len] == host.as_bytes() {
+                if e.ttl > 0 && now >= e.cached_at + e.ttl {
+                    continue; // Expired
+                }
+                match e.addr {
+                    DnsCacheAddr::V4(_) => return None,
+                    DnsCacheAddr::V6(ip) => return Some(ip),
+                }
+            }
+        }
+    }
+    None
+}
+
+fn dns_cache_store(host: &str, ip: Ipv4Address, ttl: u32) {
     if host.len() > 64 {
         return;
     }
     unsafe {
+        let now = crate::monotonic_ms() / 1000;
         for e in DNS_CACHE.iter_mut() {
             if !e.used {
                 e.name[..host.len()].copy_from_slice(host.as_bytes());
                 e.name_len = host.len();
-                e.ip = ip;
+                e.addr = DnsCacheAddr::V4(ip);
+                e.ttl = ttl as u64;
+                e.cached_at = now;
+                e.used = true;
+                return;
+            }
+        }
+        // Tümü dolu: en eskiyi (veya süresi dolmuş olanı) değiştir
+        DNS_CACHE[0].name[..host.len()].copy_from_slice(host.as_bytes());
+        DNS_CACHE[0].name_len = host.len();
+        DNS_CACHE[0].addr = DnsCacheAddr::V4(ip);
+        DNS_CACHE[0].ttl = ttl as u64;
+        DNS_CACHE[0].cached_at = now;
+    }
+}
+
+fn dns_cache_store_aaaa(host: &str, ip: Ipv6Address, ttl: u32) {
+    if host.len() > 64 {
+        return;
+    }
+    unsafe {
+        let now = crate::monotonic_ms() / 1000;
+        for e in DNS_CACHE.iter_mut() {
+            if !e.used {
+                e.name[..host.len()].copy_from_slice(host.as_bytes());
+                e.name_len = host.len();
+                e.addr = DnsCacheAddr::V6(ip);
+                e.ttl = ttl as u64;
+                e.cached_at = now;
                 e.used = true;
                 return;
             }
         }
         DNS_CACHE[0].name[..host.len()].copy_from_slice(host.as_bytes());
         DNS_CACHE[0].name_len = host.len();
-        DNS_CACHE[0].ip = ip;
+        DNS_CACHE[0].addr = DnsCacheAddr::V6(ip);
+        DNS_CACHE[0].ttl = ttl as u64;
+        DNS_CACHE[0].cached_at = now;
     }
 }
 
@@ -661,7 +767,38 @@ pub fn resolve_host(host: &str) -> Result<Ipv4Address, i32> {
     loop {
         e1000::poll();
         if let Some(ip) = netstack::take_dns_result() {
-            dns_cache_store(host, ip);
+            dns_cache_store(host, ip, 300); // 5 dakika varsayılan TTL
+            return Ok(ip);
+        }
+        if crate::monotonic_ms() >= deadline {
+            return Err(E_TIMEOUT);
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Alan adını IPv6 (AAAA) adresine çözer: önce önbellek, sonra DNS (5 sn).
+pub fn resolve_host_aaaa(host: &str) -> Result<Ipv6Address, i32> {
+    if host.is_empty() || host.len() > 96 {
+        return Err(E_INVAL);
+    }
+    if let Some(ip) = dns_cache_lookup_aaaa(host) {
+        return Ok(ip);
+    }
+    if let Some(ip) = netstack::parse_ipv6(host) {
+        return Ok(ip);
+    }
+    if !e1000::is_ready() {
+        return Err(E_NOTCONN);
+    }
+    if !netstack::dns_query_aaaa(host) {
+        return Err(E_NOTCONN);
+    }
+    let deadline = crate::monotonic_ms().wrapping_add(5000);
+    loop {
+        e1000::poll();
+        if let Some(ip) = netstack::take_dns_result_aaaa() {
+            dns_cache_store_aaaa(host, ip, 300); // 5 dakika varsayılan TTL
             return Ok(ip);
         }
         if crate::monotonic_ms() >= deadline {

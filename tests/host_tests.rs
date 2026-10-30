@@ -156,10 +156,14 @@ pub mod drivers {
     }
     pub mod socket {
         use super::netstack::Ipv4Address;
+        use crate::netstack_mod::Ipv6Address;
         pub fn on_udp_datagram(_src: Ipv4Address, _sport: u16, _dport: u16, _data: &[u8]) -> bool {
             false
         }
         pub fn on_tcp_segment(_src: Ipv4Address, _data: &[u8]) -> bool {
+            false
+        }
+        pub fn on_tcp_segment_ipv6(_src: Ipv6Address, _data: &[u8]) -> bool {
             false
         }
         pub fn self_test() -> bool {

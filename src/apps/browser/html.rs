@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::cache::{cache_get, cache_store};
+use super::cache::{cache_get_with_metadata, cache_store_with_metadata};
 use super::css::{find_keyframes, match_css_style, parse_css};
 use super::types::{BrowserLine, HtmlTagType, TextAlign, TextSpan};
 use crate::fs::vfs::VirtualFileSystem;
@@ -324,6 +324,7 @@ pub fn render_html_to_lines(
     out_lines: &mut Vec<BrowserLine>,
     max_lines: usize,
     base_url: Option<&str>,
+    animation_start_ms: usize,
     mut vfs: Option<&mut VirtualFileSystem>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
@@ -639,14 +640,29 @@ pub fn render_html_to_lines(
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
 
-            let mut matched =
-                match_css_style(&css_rules, tag_name_str, class_attr, id_attr, style_attr);
+            let mut matched = match_css_style(
+                &css_rules,
+                tag_name_str,
+                class_attr,
+                id_attr,
+                style_attr,
+                wrap_width_px,
+                768,
+            );
 
-            // CSS animation: keyframes'ten frame bul ve uygula (statik render icin ilk frame)
+            // CSS animasyonu: zaman tabanlı keyframe interpolasyonu
             if let Some(kf_name) = matched.animation_name.clone() {
                 if let Some(kf) = find_keyframes(&css_keyframes, &kf_name) {
-                    if let Some(frame) = kf.frames.first() {
-                        matched.opacity = frame.style.opacity;
+                    let elapsed =
+                        crate::boot::time::main_monotonic_ms().saturating_sub(animation_start_ms);
+                    if let Some(progress) = super::css::animation_progress(
+                        elapsed as u64,
+                        matched.animation_duration,
+                        matched.animation_iterations,
+                    ) {
+                        let animated = super::css::interpolate_keyframes(kf, progress);
+                        matched.opacity = animated.opacity;
+                        matched.animation_name = None; // Animasyon uygulandı, tekrar etme
                     }
                 }
             }
@@ -720,17 +736,84 @@ pub fn render_html_to_lines(
                                     || resolved_url.starts_with("https://")
                                 {
                                     let mut css_bytes: Option<Vec<u8>> = None;
-                                    if let Some(cached) = cache_get(vfs.as_deref(), &resolved_url) {
-                                        css_bytes = Some(cached);
+                                    // Try cache with metadata first
+                                    let current_time =
+                                        crate::boot::time::main_monotonic_ms() / 1000;
+                                    if let Some((cached_data, cached_meta)) =
+                                        cache_get_with_metadata(vfs.as_deref(), &resolved_url)
+                                    {
+                                        if cached_meta.is_fresh(current_time as u64) {
+                                            css_bytes = Some(cached_data);
+                                        } else {
+                                            // Stale - revalidate
+                                            let validation_headers =
+                                                super::cache::build_validation_headers(
+                                                    &cached_meta,
+                                                );
+                                            let mut http_buf = vec![0u8; 1_048_576];
+                                            if let Ok((status, hlen, total)) =
+                                                crate::drivers::http::http_get_with_cache(
+                                                    &resolved_url,
+                                                    &mut http_buf,
+                                                    Some(&validation_headers),
+                                                )
+                                            {
+                                                if status == 304 {
+                                                    // Not modified - use cached data
+                                                    css_bytes = Some(cached_data.clone());
+                                                    // Update metadata
+                                                    let _ = cache_store_with_metadata(
+                                                        vfs.as_deref_mut(),
+                                                        &resolved_url,
+                                                        &cached_data,
+                                                        &cached_meta,
+                                                    );
+                                                } else if (200..300).contains(&status)
+                                                    && total > hlen
+                                                {
+                                                    let body_bytes =
+                                                        &http_buf[hlen..total].to_vec();
+                                                    css_bytes = Some(body_bytes.clone());
+                                                    let headers_str =
+                                                        decode_bytes_to_string(&http_buf[..hlen]);
+                                                    let new_meta =
+                                                        super::cache::parse_cache_headers(
+                                                            &headers_str,
+                                                            current_time as u64,
+                                                        );
+                                                    let _ = cache_store_with_metadata(
+                                                        vfs.as_deref_mut(),
+                                                        &resolved_url,
+                                                        body_bytes,
+                                                        &new_meta,
+                                                    );
+                                                }
+                                            }
+                                        }
                                     } else {
+                                        // Not in cache - fetch fresh
                                         let mut http_buf = vec![0u8; 1_048_576];
                                         if let Ok((status, hlen, total)) =
-                                            crate::drivers::http::http_get(&resolved_url, &mut http_buf)
+                                            crate::drivers::http::http_get(
+                                                &resolved_url,
+                                                &mut http_buf,
+                                            )
                                         {
                                             if (200..300).contains(&status) && total > hlen {
                                                 let body_bytes = &http_buf[hlen..total].to_vec();
                                                 css_bytes = Some(body_bytes.clone());
-                                                let _ = cache_store(vfs.as_deref_mut(), &resolved_url, body_bytes);
+                                                let headers_str =
+                                                    decode_bytes_to_string(&http_buf[..hlen]);
+                                                let meta = super::cache::parse_cache_headers(
+                                                    &headers_str,
+                                                    current_time as u64,
+                                                );
+                                                let _ = cache_store_with_metadata(
+                                                    vfs.as_deref_mut(),
+                                                    &resolved_url,
+                                                    body_bytes,
+                                                    &meta,
+                                                );
                                             }
                                         }
                                     }
@@ -752,10 +835,54 @@ pub fn render_html_to_lines(
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
+                                let current_time = crate::boot::time::main_monotonic_ms() / 1000;
                                 let mut js_bytes: Option<Vec<u8>> = None;
-                                if let Some(cached) = cache_get(vfs.as_deref(), &resolved_url) {
-                                    js_bytes = Some(cached);
+                                if let Some((cached_data, cached_meta)) =
+                                    cache_get_with_metadata(vfs.as_deref(), &resolved_url)
+                                {
+                                    if cached_meta.is_fresh(current_time as u64) {
+                                        js_bytes = Some(cached_data);
+                                    } else {
+                                        // Stale - revalidate
+                                        let validation_headers =
+                                            super::cache::build_validation_headers(&cached_meta);
+                                        let mut http_buf = vec![0u8; 1_048_576];
+                                        if let Ok((status, hlen, total)) =
+                                            crate::drivers::http::http_get_with_cache(
+                                                &resolved_url,
+                                                &mut http_buf,
+                                                Some(&validation_headers),
+                                            )
+                                        {
+                                            if status == 304 {
+                                                // Not modified - use cached data
+                                                js_bytes = Some(cached_data.clone());
+                                                let _ = cache_store_with_metadata(
+                                                    vfs.as_deref_mut(),
+                                                    &resolved_url,
+                                                    &cached_data,
+                                                    &cached_meta,
+                                                );
+                                            } else if (200..300).contains(&status) && total > hlen {
+                                                let body_bytes = &http_buf[hlen..total].to_vec();
+                                                js_bytes = Some(body_bytes.clone());
+                                                let headers_str =
+                                                    decode_bytes_to_string(&http_buf[..hlen]);
+                                                let new_meta = super::cache::parse_cache_headers(
+                                                    &headers_str,
+                                                    current_time as u64,
+                                                );
+                                                let _ = cache_store_with_metadata(
+                                                    vfs.as_deref_mut(),
+                                                    &resolved_url,
+                                                    body_bytes,
+                                                    &new_meta,
+                                                );
+                                            }
+                                        }
+                                    }
                                 } else {
+                                    // Not in cache - fetch fresh
                                     let mut http_buf = vec![0u8; 1_048_576];
                                     if let Ok((status, hlen, total)) =
                                         crate::drivers::http::http_get(&resolved_url, &mut http_buf)
@@ -763,7 +890,18 @@ pub fn render_html_to_lines(
                                         if (200..300).contains(&status) && total > hlen {
                                             let body_bytes = &http_buf[hlen..total].to_vec();
                                             js_bytes = Some(body_bytes.clone());
-                                            let _ = cache_store(vfs.as_deref_mut(), &resolved_url, body_bytes);
+                                            let headers_str =
+                                                decode_bytes_to_string(&http_buf[..hlen]);
+                                            let meta = super::cache::parse_cache_headers(
+                                                &headers_str,
+                                                current_time as u64,
+                                            );
+                                            let _ = cache_store_with_metadata(
+                                                vfs.as_deref_mut(),
+                                                &resolved_url,
+                                                body_bytes,
+                                                &meta,
+                                            );
                                         }
                                     }
                                 }
@@ -775,10 +913,15 @@ pub fn render_html_to_lines(
                                             if !stmt.is_empty() {
                                                 // execute_js_statement yerine doğrudan işle
                                                 // Burada sadece document.write desteklenir
-                                                if stmt.starts_with("document.write(") && stmt.ends_with(')') {
+                                                if stmt.starts_with("document.write(")
+                                                    && stmt.ends_with(')')
+                                                {
                                                     let inner = &stmt[15..stmt.len() - 1];
                                                     // Basit string literal çıkarma
-                                                    if let Some(_written) = inner.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                                                    if let Some(_written) = inner
+                                                        .strip_prefix('"')
+                                                        .and_then(|s| s.strip_suffix('"'))
+                                                    {
                                                         // document.write içeriğini HTML'e eklemek için
                                                         // Bu basit bir implementasyon; gerçek JS engine yok
                                                     }
@@ -1249,26 +1392,79 @@ pub fn render_html_to_lines(
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
-                                // Önbellekten dene önce
+                                // Önbellekten dene önce (metadata ile)
+                                let current_time = crate::boot::time::main_monotonic_ms() / 1000;
                                 let mut img_bytes: Option<Vec<u8>> = None;
-                                if let Some(cached) = cache_get(vfs.as_deref(), &resolved_url) {
-                                    img_bytes = Some(cached);
+                                if let Some((cached_data, cached_meta)) =
+                                    cache_get_with_metadata(vfs.as_deref(), &resolved_url)
+                                {
+                                    if cached_meta.is_fresh(current_time as u64) {
+                                        img_bytes = Some(cached_data);
+                                    } else {
+                                        // Stale - revalidate
+                                        let validation_headers =
+                                            super::cache::build_validation_headers(&cached_meta);
+                                        let mut http_buf = vec![0u8; 1_048_576];
+                                        if let Ok((status, hlen, total)) =
+                                            crate::drivers::http::http_get_with_cache(
+                                                &resolved_url,
+                                                &mut http_buf,
+                                                Some(&validation_headers),
+                                            )
+                                        {
+                                            if status == 304 {
+                                                // Not modified - use cached data
+                                                img_bytes = Some(cached_data.clone());
+                                                let _ = cache_store_with_metadata(
+                                                    vfs.as_deref_mut(),
+                                                    &resolved_url,
+                                                    &cached_data,
+                                                    &cached_meta,
+                                                );
+                                            } else if (200..300).contains(&status) && total > hlen {
+                                                let body_bytes = &http_buf[hlen..total].to_vec();
+                                                img_bytes = Some(body_bytes.clone());
+                                                let headers_str =
+                                                    decode_bytes_to_string(&http_buf[..hlen]);
+                                                let new_meta = super::cache::parse_cache_headers(
+                                                    &headers_str,
+                                                    current_time as u64,
+                                                );
+                                                let _ = cache_store_with_metadata(
+                                                    vfs.as_deref_mut(),
+                                                    &resolved_url,
+                                                    body_bytes,
+                                                    &new_meta,
+                                                );
+                                            }
+                                        }
+                                    }
                                 } else {
-                                    let mut http_buf = vec![0u8; 1_048_576]; // 1MB buffer for remote image
+                                    // Not in cache - fetch fresh
+                                    let mut http_buf = vec![0u8; 1_048_576];
                                     if let Ok((status, hlen, total)) =
                                         crate::drivers::http::http_get(&resolved_url, &mut http_buf)
                                     {
                                         if (200..300).contains(&status) && total > hlen {
                                             let body_bytes = &http_buf[hlen..total].to_vec();
                                             img_bytes = Some(body_bytes.clone());
-                                            // Önbelleğe kaydet
-                                            let _ = cache_store(vfs.as_deref_mut(), &resolved_url, body_bytes);
+                                            let headers_str =
+                                                decode_bytes_to_string(&http_buf[..hlen]);
+                                            let meta = super::cache::parse_cache_headers(
+                                                &headers_str,
+                                                current_time as u64,
+                                            );
+                                            let _ = cache_store_with_metadata(
+                                                vfs.as_deref_mut(),
+                                                &resolved_url,
+                                                body_bytes,
+                                                &meta,
+                                            );
                                         }
                                     }
                                 }
                                 if let Some(ref img_data) = img_bytes {
-                                    if let Some(img) = crate::apps::imgdecode::decode(img_data)
-                                    {
+                                    if let Some(img) = crate::apps::imgdecode::decode(img_data) {
                                         image_decoded = Some((img.width, img.height, img.rgb));
                                     }
                                 }
@@ -1360,6 +1556,98 @@ pub fn render_html_to_lines(
                             bold: current_bold,
                             underline: current_underline,
                         });
+                    }
+                } else if eq_ascii(name, b"video") {
+                    // <video>: Video işleme
+                    let _label = extract_attr(attrs, b"alt")
+                        .or_else(|| extract_attr(attrs, b"title"))
+                        .or_else(|| extract_attr(attrs, b"src"))
+                        .unwrap_or("video");
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    // Video placeholder - show as a video player UI
+                    let src_url = extract_attr(attrs, b"src").map(String::from);
+                    let controls = extract_attr(attrs, b"controls").is_some();
+
+                    if controls {
+                        // Show video player controls placeholder
+                        word_buf.push_str("[▶ VIDEO]");
+                        if let Some(url) = src_url {
+                            word_buf.push(' ');
+                            word_buf.push_str(&url);
+                        }
+                    } else {
+                        word_buf.push_str("[VIDEO]");
+                        if let Some(url) = src_url {
+                            word_buf.push(' ');
+                            word_buf.push_str(&url);
+                        }
+                    }
+                } else if eq_ascii(name, b"audio") {
+                    // <audio>: Ses işleme
+                    let _label = extract_attr(attrs, b"alt")
+                        .or_else(|| extract_attr(attrs, b"title"))
+                        .or_else(|| extract_attr(attrs, b"src"))
+                        .unwrap_or("audio");
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    // Audio placeholder - show as audio player UI
+                    let src_url = extract_attr(attrs, b"src").map(String::from);
+                    let controls = extract_attr(attrs, b"controls").is_some();
+
+                    if controls {
+                        // Show audio player controls placeholder
+                        word_buf.push_str("[♫ AUDIO]");
+                        if let Some(url) = src_url {
+                            word_buf.push(' ');
+                            word_buf.push_str(&url);
+                        }
+                    } else {
+                        word_buf.push_str("[AUDIO]");
+                        if let Some(url) = src_url {
+                            word_buf.push(' ');
+                            word_buf.push_str(&url);
+                        }
                     }
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
@@ -1748,6 +2036,12 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"td") {
                     // <td> kapanıyor, zaten metin eklendi
                     word_buf.push('[');
+                } else if eq_ascii(name, b"video") {
+                    // <video> kapanıyor
+                    // Video içeriği zaten açılışta eklendi
+                } else if eq_ascii(name, b"audio") {
+                    // <audio> kapanıyor
+                    // Ses içeriği zaten açılışta eklendi
                 }
                 active_id = None;
             }

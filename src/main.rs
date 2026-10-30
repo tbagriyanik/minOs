@@ -3768,7 +3768,10 @@ pub extern "C" fn _start() -> ! {
                                                     } else if tag == "VID" {
                                                         open_app(&mut compositor, 6);
                                                     } else if tag == "WEB" {
-                                                        let file_data = fs_mgr.vfs.read_file(&path).map(|d| alloc::vec::Vec::from(d));
+                                                        let file_data = fs_mgr
+                                                            .vfs
+                                                            .read_file(&path)
+                                                            .map(|d| alloc::vec::Vec::from(d));
                                                         if let Some(data) = file_data {
                                                             let wrap = compositor
                                                                 .windows
@@ -3779,7 +3782,12 @@ pub extern "C" fn _start() -> ! {
                                                                     w.width.saturating_sub(40)
                                                                 });
                                                             browser_app.set_url(path.as_bytes());
-                                                            browser_app.load_html(&data, wrap, 256, Some(&mut fs_mgr.vfs));
+                                                            browser_app.load_html(
+                                                                &data,
+                                                                wrap,
+                                                                256,
+                                                                Some(&mut fs_mgr.vfs),
+                                                            );
                                                         }
 
                                                         open_app(&mut compositor, 3);
@@ -4735,7 +4743,8 @@ pub extern "C" fn _start() -> ! {
                                     browser_app.set_url(url.as_bytes());
 
                                     browser_app.navigate();
-                                } else if let Some(cache_path) = browser_app.click_image_at(mx, my) {
+                                } else if let Some(cache_path) = browser_app.click_image_at(mx, my)
+                                {
                                     // Resim üzerine çift tıkla: görüntüleyicide aç.
                                     let now_ms = monotonic_ms();
                                     let is_double_click = browser_last_img_click == Some((mx, my))
@@ -5763,7 +5772,11 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
                         // Arrow up scrolls the browser page
-                        browser_scroll_by(&mut compositor, &mut browser_app, -(gui::sp(30) as isize));
+                        browser_scroll_by(
+                            &mut compositor,
+                            &mut browser_app,
+                            -(gui::sp(30) as isize),
+                        );
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -8056,6 +8069,13 @@ pub extern "C" fn _start() -> ! {
                 browser_app.close_find();
             } else if ch == '\x08' && app_is_focused(&compositor, 3) && browser_app.find_active {
                 browser_app.find_backspace();
+            } else if ch == '\x08'
+                && app_is_focused(&compositor, 3)
+                && !browser_app.address_focused
+                && !browser_app.find_active
+            {
+                // Backspace: git geri (tarayıcıda standart davranış).
+                browser_app.back();
             } else if keyboard.ctrl && (ch == 'f' || ch == 'F') && app_is_focused(&compositor, 3) {
 
                 // Ctrl+F is handled by the FindText keyboard action.

@@ -13,6 +13,7 @@ mod css;
 mod html;
 mod types;
 
+pub use cache::CacheMetadata;
 pub use types::{
     html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedImage, RenderedLink,
     TextAlign, TextSpan, BOOKMARKS,
@@ -280,6 +281,8 @@ pub struct BrowserApp {
     suppress_history: bool,
     pub page_loaded: bool,
     pub status: &'static str,
+    /// Sayfa yükleme ilerlemesi (0..=100). Ağ istekleri sırasında güncellenir.
+    pub load_progress: u8,
     pub error_logs: Vec<String>,
     pub net_online: bool,
     pub ping_ok: bool,
@@ -300,6 +303,8 @@ pub struct BrowserApp {
     /// Yumuşak kaydırma animasyonu sürüyor mu?
     pub scroll_animating: bool,
     scroll_anim_start: u64,
+    /// CSS animasyon başlangıç zamanı (monotonic ms), sayfa yükleme ile sıfırlanır.
+    pub animation_start_ms: usize,
     /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
     pub scroll_reset: bool,
     pub request_pending: bool,
@@ -401,6 +406,7 @@ impl BrowserApp {
             find_match_count: Cell::new(0),
             suppress_history: false,
             page_loaded: true,
+            load_progress: 0,
             status: crate::gui::ui_text("minOs yerel yardım sayfası", "minOs local help page"),
             error_logs: Vec::new(),
             net_online: false,
@@ -419,6 +425,7 @@ impl BrowserApp {
             scroll_target: 0,
             scroll_animating: false,
             scroll_anim_start: 0,
+            animation_start_ms: 0,
             scroll_reset: true,
             request_pending: false,
             request_host: [0; 128],
@@ -717,6 +724,23 @@ impl BrowserApp {
         self.page_selection_anchor = None;
         self.page_selection_start = None;
         self.page_selection_end = None;
+        self.page_dragging = false;
+    }
+
+    /// Tüm sayfa içeriğini seçer (Ctrl+A kısayolu için).
+    pub fn select_all_page(&mut self) {
+        if self.page_lines.is_empty() {
+            return;
+        }
+        let last_idx = self.page_lines.len() - 1;
+        let last_len = self.page_lines[last_idx]
+            .spans
+            .iter()
+            .map(|s| s.text.len())
+            .sum();
+        self.page_selection_anchor = Some((0, 0));
+        self.page_selection_start = Some((0, 0));
+        self.page_selection_end = Some((last_idx, last_len));
         self.page_dragging = false;
     }
 
@@ -1074,6 +1098,7 @@ impl BrowserApp {
             &mut self.page_lines,
             max_lines,
             current_url,
+            self.animation_start_ms,
             vfs,
         );
     }
@@ -2195,6 +2220,8 @@ impl BrowserApp {
                 self.request_port = port;
                 self.request_state = 0;
                 self.request_pending = true;
+                self.animation_start_ms = crate::boot::time::main_monotonic_ms();
+                self.load_progress = 0;
                 self.tls_session = None;
                 self.tls_pending_request.clear();
                 self.tls_request_sent = false;
@@ -2387,6 +2414,7 @@ impl BrowserApp {
                 let host =
                     core::str::from_utf8(&self.request_host[..self.request_host_len]).unwrap_or("");
                 let clean_host = host.trim().trim_start_matches('[').trim_end_matches(']');
+                self.load_progress = 10;
                 if let Some(_v6) = crate::drivers::netstack::parse_ipv6(clean_host) {
                     // IPv6 adresi doğrudan girildiğinde (ör: http://[::1]/ veya http://[fe80::1]/)
                     self.finish_network_error(crate::gui::ui_text(
@@ -2398,6 +2426,7 @@ impl BrowserApp {
                     let port = self.request_port;
                     if crate::drivers::netstack::tcp_begin(ip, port, 49153) {
                         self.request_state = 1;
+                        self.load_progress = 30;
                         self.status = crate::gui::ui_text(
                             "TCP bağlantısı kuruluyor...",
                             "Connecting over TCP...",
@@ -2410,6 +2439,7 @@ impl BrowserApp {
                     }
                 } else if crate::drivers::netstack::dns_query(host) {
                     self.request_state = 4;
+                    self.load_progress = 20;
                     self.status = crate::gui::ui_text(
                         "DNS yanıtı bekleniyor...",
                         "Waiting for DNS response...",
@@ -2424,6 +2454,7 @@ impl BrowserApp {
             4 => {
                 if let Some(ip) = crate::drivers::netstack::take_dns_result() {
                     self.request_ip = ip;
+                    self.load_progress = 30;
                     if crate::drivers::netstack::tcp_begin(ip, self.request_port, 49153) {
                         self.request_state = 1;
                         self.status = crate::gui::ui_text(
@@ -2445,6 +2476,7 @@ impl BrowserApp {
                         "Server rejected the connection.",
                     ));
                 } else if crate::drivers::netstack::tcp_syn_acked() {
+                    self.load_progress = 40;
                     let host = core::str::from_utf8(&self.request_host[..self.request_host_len])
                         .unwrap_or("");
                     let path = core::str::from_utf8(&self.request_path[..self.request_path_len])
@@ -2538,6 +2570,7 @@ impl BrowserApp {
                             self.tls_session = Some(tls_session);
                             self.request_state = 2;
                             self.web_request_sent = true;
+                            self.load_progress = 50;
                             self.status = crate::gui::ui_text(
                                 "TLS el sıkışması ve yanıt bekleniyor...",
                                 "Waiting for TLS handshake & response...",
@@ -2552,6 +2585,7 @@ impl BrowserApp {
                         if crate::drivers::netstack::tcp_send(&req_buf) {
                             self.request_state = 2;
                             self.web_request_sent = true;
+                            self.load_progress = 50;
                             self.status = crate::gui::ui_text(
                                 "HTTP yanıtı bekleniyor...",
                                 "Waiting for HTTP response...",
@@ -2717,6 +2751,7 @@ impl BrowserApp {
                         Some(rec) => {
                             let _ = crate::drivers::netstack::tcp_send(&rec);
                             self.tls_request_sent = true;
+                            self.load_progress = 60;
                             crate::serial_print("[HTTPS] Şifreli HTTP isteği gönderildi: ");
                             crate::serial::print_dec(rec.len() as u64);
                             crate::serial_print(" bayt\n");
@@ -2744,6 +2779,7 @@ impl BrowserApp {
 
                 if data_to_parse.len() > 0 {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
+                        self.load_progress = 70;
                         let headers = &data_to_parse[..end];
                         let status_end = find_bytes(headers, b"\r\n").unwrap_or(end);
                         let status_line = &headers[..status_end];
@@ -3042,6 +3078,7 @@ impl BrowserApp {
                             }
                         }
                         self.page_loaded = true;
+                        self.load_progress = 100;
                     }
                 }
                 // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
@@ -3104,6 +3141,7 @@ impl BrowserApp {
 
     fn finish_http_response(&mut self) {
         self.page_loaded = true;
+        self.load_progress = 100;
         self.status = crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
     }
     fn finish_network_error(&mut self, status: &'static str) {
@@ -3114,6 +3152,7 @@ impl BrowserApp {
         self.record_network_error(detail);
         self.request_pending = false;
         self.page_loaded = false;
+        self.load_progress = 0;
         self.status = status;
         self.request_state = 0;
         self.request_deadline = 0;
@@ -3668,7 +3707,9 @@ impl BrowserApp {
                                 }
                                 // Resim isabet alanı kaydet (önbellekten görüntüleme için)
                                 if !span.image_url.is_empty() {
-                                    let cache_path = crate::apps::browser::cache::url_to_cache_path(&span.image_url);
+                                    let cache_path = crate::apps::browser::cache::url_to_cache_path(
+                                        &span.image_url,
+                                    );
                                     let mut images = self.rendered_images.borrow_mut();
                                     images.push(RenderedImage {
                                         rect: (cur_x, draw_y, span_w, line_h),
@@ -4172,6 +4213,30 @@ impl BrowserApp {
             _ => self.status,
         };
         MinGuiCompositor::draw_string(fb, win_x + 12, status_y + 3, status, Color::TEXT_MUTED);
+
+        // Yükleme sırasında durum çubuğunda ilerleme çubuğu göster.
+        if !self.page_loaded && self.request_pending && self.load_progress > 0 {
+            let bar_x = win_x + 12;
+            let bar_y = status_y + 16;
+            let bar_w = win_w.saturating_sub(24);
+            let bar_h = 4;
+            fb.draw_rect(bar_x, bar_y, bar_w, bar_h, Color::DARK_BG);
+            fb.draw_rect_outline(bar_x, bar_y, bar_w, bar_h, Color::BORDER);
+            let fill_w = bar_w.saturating_sub(2) * self.load_progress as usize / 100;
+            if fill_w > 0 {
+                fb.draw_rect(
+                    bar_x + 1,
+                    bar_y + 1,
+                    fill_w,
+                    bar_h.saturating_sub(2),
+                    Color::ACCENT_BLUE,
+                );
+            }
+            let pct_text = alloc::format!("{}%", self.load_progress);
+            let pct_w = MinGuiCompositor::text_width(&pct_text, 1);
+            let pct_x = win_x + win_w.saturating_sub(12).saturating_sub(pct_w);
+            MinGuiCompositor::draw_string(fb, pct_x, status_y + 3, &pct_text, Color::ACCENT_BLUE);
+        }
         if self.toolbar_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = Self::toolbar_menu_rect(win_x, win_y, win_w);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);

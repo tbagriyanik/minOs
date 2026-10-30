@@ -853,6 +853,79 @@ fn dns_parse_a(data: &[u8], id: u16) -> Option<Ipv4Address> {
     None
 }
 
+/// DNS yanıtındaki ilk AAAA kaydını ayrıştırır (RFC 3596).
+/// Soru bölümünü ve sıkıştırılmış DNS isimlerini güvenli şekilde atlar.
+pub fn dns_parse_aaaa(data: &[u8], id: u16) -> Option<Ipv6Address> {
+    if data.len() < 12 || u16::from_be_bytes([data[0], data[1]]) != id {
+        return None;
+    }
+    let flags = u16::from_be_bytes([data[2], data[3]]);
+    if flags & 0x8000 == 0 || flags & 0x000f != 0 {
+        return None;
+    }
+    let qd = u16::from_be_bytes([data[4], data[5]]) as usize;
+    let an = u16::from_be_bytes([data[6], data[7]]) as usize;
+    let mut p = 12usize;
+    for _ in 0..qd {
+        loop {
+            let n = *data.get(p)? as usize;
+            p += 1;
+            if n == 0 {
+                break;
+            }
+            if n & 0xc0 == 0xc0 {
+                p += 1;
+                break;
+            }
+            if n & 0xc0 != 0 {
+                return None;
+            }
+            p = p.checked_add(n)?;
+            if p > data.len() {
+                return None;
+            }
+        }
+        p = p.checked_add(4)?;
+        if p > data.len() {
+            return None;
+        }
+    }
+    for _ in 0..an {
+        let n = *data.get(p)? as usize;
+        p += 1;
+        if n & 0xc0 == 0xc0 {
+            p += 1;
+        } else {
+            if n != 0 {
+                p = p.checked_add(n)?;
+            }
+            while *data.get(p)? != 0 {
+                let l = data[p] as usize;
+                p += 1;
+                p = p.checked_add(l)?;
+            }
+            p += 1;
+        }
+        if p + 10 > data.len() {
+            return None;
+        }
+        let typ = u16::from_be_bytes([data[p], data[p + 1]]);
+        let class = u16::from_be_bytes([data[p + 2], data[p + 3]]);
+        let len = u16::from_be_bytes([data[p + 8], data[p + 9]]) as usize;
+        p += 10;
+        if p + len > data.len() {
+            return None;
+        }
+        if typ == 28 && class == 1 && len == 16 {
+            let mut a = [0u8; 16];
+            a.copy_from_slice(&data[p..p + 16]);
+            return Some(Ipv6Address(a));
+        }
+        p += len;
+    }
+    None
+}
+
 pub fn take_dns_result() -> Option<Ipv4Address> {
     unsafe {
         if DNS_REPLY_LEN == 0 {
@@ -1629,6 +1702,37 @@ pub fn send_ipv6(dst_ip: Ipv6Address, next_header: u8, payload: &[u8]) -> bool {
     e1000::transmit(&frame[..len])
 }
 
+/// IPv6 üzerinde TCP segmenti gönderir (RFC 8200/9293).
+/// Neighbor Discovery henüz yoksa send_ipv6'in gateway fallback'i kullanılır.
+pub fn send_tcp_segment_ipv6(
+    dst: Ipv6Address,
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    payload: &[u8],
+) -> bool {
+    if payload.len() > 1300 {
+        return false;
+    }
+    let mut seg = [0u8; 1400];
+    seg[0..2].copy_from_slice(&src_port.to_be_bytes());
+    seg[2..4].copy_from_slice(&dst_port.to_be_bytes());
+    seg[4..8].copy_from_slice(&seq.to_be_bytes());
+    seg[8..12].copy_from_slice(&ack.to_be_bytes());
+    seg[12] = 5 << 4;
+    seg[13] = flags;
+    seg[14..16].copy_from_slice(&64240u16.to_be_bytes());
+    seg[16..18].fill(0);
+    seg[18..20].fill(0);
+    let n = 20 + payload.len();
+    seg[20..n].copy_from_slice(payload);
+    let checksum = ipv6_pseudo_checksum(&local_ipv6().0, &dst.0, IP_PROTO_TCP, &seg[..n]);
+    seg[16..18].copy_from_slice(&checksum.to_be_bytes());
+    send_ipv6(dst, IP_PROTO_TCP, &seg[..n])
+}
+
 /// ICMPv6 Echo Request (Ping6) gönderir.
 pub fn send_icmpv6_echo(dst: Ipv6Address, id: u16, seq: u16, data: &[u8]) -> bool {
     let mut pkt = [0u8; 128];
@@ -1890,7 +1994,8 @@ pub fn handle_ipv6(payload: &[u8]) {
         6 => {
             // TCP over IPv6: TCP segmenti 40. ofsetten başlar
             if payload.len() >= 60 {
-                // TODO: TCP port ve segment eşleme
+                let tcp = &payload[40..];
+                let _ = crate::drivers::socket::on_tcp_segment_ipv6(src_ip, tcp);
             }
         }
         17 => {

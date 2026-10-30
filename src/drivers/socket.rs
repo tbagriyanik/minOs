@@ -35,6 +35,26 @@ pub const DEFAULT_TIMEOUT_MS: u64 = 8000;
 // Eski tek-bağlantılı yolun kullandığı portlardan uzak dur.
 const EPHEMERAL_BASE: u16 = 50000;
 
+#[inline]
+fn send_tcp_to(
+    ip: IpAddress,
+    dst_port: u16,
+    src_port: u16,
+    seq: u32,
+    ack: u32,
+    flags: u8,
+    data: &[u8],
+) -> bool {
+    match ip {
+        IpAddress::V4(v4) => {
+            netstack::send_tcp_segment(v4, dst_port, src_port, seq, ack, flags, data)
+        }
+        IpAddress::V6(v6) => {
+            netstack::send_tcp_segment_ipv6(v6, dst_port, src_port, seq, ack, flags, data)
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SockType {
     Stream,
@@ -66,7 +86,7 @@ pub struct Socket {
     state: SockState,
     local_port: u16,
     remote_port: u16,
-    remote_ip: Ipv4Address,
+    remote_ip: IpAddress,
     iss: u32,
     snd_una: u32,
     snd_nxt: u32,
@@ -95,7 +115,7 @@ impl Socket {
             state: SockState::Free,
             local_port: 0,
             remote_port: 0,
-            remote_ip: Ipv4Address([0; 4]),
+            remote_ip: IpAddress::V4(Ipv4Address([0; 4])),
             iss: 0,
             snd_una: 0,
             snd_nxt: 0,
@@ -223,7 +243,7 @@ fn fire_retry(fd: usize) {
         }
         match s.retry.kind {
             1 => {
-                netstack::send_tcp_segment(
+                send_tcp_to(
                     s.remote_ip,
                     s.remote_port,
                     s.local_port,
@@ -238,7 +258,7 @@ fn fire_retry(fd: usize) {
                 let len = s.unacked_len;
                 let seq = s.unacked_seq;
                 let ack = s.rcv_nxt;
-                netstack::send_tcp_segment(
+                send_tcp_to(
                     s.remote_ip,
                     s.remote_port,
                     s.local_port,
@@ -249,7 +269,7 @@ fn fire_retry(fd: usize) {
                 );
             }
             3 => {
-                netstack::send_tcp_segment(
+                send_tcp_to(
                     s.remote_ip,
                     s.remote_port,
                     s.local_port,
@@ -304,7 +324,7 @@ pub fn connect(fd: i32, ip: Ipv4Address, port: u16) -> Result<(), i32> {
         .wrapping_mul(2654435761)
         .wrapping_add((fd as u32).wrapping_mul(7919) | 0x1000);
     s.local_port = lport;
-    s.remote_ip = ip;
+    s.remote_ip = IpAddress::V4(ip);
     s.remote_port = port;
     s.iss = iss;
     s.snd_una = iss;
@@ -315,7 +335,7 @@ pub fn connect(fd: i32, ip: Ipv4Address, port: u16) -> Result<(), i32> {
     s.error = 0;
     s.state = SockState::SynSent;
     arm_retry(s, 1);
-    netstack::send_tcp_segment(ip, port, lport, iss, 0, 0x02, &[]);
+    send_tcp_to(IpAddress::V4(ip), port, lport, iss, 0, 0x02, &[]);
 
     let deadline = crate::monotonic_ms().wrapping_add(s.timeout_ms);
     loop {
@@ -372,7 +392,7 @@ fn send_chunk(fd: i32, data: &[u8]) -> Result<usize, i32> {
     s.unacked_len = n;
     s.unacked_seq = s.snd_nxt;
     let end = s.snd_nxt.wrapping_add(n as u32);
-    netstack::send_tcp_segment(
+    send_tcp_to(
         s.remote_ip,
         s.remote_port,
         s.local_port,
@@ -452,7 +472,7 @@ pub fn close(fd: i32) {
         && (s.state == SockState::Established || s.state == SockState::CloseWait)
     {
         s.fin_seq = s.snd_nxt;
-        netstack::send_tcp_segment(
+        send_tcp_to(
             s.remote_ip,
             s.remote_port,
             s.local_port,
@@ -656,7 +676,7 @@ pub fn resolve_host(host: &str) -> Result<Ipv4Address, i32> {
 // ---------------------------------------------------------------------------
 
 fn send_ack(s: &Socket) {
-    netstack::send_tcp_segment(
+    send_tcp_to(
         s.remote_ip,
         s.remote_port,
         s.local_port,
@@ -698,7 +718,7 @@ pub(crate) fn on_tcp_segment(src_ip: Ipv4Address, payload: &[u8]) -> bool {
                 && s.sock_type == SockType::Stream
                 && s.local_port == dst_port
                 && (s.state == SockState::SynSent
-                    || (s.remote_port == src_port && s.remote_ip == src_ip))
+                    || (s.remote_port == src_port && s.remote_ip == IpAddress::V4(src_ip)))
         });
         let Some(s) = slot else { return false };
         if flags & 0x04 != 0 {
@@ -713,7 +733,7 @@ pub(crate) fn on_tcp_segment(src_ip: Ipv4Address, payload: &[u8]) -> bool {
                     s.rcv_nxt = seq.wrapping_add(1);
                     s.snd_una = ack;
                     s.snd_nxt = ack;
-                    s.remote_ip = src_ip;
+                    s.remote_ip = IpAddress::V4(src_ip);
                     s.remote_port = src_port;
                     s.state = SockState::Established;
                     s.retry.kind = 0;
@@ -773,6 +793,81 @@ pub(crate) fn on_tcp_segment(src_ip: Ipv4Address, payload: &[u8]) -> bool {
             _ => true,
         }
     }
+}
+
+/// IPv6 TCP segmentlerini aynı socket durum makinesine bağlar.
+pub(crate) fn on_tcp_segment_ipv6(src_ip: Ipv6Address, payload: &[u8]) -> bool {
+    if payload.len() < 20
+        || netstack::ipv6_pseudo_checksum(
+            &netstack::local_ipv6().0,
+            &src_ip.0,
+            netstack::IP_PROTO_TCP,
+            payload,
+        ) != 0
+    {
+        return false;
+    }
+    let off = ((payload[12] >> 4) as usize) * 4;
+    if off < 20 || payload.len() < off {
+        return false;
+    }
+    let src_port = u16::from_be_bytes([payload[0], payload[1]]);
+    let dst_port = u16::from_be_bytes([payload[2], payload[3]]);
+    let seq = u32::from_be_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    let ack = u32::from_be_bytes([payload[8], payload[9], payload[10], payload[11]]);
+    let flags = payload[13];
+    let data = &payload[off..];
+    unsafe {
+        let slot = SOCKETS.iter_mut().find(|s| {
+            s.used
+                && s.sock_type == SockType::Stream
+                && s.local_port == dst_port
+                && (s.state == SockState::SynSent
+                    || (s.remote_port == src_port && s.remote_ip == IpAddress::V6(src_ip)))
+        });
+        let Some(s) = slot else { return false };
+        if flags & 0x04 != 0 {
+            s.state = SockState::Error;
+            s.error = E_CONNREFUSED;
+            return true;
+        }
+        if s.state == SockState::SynSent
+            && flags & 0x02 != 0
+            && flags & 0x10 != 0
+            && ack == s.iss.wrapping_add(1)
+        {
+            s.rcv_nxt = seq.wrapping_add(1);
+            s.snd_una = ack;
+            s.snd_nxt = ack;
+            s.remote_ip = IpAddress::V6(src_ip);
+            s.remote_port = src_port;
+            s.state = SockState::Established;
+            s.retry.kind = 0;
+            send_ack(s);
+            return true;
+        }
+        if matches!(s.state, SockState::Established | SockState::CloseWait) {
+            if flags & 0x10 != 0 {
+                s.snd_una = ack;
+            }
+            if !data.is_empty() && seq == s.rcv_nxt {
+                let n = data.len().min(RX_BUF.saturating_sub(s.rx_len));
+                s.rx[s.rx_len..s.rx_len + n].copy_from_slice(&data[..n]);
+                s.rx_len += n;
+                s.rcv_nxt = s.rcv_nxt.wrapping_add(n as u32);
+                send_ack(s);
+            } else if !data.is_empty() {
+                send_ack(s);
+            }
+            if flags & 1 != 0 {
+                s.rcv_nxt = s.rcv_nxt.wrapping_add(1);
+                send_ack(s);
+                s.state = SockState::CloseWait;
+            }
+            return true;
+        }
+    }
+    true
 }
 
 /// Gelen bir UDP datagramını ilgili sokete dağıtır. Tüketildiyse `true`.

@@ -1,5 +1,6 @@
 //! CSS ayrıştırıcı ve stil eşleştirici (no_std).
 extern crate alloc;
+use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -10,6 +11,10 @@ use super::types::{html_color, ElementStyle, GridTrack, TextAlign};
 pub struct CssRule {
     pub selector: String,
     pub style: ElementStyle,
+    /// İsteğe bağlı @media koşulu (örnek: "screen and (min-width: 600px)").
+    /// None ise kural her zaman etkindir.
+    #[allow(dead_code)]
+    pub media: Option<String>,
 }
 
 /// Tek bir @keyframes adımı: yüzde konumu ve stili.
@@ -533,7 +538,12 @@ fn parse_single_grid_track(part: &str) -> GridTrack {
 }
 
 /// Seçicileri ve bildirim bloklarını ayrıştırır; `@media` gibi iç içe bloklar recursive işlenir.
-fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>, keyframes: &mut Vec<Keyframes>) {
+fn parse_css_rules(
+    bytes: &[u8],
+    rules: &mut Vec<CssRule>,
+    keyframes: &mut Vec<Keyframes>,
+    current_media: Option<&str>,
+) {
     let mut p = 0;
     while p < bytes.len() {
         while p < bytes.len() && bytes[p].is_ascii_whitespace() {
@@ -580,8 +590,22 @@ fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>, keyframes: &mut Vec<K
             // @media / @supports / @layer: içindeki kuralları uygula.
             // @font-face, @import: atlanır.
             let at = selector.split_whitespace().next().unwrap_or("");
-            if at == "@media" || at == "@supports" || at == "@layer" || at == "@container" {
-                parse_css_rules(block.as_bytes(), rules, keyframes);
+            if at == "@media" {
+                // Media koşulunu ayıkla: "@media screen and (min-width: 600px)"
+                let media_cond = selector
+                    .split_whitespace()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let combined = match (current_media, media_cond.is_empty()) {
+                    (Some(parent), false) => Some(format!("{} and {}", parent, media_cond)),
+                    (Some(parent), true) => Some(parent.to_string()),
+                    (None, false) => Some(media_cond),
+                    (None, true) => None,
+                };
+                parse_css_rules(block.as_bytes(), rules, keyframes, combined.as_deref());
+            } else if at == "@supports" || at == "@layer" || at == "@container" {
+                parse_css_rules(block.as_bytes(), rules, keyframes, current_media);
             } else if at == "@keyframes" {
                 // @keyframes NAME { 0% { opacity: 1 } 50% { opacity: 0.5 } }
                 let kf_name = selector
@@ -668,6 +692,7 @@ fn parse_css_rules(bytes: &[u8], rules: &mut Vec<CssRule>, keyframes: &mut Vec<K
                 rules.push(CssRule {
                     selector: String::from(trimmed),
                     style: style.clone(),
+                    media: None,
                 });
             }
         }
@@ -687,19 +712,203 @@ pub fn parse_css(css_code: &str) -> ParsedCss {
         strip_css_comments(css_code).as_bytes(),
         &mut rules,
         &mut keyframes,
+        None,
     );
     ParsedCss { rules, keyframes }
 }
 
-pub fn match_css_style(
+/// CSS özgüllük (specificity) skoru: (ID sayısı, sınıf/özellik sayısı, etiket sayısı).
+/// W3C spesifikasyonuna göre hesaplanır; yüksek skor kazanıcı.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Specificity {
+    pub a: u32, // ID seçicileri
+    pub b: u32, // Sınıf, özellik, sözde-sınıf seçicileri
+    pub c: u32, // Etiket ve sözde-element seçicileri
+}
+
+impl Specificity {
+    pub const fn new(a: u32, b: u32, c: u32) -> Self {
+        Self { a, b, c }
+    }
+}
+
+/// Bir CSS seçicisinin özgüllük skorunu hesaplar.
+fn selector_specificity(sel: &str) -> Specificity {
+    let mut a = 0u32;
+    let mut b = 0u32;
+    let mut c = 0u32;
+    let s = sel.trim();
+    // Virgülle ayrılmış çoklu seçiciler: her birinin en yüksek skoru alınır.
+    for part in s.split(',') {
+        let p = part.trim();
+        if p.is_empty() {
+            continue;
+        }
+        let mut pa = 0u32;
+        let mut pb = 0u32;
+        let mut pc = 0u32;
+        let mut chars = p.chars().peekable();
+        while let Some(&ch) = chars.peek() {
+            match ch {
+                '#' => {
+                    pa += 1;
+                    chars.next();
+                    while let Some(&c2) = chars.peek() {
+                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                '.' => {
+                    pb += 1;
+                    chars.next();
+                    while let Some(&c2) = chars.peek() {
+                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                '[' => {
+                    pb += 1;
+                    chars.next();
+                    while let Some(&c2) = chars.peek() {
+                        if c2 == ']' {
+                            chars.next();
+                            break;
+                        } else {
+                            chars.next();
+                        }
+                    }
+                }
+                ':' => {
+                    chars.next();
+                    if let Some(&c2) = chars.peek() {
+                        if c2 == ':' {
+                            chars.next();
+                            // Sözde-element: ::before, ::after vb. → c++
+                            pc += 1;
+                        } else {
+                            // Sözde-sınıf: :hover, :nth-child() vb. → b++
+                            pb += 1;
+                        }
+                        while let Some(&c3) = chars.peek() {
+                            if c3.is_ascii_alphanumeric()
+                                || c3 == '-'
+                                || c3 == '_'
+                                || c3 == '('
+                                || c3 == ')'
+                            {
+                                chars.next();
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+                '*' => {
+                    chars.next(); // Evrensel seçici, 0 etki
+                }
+                _ if ch.is_ascii_alphabetic() => {
+                    pc += 1;
+                    chars.next();
+                    while let Some(&c2) = chars.peek() {
+                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                _ => {
+                    chars.next();
+                }
+            }
+        }
+        a = a.max(pa);
+        b = b.max(pb);
+        c = c.max(pc);
+    }
+    Specificity::new(a, b, c)
+}
+
+/// CSS kuralı ile özgüllük skoru.
+struct ScoredRule {
+    specificity: Specificity,
+    style: ElementStyle,
+}
+
+/// Bir @media koşulunu değerlendirir.
+/// Desteklenen: screen, (min-width: Npx), (max-width: Npx), (min-height: Npx), (max-height: Npx), and
+fn media_matches(cond: &str, viewport_w: usize, viewport_h: usize) -> bool {
+    let c = cond.trim();
+    if c.is_empty() || c.eq_ignore_ascii_case("screen") || c.eq_ignore_ascii_case("all") {
+        return true;
+    }
+
+    // "and" ile ayrılmış parçalar
+    for part in c.split("and") {
+        let part = part.trim();
+        if part.is_empty()
+            || part.eq_ignore_ascii_case("screen")
+            || part.eq_ignore_ascii_case("all")
+        {
+            continue;
+        }
+
+        // (min-width: 600px) veya (max-width: 800px) vb.
+        let inner = part
+            .strip_prefix('(')
+            .and_then(|s| s.strip_suffix(')'))
+            .unwrap_or(part);
+        let inner = inner.trim();
+
+        if let Some((prop, val)) = inner.split_once(':') {
+            let prop = prop.trim().to_ascii_lowercase();
+            let val = val.trim();
+            let px = val
+                .strip_suffix("px")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+
+            let ok = match prop.as_str() {
+                "min-width" => viewport_w >= px,
+                "max-width" => viewport_w <= px,
+                "min-height" => viewport_h >= px,
+                "max-height" => viewport_h <= px,
+                _ => true,
+            };
+            if !ok {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// CSS Cascade: kuralları özgüllüğe göre sıralar ve en yüksek skoru uygular.
+/// `media` ile filtreleme yapılır; eşleşmeyen @media kuralları atlanır.
+/// Aynı özgüllükteyse sonra gelen kural kazanır (son kazanır kuralı).
+fn apply_css_cascade(
     rules: &[CssRule],
     tag: &str,
     class: Option<&str>,
     id: Option<&str>,
-    inline_style: Option<&str>,
+    viewport_w: usize,
+    viewport_h: usize,
 ) -> ElementStyle {
-    let mut resolved = ElementStyle::new();
+    let mut scored: Vec<ScoredRule> = Vec::new();
     for rule in rules {
+        // @media filtresi
+        if let Some(ref media) = rule.media {
+            if !media_matches(media, viewport_w, viewport_h) {
+                continue;
+            }
+        }
+
         let sel = rule.selector.as_str();
         let matches = if sel.starts_with('.') {
             class.map_or(false, |c| {
@@ -712,9 +921,33 @@ pub fn match_css_style(
             sel.eq_ignore_ascii_case(tag)
         };
         if matches {
-            resolved.merge_from(&rule.style);
+            scored.push(ScoredRule {
+                specificity: selector_specificity(sel),
+                style: rule.style.clone(),
+            });
         }
     }
+
+    // Özgüllüğe göre sırala (aşşağıdan yukarıya); eşit skorlarda orijinal sırayı koru (stabil).
+    scored.sort_by(|a, b| a.specificity.cmp(&b.specificity));
+
+    let mut resolved = ElementStyle::new();
+    for sr in scored {
+        resolved.merge_from(&sr.style);
+    }
+    resolved
+}
+
+pub fn match_css_style(
+    rules: &[CssRule],
+    tag: &str,
+    class: Option<&str>,
+    id: Option<&str>,
+    inline_style: Option<&str>,
+    viewport_w: usize,
+    viewport_h: usize,
+) -> ElementStyle {
+    let mut resolved = apply_css_cascade(rules, tag, class, id, viewport_w, viewport_h);
     if let Some(inline) = inline_style {
         for decl in inline.split(';') {
             if let Some((prop, val)) = decl.split_once(':') {
@@ -729,4 +962,80 @@ pub fn match_css_style(
 /// Animasyon ismi ile keyframes kaydını bulur.
 pub fn find_keyframes<'a>(keyframes: &'a [Keyframes], name: &str) -> Option<&'a Keyframes> {
     keyframes.iter().find(|k| k.name == name)
+}
+
+/// CSS animasyonu için geçerli kare değerini hesaplar.
+/// `elapsed_ms` animasyonun başlangıcından geçen süre, `duration_ms` animasyon süresi,
+/// `iterations` tekrar sayısı (-1 = sonsuz). Döndürülen değer 0.0..=1.0 arası ilerleme.
+pub fn animation_progress(elapsed_ms: u64, duration_ms: f32, iterations: i32) -> Option<f32> {
+    if duration_ms <= 0.0 {
+        return None;
+    }
+    let duration_us = (duration_ms * 1000.0) as u64;
+    let elapsed_us = elapsed_ms * 1000;
+
+    // Tek döngü içi ilerleme (0.0..=1.0)
+    let cycle = (elapsed_us % duration_us) as f32 / duration_us as f32;
+
+    // Tekrar sayısı kontrolü
+    if iterations > 0 {
+        let total_cycles = elapsed_us / duration_us;
+        if total_cycles >= iterations as u64 {
+            return Some(1.0); // Animasyon bitti, son kare
+        }
+    }
+
+    Some(cycle)
+}
+
+/// Keyframes arası lineer interpolasyon yapar.
+/// `progress` 0.0..=1.0 arası bir değer. İlk ve son kare arasında interpolasyon yapar.
+pub fn interpolate_keyframes(kf: &Keyframes, progress: f32) -> ElementStyle {
+    if kf.frames.is_empty() {
+        return ElementStyle::new();
+    }
+    if kf.frames.len() == 1 {
+        return kf.frames[0].style.clone();
+    }
+
+    let p = progress.clamp(0.0, 1.0) * 100.0; // 0..=100
+
+    // İki kareyi bul: p'nin hangi iki kare arasında olduğunu
+    for i in 0..kf.frames.len() - 1 {
+        let f0 = &kf.frames[i];
+        let f1 = &kf.frames[i + 1];
+        if p >= f0.percent && p <= f1.percent {
+            let t = if f1.percent > f0.percent {
+                (p - f0.percent) / (f1.percent - f0.percent)
+            } else {
+                0.0
+            };
+            return blend_styles(&f0.style, &f1.style, t);
+        }
+    }
+
+    // p son karenin üzerindeyse son kareyi döndür
+    kf.frames.last().unwrap().style.clone()
+}
+
+/// İki stil arasında lineer interpolasyon (sadece opacity için şimdilik).
+fn blend_styles(a: &ElementStyle, b: &ElementStyle, t: f32) -> ElementStyle {
+    let mut result = a.clone();
+    result.opacity = a.opacity + (b.opacity - a.opacity) * t;
+    result
+}
+
+/// CSS geçiş (transition) ilerlemesini hesaplar.
+/// `elapsed_ms` geçişin başlangıcından geçen süre, `duration_ms` geçiş süresi.
+/// Döndürülen değer 0.0..=1.0 arası ilerleme.
+pub fn transition_progress(elapsed_ms: u64, duration_ms: f32) -> Option<f32> {
+    if duration_ms <= 0.0 {
+        return None;
+    }
+    let duration_us = (duration_ms * 1000.0) as u64;
+    let elapsed_us = elapsed_ms * 1000;
+    if elapsed_us >= duration_us {
+        return Some(1.0);
+    }
+    Some(elapsed_us as f32 / duration_us as f32)
 }

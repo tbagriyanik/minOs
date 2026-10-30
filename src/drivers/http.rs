@@ -173,24 +173,52 @@ pub fn decode_chunked(buf: &mut [u8], len: usize) -> Option<usize> {
 }
 
 fn build_request(req: &mut [u8], host: &[u8], path: &[u8], ip: Ipv4Address) -> Option<usize> {
-    // IP literal ise Host başlığına aynen yaz; DNS adı zaten çözüldü.
+    build_request_with_headers(req, host, path, ip, None)
+}
+
+/// Cache validation başlıkları ile HTTP isteği oluşturur.
+fn build_request_with_headers(
+    req: &mut [u8],
+    host: &[u8],
+    path: &[u8],
+    ip: Ipv4Address,
+    extra_headers: Option<&str>,
+) -> Option<usize> {
     let _ = ip;
-    let parts: [&[u8]; 6] = [
+    let base: &[&[u8]] = &[
         b"GET ",
         path,
         b" HTTP/1.1\r\nHost: ",
         host,
-        b"\r\nUser-Agent: minOs-curl/1.0\r\nConnection: close\r\n\r\n",
-        b"",
+        b"\r\nUser-Agent: minOs-curl/1.0\r\nConnection: close",
     ];
+
     let mut n = 0usize;
-    for p in parts {
+    for p in base {
         if n + p.len() > req.len() {
             return None;
         }
-        req[n..n + p.len()].copy_from_slice(p);
+        req[n..n + p.len()].copy_from_slice(*p);
         n += p.len();
     }
+
+    // Extra headers (cache validation)
+    if let Some(headers) = extra_headers {
+        let headers_bytes = headers.as_bytes();
+        if n + headers_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + headers_bytes.len()].copy_from_slice(headers_bytes);
+        n += headers_bytes.len();
+    }
+
+    // Final CRLF
+    if n + 2 > req.len() {
+        return None;
+    }
+    req[n..n + 2].copy_from_slice(b"\r\n");
+    n += 2;
+
     Some(n)
 }
 
@@ -199,6 +227,8 @@ fn build_request(req: &mut [u8], host: &[u8], path: &[u8], ip: Ipv4Address) -> O
 ///
 /// `is_https` doğruysa TLS el sıkışması yapılır, istek şifreli gönderilir ve
 /// yanıt şifreli olarak alınıp çözülür.
+///
+/// `cache_headers` verilirse cache validation başlıkları eklenir.
 fn fetch_once(
     host: &[u8],
     port: u16,
@@ -206,13 +236,15 @@ fn fetch_once(
     ip: Ipv4Address,
     resp_buf: &mut [u8],
     is_https: bool,
+    cache_headers: Option<&str>,
 ) -> Result<(u16, usize, usize), i32> {
     let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
     let _ = socket::set_timeout(fd, 4000);
     let res = (|| {
         socket::connect(fd, ip, port)?;
         let mut req = [0u8; 768];
-        let reqlen = build_request(&mut req, host, path, ip).ok_or(socket::E_INVAL)?;
+        let reqlen = build_request_with_headers(&mut req, host, path, ip, cache_headers)
+            .ok_or(socket::E_INVAL)?;
 
         if is_https {
             fetch_https(fd, host, req, reqlen, resp_buf)
@@ -408,6 +440,25 @@ fn fetch_https(
 /// Dönen `(durum, başlık_uzunluğu, toplam_uzunluk)`; gövde `resp_buf[hlen..total]`
 /// aralığındadır (chunked ise çözülmüş hâliyle).
 pub fn http_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i32> {
+    http_get_impl(url, resp_buf, None)
+}
+
+/// Cache validation başlıkları ile HTTP GET isteği.
+/// `cache_headers` verilirse If-None-Match/If-Modified-Since başlıkları eklenir.
+pub fn http_get_with_cache(
+    url: &str,
+    resp_buf: &mut [u8],
+    cache_headers: Option<&str>,
+) -> Result<(u16, usize, usize), i32> {
+    http_get_impl(url, resp_buf, cache_headers)
+}
+
+/// Internal implementation for http_get variants.
+fn http_get_impl(
+    url: &str,
+    resp_buf: &mut [u8],
+    cache_headers: Option<&str>,
+) -> Result<(u16, usize, usize), i32> {
     if !e1000::is_ready() {
         return Err(socket::E_NOTCONN);
     }
@@ -427,6 +478,7 @@ pub fn http_get(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i
             ip,
             resp_buf,
             is_https,
+            cache_headers,
         )?;
         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
             let headers = &resp_buf[..hlen];
@@ -730,4 +782,94 @@ pub fn h2_send_preface(fd: i32) -> Result<(), i32> {
     let _ = socket::send(fd, h2::PREFACE).map_err(|_| socket::E_IO)?;
     let _ = socket::send(fd, &h2::build_client_settings_full()).map_err(|_| socket::E_IO)?;
     Ok(())
+}
+
+/// WebSocket (RFC 6455) yardımcıları. TCP/TLS taşımasını çağıran katman sağlar.
+pub mod websocket {
+    use alloc::vec::Vec;
+
+    pub const OP_CONTINUATION: u8 = 0x0;
+    pub const OP_TEXT: u8 = 0x1;
+    pub const OP_BINARY: u8 = 0x2;
+    pub const OP_CLOSE: u8 = 0x8;
+    pub const OP_PING: u8 = 0x9;
+    pub const OP_PONG: u8 = 0xA;
+
+    /// İstemci Upgrade isteği üretir. `key` 16-byte random değerin Base64'üdür.
+    pub fn build_upgrade_request(host: &[u8], path: &[u8], key_b64: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"GET ");
+        out.extend_from_slice(path);
+        out.extend_from_slice(b" HTTP/1.1\r\nHost: ");
+        out.extend_from_slice(host);
+        out.extend_from_slice(
+            b"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ",
+        );
+        out.extend_from_slice(key_b64);
+        out.extend_from_slice(b"\r\nSec-WebSocket-Version: 13\r\n\r\n");
+        out
+    }
+
+    /// İstemci frame'i üretir; RFC gereği payload maskelenir.
+    pub fn build_client_frame(opcode: u8, payload: &[u8], mask: [u8; 4]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(0x80 | (opcode & 0x0f));
+        let n = payload.len();
+        if n < 126 {
+            out.push(0x80 | n as u8);
+        } else if n <= 0xffff {
+            out.push(0x80 | 126);
+            out.extend_from_slice(&(n as u16).to_be_bytes());
+        } else {
+            out.push(0x80 | 127);
+            out.extend_from_slice(&(n as u64).to_be_bytes());
+        }
+        out.extend_from_slice(&mask);
+        for (i, b) in payload.iter().enumerate() {
+            out.push(*b ^ mask[i & 3]);
+        }
+        out
+    }
+
+    /// Sunucu frame başlığını ayrıştırır ve `(fin, opcode, masked, payload_len, header_len)` döner.
+    pub fn parse_frame_header(data: &[u8]) -> Option<(bool, u8, bool, usize, usize)> {
+        if data.len() < 2 {
+            return None;
+        }
+        let fin = data[0] & 0x80 != 0;
+        let opcode = data[0] & 0x0f;
+        let masked = data[1] & 0x80 != 0;
+        let short = (data[1] & 0x7f) as usize;
+        let mut p = 2;
+        let len = match short {
+            126 => {
+                if data.len() < 4 {
+                    return None;
+                };
+                p += 2;
+                u16::from_be_bytes([data[2], data[3]]) as usize
+            }
+            127 => {
+                if data.len() < 10 {
+                    return None;
+                };
+                p += 8;
+                usize::try_from(u64::from_be_bytes(data[2..10].try_into().ok()?)).ok()?
+            }
+            n => n,
+        };
+        if masked {
+            p += 4;
+        }
+        if p > data.len() {
+            return None;
+        }
+        Some((fin, opcode, masked, len, p))
+    }
+
+    pub fn unmask(payload: &mut [u8], mask: [u8; 4]) {
+        for (i, b) in payload.iter_mut().enumerate() {
+            *b ^= mask[i & 3];
+        }
+    }
 }

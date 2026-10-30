@@ -820,6 +820,8 @@ pub extern "C" fn _start() -> ! {
     let mut notepad_dragging = false;
     let mut browser_address_dragging = false;
     let mut browser_page_dragging = false;
+    let mut browser_last_img_click: Option<(usize, usize)> = None;
+    let mut browser_last_img_click_ms: u64 = 0;
     let mut terminal_dragging = false;
     let mut start_search_dragging = false;
 
@@ -3442,6 +3444,9 @@ pub extern "C" fn _start() -> ! {
                                     if let Some(wm) = compositor.windows[idx].as_mut() {
                                         wm.scroll.y = new_scroll_y;
                                     }
+                                    if win.app_id as usize == 3 {
+                                        browser_app.sync_external_scroll(new_scroll_y);
+                                    }
 
                                     let grab = (thumb_h / 2).min(thumb_h);
                                     vscroll_drag = Some((idx, grab, thumb_h, track.3, c_h, view_h));
@@ -3763,18 +3768,8 @@ pub extern "C" fn _start() -> ! {
                                                     } else if tag == "VID" {
                                                         open_app(&mut compositor, 6);
                                                     } else if tag == "WEB" {
-                                                        let data = with_busy_progress(
-                                                            &mut fb,
-                                                            mx,
-                                                            my,
-                                                            gui::ui_text(
-                                                                "Sayfa açılıyor...",
-                                                                "Opening page...",
-                                                            ),
-                                                            || fs_mgr.vfs.read_file(&path),
-                                                        );
-
-                                                        if let Some(data) = data {
+                                                        let file_data = fs_mgr.vfs.read_file(&path).map(|d| alloc::vec::Vec::from(d));
+                                                        if let Some(data) = file_data {
                                                             let wrap = compositor
                                                                 .windows
                                                                 .iter()
@@ -3784,7 +3779,7 @@ pub extern "C" fn _start() -> ! {
                                                                     w.width.saturating_sub(40)
                                                                 });
                                                             browser_app.set_url(path.as_bytes());
-                                                            browser_app.load_html(data, wrap, 256);
+                                                            browser_app.load_html(&data, wrap, 256, Some(&mut fs_mgr.vfs));
                                                         }
 
                                                         open_app(&mut compositor, 3);
@@ -4706,10 +4701,13 @@ pub extern "C" fn _start() -> ! {
                                         browser_app.show_console();
                                     }
                                 } else if gui::in_rect(mx, my, (wx + 12, wy + 32, 22, 20)) {
+                                    browser_app.blur_toolbar_focus();
                                     browser_app.back();
                                 } else if gui::in_rect(mx, my, (wx + 38, wy + 32, 22, 20)) {
+                                    browser_app.blur_toolbar_focus();
                                     browser_app.forward();
                                 } else if gui::in_rect(mx, my, (wx + 64, wy + 32, 22, 20)) {
+                                    browser_app.blur_toolbar_focus();
                                     browser_app.navigate();
                                 } else if gui::in_rect(
                                     mx,
@@ -4737,8 +4735,26 @@ pub extern "C" fn _start() -> ! {
                                     browser_app.set_url(url.as_bytes());
 
                                     browser_app.navigate();
+                                } else if let Some(cache_path) = browser_app.click_image_at(mx, my) {
+                                    // Resim üzerine çift tıkla: görüntüleyicide aç.
+                                    let now_ms = monotonic_ms();
+                                    let is_double_click = browser_last_img_click == Some((mx, my))
+                                        && now_ms.wrapping_sub(browser_last_img_click_ms)
+                                            <= settings_app.double_click_ms as u64;
+                                    browser_last_img_click = Some((mx, my));
+                                    browser_last_img_click_ms = now_ms;
+                                    if is_double_click {
+                                        browser_last_img_click = None;
+                                        open_image_file(
+                                            &cache_path,
+                                            &fs_mgr.vfs,
+                                            &paint_apps,
+                                            &mut imageviewer_app,
+                                        );
+                                        open_app(&mut compositor, 4);
+                                    }
                                 } else {
-                                    browser_app.address_focused = false;
+                                    browser_app.blur_toolbar_focus();
                                     if browser_app.active_tab == 3 {
                                         let doc_x = wx + 8;
                                         let doc_y = wy + 38;
@@ -5747,7 +5763,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
                         // Arrow up scrolls the browser page
-                        browser_app.scroll_up(30);
+                        browser_scroll_by(&mut compositor, &mut browser_app, -(gui::sp(30) as isize));
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -5826,7 +5842,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
                         // Arrow down scrolls the browser page
-                        browser_app.scroll_down(30);
+                        browser_scroll_by(&mut compositor, &mut browser_app, gui::sp(30) as isize);
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -5925,16 +5941,6 @@ pub extern "C" fn _start() -> ! {
                         taskmgr_app.focused_control = 0;
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_prev();
-                    } else if app_is_focused(&compositor, 3) {
-                        if browser_app.address_focused {
-                            if keyboard.ctrl {
-                                browser_app.address_move_word_left_ext(keyboard.shift);
-                            } else {
-                                browser_app.address_move_left_ext(keyboard.shift);
-                            }
-                        } else {
-                            browser_app.focus_prev_control();
-                        }
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y -= 0.1;
                     }
@@ -6006,15 +6012,12 @@ pub extern "C" fn _start() -> ! {
                         taskmgr_app.focused_control = 1;
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_next();
-                    } else if app_is_focused(&compositor, 3) {
-                        if browser_app.address_focused {
-                            if keyboard.ctrl {
-                                browser_app.address_move_word_right_ext(keyboard.shift);
-                            } else {
-                                browser_app.address_move_right_ext(keyboard.shift);
-                            }
+                    } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
+                        // Yalnızca adres çubuğu odaklıyken imleci taşı.
+                        if keyboard.ctrl {
+                            browser_app.address_move_word_right_ext(keyboard.shift);
                         } else {
-                            browser_app.focus_next_control();
+                            browser_app.address_move_right_ext(keyboard.shift);
                         }
                     }
                 }
@@ -6449,17 +6452,14 @@ pub extern "C" fn _start() -> ! {
                         if browser_app.find_active {
                             browser_app.find_next();
                         } else {
+                            // Geri/İleri (< >) düğmeleri odak almaz; odak yalnızca
+                            // adres çubuğu, yenile ve sayfa içeriği arasında dolaşır.
                             match browser_app.focused_control {
-                                0 => browser_app.back(),
-
-                                1 => browser_app.forward(),
-
-                                2 => browser_app.navigate(),
-
+                                apps::browser::BrowserApp::FOCUS_REFRESH
+                                | apps::browser::BrowserApp::FOCUS_ADDRESS => {
+                                    browser_app.navigate()
+                                }
                                 3 => browser_app.show_history(),
-
-                                4 | 5 => browser_app.navigate(),
-
                                 _ => {}
                             }
                         }
@@ -6694,7 +6694,7 @@ pub extern "C" fn _start() -> ! {
                         browser_app.address_home_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 3) {
                         // Home: scroll to top of page
-                        browser_app.scroll_top();
+                        browser_scroll_edge(&mut compositor, &mut browser_app, false);
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_first();
 
@@ -6723,8 +6723,7 @@ pub extern "C" fn _start() -> ! {
                         browser_app.address_end_ext(keyboard.shift);
                     } else if app_is_focused(&compositor, 3) {
                         // End: scroll to bottom of page
-                        let content_h = browser_app.content_height();
-                        browser_app.scroll_bottom(content_h);
+                        browser_scroll_edge(&mut compositor, &mut browser_app, true);
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_last();
 
@@ -6754,10 +6753,10 @@ pub extern "C" fn _start() -> ! {
 
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) {
-                        if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
-                            let page_h = w.height.saturating_sub(100);
-                            browser_app.page_up(page_h);
-                        }
+                        let page_h = focused_window_for_app(&compositor, 3)
+                            .map(|(_, w)| w.height.saturating_sub(100))
+                            .unwrap_or(300);
+                        browser_scroll_by(&mut compositor, &mut browser_app, -(page_h as isize));
                     } else if app_is_focused(&compositor, 7) {
                         taskmgr_app.select_page(false, 8);
                     } else if app_is_focused(&compositor, 10) {
@@ -6787,10 +6786,10 @@ pub extern "C" fn _start() -> ! {
 
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) {
-                        if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
-                            let page_h = w.height.saturating_sub(100);
-                            browser_app.page_down(page_h);
-                        }
+                        let page_h = focused_window_for_app(&compositor, 3)
+                            .map(|(_, w)| w.height.saturating_sub(100))
+                            .unwrap_or(300);
+                        browser_scroll_by(&mut compositor, &mut browser_app, page_h as isize);
                     } else if app_is_focused(&compositor, 7) {
                         taskmgr_app.select_page(true, 8);
                     } else if app_is_focused(&compositor, 10) {
@@ -7151,31 +7150,6 @@ pub extern "C" fn _start() -> ! {
                 }
             }
 
-            // Browser: mouse wheel scroll
-            if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
-                if w.is_open
-                    && w.is_focused
-                    && !w.is_minimized
-                    && gui::in_rect(
-                        mouse.x as usize,
-                        mouse.y as usize,
-                        (
-                            w.x,
-                            w.y + gui::titlebar_h(),
-                            w.width,
-                            w.height.saturating_sub(gui::titlebar_h() + 28),
-                        ),
-                    )
-                {
-                    let scroll_amount = gui::sp(40);
-                    if scroll_val > 0 {
-                        browser_app.scroll_up(scroll_amount);
-                    } else {
-                        browser_app.scroll_down(scroll_amount);
-                    }
-                }
-            }
-
             // Imlecin altindaki en ust pencerede icerik kaydirmasini guncelle.
 
             // Scrollbar ayni ScrollState uzerinden cizildigi icin tutamac da
@@ -7218,16 +7192,31 @@ pub extern "C" fn _start() -> ! {
                 if over_content && (c_h > ch || c_w > cw) {
                     let max_y = c_h.saturating_sub(ch);
 
-                    let step = if app_id == 2 {
-                        gui::sp(16)
+                    if app_id == 3 {
+                        // Tarayıcı: tekerlek yumuşak kaydırma animasyonunu besler.
+                        let current = w.scroll.y.min(max_y);
+                        let step = gui::sp(56) as isize;
+                        let delta = (scroll_val as isize) * step;
+                        let target = if delta >= 0 {
+                            current.saturating_add(delta as usize)
+                        } else {
+                            current.saturating_sub(delta.unsigned_abs())
+                        }
+                        .min(max_y);
+                        browser_app.scroll_to(current, target, max_y, monotonic_ms());
                     } else {
-                        gui::sp(24)
-                    };
+                        let step = if app_id == 2 {
+                            gui::sp(16)
+                        } else {
+                            gui::sp(24)
+                        };
 
-                    let delta = (scroll_val as isize) * step.max(1) as isize;
+                        let delta = (scroll_val as isize) * step.max(1) as isize;
 
-                    if let Some(wm) = compositor.windows[idx].as_mut() {
-                        wm.scroll.y = ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                        if let Some(wm) = compositor.windows[idx].as_mut() {
+                            wm.scroll.y =
+                                ((wm.scroll.y as isize - delta).max(0) as usize).min(max_y);
+                        }
                     }
                 }
 
@@ -7534,6 +7523,9 @@ pub extern "C" fn _start() -> ! {
                     wm.scroll.y = new_off;
                     let (cx, cy, cw, ch) = wm.content_rect();
                     drag_dirty_rect = Some((cx, cy, cw, ch));
+                }
+                if compositor.windows[idx].map(|w| w.app_id as usize) == Some(3) {
+                    browser_app.sync_external_scroll(new_off);
                 }
             } else if let Some(idx) = dragging_win {
                 if let Some(w) = compositor.windows[idx].as_mut() {
@@ -8164,10 +8156,10 @@ pub extern "C" fn _start() -> ! {
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
             } else if ch == ' ' && app_is_focused(&compositor, 3) && !browser_app.address_focused {
                 // Space: page down in browser when not in address bar
-                if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
-                    let page_h = w.height.saturating_sub(100);
-                    browser_app.page_down(page_h);
-                }
+                let page_h = focused_window_for_app(&compositor, 3)
+                    .map(|(_, w)| w.height.saturating_sub(100))
+                    .unwrap_or(300);
+                browser_scroll_by(&mut compositor, &mut browser_app, page_h as isize);
             } else if ch == ' '
                 && app_is_focused(&compositor, 0)
                 && filemanager_app.selected_idx < filemanager_app.file_count
@@ -8511,7 +8503,7 @@ pub extern "C" fn _start() -> ! {
         // scheduler budget is one callback; a callback itself is not preempted.
         task::poll_tasks();
 
-        browser_app.poll_network();
+        browser_app.poll_network(&mut fs_mgr.vfs);
 
         // Bes parcali, HDA PCM tabanli melodi yurutucusu. (HDA yoksa PIT/PC speaker fallback).
 
@@ -8654,9 +8646,42 @@ pub extern "C" fn _start() -> ! {
             filemanager_app.update_preview(&fs_mgr.vfs);
         }
 
+        // Tarayıcı: yeni sayfa yüklendiğinde kaydırmayı başa al.
+        let browser_scroll_reset = browser_app.scroll_reset;
+        if browser_app.scroll_reset {
+            browser_app.scroll_reset = false;
+            browser_app.scroll_animating = false;
+            browser_app.scroll_target = 0;
+            if let Some((idx, _)) = focused_window_for_app(&compositor, 3) {
+                if let Some(wm) = compositor.windows[idx].as_mut() {
+                    wm.scroll.y = 0;
+                }
+            }
+        }
+
+        // Tarayıcı: yumuşak içerik kaydırmasını kare hızında ilerlet.
+        let mut browser_scroll_step = false;
+        if browser_app.scroll_animating && timer_tick_fired {
+            if let Some((idx, w)) = focused_window_for_app(&compositor, 3) {
+                let view_h = w.content_rect().3;
+                let max_y = browser_app.content_height().saturating_sub(view_h);
+                if let Some(y) = browser_app.scroll_anim_step(monotonic_ms(), max_y) {
+                    browser_scroll_step = true;
+                    if let Some(wm) = compositor.windows[idx].as_mut() {
+                        wm.scroll.y = y.min(max_y);
+                    }
+                }
+            } else {
+                browser_app.scroll_animating = false;
+            }
+        }
+        let browser_scrolling = browser_scroll_step || browser_app.scroll_animating;
+
         let full_redraw = input_update.keyboard
             || buttons_changed
             || scroll_val != 0
+            || browser_scrolling
+            || browser_scroll_reset
             || force_render
             || busy_dirty
             || (mouse_moved
@@ -8908,7 +8933,7 @@ fn handle_terminal_open_request(
                     .find(|w| w.app_id == 3u8)
                     .map_or(700, |w| w.width.saturating_sub(40));
                 browser_app.set_url(path.as_bytes());
-                browser_app.load_html(&data, wrap, 256);
+                browser_app.load_html(&data, wrap, 256, Some(&mut *vfs));
                 open_app(compositor, 3);
                 return;
             }

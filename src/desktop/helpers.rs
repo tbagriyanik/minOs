@@ -338,6 +338,44 @@ pub fn notepad_ensure_cursor_visible(
     }
 }
 
+/// Tarayıcı içeriğini `delta` piksel yumuşak kaydırma hedefiyle kaydırır.
+/// Kaydırma ofseti pencere kaydırmasında (`scroll.y`) tutulur; çizim ve isabet
+/// alanları aynı değeri kullandığı için kısayollar görünür şekilde çalışır.
+pub fn browser_scroll_by(
+    compositor: &mut gui::MinGuiCompositor,
+    br: &mut apps::browser::BrowserApp,
+    delta: isize,
+) {
+    let Some((_, w)) = focused_window_for_app(compositor, 3) else {
+        return;
+    };
+    let view_h = w.content_rect().3;
+    let max_y = br.content_height().saturating_sub(view_h);
+    let current = w.scroll.y.min(max_y);
+    let target = if delta >= 0 {
+        current.saturating_add(delta as usize)
+    } else {
+        current.saturating_sub(delta.unsigned_abs())
+    };
+    br.scroll_to(current, target, max_y, crate::boot::time::monotonic_ms());
+}
+
+/// Tarayıcı içeriğini en üste (`bottom == false`) veya en alta kaydırır.
+pub fn browser_scroll_edge(
+    compositor: &mut gui::MinGuiCompositor,
+    br: &mut apps::browser::BrowserApp,
+    bottom: bool,
+) {
+    let Some((_, w)) = focused_window_for_app(compositor, 3) else {
+        return;
+    };
+    let view_h = w.content_rect().3;
+    let max_y = br.content_height().saturating_sub(view_h);
+    let current = w.scroll.y.min(max_y);
+    let target = if bottom { max_y } else { 0 };
+    br.scroll_to(current, target, max_y, crate::boot::time::monotonic_ms());
+}
+
 /// Dosya Yöneticisi listesinde seçili satırı görünür tutacak kaydırmayı uygular.
 pub fn fm_ensure_selection_visible(
     compositor: &mut gui::MinGuiCompositor,

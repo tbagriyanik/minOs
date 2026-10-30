@@ -533,6 +533,7 @@ pub fn self_test() -> bool {
 
 /// HTTP/2 çerçeve türleri ve sabitleri.
 pub mod h2 {
+    use alloc::vec::Vec;
     /// HTTP/2 çerçeve türleri (RFC 7540 §5.1.1).
     pub const FRAME_DATA: u8 = 0x0;
     pub const FRAME_HEADERS: u8 = 0x1;
@@ -622,6 +623,90 @@ pub mod h2 {
         frame.push(0x00);
         frame
     }
+
+    fn encode_int(out: &mut Vec<u8>, value: usize, prefix_bits: u8, first: u8) {
+        let max = (1usize << prefix_bits) - 1;
+        if value < max {
+            out.push(first | value as u8);
+            return;
+        }
+        out.push(first | max as u8);
+        let mut n = value - max;
+        while n >= 128 {
+            out.push((n as u8 & 0x7f) | 0x80);
+            n >>= 7;
+        }
+        out.push(n as u8);
+    }
+
+    fn encode_string(out: &mut Vec<u8>, value: &[u8]) {
+        encode_int(out, value.len(), 7, 0);
+        out.extend_from_slice(value);
+    }
+
+    /// HPACK ile minimum bir GET başlığı üretir (RFC 7541).
+    /// Statik tablo kullanılır; dinamik tablo güncellenmez, bu nedenle akışlar
+    /// arasında güvenli şekilde yeniden kullanılabilir.
+    pub fn encode_get_headers(authority: &[u8], path: &[u8], https: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.push(0x82); // :method GET (static index 2)
+        out.push(if https { 0x87 } else { 0x86 }); // :scheme
+        if path == b"/" {
+            out.push(0x84); // :path /
+        } else {
+            encode_int(&mut out, 4, 4, 0x00); // literal :path, indexed name
+            encode_string(&mut out, path);
+        }
+        encode_int(&mut out, 1, 4, 0x00); // literal :authority, indexed name
+        encode_string(&mut out, authority);
+        out
+    }
+
+    /// Genel HTTP/2 frame oluşturucu. Stream ID'nin reserved biti temizlenir.
+    pub fn build_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(9 + payload.len());
+        let len = payload.len().min(0x00ff_ffff);
+        out.extend_from_slice(&[(len >> 16) as u8, (len >> 8) as u8, len as u8]);
+        out.push(frame_type);
+        out.push(flags);
+        out.extend_from_slice(&(stream_id & 0x7fff_ffff).to_be_bytes());
+        out.extend_from_slice(&payload[..len]);
+        out
+    }
+
+    /// Client SETTINGS: push kapalı ve 64 KiB başlangıç akış penceresi.
+    pub fn build_client_settings_full() -> Vec<u8> {
+        let mut p = Vec::with_capacity(12);
+        p.extend_from_slice(&SETTINGS_ENABLE_PUSH.to_be_bytes());
+        p.extend_from_slice(&0u32.to_be_bytes());
+        p.extend_from_slice(&SETTINGS_INITIAL_WINDOW_SIZE.to_be_bytes());
+        p.extend_from_slice(&65535u32.to_be_bytes());
+        build_frame(FRAME_SETTINGS, 0, 0, &p)
+    }
+
+    pub fn build_window_update(stream_id: u32, increment: u32) -> Vec<u8> {
+        build_frame(
+            FRAME_WINDOW_UPDATE,
+            0,
+            stream_id,
+            &(increment & 0x7fff_ffff).to_be_bytes(),
+        )
+    }
+
+    pub fn build_get_headers(
+        stream_id: u32,
+        authority: &[u8],
+        path: &[u8],
+        https: bool,
+    ) -> Vec<u8> {
+        let block = encode_get_headers(authority, path, https);
+        build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            stream_id,
+            &block,
+        )
+    }
 }
 
 /// Sunucu yanıtının HTTP/2 ile başlayıp başlamadığını kontrol eder.
@@ -643,6 +728,6 @@ pub fn is_http2_response(data: &[u8]) -> bool {
 /// Bu, HTTP/2 protokolünün başlatılması için gereklidir.
 pub fn h2_send_preface(fd: i32) -> Result<(), i32> {
     let _ = socket::send(fd, h2::PREFACE).map_err(|_| socket::E_IO)?;
-    let _ = socket::send(fd, &h2::build_client_settings()).map_err(|_| socket::E_IO)?;
+    let _ = socket::send(fd, &h2::build_client_settings_full()).map_err(|_| socket::E_IO)?;
     Ok(())
 }

@@ -546,6 +546,8 @@ pub struct TextSpan {
     pub image_width: usize,
     pub image_height: usize,
     pub image_rgb: Option<Vec<u8>>,
+    /// Orijinal resim URL'si (önbellek anahtarı için kullanılır).
+    pub image_url: String,
     pub onclick: String,
     pub elem_id: String,
     /// CSS `font-weight: bold` karşılığı (sentez kalın çizim).
@@ -575,6 +577,13 @@ pub struct RenderedLink {
     pub rect: (usize, usize, usize, usize),
     pub url: String,
     pub onclick: String,
+}
+
+#[derive(Clone)]
+pub struct RenderedImage {
+    pub rect: (usize, usize, usize, usize),
+    pub url: String,
+    pub cache_path: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

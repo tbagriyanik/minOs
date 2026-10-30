@@ -78,6 +78,27 @@ impl ImageViewerApp {
             self.clear_image(file_name);
             return false;
         }
+        if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+            if let Some(decoded) = crate::apps::imgdecode::decode_gif(bytes) {
+                if decoded.rgb.is_empty() {
+                    return false;
+                }
+                self.rgb = alloc::sync::Arc::from(decoded.rgb.into_boxed_slice());
+                self.image = alloc::sync::Arc::from([]);
+                self.pan_x = 0;
+                self.pan_y = 0;
+                self.data_offset = 0;
+                self.width = decoded.width;
+                self.height = decoded.height;
+                self.top_down = true;
+                self.file_name = file_name;
+                self.format_label = "GIF (RGB)";
+                self.status = crate::gui::ui_text("GIF açıldı", "GIF opened");
+                return true;
+            }
+            self.clear_image(file_name);
+            return false;
+        }
         if bytes.len() >= 2 && &bytes[0..2] == b"BM" {
             return self.open_bmp(data);
         }

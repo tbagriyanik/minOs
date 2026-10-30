@@ -7,14 +7,15 @@
 //! - `color`: renk sabitleri ve dönüştürme yardımcıları
 //! - `crate::apps::js`: minJs betik motoru
 //! - bu dosya: HTTP/TLS akışı, geçmiş ve `BrowserApp` pencere denetçisi
+mod cache;
 mod color;
 mod css;
 mod html;
 mod types;
 
 pub use types::{
-    html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedLink, TextAlign, TextSpan,
-    BOOKMARKS,
+    html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedImage, RenderedLink,
+    TextAlign, TextSpan, BOOKMARKS,
 };
 
 use alloc::boxed::Box;
@@ -24,8 +25,10 @@ use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use crate::drivers::video::Framebuffer;
+use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 
+use css::parse_css;
 use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
 
 extern crate alloc;
@@ -285,11 +288,20 @@ pub struct BrowserApp {
     pub page_title_len: usize,
     pub page_lines: Vec<BrowserLine>,
     pub rendered_links: RefCell<Vec<RenderedLink>>,
+    pub rendered_images: RefCell<Vec<RenderedImage>>,
     pub page_selection_anchor: Option<(usize, usize)>,
     pub page_selection_start: Option<(usize, usize)>,
     pub page_selection_end: Option<(usize, usize)>,
     pub page_dragging: bool,
-    pub scroll_y: usize,
+    /// Yumuşak kaydırma animasyonunun başladığı ofset.
+    scroll_anim_from: usize,
+    /// Yumuşak kaydırma hedefi (pencere kaydırmasına uygulanır).
+    pub scroll_target: usize,
+    /// Yumuşak kaydırma animasyonu sürüyor mu?
+    pub scroll_animating: bool,
+    scroll_anim_start: u64,
+    /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
+    pub scroll_reset: bool,
     pub request_pending: bool,
     pub request_host: [u8; 128],
     pub request_host_len: usize,
@@ -380,7 +392,7 @@ impl BrowserApp {
             address_redo_len: [0; 16],
             address_redo_count: 0,
             active_tab: 0,
-            focused_control: 0,
+            focused_control: Self::FOCUS_CONTENT,
             toolbar_menu_open: false,
             find_active: false,
             find_query: [0; 64],
@@ -398,11 +410,16 @@ impl BrowserApp {
             page_title_len: 0,
             page_lines: Vec::new(),
             rendered_links: RefCell::new(Vec::new()),
+            rendered_images: RefCell::new(Vec::new()),
             page_selection_anchor: None,
             page_selection_start: None,
             page_selection_end: None,
             page_dragging: false,
-            scroll_y: 0,
+            scroll_anim_from: 0,
+            scroll_target: 0,
+            scroll_animating: false,
+            scroll_anim_start: 0,
+            scroll_reset: true,
             request_pending: false,
             request_host: [0; 128],
             request_host_len: 0,
@@ -819,6 +836,17 @@ impl BrowserApp {
         clicked_url
     }
 
+    /// Resim üzerine tıklandıysa önbellek yolunu döndürür (çift tıklama ile görüntüleme için).
+    pub fn click_image_at(&self, mx: usize, my: usize) -> Option<String> {
+        for img in self.rendered_images.borrow().iter() {
+            let (rx, ry, rw, rh) = img.rect;
+            if mx >= rx && mx < rx + rw && my >= ry && my < ry + rh {
+                return Some(img.cache_path.clone());
+            }
+        }
+        None
+    }
+
     pub fn execute_js(&mut self, code: &str) {
         for stmt in code.split(';') {
             let stmt = stmt.trim();
@@ -960,12 +988,20 @@ impl BrowserApp {
         }
     }
 
-    pub fn load_html(&mut self, body: &[u8], wrap_width_px: usize, max_lines: usize) {
+    pub fn load_html(
+        &mut self,
+        body: &[u8],
+        wrap_width_px: usize,
+        max_lines: usize,
+        vfs: Option<&mut VirtualFileSystem>,
+    ) {
         self.page_lines.clear();
         self.rendered_links.borrow_mut().clear();
+        self.rendered_images.borrow_mut().clear();
         self.page_bg_color = None;
         self.js_alert = None;
         self.js_vars.clear();
+        self.scroll_reset = true;
 
         // Preprocess: Extract <script> tags and handle document.write()
         let mut preprocessed_html = Vec::with_capacity(body.len());
@@ -1002,6 +1038,35 @@ impl BrowserApp {
             p += 1;
         }
 
+        // Paint CSS body/html backgrounds on the document paper itself.
+        let mut scan = 0usize;
+        while scan < preprocessed_html.len() {
+            if preprocessed_html[scan] == b'<'
+                && scan + 6 <= preprocessed_html.len()
+                && eq_ascii(&preprocessed_html[scan..scan + 6], b"<style")
+            {
+                let start = scan + 6;
+                if let Some(gt) = preprocessed_html[start..].iter().position(|&b| b == b'>') {
+                    let css_start = start + gt + 1;
+                    if let Some(end) = find_bytes(&preprocessed_html[css_start..], b"</style>") {
+                        let css_text =
+                            decode_bytes_to_string(&preprocessed_html[css_start..css_start + end]);
+                        for rule in parse_css(&css_text).rules {
+                            if (rule.selector.eq_ignore_ascii_case("body")
+                                || rule.selector.eq_ignore_ascii_case("html"))
+                                && rule.style.bg_color.is_some()
+                            {
+                                self.page_bg_color = rule.style.bg_color;
+                            }
+                        }
+                        scan = css_start + end + 8;
+                        continue;
+                    }
+                }
+            }
+            scan += 1;
+        }
+
         let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         render_html_to_lines(
             &preprocessed_html,
@@ -1009,18 +1074,42 @@ impl BrowserApp {
             &mut self.page_lines,
             max_lines,
             current_url,
+            vfs,
         );
     }
 
+    /// Sayfa içeriği odağı (araç çubuğu düğmeleri odaklanmaz).
+    pub const FOCUS_CONTENT: usize = 6;
+    /// Yenile düğmesi odağı.
+    pub const FOCUS_REFRESH: usize = 2;
+    /// Adres çubuğu odağı.
+    pub const FOCUS_ADDRESS: usize = 4;
+
+    /// Sekme sırası: içerik → adres çubuğu → yenile → içerik.
+    /// Geri/İleri (< >) düğmeleri yalnızca fareyle kullanılır ve odak almaz.
     pub fn focus_next_control(&mut self) {
-        // 0: Geri, 1: İleri, 2: Yenile, 3: Geçmiş, 4: Adres çubuğu, 5: GIT
-        self.focused_control = (self.focused_control + 1) % 6;
-        self.address_focused = self.focused_control == 4;
+        self.focused_control = match self.focused_control {
+            Self::FOCUS_ADDRESS => Self::FOCUS_REFRESH,
+            Self::FOCUS_REFRESH => Self::FOCUS_CONTENT,
+            _ => Self::FOCUS_ADDRESS,
+        };
+        self.address_focused = self.focused_control == Self::FOCUS_ADDRESS;
     }
 
+    /// Ters sekme sırası: içerik → yenile → adres çubuğu → içerik.
     pub fn focus_prev_control(&mut self) {
-        self.focused_control = (self.focused_control + 5) % 6;
-        self.address_focused = self.focused_control == 4;
+        self.focused_control = match self.focused_control {
+            Self::FOCUS_REFRESH => Self::FOCUS_ADDRESS,
+            Self::FOCUS_ADDRESS => Self::FOCUS_CONTENT,
+            _ => Self::FOCUS_REFRESH,
+        };
+        self.address_focused = self.focused_control == Self::FOCUS_ADDRESS;
+    }
+
+    /// Araç çubuğu düğmesine fareyle tıklandığında klavye odağını sayfaya bırakır.
+    pub fn blur_toolbar_focus(&mut self) {
+        self.focused_control = Self::FOCUS_CONTENT;
+        self.address_focused = false;
     }
 
     pub fn set_url(&mut self, value: &[u8]) {
@@ -1229,6 +1318,7 @@ impl BrowserApp {
                     image_width: 0,
                     image_height: 0,
                     image_rgb: None,
+                    image_url: String::new(),
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -1265,6 +1355,7 @@ impl BrowserApp {
             image_width: 0,
             image_height: 0,
             image_rgb: None,
+            image_url: String::new(),
             bold: false,
             underline: false,
             onclick: String::new(),
@@ -1283,6 +1374,7 @@ impl BrowserApp {
                 image_width: 0,
                 image_height: 0,
                 image_rgb: None,
+                image_url: String::new(),
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1302,6 +1394,7 @@ impl BrowserApp {
                 image_width: 0,
                 image_height: 0,
                 image_rgb: None,
+                image_url: String::new(),
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1329,6 +1422,7 @@ impl BrowserApp {
                     image_width: 0,
                     image_height: 0,
                     image_rgb: None,
+                    image_url: String::new(),
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -1380,6 +1474,7 @@ impl BrowserApp {
                             image_width: 0,
                             image_height: 0,
                             image_rgb: None,
+                            image_url: String::new(),
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1396,6 +1491,7 @@ impl BrowserApp {
                             image_width: 0,
                             image_height: 0,
                             image_rgb: None,
+                            image_url: String::new(),
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1412,6 +1508,7 @@ impl BrowserApp {
                             image_width: 0,
                             image_height: 0,
                             image_rgb: None,
+                            image_url: String::new(),
                             bold: false,
                             underline: false,
                             onclick: String::new(),
@@ -1450,6 +1547,7 @@ impl BrowserApp {
                 image_width: 0,
                 image_height: 0,
                 image_rgb: None,
+                image_url: String::new(),
                 bold: true,
                 underline: false,
                 onclick: String::new(),
@@ -1475,6 +1573,7 @@ impl BrowserApp {
                 image_width: 0,
                 image_height: 0,
                 image_rgb: None,
+                image_url: String::new(),
                 bold: false,
                 underline: false,
                 onclick: String::new(),
@@ -1514,6 +1613,7 @@ impl BrowserApp {
                         image_width: 0,
                         image_height: 0,
                         image_rgb: None,
+                        image_url: String::new(),
                         bold: true,
                         underline: false,
                         onclick: String::new(),
@@ -1530,6 +1630,7 @@ impl BrowserApp {
                         image_width: 0,
                         image_height: 0,
                         image_rgb: None,
+                        image_url: String::new(),
                         bold: true,
                         underline: false,
                         onclick: String::new(),
@@ -1546,6 +1647,7 @@ impl BrowserApp {
                         image_width: 0,
                         image_height: 0,
                         image_rgb: None,
+                        image_url: String::new(),
                         bold: false,
                         underline: true,
                         onclick: String::new(),
@@ -1569,6 +1671,7 @@ impl BrowserApp {
                     image_width: 0,
                     image_height: 0,
                     image_rgb: None,
+                    image_url: String::new(),
                     bold: false,
                     underline: false,
                     onclick: String::new(),
@@ -2001,6 +2104,10 @@ impl BrowserApp {
     }
 
     pub fn navigate(&mut self) {
+        // Yeni gezinme: içerik kaydırmasını başa al ve süren animasyonu durdur.
+        self.scroll_reset = true;
+        self.scroll_animating = false;
+        self.scroll_target = 0;
         let suppress = self.suppress_history;
         self.suppress_history = false;
         let mut input = [0u8; 128];
@@ -2129,6 +2236,7 @@ impl BrowserApp {
                     b"<html><body><h1>minOs Help</h1><p>This is the local minOs browser help page.</p><p>Features:</p><ul><li>HTML rendering</li><li>CSS styles</li><li>PNG image display (data: URLs)</li><li>Links and bookmarks</li></ul><p><a href='minos://demo'>Demo page</a> | <a href='minos://demo-img'>Image demo</a> | <a href='minos://demo-video'>Video demo</a></p></body></html>",
                     600,
                     256,
+                    None,
                 );
             }
             "minos://cats" => {
@@ -2145,6 +2253,7 @@ impl BrowserApp {
                     b"<html><body><h1>KediWiki</h1><p>Local cats and encyclopedia page.</p><p><img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/5+hHgAHggJ/chD2wbwAAAABJRU5ErkJggg==' alt='Cat' /></p><p><a href='minos://help'>Back to help</a></p></body></html>",
                     600,
                     256,
+                    None,
                 );
             }
             s if s.starts_with("minos://history") => {
@@ -2227,7 +2336,7 @@ impl BrowserApp {
                     Some(path) if path == "/video" => DEMO_HTML_VIDEO,
                     _ => DEMO_HTML_BASIC,
                 };
-                self.load_html(demo_html, 600, 256);
+                self.load_html(demo_html, 600, 256, None);
                 self.status = crate::gui::ui_text(
                     "HTML/CSS/JS demo sayfası yüklendi.",
                     "HTML/CSS/JS demo page loaded.",
@@ -2253,7 +2362,7 @@ impl BrowserApp {
     }
 
     /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
-    pub fn poll_network(&mut self) {
+    pub fn poll_network(&mut self, vfs: &mut VirtualFileSystem) {
         if !self.request_pending {
             return;
         }
@@ -2858,6 +2967,7 @@ impl BrowserApp {
                                 image_width: 0,
                                 image_height: 0,
                                 image_rgb: None,
+                                image_url: String::new(),
                                 bold: false,
                                 underline: false,
                                 onclick: String::new(),
@@ -2904,7 +3014,7 @@ impl BrowserApp {
                         self.download_data = Some(body_bytes.clone());
 
                         if body_bytes.iter().any(|b| *b == b'<') {
-                            self.load_html(&body_bytes, 600, 256);
+                            self.load_html(&body_bytes, 600, 256, Some(vfs));
                         } else {
                             for line in split_http_lines(&body_bytes).take(256) {
                                 self.page_lines.push(BrowserLine {
@@ -2919,6 +3029,7 @@ impl BrowserApp {
                                         image_width: 0,
                                         image_height: 0,
                                         image_rgb: None,
+                                        image_url: String::new(),
                                         bold: false,
                                         underline: false,
                                         onclick: String::new(),
@@ -3070,36 +3181,49 @@ impl BrowserApp {
         self.navigate();
     }
 
-    /// Scroll the page up by a small amount (line scroll)
-    pub fn scroll_up(&mut self, amount: usize) {
-        self.scroll_y = self.scroll_y.saturating_sub(amount);
-    }
-
-    /// Scroll the page down by a small amount (line scroll)
-    pub fn scroll_down(&mut self, amount: usize) {
-        self.scroll_y = self.scroll_y.saturating_add(amount);
-    }
-
-    /// Scroll the page up by one page
-    pub fn page_up(&mut self, page_height: usize) {
-        self.scroll_y = self.scroll_y.saturating_sub(page_height);
-    }
-
-    /// Scroll the page down by one page
-    pub fn page_down(&mut self, page_height: usize) {
-        self.scroll_y = self.scroll_y.saturating_add(page_height);
-    }
-
-    /// Scroll to the top of the page
-    pub fn scroll_top(&mut self) {
-        self.scroll_y = 0;
-    }
-
-    /// Scroll to the bottom of the page
-    pub fn scroll_bottom(&mut self, content_height: usize) {
-        if content_height > 0 {
-            self.scroll_y = content_height;
+    /// İçerik kaydırmasını yumuşak animasyonla hedefler.
+    /// `current` pencerenin o anki kaydırma ofseti, `max_y` en büyük ofsettir.
+    /// Gerçek ofset pencere kaydırmasına (`scroll.y`) uygulanır; böylece çizim,
+    /// bağlantı isabet alanları ve kaydırma çubuğu her zaman aynı değeri görür.
+    pub fn scroll_to(&mut self, current: usize, target: usize, max_y: usize, now_ms: u64) {
+        let target = target.min(max_y);
+        if self.scroll_animating && self.scroll_target == target {
+            return;
         }
+        if target == current {
+            self.scroll_target = target;
+            self.scroll_animating = false;
+            return;
+        }
+        self.scroll_anim_from = current.min(max_y);
+        self.scroll_target = target;
+        self.scroll_anim_start = now_ms;
+        self.scroll_animating = true;
+    }
+
+    /// Animasyonun bu kare için hesapladığı kaydırma ofsetini döndürür.
+    pub fn scroll_anim_step(&mut self, now_ms: u64, max_y: usize) -> Option<usize> {
+        if !self.scroll_animating {
+            return None;
+        }
+        let target = self.scroll_target.min(max_y);
+        const DURATION_MS: u64 = 150;
+        let elapsed = now_ms.wrapping_sub(self.scroll_anim_start);
+        if elapsed >= DURATION_MS {
+            self.scroll_animating = false;
+            return Some(target);
+        }
+        let progress = elapsed as f32 / DURATION_MS as f32;
+        // ease-out quad: hızlı başlar, yumuşak durur.
+        let eased = 1.0 - (1.0 - progress) * (1.0 - progress);
+        let from = self.scroll_anim_from.min(max_y) as f32;
+        Some((from + (target as f32 - from) * eased) as usize)
+    }
+
+    /// Dış kaynaklı (fare kaydırma çubuğu) ofseti animasyona yansıtır.
+    pub fn sync_external_scroll(&mut self, offset: usize) {
+        self.scroll_animating = false;
+        self.scroll_target = offset;
     }
 
     pub fn render_content(
@@ -3112,25 +3236,20 @@ impl BrowserApp {
         scroll: &crate::gui::ScrollState,
     ) {
         let english = crate::gui::ui_english();
-        // Bağlantı isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
+        // Bağlantı ve resim isabet alanlarını sıfırla; yalnızca HTML içerik yeniden doldurur.
         self.rendered_links.borrow_mut().clear();
+        self.rendered_images.borrow_mut().clear();
         // Araç çubuğu: gezinme, adres ve taşma menüsü.
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 30, Color::TITLE_BAR);
         fb.draw_rect(win_x + 12, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 18, win_y + 36, "<", Color::TEXT_MAIN);
-        if self.focused_control == 0 {
-            fb.draw_rect_outline(win_x + 12, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
-        }
 
         fb.draw_rect(win_x + 38, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 44, win_y + 36, ">", Color::TEXT_MAIN);
-        if self.focused_control == 1 {
-            fb.draw_rect_outline(win_x + 38, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
-        }
 
         fb.draw_rect(win_x + 64, win_y + 32, 22, 20, Color::WINDOW_BG);
         MinGuiCompositor::draw_string(fb, win_x + 69, win_y + 36, "R", Color::ACCENT_GREEN);
-        if self.focused_control == 2 {
+        if self.focused_control == Self::FOCUS_REFRESH {
             fb.draw_rect_outline(win_x + 64, win_y + 32, 22, 20, Color::ACCENT_YELLOW);
         }
 
@@ -3208,7 +3327,7 @@ impl BrowserApp {
                 fb.draw_rect(caret_x, win_y + 34, 1, 16, Color::ACCENT_YELLOW);
             }
         }
-        if self.focused_control == 4 {
+        if self.focused_control == Self::FOCUS_ADDRESS {
             fb.draw_rect_outline(url_x, win_y + 32, url_w, 20, Color::ACCENT_YELLOW);
         }
 
@@ -3441,6 +3560,7 @@ impl BrowserApp {
                             .map(|s| {
                                 MinGuiCompositor::text_width(&s.text, scale)
                                     + if s.is_button { 16 } else { 0 }
+                                    + if s.is_image { s.image_width.max(1) } else { 0 }
                             })
                             .sum();
 
@@ -3544,6 +3664,16 @@ impl BrowserApp {
                                         rect: (cur_x, draw_y, span_w, line_h),
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
+                                    });
+                                }
+                                // Resim isabet alanı kaydet (önbellekten görüntüleme için)
+                                if !span.image_url.is_empty() {
+                                    let cache_path = crate::apps::browser::cache::url_to_cache_path(&span.image_url);
+                                    let mut images = self.rendered_images.borrow_mut();
+                                    images.push(RenderedImage {
+                                        rect: (cur_x, draw_y, span_w, line_h),
+                                        url: span.image_url.clone(),
+                                        cache_path,
                                     });
                                 }
                                 span_char_start = span_char_end;

@@ -33,15 +33,24 @@ impl DecodedImage {
     }
 }
 
-/// İmzaya bakarak PNG veya JPEG çözer.
+/// İmzaya bakarak PNG, JPEG veya GIF çözer.
 pub fn decode(data: &[u8]) -> Option<DecodedImage> {
     if data.len() >= 8 && data[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
         decode_png(data)
     } else if data.len() >= 4 && data[0] == 0xFF && data[1] == 0xD8 {
         decode_jpeg(data)
+    } else if data.len() >= 6 && (&data[0..6] == b"GIF87a" || &data[0..6] == b"GIF89a") {
+        decode_gif(data)
     } else {
         None
     }
+}
+
+fn le16(d: &[u8], i: usize) -> Option<usize> {
+    if i + 2 > d.len() {
+        return None;
+    }
+    Some((d[i] as usize) | ((d[i + 1] as usize) << 8))
 }
 
 fn be16(d: &[u8], i: usize) -> Option<usize> {
@@ -1195,4 +1204,299 @@ fn sample_plane(plane: &[u8], comp: &JComponent, frame: &JFrame, x: usize, y: us
     let sx = (x * comp.h / frame.max_h).min(comp.bw * 8 - 1);
     let sy = (y * comp.v / frame.max_v).min(comp.bh * 8 - 1);
     plane[(sy) * (comp.bw * 8) + sx]
+}
+
+// ---------------------------------------------------------------------------
+// GIF
+// ---------------------------------------------------------------------------
+
+/// GIF (GIF87a / GIF89a) kod çözücüsü. İlk kareyi döndürür.
+pub fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
+    if data.len() < 13
+        || (&data[0..6] != b"GIF87a" && &data[0..6] != b"GIF89a")
+    {
+        return None;
+    }
+
+    // Logical Screen Descriptor
+    let width = le16(data, 6)?;
+    let height = le16(data, 8)?;
+    let packed = data[10];
+    let has_gct = (packed & 0x80) != 0;
+    let gct_size = 2usize << (packed & 7);
+
+    if for_pixels(width, height).is_none() {
+        return None;
+    }
+
+    let mut pos = 13usize;
+    let mut gct: Option<Vec<u8>> = None;
+    if has_gct {
+        if pos + gct_size * 3 > data.len() {
+            return None;
+        }
+        gct = Some(data[pos..pos + gct_size * 3].to_vec());
+        pos += gct_size * 3;
+    }
+
+    // Scan blocks for first image
+    while pos < data.len() {
+        let block = data[pos];
+        match block {
+            0x2C => {
+                // Image Descriptor
+                if pos + 10 > data.len() {
+                    return None;
+                }
+                let _left = le16(data, pos + 1)?;
+                let _top = le16(data, pos + 3)?;
+                let w = le16(data, pos + 5)?;
+                let h = le16(data, pos + 7)?;
+                let packed = data[pos + 9];
+                let has_lct = (packed & 0x80) != 0;
+                let interlace = (packed & 0x40) != 0;
+                let lct_size = 2usize << (packed & 7);
+
+                pos += 10;
+                let mut lct: Option<Vec<u8>> = None;
+                if has_lct {
+                    if pos + lct_size * 3 > data.len() {
+                        return None;
+                    }
+                    lct = Some(data[pos..pos + lct_size * 3].to_vec());
+                    pos += lct_size * 3;
+                }
+
+                // LZW minimum code size
+                if pos >= data.len() {
+                    return None;
+                }
+                let lzw_min_code_size = data[pos] as usize;
+                pos += 1;
+
+                // Read LZW compressed data sub-blocks
+                let mut compressed = Vec::new();
+                while pos < data.len() {
+                    let block_size = data[pos] as usize;
+                    pos += 1;
+                    if block_size == 0 {
+                        break;
+                    }
+                    if pos + block_size > data.len() {
+                        return None;
+                    }
+                    compressed.extend_from_slice(&data[pos..pos + block_size]);
+                    pos += block_size;
+                }
+
+                let decompressed = lzw_decompress(&compressed, lzw_min_code_size)?;
+
+                let color_table = lct.or(gct)?;
+                if color_table.len() < 3 {
+                    return None;
+                }
+
+                let mut rgb = vec![0u8; w * h * 3];
+                if interlace {
+                    // Interlaced: Adam7-like GIF interlacing (4 passes)
+                    let passes: [(usize, usize); 4] = [(0, 8), (4, 8), (2, 4), (1, 2)];
+                    let mut pixel_idx = 0usize;
+                    for (start, step) in passes {
+                        let mut y = start;
+                        while y < h {
+                            let mut x = 0usize;
+                            while x < w {
+                                if pixel_idx + 2 < decompressed.len() {
+                                    let ci = decompressed[pixel_idx] as usize;
+                                    if ci * 3 + 2 < color_table.len() {
+                                        let base = (y * w + x) * 3;
+                                        rgb[base] = color_table[ci * 3];
+                                        rgb[base + 1] = color_table[ci * 3 + 1];
+                                        rgb[base + 2] = color_table[ci * 3 + 2];
+                                    }
+                                    pixel_idx += 1;
+                                }
+                                x += step;
+                            }
+                            y += step;
+                        }
+                    }
+                } else {
+                    // Non-interlaced
+                    let mut pixel_idx = 0usize;
+                    for y in 0..h {
+                        for x in 0..w {
+                            if pixel_idx < decompressed.len() {
+                                let ci = decompressed[pixel_idx] as usize;
+                                if ci * 3 + 2 < color_table.len() {
+                                    let base = (y * w + x) * 3;
+                                    rgb[base] = color_table[ci * 3];
+                                    rgb[base + 1] = color_table[ci * 3 + 1];
+                                    rgb[base + 2] = color_table[ci * 3 + 2];
+                                }
+                                pixel_idx += 1;
+                            }
+                        }
+                    }
+                }
+
+                return Some(DecodedImage {
+                    width: w,
+                    height: h,
+                    rgb,
+                    format: "GIF",
+                });
+            }
+            0x21 => {
+                // Extension block
+                if pos + 1 >= data.len() {
+                    break;
+                }
+                let _ext_label = data[pos + 1];
+                pos += 2;
+                // Skip sub-blocks
+                while pos < data.len() {
+                    let block_size = data[pos] as usize;
+                    pos += 1;
+                    if block_size == 0 {
+                        break;
+                    }
+                    if pos + block_size > data.len() {
+                        return None;
+                    }
+                    pos += block_size;
+                }
+            }
+            0x3B => break, // Trailer
+            _ => break,
+        }
+    }
+
+    None
+}
+
+/// LZW decompression for GIF.
+fn lzw_decompress(data: &[u8], min_code_size: usize) -> Option<Vec<u8>> {
+    if min_code_size > 12 {
+        return None;
+    }
+
+    let clear_code = 1usize << min_code_size;
+    let end_code = clear_code + 1;
+    let mut next_code = end_code + 1;
+    let mut code_size = min_code_size + 1;
+
+    // Code table: each entry is (prefix_code, suffix_byte)
+    let mut prefix: Vec<Option<usize>> = vec![None; 4096];
+    let mut suffix: Vec<u8> = vec![0; 4096];
+    for i in 0..clear_code {
+        suffix[i] = i as u8;
+    }
+
+    // Bit reader
+    // Simple bit reader - rework for correctness
+    let mut bit_reader = GifBitReader::new(data);
+
+    let mut out: Vec<u8> = Vec::new();
+    let mut old_code: Option<usize> = None;
+
+    loop {
+        let code = bit_reader.read_variable(code_size)?;
+
+        if code == clear_code {
+            next_code = end_code + 1;
+            code_size = min_code_size + 1;
+            old_code = None;
+            continue;
+        }
+        if code == end_code {
+            break;
+        }
+
+        let in_code = code;
+
+        if code >= next_code {
+            // Special case: code not yet in table
+            let mut stack: Vec<u8> = Vec::new();
+            let mut c = old_code?;
+            stack.push(suffix[c]);
+            while let Some(p) = prefix[c] {
+                c = p;
+                stack.push(suffix[c]);
+            }
+            for &b in stack.iter().rev() {
+                out.push(b);
+            }
+            if next_code < 4096 {
+                prefix[next_code] = Some(old_code?);
+                suffix[next_code] = *stack.last()?;
+                next_code += 1;
+            }
+        } else {
+            let mut stack: Vec<u8> = Vec::new();
+            let mut c = code;
+            while let Some(p) = prefix[c] {
+                stack.push(suffix[c]);
+                c = p;
+            }
+            stack.push(suffix[c]);
+            for &b in stack.iter().rev() {
+                out.push(b);
+            }
+            if next_code < 4096 && old_code.is_some() {
+                prefix[next_code] = Some(old_code?);
+                suffix[next_code] = *stack.first()?;
+                next_code += 1;
+            }
+        }
+
+        old_code = Some(in_code);
+
+        // Increase code size when table fills
+        if next_code == (1usize << code_size) && code_size < 12 {
+            code_size += 1;
+        }
+    }
+
+    Some(out)
+}
+
+/// Variable-length bit reader for LZW (GIF).
+struct GifBitReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+    bit_offset: u32,
+}
+
+impl<'a> GifBitReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0, bit_offset: 0 }
+    }
+
+    fn read_variable(&mut self, code_size: usize) -> Option<usize> {
+        let mut result: usize = 0;
+        let mut bits_read = 0u32;
+
+        while bits_read < code_size as u32 {
+            if self.pos >= self.data.len() {
+                return None;
+            }
+            let available_in_byte = 8 - self.bit_offset;
+            let needed = code_size as u32 - bits_read;
+            let take = available_in_byte.min(needed);
+
+            let mask: u8 = ((1u32 << take) - 1) as u8;
+            let bits = ((self.data[self.pos] >> self.bit_offset) & mask) as usize;
+            result |= bits << bits_read;
+
+            bits_read += take;
+            self.bit_offset += take;
+            if self.bit_offset >= 8 {
+                self.bit_offset = 0;
+                self.pos += 1;
+            }
+        }
+
+        Some(result)
+    }
 }

@@ -10,6 +10,7 @@ use crate::drivers::socket;
 use crate::drivers::tls::TlsSession;
 use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 
 pub const E_URL: i32 = 1001;
@@ -20,6 +21,256 @@ pub const E_REDIRECT: i32 = 1004;
 pub const MAX_REDIRECTS: usize = 3;
 pub const MAX_HOST: usize = 96;
 pub const MAX_PATH: usize = 256;
+
+/// HTTP istemci yapılandırması: zaman aşımları, yeniden deneme politikası ve proxy ayarları.
+#[derive(Clone, Debug)]
+pub struct HttpClientConfig {
+    /// Toplam istek zaman aşımı (milisaniye)
+    pub timeout_ms: u64,
+    /// Maksimum yeniden deneme sayısı
+    pub max_retries: u32,
+    /// İlk yeniden deneme gecikmesi (milisaniye), ikili olarak artar
+    pub retry_delay_ms: u64,
+    /// HTTP proxy sunucusu (örn. "proxy.example.com:8080"), None ise doğrudan bağlantı
+    pub proxy: Option<String>,
+    /// Proxy kimlik doğrulama kullanıcı adı
+    pub proxy_username: Option<String>,
+    /// Proxy kimlik doğrulama şifresi
+    pub proxy_password: Option<String>,
+    /// Range isteği için byte aralığı (örn. "0-499")
+    pub range: Option<String>,
+}
+
+impl Default for HttpClientConfig {
+    fn default() -> Self {
+        Self {
+            timeout_ms: 8000,
+            max_retries: 3,
+            retry_delay_ms: 500,
+            proxy: None,
+            proxy_username: None,
+            proxy_password: None,
+            range: None,
+        }
+    }
+}
+
+/// Milisaniye cinsinden bekleme (spin loop ile).
+fn sleep_ms(ms: u64) {
+    let start = crate::monotonic_ms();
+    while crate::monotonic_ms().wrapping_sub(start) < ms {
+        core::hint::spin_loop();
+    }
+}
+
+/// Keep-alive bağlantı havuzu girişi.
+struct PooledConnection {
+    fd: i32,
+    host: String,
+    port: u16,
+    is_https: bool,
+    tls_session: Option<TlsSession>,
+    last_used: u64,
+}
+
+/// Bağlantı havuzu: aynı sunucuya tekrar isteklerde soket yeniden kullanımı.
+struct ConnectionPool {
+    connections: [Option<PooledConnection>; 8],
+}
+
+impl ConnectionPool {
+    fn new() -> Self {
+        Self {
+            connections: [const { None }; 8],
+        }
+    }
+
+    /// Boşta bir bağlantı bulur ve havuzdan çıkarır (kullanıma alınır).
+    fn acquire(&mut self, host: &str, port: u16, is_https: bool) -> Option<i32> {
+        let now = crate::monotonic_ms();
+        for entry in self.connections.iter_mut() {
+            if let Some(ref mut conn) = entry {
+                if conn.host == host && conn.port == port && conn.is_https == is_https {
+                    let fd = conn.fd;
+                    conn.last_used = now;
+                    // TLS session'ı koru, sadece fd'yi döndür
+                    let _ = conn.tls_session.take(); // Çağrıcı tarafından yeniden kurulacak
+                    *entry = None;
+                    return Some(fd);
+                }
+            }
+        }
+        None
+    }
+
+    /// Bağlantıyı havuza geri koyar (kullanım bittiğinde).
+    fn release(
+        &mut self,
+        fd: i32,
+        host: String,
+        port: u16,
+        is_https: bool,
+        tls_session: Option<TlsSession>,
+    ) {
+        let now = crate::monotonic_ms();
+        // Boş slot ara
+        for entry in self.connections.iter_mut() {
+            if entry.is_none() {
+                *entry = Some(PooledConnection {
+                    fd,
+                    host,
+                    port,
+                    is_https,
+                    tls_session,
+                    last_used: now,
+                });
+                return;
+            }
+        }
+        // Tümü dolu: en eskiyi kapat
+        let mut oldest_idx = 0;
+        let mut oldest_time = u64::MAX;
+        for (i, entry) in self.connections.iter().enumerate() {
+            if let Some(ref conn) = entry {
+                if conn.last_used < oldest_time {
+                    oldest_time = conn.last_used;
+                    oldest_idx = i;
+                }
+            }
+        }
+        let _ = socket::close(self.connections[oldest_idx].take().unwrap().fd);
+        self.connections[oldest_idx] = Some(PooledConnection {
+            fd,
+            host,
+            port,
+            is_https,
+            tls_session,
+            last_used: now,
+        });
+    }
+
+    /// Boşta kalan ve çok eski bağlantıları kapatır.
+    fn cleanup_stale(&mut self, max_idle_ms: u64) {
+        let now = crate::monotonic_ms();
+        for entry in self.connections.iter_mut() {
+            if let Some(ref conn) = entry {
+                if now.wrapping_sub(conn.last_used) > max_idle_ms {
+                    let _ = socket::close(conn.fd);
+                    *entry = None;
+                }
+            }
+        }
+    }
+}
+
+static mut CONNECTION_POOL: Option<ConnectionPool> = None;
+
+fn connection_pool() -> &'static mut ConnectionPool {
+    unsafe { CONNECTION_POOL.get_or_insert_with(ConnectionPool::new) }
+}
+
+/// Proxy-Authorization başlığı oluşturur (Basic auth).
+fn proxy_auth_header(username: &str, password: &str) -> String {
+    let credentials = format!("{}:{}", username, password);
+    let encoded = base64_encode(credentials.as_bytes());
+    format!("Basic {}", encoded)
+}
+
+/// Temel Base64 kodlama (RFC 4648).
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i < input.len() {
+        let b0 = input[i] as u32;
+        let b1 = if i + 1 < input.len() {
+            input[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < input.len() {
+            input[i + 2] as u32
+        } else {
+            0
+        };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        if i + 1 < input.len() {
+            out.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if i + 2 < input.len() {
+            out.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        i += 3;
+    }
+    out
+}
+
+/// HTTP CONNECT tüneli kurar (proxy üzerinden).
+/// `fd` — proxy'ye bağlı soket, `host_port` — "host:port" biçiminde hedef.
+fn proxy_connect(fd: i32, host_port: &str, config: &HttpClientConfig) -> Result<(), i32> {
+    let mut req = String::new();
+    req.push_str(&format!("CONNECT {} HTTP/1.1\r\n", host_port));
+    req.push_str(&format!("Host: {}\r\n", host_port));
+    if let (Some(user), Some(pass)) = (&config.proxy_username, &config.proxy_password) {
+        req.push_str(&format!(
+            "Proxy-Authorization: {}\r\n",
+            proxy_auth_header(user, pass)
+        ));
+    }
+    req.push_str("Connection: close\r\n\r\n");
+
+    let mut sent = 0;
+    let req_bytes = req.as_bytes();
+    while sent < req_bytes.len() {
+        sent += socket::send(fd, &req_bytes[sent..]).map_err(|e| {
+            if sent == 0 {
+                e
+            } else {
+                socket::E_TIMEOUT
+            }
+        })?;
+    }
+
+    // Proxy yanıtını oku (basit: ilk 2KB)
+    let mut resp = [0u8; 2048];
+    let mut total = 0;
+    loop {
+        let n = socket::recv(fd, &mut resp[total..]).map_err(|e| {
+            if total == 0 {
+                e
+            } else {
+                socket::E_TIMEOUT
+            }
+        })?;
+        if n == 0 {
+            return Err(socket::E_NOTCONN);
+        }
+        total += n;
+        if total >= 4 {
+            // "\r\n\r\n" başlık sonunu ara
+            if resp[total - 4..total] == *b"\r\n\r\n" {
+                break;
+            }
+        }
+        if total >= resp.len() {
+            break;
+        }
+    }
+
+    let resp_str = core::str::from_utf8(&resp[..total]).unwrap_or("");
+    // HTTP/1.1 200 Connection established kontrolü
+    if resp_str.starts_with("HTTP/1.1 200") || resp_str.starts_with("HTTP/1.0 200") {
+        Ok(())
+    } else {
+        Err(E_HTTP)
+    }
+}
 
 /// `http[s]://host[:port][/path]` ayrıştırır. `host`/`path` çıktı tamponlarına
 /// yazılır, port ve (is_https) bilgisi döner.
@@ -175,7 +426,7 @@ pub fn decode_chunked(buf: &mut [u8], len: usize) -> Option<usize> {
 }
 
 fn build_request(req: &mut [u8], host: &[u8], path: &[u8], ip: Ipv4Address) -> Option<usize> {
-    build_request_with_headers(req, host, path, ip, None)
+    build_request_with_headers(req, host, path, ip, None, None)
 }
 
 /// Cache validation başlıkları ile HTTP isteği oluşturur.
@@ -185,6 +436,7 @@ fn build_request_with_headers(
     path: &[u8],
     ip: Ipv4Address,
     extra_headers: Option<&str>,
+    range: Option<&str>,
 ) -> Option<usize> {
     let _ = ip;
     let base: &[&[u8]] = &[
@@ -192,7 +444,7 @@ fn build_request_with_headers(
         path,
         b" HTTP/1.1\r\nHost: ",
         host,
-        b"\r\nUser-Agent: minOs-curl/1.0\r\nConnection: close",
+        b"\r\nUser-Agent: minOs-curl/1.0\r\nConnection: keep-alive",
     ];
 
     let mut n = 0usize;
@@ -202,6 +454,17 @@ fn build_request_with_headers(
         }
         req[n..n + p.len()].copy_from_slice(*p);
         n += p.len();
+    }
+
+    // Range header
+    if let Some(r) = range {
+        let range_header = format!("\r\nRange: bytes={}", r);
+        let range_bytes = range_header.as_bytes();
+        if n + range_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + range_bytes.len()].copy_from_slice(range_bytes);
+        n += range_bytes.len();
     }
 
     // Extra headers (cache validation)
@@ -231,6 +494,7 @@ fn build_request_with_headers(
 /// yanıt şifreli olarak alınıp çözülür.
 ///
 /// `cache_headers` verilirse cache validation başlıkları eklenir.
+/// `config` yeniden deneme ve zaman ayarı politikasını belirtir.
 fn fetch_once(
     host: &[u8],
     port: u16,
@@ -239,45 +503,285 @@ fn fetch_once(
     resp_buf: &mut [u8],
     is_https: bool,
     cache_headers: Option<&str>,
+    config: &HttpClientConfig,
 ) -> Result<(u16, usize, usize), i32> {
-    let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
-    let _ = socket::set_timeout(fd, 4000);
-    let res = (|| {
-        socket::connect(fd, ip, port)?;
-        let mut req = [0u8; 768];
-        let reqlen = build_request_with_headers(&mut req, host, path, ip, cache_headers)
-            .ok_or(socket::E_INVAL)?;
+    let host_str = core::str::from_utf8(host).unwrap_or("");
+    let use_pool = config.proxy.is_none(); // Proxy ile bağlantı havuzlanmaz
 
-        let (status, hlen, total) = if is_https {
-            fetch_https(fd, host, &req, reqlen, resp_buf)?
-        } else {
-            let mut sent = 0;
-            while sent < reqlen {
-                sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
-                    if sent == 0 {
-                        e
-                    } else {
-                        socket::E_TIMEOUT
-                    }
+    let mut last_err: Option<i32> = None;
+    let mut delay = config.retry_delay_ms;
+
+    for attempt in 0..=config.max_retries {
+        // Havuzdan mevcut bağlantıyı almayı dene (sadece doğrudan bağlantı için)
+        let fd = if use_pool {
+            if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
+                cached_fd
+            } else {
+                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                    last_err = Some(e);
+                    e
                 })?;
+                let _ = socket::set_timeout(new_fd, config.timeout_ms);
+                socket::connect(new_fd, ip, port).map_err(|e| {
+                    let _ = socket::close(new_fd);
+                    last_err = Some(e);
+                    e
+                })?;
+                new_fd
             }
-            let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
-            let _ = expected_total;
-            if total < 12 {
-                return Err(E_HTTP);
-            }
-            let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
-            let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
-            (status, hlen, total)
+        } else {
+            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                last_err = Some(e);
+                e
+            })?;
+            let _ = socket::set_timeout(new_fd, config.timeout_ms);
+            socket::connect(new_fd, ip, port).map_err(|e| {
+                let _ = socket::close(new_fd);
+                last_err = Some(e);
+                e
+            })?;
+            new_fd
         };
 
-        // TODO: Content-Encoding (gzip/deflate) decoding to be implemented
-        // For now, compressed responses are passed through as-is
+        let res = (|| {
+            // Proxy ile bağlanma: proxy'e bağlan, gerekirse CONNECT tüneli kur
+            if let Some(ref proxy_str) = config.proxy {
+                let proxy_host_port = proxy_str.as_str();
+                let proxy_ip = socket::resolve_host(
+                    proxy_host_port.split(':').next().unwrap_or(proxy_host_port),
+                )?;
+                let proxy_port = proxy_host_port
+                    .split(':')
+                    .nth(1)
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(8080);
+                socket::connect(fd, proxy_ip, proxy_port)?;
 
-        Ok((status, hlen, total))
-    })();
-    socket::close(fd);
-    res
+                if is_https {
+                    // HTTPS üzerinden proxy: CONNECT tüneli kur
+                    let host_port = format!("{}:{}", host_str, port);
+                    proxy_connect(fd, &host_port, config)?;
+                    // TLS el sıkışması tünel üzerinden
+                    fetch_https(fd, host, &mut [0u8; 0], 0, resp_buf)
+                } else {
+                    // HTTP üzerinden proxy: mutlak URL formu kullan
+                    let mut req = [0u8; 1024];
+                    let url_str = format!(
+                        "http://{}{}",
+                        host_str,
+                        core::str::from_utf8(path).unwrap_or("/")
+                    );
+                    let reqlen = build_proxy_request(&mut req, &url_str, host, cache_headers)
+                        .ok_or(socket::E_INVAL)?;
+                    let mut sent = 0;
+                    while sent < reqlen {
+                        sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                            if sent == 0 {
+                                e
+                            } else {
+                                socket::E_TIMEOUT
+                            }
+                        })?;
+                    }
+                    let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+                    let _ = expected_total;
+                    if total < 12 {
+                        return Err(E_HTTP);
+                    }
+                    let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    Ok((status, hlen, total))
+                }
+            } else {
+                // Doğrudan bağlantı
+                if is_https {
+                    // TLS el sıkışması
+                    let mut client_random = [0u8; 32];
+                    let mut state =
+                        crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+                    for b in client_random.iter_mut() {
+                        state ^= state >> 12;
+                        state ^= state << 25;
+                        state ^= state >> 27;
+                        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+                    }
+
+                    let mut hello = Vec::new();
+                    let mut ecdhe_secret = [0u8; 32];
+                    crate::drivers::tls::build_client_hello(
+                        host_str,
+                        &client_random,
+                        &mut hello,
+                        &mut ecdhe_secret,
+                    );
+                    let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+                    let mut session = TlsSession::new(host_str, client_random);
+                    session.note_client_hello(ch_body);
+                    session.set_client_ecdhe_secret(ecdhe_secret);
+
+                    socket::send(fd, &hello).map_err(|_| E_TLS)?;
+
+                    // El sıkışma: sunucu yanıtı gelene kadar kayıtları işle
+                    let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+                    loop {
+                        let mut raw = [0u8; 4096];
+                        let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
+                        if n == 0 {
+                            return Err(E_TLS);
+                        }
+                        session.feed_tcp_data(&raw[..n]);
+
+                        let mut app = Vec::new();
+                        let mut hs = Vec::new();
+                        match session.process_records(&mut hs, &mut app) {
+                            Ok(_) => {}
+                            Err(_) => return Err(E_TLS),
+                        }
+
+                        if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
+                            if let Some(ccs) = session.tls13_change_cipher_spec() {
+                                socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                            }
+                            if let Some(record) = session.build_tls13_client_finished() {
+                                socket::send(fd, &record).map_err(|_| E_TLS)?;
+                            }
+                        }
+
+                        let outgoing = session.take_outgoing();
+                        if !outgoing.is_empty() {
+                            socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
+                        }
+
+                        if session.state() == crate::drivers::tls::TlsState::Established {
+                            break;
+                        }
+                        if crate::boot::time::main_monotonic_ms() > handshake_deadline {
+                            return Err(E_TLS);
+                        }
+                    }
+
+                    // Şifreli HTTP isteğini hazırla ve gönder
+                    let mut req = [0u8; 768];
+                    let reqlen = build_request_with_headers(
+                        &mut req,
+                        host,
+                        path,
+                        ip,
+                        cache_headers,
+                        config.range.as_deref(),
+                    )
+                    .ok_or(socket::E_INVAL)?;
+                    let record = session.encrypt_app_data(&req[..reqlen]).ok_or(E_TLS)?;
+                    socket::send(fd, &record).map_err(|_| E_TLS)?;
+
+                    // Şifreli yanıtı oku
+                    let (total, _) = read_http_response(fd, resp_buf, Some(&mut session))?;
+                    if total < 12 {
+                        return Err(E_HTTP);
+                    }
+                    let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+
+                    // TLS session'ı havuza döndürmek için sakla
+                    connection_pool().release(fd, host_str.to_string(), port, true, Some(session));
+
+                    Ok((status, hlen, total))
+                } else {
+                    let mut req = [0u8; 768];
+                    let reqlen = build_request_with_headers(
+                        &mut req,
+                        host,
+                        path,
+                        ip,
+                        cache_headers,
+                        config.range.as_deref(),
+                    )
+                    .ok_or(socket::E_INVAL)?;
+
+                    let mut sent = 0;
+                    while sent < reqlen {
+                        sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                            if sent == 0 {
+                                e
+                            } else {
+                                socket::E_TIMEOUT
+                            }
+                        })?;
+                    }
+                    let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+                    let _ = expected_total;
+                    if total < 12 {
+                        return Err(E_HTTP);
+                    }
+                    let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    Ok((status, hlen, total))
+                }
+            }
+        })();
+
+        // Bağlantıyı havuza geri ver (doğrudan bağlantı ve başarılıysa)
+        if use_pool {
+            connection_pool().release(fd, host_str.to_string(), port, is_https, None);
+        } else {
+            socket::close(fd);
+        }
+
+        match res {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < config.max_retries {
+                    sleep_ms(delay);
+                    delay = (delay * 2).min(10000);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or(E_HTTP))
+}
+
+/// Proxy üzerinden HTTP istek başlığı oluşturur (mutlak URL formu).
+fn build_proxy_request(
+    req: &mut [u8],
+    url: &str,
+    host: &[u8],
+    extra_headers: Option<&str>,
+) -> Option<usize> {
+    let mut n = 0usize;
+    let method = b"GET ";
+    let http_ver = b" HTTP/1.1\r\nHost: ";
+
+    if n + method.len() + url.len() + http_ver.len() + host.len() + 10 > req.len() {
+        return None;
+    }
+    req[n..n + method.len()].copy_from_slice(method);
+    n += method.len();
+    req[n..n + url.len()].copy_from_slice(url.as_bytes());
+    n += url.len();
+    req[n..n + http_ver.len()].copy_from_slice(http_ver);
+    n += http_ver.len();
+    req[n..n + host.len()].copy_from_slice(host);
+    n += host.len();
+
+    if let Some(headers) = extra_headers {
+        let headers_bytes = headers.as_bytes();
+        if n + headers_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + headers_bytes.len()].copy_from_slice(headers_bytes);
+        n += headers_bytes.len();
+    }
+
+    req[n..n + 2].copy_from_slice(b"\r\n");
+    n += 2;
+    req[n..n + 2].copy_from_slice(b"\r\n");
+    n += 2;
+
+    Some(n)
 }
 
 /// HTTP yanıtını socket'ten okur; `decrypt` verilirse gövde şifreli okunur
@@ -460,6 +964,83 @@ pub fn http_get_with_cache(
     http_get_impl(url, resp_buf, cache_headers)
 }
 
+/// HTTP GET isteği byte aralığı ile (Range başlığı).
+/// `range` örn. "0-499" (ilk 500 byte), "500-" (500. bayttan sona), "-500" (son 500 byte).
+pub fn http_get_range(
+    url: &str,
+    resp_buf: &mut [u8],
+    range: &str,
+    cache_headers: Option<&str>,
+) -> Result<(u16, usize, usize), i32> {
+    if !e1000::is_ready() {
+        return Err(socket::E_NOTCONN);
+    }
+    let mut host = [0u8; MAX_HOST];
+    let mut path = [0u8; MAX_PATH];
+    let (mut port, mut host_len, mut path_len) = parse_url(url, &mut host, &mut path)?;
+    let mut is_https = url.starts_with("https://");
+    let mut hops = 0;
+    loop {
+        let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
+        let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
+        let ip = socket::resolve_host(host_str)?;
+        let mut config = HttpClientConfig::default();
+        config.range = Some(range.to_string());
+        let (status, hlen, total) = fetch_once(
+            &host[..host_len],
+            port,
+            &path[..path_len],
+            ip,
+            resp_buf,
+            is_https,
+            cache_headers,
+            &config,
+        )?;
+        if (300..400).contains(&status) && hops < MAX_REDIRECTS {
+            let headers = &resp_buf[..hlen];
+            if let Some(loc) = header_value(headers, b"location") {
+                let loc_str = core::str::from_utf8(loc).map_err(|_| E_HTTP)?;
+                if loc_str.starts_with("http://") || loc_str.starts_with("https://") {
+                    is_https = loc_str.starts_with("https://");
+                    let (p2, hl2, pl2) = parse_url(loc_str, &mut host, &mut path)?;
+                    port = p2;
+                    host_len = hl2;
+                    path_len = pl2;
+                    hops += 1;
+                    continue;
+                } else if loc_str.starts_with('/') && loc_str.len() <= MAX_PATH {
+                    path[..loc_str.len()].copy_from_slice(loc_str.as_bytes());
+                    path_len = loc_str.len();
+                    hops += 1;
+                    continue;
+                }
+                return Err(E_REDIRECT);
+            }
+        }
+        // Chunked gövdeyi yerinde çöz.
+        let headers = &resp_buf[..hlen];
+        let is_chunked = header_value(headers, b"transfer-encoding")
+            .map(|v| {
+                v.iter()
+                    .zip(b"chunked".iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+                    && v.len() == 7
+            })
+            .unwrap_or(false);
+        if is_chunked {
+            let body_len = total - hlen;
+            let mut tmp = resp_buf[hlen..total].to_vec();
+            if let Some(decoded) = decode_chunked(&mut tmp, body_len) {
+                resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
+                return Ok((status, hlen, hlen + decoded));
+            }
+            return Err(E_HTTP);
+        }
+        let _ = (host_str, path_str);
+        return Ok((status, hlen, total));
+    }
+}
+
 /// Internal implementation for http_get variants.
 fn http_get_impl(
     url: &str,
@@ -478,6 +1059,7 @@ fn http_get_impl(
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
         let ip = socket::resolve_host(host_str)?;
+        let config = HttpClientConfig::default();
         let (status, hlen, total) = fetch_once(
             &host[..host_len],
             port,
@@ -486,6 +1068,7 @@ fn http_get_impl(
             resp_buf,
             is_https,
             cache_headers,
+            &config,
         )?;
         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
             let headers = &resp_buf[..hlen];
@@ -602,7 +1185,9 @@ pub fn form_multipart(
     let mut out = Vec::new();
     for (name, value) in fields {
         out.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
-        out.extend_from_slice(format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes());
+        out.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes(),
+        );
         out.extend_from_slice(value.as_bytes());
         out.extend_from_slice(b"\r\n");
     }
@@ -645,6 +1230,7 @@ pub fn http_request(
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
         let ip = socket::resolve_host(host_str)?;
+        let config = HttpClientConfig::default();
         let (status, hlen, total) = fetch_once_with_method(
             method,
             &host[..host_len],
@@ -657,6 +1243,7 @@ pub fn http_request(
             extra_headers,
             is_https,
             cache_headers,
+            &config,
         )?;
         if (300..400).contains(&status) && hops < MAX_REDIRECTS {
             let headers = &resp_buf[..hlen];
@@ -758,19 +1345,8 @@ pub fn http_patch(
 }
 
 /// DELETE istek kolaylık sarmalayıcısı.
-pub fn http_delete(
-    url: &str,
-    resp_buf: &mut [u8],
-) -> Result<(u16, usize, usize), i32> {
-    http_request(
-        HttpMethod::Delete,
-        url,
-        resp_buf,
-        None,
-        None,
-        None,
-        None,
-    )
+pub fn http_delete(url: &str, resp_buf: &mut [u8]) -> Result<(u16, usize, usize), i32> {
+    http_request(HttpMethod::Delete, url, resp_buf, None, None, None, None)
 }
 
 /// `fetch_once` gibi ama farklı HTTP metodu ve gövde desteğiyle.
@@ -786,53 +1362,161 @@ fn fetch_once_with_method(
     extra_headers: Option<&str>,
     is_https: bool,
     _cache_headers: Option<&str>,
+    config: &HttpClientConfig,
 ) -> Result<(u16, usize, usize), i32> {
-    let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM)?;
-    let _ = socket::set_timeout(fd, 4000);
-    let res = (|| {
-        socket::connect(fd, ip, port)?;
-        let mut req = [0u8; 1024];
-        let reqlen = build_request_with_method(
-            &mut req,
-            method,
-            host,
-            path,
-            body,
-            content_type,
-            extra_headers,
-        )
-        .ok_or(socket::E_INVAL)?;
+    let host_str = core::str::from_utf8(host).unwrap_or("");
+    let use_pool = config.proxy.is_none(); // Proxy ile bağlantı havuzlanmaz
 
-        let (status, hlen, total) = if is_https {
-            fetch_https(fd, host, &req, reqlen, resp_buf)?
-        } else {
-            let mut sent = 0;
-            while sent < reqlen {
-                sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
-                    if sent == 0 {
-                        e
-                    } else {
-                        socket::E_TIMEOUT
-                    }
+    let mut last_err: Option<i32> = None;
+    let mut delay = config.retry_delay_ms;
+
+    for attempt in 0..=config.max_retries {
+        let fd = if use_pool {
+            // Havuzdan mevcut bağlantıyı almayı dene
+            if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
+                cached_fd
+            } else {
+                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                    last_err = Some(e);
+                    e
                 })?;
+                let _ = socket::set_timeout(new_fd, config.timeout_ms);
+                socket::connect(new_fd, ip, port).map_err(|e| {
+                    let _ = socket::close(new_fd);
+                    last_err = Some(e);
+                    e
+                })?;
+                new_fd
             }
-            let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
-            let _ = expected_total;
-            if total < 12 {
-                return Err(E_HTTP);
-            }
-            let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
-            let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
-            (status, hlen, total)
+        } else {
+            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                last_err = Some(e);
+                e
+            })?;
+            let _ = socket::set_timeout(new_fd, config.timeout_ms);
+            socket::connect(new_fd, ip, port).map_err(|e| {
+                let _ = socket::close(new_fd);
+                last_err = Some(e);
+                e
+            })?;
+            new_fd
         };
 
-        // TODO: Content-Encoding (gzip/deflate) decoding to be implemented
-        // For now, compressed responses are passed through as-is
+        let res = (|| {
+            // Proxy ile bağlanma: proxy'e bağlan, gerekirse CONNECT tüneli kur
+            if let Some(ref proxy_str) = config.proxy {
+                let proxy_host_port = proxy_str.as_str();
+                let proxy_ip = socket::resolve_host(
+                    proxy_host_port.split(':').next().unwrap_or(proxy_host_port),
+                )?;
+                let proxy_port = proxy_host_port
+                    .split(':')
+                    .nth(1)
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(8080);
+                socket::connect(fd, proxy_ip, proxy_port)?;
 
-        Ok((status, hlen, total))
-    })();
-    socket::close(fd);
-    res
+                if is_https {
+                    // HTTPS üzerinden proxy: CONNECT tüneli kur
+                    let host_port = format!("{}:{}", host_str, port);
+                    proxy_connect(fd, &host_port, config)?;
+                    // TLS el sıkışması tünel üzerinden
+                    let empty_req = [0u8; 0];
+                    fetch_https(fd, host, &empty_req, 0, resp_buf)?;
+                } else {
+                    // HTTP üzerinden proxy: mutlak URL formu kullan
+                    let mut req = [0u8; 1024];
+                    let url_str = format!(
+                        "http://{}{}",
+                        host_str,
+                        core::str::from_utf8(path).unwrap_or("/")
+                    );
+                    let reqlen = build_proxy_request(&mut req, &url_str, host, extra_headers)
+                        .ok_or(socket::E_INVAL)?;
+                    let mut sent = 0;
+                    while sent < reqlen {
+                        sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                            if sent == 0 {
+                                e
+                            } else {
+                                socket::E_TIMEOUT
+                            }
+                        })?;
+                    }
+                    let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+                    let _ = expected_total;
+                    if total < 12 {
+                        return Err(E_HTTP);
+                    }
+                    let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+                    return Ok((status, hlen, total));
+                }
+            } else {
+                socket::connect(fd, ip, port)?;
+            }
+
+            let mut req = [0u8; 1024];
+            let reqlen = build_request_with_method(
+                &mut req,
+                method,
+                host,
+                path,
+                body,
+                content_type,
+                extra_headers,
+                config.range.as_deref(),
+            )
+            .ok_or(socket::E_INVAL)?;
+
+            let (status, hlen, total) = if is_https {
+                fetch_https(fd, host, &req, reqlen, resp_buf)?
+            } else {
+                let mut sent = 0;
+                while sent < reqlen {
+                    sent += socket::send(fd, &req[sent..reqlen]).map_err(|e| {
+                        if sent == 0 {
+                            e
+                        } else {
+                            socket::E_TIMEOUT
+                        }
+                    })?;
+                }
+                let (total, expected_total) = read_http_response(fd, resp_buf, None)?;
+                let _ = expected_total;
+                if total < 12 {
+                    return Err(E_HTTP);
+                }
+                let status = parse_status(&resp_buf[..total]).ok_or(E_HTTP)?;
+                let hlen = find_header_end(&resp_buf[..total]).ok_or(E_HTTP)?;
+                (status, hlen, total)
+            };
+
+            Ok((status, hlen, total))
+        })();
+
+        // Bağlantıyı havuza geri ver (doğrudan bağlantı ve başarılıysa)
+        if use_pool {
+            connection_pool().release(fd, host_str.to_string(), port, is_https, None);
+        } else {
+            socket::close(fd);
+        }
+
+        match res {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt < config.max_retries {
+                    sleep_ms(delay);
+                    delay = (delay * 2).min(10000);
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+
+    Err(last_err.unwrap_or(E_HTTP))
 }
 
 /// HTTP istek başlığı oluşturur: metod, gövde, Content-Type, Content-Length.
@@ -844,6 +1528,7 @@ fn build_request_with_method(
     body: Option<&[u8]>,
     content_type: Option<&str>,
     extra_headers: Option<&str>,
+    range: Option<&str>,
 ) -> Option<usize> {
     let mut n = 0usize;
 
@@ -864,6 +1549,17 @@ fn build_request_with_method(
     req[n..n + host.len()].copy_from_slice(host);
     n += host.len();
 
+    // Range header
+    if let Some(r) = range {
+        let range_header = format!("\r\nRange: bytes={}", r);
+        let range_bytes = range_header.as_bytes();
+        if n + range_bytes.len() > req.len() {
+            return None;
+        }
+        req[n..n + range_bytes.len()].copy_from_slice(range_bytes);
+        n += range_bytes.len();
+    }
+
     // Content-Type
     if let Some(ct) = content_type {
         let ct_str = format!("\r\nContent-Type: {}", ct);
@@ -877,7 +1573,7 @@ fn build_request_with_method(
 
     // Content-Length
     let body_len = body.map_or(0, |b| b.len());
-    let cl_str = format!("\r\nContent-Length: {}\r\nConnection: close", body_len);
+    let cl_str = format!("\r\nContent-Length: {}\r\nConnection: keep-alive", body_len);
     let cl_bytes = cl_str.as_bytes();
     if n + cl_bytes.len() > req.len() {
         return None;

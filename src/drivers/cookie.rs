@@ -143,19 +143,14 @@ impl CookieJar {
 
         // Aynı isim+domain+path çerezi varsa güncelle
         if let Some(pos) = cookies.iter().position(|c| {
-            c.name == cookie.name
-                && c.domain == cookie.domain
-                && c.path == cookie.path
+            c.name == cookie.name && c.domain == cookie.domain && c.path == cookie.path
         }) {
             cookies[pos] = cookie;
             return;
         }
 
         // Domain başına maksimum sayı kontrolü
-        let domain_count = cookies
-            .iter()
-            .filter(|c| c.domain == cookie.domain)
-            .count();
+        let domain_count = cookies.iter().filter(|c| c.domain == cookie.domain).count();
         if domain_count >= self.max_cookies_per_domain {
             // En eski çerezi kaldır
             if let Some(pos) = cookies.iter().position(|c| c.domain == cookie.domain) {
@@ -300,7 +295,12 @@ pub fn process_set_cookie(header: &str, default_domain: &str, default_path: &str
 }
 
 /// Belirtilen URL için Cookie başlığı değerini döner.
-pub fn get_cookie_header(domain: &str, path: &str, secure: bool, same_site_request: bool) -> String {
+pub fn get_cookie_header(
+    domain: &str,
+    path: &str,
+    secure: bool,
+    same_site_request: bool,
+) -> String {
     let jar = unsafe { &*cookie_jar() };
     jar.get_cookie_header(domain, path, secure, same_site_request)
 }

@@ -114,11 +114,12 @@ const LENGTH_EXTRA: [u32; 29] = [
 
 // Mesafe kodları (0-29) için temel mesafe ve ek bit sayısı.
 const DIST_BASE: [u32; 30] = [
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049,
-    3073, 4097, 6145, 8193, 12289, 16385, 24577,
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 ];
 const DIST_EXTRA: [u32; 30] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 ];
 
 /// Bir Huffman kodunu bit akışından çözer.
@@ -226,10 +227,36 @@ pub fn inflate(input: &[u8]) -> Option<Vec<u8>> {
 
 /// Sabit Huffman mesafe kodları (30 kod, 5 bit her biri).
 const FIXED_DIST_CODES: [(u16, u8); 30] = [
-    (0, 5), (1, 5), (2, 5), (3, 5), (4, 5), (5, 5), (6, 5), (7, 5),
-    (8, 5), (9, 5), (10, 5), (11, 5), (12, 5), (13, 5), (14, 5), (15, 5),
-    (16, 5), (17, 5), (18, 5), (19, 5), (20, 5), (21, 5), (22, 5), (23, 5),
-    (24, 5), (25, 5), (26, 5), (27, 5), (28, 5), (29, 5),
+    (0, 5),
+    (1, 5),
+    (2, 5),
+    (3, 5),
+    (4, 5),
+    (5, 5),
+    (6, 5),
+    (7, 5),
+    (8, 5),
+    (9, 5),
+    (10, 5),
+    (11, 5),
+    (12, 5),
+    (13, 5),
+    (14, 5),
+    (15, 5),
+    (16, 5),
+    (17, 5),
+    (18, 5),
+    (19, 5),
+    (20, 5),
+    (21, 5),
+    (22, 5),
+    (23, 5),
+    (24, 5),
+    (25, 5),
+    (26, 5),
+    (27, 5),
+    (28, 5),
+    (29, 5),
 ];
 
 // Gzip header skipper, returns compressed data (RFC 1952).
@@ -292,10 +319,7 @@ pub fn strip_gzip_header(data: &[u8]) -> Option<&[u8]> {
 /// `encoding` — "gzip", "deflate", "br" veya None.
 /// `data` — sıkıştırılmış veri.
 /// Döner: çözümlenmiş ham veri.
-pub fn decode_content_encoding(
-    encoding: Option<&str>,
-    data: &[u8],
-) -> Option<Vec<u8>> {
+pub fn decode_content_encoding(encoding: Option<&str>, data: &[u8]) -> Option<Vec<u8>> {
     match encoding {
         None | Some("identity") => Some(data.to_vec()),
         Some("gzip") => {

@@ -607,7 +607,8 @@ pub fn sendto_v6(fd: i32, ip: Ipv6Address, port: u16, data: &[u8]) -> Result<usi
     packet[8..len].copy_from_slice(data);
     // Compute UDP checksum over IPv6 pseudo-header
     let src = netstack::local_ipv6();
-    let csum = netstack::ipv6_pseudo_checksum(&src.0, &ip.0, netstack::IP_PROTO_UDP, &packet[..len]);
+    let csum =
+        netstack::ipv6_pseudo_checksum(&src.0, &ip.0, netstack::IP_PROTO_UDP, &packet[..len]);
     packet[6..8].copy_from_slice(&csum.to_be_bytes());
     if netstack::send_ipv6(ip, netstack::IP_PROTO_UDP, &packet[..len]) {
         Ok(data.len())
@@ -657,8 +658,8 @@ struct DnsCacheEntry {
     name: [u8; 64],
     name_len: usize,
     addr: DnsCacheAddr,
-    ttl: u64,        // Saniye cinsinden geçerlilik süresi (epoch seconds)
-    cached_at: u64,  // Önbelleğe alma zamanı (epoch seconds)
+    ttl: u64,       // Saniye cinsinden geçerlilik süresi (epoch seconds)
+    cached_at: u64, // Önbelleğe alma zamanı (epoch seconds)
     used: bool,
 }
 
@@ -956,11 +957,7 @@ pub fn resolve_host_ip(host: &str) -> Result<IpAddress, i32> {
 /// ~300 ms içinde başarısız olursa IPv4 paralel denenir. İlk başarılı bağlantı
 /// döndürülür. Soket tanımlayıcısı çağrıcı tarafından yönetilir (socket() ile
 /// oluşturulmalı, başarısızsa kapatılmalı).
-pub fn connect_happy_eyeballs(
-    fd: i32,
-    host: &str,
-    port: u16,
-) -> Result<IpAddress, i32> {
+pub fn connect_happy_eyeballs(fd: i32, host: &str, port: u16) -> Result<IpAddress, i32> {
     // Her iki adres ailesini de çöz
     let v4 = resolve_host(host).ok();
     let v6 = resolve_host_aaaa(host).ok();

@@ -1895,7 +1895,14 @@ pub fn send_neighbor_solicitation(target_ip: Ipv6Address) -> bool {
     solicited_node[13] = target_ip.0[13];
     solicited_node[14] = target_ip.0[14];
     solicited_node[15] = target_ip.0[15];
-    let dst_mac = MacAddress([0x33, 0x33, 0xFF, target_ip.0[13], target_ip.0[14], target_ip.0[15]]);
+    let dst_mac = MacAddress([
+        0x33,
+        0x33,
+        0xFF,
+        target_ip.0[13],
+        target_ip.0[14],
+        target_ip.0[15],
+    ]);
 
     let mut pkt = [0u8; 64];
     let total_len = 32; // ICMPv6 başlığı (8) + Target Address (16) + SLLAO (8)
@@ -1921,12 +1928,24 @@ pub fn send_neighbor_solicitation(target_ip: Ipv6Address) -> bool {
 
 /// IPv6 Komşu Bildirimi (Neighbor Advertisement, ICMPv6 Type 136) gönderir.
 /// Bir Komşu Sorgulamaya yanıt olarak veya otomatik olarak gönderilebilir.
-pub fn send_neighbor_advertisement(target_ip: Ipv6Address, dst_ip: Ipv6Address, solicited: bool, override_flag: bool) -> bool {
+pub fn send_neighbor_advertisement(
+    target_ip: Ipv6Address,
+    dst_ip: Ipv6Address,
+    solicited: bool,
+    override_flag: bool,
+) -> bool {
     let src_ip = local_ipv6();
     let dst_mac = if dst_ip.is_multicast() {
         dst_ip.multicast_mac()
     } else {
-        neighbor_lookup(dst_ip).unwrap_or(MacAddress([0x33, 0x33, 0xFF, target_ip.0[13], target_ip.0[14], target_ip.0[15]]))
+        neighbor_lookup(dst_ip).unwrap_or(MacAddress([
+            0x33,
+            0x33,
+            0xFF,
+            target_ip.0[13],
+            target_ip.0[14],
+            target_ip.0[15],
+        ]))
     };
 
     let mut pkt = [0u8; 32];
@@ -1968,7 +1987,12 @@ pub fn send_neighbor_advertisement(target_ip: Ipv6Address, dst_ip: Ipv6Address, 
     ip_packet[24..40].copy_from_slice(&dst_ip.0);
     ip_packet[40..40 + total_len].copy_from_slice(&pkt[..total_len]);
 
-    let len = build_ethernet(dst_mac, ETHERTYPE_IPV6, &ip_packet[..ip_packet_len], &mut frame);
+    let len = build_ethernet(
+        dst_mac,
+        ETHERTYPE_IPV6,
+        &ip_packet[..ip_packet_len],
+        &mut frame,
+    );
     e1000::transmit(&frame[..len])
 }
 

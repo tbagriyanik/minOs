@@ -1002,11 +1002,13 @@ impl BrowserApp {
             p += 1;
         }
 
+        let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         render_html_to_lines(
             &preprocessed_html,
             wrap_width_px,
             &mut self.page_lines,
             max_lines,
+            current_url,
         );
     }
 

@@ -235,12 +235,93 @@ pub fn decode_bytes_to_string(bytes: &[u8]) -> String {
     out
 }
 
+/// Solves relative/absolute URLs against an optional base URL.
+pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
+    let src = src.trim();
+    if src.is_empty() {
+        return None;
+    }
+    if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:") {
+        return Some(String::from(src));
+    }
+    let base = base_url?.trim();
+    if src.starts_with("//") {
+        let scheme = if base.starts_with("https://") {
+            "https:"
+        } else {
+            "http:"
+        };
+        return Some(format!("{}{}", scheme, src));
+    }
+    if src.starts_with('/') {
+        if let Some(scheme_end) = base.find("://") {
+            let rest = &base[scheme_end + 3..];
+            let host_end = rest.find('/').unwrap_or(rest.len());
+            let authority = &base[..scheme_end + 3 + host_end];
+            return Some(format!("{}{}", authority, src));
+        }
+        return None;
+    }
+    let src_clean = if src.starts_with("./") {
+        &src[2..]
+    } else {
+        src
+    };
+    if let Some(scheme_end) = base.find("://") {
+        let rest = &base[scheme_end + 3..];
+        let host_and_path = if let Some(q_or_h) = rest.find(|c| c == '?' || c == '#') {
+            &rest[..q_or_h]
+        } else {
+            rest
+        };
+        if let Some(last_slash) = host_and_path.rfind('/') {
+            let base_dir = &base[..scheme_end + 3 + last_slash + 1];
+            return Some(format!("{}{}", base_dir, src_clean));
+        } else {
+            return Some(format!("{}/{}", base, src_clean));
+        }
+    }
+    None
+}
+
+/// Scales RGB pixel array to target dimensions using nearest-neighbor sampling.
+fn scale_rgb(
+    orig_w: usize,
+    orig_h: usize,
+    orig_rgb: &[u8],
+    target_w: usize,
+    target_h: usize,
+) -> Vec<u8> {
+    if orig_w == target_w && orig_h == target_h {
+        return orig_rgb.to_vec();
+    }
+    let mut scaled = Vec::with_capacity(target_w * target_h * 3);
+    for ty in 0..target_h {
+        let sy = (ty * orig_h) / target_h.max(1);
+        for tx in 0..target_w {
+            let sx = (tx * orig_w) / target_w.max(1);
+            let idx = (sy * orig_w + sx) * 3;
+            if idx + 2 < orig_rgb.len() {
+                scaled.push(orig_rgb[idx]);
+                scaled.push(orig_rgb[idx + 1]);
+                scaled.push(orig_rgb[idx + 2]);
+            } else {
+                scaled.push(0);
+                scaled.push(0);
+                scaled.push(0);
+            }
+        }
+    }
+    scaled
+}
+
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 pub fn render_html_to_lines(
     body: &[u8],
     wrap_width_px: usize,
     out_lines: &mut Vec<BrowserLine>,
     max_lines: usize,
+    base_url: Option<&str>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
     // script etiketleri ise çıktidan çıkarılır.
@@ -1032,7 +1113,7 @@ pub fn render_html_to_lines(
                 } else if eq_ascii(name, b"caption") {
                     // <caption>: Tablo basligi
                 } else if eq_ascii(name, b"img") {
-                    // <img>: Görsel çizilemez; erişilebilir metin + basit görsel placeholder göster.
+                    // <img>: Görsel işleme
                     let label = extract_attr(attrs, b"alt")
                         .or_else(|| extract_attr(attrs, b"title"))
                         .or_else(|| extract_attr(attrs, b"src"))
@@ -1058,7 +1139,7 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
-                    // Decode image from data URL or src attribute and render inline.
+                    // Decode image from data URL or remote HTTP URL.
                     let mut image_decoded: Option<(usize, usize, Vec<u8>)> = None;
                     if let Some(src) = extract_attr(attrs, b"src") {
                         if src.starts_with("data:image/") {
@@ -1073,18 +1154,35 @@ pub fn render_html_to_lines(
                                     }
                                 }
                             }
+                        } else if let Some(resolved_url) = resolve_url(src, base_url) {
+                            if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
+                                let mut http_buf = vec![0u8; 1_048_576]; // 1MB buffer for remote image
+                                if let Ok((status, hlen, total)) = crate::drivers::http::http_get(&resolved_url, &mut http_buf) {
+                                    if (200..300).contains(&status) && total > hlen {
+                                        let img_bytes = &http_buf[hlen..total];
+                                        if let Some(img) = crate::apps::imgdecode::decode(img_bytes) {
+                                            image_decoded = Some((img.width, img.height, img.rgb));
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
                     // Calculate display size (max 200px wide, maintain aspect ratio)
-                    let (img_w, _img_h) = image_decoded.as_ref().map_or((64, 64), |(w, h, _)| {
+                    let (disp_w, disp_h) = image_decoded.as_ref().map_or((64, 64), |(w, h, _)| {
                         let max_w = 200usize;
                         if *w > max_w {
                             let scale = max_w as f32 / *w as f32;
-                            (max_w, (*h as f32 * scale) as usize)
+                            (max_w, ((*h as f32 * scale) as usize).max(1))
                         } else {
                             (*w, *h)
                         }
+                    });
+
+                    // Pre-downscale image pixels to display size for crisp rendering and smaller memory footprint
+                    let pre_scaled_rgb = image_decoded.as_ref().map(|(w, h, rgb)| {
+                        scale_rgb(*w, *h, rgb, disp_w, disp_h)
                     });
 
                     // Check if image fits on current line, flush if needed
@@ -1095,7 +1193,7 @@ pub fn render_html_to_lines(
                     let space_w = MinGuiCompositor::text_width(" ", scale);
                     let indent = tag_indent(cur_line_tag);
                     let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
-                    let img_w_px = img_w.max(1);
+                    let img_w_px = disp_w.max(1);
 
                     if cur_line_w > 0 && cur_line_w + space_w + img_w_px > eff_wrap {
                         flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
@@ -1104,7 +1202,7 @@ pub fn render_html_to_lines(
                     // Add image span
                     cur_line_w += if cur_line_w > 0 { space_w + img_w_px } else { img_w_px };
 
-                    if let Some((w, h, rgb)) = image_decoded {
+                    if let Some(scaled_rgb) = pre_scaled_rgb {
                         cur_line_spans.push(TextSpan {
                             text: format!("[{}]", label),
                             color: current_color,
@@ -1113,9 +1211,9 @@ pub fn render_html_to_lines(
                             link_url: String::from(link_target),
                             is_button: active_is_button,
                             is_image: true,
-                            image_width: w,
-                            image_height: h,
-                            image_rgb: Some(rgb),
+                            image_width: disp_w,
+                            image_height: disp_h,
+                            image_rgb: Some(scaled_rgb),
                             onclick: String::from(onclick_str),
                             elem_id: String::from(elem_id_str),
                             bold: current_bold,
@@ -1613,6 +1711,36 @@ pub fn render_html_to_lines(
         cur_line_align,
         max_lines,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_url() {
+        let base = "http://example.com/sub/page.html";
+        assert_eq!(
+            resolve_url("http://other.com/img.png", Some(base)).as_deref(),
+            Some("http://other.com/img.png")
+        );
+        assert_eq!(
+            resolve_url("//cdn.example.com/logo.png", Some(base)).as_deref(),
+            Some("http://cdn.example.com/logo.png")
+        );
+        assert_eq!(
+            resolve_url("/static/pic.jpg", Some(base)).as_deref(),
+            Some("http://example.com/static/pic.jpg")
+        );
+        assert_eq!(
+            resolve_url("photo.png", Some(base)).as_deref(),
+            Some("http://example.com/sub/photo.png")
+        );
+        assert_eq!(
+            resolve_url("./banner.gif", Some(base)).as_deref(),
+            Some("http://example.com/sub/banner.gif")
+        );
+    }
 }
 
 /// CSS Grid render etme: hucreleri satir satir, sutunlara gore yerlestir.

@@ -10,8 +10,7 @@
 use alloc::vec::Vec;
 
 use crate::drivers::crypto::revocation_core::{
-    check_crl_verified, check_ocsp, certificate_serial, serials_equal,
-    RevocationStatus,
+    certificate_serial, check_crl_verified, check_ocsp, serials_equal, RevocationStatus,
 };
 use crate::drivers::crypto::x509::X509Time;
 
@@ -96,7 +95,7 @@ fn list_root_certs() -> Vec<Vec<u8>> {
     // certificate_serial fonksiyonunun calismasi onemlidir.
     for name in &root_names {
         let _ = name; // isim sadece tanimlama icin
-        // Minimal DER: SEQUENCE(30) { tbsCertificate SEQUENCE(30) { serialNumber INTEGER(02) } }
+                      // Minimal DER: SEQUENCE(30) { tbsCertificate SEQUENCE(30) { serialNumber INTEGER(02) } }
         let mut der = Vec::new();
         der.push(0x30); // SEQUENCE tag
         der.push(0x0c); // length 12
@@ -136,7 +135,7 @@ fn make_empty_crl_der() -> Vec<u8> {
 fn make_revoked_crl_der(serial: &[u8]) -> Vec<u8> {
     let mut der = Vec::new();
     der.push(0x30); // outer SEQUENCE
-    // Uzunluk: 4 + 4 + 3 + serial.len() + 2 (yaklasik)
+                    // Uzunluk: 4 + 4 + 3 + serial.len() + 2 (yaklasik)
     let revoked_entry_len = 3 + serial.len() + 2;
     let tbs_len = 4 + 4 + revoked_entry_len;
     der.push((tbs_len + 6) as u8);
@@ -241,7 +240,10 @@ fn ocsp_crl_serial_equality() {
         Ok(s) => s,
         Err(_) => return,
     };
-    assert!(serials_equal(&serial1, &serial2), "Ayni sertifikadan cikan seri numaralari esit olmali");
+    assert!(
+        serials_equal(&serial1, &serial2),
+        "Ayni sertifikadan cikan seri numaralari esit olmali"
+    );
 
     // Farkli uzunlukta ama ayni degerli seri numaralari (basit sifir ekleme)
     let mut padded = vec![0u8; 4];
@@ -272,7 +274,7 @@ fn ocsp_crl_invalid_crl_returns_unknown() {
             RevocationStatus::Unknown,
             "Gecersiz CRL Unknown donmeli"
         ),
-        Err(_) => {}, // Ayrıştırma hatasi da fail-safe
+        Err(_) => {} // Ayrıştırma hatasi da fail-safe
     }
 
     // Gecersiz DER (rasgele baytlar) -> Err veya Ok(Unknown) kabul edilebilir
@@ -283,7 +285,7 @@ fn ocsp_crl_invalid_crl_returns_unknown() {
             RevocationStatus::Unknown,
             "Rasgele CRL Unknown donmeli"
         ),
-        Err(_) => {},
+        Err(_) => {}
     }
 }
 
@@ -304,7 +306,7 @@ fn ocsp_crl_invalid_ocsp_returns_unknown() {
             RevocationStatus::Unknown,
             "Gecersiz OCSP Unknown donmeli"
         ),
-        Err(_) => {}, // Ayrıştırma hatasi kabul edilebilir
+        Err(_) => {} // Ayrıştırma hatasi kabul edilebilir
     }
 
     let result = check_ocsp(&[0xff, 0xff, 0xff], &serial, &test_now());
@@ -314,7 +316,7 @@ fn ocsp_crl_invalid_ocsp_returns_unknown() {
             RevocationStatus::Unknown,
             "Rasgele OCSP Unknown donmeli"
         ),
-        Err(_) => {},
+        Err(_) => {}
     }
 }
 
@@ -338,7 +340,7 @@ fn ocsp_crl_fail_closed_core() {
             RevocationStatus::Unknown,
             "Gecersiz CRL Unknown donmeli (fail-closed)"
         ),
-        Err(_) => {},
+        Err(_) => {}
     }
 
     // Gecersiz OCSP -> Unknown
@@ -349,7 +351,7 @@ fn ocsp_crl_fail_closed_core() {
             RevocationStatus::Unknown,
             "Gecersiz OCSP Unknown donmeli"
         ),
-        Err(_) => {}, // Ayrıştırma hatasi da kabul edilebilir
+        Err(_) => {} // Ayrıştırma hatasi da kabul edilebilir
     }
 }
 
@@ -373,7 +375,7 @@ fn ocsp_crl_check_all_roots() {
                 RevocationStatus::Unknown,
                 "Kok CA: gecersiz CRL Unknown olmali"
             ),
-            Err(_) => {},
+            Err(_) => {}
         }
 
         // Gecersiz OCSP -> Unknown veya hata
@@ -384,7 +386,7 @@ fn ocsp_crl_check_all_roots() {
                 RevocationStatus::Unknown,
                 "Kok CA: gecersiz OCSP Unknown olmali"
             ),
-            Err(_) => {}, // Ayrıştırma hatasi da kabul edilebilir
+            Err(_) => {} // Ayrıştırma hatasi da kabul edilebilir
         }
     }
 }
@@ -406,11 +408,10 @@ fn ocsp_crl_revoked_serial_detected() {
     // beklenir (fail-safe). Gercek CRL DER yapisi daha komplex olur.
     match result {
         Ok(r) => assert!(
-            r.status == RevocationStatus::Revoked
-                || r.status == RevocationStatus::Unknown,
+            r.status == RevocationStatus::Revoked || r.status == RevocationStatus::Unknown,
             "Iptal CRL Revoked veya Unknown olmali"
         ),
-        Err(_) => {}, // Ayrıştırma hatasi da kabul edilebilir
+        Err(_) => {} // Ayrıştırma hatasi da kabul edilebilir
     }
 }
 
@@ -418,8 +419,5 @@ fn ocsp_crl_revoked_serial_detected() {
 #[test]
 fn ocsp_crl_root_count() {
     let certs = list_root_certs();
-    assert!(
-        certs.len() >= 40,
-        "En az 40 kok CA sertifikasi bekleniyor"
-    );
+    assert!(certs.len() >= 40, "En az 40 kok CA sertifikasi bekleniyor");
 }

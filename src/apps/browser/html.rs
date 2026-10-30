@@ -1148,19 +1148,26 @@ pub fn render_html_to_lines(
                                 let is_base64 = src[..comma_pos].contains("base64");
                                 if is_base64 {
                                     if let Some(decoded_bytes) = base64_decode(data_part) {
-                                        if let Some(img) = crate::apps::imgdecode::decode(&decoded_bytes) {
+                                        if let Some(img) =
+                                            crate::apps::imgdecode::decode(&decoded_bytes)
+                                        {
                                             image_decoded = Some((img.width, img.height, img.rgb));
                                         }
                                     }
                                 }
                             }
                         } else if let Some(resolved_url) = resolve_url(src, base_url) {
-                            if resolved_url.starts_with("http://") || resolved_url.starts_with("https://") {
+                            if resolved_url.starts_with("http://")
+                                || resolved_url.starts_with("https://")
+                            {
                                 let mut http_buf = vec![0u8; 1_048_576]; // 1MB buffer for remote image
-                                if let Ok((status, hlen, total)) = crate::drivers::http::http_get(&resolved_url, &mut http_buf) {
+                                if let Ok((status, hlen, total)) =
+                                    crate::drivers::http::http_get(&resolved_url, &mut http_buf)
+                                {
                                     if (200..300).contains(&status) && total > hlen {
                                         let img_bytes = &http_buf[hlen..total];
-                                        if let Some(img) = crate::apps::imgdecode::decode(img_bytes) {
+                                        if let Some(img) = crate::apps::imgdecode::decode(img_bytes)
+                                        {
                                             image_decoded = Some((img.width, img.height, img.rgb));
                                         }
                                     }
@@ -1181,9 +1188,9 @@ pub fn render_html_to_lines(
                     });
 
                     // Pre-downscale image pixels to display size for crisp rendering and smaller memory footprint
-                    let pre_scaled_rgb = image_decoded.as_ref().map(|(w, h, rgb)| {
-                        scale_rgb(*w, *h, rgb, disp_w, disp_h)
-                    });
+                    let pre_scaled_rgb = image_decoded
+                        .as_ref()
+                        .map(|(w, h, rgb)| scale_rgb(*w, *h, rgb, disp_w, disp_h));
 
                     // Check if image fits on current line, flush if needed
                     let scale = match cur_line_tag {
@@ -1196,11 +1203,22 @@ pub fn render_html_to_lines(
                     let img_w_px = disp_w.max(1);
 
                     if cur_line_w > 0 && cur_line_w + space_w + img_w_px > eff_wrap {
-                        flush_line(out_lines, &mut cur_line_spans, &mut cur_line_w, cur_line_tag, cur_line_align, max_lines);
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
                     }
 
                     // Add image span
-                    cur_line_w += if cur_line_w > 0 { space_w + img_w_px } else { img_w_px };
+                    cur_line_w += if cur_line_w > 0 {
+                        space_w + img_w_px
+                    } else {
+                        img_w_px
+                    };
 
                     if let Some(scaled_rgb) = pre_scaled_rgb {
                         cur_line_spans.push(TextSpan {

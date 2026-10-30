@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 //! Maturity: SKELETON / WIP — Gerçek UVC cihaz tespiti ve video akışı yok,//! sadece sabitler ve YUY2→RGB32 dönüşüm ilkeleri mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! USB Video Class (UVC) Kamera ve Görüntü Yakalama Sürücüsü.
 //!
 //! Bu modül, USB üzerinden bağlanan harici ve dahili web kameralarını (UVC 1.1 / 1.5)

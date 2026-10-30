@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
 //! Maturity: SKELETON / WIP — Gerçek USB Printer cihaz tespiti yok,//! sadece Class sabitleri ve state machine mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! USB Printer Driver - USB yazıcı desteği
 //!
 //! Bu driver, USB yazıcıları destekler. USB Printer Class spesifikasyonuna

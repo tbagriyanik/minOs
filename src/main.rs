@@ -5745,6 +5745,9 @@ pub extern "C" fn _start() -> ! {
                             compositor.context_file_idx =
                                 Some(compositor.context_file_idx.unwrap() - 1);
                         }
+                    } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
+                        // Arrow up scrolls the browser page
+                        browser_app.scroll_up(30);
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -5821,6 +5824,9 @@ pub extern "C" fn _start() -> ! {
                         if cur + 1 < items_len {
                             compositor.context_file_idx = Some(cur + 1);
                         }
+                    } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
+                        // Arrow down scrolls the browser page
+                        browser_app.scroll_down(30);
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -6686,6 +6692,9 @@ pub extern "C" fn _start() -> ! {
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         browser_app.address_home_ext(keyboard.shift);
+                    } else if app_is_focused(&compositor, 3) {
+                        // Home: scroll to top of page
+                        browser_app.scroll_top();
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_first();
 
@@ -6712,6 +6721,10 @@ pub extern "C" fn _start() -> ! {
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                     } else if app_is_focused(&compositor, 3) && browser_app.address_focused {
                         browser_app.address_end_ext(keyboard.shift);
+                    } else if app_is_focused(&compositor, 3) {
+                        // End: scroll to bottom of page
+                        let content_h = browser_app.content_height();
+                        browser_app.scroll_bottom(content_h);
                     } else if app_is_focused(&compositor, 0) {
                         filemanager_app.select_last();
 
@@ -6740,6 +6753,11 @@ pub extern "C" fn _start() -> ! {
                         notepad_app.move_page_ext(true, lines, keyboard.shift);
 
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                            let page_h = w.height.saturating_sub(100);
+                            browser_app.page_up(page_h);
+                        }
                     } else if app_is_focused(&compositor, 7) {
                         taskmgr_app.select_page(false, 8);
                     } else if app_is_focused(&compositor, 10) {
@@ -6768,6 +6786,11 @@ pub extern "C" fn _start() -> ! {
                         notepad_app.move_page_ext(false, lines, keyboard.shift);
 
                         notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
+                    } else if app_is_focused(&compositor, 3) {
+                        if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                            let page_h = w.height.saturating_sub(100);
+                            browser_app.page_down(page_h);
+                        }
                     } else if app_is_focused(&compositor, 7) {
                         taskmgr_app.select_page(true, 8);
                     } else if app_is_focused(&compositor, 10) {
@@ -6890,6 +6913,22 @@ pub extern "C" fn _start() -> ! {
 
                     if focused {
                         browser_app.navigate();
+                    }
+                }
+
+                drivers::keyboard::KeyAction::BrowserBack => {
+                    let focused = app_is_focused(&compositor, 3);
+
+                    if focused {
+                        browser_app.back();
+                    }
+                }
+
+                drivers::keyboard::KeyAction::BrowserForward => {
+                    let focused = app_is_focused(&compositor, 3);
+
+                    if focused {
+                        browser_app.forward();
                     }
                 }
 
@@ -7109,6 +7148,31 @@ pub extern "C" fn _start() -> ! {
                     let view_lines = w.height.saturating_sub(86) / 13;
 
                     terminal_app.scroll_output(scroll_val as isize, view_lines);
+                }
+            }
+
+            // Browser: mouse wheel scroll
+            if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                if w.is_open
+                    && w.is_focused
+                    && !w.is_minimized
+                    && gui::in_rect(
+                        mouse.x as usize,
+                        mouse.y as usize,
+                        (
+                            w.x,
+                            w.y + gui::titlebar_h(),
+                            w.width,
+                            w.height.saturating_sub(gui::titlebar_h() + 28),
+                        ),
+                    )
+                {
+                    let scroll_amount = gui::sp(40);
+                    if scroll_val > 0 {
+                        browser_app.scroll_up(scroll_amount);
+                    } else {
+                        browser_app.scroll_down(scroll_amount);
+                    }
                 }
             }
 
@@ -8098,6 +8162,12 @@ pub extern "C" fn _start() -> ! {
                 filemanager_app.search_char(ch);
 
                 fm_ensure_selection_visible(&mut compositor, &filemanager_app);
+            } else if ch == ' ' && app_is_focused(&compositor, 3) && !browser_app.address_focused {
+                // Space: page down in browser when not in address bar
+                if let Some((_, w)) = focused_window_for_app(&compositor, 3) {
+                    let page_h = w.height.saturating_sub(100);
+                    browser_app.page_down(page_h);
+                }
             } else if ch == ' '
                 && app_is_focused(&compositor, 0)
                 && filemanager_app.selected_idx < filemanager_app.file_count

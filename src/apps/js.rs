@@ -525,7 +525,10 @@ impl JsRuntime {
             return;
         }
         let (extends, ctor) = match self.classes.get(class_name) {
-            Some(class) => (class.extends.clone(), class.methods.get("constructor").cloned()),
+            Some(class) => (
+                class.extends.clone(),
+                class.methods.get("constructor").cloned(),
+            ),
             None => return,
         };
         let (params, body) = match ctor {
@@ -1490,10 +1493,7 @@ impl JsRuntime {
                     let class_name = rest[..open].trim();
                     let arg_str = &rest[open + 1..rest.len() - 1];
                     // Sınıf verisini ödünç çakışması olmadan klonla.
-                    let extends_opt = self
-                        .classes
-                        .get(class_name)
-                        .and_then(|c| c.extends.clone());
+                    let extends_opt = self.classes.get(class_name).and_then(|c| c.extends.clone());
                     if self.classes.contains_key(class_name) {
                         // Miras zinciri boyunca tüm metodları topla (alt sınıf kazanır).
                         let methods = self.class_methods(class_name);
@@ -1565,8 +1565,7 @@ impl JsRuntime {
                             .map(|a| self.eval_val(a))
                             .collect();
                         let old_this = self.values.get("this").cloned();
-                        self.values
-                            .insert(String::from("this"), JsValue::Undefined);
+                        self.values.insert(String::from("this"), JsValue::Undefined);
                         for (i, param) in sm.params.iter().enumerate() {
                             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                             self.var_set_val(param, val);
@@ -1628,8 +1627,7 @@ impl JsRuntime {
                             }
                             let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
                             // `this` üzerinden yapılan atamaları örneğe geri yaz.
-                            if let Some(JsValue::Object(mutated)) =
-                                self.values.get("this").cloned()
+                            if let Some(JsValue::Object(mutated)) = self.values.get("this").cloned()
                             {
                                 if is_simple_ident(obj_name) {
                                     if let Some(existing) = self.values.get_mut(obj_name) {
@@ -1987,9 +1985,7 @@ impl JsRuntime {
                         };
                         if let Some(open) = r.find('(') {
                             let mname = r[..open].trim();
-                            if !mname.is_empty()
-                                && !mname.contains(char::is_whitespace)
-                            {
+                            if !mname.is_empty() && !mname.contains(char::is_whitespace) {
                                 if let Some((param_str, after_params)) = call_args(r, open) {
                                     if let Some(body) = extract_block(&r[after_params..]) {
                                         let params: Vec<String> = split_top_level_comma(param_str)
@@ -2008,10 +2004,7 @@ impl JsRuntime {
                                                 .static_methods
                                                 .insert(mname.to_string(), js_func);
                                         } else {
-                                            js_class.methods.insert(
-                                                mname.to_string(),
-                                                js_func,
-                                            );
+                                            js_class.methods.insert(mname.to_string(), js_func);
                                         }
                                     }
                                 }
@@ -2849,10 +2842,7 @@ fn find_top_level_word(hay: &[u8], word: &[u8]) -> Option<usize> {
             b'(' | b'[' | b'{' => depth += 1,
             b')' | b']' | b'}' => depth -= 1,
             _ => {
-                if depth == 0
-                    && i + word.len() <= hay.len()
-                    && &hay[i..i + word.len()] == word
-                {
+                if depth == 0 && i + word.len() <= hay.len() && &hay[i..i + word.len()] == word {
                     let before_ok = i == 0 || !is_word(hay[i - 1]);
                     let after_ok = hay.get(i + word.len()).map_or(true, |n| !is_word(*n));
                     if before_ok && after_ok {

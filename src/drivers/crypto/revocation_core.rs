@@ -1084,6 +1084,10 @@ mod tests {
             }
         }
 
-        assert_eq!(failures, 0, "40-kök CRL/OCSP regresyon testi başarısız: {} hata", failures);
+        assert_eq!(
+            failures, 0,
+            "40-kök CRL/OCSP regresyon testi başarısız: {} hata",
+            failures
+        );
     }
 }

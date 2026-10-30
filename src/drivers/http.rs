@@ -567,9 +567,9 @@ pub mod h2 {
     #[repr(C, packed)]
     #[derive(Clone, Copy, Debug)]
     pub struct FrameHeader {
-        pub length: [u8; 3],   // 24-bit payload uzunluğu
-        pub r#type: u8,        // Çerçeve türü
-        pub flags: u8,         // Bayraklar
+        pub length: [u8; 3],    // 24-bit payload uzunluğu
+        pub r#type: u8,         // Çerçeve türü
+        pub flags: u8,          // Bayraklar
         pub stream_id: [u8; 4], // 31-bit akış kimliği (bit 31 reserved)
     }
 

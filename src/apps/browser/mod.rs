@@ -3070,6 +3070,38 @@ impl BrowserApp {
         self.navigate();
     }
 
+    /// Scroll the page up by a small amount (line scroll)
+    pub fn scroll_up(&mut self, amount: usize) {
+        self.scroll_y = self.scroll_y.saturating_sub(amount);
+    }
+
+    /// Scroll the page down by a small amount (line scroll)
+    pub fn scroll_down(&mut self, amount: usize) {
+        self.scroll_y = self.scroll_y.saturating_add(amount);
+    }
+
+    /// Scroll the page up by one page
+    pub fn page_up(&mut self, page_height: usize) {
+        self.scroll_y = self.scroll_y.saturating_sub(page_height);
+    }
+
+    /// Scroll the page down by one page
+    pub fn page_down(&mut self, page_height: usize) {
+        self.scroll_y = self.scroll_y.saturating_add(page_height);
+    }
+
+    /// Scroll to the top of the page
+    pub fn scroll_top(&mut self) {
+        self.scroll_y = 0;
+    }
+
+    /// Scroll to the bottom of the page
+    pub fn scroll_bottom(&mut self, content_height: usize) {
+        if content_height > 0 {
+            self.scroll_y = content_height;
+        }
+    }
+
     pub fn render_content(
         &self,
         fb: &mut Framebuffer,
@@ -3462,8 +3494,13 @@ impl BrowserApp {
                         let mut span_char_start = 0usize;
                         for span in &line.spans {
                             let raw_text_w = MinGuiCompositor::text_width(&span.text, scale);
-                            let span_w = raw_text_w + if span.is_button { 16 } else { 0 }
-                                + if span.is_image { span.image_width.max(1) } else { 0 };
+                            let span_w = raw_text_w
+                                + if span.is_button { 16 } else { 0 }
+                                + if span.is_image {
+                                    span.image_width.max(1)
+                                } else {
+                                    0
+                                };
                             let text_color = if span.is_link {
                                 Color::ACCENT_BLUE
                             } else {
@@ -3477,9 +3514,15 @@ impl BrowserApp {
                                 if let Some(rgb) = &span.image_rgb {
                                     let img_w = span.image_width.max(1);
                                     let img_h = span.image_height.max(1);
-                                    let draw_w = img_w.min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                    let draw_h = img_h.min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
-                                    if draw_w > 0 && draw_h > 0 && draw_y >= doc_y && draw_y < doc_y + doc_h {
+                                    let draw_w = img_w
+                                        .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                    let draw_h = img_h
+                                        .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                    if draw_w > 0
+                                        && draw_h > 0
+                                        && draw_y >= doc_y
+                                        && draw_y < doc_y + doc_h
+                                    {
                                         for dy in 0..draw_h {
                                             let sy = (dy * img_h) / draw_h.max(1);
                                             for dx in 0..draw_w {
@@ -3558,50 +3601,6 @@ impl BrowserApp {
                                         url: span.link_url.clone(),
                                         onclick: span.onclick.clone(),
                                     });
-                                }
-                            } else if let Some((s, e)) = sel_range {
-                                if let Some(bg) = span.bg_color {
-                                    fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
-                                }
-                                let prefix = &span.text[..s];
-                                let selected = &span.text[s..e];
-                                let suffix = &span.text[e..];
-                                let prefix_w = MinGuiCompositor::text_width(prefix, scale);
-                                let sel_w = MinGuiCompositor::text_width(selected, scale);
-
-                                if !prefix.is_empty() {
-                                    MinGuiCompositor::draw_string_scaled_clipped(
-                                        fb, cur_x, draw_y, prefix, text_color, scale, doc_clip,
-                                    );
-                                }
-                                if !selected.is_empty() {
-                                    fb.draw_rect(
-                                        cur_x + prefix_w,
-                                        draw_y,
-                                        sel_w,
-                                        line_h,
-                                        Color::ACCENT_BLUE,
-                                    );
-                                    MinGuiCompositor::draw_string_scaled_clipped(
-                                        fb,
-                                        cur_x + prefix_w,
-                                        draw_y,
-                                        selected,
-                                        Color::WHITE,
-                                        scale,
-                                        doc_clip,
-                                    );
-                                }
-                                if !suffix.is_empty() {
-                                    MinGuiCompositor::draw_string_scaled_clipped(
-                                        fb,
-                                        cur_x + prefix_w + sel_w,
-                                        draw_y,
-                                        suffix,
-                                        text_color,
-                                        scale,
-                                        doc_clip,
-                                    );
                                 }
                             } else if let Some((s, e)) = sel_range {
                                 if let Some(bg) = span.bg_color {

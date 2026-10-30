@@ -18,6 +18,8 @@ pub enum KeyAction {
     Refresh,
     BrowserAddress,
     BrowserRefresh,
+    BrowserBack,
+    BrowserForward,
     HomeKey,
     EndKey,
     PageUpKey,
@@ -375,6 +377,14 @@ impl KeyboardState {
                 self.push_action(KeyAction::BrowserRefresh);
                 return None;
             } // Ctrl+R
+            0x4B if self.alt => {
+                self.push_action(KeyAction::BrowserBack);
+                return None;
+            } // Alt+Left
+            0x4D if self.alt => {
+                self.push_action(KeyAction::BrowserForward);
+                return None;
+            } // Alt+Right
             0x48 if !self.num_lock => {
                 // Arrow Up / keypad 8
                 self.push_action(KeyAction::ArrowUp);
@@ -549,10 +559,18 @@ impl KeyboardState {
                 return None;
             }
             0x4B => {
+                if self.alt {
+                    self.push_action(KeyAction::BrowserBack);
+                    return None;
+                }
                 self.push_action(KeyAction::ArrowLeft);
                 return None;
             }
             0x4D => {
+                if self.alt {
+                    self.push_action(KeyAction::BrowserForward);
+                    return None;
+                }
                 self.push_action(KeyAction::ArrowRight);
                 return None;
             }

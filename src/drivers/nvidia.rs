@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
 //! Maturity: KISMI / WIP — Gerçek 3D hızlandırma yok,//! sadece PCI tespit + 2D mode-set iskeleti mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! NVIDIA GPU Driver - NVIDIA GeForce GPU'lar için temel 2D ve Mode-Set sürücüsü
 //!
 //! Bu sürücü:
@@ -11,8 +11,8 @@
 //! - Çözünürlük ayarlama (Mode-set: 800x600, 1024x768, 1280x720, 1920x1080) işlevlerini sağlar.
 //! - Temel 2D hızlandırma (Dikdörtgen doldurma, Blit, Ekran temizleme) işlevlerini sunar.
 
-use core::sync::atomic::{compiler_fence, Ordering};
 use crate::drivers::port_io::*;
+use core::sync::atomic::{compiler_fence, Ordering};
 
 // ---------------------------------------------------------------------------
 // NVIDIA PCI Kimlikleri ve Sabitleri

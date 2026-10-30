@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
 //! Maturity: SKELETON / WIP — Gerçek MAC/RX/TX yok,//! sadece PCI vendor/device ID listesi mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! Marvell Ethernet Driver - Marvell chip setleri için ağ sürücüsü
 //!
 //! Marvell, çeşitli Gigabit Ethernet denetleyicileri üreten bir şirkettir.

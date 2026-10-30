@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
 //! Maturity: SKELETON / WIP — Gerçek MAC/RX/TX yok,//! sadece PCI vendor/device ID listesi mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! Atheros Ethernet Driver - Atheros chip setleri için ağ sürücüsü
 //!
 //! Atheros, Qualcomm tarafından satın alınmış bir ağ chip seti üreticisidir.

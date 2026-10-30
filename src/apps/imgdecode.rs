@@ -170,7 +170,7 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let bpp = (bits_per_pixel + 7) / 8;
     let stride = (hdr.width.checked_mul(bits_per_pixel)? + 7) / 8;
     let expected = hdr.height.checked_mul(stride + 1)?;
-    let mut raw = inflate_zlib(&idat, expected)?;
+    let mut raw = inflate(&idat, expected)?;
     if raw.len() < expected {
         return None;
     }

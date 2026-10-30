@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_variables, static_mut_refs)]
 
 //! Maturity: KISMI / WIP — Gerçek USB/PCI Bluetooth tespiti yok,//! sadece HCI paketleme/ayrıştırma ve synthetic yanıtlar mevcut.//! Bkz. docs/driver-maturity.md
-//! 
+//!
 //! Bluetooth Driver - Bluetooth HCI (Host Controller Interface) Protokol Sürücüsü
 //!
 //! Bu sürücü:

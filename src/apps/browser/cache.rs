@@ -4,6 +4,7 @@
 //! Aynı URL'den ikinci kez istek yapıldığında ağa gitmeden önbellekten okunur.
 //!
 //! HTTP önbellek kontrolü desteklenir: Cache-Control, Expires, ETag, Last-Modified.
+#![allow(static_mut_refs)]
 
 use crate::fs::vfs::VirtualFileSystem;
 use alloc::format;
@@ -58,6 +59,122 @@ impl CacheMetadata {
 
 /// Önbellek kök dizini (VFS yolu).
 const CACHE_DIR: &str = "/browser/cache";
+
+/// Maksimum önbellek boyutu (varsayılan 10 MB).
+const MAX_CACHE_SIZE: usize = 10 * 1024 * 1024;
+
+/// Geçerli önbellek boyutu (bayt cinsinden).
+static mut CACHE_SIZE: usize = 0;
+
+/// Önbellekteki dosya boyutları (LRU eviction için).
+struct CacheEntrySize {
+    path: String,
+    size: usize,
+}
+static mut CACHE_ENTRY_SIZES: [Option<CacheEntrySize>; 64] = [const { None }; 64];
+
+/// Önbellek boyutunu günceller ve gerekiyorsa LRU tabanlı eviction yapar.
+fn ensure_cache_size(vfs: &mut VirtualFileSystem, needed: usize) {
+    unsafe {
+        let current = CACHE_SIZE;
+        if current + needed <= MAX_CACHE_SIZE {
+            CACHE_SIZE = current + needed;
+            return;
+        }
+
+        // LRU: en eski eklenen girdiyi kaldır (basit FIFO eviction)
+        let mut removed = 0usize;
+        for entry in CACHE_ENTRY_SIZES.iter_mut() {
+            if let Some(ref e) = entry {
+                let _ = vfs.delete_file(&e.path);
+                let meta_path = format!("{}.meta", e.path);
+                let _ = vfs.delete_file(&meta_path);
+                removed = e.size;
+                *entry = None;
+                break;
+            }
+        }
+        CACHE_SIZE = current.saturating_sub(removed) + needed;
+    }
+}
+
+/// Önbellekteki bir girdinin boyutunu kaydeder.
+fn record_cache_entry(path: &str, size: usize) {
+    unsafe {
+        for entry in CACHE_ENTRY_SIZES.iter_mut() {
+            if entry.is_none() {
+                *entry = Some(CacheEntrySize {
+                    path: path.to_string(),
+                    size,
+                });
+                return;
+            }
+        }
+        // Tümü dolu: ilkini değiştir
+        if let Some(first) = CACHE_ENTRY_SIZES.iter_mut().next() {
+            *first = Some(CacheEntrySize {
+                path: path.to_string(),
+                size,
+            });
+        }
+    }
+}
+
+/// Önbellekteki bir girdinin boyutunu günceller.
+#[allow(dead_code)]
+fn update_cache_entry_size(path: &str, _old_size: usize, new_size: usize) {
+    unsafe {
+        for entry in CACHE_ENTRY_SIZES.iter_mut() {
+            if let Some(ref mut e) = entry {
+                if e.path == path {
+                    e.size = new_size;
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Önbelleği temizler (tüm girdileri kaldırır).
+#[allow(dead_code)]
+pub fn cache_clear(vfs: &mut VirtualFileSystem) {
+    unsafe {
+        for entry in CACHE_ENTRY_SIZES.iter_mut() {
+            if let Some(ref e) = entry.take() {
+                let _ = vfs.delete_file(&e.path);
+                let meta_path = format!("{}.meta", e.path);
+                let _ = vfs.delete_file(&meta_path);
+            }
+        }
+        CACHE_SIZE = 0;
+    }
+}
+
+/// Belirtilen URL'yi önbellekten kaldırır (invalidation).
+#[allow(dead_code)]
+pub fn cache_invalidate(vfs: &mut VirtualFileSystem, url: &str) -> bool {
+    let path = url_to_cache_path(url);
+    unsafe {
+        for entry in CACHE_ENTRY_SIZES.iter_mut() {
+            if let Some(ref mut e) = entry {
+                if e.path == path {
+                    let size = e.size;
+                    *entry = None;
+                    let _ = vfs.delete_file(&path);
+                    let meta_path = format!("{}.meta", path);
+                    let _ = vfs.delete_file(&meta_path);
+                    CACHE_SIZE = CACHE_SIZE.saturating_sub(size);
+                    return true;
+                }
+            }
+        }
+    }
+    // Entry sizes'de yoksa doğrudan dosyayı silmeye çalış
+    let _ = vfs.delete_file(&path);
+    let meta_path = format!("{}.meta", path);
+    let _ = vfs.delete_file(&meta_path);
+    true
+}
 
 /// URL'yi VFS dosya yolu olarak temizler (özel karakterler `_` ile değiştirilir).
 pub fn url_to_cache_path(url: &str) -> String {
@@ -254,6 +371,23 @@ pub fn cache_store_with_metadata(
         vfs.create_dir(CACHE_DIR);
     }
 
+    // Aynı URL zaten önbellekteyse boyutu güncelle
+    let existing_size = unsafe {
+        let mut size = 0usize;
+        for entry in CACHE_ENTRY_SIZES.iter() {
+            if let Some(ref e) = entry {
+                if e.path == path {
+                    size = e.size;
+                    break;
+                }
+            }
+        }
+        size
+    };
+
+    // Önbellek boyutunu kontrol et ve gerekiyorsa eviction yap
+    ensure_cache_size(vfs, data.len().saturating_sub(existing_size));
+
     // Dosyayı kaydet
     if !vfs.create_file(&path, data) {
         return false;
@@ -274,5 +408,16 @@ pub fn cache_store_with_metadata(
     }
     meta_str.push_str(&format!("cached_at={}\n", meta.cached_at));
 
-    vfs.create_file(&meta_path, meta_str.as_bytes())
+    if !vfs.create_file(&meta_path, meta_str.as_bytes()) {
+        return false;
+    }
+
+    // Önbellek girdisi boyutunu kaydet/güncelle
+    if existing_size > 0 {
+        update_cache_entry_size(&path, existing_size, data.len());
+    } else {
+        record_cache_entry(&path, data.len());
+    }
+
+    true
 }

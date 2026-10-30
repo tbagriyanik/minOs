@@ -358,6 +358,60 @@ pub fn connect(fd: i32, ip: Ipv4Address, port: u16) -> Result<(), i32> {
     }
 }
 
+/// `connect_v6(fd, ip, port)` — TCP 3'lü el sıkışması IPv6 için (bloklayan).
+pub fn connect_v6(fd: i32, ip: Ipv6Address, port: u16) -> Result<(), i32> {
+    if !e1000::is_ready() {
+        return Err(E_NOTCONN);
+    }
+    let s = sock_mut(fd).ok_or(E_BADFD)?;
+    if s.sock_type != SockType::Stream {
+        return Err(E_INVAL);
+    }
+    if s.state == SockState::Established {
+        return Ok(());
+    }
+    let lport = alloc_ephemeral();
+    if lport == 0 {
+        return Err(E_BUSY);
+    }
+    let iss = (crate::monotonic_ms() as u32)
+        .wrapping_mul(2654435761)
+        .wrapping_add((fd as u32).wrapping_mul(7919) | 0x1000);
+    s.local_port = lport;
+    s.remote_ip = IpAddress::V6(ip);
+    s.remote_port = port;
+    s.iss = iss;
+    s.snd_una = iss;
+    s.snd_nxt = iss.wrapping_add(1);
+    s.rcv_nxt = 0;
+    s.rx_len = 0;
+    s.unacked_len = 0;
+    s.error = 0;
+    s.state = SockState::SynSent;
+    arm_retry(s, 1);
+    send_tcp_to(IpAddress::V6(ip), port, lport, iss, 0, 0x02, &[]);
+
+    let deadline = crate::monotonic_ms().wrapping_add(s.timeout_ms);
+    loop {
+        pump(fd as usize);
+        let s = sock_mut(fd).ok_or(E_BADFD)?;
+        match s.state {
+            SockState::Established => {
+                s.retry.kind = 0;
+                return Ok(());
+            }
+            SockState::Error => return Err(s.error),
+            _ => {}
+        }
+        if crate::monotonic_ms() >= deadline {
+            s.state = SockState::Closed;
+            s.retry.kind = 0;
+            return Err(E_TIMEOUT);
+        }
+        core::hint::spin_loop();
+    }
+}
+
 /// `send(fd, data)` — tamamını göndermeye çalışır, gönderilen baytı döner.
 pub fn send(fd: i32, data: &[u8]) -> Result<usize, i32> {
     let total = data.len();
@@ -522,6 +576,40 @@ pub fn sendto(fd: i32, ip: Ipv4Address, port: u16, data: &[u8]) -> Result<usize,
         s.local_port = p;
     }
     if netstack::send_udp(ip, s.local_port, port, data) {
+        Ok(data.len())
+    } else {
+        Err(E_NOTCONN)
+    }
+}
+
+/// `sendto_v6(fd, ip, port, data)` — IPv6 bağlantısız UDP gönderimi.
+pub fn sendto_v6(fd: i32, ip: Ipv6Address, port: u16, data: &[u8]) -> Result<usize, i32> {
+    let s = sock_mut(fd).ok_or(E_BADFD)?;
+    if s.sock_type != SockType::Dgram {
+        return Err(E_INVAL);
+    }
+    if s.local_port == 0 {
+        let p = alloc_ephemeral();
+        if p == 0 {
+            return Err(E_BUSY);
+        }
+        s.local_port = p;
+    }
+    if data.len() > 1400 {
+        return Err(E_IO);
+    }
+    let mut packet = [0u8; 1500 - 14 - 40];
+    let len = 8 + data.len();
+    packet[0..2].copy_from_slice(&s.local_port.to_be_bytes());
+    packet[2..4].copy_from_slice(&port.to_be_bytes());
+    packet[4..6].copy_from_slice(&(len as u16).to_be_bytes());
+    packet[6..8].copy_from_slice(&0u16.to_be_bytes()); // UDP checksum optional for IPv6? Actually required for IPv6
+    packet[8..len].copy_from_slice(data);
+    // Compute UDP checksum over IPv6 pseudo-header
+    let src = netstack::local_ipv6();
+    let csum = netstack::ipv6_pseudo_checksum(&src.0, &ip.0, netstack::IP_PROTO_UDP, &packet[..len]);
+    packet[6..8].copy_from_slice(&csum.to_be_bytes());
+    if netstack::send_ipv6(ip, netstack::IP_PROTO_UDP, &packet[..len]) {
         Ok(data.len())
     } else {
         Err(E_NOTCONN)
@@ -805,6 +893,123 @@ pub fn resolve_host_aaaa(host: &str) -> Result<Ipv6Address, i32> {
             return Err(E_TIMEOUT);
         }
         core::hint::spin_loop();
+    }
+}
+
+/// Alan adını hem IPv4 (A) hem IPv6 (AAAA) kayıtlarına çözer.
+/// İlk olarak önbellek kontrol edilir, ardından paralel olarak A ve AAAA
+/// sorguları gönderilir. İlk gelen yanıt döndürülür (Happy Eyeballs için
+/// çağrıcı tarafından kullanılabilir).
+pub fn resolve_host_ip(host: &str) -> Result<IpAddress, i32> {
+    if host.is_empty() || host.len() > 96 {
+        return Err(E_INVAL);
+    }
+    // Önce IP literal mi kontrol et
+    let clean = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if let Some(v6) = netstack::parse_ipv6(clean) {
+        return Ok(IpAddress::V6(v6));
+    }
+    if let Some(v4) = netstack::parse_ipv4(clean) {
+        return Ok(IpAddress::V4(v4));
+    }
+    // Önbellek kontrolü
+    if let Some(ip) = dns_cache_lookup(host) {
+        return Ok(IpAddress::V4(ip));
+    }
+    if let Some(ip) = dns_cache_lookup_aaaa(host) {
+        return Ok(IpAddress::V6(ip));
+    }
+    if !e1000::is_ready() {
+        return Err(E_NOTCONN);
+    }
+    // Hem A hem AAAA sorgusu gönder (Happy Eyeballs uyumlu)
+    let a_sent = netstack::dns_query(host);
+    let aaaa_sent = netstack::dns_query_aaaa(host);
+    if !a_sent && !aaaa_sent {
+        return Err(E_NOTCONN);
+    }
+    let deadline = crate::monotonic_ms().wrapping_add(5000);
+    loop {
+        e1000::poll();
+        // Önce A kaydını dene
+        if a_sent {
+            if let Some(ip) = netstack::take_dns_result() {
+                dns_cache_store(host, ip, 300);
+                return Ok(IpAddress::V4(ip));
+            }
+        }
+        // Ardından AAAA kaydını dene
+        if aaaa_sent {
+            if let Some(ip) = netstack::take_dns_result_aaaa() {
+                dns_cache_store_aaaa(host, ip, 300);
+                return Ok(IpAddress::V6(ip));
+            }
+        }
+        if crate::monotonic_ms() >= deadline {
+            return Err(E_TIMEOUT);
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// Happy Eyeballs (RFC 8305): İsim çözümlemesi sonrası IPv6 bağlantısı denenir;
+/// ~300 ms içinde başarısız olursa IPv4 paralel denenir. İlk başarılı bağlantı
+/// döndürülür. Soket tanımlayıcısı çağrıcı tarafından yönetilir (socket() ile
+/// oluşturulmalı, başarısızsa kapatılmalı).
+pub fn connect_happy_eyeballs(
+    fd: i32,
+    host: &str,
+    port: u16,
+) -> Result<IpAddress, i32> {
+    // Her iki adres ailesini de çöz
+    let v4 = resolve_host(host).ok();
+    let v6 = resolve_host_aaaa(host).ok();
+
+    match (v4, v6) {
+        (Some(ip4), Some(ip6)) => {
+            // IPv6'den dene
+            let v6_result = connect_v6(fd, ip6, port);
+            if v6_result.is_ok() {
+                return Ok(IpAddress::V6(ip6));
+            }
+
+            // 300 ms bekle, ardından IPv4'yi dene
+            let start = crate::monotonic_ms();
+            while crate::monotonic_ms().wrapping_sub(start) < 300 {
+                e1000::poll();
+                fire_retry(fd as usize);
+                // IPv6 bağlantısı oluşmuş olabilir
+                if let Some(s) = sock_mut(fd) {
+                    if s.state == SockState::Established {
+                        return Ok(IpAddress::V6(ip6));
+                    }
+                }
+                core::hint::spin_loop();
+            }
+
+            // Yeni bir soket ile IPv4 dene (eski soket hala bağlanmaya çalışıyor olabilir)
+            let fd4 = socket(AF_INET, SOCK_STREAM)?;
+            let v4_result = connect(fd4, ip4, port);
+            if v4_result.is_ok() {
+                // IPv6 soketini kapat, artık gereksiz
+                close(fd);
+                return Ok(IpAddress::V4(ip4));
+            }
+
+            // İkisi de başarısız: IPv4 soketini de kapat
+            close(fd4);
+            close(fd);
+            Err(E_TIMEOUT)
+        }
+        (Some(ip4), None) => {
+            connect(fd, ip4, port)?;
+            Ok(IpAddress::V4(ip4))
+        }
+        (None, Some(ip6)) => {
+            connect_v6(fd, ip6, port)?;
+            Ok(IpAddress::V6(ip6))
+        }
+        (None, None) => Err(E_NOTCONN),
     }
 }
 

@@ -7,6 +7,7 @@ pub mod atheros;
 pub mod audio;
 pub mod bluetooth;
 pub mod camera;
+pub mod cookie;
 pub mod crypto;
 pub mod e1000;
 pub mod fan_temp;

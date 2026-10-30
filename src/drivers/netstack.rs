@@ -157,6 +157,96 @@ static mut ARP_TABLE: [ArpEntry; 16] = [
     },
 ];
 
+// ---------------------------------------------------------------------------
+// IPv6 Neighbor Discovery (RFC 4861)
+// ---------------------------------------------------------------------------
+
+/// IPv6 Komşu Önbelleği: IPv6 adresi → MAC eşlemesi.
+struct NeighborEntry {
+    ip: Ipv6Address,
+    mac: MacAddress,
+    used: bool,
+}
+
+static mut NEIGHBOR_CACHE: [NeighborEntry; 8] = [
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+    NeighborEntry {
+        ip: Ipv6Address::UNSPECIFIED,
+        mac: MacAddress([0; 6]),
+        used: false,
+    },
+];
+
+pub fn neighbor_lookup(ip: Ipv6Address) -> Option<MacAddress> {
+    unsafe {
+        for e in NEIGHBOR_CACHE.iter() {
+            if e.used && e.ip == ip {
+                return Some(e.mac);
+            }
+        }
+    }
+    None
+}
+
+pub fn neighbor_insert(ip: Ipv6Address, mac: MacAddress) {
+    unsafe {
+        // Var olan eşleşmeyi güncelle
+        for e in NEIGHBOR_CACHE.iter_mut() {
+            if e.used && e.ip == ip {
+                e.mac = mac;
+                return;
+            }
+        }
+        // Boş slota ekle
+        for e in NEIGHBOR_CACHE.iter_mut() {
+            if !e.used {
+                e.ip = ip;
+                e.mac = mac;
+                e.used = true;
+                return;
+            }
+        }
+        // Dolu ise ilk girişi değiştir
+        NEIGHBOR_CACHE[0].ip = ip;
+        NEIGHBOR_CACHE[0].mac = mac;
+        NEIGHBOR_CACHE[0].used = true;
+    }
+}
+
 pub fn arp_lookup(ip: Ipv4Address) -> Option<MacAddress> {
     unsafe {
         for e in ARP_TABLE.iter_mut() {
@@ -221,7 +311,7 @@ fn build_ethernet(dst: MacAddress, ethertype: u16, payload: &[u8], buf: &mut [u8
 
 const IP_PROTO_ICMP: u8 = 1;
 pub const IP_PROTO_TCP: u8 = 6;
-const IP_PROTO_UDP: u8 = 17;
+pub const IP_PROTO_UDP: u8 = 17;
 pub const DNS_SERVER: Ipv4Address = Ipv4Address::new(10, 0, 2, 3);
 pub const DNS_PORT: u16 = 53;
 pub const HTTP_PORT: u16 = 80;
@@ -1741,8 +1831,11 @@ pub fn send_ipv6(dst_ip: Ipv6Address, next_header: u8, payload: &[u8]) -> bool {
     let src_ip = local_ipv6();
     let dst_mac = if dst_ip.is_multicast() {
         dst_ip.multicast_mac()
+    } else if let Some(mac) = neighbor_lookup(dst_ip) {
+        mac
     } else {
-        // Standart QEMU ağ geçidi MAC'i veya yayın fallback'i
+        // Henüz bilinmiyor: Neighbor Solicitation gönder ve gateway fallback'i kullan
+        let _ = send_neighbor_solicitation(dst_ip);
         MacAddress([0x52, 0x55, 0x0A, 0x00, 0x02, 0x02])
     };
 
@@ -1777,6 +1870,105 @@ pub fn send_ipv6(dst_ip: Ipv6Address, next_header: u8, payload: &[u8]) -> bool {
         &ip_packet[..40 + payload.len()],
         &mut frame,
     );
+    e1000::transmit(&frame[..len])
+}
+
+/// IPv6 Komşu Sorgulama (Neighbor Solicitation, ICMPv6 Type 135) gönderir.
+/// Belirtilen IPv6 adresinin MAC adresini öğrenmek için kullanılır (RFC 4861).
+pub fn send_neighbor_solicitation(target_ip: Ipv6Address) -> bool {
+    let src_ip = local_ipv6();
+    // Solicited-node multicast adresi: ff02::1:ffXX:XXXX (hedef IP'nin son 24 biti)
+    let mut solicited_node = [0u8; 16];
+    solicited_node[0] = 0xFF;
+    solicited_node[1] = 0x02;
+    solicited_node[2] = 0x00;
+    solicited_node[3] = 0x00;
+    solicited_node[4] = 0x00;
+    solicited_node[5] = 0x00;
+    solicited_node[6] = 0x00;
+    solicited_node[7] = 0x00;
+    solicited_node[8] = 0x00;
+    solicited_node[9] = 0x00;
+    solicited_node[10] = 0x00;
+    solicited_node[11] = 0x01;
+    solicited_node[12] = 0xFF;
+    solicited_node[13] = target_ip.0[13];
+    solicited_node[14] = target_ip.0[14];
+    solicited_node[15] = target_ip.0[15];
+    let dst_mac = MacAddress([0x33, 0x33, 0xFF, target_ip.0[13], target_ip.0[14], target_ip.0[15]]);
+
+    let mut pkt = [0u8; 64];
+    let total_len = 32; // ICMPv6 başlığı (8) + Target Address (16) + SLLAO (8)
+    pkt[0] = ICMPV6_TYPE_NEIGHBOR_SOLICIT;
+    pkt[1] = 0; // Code
+    pkt[2] = 0; // Checksum (hesaplanacak)
+    pkt[3] = 0; // Reserved
+    pkt[8..24].copy_from_slice(&target_ip.0); // Target Address
+
+    // Source Link-Layer Address option (Type 1, Length 1 = 8 bytes)
+    pkt[24] = 1; // Type: Source Link-Layer Address
+    pkt[25] = 1; // Length: 1 unit of 8 octets
+    pkt[26..32].copy_from_slice(&local_mac().0);
+
+    let src = local_ipv6();
+    let dst = Ipv6Address(solicited_node);
+    let csum = ipv6_pseudo_checksum(&src.0, &dst.0, 58, &pkt[..total_len]);
+    pkt[2] = (csum >> 8) as u8;
+    pkt[3] = (csum & 0xFF) as u8;
+
+    send_ipv6(dst, 58, &pkt[..total_len])
+}
+
+/// IPv6 Komşu Bildirimi (Neighbor Advertisement, ICMPv6 Type 136) gönderir.
+/// Bir Komşu Sorgulamaya yanıt olarak veya otomatik olarak gönderilebilir.
+pub fn send_neighbor_advertisement(target_ip: Ipv6Address, dst_ip: Ipv6Address, solicited: bool, override_flag: bool) -> bool {
+    let src_ip = local_ipv6();
+    let dst_mac = if dst_ip.is_multicast() {
+        dst_ip.multicast_mac()
+    } else {
+        neighbor_lookup(dst_ip).unwrap_or(MacAddress([0x33, 0x33, 0xFF, target_ip.0[13], target_ip.0[14], target_ip.0[15]]))
+    };
+
+    let mut pkt = [0u8; 32];
+    let total_len = 32;
+    pkt[0] = ICMPV6_TYPE_NEIGHBOR_ADVERT;
+    pkt[1] = 0; // Code
+    pkt[2] = 0; // Checksum
+    pkt[3] = 0;
+    // Flags: Router (bit 7), Solicited (bit 6), Override (bit 5)
+    let mut flags: u8 = 0;
+    if solicited {
+        flags |= 0x40;
+    }
+    if override_flag {
+        flags |= 0x20;
+    }
+    pkt[4] = flags;
+    pkt[8..24].copy_from_slice(&target_ip.0); // Target Address
+
+    // Target Link-Layer Address option (Type 2, Length 1 = 8 bytes)
+    pkt[24] = 2; // Type: Target Link-Layer Address
+    pkt[25] = 1; // Length: 1 unit of 8 octets
+    pkt[26..32].copy_from_slice(&local_mac().0);
+
+    let src = local_ipv6();
+    let csum = ipv6_pseudo_checksum(&src.0, &dst_ip.0, 58, &pkt[..total_len]);
+    pkt[2] = (csum >> 8) as u8;
+    pkt[3] = (csum & 0xFF) as u8;
+
+    let mut frame = [0u8; 1514];
+    let ip_packet_len = 40 + total_len;
+    let mut ip_packet = [0u8; 1500 - 14];
+    ip_packet[0] = 0x60;
+    ip_packet[4] = (total_len as u16 >> 8) as u8;
+    ip_packet[5] = (total_len as u16 & 0xFF) as u8;
+    ip_packet[6] = 58;
+    ip_packet[7] = 255;
+    ip_packet[8..24].copy_from_slice(&src_ip.0);
+    ip_packet[24..40].copy_from_slice(&dst_ip.0);
+    ip_packet[40..40 + total_len].copy_from_slice(&pkt[..total_len]);
+
+    let len = build_ethernet(dst_mac, ETHERTYPE_IPV6, &ip_packet[..ip_packet_len], &mut frame);
     e1000::transmit(&frame[..len])
 }
 
@@ -2065,6 +2257,19 @@ pub fn handle_ipv6(payload: &[u8]) {
                         na[2] = (csum >> 8) as u8;
                         na[3] = (csum & 0xFF) as u8;
                         send_ipv6(src_ip, 58, &na[..32]);
+                    }
+                } else if icmp_type == ICMPV6_TYPE_NEIGHBOR_ADVERT {
+                    // Komşu önbelleğini güncelle: hedef IP ve kaynak MAC
+                    if icmp.len() >= 32 {
+                        let target_ip_bytes = &icmp[8..24];
+                        let mut target_ip = [0u8; 16];
+                        target_ip.copy_from_slice(target_ip_bytes);
+                        // Target Link-Layer Address option (Type 2) at offset 24
+                        if icmp.len() >= 32 && icmp[24] == 2 {
+                            let mut mac = [0u8; 6];
+                            mac.copy_from_slice(&icmp[26..32]);
+                            neighbor_insert(Ipv6Address(target_ip), MacAddress(mac));
+                        }
                     }
                 }
             }

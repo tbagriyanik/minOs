@@ -55,6 +55,16 @@ pub const TLS_RSA_WITH_AES_128_GCM_SHA256: u16 = 0x009C;
 pub const TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: u16 = 0xC030;
 /// ECDHE + ECDSA + AES-256-GCM + SHA-384.
 pub const TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384: u16 = 0xC02A;
+/// ECDHE + RSA + AES-128-CBC + SHA-256 (CBC mode, daha eski sunucular icin).
+pub const TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256: u16 = 0xC027;
+/// ECDHE + RSA + AES-256-CBC + SHA-384 (CBC mode).
+pub const TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384: u16 = 0xC028;
+/// RSA + AES-128-CBC + SHA (legacy, cok eski sunucular icin son care).
+pub const TLS_RSA_WITH_AES_128_CBC_SHA: u16 = 0x002F;
+/// RSA + AES-256-CBC + SHA (legacy).
+pub const TLS_RSA_WITH_AES_256_CBC_SHA: u16 = 0x0035;
+/// ECDHE + RSA + CHACHA20-POLY1305 + SHA-256.
+pub const TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256: u16 = 0xCCA8;
 /// TLS 1.3 cipher suites.
 pub const TLS_AES_128_GCM_SHA256: u16 = 0x1301;
 pub const TLS_AES_256_GCM_SHA384: u16 = 0x1302;
@@ -597,7 +607,12 @@ impl TlsSession {
             | TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
             | TLS_RSA_WITH_AES_128_GCM_SHA256
             | TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
-            | TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 => {
+            | TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+            | TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+            | TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+            | TLS_RSA_WITH_AES_128_CBC_SHA
+            | TLS_RSA_WITH_AES_256_CBC_SHA
+            | TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 => {
                 self.tls13_mode = false;
             }
             // Desteklenmeyen paket: sessizce bozuk bir el sikisma kurmak yerine
@@ -981,6 +996,9 @@ impl TlsSession {
             || self.cipher_suite == TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
             || self.cipher_suite == TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
             || self.cipher_suite == TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+            || self.cipher_suite == TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
+            || self.cipher_suite == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
+            || self.cipher_suite == TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
         {
             if self.ecdhe_point.len() != 65 {
                 serial_print("[TLS] ECDHE noktası yanlış uzunluk\n");
@@ -1681,10 +1699,15 @@ pub fn build_client_hello(
     // (RFC 8446 §7.1). Bazı sunucular yalnızca AES-256-GCM/SHA-384 kabul eder
     // (örn. aa.com.tr), bu yüzden 0x1302 mutlaka ilan edilmelidir.
     let ciphers = [
+        // TLS 1.3 (sunucu TLS 1.3 secerse bu paketler kullanilir).
         TLS_AES_128_GCM_SHA256,
         TLS_AES_256_GCM_SHA384,
+        // TLS 1.2 ECDHE + AES-GCM (ileri secrecy).
         TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+        TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+        TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+        // TLS 1.2 RSA key exchange (eski sunucular, ileri secrecy yok).
         TLS_RSA_WITH_AES_128_GCM_SHA256,
     ];
     let cipher_len = (ciphers.len() * 2) as u16;

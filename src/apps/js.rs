@@ -41,6 +41,9 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
+#[cfg(not(any(test, host_fs_tests)))]
+use crate::drivers::http;
+
 // ── DOM Veri Yapıları ──────────────────────────────────────────────
 
 /// Tek bir DOM elemanını temsil eder.
@@ -356,6 +359,40 @@ pub struct JsRuntime {
     pub timers: Vec<Timer>,
     /// Bir sonraki zamanlayıcı kimliği.
     pub next_timer_id: u32,
+    /// localStorage kalıcı anahtar-değer deposu.
+    pub local_storage: BTreeMap<String, String>,
+    /// sessionStorage oturum bazlı anahtar-değer deposu.
+    pub session_storage: BTreeMap<String, String>,
+    /// WebSocket bağlantıları: kimlik -> (url, readyState, onmessage handler).
+    pub websockets: BTreeMap<u32, WebSocketConn>,
+    /// Bir sonraki WebSocket kimliği.
+    pub next_ws_id: u32,
+}
+
+/// WebSocket bağlantı durumu.
+#[derive(Clone, Debug)]
+pub struct WebSocketConn {
+    pub url: String,
+    pub ready_state: u8, // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+    pub onmessage: Option<String>,
+    pub onopen: Option<String>,
+    pub onerror: Option<String>,
+    pub onclose: Option<String>,
+    pub buffered: Vec<String>, // alınan mesaj kuyruğu
+}
+
+impl WebSocketConn {
+    pub fn new(url: String) -> Self {
+        Self {
+            url,
+            ready_state: 0,
+            onmessage: None,
+            onopen: None,
+            onerror: None,
+            onclose: None,
+            buffered: Vec::new(),
+        }
+    }
 }
 
 impl JsRuntime {
@@ -375,6 +412,10 @@ impl JsRuntime {
             strict_mode: false,
             timers: Vec::new(),
             next_timer_id: 1,
+            local_storage: BTreeMap::new(),
+            session_storage: BTreeMap::new(),
+            websockets: BTreeMap::new(),
+            next_ws_id: 1,
         }
     }
 
@@ -720,6 +761,174 @@ impl JsRuntime {
         let mut sub = self.clone();
         let mut dummy = Vec::new();
         sub.call_function(name, args, &mut dummy)
+    }
+
+    /// fetch(url) — HTTP GET isteği yapar ve Promise değeri döndürür.
+    #[cfg(not(any(test, host_fs_tests)))]
+    fn do_fetch(&mut self, url: &str) -> Result<JsValue, i32> {
+        if !crate::drivers::e1000::is_ready() {
+            return Err(http::E_HTTP);
+        }
+
+        let mut host = [0u8; http::MAX_HOST];
+        let mut path = [0u8; http::MAX_PATH];
+        let (port, host_len, path_len) = http::parse_url(url, &mut host, &mut path)?;
+        let is_https = url.starts_with("https://");
+        let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| http::E_URL)?;
+        let ip = crate::drivers::socket::resolve_host(host_str)?;
+
+        let mut resp_buf = [0u8; 8192];
+        let config = http::HttpClientConfig::default();
+        let (status, hlen, total) = http::fetch_once(
+            &host[..host_len],
+            port,
+            &path[..path_len],
+            ip,
+            &mut resp_buf,
+            is_https,
+            None,
+            &config,
+        )?;
+
+        // Chunked gövdeyi çöz
+        let headers = &resp_buf[..hlen];
+        let is_chunked = http::header_value(headers, b"transfer-encoding")
+            .map(|v| {
+                v.iter()
+                    .zip(b"chunked".iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+                    && v.len() == 7
+            })
+            .unwrap_or(false);
+        let body_start = hlen;
+        let body_end = if is_chunked {
+            let body_len = total - hlen;
+            let mut tmp = resp_buf[hlen..total].to_vec();
+            http::decode_chunked(&mut tmp, body_len)
+                .map(|decoded| {
+                    resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
+                    hlen + decoded
+                })
+                .unwrap_or(total)
+        } else {
+            total
+        };
+
+        let body = core::str::from_utf8(&resp_buf[body_start..body_end]).unwrap_or("");
+        let status_text = match status {
+            200 => "OK",
+            201 => "Created",
+            204 => "No Content",
+            301 => "Moved Permanently",
+            302 => "Found",
+            304 => "Not Modified",
+            400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "Unknown",
+        };
+
+        // Response objesi oluştur
+        let resp_var = format!("__resp_{}", self.values.len());
+        let mut resp_obj = BTreeMap::new();
+        resp_obj.insert(String::from("ok"), JsValue::Bool(status >= 200 && status < 300));
+        resp_obj.insert(String::from("status"), JsValue::Number(status as i64));
+        resp_obj.insert(String::from("statusText"), JsValue::String(status_text.to_string()));
+        resp_obj.insert(String::from("body"), JsValue::String(body.to_string()));
+        resp_obj.insert(
+            String::from("headers"),
+            JsValue::Object(BTreeMap::new()),
+        );
+
+        // text() metodu
+        resp_obj.insert(
+            String::from("text"),
+            JsValue::Object(BTreeMap::from([
+                (
+                    String::from("__fn__"),
+                    JsValue::String(format!("return {};", body)),
+                ),
+                (String::from("__params__"), JsValue::String(String::new())),
+            ])),
+        );
+
+        // json() metodu
+        resp_obj.insert(
+            String::from("json"),
+            JsValue::Object(BTreeMap::from([
+                (
+                    String::from("__fn__"),
+                    JsValue::String(format!("return JSON.parse('{}');", body.replace("'", "\\'"))),
+                ),
+                (String::from("__params__"), JsValue::String(String::new())),
+            ])),
+        );
+
+        self.values.insert(resp_var.clone(), JsValue::Object(resp_obj));
+
+        // Promise oluştur ve yerine getir (Response objesinin değişken ismi ile)
+        let pvar = format!("__fetch_promise_{}", self.values.len());
+        let mut p = PromiseObj::new();
+        p.state = PromiseState::Fulfilled;
+        p.value = Some(JsValue::String(resp_var.clone()));
+        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+
+        Ok(JsValue::String(pvar))
+    }
+
+    // Host test harness'ı gerçek ağ sürücülerini bağlamaz. JS testleri ağ
+    // isteğini değil, çalışma zamanının geri kalanını doğrular.
+    #[cfg(any(test, host_fs_tests))]
+    fn do_fetch(&mut self, _url: &str) -> Result<JsValue, i32> {
+        Err(1003)
+    }
+
+    /// localStorage.getItem(key) — kalıcı depodan değer okur.
+    fn local_storage_get(&mut self, key: &str) -> JsValue {
+        self.local_storage
+            .get(key)
+            .map(|v| JsValue::String(v.clone()))
+            .unwrap_or(JsValue::Null)
+    }
+
+    /// localStorage.setItem(key, value) — kalıcı depoya değer yazar.
+    fn local_storage_set(&mut self, key: &str, value: &str) {
+        self.local_storage.insert(String::from(key), String::from(value));
+    }
+
+    /// localStorage.removeItem(key) — kalıcı depodan değer siler.
+    fn local_storage_remove(&mut self, key: &str) {
+        self.local_storage.remove(key);
+    }
+
+    /// localStorage.clear() — kalıcı depoyu temizler.
+    fn local_storage_clear(&mut self) {
+        self.local_storage.clear();
+    }
+
+    /// sessionStorage.getItem(key) — oturum deposundan değer okur.
+    fn session_storage_get(&mut self, key: &str) -> JsValue {
+        self.session_storage
+            .get(key)
+            .map(|v| JsValue::String(v.clone()))
+            .unwrap_or(JsValue::Null)
+    }
+
+    /// sessionStorage.setItem(key, value) — oturum deposuna değer yazar.
+    fn session_storage_set(&mut self, key: &str, value: &str) {
+        self.session_storage.insert(String::from(key), String::from(value));
+    }
+
+    /// sessionStorage.removeItem(key) — oturum deposundan değer siler.
+    fn session_storage_remove(&mut self, key: &str) {
+        self.session_storage.remove(key);
+    }
+
+    /// sessionStorage.clear() — oturum deposunu temizler.
+    fn session_storage_clear(&mut self) {
+        self.session_storage.clear();
     }
 
     pub fn add_event_listener(&mut self, target: &str, event_type: &str, handler: &str) {
@@ -1111,6 +1320,88 @@ impl JsRuntime {
                     }
                     _ => {}
                 },
+                "localStorage" => match method {
+                    "getItem" => {
+                        let key = self.eval_val(args).to_str();
+                        return self.local_storage_get(&key);
+                    }
+                    "setItem" => {
+                        let parts = split_top_level_comma(args);
+                        if parts.len() >= 2 {
+                            let key = self.eval_val(parts[0]).to_str();
+                            let val = self.eval_val(parts[1]).to_str();
+                            self.local_storage_set(&key, &val);
+                        }
+                        return JsValue::Undefined;
+                    }
+                    "removeItem" => {
+                        let key = self.eval_val(args).to_str();
+                        self.local_storage_remove(&key);
+                        return JsValue::Undefined;
+                    }
+                    "clear" => {
+                        self.local_storage_clear();
+                        return JsValue::Undefined;
+                    }
+                    "length" => {
+                        return JsValue::Number(self.local_storage.len() as i64);
+                    }
+                    _ => {}
+                },
+                "sessionStorage" => match method {
+                    "getItem" => {
+                        let key = self.eval_val(args).to_str();
+                        return self.session_storage_get(&key);
+                    }
+                    "setItem" => {
+                        let parts = split_top_level_comma(args);
+                        if parts.len() >= 2 {
+                            let key = self.eval_val(parts[0]).to_str();
+                            let val = self.eval_val(parts[1]).to_str();
+                            self.session_storage_set(&key, &val);
+                        }
+                        return JsValue::Undefined;
+                    }
+                    "removeItem" => {
+                        let key = self.eval_val(args).to_str();
+                        self.session_storage_remove(&key);
+                        return JsValue::Undefined;
+                    }
+                    "clear" => {
+                        self.session_storage_clear();
+                        return JsValue::Undefined;
+                    }
+                    "length" => {
+                        return JsValue::Number(self.session_storage.len() as i64);
+                    }
+                    _ => {}
+                },
+                "WebSocket" => match method {
+                    "send" => {
+                        let data = self.eval_val(args).to_str();
+                        // WebSocket gönderimi: frame oluştur ve socket üzerinden gönder
+                        // Basit implementasyon: veriyi buffer'a ekle
+                        if let Some(JsValue::Object(map)) = self.values.get_mut("__ws_current__") {
+                            if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
+                                if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                    conn.buffered.push(data.clone());
+                                }
+                            }
+                        }
+                        return JsValue::Undefined;
+                    }
+                    "close" => {
+                        if let Some(JsValue::Object(map)) = self.values.get("__ws_current__") {
+                            if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
+                                if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                    conn.ready_state = 3;
+                                }
+                            }
+                        }
+                        return JsValue::Undefined;
+                    }
+                    _ => {}
+                },
                 _ => {
                     let base_val = self.eval_val(base);
                     match base_val {
@@ -1261,6 +1552,28 @@ impl JsRuntime {
                                     .map(|c| c.to_string())
                                     .unwrap_or_default();
                                 return JsValue::String(ch);
+                            }
+                            _ => {}
+                        },
+                        JsValue::Object(map) => match method {
+                            "send" => {
+                                // WebSocket.send(data) — mesaj gönder
+                                if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
+                                    let data = self.eval_val(args).to_str();
+                                    if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                        conn.buffered.push(data);
+                                    }
+                                }
+                                return JsValue::Undefined;
+                            }
+                            "close" => {
+                                // WebSocket.close() — bağlantıyı kapat
+                                if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
+                                    if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                        conn.ready_state = 3;
+                                    }
+                                }
+                                return JsValue::Undefined;
                             }
                             _ => {}
                         },
@@ -1719,6 +2032,55 @@ impl JsRuntime {
         }
         if let Some(v) = self.var_get(e) {
             return JsValue::String(String::from(v));
+        }
+
+        // fetch(url) — Promise döndürür
+        if e.starts_with("fetch(") && e.ends_with(')') {
+            if let Some((args, _)) = call_args(e, 5) {
+                let url = self.eval_val(args.trim()).to_str();
+                let url = url.trim_matches(|c| c == '\'' || c == '"');
+                match self.do_fetch(&url) {
+                    Ok(promise_val) => {
+                        return promise_val;
+                    }
+                    Err(_) => {
+                        return JsValue::Null;
+                    }
+                }
+            }
+        }
+
+        // localStorage / sessionStorage — depolama nesnesi döndürür
+        if e == "localStorage" {
+            let mut map = BTreeMap::new();
+            map.insert(String::from("__storage_type__"), JsValue::String(String::from("local")));
+            return JsValue::Object(map);
+        }
+        if e == "sessionStorage" {
+            let mut map = BTreeMap::new();
+            map.insert(String::from("__storage_type__"), JsValue::String(String::from("session")));
+            return JsValue::Object(map);
+        }
+
+        // WebSocket(url) — WebSocket nesnesi döndürür
+        if e.starts_with("WebSocket(") && e.ends_with(')') {
+            if let Some((args, _)) = call_args(e, 9) {
+                let url = self.eval_val(args.trim()).to_str();
+                let url = url.trim_matches(|c| c == '\'' || c == '"');
+                let ws_id = self.next_ws_id;
+                self.next_ws_id += 1;
+                let ws_var = format!("__ws_{}", ws_id);
+                self.websockets.insert(
+                    ws_id,
+                    WebSocketConn::new(url.to_string()),
+                );
+                let mut ws_obj = BTreeMap::new();
+                ws_obj.insert(String::from("__ws_id__"), JsValue::Number(ws_id as i64));
+                ws_obj.insert(String::from("url"), JsValue::String(url.to_string()));
+                ws_obj.insert(String::from("readyState"), JsValue::Number(0));
+                self.values.insert(ws_var.clone(), JsValue::Object(ws_obj));
+                return JsValue::String(ws_var);
+            }
         }
 
         // Eski geri uyumluluk: eval_expr mantığı
@@ -2626,6 +2988,21 @@ impl JsRuntime {
                         self.remove_timer(id);
                     }
                     out.extend_from_slice(b"");
+                } else if name == "fetch" {
+                    // fetch(url) — HTTP GET isteği yapar, Promise döndürür.
+                    let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
+                    let _ = self.do_fetch(&url);
+                    out.extend_from_slice(b"0");
+                } else if name == "localStorage" {
+                    out.extend_from_slice(b"0");
+                } else if name == "sessionStorage" {
+                    out.extend_from_slice(b"0");
+                } else if name == "WebSocket" {
+                    let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
+                    let ws_id = self.next_ws_id;
+                    self.next_ws_id += 1;
+                    self.websockets.insert(ws_id, WebSocketConn::new(url.to_string()));
+                    out.extend_from_slice(ws_id.to_string().as_bytes());
                 } else {
                     out.extend_from_slice(value.as_bytes());
                 }
@@ -3333,7 +3710,7 @@ fn method_object(mfunc: &JsFunction) -> JsValue {
     ]))
 }
 
-const CALLS: [&str; 24] = [
+const CALLS: [&str; 28] = [
     "console.log",
     "console.info",
     "console.warn",
@@ -3358,6 +3735,10 @@ const CALLS: [&str; 24] = [
     "setInterval",
     "clearTimeout",
     "clearInterval",
+    "fetch",
+    "localStorage",
+    "sessionStorage",
+    "WebSocket",
 ];
 
 /// JS kaynak kodunu `;` ve satır sonlarına göre deyimlere böler

@@ -336,7 +336,7 @@ fn parse_status(buf: &[u8]) -> Option<u16> {
     Some(d(buf[sp + 1]) * 100 + d(buf[sp + 2]) * 10 + d(buf[sp + 3]))
 }
 
-fn header_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+pub fn header_value<'a>(headers: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
     // Satır satır tara, isim eşleşmesini harf duyarsız yap.
     let mut line_start = 0usize;
     // İlk satır (status) atlanır.
@@ -495,7 +495,7 @@ fn build_request_with_headers(
 ///
 /// `cache_headers` verilirse cache validation başlıkları eklenir.
 /// `config` yeniden deneme ve zaman ayarı politikasını belirtir.
-fn fetch_once(
+pub fn fetch_once(
     host: &[u8],
     port: u16,
     path: &[u8],

@@ -212,7 +212,7 @@ impl VirtualFileSystem {
         );
         self.create_file_internal(
             "/root/Documents/readme.txt",
-            b"minOs x86_64 Sarman Edition v2.0\n--------------------------------\n* Hizli ve hafif mikrocekirdek mimarisi\n* Gelismis dosya yoneticisi ve klasor destegi\n* USB, HDD ve CD-ROM suruculeri aktif\n"
+            b"minOs x86_64 Sarman Edition\n--------------------------------\n* Hizli ve hafif mikrocekirdek mimarisi\n* Gelismis dosya yoneticisi ve klasor destegi\n* USB, HDD ve CD-ROM suruculeri aktif\n"
         );
         self.create_file_internal(
             "/root/Documents/proje_fikirleri.txt",
@@ -240,7 +240,7 @@ impl VirtualFileSystem {
         );
         self.create_file_internal(
             "/var/log/kernel.log",
-            b"[minOs] Kernel v2.0 online.\n[Storage] ATA 4 channels initialized.\n[VFS] Virtual File System mounted.\n[GUI] Compositor active.\n"
+            b"[minOs] Kernel online.\n[Storage] ATA 4 channels initialized.\n[VFS] Virtual File System mounted.\n[GUI] Compositor active.\n"
         );
         self.create_file_internal(
             "/boot/limine.conf",

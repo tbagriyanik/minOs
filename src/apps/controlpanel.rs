@@ -258,7 +258,7 @@ pub fn render_content(
                 y,
                 row_w,
                 crate::gui::ui_text("İşletim Sistemi:", "Operating System:"),
-                concat!("minOs v", env!("CARGO_PKG_VERSION"), " (x86_64)"),
+                "minOs (x86_64)",
                 Color::TEXT_MAIN,
             );
             y += step;
@@ -591,7 +591,7 @@ pub fn render_content(
                 y,
                 row_w,
                 crate::gui::ui_text("Sürüm:", "Version:"),
-                concat!("minOs v", env!("CARGO_PKG_VERSION")),
+                "minOs",
                 Color::TEXT_MAIN,
             );
             y += step;

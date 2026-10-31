@@ -416,7 +416,7 @@ impl NotepadApp {
             }
             NotepadMenuAction::About => {
                 self.status_msg =
-                    crate::gui::ui_text("minOs Not Defteri v1.3", "minOs Notepad v1.3");
+                    crate::gui::ui_text("minOs Not Defteri", "minOs Notepad");
             }
             NotepadMenuAction::Shortcuts => {
                 self.status_msg = crate::gui::ui_text(

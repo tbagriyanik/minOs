@@ -496,7 +496,7 @@ impl ImageViewerApp {
             fb,
             win_x + 12,
             status_y + 4,
-            crate::gui::ui_text("Görüntüleyici: MinViewer v1.0", "Viewer: MinViewer v1.0"),
+            crate::gui::ui_text("Görüntüleyici: MinViewer", "Viewer: MinViewer"),
             Color::TEXT_MUTED,
             (win_x + 8, status_y + 2, win_w.saturating_sub(16), 14),
         );

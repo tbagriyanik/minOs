@@ -25,7 +25,7 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `mem` | `mem` | Fiziksel Bellek Yöneticisi (PMM) üzerinden toplam ve boş bellek miktarını (KB) gösterir. |
 | `ps` | `ps` | Çekirdek ve aktif sistem süreçlerini (PID, isim) listeler. |
 | `date` | `date` | Gerçek Zamanlı Saat (RTC / CMOS) üzerinden güncel tarih ve saati gösterir. |
-| `uname` | `uname` | minOs çekirdek sürümünü ve mimari bilgisini (`x86_64 Sarman Edition v2.0`) yazar. |
+| `uname` | `uname` | minOs çekirdek sürümünü ve mimari bilgisini (`x86_64 Sarman Edition`) yazar. |
 | `whoami` | `whoami` | Aktif kullanıcı yetkisini gösterir (`sarman (root)`). |
 | `theme` | `theme` | Masaüstü temasını komut satırından anında sıradaki temaya geçirir. |
 | `uptime` | `uptime` | Sistemin açılışından itibaren geçen çalışma süresini (saat, dakika, saniye, milisaniye) gösterir. |

@@ -2397,8 +2397,8 @@ impl TerminalApp {
                     _ => {
                         self.push_line(
                             crate::gui::ui_text(
-                                "minOs Paket Yöneticisi v1.1 (minPak)",
-                                "minOs Package Manager v1.1 (minPak)",
+                                "minOs Paket Yöneticisi (minPak)",
+                                "minOs Package Manager (minPak)",
                             ),
                             Color::ACCENT_PINK,
                         );
@@ -3368,7 +3368,7 @@ impl TerminalApp {
             }
             "fetch" | "neofetch" => {
                 self.push_line(
-                    "   /\\_/\\     minOs Sarman Edition v2.0",
+                    "   /\\_/\\     minOs Sarman Edition",
                     Color::ACCENT_PINK,
                 );
                 self.push_line("  ( o.o )    -------------------------", Color::ACCENT_PINK);
@@ -3823,8 +3823,8 @@ impl TerminalApp {
             x + 16,
             y + 44,
             crate::gui::ui_text(
-                "minOs Komut İstemi v2.0 (MinShell)",
-                "minOs Command Prompt v2.0 (MinShell)",
+                "minOs Komut İstemi (MinShell)",
+                "minOs Command Prompt (MinShell)",
             ),
             title_fg,
         );

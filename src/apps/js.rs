@@ -833,14 +833,17 @@ impl JsRuntime {
         // Response objesi oluştur
         let resp_var = format!("__resp_{}", self.values.len());
         let mut resp_obj = BTreeMap::new();
-        resp_obj.insert(String::from("ok"), JsValue::Bool(status >= 200 && status < 300));
-        resp_obj.insert(String::from("status"), JsValue::Number(status as i64));
-        resp_obj.insert(String::from("statusText"), JsValue::String(status_text.to_string()));
-        resp_obj.insert(String::from("body"), JsValue::String(body.to_string()));
         resp_obj.insert(
-            String::from("headers"),
-            JsValue::Object(BTreeMap::new()),
+            String::from("ok"),
+            JsValue::Bool(status >= 200 && status < 300),
         );
+        resp_obj.insert(String::from("status"), JsValue::Number(status as i64));
+        resp_obj.insert(
+            String::from("statusText"),
+            JsValue::String(status_text.to_string()),
+        );
+        resp_obj.insert(String::from("body"), JsValue::String(body.to_string()));
+        resp_obj.insert(String::from("headers"), JsValue::Object(BTreeMap::new()));
 
         // text() metodu
         resp_obj.insert(
@@ -860,20 +863,25 @@ impl JsRuntime {
             JsValue::Object(BTreeMap::from([
                 (
                     String::from("__fn__"),
-                    JsValue::String(format!("return JSON.parse('{}');", body.replace("'", "\\'"))),
+                    JsValue::String(format!(
+                        "return JSON.parse('{}');",
+                        body.replace("'", "\\'")
+                    )),
                 ),
                 (String::from("__params__"), JsValue::String(String::new())),
             ])),
         );
 
-        self.values.insert(resp_var.clone(), JsValue::Object(resp_obj));
+        self.values
+            .insert(resp_var.clone(), JsValue::Object(resp_obj));
 
         // Promise oluştur ve yerine getir (Response objesinin değişken ismi ile)
         let pvar = format!("__fetch_promise_{}", self.values.len());
         let mut p = PromiseObj::new();
         p.state = PromiseState::Fulfilled;
         p.value = Some(JsValue::String(resp_var.clone()));
-        self.values.insert(pvar.clone(), JsValue::Promise(Box::new(p)));
+        self.values
+            .insert(pvar.clone(), JsValue::Promise(Box::new(p)));
 
         Ok(JsValue::String(pvar))
     }
@@ -895,7 +903,8 @@ impl JsRuntime {
 
     /// localStorage.setItem(key, value) — kalıcı depoya değer yazar.
     fn local_storage_set(&mut self, key: &str, value: &str) {
-        self.local_storage.insert(String::from(key), String::from(value));
+        self.local_storage
+            .insert(String::from(key), String::from(value));
     }
 
     /// localStorage.removeItem(key) — kalıcı depodan değer siler.
@@ -918,7 +927,8 @@ impl JsRuntime {
 
     /// sessionStorage.setItem(key, value) — oturum deposuna değer yazar.
     fn session_storage_set(&mut self, key: &str, value: &str) {
-        self.session_storage.insert(String::from(key), String::from(value));
+        self.session_storage
+            .insert(String::from(key), String::from(value));
     }
 
     /// sessionStorage.removeItem(key) — oturum deposundan değer siler.
@@ -2053,12 +2063,18 @@ impl JsRuntime {
         // localStorage / sessionStorage — depolama nesnesi döndürür
         if e == "localStorage" {
             let mut map = BTreeMap::new();
-            map.insert(String::from("__storage_type__"), JsValue::String(String::from("local")));
+            map.insert(
+                String::from("__storage_type__"),
+                JsValue::String(String::from("local")),
+            );
             return JsValue::Object(map);
         }
         if e == "sessionStorage" {
             let mut map = BTreeMap::new();
-            map.insert(String::from("__storage_type__"), JsValue::String(String::from("session")));
+            map.insert(
+                String::from("__storage_type__"),
+                JsValue::String(String::from("session")),
+            );
             return JsValue::Object(map);
         }
 
@@ -2070,10 +2086,8 @@ impl JsRuntime {
                 let ws_id = self.next_ws_id;
                 self.next_ws_id += 1;
                 let ws_var = format!("__ws_{}", ws_id);
-                self.websockets.insert(
-                    ws_id,
-                    WebSocketConn::new(url.to_string()),
-                );
+                self.websockets
+                    .insert(ws_id, WebSocketConn::new(url.to_string()));
                 let mut ws_obj = BTreeMap::new();
                 ws_obj.insert(String::from("__ws_id__"), JsValue::Number(ws_id as i64));
                 ws_obj.insert(String::from("url"), JsValue::String(url.to_string()));
@@ -3001,7 +3015,8 @@ impl JsRuntime {
                     let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
                     let ws_id = self.next_ws_id;
                     self.next_ws_id += 1;
-                    self.websockets.insert(ws_id, WebSocketConn::new(url.to_string()));
+                    self.websockets
+                        .insert(ws_id, WebSocketConn::new(url.to_string()));
                     out.extend_from_slice(ws_id.to_string().as_bytes());
                 } else {
                     out.extend_from_slice(value.as_bytes());

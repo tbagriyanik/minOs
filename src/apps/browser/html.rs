@@ -662,7 +662,13 @@ pub fn render_html_to_lines(
                     ) {
                         let animated = super::css::interpolate_keyframes(kf, progress);
                         matched.opacity = animated.opacity;
-                        matched.animation_name = None; // Animasyon uygulandı, tekrar etme
+                        if let Some(c) = animated.color {
+                            matched.color = Some(c);
+                        }
+                        if let Some(bg) = animated.bg_color {
+                            matched.bg_color = Some(bg);
+                        }
+                        // Animasyon devam etsin, animation_name'i sıfırlama
                     }
                 }
             }

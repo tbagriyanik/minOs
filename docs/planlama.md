@@ -221,7 +221,7 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 #### Durum Analizi
 | Özellik | Durum | Açıklama |
 | :--- | :---: | :--- |
-| HTTP/2 (RFC 9113) | ❌ Eksik | 2015'ten beri standart; günümüz web trafiğinin çoğunluğu bunu kullanıyor |
+| HTTP/2 (RFC 9113) | ⚠️ Kısım | `http.rs` içinde `h2` çerçeve katmanı, HPACK başlık kodlayıcısı ve `Http2Connection` (akış yönetimi, SETTINGS/PING/WINDOW_UPDATE) hazır; TLS kaydı şifrelemesi, ALPN ve HPACK çözümlemesi (dinamik tablo) eksik — tarayıcıya bağlanmadı |
 | `gzip` / `br` içerik kodlaması | ❌ Eksik | `Transfer-Encoding: chunked` dışında içerik kodlaması yok; RFC 9110 §8.4 |
 | Yönlendirme, çerez, POST | ✅ Var | Temel RFC 9110 uygunluğu sağlanmış |
 
@@ -229,10 +229,10 @@ Bu faz, minOs web tarayıcısının W3C ve IETF standartlarına uygunluğunu art
 
 **A. HTTP/2 (RFC 9113)**
 - **Dosyalar:** `src/drivers/http.rs` (yeni `http2.rs` modülü), `src/drivers/tls.rs` (ALPN entegrasyonu)
-- **Aşama 1 — HTTP/2 çerçeve katmanı:** `FRAME` yapısı (HEADERS, DATA, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE), 9 baytlık başlık + payload.
-- **Aşama 2 — HPACK sıkıştırması:** Header alanlarının HPACK ile sıkıştırılması/çözülmesi (static table + dynamic table).
-- **Aşama 3 — Akış (stream) yönetimi:** Çoklu eşzamanlı istek/yanıt için stream ID'leri ve durum makinesi.
-- **Aşama 4 — ALPN entegrasyonu:** `http/2` seçildiğinde HTTP/2 yığınına geçiş.
+- **Aşama 1 — HTTP/2 çerçeve katmanı:** ✅ `h2` modülü (`build_frame`, `parse_frame_header`, `build_window_update`; HEADERS, DATA, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE), 9 baytlık başlık + payload.
+- **Aşama 2 — HPACK sıkıştırması:** ⚠️ İsteğe (`encode_get_headers`) statik tablo kodlaması hazır; yanıt başlıkları için statik + dinamik tablo **çözücüsü** yok (yalnızca `:status 200` sezgisel bulunuyor).
+- **Aşama 3 — Akış (stream) yönetimi:** ✅ `Http2Connection` içinde tek sayılı akış ID'leri, akış haritası ve durum makinesi (`HalfClosedLocal` / `Closed`).
+- **Aşama 4 — ALPN entegrasyonu:** ❌ Bekliyor; ayrıca HTTPS yolunda çerçevelerin TLS kaydıyla şifrelenmesi (`Http2Connection::get` şu an düz gönderim yapıyor) tamamlanmalı.
 - **Aşama 5 — Test:** HTTP/2 sunucusu ile çoklu eşzamanlı istek; HEADERS/DATA çerçevesi doğrulaması.
 
 **B. `gzip` / `br` İçerik Kodlaması (RFC 9110 §8.4)**

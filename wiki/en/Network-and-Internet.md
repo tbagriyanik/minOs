@@ -1,6 +1,6 @@
 # Network and Internet
 
-minOs network stack includes TCP/IP protocol, DNS resolution, HTTP/1.1 and TLS 1.3 (HTTPS) support.
+minOs network stack includes TCP/IP protocol, DNS resolution (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and a prepared HTTP/2 client infrastructure.
 
 ---
 
@@ -14,8 +14,9 @@ minOs network stack includes TCP/IP protocol, DNS resolution, HTTP/1.1 and TLS 1
 | **Multicast MAC** | RFC 2464 Multicast MAC mapping |
 | **Pseudo-header Checksum** | RFC 8200 pseudo-header checksum calculation |
 | **Socket API** | `AF_INET6` (10), `resolve_ip()` / `resolve_ipv6()`, IPv6 address validation in web browser |
+| **DNS A / AAAA** | `dns_query()` + `dns_parse_a()` (QTYPE=A) and `dns_query_aaaa()` + `dns_parse_aaaa()` (QTYPE=AAAA, RFC 3596); `resolve_host()` / `resolve_host_aaaa()` (5-minute cache) and `resolve_host_ip()` which tries both |
 
-> **IPv6 DNS Limitation:** `dns_query()` emits only **QTYPE=A (1)** queries and `dns_parse_a()` accepts only A records in the response; **no AAAA (28) query is sent and AAAA answers are not parsed**. Host names therefore resolve to IPv4 only, and IPv6-only (AAAA-only) targets cannot be reached by name.
+> **IPv6 Limitation:** Host name resolution supports AAAA, but the IPv4 path is not retried automatically after an established IPv6 connection fails, and `dns`/`nslookup` output does not report AAAA records yet.
 
 ---
 
@@ -30,6 +31,23 @@ minOs network stack includes TCP/IP protocol, DNS resolution, HTTP/1.1 and TLS 1
 | **Chunked Transfer** | `Transfer-Encoding: chunked` responses decoded in place |
 | **Timeout** | 15-second network timeout |
 | **Buffers** | 64 KB TCP receive buffer, 64 KB dynamic response buffer |
+| **IPv6-First Connection** | AAAA is resolved before the request and IPv6 is used via `connect_v6` (the TLS handshake runs over IPv6 for HTTPS); falls back to the IPv4 `fetch_once` path when AAAA is missing or fails |
+
+---
+
+## HTTP/2 (Infrastructure)
+
+An RFC 7540 client core lives in `src/drivers/http.rs`.
+
+| Feature | Description |
+| :--- | :--- |
+| **Frame Layer** | `h2` module: `build_frame`, `parse_frame_header`, `build_window_update`; DATA, HEADERS, SETTINGS, PING, GOAWAY, RST_STREAM, WINDOW_UPDATE constants |
+| **HPACK** | `encode_get_headers` encodes `:method GET`, `:scheme`, `:authority`, `:path` (static table indices) |
+| **Connection** | `Http2Connection::connect` (client preface + server SETTINGS wait), `get()` (multiplexed streams on one socket, odd stream IDs), `close()` (GOAWAY) |
+| **Convenience API** | `http2_get(url, &mut buf)` |
+| **Limits** | No TLS record encryption on HTTPS, no `Upgrade: h2c` / ALPN `h2` negotiation, and no HPACK dynamic table or full header decoding yet (only `:status 200` is detected heuristically) |
+
+> The browser still uses **HTTP/1.1**; it will switch once the HTTP/2 path is complete.
 
 ---
 

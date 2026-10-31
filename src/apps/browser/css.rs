@@ -38,6 +38,36 @@ pub struct Keyframes {
     pub frames: Vec<Keyframe>,
 }
 
+/// @font-face kuralı: font-family adı ve uzak kaynağı (URL).
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct FontFace {
+    pub font_family: String,
+    pub src_url: Option<String>,
+}
+
+/// @font-face kuralları deposu (global, tek iş parçacığı).
+pub static mut FONT_FACES: alloc::vec::Vec<FontFace> = alloc::vec::Vec::new();
+
+/// Yeni bir @font-face kuralı ekler.
+#[allow(static_mut_refs)]
+pub fn register_font_face(face: FontFace) {
+    unsafe {
+        FONT_FACES.push(face);
+    }
+}
+
+/// Belirtilen font-family için kayıtlı @font-face kaynağını döndürür.
+#[allow(dead_code, static_mut_refs)]
+pub fn find_font_face(font_family: &str) -> Option<String> {
+    unsafe {
+        FONT_FACES
+            .iter()
+            .find(|f| f.font_family == font_family)
+            .and_then(|f| f.src_url.clone())
+    }
+}
+
 fn strip_css_comments(css: &str) -> String {
     let b = css.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(b.len());
@@ -186,6 +216,18 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             };
         }
         "font-size" => style.font_scale = font_scale_from_size(val),
+        "font-family" => {
+            // font-family: "CustomFont", sans-serif — ilk isim alınır
+            let name = val
+                .split(',')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_matches(|c| c == '"' || c == '\'');
+            if !name.is_empty() {
+                style.font_family = Some(String::from(name));
+            }
+        }
         "display" => {
             if val.eq_ignore_ascii_case("none") {
                 style.display_none = true;
@@ -587,8 +629,7 @@ fn parse_css_rules(
         };
 
         if selector.starts_with('@') {
-            // @media / @supports / @layer: içindeki kuralları uygula.
-            // @font-face, @import: atlanır.
+            // @media / @supports / @layer / @font-face: içindeki kuralları uygula.
             let at = selector.split_whitespace().next().unwrap_or("");
             if at == "@media" {
                 // Media koşulunu ayıkla: "@media screen and (min-width: 600px)"
@@ -672,6 +713,43 @@ fn parse_css_rules(
                         keyframes.push(Keyframes {
                             name: kf_name,
                             frames,
+                        });
+                    }
+                } else if at == "@font-face" {
+                    // @font-face { font-family: "CustomFont"; src: url("https://..."); }
+                    let mut font_family = String::new();
+                    let mut src_url = String::new();
+                    for decl in block.split(';') {
+                        if let Some((prop, val)) = decl.split_once(':') {
+                            let prop = prop.trim().to_ascii_lowercase();
+                            let val = val.trim();
+                            match prop.as_str() {
+                                "font-family" => {
+                                    font_family =
+                                        val.trim_matches(|c| c == '"' || c == '\'').to_string();
+                                }
+                                "src" => {
+                                    // url("...") veya url('...') formatını ayıkla
+                                    if let Some(inner) =
+                                        val.strip_prefix("url(").and_then(|s| s.strip_suffix(')'))
+                                    {
+                                        src_url = inner
+                                            .trim_matches(|c| c == '"' || c == '\'')
+                                            .to_string();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    if !font_family.is_empty() {
+                        register_font_face(FontFace {
+                            font_family,
+                            src_url: if src_url.is_empty() {
+                                None
+                            } else {
+                                Some(src_url)
+                            },
                         });
                     }
                 }
@@ -1018,10 +1096,36 @@ pub fn interpolate_keyframes(kf: &Keyframes, progress: f32) -> ElementStyle {
     kf.frames.last().unwrap().style.clone()
 }
 
-/// İki stil arasında lineer interpolasyon (sadece opacity için şimdilik).
+/// İki stil arasında lineer interpolasyon (opacity, renk, arka plan rengi).
 fn blend_styles(a: &ElementStyle, b: &ElementStyle, t: f32) -> ElementStyle {
     let mut result = a.clone();
     result.opacity = a.opacity + (b.opacity - a.opacity) * t;
+    // Renk interpolasyonu
+    if let (Some(ca), Some(cb)) = (a.color, b.color) {
+        let ra = ((ca >> 16) & 0xFF) as f32;
+        let ga = ((ca >> 8) & 0xFF) as f32;
+        let ba = (ca & 0xFF) as f32;
+        let rb = ((cb >> 16) & 0xFF) as f32;
+        let gb = ((cb >> 8) & 0xFF) as f32;
+        let bb = (cb & 0xFF) as f32;
+        let r = (ra + (rb - ra) * t) as u32;
+        let g = (ga + (gb - ga) * t) as u32;
+        let b = (ba + (bb - ba) * t) as u32;
+        result.color = Some((r << 16) | (g << 8) | b);
+    }
+    // Arka plan rengi interpolasyonu
+    if let (Some(ca), Some(cb)) = (a.bg_color, b.bg_color) {
+        let ra = ((ca >> 16) & 0xFF) as f32;
+        let ga = ((ca >> 8) & 0xFF) as f32;
+        let ba = (ca & 0xFF) as f32;
+        let rb = ((cb >> 16) & 0xFF) as f32;
+        let gb = ((cb >> 8) & 0xFF) as f32;
+        let bb = (cb & 0xFF) as f32;
+        let r = (ra + (rb - ra) * t) as u32;
+        let g = (ga + (gb - ga) * t) as u32;
+        let b = (ba + (bb - ba) * t) as u32;
+        result.bg_color = Some((r << 16) | (g << 8) | b);
+    }
     result
 }
 

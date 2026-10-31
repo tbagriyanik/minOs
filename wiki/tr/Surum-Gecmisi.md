@@ -13,6 +13,8 @@ minOs sürüm notları ve gelecek planları.
   - **Finished anahtar türetimi (§4.4.4):** `finished_key` doğrudan `server/client_hs_traffic_secret` üzerinden türetiliyor.
   - **`close_notify` zarif kapanış (§6.1):** Sunucunun gönderdiği `close_notify` artık fatal hata sayılmıyor.
 - **🌐 Tarayıcı Sayfa İndirme ve HTML Entegrasyonu:** İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir. Dosya Yöneticisi'nde `.html`, `.htm`, `.xhtml` ve `.url` dosyalarına çift tıklandığında tarayıcıda açılır.
+- **🌍 Progresif JPEG, `@font-face` & `@keyframes` Renk Animasyonu:** Görsel çözücü çok taramalı **progresif JPEG** (SOF2) dosyalarını katsayı biriktirerek çözer; CSS motoru `@font-face` kurallarını ayrıştırıp `font-family` bilgisini `ElementStyle` üzerinde taşır; `@keyframes` animasyonları `opacity` yanında `color`/`background-color` değerlerini de interpolasyonla canlandırır. Sınır: uzak TTF/WOFF verisi indirilip rasterleştirilmiyor.
+- **⏱️ IPv6 Öncelikli HTTP & HTTP/2 İstemci Altyapısı:** `http_get_impl` önce AAAA çözüp IPv6 bağlantısı kurar (HTTPS'te TLS el sıkışması IPv6 üzerinden), başarısız olursa IPv4 yoluna düşer. `http.rs` içine RFC 7540 çerçeve katmanı, HPACK istek kodlayıcısı ve `Http2Connection` (`http2_get`) eklendi. Sınır: HTTPS'te çerçeve şifrelemesi, ALPN `h2` pazarlığı ve HPACK çözümlemesi eksik olduğu için tarayıcı hâlâ HTTP/1.1 kullanır.
 - **🐾 Tarayıcı Demo Sayfaları:** `minos://demo`, `minos://demo-img`, `minos://demo-video` yerel demo sayfaları eklendi.
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):** Ağ, Bluetooth HCI, Depolama, USB, Grafik, Sensör & Güç, Veri Yolu & Zaman.
 - **Canlı USB Tak/Çıkar:** Çalışma sırasında USB cihazlarının anında algılanıp toast bildirimleri gösteriliyor.

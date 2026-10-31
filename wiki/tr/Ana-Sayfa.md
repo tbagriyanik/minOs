@@ -15,7 +15,7 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | [Kurulum ve Çalıştırma](Kurulum-ve-Calistirma) | `run.ps1` seçenekleri, Live USB oluşturma, diske kurulum |
 | [Desteklenen Donanım Listesi](Desteklenen-Donanimlar) | Sürücü matrisi, ağ, grafik, depolama, giriş aygıtları |
 | [Yerleşik 15 Uygulama](Uygulamalar) | Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, vb. |
-| [Ağ ve İnternet](Ag-ve-Internet) | TCP/IP, DNS, HTTP/1.1, TLS 1.3 (HTTPS) |
+| [Ağ ve İnternet](Ag-ve-Internet) | TCP/IP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS), HTTP/2 altyapısı |
 | [Dosya Sistemleri](Dosya-Sistemleri) | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 | [Kullanıcı Rehberi](Kullanici-Rehberi) | Masaüstü kısayolları, MinShell komutları |
 | [Geliştirici Rehberi](Gelistirici-Rehberi) | Kaynak haritası, birim testleri, derleme |
@@ -38,7 +38,8 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 ## Özellik Özetleri
 
-- **TLS 1.3 HTTPS:** Tarayıcı `https://` bağlantılarını RFC 8446 uyumlu olarak tamamlar.
+- **TLS 1.3 HTTPS:** Tarayıcı `https://` bağlantılarını RFC 8446 uyumlu olarak tamamlar; IPv6 (AAAA) öncelikli, IPv4 geri düşüşlü bağlantı.
+- **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.
 - **Dinamik Tema:** 5 tema (Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal, Gün Batımı) canlı geçiş.
 - **xHCI USB HID:** Yerel USB klavye/fare desteği, PS/2 fallback ile.
 - **Ağ:** Intel e1000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net, VMware VMXNET3.

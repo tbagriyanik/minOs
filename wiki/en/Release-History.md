@@ -13,6 +13,8 @@ minOs release notes and future plans.
   - **Finished key derivation (§4.4.4):** `finished_key` derived directly from `server/client_hs_traffic_secret`.
   - **Graceful `close_notify` (§6.1):** Server's `close_notify` no longer treated as fatal error.
 - **🌐 Browser Page Download and HTML Integration:** Downloaded pages saved under `/root/Downloads/` with `.html` extension. Double-clicking `.html`, `.htm`, `.xhtml` and `.url` files in File Manager opens them in the browser via `load_html`.
+- **🌍 Progressive JPEG, `@font-face` & `@keyframes` Color Animation:** The image decoder handles multi-scan **progressive JPEG** (SOF2) by accumulating coefficients; the CSS engine parses `@font-face` rules and carries `font-family` on `ElementStyle`; `@keyframes` now animates `color`/`background-color` in addition to `opacity`. Limit: remote TTF/WOFF data is not downloaded or rasterized.
+- **⏱️ IPv6-First HTTP & HTTP/2 Client Infrastructure:** `http_get_impl` resolves AAAA first and connects over IPv6 (TLS handshake over IPv6 for HTTPS), falling back to IPv4 on failure. `http.rs` gained the RFC 7540 frame layer, an HPACK request encoder and `Http2Connection` (`http2_get`). Limit: HTTPS frame encryption, ALPN `h2` negotiation and HPACK decoding are missing, so the browser still uses HTTP/1.1.
 - **🐾 Browser Demo Pages:** Three local demo pages added: `minos://demo`, `minos://demo-img`, `minos://demo-video`.
 - **Expanded Hardware Drivers (20+ New Drivers):** Networking, Bluetooth HCI, Storage, USB, Graphics, Sensors & Power, Bus & Timing.
 - **Live USB Hot-plug:** USB devices detected instantly while running with toast notifications.

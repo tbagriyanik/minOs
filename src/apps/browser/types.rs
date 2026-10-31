@@ -350,6 +350,8 @@ pub struct ElementStyle {
     pub grid_gap: usize,
     /// CSS Grid: otomatik yerlestirme etkin mi? (grid-auto-flow: row default).
     pub grid_auto_flow: bool,
+    /// CSS font-family özelliği (@font-face ile tanımlanabilir).
+    pub font_family: Option<String>,
 }
 
 impl ElementStyle {
@@ -398,6 +400,7 @@ impl ElementStyle {
             grid_template_rows: Vec::new(),
             grid_gap: 0,
             grid_auto_flow: true,
+            font_family: None,
         }
     }
 
@@ -531,6 +534,9 @@ impl ElementStyle {
             self.grid_gap = other.grid_gap;
         }
         self.grid_auto_flow = other.grid_auto_flow;
+        if let Some(name) = &other.font_family {
+            self.font_family = Some(name.clone());
+        }
     }
 }
 

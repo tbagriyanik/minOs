@@ -10,7 +10,16 @@ minOs includes **15 built-in applications** and a window manager, providing a fu
 | **🎛️ Control Panel** | Live system info: OS/kernel version, CPU vendor and logical core count, RAM usage and fill bar, resolution, theme, keyboard layout, uptime and date. Network tab with e1000 driver, link status, DHCP/IP/mask/gateway/DNS and audio driver; one-click theme change. |
 | **📦 Package Manager (`minPak`)** | Graphical and command-line package management interface. Repository catalog listing, package search, local/network package installation and installed package management. |
 | **📝 Notepad** | Top menu bar (`File`, `Edit`, `Help`), text clear/save, **Cut / Copy / Paste / Select All**, **Undo / Redo** (Ctrl+Z / Ctrl+Y). Turkish character support, `Backspace`, `Enter`, **Home / End**, **Shift+arrow keys selection**, line numbers and cursor. |
-| **🌐 Web Browser** | Favorites (Bookmarks) bar, lightweight HTTP test site, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` and `minos://demo` / `minos://demo-img` / `minos://demo-video` local demo pages, tabbed navigation and e1000 ARP/ping/DNS test panel. `https://` addresses (port 443) establish secure connections via **TLS 1.3** handshake; server response decrypted with AES-128-GCM and processed as HTTP. Downloaded pages saved under `/root/Downloads/` with `.html` extension; double-clicking `.html`/`.htm`/`.xhtml` files in File Manager opens them in the browser. |
+| **🌐 Web Browser** | Favorites (Bookmarks) bar, lightweight HTTP test site, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` and `minos://demo` / `minos://demo-img` / `minos://demo-video` local demo pages, tabbed navigation and e1000 ARP/ping/DNS test panel. `https://` addresses (port 443) establish secure connections via **TLS 1.3** handshake; server response decrypted with AES-128-GCM and processed as HTTP. Downloaded pages saved under `/root/Downloads/` with `.html` extension; double-clicking `.html`/`.htm`/`.xhtml` files in File Manager opens them in the browser. The CSS engine parses `@font-face` rules and animates `@keyframes` over `opacity`/`color`/`background-color`; the image decoder supports progressive JPEG. |
+
+### 🎨 CSS & Image Support
+
+| Feature | Detail |
+| :--- | :--- |
+| **Layout** | Basic `flexbox` / `grid`, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **`@font-face`** | `font-family` and `src: url(...)` rules are parsed and carried via `ElementStyle.font_family`. **Limit:** remote TTF/WOFF data is not downloaded or rasterized into an atlas; text is drawn with the embedded atlases |
+| **`@keyframes`** | Linear interpolation of `opacity`, `color` and `background-color` via `blend_styles`; animations do not restart on every repaint |
+| **Images** | PNG, GIF, WebP, SVG and baseline **and progressive (SOF2) JPEG**; `data:` URIs, VFS-local and remote images |
 
 ---
 

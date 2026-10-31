@@ -10,7 +10,16 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **15 adet yerleşik uygul
 | **🎛️ Kontrol Paneli** | Canlı sistem bilgisi: işletim sistemi/çekirdek sürümü, CPU üreticisi ve mantıksal çekirdek sayısı, RAM kullanımı ve doluluk çubuğu, çözünürlük, tema, klavye düzeni, çalışma süresi ve tarih. Ağ sekmesinde e1000 sürücüsü, link durumu, DHCP/IP/maske/ağ geçidi/DNS ve ses sürücüsü; tek düğmeyle tema değiştirme. |
 | **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
-| **🌐 Web Tarayıcısı** | Sık kullanılanlar (Bookmarks) çubuğu, hafif HTTP test sitesi, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` / `minos://demo-img` / `minos://demo-video` yerel demo sayfaları, sekmeli gezinme ve e1000 ARP/ping/DNS test paneli. `https://` adresleri (443 portu) **TLS 1.3** el sıkışması ile güvenli bağlantı kurar; sunucu yanıtı AES-128-GCM ile şifresi çözülüp HTTP olarak işlenir. İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir; Dosya Yöneticisi'nden `.html`/`.htm`/`.xhtml` dosyalarına çift tıklandığında tarayıcıda açılır. |
+| **🌐 Web Tarayıcısı** | Sık kullanılanlar (Bookmarks) çubuğu, hafif HTTP test sitesi, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` / `minos://demo-img` / `minos://demo-video` yerel demo sayfaları, sekmeli gezinme ve e1000 ARP/ping/DNS test paneli. `https://` adresleri (443 portu) **TLS 1.3** el sıkışması ile güvenli bağlantı kurar; sunucu yanıtı AES-128-GCM ile şifresi çözülüp HTTP olarak işlenir. İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir; Dosya Yöneticisi'nden `.html`/`.htm`/`.xhtml` dosyalarına çift tıklandığında tarayıcıda açılır. CSS motoru `@font-face` kurallarını ayrıştırır, `@keyframes` animasyonlarını `opacity`/`color`/`background-color` üzerinde canlandırır; görsel çözücü progresif JPEG destekler. |
+
+### 🎨 CSS & Görsel Desteği
+
+| Özellik | Detay |
+| :--- | :--- |
+| **Düzen** | `flexbox` / `grid` temel özellikleri, `transform` (translate/scale/rotate), `transition` / `animation` |
+| **`@font-face`** | `font-family` ve `src: url(...)` kuralları ayrıştırılır ve `ElementStyle.font_family` üzerinden taşınır. **Sınır:** uzak TTF/WOFF verisi indirilip raster atlassa çevrilmez; metin gömülü atlaslarla çizilir |
+| **`@keyframes`** | `blend_styles` ile `opacity`, `color` ve `background-color` lineer interpolasyonu; animasyon yeniden çizimde bastan başlamaz |
+| **Görseller** | PNG, GIF, WebP, SVG ve baseline **ve progresif (SOF2) JPEG**; `data:` URI, VFS içi ve uzak görseller |
 
 ---
 

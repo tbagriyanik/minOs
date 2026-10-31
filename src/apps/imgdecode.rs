@@ -872,6 +872,39 @@ fn idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: us
     }
 }
 
+/// IDCT bloğunu mevcut plane değerine EKLER (progresif JPEG için biriktirme).
+fn add_idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: usize) {
+    let mut tmp = [0i32; 64];
+    for col in 0..8 {
+        let s = [
+            coeff[col],
+            coeff[8 + col],
+            coeff[16 + col],
+            coeff[24 + col],
+            coeff[32 + col],
+            coeff[40 + col],
+            coeff[48 + col],
+            coeff[56 + col],
+        ];
+        let v = idct_1d(s);
+        for row in 0..8 {
+            tmp[row * 8 + col] = (v[row] + 512) >> 10;
+        }
+    }
+    for row in 0..8 {
+        let mut s = [0i32; 8];
+        s.copy_from_slice(&tmp[row * 8..row * 8 + 8]);
+        let v = idct_1d(s);
+        for col in 0..8 {
+            let value = ((v[col] + 65536 + (128 << 17)) >> 17).clamp(0, 255) as u8;
+            let idx = (oy + row) * out_w + ox + col;
+            if idx < out.len() {
+                out[idx] = out[idx].saturating_add(value);
+            }
+        }
+    }
+}
+
 pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
@@ -882,6 +915,9 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let mut frame: Option<JFrame> = None;
     let mut restart_interval = 0usize;
     let mut pos = 2usize;
+    // Progressive JPEG: tüm SOS (scan) başlangıç pozisyonları.
+    let mut sos_positions: Vec<usize> = Vec::new();
+    let mut is_progressive = false;
 
     while pos < data.len() {
         if data[pos] != 0xFF {
@@ -900,13 +936,24 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             0xD8 | 0x01 | 0xD0..=0xD7 => continue,
             0xD9 => break,
             0xDA => {
+                // SOS (Start of Scan) — progresif JPEG'de birden fazla olabilir.
                 let seg_len = be16(data, pos)?;
                 if seg_len < 2 || pos + seg_len - 2 > data.len() {
                     return None;
                 }
-                let seg = &data[pos..pos + seg_len - 2];
+                // Scan başlangıcı (SOS başlığının sonu = scan verisinin başı).
+                let scan_start = pos + seg_len - 2;
+                sos_positions.push(scan_start);
                 pos += seg_len - 2;
+
+                if is_progressive {
+                    // Progresif modda tüm scan'ları toplayıp döngüye devam et.
+                    continue;
+                }
+
+                // Baseline (tek scan): mevcut davranış.
                 let mut fr = frame.take()?;
+                let seg = &data[pos - (seg_len - 2)..pos];
                 let n = *seg.first()? as usize;
                 if n != fr.comps.len() || seg.len() < 1 + n * 2 {
                     return None;
@@ -920,7 +967,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 }
                 let rgb = decode_jpeg_scan(
                     data,
-                    pos,
+                    scan_start,
                     &fr,
                     &quant,
                     &dc_tables,
@@ -1092,9 +1139,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 pos += seg_len - 2;
             }
             0xC2 => {
-                // Progressive JPEG: treat as baseline for simple decoding
-                // Full progressive JPEG support would require multi-pass decoding
-                // For now, we'll attempt to decode it as if it were baseline
+                // Progressive JPEG (SOF2): çoklu geçiş decoding desteği.
                 let seg_len = be16(data, pos)?;
                 if seg_len < 2 || pos + seg_len - 2 > data.len() {
                     return None;
@@ -1154,6 +1199,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 if total_plane > 24 * 1024 * 1024 {
                     return None;
                 }
+                is_progressive = true;
                 frame = Some(JFrame {
                     width,
                     height,
@@ -1175,6 +1221,171 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
         }
     }
+
+    // Progresif JPEG: tüm scan'ları sırayla decode et, katsayıları biriktir.
+    if is_progressive {
+        let mut fr = match frame {
+            Some(f) => f,
+            None => return None,
+        };
+        if sos_positions.is_empty() {
+            return None;
+        }
+
+        let mcu_w = 8 * fr.max_h;
+        let mcu_h = 8 * fr.max_v;
+        let mcus_x = (fr.width + mcu_w - 1) / mcu_w;
+        let mcus_y = (fr.height + mcu_h - 1) / mcu_h;
+
+        // Plane buffer'ları sıfırla (tüm scan'lar aynı buffer'a yazar).
+        let mut planes: Vec<Vec<u8>> = Vec::new();
+        for c in &fr.comps {
+            planes.push(vec![0u8; c.bw * c.bh * 64]);
+        }
+        let _preds = [0i32; 4];
+
+        for &scan_start in &sos_positions {
+            // SOS başlığını ayrıştır: component -> (td, ta) eşlemesi.
+            if scan_start < 2 {
+                continue;
+            }
+            let seg_len = match be16(data, scan_start - 2) {
+                Some(s) => s,
+                None => continue,
+            };
+            if seg_len < 2 || scan_start - 2 + seg_len > data.len() {
+                continue;
+            }
+            let seg = &data[scan_start - 2..scan_start - 2 + seg_len];
+            let n = *seg.first()? as usize;
+            if n != fr.comps.len() || seg.len() < 1 + n * 2 {
+                continue;
+            }
+            for i in 0..n {
+                let id = seg[1 + i * 2];
+                let tables = seg[2 + i * 2];
+                let comp = fr.comps.iter_mut().find(|c| c.id == id)?;
+                comp.td = (tables >> 4) as usize;
+                comp.ta = (tables & 15) as usize;
+            }
+
+            // Scan verisini decode et ve katsayıları plane'lara biriktir.
+            let mut br = JBitReader::new(data, scan_start);
+            let mut local_preds = [0i32; 4];
+            let mut mcu = 0usize;
+
+            for my in 0..mcus_y {
+                for mx in 0..mcus_x {
+                    if restart_interval > 0 && mcu > 0 && mcu % restart_interval == 0 {
+                        if !br.reset_at_restart() {
+                            return None;
+                        }
+                        local_preds = [0i32; 4];
+                    }
+                    for (ci, comp) in fr.comps.iter().enumerate() {
+                        let qt = match quant[comp.tq] {
+                            Some(q) => q,
+                            None => return None,
+                        };
+                        let dc = match dc_tables.get(comp.td) {
+                            Some(Some(d)) => d,
+                            _ => return None,
+                        };
+                        let ac = match ac_tables.get(comp.ta) {
+                            Some(Some(a)) => a,
+                            _ => return None,
+                        };
+                        for by in 0..comp.v {
+                            for bx in 0..comp.h {
+                                let mut coeff = [0i32; 64];
+                                let s = match dc.decode(&mut br) {
+                                    Some(s) => s as u32,
+                                    None => return None,
+                                };
+                                if s > 16 {
+                                    return None;
+                                }
+                                let diff = extend(br.bits(s)?, s);
+                                local_preds[ci] = local_preds[ci].wrapping_add(diff);
+                                coeff[0] = local_preds[ci] * qt[0];
+                                let mut k = 1usize;
+                                while k < 64 {
+                                    let rs = match ac.decode(&mut br) {
+                                        Some(rs) => rs as usize,
+                                        None => return None,
+                                    };
+                                    let r = rs >> 4;
+                                    let size = rs & 15;
+                                    if size == 0 {
+                                        if r == 15 {
+                                            k += 16;
+                                            continue;
+                                        }
+                                        break;
+                                    }
+                                    k += r;
+                                    if k >= 64 {
+                                        break;
+                                    }
+                                    let v = extend(br.bits(size as u32)?, size as u32);
+                                    coeff[ZIGZAG[k]] = v * qt[k];
+                                    k += 1;
+                                }
+                                // Progresif: katsayıları mevcut plane değerine EKLE (biriktir).
+                                let plane = &mut planes[ci];
+                                let plane_w = comp.bw * 8;
+                                add_idct_block(
+                                    &coeff,
+                                    plane,
+                                    plane_w,
+                                    (mx * comp.h + bx) * 8,
+                                    (my * comp.v + by) * 8,
+                                );
+                            }
+                        }
+                    }
+                    mcu += 1;
+                }
+            }
+        }
+
+        // Tüm scan'lar işlendikten sonra IDCT sonucunu RGB'ye dönüştür.
+        let total = fr.width.checked_mul(fr.height)?;
+        let mut rgb = Vec::new();
+        if rgb.try_reserve_exact(total * 3).is_err() {
+            return None;
+        }
+        rgb.resize(total * 3, 0);
+        let nc = fr.comps.len();
+        for y in 0..fr.height {
+            for x in 0..fr.width {
+                let (r, g, b) = if nc == 1 {
+                    let c = &fr.comps[0];
+                    let v = sample_plane(&planes[0], c, &fr, x, y);
+                    (v, v, v)
+                } else {
+                    let yv = sample_plane(&planes[0], &fr.comps[0], &fr, x, y) as i32;
+                    let cb = sample_plane(&planes[1], &fr.comps[1], &fr, x, y) as i32 - 128;
+                    let cr = sample_plane(&planes[2], &fr.comps[2], &fr, x, y) as i32 - 128;
+                    let r = (yv + ((cr * 359 + 128) >> 8)).clamp(0, 255) as u8;
+                    let g = (yv - ((cb * 88 + cr * 183 + 128) >> 8)).clamp(0, 255) as u8;
+                    let b = (yv + ((cb * 454 + 128) >> 8)).clamp(0, 255) as u8;
+                    (r, g, b)
+                };
+                let i = (y * fr.width + x) * 3;
+                rgb[i] = r;
+                rgb[i + 1] = g;
+                rgb[i + 2] = b;
+            }
+        }
+        return Some(DecodedImage {
+            width: fr.width,
+            height: fr.height,
+            rgb,
+            format: "JPEG (progressive)",
+        });
+    }
+
     None
 }
 

@@ -15,7 +15,7 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 | [Installation and Running](Installation-and-Running) | `run.ps1` options, Live USB creation, disk installation |
 | [Supported Hardware List](Supported-Hardware) | Driver matrix, network, graphics, storage, input devices |
 | [15 Built-in Applications](Built-in-Applications) | Web Browser, Notepad, File Manager, etc. |
-| [Network and Internet](Network-and-Internet) | TCP/IP, DNS, HTTP/1.1, TLS 1.3 (HTTPS) |
+| [Network and Internet](Network-and-Internet) | TCP/IP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS), HTTP/2 infrastructure |
 | [File Systems](File-Systems) | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 | [User Guide](User-Guide) | Desktop shortcuts, MinShell commands |
 | [Developer Guide](Developer-Guide) | Source tree map, unit tests, building |
@@ -38,7 +38,8 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 
 ## Feature Highlights
 
-- **TLS 1.3 HTTPS:** Browser completes `https://` connections per RFC 8446.
+- **TLS 1.3 HTTPS:** Browser completes `https://` connections per RFC 8446, preferring IPv6 (AAAA) with an IPv4 fallback.
+- **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.
 - **Dynamic Themes:** 5 themes (Velvet Dark, Daylight, Nord, Terminal Green, Sunset) with live switching.
 - **xHCI USB HID:** Native USB keyboard/mouse support with PS/2 fallback.
 - **Networking:** Intel e1000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net, VMware VMXNET3.

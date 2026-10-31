@@ -1183,11 +1183,8 @@ impl TlsSession {
             let mut pms = [0u8; 48];
             pms[0] = (TLS_VERSION_1_2 >> 8) as u8;
             pms[1] = (TLS_VERSION_1_2 & 0xFF) as u8;
-            let seed = crate::monotonic_ms();
-            for i in 2..48 {
-                pms[i] =
-                    ((seed.wrapping_add((i as u64) * 0x9e3779b97f4a7c15)) >> ((i % 8) * 8)) as u8;
-            }
+            // Donanım Rastgelelik kaynağından pms'yi doldur.
+            crate::random::fill_bytes(&mut pms[2..]);
             let encrypted_pms = {
                 let rsa_key = self.rsa_key.as_ref().ok_or(())?;
                 pkcs1_v1_5_encrypt(rsa_key, &pms)?
@@ -1961,15 +1958,9 @@ pub fn build_client_hello(
     extensions.push(0);
 
     // TLS 1.2 için ECDHE secret oluştur (ServerKeyExchange'de kullanılacak)
-    let seed = crate::boot::time::main_monotonic_ms() as u64 ^ 0x2545_F491_4F6C_DD1D as u64;
-    let mut state = seed;
+    // Donanım Rastgelelik kaynağından tohum.
     let mut ks_seed = [0u8; 32];
-    for b in ks_seed.iter_mut() {
-        state ^= state >> 12;
-        state ^= state << 25;
-        state ^= state >> 27;
-        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
-    }
+    crate::random::fill_bytes(&mut ks_seed);
     let kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
     ecdhe_secret_out.copy_from_slice(&kp.secret);
     // TLS 1.3: istemcinin ECDHE paylasimini ClientHello key_share (0x0033)

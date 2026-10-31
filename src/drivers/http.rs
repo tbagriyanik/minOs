@@ -595,16 +595,9 @@ pub fn fetch_once(
             } else {
                 // Doğrudan bağlantı
                 if is_https {
-                    // TLS el sıkışması
+                    // TLS el sıkışması — client_random donanım Rastgelelik kaynağından.
                     let mut client_random = [0u8; 32];
-                    let mut state =
-                        crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-                    for b in client_random.iter_mut() {
-                        state ^= state >> 12;
-                        state ^= state << 25;
-                        state ^= state >> 27;
-                        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
-                    }
+                    crate::random::fill_bytes(&mut client_random);
 
                     let mut hello = Vec::new();
                     let mut ecdhe_secret = [0u8; 32];

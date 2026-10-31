@@ -158,6 +158,9 @@ pub extern "C" fn _start() -> ! {
 
     init_heap();
 
+    // Donanım Rastgelelik kaynağını (RDRAND/RDSEED) başlat ve PRNG'i tohumla.
+    random::init();
+
     // Install early display output before PMM/VMM/SMP and device probes.
 
     let (fb_ptr, mut width, mut height, pitch, bpp) = unsafe {

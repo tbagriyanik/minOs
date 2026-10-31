@@ -115,6 +115,48 @@ pub mod boot {
 #[path = "../src/drivers/tls.rs"]
 pub mod tls;
 
+// Host test icin rastgelelik stub'i: Gercek donanim RDRAND/RDSEED yok,
+// bu yuzde basit bir xorshift PRNG kullanilir.
+pub mod random {
+    static mut STATE: u64 = 0x6d69_6e4f_532d_524e;
+
+    pub fn init() {
+        unsafe { STATE = 0x6d69_6e4f_532d_524e; }
+    }
+
+    pub fn seed(seed: [u8; 32]) {
+        let mut value = 0u64;
+        for chunk in seed.chunks_exact(8) {
+            value ^= u64::from_le_bytes([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+            ]);
+        }
+        unsafe { STATE = value | 1; }
+    }
+
+    pub fn hw_available() -> bool {
+        false
+    }
+
+    pub fn fill_bytes(buf: &mut [u8]) {
+        let mut offset = 0;
+        while offset < buf.len() {
+            let remaining = buf.len() - offset;
+            let chunk = if remaining >= 8 { 8 } else { remaining };
+            unsafe {
+                let mut x = STATE;
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                STATE = x;
+                let val = x.wrapping_mul(0x2545_f491_4f6c_dd1d).to_le_bytes();
+                buf[offset..offset + chunk].copy_from_slice(&val[..chunk]);
+            }
+            offset += chunk;
+        }
+    }
+}
+
 // Kaynak moduller `crate::drivers::crypto::...` yoluyla birbirine bagli
 // oldugu icin ayni yolu host harness'inda da saglariz.
 pub mod drivers {

@@ -1676,6 +1676,7 @@ pub fn build_client_hello(
     client_random: &[u8; 32],
     out: &mut Vec<u8>,
     ecdhe_secret_out: &mut [u8; 32],
+    fallback: bool,
 ) {
     out.clear();
 
@@ -1694,14 +1695,10 @@ pub fn build_client_hello(
     //  * TLS 1.2: TLS_RSA_WITH_AES_128_GCM_SHA256 (0x009C) — yalnizca RSA
     //    sertifikasi olan eski sunucular icin son care.
     //
-    // TLS 1.3'te her iki paket de desteklenir; hash algoritması (SHA-256/SHA-384)
-    // ve AEAD anahtar uzunluğu (16/32 bayt) ServerHello'daki pakete göre seçilir
-    // (RFC 8446 §7.1). Bazı sunucular yalnızca AES-256-GCM/SHA-384 kabul eder
-    // (örn. aa.com.tr), bu yüzden 0x1302 mutlaka ilan edilmelidir.
-    let ciphers = [
-        // TLS 1.3 (sunucu TLS 1.3 secerse bu paketler kullanilir).
-        TLS_AES_128_GCM_SHA256,
-        TLS_AES_256_GCM_SHA384,
+    // fallback == true ise RFC 7507 uyarinaca fallback_scsv (0x5600) eklenir ve
+    // TLS 1.3 paketleri cikarilir (sunucu daha yuksek surum destekliyorsa baglantiyi
+    // reddetmeli).
+    let mut ciphers: alloc::vec::Vec<u16> = alloc::vec![
         // TLS 1.2 ECDHE + AES-GCM (ileri secrecy).
         TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
         TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -1710,6 +1707,15 @@ pub fn build_client_hello(
         // TLS 1.2 RSA key exchange (eski sunucular, ileri secrecy yok).
         TLS_RSA_WITH_AES_128_GCM_SHA256,
     ];
+    if !fallback {
+        // TLS 1.3 paketleri (sunucu TLS 1.3 secerse kullanilir).
+        ciphers.insert(0, TLS_AES_128_GCM_SHA256);
+        ciphers.insert(1, TLS_AES_256_GCM_SHA384);
+    }
+    if fallback {
+        // RFC 7507: fallback_scsv — sunucuya downgrade sinyali.
+        ciphers.push(0x5600);
+    }
     let cipher_len = (ciphers.len() * 2) as u16;
     handshake.extend_from_slice(&cipher_len.to_be_bytes());
     for c in &ciphers {
@@ -1739,14 +1745,25 @@ pub fn build_client_hello(
     extensions.push(8);
     extensions.extend_from_slice(b"http/1.1");
 
-    // TLS 1.3 ve TLS 1.2'yi ilan et (sunucu 0x0303 secerse TLS 1.2 modu).
-    let versions: [u16; 2] = [TLS_VERSION_1_3, TLS_VERSION_1_2];
-    extensions.extend_from_slice(&0x002bu16.to_be_bytes());
-    let sv_len = (1 + versions.len() * 2) as u16;
-    extensions.extend_from_slice(&sv_len.to_be_bytes());
-    extensions.push((versions.len() * 2) as u8);
-    for v in &versions {
-        extensions.extend_from_slice(&v.to_be_bytes());
+    // supported_versions: fallback == true ise sadece TLS 1.2, degilse 1.3 + 1.2.
+    if fallback {
+        let versions: [u16; 1] = [TLS_VERSION_1_2];
+        extensions.extend_from_slice(&0x002bu16.to_be_bytes());
+        let sv_len = (1 + versions.len() * 2) as u16;
+        extensions.extend_from_slice(&sv_len.to_be_bytes());
+        extensions.push((versions.len() * 2) as u8);
+        for v in &versions {
+            extensions.extend_from_slice(&v.to_be_bytes());
+        }
+    } else {
+        let versions: [u16; 2] = [TLS_VERSION_1_3, TLS_VERSION_1_2];
+        extensions.extend_from_slice(&0x002bu16.to_be_bytes());
+        let sv_len = (1 + versions.len() * 2) as u16;
+        extensions.extend_from_slice(&sv_len.to_be_bytes());
+        extensions.push((versions.len() * 2) as u8);
+        for v in &versions {
+            extensions.extend_from_slice(&v.to_be_bytes());
+        }
     }
 
     // signature_algorithms (0x000d): doğrulayabildiğimiz şemalar ilan edilir.
@@ -1787,14 +1804,17 @@ pub fn build_client_hello(
     ecdhe_secret_out.copy_from_slice(&kp.secret);
     // TLS 1.3: istemcinin ECDHE paylasimini ClientHello key_share (0x0033)
     // uzantisinda ilan et, ki sunucu direkt ortak anahtarla ECDHE yapabilme.
-    let ks_entry_len = 2 + 2 + kp.public.len(); // group + point_len + point
-    let ks_body_len = 2 + ks_entry_len; // shares_len + entry
-    extensions.extend_from_slice(&0x0033u16.to_be_bytes());
-    extensions.extend_from_slice(&(ks_body_len as u16).to_be_bytes());
-    extensions.extend_from_slice(&(ks_entry_len as u16).to_be_bytes());
-    extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
-    extensions.extend_from_slice(&(kp.public.len() as u16).to_be_bytes());
-    extensions.extend_from_slice(&kp.public);
+    // fallback == true ise key_share uzantisini cikar (TLS 1.2'de gerekli degil).
+    if !fallback {
+        let ks_entry_len = 2 + 2 + kp.public.len(); // group + point_len + point
+        let ks_body_len = 2 + ks_entry_len; // shares_len + entry
+        extensions.extend_from_slice(&0x0033u16.to_be_bytes());
+        extensions.extend_from_slice(&(ks_body_len as u16).to_be_bytes());
+        extensions.extend_from_slice(&(ks_entry_len as u16).to_be_bytes());
+        extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
+        extensions.extend_from_slice(&(kp.public.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&kp.public);
+    }
 
     if !extensions.is_empty() {
         handshake.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
@@ -1950,7 +1970,7 @@ mod tests {
         let random = [0u8; 32];
         let mut out = Vec::new();
         let mut ecdhe = [0u8; 32];
-        build_client_hello("example.com", &random, &mut out, &mut ecdhe);
+        build_client_hello("example.com", &random, &mut out, &mut ecdhe, false);
 
         // TLS 1.3-compatible record version is 0x0301; ClientHello legacy_version is 0x0303.
         assert_eq!(out[0], TLS_RECORD_HANDSHAKE);
@@ -2604,7 +2624,7 @@ mod tests {
         let client_random = [0x11u8; 32];
         let mut hello = Vec::new();
         let mut client_ecdhe = [0u8; 32];
-        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe);
+        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe, false);
 
         let mut client = TlsSession::new("minos.test", client_random);
         let ch_body = &hello[5..];
@@ -2809,7 +2829,7 @@ mod tests {
         let client_random = [0x22u8; 32];
         let mut hello = Vec::new();
         let mut client_ecdhe = [0u8; 32];
-        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe);
+        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe, false);
         let mut client = TlsSession::new("minos.test", client_random);
         let ch_body = &hello[5..];
         client.note_client_hello(ch_body);

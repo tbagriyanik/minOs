@@ -334,7 +334,6 @@ pub struct Timer {
 }
 
 // Sayfa boyunca süren JS durumu: değişkenler ve konsol çıktısı.
-#[derive(Clone)]
 pub struct JsRuntime {
     pub vars: Vec<(String, String)>,
     pub values: BTreeMap<String, JsValue>,
@@ -369,8 +368,51 @@ pub struct JsRuntime {
     pub next_ws_id: u32,
 }
 
+impl Clone for JsRuntime {
+    fn clone(&self) -> Self {
+        // WebSocket bağlantıları kopyalanır ancak TLS/soket durumu (connection alanı)
+        // sıfırlanır, çünkü WebSocketConnection Clone değil.
+        let websockets = self
+            .websockets
+            .iter()
+            .map(|(id, conn)| {
+                let cloned = conn.clone();
+                #[cfg(not(any(test, host_fs_tests)))]
+                {
+                    let mut cloned = cloned;
+                    cloned.connection = None;
+                    (*id, cloned)
+                }
+                #[cfg(any(test, host_fs_tests))]
+                {
+                    (*id, cloned)
+                }
+            })
+            .collect();
+        Self {
+            vars: self.vars.clone(),
+            values: self.values.clone(),
+            functions: self.functions.clone(),
+            listeners: self.listeners.clone(),
+            logs: self.logs.clone(),
+            last_cond: self.last_cond,
+            last_return: self.last_return.clone(),
+            doc: self.doc.clone(),
+            microtask_queue: self.microtask_queue.clone(),
+            protos: self.protos.clone(),
+            classes: self.classes.clone(),
+            strict_mode: self.strict_mode,
+            timers: self.timers.clone(),
+            next_timer_id: self.next_timer_id,
+            local_storage: self.local_storage.clone(),
+            session_storage: self.session_storage.clone(),
+            websockets,
+            next_ws_id: self.next_ws_id,
+        }
+    }
+}
+
 /// WebSocket bağlantı durumu.
-#[derive(Clone, Debug)]
 pub struct WebSocketConn {
     pub url: String,
     pub ready_state: u8, // 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
@@ -379,6 +421,24 @@ pub struct WebSocketConn {
     pub onerror: Option<String>,
     pub onclose: Option<String>,
     pub buffered: Vec<String>, // alınan mesaj kuyruğu
+    #[cfg(not(any(test, host_fs_tests)))]
+    pub connection: Option<crate::drivers::http::WebSocketConnection>,
+}
+
+impl Clone for WebSocketConn {
+    fn clone(&self) -> Self {
+        Self {
+            url: self.url.clone(),
+            ready_state: self.ready_state,
+            onmessage: self.onmessage.clone(),
+            onopen: self.onopen.clone(),
+            onerror: self.onerror.clone(),
+            onclose: self.onclose.clone(),
+            buffered: self.buffered.clone(),
+            #[cfg(not(any(test, host_fs_tests)))]
+            connection: None, // WebSocketConnection Clone değil, sıfırla
+        }
+    }
 }
 
 impl WebSocketConn {
@@ -391,6 +451,8 @@ impl WebSocketConn {
             onerror: None,
             onclose: None,
             buffered: Vec::new(),
+            #[cfg(not(any(test, host_fs_tests)))]
+            connection: None,
         }
     }
 }
@@ -1389,11 +1451,15 @@ impl JsRuntime {
                 "WebSocket" => match method {
                     "send" => {
                         let data = self.eval_val(args).to_str();
-                        // WebSocket gönderimi: frame oluştur ve socket üzerinden gönder
-                        // Basit implementasyon: veriyi buffer'a ekle
                         if let Some(JsValue::Object(map)) = self.values.get_mut("__ws_current__") {
                             if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
                                 if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                    #[cfg(not(any(test, host_fs_tests)))]
+                                    if let Some(ref mut ws_conn) = conn.connection {
+                                        let _ = ws_conn.send(data.as_bytes());
+                                    }
+                                    #[cfg(any(test, host_fs_tests))]
+                                    let _ = (&data, &conn);
                                     conn.buffered.push(data.clone());
                                 }
                             }
@@ -1404,6 +1470,10 @@ impl JsRuntime {
                         if let Some(JsValue::Object(map)) = self.values.get("__ws_current__") {
                             if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
                                 if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                    #[cfg(not(any(test, host_fs_tests)))]
+                                    if let Some(ref mut ws_conn) = conn.connection {
+                                        let _ = ws_conn.close();
+                                    }
                                     conn.ready_state = 3;
                                 }
                             }
@@ -1571,6 +1641,12 @@ impl JsRuntime {
                                 if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
                                     let data = self.eval_val(args).to_str();
                                     if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                        #[cfg(not(any(test, host_fs_tests)))]
+                                        if let Some(ref mut ws_conn) = conn.connection {
+                                            let _ = ws_conn.send(data.as_bytes());
+                                        }
+                                        #[cfg(any(test, host_fs_tests))]
+                                        let _ = (&data, &conn);
                                         conn.buffered.push(data);
                                     }
                                 }
@@ -1580,6 +1656,10 @@ impl JsRuntime {
                                 // WebSocket.close() — bağlantıyı kapat
                                 if let Some(JsValue::Number(ws_id)) = map.get("__ws_id__") {
                                     if let Some(conn) = self.websockets.get_mut(&(*ws_id as u32)) {
+                                        #[cfg(not(any(test, host_fs_tests)))]
+                                        if let Some(ref mut ws_conn) = conn.connection {
+                                            let _ = ws_conn.close();
+                                        }
                                         conn.ready_state = 3;
                                     }
                                 }
@@ -2078,7 +2158,7 @@ impl JsRuntime {
             return JsValue::Object(map);
         }
 
-        // WebSocket(url) — WebSocket nesnesi döndürür
+        // WebSocket(url) — WebSocket nesnesi döndürür ve bağlanmaya çalışır
         if e.starts_with("WebSocket(") && e.ends_with(')') {
             if let Some((args, _)) = call_args(e, 9) {
                 let url = self.eval_val(args.trim()).to_str();
@@ -2086,12 +2166,26 @@ impl JsRuntime {
                 let ws_id = self.next_ws_id;
                 self.next_ws_id += 1;
                 let ws_var = format!("__ws_{}", ws_id);
-                self.websockets
-                    .insert(ws_id, WebSocketConn::new(url.to_string()));
+
+                // WebSocket bağlantısını kur (ws:// veya wss://).
+                #[cfg(not(any(test, host_fs_tests)))]
+                {
+                    let mut conn = WebSocketConn::new(url.to_string());
+                    match crate::drivers::http::WebSocketConnection::connect(&url) {
+                        Ok(ws_conn) => {
+                            conn.ready_state = 1; // OPEN
+                            conn.connection = Some(ws_conn);
+                        }
+                        Err(_) => {
+                            conn.ready_state = 3; // CLOSED (bağlantı başarısız)
+                        }
+                    }
+                    self.websockets.insert(ws_id, conn);
+                }
                 let mut ws_obj = BTreeMap::new();
                 ws_obj.insert(String::from("__ws_id__"), JsValue::Number(ws_id as i64));
                 ws_obj.insert(String::from("url"), JsValue::String(url.to_string()));
-                ws_obj.insert(String::from("readyState"), JsValue::Number(0));
+                ws_obj.insert(String::from("readyState"), JsValue::Number(self.websockets[&ws_id].ready_state as i64));
                 self.values.insert(ws_var.clone(), JsValue::Object(ws_obj));
                 return JsValue::String(ws_var);
             }

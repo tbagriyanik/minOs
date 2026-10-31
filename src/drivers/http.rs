@@ -613,6 +613,7 @@ pub fn fetch_once(
                         &client_random,
                         &mut hello,
                         &mut ecdhe_secret,
+                        false,
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
@@ -882,6 +883,7 @@ fn fetch_https(
         &client_random,
         &mut hello,
         &mut ecdhe_secret,
+        false,
     );
     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
     let mut session = TlsSession::new(host_str, client_random);
@@ -1100,6 +1102,7 @@ fn http_get_impl(
                         &client_random,
                         &mut hello,
                         &mut ecdhe_secret,
+                        false,
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
@@ -1969,21 +1972,128 @@ pub mod h2 {
         out.extend_from_slice(value);
     }
 
-    /// HPACK ile minimum bir GET başlığı üretir (RFC 7541).
-    /// Statik tablo kullanılır; dinamik tablo güncellenmez, bu nedenle akışlar
-    /// arasında güvenli şekilde yeniden kullanılabilir.
-    pub fn encode_get_headers(authority: &[u8], path: &[u8], https: bool) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.push(0x82); // :method GET (static index 2)
-        out.push(if https { 0x87 } else { 0x86 }); // :scheme
-        if path == b"/" {
-            out.push(0x84); // :path /
-        } else {
-            encode_int(&mut out, 4, 4, 0x00); // literal :path, indexed name
-            encode_string(&mut out, path);
+    /// HPACK dinamik tablo girişi (isim + değer).
+    #[derive(Clone, Debug)]
+    struct HpackEntry {
+        name: Vec<u8>,
+        value: Vec<u8>,
+    }
+
+    /// HPACK dinamik tablo: sunucu tarafından bildirilen SETTINGS_HEADER_TABLE_SIZE
+    /// sınırına göre en son eklenen girdileri tutar, eskileri çıkarır.
+    pub struct HpackDynamicTable {
+        entries: alloc::vec::Vec<HpackEntry>,
+        current_size: usize,
+        max_size: usize,
+    }
+
+    impl HpackDynamicTable {
+        pub fn new(max_size: usize) -> Self {
+            Self {
+                entries: alloc::vec::Vec::new(),
+                current_size: 0,
+                max_size,
+            }
         }
-        encode_int(&mut out, 1, 4, 0x00); // literal :authority, indexed name
+
+        /// Girdiyi ekle; gerekirse eskileri çıkar (RFC 7541 §4.2).
+        fn insert(&mut self, name: &[u8], value: &[u8]) {
+            let entry_size = 32 + name.len() + value.len(); // 32 = overhead (RFC 7541 §4.2)
+            // Çok büyükse ekleme.
+            if entry_size > self.max_size {
+                return;
+            }
+            // Yer açmak için eskileri çıkar.
+            while self.current_size + entry_size > self.max_size && !self.entries.is_empty() {
+                let removed = self.entries.remove(0);
+                self.current_size -= 32 + removed.name.len() + removed.value.len();
+            }
+            self.entries.push(HpackEntry {
+                name: name.to_vec(),
+                value: value.to_vec(),
+            });
+            self.current_size += entry_size;
+        }
+
+        /// İndisle (1-based, dinamik tablo) ara; bulunursa (index, name, value) döner.
+        fn get_by_index(&self, index: usize) -> Option<(usize, &[u8], &[u8])> {
+            // Dinamik tablo indeksleri statik tablo boyutundan sonra başlar.
+            // Statik tablo boyutu = 61 (RFC 7541 §2.3.1).
+            const STATIC_TABLE_SIZE: usize = 61;
+            if index <= STATIC_TABLE_SIZE {
+                return None; // Statik tablo, burada işlenmez.
+            }
+            let dyn_idx = index - STATIC_TABLE_SIZE - 1;
+            self.entries.get(dyn_idx).map(|e| (index, e.name.as_slice(), e.value.as_slice()))
+        }
+
+        /// İsim-değer çiftini ara; bulunursa dinamik tablo indeksi (1-based, statikten sonra) döner.
+        fn find(&self, name: &[u8], value: Option<&[u8]>) -> Option<usize> {
+            const STATIC_TABLE_SIZE: usize = 61;
+            for (i, e) in self.entries.iter().enumerate() {
+                let idx = STATIC_TABLE_SIZE + 1 + i;
+                if e.name == name {
+                    if let Some(v) = value {
+                        if e.value == *v {
+                            return Some(idx);
+                        }
+                    } else {
+                        return Some(idx); // Sadece isim eşleşti (literal değer, indexed name)
+                    }
+                }
+            }
+            None
+        }
+
+        fn max_size(&self) -> usize {
+            self.max_size
+        }
+
+        fn set_max_size(&mut self, size: usize) {
+            self.max_size = size;
+            // Yeni limitten büyükse eskileri çıkar.
+            while self.current_size > self.max_size && !self.entries.is_empty() {
+                let removed = self.entries.remove(0);
+                self.current_size -= 32 + removed.name.len() + removed.value.len();
+            }
+        }
+    }
+
+    /// HPACK ile GET başlığı üretir (RFC 7541).
+    /// Statik tablo + dinamik tablo kullanır; dinamik tablo her istek için
+    /// sıfırdan başlar (bağlantı başına tek bir tablo kullanılır).
+    pub fn encode_get_headers(
+        authority: &[u8],
+        path: &[u8],
+        https: bool,
+        dyn_table: &mut HpackDynamicTable,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+
+        // :method GET — statik indeks 2 (indexed representation)
+        out.push(0x82);
+
+        // :scheme — statik indeks 6 (http) veya 7 (https)
+        out.push(if https { 0x87 } else { 0x86 });
+
+        // :path
+        if path == b"/" {
+            // Statik indeks 4 (indexed representation)
+            out.push(0x84);
+        } else {
+            // :path için literal header field, indexed name (statik indeks 4)
+            encode_int(&mut out, 4, 4, 0x00);
+            encode_string(&mut out, path);
+            // Dinamik tabloya ekle.
+            dyn_table.insert(b":path", path);
+        }
+
+        // :authority — literal header field, indexed name (statik indeks 1)
+        encode_int(&mut out, 1, 4, 0x00);
         encode_string(&mut out, authority);
+        // Dinamik tabloya ekle.
+        dyn_table.insert(b":authority", authority);
+
         out
     }
 
@@ -2023,8 +2133,9 @@ pub mod h2 {
         authority: &[u8],
         path: &[u8],
         https: bool,
+        dyn_table: &mut HpackDynamicTable,
     ) -> Vec<u8> {
-        let block = encode_get_headers(authority, path, https);
+        let block = encode_get_headers(authority, path, https, dyn_table);
         build_frame(
             FRAME_HEADERS,
             FLAG_END_HEADERS | FLAG_END_STREAM,
@@ -2104,12 +2215,19 @@ pub struct Http2Connection {
     host: String,
     port: u16,
     is_https: bool,
+    tls_session: Option<crate::drivers::tls::TlsSession>,
     next_stream_id: u32,
     streams: alloc::vec::Vec<Option<H2Stream>>,
     /// Akış ID'sine göre stream index'i.
     stream_map: alloc::collections::BTreeMap<u32, usize>,
     /// Akış penceresi (flow control) — bağlantı düzeyi.
     connection_window: u32,
+    /// Sunucudan gelen SETTINGS MAX_CONCURRENT_STREAMS değeri.
+    max_concurrent_streams: u32,
+    /// Şu anda açık akış sayısı.
+    open_stream_count: u32,
+    /// HPACK dinamik tablo (bağlantı başına tek bir tablo).
+    dyn_table: h2::HpackDynamicTable,
 }
 
 impl Http2Connection {
@@ -2134,7 +2252,7 @@ impl Http2Connection {
         })?;
 
         // TLS el sıkışması (HTTPS için)
-        if is_https {
+        let tls_session: Option<crate::drivers::tls::TlsSession> = if is_https {
             let _host_str = host.as_bytes();
             let mut client_random = [0u8; 32];
             let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
@@ -2152,6 +2270,7 @@ impl Http2Connection {
                 &client_random,
                 &mut hello,
                 &mut ecdhe_secret,
+                false,
             );
             let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
             let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
@@ -2198,10 +2317,11 @@ impl Http2Connection {
                 }
             }
 
-            // TLS session'ı saklamak için — şimdilik sadece bağlantıyı kullanıyoruz.
-            // İstek gönderilirken şifreleme yapılacak.
-            let _ = session;
-        }
+            // TLS session'ı sakla — istek gönderilirken şifreleme için kullanılacak.
+            Some(session)
+        } else {
+            None
+        };
 
         // HTTP/2 bağlantı önyüzünü gönder
         h2_send_preface(fd)?;
@@ -2209,6 +2329,7 @@ impl Http2Connection {
         // Sunucu SETTINGS'ını oku (ilk gelen çerçeve SETTINGS olmalı)
         let mut buf = [0u8; 4096];
         let mut total = 0usize;
+        let mut max_concurrent_streams: u32 = 100; // RFC 7540 varsayılanı: sınırsız (100 kabul edilebilir varsayılan)
         let deadline = crate::boot::time::main_monotonic_ms() + 8_000;
         loop {
             if total >= buf.len() {
@@ -2233,6 +2354,17 @@ impl Http2Connection {
                             }
                             total += n;
                         }
+                        // SETTINGS payload'unu ayrıştır: MAX_CONCURRENT_STREAMS (0x3)
+                        let settings_payload = &buf[9..9 + payload_len];
+                        let mut sp_offset = 0;
+                        while sp_offset + 6 <= settings_payload.len() {
+                            let setting_id = u16::from_be_bytes([settings_payload[sp_offset], settings_payload[sp_offset + 1]]);
+                            let setting_value = u32::from_be_bytes([settings_payload[sp_offset + 2], settings_payload[sp_offset + 3], settings_payload[sp_offset + 4], settings_payload[sp_offset + 5]]);
+                            if setting_id == h2::SETTINGS_MAX_CONCURRENT_STREAMS {
+                                max_concurrent_streams = setting_value;
+                            }
+                            sp_offset += 6;
+                        }
                         break;
                     }
                 }
@@ -2247,10 +2379,14 @@ impl Http2Connection {
             host: String::from(host),
             port,
             is_https,
+            tls_session,
             next_stream_id: 1, // İstemci akış ID'leri tek sayıdır
             streams: alloc::vec::Vec::new(),
             stream_map: alloc::collections::BTreeMap::new(),
             connection_window: 65535,
+            max_concurrent_streams,
+            open_stream_count: 0,
+            dyn_table: h2::HpackDynamicTable::new(4096), // RFC 7541 varsayılanı: 4096 bayt
         })
     }
 
@@ -2279,13 +2415,18 @@ impl Http2Connection {
         path: &[u8],
         resp_buf: &mut [u8],
     ) -> Result<(u16, usize, usize), i32> {
+        // Akış eşzamanlılık sınırını kontrol et (SETTINGS_MAX_CONCURRENT_STREAMS).
+        if self.open_stream_count >= self.max_concurrent_streams {
+            return Err(socket::E_INVAL);
+        }
+
         let stream_id = self.open_stream();
+        self.open_stream_count += 1;
         let is_https = self.is_https;
         let fd = self.fd;
-        let stream = self.stream_mut(stream_id).ok_or(socket::E_IO)?;
 
         // HEADERS çerçevesi oluştur (HPACK ile)
-        let headers_block = h2::encode_get_headers(authority, path, is_https);
+        let headers_block = h2::encode_get_headers(authority, path, is_https, &mut self.dyn_table);
         let headers_frame = h2::build_frame(
             h2::FRAME_HEADERS,
             h2::FLAG_END_HEADERS | h2::FLAG_END_STREAM,
@@ -2293,28 +2434,63 @@ impl Http2Connection {
             &headers_block,
         );
 
-        // Şifreliyse TLS ile şifrele, değilse düz gönder
-        if is_https {
-            // TLS şifreleme için session gerekli — şimdilik basit düz gönderim
-            // (TLS entegrasyonu mevcut fetch_once ile aynı kalıpla yapılmalı)
-            let _ = socket::send(fd, &headers_frame).map_err(|_| socket::E_IO)?;
+        // Şifreliyse TLS ile şifrele, değilse düz gönder.
+        let frame_bytes = if is_https {
+            if let Some(ref mut session) = self.tls_session {
+                match session.encrypt_app_data(&headers_frame) {
+                    Some(encrypted) => encrypted,
+                    None => return Err(E_TLS),
+                }
+            } else {
+                return Err(E_TLS);
+            }
         } else {
-            let _ = socket::send(fd, &headers_frame).map_err(|_| socket::E_IO)?;
+            headers_frame
+        };
+        let _ = socket::send(fd, &frame_bytes).map_err(|_| socket::E_IO)?;
+
+        // Stream durumunu HalfClosedLocal olarak işaretle (kısa boru).
+        {
+            let stream = self.stream_mut(stream_id).ok_or(socket::E_IO)?;
+            stream.state = H2StreamState::HalfClosedLocal;
         }
 
-        stream.state = H2StreamState::HalfClosedLocal;
-
-        // Yanıtı oku: HEADERS + DATA çerçeveleri
+        // Yanıtı oku: HEADERS + DATA çerçeveleri.
         let mut buf = [0u8; 8192];
         let mut total = 0usize;
         let deadline = crate::boot::time::main_monotonic_ms() + 10_000;
 
-        while !stream.body_complete && total < resp_buf.len() {
+        // Yerel durum değişkenleri (stream borusu tutulmadan erişim için).
+        let mut status_code: Option<u16> = None;
+        let mut body_complete = false;
+        let mut response_buf: Vec<u8> = Vec::new();
+
+        while !body_complete && total < resp_buf.len() {
             let n = socket::recv(fd, &mut buf[total..]).map_err(|_| socket::E_IO)?;
             if n == 0 {
                 break;
             }
-            total += n;
+
+            if is_https {
+                // TLS şifreli kayıtları çöz.
+                if let Some(ref mut session) = self.tls_session {
+                    session.feed_tcp_data(&buf[..n]);
+                    let mut app = Vec::new();
+                    let mut hs = Vec::new();
+                    match session.process_records(&mut hs, &mut app) {
+                        Ok(_) => {}
+                        Err(_) => return Err(E_TLS),
+                    }
+                    // İşlenmiş uygulama verisini buf'ın başına kopyala.
+                    let copy_len = app.len().min(buf.len());
+                    buf[..copy_len].copy_from_slice(&app[..copy_len]);
+                    total = copy_len;
+                } else {
+                    return Err(E_TLS);
+                }
+            } else {
+                total += n;
+            }
 
             // Çerçeveleri ayrıştır
             let mut offset = 0usize;
@@ -2330,38 +2506,87 @@ impl Http2Connection {
                         h2::FRAME_SETTINGS => {
                             // SETTINGS ACK gönder
                             let ack = h2::build_frame(h2::FRAME_SETTINGS, h2::FLAG_ACK, 0, &[]);
-                            let _ = socket::send(fd, &ack);
+                            let ack_bytes = if is_https {
+                                if let Some(ref mut session) = self.tls_session {
+                                    session.encrypt_app_data(&ack).unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                ack
+                            };
+                            if !ack_bytes.is_empty() {
+                                let _ = socket::send(fd, &ack_bytes);
+                            }
                         }
                         h2::FRAME_HEADERS => {
                             // Yanıt başlıklarını ayrıştır (basit: durum kodunu bul)
                             if fh.flags & h2::FLAG_END_HEADERS != 0 {
-                                stream.headers_complete = true;
                                 // :status'yi HPACK'den çöz (basit: 0x88 = 200)
                                 for byte in payload {
                                     if *byte == 0x88 {
-                                        stream.status_code = Some(200);
+                                        status_code = Some(200);
                                         break;
                                     }
                                 }
                             }
                             if fh.flags & h2::FLAG_END_STREAM != 0 {
-                                stream.body_complete = true;
+                                body_complete = true;
                             }
                         }
                         h2::FRAME_DATA => {
-                            stream.response_buf.extend_from_slice(payload);
+                            // Flow control: bağlantı penceresini kontrol et.
+                            if payload_len as u32 > self.connection_window {
+                                // Pencere yetersiz: WINDOW_UPDATE gönder ve devam et.
+                                let wu = h2::build_window_update(0, 65535);
+                                let wu_bytes = if is_https {
+                                    if let Some(ref mut session) = self.tls_session {
+                                        session.encrypt_app_data(&wu).unwrap_or_default()
+                                    } else {
+                                        Vec::new()
+                                    }
+                                } else {
+                                    wu
+                                };
+                                if !wu_bytes.is_empty() {
+                                    let _ = socket::send(fd, &wu_bytes);
+                                }
+                                self.connection_window = 65535;
+                            }
+                            self.connection_window = self.connection_window.saturating_sub(payload_len as u32);
+
+                            response_buf.extend_from_slice(payload);
                             if fh.flags & h2::FLAG_END_STREAM != 0 {
-                                stream.body_complete = true;
+                                body_complete = true;
                             }
                             // WINDOW_UPDATE gönder (akış penceresi)
                             let wu = h2::build_window_update(stream_id, payload_len as u32);
-                            let _ = socket::send(fd, &wu);
+                            let wu_bytes = if is_https {
+                                if let Some(ref mut session) = self.tls_session {
+                                    session.encrypt_app_data(&wu).unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                wu
+                            };
+                            if !wu_bytes.is_empty() {
+                                let _ = socket::send(fd, &wu_bytes);
+                            }
+                        }
+                        h2::FRAME_WINDOW_UPDATE => {
+                            // Sunucudan gelen WINDOW_UPDATE: bağlantı penceresini genişlet.
+                            if fh.stream_id() == 0 && payload_len >= 4 {
+                                let increment = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x7fff_ffff;
+                                self.connection_window = self.connection_window.saturating_add(increment);
+                            }
                         }
                         h2::FRAME_RST_STREAM => {
-                            stream.state = H2StreamState::Closed;
+                            self.open_stream_count = self.open_stream_count.saturating_sub(1);
                             return Err(socket::E_IO);
                         }
                         h2::FRAME_GOAWAY => {
+                            self.open_stream_count = self.open_stream_count.saturating_sub(1);
                             return Err(socket::E_IO);
                         }
                         h2::FRAME_PING => {
@@ -2370,7 +2595,22 @@ impl Http2Connection {
                             ping_payload.copy_from_slice(&payload[..8.min(payload.len())]);
                             let ack =
                                 h2::build_frame(h2::FRAME_PING, h2::FLAG_ACK, 0, &ping_payload);
-                            let _ = socket::send(fd, &ack);
+                            let ack_bytes = if is_https {
+                                if let Some(ref mut session) = self.tls_session {
+                                    session.encrypt_app_data(&ack).unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                ack
+                            };
+                            if !ack_bytes.is_empty() {
+                                let _ = socket::send(fd, &ack_bytes);
+                            }
+                        }
+                        h2::FRAME_CONTINUATION => {
+                            // CONTINUATION: başlık bloğu devam ediyor, birleştir.
+                            response_buf.extend_from_slice(payload);
                         }
                         _ => {}
                     }
@@ -2394,14 +2634,18 @@ impl Http2Connection {
             }
         }
 
-        // Yanıtı resp_buf'ye kopyala
-        let status = stream.status_code.unwrap_or(200);
-        let body = &stream.response_buf;
-        let hlen = 0; // HTTP/2'de ayrı başlık yok, gövde doğrudan başlar
-        let copy_len = body.len().min(resp_buf.len());
-        resp_buf[..copy_len].copy_from_slice(&body[..copy_len]);
+        // Stream durumunu Closed olarak işaretle ve sayacı azalt (kısa boru).
+        {
+            let stream = self.stream_mut(stream_id).ok_or(socket::E_IO)?;
+            stream.state = H2StreamState::Closed;
+        }
+        self.open_stream_count = self.open_stream_count.saturating_sub(1);
 
-        stream.state = H2StreamState::Closed;
+        // Yanıtı resp_buf'ye kopyala
+        let status = status_code.unwrap_or(200);
+        let hlen = 0; // HTTP/2'de ayrı başlık yok, gövde doğrudan başlar
+        let copy_len = response_buf.len().min(resp_buf.len());
+        resp_buf[..copy_len].copy_from_slice(&response_buf[..copy_len]);
 
         Ok((status, hlen, copy_len))
     }
@@ -2518,4 +2762,514 @@ pub mod websocket {
             *b ^= mask[i & 3];
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP/2 unit tests (NIC gerektirmez)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod h2_tests {
+    use super::h2::*;
+
+    #[test]
+    fn test_frame_header_roundtrip() {
+        let payload = b"hello world";
+        let frame = build_frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, payload);
+        assert!(frame.len() >= 9 + payload.len());
+
+        let fh = parse_frame_header(&frame).unwrap();
+        assert_eq!(fh.r#type, FRAME_HEADERS);
+        assert_eq!(fh.flags, FLAG_END_HEADERS | FLAG_END_STREAM);
+        assert_eq!(fh.stream_id(), 1);
+        assert_eq!(fh.payload_len(), payload.len() as u32);
+    }
+
+    #[test]
+    fn test_client_settings_frame() {
+        let frame = build_client_settings();
+        assert_eq!(frame.len(), 9);
+        assert_eq!(frame[3], FRAME_SETTINGS);
+        assert_eq!(frame[4], 0); // flags
+        assert_eq!(frame[5], 0); // stream ID = 0
+        assert_eq!(frame[6], 0);
+        assert_eq!(frame[7], 0);
+        assert_eq!(frame[8], 0);
+    }
+
+    #[test]
+    fn test_client_settings_full() {
+        let frame = build_client_settings_full();
+        assert!(frame.len() >= 9 + 12); // 9 header + 12 payload (2 settings × 6 bytes)
+        assert_eq!(frame[3], FRAME_SETTINGS);
+        assert_eq!(frame[4], 0);
+    }
+
+    #[test]
+    fn test_window_update_frame() {
+        let wu = build_window_update(5, 65535);
+        let fh = parse_frame_header(&wu).unwrap();
+        assert_eq!(fh.r#type, FRAME_WINDOW_UPDATE);
+        assert_eq!(fh.stream_id(), 5);
+        assert_eq!(fh.payload_len(), 4);
+        let increment = u32::from_be_bytes([wu[9], wu[10], wu[11], wu[12]]);
+        assert_eq!(increment, 65535);
+    }
+
+    #[test]
+    fn test_hpack_encode_get_headers_http() {
+        let mut dyn_table = HpackDynamicTable::new(4096);
+        let block = encode_get_headers(b"example.com", b"/", false, &mut dyn_table);
+        // :method GET (0x82), :scheme http (0x86), :path / (0x84)
+        assert_eq!(block[0], 0x82);
+        assert_eq!(block[1], 0x86);
+        assert_eq!(block[2], 0x84);
+    }
+
+    #[test]
+    fn test_hpack_encode_get_headers_https() {
+        let mut dyn_table = HpackDynamicTable::new(4096);
+        let block = encode_get_headers(b"example.com", b"/", true, &mut dyn_table);
+        // :method GET (0x82), :scheme https (0x87), :path / (0x84)
+        assert_eq!(block[0], 0x82);
+        assert_eq!(block[1], 0x87);
+        assert_eq!(block[2], 0x84);
+    }
+
+    #[test]
+    fn test_hpack_encode_get_headers_non_root_path() {
+        let mut dyn_table = HpackDynamicTable::new(4096);
+        let block = encode_get_headers(b"example.com", b"/index.html", false, &mut dyn_table);
+        // :method GET (0x82), :scheme http (0x86), :path literal (not 0x84)
+        assert_eq!(block[0], 0x82);
+        assert_eq!(block[1], 0x86);
+        assert_ne!(block[2], 0x84); // :path / değil, literal encoding
+    }
+
+    #[test]
+    fn test_build_get_headers() {
+        let mut dyn_table = HpackDynamicTable::new(4096);
+        let frame = build_get_headers(1, b"example.com", b"/", true, &mut dyn_table);
+        let fh = parse_frame_header(&frame).unwrap();
+        assert_eq!(fh.r#type, FRAME_HEADERS);
+        assert_eq!(fh.flags, FLAG_END_HEADERS | FLAG_END_STREAM);
+        assert_eq!(fh.stream_id(), 1);
+    }
+
+    #[test]
+    fn test_is_http2_response() {
+        // SETTINGS frame on stream 0 = HTTP/2 response
+        let settings_frame = build_client_settings();
+        assert!(is_http2_response(&settings_frame));
+
+        // Non-SETTINGS frame = not HTTP/2
+        let data_frame = build_frame(FRAME_DATA, 0, 1, b"data");
+        assert!(!is_http2_response(&data_frame));
+
+        // Too short
+        let short = &[0u8; 8];
+        assert!(!is_http2_response(short));
+    }
+
+    #[test]
+    fn test_hpack_dynamic_table_insert_and_find() {
+        let mut table = HpackDynamicTable::new(4096);
+        table.insert(b":path", b"/index.html");
+        table.insert(b":authority", b"example.com");
+
+        // :path /index.html should be found at dynamic index
+        let found = table.find(b":path", Some(b"/index.html"));
+        assert!(found.is_some());
+        assert!(found.unwrap() > 61); // Statik tablo boyutundan sonra
+
+        // :authority should be found by name only
+        let found_name = table.find(b":authority", None);
+        assert!(found_name.is_some());
+    }
+
+    #[test]
+    fn test_hpack_dynamic_table_eviction() {
+        let mut table = HpackDynamicTable::new(100); // Çok küçük limit
+        table.insert(b"short", b"v");
+        let _ = table.find(b"short", Some(b"v"));
+        // Büyük giriş eklenince eskiler çıkarılmalı
+        table.insert(b"very-long-name-that-exceeds-limit", b"value");
+        // Tablo hala çalışır durumda olmalı
+        assert!(table.entries.len() <= 1);
+    }
+
+    #[test]
+    fn test_preface_constant() {
+        assert_eq!(PREFACE, b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
+    }
+
+    #[test]
+    fn test_frame_type_constants() {
+        assert_eq!(FRAME_DATA, 0x0);
+        assert_eq!(FRAME_HEADERS, 0x1);
+        assert_eq!(FRAME_SETTINGS, 0x4);
+        assert_eq!(FRAME_WINDOW_UPDATE, 0x8);
+        assert_eq!(FRAME_CONTINUATION, 0x9);
+    }
+
+    #[test]
+    fn test_flag_constants() {
+        assert_eq!(FLAG_END_STREAM, 0x1);
+        assert_eq!(FLAG_END_HEADERS, 0x4);
+        assert_eq!(FLAG_ACK, 0x1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket bağlantı yönetimi (RFC 6455) — ws:// ve wss://
+// ---------------------------------------------------------------------------
+
+/// WebSocket bağlantı durumu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WsState {
+    Connecting,
+    Open,
+    Closing,
+    Closed,
+}
+
+/// WebSocket bağlantısı: TCP/TLS soket üzerinden çerçeveleme.
+pub struct WebSocketConnection {
+    fd: i32,
+    is_wss: bool,
+    tls_session: Option<crate::drivers::tls::TlsSession>,
+    state: WsState,
+    mask_key: [u8; 4],
+}
+
+impl WebSocketConnection {
+    /// ws:// veya wss:// URL'sine bağlanır ve WebSocket el sıkışmasını yapar.
+    pub fn connect(url: &str) -> Result<Self, i32> {
+        let is_wss = url.starts_with("wss://");
+        let ws_url = if is_wss {
+            &url[6..]
+        } else {
+            &url[5..]
+        };
+
+        // host[:port]/path ayır.
+        let (authority, path) = match ws_url.find('/') {
+            Some(i) => (&ws_url[..i], &ws_url[i..]),
+            None => (ws_url, "/"),
+        };
+        let (host, port) = match authority.find(':') {
+            Some(i) => (authority[..i].to_string(), authority[i + 1..].parse::<u16>().unwrap_or(443)),
+            None => (authority.to_string(), if is_wss { 443 } else { 80 }),
+        };
+
+        let ip = socket::resolve_host(&host)?;
+        let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+            crate::serial_print("[WS] socket oluşturulamadı: ");
+            crate::serial_print(&e.to_string());
+            crate::serial_print("\n");
+            e
+        })?;
+        let _ = socket::set_timeout(fd, 8000);
+        socket::connect(fd, ip, port).map_err(|e| {
+            let _ = socket::close(fd);
+            e
+        })?;
+
+        // TLS el sıkışması (wss:// için)
+        let mut tls_session = if is_wss {
+            let mut client_random = [0u8; 32];
+            let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+            for b in client_random.iter_mut() {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+            }
+
+            let mut hello = Vec::new();
+            let mut ecdhe_secret = [0u8; 32];
+            crate::drivers::tls::build_client_hello(
+                &host,
+                &client_random,
+                &mut hello,
+                &mut ecdhe_secret,
+                false,
+            );
+            let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+            let mut session = crate::drivers::tls::TlsSession::new(&host, client_random);
+            session.note_client_hello(ch_body);
+            session.set_client_ecdhe_secret(ecdhe_secret);
+
+            socket::send(fd, &hello).map_err(|_| E_TLS)?;
+
+            let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+            loop {
+                let mut raw = [0u8; 4096];
+                let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
+                if n == 0 {
+                    return Err(E_TLS);
+                }
+                session.feed_tcp_data(&raw[..n]);
+
+                let mut app = Vec::new();
+                let mut hs = Vec::new();
+                match session.process_records(&mut hs, &mut app) {
+                    Ok(_) => {}
+                    Err(_) => return Err(E_TLS),
+                }
+
+                if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
+                    if let Some(ccs) = session.tls13_change_cipher_spec() {
+                        socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                    }
+                    if let Some(record) = session.build_tls13_client_finished() {
+                        socket::send(fd, &record).map_err(|_| E_TLS)?;
+                    }
+                }
+
+                let outgoing = session.take_outgoing();
+                if !outgoing.is_empty() {
+                    socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
+                }
+
+                if session.state() == crate::drivers::tls::TlsState::Established {
+                    break;
+                }
+                if crate::boot::time::main_monotonic_ms() > handshake_deadline {
+                    return Err(E_TLS);
+                }
+            }
+
+            Some(session)
+        } else {
+            None
+        };
+
+        // WebSocket Upgrade isteği gönder.
+        let key = crate::drivers::tls::TlsSession::new("", [0u8; 32]); // dummy for random
+        let _ = key;
+        let ws_key = generate_ws_key();
+        let upgrade_req = websocket::build_upgrade_request(host.as_bytes(), path.as_bytes(), ws_key.as_bytes());
+
+        let upgrade_bytes = if is_wss {
+            if let Some(ref mut session) = tls_session {
+                session.encrypt_app_data(&upgrade_req).ok_or(E_TLS)?
+            } else {
+                return Err(E_TLS);
+            }
+        } else {
+            upgrade_req
+        };
+
+        let mut sent = 0;
+        while sent < upgrade_bytes.len() {
+            sent += socket::send(fd, &upgrade_bytes[sent..]).map_err(|_| socket::E_IO)?;
+        }
+
+        // Sunucu yanıtını oku (101 Switching Protocols beklenir).
+        let mut buf = [0u8; 4096];
+        let mut total = 0usize;
+        let deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+        while total < buf.len() {
+            let n = if is_wss {
+                if let Some(ref mut session) = tls_session {
+                    let mut raw = [0u8; 4096];
+                    let rn = socket::recv(fd, &mut raw).map_err(|_| socket::E_IO)?;
+                    if rn == 0 {
+                        return Err(E_TLS);
+                    }
+                    session.feed_tcp_data(&raw[..rn]);
+                    let mut app = Vec::new();
+                    let mut hs = Vec::new();
+                    session.process_records(&mut hs, &mut app).map_err(|_| E_TLS)?;
+                    let copy_len = app.len().min(buf.len() - total);
+                    buf[total..total + copy_len].copy_from_slice(&app[..copy_len]);
+                    total += copy_len;
+                    copy_len
+                } else {
+                    return Err(E_TLS);
+                }
+            } else {
+                socket::recv(fd, &mut buf[total..]).map_err(|_| socket::E_IO)?
+            };
+            if n == 0 {
+                break;
+            }
+
+            // "101" kontrolü
+            if total >= 12 {
+                let resp = &buf[..total.min(16)];
+                if resp.starts_with(b"HTTP/1.1 101") || resp.starts_with(b"HTTP/1.0 101") {
+                    break;
+                }
+            }
+            if crate::boot::time::main_monotonic_ms() > deadline {
+                return Err(socket::E_TIMEOUT);
+            }
+        }
+
+        Ok(Self {
+            fd,
+            is_wss,
+            tls_session,
+            state: WsState::Open,
+            mask_key: [0x12, 0x34, 0x56, 0x78],
+        })
+    }
+
+    /// Mesaj gönder (text frame).
+    pub fn send(&mut self, data: &[u8]) -> Result<(), i32> {
+        if self.state != WsState::Open {
+            return Err(socket::E_NOTCONN);
+        }
+        let frame = websocket::build_client_frame(websocket::OP_TEXT, data, self.mask_key);
+        let frame_bytes = if self.is_wss {
+            if let Some(ref mut session) = self.tls_session {
+                session.encrypt_app_data(&frame).ok_or(E_TLS)?
+            } else {
+                return Err(E_TLS);
+            }
+        } else {
+            frame
+        };
+        let mut sent = 0;
+        while sent < frame_bytes.len() {
+            sent += socket::send(self.fd, &frame_bytes[sent..]).map_err(|_| socket::E_IO)?;
+        }
+        Ok(())
+    }
+
+    /// Mesaj al (blocking, timeout ile).
+    pub fn recv(&mut self) -> Result<Option<String>, i32> {
+        if self.state != WsState::Open {
+            return Err(socket::E_NOTCONN);
+        }
+        let mut buf = [0u8; 4096];
+        let n = if self.is_wss {
+            if let Some(ref mut session) = self.tls_session {
+                let mut raw = [0u8; 4096];
+                let rn = socket::recv(self.fd, &mut raw).map_err(|_| socket::E_IO)?;
+                if rn == 0 {
+                    return Ok(None);
+                }
+                session.feed_tcp_data(&raw[..rn]);
+                let mut app = Vec::new();
+                let mut hs = Vec::new();
+                session.process_records(&mut hs, &mut app).map_err(|_| E_TLS)?;
+                if app.is_empty() {
+                    return Ok(None);
+                }
+                let copy_len = app.len().min(buf.len());
+                buf[..copy_len].copy_from_slice(&app[..copy_len]);
+                copy_len
+            } else {
+                return Err(E_TLS);
+            }
+        } else {
+            socket::recv(self.fd, &mut buf).map_err(|_| socket::E_IO)?
+        };
+        if n == 0 {
+            return Ok(None);
+        }
+
+        // Frame başlığını ayrıştır.
+        if let Some((fin, opcode, masked, payload_len, header_len)) =
+            websocket::parse_frame_header(&buf[..n])
+        {
+            if !masked {
+                return Err(socket::E_IO); // Sunucu frame'i maskelenmeli değil
+            }
+            if header_len + payload_len > n {
+                return Ok(None); // Henüz tam frame gelmedi
+            }
+            let payload = buf[header_len..header_len + payload_len].to_vec();
+            // Sunucu frame'i maskelenmemeli (RFC 6455), ama mask varsa çıkar.
+            let _ = masked;
+            let _ = fin;
+            match opcode {
+                websocket::OP_TEXT => {
+                    Ok(Some(String::from_utf8_lossy(&payload).to_string()))
+                }
+                websocket::OP_BINARY => {
+                    Ok(Some(String::from_utf8_lossy(&payload).to_string()))
+                }
+                websocket::OP_CLOSE => {
+                    self.state = WsState::Closed;
+                    Ok(None)
+                }
+                websocket::OP_PING => {
+                    // PONG yanıtı gönder.
+                    let pong = websocket::build_client_frame(websocket::OP_PONG, &payload, self.mask_key);
+                    let pong_bytes = if self.is_wss {
+                        if let Some(ref mut session) = self.tls_session {
+                            session.encrypt_app_data(&pong).ok_or(E_TLS)?
+                        } else {
+                            return Err(E_TLS);
+                        }
+                    } else {
+                        pong
+                    };
+                    let _ = socket::send(self.fd, &pong_bytes);
+                    Ok(None)
+                }
+                _ => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Bağlantıyı kapat.
+    pub fn close(&mut self) -> Result<(), i32> {
+        if self.state == WsState::Closed {
+            return Ok(());
+        }
+        let close_frame = websocket::build_client_frame(websocket::OP_CLOSE, &[], self.mask_key);
+        let close_bytes = if self.is_wss {
+            if let Some(ref mut session) = self.tls_session {
+                session.encrypt_app_data(&close_frame).ok_or(E_TLS)?
+            } else {
+                return Err(E_TLS);
+            }
+        } else {
+            close_frame
+        };
+        let _ = socket::send(self.fd, &close_bytes);
+        let _ = socket::close(self.fd);
+        self.state = WsState::Closed;
+        Ok(())
+    }
+}
+
+/// WebSocket anahtarı üretir (Base64-encoded 16-byte random değer).
+fn generate_ws_key() -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut key_bytes = [0u8; 16];
+    let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+    for b in key_bytes.iter_mut() {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+    }
+    let mut out = String::new();
+    for i in (0..16).step_by(3) {
+        let b0 = key_bytes[i] as u32;
+        let b1 = if i + 1 < 16 { key_bytes[i + 1] as u32 } else { 0 };
+        let b2 = if i + 2 < 16 { key_bytes[i + 2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        if i + 1 < 16 {
+            out.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if i + 2 < 16 {
+            out.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }

@@ -1247,8 +1247,6 @@ pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
     })
 }
 
-
-
 /// Bir sertifikanın vereni için güven çapası anahtarını (SPKI) döndürür.
 ///
 /// Kökler `TRUSTED_ROOTS` tablosunda gömülüdür (eski harici `webpki-roots`

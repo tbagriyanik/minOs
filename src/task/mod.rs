@@ -199,7 +199,8 @@ impl SimpleExecutor {
 }
 
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
-static RUN_QUEUE_DEPTH: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] = [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
+static RUN_QUEUE_DEPTH: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
 fn least_loaded_cpu() -> usize {
     let count = crate::arch::x86_64::smp::cpu_count()
         .max(1)
@@ -218,7 +219,9 @@ fn least_loaded_cpu() -> usize {
         })
         .unwrap_or(0)
 }
-pub fn run_queue_depth(cpu: usize) -> usize { RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].load(Ordering::Relaxed) }
+pub fn run_queue_depth(cpu: usize) -> usize {
+    RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].load(Ordering::Relaxed)
+}
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);
 static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SCHEDULER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -494,9 +497,17 @@ fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
                 && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
                     == best_priority
         });
-    local.or_else(|| (0..tasks.len()).map(|n| (start + n) % tasks.len()).find(|&i| {
-        let task = &tasks[i];
-        task.ready && !task.cancelled && !task.completed
-            && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32) == best_priority
-    }))
+    local.or_else(|| {
+        (0..tasks.len())
+            .map(|n| (start + n) % tasks.len())
+            .find(|&i| {
+                let task = &tasks[i];
+                task.ready
+                    && !task.cancelled
+                    && !task.completed
+                    && (task.priority as u32 + (task.ready_age / 8))
+                        .min(TaskPriority::Realtime as u32)
+                        == best_priority
+            })
+    })
 }

@@ -245,7 +245,11 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
     if src.is_empty() {
         return None;
     }
-    if src.starts_with("http://") || src.starts_with("https://") || src.starts_with("data:") {
+    if src.starts_with("http://")
+        || src.starts_with("https://")
+        || src.starts_with("minos://")
+        || src.starts_with("data:")
+    {
         return Some(String::from(src));
     }
     let base = base_url?.trim();
@@ -1270,6 +1274,15 @@ pub fn render_html_to_lines(
                                 }
                             }
                         } else if let Some(resolved_url) = resolve_url(src, base_url) {
+                            // Local minos:// resources do not go through the
+                            // network queue. Resolve and decode them directly.
+                            if let Some(bytes) =
+                                crate::apps::browser::local_image_bytes(&resolved_url)
+                            {
+                                if let Some(img) = crate::apps::imgdecode::decode(bytes) {
+                                    image_decoded = Some((img.width, img.height, img.rgb));
+                                }
+                            }
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
@@ -1284,7 +1297,9 @@ pub fn render_html_to_lines(
                                     pending_resources.push(resolved_url.clone());
                                 }
                                 // Cache'den çözümlenmiş görsel mi var?
-                                if let Some(cached) = image_cache.and_then(|cache| cache.get(&resolved_url)) {
+                                if let Some(cached) =
+                                    image_cache.and_then(|cache| cache.get(&resolved_url))
+                                {
                                     image_decoded = Some((cached.0, cached.1, cached.2.clone()));
                                 }
                             }

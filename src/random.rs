@@ -66,11 +66,7 @@ fn fill_hw(buf: &mut [u8]) -> bool {
     while offset < buf.len() {
         let remaining = buf.len() - offset;
         let chunk = if remaining >= 8 { 8 } else { remaining };
-        let val = if has_rdseed() {
-            rdseed64()
-        } else {
-            rdrand64()
-        };
+        let val = if has_rdseed() { rdseed64() } else { rdrand64() };
         let Some(v) = val else {
             // Donanım geçici olarak uygun değil; PRNG'e düş.
             return false;

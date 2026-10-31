@@ -121,7 +121,9 @@ pub mod random {
     static mut STATE: u64 = 0x6d69_6e4f_532d_524e;
 
     pub fn init() {
-        unsafe { STATE = 0x6d69_6e4f_532d_524e; }
+        unsafe {
+            STATE = 0x6d69_6e4f_532d_524e;
+        }
     }
 
     pub fn seed(seed: [u8; 32]) {
@@ -131,7 +133,9 @@ pub mod random {
                 chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
             ]);
         }
-        unsafe { STATE = value | 1; }
+        unsafe {
+            STATE = value | 1;
+        }
     }
 
     pub fn hw_available() -> bool {

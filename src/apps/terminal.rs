@@ -3367,10 +3367,7 @@ impl TerminalApp {
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
             }
             "fetch" | "neofetch" => {
-                self.push_line(
-                    "   /\\_/\\     minOs Sarman Edition",
-                    Color::ACCENT_PINK,
-                );
+                self.push_line("   /\\_/\\     minOs Sarman Edition", Color::ACCENT_PINK);
                 self.push_line("  ( o.o )    -------------------------", Color::ACCENT_PINK);
                 self.push_line(
                     "   > ^ <     OS: minOs x86_64 [Rust no_std]",

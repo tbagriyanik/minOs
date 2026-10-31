@@ -1120,7 +1120,9 @@ impl TlsSession {
                         let pinned = self.pinned_cert_hashes.iter().any(|p| p == &digest[..]);
                         if !pinned {
                             self.cert_verified = false;
-                            self.cert_error = Some(crate::drivers::crypto::x509::CertValidationError::UntrustedRoot);
+                            self.cert_error = Some(
+                                crate::drivers::crypto::x509::CertValidationError::UntrustedRoot,
+                            );
                             serial_print("[TLS] Sertifika pinleme hatası: sertifika hash'i pinlenmiş listede bulunamadı.\n");
                             return Err(());
                         }
@@ -2139,7 +2141,15 @@ mod tests {
         let random = [0u8; 32];
         let mut out = Vec::new();
         let mut ecdhe = [0u8; 32];
-        build_client_hello("example.com", &random, &mut out, &mut ecdhe, false, None, None);
+        build_client_hello(
+            "example.com",
+            &random,
+            &mut out,
+            &mut ecdhe,
+            false,
+            None,
+            None,
+        );
 
         // TLS 1.3-compatible record version is 0x0301; ClientHello legacy_version is 0x0303.
         assert_eq!(out[0], TLS_RECORD_HANDSHAKE);

@@ -483,7 +483,15 @@ pub fn read_file(path: &str, out: &mut Vec<u8>) -> bool {
 /// inode veri bloklarını `data` ile değiştirir (gerekirse blok ayırır/boşaltır).
 fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut Vec<u8>, data: &[u8]) -> bool {
     let bs = sb.block_size as usize;
+    // This implementation currently supports 12 direct blocks plus one
+    // single-indirect block. Do the capacity check before allocating blocks;
+    // otherwise a large write reaches the indirect-block loop and attempts
+    // to write past its fixed `bs`-byte buffer (e.g. 1028 on a 1024-byte FS).
+    let max_blocks = 12usize.saturating_add(bs / core::mem::size_of::<u32>());
     let need = data.len().max(1).div_ceil(bs);
+    if bs < core::mem::size_of::<u32>() || need > max_blocks {
+        return false;
+    }
     let mut blocks = inode_blocks(sb, drive, ino_raw);
     while blocks.len() < need {
         let Some(b) = alloc_block(sb, drive) else {
@@ -515,7 +523,16 @@ fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut Vec<u8>, data:
         let mut ib = alloc::vec![0u8; 0];
         ib.resize(bs, 0);
         for (i, blk) in blocks.iter().skip(12).enumerate() {
-            ib[i * 4..i * 4 + 4].copy_from_slice(&blk.to_le_bytes());
+            let Some(off) = i
+                .checked_mul(core::mem::size_of::<u32>())
+                .and_then(|off| off.checked_add(core::mem::size_of::<u32>()))
+            else {
+                return false;
+            };
+            if off > ib.len() {
+                return false;
+            }
+            ib[off - 4..off].copy_from_slice(&blk.to_le_bytes());
         }
         if !write_block(sb, drive, ind, &ib) {
             return false;

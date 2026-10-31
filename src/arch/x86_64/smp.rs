@@ -71,8 +71,7 @@ struct AlignedApStack([u8; AP_STACK_SIZE]);
 static NEXT_AP: AtomicU32 = AtomicU32::new(0);
 static mut AP_STACKS: [AlignedApStack; MAX_CPUS] =
     [const { AlignedApStack([0; AP_STACK_SIZE]) }; MAX_CPUS];
-static AP_ONLINE: [AtomicBool; MAX_CPUS] =
-    [const { AtomicBool::new(false) }; MAX_CPUS];
+static AP_ONLINE: [AtomicBool; MAX_CPUS] = [const { AtomicBool::new(false) }; MAX_CPUS];
 #[repr(C, align(64))]
 struct PaddedCounter(AtomicU64);
 
@@ -80,8 +79,7 @@ struct PaddedCounter(AtomicU64);
 static HEARTBEAT: [PaddedCounter; MAX_CPUS] =
     [const { PaddedCounter(AtomicU64::new(0)) }; MAX_CPUS];
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
-static LAPIC_ID: [AtomicU32; MAX_CPUS] =
-    [const { AtomicU32::new(0) }; MAX_CPUS];
+static LAPIC_ID: [AtomicU32; MAX_CPUS] = [const { AtomicU32::new(0) }; MAX_CPUS];
 
 static PRINT_LOCK: super::sync::Spinlock = super::sync::Spinlock::new();
 
@@ -374,7 +372,9 @@ pub fn cpu_count() -> usize {
 pub fn current_cpu_index() -> usize {
     let id = (lapic_read(0x20) >> 24) as u32;
     for cpu in 0..cpu_count().min(MAX_CPUS) {
-        if LAPIC_ID[cpu].load(Ordering::Relaxed) == id { return cpu; }
+        if LAPIC_ID[cpu].load(Ordering::Relaxed) == id {
+            return cpu;
+        }
     }
     0
 }

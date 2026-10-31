@@ -1273,8 +1273,14 @@ pub fn render_html_to_lines(
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
-                                // Önce pending_resources'a ekle (fetch tetikle)
-                                if !pending_resources.iter().any(|u| u == &resolved_url) {
+                                // Cache'de zaten varsa yeniden ekleme (sonsuz döngü önlenir)
+                                let already_cached = image_cache
+                                    .as_ref()
+                                    .and_then(|cache| cache.get(&resolved_url))
+                                    .is_some();
+                                if !already_cached
+                                    && !pending_resources.iter().any(|u| u == &resolved_url)
+                                {
                                     pending_resources.push(resolved_url.clone());
                                 }
                                 // Cache'den çözümlenmiş görsel mi var?

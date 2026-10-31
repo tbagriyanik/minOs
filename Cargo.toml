@@ -12,6 +12,7 @@ exfat = []
 [dependencies]
 # Allocator for no_std environment
 linked_list_allocator = { version = "0.10", default-features = false, features = ["use_spin"] }
+
 # NOTE: Aşağıdaki kütüphaneler çekirdek tarafından KULLANILMIYOR (kullanılmayan-kütüphane
 # hijyeni). Yanlışlıkla derlenip ağ/X.509 yüzeyine sızmasınlar diye
 # bağımlılık olarak değil, bu notta tutuluyor:
@@ -24,7 +25,7 @@ linked_list_allocator = { version = "0.10", default-features = false, features =
 #                     ELF sabiti ve 5 baytlık IPC düzenini kullanıyor.
 #   acpi            — ACPI tabloları Limine RSDP'sinden yerel ayrıştırılıyor.
 # Kullanımda kalanlar: p384 (P-384 imza), bitflags, heapless, zerocopy,
-# crc32fast, raw-cpuid, log, linked_list_allocator.
+# crc32fast, raw-cpuid, log, linked_list_allocator, spin, x86_64.
 p384 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
 bitflags = { version = "2.10.0", default-features = false }
 heapless = { version = "0.9.3", default-features = false }

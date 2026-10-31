@@ -4,8 +4,8 @@
 //!   adresini yazar; Limine AP'leri park halinden çıkarır.
 //! * AP'ler çıplak (`naked`) girişle atomik sayaçtan kimlik alıp kendilerine
 //!   ayrılmış 64 KiB yığına geçer, SSE + GDT kurar ve iş kuyruğuna katılır.
-//! * Kesme zamanlayıcısı yoktur; AP'ler kuyruğu yoklar (polling). Çekirdek
-//!   veri yarışını önlemek için paylaşılan durum yalnızca atomikler ve
+//! * Her CPU kendi Local APIC timer kesmesini alır; iş kuyruğu yine boşta
+//!   polling ile kontrol edilir. Çekirdek veri yarışını önlemek için paylaşılan durum yalnızca atomikler ve
 //!   [`crate::arch::x86_64::sync`] kilitleri üzerinden erişilir.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -14,7 +14,10 @@ use super::gdt;
 use super::sync::SpinMutex;
 
 /// Desteklenen azami CPU sayısı (BSP dahil).
-pub const MAX_CPUS: usize = 8;
+///
+/// Bu bir ABI sınırı değil, statik per-CPU tabloların kapasitesidir. Limine'in
+/// bildirdiği CPU sayısı bu değeri aşarsa güvenli biçimde kapasiteye kırpılır.
+pub const MAX_CPUS: usize = 64;
 /// AP çekirdek yığını boyutu.
 const AP_STACK_SIZE: usize = 64 * 1024;
 
@@ -68,41 +71,17 @@ struct AlignedApStack([u8; AP_STACK_SIZE]);
 static NEXT_AP: AtomicU32 = AtomicU32::new(0);
 static mut AP_STACKS: [AlignedApStack; MAX_CPUS] =
     [const { AlignedApStack([0; AP_STACK_SIZE]) }; MAX_CPUS];
-static AP_ONLINE: [AtomicBool; MAX_CPUS] = [
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-    AtomicBool::new(false),
-];
+static AP_ONLINE: [AtomicBool; MAX_CPUS] =
+    [const { AtomicBool::new(false) }; MAX_CPUS];
 #[repr(C, align(64))]
 struct PaddedCounter(AtomicU64);
 
 /// AP kalp atış sayaçları — her biri ayrı önbellek satırında (64B) false sharing önlenir.
-static HEARTBEAT: [PaddedCounter; MAX_CPUS] = [
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-    PaddedCounter(AtomicU64::new(0)),
-];
+static HEARTBEAT: [PaddedCounter; MAX_CPUS] =
+    [const { PaddedCounter(AtomicU64::new(0)) }; MAX_CPUS];
 static CPU_COUNT: AtomicU32 = AtomicU32::new(1);
-static LAPIC_ID: [AtomicU32; MAX_CPUS] = [
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-    AtomicU32::new(0),
-];
+static LAPIC_ID: [AtomicU32; MAX_CPUS] =
+    [const { AtomicU32::new(0) }; MAX_CPUS];
 
 static PRINT_LOCK: super::sync::Spinlock = super::sync::Spinlock::new();
 
@@ -223,20 +202,21 @@ pub unsafe extern "C" fn ap_entry() {
 #[no_mangle]
 pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     let cpu = (idx as usize).min(MAX_CPUS - 1);
-    // Kesmeler kapalı kalsın (polling AP kesme almaz).
+    // Kurulum sırasında kesmeler kapalı kalır.
     unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     super::enable_sse();
     unsafe { gdt::load_for_cpu(cpu) };
     // IDT CPU başına bir yazmaçtır (IDTR); BSP'nin LIDT'si AP'yi kapsamaz.
     // Her AP kendi IDTR'sini yüklemeli, yoksa en ufak kesmede üçlü hata olur.
     super::init_interrupts();
-    // Bu AP'nin Local APIC'ini etkinleştir (spurious vektör) ve tüm LVT
-    // girdilerini maskele; timer yalnızca BSP'de çalışır.
+    // Bu AP'nin Local APIC'ini ve kendi timer LVT'sini etkinleştir.
     lapic_init();
-    super::apic::mask_for_ap();
+    super::apic::init_timer();
     unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
     LAPIC_ID[cpu].store(lapic_read(0x20) >> 24, Ordering::Relaxed);
     AP_ONLINE[cpu].store(true, Ordering::Release);
+    // Timer artık güvenli biçimde kuruldu; AP scheduler tick alabilir.
+    unsafe { core::arch::asm!("sti", options(nomem, nostack, preserves_flags)) };
 
     print_locked("[SMP] AP");
     print_locked_dec(cpu as u64);
@@ -244,8 +224,6 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
 
     let mut idle_spins: u32 = 0;
     loop {
-        // Kesmelerin yanlışlıkla açılmasına karşı her turda kapalı tut.
-        unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
         // İş kuyruğunu yokla; iş varsa çalıştır.
         if !poll_job(cpu) {
             crate::task::poll_tasks();

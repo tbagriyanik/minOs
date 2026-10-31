@@ -201,8 +201,22 @@ impl SimpleExecutor {
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
 static RUN_QUEUE_DEPTH: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] = [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
 fn least_loaded_cpu() -> usize {
-    let count = crate::arch::x86_64::smp::cpu_count().max(1).min(RUN_QUEUE_DEPTH.len());
-    (0..count).min_by_key(|&cpu| RUN_QUEUE_DEPTH[cpu].load(Ordering::Relaxed)).unwrap_or(0)
+    let count = crate::arch::x86_64::smp::cpu_count()
+        .max(1)
+        .min(RUN_QUEUE_DEPTH.len());
+    // When queues have equal depth, min_by_key alone always selected CPU 0.
+    // Rotate the tie-breaker so newly-created window/application tasks are
+    // spread across all online CPUs instead of accumulating on the BSP.
+    let start = RR_CURSOR.fetch_add(1, Ordering::Relaxed) % count;
+    (0..count)
+        .map(|offset| (start + offset) % count)
+        .min_by_key(|&cpu| {
+            (
+                RUN_QUEUE_DEPTH[cpu].load(Ordering::Relaxed),
+                (cpu + count - start) % count,
+            )
+        })
+        .unwrap_or(0)
 }
 pub fn run_queue_depth(cpu: usize) -> usize { RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].load(Ordering::Relaxed) }
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);

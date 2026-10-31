@@ -19,6 +19,7 @@ pub use types::{
     TextAlign, TextSpan, BOOKMARKS,
 };
 
+use alloc::collections::BTreeMap;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -305,6 +306,10 @@ pub struct BrowserApp {
     scroll_anim_start: u64,
     /// CSS animasyon başlangıç zamanı (monotonic ms), sayfa yükleme ile sıfırlanır.
     pub animation_start_ms: usize,
+    /// CSS geçiş (transition) başlangıç zamanı (monotonic ms), sayfa yükleme ile sıfırlanır.
+    pub transition_start_ms: usize,
+    /// Önceki element stilleri (CSS geçiş interpolasyonu için, element ID'ye göre).
+    pub previous_styles: BTreeMap<String, types::ElementStyle>,
     /// Yeni sayfa yüklendiğinde kaydırmayı başa al.
     pub scroll_reset: bool,
     pub request_pending: bool,
@@ -426,6 +431,8 @@ impl BrowserApp {
             scroll_animating: false,
             scroll_anim_start: 0,
             animation_start_ms: 0,
+            transition_start_ms: 0,
+            previous_styles: BTreeMap::new(),
             scroll_reset: true,
             request_pending: false,
             request_host: [0; 128],
@@ -1099,6 +1106,8 @@ impl BrowserApp {
             max_lines,
             current_url,
             self.animation_start_ms,
+            self.transition_start_ms,
+            &mut self.previous_styles,
             vfs,
         );
     }
@@ -2221,6 +2230,7 @@ impl BrowserApp {
                 self.request_state = 0;
                 self.request_pending = true;
                 self.animation_start_ms = crate::boot::time::main_monotonic_ms();
+                self.transition_start_ms = crate::boot::time::main_monotonic_ms();
                 self.load_progress = 0;
                 self.tls_session = None;
                 self.tls_pending_request.clear();

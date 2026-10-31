@@ -682,6 +682,10 @@ static mut UDP_LISTENER_LEN: usize = 0;
 static mut DNS_REPLY_DATA: [u8; 512] = [0; 512];
 static mut DNS_REPLY_LEN: usize = 0;
 static mut DNS_REPLY_IP: [u8; 4] = [0; 4];
+/// AAAA DNS yanıtı için ayrı durum (A ve AAAA sorguları paralel gönderildiğinde
+/// çakışmayı önler — Happy Eyeballs/RFC 8305 uyumluluğu için).
+static mut DNS_REPLY_DATA_AAAA: [u8; 512] = [0; 512];
+static mut DNS_REPLY_LEN_AAAA: usize = 0;
 static mut TCP_DATA: [u8; 65536] = [0; 65536];
 static mut TCP_DATA_LEN: usize = 0;
 static mut TCP_LOCAL_PORT: u16 = 0;
@@ -733,7 +737,7 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
         let flags = u16::from_be_bytes([data[2], data[3]]);
         if (id == 0x4D4D || id == 0x4D4E) && (flags & 0x8000 != 0) && (flags & 0x000F == 0) {
             unsafe {
-                // Try A record first (id 0x4D4D), then AAAA (id 0x4D4E)
+                // A record yanıtı (id 0x4D4D)
                 if id == 0x4D4D {
                     if let Some(ip) = dns_parse_a(data, id) {
                         let n = data.len().min(DNS_REPLY_DATA.len());
@@ -741,13 +745,13 @@ fn handle_udp(src_ip: Ipv4Address, payload: &[u8]) {
                         DNS_REPLY_IP = ip.0;
                         DNS_REPLY_LEN = n;
                     }
-                } else if id == 0x4D4E {
+                }
+                // AAAA record yanıtı (id 0x4D4E) — ayrı durumda sakla
+                else if id == 0x4D4E {
                     if let Some(ip) = dns_parse_aaaa(data, id) {
-                        let n = data.len().min(DNS_REPLY_DATA.len());
-                        DNS_REPLY_DATA[..n].copy_from_slice(&data[..n]);
-                        // Store first 4 bytes of AAAA in DNS_REPLY_IP for compatibility
-                        DNS_REPLY_IP = [ip.0[0], ip.0[1], ip.0[2], ip.0[3]];
-                        DNS_REPLY_LEN = n;
+                        let n = data.len().min(DNS_REPLY_DATA_AAAA.len());
+                        DNS_REPLY_DATA_AAAA[..n].copy_from_slice(&data[..n]);
+                        DNS_REPLY_LEN_AAAA = n;
                     }
                 }
             }
@@ -989,6 +993,8 @@ pub fn dns_query_aaaa(host: &str) -> bool {
     unsafe {
         DNS_REPLY_LEN = 0;
         DNS_REPLY_IP = [0; 4];
+        DNS_REPLY_LEN_AAAA = 0;
+        DNS_REPLY_DATA_AAAA = [0; 512];
     }
 
     let primary_dns = dns_server();
@@ -1078,12 +1084,14 @@ pub fn dns_parse_aaaa(data: &[u8], id: u16) -> Option<Ipv6Address> {
 /// AAAA DNS yanıtını alır ve Ipv6Address döner.
 pub fn take_dns_result_aaaa() -> Option<Ipv6Address> {
     unsafe {
-        if DNS_REPLY_LEN == 0 {
+        if DNS_REPLY_LEN_AAAA == 0 {
             None
         } else {
-            DNS_REPLY_LEN = 0;
+            DNS_REPLY_LEN_AAAA = 0;
             let mut buf = [0u8; 512];
-            let n = take_dns_packet(&mut buf);
+            let n = DNS_REPLY_LEN_AAAA.min(buf.len());
+            buf[..n].copy_from_slice(&DNS_REPLY_DATA_AAAA[..n]);
+            DNS_REPLY_DATA_AAAA = [0; 512];
             if n >= 12 {
                 if let Some(ip) = dns_parse_aaaa(&buf, 0x4D4E) {
                     return Some(ip);
@@ -1194,6 +1202,8 @@ pub fn dns_query(host: &str) -> bool {
     unsafe {
         DNS_REPLY_LEN = 0;
         DNS_REPLY_IP = [0; 4];
+        DNS_REPLY_LEN_AAAA = 0;
+        DNS_REPLY_DATA_AAAA = [0; 512];
     }
 
     let primary_dns = dns_server();

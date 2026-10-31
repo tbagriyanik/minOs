@@ -5,9 +5,12 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use alloc::collections::BTreeMap;
 use super::cache::{cache_get_with_metadata, cache_store_with_metadata};
 use super::css::{find_keyframes, match_css_style, parse_css};
-use super::types::{BrowserLine, HtmlTagType, TextAlign, TextSpan};
+use super::css::blend_styles;
+use super::css::transition_progress;
+use super::types::{BrowserLine, ElementStyle, HtmlTagType, TextAlign, TextSpan};
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 
@@ -325,6 +328,8 @@ pub fn render_html_to_lines(
     max_lines: usize,
     base_url: Option<&str>,
     animation_start_ms: usize,
+    transition_start_ms: usize,
+    previous_styles: &mut BTreeMap<String, ElementStyle>,
     mut vfs: Option<&mut VirtualFileSystem>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
@@ -669,6 +674,48 @@ pub fn render_html_to_lines(
                             matched.bg_color = Some(bg);
                         }
                         // Animasyon devam etsin, animation_name'i sıfırlama
+                    }
+                }
+            }
+
+            // CSS geçiş (transition): önceki stil ile mevcut stil arasında interpolasyon
+            if let Some(ref tp) = matched.transition_property {
+                if matched.transition_duration > 0.0 {
+                    let elem_id = String::from(id_attr.unwrap_or(""));
+                    let now = crate::boot::time::main_monotonic_ms();
+                    let elapsed = now.saturating_sub(transition_start_ms);
+
+                    if let Some(prev) = previous_styles.get(&elem_id) {
+                        let progress = transition_progress(
+                            elapsed as u64,
+                            matched.transition_duration,
+                        );
+                        if let Some(p) = progress {
+                            if p >= 1.0 {
+                                // Geçiş tamamlandı, mevcut stili kaydı olarak güncelle
+                                previous_styles.insert(elem_id, matched.clone());
+                            } else {
+                                // Önceki ve mevcut stil arasında interpolasyon yap
+                                let blended = blend_styles(prev, &matched, p);
+                                // Geçişte yalnızca transition_property'de belirtilen özellikleri interpolasyonla
+                                let tp_str = tp.as_str();
+                                let apply_all = tp_str == "all";
+                                if tp_str == "opacity" || apply_all {
+                                    matched.opacity = blended.opacity;
+                                }
+                                if tp_str == "color" || apply_all {
+                                    matched.color = blended.color;
+                                }
+                                if tp_str == "background-color" || tp_str == "background" || apply_all {
+                                    matched.bg_color = blended.bg_color;
+                                }
+                                // Geçiş devam ediyor, mevcut stili sonraki kare için kaydet
+                                previous_styles.insert(elem_id, matched.clone());
+                            }
+                        }
+                    } else {
+                        // İlk kez görülen element, mevcut stili kaydet
+                        previous_styles.insert(elem_id, matched.clone());
                     }
                 }
             }

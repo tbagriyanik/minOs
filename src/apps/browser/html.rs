@@ -331,6 +331,9 @@ pub fn render_html_to_lines(
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
     mut vfs: Option<&mut VirtualFileSystem>,
+    canvases: &mut Vec<super::canvas::CanvasElement>,
+    media_players: &mut super::media::MediaPlayers,
+    iframes: &mut super::iframe::IFrames,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
     // script etiketleri ise çıktidan çıkarılır.
@@ -1610,12 +1613,23 @@ pub fn render_html_to_lines(
                             underline: current_underline,
                         });
                     }
-                } else if eq_ascii(name, b"video") {
-                    // <video>: Video işleme
-                    let _label = extract_attr(attrs, b"alt")
-                        .or_else(|| extract_attr(attrs, b"title"))
-                        .or_else(|| extract_attr(attrs, b"src"))
-                        .unwrap_or("video");
+                } else if eq_ascii(name, b"canvas") {
+                    // <canvas>: HTML5 canvas elementi
+                    static CANVAS_ID_COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+                    let canvas_id = extract_attr(attrs, b"id")
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            let n = CANVAS_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            format!("canvas_{}", n)
+                        });
+                    let canvas_w = extract_attr(attrs, b"width")
+                        .and_then(|w| w.trim().parse::<usize>().ok())
+                        .unwrap_or(300);
+                    let canvas_h = extract_attr(attrs, b"height")
+                        .and_then(|h| h.trim().parse::<usize>().ok())
+                        .unwrap_or(150);
+
+                    // Flush any pending word before the canvas element.
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -1638,30 +1652,87 @@ pub fn render_html_to_lines(
                         );
                     }
 
-                    // Video placeholder - show as a video player UI
-                    let src_url = extract_attr(attrs, b"src").map(String::from);
-                    let controls = extract_attr(attrs, b"controls").is_some();
+                    // Create the canvas element and add it to the page's canvas list.
+                    // The canvas will be rendered separately in render_content.
+                    let mut canvas = crate::apps::browser::canvas::CanvasElement::new(
+                        canvas_id.clone(),
+                        canvas_w,
+                        canvas_h,
+                    );
+                    // Draw a default border and background so the canvas is visible.
+                    {
+                        let ctx = canvas.get_context_2d();
+                        ctx.fill_rect(0.0, 0.0, canvas_w as f32, canvas_h as f32);
+                        ctx.set_fill_style(0xFFFFFF);
+                        ctx.fill_rect(1.0, 1.0, (canvas_w as f32) - 2.0, (canvas_h as f32) - 2.0);
+                        ctx.set_fill_style(0x000000);
+                        ctx.stroke_rect(0.0, 0.0, canvas_w as f32, canvas_h as f32);
+                        ctx.fill_text("Canvas", 10.0, 10.0 + ctx.font_size);
+                    }
+                    canvases.push(canvas);
 
-                    if controls {
-                        // Show video player controls placeholder
-                        word_buf.push_str("[▶ VIDEO]");
-                        if let Some(url) = src_url {
-                            word_buf.push(' ');
-                            word_buf.push_str(&url);
-                        }
+                    // Check if canvas fits on current line, flush if needed.
+                    let scale = match cur_line_tag {
+                        HtmlTagType::Heading1 => 2,
+                        _ => 1,
+                    };
+                    let space_w = MinGuiCompositor::text_width(" ", scale);
+                    let indent = tag_indent(cur_line_tag);
+                    let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+                    let canvas_w_px = canvas_w.max(1);
+
+                    if cur_line_w > 0 && cur_line_w + space_w + canvas_w_px > eff_wrap {
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    cur_line_w += if cur_line_w > 0 {
+                        space_w + canvas_w_px
                     } else {
-                        word_buf.push_str("[VIDEO]");
-                        if let Some(url) = src_url {
-                            word_buf.push(' ');
-                            word_buf.push_str(&url);
-                        }
-                    }
-                } else if eq_ascii(name, b"audio") {
-                    // <audio>: Ses işleme
-                    let _label = extract_attr(attrs, b"alt")
-                        .or_else(|| extract_attr(attrs, b"title"))
-                        .or_else(|| extract_attr(attrs, b"src"))
-                        .unwrap_or("audio");
+                        canvas_w_px
+                    };
+
+                    // Add a canvas span that references the canvas element by index.
+                    let _canvas_idx = out_lines.len(); // placeholder, will be resolved at render
+                    cur_line_spans.push(TextSpan {
+                        text: format!("[canvas:{}]", canvas_id),
+                        color: current_color,
+                        bg_color: current_bg,
+                        is_link,
+                        link_url: String::from(link_target),
+                        is_button: active_is_button,
+                        is_image: true,
+                        image_width: canvas_w,
+                        image_height: canvas_h,
+                        image_rgb: None,
+                        image_url: String::new(),
+                        onclick: String::from(onclick_str),
+                        elem_id: canvas_id,
+                        bold: current_bold,
+                        underline: current_underline,
+                    });
+                } else if eq_ascii(name, b"video") {
+                    // <video>: Video oynatıcı
+                    let video_id = extract_attr(attrs, b"id")
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            static VIDEO_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                core::sync::atomic::AtomicUsize::new(0);
+                            let n = VIDEO_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            format!("video_{}", n)
+                        });
+                    let src_url = extract_attr(attrs, b"src").map(String::from);
+                    let controls = extract_attr(attrs, b"controls").is_some();
+                    let autoplay = extract_attr(attrs, b"autoplay").is_some();
+                    let loop_mode = extract_attr(attrs, b"loop").is_some();
+
+                    // Flush any pending word before the video element.
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -1684,12 +1755,147 @@ pub fn render_html_to_lines(
                         );
                     }
 
-                    // Audio placeholder - show as audio player UI
+                    // Create media player for this video element.
+                    let mut player = super::media::MediaPlayer::new(video_id.clone(), super::media::MediaType::Video);
+                    if let Some(src) = &src_url {
+                        player.src = src.clone();
+                    }
+                    player.controls = controls;
+                    player.autoplay = autoplay;
+                    player.loop_mode = loop_mode;
+                    if autoplay {
+                        player.state = super::media::MediaState::Playing;
+                        player.last_update_ms = crate::boot::time::main_monotonic_ms() as u64;
+                    }
+                    media_players.add(player);
+
+                    // Render video placeholder box with controls hint.
+                    let video_w = extract_attr(attrs, b"width")
+                        .and_then(|w| w.trim().parse::<usize>().ok())
+                        .unwrap_or(320);
+                    let video_h = extract_attr(attrs, b"height")
+                        .and_then(|h| h.trim().parse::<usize>().ok())
+                        .unwrap_or(240);
+
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    let scale = match cur_line_tag {
+                        HtmlTagType::Heading1 => 2,
+                        _ => 1,
+                    };
+                    let space_w = MinGuiCompositor::text_width(" ", scale);
+                    let indent = tag_indent(cur_line_tag);
+                    let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+                    let video_w_px = video_w.max(1);
+
+                    if cur_line_w > 0 && cur_line_w + space_w + video_w_px > eff_wrap {
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    cur_line_w += if cur_line_w > 0 {
+                        space_w + video_w_px
+                    } else {
+                        video_w_px
+                    };
+
+                    cur_line_spans.push(TextSpan {
+                        text: format!("[video:{}]", video_id),
+                        color: current_color,
+                        bg_color: current_bg,
+                        is_link,
+                        link_url: String::from(link_target),
+                        is_button: active_is_button,
+                        is_image: true,
+                        image_width: video_w,
+                        image_height: video_h,
+                        image_rgb: None,
+                        image_url: src_url.unwrap_or_default(),
+                        onclick: String::from(onclick_str),
+                        elem_id: video_id,
+                        bold: current_bold,
+                        underline: current_underline,
+                    });
+                } else if eq_ascii(name, b"audio") {
+                    // <audio>: Ses oynatıcı
+                    let audio_id = extract_attr(attrs, b"id")
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            static AUDIO_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                core::sync::atomic::AtomicUsize::new(0);
+                            let n = AUDIO_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            format!("audio_{}", n)
+                        });
                     let src_url = extract_attr(attrs, b"src").map(String::from);
                     let controls = extract_attr(attrs, b"controls").is_some();
+                    let autoplay = extract_attr(attrs, b"autoplay").is_some();
+                    let loop_mode = extract_attr(attrs, b"loop").is_some();
 
+                    // Flush any pending word before the audio element.
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    // Create media player for this audio element.
+                    let mut player = super::media::MediaPlayer::new(audio_id.clone(), super::media::MediaType::Audio);
+                    if let Some(src) = &src_url {
+                        player.src = src.clone();
+                    }
+                    player.controls = controls;
+                    player.autoplay = autoplay;
+                    player.loop_mode = loop_mode;
+                    if autoplay {
+                        player.state = super::media::MediaState::Playing;
+                        player.last_update_ms = crate::boot::time::main_monotonic_ms() as u64;
+                    }
+                    media_players.add(player);
+
+                    // Render audio placeholder.
                     if controls {
-                        // Show audio player controls placeholder
                         word_buf.push_str("[♫ AUDIO]");
                         if let Some(url) = src_url {
                             word_buf.push(' ');
@@ -1702,6 +1908,122 @@ pub fn render_html_to_lines(
                             word_buf.push_str(&url);
                         }
                     }
+                } else if eq_ascii(name, b"iframe") {
+                    // <iframe>: İç içe tarama bağlamı
+                    let iframe_id = extract_attr(attrs, b"id")
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            static IFRAME_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                core::sync::atomic::AtomicUsize::new(0);
+                            let n = IFRAME_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            format!("iframe_{}", n)
+                        });
+                    let src_url = extract_attr(attrs, b"src").map(String::from);
+                    let iframe_w = extract_attr(attrs, b"width")
+                        .and_then(|w| w.trim().parse::<usize>().ok())
+                        .unwrap_or(300);
+                    let iframe_h = extract_attr(attrs, b"height")
+                        .and_then(|h| h.trim().parse::<usize>().ok())
+                        .unwrap_or(150);
+                    let sandbox = extract_attr(attrs, b"sandbox").is_some();
+
+                    // Flush any pending word before the iframe element.
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    // Create iframe element.
+                    let mut frame = super::iframe::IFrame::new(iframe_id.clone(), iframe_w, iframe_h);
+                    if let Some(src) = &src_url {
+                        frame.set_src(src.clone());
+                    }
+                    frame.sandbox = sandbox;
+                    iframes.add(frame);
+
+                    // Render iframe placeholder box.
+                    if !word_buf.is_empty() {
+                        flush_word(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            &mut word_buf,
+                            current_color,
+                            current_bg,
+                            is_link,
+                            link_target,
+                            active_is_button,
+                            false,
+                            onclick_str,
+                            elem_id_str,
+                            current_bold,
+                            current_underline,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    let scale = match cur_line_tag {
+                        HtmlTagType::Heading1 => 2,
+                        _ => 1,
+                    };
+                    let space_w = MinGuiCompositor::text_width(" ", scale);
+                    let indent = tag_indent(cur_line_tag);
+                    let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+                    let iframe_w_px = iframe_w.max(1);
+
+                    if cur_line_w > 0 && cur_line_w + space_w + iframe_w_px > eff_wrap {
+                        flush_line(
+                            out_lines,
+                            &mut cur_line_spans,
+                            &mut cur_line_w,
+                            cur_line_tag,
+                            cur_line_align,
+                            max_lines,
+                        );
+                    }
+
+                    cur_line_w += if cur_line_w > 0 {
+                        space_w + iframe_w_px
+                    } else {
+                        iframe_w_px
+                    };
+
+                    cur_line_spans.push(TextSpan {
+                        text: format!("[iframe:{}]", iframe_id),
+                        color: current_color,
+                        bg_color: current_bg,
+                        is_link,
+                        link_url: String::from(link_target),
+                        is_button: active_is_button,
+                        is_image: true,
+                        image_width: iframe_w,
+                        image_height: iframe_h,
+                        image_rgb: None,
+                        image_url: src_url.unwrap_or_default(),
+                        onclick: String::from(onclick_str),
+                        elem_id: iframe_id,
+                        bold: current_bold,
+                        underline: current_underline,
+                    });
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,

@@ -3028,6 +3028,24 @@ impl JsRuntime {
                     } else {
                         out.extend_from_slice(b"null");
                     }
+                } else if name == "element.getContext" {
+                    // element.getContext('2d') — returns a canvas 2D context reference.
+                    let parts: Vec<&str> = split_top_level_comma(args);
+                    let context_type = parts
+                        .first()
+                        .map(|s| s.trim().trim_matches(|c| c == '\'' || c == '"'))
+                        .unwrap_or("");
+                    if context_type == "2d" {
+                        // Extract the element index from "elementN"
+                        let elem_ref = value.trim();
+                        if let Some(idx) = elem_ref.strip_prefix("element") {
+                            if let Ok(n) = idx.parse::<usize>() {
+                                out.extend_from_slice(format!("canvas2d{}", n).as_bytes());
+                                return;
+                            }
+                        }
+                    }
+                    out.extend_from_slice(b"null");
                 } else if name == "document.getElementsByClassName" {
                     let arg = value.trim();
                     if let Some(doc) = self.doc.as_ref() {

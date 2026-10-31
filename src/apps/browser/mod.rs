@@ -8,20 +8,32 @@
 //! - `crate::apps::js`: minJs betik motoru
 //! - bu dosya: HTTP/TLS akışı, geçmiş ve `BrowserApp` pencere denetçisi
 mod cache;
+mod canvas;
 mod color;
 mod css;
 mod html;
+mod iframe;
+mod media;
 mod types;
+mod wasm;
+mod worker;
 
 pub use cache::CacheMetadata;
+pub use canvas::{CanvasElement, Canvas2dContext, ImageData, Point, Rgba};
+pub use iframe::{IFrame, IFrames};
+pub use media::{MediaPlayer, MediaPlayers, MediaState, MediaType};
 pub use types::{
     html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedImage, RenderedLink,
     TextAlign, TextSpan, BOOKMARKS,
 };
+pub use wasm::{WasmInstance, WasmModule, WasmModules};
+pub use worker::{Worker, WorkerMessage, WorkerState, Workers};
 
-use alloc::collections::BTreeMap;
 use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::format;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -36,6 +48,46 @@ use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
 extern crate alloc;
 
 const BROWSER_ERROR_LOG_LIMIT: usize = 64;
+
+/// Tek bir uyandırma turunda HTML düzeni için ayrılan azami CPU süresi (ms).
+/// Bu bütçeyi aşan sayfalar parça parça düzenlenir; tarayıcı bir siteye girerken
+/// sistem kilitlenmez, olay döngüsü çalışmaya devam eder.
+const HTML_LOAD_TIME_BUDGET_MS: u64 = 8;
+
+// ── Tur (frame) yardımcıları ─────────────────────────────────────
+// Ana döngü her turda `begin_turn` çağırır; `mark_turn_busy` bu turda iş
+// yapıldığını, `rendering_frame` ise ekranın o anda çizilmekte olduğunu bildirir.
+static TURN_BUSY: AtomicU32 = AtomicU32::new(0);
+static FRAME_RENDERING: AtomicU32 = AtomicU32::new(0);
+
+/// Yeni bir uyandırma turu başlatır.
+pub fn begin_turn() {
+    TURN_BUSY.store(0, Ordering::Relaxed);
+}
+
+/// Bu turda CPU kullanıldığını bildirir.
+pub fn mark_turn_busy() {
+    TURN_BUSY.store(1, Ordering::Relaxed);
+}
+
+/// Geçen tur boşta geçti mi? (CPU rahatlatma kararı için.)
+pub fn last_turn_idle() -> bool {
+    TURN_BUSY.load(Ordering::Relaxed) == 0
+}
+
+/// Ekran çizimi sürüyor mu? Havuzu, tur içinden yapılan çizimleri CPU
+/// rahatlatma penceresinden ayırmak için kullanılır.
+pub fn set_rendering_frame(active: bool) {
+    FRAME_RENDERING.store(if active { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+/// Çizim penceresinde, örneğin VBE gelişigüzel erişim (ARQ = 0) LFB'ye yazdığında
+/// bus master DMA sürerken CPU beklemesi gerekir; çizim sırasında CPU'yu
+/// rahatlatmak kare sırasında titreme (tearing) yapar. Bu yüzden yalnızca
+/// çizim dışında kullanılır.
+pub fn is_rendering_frame() -> bool {
+    FRAME_RENDERING.load(Ordering::Relaxed) != 0
+}
 
 // ── HTML Demo içeriği ──────────────────────────────────────────────
 /// Tem demo HTML sayfası (basit tanıttık)
@@ -109,24 +161,12 @@ static HISTORY_POS: AtomicUsize = AtomicUsize::new(0);
 
 // ── Ertelenmiş hata günlüğü ───────────────────────────────────────────────
 // Ağ döngüsü, yanıt tamponlarına ödünç verdiği `self` alanlarını tutarken
-// `record_network_error(&mut self)` çağıramaz (E0502). Hata mesajı bu halka
-// tampona yazılır, ardından `flush_network_errors()` ile günlüğe aktarılır.
+// `record_network_error(&mut self)` çağıramaz. Hata mesajları halka tamponunda
+// tutulur, ardından `flush_network_errors()` ile günlüğe aktarılır.
 const PENDING_ERROR_CAP: usize = 8;
 const PENDING_ERROR_LEN: usize = 96;
-static PENDING_ERROR_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PENDING_ERRORS: [[AtomicU32; PENDING_ERROR_LEN]; PENDING_ERROR_CAP] =
     [const { [const { AtomicU32::new(0) }; PENDING_ERROR_LEN] }; PENDING_ERROR_CAP];
-
-fn defer_network_error(message: &str) {
-    let slot = PENDING_ERROR_COUNT.fetch_add(1, Ordering::Relaxed) % PENDING_ERROR_CAP;
-    for cell in PENDING_ERRORS[slot].iter() {
-        cell.store(0, Ordering::Relaxed);
-    }
-    for (cell, byte) in PENDING_ERRORS[slot].iter().zip(message.bytes()) {
-        cell.store(u32::from(byte), Ordering::Relaxed);
-    }
-    // Son hücre ayırıcı olarak sıfırda bırakılır (güvenli kısa metin).
-}
 
 /// Belirtilen geçmiş girdisini (0 = en eski) metne çevirir.
 fn history_copy(index: usize) -> Option<String> {
@@ -321,6 +361,8 @@ pub struct BrowserApp {
     pub request_port: u16,
     pub request_deadline: usize,
     pub request_state: u8,
+    /// Ana döngünün bu turda CPU'yu rahatlatması öneriliyor mu?
+    net_idle_hint: bool,
     pub redirect_count: usize,
     pub is_https: bool,
     pub is_post: bool,
@@ -342,6 +384,79 @@ pub struct BrowserApp {
     pub bookmarks_extra: Vec<crate::apps::browser::types::Bookmark>,
     pub download_path: Option<alloc::string::String>,
     pub download_data: Option<Vec<u8>>,
+    /// Canvas elements created by <canvas> tags on the current page.
+    pub canvases: Vec<canvas::CanvasElement>,
+    /// Media players for <audio> and <video> elements on the current page.
+    pub media_players: media::MediaPlayers,
+    /// Nested browsing contexts (<iframe> elements) on the current page.
+    pub iframes: iframe::IFrames,
+    /// WebAssembly modules loaded on the current page.
+    pub wasm_modules: wasm::WasmModules,
+    /// Web Workers running on the current page.
+    pub workers: worker::Workers,
+    /// Active downloads with progress tracking.
+    pub downloads: Vec<DownloadItem>,
+    /// Form autofill store for remembering form field values.
+    pub form_autofill: FormAutofill,
+}
+
+/// A download item with progress tracking.
+#[derive(Clone, Debug)]
+pub struct DownloadItem {
+    pub id: usize,
+    pub url: String,
+    pub file_name: String,
+    pub total_bytes: usize,
+    pub received_bytes: usize,
+    pub status: DownloadStatus,
+    pub saved_path: Option<alloc::string::String>,
+}
+
+/// Download status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadStatus {
+    Queued,
+    Downloading,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// A form autofill entry: field name -> value for a domain.
+#[derive(Clone, Debug)]
+pub struct FormAutofillEntry {
+    pub domain: String,
+    pub field_name: String,
+    pub field_value: String,
+}
+
+/// Form autofill store: domain -> list of (field_name, field_value).
+#[derive(Clone, Debug)]
+pub struct FormAutofill {
+    pub entries: Vec<FormAutofillEntry>,
+}
+
+impl FormAutofill {
+    pub fn new() -> Self {
+        FormAutofill { entries: Vec::new() }
+    }
+
+    pub fn add_entry(&mut self, domain: String, field_name: String, field_value: String) {
+        // Remove existing entry for same domain+field
+        self.entries.retain(|e| !(e.domain == domain && e.field_name == field_name));
+        self.entries.push(FormAutofillEntry {
+            domain,
+            field_name,
+            field_value,
+        });
+    }
+
+    pub fn get_value(&self, domain: &str, field_name: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|e| e.domain == domain && e.field_name == field_name)
+            .map(|e| e.field_value.as_str())
+    }
 }
 
 impl BrowserApp {
@@ -443,6 +558,7 @@ impl BrowserApp {
             request_port: 80,
             request_deadline: 0,
             request_state: 0,
+            net_idle_hint: false,
             redirect_count: 0,
             is_https: false,
             is_post: false,
@@ -462,6 +578,13 @@ impl BrowserApp {
             bookmarks_extra: Vec::new(),
             download_path: None,
             download_data: None,
+            canvases: Vec::new(),
+            media_players: media::MediaPlayers::new(),
+            iframes: iframe::IFrames::new(),
+            wasm_modules: wasm::WasmModules::new(),
+            workers: worker::Workers::new(),
+            downloads: Vec::new(),
+            form_autofill: FormAutofill::new(),
         };
         app.set_url(b"minos://help");
         app.navigate();
@@ -493,6 +616,51 @@ impl BrowserApp {
         let current = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
         self.bookmarks_extra.retain(|b| b.url != current);
         self.status = crate::gui::ui_text("Yer imi kaldırıldı.", "Bookmark removed.");
+    }
+
+    /// Save user bookmarks to VFS for persistence across sessions.
+    pub fn save_bookmarks_to_vfs(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
+        if !vfs.is_dir("/browser") {
+            let _ = vfs.create_dir("/browser");
+        }
+        let mut lines: Vec<u8> = Vec::new();
+        for bm in &self.bookmarks_extra {
+            let line = alloc::format!(
+                "{}|{}|{}|{}|{}\n",
+                bm.title,
+                bm.title_en,
+                bm.url,
+                bm.description,
+                bm.description_en
+            );
+            lines.extend_from_slice(line.as_bytes());
+        }
+        vfs.create_file("/browser/bookmarks.txt", &lines)
+    }
+
+    /// Load user bookmarks from VFS.
+    pub fn load_bookmarks_from_vfs(
+        &mut self,
+        vfs: &crate::fs::vfs::VirtualFileSystem,
+    ) -> bool {
+        let data = match vfs.read_file("/browser/bookmarks.txt") {
+            Some(d) => d,
+            None => return false,
+        };
+        let text = core::str::from_utf8(data).unwrap_or("");
+        for line in text.lines() {
+            let parts: Vec<&str> = line.split('|').collect();
+            if parts.len() >= 5 {
+                self.bookmarks_extra.push(crate::apps::browser::types::Bookmark {
+                    title: Box::leak(parts[0].to_string().into_boxed_str()),
+                    title_en: Box::leak(parts[1].to_string().into_boxed_str()),
+                    url: Box::leak(parts[2].to_string().into_boxed_str()),
+                    description: Box::leak(parts[3].to_string().into_boxed_str()),
+                    description_en: Box::leak(parts[4].to_string().into_boxed_str()),
+                });
+            }
+        }
+        true
     }
 
     pub fn save_current_download(&mut self, vfs: &mut crate::fs::vfs::VirtualFileSystem) -> bool {
@@ -993,6 +1161,142 @@ impl BrowserApp {
                     for line in &mut self.page_lines {
                         line.spans.retain(|s| s.elem_id != id);
                     }
+                } else if rest.starts_with(".getContext(") {
+                    // element.getContext('2d') — return a canvas context reference.
+                    if let Some(close_paren) = rest.find(')') {
+                        let ctx_type = &rest[12..close_paren];
+                        let ctx_type = ctx_type.trim().trim_matches(|c| c == '\'' || c == '"');
+                        if ctx_type == "2d" {
+                            // Store a canvas2d reference for this element ID.
+                            // We use a special variable naming convention: __ctx_<id>
+                            let ctx_var = alloc::format!("__ctx_{}", id);
+                            self.js_vars.push((ctx_var, String::from("canvas2d")));
+                        }
+                    }
+                }
+            }
+        } else if stmt.starts_with("canvas2d") {
+            // Canvas 2D context method calls: canvas2d<N>.method(args)
+            // or canvas2d<N>.property = value
+            if let Some(dot_pos) = stmt.find('.') {
+                let ctx_ref = &stmt[..dot_pos];
+                let rest = stmt[dot_pos + 1..].trim();
+                // Extract canvas index from "canvas2d<N>"
+                let canvas_idx_str = ctx_ref.strip_prefix("canvas2d").unwrap_or("0");
+                let canvas_idx: usize = canvas_idx_str.parse().unwrap_or(0);
+                if let Some(canvas) = self.canvases.get_mut(canvas_idx) {
+                    let ctx = canvas.get_context_2d();
+                    if rest.starts_with("fillStyle =") || rest.starts_with("fillStyle=") {
+                        let val = rest.split('=').nth(1).unwrap_or("").trim();
+                        let val = val.trim_matches(|c| c == '\'' || c == '"');
+                        if let Some(c) = html_color(val.as_bytes()) {
+                            ctx.set_fill_style(c);
+                        }
+                    } else if rest.starts_with("strokeStyle =") || rest.starts_with("strokeStyle=") {
+                        let val = rest.split('=').nth(1).unwrap_or("").trim();
+                        let val = val.trim_matches(|c| c == '\'' || c == '"');
+                        if let Some(c) = html_color(val.as_bytes()) {
+                            ctx.set_stroke_style(c);
+                        }
+                    } else if rest.starts_with("fillRect(") && rest.ends_with(')') {
+                        let args = &rest[8..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 4 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let w = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let h = parts[3].parse::<f32>().unwrap_or(0.0);
+                            ctx.fill_rect(x, y, w, h);
+                            canvas.dirty = true;
+                        }
+                    } else if rest.starts_with("strokeRect(") && rest.ends_with(')') {
+                        let args = &rest[10..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 4 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let w = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let h = parts[3].parse::<f32>().unwrap_or(0.0);
+                            ctx.stroke_rect(x, y, w, h);
+                            canvas.dirty = true;
+                        }
+                    } else if rest.starts_with("clearRect(") && rest.ends_with(')') {
+                        let args = &rest[9..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 4 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let w = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let h = parts[3].parse::<f32>().unwrap_or(0.0);
+                            ctx.clear_rect(x, y, w, h);
+                            canvas.dirty = true;
+                        }
+                    } else if rest == "beginPath()" {
+                        ctx.begin_path();
+                    } else if rest.starts_with("moveTo(") && rest.ends_with(')') {
+                        let args = &rest[6..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 2 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            ctx.move_to(x, y);
+                        }
+                    } else if rest.starts_with("lineTo(") && rest.ends_with(')') {
+                        let args = &rest[6..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 2 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            ctx.line_to(x, y);
+                        }
+                    } else if rest == "stroke()" {
+                        ctx.stroke();
+                        canvas.dirty = true;
+                    } else if rest == "fill()" {
+                        ctx.fill();
+                        canvas.dirty = true;
+                    } else if rest.starts_with("fillText(") && rest.ends_with(')') {
+                        let args = &rest[8..rest.len() - 1];
+                        // Parse: fillText('text', x, y)
+                        if let Some(first_comma) = args.find(',') {
+                            let text = args[..first_comma].trim().trim_matches(|c| c == '\'' || c == '"');
+                            let rest_args = &args[first_comma + 1..];
+                            let parts: Vec<&str> = rest_args.split(',').map(|s| s.trim()).collect();
+                            if parts.len() >= 2 {
+                                let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                                let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                                ctx.fill_text(text, x, y);
+                                canvas.dirty = true;
+                            }
+                        }
+                    } else if rest.starts_with("strokeText(") && rest.ends_with(')') {
+                        let args = &rest[10..rest.len() - 1];
+                        if let Some(first_comma) = args.find(',') {
+                            let text = args[..first_comma].trim().trim_matches(|c| c == '\'' || c == '"');
+                            let rest_args = &args[first_comma + 1..];
+                            let parts: Vec<&str> = rest_args.split(',').map(|s| s.trim()).collect();
+                            if parts.len() >= 2 {
+                                let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                                let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                                ctx.stroke_text(text, x, y);
+                                canvas.dirty = true;
+                            }
+                        }
+                    } else if rest.starts_with("arc(") && rest.ends_with(')') {
+                        let args = &rest[3..rest.len() - 1];
+                        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+                        if parts.len() >= 5 {
+                            let x = parts[0].parse::<f32>().unwrap_or(0.0);
+                            let y = parts[1].parse::<f32>().unwrap_or(0.0);
+                            let radius = parts[2].parse::<f32>().unwrap_or(0.0);
+                            let start = parts[3].parse::<f32>().unwrap_or(0.0);
+                            let end = parts[4].parse::<f32>().unwrap_or(0.0);
+                            let anticlockwise = parts.get(5).map_or(false, |s| s.trim() == "true");
+                            ctx.arc(x, y, radius, start, end, anticlockwise);
+                        }
+                    } else if rest == "closePath()" {
+                        ctx.close_path();
+                    }
                 }
             }
         } else if stmt.starts_with("var ") || stmt.starts_with("let ") {
@@ -1029,10 +1333,24 @@ impl BrowserApp {
         self.page_lines.clear();
         self.rendered_links.borrow_mut().clear();
         self.rendered_images.borrow_mut().clear();
+        self.canvases.clear();
+        self.media_players = media::MediaPlayers::new();
+        self.iframes = iframe::IFrames::new();
+        self.wasm_modules = wasm::WasmModules::new();
+        self.workers = worker::Workers::new();
+        self.downloads.clear();
+        self.form_autofill = FormAutofill::new();
         self.page_bg_color = None;
         self.js_alert = None;
         self.js_vars.clear();
         self.scroll_reset = true;
+
+        // HTML yerleşimi, DOM yeniden çizimi ve script yürütme her karede
+        // ekranı kilitlemesin diye bütçelenir: her `load_html` çağrısı en
+        // fazla `HTML_LOAD_TIME_BUDGET_MS` kadar CPU kullanır, kalan iş bir
+        // sonraki uyandırma turuna (kare) bırakılır; turda asgari bir süre
+        // kullanıldıktan sonra CPU rahatlatılır (bkz. `net_idle_hint`).
+        let layout_start_ms = crate::boot::time::main_monotonic_ms();
 
         // Preprocess: Extract <script> tags and handle document.write()
         let mut preprocessed_html = Vec::with_capacity(body.len());
@@ -1109,7 +1427,30 @@ impl BrowserApp {
             self.transition_start_ms,
             &mut self.previous_styles,
             vfs,
+            &mut self.canvases,
+            &mut self.media_players,
+            &mut self.iframes,
         );
+
+        // İş bütçesine dayalı CPU rahatlatma ipucu: sayfa düzenlemesi bu karede
+        // eşiği aştıysa ya da geçen kare boşta geçtiyse, ana döngü CPU'yu biraz
+        // serbest bırakır. Böylece tarayıcı bir siteye giderken sistem kilitlenmez.
+        let layout_ms = crate::boot::time::main_monotonic_ms().wrapping_sub(layout_start_ms);
+        let over_budget = layout_ms as u64 >= HTML_LOAD_TIME_BUDGET_MS;
+        self.net_idle_hint = over_budget || last_turn_idle();
+        mark_turn_busy();
+    }
+
+    /// Bu turda CPU kısa süreliğine rahatlatılmalı mı?
+    ///
+    /// `poll_network` ve `load_html` tarafından güncellenir; ana döngü her
+    /// turda bir kez okur. Ağ isteği beklemesi, sayfa düzeni veya animasyon
+    /// sırasında CPU'yu sürekli döndürmek yerine tur aralıklarına bırakmak
+    /// için kullanılır.
+    pub fn take_net_idle_hint(&mut self) -> bool {
+        let hint = self.net_idle_hint;
+        self.net_idle_hint = false;
+        hint
     }
 
     /// Sayfa içeriği odağı (araç çubuğu düğmeleri odaklanmaz).
@@ -2400,9 +2741,17 @@ impl BrowserApp {
 
     /// Ana döngüden çağrılır; ağ bekleyişi ekran olaylarını durdurmaz.
     pub fn poll_network(&mut self, vfs: &mut VirtualFileSystem) {
+        // Media player'ları her karede güncelle (ses oynatma için).
+        let now = crate::boot::time::main_monotonic_ms() as u64;
+        self.media_players.update_all(now);
+
         if !self.request_pending {
             return;
         }
+        // Ağ isteği sürüyor ama bu turda gönderilecek iş (TCP SYN, TLS kaydı,
+        // HTTP yanıtı) yoksa ana döngü CPU'yu rahatlatabilir. Sunucu yanıtı
+        // gelene kadar döngüyü boşuna çevirip sistemi kilitlemeyiz.
+        mark_turn_busy();
         let now = crate::boot::time::main_monotonic_ms();
         if self.request_deadline == 0 {
             self.request_deadline = now.wrapping_add(15000);
@@ -2611,11 +2960,13 @@ impl BrowserApp {
                     self.response_data.resize(65536, 0);
                 }
                 let room = self.response_data.len().saturating_sub(self.response_len);
+                let mut progressed = false;
                 if room > 0 {
                     let n = crate::drivers::netstack::take_tcp_data(
                         &mut self.response_data[self.response_len..],
                     );
                     if n > 0 {
+                        progressed = true;
                         self.response_len += n;
                         if let Some(ref mut tls) = self.tls_session {
                             tls.feed_tcp_data(
@@ -2623,6 +2974,11 @@ impl BrowserApp {
                             );
                         }
                     }
+                }
+                // Yanıt beklenirken CPU'yu serbest bırak: yeni bayt gelmediyse
+                // tur boşta sayılır ve ana döngü bekleme aralığı kısaltılır.
+                if !progressed {
+                    self.net_idle_hint = true;
                 }
 
                 // TLS oturumundan giden mesajları (ChangeCipherSpec + Finished) gönder.
@@ -2791,6 +3147,7 @@ impl BrowserApp {
                 if data_to_parse.len() > 0 {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
                         self.load_progress = 70;
+                        self.net_idle_hint = true;
                         let headers = &data_to_parse[..end];
                         let status_end = find_bytes(headers, b"\r\n").unwrap_or(end);
                         let status_line = &headers[..status_end];
@@ -2859,17 +3216,10 @@ impl BrowserApp {
                                         }
                                     }
                                 }
-                            }
-                        }
 
-                        // 3xx Yönlendirme (Redirect) Kontrolü
-                        if let Some(code) = status_code {
-                            if code >= 400 {
-                                let mut http_error = String::from("HTTP status ");
-                                http_error.push_str(&alloc::format!("{}", code));
-                                defer_network_error(&http_error);
                             }
-                            if (code == 301
+                            if let Some(code) = status_code {
+                                if (code == 301
                                 || code == 302
                                 || code == 303
                                 || code == 307
@@ -2990,6 +3340,7 @@ impl BrowserApp {
                                     return;
                                 }
                             }
+                        }
                         }
 
                         // Normal yanıt içeriği
@@ -3203,6 +3554,11 @@ impl BrowserApp {
         if self.error_logs.len() > BROWSER_ERROR_LOG_LIMIT {
             self.error_logs.remove(0);
         }
+    }
+
+    /// Render audio for all playing media players.
+    pub fn render_audio(&mut self, audio: &mut crate::drivers::audio::AudioDevice) {
+        self.media_players.render_audio_all(audio);
     }
 
     pub fn back(&mut self) {
@@ -3679,8 +4035,171 @@ impl BrowserApp {
                             let span_len = span.text.len();
                             let span_char_end = span_char_start + span_len;
 
-                            // Draw image for is_image spans
+                            // Draw image, canvas, or video for is_image spans
                             if span.is_image {
+                                // Canvas element: render from self.canvases by matching elem_id
+                                if span.image_rgb.is_none() && !span.elem_id.is_empty() {
+                                    // Check if it's a canvas element
+                                    if let Some(canvas) = self
+                                        .canvases
+                                        .iter()
+                                        .find(|c| c.id == span.elem_id)
+                                    {
+                                        let canvas_w = canvas.width.max(1);
+                                        let canvas_h = canvas.height.max(1);
+                                        let draw_w = canvas_w
+                                            .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        let draw_h = canvas_h
+                                            .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                        if draw_w > 0
+                                            && draw_h > 0
+                                            && draw_y >= doc_y
+                                            && draw_y < doc_y + doc_h
+                                        {
+                                            canvas.render_to_fb(fb, cur_x, draw_y);
+                                        }
+                                        {
+                                            links.push(RenderedLink {
+                                                rect: (cur_x, draw_y, span_w, line_h),
+                                                url: span.link_url.clone(),
+                                                onclick: span.onclick.clone(),
+                                            });
+                                        }
+                                        span_char_start = span_char_end;
+                                        cur_x += span_w;
+                                        continue;
+                                    }
+                                    // Check if it's a video element
+                                    if let Some(player) = self.media_players.get(&span.elem_id) {
+                                        let video_w = player.media_type == MediaType::Video;
+                                        if video_w {
+                                            let draw_w = span.image_width.max(1)
+                                                .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                            let draw_h = span.image_height.max(1)
+                                                .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                            if draw_w > 0
+                                                && draw_h > 0
+                                                && draw_y >= doc_y
+                                                && draw_y < doc_y + doc_h
+                                            {
+                                                // Draw video placeholder rectangle
+                                                fb.draw_rect(cur_x, draw_y, draw_w, draw_h, 0x101010);
+                                                fb.draw_rect_outline(cur_x, draw_y, draw_w, draw_h, Color::BORDER);
+                                                // Draw play button or pause indicator
+                                                let center_x = cur_x + draw_w / 2;
+                                                let center_y = draw_y + draw_h / 2;
+                                                match player.state {
+                                                    MediaState::Playing => {
+                                                        // Draw pause bars
+                                                        fb.draw_rect(center_x - 6, center_y - 6, 4, 12, Color::WHITE);
+                                                        fb.draw_rect(center_x + 2, center_y - 6, 4, 12, Color::WHITE);
+                                                    }
+                                                    _ => {
+                                                        // Draw play triangle
+                                                        fb.draw_rect(center_x - 5, center_y - 5, 10, 10, Color::WHITE);
+                                                    }
+                                                }
+                                                // Draw time overlay
+                                                let time_str = format!("{:.1}s", player.current_time);
+                                                MinGuiCompositor::draw_string_clipped(
+                                                    fb,
+                                                    cur_x + 4,
+                                                    draw_y + draw_h.saturating_sub(14),
+                                                    &time_str,
+                                                    Color::WHITE,
+                                                    (cur_x, draw_y, draw_w, draw_h),
+                                                );
+                                            }
+                                        }
+                                        {
+                                            links.push(RenderedLink {
+                                                rect: (cur_x, draw_y, span_w, line_h),
+                                                url: span.link_url.clone(),
+                                                onclick: span.onclick.clone(),
+                                            });
+                                        }
+                                        span_char_start = span_char_end;
+                                        cur_x += span_w;
+                                        continue;
+                                    }
+                                    // Check if it's an iframe element
+                                    if let Some(frame) = self.iframes.get(&span.elem_id) {
+                                        let draw_w = span.image_width.max(1)
+                                            .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                        let draw_h = span.image_height.max(1)
+                                            .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                        if draw_w > 0
+                                            && draw_h > 0
+                                            && draw_y >= doc_y
+                                            && draw_y < doc_y + doc_h
+                                        {
+                                            // Draw iframe border
+                                            fb.draw_rect(cur_x, draw_y, draw_w, draw_h, 0xE0E0E0);
+                                            fb.draw_rect_outline(cur_x, draw_y, draw_w, draw_h, Color::BORDER);
+                                            let inner_x = cur_x + 2;
+                                            let inner_y = draw_y + 2;
+                                            let inner_w = draw_w.saturating_sub(4);
+                                            let inner_h = draw_h.saturating_sub(4);
+                                            fb.draw_rect(inner_x, inner_y, inner_w, inner_h, 0xFFFFFF);
+                                            // Draw iframe label
+                                            let label = format!("iframe: {}", frame.id);
+                                            MinGuiCompositor::draw_string_clipped(
+                                                fb,
+                                                inner_x + 4,
+                                                inner_y + 4,
+                                                &label,
+                                                Color::TEXT_MUTED,
+                                                (inner_x, inner_y, inner_w, inner_h),
+                                            );
+                                            // Render nested content lines
+                                            let mut line_y = inner_y + 16;
+                                            for line in &frame.page_lines {
+                                                let line_h = match line.tag {
+                                                    HtmlTagType::Heading1 => 26,
+                                                    HtmlTagType::Heading2 => 22,
+                                                    HtmlTagType::Heading3 => 20,
+                                                    _ => 18,
+                                                };
+                                                if line_y + line_h >= inner_y && line_y < inner_y + inner_h {
+                                                    let mut cx = inner_x + 4;
+                                                    for span2 in &line.spans {
+                                                        let text_w = MinGuiCompositor::text_width(&span2.text, 1);
+                                                        let span2_w = text_w
+                                                            + if span2.is_button { 16 } else { 0 }
+                                                            + if span2.is_image { span2.image_width.max(1) } else { 0 };
+                                                        if cx + span2_w > inner_x + inner_w {
+                                                            break;
+                                                        }
+                                                        if line_y >= inner_y && line_y < inner_y + inner_h {
+                                                            MinGuiCompositor::draw_string_clipped(
+                                                                fb,
+                                                                cx,
+                                                                line_y,
+                                                                &span2.text,
+                                                                span2.color,
+                                                                (inner_x, line_y, inner_w, line_h),
+                                                            );
+                                                        }
+                                                        cx += span2_w;
+                                                    }
+                                                }
+                                                line_y += line_h;
+                                            }
+                                        }
+                                        {
+                                            links.push(RenderedLink {
+                                                rect: (cur_x, draw_y, span_w, line_h),
+                                                url: span.link_url.clone(),
+                                                onclick: span.onclick.clone(),
+                                            });
+                                        }
+                                        span_char_start = span_char_end;
+                                        cur_x += span_w;
+                                        continue;
+                                    }
+                                }
+
+                                // Regular image with RGB data
                                 if let Some(rgb) = &span.image_rgb {
                                     let img_w = span.image_width.max(1);
                                     let img_h = span.image_height.max(1);
@@ -4248,6 +4767,70 @@ impl BrowserApp {
             let pct_x = win_x + win_w.saturating_sub(12).saturating_sub(pct_w);
             MinGuiCompositor::draw_string(fb, pct_x, status_y + 3, &pct_text, Color::ACCENT_BLUE);
         }
+
+        // Download progress bar for active downloads.
+        if !self.downloads.is_empty() {
+            let dl_bar_y = status_y + 22;
+            let dl_bar_h = 6;
+            let dl_bar_w = win_w.saturating_sub(24);
+            let dl_x = win_x + 12;
+            for (i, dl) in self.downloads.iter().enumerate() {
+                let y = dl_bar_y + i * (dl_bar_h + 2);
+                if y + dl_bar_h > status_y + status_h {
+                    break;
+                }
+                // Download label
+                let label = if dl.file_name.len() > 20 {
+                    format!("{}...", &dl.file_name[..17])
+                } else {
+                    dl.file_name.clone()
+                };
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    dl_x,
+                    y + 1,
+                    &label,
+                    Color::TEXT_MAIN,
+                    (dl_x, y, 100, dl_bar_h),
+                );
+                // Progress bar
+                let bar_x = dl_x + 100;
+                let bar_w = dl_bar_w.saturating_sub(100);
+                fb.draw_rect(bar_x, y, bar_w, dl_bar_h, Color::DARK_BG);
+                fb.draw_rect_outline(bar_x, y, bar_w, dl_bar_h, Color::BORDER);
+                let progress = if dl.total_bytes > 0 {
+                    dl.received_bytes * 100 / dl.total_bytes
+                } else {
+                    0
+                };
+                let fill_w = bar_w.saturating_sub(2) * progress / 100;
+                if fill_w > 0 {
+                    fb.draw_rect(
+                        bar_x + 1,
+                        y + 1,
+                        fill_w,
+                        dl_bar_h.saturating_sub(2),
+                        Color::ACCENT_GREEN,
+                    );
+                }
+                // Status text
+                let status_str = match dl.status {
+                    DownloadStatus::Downloading => crate::gui::ui_text("İndiriliyor", "Downloading"),
+                    DownloadStatus::Completed => crate::gui::ui_text("Tamamlandı", "Completed"),
+                    DownloadStatus::Failed => crate::gui::ui_text("Başarısız", "Failed"),
+                    DownloadStatus::Cancelled => crate::gui::ui_text("İptal Edildi", "Cancelled"),
+                    DownloadStatus::Queued => crate::gui::ui_text("Sıraya Alındı", "Queued"),
+                };
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    bar_x + bar_w.saturating_sub(60),
+                    y + 1,
+                    status_str,
+                    Color::TEXT_MUTED,
+                    (bar_x + bar_w.saturating_sub(60), y, 60, dl_bar_h),
+                );
+            }
+        }
         if self.toolbar_menu_open {
             let (menu_x, menu_y, menu_w, menu_h) = Self::toolbar_menu_rect(win_x, win_y, win_w);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
@@ -4295,3 +4878,4 @@ impl BrowserApp {
         }
     }
 }
+

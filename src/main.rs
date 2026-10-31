@@ -377,6 +377,9 @@ pub extern "C" fn _start() -> ! {
 
     let mut browser_app = apps::browser::BrowserApp::new();
 
+    // Load persistent bookmarks from VFS.
+    let _ = browser_app.load_bookmarks_from_vfs(&fs_mgr.vfs);
+
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
 
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
@@ -1690,6 +1693,8 @@ pub extern "C" fn _start() -> ! {
 
     loop {
         let loop_start_cycles = read_cpu_cycles();
+
+        apps::browser::begin_turn();
 
         mouse.speed = settings_app.mouse_speed;
 
@@ -4688,8 +4693,10 @@ pub extern "C" fn _start() -> ! {
                                                 .any(|b| b.url == current)
                                             {
                                                 browser_app.remove_bookmark_current();
+                                                let _ = browser_app.save_bookmarks_to_vfs(&mut fs_mgr.vfs);
                                             } else {
                                                 browser_app.add_bookmark_current();
+                                                let _ = browser_app.save_bookmarks_to_vfs(&mut fs_mgr.vfs);
                                             }
                                         }
                                         Some(2) => {
@@ -8525,6 +8532,9 @@ pub extern "C" fn _start() -> ! {
 
         browser_app.poll_network(&mut fs_mgr.vfs);
 
+        // Tarayıcı medya oynatıcılarının ses çıkışını render et.
+        browser_app.render_audio(&mut audio_dev);
+
         // Bes parcali, HDA PCM tabanli melodi yurutucusu. (HDA yoksa PIT/PC speaker fallback).
 
         audio_dev.set_volume(settings_app.volume);
@@ -8845,9 +8855,24 @@ pub extern "C" fn _start() -> ! {
 
             let wait_start = read_cpu_cycles();
 
-            let wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
+            // Ovme (spin) ile bekle: kesme (interrupt) yolu yok, bu yuzden
+            // ps2/USB tamponlarina bakarak giris geldiginde aninda cikilir.
+            //
+            // Tarayici ag istegi bekliyorsa ya da bir onceki turde sayfa
+            // duzeni butcesi asildiysa bekleme suresi kisaltilir; boylece
+            // tarayici bir siteye girerken masaustu kilitlenmez, ama CPU
+            // bosta %100 donmek yerine rahatlatilir.
+            let browser_waiting = browser_app.take_net_idle_hint();
 
-            while read_cpu_cycles().wrapping_sub(wait_start) < wait_cycles {
+            let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
+
+            let busy_wait_cycles = if browser_waiting {
+                unsafe { TSC_CYCLES_PER_US }.saturating_mul(250)
+            } else {
+                idle_wait_cycles
+            };
+
+            while read_cpu_cycles().wrapping_sub(wait_start) < busy_wait_cycles {
                 if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
                     break;
                 }

@@ -5,11 +5,11 @@
 //! them with linear memory, and calling exported functions from JavaScript.
 
 extern crate alloc;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 
 /// WASM value types.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

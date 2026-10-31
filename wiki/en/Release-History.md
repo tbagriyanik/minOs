@@ -8,6 +8,7 @@ minOs release notes and future plans.
 
 ### What's New
 
+- **🛠️ Browser DevTools Panel:** `Ctrl+Shift+D` opens developer tools with Elements, Console, Network and Storage tabs for page-element counts, JavaScript error logs, request/download state, cookies and form-autofill entries.
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** Browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes per RFC 8446:
   - **AAD length (§5.2):** Additional Authenticated Data computed as exactly 5 bytes.
   - **Finished key derivation (§4.4.4):** `finished_key` derived directly from `server/client_hs_traffic_secret`.

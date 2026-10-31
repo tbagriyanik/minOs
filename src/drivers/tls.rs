@@ -2624,7 +2624,13 @@ mod tests {
         let client_random = [0x11u8; 32];
         let mut hello = Vec::new();
         let mut client_ecdhe = [0u8; 32];
-        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe, false);
+        build_client_hello(
+            "minos.test",
+            &client_random,
+            &mut hello,
+            &mut client_ecdhe,
+            false,
+        );
 
         let mut client = TlsSession::new("minos.test", client_random);
         let ch_body = &hello[5..];
@@ -2829,7 +2835,13 @@ mod tests {
         let client_random = [0x22u8; 32];
         let mut hello = Vec::new();
         let mut client_ecdhe = [0u8; 32];
-        build_client_hello("minos.test", &client_random, &mut hello, &mut client_ecdhe, false);
+        build_client_hello(
+            "minos.test",
+            &client_random,
+            &mut hello,
+            &mut client_ecdhe,
+            false,
+        );
         let mut client = TlsSession::new("minos.test", client_random);
         let ch_body = &hello[5..];
         client.note_client_hello(ch_body);

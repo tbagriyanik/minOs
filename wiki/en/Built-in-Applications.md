@@ -10,7 +10,14 @@ minOs includes **15 built-in applications** and a window manager, providing a fu
 | **🎛️ Control Panel** | Live system info: OS/kernel version, CPU vendor and logical core count, RAM usage and fill bar, resolution, theme, keyboard layout, uptime and date. Network tab with e1000 driver, link status, DHCP/IP/mask/gateway/DNS and audio driver; one-click theme change. |
 | **📦 Package Manager (`minPak`)** | Graphical and command-line package management interface. Repository catalog listing, package search, local/network package installation and installed package management. |
 | **📝 Notepad** | Top menu bar (`File`, `Edit`, `Help`), text clear/save, **Cut / Copy / Paste / Select All**, **Undo / Redo** (Ctrl+Z / Ctrl+Y). Turkish character support, `Backspace`, `Enter`, **Home / End**, **Shift+arrow keys selection**, line numbers and cursor. |
-| **🌐 Web Browser** | Favorites (Bookmarks) bar, lightweight HTTP test site, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` and `minos://demo` / `minos://demo-img` / `minos://demo-video` local demo pages, tabbed navigation and e1000 ARP/ping/DNS test panel. `https://` addresses (port 443) establish secure connections via **TLS 1.3** handshake; server response decrypted with AES-128-GCM and processed as HTTP. Downloaded pages saved under `/root/Downloads/` with `.html` extension; double-clicking `.html`/`.htm`/`.xhtml` files in File Manager opens them in the browser. The CSS engine parses `@font-face` rules and animates `@keyframes` over `opacity`/`color`/`background-color`; the image decoder supports progressive JPEG. |
+| **🌐 Web Browser** | Favorites (Bookmarks) bar, lightweight HTTP test site, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` and `minos://demo` / `minos://demo-img` / `minos://demo-video` local demo pages, tabbed navigation and e1000 ARP/ping/DNS test panel. `https://` addresses (port 443) establish secure connections via **TLS 1.3** handshake; server response decrypted with AES-128-GCM and processed as HTTP. Downloaded pages saved under `/root/Downloads/` with `.html` extension; double-clicking `.html`/`.htm`/`.xhtml` files in File Manager opens them in the browser. The CSS engine parses `@font-face` rules and animates `@keyframes` over `opacity`/`color`/`background-color`; the image decoder supports progressive JPEG. **Press `Ctrl+Shift+D` to open DevTools with Elements, Console, Network and Storage tabs.** |
+
+DevTools tabs:
+
+- **Elements:** Counts links, images, canvases, media, iframes, WASM modules and Workers.
+- **Console:** Shows JavaScript alerts and error logs.
+- **Network:** Shows request state and downloads.
+- **Storage:** Shows cookies and form-autofill entries.
 
 ### 🎨 CSS & Image Support
 

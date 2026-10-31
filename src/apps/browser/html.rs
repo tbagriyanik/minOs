@@ -5,14 +5,14 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use alloc::collections::BTreeMap;
 use super::cache::{cache_get_with_metadata, cache_store_with_metadata};
-use super::css::{find_keyframes, match_css_style, parse_css};
 use super::css::blend_styles;
 use super::css::transition_progress;
+use super::css::{find_keyframes, match_css_style, parse_css};
 use super::types::{BrowserLine, ElementStyle, HtmlTagType, TextAlign, TextSpan};
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
+use alloc::collections::BTreeMap;
 
 pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
@@ -689,10 +689,8 @@ pub fn render_html_to_lines(
                     let elapsed = now.saturating_sub(transition_start_ms);
 
                     if let Some(prev) = previous_styles.get(&elem_id) {
-                        let progress = transition_progress(
-                            elapsed as u64,
-                            matched.transition_duration,
-                        );
+                        let progress =
+                            transition_progress(elapsed as u64, matched.transition_duration);
                         if let Some(p) = progress {
                             if p >= 1.0 {
                                 // Geçiş tamamlandı, mevcut stili kaydı olarak güncelle
@@ -709,7 +707,10 @@ pub fn render_html_to_lines(
                                 if tp_str == "color" || apply_all {
                                     matched.color = blended.color;
                                 }
-                                if tp_str == "background-color" || tp_str == "background" || apply_all {
+                                if tp_str == "background-color"
+                                    || tp_str == "background"
+                                    || apply_all
+                                {
                                     matched.bg_color = blended.bg_color;
                                 }
                                 // Geçiş devam ediyor, mevcut stili sonraki kare için kaydet
@@ -1615,13 +1616,16 @@ pub fn render_html_to_lines(
                     }
                 } else if eq_ascii(name, b"canvas") {
                     // <canvas>: HTML5 canvas elementi
-                    static CANVAS_ID_COUNTER: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
-                    let canvas_id = extract_attr(attrs, b"id")
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            let n = CANVAS_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            format!("canvas_{}", n)
-                        });
+                    static CANVAS_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                        core::sync::atomic::AtomicUsize::new(0);
+                    let canvas_id =
+                        extract_attr(attrs, b"id")
+                            .map(String::from)
+                            .unwrap_or_else(|| {
+                                let n = CANVAS_ID_COUNTER
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                format!("canvas_{}", n)
+                            });
                     let canvas_w = extract_attr(attrs, b"width")
                         .and_then(|w| w.trim().parse::<usize>().ok())
                         .unwrap_or(300);
@@ -1719,14 +1723,16 @@ pub fn render_html_to_lines(
                     });
                 } else if eq_ascii(name, b"video") {
                     // <video>: Video oynatıcı
-                    let video_id = extract_attr(attrs, b"id")
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            static VIDEO_ID_COUNTER: core::sync::atomic::AtomicUsize =
-                                core::sync::atomic::AtomicUsize::new(0);
-                            let n = VIDEO_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            format!("video_{}", n)
-                        });
+                    let video_id =
+                        extract_attr(attrs, b"id")
+                            .map(String::from)
+                            .unwrap_or_else(|| {
+                                static VIDEO_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                    core::sync::atomic::AtomicUsize::new(0);
+                                let n = VIDEO_ID_COUNTER
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                format!("video_{}", n)
+                            });
                     let src_url = extract_attr(attrs, b"src").map(String::from);
                     let controls = extract_attr(attrs, b"controls").is_some();
                     let autoplay = extract_attr(attrs, b"autoplay").is_some();
@@ -1756,7 +1762,10 @@ pub fn render_html_to_lines(
                     }
 
                     // Create media player for this video element.
-                    let mut player = super::media::MediaPlayer::new(video_id.clone(), super::media::MediaType::Video);
+                    let mut player = super::media::MediaPlayer::new(
+                        video_id.clone(),
+                        super::media::MediaType::Video,
+                    );
                     if let Some(src) = &src_url {
                         player.src = src.clone();
                     }
@@ -1844,14 +1853,16 @@ pub fn render_html_to_lines(
                     });
                 } else if eq_ascii(name, b"audio") {
                     // <audio>: Ses oynatıcı
-                    let audio_id = extract_attr(attrs, b"id")
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            static AUDIO_ID_COUNTER: core::sync::atomic::AtomicUsize =
-                                core::sync::atomic::AtomicUsize::new(0);
-                            let n = AUDIO_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            format!("audio_{}", n)
-                        });
+                    let audio_id =
+                        extract_attr(attrs, b"id")
+                            .map(String::from)
+                            .unwrap_or_else(|| {
+                                static AUDIO_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                    core::sync::atomic::AtomicUsize::new(0);
+                                let n = AUDIO_ID_COUNTER
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                format!("audio_{}", n)
+                            });
                     let src_url = extract_attr(attrs, b"src").map(String::from);
                     let controls = extract_attr(attrs, b"controls").is_some();
                     let autoplay = extract_attr(attrs, b"autoplay").is_some();
@@ -1881,7 +1892,10 @@ pub fn render_html_to_lines(
                     }
 
                     // Create media player for this audio element.
-                    let mut player = super::media::MediaPlayer::new(audio_id.clone(), super::media::MediaType::Audio);
+                    let mut player = super::media::MediaPlayer::new(
+                        audio_id.clone(),
+                        super::media::MediaType::Audio,
+                    );
                     if let Some(src) = &src_url {
                         player.src = src.clone();
                     }
@@ -1910,14 +1924,16 @@ pub fn render_html_to_lines(
                     }
                 } else if eq_ascii(name, b"iframe") {
                     // <iframe>: İç içe tarama bağlamı
-                    let iframe_id = extract_attr(attrs, b"id")
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            static IFRAME_ID_COUNTER: core::sync::atomic::AtomicUsize =
-                                core::sync::atomic::AtomicUsize::new(0);
-                            let n = IFRAME_ID_COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                            format!("iframe_{}", n)
-                        });
+                    let iframe_id =
+                        extract_attr(attrs, b"id")
+                            .map(String::from)
+                            .unwrap_or_else(|| {
+                                static IFRAME_ID_COUNTER: core::sync::atomic::AtomicUsize =
+                                    core::sync::atomic::AtomicUsize::new(0);
+                                let n = IFRAME_ID_COUNTER
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                                format!("iframe_{}", n)
+                            });
                     let src_url = extract_attr(attrs, b"src").map(String::from);
                     let iframe_w = extract_attr(attrs, b"width")
                         .and_then(|w| w.trim().parse::<usize>().ok())
@@ -1951,7 +1967,8 @@ pub fn render_html_to_lines(
                     }
 
                     // Create iframe element.
-                    let mut frame = super::iframe::IFrame::new(iframe_id.clone(), iframe_w, iframe_h);
+                    let mut frame =
+                        super::iframe::IFrame::new(iframe_id.clone(), iframe_w, iframe_h);
                     if let Some(src) = &src_url {
                         frame.set_src(src.clone());
                     }

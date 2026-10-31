@@ -5,11 +5,11 @@
 //! content within a parent page.
 
 extern crate alloc;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 
-use super::types::{BrowserLine, HtmlTagType, ElementStyle};
+use super::types::{BrowserLine, ElementStyle, HtmlTagType};
 use crate::gui::Color;
 
 /// State of the iframe's nested browsing context.
@@ -152,7 +152,11 @@ impl IFrame {
                         let text_w = crate::gui::MinGuiCompositor::text_width(&span.text, 1);
                         let span_w = text_w
                             + if span.is_button { 16 } else { 0 }
-                            + if span.is_image { span.image_width.max(1) } else { 0 };
+                            + if span.is_image {
+                                span.image_width.max(1)
+                            } else {
+                                0
+                            };
 
                         if cur_x + span_w > inner_x + inner_w {
                             break;

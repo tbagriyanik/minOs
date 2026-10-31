@@ -426,7 +426,11 @@ impl Canvas2dContext {
                 let uy = y as usize;
                 for dy_off in 0..width {
                     for dx_off in 0..width {
-                        self.put_pixel_blend(ux.saturating_add(dx_off), uy.saturating_add(dy_off), color);
+                        self.put_pixel_blend(
+                            ux.saturating_add(dx_off),
+                            uy.saturating_add(dy_off),
+                            color,
+                        );
                     }
                 }
             }

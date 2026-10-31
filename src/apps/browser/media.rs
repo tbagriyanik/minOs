@@ -93,7 +93,8 @@ impl MediaPlayer {
         let mut p = 12;
         while p + 8 <= data.len() {
             let chunk_id = &data[p..p + 4];
-            let chunk_size = u32::from_le_bytes([data[p + 4], data[p + 5], data[p + 6], data[p + 7]]) as usize;
+            let chunk_size =
+                u32::from_le_bytes([data[p + 4], data[p + 5], data[p + 6], data[p + 7]]) as usize;
             if chunk_id == b"fmt " {
                 if p + 8 + chunk_size > data.len() {
                     return false;
@@ -104,14 +105,16 @@ impl MediaPlayer {
                     // Only PCM
                     return false;
                 }
-                self.channels = u16::from_le_bytes([data[fmt_offset + 2], data[fmt_offset + 3]]) as u8;
+                self.channels =
+                    u16::from_le_bytes([data[fmt_offset + 2], data[fmt_offset + 3]]) as u8;
                 self.sample_rate = u32::from_le_bytes([
                     data[fmt_offset + 4],
                     data[fmt_offset + 5],
                     data[fmt_offset + 6],
                     data[fmt_offset + 7],
                 ]);
-                self.bytes_per_sample = u16::from_le_bytes([data[fmt_offset + 14], data[fmt_offset + 15]]) as u8;
+                self.bytes_per_sample =
+                    u16::from_le_bytes([data[fmt_offset + 14], data[fmt_offset + 15]]) as u8;
                 p += 8 + chunk_size;
             } else if chunk_id == b"data" {
                 if p + 8 + chunk_size > data.len() {
@@ -120,7 +123,9 @@ impl MediaPlayer {
                 self.audio_data = data[p + 8..p + 8 + chunk_size].to_vec();
                 self.audio_pos = 0;
                 // Calculate duration: bytes / (sample_rate * bytes_per_sample * channels)
-                let byte_rate = self.sample_rate as usize * self.bytes_per_sample as usize * self.channels as usize;
+                let byte_rate = self.sample_rate as usize
+                    * self.bytes_per_sample as usize
+                    * self.channels as usize;
                 if byte_rate > 0 {
                     self.duration = self.audio_data.len() as f32 / byte_rate as f32;
                 }
@@ -168,7 +173,10 @@ impl MediaPlayer {
         self.last_update_ms = now_ms;
 
         self.current_time += elapsed;
-        self.audio_pos = (self.current_time * self.sample_rate as f32 * self.bytes_per_sample as f32 * self.channels as f32) as usize;
+        self.audio_pos = (self.current_time
+            * self.sample_rate as f32
+            * self.bytes_per_sample as f32
+            * self.channels as f32) as usize;
 
         if self.current_time >= self.duration {
             if self.loop_mode {
@@ -190,7 +198,10 @@ impl MediaPlayer {
     /// Seek to a time position.
     pub fn seek(&mut self, time: f32) {
         self.current_time = time.clamp(0.0, self.duration);
-        self.audio_pos = (self.current_time * self.sample_rate as f32 * self.bytes_per_sample as f32 * self.channels as f32) as usize;
+        self.audio_pos = (self.current_time
+            * self.sample_rate as f32
+            * self.bytes_per_sample as f32
+            * self.channels as f32) as usize;
     }
 
     /// Get playback progress as a fraction (0.0..=1.0).
@@ -212,7 +223,8 @@ impl MediaPlayer {
         // Push a small buffer of PCM data to the audio device.
         // This is a simplified implementation - in a full implementation,
         // we'd mix and resample properly.
-        let byte_rate = self.sample_rate as usize * self.bytes_per_sample as usize * self.channels as usize;
+        let byte_rate =
+            self.sample_rate as usize * self.bytes_per_sample as usize * self.channels as usize;
         let samples_per_frame = byte_rate / 30; // ~30 FPS audio chunks
 
         let start = self.audio_pos;
@@ -228,7 +240,9 @@ impl MediaPlayer {
                 // Convert to i16 stereo samples
                 let mut pcm = [0i16; 384];
                 let mut idx = 0;
-                for i in (start..end).step_by(self.bytes_per_sample as usize * self.channels as usize) {
+                for i in
+                    (start..end).step_by(self.bytes_per_sample as usize * self.channels as usize)
+                {
                     if idx + 1 >= pcm.len() {
                         break;
                     }
@@ -276,7 +290,9 @@ pub struct MediaPlayers {
 
 impl MediaPlayers {
     pub fn new() -> Self {
-        MediaPlayers { players: Vec::new() }
+        MediaPlayers {
+            players: Vec::new(),
+        }
     }
 
     pub fn add(&mut self, player: MediaPlayer) {

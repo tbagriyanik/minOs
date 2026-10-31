@@ -1999,7 +1999,7 @@ pub mod h2 {
         /// Girdiyi ekle; gerekirse eskileri çıkar (RFC 7541 §4.2).
         fn insert(&mut self, name: &[u8], value: &[u8]) {
             let entry_size = 32 + name.len() + value.len(); // 32 = overhead (RFC 7541 §4.2)
-            // Çok büyükse ekleme.
+                                                            // Çok büyükse ekleme.
             if entry_size > self.max_size {
                 return;
             }
@@ -2024,7 +2024,9 @@ pub mod h2 {
                 return None; // Statik tablo, burada işlenmez.
             }
             let dyn_idx = index - STATIC_TABLE_SIZE - 1;
-            self.entries.get(dyn_idx).map(|e| (index, e.name.as_slice(), e.value.as_slice()))
+            self.entries
+                .get(dyn_idx)
+                .map(|e| (index, e.name.as_slice(), e.value.as_slice()))
         }
 
         /// İsim-değer çiftini ara; bulunursa dinamik tablo indeksi (1-based, statikten sonra) döner.
@@ -2358,8 +2360,16 @@ impl Http2Connection {
                         let settings_payload = &buf[9..9 + payload_len];
                         let mut sp_offset = 0;
                         while sp_offset + 6 <= settings_payload.len() {
-                            let setting_id = u16::from_be_bytes([settings_payload[sp_offset], settings_payload[sp_offset + 1]]);
-                            let setting_value = u32::from_be_bytes([settings_payload[sp_offset + 2], settings_payload[sp_offset + 3], settings_payload[sp_offset + 4], settings_payload[sp_offset + 5]]);
+                            let setting_id = u16::from_be_bytes([
+                                settings_payload[sp_offset],
+                                settings_payload[sp_offset + 1],
+                            ]);
+                            let setting_value = u32::from_be_bytes([
+                                settings_payload[sp_offset + 2],
+                                settings_payload[sp_offset + 3],
+                                settings_payload[sp_offset + 4],
+                                settings_payload[sp_offset + 5],
+                            ]);
                             if setting_id == h2::SETTINGS_MAX_CONCURRENT_STREAMS {
                                 max_concurrent_streams = setting_value;
                             }
@@ -2553,7 +2563,8 @@ impl Http2Connection {
                                 }
                                 self.connection_window = 65535;
                             }
-                            self.connection_window = self.connection_window.saturating_sub(payload_len as u32);
+                            self.connection_window =
+                                self.connection_window.saturating_sub(payload_len as u32);
 
                             response_buf.extend_from_slice(payload);
                             if fh.flags & h2::FLAG_END_STREAM != 0 {
@@ -2577,8 +2588,11 @@ impl Http2Connection {
                         h2::FRAME_WINDOW_UPDATE => {
                             // Sunucudan gelen WINDOW_UPDATE: bağlantı penceresini genişlet.
                             if fh.stream_id() == 0 && payload_len >= 4 {
-                                let increment = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]) & 0x7fff_ffff;
-                                self.connection_window = self.connection_window.saturating_add(increment);
+                                let increment = u32::from_be_bytes([
+                                    payload[0], payload[1], payload[2], payload[3],
+                                ]) & 0x7fff_ffff;
+                                self.connection_window =
+                                    self.connection_window.saturating_add(increment);
                             }
                         }
                         h2::FRAME_RST_STREAM => {
@@ -2775,7 +2789,12 @@ mod h2_tests {
     #[test]
     fn test_frame_header_roundtrip() {
         let payload = b"hello world";
-        let frame = build_frame(FRAME_HEADERS, FLAG_END_HEADERS | FLAG_END_STREAM, 1, payload);
+        let frame = build_frame(
+            FRAME_HEADERS,
+            FLAG_END_HEADERS | FLAG_END_STREAM,
+            1,
+            payload,
+        );
         assert!(frame.len() >= 9 + payload.len());
 
         let fh = parse_frame_header(&frame).unwrap();
@@ -2946,11 +2965,7 @@ impl WebSocketConnection {
     /// ws:// veya wss:// URL'sine bağlanır ve WebSocket el sıkışmasını yapar.
     pub fn connect(url: &str) -> Result<Self, i32> {
         let is_wss = url.starts_with("wss://");
-        let ws_url = if is_wss {
-            &url[6..]
-        } else {
-            &url[5..]
-        };
+        let ws_url = if is_wss { &url[6..] } else { &url[5..] };
 
         // host[:port]/path ayır.
         let (authority, path) = match ws_url.find('/') {
@@ -2958,7 +2973,10 @@ impl WebSocketConnection {
             None => (ws_url, "/"),
         };
         let (host, port) = match authority.find(':') {
-            Some(i) => (authority[..i].to_string(), authority[i + 1..].parse::<u16>().unwrap_or(443)),
+            Some(i) => (
+                authority[..i].to_string(),
+                authority[i + 1..].parse::<u16>().unwrap_or(443),
+            ),
             None => (authority.to_string(), if is_wss { 443 } else { 80 }),
         };
 
@@ -3049,7 +3067,8 @@ impl WebSocketConnection {
         let key = crate::drivers::tls::TlsSession::new("", [0u8; 32]); // dummy for random
         let _ = key;
         let ws_key = generate_ws_key();
-        let upgrade_req = websocket::build_upgrade_request(host.as_bytes(), path.as_bytes(), ws_key.as_bytes());
+        let upgrade_req =
+            websocket::build_upgrade_request(host.as_bytes(), path.as_bytes(), ws_key.as_bytes());
 
         let upgrade_bytes = if is_wss {
             if let Some(ref mut session) = tls_session {
@@ -3081,7 +3100,9 @@ impl WebSocketConnection {
                     session.feed_tcp_data(&raw[..rn]);
                     let mut app = Vec::new();
                     let mut hs = Vec::new();
-                    session.process_records(&mut hs, &mut app).map_err(|_| E_TLS)?;
+                    session
+                        .process_records(&mut hs, &mut app)
+                        .map_err(|_| E_TLS)?;
                     let copy_len = app.len().min(buf.len() - total);
                     buf[total..total + copy_len].copy_from_slice(&app[..copy_len]);
                     total += copy_len;
@@ -3155,7 +3176,9 @@ impl WebSocketConnection {
                 session.feed_tcp_data(&raw[..rn]);
                 let mut app = Vec::new();
                 let mut hs = Vec::new();
-                session.process_records(&mut hs, &mut app).map_err(|_| E_TLS)?;
+                session
+                    .process_records(&mut hs, &mut app)
+                    .map_err(|_| E_TLS)?;
                 if app.is_empty() {
                     return Ok(None);
                 }
@@ -3187,19 +3210,16 @@ impl WebSocketConnection {
             let _ = masked;
             let _ = fin;
             match opcode {
-                websocket::OP_TEXT => {
-                    Ok(Some(String::from_utf8_lossy(&payload).to_string()))
-                }
-                websocket::OP_BINARY => {
-                    Ok(Some(String::from_utf8_lossy(&payload).to_string()))
-                }
+                websocket::OP_TEXT => Ok(Some(String::from_utf8_lossy(&payload).to_string())),
+                websocket::OP_BINARY => Ok(Some(String::from_utf8_lossy(&payload).to_string())),
                 websocket::OP_CLOSE => {
                     self.state = WsState::Closed;
                     Ok(None)
                 }
                 websocket::OP_PING => {
                     // PONG yanıtı gönder.
-                    let pong = websocket::build_client_frame(websocket::OP_PONG, &payload, self.mask_key);
+                    let pong =
+                        websocket::build_client_frame(websocket::OP_PONG, &payload, self.mask_key);
                     let pong_bytes = if self.is_wss {
                         if let Some(ref mut session) = self.tls_session {
                             session.encrypt_app_data(&pong).ok_or(E_TLS)?
@@ -3255,8 +3275,16 @@ fn generate_ws_key() -> String {
     let mut out = String::new();
     for i in (0..16).step_by(3) {
         let b0 = key_bytes[i] as u32;
-        let b1 = if i + 1 < 16 { key_bytes[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < 16 { key_bytes[i + 2] as u32 } else { 0 };
+        let b1 = if i + 1 < 16 {
+            key_bytes[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < 16 {
+            key_bytes[i + 2] as u32
+        } else {
+            0
+        };
         let triple = (b0 << 16) | (b1 << 8) | b2;
         out.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
         out.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);

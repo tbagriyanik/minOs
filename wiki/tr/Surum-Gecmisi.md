@@ -8,6 +8,7 @@ minOs sürüm notları ve gelecek planları.
 
 ### Yenilikler
 
+- **🛠️ Tarayıcı DevTools Paneli:** `Ctrl+Shift+D` kısayoluyla açılan geliştirici araçları; Elements, Console, Network ve Storage sekmeleri üzerinden DOM öğe sayaçlarını, JavaScript hata günlüğünü, ağ/indirme durumunu, çerezleri ve form otomatik doldurma kayıtlarını gösterir.
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt olarak hesaplanıyor.
   - **Finished anahtar türetimi (§4.4.4):** `finished_key` doğrudan `server/client_hs_traffic_secret` üzerinden türetiliyor.

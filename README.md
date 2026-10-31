@@ -2,16 +2,16 @@
 
 [Türkçe](README.md) | [English](README.en.md)
 
-[![Rust](https://img.shields.io/badge/Language-Rust%201.101.0--nightly-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-193%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-241%20registered-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-95%2C977%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-104%2C153%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -32,6 +32,7 @@
 - **⏱️ IPv6 Öncelikli HTTP İsteği (Dual-Stack):** `http_get_impl` önce **AAAA** kaydını çözer ve IPv6 hedefe `connect_v6` ile bağlanır (HTTPS yolu TLS 1.3 el sıkışmasını IPv6 soketi üzerinden yürütür); AAAA yoksa veya IPv6 yolu başarısız olursa IPv4 `fetch_once` yoluna düşer. IPv6 yanıtlarında 3xx yönlendirme takibi ve `Transfer-Encoding: chunked` çözümü de uygulanır.
 - **🧩 HTTP/2 İstemci Çekirdeği:** `http.rs` içine RFC 7540 çerçeve katmanı (`h2` modülü: DATA/HEADERS/SETTINGS/PING/GOAWAY/WINDOW_UPDATE), HPACK `:method`/`:scheme`/`:authority`/`:path` başlık bloğu kodlayıcısı, `Http2Connection` (tek soket üzerinden çoklu akış, `SETTINGS` ACK, akış `WINDOW_UPDATE`) ve `http2_get()` kolaylık fonksiyonu eklendi. Durum: **altyapı hazır**, tarayıcı akışına bağlanmadı — HTTPS tarafında çerçeveler henüz TLS kaydıyla şifrelenmiyor, `Connection` başlığı ile ALPN h2 pazarlığı ve HPACK dinamik tablosu/HPACK çözümlemesi sonraki adım. Bu nedenle tarayıcı hâlâ HTTP/1.1 kullanır.
 - **🐾 Tarayıcı Demo Sayfaları:** Tarayıcıya yerel, ağ bağlantısı gerektirmeyen üç demo sayfası eklendi: `minos://demo` (temel HTML/CSS), `minos://demo-img` (görsel yerleşimi) ve `minos://demo-video` (video yerleşimi). Bu sayfalar çevrimdışıyken HTML/CSS motorunu ve düzen yeteneklerini sınamak için kullanılabilir.
+- **🛠️ Tarayıcı Geliştirici Araçları:** Tarayıcıda `Ctrl+Shift+D` ile açılıp kapanan DevTools paneli eklendi. `Elements` sekmesi sayfadaki bağlantı, görsel, canvas, medya, iframe, WASM ve Worker sayılarını; `Console` JavaScript uyarılarını ve hata günlüğünü; `Network` istek durumunu ve indirmeleri; `Storage` çerezleri ve form otomatik doldurma kayıtlarını gösterir.
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
   - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
   - ✅ **Bluetooth HCI Protokolü:** Komut (0x01), ACL veri (0x02), Olay (0x04) paket formatlaması/ayrıştırması, Inquiry ve bağlantı yönetimi tamamlandı.

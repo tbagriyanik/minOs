@@ -2,16 +2,16 @@
 
 [English](README.en.md) | [Türkçe](README.md)
 
-[![Rust](https://img.shields.io/badge/Language-Rust%201.101.0--nightly-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-193%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-241%20registered-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
-[![Min RAM](https://img.shields.io/badge/Min%20RAM-4%20MB-red.svg)]()
+[![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-95%2C977%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-104%2C153%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -32,6 +32,7 @@
 - **⏱️ IPv6-First HTTP Requests (Dual-Stack):** `http_get_impl` resolves the **AAAA** record first and connects over IPv6 with `connect_v6` (the HTTPS path runs the TLS 1.3 handshake over the IPv6 socket); if no AAAA record exists or the IPv6 path fails, it falls back to the IPv4 `fetch_once` path. 3xx redirect following and `Transfer-Encoding: chunked` decoding are also applied to IPv6 responses.
 - **🧩 HTTP/2 Client Core:** `http.rs` now contains the RFC 7540 frame layer (the `h2` module: DATA/HEADERS/SETTINGS/PING/GOAWAY/WINDOW_UPDATE), an HPACK header block encoder for `:method`/`:scheme`/`:authority`/`:path`, `Http2Connection` (multiplexed streams over a single socket, `SETTINGS` ACK, per-stream `WINDOW_UPDATE`) and the `http2_get()` convenience function. Status: **infrastructure ready, not wired into the browser** — frames are not yet encrypted as TLS records on HTTPS, and the `Connection` header/ALPN `h2` negotiation plus the HPACK dynamic table/decoding are next. The browser therefore still uses HTTP/1.1.
 - **🐾 Browser Demo Pages:** Three local, network-free demo pages were added to the browser: `minos://demo` (basic HTML/CSS), `minos://demo-img` (image layout) and `minos://demo-video` (video layout). These pages can be used to exercise the HTML/CSS engine and layout capabilities offline.
+- **🛠️ Browser Developer Tools:** A DevTools panel toggled with `Ctrl+Shift+D` is now available in the browser. The `Elements` tab reports links, images, canvases, media, iframes, WASM modules and Workers; `Console` shows JavaScript alerts and error logs; `Network` shows request state and downloads; `Storage` shows cookies and form-autofill entries.
 - **Expanded Hardware Drivers (20+ New Drivers):**
   - ✅ **Networking:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
   - ✅ **Bluetooth HCI Protocol:** Command (0x01), ACL data (0x02) and Event (0x04) packet formatting/parsing, inquiry and connection management completed.

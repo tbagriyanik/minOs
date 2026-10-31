@@ -2185,7 +2185,10 @@ impl JsRuntime {
                 let mut ws_obj = BTreeMap::new();
                 ws_obj.insert(String::from("__ws_id__"), JsValue::Number(ws_id as i64));
                 ws_obj.insert(String::from("url"), JsValue::String(url.to_string()));
-                ws_obj.insert(String::from("readyState"), JsValue::Number(self.websockets[&ws_id].ready_state as i64));
+                ws_obj.insert(
+                    String::from("readyState"),
+                    JsValue::Number(self.websockets[&ws_id].ready_state as i64),
+                );
                 self.values.insert(ws_var.clone(), JsValue::Object(ws_obj));
                 return JsValue::String(ws_var);
             }

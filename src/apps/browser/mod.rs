@@ -11,6 +11,7 @@ mod cache;
 mod canvas;
 mod color;
 mod css;
+mod devtools;
 mod html;
 mod iframe;
 mod media;
@@ -19,7 +20,8 @@ mod wasm;
 mod worker;
 
 pub use cache::CacheMetadata;
-pub use canvas::{CanvasElement, Canvas2dContext, ImageData, Point, Rgba};
+pub use canvas::{Canvas2dContext, CanvasElement, ImageData, Point, Rgba};
+pub use devtools::{DevToolsState, DevToolsTab};
 pub use iframe::{IFrame, IFrames};
 pub use media::{MediaPlayer, MediaPlayers, MediaState, MediaType};
 pub use types::{
@@ -394,6 +396,8 @@ pub struct BrowserApp {
     pub wasm_modules: wasm::WasmModules,
     /// Web Workers running on the current page.
     pub workers: worker::Workers,
+    /// Developer Tools state.
+    pub devtools: DevToolsState,
     /// Active downloads with progress tracking.
     pub downloads: Vec<DownloadItem>,
     /// Form autofill store for remembering form field values.
@@ -438,12 +442,15 @@ pub struct FormAutofill {
 
 impl FormAutofill {
     pub fn new() -> Self {
-        FormAutofill { entries: Vec::new() }
+        FormAutofill {
+            entries: Vec::new(),
+        }
     }
 
     pub fn add_entry(&mut self, domain: String, field_name: String, field_value: String) {
         // Remove existing entry for same domain+field
-        self.entries.retain(|e| !(e.domain == domain && e.field_name == field_name));
+        self.entries
+            .retain(|e| !(e.domain == domain && e.field_name == field_name));
         self.entries.push(FormAutofillEntry {
             domain,
             field_name,
@@ -583,6 +590,7 @@ impl BrowserApp {
             iframes: iframe::IFrames::new(),
             wasm_modules: wasm::WasmModules::new(),
             workers: worker::Workers::new(),
+            devtools: DevToolsState::new(),
             downloads: Vec::new(),
             form_autofill: FormAutofill::new(),
         };
@@ -639,10 +647,7 @@ impl BrowserApp {
     }
 
     /// Load user bookmarks from VFS.
-    pub fn load_bookmarks_from_vfs(
-        &mut self,
-        vfs: &crate::fs::vfs::VirtualFileSystem,
-    ) -> bool {
+    pub fn load_bookmarks_from_vfs(&mut self, vfs: &crate::fs::vfs::VirtualFileSystem) -> bool {
         let data = match vfs.read_file("/browser/bookmarks.txt") {
             Some(d) => d,
             None => return false,
@@ -651,13 +656,14 @@ impl BrowserApp {
         for line in text.lines() {
             let parts: Vec<&str> = line.split('|').collect();
             if parts.len() >= 5 {
-                self.bookmarks_extra.push(crate::apps::browser::types::Bookmark {
-                    title: Box::leak(parts[0].to_string().into_boxed_str()),
-                    title_en: Box::leak(parts[1].to_string().into_boxed_str()),
-                    url: Box::leak(parts[2].to_string().into_boxed_str()),
-                    description: Box::leak(parts[3].to_string().into_boxed_str()),
-                    description_en: Box::leak(parts[4].to_string().into_boxed_str()),
-                });
+                self.bookmarks_extra
+                    .push(crate::apps::browser::types::Bookmark {
+                        title: Box::leak(parts[0].to_string().into_boxed_str()),
+                        title_en: Box::leak(parts[1].to_string().into_boxed_str()),
+                        url: Box::leak(parts[2].to_string().into_boxed_str()),
+                        description: Box::leak(parts[3].to_string().into_boxed_str()),
+                        description_en: Box::leak(parts[4].to_string().into_boxed_str()),
+                    });
             }
         }
         true
@@ -1192,7 +1198,8 @@ impl BrowserApp {
                         if let Some(c) = html_color(val.as_bytes()) {
                             ctx.set_fill_style(c);
                         }
-                    } else if rest.starts_with("strokeStyle =") || rest.starts_with("strokeStyle=") {
+                    } else if rest.starts_with("strokeStyle =") || rest.starts_with("strokeStyle=")
+                    {
                         let val = rest.split('=').nth(1).unwrap_or("").trim();
                         let val = val.trim_matches(|c| c == '\'' || c == '"');
                         if let Some(c) = html_color(val.as_bytes()) {
@@ -1259,7 +1266,9 @@ impl BrowserApp {
                         let args = &rest[8..rest.len() - 1];
                         // Parse: fillText('text', x, y)
                         if let Some(first_comma) = args.find(',') {
-                            let text = args[..first_comma].trim().trim_matches(|c| c == '\'' || c == '"');
+                            let text = args[..first_comma]
+                                .trim()
+                                .trim_matches(|c| c == '\'' || c == '"');
                             let rest_args = &args[first_comma + 1..];
                             let parts: Vec<&str> = rest_args.split(',').map(|s| s.trim()).collect();
                             if parts.len() >= 2 {
@@ -1272,7 +1281,9 @@ impl BrowserApp {
                     } else if rest.starts_with("strokeText(") && rest.ends_with(')') {
                         let args = &rest[10..rest.len() - 1];
                         if let Some(first_comma) = args.find(',') {
-                            let text = args[..first_comma].trim().trim_matches(|c| c == '\'' || c == '"');
+                            let text = args[..first_comma]
+                                .trim()
+                                .trim_matches(|c| c == '\'' || c == '"');
                             let rest_args = &args[first_comma + 1..];
                             let parts: Vec<&str> = rest_args.split(',').map(|s| s.trim()).collect();
                             if parts.len() >= 2 {
@@ -1338,6 +1349,7 @@ impl BrowserApp {
         self.iframes = iframe::IFrames::new();
         self.wasm_modules = wasm::WasmModules::new();
         self.workers = worker::Workers::new();
+        self.devtools = DevToolsState::new();
         self.downloads.clear();
         self.form_autofill = FormAutofill::new();
         self.page_bg_color = None;
@@ -3216,131 +3228,130 @@ impl BrowserApp {
                                         }
                                     }
                                 }
-
                             }
                             if let Some(code) = status_code {
                                 if (code == 301
-                                || code == 302
-                                || code == 303
-                                || code == 307
-                                || code == 308)
-                                && self.redirect_count < 3
-                            {
-                                let mut loc_target: Option<&[u8]> = None;
-                                for line in headers.split(|b| *b == b'\n') {
-                                    let l = if line.last() == Some(&b'\r') {
-                                        &line[..line.len() - 1]
-                                    } else {
-                                        line
-                                    };
-                                    if let Some(colon) = l.iter().position(|&b| b == b':') {
-                                        let key = &l[..colon];
-                                        if key.eq_ignore_ascii_case(b"Location") {
-                                            let mut val = &l[colon + 1..];
-                                            while val
-                                                .first()
-                                                .map_or(false, |b| b.is_ascii_whitespace())
-                                            {
-                                                val = &val[1..];
+                                    || code == 302
+                                    || code == 303
+                                    || code == 307
+                                    || code == 308)
+                                    && self.redirect_count < 3
+                                {
+                                    let mut loc_target: Option<&[u8]> = None;
+                                    for line in headers.split(|b| *b == b'\n') {
+                                        let l = if line.last() == Some(&b'\r') {
+                                            &line[..line.len() - 1]
+                                        } else {
+                                            line
+                                        };
+                                        if let Some(colon) = l.iter().position(|&b| b == b':') {
+                                            let key = &l[..colon];
+                                            if key.eq_ignore_ascii_case(b"Location") {
+                                                let mut val = &l[colon + 1..];
+                                                while val
+                                                    .first()
+                                                    .map_or(false, |b| b.is_ascii_whitespace())
+                                                {
+                                                    val = &val[1..];
+                                                }
+                                                while val
+                                                    .last()
+                                                    .map_or(false, |b| b.is_ascii_whitespace())
+                                                {
+                                                    val = &val[..val.len() - 1];
+                                                }
+                                                loc_target = Some(val);
+                                                break;
                                             }
-                                            while val
-                                                .last()
-                                                .map_or(false, |b| b.is_ascii_whitespace())
-                                            {
-                                                val = &val[..val.len() - 1];
-                                            }
-                                            loc_target = Some(val);
-                                            break;
                                         }
                                     }
-                                }
 
-                                if let Some(loc) = loc_target {
-                                    let mut loc_buf = [0u8; 256];
-                                    let loc_len = loc.len().min(loc_buf.len());
-                                    loc_buf[..loc_len].copy_from_slice(&loc[..loc_len]);
+                                    if let Some(loc) = loc_target {
+                                        let mut loc_buf = [0u8; 256];
+                                        let loc_len = loc.len().min(loc_buf.len());
+                                        loc_buf[..loc_len].copy_from_slice(&loc[..loc_len]);
 
-                                    self.redirect_count += 1;
-                                    crate::drivers::netstack::tcp_clear_result();
-                                    self.response_len = 0;
-                                    self.response_data.clear();
-                                    self.response_data.resize(65536, 0);
-                                    self.tls_app_data.clear();
-                                    self.tls_session = None;
-                                    self.tls_pending_request.clear();
-                                    self.tls_request_sent = false;
-                                    self.tls13_finished_sent = false;
-
-                                    let loc_slice = &loc_buf[..loc_len];
-                                    let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
-                                    let current_scheme =
-                                        if self.is_https { "https://" } else { "http://" };
-                                    let host = core::str::from_utf8(
-                                        &self.request_host[..self.request_host_len],
-                                    )
-                                    .unwrap_or("");
-                                    let current_path = core::str::from_utf8(
-                                        &self.request_path[..self.request_path_len],
-                                    )
-                                    .unwrap_or("/");
-                                    let current_path =
-                                        current_path.split('?').next().unwrap_or("/");
-                                    let base_path = current_path
-                                        .rsplit_once('/')
-                                        .map(|(base, _)| base)
-                                        .unwrap_or("");
-                                    let mut target = String::new();
-                                    if loc_str.starts_with("http://")
-                                        || loc_str.starts_with("https://")
-                                    {
-                                        target.push_str(loc_str);
-                                    } else if loc_str.starts_with("//") {
-                                        target.push_str(if self.is_https {
-                                            "https:"
-                                        } else {
-                                            "http:"
-                                        });
-                                        target.push_str(loc_str);
-                                    } else {
-                                        target.push_str(current_scheme);
-                                        target.push_str(host);
-                                        let default_port = if self.is_https { 443 } else { 80 };
-                                        if self.request_port != default_port {
-                                            use core::fmt::Write as _;
-                                            let _ = write!(target, ":{}", self.request_port);
-                                        }
-                                        if loc_str.starts_with('/') {
-                                            target.push_str(loc_str);
-                                        } else if loc_str.starts_with('?') {
-                                            target.push_str(current_path);
-                                            target.push_str(loc_str);
-                                        } else {
-                                            target.push_str(base_path);
-                                            target.push('/');
-                                            target.push_str(loc_str);
-                                        }
-                                    }
-                                    if target.len() <= self.url.len() {
-                                        self.set_url(target.as_bytes());
-                                        self.request_pending = false;
-                                        self.request_state = 0;
-                                        self.request_deadline = 0;
+                                        self.redirect_count += 1;
                                         crate::drivers::netstack::tcp_clear_result();
-                                        self.suppress_history = true;
-                                        let redirect_count = self.redirect_count;
-                                        self.navigate();
-                                        // navigate() normal gezinme için sayacı sıfırlar.
-                                        self.redirect_count = redirect_count;
-                                    } else {
-                                        self.finish_network_error(crate::gui::ui_text(
-                                            "Yönlendirme adresi çok uzun.",
-                                            "Redirect URL is too long.",
-                                        ));
+                                        self.response_len = 0;
+                                        self.response_data.clear();
+                                        self.response_data.resize(65536, 0);
+                                        self.tls_app_data.clear();
+                                        self.tls_session = None;
+                                        self.tls_pending_request.clear();
+                                        self.tls_request_sent = false;
+                                        self.tls13_finished_sent = false;
+
+                                        let loc_slice = &loc_buf[..loc_len];
+                                        let loc_str = core::str::from_utf8(loc_slice).unwrap_or("");
+                                        let current_scheme =
+                                            if self.is_https { "https://" } else { "http://" };
+                                        let host = core::str::from_utf8(
+                                            &self.request_host[..self.request_host_len],
+                                        )
+                                        .unwrap_or("");
+                                        let current_path = core::str::from_utf8(
+                                            &self.request_path[..self.request_path_len],
+                                        )
+                                        .unwrap_or("/");
+                                        let current_path =
+                                            current_path.split('?').next().unwrap_or("/");
+                                        let base_path = current_path
+                                            .rsplit_once('/')
+                                            .map(|(base, _)| base)
+                                            .unwrap_or("");
+                                        let mut target = String::new();
+                                        if loc_str.starts_with("http://")
+                                            || loc_str.starts_with("https://")
+                                        {
+                                            target.push_str(loc_str);
+                                        } else if loc_str.starts_with("//") {
+                                            target.push_str(if self.is_https {
+                                                "https:"
+                                            } else {
+                                                "http:"
+                                            });
+                                            target.push_str(loc_str);
+                                        } else {
+                                            target.push_str(current_scheme);
+                                            target.push_str(host);
+                                            let default_port = if self.is_https { 443 } else { 80 };
+                                            if self.request_port != default_port {
+                                                use core::fmt::Write as _;
+                                                let _ = write!(target, ":{}", self.request_port);
+                                            }
+                                            if loc_str.starts_with('/') {
+                                                target.push_str(loc_str);
+                                            } else if loc_str.starts_with('?') {
+                                                target.push_str(current_path);
+                                                target.push_str(loc_str);
+                                            } else {
+                                                target.push_str(base_path);
+                                                target.push('/');
+                                                target.push_str(loc_str);
+                                            }
+                                        }
+                                        if target.len() <= self.url.len() {
+                                            self.set_url(target.as_bytes());
+                                            self.request_pending = false;
+                                            self.request_state = 0;
+                                            self.request_deadline = 0;
+                                            crate::drivers::netstack::tcp_clear_result();
+                                            self.suppress_history = true;
+                                            let redirect_count = self.redirect_count;
+                                            self.navigate();
+                                            // navigate() normal gezinme için sayacı sıfırlar.
+                                            self.redirect_count = redirect_count;
+                                        } else {
+                                            self.finish_network_error(crate::gui::ui_text(
+                                                "Yönlendirme adresi çok uzun.",
+                                                "Redirect URL is too long.",
+                                            ));
+                                        }
+                                        return;
                                     }
-                                    return;
                                 }
                             }
-                        }
                         }
 
                         // Normal yanıt içeriği
@@ -4040,17 +4051,16 @@ impl BrowserApp {
                                 // Canvas element: render from self.canvases by matching elem_id
                                 if span.image_rgb.is_none() && !span.elem_id.is_empty() {
                                     // Check if it's a canvas element
-                                    if let Some(canvas) = self
-                                        .canvases
-                                        .iter()
-                                        .find(|c| c.id == span.elem_id)
+                                    if let Some(canvas) =
+                                        self.canvases.iter().find(|c| c.id == span.elem_id)
                                     {
                                         let canvas_w = canvas.width.max(1);
                                         let canvas_h = canvas.height.max(1);
                                         let draw_w = canvas_w
                                             .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                        let draw_h = canvas_h
-                                            .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                        let draw_h = canvas_h.min(
+                                            doc_h.saturating_sub(draw_y.saturating_sub(doc_y)),
+                                        );
                                         if draw_w > 0
                                             && draw_h > 0
                                             && draw_y >= doc_y
@@ -4073,34 +4083,63 @@ impl BrowserApp {
                                     if let Some(player) = self.media_players.get(&span.elem_id) {
                                         let video_w = player.media_type == MediaType::Video;
                                         if video_w {
-                                            let draw_w = span.image_width.max(1)
-                                                .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                            let draw_h = span.image_height.max(1)
-                                                .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                            let draw_w = span.image_width.max(1).min(
+                                                doc_w.saturating_sub(cur_x.saturating_sub(doc_x)),
+                                            );
+                                            let draw_h = span.image_height.max(1).min(
+                                                doc_h.saturating_sub(draw_y.saturating_sub(doc_y)),
+                                            );
                                             if draw_w > 0
                                                 && draw_h > 0
                                                 && draw_y >= doc_y
                                                 && draw_y < doc_y + doc_h
                                             {
                                                 // Draw video placeholder rectangle
-                                                fb.draw_rect(cur_x, draw_y, draw_w, draw_h, 0x101010);
-                                                fb.draw_rect_outline(cur_x, draw_y, draw_w, draw_h, Color::BORDER);
+                                                fb.draw_rect(
+                                                    cur_x, draw_y, draw_w, draw_h, 0x101010,
+                                                );
+                                                fb.draw_rect_outline(
+                                                    cur_x,
+                                                    draw_y,
+                                                    draw_w,
+                                                    draw_h,
+                                                    Color::BORDER,
+                                                );
                                                 // Draw play button or pause indicator
                                                 let center_x = cur_x + draw_w / 2;
                                                 let center_y = draw_y + draw_h / 2;
                                                 match player.state {
                                                     MediaState::Playing => {
                                                         // Draw pause bars
-                                                        fb.draw_rect(center_x - 6, center_y - 6, 4, 12, Color::WHITE);
-                                                        fb.draw_rect(center_x + 2, center_y - 6, 4, 12, Color::WHITE);
+                                                        fb.draw_rect(
+                                                            center_x - 6,
+                                                            center_y - 6,
+                                                            4,
+                                                            12,
+                                                            Color::WHITE,
+                                                        );
+                                                        fb.draw_rect(
+                                                            center_x + 2,
+                                                            center_y - 6,
+                                                            4,
+                                                            12,
+                                                            Color::WHITE,
+                                                        );
                                                     }
                                                     _ => {
                                                         // Draw play triangle
-                                                        fb.draw_rect(center_x - 5, center_y - 5, 10, 10, Color::WHITE);
+                                                        fb.draw_rect(
+                                                            center_x - 5,
+                                                            center_y - 5,
+                                                            10,
+                                                            10,
+                                                            Color::WHITE,
+                                                        );
                                                     }
                                                 }
                                                 // Draw time overlay
-                                                let time_str = format!("{:.1}s", player.current_time);
+                                                let time_str =
+                                                    format!("{:.1}s", player.current_time);
                                                 MinGuiCompositor::draw_string_clipped(
                                                     fb,
                                                     cur_x + 4,
@@ -4124,10 +4163,13 @@ impl BrowserApp {
                                     }
                                     // Check if it's an iframe element
                                     if let Some(frame) = self.iframes.get(&span.elem_id) {
-                                        let draw_w = span.image_width.max(1)
+                                        let draw_w = span
+                                            .image_width
+                                            .max(1)
                                             .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                        let draw_h = span.image_height.max(1)
-                                            .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
+                                        let draw_h = span.image_height.max(1).min(
+                                            doc_h.saturating_sub(draw_y.saturating_sub(doc_y)),
+                                        );
                                         if draw_w > 0
                                             && draw_h > 0
                                             && draw_y >= doc_y
@@ -4135,12 +4177,20 @@ impl BrowserApp {
                                         {
                                             // Draw iframe border
                                             fb.draw_rect(cur_x, draw_y, draw_w, draw_h, 0xE0E0E0);
-                                            fb.draw_rect_outline(cur_x, draw_y, draw_w, draw_h, Color::BORDER);
+                                            fb.draw_rect_outline(
+                                                cur_x,
+                                                draw_y,
+                                                draw_w,
+                                                draw_h,
+                                                Color::BORDER,
+                                            );
                                             let inner_x = cur_x + 2;
                                             let inner_y = draw_y + 2;
                                             let inner_w = draw_w.saturating_sub(4);
                                             let inner_h = draw_h.saturating_sub(4);
-                                            fb.draw_rect(inner_x, inner_y, inner_w, inner_h, 0xFFFFFF);
+                                            fb.draw_rect(
+                                                inner_x, inner_y, inner_w, inner_h, 0xFFFFFF,
+                                            );
                                             // Draw iframe label
                                             let label = format!("iframe: {}", frame.id);
                                             MinGuiCompositor::draw_string_clipped(
@@ -4160,17 +4210,28 @@ impl BrowserApp {
                                                     HtmlTagType::Heading3 => 20,
                                                     _ => 18,
                                                 };
-                                                if line_y + line_h >= inner_y && line_y < inner_y + inner_h {
+                                                if line_y + line_h >= inner_y
+                                                    && line_y < inner_y + inner_h
+                                                {
                                                     let mut cx = inner_x + 4;
                                                     for span2 in &line.spans {
-                                                        let text_w = MinGuiCompositor::text_width(&span2.text, 1);
+                                                        let text_w = MinGuiCompositor::text_width(
+                                                            &span2.text,
+                                                            1,
+                                                        );
                                                         let span2_w = text_w
                                                             + if span2.is_button { 16 } else { 0 }
-                                                            + if span2.is_image { span2.image_width.max(1) } else { 0 };
+                                                            + if span2.is_image {
+                                                                span2.image_width.max(1)
+                                                            } else {
+                                                                0
+                                                            };
                                                         if cx + span2_w > inner_x + inner_w {
                                                             break;
                                                         }
-                                                        if line_y >= inner_y && line_y < inner_y + inner_h {
+                                                        if line_y >= inner_y
+                                                            && line_y < inner_y + inner_h
+                                                        {
                                                             MinGuiCompositor::draw_string_clipped(
                                                                 fb,
                                                                 cx,
@@ -4815,7 +4876,9 @@ impl BrowserApp {
                 }
                 // Status text
                 let status_str = match dl.status {
-                    DownloadStatus::Downloading => crate::gui::ui_text("İndiriliyor", "Downloading"),
+                    DownloadStatus::Downloading => {
+                        crate::gui::ui_text("İndiriliyor", "Downloading")
+                    }
                     DownloadStatus::Completed => crate::gui::ui_text("Tamamlandı", "Completed"),
                     DownloadStatus::Failed => crate::gui::ui_text("Başarısız", "Failed"),
                     DownloadStatus::Cancelled => crate::gui::ui_text("İptal Edildi", "Cancelled"),
@@ -4876,6 +4939,21 @@ impl BrowserApp {
                 );
             }
         }
+        // Render DevTools panel if open
+        if self.devtools.open {
+            let devtools_x = win_x + 4;
+            let devtools_y = win_y + 4;
+            let devtools_w = win_w.saturating_sub(8);
+            let devtools_h = win_h.saturating_sub(8);
+            devtools::render_devtools(
+                fb,
+                devtools_x,
+                devtools_y,
+                devtools_w,
+                devtools_h,
+                &self.devtools,
+                self,
+            );
+        }
     }
 }
-

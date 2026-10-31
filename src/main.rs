@@ -4693,10 +4693,12 @@ pub extern "C" fn _start() -> ! {
                                                 .any(|b| b.url == current)
                                             {
                                                 browser_app.remove_bookmark_current();
-                                                let _ = browser_app.save_bookmarks_to_vfs(&mut fs_mgr.vfs);
+                                                let _ = browser_app
+                                                    .save_bookmarks_to_vfs(&mut fs_mgr.vfs);
                                             } else {
                                                 browser_app.add_bookmark_current();
-                                                let _ = browser_app.save_bookmarks_to_vfs(&mut fs_mgr.vfs);
+                                                let _ = browser_app
+                                                    .save_bookmarks_to_vfs(&mut fs_mgr.vfs);
                                             }
                                         }
                                         Some(2) => {
@@ -8187,6 +8189,14 @@ pub extern "C" fn _start() -> ! {
                     .map(|(_, w)| w.height.saturating_sub(100))
                     .unwrap_or(300);
                 browser_scroll_by(&mut compositor, &mut browser_app, page_h as isize);
+            } else if (ch == 'd' || ch == 'D')
+                && keyboard.ctrl
+                && keyboard.shift
+                && app_is_focused(&compositor, 3)
+                && !browser_app.address_focused
+            {
+                // Ctrl+Shift+D: toggle DevTools
+                browser_app.devtools.toggle();
             } else if ch == ' '
                 && app_is_focused(&compositor, 0)
                 && filemanager_app.selected_idx < filemanager_app.file_count

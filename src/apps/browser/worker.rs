@@ -5,9 +5,9 @@
 //! context with message-passing communication to the main thread.
 
 extern crate alloc;
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 
 use crate::apps::js::JsRuntime;
 

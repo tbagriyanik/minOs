@@ -1,29 +1,37 @@
-//! Kernel randomness backed by HC-128 (`rand_hc`).
-//! The seed is mixed with the boot TSC; callers must not use this as a
-//! cryptographic entropy source until a hardware entropy source is available.
+//! Kernel randomness.
+//!
+//! `rand_hc`/`rand_core` bağımlılığı kaldırıldı: üretici artık içeride,
+//! sayaç karıştırma (bölme tabanlı değil, kaydırma + FNV çarpımı) ile
+//! çalışır. Tohum TSC/boot entropy ile karıştırılır; donanım entropi
+//! kaynağı gelene kadar kriptografik amaçla kullanılmamalıdır.
 use core::sync::atomic::{AtomicU64, Ordering};
-use rand_core::{Rng, SeedableRng};
 
 static STATE: AtomicU64 = AtomicU64::new(0x6d69_6e4f_532d_524e);
 
 pub fn seed(seed: [u8; 32]) {
     let mut value = 0u64;
     for chunk in seed.chunks_exact(8) {
-        value ^= u64::from_le_bytes(chunk.try_into().unwrap());
+        value ^= u64::from_le_bytes([
+            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+        ]);
     }
     STATE.store(value | 1, Ordering::Release);
 }
 
+/// xorshift64* adımı.
+fn next_u64() -> u64 {
+    let mut x = STATE.load(Ordering::Relaxed);
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    STATE.store(x, Ordering::Relaxed);
+    x.wrapping_mul(0x2545_f491_4f6c_dd1d)
+}
+
 pub fn random_u32() -> u32 {
-    let n = STATE.fetch_add(0x9e37_79b9_7f4a_7c15, Ordering::Relaxed);
-    let mut s = [0u8; 32];
-    for (i, b) in s.iter_mut().enumerate() {
-        *b = (n.rotate_left((i as u32) & 31) as u8) ^ (i as u8).wrapping_mul(17);
-    }
-    let mut rng = rand_hc::Hc128Rng::from_seed(s);
-    rng.next_u32()
+    (next_u64() >> 32) as u32
 }
 
 pub fn random_u64() -> u64 {
-    ((random_u32() as u64) << 32) | random_u32() as u64
+    next_u64()
 }

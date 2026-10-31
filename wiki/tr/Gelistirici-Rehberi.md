@@ -37,11 +37,13 @@ minos/
 
 ### Kernel Cargo katmanı
 
-`rand_hc` kernel RNG, `smoltcp` ağ protokol yapılandırması, `heapless` sabit kuyruklar,
-`zerocopy` paket görünümleri, `crc32fast` checksum, `elf` ELF yardımcıları,
-`embedded-io` ortak I/O trait'leri, `postcard` IPC mesajları, `acpi` ACPI tabloları,
-`raw-cpuid` CPU özellikleri ve `log` standart log facade'i için kullanılır. Bağımlılıklar
-`default-features = false` ile `no_std` hedefe göre sınırlandırılmıştır.
+Çekirdek yalnızca gerçekten çağırdığı 8 crate'e bağımlıdır: `linked_list_allocator`
+(heap), `p384` (P-384 imza), `bitflags`, `heapless`, `zerocopy`, `crc32fast`,
+`raw-cpuid` ve `log`. Ağ yığını (`netstack.rs`), kök CA deposu (`roots/`),
+rastgelelik (`random.rs`, xorshift64*) ve IPC kodlaması (`kernel_formats.rs`) kendi
+kodlarıyla, sıfır harici bağımlılıkla çalışır; `webpki-roots`, `smoltcp`, `rand_hc`,
+`elf`, `embedded-io`, `postcard`, `serde` ve `acpi` kaldırılmıştır. Bağımlılıklar
+`default-features = false` ile `no_std` hedefine göre sınırlandırılmıştır.
 
 ---
 

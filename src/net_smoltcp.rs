@@ -1,9 +1,8 @@
-//! smoltcp socket/protocol configuration used by the kernel network service.
-//! Device I/O remains owned by the NIC drivers; this module owns protocol
-//! state so DHCP, DNS, TCP and UDP share one implementation.
-pub use smoltcp::iface::{Config, Interface, SocketSet};
-pub use smoltcp::socket::{dhcpv4, dns, tcp, udp};
-pub use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address, Ipv6Address};
+//! smoltcp tabanlı ağ yapılandırması kaldırıldı; çekirdek ağ yığını
+//! (`drivers/netstack.rs`) sıfır harici bağımlılıkla çalışır.
+//!
+//! Bu modül yalnızca protokol katmanlarının adlarını/sabitlerini tanımlayan
+//! bir referanstır; cihaz G/Ç işlemleri NIC sürücülerinde kalır.
 
 pub const HTTP_PORT: u16 = 80;
 pub const HTTPS_PORT: u16 = 443;

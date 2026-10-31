@@ -95,6 +95,7 @@ impl IFrame {
             0,
             &mut previous_styles,
             None as Option<&mut VirtualFileSystem>,
+            None,
             &mut canvases,
             &mut media_players,
             &mut iframes,

@@ -1111,8 +1111,7 @@ impl<'a> ParsedX509Cert<'a> {
 
 /// Gömülü kök CA listesi.
 ///
-/// Bu liste, Mozilla kök deposunun (webpki-roots) yanında ek bir güven
-/// kaynağıdır; tam kapsam `mozilla_anchor_spki_for` üzerinden sağlanır.
+/// Güven zinciri için tek kaynak bu tablodur (`trust_anchor_spki_for`).
 /// Buradaki DER'ler ayrıca testlerde birebir eşleşme için kullanılır.
 pub const TRUSTED_ROOTS: &[&[u8]] = &[
     ISRG_ROOT_X1_DER,
@@ -1248,62 +1247,14 @@ pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
     })
 }
 
-/// Bir Name (RDNSequence) DER'inden dış SEQUENCE başlığını atarak içeriğini döner.
-///
-/// webpki-roots, güven çapasının `subject` alanını rustls-webpki'nin
-/// `anchor_from_trusted_cert` çıktısından üretir; o gösterim Name'in yalnızca
-/// RDNSequence içeriğini saklar (dış SEQUENCE etiketi ve uzunluğu yoktur).
-/// Gelen sertifikadaki issuer/subject alanları ise tam TLV'dir; bu yüzden
-/// karşılaştırma başlık atıldıktan sonra yapılmalıdır.
-///
-/// webpki-roots stores a trust anchor's `subject` as the RDNSequence content of
-/// the Name (no outer SEQUENCE tag/length), while certificates carry the full
-/// TLV. Strip the header before comparing.
-#[cfg(not(test))]
-fn name_content(name_der: &[u8]) -> Option<&[u8]> {
-    let (tag, value_offset, value_len, _) = read_der_tlv(name_der, 0).ok()?;
-    if tag != TAG_SEQUENCE {
-        return None;
-    }
-    Some(&name_der[value_offset..value_offset + value_len])
-}
 
-/// Mozilla kök deposunda (webpki-roots) verilen issuer subject'ine karşılık
-/// gelen SubjectPublicKeyInfo'yu arar.
-// Mozilla kök listesi boş kalırsa tüm HTTPS bağlantıları `UntrustedRoot` ile
-// reddedilir; bunu derleme zamanında yakala.
-#[cfg(not(test))]
-const _: () = assert!(webpki_roots::TLS_SERVER_ROOTS.len() > 100);
-
-#[cfg(not(test))]
-fn mozilla_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
-    let issuer_content = name_content(issuer_raw)?;
-    webpki_roots::TLS_SERVER_ROOTS.iter().find_map(|anchor| {
-        let subject: &'static [u8] = anchor.subject.as_ref();
-        if subject == issuer_content {
-            Some(anchor.subject_public_key_info.as_ref())
-        } else {
-            None
-        }
-    })
-}
-
-/// Host test koşucusu yalnızca `core`/`alloc` bağlar; Mozilla deposu
-/// çekirdek derlemesinde kullanılır. Testlerde gömülü kökler doğrulanır.
-#[cfg(test)]
-fn mozilla_anchor_spki_for(_issuer_raw: &[u8]) -> Option<&'static [u8]> {
-    None
-}
 
 /// Bir sertifikanın vereni için güven çapası anahtarını (SPKI) döndürür.
 ///
-/// Önce Mozilla kök deposu, ardından gömülü DER kökleri denenir. Sunucu
-/// zinciri kökü göndermek zorunda olmadığı için bu arama, el sıkışmanın
-/// kök olmadan da doğrulanmasını sağlar.
+/// Kökler `TRUSTED_ROOTS` tablosunda gömülüdür (eski harici `webpki-roots`
+/// deposu kaldırıldı); sunucu zinciri kökü göndermek zorunda olmadığı için
+/// bu arama, el sıkışmanın kök olmadan da doğrulanmasını sağlar.
 fn trust_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
-    if let Some(spki) = mozilla_anchor_spki_for(issuer_raw) {
-        return Some(spki);
-    }
     TRUSTED_ROOTS.iter().find_map(|&root| {
         let parsed = ParsedX509Cert::parse(root).ok()?;
         if parsed.subject_raw == issuer_raw {

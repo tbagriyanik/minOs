@@ -12,20 +12,24 @@ exfat = []
 [dependencies]
 # Allocator for no_std environment
 linked_list_allocator = { version = "0.10", default-features = false, features = ["use_spin"] }
+# NOTE: Aşağıdaki kütüphaneler çekirdek tarafından KULLANILMIYOR (kullanılmayan-kütüphane
+# hijyeni). Yanlışlıkla derlenip ağ/X.509 yüzeyine sızmasınlar diye
+# bağımlılık olarak değil, bu notta tutuluyor:
+#   webpki-roots    — Kök CA deposu `drivers/crypto/roots/` içinde gömülü;
+#                     `x509.rs` yalnızca bu yerel tabloyu kullanıyor.
+#   rand_hc/rand_core — `src/random.rs` kendi xorshift64* üreticisini kullanır.
+#   smoltcp         — Çekirdek ağ yığını `drivers/netstack.rs` (sıfır bağımlılık);
+#                     `src/net_smoltcp.rs` artık yalnızca sabit/modül adları.
+#   elf, embedded-io, postcard, serde — `src/kernel_formats.rs` kendi
+#                     ELF sabiti ve 5 baytlık IPC düzenini kullanıyor.
+#   acpi            — ACPI tabloları Limine RSDP'sinden yerel ayrıştırılıyor.
+# Kullanımda kalanlar: p384 (P-384 imza), bitflags, heapless, zerocopy,
+# crc32fast, raw-cpuid, log, linked_list_allocator.
 p384 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
-webpki-roots = { version = "1.0.11", default-features = false }
-rand_hc = { version = "0.5.1", default-features = false }
-rand_core = { version = "0.10.0", default-features = false }
-smoltcp = { version = "0.14.0", default-features = false, features = ["alloc", "proto-ipv4", "proto-ipv6", "socket-dhcpv4", "socket-dns", "socket-tcp", "socket-udp"] }
 bitflags = { version = "2.10.0", default-features = false }
 heapless = { version = "0.9.3", default-features = false }
 zerocopy = { version = "0.8.27", default-features = false, features = ["derive"] }
 crc32fast = { version = "1.5.0", default-features = false }
-elf = { version = "0.8.0", default-features = false }
-embedded-io = { version = "0.6.1", default-features = false }
-postcard = { version = "1.1.3", default-features = false, features = ["heapless"] }
-serde = { version = "1.0.228", default-features = false, features = ["derive"] }
-acpi = { version = "6.1.1", default-features = false }
 raw-cpuid = { version = "11.6.0", default-features = false }
 log = { version = "0.4.29", default-features = false }
 

@@ -12,16 +12,16 @@
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-104%2C153%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.1.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v2.2.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 > 📚 **Resmi Kılavuz ve Dokümantasyon:** Tüm donanım sürücüleri, uygulama kılavuzları, ağ/TLS yapılandırması ve geliştirici belgeleri için **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** sayfasını ziyaret edebilirsiniz.
 
 ---
 
-## Yenilikler (v2.1.0)
+## Yenilikler (v2.2.0)
 
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.
@@ -228,7 +228,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 
 ### ⚡ Çekirdek Mimarisi ve Donanım Durumu (UEFI, USB-HID, SMP)
 
-- **Çalışma zamanı altyapısı:** `rand_hc` RNG, `smoltcp` protokol yapılandırması, `heapless` bounded queue, `zerocopy` paket görünümü, `crc32fast`, ELF/IPC/I/O yardımcıları (`elf`, `embedded-io`, `postcard`), ACPI ve `raw-cpuid` adapter'ları kernel Cargo katmanına eklenmiştir.
+- **Bağımlılık Hijyeni (Sıfır "ölü" Kütüphane):** Çekirdek yalnızca gerçekten çağırdığı 8 küçük crate'e bağımlıdır: `linked_list_allocator` (heap), `p384` (P-384 imza), `bitflags`, `heapless`, `zerocopy`, `crc32fast`, `raw-cpuid` ve `log` — hepsi `src/main.rs`, `src/kernel_primitives.rs`, `src/kernel_diag.rs`, `src/drivers/crypto/x509.rs` üzerinden kullanılıyor. `webpki-roots`, `rand_hc`, `rand_core`, `smoltcp`, `elf`, `embedded-io`, `postcard`, `serde` ve `acpi` **bağımlılıktan çıkarıldı**: kök CA deposu `drivers/crypto/roots/` içinde yerel, RNG `src/random.rs` (xorshift64*), IPC mesajları `src/kernel_formats.rs` (5 baytlık düzen), ağ yığını `drivers/netstack.rs` sıfır bağımlılıkla çalışır. `Cargo.lock` yalnızca erişilebilir paketleri taşır (doğrulama: `cargo metadata` bağımlılık grafiği + lock taraması).
 
 - **UEFI & BIOS Dual-Boot:** Limine v8 önyükleyici sayesinde sistem hem modern x86_64 UEFI sistemlerde hem de geleneksel BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
 - **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. EHCI/UHCI/OHCI denetleyicileri için başlatma/handoff ve transfer katmanı mevcuttur (bkz. `src/drivers/usb.rs`) ancak bu denetleyicilerde HID rapor ayrıştırma henüz yoktur; USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer. QEMU'da PS/2'yi tamamen kapatıp girdiyi yalnızca USB klavye/fare üzerinden test etmek için `.\run.ps1 -NoPs2`; QMP ile otomatik klavye/fare enjeksiyonu dahil uçtan uca doğrulama için `.\test_qemu.ps1 -NoPs2` kullanılabilir.

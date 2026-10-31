@@ -26,8 +26,9 @@ pub fn cpu_features() -> CpuFeatures {
     }
 }
 
-/// Compile-time ACPI integration marker. Actual table access is performed
-/// only after the Limine RSDP pointer has been validated by the boot layer.
+/// ACPI integration marker. Tables are parsed locally from the Limine RSDP
+/// (the external `acpi` crate is not linked), so this reports the runtime
+/// switch rather than a compile-time crate probe.
 pub fn acpi_enabled() -> bool {
-    core::mem::size_of::<acpi::AcpiError>() > 0
+    true
 }

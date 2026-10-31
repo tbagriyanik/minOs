@@ -1,6 +1,6 @@
 # Ağ ve İnternet
 
-minOs ağ yığını, TCP/IP protokolü, DHCP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve hazırlanan HTTP/2 istemci altyapısı içerir. Protokol yapılandırmasında allocation-free `smoltcp`, paket yardımcılarında `zerocopy`, sabit kuyruklarda `heapless` kullanılır.
+minOs ağ yığını, TCP/IP protokolü, DHCP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve hazırlanan HTTP/2 istemci altyapısı içerir. Ağ yığını sıfır harici bağımlılıkla yazılmıştır (harici `smoltcp` kullanılmaz); paket yardımcılarında `zerocopy`, sabit kuyruklarda `heapless` kullanılır.
 
 Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algılamasını içerir; NE2000 ISA/PCI yolları da korunur. Tarayıcı indirmeleri scheduler içinde cooperative olarak yield eder, bu nedenle GUI ana döngüsü çalışmaya devam eder.
 

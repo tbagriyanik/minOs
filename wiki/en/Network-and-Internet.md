@@ -1,6 +1,6 @@
 # Network and Internet
 
-minOs network stack includes DHCP, TCP/IP, DNS resolution (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and prepared HTTP/2 infrastructure. Protocol configuration uses allocation-free `smoltcp`, packet helpers use `zerocopy`, and bounded queues use `heapless`.
+minOs network stack includes DHCP, TCP/IP, DNS resolution (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and prepared HTTP/2 infrastructure. The stack is written with zero external dependencies (no `smoltcp`); packet helpers use `zerocopy` and bounded queues use `heapless`.
 
 PCI network identification includes Intel PRO/1000, Realtek RTL8139 and AMD PCnet; NE2000 ISA/PCI paths remain available. Browser downloads yield cooperatively through the scheduler so the GUI event loop keeps rendering.
 

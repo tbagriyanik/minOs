@@ -330,6 +330,7 @@ pub fn render_html_to_lines(
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
     _vfs: Option<&mut VirtualFileSystem>,
+    image_cache: Option<&BTreeMap<String, (usize, usize, Vec<u8>)>>,
     canvases: &mut Vec<super::canvas::CanvasElement>,
     media_players: &mut super::media::MediaPlayers,
     iframes: &mut super::iframe::IFrames,
@@ -1272,8 +1273,13 @@ pub fn render_html_to_lines(
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
+                                // Önce pending_resources'a ekle (fetch tetikle)
                                 if !pending_resources.iter().any(|u| u == &resolved_url) {
                                     pending_resources.push(resolved_url.clone());
+                                }
+                                // Cache'den çözümlenmiş görsel mi var?
+                                if let Some(cached) = image_cache.and_then(|cache| cache.get(&resolved_url)) {
+                                    image_decoded = Some((cached.0, cached.1, cached.2.clone()));
                                 }
                             }
                         }

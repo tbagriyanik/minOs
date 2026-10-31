@@ -386,7 +386,7 @@ impl TlsSession {
         const MAX_RECORDS_PER_WINDOW: usize = 100;
         const WINDOW_MS: u64 = 1000;
 
-        let now = crate::boot::time::monotonic_ms();
+        let now = crate::monotonic_ms();
         // Eski kayıtları temizle.
         self.record_history
             .retain(|&t| now.wrapping_sub(t) < WINDOW_MS);
@@ -2148,7 +2148,7 @@ mod tests {
         let random = [0u8; 32];
         let mut out = Vec::new();
         let mut ecdhe = [0u8; 32];
-        build_client_hello("example.com", &random, &mut out, &mut ecdhe, false);
+        build_client_hello("example.com", &random, &mut out, &mut ecdhe, false, None, None);
 
         // TLS 1.3-compatible record version is 0x0301; ClientHello legacy_version is 0x0303.
         assert_eq!(out[0], TLS_RECORD_HANDSHAKE);
@@ -2808,6 +2808,8 @@ mod tests {
             &mut hello,
             &mut client_ecdhe,
             false,
+            None,
+            None,
         );
 
         let mut client = TlsSession::new("minos.test", client_random);
@@ -3019,6 +3021,8 @@ mod tests {
             &mut hello,
             &mut client_ecdhe,
             false,
+            None,
+            None,
         );
         let mut client = TlsSession::new("minos.test", client_random);
         let ch_body = &hello[5..];

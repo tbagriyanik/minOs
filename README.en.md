@@ -12,16 +12,16 @@
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
 [![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-104%2C153%20(Rust)-lightgrey.svg)]()
-[![GitHub Release](https://img.shields.io/badge/Release-v2.1.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.1.0** is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. During the build, bitmap atlases are generated from TTF fonts using `fontdue`; the kernel uses these atlases in its graphical interface.
+**minOs (Sarman Edition) v2.2.0** is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. During the build, bitmap atlases are generated from TTF fonts using `fontdue`; the kernel uses these atlases in its graphical interface.
 
 > 📚 **Official Guide and Documentation:** Visit the **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** for all hardware drivers, application guides, network/TLS configuration and developer documents.
 
 ---
 
-## What's New (v2.1.0)
+## What's New (v2.2.0)
 
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.
@@ -227,7 +227,7 @@ The minOs VFS layer supports several file systems, but each file system's capabi
 
 ### ⚡ Kernel Architecture and Hardware Status (UEFI, USB-HID, SMP)
 
-- **Runtime primitives:** The kernel Cargo layer includes `rand_hc`, `smoltcp`, bounded `heapless` queues, `zerocopy` packet views, `crc32fast`, ELF/IPC/I/O helpers (`elf`, `embedded-io`, `postcard`), and ACPI/`raw-cpuid` adapters.
+- **Dependency Hygiene (No Dead Crates):** The kernel depends only on the 8 small crates it actually calls: `linked_list_allocator` (heap), `p384` (P-384 signatures), `bitflags`, `heapless`, `zerocopy`, `crc32fast`, `raw-cpuid` and `log` — all reached through `src/main.rs`, `src/kernel_primitives.rs`, `src/kernel_diag.rs` and `src/drivers/crypto/x509.rs`. `webpki-roots`, `rand_hc`, `rand_core`, `smoltcp`, `elf`, `embedded-io`, `postcard`, `serde` and `acpi` were **removed from the dependency list**: the root-CA store lives in `drivers/crypto/roots/`, the RNG is `src/random.rs` (xorshift64*), IPC messages use the 5-byte layout in `src/kernel_formats.rs`, and the network stack `drivers/netstack.rs` runs with zero dependencies. `Cargo.lock` now carries only reachable packages (verified against the `cargo metadata` dependency graph).
 
 - **UEFI & BIOS Dual-Boot:** Thanks to the Limine v8 bootloader, the system boots smoothly on both modern x86_64 UEFI systems and traditional BIOS (Legacy) environments.
 - **Native xHCI USB HID & PS/2 Fallback:** A native USB keyboard and mouse driver (`src/drivers/usb_hid.rs`) is active over xHCI (USB 3.x) controllers. Initialization/handoff and a transfer layer exist for EHCI/UHCI/OHCI controllers (see `src/drivers/usb.rs`), but HID report parsing is not yet available on these controllers; when no USB device is found or BIOS CSM/Legacy USB is disabled, the system automatically switches to PS/2 fallback mode for stability and logs an informational message to the boot console. To completely disable PS/2 in QEMU and test input only through a USB keyboard/mouse use `.\run.ps1 -NoPs2`; for end-to-end verification including automated keyboard/mouse injection over QMP use `.\test_qemu.ps1 -NoPs2`.

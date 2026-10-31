@@ -368,6 +368,12 @@ pub struct BrowserApp {
     /// Harici kaynak (CSS/JS/img) URL'leri, sayfa render edildiğinde toplanır
     /// ve poll_network tarafından asenkron olarak getirilir.
     pub pending_resources: Vec<String>,
+    /// Fetched image data cache: URL -> (width, height, rgb_bytes)
+    /// Poll network tarafından getirilen resim verileri burada saklanır;
+    /// HTML yeniden render edildiğinde `` etiketleri bu cache'den okur.
+    pub image_cache: BTreeMap<String, (usize, usize, Vec<u8>)>,
+    /// Original HTML retained while asynchronous external resources load.
+    pub original_html: Vec<u8>,
     /// Kaynak getirme durum makinesi: 0 = boşta, 1 = DNS, 2 = TCP bağlanıyor,
     /// 3 = HTTP gönderiliyor, 4 = yanıt bekleniyor, 5 = tamamlandı/hata.
     resource_fetch_state: u8,
@@ -575,6 +581,8 @@ impl BrowserApp {
             request_state: 0,
             net_idle_hint: false,
             pending_resources: Vec::new(),
+            image_cache: BTreeMap::new(),
+            original_html: Vec::new(),
             resource_fetch_state: 0,
             current_resource_url: String::new(),
             redirect_count: 0,
@@ -1352,6 +1360,11 @@ impl BrowserApp {
         max_lines: usize,
         vfs: Option<&mut VirtualFileSystem>,
     ) {
+        // Orijinal HTML gövdesini sakla (kaynak getirme sonrası yeniden render için)
+        if self.original_html.is_empty() {
+            self.original_html = body.to_vec();
+        }
+
         self.page_lines.clear();
         self.rendered_links.borrow_mut().clear();
         self.rendered_images.borrow_mut().clear();
@@ -1441,6 +1454,7 @@ impl BrowserApp {
 
         let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         let mut pending_resources: Vec<String> = Vec::new();
+        let image_cache = self.image_cache.clone();
         render_html_to_lines(
             &preprocessed_html,
             wrap_width_px,
@@ -1451,6 +1465,7 @@ impl BrowserApp {
             self.transition_start_ms,
             &mut self.previous_styles,
             vfs,
+            Some(&image_cache),
             &mut self.canvases,
             &mut self.media_players,
             &mut self.iframes,
@@ -3696,6 +3711,22 @@ impl BrowserApp {
                             &self.response_data[body_start..self.response_data.len()],
                         );
 
+                        // Resim ise decode edip image_cache'e sakla
+                        let is_image = self.current_resource_url.ends_with(".png")
+                            || self.current_resource_url.ends_with(".jpg")
+                            || self.current_resource_url.ends_with(".jpeg")
+                            || self.current_resource_url.ends_with(".gif")
+                            || self.current_resource_url.ends_with(".webp")
+                            || self.current_resource_url.contains("image/");
+                        if is_image {
+                            if let Some(img) = crate::apps::imgdecode::decode(&body_bytes) {
+                                self.image_cache.insert(
+                                    self.current_resource_url.clone(),
+                                    (img.width, img.height, img.rgb),
+                                );
+                            }
+                        }
+
                         // CSS içeriğini parse et ve sayfaya uygula
                         if let Some(code) = status_code {
                             if (200..300).contains(&code) {
@@ -3711,8 +3742,9 @@ impl BrowserApp {
                             }
                         }
 
-                        // Sayfayı yeniden render et (kaynak eklentisiyle)
-                        self.load_html(&body_bytes, 600, 256, Some(vfs));
+                        // Sayfayı yeniden render et (orijinal HTML + image_cache)
+                        let original_html = self.original_html.clone();
+                        self.load_html(&original_html, 600, 256, Some(vfs));
 
                         // Bu kaynağı tamamla
                         self.pending_resources.remove(0);

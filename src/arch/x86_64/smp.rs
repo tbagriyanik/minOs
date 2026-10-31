@@ -248,6 +248,7 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
         unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
         // İş kuyruğunu yokla; iş varsa çalıştır.
         if !poll_job(cpu) {
+            crate::task::poll_tasks();
             idle_spins = idle_spins.wrapping_add(1);
             // Kalp atışını her turda atomik yazmak veri yolunu kilitler (cache bouncing).
             // Yalnızca her 500 döngüde bir atomik güncelle.
@@ -392,6 +393,14 @@ pub fn cpu_count() -> usize {
     CPU_COUNT.load(Ordering::Relaxed) as usize
 }
 
+pub fn current_cpu_index() -> usize {
+    let id = (lapic_read(0x20) >> 24) as u32;
+    for cpu in 0..cpu_count().min(MAX_CPUS) {
+        if LAPIC_ID[cpu].load(Ordering::Relaxed) == id { return cpu; }
+    }
+    0
+}
+
 pub fn is_ap_online(cpu: usize) -> bool {
     if cpu >= MAX_CPUS {
         return false;
@@ -498,14 +507,10 @@ pub fn wait_for_aps(timeout_spins: u32) -> usize {
             crate::serial_print("/ ");
             crate::serial::print_dec(count as u64);
             crate::serial_print(". Tek CPU modunda devam ediliyor.\n");
-            // A partial AP set is treated as unsupported on this machine.
-            // Park APs that did arrive and make the public topology unambiguously 1 CPU.
-            for cpu in 1..count {
-                AP_ONLINE[cpu].store(false, Ordering::Release);
-            }
-            CPU_COUNT.store(1, Ordering::Release);
-            LAPIC_ID[0].store(lapic_init(), Ordering::Relaxed);
-            return 1;
+            // Keep every AP that actually arrived online. A slow/failed AP
+            // must not force the already-running cores back to BSP-only mode.
+            CPU_COUNT.store(online.max(1) as u32, Ordering::Release);
+            return online.max(1);
         }
         core::hint::spin_loop();
     }

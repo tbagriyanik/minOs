@@ -61,6 +61,7 @@ Sürücü başlatma sırasında donanım hatalarında anakartın ani yeniden ba�
 ## SMP (Çoklu İşlemci)
 
 - Limine SMP protokolü mevcuttur.
-- Varsayılan profil tek çekirdek modunda başlar (fiziksel laptop kararlılığı için).
-- AP başlatma kodu `src/arch/x86_64/smp.rs` içinde mevcuttur ancak varsayılan akışta kullanılmaz.
+- Varsayılan profil Limine ile bildirilen CPU'ları başlatır; AP başarısızlığında güvenli tek CPU fallback'i uygulanır.
+- Limine ile bildirilen AP'ler varsayılan akışta başlatılır; her CPU için GDT/yığın ve per-CPU run queue hazırlanır.
+- Scheduler yerel kuyruğu tercih eder, boşsa work-stealing yapar; APIC timer 1000 Hz preemption tick'i üretir.
 - TTAS Spinlock senkronizasyonu ve per-core CPU izleme çubukları mevcuttur.

@@ -2954,6 +2954,8 @@ impl BrowserApp {
                             &mut hello,
                             &mut ecdhe_secret,
                             false,
+                            None,
+                            None,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut tls_session =

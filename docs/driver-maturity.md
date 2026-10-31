@@ -33,10 +33,11 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Realtek RTL8139 | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası |
 | NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP, uzak DMA, 8K RX halkası |
 | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
-| Realtek PCIe | `net.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX, PHYSTATUS |
-| Broadcom NetXtreme | `net.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link |
+| Realtek PCIe | `e1000.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX, PHYSTATUS |
+| Broadcom NetXtreme | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link |
 | VirtIO-net | `virtio_net.rs` | 🟢 Tam | Sanallaştırılmış ağ adaptörü |
-| VMware VMXNET3 | `net.rs` | 🟢 Tam | PCI vendor 0x15AD, MAC ve link |
+| VMware VMXNET3 | `e1000.rs` | 🟢 Tam | PCI vendor 0x15AD, MAC ve link |
+| Ağ otobüsü seçimi (PCI / ISA) | `net.rs` | 🟢 Tam | `BusKind`, ISA PnP izolasyonu, NE2000 DMA veri portu |
 | Atheros Ethernet | `atheros.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
 | Marvell Ethernet | `marvell.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
 | Wi-Fi 802.11 | `wifi.rs` | 🔴 İskelet | 802.11 çerçeve yapıları, WPA2-PSK anahtar türetimi, gerçek PHY yok |
@@ -95,10 +96,10 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 
 | Maturite | Sayı | Yüzde |
 | :--- | :---: | :---: |
-| 🟢 Tam | 22 | ~61% |
-| 🟡 Kısmi | 7 | ~19% |
-| 🔴 İskelet / WIP | 7 | ~19% |
-| **Toplam** | **36** | **100%** |
+| 🟢 Tam | 26 | ~70% |
+| 🟡 Kısmi | 6 | ~16% |
+| 🔴 İskelet / WIP | 5 | ~14% |
+| **Toplam** | **37** | **100%** |
 
 ---
 

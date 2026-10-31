@@ -85,6 +85,7 @@ pub struct Task {
     ready_age: u32,
     waiting_for: Option<TaskEvent>,
     deadline_ms: Option<u64>,
+    pub cpu: usize,
 }
 
 impl Task {
@@ -92,6 +93,7 @@ impl Task {
     where
         F: FnMut() -> TaskStatus + Send + 'static,
     {
+        let cpu = least_loaded_cpu();
         Self {
             id: TaskId::new(),
             name: String::from(name),
@@ -104,6 +106,7 @@ impl Task {
             ready_age: 0,
             waiting_for: None,
             deadline_ms: None,
+            cpu,
         }
     }
 }
@@ -137,6 +140,7 @@ impl SimpleExecutor {
     {
         let task = Task::new(name, priority, f);
         let id = task.id;
+        RUN_QUEUE_DEPTH[task.cpu].fetch_add(1, Ordering::Relaxed);
         self.tasks.push(task);
         id
     }
@@ -195,6 +199,12 @@ impl SimpleExecutor {
 }
 
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
+static RUN_QUEUE_DEPTH: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] = [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
+fn least_loaded_cpu() -> usize {
+    let count = crate::arch::x86_64::smp::cpu_count().max(1).min(RUN_QUEUE_DEPTH.len());
+    (0..count).min_by_key(|&cpu| RUN_QUEUE_DEPTH[cpu].load(Ordering::Relaxed)).unwrap_or(0)
+}
+pub fn run_queue_depth(cpu: usize) -> usize { RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].load(Ordering::Relaxed) }
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);
 static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SCHEDULER_TICKS: AtomicU64 = AtomicU64::new(0);
@@ -377,13 +387,15 @@ pub fn poll_tasks() -> usize {
             // Drop queued cancellations promptly, including tasks cancelled
             // while blocked and therefore never selected for dispatch.
             executor.tasks.retain(|t| !t.cancelled && !t.completed);
-            let Some(index) = select_ready(&executor.tasks) else {
+            let cpu = crate::arch::x86_64::smp::current_cpu_index();
+            let Some(index) = select_ready(&executor.tasks, cpu) else {
                 break;
             };
             for task in executor.tasks.iter_mut().filter(|t| t.ready) {
                 task.ready_age = task.ready_age.saturating_add(1);
             }
             let mut task = executor.tasks.swap_remove(index);
+            RUN_QUEUE_DEPTH[task.cpu].fetch_sub(1, Ordering::Relaxed);
             task.ready = false;
             task.ready_age = 0;
             task.run_count = task.run_count.saturating_add(1);
@@ -437,6 +449,7 @@ pub fn poll_tasks() -> usize {
         RUNNING_TASK.store(0, Ordering::Release);
         task.cancelled = task.cancelled || cancelled;
         if !task.completed && !task.cancelled {
+            RUN_QUEUE_DEPTH[task.cpu].fetch_add(1, Ordering::Relaxed);
             executor.tasks.push(task);
         }
     }
@@ -447,7 +460,7 @@ pub fn poll_tasks() -> usize {
 /// Priority aging promotes a ready task by one level for each eight dispatch
 /// opportunities it waits, up to Realtime. This reduces starvation without
 /// claiming deadlines or wall-clock guarantees.
-fn select_ready(tasks: &[Task]) -> Option<usize> {
+fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
     let best_priority = tasks
         .iter()
         .filter(|task| task.ready && !task.cancelled && !task.completed)
@@ -456,14 +469,20 @@ fn select_ready(tasks: &[Task]) -> Option<usize> {
         })
         .max()?;
     let start = RR_CURSOR.fetch_add(1, Ordering::Relaxed);
-    (0..tasks.len())
+    let local = (0..tasks.len())
         .map(|n| (start + n) % tasks.len())
         .find(|&i| {
             let task = &tasks[i];
             task.ready
                 && !task.cancelled
                 && !task.completed
+                && task.cpu == cpu
                 && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
                     == best_priority
-        })
+        });
+    local.or_else(|| (0..tasks.len()).map(|n| (start + n) % tasks.len()).find(|&i| {
+        let task = &tasks[i];
+        task.ready && !task.cancelled && !task.completed
+            && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32) == best_priority
+    }))
 }

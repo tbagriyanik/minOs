@@ -9,7 +9,7 @@ Kaynak kod dizin haritası, birim testleri ve derleme bilgileri.
 ```
 minos/
 ├── src/
-│   ├── arch/x86_64/         # SSE, IDT kesmeleri ve PIC maskeleme
+│   ├── arch/x86_64/         # SSE, IDT, APIC, SMP ve 1000Hz scheduler tick
 │   ├── boot/                # Limine konsolu, metin çizimi, ilerleme çubuğu
 │   ├── desktop/             # Masaüstü oturumu (session.rs) ve yardımcılar
 │   ├── drivers/             # video, PS/2, RTC, e1000, TCP/IP, soket API, HTTP,
@@ -21,7 +21,7 @@ minos/
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru,
 │   │                        # kaydırma çubuğu ve pano
 │   ├── apps/                # 15 Masaüstü uygulaması
-│   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu, ELF yükleyici
+│   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici
 │   └── main.rs              # Çekirdek giriş noktası (_start)
 ├── tests/                   # Host birim testleri (210 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
@@ -34,6 +34,14 @@ minos/
 ├── linker.ld                # Bağlayıcı komut dosyası
 └── rust-toolchain.toml      # Rust toolchain yapılandırması (nightly)
 ```
+
+### Kernel Cargo katmanı
+
+`rand_hc` kernel RNG, `smoltcp` ağ protokol yapılandırması, `heapless` sabit kuyruklar,
+`zerocopy` paket görünümleri, `crc32fast` checksum, `elf` ELF yardımcıları,
+`embedded-io` ortak I/O trait'leri, `postcard` IPC mesajları, `acpi` ACPI tabloları,
+`raw-cpuid` CPU özellikleri ve `log` standart log facade'i için kullanılır. Bağımlılıklar
+`default-features = false` ile `no_std` hedefe göre sınırlandırılmıştır.
 
 ---
 

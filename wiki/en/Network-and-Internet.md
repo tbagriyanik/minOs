@@ -1,6 +1,8 @@
 # Network and Internet
 
-minOs network stack includes TCP/IP protocol, DNS resolution (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and a prepared HTTP/2 client infrastructure.
+minOs network stack includes DHCP, TCP/IP, DNS resolution (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and prepared HTTP/2 infrastructure. Protocol configuration uses allocation-free `smoltcp`, packet helpers use `zerocopy`, and bounded queues use `heapless`.
+
+PCI network identification includes Intel PRO/1000, Realtek RTL8139 and AMD PCnet; NE2000 ISA/PCI paths remain available. Browser downloads yield cooperatively through the scheduler so the GUI event loop keeps rendering.
 
 ---
 
@@ -93,3 +95,7 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | `atheros.rs` | Atheros Ethernet | 🟡 Partial |
 | `marvell.rs` | Marvell Ethernet | 🟡 Partial |
 | `wifi.rs` | Wi-Fi 802.11 | 🔴 Skeleton |
+
+### Driver selection
+
+At boot the kernel scans the PCI buses first (e1000/e1000e, VMware VMXNET3, Realtek RTL816x/RTL8139, Broadcom BCM57xx, PCI NE2000 RTL8029AS); if nothing is found, NE2000 ISA PnP isolation and jumper I/O base probing take over. The active adapter is reported to the `netstack` layer through `net::BusKind` (`Pci` / `IsaPnp`), so DHCP, ARP, DNS, TCP/UDP and TLS run unchanged on every card. Legacy cards are limited to 10/100 Mbps and a 1500-byte packet ceiling.

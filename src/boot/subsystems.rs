@@ -198,11 +198,16 @@ pub fn init_subsystems(
         &mut memory_mgr.pmm,
     );
 
-    // Hardware-safe mode: do not touch APIC/SMP until the laptop path is stable.
-    serial_print("[BOOT] Tek CPU modu seçildi; APIC/SMP başlatması atlandı.\n");
+    serial_print("[BOOT] SMP başlatılıyor...\n");
     serial_print("[SMP] BSP GDT yükleniyor...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };
-    serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
+    let requested_cpus = arch::x86_64::smp::init();
+    let online_cpus = arch::x86_64::smp::wait_for_aps(5_000_000);
+    serial_print("[SMP] Çevrimiçi CPU: ");
+    crate::serial::print_dec(online_cpus as u64);
+    serial_print(" / istenen: ");
+    crate::serial::print_dec(requested_cpus as u64);
+    serial_print("; per-CPU run queue etkin.\n");
 
     serial_print("[BOOT] APIC zamanlayıcısı başlatılıyor...\n");
     // Local APIC MMIO sayfasını eşlemeden ilk lapic_write çekirdek #PF (vektor 14)

@@ -1,6 +1,8 @@
 # Ağ ve İnternet
 
-minOs ağ yığını, TCP/IP protokolü, DNS çözümleme (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve hazırlanan HTTP/2 istemci altyapısı içerir.
+minOs ağ yığını, TCP/IP protokolü, DHCP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve hazırlanan HTTP/2 istemci altyapısı içerir. Protokol yapılandırmasında allocation-free `smoltcp`, paket yardımcılarında `zerocopy`, sabit kuyruklarda `heapless` kullanılır.
+
+Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algılamasını içerir; NE2000 ISA/PCI yolları da korunur. Tarayıcı indirmeleri scheduler içinde cooperative olarak yield eder, bu nedenle GUI ana döngüsü çalışmaya devam eder.
 
 ---
 
@@ -93,3 +95,7 @@ minOs ağ yığını, TCP/IP protokolü, DNS çözümleme (A/AAAA), HTTP/1.1, TL
 | `atheros.rs` | Atheros Ethernet | 🟡 Kısmi |
 | `marvell.rs` | Marvell Ethernet | 🟡 Kısmi |
 | `wifi.rs` | Wi-Fi 802.11 | 🔴 İskelet |
+
+### Sürücü seçimi
+
+Çekirdek açılışta önce PCI veri yollarını tarar (e1000/e1000e, VMware VMXNET3, Realtek RTL816x/RTL8139, Broadcom BCM57xx, PCI NE2000 RTL8029AS); hiçbiri bulunamazsa NE2000 ISA PnP izolasyonu ve jumper I/O tabanı taraması devreye girer. Etkin kart `net::BusKind` (`Pci` / `IsaPnp`) ile `netstack` katmanına bildirilir; DHCP, ARP, DNS, TCP/UDP ve TLS yığını tüm kartlarda değişmeden çalışır. Eski tip kartlarda bağlantı hızı 10/100 Mbps ve paket tavanı 1500 bayttır.

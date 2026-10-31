@@ -77,6 +77,9 @@ fn init_heap() {
 }
 
 pub mod arch;
+pub mod kernel_diag;
+pub mod kernel_formats;
+pub mod kernel_primitives;
 pub mod net_smoltcp;
 pub mod random;
 

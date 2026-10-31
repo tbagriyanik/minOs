@@ -61,6 +61,6 @@ Sudden motherboard reboots (triple fault) are prevented on hardware faults durin
 ## SMP (Symmetric Multiprocessing)
 
 - Limine SMP protocol is available.
-- Default profile starts in single-core mode (physical laptop stability).
-- AP boot code exists in `src/arch/x86_64/smp.rs` but is not used in the default boot path.
+- CPUs reported by Limine are started in the default path; each CPU receives its own GDT/stack and run-queue assignment.
+- The scheduler prefers the local queue and steals work when it is empty; the APIC timer produces a 1000 Hz preemption tick.
 - TTAS spinlock synchronization and per-core CPU monitoring bars are available.

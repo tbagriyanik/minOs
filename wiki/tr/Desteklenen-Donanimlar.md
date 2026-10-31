@@ -29,6 +29,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
 | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
 | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası, MII link |
+| AMD PCnet | `network_cards.rs` | 🟡 Algılama | PCI aygıt kimliği algılama; tam DMA sürücüsü geliştirme aşamasında |
 | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP + jumper taraması, uzak DMA, 8K RX halkası |
 | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
@@ -72,6 +73,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | `_S0`..`_S5` uyku durumları, PowerResource, dinamik AC/Pil durum izleme |
 | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone ayrıştırma, Celsius dönüşümü, fan RPM izleme |
 | Veri Yolu & Zamanlayıcı | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Tam | PCI/PCIe konfigürasyonu, TSC/HPET/APIC zamanlayıcıları |
+| SMP & Scheduler | `smp.rs`, `task/mod.rs` | 🟢 Etkin | Limine AP başlatma, per-CPU run queue, work-stealing, 1000 Hz tick |
 
 ---
 

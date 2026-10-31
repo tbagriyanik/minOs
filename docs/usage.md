@@ -157,7 +157,7 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 28 Ekim 2026 (v2.1.0)
+> Son güncelleme: 28 Ekim 2026 (v2.2.0)
 | Ölçüt | Değer |
 | :--- | :--- |
 | **Toplam Rust Kaynak Dosyası** | 147 dosya (`src/**/*.rs` + `tests/**/*.rs`) |

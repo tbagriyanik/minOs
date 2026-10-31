@@ -1,4 +1,4 @@
-# minOs (v2.1.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
+# minOs (v2.2.0): Bağımsız x86_64 İşletim Sistemi Mimari ve Yol Haritası
 
 **minOs**, modern 64-bit mimariye (x86_64) odaklanan, ultra düşük bellek tüketimli (<64 MB RAM), sade grafik arayüzlü (GUI), ses, ağ ve kalıcı depolama destekli açık kaynak bir işletim sistemidir.
 

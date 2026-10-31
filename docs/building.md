@@ -5,7 +5,7 @@ Desteklenen donanım, sistem gereksinimleri ve çalıştırma adımları.
 ## ⚠️ Donanım Desteği ve Güncel Açılış Yapılandırması
 
 - **Boot ekranı ve hata davranışı:** Limine framebuffer doğrulandıktan sonra `serial_print` kayıtları metin konsoluna da aktarılır. Framebuffer geçersizse ya da kritik bir açılış hatası oluşursa GUI açılmaz. Panik mesajı ve son boot logu ekranda bırakılır; otomatik reset yapılmaz.
-- **CPU/APIC:** Mevcut laptop tanılama yapılandırması AP başlatımını ve APIC timer'ı atlar; sistem tek CPU modunda TSC saatiyle devam eder. `src/arch/x86_64/smp.rs` içinde Limine SMP/AP başlatma kodu mevcut olsa da varsayılan açılış akışında kullanılmıyor.
+- **CPU/APIC:** Limine SMP CPU'ları başlatılır; AP başına GDT/yığın, per-CPU run queue ve work-stealing scheduler etkinleştirilir. APIC timer 1000 Hz scheduler tick üretir; başarısız AP'ler güvenli tek CPU fallback'ine bırakılır.
 - **PS/2 fare/touchpad:** `src/drivers/ps2.rs` PS/2 8042 yardımcı portunu yoklayarak standart fare paketlerini okur. Dahili touchpad'in bu arayüzde sunulması firmware/ACPI ayarına bağlıdır; I2C-HID touchpad sürücüsü henüz bulunmuyor.
 - **USB klavye/fare:** `src/drivers/usb_hid.rs`, xHCI denetleyicilerinde yerel HID Boot Protocol desteği sunar: aygıt numaralandırma, yapılandırma seçimi, kesme IN uç noktası ve rapor çözümleme uygulanmıştır. Klavye HID kullanım kimlikleri PS/2 set-1 tarama kodlarına, fare raporları ise mevcut `MouseState` paketlerine çevrilir. Sınırlar: yalnızca HID sınıfı/alt sınıf 1 (Boot Interface) ve boot protokolü desteklenir; EHCI/UHCI/OHCI için denetleyici başlatma/handoff ve transfer katmanı (`src/drivers/usb.rs`) mevcuttur ancak bu denetleyicilerde HID rapor ayrıştırma henüz yoktur — firmware'in USB Legacy/8042 emülasyonu yedek yol olarak kullanılır. `src/drivers/usb.rs` ayrıca PCI denetleyici tanısı ve legacy capability raporlamasını sürdürür.
 - **USB depolama:** USB depolama desteği, mevcut ATA/ATAPI ve diskfs yolları üzerinden sunulur; bu, USB HID giriş desteğinden ayrıdır.
@@ -15,7 +15,7 @@ Desteklenen donanım, sistem gereksinimleri ve çalıştırma adımları.
 
 | Özellik | Kaynak konumu |
 | :--- | :--- |
-| Erken framebuffer doğrulaması ve tek CPU açılış kararı | [`src/main.rs:102`](../src/main.rs#L102), [`src/main.rs:286`](../src/main.rs#L286) |
+| Erken framebuffer doğrulaması ve SMP/CPU açılışı | [`src/main.rs:102`](../src/main.rs#L102), [`src/arch/x86_64/smp.rs`](../src/arch/x86_64/smp.rs) |
 | PS/2 fare/touchpad başlatma ve paket yoklama | [`src/drivers/ps2.rs:73`](../src/drivers/ps2.rs#L73), [`src/drivers/ps2.rs:163`](../src/drivers/ps2.rs#L163) |
 | USB controller ve legacy capability tanılama | [`src/drivers/usb.rs:280`](../src/drivers/usb.rs#L280), [`src/drivers/usb.rs:336`](../src/drivers/usb.rs#L336) |
 | Yerel xHCI USB HID klavye/fare sürücüsü | [`src/drivers/usb_hid.rs:1`](../src/drivers/usb_hid.rs#L1), [`src/drivers/usb_hid.rs:1731`](../src/drivers/usb_hid.rs#L1731) |
@@ -35,7 +35,7 @@ Desteklenen donanım, sistem gereksinimleri ve çalıştırma adımları.
 | **Depolama** | Yalnızca CD/ISO (RAM tabanlı) | 64 MB+ qcow2 disk |
 | **Ekran** | 1024×768 32-bit framebuffer | 1024×768 veya daha yüksek |
 | **Ses** | — (isteğe bağlı) | HDA uyumlu |
-| **Ağ** | — (isteğe bağlı) | Realtek PCIe (RTL8168/8169) / Intel e1000 / VMware VMXNET3 |
+| **Ağ** | — (isteğe bağlı) | Intel e1000 / VMware VMXNET3 / Realtek PCIe (RTL8168/8169) / Realtek RTL8139 / NE2000 (ISA veya PCI RTL8029AS) |
 
 > **Not:** minOs 4 MB RAM ile stabil çalışır; grafik arayüzü, font atlasları ve çekirdek tamponları bu alanda sığar. QEMU'da test için `-Memory 4M` parametresi yeterlidir. FAT32 disk yazma gibi özellikler için 32+ MB önerilir.
 
@@ -186,12 +186,12 @@ VirtualBox üzerinde minOs çalıştırmak için gereken temel ve önerilen sana
 | :--- | :--- | :--- |
 | **İşletim Sistemi Türü** | **Other / Other (64-bit)** | Çekirdek x86_64 long modda çalıştığı için mutlaka 64-bit seçilmelidir. |
 | **Temel Bellek (RAM)** | **128 MB – 512 MB** *(Min: 4 MB)* | Canlı masaüstü, font atlasları ve çoklu pencere için 256 MB veya 512 MB idealdir. |
-| **İşlemci (CPU)** | **1 vCPU önerilir** | Güncel fiziksel laptop açılışında AP/SMP ve APIC timer devre dışıdır; TSC tabanlı saat kullanılır. SMP kodu kaynakta bulunsa da bu boot profilinde etkin değildir. |
+| **İşlemci (CPU)** | **2+ vCPU önerilir** | Limine SMP, per-CPU run queue, work-stealing ve 1000 Hz scheduler tick kullanılır. Firmware uyumsuzsa BSP-only fallback uygulanır. |
 | **Ekran Belleği (VRAM)** | **16 MB – 32 MB** | 1280x720 32-bit çözünürlük için en az 16 MB ayrılmalıdır. |
 | **Grafik Denetleyicisi** | **VBoxVGA** veya **VMSVGA** | 3D hızlandırmayı kapatın (yazılımsal framebuffer kullanılır). |
 | **Sabit Disk (İsteğe Bağlı)** | **256 MB – 1 GB** *(VDI / RAW)* | Canlı ISO testi için disk gerekmez. Kalıcı kurulum için SATA veya IDE olarak ekleyin. |
 | **Ses Denetleyicisi** | **Intel HD Audio** | minOs HDA ses çıkış codec'i ile tam uyumludur. |
-| **Ağ Bağdaştırıcısı** | **Intel PRO/1000 MT Desktop (82540EM)** | e1000 sürücüsüyle DHCP, ping ve HTTP desteği sağlar. |
+| **Ağ Bağdaştırıcısı** | **Intel PRO/1000 MT Desktop (82540EM)** | e1000 sürücüsüyle DHCP, ping ve HTTP desteği sağlar. Alternatif olarak `AMD PCnet`/`NE2000 (RTL8029AS)` veya `PCI Fast Ethernet (RTL8139)` seçilebilir. |
 
 > **⚠️ Önemli VirtualBox Sorun Giderme Notları:**
 > 1. **`PANIC: limine: This CPU does not support 64-bit mode`:** Sanal makine türünün `Other (64-bit)` olduğundan ve BIOS'ta işlemci sanallaştırmasının (VT-x / AMD-V) açık olduğundan emin olun.

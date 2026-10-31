@@ -235,6 +235,22 @@ pub struct TlsSession {
     pub cert_verified: bool,
     /// Sertifika doğrulama hatası (varsa).
     pub cert_error: Option<crate::drivers::crypto::x509::CertValidationError>,
+    /// Maksimum sertifika zinciri derinliği (RFC 5280: max 255, normal 3-5).
+    max_chain_depth: usize,
+    /// Oturum kimliği (session ID) için resumption desteği.
+    session_id: Option<alloc::vec::Vec<u8>>,
+    /// TLS 1.3 oturum kimliği (ticket) için resumption desteği.
+    tls13_ticket: Option<alloc::vec::Vec<u8>>,
+    /// ALPN (Application-Layer Protocol Negotiation) protokolü seçimi.
+    negotiated_protocol: Option<alloc::vec::Vec<u8>>,
+    /// Sertifika pinning: güvenilen sertifika hash'leri.
+    pinned_cert_hashes: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    /// Son gönderilen uygulama verisi kaydı sayısı (rate limiting).
+    last_record_seq: u64,
+    /// DDoS koruması: son N kayıt sayısı (rate limiting).
+    record_history: alloc::vec::Vec<u64>,
+    /// Kalp atışı (heartbeat) destekleyici veri.
+    heartbeat_data: Option<alloc::vec::Vec<u8>>,
 }
 
 impl TlsSession {
@@ -280,6 +296,14 @@ impl TlsSession {
             client_ecdhe_secret: None,
             cert_verified: false,
             cert_error: None,
+            max_chain_depth: 6,
+            session_id: None,
+            tls13_ticket: None,
+            negotiated_protocol: None,
+            pinned_cert_hashes: Vec::new(),
+            last_record_seq: 0,
+            record_history: Vec::new(),
+            heartbeat_data: None,
         }
     }
 
@@ -304,6 +328,86 @@ impl TlsSession {
     /// (Bu bir hata değildir; çağıran taraf biriken yanıt verisini işlemelidir.)
     pub fn peer_closed(&self) -> bool {
         self.peer_closed
+    }
+
+    /// Sertifika zinciri için maksimum derinlik sınırını ayarlar (varsayılan: 6).
+    pub fn set_max_chain_depth(&mut self, depth: usize) {
+        self.max_chain_depth = depth;
+    }
+
+    /// Mevcut maksimum sertifika zinciri derinliğini döndürür.
+    pub fn max_chain_depth(&self) -> usize {
+        self.max_chain_depth
+    }
+
+    /// Oturum kimliğini (session ID) ayarlar (resumption için).
+    pub fn set_session_id(&mut self, id: Vec<u8>) {
+        self.session_id = Some(id);
+    }
+
+    /// Oturum kimliğini döndürür (varsa).
+    pub fn session_id(&self) -> Option<&Vec<u8>> {
+        self.session_id.as_ref()
+    }
+
+    /// TLS 1.3 oturum bileti (ticket) ayarlar (resumption için).
+    pub fn set_tls13_ticket(&mut self, ticket: Vec<u8>) {
+        self.tls13_ticket = Some(ticket);
+    }
+
+    /// TLS 1.3 oturum biletini döndürür (varsa).
+    pub fn tls13_ticket(&self) -> Option<&Vec<u8>> {
+        self.tls13_ticket.as_ref()
+    }
+
+    /// ALPN protokolünü ayarlar (ör. b"http/1.1").
+    pub fn set_negotiated_protocol(&mut self, protocol: Vec<u8>) {
+        self.negotiated_protocol = Some(protocol);
+    }
+
+    /// Seçilen ALPN protokolünü döndürür (varsa).
+    pub fn negotiated_protocol(&self) -> Option<&Vec<u8>> {
+        self.negotiated_protocol.as_ref()
+    }
+
+    /// Sertifika pinning için güvenilen sertifika hash'ini ekler (SHA-256).
+    pub fn add_pinned_cert_hash(&mut self, hash: Vec<u8>) {
+        self.pinned_cert_hashes.push(hash);
+    }
+
+    /// Pinlenmiş sertifika hash'lerini döndürür.
+    pub fn pinned_cert_hashes(&self) -> &alloc::vec::Vec<alloc::vec::Vec<u8>> {
+        &self.pinned_cert_hashes
+    }
+
+    /// Uygulama verisi kaydı sayısını rate limiting için kaydeder.
+    /// Dönüş: kayıt kabul edildi mi? (false = rate limit aşıldı).
+    pub fn record_app_data(&mut self) -> bool {
+        const MAX_RECORDS_PER_WINDOW: usize = 100;
+        const WINDOW_MS: u64 = 1000;
+
+        let now = crate::boot::time::monotonic_ms();
+        // Eski kayıtları temizle.
+        self.record_history
+            .retain(|&t| now.wrapping_sub(t) < WINDOW_MS);
+
+        if self.record_history.len() >= MAX_RECORDS_PER_WINDOW {
+            return false; // Rate limit aşıldı
+        }
+
+        self.record_history.push(now);
+        self.last_record_seq = self.last_record_seq.wrapping_add(1);
+        true
+    }
+
+    /// Kalp atışı (heartbeat) verisini ayarlar.
+    pub fn set_heartbeat_data(&mut self, data: Vec<u8>) {
+        self.heartbeat_data = Some(data);
+    }
+
+    /// Kalp atışı verisini döndürür (varsa).
+    pub fn heartbeat_data(&self) -> Option<&Vec<u8>> {
+        self.heartbeat_data.as_ref()
     }
 
     pub fn note_client_hello(&mut self, client_hello_body: &[u8]) {
@@ -370,6 +474,11 @@ impl TlsSession {
                     return Err(());
                 }
                 TLS_RECORD_APPLICATION_DATA => {
+                    // DDoS koruması: kayıt rate limiting.
+                    if !self.record_app_data() {
+                        serial_print("[TLS] Kayıt rate limit aşıldı, bağlantı reddediliyor.\n");
+                        return Err(());
+                    }
                     if self.tls13_mode {
                         // RFC 8446 §5.2: TLS 1.3'te ServerHello sonrası TÜM
                         // kayıtların dış türü 0x17'dir; asıl içerik türü şifreli
@@ -910,6 +1019,19 @@ impl TlsSession {
         // kullanır. Üretim derlemesinde sertifika doğrulaması zorunludur.
         #[cfg(not(test))]
         if let Some(first_cert) = cert_chain.first() {
+            // 1. Sertifika zinciri derinliği sınırı.
+            if cert_chain.len() > self.max_chain_depth {
+                self.cert_verified = false;
+                self.cert_error =
+                    Some(crate::drivers::crypto::x509::CertValidationError::ChainTooDeep);
+                serial_print("[TLS] Sertifika zinciri çok derin (maks ");
+                crate::serial::print_dec(self.max_chain_depth as u64);
+                serial_print(", alınan ");
+                crate::serial::print_dec(cert_chain.len() as u64);
+                serial_print(").\n");
+                return Err(());
+            }
+
             let now = crate::drivers::crypto::x509::X509Time::now();
             let field_res = crate::drivers::crypto::x509::verify_certificate_fields(
                 first_cert,
@@ -954,6 +1076,28 @@ impl TlsSession {
                     crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
                         serial_print("desteklenmeyen imza algoritması\n");
                     }
+                    crate::drivers::crypto::x509::CertValidationError::ChainTooDeep => {
+                        serial_print("zincir derinliği sınırı aşıldı\n");
+                    }
+                    _ => {
+                        serial_print("alan doğrulama hatası\n");
+                    }
+                }
+                return Err(());
+            } else if let Err(e) = chain_res {
+                self.cert_verified = false;
+                self.cert_error = Some(e);
+                serial_print("[TLS] Sertifika zincir hatası: ");
+                match e {
+                    crate::drivers::crypto::x509::CertValidationError::UntrustedRoot => {
+                        serial_print("kök sertifika güvenilmiyor (gömülü kök CA'lar eşleşmedi)\n");
+                    }
+                    crate::drivers::crypto::x509::CertValidationError::InvalidSignature => {
+                        serial_print("geçersiz CA imzası\n");
+                    }
+                    crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
+                        serial_print("desteklenmeyen imza algoritması\n");
+                    }
                     _ => {
                         serial_print("zincir doğrulama hatası\n");
                     }
@@ -965,6 +1109,24 @@ impl TlsSession {
                 serial_print("[TLS] Sertifika ve CA kök zinciri başarıyla doğrulandı: ");
                 serial_print(&self.hostname);
                 serial_print("\n");
+
+                // 2. Sertifika pinning kontrolü: ilk sertifikanın SHA-256 hash'i
+                // pinlenmiş hash'ler listesinde bulunmalı (eğer pinning etkinse).
+                if !self.pinned_cert_hashes.is_empty() {
+                    if let Some(first_cert) = cert_chain.first() {
+                        let mut h = Sha256::new();
+                        h.update(first_cert);
+                        let digest = h.finalize();
+                        let pinned = self.pinned_cert_hashes.iter().any(|p| p == &digest[..]);
+                        if !pinned {
+                            self.cert_verified = false;
+                            self.cert_error = Some(crate::drivers::crypto::x509::CertValidationError::UntrustedRoot);
+                            serial_print("[TLS] Sertifika pinleme hatası: sertifika hash'i pinlenmiş listede bulunamadı.\n");
+                            return Err(());
+                        }
+                        serial_print("[TLS] Sertifika pinleme doğrulandı.\n");
+                    }
+                }
             }
         }
         #[cfg(test)]
@@ -1677,6 +1839,8 @@ pub fn build_client_hello(
     out: &mut Vec<u8>,
     ecdhe_secret_out: &mut [u8; 32],
     fallback: bool,
+    session_id: Option<&[u8]>,
+    session_ticket: Option<&[u8]>,
 ) {
     out.clear();
 
@@ -1686,7 +1850,13 @@ pub fn build_client_hello(
 
     handshake.extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
     handshake.extend_from_slice(client_random);
-    handshake.push(0);
+    // Session ID (0-32 bytes) — oturum resumption için.
+    if let Some(id) = session_id {
+        handshake.push(id.len().min(32) as u8);
+        handshake.extend_from_slice(&id[..id.len().min(32)]);
+    } else {
+        handshake.push(0);
+    }
 
     // Cipher suites. Sunucu listeden secmek zorundadir.
     //
@@ -1814,6 +1984,14 @@ pub fn build_client_hello(
         extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
         extensions.extend_from_slice(&(kp.public.len() as u16).to_be_bytes());
         extensions.extend_from_slice(&kp.public);
+    }
+
+    // Session ticket extension (TLS 1.2, type 0x0023).
+    if let Some(ticket) = session_ticket {
+        extensions.extend_from_slice(&0x0023u16.to_be_bytes());
+        let ticket_len = ticket.len() as u16;
+        extensions.extend_from_slice(&ticket_len.to_be_bytes());
+        extensions.extend_from_slice(ticket);
     }
 
     if !extensions.is_empty() {

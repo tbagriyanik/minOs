@@ -3099,12 +3099,40 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
         let off = c.op + XhciController::port_offset(port);
         let status = c.rd32(off);
         let connected = status & PORTSC_CCS != 0;
-        let changed = status & PORTSC_CSC != 0;
+        let changed_bits = status & PORTSC_CHANGE_BITS;
+        let csc = changed_bits & PORTSC_CSC != 0;
+        let pec = changed_bits & PORTSC_PEC != 0;
+        let prc = changed_bits & PORTSC_PRC != 0;
+        let occ = changed_bits & PORTSC_OCC != 0;
         let known_slot = c.port_slot[idx];
         let was_connected = c.port_connected[idx];
 
-        if changed {
-            c.wr32(off, (status & PORTSC_KEEP) | (status & PORTSC_CHANGE_BITS));
+        // Tüm değişiklik bitlerini temizle (W1C — yaz 1 ile temizle).
+        if changed_bits != 0 {
+            c.wr32(off, (status & PORTSC_KEEP) | changed_bits);
+        }
+
+        // Over-current değişikliği: portu devre dışı bırak ve günlüğe kaydet.
+        if occ {
+            crate::serial::print("[USB-HID] Port ");
+            crate::serial::print_dec(port as u64);
+            crate::serial::print(" aşırı akış değişikliği algılandı.\n");
+        }
+
+        // Port reset tamamlandı: PR bitini temizle ve cihazı yeniden değerlendir.
+        if prc && connected {
+            crate::serial::print("[USB-HID] Port ");
+            crate::serial::print_dec(port as u64);
+            crate::serial::print(" sıfırlama tamamlandı.\n");
+        }
+
+        // Port enable değişikliği: PED durumu değiştiyse yeniden denetle.
+        if pec && !connected && was_connected {
+            crate::serial::print("[USB-HID] Port ");
+            crate::serial::print_dec(port as u64);
+            crate::serial::print(" etkinlik kaybı (PEC), aygıt çıkarıldı.\n");
+            mark_port_disconnected(controller, port, pmm);
+            continue;
         }
 
         if !connected {
@@ -3116,7 +3144,7 @@ unsafe fn scan_ports(controller: usize, pmm: &mut PhysicalMemoryManager, initial
 
         c.port_connected[idx] = true;
 
-        let should_enumerate = known_slot == 0 || changed || (initial && known_slot == 0);
+        let should_enumerate = known_slot == 0 || csc || prc || (initial && known_slot == 0);
         if should_enumerate {
             if known_slot != 0 && known_slot != 0xFF {
                 // Port yeniden sıfırlandıysa eski aygıtı kapat.

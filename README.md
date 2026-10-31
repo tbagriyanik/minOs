@@ -35,7 +35,7 @@
 - **🚫 Tarayıcı Donma Düzeltmesi (Engellemeyen Kaynak Yükleme):** Web sayfası açılırken sistemin donması engellendi. `<link rel="stylesheet">`, `<script src="...">` ve `<img src="...">` gibi harici kaynakların `http_get()` ile senkron (engellemeyen) olarak getirilmesi HTML render sırasında kaldırıldı. Bunun yerine kaynak URL'leri `pending_resources` listesine toplanır ve `poll_network()` durum makinesi tarafından her karede tek tek asenkron olarak getirilir. Sayfa her kaynaktan sonra yeniden render edilir; bu sayede ağ işlemleri ana olay döngüsünü bloke etmez ve tarayıcı sayfa yüklenirken yanıt verir.
 - **🛠️ Tarayıcı Geliştirici Araçları:** Tarayıcıda `Ctrl+Shift+D` ile açılıp kapanan DevTools paneli eklendi. `Elements` sekmesi sayfadaki bağlantı, görsel, canvas, medya, iframe, WASM ve Worker sayılarını; `Console` JavaScript uyarılarını ve hata günlüğünü; `Network` istek durumunu ve indirmeleri; `Storage` çerezleri ve form otomatik doldurma kayıtlarını gösterir.
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):**
-  - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
+  - ✅ **Ağ:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet, Realtek RTL8139 ve NE2000 (ISA PnP + PCI RTL8029AS).
   - ✅ **Bluetooth HCI Protokolü:** Komut (0x01), ACL veri (0x02), Olay (0x04) paket formatlaması/ayrıştırması, Inquiry ve bağlantı yönetimi tamamlandı.
   - ✅ **Depolama:** AHCI/SATA, NVMe SSD, VirtIO-blk, SD/MMC.
   - ✅ **USB:** Mass Storage, Printer, Audio, Touchscreen.
@@ -54,8 +54,8 @@
 - **Açılış Konsolunda Akıllı Hata ve Uyarı Renklendirmesi:** UEFI/BIOS metin konsolunda (`[BOOT]`, `[INPUT]`, `[DRIVER]`) algılanamayan donanımlar, hata veren veya uyarı niteliğindeki satırlar açılış ekranında otomatik olarak kırmızı (`#FF6B6B`) renkle vurgulanır.
 - **Not Defteri – Bul ve Değiştir & Taşma Menüsü:** `Ctrl+F` ile **Bul** çubuğu, `Ctrl+H` ile **Değiştir** çubuğu açılır. Metin girişi aktif alanda yönlendirilir, `Esc` ile çubuk kapanır. Gelişmiş arama seçenekleri ve küçük ekranlar için taşma (overflow) menüsü entegre edildi.
 - **Realtek PCIe Ağ Kartı Desteği (RTL8168/8169/8125/8101):** Fiziksel anakartlarda ve PCIe genişleme yuvalarında en yaygın kullanılan Realtek Gigabit ve Fast Ethernet denetleyicileri için yerel sürücü desteği entegre edildi. Çoklu PCI veri yolu taraması (Bus 0..8), C+ modu başlatması, 64-bit RX/TX descriptor halkaları ve anlık donanımsal kablo/link durumu (PHYSTATUS) takibi eklendi.
-- **Realtek RTL8139 Ağ Kartı Desteği (PCI 0x10EC:0x8139):** Klasik PCI Fast Ethernet kartı için C+ modu başlatma, I/O portu tabanlı kayıt erişimi, 4 kanallı TX ve 8 KiB RX halkası (WRAP payı ile) ve MII (BMSR) bağlantı yoklaması eklendi (`e1000.rs`, `NicType::RealtekRtl8139`).
-- **NE2000 Sürücüsü (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS uyumlu ISA kartlar ISA PnP izolasyonu (0x279/0xA79/0x203, oturum anahtarı, 72 baytlık yanıt yapısından MAC okuma) veya yaygın jumper I/O tabanı taramasıyla bulunur; DP8390 sayfa yönetimi, 8 KiB RX halkası ve 16 KiB kart RAM'inde uzak DMA ile TX/RX yapılır (`ne2000.rs`). PCI RTL8029AS kartları da aynı sürücüyle çalışır. Otobüs seçimi `net::BusKind` üzerinden `netstack`'e bağlanır.
+- **Realtek RTL8139 Ağ Kartı Desteği (PCI 0x10EC:0x8139):** Klasik PCI Fast Ethernet kartı için C+ modu başlatma, I/O portu tabanlı kayıt erişimi (BAR0 = I/O BAR), 4 kanallı TX ve 8 KiB RX halkası (16 baytlık WRAP payı, CAPR/CBR boş-halka denetimi) ve MII (BMSR) bağlantı yoklaması (yedek: MSR) eklendi (`e1000.rs`, `NicType::RealtekRtl8139`). MAC adresi IDR0'dan okunur; boş/geçersizse 93C46 EEPROM yedeği kullanılır. QEMU'da `-device rtl8139,netdev=n0` ile test edilebilir.
+- **NE2000 Sürücüsü (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS uyumlu ISA kartlar ISA PnP izolasyonu (0x279/0xA79/0x203, 72-bit giriş anahtarı, 72 baytlık yanıt yapısından MAC okuma ve kaynak ayarlama) ile; PnP yanıtı yoksa 0x300, 0x280, 0x320 … 0x2E0 jumper I/O tabanlarının taranmasıyla bulunur. DP8390 sayfa yönetimi (CR/PS0-PS1), RTL8019AS sıfırlaması, PSTART/PSTOP = 0x46/0x80 ile 8 KiB RX halkası, 0x40'ta TX tamponu, 0x10 veri portu üzerinden uzak DMA (ISR/RSR ile otomatik 8/16-bit seçimi), 60 bayta dolgu, taşma (OVW) kurtarma ve çerçeve başına BNRY güncellemesi uygulanır (`ne2000.rs`). PCI RTL8029AS (aygıt kimliği 0x8029) kartları aynı çekirdeği `init_pci` üzerinden kullanır. Sürücü, PCI ağ kartı bulunamadığında açılışta otomatik olarak devreye girer; otobüs seçimi `net::BusKind` (`Pci` / `IsaPnp`) ile `netstack`'e bağlanır, böylece DHCP, ARP, DNS, TCP/UDP ve TLS yığını tüm kartlarda değişmeden çalışır. Ayarlar, Kontrol Paneli, sistem durum penceresi ve önyükleme günlüğü etkin kartı adıyla (TR/EN) raporlar.
 - **Broadcom NetXreme Ağ Kartı Desteği (BCM57xx, PCI 0x14E4):** Dördüncü büyük NIC üreticisi Broadcom için yerel sürücü eklendi. BCM5701–5782 ailesi tanınır; Register Access Enable, MAC hash tablosu, RX/TX descriptor halkaları ve link durumu (PHYSTATUS) desteği sağlanır.
 - **Yüksek Çözünürlüklü Ekranlarda (1080p+) Akıcı Fare & Balistik İvmelenme:** USB fare raporlarındaki 12/16-bit hareket verilerinin dar aralığa kırpılması engellenerek tam eksen duyarlılığı sağlandı. 1080p ve 2K/4K ekranlar için çözünürlük ölçekli dinamik taban hız (~2.8x) ve hassas piksel tıklamalarını bozmayan 4 kademeli balistik ivmelenme uygulandı.
 - **Yenilenen Orta Boyutlu & Yüksek Kontrastlı Fare İmleci:** 1080p ve üzeri çözünürlüklerde ideal boyuta sahip, modern 15 piksellik keskin ok imleci tasarlandı. 8 yönlü tam kutu konturu (outline) sayesinde açık ve koyu zeminlerin tamamında yüksek kontrast ve net görünürlük sunar; imleç arkası iz kalmasını önlemek için VRAM yedekleme arabelleği 32x32 piksele çıkarıldı.
@@ -112,9 +112,9 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | **Ağ & İletişim** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | | Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
 | | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
-| | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası, MII link |
-| | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP + jumper taraması, uzak DMA, 8K RX halkası |
-| | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
+| | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası, MII link, 93C46 MAC yedeği |
+| | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP + jumper taraması, uzak DMA, 8K RX halkası, TR/EN raporlama |
+| | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA, otomatik 8/16-bit seçimi |
 | | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
 | | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
 | | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
@@ -148,6 +148,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 - **NVIDIA / AMD 3D Hızlandırma:** Doğrusal çerçeve belleği (VRAM LFB), 2D çizim ve dinamik çözünürlük değişimi hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
 - **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri.
 - **Atheros / Marvell Ethernet:** Temel RX/TX aktarımı aktiftir; donanımsal checksum offload ve gelişmiş paket filtreleri planlanmaktadır.
+- **RTL8139 / NE2000 Ağ Sürücüleri:** Paket aktarımı, MAC okuma ve bağlantı durumu tamamlandı. Planlananlar: çoklu segment (jumbo) çerçeveler, 8 ham TX kanalını kullanan daha derin TX kuyruğu, NE2000 için kesme (IRQ) tabanlı RX ve gerçek donanımda otomatik `ne2k_pci` (RTL8029AS) kart doğrulaması. Yönetim (SNMP/IPMI) için henüz promiscuous mod yoktur.
 - **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.
 - **SD/MMC Karta Yazma:** Sektör okuma aktiftir; CSD kayıt ayrıştırması ve blok yazma güvenilirliği WIP.
 - **CRL/OCSP İptal Kontrolü:** Ayrıştırma algoritmaları entegre edilmiştir; otomatik HTTP/OCSP indirme isteği planlanmaktadır.
@@ -193,7 +194,7 @@ Ayrıntılı rehberler ve teknik başvuru kaynakları:
 - 📖 **[minOs GitHub Wiki (Ana Sayfa)](https://github.com/tbagriyanik/minOs/wiki)**
   - ℹ️ **[Hakkında & Mimari](https://github.com/tbagriyanik/minOs/wiki/Hakkinda)**: Tasarım felsefesi, `no_std` modeli, PMM ve IDT yapısı.
   - 🚀 **[Kurulum ve Çalıştırma](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` seçenekleri, Live USB oluşturma ve diske kurulum.
-  - 💻 **[Desteklenen Donanım Listesi](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (Tap-to-click), UVC Kamera, e1000 ve Wi-Fi.
+  - 💻 **[Desteklenen Donanım Listesi](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (Tap-to-click), UVC Kamera, e1000/RTL8139/NE2000 Ethernet ve Wi-Fi.
   - 📦 **[Yerleşik 15 Uygulama](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Kontrol Paneli, Paket Yöneticisi vb.
   - 🌐 **[Ağ ve İnternet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP yığını, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve HTTP/2 altyapısı.
   - 💾 **[Dosya Sistemleri](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 ve kalıcılık (`VFS.DAT`).
@@ -227,9 +228,11 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 
 ### ⚡ Çekirdek Mimarisi ve Donanım Durumu (UEFI, USB-HID, SMP)
 
+- **Çalışma zamanı altyapısı:** `rand_hc` RNG, `smoltcp` protokol yapılandırması, `heapless` bounded queue, `zerocopy` paket görünümü, `crc32fast`, ELF/IPC/I/O yardımcıları (`elf`, `embedded-io`, `postcard`), ACPI ve `raw-cpuid` adapter'ları kernel Cargo katmanına eklenmiştir.
+
 - **UEFI & BIOS Dual-Boot:** Limine v8 önyükleyici sayesinde sistem hem modern x86_64 UEFI sistemlerde hem de geleneksel BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
 - **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. EHCI/UHCI/OHCI denetleyicileri için başlatma/handoff ve transfer katmanı mevcuttur (bkz. `src/drivers/usb.rs`) ancak bu denetleyicilerde HID rapor ayrıştırma henüz yoktur; USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer. QEMU'da PS/2'yi tamamen kapatıp girdiyi yalnızca USB klavye/fare üzerinden test etmek için `.\run.ps1 -NoPs2`; QMP ile otomatik klavye/fare enjeksiyonu dahil uçtan uca doğrulama için `.\test_qemu.ps1 -NoPs2` kullanılabilir.
-- **SMP (Symmetric Multiprocessing) Altyapısı:** Çekirdekte Limine SMP protokolü, Local APIC timer/IPI, TTAS Spinlock senkronizasyonu ve Görev Yöneticisi per-core CPU izleme çubukları mevcuttur; fiziksel laptop açılış kararlılığı için varsayılan profilde tek çekirdek emniyetiyle başlar.
+- **SMP (Symmetric Multiprocessing):** Limine ile bildirilen CPU'lar başlatılır; AP başına GDT/yığın, per-CPU run queue, yerel kuyruk önceliği ve boş kuyrukta work-stealing uygulanır. 1000 Hz APIC scheduler tick'i preemption isteği üretir; başarısız AP'ler için tek CPU fallback'i korunur.
 
 ---
 
@@ -260,6 +263,7 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Not: DirectSound kullanıyorsanız `hda-duplex` yerine `hda-output` veya `-audiodev driver=sdl` kullanmak mikrofon yakalama aygıtı eksikliğinden kaynaklanan QEMU açılış çökmelerini önler.*
+> 💡 *Not: minOs farklı ağ kartlarıyla da çalışır; `-device e1000,netdev=n0` yerine `-device rtl8139,netdev=n0` (PCI RTL8139) veya `-device ne2k_isa,netdev=n0` (ISA NE2000, ISA PnP ile bulunur) kullanabilirsiniz. Sisteme özgü farkı yalnızca sürücü seçimi oluşturur; üst katman (DHCP/ARP/DNS/TCP/UDP/TLS) aynıdır.*
 > 💡 *Not: VirtIO-GPU (`-vga virtio`), QEMU/KVM ortamında doğrudan donanım 2D hızlandırma ve scanout flush mekanizması sunar. Standart VGA için `-vga std -global VGA.vgamem_mb=64` kullanılabilir.*
 > 💡 *Not: QEMU, VirtualBox ve VMware sanal makinelerinde gerçek zamanlı saat senkronizasyonu için donanım RTC saati UTC olarak çalışır ve minOs bölge/saat dilimi farkını (`settings.cfg: region`, varsayılan UTC+3) uygulayarak ana makine saati ile tam senkronize çalışır.*
 
@@ -282,7 +286,7 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
 
 > 💡 *Not: `-Memory` veya `-CpuCount` açıkça verilirse profil varsayılanlarını ezer. CI ayrıca `default`, `minimal` ve `high` profilleriyle QEMU boot doğrulaması çalıştırır.*
 > ⚠️ *Not: 64 MB ile çekirdek önyüklenemiyor (bellek hatası); doğrulanmış en düşük değer 128 MB'dır. `test_qemu.ps1` profil testleri varsayılan olarak yazılım VGA (`std`) kullanır; VirtIO-GPU için `-Vga virtio` verin.*
-> ℹ️ *Not: minOs çekirdeği şu anda tek çekirdek (SMP devre dışı) çalışır. `-CpuCount` ile vCPU artırmak hipervizörde boşta dönen AP'ler yüzünden host CPU tüketir ve fare/masaüstü tepkisini belirgin biçimde yavaşlatır; bu nedenle `-HighEnd` de 1 vCPU kullanır (8 GB RAM, 256 MB VRAM, USB HID ile ölçeklenir).*
+> ℹ️ *Not: SMP etkin profilde `-CpuCount` ile verilen vCPU'lar Limine üzerinden başlatılır ve scheduler tarafından kullanılır. AP başlatılamayan firmware/hipervizörlerde güvenli BSP/tek CPU fallback'i uygulanır.*
 
 ---
 

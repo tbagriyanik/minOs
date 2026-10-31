@@ -29,6 +29,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | Intel I219-V Ethernet | `i219.rs` | 🟢 Full | Gigabit Ethernet link and packet transfer |
 | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
 | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Full | I/O ports, C+ mode, 4 TX channels, 8 KiB RX ring, MII link |
+| AMD PCnet | `network_cards.rs` | 🟡 Detection | PCI identification; full DMA driver is still under development |
 | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Full | ISA PnP + jumper probing, remote DMA, 8K RX ring |
 | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
@@ -72,6 +73,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | ACPI Power Management | `acpi_power.rs` | 🟢 Full | `_S0`..`_S5` sleep states detection, PowerResource, dynamic AC/Battery status tracking |
 | Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone parsing, Celsius conversion, fan RPM monitoring |
 | Bus & Timers | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Full | PCI/PCIe configuration, TSC/HPET/APIC timers |
+| SMP & Scheduler | `smp.rs`, `task/mod.rs` | 🟢 Enabled | Limine AP startup, per-CPU run queues, work stealing, 1000 Hz tick |
 
 ---
 

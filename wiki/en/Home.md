@@ -42,7 +42,7 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 - **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.
 - **Dynamic Themes:** 5 themes (Velvet Dark, Daylight, Nord, Terminal Green, Sunset) with live switching.
 - **xHCI USB HID:** Native USB keyboard/mouse support with PS/2 fallback.
-- **Networking:** Intel e1000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net, VMware VMXNET3.
+- **Networking:** Intel PRO/1000, RTL8139, AMD PCnet detection, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net and VMware VMXNET3.
 - **Storage:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **File Systems:** FAT32, Ext2, Ext4, exFAT (read/write/format).
 - **Crypto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.

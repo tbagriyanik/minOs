@@ -35,7 +35,7 @@
 - **🚫 Browser Freeze Fix (Non-blocking Resource Loading):** System freeze when opening web pages has been eliminated. Synchronous (blocking) `http_get()` calls for external resources (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) were removed from HTML rendering. Instead, resource URLs are collected into a `pending_resources` list and fetched one per frame asynchronously by the `poll_network()` state machine. The page re-renders after each resource is fetched, so network operations never block the main event loop and the browser remains responsive while pages load.
 - **🛠️ Browser Developer Tools:** A DevTools panel toggled with `Ctrl+Shift+D` is now available in the browser. The `Elements` tab reports links, images, canvases, media, iframes, WASM modules and Workers; `Console` shows JavaScript alerts and error logs; `Network` shows request state and downloads; `Storage` shows cookies and form-autofill entries.
 - **Expanded Hardware Drivers (20+ New Drivers):**
-  - ✅ **Networking:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet.
+  - ✅ **Networking:** VirtIO-net, Intel I219-V, Atheros, Marvell Ethernet, Realtek RTL8139 and NE2000 (ISA PnP + PCI RTL8029AS).
   - ✅ **Bluetooth HCI Protocol:** Command (0x01), ACL data (0x02) and Event (0x04) packet formatting/parsing, inquiry and connection management completed.
   - ✅ **Storage:** AHCI/SATA, NVMe SSD, VirtIO-blk, SD/MMC.
   - ✅ **USB:** Mass Storage, Printer, Audio, Touchscreen.
@@ -54,8 +54,8 @@
 - **Smart Error and Warning Coloring in the Boot Console:** Undetected hardware and error or warning lines (`[BOOT]`, `[INPUT]`, `[DRIVER]`) in the UEFI/BIOS text console are automatically highlighted in red (`#FF6B6B`) on the boot screen.
 - **Notepad – Find & Replace and Overflow Menu:** `Ctrl+F` opens the **Find** bar and `Ctrl+H` opens the **Replace** bar. Text input is routed to the active field and `Esc` closes the bar. Advanced search options and an overflow menu for small screens were integrated.
 - **Realtek PCIe Network Card Support (RTL8168/8169/8125/8101):** Native driver support was integrated for the most widely used Realtek Gigabit and Fast Ethernet controllers on physical motherboards and PCIe expansion slots. Multi PCI bus scanning (Bus 0..8), C+ mode initialization, 64-bit RX/TX descriptor rings and live hardware cable/link status (PHYSTATUS) tracking were added.
-- **Realtek RTL8139 Network Card Support (PCI 0x10EC:0x8139):** The classic PCI Fast Ethernet controller is now driven natively: C+ mode initialisation, I/O port register access, four TX channels and an 8 KiB RX ring (with WRAP padding) plus MII (BMSR) link polling (`e1000.rs`, `NicType::RealtekRtl8139`).
-- **NE2000 Driver (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS compatible ISA cards are located through ISA PnP isolation (0x279/0xA79/0x203, initiation key, MAC read from the 72-byte response structure) or by probing common jumper I/O bases; packets move through DP8390 page handling, an 8 KiB RX ring and remote DMA inside the card's 16 KiB RAM (`ne2000.rs`). PCI RTL8029AS cards use the same driver. Bus selection is wired into `netstack` through `net::BusKind`.
+- **Realtek RTL8139 Network Card Support (PCI 0x10EC:0x8139):** The classic PCI Fast Ethernet controller is now driven natively: C+ mode initialisation, I/O port register access (BAR0 is an I/O BAR), four TX channels and an 8 KiB RX ring (16-byte WRAP padding, CAPR/CBR empty-ring detection) plus MII (BMSR) link polling with an MSR fallback (`e1000.rs`, `NicType::RealtekRtl8139`). The MAC address is read from IDR0, with a 93C46 EEPROM fallback when it is blank or invalid. Testable in QEMU with `-device rtl8139,netdev=n0`.
+- **NE2000 Driver (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS compatible ISA cards are located through ISA PnP isolation (0x279/0xA79/0x203, 72-bit initiation key, MAC and resource settings read from the 72-byte response structure); when PnP does not answer, the common jumper bases 0x300, 0x280, 0x320 … 0x2E0 are probed. The driver performs DP8390 page handling (CR/PS0-PS1), RTL8019AS reset, an 8 KiB RX ring (PSTART/PSTOP = 0x46/0x80), a TX buffer at 0x40, remote DMA through the 0x10 data port with automatic 8/16-bit selection (ISR/RSR), 60-byte padding, overrun (OVW) recovery and per-frame BNRY updates (`ne2000.rs`). PCI RTL8029AS cards (device 0x8029) reuse the same core through `init_pci`. The driver is started automatically at boot when no PCI NIC is found; bus selection goes through `net::BusKind` (`Pci` / `IsaPnp`), so the DHCP, ARP, DNS, TCP/UDP and TLS stack works unchanged on every card. Settings, Control Panel, the system status window and the boot log report the active adapter in TR/EN.
 - **Broadcom NetXtreme Network Card Support (BCM57xx, PCI 0x14E4):** A native driver was added for Broadcom, the fourth major NIC vendor. The BCM5701–5782 family is recognized; Register Access Enable, MAC hash table, RX/TX descriptor rings and link status (PHYSTATUS) support are provided.
 - **Smooth Mouse & Ballistic Acceleration on High-Resolution Displays (1080p+):** Clipping of the 12/16-bit movement data in USB mouse reports to a narrow range was prevented, providing full axis sensitivity. Resolution-scaled dynamic base speed (~2.8x) for 1080p and 2K/4K screens and a 4-stage ballistic acceleration that does not disturb precise pixel clicks were applied.
 - **Renewed Medium-Sized & High-Contrast Mouse Cursor:** A modern 15-pixel sharp arrow cursor with an ideal size for 1080p and higher resolutions was designed. The full 8-direction box outline provides high contrast and clear visibility on all light and dark backgrounds; the VRAM backup buffer was increased to 32x32 pixels to prevent cursor trails.
@@ -112,9 +112,9 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | **Network & Communication** | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Full | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | | Intel I219-V Ethernet | `i219.rs` | 🟢 Full | Gigabit Ethernet link and packet transfer |
 | | Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
-| | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Full | I/O port access, C+ mode, 4 TX channels, 8 KiB RX ring, MII link |
-| | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Full | ISA PnP + jumper probing, remote DMA, 8K RX ring |
-| | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA |
+| | Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Full | I/O port access, C+ mode, 4 TX channels, 8 KiB RX ring, MII link, 93C46 MAC fallback |
+| | NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Full | ISA PnP + jumper probing, remote DMA, 8K RX ring, TR/EN reporting |
+| | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA, automatic 8/16-bit selection |
 | | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
 | | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Full | High-speed virtualized network adapter |
 | | Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
@@ -148,6 +148,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 - **NVIDIA / AMD 3D Acceleration:** Linear frame buffer (VRAM LFB), 2D drawing and dynamic resolution change are ready; 3D acceleration (Vulkan/Gallium) is a separate stage.
 - **Sensor & Fan Management:** Hardware-specific EC (Embedded Controller) fan profiles for `fan_temp.rs`.
 - **Atheros / Marvell Ethernet:** Basic RX/TX transfer is active; hardware checksum offload and advanced packet filters are planned.
+- **RTL8139 / NE2000 Network Drivers:** Packet transfer, MAC reading and link state are complete. Planned: multi-segment (jumbo) frames, a deeper TX queue using all four RTL8139 channels, interrupt-driven RX for NE2000, and validation on real `ne2k_pci` (RTL8029AS) hardware. Promiscuous mode for management (SNMP/IPMI) is not available yet.
 - **USB Audio Recording:** Speaker output (playback) is active; PCM recording via microphone is TODO.
 - **SD/MMC Card Writing:** Sector reading is active; CSD register parsing and block write reliability are WIP.
 - **CRL/OCSP Revocation Checking:** Parsing algorithms are integrated; automatic HTTP/OCSP download requests are planned.
@@ -193,7 +194,7 @@ Detailed guides and technical reference resources:
 - 📖 **[minOs GitHub Wiki (Home)](https://github.com/tbagriyanik/minOs/wiki)**
   - ℹ️ **[About & Architecture](https://github.com/tbagriyanik/minOs/wiki/Hakkinda)**: Design philosophy, `no_std` model, PMM and IDT structure.
   - 🚀 **[Installation and Running](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` options, creating a Live USB and installing to disk.
-  - 💻 **[Supported Hardware List](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (tap-to-click), UVC camera, e1000 and Wi-Fi.
+  - 💻 **[Supported Hardware List](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (tap-to-click), UVC camera, e1000/RTL8139/NE2000 Ethernet and Wi-Fi.
   - 📦 **[15 Built-in Applications](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Browser, Notepad, File Manager, Control Panel, Package Manager etc.
   - 🌐 **[Network and Internet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP stack, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and HTTP/2 infrastructure.
   - 💾 **[File Systems](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 and persistence (`VFS.DAT`).
@@ -226,9 +227,11 @@ The minOs VFS layer supports several file systems, but each file system's capabi
 
 ### ⚡ Kernel Architecture and Hardware Status (UEFI, USB-HID, SMP)
 
+- **Runtime primitives:** The kernel Cargo layer includes `rand_hc`, `smoltcp`, bounded `heapless` queues, `zerocopy` packet views, `crc32fast`, ELF/IPC/I/O helpers (`elf`, `embedded-io`, `postcard`), and ACPI/`raw-cpuid` adapters.
+
 - **UEFI & BIOS Dual-Boot:** Thanks to the Limine v8 bootloader, the system boots smoothly on both modern x86_64 UEFI systems and traditional BIOS (Legacy) environments.
 - **Native xHCI USB HID & PS/2 Fallback:** A native USB keyboard and mouse driver (`src/drivers/usb_hid.rs`) is active over xHCI (USB 3.x) controllers. Initialization/handoff and a transfer layer exist for EHCI/UHCI/OHCI controllers (see `src/drivers/usb.rs`), but HID report parsing is not yet available on these controllers; when no USB device is found or BIOS CSM/Legacy USB is disabled, the system automatically switches to PS/2 fallback mode for stability and logs an informational message to the boot console. To completely disable PS/2 in QEMU and test input only through a USB keyboard/mouse use `.\run.ps1 -NoPs2`; for end-to-end verification including automated keyboard/mouse injection over QMP use `.\test_qemu.ps1 -NoPs2`.
-- **SMP (Symmetric Multiprocessing) Infrastructure:** The kernel includes the Limine SMP protocol, Local APIC timer/IPI, TTAS spinlock synchronization and per-core CPU monitoring bars in Task Manager; the default profile starts with single-core safety for physical laptop boot stability.
+- **SMP (Symmetric Multiprocessing):** CPUs reported by Limine are brought online with per-AP GDTs/stacks, per-CPU run-queue assignment, local-queue preference and work stealing. The 1000 Hz APIC scheduler tick requests preemption; failed AP startup falls back safely to BSP-only mode.
 
 ---
 
@@ -259,6 +262,7 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
   -netdev user,id=n0 -device e1000,netdev=n0
 ```
 > 💡 *Note: If you use DirectSound, using `hda-output` instead of `hda-duplex` or `-audiodev driver=sdl` prevents QEMU startup crashes caused by a missing microphone capture device.*
+> 💡 *Note: minOs also works with other network cards; instead of `-device e1000,netdev=n0` use `-device rtl8139,netdev=n0` (PCI RTL8139) or `-device ne2k_isa,netdev=n0` (ISA NE2000, found via ISA PnP). Only driver selection differs — the upper layers (DHCP/ARP/DNS/TCP/UDP/TLS) are identical.*
 > 💡 *Note: VirtIO-GPU (`-vga virtio`) provides direct 2D hardware acceleration and scanout flush queues in QEMU/KVM environments. For legacy/standard VGA, `-vga std -global VGA.vgamem_mb=64` can be used.*
 > 💡 *Note: In QEMU, VirtualBox, and VMware, hardware RTC operates in UTC and minOs applies the timezone offset (`settings.cfg: region`, default UTC+3) to ensure exact synchronization with host real time.*
 

@@ -3,12 +3,12 @@
 Bu dosya minOs sürümlerinin ayrıntılı değişiklik listelerini içerir.
 README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradadır.
 
-- [v2.1.0](#yenilikler-v210) — güncel sürüm
+- [v2.2.0](#yenilikler-v210) — güncel sürüm
 - [v1.6.0 ve öncesi](releases.md)
 
 ---
 
-## Yenilikler (v2.1.0)
+## Yenilikler (v2.2.0)
 
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.
@@ -40,6 +40,8 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - **Açılış Konsolunda Akıllı Hata ve Uyarı Renklendirmesi:** UEFI/BIOS metin konsolunda (`[BOOT]`, `[INPUT]`, `[DRIVER]`) algılanamayan donanımlar, hata veren veya uyarı niteliğindeki satırlar açılış ekranında otomatik olarak kırmızı (`#FF6B6B`) renkle vurgulanır.
 - **Not Defteri – Bul ve Değiştir & Taşma Menüsü:** `Ctrl+F` ile **Bul** çubuğu, `Ctrl+H` ile **Değiştir** çubuğu açılır. Metin girişi aktif alanda yönlendirilir, `Esc` ile çubuk kapanır. Gelişmiş arama seçenekleri ve küçük ekranlar için taşma (overflow) menüsü entegre edildi.
 - **Realtek PCIe Ağ Kartı Desteği (RTL8168/8169/8125/8101):** Fiziksel anakartlarda ve PCIe genişleme yuvalarında en yaygın kullanılan Realtek Gigabit ve Fast Ethernet denetleyicileri için yerel sürücü desteği entegre edildi. Çoklu PCI veri yolu taraması (Bus 0..8), C+ modu başlatması, 64-bit RX/TX descriptor halkaları ve anlık donanımsal kablo/link durumu (PHYSTATUS) takibi eklendi.
+- **Realtek RTL8139 Ağ Kartı Desteği (PCI 0x10EC:0x8139):** Yerel C+ modlu sürücü eklendi: I/O portu kayıt erişimi, 4 TX kanalı, WRAP paylı 8 KiB RX halkası, CAPR/CBR boş-halka denetimi, MII (BMSR) link yoklaması ve 93C46 EEPROM MAC yedeği (`e1000.rs`, `NicType::RealtekRtl8139`).
+- **NE2000 Sürücüsü (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS uyumlu ISA kartlar yerel olarak sürülür: ISA PnP izolasyonu (0x279/0xA79/0x203, 72-bit giriş anahtarı, 72 baytlık yanıttan MAC) ve yedek olarak jumper taban taraması, DP8390 sayfa yönetimi, 8 KiB RX halkası, 0x10 veri portundan otomatik 8/16-bit seçimli uzak DMA ve 60 bayta dolgu (`ne2000.rs`). PCI RTL8029AS kartları aynı çekirdeği kullanır. Otobüs seçimi `net::BusKind` ile yapılır ve PCI ağ kartı yoksa NE2000 otomatik devreye girer.
 - **Broadcom NetXtreme Ağ Kartı Desteği (BCM57xx, PCI 0x14E4):** Dördüncü büyük NIC üreticisi Broadcom için yerel sürücü eklendi. BCM5701–5782 ailesi tanınır; Register Access Enable, MAC hash tablosu, RX/TX descriptor halkaları ve link durumu (PHYSTATUS) desteği sağlanır.
 - **Yüksek Çözünürlüklü Ekranlarda (1080p+) Akıcı Fare & Balistik İvmelenme:** USB fare raporlarındaki 12/16-bit hareket verilerinin dar aralığa kırpılması engellenerek tam eksen duyarlılığı sağlandı. 1080p ve 2K/4K ekranlar için çözünürlük ölçekli dinamik taban hız (~2.8x) ve hassas piksel tıklamalarını bozmayan 4 kademeli balistik ivmelenme uygulandı.
 - **Yenilenen Orta Boyutlu & Yüksek Kontrastlı Fare İmleci:** 1080p ve üzeri çözünürlüklerde ideal boyuta sahip, modern 15 piksellik keskin ok imleci tasarlandı. 8 yönlü tam kutu konturu (outline) sayesinde açık ve koyu zeminlerin tamamında yüksek kontrast ve net görünürlük sunar; imleç arkası iz kalmasını önlemek için VRAM yedekleme arabelleği 32x32 piksele çıkarıldı.

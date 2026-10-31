@@ -614,6 +614,8 @@ pub fn fetch_once(
                         &mut hello,
                         &mut ecdhe_secret,
                         false,
+                        None,
+                        None,
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
@@ -884,6 +886,8 @@ fn fetch_https(
         &mut hello,
         &mut ecdhe_secret,
         false,
+        None,
+        None,
     );
     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
     let mut session = TlsSession::new(host_str, client_random);
@@ -1103,6 +1107,8 @@ fn http_get_impl(
                         &mut hello,
                         &mut ecdhe_secret,
                         false,
+                        None,
+                        None,
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
@@ -2273,6 +2279,8 @@ impl Http2Connection {
                 &mut hello,
                 &mut ecdhe_secret,
                 false,
+                None,
+                None,
             );
             let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
             let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
@@ -3012,6 +3020,8 @@ impl WebSocketConnection {
                 &mut hello,
                 &mut ecdhe_secret,
                 false,
+                None,
+                None,
             );
             let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
             let mut session = crate::drivers::tls::TlsSession::new(&host, client_random);
@@ -3301,3 +3311,4 @@ fn generate_ws_key() -> String {
     }
     out
 }
+

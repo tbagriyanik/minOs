@@ -3,12 +3,12 @@
 This file contains the detailed change lists for minOs releases.
 The README files only summarise the highlights; the full list lives here.
 
-- [v2.1.0](#whats-new-v210) — current release
+- [v2.2.0](#whats-new-v210) — current release
 - [v1.6.0 and earlier](releases.md)
 
 ---
 
-## What's New (v2.1.0)
+## What's New (v2.2.0)
 
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.
@@ -40,6 +40,8 @@ The README files only summarise the highlights; the full list lives here.
 - **Smart Error and Warning Coloring in the Boot Console:** Undetected hardware and error or warning lines (`[BOOT]`, `[INPUT]`, `[DRIVER]`) in the UEFI/BIOS text console are automatically highlighted in red (`#FF6B6B`) on the boot screen.
 - **Notepad – Find & Replace and Overflow Menu:** `Ctrl+F` opens the **Find** bar and `Ctrl+H` opens the **Replace** bar. Text input is routed to the active field and `Esc` closes the bar. Advanced search options and an overflow menu for small screens were integrated.
 - **Realtek PCIe Network Card Support (RTL8168/8169/8125/8101):** Native driver support was integrated for the most widely used Realtek Gigabit and Fast Ethernet controllers on physical motherboards and PCIe expansion slots. Multi PCI bus scanning (Bus 0..8), C+ mode initialization, 64-bit RX/TX descriptor rings and live hardware cable/link status (PHYSTATUS) tracking were added.
+- **Realtek RTL8139 Network Card Support (PCI 0x10EC:0x8139):** Native C+ mode driver added: I/O port register access, four TX channels, 8 KiB RX ring with WRAP padding, CAPR/CBR empty-ring detection, MII (BMSR) link polling, and a 93C46 EEPROM MAC fallback (`e1000.rs`, `NicType::RealtekRtl8139`).
+- **NE2000 Driver (ISA PnP + PCI RTL8029AS):** Novell NE2000 / RTL8019AS compatible ISA cards are driven natively: ISA PnP isolation (0x279/0xA79/0x203, 72-bit initiation key, MAC from the 72-byte response) with jumper-base probing as fallback, DP8390 page handling, an 8 KiB RX ring, remote DMA through the 0x10 data port with automatic 8/16-bit selection, and 60-byte padding (`ne2000.rs`). PCI RTL8029AS cards reuse the same core. Bus selection goes through `net::BusKind` and falls back to NE2000 automatically when no PCI NIC is present.
 - **Broadcom NetXtreme Network Card Support (BCM57xx, PCI 0x14E4):** A native driver was added for Broadcom, the fourth major NIC vendor. The BCM5701–5782 family is recognized; Register Access Enable, MAC hash table, RX/TX descriptor rings and link status (PHYSTATUS) support are provided.
 - **Smooth Mouse & Ballistic Acceleration on High-Resolution Displays (1080p+):** Clipping of the 12/16-bit movement data in USB mouse reports to a narrow range was prevented, providing full axis sensitivity. Resolution-scaled dynamic base speed (~2.8x) for 1080p and 2K/4K screens and a 4-stage ballistic acceleration that does not disturb precise pixel clicks were applied.
 - **Renewed Medium-Sized & High-Contrast Mouse Cursor:** A modern 15-pixel sharp arrow cursor with an ideal size for 1080p and higher resolutions was designed. The full 8-direction box outline provides high contrast and clear visibility on all light and dark backgrounds; the VRAM backup buffer was increased to 32x32 pixels to prevent cursor trails.

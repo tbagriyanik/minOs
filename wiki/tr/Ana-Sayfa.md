@@ -42,7 +42,7 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.
 - **Dinamik Tema:** 5 tema (Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal, Gün Batımı) canlı geçiş.
 - **xHCI USB HID:** Yerel USB klavye/fare desteği, PS/2 fallback ile.
-- **Ağ:** Intel e1000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net, VMware VMXNET3.
+- **Ağ:** Intel PRO/1000, RTL8139, AMD PCnet algılama, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net ve VMware VMXNET3.
 - **Depolama:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **Dosya Sistemleri:** FAT32, Ext2, Ext4, exFAT (okuma/yazma/biçimlendirme).
 - **Kripto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.

@@ -205,6 +205,10 @@ pub fn init_subsystems(
     serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
 
     serial_print("[BOOT] APIC zamanlayıcısı başlatılıyor...\n");
+    // Local APIC MMIO sayfasını eşlemeden ilk lapic_write çekirdek #PF (vektor 14)
+    // üretir ve sistemi siyah ekranda durdurur. lapic_init() önce MMIO sayfasını
+    // map'ler, ardından apic::init_timer() timer kayıtlarına güvenle yazabilir.
+    arch::x86_64::smp::lapic_init();
     arch::x86_64::apic::init_timer();
     serial_print("[APIC] 1000Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
     serial_print("[SCHED] 1000Hz round-robin scheduler; network downloads yield cooperatively.\n");

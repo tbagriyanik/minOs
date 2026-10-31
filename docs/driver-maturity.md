@@ -30,6 +30,9 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | Intel e1000/e1000e | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, TLS 1.3 |
 | Intel I219-V | `i219.rs` | 🟢 Tam | Gigabit Ethernet |
+| Realtek RTL8139 | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası |
+| NE2000 / RTL8019AS (ISA PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP, uzak DMA, 8K RX halkası |
+| NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
 | Realtek PCIe | `net.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX, PHYSTATUS |
 | Broadcom NetXtreme | `net.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link |
 | VirtIO-net | `virtio_net.rs` | 🟢 Tam | Sanallaştırılmış ağ adaptörü |

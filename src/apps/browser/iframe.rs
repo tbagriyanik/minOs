@@ -98,6 +98,7 @@ impl IFrame {
             &mut canvases,
             &mut media_players,
             &mut iframes,
+            &mut Vec::new(),
         );
 
         // Extract title from first heading line if available

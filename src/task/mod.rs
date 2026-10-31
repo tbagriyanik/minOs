@@ -196,6 +196,9 @@ impl SimpleExecutor {
 
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);
+static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SCHEDULER_TICKS: AtomicU64 = AtomicU64::new(0);
+static RR_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static RUNNING_TASK: AtomicUsize = AtomicUsize::new(0);
 static RUNNING_CANCELLED: AtomicBool = AtomicBool::new(false);
 static RUNNING_WAIT_EVENT: AtomicUsize = AtomicUsize::new(0);
@@ -277,6 +280,25 @@ pub fn set_step_budget(steps: usize) {
     EXECUTOR.lock().set_step_budget(steps);
 }
 
+/// Request a reschedule from the timer/IPI path. The current callback yields
+/// at its next scheduler boundary, keeping per-CPU scheduler state lock-free.
+pub fn request_preempt() {
+    PREEMPT_REQUESTED.store(true, Ordering::Release);
+}
+
+pub const SCHEDULER_HZ: u64 = 1_000;
+pub fn scheduler_tick() {
+    SCHEDULER_TICKS.fetch_add(1, Ordering::Relaxed);
+    request_preempt();
+}
+pub fn scheduler_ticks() -> u64 {
+    SCHEDULER_TICKS.load(Ordering::Relaxed)
+}
+
+pub fn preempt_pending() -> bool {
+    PREEMPT_REQUESTED.load(Ordering::Acquire)
+}
+
 /// Return a read-only snapshot of queued and currently executing tasks.
 pub fn task_snapshots() -> Vec<TaskSnapshot> {
     let executor = EXECUTOR.lock();
@@ -335,6 +357,9 @@ pub fn poll_tasks() -> usize {
     if IN_SCHEDULER.swap(true, Ordering::Acquire) {
         return EXECUTOR.lock().task_count();
     }
+    // A timer interrupt requests a new quantum. The callback itself remains
+    // cooperative: Rust cannot safely switch stacks in the middle of it.
+    let _quantum_expired = PREEMPT_REQUESTED.swap(false, Ordering::AcqRel);
     let budget = EXECUTOR.lock().step_budget();
     for _ in 0..budget {
         let task = {
@@ -423,15 +448,22 @@ pub fn poll_tasks() -> usize {
 /// opportunities it waits, up to Realtime. This reduces starvation without
 /// claiming deadlines or wall-clock guarantees.
 fn select_ready(tasks: &[Task]) -> Option<usize> {
-    tasks
+    let best_priority = tasks
         .iter()
-        .enumerate()
-        .filter(|(_, task)| task.ready && !task.cancelled && !task.completed)
-        .max_by_key(|(_, task)| {
-            (
-                (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32),
-                task.ready_age,
-            )
+        .filter(|task| task.ready && !task.cancelled && !task.completed)
+        .map(|task| {
+            (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
         })
-        .map(|(index, _)| index)
+        .max()?;
+    let start = RR_CURSOR.fetch_add(1, Ordering::Relaxed);
+    (0..tasks.len())
+        .map(|n| (start + n) % tasks.len())
+        .find(|&i| {
+            let task = &tasks[i];
+            task.ready
+                && !task.cancelled
+                && !task.completed
+                && (task.priority as u32 + (task.ready_age / 8)).min(TaskPriority::Realtime as u32)
+                    == best_priority
+        })
 }

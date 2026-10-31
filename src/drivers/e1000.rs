@@ -2,7 +2,13 @@
 
 //! Intel 82540EM (e1000) Ethernet sürücüsü — QEMU `-device e1000,netdev=n0`
 //! ile uyumlu, MMIO tabanlı TX/RX ring'leri kullanır.
+//!
+//! Aynı giriş noktaları (`init`, `poll`, `transmit`, `receive`, `is_ready`,
+//! `link_up`) Realtek RTL8139 (PCI, C+ modu) için de hizmet verir; otobüs
+//! seçimi `net::set_bus` ile yapılır. NE2000 (ISA/PnP) sürücüsü ayrı modüldedir
+//! (`drivers::ne2000`).
 
+use crate::drivers::net::{self, BusKind};
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -82,7 +88,8 @@ const VMWARE_DEVICES: [u32; 2] = [
 ];
 
 // Realtek PCIe Gigabit & Fast Ethernet Aygıtları (RTL8168, RTL8169, RTL8101, RTL8125 vb.)
-const REALTEK_DEVICES: [u32; 10] = [
+const REALTEK_DEVICES: [u32; 11] = [
+    0x8139, // RTL8139 Fast Ethernet (klasik PCI NIC, C+ modu)
     0x8168, // RTL8111/8168/8411 PCI Express Gigabit Ethernet (En yaygın anakart PCIe NIC)
     0x8169, // RTL8169 Gigabit Ethernet
     0x8167, // RTL8169SC Gigabit Ethernet
@@ -150,7 +157,11 @@ pub enum NicType {
     IntelE1000,
     VmwareVmxnet3,
     RealtekR8169,
+    RealtekRtl8139,
     BroadcomB57,
+    /// NE2000 uyumlu PCI kart (RTL8029AS). ISA karşılığı `drivers::ne2000`
+    /// modülündedir; sadece PCI adresi/BAR tespiti için burada tutulur.
+    Ne2000Pci,
 }
 
 static mut DETECTED_NIC: NicType = NicType::IntelE1000;
@@ -164,7 +175,33 @@ pub fn nic_name() -> &'static str {
         NicType::IntelE1000 => "Intel e1000",
         NicType::VmwareVmxnet3 => "VMware VMXNET3",
         NicType::RealtekR8169 => "Realtek PCIe GbE (RTL8168/8169)",
+        NicType::RealtekRtl8139 => "Realtek RTL8139",
         NicType::BroadcomB57 => "Broadcom NetXtreme (BCM57xx/577xx)",
+        NicType::Ne2000Pci => "NE2000 compatible (RTL8029AS)",
+    }
+}
+
+/// Arayüzlerde gösterilecek yerelleştirilmiş (TR/EN) açıklayıcı sürücü adı.
+pub fn nic_label(english: bool) -> &'static str {
+    match unsafe { DETECTED_NIC } {
+        NicType::IntelE1000 => "Intel e1000",
+        NicType::VmwareVmxnet3 => "VMware VMXNET3",
+        NicType::RealtekR8169 => "Realtek PCIe GbE",
+        NicType::RealtekRtl8139 => {
+            if english {
+                "Realtek RTL8139 (PCI Fast Ethernet)"
+            } else {
+                "Realtek RTL8139 (PCI Hızlı Ethernet)"
+            }
+        }
+        NicType::BroadcomB57 => "Broadcom NetXtreme",
+        NicType::Ne2000Pci => {
+            if english {
+                "NE2000 compatible (RTL8029AS)"
+            } else {
+                "NE2000 uyumlu (RTL8029AS)"
+            }
+        }
     }
 }
 
@@ -193,6 +230,52 @@ const RTL_REG_RXADDR: u32 = 0x00E4; // RX Descriptor ring tabanı (64-bit: 0xE4.
 const RTL_CMD_RESET: u8 = 0x10;
 const RTL_CMD_RX_EN: u8 = 0x08;
 const RTL_CMD_TX_EN: u8 = 0x04;
+
+// ---------------------------------------------------------------------------
+// Realtek RTL8139 (PCI, C+ modu) I/O kayıtları
+// ---------------------------------------------------------------------------
+// RTL8139 PCI BAR0 bir I/O BAR'dır; kayıtlara I/O portundan erişilir.
+const RTL8139_IDR0: u16 = 0x00; // MAC adresi bayt 0..5
+const RTL8139_TSD0: u16 = 0x10; // TX status (4 kanal: 0x10, 0x14, 0x18, 0x1C)
+const RTL8139_TSAD0: u16 = 0x20; // TX start address (4 kanal: 0x20, 0x24, 0x28, 0x2C)
+const RTL8139_RBSTART: u16 = 0x30; // RX buffer fiziksel adresi
+const RTL8139_CR: u16 = 0x37; // Command
+const RTL8139_CAPR: u16 = 0x38; // Current Address of Packet Read
+const RTL8139_CBR: u16 = 0x3A; // Current Buffer Address
+const RTL8139_IMR: u16 = 0x3C;
+const RTL8139_ISR: u16 = 0x3E;
+const RTL8139_TCR: u16 = 0x40;
+const RTL8139_RCR: u16 = 0x44;
+const RTL8139_CONFIG1: u16 = 0x52;
+const RTL8139_CONFIG3: u16 = 0x54; // EEPROM adres bitleri (Config3)
+const RTL8139_CONFIG4: u16 = 0x55; // EEPROM veri bitleri (Config4)
+const RTL8139_9346CR: u16 = 0x50;
+const RTL8139_MSR: u16 = 0x58;
+const RTL8139_PHY_MII: u16 = 0x32; // MII serial interface (BMCR/BMEDIA)
+const RTL8139_PHY_DATA: u16 = 0x34;
+const RTL8139_CONFIG1_LWAKE: u8 = 1 << 0; // LWAKE: Config1 yazma kilidini açar
+const RTL8139_CONFIG4_EEM0: u8 = 1 << 7; // EEM0 = 1: 93C46 yok, sürücü programlar
+
+const RTL8139_RX_RING_BITS: u32 = 1 << 11; // RCR bit 11: 8K + 16B RX halkası
+const RTL8139_RX_WRAP: u16 = 0x2000; // Halka girdisi WRAP işareti
+
+const RTL8139_CR_BUFE: u8 = 0x01; // RX tamponu boş
+const RTL8139_CR_TE: u8 = 0x04; // TX enable
+const RTL8139_CR_RE: u8 = 0x08; // RX enable
+const RTL8139_CR_RST: u8 = 0x10; // Sıfırlama (kendini temizler)
+
+const RTL8139_TSD_OWN: u32 = 1 << 13; // Kanalın gönderimi tamamladı
+const RTL8139_TSD_UNDERRUN: u32 = 1 << 14;
+
+// RX halkası 8K + 16 bayt "wrap around" payı, 2K paket tavanı (tek segment).
+const RTL8139_RX_RING_SIZE: usize = 8192;
+const RTL8139_RX_BUF_TOTAL: usize = RTL8139_RX_RING_SIZE + 16;
+const RTL8139_MAX_PACKET: usize = 2048;
+const RTL8139_TX_CHANNELS: usize = 4;
+
+// RTL8139 başlatılamadığında (ör. DMA belleği yok) diğer otobüslere devam
+// edebilmek için uyarı iletisi bir kez yazılır.
+static RTL8139_WARNED: AtomicBool = AtomicBool::new(false);
 
 // Realtek Descriptor Bitleri
 const RTL_DESC_OWN: u32 = 1 << 31;
@@ -359,7 +442,14 @@ pub fn link_up() -> bool {
     if !is_ready() {
         return false;
     }
+    // ISA/PnP kartlar için sorgu NE2000 sürücüsüne yönlendirilir.
+    if net::active_bus() == BusKind::IsaPnp {
+        return crate::drivers::ne2000::link_up();
+    }
     unsafe {
+        if DETECTED_NIC == NicType::RealtekRtl8139 {
+            return rtl8139_link_up();
+        }
         match DETECTED_NIC {
             NicType::IntelE1000 => mmio_read32(REG_STATUS) & (1 << 1) != 0,
             NicType::VmwareVmxnet3 => {
@@ -372,8 +462,322 @@ pub fn link_up() -> bool {
                 (mmio_read8(RTL_REG_PHYSTATUS) & 0x02) != 0
             }
             NicType::BroadcomB57 => (mmio_read32(B57_PHY_STATUS) & B57_PHY_LINK_UP) != 0,
+            NicType::RealtekRtl8139 => rtl8139_link_up(),
+            NicType::Ne2000Pci => false,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Realtek RTL8139 (C+ modu) sürücüsü
+// ---------------------------------------------------------------------------
+// Kayıtlara I/O portundan erişilir. TX için 4 kanal doğrudan
+// `tx_bufs` içine yazılan tamponlara yönlendirilir; RX tek bir fiziksel
+// halkadır (`rtl8139_rx()`) ve paketler halkadan okunup `rx_bufs`
+// içinde yeniden oluşturulur (wrap-around böylece tek segment olur).
+
+static mut RTL8139_IOBASE: u16 = 0;
+static mut RTL8139_READ_PTR: usize = 0;
+static mut RTL8139_BUF_ADDR: usize = 0;
+
+#[inline(always)]
+unsafe fn rtl8139_out8(off: u16, val: u8) {
+    crate::drivers::port_io::io_out8(RTL8139_IOBASE + off, val)
+}
+
+#[inline(always)]
+unsafe fn rtl8139_in8(off: u16) -> u8 {
+    crate::drivers::port_io::io_in8(RTL8139_IOBASE + off)
+}
+
+#[inline(always)]
+unsafe fn rtl8139_out16(off: u16, val: u16) {
+    crate::drivers::port_io::io_out16(RTL8139_IOBASE + off, val)
+}
+
+#[inline(always)]
+unsafe fn rtl8139_in16(off: u16) -> u16 {
+    crate::drivers::port_io::io_in16(RTL8139_IOBASE + off)
+}
+
+#[inline(always)]
+unsafe fn rtl8139_out32(off: u16, val: u32) {
+    crate::drivers::port_io::io_out32(RTL8139_IOBASE + off, val)
+}
+
+#[inline(always)]
+unsafe fn rtl8139_in32(off: u16) -> u32 {
+    crate::drivers::port_io::io_in32(RTL8139_IOBASE + off)
+}
+
+/// Halkadan küçük-endian 16-bit alan okur (CPU x86-64 olduğundan doğal u16
+/// okuması doğrudan kullanılabilir).
+#[inline(always)]
+unsafe fn read_le16(base: *const u8, off: usize) -> u16 {
+    core::ptr::read_volatile(base.add(off) as *const u16)
+}
+
+unsafe fn rtl8139_rx_ring_phys() -> u64 {
+    RINGS_ADDR + core::mem::offset_of!(E1000Rings, rx_bufs) as u64
+}
+
+unsafe fn rtl8139_tx_buf_phys() -> u64 {
+    RINGS_ADDR + core::mem::offset_of!(E1000Rings, tx_bufs) as u64
+}
+
+/// RTL8139 yazılım sıfırlaması; 0x10 biti temizlenince tamamlanır.
+pub(crate) unsafe fn rtl8139_reset() {
+    rtl8139_out8(RTL8139_CR, RTL8139_CR_RST);
+    let mut spins = 0u32;
+    while (rtl8139_in8(RTL8139_CR) & RTL8139_CR_RST) != 0 {
+        spins += 1;
+        if spins > 1_000_000 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// C+ modu: Config1 LWAKE + Config4 EEM0; aygıt 0xFF baytına (kendi MAC'i)
+/// yönlendirilir, böylece MAC config alanından doğru okunur.
+unsafe fn rtl8139_enter_c_plus_mode() {
+    let mut config1 = rtl8139_in8(RTL8139_CONFIG1);
+    let config4 = rtl8139_in8(RTL8139_CONFIG4);
+    rtl8139_out8(RTL8139_CONFIG1, config1 | RTL8139_CONFIG1_LWAKE);
+    rtl8139_out8(RTL8139_CONFIG4, config4 | RTL8139_CONFIG4_EEM0);
+    config1 = rtl8139_in8(RTL8139_CONFIG1);
+    rtl8139_out8(RTL8139_CONFIG1, config1 & !RTL8139_CONFIG1_LWAKE);
+}
+
+unsafe fn rtl8139_read_mac() -> [u8; 6] {
+    let mut mac = [0u8; 6];
+    for (i, b) in mac.iter_mut().enumerate() {
+        *b = rtl8139_in8(RTL8139_IDR0 + i as u16);
+    }
+    mac
+}
+
+/// RTL8139 EEPROM arayüzü: 9346CR (0x50) komut, Config3 (0x54) adres
+/// bitleri, Config4 (0x55) veri bitleri.
+unsafe fn rtl8139_read_mac_eeprom() -> Option<[u8; 6]> {
+    let mut mac = [0u8; 6];
+    for (word_idx, pair) in mac.chunks_mut(2).enumerate() {
+        // 93C46 word adresi (0..2) 6 bitlik adres alanına yazılır.
+        rtl8139_out8(RTL8139_CONFIG3, (word_idx as u8) << 3);
+        // EE_ENB (0xC0) | READ (0x02)
+        rtl8139_out8(RTL8139_9346CR, 0xC0 | 0x02);
+        let mut spins = 0u32;
+        loop {
+            if rtl8139_in8(RTL8139_CONFIG4) & 0x01 != 0 {
+                break;
+            }
+            spins += 1;
+            if spins > 1_000_000 {
+                return None;
+            }
+            core::hint::spin_loop();
+        }
+        let val = rtl8139_in16(0x50);
+        pair[0] = (val & 0xFF) as u8;
+        if pair.len() > 1 {
+            pair[1] = (val >> 8) as u8;
+        }
+    }
+    rtl8139_out8(RTL8139_9346CR, 0x00);
+    Some(mac)
+}
+
+/// 2.5MHz MII serial bus üzerinden PHY register'ı (BMCR/BMSR) okur.
+unsafe fn rtl8139_phy_read(reg: u8) -> u16 {
+    // Yön biti (MDO) + PHY adresi 0 + register + MII_WRITE (bit 3).
+    rtl8139_out8(RTL8139_PHY_MII, (reg << 2) | 0x01 | 0x08);
+    let mut spins = 0u32;
+    while rtl8139_in8(RTL8139_PHY_MII) & 0x80 == 0 {
+        spins += 1;
+        if spins > 100_000 {
+            return 0;
+        }
+        core::hint::spin_loop();
+    }
+    rtl8139_in16(RTL8139_PHY_DATA)
+}
+
+unsafe fn rtl8139_link_up() -> bool {
+    // MII taraması: register 0x01 (BMSR) bit 2 = bağlantı kuruldu.
+    let bmsr = rtl8139_phy_read(0x01);
+    if bmsr != 0 {
+        return bmsr & 0x0004 != 0;
+    }
+    // MEDIA_STATUS (MSR) yedek: jumper / autonegotiate sonucu.
+    let media = rtl8139_in8(RTL8139_MSR);
+    (media & 0x0C) != 0 || (media & 0x03) == 0x03
+}
+
+pub(crate) unsafe fn rtl8139_transmit(packet: &[u8]) -> bool {
+    let tail = TX_TAIL % RTL8139_TX_CHANNELS;
+    let buf_phys = rtl8139_tx_buf_phys() + (tail as u64) * TX_BUF_SIZE as u64;
+    let buf_ptr = crate::drivers::phys_to_virt(buf_phys) as *mut u8;
+    core::ptr::copy_nonoverlapping(packet.as_ptr(), buf_ptr, packet.len());
+    core::sync::atomic::fence(Ordering::SeqCst);
+    TX_TAIL = (tail + 1) % RTL8139_TX_CHANNELS;
+
+    rtl8139_out32(RTL8139_TSAD0 + (tail as u16) * 4, buf_phys as u32);
+    // Boyut (bit 0-12), OWN (bit 13), IFG ayarlanmadan önce temizlenir.
+    rtl8139_out32(
+        RTL8139_TSD0 + (tail as u16) * 4,
+        packet.len() as u32 & 0x1FFF,
+    );
+
+    let mut spins = 0u32;
+    loop {
+        let status = rtl8139_in32(RTL8139_TSD0 + (tail as u16) * 4);
+        if status & (RTL8139_TSD_OWN | RTL8139_TSD_UNDERRUN) != 0 {
+            return status & RTL8139_TSD_UNDERRUN == 0;
+        }
+        spins += 1;
+        if spins > 500_000 {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// RX halkasından ilk paketi okur ve `buf` içine kopyalar.
+/// Halka girdisi: [durum u16][boyut u16][MAC 6][...].
+pub(crate) unsafe fn rtl8139_receive(buf: &mut [u8]) -> usize {
+    let ring_ptr = crate::drivers::phys_to_virt(rtl8139_rx_ring_phys()) as *const u8;
+
+    let offset = RTL8139_READ_PTR;
+    if offset >= RTL8139_RX_RING_SIZE {
+        return 0;
+    }
+    let status = read_le16(ring_ptr, offset);
+    let len = read_le16(ring_ptr, offset + 2);
+
+    // Halka boş: CBR == CAPR; yine de bekleyen iş varsa (WRAP) okunmalıdır.
+    if status & RTL8139_RX_WRAP == 0 && rtl8139_in16(RTL8139_CBR) == rtl8139_in16(RTL8139_CAPR) {
+        return 0;
+    }
+
+    // ROK (bit 0) yoksa paket bozulmuştur; yine de tüketilir.
+    let ok = status & 0x0001 != 0;
+    let len = len as usize;
+    let aligned = (len + 4 + 3) & !3;
+
+    // Sonraki okuma noktası, 8K halka + 16 baytlık WRAP payı içinde döner.
+    RTL8139_BUF_ADDR = RTL8139_BUF_ADDR.wrapping_add(aligned) & !3;
+    if RTL8139_BUF_ADDR >= RTL8139_RX_RING_SIZE {
+        RTL8139_BUF_ADDR -= RTL8139_RX_RING_SIZE;
+    }
+    RTL8139_READ_PTR = (offset + aligned) & (RTL8139_RX_BUF_TOTAL - 1);
+    // CAPR bir büyük yazılır (WRAP biti için 16 bayt boşluk bırakılır).
+    rtl8139_out16(RTL8139_CAPR, (offset + 16) as u16);
+
+    if !ok || len <= 4 || len - 4 > RTL8139_MAX_PACKET || len - 4 > buf.len() {
+        return 0;
+    }
+
+    let copied = len - 4;
+    let src = offset + 4;
+    for (i, b) in buf.iter_mut().take(copied).enumerate() {
+        let mut idx = src + i;
+        if idx >= RTL8139_RX_BUF_TOTAL {
+            idx -= RTL8139_RX_BUF_TOTAL;
+        }
+        *b = core::ptr::read_volatile(ring_ptr.add(idx));
+    }
+    copied
+}
+
+/// RTL8139 başlatma. DMA ringi (E1000Rings) mevcut değilse `false` döner,
+/// böylece çağrı sahibi diğer otobüslere geçebilir.
+pub(crate) unsafe fn init_rtl8139(bus: u8, dev: u8, func: u8, io_base: u16) -> bool {
+    let phys = RINGS_ADDR;
+    if phys == 0 {
+        // `init` DMA halkasını ayrımadan yalın RTL8139 başlatması çağrıldı.
+        if !RTL8139_WARNED.swap(true, Ordering::Relaxed) {
+            e1000_print("[NET] RTL8139 için DMA halkası ayrılamadı.\n");
+        }
+        return false;
+    }
+    RTL8139_IOBASE = io_base;
+
+    // PCI Komut: I/O Space (bit0) + Bus Master (bit2) + Memory Write (bit4)
+    let cmd = pci_read32(bus, dev, func, 0x04);
+    pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_0000) | 0x15);
+
+    rtl8139_reset();
+    rtl8139_enter_c_plus_mode();
+
+    let mut mac = rtl8139_read_mac();
+    if mac.iter().all(|&b| b == 0 || b == 0xFF) {
+        if let Some(ee) = rtl8139_read_mac_eeprom() {
+            if ee.iter().any(|&b| b != 0 && b != 0xFF) {
+                mac = ee;
+            }
+        }
+    }
+    MAC_ADDR = mac;
+    e1000_print("[NET] RTL8139 MAC: ");
+    for (i, b) in mac.iter().enumerate() {
+        if i > 0 {
+            e1000_print(":");
+        }
+        e1000_print_hex(*b);
+    }
+    e1000_print("\n");
+
+    // PHY'nin autonegotiation tamamlamasına fırsat ver.
+    for _ in 0..10_000 {
+        core::hint::spin_loop();
+    }
+
+    // RX halkası: 8 KiB + 16 bayt WRAP payı; kayıtlar temizlenir.
+    let rx_phys = rtl8139_rx_ring_phys();
+    let rx_ptr = crate::drivers::phys_to_virt(rx_phys) as *mut u8;
+    core::ptr::write_bytes(rx_ptr, 0, RTL8139_RX_BUF_TOTAL);
+    rtl8139_out32(RTL8139_RBSTART, rx_phys as u32);
+
+    // Kesmeleri kapat; bekleyen durumları temizle (polling).
+    rtl8139_out16(RTL8139_IMR, 0x0000);
+    rtl8139_out16(RTL8139_ISR, 0xFFFF);
+
+    // RCR: 8K RX halkası (bit 11), AB/AM/AP (bit 12-14), 2K tampon (0<<16),
+    // yalnız ROK paketleri kabul et (bit 20).
+    rtl8139_out32(RTL8139_RCR, RTL8139_RX_RING_BITS | (0x7 << 12) | (1 << 20));
+    // TCR: standart interframe gap
+    rtl8139_out32(RTL8139_TCR, 0x00_00_03_00);
+
+    // TX kanallarını temizle
+    for ch in 0..RTL8139_TX_CHANNELS {
+        let off = (ch as u16) * 4;
+        rtl8139_out32(RTL8139_TSD0 + off, 0);
+        rtl8139_out32(RTL8139_TSAD0 + off, 0);
+    }
+    core::ptr::write_bytes(
+        crate::drivers::phys_to_virt(rtl8139_tx_buf_phys()) as *mut u8,
+        0,
+        TX_RING_SIZE * TX_BUF_SIZE,
+    );
+    TX_TAIL = 0;
+    RTL8139_READ_PTR = 0;
+    RTL8139_BUF_ADDR = 0;
+
+    // RX + TX etkinleştir. CAPR başlangıçta 0xFFF0'dır: CAPR + 16 == CBR
+    // olduğundan "halka boş" kuralı sağlanır ve ilk paket okunur.
+    rtl8139_out8(RTL8139_CR, RTL8139_CR_BUFE);
+    rtl8139_out8(RTL8139_CR, RTL8139_CR_RE | RTL8139_CR_TE);
+    rtl8139_out16(RTL8139_CAPR, 0xFFF0);
+
+    e1000_print("[NET] Realtek RTL8139 bulundu. PCI ");
+    e1000_print_hex(bus);
+    e1000_print(":");
+    e1000_print_hex(dev);
+    e1000_print(" IO:0x");
+    e1000_print_hex((io_base >> 8) as u8);
+    e1000_print_hex((io_base & 0xFF) as u8);
+    e1000_print("\n");
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -624,12 +1028,18 @@ unsafe fn init_tx_ring() {
 // Paket TX / RX
 // ---------------------------------------------------------------------------
 
-/// Ham bir Ethernet çerçevesini e1000 üzerinden iletir.
+/// Ham bir Ethernet çerçevesini etkin ağ kartı üzerinden iletir.
 pub fn transmit(packet: &[u8]) -> bool {
     if !is_ready() || packet.len() > TX_BUF_SIZE {
         return false;
     }
+    if net::active_bus() == BusKind::IsaPnp {
+        return crate::drivers::ne2000::transmit(packet);
+    }
     unsafe {
+        if DETECTED_NIC == NicType::RealtekRtl8139 {
+            return rtl8139_transmit(packet);
+        }
         if DETECTED_NIC == NicType::BroadcomB57 {
             return broadcom_transmit(packet);
         }
@@ -707,7 +1117,13 @@ pub fn receive(buf: &mut [u8]) -> usize {
     if !is_ready() {
         return 0;
     }
+    if net::active_bus() == BusKind::IsaPnp {
+        return crate::drivers::ne2000::receive(buf);
+    }
     unsafe {
+        if DETECTED_NIC == NicType::RealtekRtl8139 {
+            return rtl8139_receive(buf);
+        }
         if DETECTED_NIC == NicType::BroadcomB57 {
             return broadcom_receive(buf);
         }
@@ -784,6 +1200,10 @@ pub fn poll() {
             break;
         }
         crate::drivers::netstack::on_packet(&buf[..n]);
+        // NE2000: döngü, tampon bitene kadar `receive` içinde sınırlanır.
+        if net::active_bus() == BusKind::IsaPnp && !crate::drivers::ne2000::has_pending() {
+            break;
+        }
     }
 }
 
@@ -792,18 +1212,15 @@ pub fn poll() {
 // ---------------------------------------------------------------------------
 
 pub fn init(pmm_dma_phys: Option<u64>) {
-    unsafe {
-        let phys = match pmm_dma_phys {
-            Some(phys) => phys,
-            None => {
-                e1000_print("[NET] DMA ring havuzu ayrılamadı; e1000 başlatılmadı.\n");
-                return;
-            }
-        };
-        RINGS_ADDR = phys;
+    let Some(phys) = pmm_dma_phys else {
+        e1000_print("[NET] DMA ring havuzu ayrılamadı; PCI ağ sürücüsü başlatılmadı.\n");
+        return;
+    };
 
-        // PCI'da Intel e1000, VMware VMXNET3 veya Realtek PCIe NIC (RTL8168/8169/8125) bul
-        let mut found: Option<(u8, u8, u8, u64, NicType)> = None;
+    // PCI'da Intel e1000 / VMware VMXNET3 / Realtek (RTL8139, RTL816x) /
+    // Broadcom NIC ara.
+    let mut found: Option<(u8, u8, u8, u64, NicType)> = None;
+    unsafe {
         for bus in 0..8u8 {
             for dev in 0..32u8 {
                 let id0 = pci_read32(bus, dev, 0, 0x00);
@@ -824,6 +1241,29 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                     }
                     let vid = (id & 0xFFFF) as u32;
                     let did = (id >> 16) & 0xFFFF;
+
+                    if did == 0x8029 {
+                        // NE2000 uyumlu PCI kartlar (RTL8029AS). Klasik ISA
+                        // NE2000'ler PCI'da g\u{f6}r\u{fc}nmez; onlar PnP taramas\u{131}yla bulunur.
+                        found = Some((bus, dev, func, 0, NicType::Ne2000Pci));
+                        break;
+                    }
+
+                    if vid == REALTEK_VENDOR && did == 0x8139 {
+                        // RTL8139 klasik PCI kart\u{131}: BAR0 bir I/O BAR'd\u{131}r.
+                        let bar0 = pci_read32(bus, dev, func, 0x10);
+                        if bar0 != 0 && bar0 & 1 == 1 {
+                            found = Some((
+                                bus,
+                                dev,
+                                func,
+                                (bar0 & 0xFFFF_FFFC) as u64,
+                                NicType::RealtekRtl8139,
+                            ));
+                            break;
+                        }
+                        continue;
+                    }
 
                     if vid == E1000_VENDOR && E1000_DEVICES.contains(&did) {
                         let bar0_lo = pci_read32(bus, dev, func, 0x10);
@@ -900,8 +1340,28 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             }
         };
         DETECTED_NIC = ntype;
-        let base = crate::drivers::phys_to_virt(base_phys);
-        crate::arch::x86_64::mmio_map_2mb(base_phys & !0x1F_FFFF);
+
+        // NE2000 uyumlu PCI kart (RTL8029AS): ISA/PnP sürücüsüne devredilir.
+        if ntype == NicType::Ne2000Pci {
+            e1000_print("[NET] NE2000 uyumlu PCI ag adaptoru bulundu. PCI ");
+            e1000_print_hex(bus);
+            e1000_print(":");
+            e1000_print_hex(dev);
+            e1000_print("\n");
+            // BAR0 bir I/O BAR'dır.
+            let bar0 = pci_read32(bus, dev, func, 0x10);
+            let io_base = if bar0 & 1 == 1 {
+                (bar0 & 0xFFFC) as u16
+            } else {
+                0
+            };
+            let _ = crate::drivers::ne2000::init_pci(io_base);
+            return;
+        }
+
+        RINGS_ADDR = phys;
+        let base = crate::drivers::phys_to_virt(base_phys as u64);
+        crate::arch::x86_64::mmio_map_2mb(base_phys as u64 & !0x1F_FFFF);
 
         match ntype {
             NicType::IntelE1000 => {
@@ -911,6 +1371,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 e1000_print_hex(dev);
                 e1000_print("\n");
             }
+            NicType::RealtekRtl8139 => {}
             NicType::VmwareVmxnet3 => {
                 e1000_print("[NET] VMware VMXNET3 ag adaptoru bulundu. PCI ");
                 e1000_print_hex(bus);
@@ -934,11 +1395,18 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 e1000_print_hex(dev);
                 e1000_print("\n");
             }
+            NicType::Ne2000Pci => {}
         }
 
-        // PCI Komut: Bus Master + MMIO enable + Memory Write and Invalidate
+        // PCI Komut: Bus Master + MMIO enable + Memory Write and Invalidate.
+        // RTL8139 için I/O Space (bit 0) de açık kalmalıdır.
         let cmd = pci_read32(bus, dev, func, 0x04);
-        pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | 0x16);
+        let cmd_bits = if ntype == NicType::RealtekRtl8139 {
+            0x17
+        } else {
+            0x16
+        };
+        pci_write32(bus, dev, func, 0x04, (cmd & 0xFFFF_FFF0) | cmd_bits);
 
         MMIO_BASE = base;
 
@@ -970,10 +1438,12 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                 // EEPROM/Config kilitlerini aç (93C46 unlock: 0xC0)
                 mmio_write8(RTL_REG_9346CR, 0xC0);
             }
+            NicType::RealtekRtl8139 => {}
             NicType::BroadcomB57 => {
                 // B57: register access + MAC modu/ring hazırlığı `init_broadcom`
                 // içinde yapılır (ring belleği sıfırlandıktan sonra).
             }
+            NicType::Ne2000Pci => {}
         }
 
         // Ring yapısını HHDM üzerinden sıfırla
@@ -986,21 +1456,25 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             NicType::VmwareVmxnet3 => read_mac_vmxnet3(),
             NicType::RealtekR8169 => read_mac_realtek(),
             NicType::BroadcomB57 => read_mac_broadcom(),
+            NicType::RealtekRtl8139 | NicType::Ne2000Pci => [0u8; 6],
         };
         MAC_ADDR = mac;
-        e1000_print("[NET] MAC adresi: ");
-        e1000_print_hex(mac[0]);
-        e1000_print(":");
-        e1000_print_hex(mac[1]);
-        e1000_print(":");
-        e1000_print_hex(mac[2]);
-        e1000_print(":");
-        e1000_print_hex(mac[3]);
-        e1000_print(":");
-        e1000_print_hex(mac[4]);
-        e1000_print(":");
-        e1000_print_hex(mac[5]);
-        e1000_print("\n");
+        // RTL8139 MAC'ini `init_rtl8139` (C+ modu sonrası) kendisi yazar.
+        if ntype != NicType::RealtekRtl8139 {
+            e1000_print("[NET] MAC adresi: ");
+            e1000_print_hex(mac[0]);
+            e1000_print(":");
+            e1000_print_hex(mac[1]);
+            e1000_print(":");
+            e1000_print_hex(mac[2]);
+            e1000_print(":");
+            e1000_print_hex(mac[3]);
+            e1000_print(":");
+            e1000_print_hex(mac[4]);
+            e1000_print(":");
+            e1000_print_hex(mac[5]);
+            e1000_print("\n");
+        }
 
         if ntype == NicType::IntelE1000 {
             let ral = (mac[0] as u32)
@@ -1102,7 +1576,20 @@ pub fn init(pmm_dma_phys: Option<u64>) {
             NicType::BroadcomB57 => {
                 e1000_print("[NET] Broadcom NetXtreme RX/TX ring'leri hazir, link acildi.\n");
             }
+            NicType::RealtekRtl8139 => {
+                // DMA halkası hazır; `init_rtl8139` sıfırlama, C+ modu, MAC
+                // okuma, RX halkası ve RX/TX etkinleştirmesini üstlenir.
+                if init_rtl8139(bus, dev, func, base_phys as u16) {
+                    e1000_print("[NET] Realtek RTL8139 RX/TX hazir, link acildi.\n");
+                } else {
+                    return;
+                }
+            }
+            NicType::Ne2000Pci => return,
         }
+        // PCI kartın seçildiğini (e1000/VMXNET3/RTL816x/RTL8139/BCM) bildir.
+        net::set_bus(BusKind::Pci);
+
         E1000_READY.store(true, Ordering::Relaxed);
     }
 }

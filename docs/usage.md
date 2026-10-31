@@ -55,6 +55,14 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | `open <uygulama>` | `run <uygulama>` | İstenen masaüstü uygulamasını yeni veya mevcut pencerede açar. |
 | Doğrudan İsim | `files`, `notepad`, `calc`, `paint`, `browser`, `image`, `music`, `video`, `taskmgr`, `settings`, `cmd`, `pkgmgr` | Uygulama adı doğrudan komut olarak yazıldığında ilgili grafik arayüz penceresi odaklanır/açılır. |
 
+### 5.1 Web Tarayıcısı Kullanımı
+
+Tarayıcı `browser` komutu veya Başlat menüsünden açılır. `https://` adresleri TLS 1.3 ile şifreli bağlantı kurar; `http://` ve `minos://` yerel sayfaları da destekler.
+
+**Sayfa açılışında sistem donması giderildi:** Harici kaynaklar (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) render sırasında senkron olarak getirilmez. URL'ler `pending_resources` listesine eklenir ve `poll_network()` tarafından kare başına tek tek asenkron olarak getirilir; sayfa her kaynaktan sonra yeniden render edilir. Bu sayede ağ işlemleri ana olay döngüsünü bloke etmez ve tarayıcı sayfa yüklenirken yanıt verir.
+
+**Klavye kısayolları:** `Ctrl+Shift+D` Geliştirici Araçları (DevTools) paneli açar/kapatır; `F5` sayfayı yeniler.
+
 ---
 
 

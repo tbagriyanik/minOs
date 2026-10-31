@@ -5,7 +5,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::cache::{cache_get_with_metadata, cache_store_with_metadata};
 use super::css::blend_styles;
 use super::css::transition_progress;
 use super::css::{find_keyframes, match_css_style, parse_css};
@@ -330,10 +329,11 @@ pub fn render_html_to_lines(
     animation_start_ms: usize,
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
-    mut vfs: Option<&mut VirtualFileSystem>,
+    _vfs: Option<&mut VirtualFileSystem>,
     canvases: &mut Vec<super::canvas::CanvasElement>,
     media_players: &mut super::media::MediaPlayers,
     iframes: &mut super::iframe::IFrames,
+    pending_resources: &mut Vec<String>,
 ) {
     // JS: <script> bloklarını sırayla çalıştır; document.write çıktısı HTML'e gömülür,
     // script etiketleri ise çıktidan çıkarılır.
@@ -784,7 +784,8 @@ pub fn render_html_to_lines(
                         active_onclick = Some(String::from(oc));
                     }
                 } else if eq_ascii(name, b"link") {
-                    // <link rel="stylesheet" href="..."> — harici CSS
+                    // <link rel="stylesheet" href="..."> — harici CSS.
+                    // Engellemeyen: URL'yi kaydet, asenkron yükleme poll_network'de yapılır.
                     let rel_attr = extract_attr(attrs, b"rel");
                     if rel_attr.map_or(false, |r| r.eq_ignore_ascii_case("stylesheet")) {
                         if let Some(href) = href_attr {
@@ -792,200 +793,23 @@ pub fn render_html_to_lines(
                                 if resolved_url.starts_with("http://")
                                     || resolved_url.starts_with("https://")
                                 {
-                                    let mut css_bytes: Option<Vec<u8>> = None;
-                                    // Try cache with metadata first
-                                    let current_time =
-                                        crate::boot::time::main_monotonic_ms() / 1000;
-                                    if let Some((cached_data, cached_meta)) =
-                                        cache_get_with_metadata(vfs.as_deref(), &resolved_url)
-                                    {
-                                        if cached_meta.is_fresh(current_time as u64) {
-                                            css_bytes = Some(cached_data);
-                                        } else {
-                                            // Stale - revalidate
-                                            let validation_headers =
-                                                super::cache::build_validation_headers(
-                                                    &cached_meta,
-                                                );
-                                            let mut http_buf = vec![0u8; 1_048_576];
-                                            if let Ok((status, hlen, total)) =
-                                                crate::drivers::http::http_get_with_cache(
-                                                    &resolved_url,
-                                                    &mut http_buf,
-                                                    Some(&validation_headers),
-                                                )
-                                            {
-                                                if status == 304 {
-                                                    // Not modified - use cached data
-                                                    css_bytes = Some(cached_data.clone());
-                                                    // Update metadata
-                                                    let _ = cache_store_with_metadata(
-                                                        vfs.as_deref_mut(),
-                                                        &resolved_url,
-                                                        &cached_data,
-                                                        &cached_meta,
-                                                    );
-                                                } else if (200..300).contains(&status)
-                                                    && total > hlen
-                                                {
-                                                    let body_bytes =
-                                                        &http_buf[hlen..total].to_vec();
-                                                    css_bytes = Some(body_bytes.clone());
-                                                    let headers_str =
-                                                        decode_bytes_to_string(&http_buf[..hlen]);
-                                                    let new_meta =
-                                                        super::cache::parse_cache_headers(
-                                                            &headers_str,
-                                                            current_time as u64,
-                                                        );
-                                                    let _ = cache_store_with_metadata(
-                                                        vfs.as_deref_mut(),
-                                                        &resolved_url,
-                                                        body_bytes,
-                                                        &new_meta,
-                                                    );
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        // Not in cache - fetch fresh
-                                        let mut http_buf = vec![0u8; 1_048_576];
-                                        if let Ok((status, hlen, total)) =
-                                            crate::drivers::http::http_get(
-                                                &resolved_url,
-                                                &mut http_buf,
-                                            )
-                                        {
-                                            if (200..300).contains(&status) && total > hlen {
-                                                let body_bytes = &http_buf[hlen..total].to_vec();
-                                                css_bytes = Some(body_bytes.clone());
-                                                let headers_str =
-                                                    decode_bytes_to_string(&http_buf[..hlen]);
-                                                let meta = super::cache::parse_cache_headers(
-                                                    &headers_str,
-                                                    current_time as u64,
-                                                );
-                                                let _ = cache_store_with_metadata(
-                                                    vfs.as_deref_mut(),
-                                                    &resolved_url,
-                                                    body_bytes,
-                                                    &meta,
-                                                );
-                                            }
-                                        }
-                                    }
-                                    if let Some(ref css_data) = css_bytes {
-                                        if let Ok(css_text) = core::str::from_utf8(css_data) {
-                                            let parsed = parse_css(css_text);
-                                            css_rules.extend(parsed.rules);
-                                            css_keyframes = parsed.keyframes;
-                                        }
+                                    if !pending_resources.iter().any(|u| u == &resolved_url) {
+                                        pending_resources.push(resolved_url.clone());
                                     }
                                 }
                             }
                         }
                     }
                 } else if eq_ascii(name, b"script") && !closing {
-                    // <script src="..."> — harici JS
+                    // <script src="..."> — harici JS.
+                    // Engellemeyen: URL'yi kaydet, asenkron yükleme poll_network'de yapılır.
                     if let Some(src) = extract_attr(attrs, b"src") {
                         if let Some(resolved_url) = resolve_url(src, base_url) {
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
-                                let current_time = crate::boot::time::main_monotonic_ms() / 1000;
-                                let mut js_bytes: Option<Vec<u8>> = None;
-                                if let Some((cached_data, cached_meta)) =
-                                    cache_get_with_metadata(vfs.as_deref(), &resolved_url)
-                                {
-                                    if cached_meta.is_fresh(current_time as u64) {
-                                        js_bytes = Some(cached_data);
-                                    } else {
-                                        // Stale - revalidate
-                                        let validation_headers =
-                                            super::cache::build_validation_headers(&cached_meta);
-                                        let mut http_buf = vec![0u8; 1_048_576];
-                                        if let Ok((status, hlen, total)) =
-                                            crate::drivers::http::http_get_with_cache(
-                                                &resolved_url,
-                                                &mut http_buf,
-                                                Some(&validation_headers),
-                                            )
-                                        {
-                                            if status == 304 {
-                                                // Not modified - use cached data
-                                                js_bytes = Some(cached_data.clone());
-                                                let _ = cache_store_with_metadata(
-                                                    vfs.as_deref_mut(),
-                                                    &resolved_url,
-                                                    &cached_data,
-                                                    &cached_meta,
-                                                );
-                                            } else if (200..300).contains(&status) && total > hlen {
-                                                let body_bytes = &http_buf[hlen..total].to_vec();
-                                                js_bytes = Some(body_bytes.clone());
-                                                let headers_str =
-                                                    decode_bytes_to_string(&http_buf[..hlen]);
-                                                let new_meta = super::cache::parse_cache_headers(
-                                                    &headers_str,
-                                                    current_time as u64,
-                                                );
-                                                let _ = cache_store_with_metadata(
-                                                    vfs.as_deref_mut(),
-                                                    &resolved_url,
-                                                    body_bytes,
-                                                    &new_meta,
-                                                );
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Not in cache - fetch fresh
-                                    let mut http_buf = vec![0u8; 1_048_576];
-                                    if let Ok((status, hlen, total)) =
-                                        crate::drivers::http::http_get(&resolved_url, &mut http_buf)
-                                    {
-                                        if (200..300).contains(&status) && total > hlen {
-                                            let body_bytes = &http_buf[hlen..total].to_vec();
-                                            js_bytes = Some(body_bytes.clone());
-                                            let headers_str =
-                                                decode_bytes_to_string(&http_buf[..hlen]);
-                                            let meta = super::cache::parse_cache_headers(
-                                                &headers_str,
-                                                current_time as u64,
-                                            );
-                                            let _ = cache_store_with_metadata(
-                                                vfs.as_deref_mut(),
-                                                &resolved_url,
-                                                body_bytes,
-                                                &meta,
-                                            );
-                                        }
-                                    }
-                                }
-                                if let Some(ref js_data) = js_bytes {
-                                    if let Ok(js_text) = core::str::from_utf8(js_data) {
-                                        // Harici JS'yi çalıştır (basit: document.write destekli)
-                                        for stmt in js_text.split(';') {
-                                            let stmt = stmt.trim();
-                                            if !stmt.is_empty() {
-                                                // execute_js_statement yerine doğrudan işle
-                                                // Burada sadece document.write desteklenir
-                                                if stmt.starts_with("document.write(")
-                                                    && stmt.ends_with(')')
-                                                {
-                                                    let inner = &stmt[15..stmt.len() - 1];
-                                                    // Basit string literal çıkarma
-                                                    if let Some(_written) = inner
-                                                        .strip_prefix('"')
-                                                        .and_then(|s| s.strip_suffix('"'))
-                                                    {
-                                                        // document.write içeriğini HTML'e eklemek için
-                                                        // Bu basit bir implementasyon; gerçek JS engine yok
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                if !pending_resources.iter().any(|u| u == &resolved_url) {
+                                    pending_resources.push(resolved_url.clone());
                                 }
                             }
                         }
@@ -1426,11 +1250,10 @@ pub fn render_html_to_lines(
                         );
                     }
 
-                    // Decode image from data URL or remote HTTP URL.
+                    // Decode image from data URL only during render; remote URLs are
+                    // fetched asynchronously by poll_network and the page is re-rendered.
                     let mut image_decoded: Option<(usize, usize, Vec<u8>)> = None;
-                    let mut image_src_url: Option<String> = None;
                     if let Some(src) = extract_attr(attrs, b"src") {
-                        image_src_url = Some(String::from(src));
                         if src.starts_with("data:image/") {
                             if let Some(comma_pos) = src.find(',') {
                                 let data_part = &src[comma_pos + 1..];
@@ -1449,81 +1272,8 @@ pub fn render_html_to_lines(
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
-                                // Önbellekten dene önce (metadata ile)
-                                let current_time = crate::boot::time::main_monotonic_ms() / 1000;
-                                let mut img_bytes: Option<Vec<u8>> = None;
-                                if let Some((cached_data, cached_meta)) =
-                                    cache_get_with_metadata(vfs.as_deref(), &resolved_url)
-                                {
-                                    if cached_meta.is_fresh(current_time as u64) {
-                                        img_bytes = Some(cached_data);
-                                    } else {
-                                        // Stale - revalidate
-                                        let validation_headers =
-                                            super::cache::build_validation_headers(&cached_meta);
-                                        let mut http_buf = vec![0u8; 1_048_576];
-                                        if let Ok((status, hlen, total)) =
-                                            crate::drivers::http::http_get_with_cache(
-                                                &resolved_url,
-                                                &mut http_buf,
-                                                Some(&validation_headers),
-                                            )
-                                        {
-                                            if status == 304 {
-                                                // Not modified - use cached data
-                                                img_bytes = Some(cached_data.clone());
-                                                let _ = cache_store_with_metadata(
-                                                    vfs.as_deref_mut(),
-                                                    &resolved_url,
-                                                    &cached_data,
-                                                    &cached_meta,
-                                                );
-                                            } else if (200..300).contains(&status) && total > hlen {
-                                                let body_bytes = &http_buf[hlen..total].to_vec();
-                                                img_bytes = Some(body_bytes.clone());
-                                                let headers_str =
-                                                    decode_bytes_to_string(&http_buf[..hlen]);
-                                                let new_meta = super::cache::parse_cache_headers(
-                                                    &headers_str,
-                                                    current_time as u64,
-                                                );
-                                                let _ = cache_store_with_metadata(
-                                                    vfs.as_deref_mut(),
-                                                    &resolved_url,
-                                                    body_bytes,
-                                                    &new_meta,
-                                                );
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    // Not in cache - fetch fresh
-                                    let mut http_buf = vec![0u8; 1_048_576];
-                                    if let Ok((status, hlen, total)) =
-                                        crate::drivers::http::http_get(&resolved_url, &mut http_buf)
-                                    {
-                                        if (200..300).contains(&status) && total > hlen {
-                                            let body_bytes = &http_buf[hlen..total].to_vec();
-                                            img_bytes = Some(body_bytes.clone());
-                                            let headers_str =
-                                                decode_bytes_to_string(&http_buf[..hlen]);
-                                            let meta = super::cache::parse_cache_headers(
-                                                &headers_str,
-                                                current_time as u64,
-                                            );
-                                            let _ = cache_store_with_metadata(
-                                                vfs.as_deref_mut(),
-                                                &resolved_url,
-                                                body_bytes,
-                                                &meta,
-                                            );
-                                        }
-                                    }
-                                }
-                                if let Some(ref img_data) = img_bytes {
-                                    if let Some(img) = crate::apps::imgdecode::decode(img_data) {
-                                        image_decoded = Some((img.width, img.height, img.rgb));
-                                    }
+                                if !pending_resources.iter().any(|u| u == &resolved_url) {
+                                    pending_resources.push(resolved_url.clone());
                                 }
                             }
                         }
@@ -1585,7 +1335,7 @@ pub fn render_html_to_lines(
                             image_width: disp_w,
                             image_height: disp_h,
                             image_rgb: Some(scaled_rgb),
-                            image_url: String::from(image_src_url.as_deref().unwrap_or("")),
+                            image_url: String::new(),
                             onclick: String::from(onclick_str),
                             elem_id: String::from(elem_id_str),
                             bold: current_bold,

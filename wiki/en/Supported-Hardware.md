@@ -27,8 +27,11 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | :--- | :--- | :---: | :--- |
 | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Full | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | Intel I219-V Ethernet | `i219.rs` | 🟢 Full | Gigabit Ethernet link and packet transfer |
-| Realtek PCIe (RTL8168/8169/8125) | `net.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
-| Broadcom NetXtreme (BCM57xx) | `net.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
+| Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Full | C+ mode, 64-bit RX/TX rings, PHYSTATUS link tracking |
+| Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Full | I/O ports, C+ mode, 4 TX channels, 8 KiB RX ring, MII link |
+| NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Full | ISA PnP + jumper probing, remote DMA, 8K RX ring |
+| NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA |
+| Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Full | High-speed virtualized network adapter |
 | Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
 | Marvell Ethernet | `marvell.rs` | 🟡 Partial | Basic RX/TX packet processing |

@@ -87,7 +87,8 @@ minOs ağ yığını, TCP/IP protokolü, DNS çözümleme (A/AAAA), HTTP/1.1, TL
 | :--- | :--- | :--- |
 | `e1000.rs` | Intel e1000 / e1000e | 🟢 Tam |
 | `i219.rs` | Intel I219-V | 🟢 Tam |
-| `net.rs` | Realtek PCIe, Broadcom NetXtreme | 🟢 Tam |
+| `e1000.rs` | Realtek PCIe, RTL8139, Broadcom NetXtreme | 🟢 Tam |
+| `ne2000.rs` | NE2000 / RTL8019AS (ISA PnP), RTL8029AS (PCI) | 🟢 Tam |
 | `virtio_net.rs` | VirtIO-net | 🟢 Tam |
 | `atheros.rs` | Atheros Ethernet | 🟡 Kısmi |
 | `marvell.rs` | Marvell Ethernet | 🟡 Kısmi |

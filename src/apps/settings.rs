@@ -229,13 +229,18 @@ fn render_device_inventory(
 
     if crate::drivers::e1000::is_ready() {
         let mut line = DeviceLine::new();
-        line.push(
-            if crate::drivers::e1000::nic_type() == crate::drivers::e1000::NicType::VmwareVmxnet3 {
-                "Ethernet: VMware VMXNET3 | "
-            } else {
-                "Ethernet: Intel e1000 | "
-            },
-        );
+        line.push(if crate::drivers::net::is_isa() {
+            "Ethernet: NE2000 (ISA) | "
+        } else {
+            match crate::drivers::e1000::nic_type() {
+                crate::drivers::e1000::NicType::VmwareVmxnet3 => "Ethernet: VMware VMXNET3 | ",
+                crate::drivers::e1000::NicType::RealtekRtl8139 => "Ethernet: Realtek RTL8139 | ",
+                crate::drivers::e1000::NicType::RealtekR8169 => "Ethernet: Realtek PCIe GbE | ",
+                crate::drivers::e1000::NicType::BroadcomB57 => "Ethernet: Broadcom NetXtreme | ",
+                crate::drivers::e1000::NicType::Ne2000Pci => "Ethernet: NE2000 (PCI) | ",
+                crate::drivers::e1000::NicType::IntelE1000 => "Ethernet: Intel e1000 | ",
+            }
+        });
         line.push(if crate::drivers::e1000::link_up() {
             if english {
                 "link up | MAC "

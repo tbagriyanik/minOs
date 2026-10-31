@@ -79,7 +79,7 @@ impl MinPkg {
         vfs: &mut VirtualFileSystem,
     ) -> Result<String, &'static str> {
         if !crate::drivers::e1000::is_ready() {
-            return Err("Ag bagdastiricisi (e1000) hazir degil");
+            return Err("Ag bagdastiricisi (e1000/NE2000) hazir degil");
         }
 
         let url = if pkg_name_or_url.starts_with("http://") {

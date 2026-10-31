@@ -392,7 +392,11 @@ pub fn render_content(
             let nic_ok = crate::drivers::e1000::is_ready();
             let mut nic = TextBuf::new();
             if nic_ok {
-                nic.push_str(crate::drivers::e1000::nic_name());
+                if crate::drivers::net::is_isa() {
+                    nic.push_str("NE2000 (ISA)");
+                } else {
+                    nic.push_str(crate::drivers::e1000::nic_name());
+                }
                 nic.push_str(crate::gui::ui_text(" (hazır)", " (ready)"));
             } else {
                 nic.push_str(crate::gui::ui_text("Sürücü bulunamadı", "Driver not found"));

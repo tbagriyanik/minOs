@@ -1432,12 +1432,12 @@ pub fn run_network_self_test() -> bool {
     crate::serial_print("[NET-TEST] --- e1000 ve TCP/IP yığını doğrulama testi ---\n");
 
     if !e1000::is_ready() {
-        crate::serial_print("[NET-TEST] e1000 sürücüsü hazır değil, ağ testleri ATLANDI.\n");
+        crate::serial_print("[NET-TEST] Ağ sürücüsü hazır değil, ağ testleri ATLANDI.\n");
         return false;
     }
 
     let link_up = e1000::link_up();
-    crate::serial_print("[NET-TEST] e1000 Link Durumu: ");
+    crate::serial_print("[NET-TEST] Ağ Link Durumu: ");
     if link_up {
         crate::serial_print("LINK UP (aktif)\n");
     } else {

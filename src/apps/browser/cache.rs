@@ -61,6 +61,7 @@ impl CacheMetadata {
 const CACHE_DIR: &str = "/browser/cache";
 
 /// Maksimum önbellek boyutu (varsayılan 10 MB).
+#[allow(dead_code)]
 const MAX_CACHE_SIZE: usize = 10 * 1024 * 1024;
 
 /// Geçerli önbellek boyutu (bayt cinsinden).
@@ -74,6 +75,7 @@ struct CacheEntrySize {
 static mut CACHE_ENTRY_SIZES: [Option<CacheEntrySize>; 64] = [const { None }; 64];
 
 /// Önbellek boyutunu günceller ve gerekiyorsa LRU tabanlı eviction yapar.
+#[allow(dead_code)]
 fn ensure_cache_size(vfs: &mut VirtualFileSystem, needed: usize) {
     unsafe {
         let current = CACHE_SIZE;
@@ -239,6 +241,7 @@ pub fn init_cache(vfs: &mut VirtualFileSystem) {
 }
 
 /// HTTP yanıt başlıklarından önbellek meta verilerini çıkarır.
+#[allow(dead_code)]
 pub fn parse_cache_headers(headers: &str, current_time: u64) -> CacheMetadata {
     let mut meta = CacheMetadata::new();
     meta.cached_at = current_time;
@@ -303,6 +306,7 @@ fn parse_http_date(_date_str: &str) -> Option<u64> {
 }
 
 /// Cache validation için HTTP başlıkları oluşturur.
+#[allow(dead_code)]
 pub fn build_validation_headers(meta: &CacheMetadata) -> String {
     let mut headers = String::new();
 
@@ -323,6 +327,7 @@ pub fn build_validation_headers(meta: &CacheMetadata) -> String {
 }
 
 /// Önbellekten dosya ve meta verilerini okur.
+#[allow(dead_code)]
 pub fn cache_get_with_metadata(
     vfs: Option<&VirtualFileSystem>,
     url: &str,
@@ -355,6 +360,7 @@ pub fn cache_get_with_metadata(
 }
 
 /// Önbelleğe dosya ve meta verilerini yazar.
+#[allow(dead_code)]
 pub fn cache_store_with_metadata(
     vfs: Option<&mut VirtualFileSystem>,
     url: &str,

@@ -2,6 +2,10 @@
 
 README'den ayrılan v1.6.0 ve v1.5.0 değişiklik listeleri.
 
+## Yenilikler (v2.1.0)
+
+- **🚫 Tarayıcı Donma Düzeltmesi (Engellemeyen Kaynak Yükleme):** Web Tarayıcısı sayfa açılırken donma sorunu giderildi. Harici kaynaklar (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) render sırasında senkron olarak getirilmez; URL'ler `pending_resources` listesine eklenir ve `poll_network()` tarafından kare başına tek tek asenkron olarak getirilir, sayfa her kaynaktan sonra yeniden render edilir. Ağ işlemleri artık ana olay döngüsünü bloke etmez.
+
 ## Yenilikler (v1.6.0)
 
 - **🖥️ UEFI Önyükleme Tanılama Konsolu:** Limine framebuffer doğrulandıktan sonra bellek, sürücü ve sistem başlatma adımları metin olarak ekrana yazılır. Hata durumunda son loglar korunur; kritik hatada GUI başlatılmaz.

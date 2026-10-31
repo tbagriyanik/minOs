@@ -13,6 +13,7 @@ pub static SYSTEM_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// APIC Timer Kesme Vektörü (IDT vektör 32)
 pub const APIC_TIMER_VECTOR: u8 = 0x20;
+pub const SCHEDULER_HZ: u32 = 1000;
 
 // Local APIC register offset'leri
 const LAPIC_TIMER_DIVIDE: u32 = 0x3E0;
@@ -47,6 +48,7 @@ pub fn send_eoi() {
 #[no_mangle]
 pub extern "C" fn apic_timer_handler_rust() {
     SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed);
+    crate::task::scheduler_tick();
     send_eoi();
 }
 

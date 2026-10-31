@@ -369,9 +369,9 @@ $checks = @(
         Description = "BSP GDT, IDT ve islemci mimari yapisi"
     },
     @{
-        Name = "Ag Adaptoru (e1000 Link & Ring Hazir)";
-        Pattern = "\[NET\] (e1000|VMware VMXNET3).*hazir";
-        Description = "PCI donanim tespiti, MAC cozumu ve DMA halka tamponu aktivasyonu"
+        Name = "Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir)";
+        Pattern = "\[NET\] (e1000|VMware VMXNET3|Realtek RTL8139|Realtek PCIe GbE|Broadcom NetXtreme|NE2000).*hazir";
+        Description = "PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu"
     },
     @{
         Name = "Giris Suruculeri (USB-HID / PS-2 Fallback)";

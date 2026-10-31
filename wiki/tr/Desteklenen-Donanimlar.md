@@ -27,8 +27,11 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | :--- | :--- | :---: | :--- |
 | Intel e1000 / e1000e (Gigabit) | `e1000.rs` | 🟢 Tam | DMA ring, DHCP, DNS, TCP/UDP, IPv4/IPv6, ICMPv6, TLS 1.3 |
 | Intel I219-V Ethernet | `i219.rs` | 🟢 Tam | Gigabit Ethernet bağlantısı ve paket aktarımı |
-| Realtek PCIe (RTL8168/8169/8125) | `net.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
-| Broadcom NetXtreme (BCM57xx) | `net.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
+| Realtek PCIe (RTL8168/8169/8125) | `e1000.rs` | 🟢 Tam | C+ modu, 64-bit RX/TX halkaları, PHYSTATUS link takibi |
+| Realtek RTL8139 (PCI 10/100) | `e1000.rs` | 🟢 Tam | I/O portu, C+ modu, 4 TX kanalı, 8 KiB RX halkası, MII link |
+| NE2000 / RTL8019AS (ISA, PnP) | `ne2000.rs` | 🟢 Tam | ISA PnP + jumper taraması, uzak DMA, 8K RX halkası |
+| NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
+| Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
 | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
 | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |

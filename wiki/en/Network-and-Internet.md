@@ -87,7 +87,8 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | :--- | :--- | :--- |
 | `e1000.rs` | Intel e1000 / e1000e | 🟢 Full |
 | `i219.rs` | Intel I219-V | 🟢 Full |
-| `net.rs` | Realtek PCIe, Broadcom NetXtreme | 🟢 Full |
+| `e1000.rs` | Realtek PCIe, RTL8139, Broadcom NetXtreme | 🟢 Full |
+| `ne2000.rs` | NE2000 / RTL8019AS (ISA PnP), RTL8029AS (PCI) | 🟢 Full |
 | `virtio_net.rs` | VirtIO-net | 🟢 Full |
 | `atheros.rs` | Atheros Ethernet | 🟡 Partial |
 | `marvell.rs` | Marvell Ethernet | 🟡 Partial |

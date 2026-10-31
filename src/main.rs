@@ -77,6 +77,8 @@ fn init_heap() {
 }
 
 pub mod arch;
+pub mod net_smoltcp;
+pub mod random;
 
 pub mod mm;
 
@@ -1129,7 +1131,9 @@ pub extern "C" fn _start() -> ! {
                                     "PC Speaker (PWM fallback)",
                                 )
                             },
-                            if drivers::e1000::is_ready() {
+                            if drivers::e1000::is_ready() && drivers::net::is_isa() {
+                                gui::ui_text("NE2000 (ISA)", "NE2000 (ISA)")
+                            } else if drivers::e1000::is_ready() {
                                 drivers::e1000::nic_name()
                             } else {
                                 gui::ui_text("Bulunamadı", "Not found")

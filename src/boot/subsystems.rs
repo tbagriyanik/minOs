@@ -205,7 +205,9 @@ pub fn init_subsystems(
     serial_print("[SMP] 1 CPU modunda devam ediliyor.\n");
 
     serial_print("[BOOT] APIC zamanlayıcısı başlatılıyor...\n");
-    serial_print("[APIC] APIC zamanlayıcısı atlandı; TSC monotonik saati kullanılıyor.\n");
+    arch::x86_64::apic::init_timer();
+    serial_print("[APIC] 1000Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
+    serial_print("[SCHED] 1000Hz round-robin scheduler; network downloads yield cooperatively.\n");
 
     // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
     {
@@ -278,13 +280,25 @@ pub fn init_subsystems(
     }
 
     if driver_profile == "hardware" || driver_profile == "full" {
-        serial_print("[DRIVER] e1000 ağ sürücüsü başlatılıyor...\n");
+        serial_print("[DRIVER] PCI ağ sürücüsü (e1000/VMXNET3/RTL816x/RTL8139) başlatılıyor...\n");
         let e1000_dma_phys = memory_mgr.pmm.allocate_contiguous_frames(34);
         let Some(e1000_dma_phys) = e1000_dma_phys else {
             boot::text_console::fatal("e1000 DMA bellek tahsisi başarısız");
         };
         drivers::e1000::init(Some(e1000_dma_phys));
-        serial_print("[DRIVER] e1000 ağ sürücüsü hazır.\n");
+        if drivers::e1000::is_ready() {
+            serial_print("[DRIVER] PCI ağ sürücüsü hazır: ");
+            serial_print(drivers::e1000::nic_name());
+            serial_print("\n");
+        } else {
+            // PCI kart yoksa NE2000 (ISA/PnP) denenir.
+            serial_print("[DRIVER] NE2000 ağ sürücüsü başlatılıyor...\n");
+            if drivers::ne2000::init_isa_pnp() {
+                serial_print("[DRIVER] NE2000 ağ sürücüsü hazır.\n");
+            } else {
+                serial_print("[DRIVER] Ağ adaptörü bulunamadı (PCI/ISA).\n");
+            }
+        }
 
         serial_print("[DRIVER] Ağ protokolü başlatılıyor...\n");
         drivers::netstack::init();
@@ -312,6 +326,9 @@ pub fn init_subsystems(
     audio_dev.test_audio_subsystem();
 
     serial_print("[DRIVERS] Tüm sürücüler hazır.\n");
+    serial_print("[NET] smoltcp protokolleri etkin: ");
+    serial_print(crate::net_smoltcp::Protocols::summary());
+    serial_print("\n");
 
     // 4b. Gelismis grafik suruculeri: VirtIO-GPU varsayılan render yolu olarak seçiliyor.
     let gpu_caps = drivers::gpu::init();

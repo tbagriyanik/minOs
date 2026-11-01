@@ -7255,15 +7255,17 @@ pub extern "C" fn _start() -> ! {
                 break;
             }
 
-            // Goruntuleyicide tekerlek zoom kisayoludur (yukari yakinlastirir).
+            // Goruntuleyicide tekerle ile yakinlastirma / uzaklastirma.
 
             if let Some((_, w)) = focused_window_for_app(&compositor, 4) {
                 let (cx, cy, cw, ch) = image_viewer_canvas_rect(&w);
 
                 if gui::in_rect(mx, my, (cx, cy, cw, ch)) {
-                    imageviewer_app.pan_y = imageviewer_app
-                        .pan_y
-                        .saturating_add((scroll_val as isize) * 24);
+                    if scroll_val > 0 {
+                        imageviewer_app.zoom_in();
+                    } else if scroll_val < 0 {
+                        imageviewer_app.zoom_out();
+                    }
                 }
             }
 

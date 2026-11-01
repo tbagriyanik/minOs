@@ -236,6 +236,33 @@ impl Thumb {
         }
         Some(Thumb { w: tw, h: th, px })
     }
+
+    fn from_image(data: &[u8]) -> Option<Thumb> {
+        if data.len() >= 2 && &data[0..2] == b"BM" {
+            return Self::from_bmp(data);
+        }
+        let decoded = crate::apps::imgdecode::decode(data)?;
+        let (src_w, src_h) = (decoded.width, decoded.height);
+        let (tw, th) = if src_w >= src_h {
+            (THUMB_MAX, (src_h * THUMB_MAX / src_w).max(1))
+        } else {
+            ((src_w * THUMB_MAX / src_h).max(1), THUMB_MAX)
+        };
+        let mut px = alloc::vec![0u32; tw * th];
+        for ty in 0..th {
+            let sy = ty * src_h / th;
+            for tx in 0..tw {
+                let sx = tx * src_w / tw;
+                let i = (sy * src_w + sx) * 3;
+                if i + 2 < decoded.rgb.len() {
+                    px[ty * tw + tx] = (decoded.rgb[i] as u32) << 16
+                        | (decoded.rgb[i + 1] as u32) << 8
+                        | decoded.rgb[i + 2] as u32;
+                }
+            }
+        }
+        Some(Thumb { w: tw, h: th, px })
+    }
 }
 
 pub struct FileManagerApp {
@@ -1059,7 +1086,7 @@ impl FileManagerApp {
         self.status = "";
     }
 
-    /// Görünür öğeler için BMP küçük resimlerini (thumbnail) çözer.
+    /// Görünür görsel öğeler için küçük resimleri (thumbnail) çözer.
     fn rebuild_thumbs(&mut self, vfs: &VirtualFileSystem) {
         self.thumbs.clear();
         let mut budget = 48usize;
@@ -1080,7 +1107,7 @@ impl FileManagerApp {
                 if d.len() > THUMB_MAX_BYTES {
                     None
                 } else {
-                    Thumb::from_bmp(d)
+                    Thumb::from_image(d)
                 }
             });
             if thumb.is_some() {

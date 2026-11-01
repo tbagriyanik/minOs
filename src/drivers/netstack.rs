@@ -686,7 +686,10 @@ static mut DNS_REPLY_IP: [u8; 4] = [0; 4];
 /// çakışmayı önler — Happy Eyeballs/RFC 8305 uyumluluğu için).
 static mut DNS_REPLY_DATA_AAAA: [u8; 512] = [0; 512];
 static mut DNS_REPLY_LEN_AAAA: usize = 0;
-static mut TCP_DATA: [u8; 65536] = [0; 65536];
+/// Gelen TCP yükü tamponu. Büyük resimlerin (ör. 100 KB üzeri JPEG/PNG)
+/// aralarında bozulmadan taşınabilmesi için 256 KB ayrıldı; tarayıcı bu
+/// veriyi kendi tamponuna aktarır.
+static mut TCP_DATA: [u8; 256 * 1024] = [0; 256 * 1024];
 static mut TCP_DATA_LEN: usize = 0;
 static mut TCP_LOCAL_PORT: u16 = 0;
 static mut TCP_REMOTE_PORT: u16 = 0;

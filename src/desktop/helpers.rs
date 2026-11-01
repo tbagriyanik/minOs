@@ -138,30 +138,27 @@ pub fn open_image_file(
     _paints: &[Option<apps::paint::PaintApp>],
     viewer: &mut apps::imageviewer::ImageViewerApp,
 ) {
+    let display_name = if path.ends_with("cizim.bmp") {
+        "cizim.bmp"
+    } else if path.ends_with(".png") {
+        "Resim.png"
+    } else if path.ends_with(".jpg") || path.ends_with(".jpeg") {
+        "Resim.jpg"
+    } else if path.ends_with(".gif") {
+        "Resim.gif"
+    } else {
+        "Resim.bmp"
+    };
     // Large VFS entries intentionally have an empty inline `data` vector;
     // check the shared payload store before `read_file`, which can return that
     // empty slice for the metadata row.
     if let Some(data) = vfs.read_large_file(path) {
-        if !viewer.open_image(
-            data,
-            if path.ends_with("cizim.bmp") {
-                "cizim.bmp"
-            } else {
-                "Resim.bmp"
-            },
-        ) {
+        if !viewer.open_image(data, display_name) {
             viewer.clear_image("cizim.bmp");
         }
     } else if let Some(data) = vfs.read_file(path).filter(|data| !data.is_empty()) {
         let data: alloc::sync::Arc<[u8]> = alloc::sync::Arc::from(data);
-        if !viewer.open_image(
-            data,
-            if path.ends_with("cizim.bmp") {
-                "cizim.bmp"
-            } else {
-                "Resim.bmp"
-            },
-        ) {
+        if !viewer.open_image(data, display_name) {
             viewer.clear_image("cizim.bmp");
         }
     } else {

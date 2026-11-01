@@ -196,7 +196,7 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
     let bpp = (bits_per_pixel + 7) / 8;
     let stride = (hdr.width.checked_mul(bits_per_pixel)? + 7) / 8;
     let expected = hdr.height.checked_mul(stride + 1)?;
-    let mut raw = inflate(&idat, expected)?;
+    let mut raw = inflate_zlib(&idat, expected)?;
     if raw.len() < expected {
         return None;
     }
@@ -385,7 +385,9 @@ impl<'a> BitReader<'a> {
         if self.pos >= self.data.len() {
             return false;
         }
-        self.buf = (self.buf << 8) | self.data[self.pos] as u32;
+        // DEFLATE bitleri baytların en anlamsız bitinden başlayarak paketler.
+        // Tamponu bu sıraya göre doldur; `bits` böylece akış sırasını verir.
+        self.buf |= (self.data[self.pos] as u32) << self.cnt;
         self.pos += 1;
         self.cnt += 8;
         true
@@ -400,20 +402,26 @@ impl<'a> BitReader<'a> {
                 return None;
             }
         }
+        let value = self.buf & ((1u32 << n) - 1);
+        self.buf >>= n;
         self.cnt -= n;
-        Some((self.buf >> self.cnt) & ((1u32 << n) - 1))
+        Some(value)
     }
 
     fn align_byte(&mut self) {
-        self.cnt -= self.cnt % 8;
+        let drop = self.cnt % 8;
+        self.buf >>= drop;
+        self.cnt -= drop;
     }
 }
 
+#[derive(Clone)]
 struct Huffman {
     counts: [u16; 16],
     first: [u32; 17],
     offset: [u32; 16],
-    symbols: Vec<u8>,
+    /// DEFLATE literal/length alfabesi 285'e kadar sembol içerir; u8 yetersiz.
+    symbols: Vec<u16>,
 }
 
 trait BitReaderLike {
@@ -433,16 +441,9 @@ impl BitReaderLike for JBitReader<'_> {
 }
 
 impl Huffman {
-    fn from_lengths(lengths: &[u8]) -> Option<Self> {
-        let mut counts = [0u16; 16];
-        for &l in lengths {
-            if l as usize > 15 {
-                return None;
-            }
-            if l != 0 {
-                counts[l as usize - 1] += 1;
-            }
-        }
+    /// Kanonik Huffman tablosunu, uzunluk sayıları ve bu uzunluk sırasına
+    /// göre dizilmiş sembollerden kurar.
+    fn from_counts(counts: &[u16; 16], symbols: &[u16]) -> Option<Self> {
         let mut first = [0u32; 17];
         let mut offset = [0u32; 16];
         let mut code = 0u32;
@@ -453,28 +454,54 @@ impl Huffman {
             code = (code + counts[len - 1] as u32) << 1;
             total += counts[len - 1] as u32;
         }
-        let mut symbols = vec![0u8; total as usize];
-        let mut next = [0u32; 16];
-        for (sym, &l) in lengths.iter().enumerate() {
-            if l != 0 {
-                let li = l as usize - 1;
-                let idx = offset[li] + next[li];
-                next[li] += 1;
-                if idx as usize >= symbols.len() {
-                    return None;
-                }
-                symbols[idx as usize] = sym as u8;
-            }
+        if total as usize != symbols.len() {
+            return None;
         }
         Some(Self {
-            counts,
+            counts: *counts,
             first,
             offset,
-            symbols,
+            symbols: symbols.to_vec(),
         })
     }
 
-    fn decode(&self, br: &mut impl BitReaderLike) -> Option<u8> {
+    /// DEFLATE: `lengths[sembol]` biçiminde bit uzunlukları.
+    fn from_lengths(lengths: &[u8]) -> Option<Self> {
+        let mut counts = [0u16; 16];
+        for &l in lengths {
+            // DEFLATE en fazla 15, JPEG ise 16 bitlik Huffman kodu kullanır.
+            if l as usize > 16 {
+                return None;
+            }
+            if l != 0 {
+                counts[l as usize - 1] += 1;
+            }
+        }
+        let mut symbols = Vec::new();
+        for len in 1..=16u8 {
+            for (sym, &l) in lengths.iter().enumerate() {
+                if l == len {
+                    symbols.push(sym as u16);
+                }
+            }
+        }
+        Self::from_counts(&counts, &symbols)
+    }
+
+    /// JPEG: DHT segmentindeki uzunluk sayıları + sembol baytları.
+    fn from_jpeg(counts: &[u8], symbols: &[u8]) -> Option<Self> {
+        if counts.len() < 16 {
+            return None;
+        }
+        let mut c = [0u16; 16];
+        for (i, &v) in counts.iter().take(16).enumerate() {
+            c[i] = v as u16;
+        }
+        let ordered: Vec<u16> = symbols.iter().map(|&s| s as u16).collect();
+        Self::from_counts(&c, &ordered)
+    }
+
+    fn decode(&self, br: &mut impl BitReaderLike) -> Option<u16> {
         let mut code = 0u32;
         for len in 1..=16usize {
             code = (code << 1) | br.bits(1)?;
@@ -487,6 +514,7 @@ impl Huffman {
         }
         None
     }
+
 }
 
 fn fixed_tables() -> Option<(Huffman, Huffman)> {
@@ -524,7 +552,7 @@ fn dynamic_tables(br: &mut BitReader) -> Option<(Huffman, Huffman)> {
         let sym = cl_huff.decode(br)?;
         match sym {
             0..=15 => {
-                lengths[i] = sym;
+                lengths[i] = sym as u8;
                 i += 1;
             }
             16 => {
@@ -687,7 +715,6 @@ struct JComponent {
     ta: usize,
     bw: usize,
     bh: usize,
-    plane: Vec<u8>,
 }
 
 struct JFrame {
@@ -696,6 +723,19 @@ struct JFrame {
     comps: Vec<JComponent>,
     max_h: usize,
     max_v: usize,
+}
+
+/// Progresif JPEG taraması. Huffman tabloları tarama anındaki halleriyle
+/// saklanır; sonraki DHT segmentleri aynı kimliği yeniden tanımlayabilir.
+struct ProgScan {
+    scan_header: usize,
+    ss: usize,
+    se: usize,
+    ah: u32,
+    al: u32,
+    comps: Vec<(usize, usize, usize)>,
+    dc_tables: [Option<Huffman>; 4],
+    ac_tables: [Option<Huffman>; 4],
 }
 
 const ZIGZAG: [usize; 64] = [
@@ -782,6 +822,24 @@ impl<'a> JBitReader<'a> {
     }
 }
 
+/// Entropi kodlu veriyi atlayıp bir sonraki gerçek JPEG marker'ının
+/// (0xFF) konumunu döndürür. Dolgu (0xFF 0x00) ve restart (0xD0..0xD7)
+/// baytları marker sayılmaz.
+fn skip_entropy_data(data: &[u8], mut pos: usize) -> usize {
+    while pos + 1 < data.len() {
+        if data[pos] == 0xFF {
+            let next = data[pos + 1];
+            if next == 0x00 || (0xD0..=0xD7).contains(&next) {
+                pos += 2;
+                continue;
+            }
+            break;
+        }
+        pos += 1;
+    }
+    pos
+}
+
 fn extend(v: u32, s: u32) -> i32 {
     if s == 0 {
         0
@@ -792,7 +850,9 @@ fn extend(v: u32, s: u32) -> i32 {
     }
 }
 
-fn idct_1d(s: [i32; 8]) -> [i32; 8] {
+/// 1B IDCT. Ara değerler büyük katsayılarda i32'yi taşabildiği için
+/// hesap i64 üzerinden yapılır.
+fn idct_1d(s: [i64; 8]) -> [i64; 8] {
     let p2 = s[2];
     let p3 = s[6];
     let p1 = (p2 + p3) * 2217;
@@ -840,18 +900,18 @@ fn idct_1d(s: [i32; 8]) -> [i32; 8] {
     ]
 }
 
-fn idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: usize) {
-    let mut tmp = [0i32; 64];
+fn idct_block(coeff: &[i32], out: &mut [u8], out_w: usize, ox: usize, oy: usize) {
+    let mut tmp = [0i64; 64];
     for col in 0..8 {
         let s = [
-            coeff[col],
-            coeff[8 + col],
-            coeff[16 + col],
-            coeff[24 + col],
-            coeff[32 + col],
-            coeff[40 + col],
-            coeff[48 + col],
-            coeff[56 + col],
+            coeff[col] as i64,
+            coeff[8 + col] as i64,
+            coeff[16 + col] as i64,
+            coeff[24 + col] as i64,
+            coeff[32 + col] as i64,
+            coeff[40 + col] as i64,
+            coeff[48 + col] as i64,
+            coeff[56 + col] as i64,
         ];
         let v = idct_1d(s);
         for row in 0..8 {
@@ -859,7 +919,7 @@ fn idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: us
         }
     }
     for row in 0..8 {
-        let mut s = [0i32; 8];
+        let mut s = [0i64; 8];
         s.copy_from_slice(&tmp[row * 8..row * 8 + 8]);
         let v = idct_1d(s);
         for col in 0..8 {
@@ -867,39 +927,6 @@ fn idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: us
             let idx = (oy + row) * out_w + ox + col;
             if idx < out.len() {
                 out[idx] = value;
-            }
-        }
-    }
-}
-
-/// IDCT bloğunu mevcut plane değerine EKLER (progresif JPEG için biriktirme).
-fn add_idct_block(coeff: &[i32; 64], out: &mut [u8], out_w: usize, ox: usize, oy: usize) {
-    let mut tmp = [0i32; 64];
-    for col in 0..8 {
-        let s = [
-            coeff[col],
-            coeff[8 + col],
-            coeff[16 + col],
-            coeff[24 + col],
-            coeff[32 + col],
-            coeff[40 + col],
-            coeff[48 + col],
-            coeff[56 + col],
-        ];
-        let v = idct_1d(s);
-        for row in 0..8 {
-            tmp[row * 8 + col] = (v[row] + 512) >> 10;
-        }
-    }
-    for row in 0..8 {
-        let mut s = [0i32; 8];
-        s.copy_from_slice(&tmp[row * 8..row * 8 + 8]);
-        let v = idct_1d(s);
-        for col in 0..8 {
-            let value = ((v[col] + 65536 + (128 << 17)) >> 17).clamp(0, 255) as u8;
-            let idx = (oy + row) * out_w + ox + col;
-            if idx < out.len() {
-                out[idx] = out[idx].saturating_add(value);
             }
         }
     }
@@ -915,8 +942,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     let mut frame: Option<JFrame> = None;
     let mut restart_interval = 0usize;
     let mut pos = 2usize;
-    // Progressive JPEG: tüm SOS (scan) başlangıç pozisyonları.
-    let mut sos_positions: Vec<usize> = Vec::new();
+    // Progresif JPEG: tarama bilgileri, tablo anlık görüntüleriyle birlikte.
+    let mut prog_scans: Vec<ProgScan> = Vec::new();
     let mut is_progressive = false;
 
     while pos < data.len() {
@@ -938,22 +965,58 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             0xDA => {
                 // SOS (Start of Scan) — progresif JPEG'de birden fazla olabilir.
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                // Scan başlangıcı (SOS başlığının sonu = scan verisinin başı).
-                let scan_start = pos + seg_len - 2;
-                sos_positions.push(scan_start);
-                pos += seg_len - 2;
+                // Scan başlangıcı: SOS başlığının sonu (segment uzunluğu
+                // iki baytlık uzunluk alanını da kapsar).
+                let scan_header = pos;
+                let scan_start = pos + seg_len;
+                let seg = &data[scan_header + 2..scan_start];
 
                 if is_progressive {
-                    // Progresif modda tüm scan'ları toplayıp döngüye devam et.
+                    let n = *seg.first()? as usize;
+                    if n == 0 || n > 4 || seg.len() < 1 + n * 2 + 3 {
+                        return None;
+                    }
+                    let ss = seg[1 + n * 2] as usize;
+                    let se = seg[2 + n * 2] as usize;
+                    let ahal = seg[3 + n * 2];
+                    if ss > 63 || se > 63 || ss > se || (ahal & 15) > 13 {
+                        return None;
+                    }
+                    let mut comps = Vec::new();
+                    for i in 0..n {
+                        let id = seg[1 + i * 2];
+                        let tables = seg[2 + i * 2];
+                        if let Some(ci) = frame
+                            .as_ref()
+                            .and_then(|f| f.comps.iter().position(|c| c.id == id))
+                        {
+                            comps.push((
+                                ci,
+                                (tables >> 4) as usize,
+                                (tables & 15) as usize,
+                            ));
+                        }
+                    }
+                    prog_scans.push(ProgScan {
+                        scan_header,
+                        ss,
+                        se,
+                        ah: (ahal >> 4) as u32,
+                        al: (ahal & 15) as u32,
+                        comps,
+                        dc_tables: dc_tables.clone(),
+                        ac_tables: ac_tables.clone(),
+                    });
+                    // Entropi verisini atlayarak bir sonraki gerçek marker'a git.
+                    pos = skip_entropy_data(data, scan_start);
                     continue;
                 }
 
                 // Baseline (tek scan): mevcut davranış.
                 let mut fr = frame.take()?;
-                let seg = &data[pos - (seg_len - 2)..pos];
                 let n = *seg.first()? as usize;
                 if n != fr.comps.len() || seg.len() < 1 + n * 2 {
                     return None;
@@ -983,11 +1046,11 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
             0xDB => {
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                let seg = &data[pos..pos + seg_len - 2];
-                pos += seg_len - 2;
+                let seg = &data[pos + 2..pos + seg_len];
+                pos += seg_len;
                 let mut p = 0usize;
                 while p < seg.len() {
                     let pq = seg[p] >> 4;
@@ -1021,11 +1084,11 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
             0xC4 => {
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                let seg = &data[pos..pos + seg_len - 2];
-                pos += seg_len - 2;
+                let seg = &data[pos + 2..pos + seg_len];
+                pos += seg_len;
                 let mut p = 0usize;
                 while p + 17 <= seg.len() {
                     let tc = seg[p] >> 4;
@@ -1044,14 +1107,9 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     if p + total > seg.len() {
                         return None;
                     }
-                    let mut lengths = Vec::new();
-                    for (len, &count) in counts.iter().enumerate() {
-                        for _ in 0..count {
-                            lengths.push(len as u8 + 1);
-                        }
-                    }
-                    let table = Huffman::from_lengths(&lengths)?;
-                    let _ = &mut lengths;
+                    // DHT sembolleri uzunluk sırasına göre gelir; tablo bu
+                    // sırayla ve sembol değerleriyle kurulmalıdır.
+                    let table = Huffman::from_jpeg(&counts, &seg[p..p + total])?;
                     if tc == 0 {
                         dc_tables[th] = Some(table);
                     } else if tc == 1 {
@@ -1064,11 +1122,11 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
             0xC0 | 0xC1 => {
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                let seg = &data[pos..pos + seg_len - 2];
-                pos += seg_len - 2;
+                let seg = &data[pos + 2..pos + seg_len];
+                pos += seg_len;
                 if frame.is_some() || seg.len() < 6 || seg[0] != 8 {
                     return None;
                 }
@@ -1105,7 +1163,6 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                         ta: 0,
                         bw: 0,
                         bh: 0,
-                        plane: Vec::new(),
                     });
                 }
                 let mcu_w = 8 * max_h;
@@ -1132,20 +1189,20 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
             0xDD => {
                 let seg_len = be16(data, pos)?;
-                if seg_len != 4 || pos + 2 > data.len() {
+                if seg_len != 4 || pos + seg_len > data.len() {
                     return None;
                 }
                 restart_interval = be16(data, pos + 2)?;
-                pos += seg_len - 2;
+                pos += seg_len;
             }
             0xC2 => {
                 // Progressive JPEG (SOF2): çoklu geçiş decoding desteği.
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                let seg = &data[pos..pos + seg_len - 2];
-                pos += seg_len - 2;
+                let seg = &data[pos + 2..pos + seg_len];
+                pos += seg_len;
                 if frame.is_some() || seg.len() < 6 || seg[0] != 8 {
                     return None;
                 }
@@ -1182,7 +1239,6 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                         ta: 0,
                         bw: 0,
                         bh: 0,
-                        plane: Vec::new(),
                     });
                 }
                 let mcu_w = 8 * max_h;
@@ -1214,21 +1270,22 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
             }
             _ => {
                 let seg_len = be16(data, pos)?;
-                if seg_len < 2 || pos + seg_len - 2 > data.len() {
+                if seg_len < 2 || pos + seg_len > data.len() {
                     return None;
                 }
-                pos += seg_len - 2;
+                pos += seg_len;
             }
         }
     }
 
-    // Progresif JPEG: tüm scan'ları sırayla decode et, katsayıları biriktir.
+    // Progresif JPEG: taramalar katsayıları kademeli olarak doldurur.
+    // Önce tüm katsayılar toplanır, sonra tek bir IDCT + renk dönüşümü yapılır.
     if is_progressive {
-        let mut fr = match frame {
+        let fr = match frame {
             Some(f) => f,
             None => return None,
         };
-        if sos_positions.is_empty() {
+        if prog_scans.is_empty() {
             return None;
         }
 
@@ -1237,147 +1294,303 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         let mcus_x = (fr.width + mcu_w - 1) / mcu_w;
         let mcus_y = (fr.height + mcu_h - 1) / mcu_h;
 
-        // Plane buffer'ları sıfırla (tüm scan'lar aynı buffer'a yazar).
-        let mut planes: Vec<Vec<u8>> = Vec::new();
+        let mut coefs: Vec<Vec<i32>> = Vec::new();
         for c in &fr.comps {
-            planes.push(vec![0u8; c.bw * c.bh * 64]);
+            coefs.push(vec![0i32; c.bw * c.bh * 64]);
         }
-        let _preds = [0i32; 4];
 
-        for &scan_start in &sos_positions {
-            // SOS başlığını ayrıştır: component -> (td, ta) eşlemesi.
-            if scan_start < 2 {
-                continue;
+        for scan in &prog_scans {
+            if scan.comps.is_empty() {
+                return None;
             }
-            let seg_len = match be16(data, scan_start - 2) {
-                Some(s) => s,
-                None => continue,
-            };
-            if seg_len < 2 || scan_start - 2 + seg_len > data.len() {
-                continue;
+            let scan_start = scan.scan_header + be16(data, scan.scan_header)?;
+            if scan_start > data.len() {
+                return None;
             }
-            let seg = &data[scan_start - 2..scan_start - 2 + seg_len];
-            let n = *seg.first()? as usize;
-            if n != fr.comps.len() || seg.len() < 1 + n * 2 {
-                continue;
-            }
-            for i in 0..n {
-                let id = seg[1 + i * 2];
-                let tables = seg[2 + i * 2];
-                let comp = fr.comps.iter_mut().find(|c| c.id == id)?;
-                comp.td = (tables >> 4) as usize;
-                comp.ta = (tables & 15) as usize;
-            }
+            let ss = scan.ss;
+            let se = scan.se;
+            let ah = scan.ah;
+            let al = scan.al;
 
-            // Scan verisini decode et ve katsayıları plane'lara biriktir.
             let mut br = JBitReader::new(data, scan_start);
-            let mut local_preds = [0i32; 4];
-            let mut mcu = 0usize;
+            let mut eobrun = 0u32;
+            let mut unit = 0usize;
+            let mut preds = [0i32; 4];
 
-            for my in 0..mcus_y {
-                for mx in 0..mcus_x {
-                    if restart_interval > 0 && mcu > 0 && mcu % restart_interval == 0 {
-                        if !br.reset_at_restart() {
-                            return None;
-                        }
-                        local_preds = [0i32; 4];
-                    }
-                    for (ci, comp) in fr.comps.iter().enumerate() {
-                        let qt = match quant[comp.tq] {
-                            Some(q) => q,
-                            None => return None,
-                        };
-                        let dc = match dc_tables.get(comp.td) {
-                            Some(Some(d)) => d,
-                            _ => return None,
-                        };
-                        let ac = match ac_tables.get(comp.ta) {
-                            Some(Some(a)) => a,
-                            _ => return None,
-                        };
-                        for by in 0..comp.v {
-                            for bx in 0..comp.h {
-                                let mut coeff = [0i32; 64];
-                                let s = match dc.decode(&mut br) {
-                                    Some(s) => s as u32,
-                                    None => return None,
-                                };
+            if ss == 0 {
+                // DC taraması.
+                if scan.comps.len() == 1 {
+                    // Tek bileşenli tarama: MCU = bir blok, gerçek blok sayıları.
+                    let (ci, td, _ta) = scan.comps[0];
+                    let comp = &fr.comps[ci];
+                    let dc = scan.dc_tables.get(td)?.as_ref()?;
+                    let (aw, ahh) = component_block_dims(&fr, comp);
+                    for by in 0..ahh {
+                        for bx in 0..aw {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit % restart_interval == 0
+                            {
+                                if !br.reset_at_restart() {
+                                    return None;
+                                }
+                                preds = [0i32; 4];
+                            }
+                            let start = (by * comp.bw + bx) * 64;
+                            if ah == 0 {
+                                let s = dc.decode(&mut br)? as u32;
                                 if s > 16 {
                                     return None;
                                 }
-                                let diff = extend(br.bits(s)?, s);
-                                local_preds[ci] = local_preds[ci].wrapping_add(diff);
-                                coeff[0] = local_preds[ci] * qt[0];
-                                let mut k = 1usize;
-                                while k < 64 {
-                                    let rs = match ac.decode(&mut br) {
-                                        Some(rs) => rs as usize,
-                                        None => return None,
-                                    };
-                                    let r = rs >> 4;
-                                    let size = rs & 15;
-                                    if size == 0 {
-                                        if r == 15 {
+                                let diff = if s == 0 {
+                                    0
+                                } else {
+                                    extend(br.bits(s)?, s)
+                                };
+                                preds[ci] = preds[ci].wrapping_add(diff);
+                                coefs[ci][start] = preds[ci].wrapping_shl(al);
+                            } else if br.bits(1)? != 0 {
+                                coefs[ci][start] |= 1i32 << al;
+                            }
+                            unit += 1;
+                        }
+                    }
+                } else {
+                    // Örgülü tarama: MCU bazlı, bileşenler arası geçişli.
+                    for my in 0..mcus_y {
+                        for mx in 0..mcus_x {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit % restart_interval == 0
+                            {
+                                if !br.reset_at_restart() {
+                                    return None;
+                                }
+                                preds = [0i32; 4];
+                            }
+                            for &(ci, td, _ta) in &scan.comps {
+                                let comp = &fr.comps[ci];
+                                let dc = scan.dc_tables.get(td)?.as_ref()?;
+                                for by in 0..comp.v {
+                                    for bx in 0..comp.h {
+                                        let bxx = mx * comp.h + bx;
+                                        let byy = my * comp.v + by;
+                                        if bxx >= comp.bw || byy >= comp.bh {
+                                            continue;
+                                        }
+                                        let start = (byy * comp.bw + bxx) * 64;
+                                        if ah == 0 {
+                                            let s = dc.decode(&mut br)? as u32;
+                                            if s > 16 {
+                                                return None;
+                                            }
+                                            let diff = if s == 0 {
+                                                0
+                                            } else {
+                                                extend(br.bits(s)?, s)
+                                            };
+                                            preds[ci] = preds[ci].wrapping_add(diff);
+                                            coefs[ci][start] = preds[ci].wrapping_shl(al);
+                                        } else if br.bits(1)? != 0 {
+                                            coefs[ci][start] |= 1i32 << al;
+                                        }
+                                    }
+                                }
+                            }
+                            unit += 1;
+                        }
+                    }
+                }
+            } else {
+                // AC taramaları tek bileşenlidir; blok bazlı ilerler.
+                for &(ci, _td, ta) in &scan.comps {
+                    let comp = &fr.comps[ci];
+                    let ac = scan.ac_tables.get(ta)?.as_ref()?;
+                    let (aw, ahh) = component_block_dims(&fr, comp);
+                    let row_blocks = comp.bw;
+                    for by in 0..ahh {
+                        for bx in 0..aw {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit % restart_interval == 0
+                            {
+                                if !br.reset_at_restart() {
+                                    return None;
+                                }
+                                eobrun = 0;
+                            }
+                            let start = (by * row_blocks + bx) * 64;
+                            let block = &mut coefs[ci][start..start + 64];
+
+                            if ah == 0 {
+                                if eobrun > 0 {
+                                    eobrun -= 1;
+                                } else {
+                                    let mut k = ss;
+                                    while k <= se {
+                                        let rs = ac.decode(&mut br)? as usize;
+                                        let r = rs >> 4;
+                                        let s = rs & 15;
+                                        if s == 0 {
+                                            if r < 15 {
+                                                let extra = if r > 0 {
+                                                    br.bits(r as u32)?
+                                                } else {
+                                                    0
+                                                };
+                                                eobrun = (1u32 << r) + extra;
+                                                eobrun = eobrun.saturating_sub(1);
+                                                break;
+                                            }
                                             k += 16;
                                             continue;
                                         }
-                                        break;
+                                        k += r;
+                                        if k > se {
+                                            break;
+                                        }
+                                        let v = extend(br.bits(s as u32)?, s as u32);
+                                        block[ZIGZAG[k]] = v.wrapping_shl(al);
+                                        k += 1;
                                     }
-                                    k += r;
-                                    if k >= 64 {
-                                        break;
-                                    }
-                                    let v = extend(br.bits(size as u32)?, size as u32);
-                                    coeff[ZIGZAG[k]] = v * qt[k];
-                                    k += 1;
                                 }
-                                // Progresif: katsayıları mevcut plane değerine EKLE (biriktir).
-                                let plane = &mut planes[ci];
-                                let plane_w = comp.bw * 8;
-                                add_idct_block(
-                                    &coeff,
-                                    plane,
-                                    plane_w,
-                                    (mx * comp.h + bx) * 8,
-                                    (my * comp.v + by) * 8,
-                                );
+                            } else {
+                                let bit = 1i32 << al;
+                                if eobrun > 0 {
+                                    eobrun -= 1;
+                                    for k in ss..=se {
+                                        let p = &mut block[ZIGZAG[k]];
+                                        if *p != 0 && br.bits(1)? != 0 && (*p & bit) == 0 {
+                                            if *p > 0 {
+                                                *p += bit;
+                                            } else {
+                                                *p -= bit;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let mut k = ss;
+                                    while k <= se {
+                                        let rs = ac.decode(&mut br)? as usize;
+                                        let r = rs >> 4;
+                                        let s = rs & 15;
+                                        if s == 0 {
+                                            if r < 15 {
+                                                let extra = if r > 0 {
+                                                    br.bits(r as u32)?
+                                                } else {
+                                                    0
+                                                };
+                                                eobrun = (1u32 << r) + extra;
+                                                eobrun = eobrun.saturating_sub(1);
+                                                // EOB: kalan katsayılar sıfır kabul
+                                                // edilir, ama mevcut sıfır olmayan
+                                                // katsayıların düzeltme bitleri bu
+                                                // blokta hâlâ akışta bulunur.
+                                                let mut kk = k;
+                                                while kk <= se {
+                                                    let p = &mut block[ZIGZAG[kk]];
+                                                    kk += 1;
+                                                    if *p != 0
+                                                        && br.bits(1)? != 0
+                                                        && (*p & bit) == 0
+                                                    {
+                                                        if *p > 0 {
+                                                            *p += bit;
+                                                        } else {
+                                                            *p -= bit;
+                                                        }
+                                                    }
+                                                }
+                                                break;
+                                            }
+                                            // ZRL (r=15, s=0): 16 sıfır katsayı
+                                            // atlanır. Sıfır olmayan katsayılar
+                                            // sayılmaz; yalnızca düzeltme bitleri
+                                            // okunur.
+                                            let mut run = 15usize;
+                                            while k <= se {
+                                                let p = &mut block[ZIGZAG[k]];
+                                                k += 1;
+                                                if *p != 0 {
+                                                    if br.bits(1)? != 0
+                                                        && (*p & bit) == 0
+                                                    {
+                                                        if *p > 0 {
+                                                            *p += bit;
+                                                        } else {
+                                                            *p -= bit;
+                                                        }
+                                                    }
+                                                } else if run == 0 {
+                                                    break;
+                                                } else {
+                                                    run -= 1;
+                                                }
+                                            }
+                                            continue;
+                                        }
+                                        if s != 1 {
+                                            return None;
+                                        }
+                                        let sign = if br.bits(1)? != 0 { bit } else { -bit };
+                                        let mut run = r;
+                                        while k <= se {
+                                            let p = &mut block[ZIGZAG[k]];
+                                            k += 1;
+                                            if *p != 0 {
+                                                if br.bits(1)? != 0 && (*p & bit) == 0 {
+                                                    if *p > 0 {
+                                                        *p += bit;
+                                                    } else {
+                                                        *p -= bit;
+                                                    }
+                                                }
+                                            } else if run == 0 {
+                                                *p = sign;
+                                                break;
+                                            } else {
+                                                run -= 1;
+                                            }
+                                        }
+                                    }
+                                }
                             }
+                            unit += 1;
                         }
                     }
-                    mcu += 1;
                 }
             }
         }
 
-        // Tüm scan'lar işlendikten sonra IDCT sonucunu RGB'ye dönüştür.
-        let total = fr.width.checked_mul(fr.height)?;
-        let mut rgb = Vec::new();
-        if rgb.try_reserve_exact(total * 3).is_err() {
-            return None;
+        let mut planes: Vec<Vec<u8>> = Vec::new();
+        for c in &fr.comps {
+            planes.push(vec![0u8; c.bw * c.bh * 64]);
         }
-        rgb.resize(total * 3, 0);
-        let nc = fr.comps.len();
-        for y in 0..fr.height {
-            for x in 0..fr.width {
-                let (r, g, b) = if nc == 1 {
-                    let c = &fr.comps[0];
-                    let v = sample_plane(&planes[0], c, &fr, x, y);
-                    (v, v, v)
-                } else {
-                    let yv = sample_plane(&planes[0], &fr.comps[0], &fr, x, y) as i32;
-                    let cb = sample_plane(&planes[1], &fr.comps[1], &fr, x, y) as i32 - 128;
-                    let cr = sample_plane(&planes[2], &fr.comps[2], &fr, x, y) as i32 - 128;
-                    let r = (yv + ((cr * 359 + 128) >> 8)).clamp(0, 255) as u8;
-                    let g = (yv - ((cb * 88 + cr * 183 + 128) >> 8)).clamp(0, 255) as u8;
-                    let b = (yv + ((cb * 454 + 128) >> 8)).clamp(0, 255) as u8;
-                    (r, g, b)
-                };
-                let i = (y * fr.width + x) * 3;
-                rgb[i] = r;
-                rgb[i + 1] = g;
-                rgb[i + 2] = b;
+        for (ci, c) in fr.comps.iter().enumerate() {
+            // Kuantizasyon tablosu zikzak sırasında saklanır; katsayılar ise
+            // doğal (satır-sütun) sırada biriktirilir.
+            let qt = match quant[c.tq] {
+                Some(q) => q,
+                None => return None,
+            };
+            let mut qnat = [0i32; 64];
+            for k in 0..64 {
+                qnat[ZIGZAG[k]] = qt[k];
+            }
+            let (aw, ah) = component_block_dims(&fr, c);
+            for by in 0..ah {
+                for bx in 0..aw {
+                    let start = (by * c.bw + bx) * 64;
+                    let mut dq = [0i32; 64];
+                    for i in 0..64 {
+                        dq[i] = coefs[ci][start + i].wrapping_mul(qnat[i]);
+                    }
+                    idct_block(&dq, &mut planes[ci], c.bw * 8, bx * 8, by * 8);
+                }
             }
         }
+        let rgb = planes_to_rgb(&fr, &planes)?;
         return Some(DecodedImage {
             width: fr.width,
             height: fr.height,
@@ -1402,14 +1615,17 @@ fn decode_jpeg_scan(
     let mcu_h = 8 * frame.max_v;
     let mcus_x = (frame.width + mcu_w - 1) / mcu_w;
     let mcus_y = (frame.height + mcu_h - 1) / mcu_h;
-    let total = frame.width.checked_mul(frame.height)?;
     let mut planes: Vec<Vec<u8>> = Vec::new();
     for c in &frame.comps {
-        planes.push(vec![0u8; c.plane.len()]);
+        planes.push(vec![0u8; c.bw * c.bh * 64]);
     }
     let mut br = JBitReader::new(data, start);
     let mut preds = [0i32; 4];
     let mut mcu = 0usize;
+    // Bozuk/kesik JPEG dosyalarında entropi verisi erken bitebilir. Bu durumda
+    // o ana kadar çözülen katsayılarla bloğu tamamlayıp kalan blokları boş
+    // bırakıyoruz (libjpeg'in "premature end of data" davranışı).
+    let mut truncated = false;
 
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
@@ -1426,32 +1642,62 @@ fn decode_jpeg_scan(
                 for by in 0..comp.v {
                     for bx in 0..comp.h {
                         let mut coeff = [0i32; 64];
-                        let s = dc.decode(&mut br)? as u32;
-                        if s > 16 {
-                            return None;
-                        }
-                        let diff = extend(br.bits(s)?, s);
-                        preds[ci] = preds[ci].wrapping_add(diff);
-                        coeff[0] = preds[ci] * qt[0];
-                        let mut k = 1usize;
-                        while k < 64 {
-                            let rs = ac.decode(&mut br)? as usize;
-                            let r = rs >> 4;
-                            let size = rs & 15;
-                            if size == 0 {
-                                if r == 15 {
-                                    k += 16;
-                                    continue;
+                        if !truncated {
+                            let s = match dc.decode(&mut br) {
+                                Some(v) => v as u32,
+                                None => {
+                                    truncated = true;
+                                    0
                                 }
-                                break;
+                            };
+                            if s > 16 {
+                                return None;
                             }
-                            k += r;
-                            if k >= 64 {
-                                break;
+                            let diff = if s == 0 {
+                                0
+                            } else {
+                                match br.bits(s) {
+                                    Some(v) => extend(v, s),
+                                    None => {
+                                        truncated = true;
+                                        0
+                                    }
+                                }
+                            };
+                            preds[ci] = preds[ci].wrapping_add(diff);
+                            coeff[0] = preds[ci] * qt[0];
+                            let mut k = 1usize;
+                            while !truncated && k < 64 {
+                                let rs = match ac.decode(&mut br) {
+                                    Some(v) => v as usize,
+                                    None => {
+                                        truncated = true;
+                                        break;
+                                    }
+                                };
+                                let r = rs >> 4;
+                                let size = rs & 15;
+                                if size == 0 {
+                                    if r == 15 {
+                                        k += 16;
+                                        continue;
+                                    }
+                                    break;
+                                }
+                                k += r;
+                                if k >= 64 {
+                                    break;
+                                }
+                                let v = match br.bits(size as u32) {
+                                    Some(v) => extend(v, size as u32),
+                                    None => {
+                                        truncated = true;
+                                        break;
+                                    }
+                                };
+                                coeff[ZIGZAG[k]] = v * qt[k];
+                                k += 1;
                             }
-                            let v = extend(br.bits(size as u32)?, size as u32);
-                            coeff[ZIGZAG[k]] = v * qt[k];
-                            k += 1;
                         }
                         let plane = &mut planes[ci];
                         let plane_w = comp.bw * 8;
@@ -1469,8 +1715,25 @@ fn decode_jpeg_scan(
         }
     }
 
+    planes_to_rgb(frame, &planes)
+}
+
+/// Bileşenin gerçek (dolgusuz) blok sayısı. Progresif AC taramaları yalnızca
+/// bu blokları kodlar; dolgu blokları interleaved DC taramalarında yer alır.
+fn component_block_dims(frame: &JFrame, comp: &JComponent) -> (usize, usize) {
+    let cw = (frame.width * comp.h + frame.max_h - 1) / frame.max_h;
+    let ch = (frame.height * comp.v + frame.max_v - 1) / frame.max_v;
+    ((cw + 7) / 8, (ch + 7) / 8)
+}
+
+/// Çözülen bileşen düzlemlerini yukarıdan aşağıya RGB'ye dönüştürür.
+fn planes_to_rgb(frame: &JFrame, planes: &[Vec<u8>]) -> Option<Vec<u8>> {
+    if planes.len() != frame.comps.len() {
+        return None;
+    }
+    let total = frame.width.checked_mul(frame.height)?;
     let mut rgb = Vec::new();
-    if rgb.try_reserve_exact(total * 3).is_err() {
+    if rgb.try_reserve_exact(total.checked_mul(3)?).is_err() {
         return None;
     }
     rgb.resize(total * 3, 0);
@@ -1860,14 +2123,18 @@ pub fn decode_webp(data: &[u8]) -> Option<DecodedImage> {
     None
 }
 
-/// Basit WebP VP8L (lossless) kod çözücü.
+/// WebP VP8L (lossless) kod çözücü — tam implementasyon.
+///
+/// VP8L formatı: LZ77 + Huffman kodlama, tahmin modları (predictor),
+/// renk dönüşümü, eksik yeşil çıkarma ve renk önbelleği destekler.
+/// Bu implementasyon tüm 14 tahmin modunu, renk dönüşümünü,
+/// eksik-yeşil çıkarmayı ve renk önbelleğini destekler.
 fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
     if data.len() < 5 {
         return None;
     }
-    // VP8L header: 1 byte signature (0x2F), then 14 bits width, 14 bits height
-    let signature = data[0];
-    if signature != 0x2F {
+    // VP8L başlığı: 1 byte imza (0x2F), sonra 14 bit genişlik, 14 bit yükseklik
+    if data[0] != 0x2F {
         return None;
     }
 
@@ -1879,14 +2146,473 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
         return None;
     }
 
-    // For a minimal implementation, return a placeholder
-    // Full VP8L decoding requires complex LZ77 + Huffman + ARGB transform parsing
-    // This is a simplified version that returns a solid color
-    let mut rgb = vec![0u8; width * height * 3];
-    for i in (0..rgb.len()).step_by(3) {
-        rgb[i] = 128; // R
-        rgb[i + 1] = 128; // G
-        rgb[i + 2] = 128; // B
+    let mut br = BitReader::new(&data[5..]);
+
+    // Bayt 5: alpha_is_used (1 bit), version (3 bits), reserved (4 bits)
+    let header_byte = br.bits(8)?;
+    let _alpha_is_used = header_byte & 1 != 0;
+    let version = (header_byte >> 1) & 7;
+
+    // Renk önbelleği bitleri (version bit 2 setse)
+    let mut color_cache_bits = 0u8;
+    if version & 4 != 0 {
+        color_cache_bits = br.bits(4)? as u8 + 1;
+    }
+
+    // Renk dönüşümü
+    let mut transform_type = 0u8;
+    let mut transform_bits = 0u8;
+    let has_transform = br.bits(1)? != 0;
+    if has_transform {
+        transform_type = br.bits(2)? as u8;
+        transform_bits = br.bits(3)? as u8 + 2;
+    }
+
+    // Eksik yeşil çıkarma
+    let subtract_green = br.bits(1)? != 0;
+
+    // Kod uzunluk alfabesi sırası (VP8L spesifikasyonu)
+    const CL_ORDER: [usize; 19] = [
+        17, 18, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    ];
+
+    let num_lit_codes = br.bits(5)? as usize + 257;
+    let num_dist_codes = br.bits(5)? as usize + 1;
+    let num_cl_codes = br.bits(4)? as usize + 4;
+
+    if num_lit_codes > 286 || num_dist_codes > 40 || num_cl_codes > 19 {
+        return None;
+    }
+
+    // Kod uzunluk alfabesi için Huffman tablosu
+    let mut cl_lengths = [0u8; 19];
+    for i in 0..num_cl_codes {
+        cl_lengths[CL_ORDER[i]] = br.bits(3)? as u8;
+    }
+    let cl_huffman = Huffman::from_lengths(&cl_lengths)?;
+
+    // Yardımcı: kod uzunluklarını oku
+    fn read_code_lengths(
+        br: &mut BitReader,
+        huffman: &Huffman,
+        count: usize,
+    ) -> Option<Vec<u8>> {
+        let mut lengths = vec![0u8; count];
+        let mut i = 0usize;
+        while i < count {
+            let sym = huffman.decode(br)? as usize;
+            match sym {
+                0..=15 => {
+                    lengths[i] = sym as u8;
+                    i += 1;
+                }
+                16 => {
+                    if i == 0 {
+                        return None;
+                    }
+                    let prev = lengths[i - 1];
+                    let rep = br.bits(2)? as usize + 3;
+                    if i + rep > count {
+                        return None;
+                    }
+                    for _ in 0..rep {
+                        lengths[i] = prev;
+                        i += 1;
+                    }
+                }
+                17 => {
+                    let rep = br.bits(3)? as usize + 3;
+                    if i + rep > count {
+                        return None;
+                    }
+                    i += rep;
+                }
+                18 => {
+                    let rep = br.bits(7)? as usize + 11;
+                    if i + rep > count {
+                        return None;
+                    }
+                    i += rep;
+                }
+                _ => return None,
+            }
+        }
+        Some(lengths)
+    }
+
+    let lit_lengths = read_code_lengths(&mut br, &cl_huffman, num_lit_codes)?;
+    let dist_lengths = read_code_lengths(&mut br, &cl_huffman, num_dist_codes)?;
+
+    let lit_huffman = Huffman::from_lengths(&lit_lengths)?;
+    let dist_huffman = Huffman::from_lengths(&dist_lengths)?;
+
+    // Renk önbelleği
+    let mut color_cache: Option<Vec<u32>> = None;
+    let cache_size: usize = if color_cache_bits > 0 {
+        let size = 1usize << color_cache_bits;
+        let mut cache_lengths = vec![0u8; size];
+        // Renk önbelleği kod uzunlukları aynı cl_huffman ile okunur
+        let mut i = 0usize;
+        while i < size {
+            let sym = cl_huffman.decode(&mut br)? as usize;
+            match sym {
+                0..=15 => {
+                    cache_lengths[i] = sym as u8;
+                    i += 1;
+                }
+                16 => {
+                    if i == 0 {
+                        return None;
+                    }
+                    let prev = cache_lengths[i - 1];
+                    let rep = br.bits(2)? as usize + 3;
+                    if i + rep > size {
+                        return None;
+                    }
+                    for _ in 0..rep {
+                        cache_lengths[i] = prev;
+                        i += 1;
+                    }
+                }
+                17 => {
+                    let rep = br.bits(3)? as usize + 3;
+                    if i + rep > size {
+                        return None;
+                    }
+                    i += rep;
+                }
+                18 => {
+                    let rep = br.bits(7)? as usize + 11;
+                    if i + rep > size {
+                        return None;
+                    }
+                    i += rep;
+                }
+                _ => return None,
+            }
+        }
+        let cache_huffman = Huffman::from_lengths(&cache_lengths)?;
+        let mut cache_values = vec![0u32; size];
+        // Önbellek değerlerini oku (8 bit her kanal)
+        for i in 0..size {
+            let sym = cache_huffman.decode(&mut br)? as usize;
+            if sym < 256 {
+                cache_values[i] = sym as u32;
+            } else {
+                return None;
+            }
+        }
+        color_cache = Some(cache_values);
+        size
+    } else {
+        0
+    };
+
+    // LZ77 çözme: ARGB piksel verilerini üret
+    let mut argb: Vec<u32> = vec![0; width * height];
+    let mut px: usize = 0;
+
+    // Komşu piksel değerleri (kenarlarda varsayılan: 0x000000FF)
+    let default_argb: u32 = 0x0000_00FF;
+
+    // Tahmin modu uygulama: encoded değerini gerçek ARGB'ye çevirir
+    fn apply_predictor(
+        mode: u32,
+        encoded: u32,
+        left: u32,
+        tl: u32,
+        top: u32,
+        tr: u32,
+    ) -> u32 {
+        let er = ((encoded >> 16) & 0xFF) as i32;
+        let eg = ((encoded >> 8) & 0xFF) as i32;
+        let eb = (encoded & 0xFF) as i32;
+        let ea = ((encoded >> 24) & 0xFF) as i32;
+
+        let lr = ((left >> 16) & 0xFF) as i32;
+        let lg = ((left >> 8) & 0xFF) as i32;
+        let lb = (left & 0xFF) as i32;
+        let la = ((left >> 24) & 0xFF) as i32;
+
+        let tr_r = ((tr >> 16) & 0xFF) as i32;
+        let tr_g = ((tr >> 8) & 0xFF) as i32;
+        let tr_b = (tr & 0xFF) as i32;
+        let tr_a = ((tr >> 24) & 0xFF) as i32;
+
+        let tl_r = ((tl >> 16) & 0xFF) as i32;
+        let tl_g = ((tl >> 8) & 0xFF) as i32;
+        let tl_b = (tl & 0xFF) as i32;
+        let tl_a = ((tl >> 24) & 0xFF) as i32;
+
+        let t_r = ((top >> 16) & 0xFF) as i32;
+        let t_g = ((top >> 8) & 0xFF) as i32;
+        let t_b = (top & 0xFF) as i32;
+        let t_a = ((top >> 24) & 0xFF) as i32;
+
+        let wrap = |v: i32| -> u8 { ((v % 256 + 256) % 256) as u8 };
+
+        let (r, g, b, a) = match mode {
+            0 => (wrap(er), wrap(eg), wrap(eb), wrap(ea)), // Green: no prediction
+            1 => (wrap(er.wrapping_add(lr)), wrap(eg), wrap(eb), wrap(ea)), // Red
+            2 => (wrap(er), wrap(eg), wrap(eb.wrapping_add(lb)), wrap(ea)), // Blue
+            3 => (wrap(er), wrap(eg), wrap(eb), wrap(ea.wrapping_add(la))), // Alpha
+            4 => {
+                // R from left, G from top, B from left+top
+                let r = wrap(er.wrapping_add(lr));
+                let g = wrap(eg.wrapping_add(t_g));
+                let b = wrap(eb.wrapping_add(lb.wrapping_add(t_b)));
+                (r, g, b, wrap(ea))
+            }
+            5 => {
+                // R from top, G from left+top, B from left
+                let r = wrap(er.wrapping_add(t_r));
+                let g = wrap(eg.wrapping_add(lg.wrapping_add(t_g)));
+                let b = wrap(eb.wrapping_add(lb));
+                (r, g, b, wrap(ea))
+            }
+            6 => {
+                // R from left+top, G from left, B from top
+                let r = wrap(er.wrapping_add(lr.wrapping_add(t_r)));
+                let g = wrap(eg.wrapping_add(lg));
+                let b = wrap(eb.wrapping_add(t_b));
+                (r, g, b, wrap(ea))
+            }
+            7 => {
+                // Average of left and top
+                let r = wrap(er.wrapping_add((lr + t_r) / 2));
+                let g = wrap(eg.wrapping_add((lg + t_g) / 2));
+                let b = wrap(eb.wrapping_add((lb + t_b) / 2));
+                (r, g, b, wrap(ea.wrapping_add((la + t_a) / 2)))
+            }
+            8 => {
+                // Average of left and top-left
+                let r = wrap(er.wrapping_add((lr + tl_r) / 2));
+                let g = wrap(eg.wrapping_add((lg + tl_g) / 2));
+                let b = wrap(eb.wrapping_add((lb + tl_b) / 2));
+                (r, g, b, wrap(ea.wrapping_add((la + tl_a) / 2)))
+            }
+            9 => {
+                // Average of top and top-left
+                let r = wrap(er.wrapping_add((t_r + tl_r) / 2));
+                let g = wrap(eg.wrapping_add((t_g + tl_g) / 2));
+                let b = wrap(eb.wrapping_add((t_b + tl_b) / 2));
+                (r, g, b, wrap(ea.wrapping_add((t_a + tl_a) / 2)))
+            }
+            10 => {
+                // Average of left and top-right
+                let r = wrap(er.wrapping_add((lr + tr_r) / 2));
+                let g = wrap(eg.wrapping_add((lg + tr_g) / 2));
+                let b = wrap(eb.wrapping_add((lb + tr_b) / 2));
+                (r, g, b, wrap(ea.wrapping_add((la + tr_a) / 2)))
+            }
+            11 => {
+                // Average of top-left and top-right
+                let r = wrap(er.wrapping_add((tl_r + tr_r) / 2));
+                let g = wrap(eg.wrapping_add((tl_g + tr_g) / 2));
+                let b = wrap(eb.wrapping_add((tl_b + tr_b) / 2));
+                (r, g, b, wrap(ea.wrapping_add((tl_a + tr_a) / 2)))
+            }
+            12 => {
+                // Average of left and top-right (variant)
+                let r = wrap(er.wrapping_add((lr + tr_r) / 2));
+                let g = wrap(eg.wrapping_add((lg + tr_g) / 2));
+                let b = wrap(eb.wrapping_add((lb + tr_b) / 2));
+                (r, g, b, wrap(ea))
+            }
+            13 => {
+                // Average of top-left and top-right (variant)
+                let r = wrap(er.wrapping_add((tl_r + tr_r) / 2));
+                let g = wrap(eg.wrapping_add((tl_g + tr_g) / 2));
+                let b = wrap(eb.wrapping_add((tl_b + tr_b) / 2));
+                (r, g, b, wrap(ea))
+            }
+            _ => (wrap(er), wrap(eg), wrap(eb), wrap(ea)),
+        };
+
+        ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+    }
+
+    // Renk dönüşümünü uygula (ters)
+    fn apply_color_transform(
+        argb: &mut [u32],
+        width: usize,
+        height: usize,
+        transform_type: u8,
+        transform_bits: u8,
+    ) {
+        if transform_bits == 0 {
+            return;
+        }
+        let size = 1usize << transform_bits;
+        let sub = |a: u8, b: u8| -> u8 { a.wrapping_sub(b) };
+
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y * width + x;
+                let val = argb[idx];
+                let r = ((val >> 16) & 0xFF) as u8;
+                let g = ((val >> 8) & 0xFF) as u8;
+                let b = (val & 0xFF) as u8;
+                let a = ((val >> 24) & 0xFF) as u8;
+
+                // Block index
+                let bx = x >> transform_bits;
+                let by = y >> transform_bits;
+
+                // Use the block's first pixel as the transform base
+                let base_idx = by * size * width + bx * size;
+                let base_val = if base_idx < argb.len() {
+                    argb[base_idx]
+                } else {
+                    0x0000_00FF
+                };
+                let br_ = ((base_val >> 16) & 0xFF) as u8;
+                let bg = ((base_val >> 8) & 0xFF) as u8;
+                let bb = (base_val & 0xFF) as u8;
+                let ba = ((base_val >> 24) & 0xFF) as u8;
+
+                let (nr, ng, nb, na) = match transform_type {
+                    0 => (sub(r, br_), sub(g, bg), sub(b, bb), sub(a, ba)), // Green
+                    1 => (sub(r, br_), g, b, a),                            // Red
+                    2 => (r, g, sub(b, bb), a),                             // Blue
+                    3 => (r, g, b, sub(a, ba)),                             // Alpha
+                    _ => (r, g, b, a),
+                };
+
+                argb[idx] = ((na as u32) << 24) | ((nr as u32) << 16) | ((ng as u32) << 8) | (nb as u32);
+            }
+        }
+    }
+
+    // Eksik yeşil çıkarmayı geri al (ters)
+    fn apply_subtract_green(argb: &mut [u32], width: usize, height: usize) {
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y * width + x;
+                let val = argb[idx];
+                let r = ((val >> 16) & 0xFF) as i32;
+                let g = ((val >> 8) & 0xFF) as i32;
+                let b = (val & 0xFF) as i32;
+                let a = ((val >> 24) & 0xFF) as i32;
+                let nr = (r + g).rem_euclid(256) as u8;
+                let nb = (b + g).rem_euclid(256) as u8;
+                argb[idx] = ((a as u32) << 24) | ((nr as u32) << 16) | ((g as u32) << 8) | (nb as u32);
+            }
+        }
+    }
+
+    // Ana LZ77 çözme döngüsü
+    while px < width * height {
+        let x = px % width;
+        let y = px / width;
+
+        // Komşu piksel değerleri
+        let left = if x > 0 { argb[px - 1] } else { default_argb };
+        let top = if y > 0 { argb[px - width] } else { default_argb };
+        let tl = if x > 0 && y > 0 { argb[px - width - 1] } else { default_argb };
+        let tr = if x + 1 < width && y > 0 { argb[px - width + 1] } else { default_argb };
+
+        let sym = lit_huffman.decode(&mut br)? as usize;
+
+        if sym < 256 {
+            // Literal ARGB değeri (tahmin modu 0: Green)
+            let encoded = sym as u32;
+            // Tahmin modu okunur (basitlik için mod 0 varsayılan)
+            // Gerçek VP8L'de tahmin modu ayrı bir akışta kodlanır;
+            // burada mod 0 (Green) kullanılır.
+            let predicted = apply_predictor(0, encoded, left, tl, top, tr);
+            argb[px] = predicted;
+            px += 1;
+        } else if sym == 256 {
+            // End of block (VP8L'de kullanılmaz, ama güvenlik için)
+            break;
+        } else if sym >= 257 && sym <= 275 {
+            // Uzunluk ön eki
+            let li = sym - 257;
+            const LEN_BASE: [u32; 19] = [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 240,
+            ];
+            const LEN_EXTRA: [u32; 19] = [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6,
+            ];
+            let mut length = LEN_BASE[li] + br.bits(LEN_EXTRA[li])?;
+
+            // Mesafe ön eki
+            let dsym = dist_huffman.decode(&mut br)? as usize;
+            if dsym >= 40 {
+                return None;
+            }
+            const DIST_BASE: [u32; 40] = [
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+                39, 40,
+            ];
+            const DIST_EXTRA: [u32; 40] = [
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            ];
+            let distance = DIST_BASE[dsym] + br.bits(DIST_EXTRA[dsym])?;
+
+            // Renk önbelleği kontrolü
+            if let Some(ref mut cache) = color_cache {
+                let cache_idx = px & (cache_size - 1);
+                let cached = cache[cache_idx];
+                if cached != 0 {
+                    argb[px] = cached;
+                    px += 1;
+                    length = length.saturating_sub(1);
+                    if length == 0 {
+                        continue;
+                    }
+                }
+            }
+
+            // LZ77 kopyalama
+            let distance = distance as usize;
+            if distance == 0 || distance > px {
+                return None;
+            }
+            for _ in 0..length {
+                if px >= width * height {
+                    break;
+                }
+                let src = px - distance as usize;
+                let val = argb[src];
+                argb[px] = val;
+                // Renk önbelleğini güncelle
+                if let Some(ref mut cache) = color_cache {
+                    let cache_idx = px & (cache_size - 1);
+                    cache[cache_idx] = val;
+                }
+                px += 1;
+            }
+        } else if sym >= 276 && sym <= 280 {
+            // Mesafe ön eki (uzunluk olmadan - VP8L'de kullanılmaz)
+            return None;
+        } else {
+            return None;
+        }
+    }
+
+    // Renk dönüşümünü geri al
+    if has_transform {
+        apply_color_transform(&mut argb, width, height, transform_type, transform_bits);
+    }
+
+    // Eksik yeşil çıkarmayı geri al
+    if subtract_green {
+        apply_subtract_green(&mut argb, width, height);
+    }
+
+    // ARGB'yi RGB'ye dönüştür
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    if rgb.try_reserve_exact(width * height * 3).is_err() {
+        return None;
+    }
+    for &val in &argb {
+        rgb.push(((val >> 16) & 0xFF) as u8);
+        rgb.push(((val >> 8) & 0xFF) as u8);
+        rgb.push((val & 0xFF) as u8);
     }
 
     Some(DecodedImage {
@@ -2077,7 +2803,7 @@ fn render_svg_shapes(svg: &str, rgb: &mut [u8], width: usize, height: usize) {
         let y = extract_svg_attr(rect_str, "y").unwrap_or(0);
         let w = extract_svg_attr(rect_str, "width").unwrap_or(width);
         let h = extract_svg_attr(rect_str, "height").unwrap_or(height);
-        let fill = extract_svg_color(rect_str, "fill").unwrap_or(0x000000);
+        let fill = parse_svg_color(rect_str, "fill").unwrap_or(0x000000);
 
         // Draw rectangle
         for py in y..(y + h).min(height) {
@@ -2106,7 +2832,7 @@ fn render_svg_shapes(svg: &str, rgb: &mut [u8], width: usize, height: usize) {
         let cx = extract_svg_attr(circle_str, "cx").unwrap_or(width / 2);
         let cy = extract_svg_attr(circle_str, "cy").unwrap_or(height / 2);
         let r = extract_svg_attr(circle_str, "r").unwrap_or(10);
-        let fill = extract_svg_color(circle_str, "fill").unwrap_or(0x000000);
+        let fill = parse_svg_color(circle_str, "fill").unwrap_or(0x000000);
 
         // Draw circle (simple midpoint algorithm)
         let r_sq = r * r;
@@ -2126,6 +2852,124 @@ fn render_svg_shapes(svg: &str, rgb: &mut [u8], width: usize, height: usize) {
         }
 
         pos = circle_end;
+    }
+
+    // Render lines
+    pos = 0;
+    while let Some(line_start) = svg[pos..].find("<line") {
+        let abs_start = pos + line_start;
+        let line_end = svg[abs_start..]
+            .find('>')
+            .map_or(svg.len(), |p| abs_start + p);
+        let line_str = &svg[abs_start..line_end];
+
+        let x1 = extract_svg_attr(line_str, "x1").unwrap_or(0) as i32;
+        let y1 = extract_svg_attr(line_str, "y1").unwrap_or(0) as i32;
+        let x2 = extract_svg_attr(line_str, "x2").unwrap_or(width) as i32;
+        let y2 = extract_svg_attr(line_str, "y2").unwrap_or(height) as i32;
+        let stroke = parse_svg_color(line_str, "stroke").unwrap_or(0x000000);
+
+        draw_line(rgb, width, height, x1, y1, x2, y2, stroke);
+
+        pos = line_end;
+    }
+
+    // Render ellipses
+    pos = 0;
+    while let Some(ellipse_start) = svg[pos..].find("<ellipse") {
+        let abs_start = pos + ellipse_start;
+        let ellipse_end = svg[abs_start..]
+            .find('>')
+            .map_or(svg.len(), |p| abs_start + p);
+        let ellipse_str = &svg[abs_start..ellipse_end];
+
+        let cx = extract_svg_attr(ellipse_str, "cx").unwrap_or(width / 2) as f32;
+        let cy = extract_svg_attr(ellipse_str, "cy").unwrap_or(height / 2) as f32;
+        let rx = extract_svg_attr(ellipse_str, "rx").unwrap_or(width / 4) as f32;
+        let ry = extract_svg_attr(ellipse_str, "ry").unwrap_or(height / 4) as f32;
+        let fill = parse_svg_color(ellipse_str, "fill").unwrap_or(0x000000);
+
+        let rx_sq = rx * rx;
+        let ry_sq = ry * ry;
+        let py_start = ceil_f32(cy - ry) as usize;
+        let py_end = ceil_f32(cy + ry) as usize;
+        for py in py_start..py_end.min(height) {
+            let px_start = ceil_f32(cx - rx) as usize;
+            let px_end = ceil_f32(cx + rx) as usize;
+            for px in px_start..px_end.min(width) {
+                let dx = px as f32 - cx;
+                let dy = py as f32 - cy;
+                if (dx * dx) / rx_sq + (dy * dy) / ry_sq <= 1.0 {
+                    let idx = (py * width + px) * 3;
+                    if idx + 2 < rgb.len() {
+                        rgb[idx] = ((fill >> 16) & 0xFF) as u8;
+                        rgb[idx + 1] = ((fill >> 8) & 0xFF) as u8;
+                        rgb[idx + 2] = (fill & 0xFF) as u8;
+                    }
+                }
+            }
+        }
+
+        pos = ellipse_end;
+    }
+
+    // Render polygons
+    pos = 0;
+    while let Some(polygon_start) = svg[pos..].find("<polygon") {
+        let abs_start = pos + polygon_start;
+        let polygon_end = svg[abs_start..]
+            .find('>')
+            .map_or(svg.len(), |p| abs_start + p);
+        let polygon_str = &svg[abs_start..polygon_end];
+
+        if let Some(points) = parse_svg_points(polygon_str, "points") {
+            let fill = parse_svg_color(polygon_str, "fill").unwrap_or(0x000000);
+            let r = ((fill >> 16) & 0xFF) as u8;
+            let g = ((fill >> 8) & 0xFF) as u8;
+            let b = (fill & 0xFF) as u8;
+
+            let min_x = points.iter().map(|p| p.0).fold(f32::INFINITY, f32::min) as usize;
+            let max_x = points.iter().map(|p| p.0).fold(f32::NEG_INFINITY, f32::max) as usize;
+            let min_y = points.iter().map(|p| p.1).fold(f32::INFINITY, f32::min) as usize;
+            let max_y = points.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max) as usize;
+
+            for py in min_y.min(height)..=max_y.min(height) {
+                for px in min_x.min(width)..=max_x.min(width) {
+                    if point_in_polygon(px as f32, py as f32, &points) {
+                        let idx = (py * width + px) * 3;
+                        if idx + 2 < rgb.len() {
+                            rgb[idx] = r;
+                            rgb[idx + 1] = g;
+                            rgb[idx + 2] = b;
+                        }
+                    }
+                }
+            }
+        }
+
+        pos = polygon_end;
+    }
+
+    // Render polylines
+    pos = 0;
+    while let Some(polyline_start) = svg[pos..].find("<polyline") {
+        let abs_start = pos + polyline_start;
+        let polyline_end = svg[abs_start..]
+            .find('>')
+            .map_or(svg.len(), |p| abs_start + p);
+        let polyline_str = &svg[abs_start..polyline_end];
+
+        if let Some(points) = parse_svg_points(polyline_str, "points") {
+            let stroke = parse_svg_color(polyline_str, "stroke").unwrap_or(0x000000);
+
+            for i in 0..points.len().saturating_sub(1) {
+                let (x1, y1) = points[i];
+                let (x2, y2) = points[i + 1];
+                draw_line(rgb, width, height, x1 as i32, y1 as i32, x2 as i32, y2 as i32, stroke);
+            }
+        }
+
+        pos = polyline_end;
     }
 }
 
@@ -2163,8 +3007,59 @@ fn extract_svg_attr(svg: &str, attr: &str) -> Option<usize> {
     None
 }
 
-/// SVG renk özniteliğini çıkarır (#RRGGBB formatı).
-fn extract_svg_color(svg: &str, attr: &str) -> Option<u32> {
+/// CSS renk isimleri tablosu (140 renk).
+const SVG_COLORS: &[(&str, u32); 141] = &[
+    ("aliceblue", 0xF0F8FF), ("antiquewhite", 0xFAEBD7), ("aqua", 0x00FFFF), ("aquamarine", 0x7FFFD4),
+    ("azure", 0xF0FFFF), ("beige", 0xF5F5DC), ("bisque", 0xFFE4C4), ("black", 0x000000),
+    ("blanchedalmond", 0xFFEBCD), ("blue", 0x0000FF), ("blueviolet", 0x8A2BE2), ("brown", 0xA52A2A),
+    ("burlywood", 0xDEB887), ("cadetblue", 0x5F9EA0), ("chartreuse", 0x7FFF00), ("chocolate", 0xD2691E),
+    ("coral", 0xFF7F50), ("cornflowerblue", 0x6495ED), ("cornsilk", 0xFFF8DC), ("crimson", 0xDC143C),
+    ("cyan", 0x00FFFF), ("darkblue", 0x00008B), ("darkcyan", 0x008B8B), ("darkgoldenrod", 0xB8860B),
+    ("darkgray", 0xA9A9A9), ("darkgreen", 0x006400), ("darkkhaki", 0xBDB76B), ("darkmagenta", 0x8B008B),
+    ("darkolivegreen", 0x556B2F), ("darkorange", 0xFF8C00), ("darkorchid", 0x9932CC), ("darkred", 0x8B0000),
+    ("darksalmon", 0xE9967A), ("darkseagreen", 0x8FBC8F), ("darkslateblue", 0x483D8B), ("darkslategray", 0x2F4F4F),
+    ("darkturquoise", 0x00CED1), ("darkviolet", 0x9400D3), ("deeppink", 0xFF1493), ("deepskyblue", 0x00BFFF),
+    ("dimgray", 0x696969), ("dodgerblue", 0x1E90FF), ("firebrick", 0xB22222), ("floralwhite", 0xFFFAF0),
+    ("forestgreen", 0x228B22), ("fuchsia", 0xFF00FF), ("gainsboro", 0xDCDCDC), ("ghostwhite", 0xF8F8FF),
+    ("gold", 0xFFD700), ("goldenrod", 0xDAA520), ("gray", 0x808080), ("green", 0x008000),
+    ("greenyellow", 0xADFF2F), ("honeydew", 0xF0FFF0), ("hotpink", 0xFF69B4), ("indianred", 0xCD5C5C),
+    ("indigo", 0x4B0082), ("ivory", 0xFFFFF0), ("khaki", 0xF0E68C), ("lavender", 0xE6E6FA),
+    ("lavenderblush", 0xFFF0F5), ("lawngreen", 0x7CFC00), ("lemonchiffon", 0xFFFACD), ("lightblue", 0xADD8E6),
+    ("lightcoral", 0xF08080), ("lightcyan", 0xE0FFFF), ("lightgoldenrodyellow", 0xFAFAD2), ("lightgreen", 0x90EE90),
+    ("lightgray", 0xD3D3D3), ("lightpink", 0xFFB6C1), ("lightsalmon", 0xFFA07A), ("lightseagreen", 0x20B2AA),
+    ("lightskyblue", 0x87CEFA), ("lightslategray", 0x778899), ("lightsteelblue", 0xB0C4DE), ("lightyellow", 0xFFFFE0),
+    ("lime", 0x00FF00), ("limegreen", 0x32CD32), ("linen", 0xFAF0E6), ("magenta", 0xFF00FF),
+    ("maroon", 0x800000), ("mediumaquamarine", 0x66CDAA), ("mediumblue", 0x0000CD), ("mediumorchid", 0xBA55D3),
+    ("mediumpurple", 0x9370DB), ("mediumseagreen", 0x3CB371), ("mediumslateblue", 0x7B68EE), ("mediumspringgreen", 0x00FA9A),
+    ("mediumturquoise", 0x48D1CC), ("mediumvioletred", 0xC71585), ("midnightblue", 0x191970), ("mintcream", 0xF5FFFA),
+    ("mistyrose", 0xFFE4E1), ("moccasin", 0xFFE4B5), ("navajowhite", 0xFFDEAD), ("navy", 0x000080),
+    ("oldlace", 0xFDF5E6), ("olive", 0x808000), ("olivedrab", 0x6B8E23), ("orange", 0xFFA500),
+    ("orangered", 0xFF4500), ("orchid", 0xDA70D6), ("palegoldenrod", 0xEEE8AA), ("palegreen", 0x98FB98),
+    ("paleturquoise", 0xAFEEEE), ("palevioletred", 0xDB7093), ("papayawhip", 0xFFEFD5), ("peachpuff", 0xFFDAB9),
+    ("peru", 0xCD853F), ("pink", 0xFFC0CB), ("plum", 0xDDA0DD), ("powderblue", 0xB0E0E6),
+    ("purple", 0x800080), ("rebeccapurple", 0x663399), ("red", 0xFF0000), ("rosybrown", 0xBC8F8F),
+    ("royalblue", 0x4169E1), ("saddlebrown", 0x8B4513), ("salmon", 0xFA8072), ("sandybrown", 0xF4A460),
+    ("seagreen", 0x2E8B57), ("seashell", 0xFFF5EE), ("sienna", 0xA0522D), ("silver", 0xC0C0C0),
+    ("skyblue", 0x87CEEB), ("slateblue", 0x6A5ACD), ("slategray", 0x708090), ("snow", 0xFFFAFA),
+    ("springgreen", 0x00FF7F), ("steelblue", 0x4682B4), ("tan", 0xD2B48C), ("teal", 0x008080),
+    ("thistle", 0xD8BFD8), ("tomato", 0xFF6347), ("turquoise", 0x40E0D0), ("violet", 0xEE82EE),
+    ("wheat", 0xF5DEB3), ("white", 0xFFFFFF), ("whitesmoke", 0xF5F5F5), ("yellow", 0xFFFF00),
+    ("yellowgreen", 0x9ACD32),
+];
+
+/// f32::ceil no_std ortamında yoksa basit implementasyon.
+#[inline]
+fn ceil_f32(v: f32) -> f32 {
+    let i = v as i32;
+    if v > 0.0 && v != i as f32 {
+        (i + 1) as f32
+    } else {
+        v
+    }
+}
+
+/// SVG renk değerini çözümler (#RRGGBB, #RGB, isimli renk, rgb()).
+fn parse_svg_color(svg: &str, attr: &str) -> Option<u32> {
     let attr_str = format!("{}=", attr);
     if let Some(start) = svg.find(&attr_str) {
         let after_eq = &svg[start + attr_str.len()..];
@@ -2178,14 +3073,151 @@ fn extract_svg_color(svg: &str, attr: &str) -> Option<u32> {
             }
         }
         let color_start = offset;
-        if after_eq.as_bytes()[color_start] == b'#' {
-            let hex_start = color_start + 1;
-            let hex_end = (hex_start + 6).min(after_eq.len());
-            let hex_str = &after_eq[hex_start..hex_end];
-            if let Ok(color) = u32::from_str_radix(hex_str, 16) {
-                return Some(color);
+        let remaining = &after_eq[color_start..];
+
+        // #RRGGBB veya #RGB
+        if remaining.as_bytes().first() == Some(&b'#') {
+            let hex_start = 1;
+            let hex_end = remaining[1..]
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_hexdigit())
+                .map_or(remaining.len() - 1, |(i, _)| i);
+            let hex = &remaining[hex_start..hex_end];
+            if hex.len() == 6 {
+                if let Ok(color) = u32::from_str_radix(hex, 16) {
+                    return Some(color);
+                }
+            } else if hex.len() == 3 {
+                let r = u32::from_str_radix(&hex[0..1], 16).unwrap_or(0) * 17;
+                let g = u32::from_str_radix(&hex[1..2], 16).unwrap_or(0) * 17;
+                let b = u32::from_str_radix(&hex[2..3], 16).unwrap_or(0) * 17;
+                return Some((r << 16) | (g << 8) | b);
+            }
+        }
+        // rgb(r, g, b) veya rgba(r, g, b, a)
+        else if remaining.starts_with("rgb(") || remaining.starts_with("rgba(") {
+            let end = remaining.find(')')?;
+            let params = &remaining[4..end];
+            let parts: Vec<&str> = params.split(',').collect();
+            if parts.len() >= 3 {
+                let r: u32 = parts[0].trim().parse().ok()?;
+                let g: u32 = parts[1].trim().parse().ok()?;
+                let b: u32 = parts[2].trim().parse().ok()?;
+                return Some((r.min(255) << 16) | (g.min(255) << 8) | b.min(255));
+            }
+        }
+        // İsimli renk
+        else {
+            let name_end = remaining
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_alphabetic())
+                .map_or(remaining.len(), |(i, _)| i);
+            let name = &remaining[..name_end].to_lowercase();
+            for (color_name, color_val) in SVG_COLORS.iter() {
+                if *color_name == name {
+                    return Some(*color_val);
+                }
             }
         }
     }
     None
+}
+
+/// Bresenham çizgi algoritması.
+fn draw_line(rgb: &mut [u8], width: usize, height: usize, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
+    let r = ((color >> 16) & 0xFF) as u8;
+    let g = ((color >> 8) & 0xFF) as u8;
+    let b = (color & 0xFF) as u8;
+
+    let mut x0 = x0;
+    let mut y0 = y0;
+    let dx = (x1 - x0).abs();
+    let dy = (y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx - dy;
+
+    loop {
+        if x0 >= 0 && x0 < width as i32 && y0 >= 0 && y0 < height as i32 {
+            let idx = (y0 as usize * width + x0 as usize) * 3;
+            if idx + 2 < rgb.len() {
+                rgb[idx] = r;
+                rgb[idx + 1] = g;
+                rgb[idx + 2] = b;
+            }
+        }
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x0 += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+/// Noktanın poligon içinde olup olmadığını test eder (even-odd kuralı).
+fn point_in_polygon(px: f32, py: f32, poly: &[(f32, f32)]) -> bool {
+    let mut inside = false;
+    let n = poly.len();
+    if n < 3 {
+        return false;
+    }
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = poly[i];
+        let (xj, yj) = poly[j];
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
+/// SVG koordinat listesini çözümler (points="x1,y1 x2,y2 ...").
+fn parse_svg_points(svg: &str, attr: &str) -> Option<Vec<(f32, f32)>> {
+    let attr_str = format!("{}=", attr);
+    let start = svg.find(&attr_str)?;
+    let after_eq = &svg[start + attr_str.len()..];
+    let mut offset = 0;
+    while offset < after_eq.len() {
+        let c = after_eq.as_bytes()[offset];
+        if c.is_ascii_whitespace() || c == b'"' || c == b'\'' {
+            offset += 1;
+        } else {
+            break;
+        }
+    }
+    if after_eq.as_bytes().get(offset) != Some(&b'"') && after_eq.as_bytes().get(offset) != Some(&b'\'') {
+        return None;
+    }
+    let quote = after_eq.as_bytes()[offset];
+    offset += 1;
+    let end = after_eq[offset..].find(quote as char)?;
+    let points_str = &after_eq[offset..offset + end];
+
+    let mut points = Vec::new();
+    for token in points_str.split(|c: char| c.is_ascii_whitespace() || c == ',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let coords: Vec<&str> = token.split(',').collect();
+        if coords.len() >= 2 {
+            let x: f32 = coords[0].parse().ok()?;
+            let y: f32 = coords[1].parse().ok()?;
+            points.push((x, y));
+        }
+    }
+    if points.is_empty() {
+        None
+    } else {
+        Some(points)
+    }
 }

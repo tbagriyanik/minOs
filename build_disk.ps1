@@ -50,7 +50,7 @@ if ((Test-Path $DiskImage) -and (Test-Path $MarkerFile) -and -not $Force) {
 }
 
 Write-Host "[1/6] Ham goruntu olusturuluyor ($DiskSizeMB MB)..." -ForegroundColor Yellow
-$tmp = Join-Path ([IO.Path]::GetTempPath()) ("minos-disk-" + [Guid]::NewGuid().ToString("N"))
+$tmp = Join-Path $PSScriptRoot2 "tmp" ("minos-disk-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $vhd = Join-Path $tmp "minos.vhd"
 
@@ -108,9 +108,26 @@ $enc = [Text.Encoding]::ASCII
 [IO.File]::WriteAllBytes((Join-Path $root "boot\limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed full`n    resolution: 1280x720x32`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed full`n    resolution: 1280x720x32`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "boot\limine\limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed full`n    resolution: 1280x720x32`n"))
-[IO.File]::WriteAllBytes((Join-Path $root "root\Media\kedi_maskotu.bmp"), ([byte[]]@(0x42,0x4D,0x36,0,0,0,0,0,0,0,0x36,0,0,0,0x28,0,0,0)))
-[IO.File]::WriteAllBytes((Join-Path $root "root\Media\lofi_ring0.wav"), ([byte[]]@(0x52,0x49,0x46,0x46,0x24,0,0,0,0x57,0x41,0x56,0x45,0x66,0x6D,0x74,0x20,0x10,0,0,0,1,0,2,0,0x44,0xAC,0,0)))
-[IO.File]::WriteAllBytes((Join-Path $root "root\Media\retro_drive.mp4"), ([byte[]]@(0,0,0,0x20,0x66,0x74,0x79,0x70,0x69,0x73,0x6F,0x6D,0,0,2,0,0x69,0x73,0x6F,0x6D,0x69,0x73,0x6F,0x32,0x61,0x76,0x63,0x31,0x6D,0x70,0x34,0x31)))
+# Gecerli medya ornek dosyalari -> /root/Media/
+$mediaFiles = @(
+    "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
+    "public\media\sample.png", "public\media\gradient.png",
+    "public\media\sample.jpg", "public\media\sunset.jpg",
+    "public\media\real.jpg", "public\media\real.png",
+    "public\media\real.bmp", 
+    "public\media\sample.wav", "public\media\scale_c_major.wav"
+)
+$mediaDestDir = Join-Path $root "root\Media"
+New-Item -ItemType Directory -Force -Path $mediaDestDir | Out-Null
+foreach ($mf in $mediaFiles) {
+    if (Test-Path $mf) {
+        $dest = Join-Path $mediaDestDir (Split-Path $mf -Leaf)
+        Copy-Item -Force $mf $dest
+        Write-Host "[MEDIA] Kopyalandi: $mf -> $dest" -ForegroundColor Cyan
+    } else {
+        Write-Host "[MEDIA] Bulunamadi: $mf" -ForegroundColor Yellow
+    }
+}
 [IO.File]::WriteAllBytes((Join-Path $root "BENIOKU.TXT"), $enc.GetBytes("minOs Kurulumu Basariyla Tamamlandi!`n====================================`nBu bolumde tam okuma ve yazma hakkiniz bulunmaktadir.`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "settings.cfg"), $enc.GetBytes("volume=75;muted=0;res=1280x720;night=0;night_level=55;keyboard=tr;language=tr;zoom=100;region=0;dhcp=1;theme=velvet"))
 # Kurulum isareti EN SON yazilir.

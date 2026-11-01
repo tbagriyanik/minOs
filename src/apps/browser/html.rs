@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use super::css::blend_styles;
 use super::css::transition_progress;
 use super::css::{find_keyframes, match_css_style, parse_css};
-use super::types::{BrowserLine, ElementStyle, HtmlTagType, TextAlign, TextSpan};
+use super::types::{html_color, BrowserLine, ElementStyle, HtmlTagType, TextAlign, TextSpan};
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 use alloc::collections::BTreeMap;
@@ -293,7 +293,7 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
 }
 
 /// Scales RGB pixel array to target dimensions using nearest-neighbor sampling.
-fn scale_rgb(
+pub(crate) fn scale_rgb(
     orig_w: usize,
     orig_h: usize,
     orig_rgb: &[u8],
@@ -652,6 +652,7 @@ pub fn render_html_to_lines(
             let style_attr = extract_attr(attrs, b"style");
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
+            let font_color_attr = extract_attr(attrs, b"color");
 
             let mut matched = match_css_style(
                 &css_rules,
@@ -732,6 +733,13 @@ pub fn render_html_to_lines(
             if !closing {
                 if let Some(c) = matched.color {
                     current_color = blend_color_with_opacity(c, matched.opacity);
+                }
+                if eq_ascii(name, b"font") {
+                    if let Some(value) = font_color_attr {
+                        if let Some(c) = html_color(value.as_bytes()) {
+                            current_color = c;
+                        }
+                    }
                 }
                 if let Some(bg) = matched.bg_color {
                     current_bg = Some(blend_color_with_opacity(bg, matched.opacity));
@@ -1297,10 +1305,15 @@ pub fn render_html_to_lines(
                                     pending_resources.push(resolved_url.clone());
                                 }
                                 // Cache'den çözümlenmiş görsel mi var?
+                                // (0x0 kayıtları başarısız kaynakları belirtir:
+                                //  alt metin gösterilir, yeniden istenmez.)
                                 if let Some(cached) =
                                     image_cache.and_then(|cache| cache.get(&resolved_url))
                                 {
-                                    image_decoded = Some((cached.0, cached.1, cached.2.clone()));
+                                    if cached.0 > 0 && cached.1 > 0 {
+                                        image_decoded =
+                                            Some((cached.0, cached.1, cached.2.clone()));
+                                    }
                                 }
                             }
                         }
@@ -1919,6 +1932,7 @@ pub fn render_html_to_lines(
                         | b"caption"
                         | b"section"
                         | b"article"
+                        | b"font"
                         | b"center"
                 ) {
                     flush_line(

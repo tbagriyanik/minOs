@@ -62,6 +62,19 @@ if (Test-Path "boot\limine\BOOTIA32.EFI") {
     Copy-Item -Force "boot\limine\BOOTIA32.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTIA32.EFI"
 }
 
+# Copy media files to ISO root
+$mediaFiles = @(
+    "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
+    "public\media\sample.png", "public\media\gradient.png",
+    "public\media\sample.jpg", "public\media\sunset.jpg",
+    "public\media\sample.wav", "public\media\scale_c_major.wav"
+)
+foreach ($mf in $mediaFiles) {
+    if (Test-Path $mf) {
+        Copy-Item -Force $mf -Destination (Join-Path $OutputDir (Split-Path $mf -Leaf))
+    }
+}
+
 # 3. Çekirdek İkilisini Derle / Kopyala
 Write-Host "[3/4] minOs Cekirdegi Paketleniyor..." -ForegroundColor Yellow
 $kernelCandidates = @(

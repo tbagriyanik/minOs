@@ -531,6 +531,53 @@ impl Canvas2dContext {
         img
     }
 
+    /// Draw an ImageData onto the canvas at (dx, dy), optionally scaled to
+    /// (d_width, d_height). Uses nearest-neighbor sampling when scaling.
+    pub fn draw_image(&mut self, image: &ImageData, dx: f32, dy: f32) {
+        self.draw_image_scaled(image, dx, dy, image.width as f32, image.height as f32);
+    }
+
+    /// Draw an ImageData onto the canvas at (dx, dy) scaled to (d_width, d_height).
+    pub fn draw_image_scaled(
+        &mut self,
+        image: &ImageData,
+        dx: f32,
+        dy: f32,
+        d_width: f32,
+        d_height: f32,
+    ) {
+        let dx0 = dx as usize;
+        let dy0 = dy as usize;
+        let dw = d_width as usize;
+        let dh = d_height as usize;
+
+        for ty in 0..dh {
+            let sy = (ty * image.height) / dh.max(1);
+            for tx in 0..dw {
+                let sx = (tx * image.width) / dw.max(1);
+                let src_idx = (sy * image.width + sx) * 4;
+                if src_idx + 3 >= image.data.len() {
+                    continue;
+                }
+                let r = image.data[src_idx];
+                let g = image.data[src_idx + 1];
+                let b = image.data[src_idx + 2];
+                let a = image.data[src_idx + 3];
+
+                let x = dx0 + tx;
+                let y = dy0 + ty;
+                if x < self.width && y < self.height {
+                    if a == 0xFF {
+                        self.put_pixel_raw(x, y, r, g, b);
+                    } else if a > 0 {
+                        let src = Rgba { r, g, b, a };
+                        self.put_pixel_blend(x, y, src);
+                    }
+                }
+            }
+        }
+    }
+
     // ── Transform ────────────────────────────────────────────────────
 
     pub fn set_transform(&mut self, a: f32, b: f32, c: f32, d: f32, e: f32, f: f32) {

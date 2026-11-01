@@ -56,6 +56,11 @@ const BROWSER_ERROR_LOG_LIMIT: usize = 64;
 /// sistem kilitlenmez, olay döngüsü çalışmaya devam eder.
 const HTML_LOAD_TIME_BUDGET_MS: u64 = 8;
 
+/// HTTP yanıt tamponunun başlangıç boyutu (bayt).
+const RESPONSE_BUF_MIN: usize = 64 * 1024;
+/// HTTP yanıt tamponunun azami boyutu (bayt). Büyük resimler için büyütülür.
+const RESPONSE_BUF_MAX: usize = 512 * 1024;
+
 // ── Tur (frame) yardımcıları ─────────────────────────────────────
 // Ana döngü her turda `begin_turn` çağırır; `mark_turn_busy` bu turda iş
 // yapıldığını, `rendering_frame` ise ekranın o anda çizilmekte olduğunu bildirir.
@@ -158,6 +163,59 @@ fn url_path(url: &[u8]) -> Option<&str> {
     } else {
         Some(path)
     }
+}
+
+/// Yanıt başlıklarındaki `Content-Length` değerini okur.
+fn header_content_length(headers: &[u8]) -> Option<usize> {
+    let raw = crate::drivers::http::header_value(headers, b"Content-Length")?;
+    let text = core::str::from_utf8(raw).ok()?;
+    text.trim().parse::<usize>().ok()
+}
+
+/// Yanıt başlıklarında `Transfer-Encoding: chunked` var mı?
+fn header_is_chunked(headers: &[u8]) -> bool {
+    if let Some(raw) = crate::drivers::http::header_value(headers, b"Transfer-Encoding") {
+        if raw.windows(7).any(|w| w.eq_ignore_ascii_case(b"chunked")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Bir kaynak URL'sini (scheme, host, port, path) bileşenlerine ayırır.
+/// Mutlak `http://` / `https://` adresleri için geçerlidir.
+fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
+    let (is_https, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return None;
+    };
+    let authority_end = rest
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let suffix = &rest[authority_end..];
+    let default_port = if is_https { 443 } else { 80 };
+    let (host, port) = if authority.starts_with('[') {
+        // IPv6 henüz yönlendirilmiyor.
+        return None;
+    } else {
+        match authority.rsplit_once(':') {
+            Some((h, p)) => match p.parse::<u16>() {
+                Ok(n) if n > 0 => (h, n),
+                _ => (authority, default_port),
+            },
+            None => (authority, default_port),
+        }
+    };
+    if host.is_empty() {
+        return None;
+    }
+    let path = suffix.split('#').next().unwrap_or("");
+    let path = if path.is_empty() { "/" } else { path };
+    Some((is_https, host, port, path))
 }
 
 // ── Tarayıcı geçmişi ──────────────────────────────────────────────────────
@@ -390,6 +448,9 @@ pub struct BrowserApp {
     resource_fetch_state: u8,
     /// Şu anda getirilen kaynak URL'si.
     current_resource_url: String,
+    /// Aktif ağ isteği bir alt kaynak (img/CSS) için mi yapılıyor?
+    /// Bu durumda gelen yanıt belge olarak değil, kaynak olarak işlenir.
+    request_is_resource: bool,
     pub redirect_count: usize,
     pub is_https: bool,
     pub is_post: bool,
@@ -596,6 +657,7 @@ impl BrowserApp {
             original_html: Vec::new(),
             resource_fetch_state: 0,
             current_resource_url: String::new(),
+            request_is_resource: false,
             redirect_count: 0,
             is_https: false,
             is_post: false,
@@ -2536,6 +2598,150 @@ impl BrowserApp {
         }
     }
 
+    /// HTTP yanıt tamponunu sıfırlar (yeni istek için).
+    fn reset_response_buffer(&mut self) {
+        self.response_len = 0;
+        self.response_data.clear();
+        self.response_data.resize(RESPONSE_BUF_MIN, 0);
+    }
+
+    /// Yanıt tamponu dolduğunda büyütür; azami sınıra ulaşıldıysa `false` döner.
+    fn grow_response_buffer(&mut self) -> bool {
+        if self.response_data.len() >= RESPONSE_BUF_MAX {
+            return false;
+        }
+        let new_len = (self.response_data.len() * 2).min(RESPONSE_BUF_MAX);
+        self.response_data.resize(new_len, 0);
+        true
+    }
+
+    /// Tamamlanan alt kaynak (resim/CSS) isteğini işler.
+    ///
+    /// Kaynak önce imza ile çözülür; görsel ise `image_cache` içine alınır ve
+    /// sayfa yeniden çizilir. Böylece `<img src="http://...">` etiketleri
+    /// uzak sunucudan gelen JPEG/PNG dosyalarını da gösterebilir.
+    fn finish_resource_request(&mut self, body: &[u8], vfs: &mut VirtualFileSystem) {
+        let url = self.current_resource_url.clone();
+
+        // Görseli uzantıya değil, gerçek dosya imzasına göre çöz.
+        // Query-string'li veya uzantısız resim URL'leri de böylece çalışır.
+        match crate::apps::imgdecode::decode(body) {
+            Some(img) => {
+                self.image_cache
+                    .insert(url.clone(), (img.width, img.height, img.rgb));
+            }
+            None => {
+                // Çözülemeyen kaynak: 0x0 işaretiyle önbelleğe yazılır, böylece
+                // sayfa yeniden çizildiğinde tekrar istenmez (alt metin görünür).
+                self.image_cache.insert(url.clone(), (0, 0, Vec::new()));
+            }
+        }
+
+        // Getirilen kaynağı kuyruktan çıkar (artık önbellekte).
+        self.pending_resources.retain(|u| u != &url);
+
+        // Sayfayı kaydırma konumu koruyarak yeniden çiz.
+        let saved_scroll = self.scroll_target;
+        let html = self.original_html.clone();
+        self.load_html(&html, 600, 256, Some(vfs));
+        self.scroll_target = saved_scroll;
+        self.scroll_reset = false;
+
+        // Bağlantıyı ve TLS durumunu temizle.
+        self.request_pending = false;
+        self.request_state = 0;
+        self.request_deadline = 0;
+        self.request_is_resource = false;
+        self.tls_session = None;
+        self.tls_app_data.clear();
+        self.tls_pending_request.clear();
+        self.tls_request_sent = false;
+        self.tls13_finished_sent = false;
+        self.reset_response_buffer();
+        crate::drivers::netstack::tcp_close();
+        crate::drivers::netstack::tcp_clear_result();
+
+        self.resource_fetch_state = if self.pending_resources.is_empty() {
+            0
+        } else {
+            1
+        };
+        self.load_progress = 100;
+        self.status = crate::gui::ui_text("Sayfa yüklendi.", "Page loaded.");
+    }
+
+    /// Doğrudan bir resim dosyası açıldığında (ör. `http://.../foto.jpg`)
+    /// görseli sayfa içinde gösterir.
+    fn render_image_document(&mut self, img: &crate::apps::imgdecode::DecodedImage) {
+        // Görseli ekrana sığacak şekilde ölçekle (en fazla 600x400).
+        let max_w = 600usize;
+        let max_h = 400usize;
+        let (disp_w, disp_h) = if img.width >= img.height {
+            let w = img.width.min(max_w);
+            let h = ((img.height as f64 * (w as f64 / img.width as f64)) as usize).max(1);
+            (w, h.min(max_h))
+        } else {
+            let h = img.height.min(max_h);
+            let w = ((img.width as f64 * (h as f64 / img.height as f64)) as usize).max(1);
+            (w.min(max_w), h)
+        };
+        let scaled = html::scale_rgb(img.width, img.height, &img.rgb, disp_w, disp_h);
+
+        self.page_lines.clear();
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![TextSpan {
+                text: String::new(),
+                color: Color::BLACK,
+                bg_color: None,
+                is_link: false,
+                link_url: String::new(),
+                is_button: false,
+                is_image: true,
+                image_width: disp_w,
+                image_height: disp_h,
+                image_rgb: Some(scaled),
+                image_url: String::new(),
+                onclick: String::new(),
+                elem_id: String::new(),
+                bold: false,
+                underline: false,
+            }],
+            tag: HtmlTagType::Normal,
+            indent: 0,
+            align: TextAlign::Center,
+        });
+        let info = format!(
+            "{} × {} — {}",
+            img.width,
+            img.height,
+            img.format
+        );
+        self.page_lines.push(BrowserLine {
+            spans: alloc::vec![TextSpan {
+                text: info,
+                color: Color::BLACK,
+                bg_color: None,
+                is_link: false,
+                link_url: String::new(),
+                is_button: false,
+                is_image: false,
+                image_width: 0,
+                image_height: 0,
+                image_rgb: None,
+                image_url: String::new(),
+                onclick: String::new(),
+                elem_id: String::new(),
+                bold: false,
+                underline: false,
+            }],
+            tag: HtmlTagType::Normal,
+            indent: 0,
+            align: TextAlign::Center,
+        });
+        self.page_loaded = true;
+        self.load_progress = 100;
+    }
+
     pub fn navigate(&mut self) {
         // Yeni gezinme: içerik kaydırmasını başa al ve süren animasyonu durdur.
         self.scroll_reset = true;
@@ -2543,6 +2749,12 @@ impl BrowserApp {
         self.scroll_target = 0;
         let suppress = self.suppress_history;
         self.suppress_history = false;
+        // Önceki sayfanın orijinal HTML'sini ve resim önbelleğini temizle;
+        // yeni sayfa yüklendiğinde load_html() tarafından yeniden doldurulur.
+        // Aksi takdirde asenkron resim getirme sonrası yeniden render'da eski
+        // sayfa veya eski sayfanın resimleri kullanılır.
+        self.original_html.clear();
+        self.image_cache.clear();
         let mut input = [0u8; 128];
         input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
         let entered = core::str::from_utf8(&input[..self.url_len])
@@ -2628,6 +2840,7 @@ impl BrowserApp {
                 self.request_port = port;
                 self.request_state = 0;
                 self.resource_fetch_state = 0;
+                self.request_is_resource = false;
                 self.pending_resources.clear();
                 self.current_resource_url.clear();
                 self.request_pending = true;
@@ -2639,9 +2852,7 @@ impl BrowserApp {
                 self.tls_request_sent = false;
                 self.tls13_finished_sent = false;
                 self.tls_app_data.clear();
-                self.response_len = 0;
-                self.response_data.clear();
-                self.response_data.resize(65536, 0);
+                self.reset_response_buffer();
                 self.status = if is_https {
                     crate::gui::ui_text(
                         "Güvenli bağlantı (HTTPS/TLS) başlatılıyor...",
@@ -2806,6 +3017,13 @@ impl BrowserApp {
         let now = crate::boot::time::main_monotonic_ms() as u64;
         self.media_players.update_all(now);
 
+        // Ana istek yokken sıradaki harici kaynağı (img/CSS) başlat.
+        // Bu blok, ana istek durum makinesinden önce gelmelidir; aksi halde
+        // "istek yok" durumunda erken dönüş kaynak kuyruğunu hiç tetiklemez.
+        if !self.request_pending {
+            self.start_next_resource();
+        }
+
         if !self.request_pending {
             return;
         }
@@ -2819,7 +3037,6 @@ impl BrowserApp {
         }
         if now.wrapping_sub(self.request_deadline) < usize::MAX / 2 {
             self.request_pending = false;
-            self.page_loaded = false;
             self.status = crate::gui::ui_text(
                 "Ağ isteği zaman aşımına uğradı.",
                 "Network request timed out.",
@@ -2827,6 +3044,13 @@ impl BrowserApp {
             crate::drivers::netstack::tcp_clear_result();
             self.request_state = 0;
             self.request_deadline = 0;
+            // Zaman aşımına uğrayan alt kaynak kuyruktan düşürülür; sayfa
+            // yine de yüklü kalır.
+            if self.request_is_resource {
+                self.fail_resource_request();
+            } else {
+                self.page_loaded = false;
+            }
             return;
         }
         match self.request_state {
@@ -2846,6 +3070,7 @@ impl BrowserApp {
                     let port = self.request_port;
                     if crate::drivers::netstack::tcp_begin(ip, port, 49153) {
                         self.request_state = 1;
+                        self.request_deadline = 0; // Yeni pencere: 15 sn daha
                         self.load_progress = 30;
                         self.status = crate::gui::ui_text(
                             "TCP bağlantısı kuruluyor...",
@@ -2859,6 +3084,7 @@ impl BrowserApp {
                     }
                 } else if crate::drivers::netstack::dns_query(host) {
                     self.request_state = 4;
+                    self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 20;
                     self.status = crate::gui::ui_text(
                         "DNS yanıtı bekleniyor...",
@@ -2874,6 +3100,7 @@ impl BrowserApp {
             4 => {
                 if let Some(ip) = crate::drivers::netstack::take_dns_result() {
                     self.request_ip = ip;
+                    self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 30;
                     if crate::drivers::netstack::tcp_begin(ip, self.request_port, 49153) {
                         self.request_state = 1;
@@ -2896,6 +3123,7 @@ impl BrowserApp {
                         "Server rejected the connection.",
                     ));
                 } else if crate::drivers::netstack::tcp_syn_acked() {
+                    self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 40;
                     let host = core::str::from_utf8(&self.request_host[..self.request_host_len])
                         .unwrap_or("");
@@ -2910,8 +3138,35 @@ impl BrowserApp {
                     }
                     req_buf.extend_from_slice(path.as_bytes());
                     req_buf.extend_from_slice(b" HTTP/1.1\r\nHost: ");
-                    req_buf.extend_from_slice(host.as_bytes());
-                    req_buf.extend_from_slice(b"\r\nUser-Agent: minOs/1.5\r\nAccept: text/html,application/xhtml+xml,text/plain,*/*\r\nConnection: close\r\n");
+                    // Standart dışı port kullanılıyorsa Host başlığına port eklenir.
+                    let default_port = if self.is_https { 443 } else { 80 };
+                    if self.request_port != default_port {
+                        req_buf.extend_from_slice(host.as_bytes());
+                        req_buf.push(b':');
+                        let mut digits = [0u8; 5];
+                        let mut n = self.request_port;
+                        let mut idx = digits.len();
+                        loop {
+                            idx -= 1;
+                            digits[idx] = b'0' + (n % 10) as u8;
+                            n /= 10;
+                            if n == 0 || idx == 0 {
+                                break;
+                            }
+                        }
+                        req_buf.extend_from_slice(&digits[idx..]);
+                    } else {
+                        req_buf.extend_from_slice(host.as_bytes());
+                    }
+                    req_buf.extend_from_slice(b"\r\nUser-Agent: minOs/1.5\r\nAccept: ");
+                    if self.request_is_resource {
+                        req_buf.extend_from_slice(b"image/*,*/*;q=0.8\r\n");
+                    } else {
+                        req_buf.extend_from_slice(
+                            b"text/html,application/xhtml+xml,text/plain,*/*\r\n",
+                        );
+                    }
+                    req_buf.extend_from_slice(b"Connection: close\r\n");
 
                     // Cookie başlığı ekle (uygun domain ve path için)
                     let mut cookie_header = String::new();
@@ -3019,8 +3274,12 @@ impl BrowserApp {
             }
             2 => {
                 // TCP verisini al ve TLS oturumuna besle (https için).
-                if self.response_data.len() < 65536 {
-                    self.response_data.resize(65536, 0);
+                if self.response_data.len() < RESPONSE_BUF_MIN {
+                    self.response_data.resize(RESPONSE_BUF_MIN, 0);
+                }
+                // Tampon dolduysa büyüt; büyük resimler sığsın diye.
+                if self.response_len >= self.response_data.len() {
+                    self.grow_response_buffer();
                 }
                 let room = self.response_data.len().saturating_sub(self.response_len);
                 let mut progressed = false;
@@ -3030,6 +3289,7 @@ impl BrowserApp {
                     );
                     if n > 0 {
                         progressed = true;
+                        self.request_deadline = 0; // Yeni pencere: 15 sn daha
                         self.response_len += n;
                         if let Some(ref mut tls) = self.tls_session {
                             tls.feed_tcp_data(
@@ -3211,9 +3471,12 @@ impl BrowserApp {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
                         self.load_progress = 70;
                         self.net_idle_hint = true;
-                        let headers = &data_to_parse[..end];
+                        // Başlıkları kopyala: bundan sonra `self` alanları
+                        // serbest kalır ve gövde işlenirken tampon temizlenebilir.
+                        let header_block: Vec<u8> = data_to_parse[..end].to_vec();
+                        let headers: &[u8] = &header_block;
                         let status_end = find_bytes(headers, b"\r\n").unwrap_or(end);
-                        let status_line = &headers[..status_end];
+                        let status_line: &[u8] = &headers[..status_end];
 
                         // HTTP durum kodunu ayrıştır
                         let status_code = if status_line.len() >= 12
@@ -3323,10 +3586,11 @@ impl BrowserApp {
                                         loc_buf[..loc_len].copy_from_slice(&loc[..loc_len]);
 
                                         self.redirect_count += 1;
+                                        crate::drivers::netstack::tcp_close();
                                         crate::drivers::netstack::tcp_clear_result();
                                         self.response_len = 0;
                                         self.response_data.clear();
-                                        self.response_data.resize(65536, 0);
+                                        self.response_data.resize(RESPONSE_BUF_MIN, 0);
                                         self.tls_app_data.clear();
                                         self.tls_session = None;
                                         self.tls_pending_request.clear();
@@ -3405,100 +3669,124 @@ impl BrowserApp {
                             }
                         }
 
-                        // Normal yanıt içeriği
+                        // ── Gövde hazırlığı ─────────────────────────────────
+                        let body_start = end + 4;
+                        let raw_body_len = data_to_parse.len().saturating_sub(body_start);
+                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
+                        body_bytes.extend_from_slice(&data_to_parse[body_start..]);
+
+                        // Transfer-Encoding: chunked kontrolü
+                        let is_chunked = header_is_chunked(headers);
+                        let content_length = header_content_length(headers);
+                        let peer_closed =
+                            self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                        let eof = crate::drivers::netstack::tcp_finished() || peer_closed;
+
+                        // Chunked gövde ancak tamamen geldiğinde çözülebilir;
+                        // eksik veriyle çözüm hatalı sonuç verir.
+                        let chunked_decoded = if is_chunked {
+                            crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len)
+                        } else {
+                            None
+                        };
+
+                        // Gövde tamamen alınmadan işleme yapma: yarım gelen bir
+                        // JPEG/PNG çözülemez ve sayfa bozuk gösterilir.
+                        let body_complete = if is_chunked {
+                            chunked_decoded.is_some()
+                        } else if let Some(len) = content_length {
+                            raw_body_len >= len
+                        } else {
+                            eof
+                        };
+                        if !body_complete {
+                            // Daha fazla veri bekleniyor; bağlantı açık kalsın.
+                            return;
+                        }
+                        if let Some(decoded_len) = chunked_decoded {
+                            body_bytes.truncate(decoded_len);
+                        } else if let Some(len) = content_length {
+                            body_bytes.truncate(len.min(body_bytes.len()));
+                        }
+
+                        // Alt kaynak (resim/CSS) yanıtı belge olarak işlenmez:
+                        // görsel çözülür, önbelleğe alınır ve sayfa yeniden çizilir.
+                        if self.request_is_resource {
+                            self.finish_resource_request(&body_bytes, vfs);
+                            return;
+                        }
+
+                        // Sayfa başlığı: ana makine.
                         self.page_title = [0; 64];
                         let title_len = self.request_host_len.min(64);
                         self.page_title[..title_len]
                             .copy_from_slice(&self.request_host[..title_len]);
                         self.page_title_len = title_len;
 
-                        self.page_lines.clear();
-                        let status_str =
-                            core::str::from_utf8(status_line).unwrap_or("HTTP Response");
-                        self.page_lines.push(BrowserLine {
-                            spans: alloc::vec![TextSpan {
-                                text: String::from(status_str),
-                                color: Color::ACCENT_BLUE,
-                                bg_color: None,
-                                is_link: false,
-                                link_url: String::new(),
-                                is_button: false,
-                                is_image: false,
-                                image_width: 0,
-                                image_height: 0,
-                                image_rgb: None,
-                                image_url: String::new(),
-                                bold: false,
-                                underline: false,
-                                onclick: String::new(),
-                                elem_id: String::new(),
-                            }],
-                            tag: HtmlTagType::Heading2,
-                            indent: 0,
-                            align: TextAlign::Left,
-                        });
-
-                        let body_start = end + 4;
-                        let raw_body_len = data_to_parse.len().saturating_sub(body_start);
-                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
-                        body_bytes
-                            .extend_from_slice(&data_to_parse[body_start..data_to_parse.len()]);
-
-                        // Transfer-Encoding: chunked kontrolü
-                        let is_chunked = headers.split(|b| *b == b'\n').any(|line| {
-                            let l = if line.last() == Some(&b'\r') {
-                                &line[..line.len() - 1]
-                            } else {
-                                line
-                            };
-                            if let Some(colon) = l.iter().position(|&b| b == b':') {
-                                if l[..colon].eq_ignore_ascii_case(b"Transfer-Encoding") {
-                                    let val = &l[colon + 1..];
-                                    return val
-                                        .windows(7)
-                                        .any(|w| w.eq_ignore_ascii_case(b"chunked"));
-                                }
-                            }
-                            false
-                        });
-
-                        if is_chunked {
-                            if let Some(decoded_len) =
-                                crate::drivers::http::decode_chunked(&mut body_bytes, raw_body_len)
-                            {
-                                body_bytes.truncate(decoded_len);
-                            }
-                        }
-
-                        // Basit indirme için son yanıt gövdesini sakla.
-                        self.download_data = Some(body_bytes.clone());
-
-                        if body_bytes.iter().any(|b| *b == b'<') {
-                            self.load_html(&body_bytes, 600, 256, Some(vfs));
+                        // Doğrudan bir resim dosyası açıldıysa (ör. foto.jpg)
+                        // görseli sayfada göster.
+                        if let Some(img) = crate::apps::imgdecode::decode(&body_bytes) {
+                            self.original_html.clear();
+                            self.image_cache.clear();
+                            self.render_image_document(&img);
+                            self.status = crate::gui::ui_text("Resim açıldı.", "Image opened.");
                         } else {
-                            for line in split_http_lines(&body_bytes).take(256) {
-                                self.page_lines.push(BrowserLine {
-                                    spans: alloc::vec![TextSpan {
-                                        text: String::from(line),
-                                        color: Color::BLACK,
-                                        bg_color: None,
-                                        is_link: false,
-                                        link_url: String::new(),
-                                        is_button: false,
-                                        is_image: false,
-                                        image_width: 0,
-                                        image_height: 0,
-                                        image_rgb: None,
-                                        image_url: String::new(),
-                                        bold: false,
-                                        underline: false,
-                                        onclick: String::new(),
-                                        elem_id: String::new(),
-                                    }],
-                                    tag: HtmlTagType::Normal,
-                                    indent: 0,
-                                    align: TextAlign::Left,
-                                });
+                            // Basit indirme için son yanıt gövdesini sakla.
+                            self.download_data = Some(body_bytes.clone());
+
+                            self.page_lines.clear();
+                            let status_str =
+                                core::str::from_utf8(status_line).unwrap_or("HTTP Response");
+                            self.page_lines.push(BrowserLine {
+                                spans: alloc::vec![TextSpan {
+                                    text: String::from(status_str),
+                                    color: Color::ACCENT_BLUE,
+                                    bg_color: None,
+                                    is_link: false,
+                                    link_url: String::new(),
+                                    is_button: false,
+                                    is_image: false,
+                                    image_width: 0,
+                                    image_height: 0,
+                                    image_rgb: None,
+                                    image_url: String::new(),
+                                    bold: false,
+                                    underline: false,
+                                    onclick: String::new(),
+                                    elem_id: String::new(),
+                                }],
+                                tag: HtmlTagType::Heading2,
+                                indent: 0,
+                                align: TextAlign::Left,
+                            });
+
+                            if body_bytes.iter().any(|b| *b == b'<') {
+                                self.load_html(&body_bytes, 600, 256, Some(vfs));
+                            } else {
+                                for line in split_http_lines(&body_bytes).take(256) {
+                                    self.page_lines.push(BrowserLine {
+                                        spans: alloc::vec![TextSpan {
+                                            text: String::from(line),
+                                            color: Color::BLACK,
+                                            bg_color: None,
+                                            is_link: false,
+                                            link_url: String::new(),
+                                            is_button: false,
+                                            is_image: false,
+                                            image_width: 0,
+                                            image_height: 0,
+                                            image_rgb: None,
+                                            image_url: String::new(),
+                                            bold: false,
+                                            underline: false,
+                                            onclick: String::new(),
+                                            elem_id: String::new(),
+                                        }],
+                                        tag: HtmlTagType::Normal,
+                                        indent: 0,
+                                        align: TextAlign::Left,
+                                    });
+                                }
                             }
                         }
                         self.page_loaded = true;
@@ -3507,23 +3795,36 @@ impl BrowserApp {
                         if !self.pending_resources.is_empty() {
                             self.resource_fetch_state = 1;
                         }
+                        // Yanıt tamamen işlendi: aynı gövde yeniden işlenmesin ve
+                        // kaynak kuyruğu (img/CSS) hemen başlayabilsin diye isteği bitir.
+                        self.response_len = 0;
+                        self.tls_app_data.clear();
+                        self.request_pending = false;
+                        self.request_state = 0;
+                        self.request_deadline = 0;
+                        crate::drivers::netstack::tcp_close();
+                        crate::drivers::netstack::tcp_clear_result();
                     }
                 }
-                // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
-                // işlendiyse isteği başarıyla bitir. close_notify bir hata
-                // değil, düzgün bağlantı kapanışıdır (RFC 8446 §6.1).
-                let peer_closed = self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
-                if peer_closed && self.page_loaded {
-                    self.status =
-                        crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
-                    self.request_pending = false;
-                    self.request_state = 0;
-                    self.request_deadline = 0;
-                    crate::drivers::netstack::tcp_clear_result();
+                if self.request_pending {
+                    // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
+                    // işlendiyse isteği başarıyla bitir. close_notify bir hata
+                    // değil, düzgün bağlantı kapanışıdır (RFC 8446 §6.1).
+                    let peer_closed =
+                        self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                    if peer_closed && self.page_loaded {
+                        self.status =
+                            crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
+                        self.request_pending = false;
+                        self.request_state = 0;
+                        self.request_deadline = 0;
+                        crate::drivers::netstack::tcp_clear_result();
+                    }
                 }
                 self.flush_network_errors();
-                if crate::drivers::netstack::tcp_finished()
-                    || self.response_len >= self.response_data.len()
+                if self.request_pending
+                    && (crate::drivers::netstack::tcp_finished()
+                        || self.response_len >= self.response_data.len())
                 {
                     crate::serial_print("[HTTPS] Bitiş: resp_len=");
                     crate::serial::print_dec(self.response_len as u64);
@@ -3567,218 +3868,62 @@ impl BrowserApp {
         }
 
         // ── Harici kaynak (CSS/JS/img) asenkron getirme ─────────────────
-        // Ana sayfa isteği tamamlandıysa ve bekleyen kaynak varsa,
-        // her turda bir kaynak getirilir; sayfa her kaynaktan sonra yeniden render edilir.
-        if !self.request_pending && !self.pending_resources.is_empty() {
-            match self.resource_fetch_state {
-                0 | 1 => {
-                    // Yeni bir kaynak başlat: DNS çözümü
-                    let host = self.pending_resources[0]
-                        .trim_start_matches("http://")
-                        .trim_start_matches("https://")
-                        .split('/')
-                        .next()
-                        .unwrap_or("");
-                    let host = host.split(':').next().unwrap_or(host);
-                    self.current_resource_url = self.pending_resources[0].clone();
-                    self.request_pending = true;
-                    self.request_state = 0;
-                    self.request_deadline = 0;
-                    self.resource_fetch_state = 2;
-                    self.load_progress = 10;
+        // Ana sayfa isteği tamamlandıysa ve bekleyen kaynak varsa sıradaki
+        // kaynak başlatılır. Kaynağın HTTP/TLS akışı ana durum makinesiyle
+        // paylaşılır; yanıt `request_is_resource` bayrağıyla kaynak olarak
+        // işlenir (belge olarak değil).
+        if !self.request_pending {
+            self.start_next_resource();
+        }
+    }
 
-                    if let Some(ip) = crate::drivers::netstack::parse_ipv4(host) {
-                        self.request_ip = ip;
-                        self.request_port = if self.current_resource_url.starts_with("https://") {
-                            443
-                        } else {
-                            80
-                        };
-                        self.request_host = [0; 128];
-                        self.request_host_len = host.len();
-                        self.request_host[..host.len()].copy_from_slice(host.as_bytes());
-                        self.request_path = [0; 256];
-                        let rest = &self.current_resource_url[host.len()..];
-                        let path = rest.split('?').next().unwrap_or("/");
-                        self.request_path_len = path.len().min(256);
-                        self.request_path[..self.request_path_len].copy_from_slice(path.as_bytes());
-                        if crate::drivers::netstack::tcp_begin(ip, self.request_port, 49153) {
-                            self.request_state = 1;
-                            self.status = crate::gui::ui_text(
-                                "Kaynak bağlanıyor...",
-                                "Connecting to resource...",
-                            );
-                        } else {
-                            self.pending_resources.remove(0);
-                            self.request_pending = false;
-                            self.resource_fetch_state = 0;
-                        }
-                    } else if crate::drivers::netstack::dns_query(host) {
-                        self.request_state = 4;
-                        self.status =
-                            crate::gui::ui_text("DNS bekleniyor...", "Waiting for DNS...");
-                    } else {
-                        self.pending_resources.remove(0);
-                        self.request_pending = false;
-                        self.resource_fetch_state = 0;
-                    }
-                }
-                2 => {
-                    // TCP bağlantı durumu kontrolü (ana istek state machine'ı ile aynı)
-                    if crate::drivers::netstack::tcp_reset_received() {
-                        self.pending_resources.remove(0);
-                        self.request_pending = false;
-                        self.resource_fetch_state = 0;
-                    } else if crate::drivers::netstack::tcp_syn_acked() {
-                        self.load_progress = 40;
-                        self.request_state = 3;
-                        self.status = crate::gui::ui_text(
-                            "HTTP isteği gönderiliyor...",
-                            "Sending HTTP request...",
-                        );
-                    }
-                }
-                3 => {
-                    // HTTP GET isteği gönder
-                    let path = core::str::from_utf8(&self.request_path[..self.request_path_len])
-                        .unwrap_or("/");
-                    let host = core::str::from_utf8(&self.request_host[..self.request_host_len])
-                        .unwrap_or("");
-                    let mut req_buf: Vec<u8> = Vec::with_capacity(512);
-                    req_buf.extend_from_slice(b"GET ");
-                    req_buf.extend_from_slice(path.as_bytes());
-                    req_buf.extend_from_slice(b" HTTP/1.1\r\nHost: ");
-                    req_buf.extend_from_slice(host.as_bytes());
-                    req_buf.extend_from_slice(
-                        b"\r\nUser-Agent: minOs/1.5\r\nAccept: */*\r\nConnection: close\r\n",
-                    );
-                    if crate::drivers::netstack::tcp_send(&req_buf) {
-                        self.load_progress = 50;
-                        self.request_state = 4;
-                        self.web_request_sent = true;
-                        self.status = crate::gui::ui_text(
-                            "HTTP yanıtı bekleniyor...",
-                            "Waiting for HTTP response...",
-                        );
-                    }
-                }
-                4 => {
-                    // Yanıtı oku ve işle
-                    if self.response_data.len() < 65536 {
-                        self.response_data.resize(65536, 0);
-                    }
-                    let room = self.response_data.len().saturating_sub(self.response_len);
-                    if room > 0 {
-                        let n = crate::drivers::netstack::take_tcp_data(
-                            &mut self.response_data[self.response_len..],
-                        );
-                        if n > 0 {
-                            self.response_len += n;
-                        }
-                    }
-
-                    if let Some(end) = crate::apps::browser::html::find_bytes(
-                        &self.response_data[..self.response_len],
-                        b"\r\n\r\n",
-                    ) {
-                        self.load_progress = 70;
-                        let headers = &self.response_data[..end];
-                        let status_end =
-                            crate::apps::browser::html::find_bytes(headers, b"\r\n").unwrap_or(end);
-                        let status_line = &headers[..status_end];
-
-                        let status_code = if status_line.len() >= 12
-                            && &status_line[..5] == b"HTTP/"
-                        {
-                            if let Some(sp) = status_line.iter().position(|&b| b == b' ') {
-                                if status_line.len() >= sp + 4 {
-                                    let d = |c: u8| (c as char).to_digit(10).unwrap_or(0) as u16;
-                                    if status_line[sp + 1].is_ascii_digit()
-                                        && status_line[sp + 2].is_ascii_digit()
-                                        && status_line[sp + 3].is_ascii_digit()
-                                    {
-                                        Some(
-                                            d(status_line[sp + 1]) * 100
-                                                + d(status_line[sp + 2]) * 10
-                                                + d(status_line[sp + 3]),
-                                        )
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        let body_start = end + 4;
-                        let raw_body_len = self.response_data.len().saturating_sub(body_start);
-                        let mut body_bytes: Vec<u8> = Vec::with_capacity(raw_body_len);
-                        body_bytes.extend_from_slice(
-                            &self.response_data[body_start..self.response_data.len()],
-                        );
-
-                        // Resim ise decode edip image_cache'e sakla
-                        let is_image = self.current_resource_url.ends_with(".png")
-                            || self.current_resource_url.ends_with(".jpg")
-                            || self.current_resource_url.ends_with(".jpeg")
-                            || self.current_resource_url.ends_with(".gif")
-                            || self.current_resource_url.ends_with(".webp")
-                            || self.current_resource_url.contains("image/");
-                        if is_image {
-                            if let Some(img) = crate::apps::imgdecode::decode(&body_bytes) {
-                                self.image_cache.insert(
-                                    self.current_resource_url.clone(),
-                                    (img.width, img.height, img.rgb),
-                                );
-                            }
-                        }
-
-                        // CSS içeriğini parse et ve sayfaya uygula
-                        if let Some(code) = status_code {
-                            if (200..300).contains(&code) {
-                                if let Ok(css_text) = core::str::from_utf8(&body_bytes) {
-                                    if self.current_resource_url.ends_with(".css")
-                                        || self.current_resource_url.contains(".css?")
-                                    {
-                                        let _parsed = parse_css(css_text);
-                                        // CSS kurallarını sayfaya eklemek için yeniden render
-                                        // (basit implementasyon: sayfayı yeniden yükle)
-                                    }
-                                }
-                            }
-                        }
-
-                        // Sayfayı yeniden render et (orijinal HTML + image_cache)
-                        let original_html = self.original_html.clone();
-                        self.load_html(&original_html, 600, 256, Some(vfs));
-
-                        // Bu kaynağı tamamla
-                        self.pending_resources.remove(0);
-                        self.request_pending = false;
-                        self.request_state = 0;
-                        self.request_deadline = 0;
-                        self.response_len = 0;
-                        self.response_data.clear();
-                        self.response_data.resize(65536, 0);
-                        crate::drivers::netstack::tcp_clear_result();
-                        self.resource_fetch_state = 0;
-
-                        if !self.pending_resources.is_empty() {
-                            self.resource_fetch_state = 1;
-                        } else {
-                            self.load_progress = 100;
-                            self.status = crate::gui::ui_text("Sayfa yüklendi.", "Page loaded.");
-                        }
-                    }
-                }
-                _ => {
-                    self.resource_fetch_state = 0;
-                }
+    /// Sıradaki harici kaynağı (img/CSS) getirmek için isteği başlatır.
+    ///
+    /// Kaynağın DNS/TCP/TLS akışı ana durum makinesiyle paylaşılır; yalnızca
+    /// hedef adres/port bilgileri doldurulur ve `request_is_resource` bayrağı
+    /// yanıtın "kaynak" olarak işlenmesini sağlar.
+    fn start_next_resource(&mut self) {
+        if self.request_pending || self.pending_resources.is_empty() {
+            return;
+        }
+        let url = self.pending_resources[0].clone();
+        match split_resource_url(&url) {
+            Some((is_https, host, port, path)) => {
+                let host_len = host.len().min(128);
+                let path_len = path.len().min(256);
+                let mut host_buf = [0u8; 128];
+                host_buf[..host_len].copy_from_slice(&host.as_bytes()[..host_len]);
+                let mut path_buf = [0u8; 256];
+                path_buf[..path_len].copy_from_slice(&path.as_bytes()[..path_len]);
+                self.current_resource_url = url;
+                self.request_is_resource = true;
+                self.is_https = is_https;
+                self.is_post = false;
+                self.post_body.clear();
+                self.request_host = host_buf;
+                self.request_host_len = host_len;
+                self.request_path = path_buf;
+                self.request_path_len = path_len;
+                self.request_port = port;
+                self.request_state = 0;
+                self.request_pending = true;
+                self.request_deadline = 0;
+                self.resource_fetch_state = 2;
+                self.load_progress = 10;
+                self.status = crate::gui::ui_text(
+                    "Kaynak getiriliyor...",
+                    "Fetching resource...",
+                );
+                self.reset_response_buffer();
+            }
+            None => {
+                // Desteklenmeyen kaynak adresi: kuyruktan düşür.
+                self.pending_resources.remove(0);
+                self.resource_fetch_state = if self.pending_resources.is_empty() {
+                    0
+                } else {
+                    1
+                };
             }
         }
     }
@@ -3794,6 +3939,17 @@ impl BrowserApp {
 
     fn finish_network_error_with_detail(&mut self, status: &'static str, detail: &str) {
         self.record_network_error(detail);
+        // Alt kaynak isteği başarısız olduysa sayfa bozulmaz; yalnızca
+        // başarısız kaynak kuyruktan düşürülür (sonsuz tekrar denemesin).
+        if self.request_is_resource {
+            self.fail_resource_request();
+            self.request_pending = false;
+            self.request_state = 0;
+            self.request_deadline = 0;
+            self.load_progress = 100;
+            crate::drivers::netstack::tcp_clear_result();
+            return;
+        }
         self.request_pending = false;
         self.page_loaded = false;
         self.load_progress = 0;
@@ -3801,6 +3957,22 @@ impl BrowserApp {
         self.request_state = 0;
         self.request_deadline = 0;
         crate::drivers::netstack::tcp_clear_result();
+    }
+
+    /// Başarısız olan alt kaynak isteğini kuyruktan düşürür.
+    fn fail_resource_request(&mut self) {
+        if !self.request_is_resource {
+            return;
+        }
+        let url = self.current_resource_url.clone();
+        self.pending_resources.retain(|u| u != &url);
+        self.request_is_resource = false;
+        self.current_resource_url.clear();
+        self.resource_fetch_state = if self.pending_resources.is_empty() {
+            0
+        } else {
+            1
+        };
     }
 
     /// Ertelenmiş ağ hata mesajlarını hata günlüğüne aktarır.

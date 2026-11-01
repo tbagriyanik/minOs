@@ -192,7 +192,7 @@ impl ImageViewerApp {
         self.zoom_level.saturating_mul(100) / 4
     }
     pub fn zoom_in(&mut self) {
-        self.zoom_level = (self.zoom_level + 1).min(8);
+        self.zoom_level = (self.zoom_level + 1).min(16);
     }
     pub fn zoom_out(&mut self) {
         self.zoom_level = self.zoom_level.saturating_sub(1).max(1);

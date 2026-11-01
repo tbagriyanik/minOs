@@ -856,6 +856,12 @@ pub const ISRG_ROOT_X1_CROSS_SIGNED_DER: &[u8] =
 // Additional widely-used root CAs to expand HTTPS certificate coverage.
 /// GlobalSign Root R46 (RSA-2048).
 pub const GLOBALSIGN_ROOT_R46_DER: &[u8] = include_bytes!("roots/globalsign_root_r46.der");
+/// GlobalSign Root CA R6 (RSA-2048).
+pub const GLOBALSIGN_ROOT_CA_R6_DER: &[u8] = include_bytes!("roots/globalsign_root_ca_r6.der");
+/// GlobalSign ECC Root CA R4 (ECC P-384).
+pub const GLOBALSIGN_ECC_ROOT_CA_R4_DER: &[u8] = include_bytes!("roots/globalsign_ecc_root_ca_r4.der");
+/// GlobalSign ECC Root CA R5 (ECC P-384).
+pub const GLOBALSIGN_ECC_ROOT_CA_R5_DER: &[u8] = include_bytes!("roots/globalsign_ecc_root_ca_r5.der");
 /// Go Daddy Root Certificate Authority - G2 (RSA-2048).
 pub const GODADDY_ROOT_G2_DER: &[u8] = include_bytes!("roots/godaddy_root_g2.der");
 /// Starfield Root Certificate Authority - G2 (RSA-2048).
@@ -919,6 +925,9 @@ pub const FNMT_RCM_AC_RAIZ_DER: &[u8] = include_bytes!("roots/fnmt_rcm_ac_raiz.d
 pub const SECOM_SECURITY_COMMUNICATION_ROOTCA2_DER: &[u8] =
     include_bytes!("roots/secom_security_communication_rootca2.der");
 
+/// Amazon Root CA 1 (RSA-2048) — AWS ve Amazon hizmetleri için.
+pub const AMAZON_ROOT_CA_1_DER: &[u8] = include_bytes!("roots/AmazonRootCA1.cer");
+
 /// SHA-256 with RSA Encryption OID: 1.2.840.113549.1.1.11
 pub const OID_SHA256_WITH_RSA_ENCRYPTION: &[u8] =
     &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
@@ -931,6 +940,9 @@ pub const OID_SHA384_WITH_RSA_ENCRYPTION: &[u8] =
 pub const OID_ECDSA_WITH_SHA256: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x02];
 /// ECDSA with SHA-384 OID: 1.2.840.10045.4.3.3
 pub const OID_ECDSA_WITH_SHA384: &[u8] = &[0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x04, 0x03, 0x03];
+
+pub const GTS_ROOT_R3_DER: &[u8] = include_bytes!("roots/r3.crt");
+pub const GTS_ROOT_R4_DER: &[u8] = include_bytes!("roots/r4.crt");
 
 /// Ayrıştırılmış ham X.509 sertifika bileşenleri (zincir ve imza doğrulaması için).
 pub struct ParsedX509Cert<'a> {
@@ -1125,6 +1137,7 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     DIGICERT_GLOBAL_ROOT_G2_DER,
     GTS_ROOT_R1_DER,
     GTS_ROOT_R2_DER,
+    GTS_ROOT_R3_DER, GTS_ROOT_R4_DER,
     SSLCOM_TLS_ECC_ROOT_CA_2022_DER,
     DIGICERT_SMIME_RSA4096_ROOT_G5_DER,
     DIGICERT_SMIME_ECC_P384_ROOT_G5_DER,
@@ -1140,6 +1153,9 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     ROOT_X2_BY_X1_DER,
     ISRG_ROOT_X1_CROSS_SIGNED_DER,
     GLOBALSIGN_ROOT_R46_DER,
+    GLOBALSIGN_ROOT_CA_R6_DER,
+    GLOBALSIGN_ECC_ROOT_CA_R4_DER,
+    GLOBALSIGN_ECC_ROOT_CA_R5_DER,
     GODADDY_ROOT_G2_DER,
     STARFIELD_ROOT_G2_DER,
     IDENTRUST_COMMERCIAL_ROOT_CA_1_DER,
@@ -1164,6 +1180,7 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     OISTE_WISEKEY_GLOBAL_ROOT_GC_CA_DER,
     FNMT_RCM_AC_RAIZ_DER,
     SECOM_SECURITY_COMMUNICATION_ROOTCA2_DER,
+    AMAZON_ROOT_CA_1_DER,
 ];
 
 /// Verilen sertifika zincirini güvenilen kök sertifikalara karşı doğrular.

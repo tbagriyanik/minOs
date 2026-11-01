@@ -34,7 +34,7 @@ impl DecodedImage {
     }
 }
 
-/// İmzaya bakarak PNG, JPEG, GIF, WebP veya SVG çözer.
+/// İmzaya bakarak PNG, JPEG, GIF, WebP, BMP veya SVG çözer.
 pub fn decode(data: &[u8]) -> Option<DecodedImage> {
     if data.len() >= 8 && data[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
         decode_png(data)
@@ -44,11 +44,98 @@ pub fn decode(data: &[u8]) -> Option<DecodedImage> {
         decode_gif(data)
     } else if data.len() >= 12 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" {
         decode_webp(data)
+    } else if data.len() >= 2 && &data[0..2] == b"BM" {
+        decode_bmp(data)
     } else if is_svg(data) {
         decode_svg(data)
     } else {
         None
     }
+}
+
+/// BMP dosyasının genişlik ve yüksekliğini döndürür.
+pub fn bmp_dimensions(data: &[u8]) -> Option<(usize, usize)> {
+    if data.len() < 26 || &data[0..2] != b"BM" {
+        return None;
+    }
+    let width = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+    let height = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let w = width.unsigned_abs() as usize;
+    let h = height.unsigned_abs() as usize;
+    for_pixels(w, h)?;
+    Some((w, h))
+}
+
+/// BMP kod çözücü (24-bit ve 32-bit, sıkıştırılmamış BI_RGB).
+pub fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
+    if data.len() < 54 || &data[0..2] != b"BM" {
+        return None;
+    }
+    let bits_per_pixel = u16::from_le_bytes([data[28], data[29]]) as usize;
+    let compression = u32::from_le_bytes([data[30], data[31], data[32], data[33]]);
+    if compression != 0 {
+        // Sadece BI_RGB (sıkıştırılmamış) desteklenir.
+        return None;
+    }
+    if bits_per_pixel != 24 && bits_per_pixel != 32 {
+        return None;
+    }
+
+    let raw_w = i32::from_le_bytes([data[18], data[19], data[20], data[21]]);
+    let raw_h = i32::from_le_bytes([data[22], data[23], data[24], data[25]]);
+    if raw_w == 0 || raw_h == 0 {
+        return None;
+    }
+    let width = raw_w.unsigned_abs() as usize;
+    let height = raw_h.unsigned_abs() as usize;
+    let top_down = raw_h < 0;
+
+    let offset = u32::from_le_bytes([data[10], data[11], data[12], data[13]]) as usize;
+    let bytes_per_pixel = bits_per_pixel / 8;
+    let row_bytes = (width * bytes_per_pixel + 3) & !3;
+
+    if for_pixels(width, height).is_none() {
+        return None;
+    }
+    if offset.checked_add(row_bytes.checked_mul(height)?).map_or(false, |end| end > data.len()) {
+        return None;
+    }
+
+    let mut rgb = Vec::with_capacity(width * height * 3);
+    if rgb.try_reserve_exact(width * height * 3).is_err() {
+        return None;
+    }
+    rgb.resize(width * height * 3, 0);
+
+    let mut out = 0usize;
+    for y in 0..height {
+        let src_y = if top_down { y } else { height - 1 - y };
+        let row_start = offset + src_y * row_bytes;
+        for x in 0..width {
+            let px_start = row_start + x * bytes_per_pixel;
+            if px_start + 2 >= data.len() {
+                return None;
+            }
+            // BMP saklar BGR sırasını; RGB'ye çevir.
+            let b = data[px_start];
+            let g = data[px_start + 1];
+            let r = data[px_start + 2];
+            rgb[out] = r;
+            rgb[out + 1] = g;
+            rgb[out + 2] = b;
+            out += 3;
+        }
+    }
+
+    Some(DecodedImage {
+        width,
+        height,
+        rgb,
+        format: "BMP",
+    })
 }
 
 fn le16(d: &[u8], i: usize) -> Option<usize> {

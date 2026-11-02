@@ -7,7 +7,7 @@ use crate::mm::pmm::PhysicalMemoryManager;
 pub const MAX_PROC: usize = crate::gui::MAX_WINDOWS;
 const PROCESS_ROW_H: usize = 20;
 const LAUNCH_ITEM_H: usize = 22;
-pub const ALL_APP_COUNT: usize = 15;
+pub const ALL_APP_COUNT: usize = 16;
 const ALL_APP_LABELS: [&str; ALL_APP_COUNT] = [
     "Dosya Yöneticisi",
     "Sistem Ayarları",
@@ -24,6 +24,7 @@ const ALL_APP_LABELS: [&str; ALL_APP_COUNT] = [
     "3D Gösterici",
     "Paket Yöneticisi",
     "Kontrol Paneli",
+    "Oyunlar",
 ];
 const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
     "File Manager",
@@ -41,6 +42,7 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
     "3D Viewer",
     "Package Manager",
     "Control Panel",
+    "Games",
 ];
 
 // "Program Aç" menüsü için Görev Yöneticisi (ID 7) hariç tutulmuş,
@@ -51,6 +53,7 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
 // 4. Hesap Makinesi (8)
 // 5. Komut İstemi (10)
 // 6. Kontrol Paneli (14)
+// 7. Oyunlar (15)
 // 7. Kurulum Sihirbazı (11)
 // 8. Müzik Çalar (5)
 // 9. Not Defteri (2)
@@ -59,8 +62,9 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
 // 12. Sistem Ayarları (1)
 // 13. Video Oynatıcı (6)
 // 14. Web Gezgini (3)
-pub const LAUNCH_APP_COUNT: usize = 14;
-const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] = [12, 9, 0, 8, 10, 14, 11, 5, 2, 13, 4, 1, 6, 3];
+pub const LAUNCH_APP_COUNT: usize = 15;
+const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] =
+    [12, 9, 0, 8, 10, 14, 11, 5, 2, 13, 4, 1, 6, 3, 15];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "3D Gösterici",
     "Çizim Tahtası",
@@ -71,6 +75,7 @@ const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "Kurulum Sihirbazı",
     "Müzik Çalar",
     "Not Defteri",
+    "Oyunlar",
     "Paket Yöneticisi",
     "Resim Gösterici",
     "Sistem Ayarları",
@@ -87,6 +92,7 @@ const LAUNCH_APP_LABELS_EN: [&str; LAUNCH_APP_COUNT] = [
     "Installer",
     "Music Player",
     "Notepad",
+    "Games",
     "Package Manager",
     "Image Viewer",
     "Settings",
@@ -380,6 +386,7 @@ impl TaskManagerApp {
             12 => core::mem::size_of::<crate::apps::viewer3d::Viewer3DApp>(),
             13 => core::mem::size_of::<crate::apps::pkgmgr::PackageManagerApp>(),
             14 => 0, // Kontrol Paneli durumu global (sabit bellek kullanmaz)
+            15 => core::mem::size_of::<crate::apps::game::GameApp>(),
             _ => 0,
         }
     }

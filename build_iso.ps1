@@ -67,6 +67,7 @@ $mediaFiles = @(
     "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
     "public\media\sample.png", "public\media\gradient.png",
     "public\media\sample.jpg", "public\media\sunset.jpg",
+    "public\desktop1.png", "public\desktop2.png", "public\desktop3.png",
     "public\media\sample.wav", "public\media\scale_c_major.wav"
 )
 foreach ($mf in $mediaFiles) {

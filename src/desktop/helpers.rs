@@ -21,6 +21,7 @@ fn app_process_name(app_id: usize) -> &'static str {
         12 => "3d_gosterici",
         13 => "paket_yoneticisi",
         14 => "kontrol_paneli",
+        15 => "oyunlar",
         _ => "uygulama",
     }
 }
@@ -205,6 +206,7 @@ pub fn terminate_app(
     installer: &mut apps::installer::InstallerApp,
     viewer3d: &mut apps::viewer3d::Viewer3DApp,
     pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
+    fps: &mut apps::game::GameApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     // Pencereyi kapatmakla kalma: pencereye bagli sureci de gercekten sonlandir.
@@ -251,6 +253,7 @@ pub fn terminate_app(
             12 => *viewer3d = apps::viewer3d::Viewer3DApp::new(),
             13 => *pkgmgr = apps::pkgmgr::PackageManagerApp::new(),
             14 => apps::controlpanel::reset(),
+            15 => *fps = apps::game::GameApp::new(),
             _ => return,
         }
     }

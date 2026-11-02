@@ -3,6 +3,12 @@
 This file contains the detailed change lists for minOs releases.
 The README files only summarise the highlights; the full list lives here.
 
+## Current
+
+- Double-clicking a WAV file plays the selected file directly in Music Player.
+- Image Viewer can apply the current image as a tiled desktop wallpaper.
+- Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.
+
 - [v2.2.0](#whats-new-v210) — current release
 - [v1.6.0 and earlier](releases.md)
 

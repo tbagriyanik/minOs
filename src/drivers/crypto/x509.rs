@@ -859,9 +859,11 @@ pub const GLOBALSIGN_ROOT_R46_DER: &[u8] = include_bytes!("roots/globalsign_root
 /// GlobalSign Root CA R6 (RSA-2048).
 pub const GLOBALSIGN_ROOT_CA_R6_DER: &[u8] = include_bytes!("roots/globalsign_root_ca_r6.der");
 /// GlobalSign ECC Root CA R4 (ECC P-384).
-pub const GLOBALSIGN_ECC_ROOT_CA_R4_DER: &[u8] = include_bytes!("roots/globalsign_ecc_root_ca_r4.der");
+pub const GLOBALSIGN_ECC_ROOT_CA_R4_DER: &[u8] =
+    include_bytes!("roots/globalsign_ecc_root_ca_r4.der");
 /// GlobalSign ECC Root CA R5 (ECC P-384).
-pub const GLOBALSIGN_ECC_ROOT_CA_R5_DER: &[u8] = include_bytes!("roots/globalsign_ecc_root_ca_r5.der");
+pub const GLOBALSIGN_ECC_ROOT_CA_R5_DER: &[u8] =
+    include_bytes!("roots/globalsign_ecc_root_ca_r5.der");
 /// Go Daddy Root Certificate Authority - G2 (RSA-2048).
 pub const GODADDY_ROOT_G2_DER: &[u8] = include_bytes!("roots/godaddy_root_g2.der");
 /// Starfield Root Certificate Authority - G2 (RSA-2048).
@@ -1137,7 +1139,8 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
     DIGICERT_GLOBAL_ROOT_G2_DER,
     GTS_ROOT_R1_DER,
     GTS_ROOT_R2_DER,
-    GTS_ROOT_R3_DER, GTS_ROOT_R4_DER,
+    GTS_ROOT_R3_DER,
+    GTS_ROOT_R4_DER,
     SSLCOM_TLS_ECC_ROOT_CA_2022_DER,
     DIGICERT_SMIME_RSA4096_ROOT_G5_DER,
     DIGICERT_SMIME_ECC_P384_ROOT_G5_DER,

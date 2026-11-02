@@ -80,6 +80,9 @@ Desktop usage, MinShell commands and shortcut reference.
 - **Notepad Shortcuts:** `Ctrl+C` (Copy), `Ctrl+X` (Cut), `Ctrl+V` (Paste), `Ctrl+A` (Select All), `Ctrl+Z` (Undo), `Ctrl+Y` (Redo), `Delete`, `Home`/`End`, `Shift+Arrow keys`.
 - **Paint:** Select color, Eraser, Open or Save; draw with left mouse button held. `C` clears, `E` toggles eraser. Saved as 24-bit BMP to `/root/Documents/cizim.bmp`.
 - **Image Viewer:** `+`/`=` zoom in, `-` zoom out, `0` default scale.
+- **Image Viewer Wallpaper:** Press **Tile on desktop** for an opened image to use it as the desktop wallpaper.
+- **Desktop Images:** System Settings includes **Desktop 1**, **Desktop 2** and **Desktop 3** wallpaper choices.
+- **WAV Playback:** Double-clicking a `.wav` file in File Manager plays that selected file directly.
 - **Media Keys:** Volume up, volume down, mute, play/pause, previous/next track.
 - **Refresh (`F5`):** Refreshes focused application content.
 - **Video Player:** `Play/Pause` toggles animation and timeline; `Stop` resets to beginning.

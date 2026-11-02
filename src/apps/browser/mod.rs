@@ -2710,12 +2710,7 @@ impl BrowserApp {
             indent: 0,
             align: TextAlign::Center,
         });
-        let info = format!(
-            "{} × {} — {}",
-            img.width,
-            img.height,
-            img.format
-        );
+        let info = format!("{} × {} — {}", img.width, img.height, img.format);
         self.page_lines.push(BrowserLine {
             spans: alloc::vec![TextSpan {
                 text: info,
@@ -3810,8 +3805,7 @@ impl BrowserApp {
                     // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
                     // işlendiyse isteği başarıyla bitir. close_notify bir hata
                     // değil, düzgün bağlantı kapanışıdır (RFC 8446 §6.1).
-                    let peer_closed =
-                        self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                    let peer_closed = self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
                     if peer_closed && self.page_loaded {
                         self.status =
                             crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
@@ -3910,10 +3904,7 @@ impl BrowserApp {
                 self.request_deadline = 0;
                 self.resource_fetch_state = 2;
                 self.load_progress = 10;
-                self.status = crate::gui::ui_text(
-                    "Kaynak getiriliyor...",
-                    "Fetching resource...",
-                );
+                self.status = crate::gui::ui_text("Kaynak getiriliyor...", "Fetching resource...");
                 self.reset_response_buffer();
             }
             None => {
@@ -4403,13 +4394,21 @@ impl BrowserApp {
                         HtmlTagType::Heading3 => 20,
                         _ => 18,
                     };
+                    let visual_h = line
+                        .spans
+                        .iter()
+                        .filter(|span| span.is_image)
+                        .map(|span| span.image_height)
+                        .max()
+                        .unwrap_or(0)
+                        .max(line_h);
 
                     let scale = match line.tag {
                         HtmlTagType::Heading1 => 2,
                         _ => 1,
                     };
 
-                    let visible = cur_line_y + line_h >= doc_y + scroll_y
+                    let visible = cur_line_y + visual_h >= doc_y + scroll_y
                         && cur_line_y <= doc_y + scroll_y + doc_h + 30;
                     let draw_y = cur_line_y.saturating_sub(scroll_y);
 
@@ -4709,15 +4708,18 @@ impl BrowserApp {
                                     let img_h = span.image_height.max(1);
                                     let draw_w = img_w
                                         .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
+                                    let image_top = cur_line_y.saturating_sub(scroll_y);
+                                    let visible_top = image_top.max(doc_y);
+                                    let source_top = scroll_y
+                                        .saturating_add(visible_top)
+                                        .saturating_sub(cur_line_y);
+                                    let draw_y = visible_top;
                                     let draw_h = img_h
-                                        .min(doc_h.saturating_sub(draw_y.saturating_sub(doc_y)));
-                                    if draw_w > 0
-                                        && draw_h > 0
-                                        && draw_y >= doc_y
-                                        && draw_y < doc_y + doc_h
-                                    {
+                                        .saturating_sub(source_top)
+                                        .min(doc_y.saturating_add(doc_h).saturating_sub(draw_y));
+                                    if draw_w > 0 && draw_h > 0 && draw_y < doc_y + doc_h {
                                         for dy in 0..draw_h {
-                                            let sy = (dy * img_h) / draw_h.max(1);
+                                            let sy = source_top + dy;
                                             for dx in 0..draw_w {
                                                 let sx = (dx * img_w) / draw_w.max(1);
                                                 let idx = (sy * img_w + sx) * 3;

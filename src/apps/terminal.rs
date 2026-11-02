@@ -109,6 +109,7 @@ const COMPLETION_APPS: &[&str] = &[
     "installer",
     "3d",
     "pkgmgr",
+    "games",
 ];
 
 fn app_index(name: &str) -> Option<usize> {
@@ -128,6 +129,7 @@ fn app_index(name: &str) -> Option<usize> {
         "3d" | "viewer3d" => Some(12),
         "pkgmgr" | "packagemgr" | "packages" | "paket" => Some(13),
         "panel" | "controlpanel" | "control" | "kontrol" => Some(14),
+        "games" | "game" | "oyun" | "oyunlar" | "dama" | "checkers" | "solitaire" => Some(15),
         _ => None,
     }
 }
@@ -149,6 +151,7 @@ fn app_name(index: usize) -> &'static str {
         (12, false) => "3D Gösterici",
         (13, false) => "Paket Yöneticisi",
         (14, false) => "Kontrol Paneli",
+        (15, false) => "Oyunlar",
         (0, true) => "File Manager",
         (1, true) => "Settings",
         (2, true) => "Notepad",
@@ -164,6 +167,7 @@ fn app_name(index: usize) -> &'static str {
         (12, true) => "3D Viewer",
         (13, true) => "Package Manager",
         (14, true) => "Control Panel",
+        (15, true) => "Games",
         _ => "Package Manager",
     }
 }
@@ -1376,7 +1380,7 @@ impl TerminalApp {
                     "  copy=cp  move=mv  ren <eski> <yeni>  edit <dosya>  where <komut>  ver  set",
                     Color::ACCENT_YELLOW,
                 );
-                self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd", Color::ACCENT_PINK);
+                self.push_line("apps: files settings panel notepad browser image music video taskmgr calc paint cmd games", Color::ACCENT_PINK);
             }
             "pwd" => {
                 let mut buf = TextBuf::new();
@@ -2768,7 +2772,7 @@ impl TerminalApp {
                 self.push_line("0 files       1 settings    2 notepad", Color::ACCENT_BLUE);
                 self.push_line("3 browser     4 image      5 music", Color::ACCENT_BLUE);
                 self.push_line("6 video       7 taskmgr    8 calc", Color::ACCENT_BLUE);
-                self.push_line("9 paint      10 cmd", Color::ACCENT_BLUE);
+                self.push_line("9 paint      10 cmd       15 games", Color::ACCENT_BLUE);
             }
             "ipconfig" => {
                 use crate::drivers::netstack::{dns_server, gateway_ip, local_ip, subnet_mask};

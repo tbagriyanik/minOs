@@ -100,7 +100,10 @@ pub fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
     if for_pixels(width, height).is_none() {
         return None;
     }
-    if offset.checked_add(row_bytes.checked_mul(height)?).map_or(false, |end| end > data.len()) {
+    if offset
+        .checked_add(row_bytes.checked_mul(height)?)
+        .map_or(false, |end| end > data.len())
+    {
         return None;
     }
 
@@ -601,7 +604,6 @@ impl Huffman {
         }
         None
     }
-
 }
 
 fn fixed_tables() -> Option<(Huffman, Huffman)> {
@@ -1080,11 +1082,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                             .as_ref()
                             .and_then(|f| f.comps.iter().position(|c| c.id == id))
                         {
-                            comps.push((
-                                ci,
-                                (tables >> 4) as usize,
-                                (tables & 15) as usize,
-                            ));
+                            comps.push((ci, (tables >> 4) as usize, (tables & 15) as usize));
                         }
                     }
                     prog_scans.push(ProgScan {
@@ -1414,10 +1412,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let (aw, ahh) = component_block_dims(&fr, comp);
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0
-                                && unit > 0
-                                && unit % restart_interval == 0
-                            {
+                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1429,11 +1424,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                                 if s > 16 {
                                     return None;
                                 }
-                                let diff = if s == 0 {
-                                    0
-                                } else {
-                                    extend(br.bits(s)?, s)
-                                };
+                                let diff = if s == 0 { 0 } else { extend(br.bits(s)?, s) };
                                 preds[ci] = preds[ci].wrapping_add(diff);
                                 coefs[ci][start] = preds[ci].wrapping_shl(al);
                             } else if br.bits(1)? != 0 {
@@ -1446,10 +1437,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     // Örgülü tarama: MCU bazlı, bileşenler arası geçişli.
                     for my in 0..mcus_y {
                         for mx in 0..mcus_x {
-                            if restart_interval > 0
-                                && unit > 0
-                                && unit % restart_interval == 0
-                            {
+                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1471,11 +1459,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                                             if s > 16 {
                                                 return None;
                                             }
-                                            let diff = if s == 0 {
-                                                0
-                                            } else {
-                                                extend(br.bits(s)?, s)
-                                            };
+                                            let diff =
+                                                if s == 0 { 0 } else { extend(br.bits(s)?, s) };
                                             preds[ci] = preds[ci].wrapping_add(diff);
                                             coefs[ci][start] = preds[ci].wrapping_shl(al);
                                         } else if br.bits(1)? != 0 {
@@ -1497,10 +1482,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let row_blocks = comp.bw;
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0
-                                && unit > 0
-                                && unit % restart_interval == 0
-                            {
+                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1520,11 +1502,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                                         let s = rs & 15;
                                         if s == 0 {
                                             if r < 15 {
-                                                let extra = if r > 0 {
-                                                    br.bits(r as u32)?
-                                                } else {
-                                                    0
-                                                };
+                                                let extra =
+                                                    if r > 0 { br.bits(r as u32)? } else { 0 };
                                                 eobrun = (1u32 << r) + extra;
                                                 eobrun = eobrun.saturating_sub(1);
                                                 break;
@@ -1563,11 +1542,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                                         let s = rs & 15;
                                         if s == 0 {
                                             if r < 15 {
-                                                let extra = if r > 0 {
-                                                    br.bits(r as u32)?
-                                                } else {
-                                                    0
-                                                };
+                                                let extra =
+                                                    if r > 0 { br.bits(r as u32)? } else { 0 };
                                                 eobrun = (1u32 << r) + extra;
                                                 eobrun = eobrun.saturating_sub(1);
                                                 // EOB: kalan katsayılar sıfır kabul
@@ -1600,9 +1576,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                                                 let p = &mut block[ZIGZAG[k]];
                                                 k += 1;
                                                 if *p != 0 {
-                                                    if br.bits(1)? != 0
-                                                        && (*p & bit) == 0
-                                                    {
+                                                    if br.bits(1)? != 0 && (*p & bit) == 0 {
                                                         if *p > 0 {
                                                             *p += bit;
                                                         } else {
@@ -2279,11 +2253,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
     let cl_huffman = Huffman::from_lengths(&cl_lengths)?;
 
     // Yardımcı: kod uzunluklarını oku
-    fn read_code_lengths(
-        br: &mut BitReader,
-        huffman: &Huffman,
-        count: usize,
-    ) -> Option<Vec<u8>> {
+    fn read_code_lengths(br: &mut BitReader, huffman: &Huffman, count: usize) -> Option<Vec<u8>> {
         let mut lengths = vec![0u8; count];
         let mut i = 0usize;
         while i < count {
@@ -2403,14 +2373,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
     let default_argb: u32 = 0x0000_00FF;
 
     // Tahmin modu uygulama: encoded değerini gerçek ARGB'ye çevirir
-    fn apply_predictor(
-        mode: u32,
-        encoded: u32,
-        left: u32,
-        tl: u32,
-        top: u32,
-        tr: u32,
-    ) -> u32 {
+    fn apply_predictor(mode: u32, encoded: u32, left: u32, tl: u32, top: u32, tr: u32) -> u32 {
         let er = ((encoded >> 16) & 0xFF) as i32;
         let eg = ((encoded >> 8) & 0xFF) as i32;
         let eb = (encoded & 0xFF) as i32;
@@ -2566,7 +2529,8 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
                     _ => (r, g, b, a),
                 };
 
-                argb[idx] = ((na as u32) << 24) | ((nr as u32) << 16) | ((ng as u32) << 8) | (nb as u32);
+                argb[idx] =
+                    ((na as u32) << 24) | ((nr as u32) << 16) | ((ng as u32) << 8) | (nb as u32);
             }
         }
     }
@@ -2583,7 +2547,8 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
                 let a = ((val >> 24) & 0xFF) as i32;
                 let nr = (r + g).rem_euclid(256) as u8;
                 let nb = (b + g).rem_euclid(256) as u8;
-                argb[idx] = ((a as u32) << 24) | ((nr as u32) << 16) | ((g as u32) << 8) | (nb as u32);
+                argb[idx] =
+                    ((a as u32) << 24) | ((nr as u32) << 16) | ((g as u32) << 8) | (nb as u32);
             }
         }
     }
@@ -2595,9 +2560,21 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
 
         // Komşu piksel değerleri
         let left = if x > 0 { argb[px - 1] } else { default_argb };
-        let top = if y > 0 { argb[px - width] } else { default_argb };
-        let tl = if x > 0 && y > 0 { argb[px - width - 1] } else { default_argb };
-        let tr = if x + 1 < width && y > 0 { argb[px - width + 1] } else { default_argb };
+        let top = if y > 0 {
+            argb[px - width]
+        } else {
+            default_argb
+        };
+        let tl = if x > 0 && y > 0 {
+            argb[px - width - 1]
+        } else {
+            default_argb
+        };
+        let tr = if x + 1 < width && y > 0 {
+            argb[px - width + 1]
+        } else {
+            default_argb
+        };
 
         let sym = lit_huffman.decode(&mut br)? as usize;
 
@@ -2619,9 +2596,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
             const LEN_BASE: [u32; 19] = [
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 240,
             ];
-            const LEN_EXTRA: [u32; 19] = [
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6,
-            ];
+            const LEN_EXTRA: [u32; 19] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6];
             let mut length = LEN_BASE[li] + br.bits(LEN_EXTRA[li])?;
 
             // Mesafe ön eki
@@ -2630,13 +2605,12 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
                 return None;
             }
             const DIST_BASE: [u32; 40] = [
-                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
-                21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
-                39, 40,
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+                24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
             ];
             const DIST_EXTRA: [u32; 40] = [
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ];
             let distance = DIST_BASE[dsym] + br.bits(DIST_EXTRA[dsym])?;
 
@@ -3052,7 +3026,9 @@ fn render_svg_shapes(svg: &str, rgb: &mut [u8], width: usize, height: usize) {
             for i in 0..points.len().saturating_sub(1) {
                 let (x1, y1) = points[i];
                 let (x2, y2) = points[i + 1];
-                draw_line(rgb, width, height, x1 as i32, y1 as i32, x2 as i32, y2 as i32, stroke);
+                draw_line(
+                    rgb, width, height, x1 as i32, y1 as i32, x2 as i32, y2 as i32, stroke,
+                );
             }
         }
 
@@ -3096,41 +3072,146 @@ fn extract_svg_attr(svg: &str, attr: &str) -> Option<usize> {
 
 /// CSS renk isimleri tablosu (140 renk).
 const SVG_COLORS: &[(&str, u32); 141] = &[
-    ("aliceblue", 0xF0F8FF), ("antiquewhite", 0xFAEBD7), ("aqua", 0x00FFFF), ("aquamarine", 0x7FFFD4),
-    ("azure", 0xF0FFFF), ("beige", 0xF5F5DC), ("bisque", 0xFFE4C4), ("black", 0x000000),
-    ("blanchedalmond", 0xFFEBCD), ("blue", 0x0000FF), ("blueviolet", 0x8A2BE2), ("brown", 0xA52A2A),
-    ("burlywood", 0xDEB887), ("cadetblue", 0x5F9EA0), ("chartreuse", 0x7FFF00), ("chocolate", 0xD2691E),
-    ("coral", 0xFF7F50), ("cornflowerblue", 0x6495ED), ("cornsilk", 0xFFF8DC), ("crimson", 0xDC143C),
-    ("cyan", 0x00FFFF), ("darkblue", 0x00008B), ("darkcyan", 0x008B8B), ("darkgoldenrod", 0xB8860B),
-    ("darkgray", 0xA9A9A9), ("darkgreen", 0x006400), ("darkkhaki", 0xBDB76B), ("darkmagenta", 0x8B008B),
-    ("darkolivegreen", 0x556B2F), ("darkorange", 0xFF8C00), ("darkorchid", 0x9932CC), ("darkred", 0x8B0000),
-    ("darksalmon", 0xE9967A), ("darkseagreen", 0x8FBC8F), ("darkslateblue", 0x483D8B), ("darkslategray", 0x2F4F4F),
-    ("darkturquoise", 0x00CED1), ("darkviolet", 0x9400D3), ("deeppink", 0xFF1493), ("deepskyblue", 0x00BFFF),
-    ("dimgray", 0x696969), ("dodgerblue", 0x1E90FF), ("firebrick", 0xB22222), ("floralwhite", 0xFFFAF0),
-    ("forestgreen", 0x228B22), ("fuchsia", 0xFF00FF), ("gainsboro", 0xDCDCDC), ("ghostwhite", 0xF8F8FF),
-    ("gold", 0xFFD700), ("goldenrod", 0xDAA520), ("gray", 0x808080), ("green", 0x008000),
-    ("greenyellow", 0xADFF2F), ("honeydew", 0xF0FFF0), ("hotpink", 0xFF69B4), ("indianred", 0xCD5C5C),
-    ("indigo", 0x4B0082), ("ivory", 0xFFFFF0), ("khaki", 0xF0E68C), ("lavender", 0xE6E6FA),
-    ("lavenderblush", 0xFFF0F5), ("lawngreen", 0x7CFC00), ("lemonchiffon", 0xFFFACD), ("lightblue", 0xADD8E6),
-    ("lightcoral", 0xF08080), ("lightcyan", 0xE0FFFF), ("lightgoldenrodyellow", 0xFAFAD2), ("lightgreen", 0x90EE90),
-    ("lightgray", 0xD3D3D3), ("lightpink", 0xFFB6C1), ("lightsalmon", 0xFFA07A), ("lightseagreen", 0x20B2AA),
-    ("lightskyblue", 0x87CEFA), ("lightslategray", 0x778899), ("lightsteelblue", 0xB0C4DE), ("lightyellow", 0xFFFFE0),
-    ("lime", 0x00FF00), ("limegreen", 0x32CD32), ("linen", 0xFAF0E6), ("magenta", 0xFF00FF),
-    ("maroon", 0x800000), ("mediumaquamarine", 0x66CDAA), ("mediumblue", 0x0000CD), ("mediumorchid", 0xBA55D3),
-    ("mediumpurple", 0x9370DB), ("mediumseagreen", 0x3CB371), ("mediumslateblue", 0x7B68EE), ("mediumspringgreen", 0x00FA9A),
-    ("mediumturquoise", 0x48D1CC), ("mediumvioletred", 0xC71585), ("midnightblue", 0x191970), ("mintcream", 0xF5FFFA),
-    ("mistyrose", 0xFFE4E1), ("moccasin", 0xFFE4B5), ("navajowhite", 0xFFDEAD), ("navy", 0x000080),
-    ("oldlace", 0xFDF5E6), ("olive", 0x808000), ("olivedrab", 0x6B8E23), ("orange", 0xFFA500),
-    ("orangered", 0xFF4500), ("orchid", 0xDA70D6), ("palegoldenrod", 0xEEE8AA), ("palegreen", 0x98FB98),
-    ("paleturquoise", 0xAFEEEE), ("palevioletred", 0xDB7093), ("papayawhip", 0xFFEFD5), ("peachpuff", 0xFFDAB9),
-    ("peru", 0xCD853F), ("pink", 0xFFC0CB), ("plum", 0xDDA0DD), ("powderblue", 0xB0E0E6),
-    ("purple", 0x800080), ("rebeccapurple", 0x663399), ("red", 0xFF0000), ("rosybrown", 0xBC8F8F),
-    ("royalblue", 0x4169E1), ("saddlebrown", 0x8B4513), ("salmon", 0xFA8072), ("sandybrown", 0xF4A460),
-    ("seagreen", 0x2E8B57), ("seashell", 0xFFF5EE), ("sienna", 0xA0522D), ("silver", 0xC0C0C0),
-    ("skyblue", 0x87CEEB), ("slateblue", 0x6A5ACD), ("slategray", 0x708090), ("snow", 0xFFFAFA),
-    ("springgreen", 0x00FF7F), ("steelblue", 0x4682B4), ("tan", 0xD2B48C), ("teal", 0x008080),
-    ("thistle", 0xD8BFD8), ("tomato", 0xFF6347), ("turquoise", 0x40E0D0), ("violet", 0xEE82EE),
-    ("wheat", 0xF5DEB3), ("white", 0xFFFFFF), ("whitesmoke", 0xF5F5F5), ("yellow", 0xFFFF00),
+    ("aliceblue", 0xF0F8FF),
+    ("antiquewhite", 0xFAEBD7),
+    ("aqua", 0x00FFFF),
+    ("aquamarine", 0x7FFFD4),
+    ("azure", 0xF0FFFF),
+    ("beige", 0xF5F5DC),
+    ("bisque", 0xFFE4C4),
+    ("black", 0x000000),
+    ("blanchedalmond", 0xFFEBCD),
+    ("blue", 0x0000FF),
+    ("blueviolet", 0x8A2BE2),
+    ("brown", 0xA52A2A),
+    ("burlywood", 0xDEB887),
+    ("cadetblue", 0x5F9EA0),
+    ("chartreuse", 0x7FFF00),
+    ("chocolate", 0xD2691E),
+    ("coral", 0xFF7F50),
+    ("cornflowerblue", 0x6495ED),
+    ("cornsilk", 0xFFF8DC),
+    ("crimson", 0xDC143C),
+    ("cyan", 0x00FFFF),
+    ("darkblue", 0x00008B),
+    ("darkcyan", 0x008B8B),
+    ("darkgoldenrod", 0xB8860B),
+    ("darkgray", 0xA9A9A9),
+    ("darkgreen", 0x006400),
+    ("darkkhaki", 0xBDB76B),
+    ("darkmagenta", 0x8B008B),
+    ("darkolivegreen", 0x556B2F),
+    ("darkorange", 0xFF8C00),
+    ("darkorchid", 0x9932CC),
+    ("darkred", 0x8B0000),
+    ("darksalmon", 0xE9967A),
+    ("darkseagreen", 0x8FBC8F),
+    ("darkslateblue", 0x483D8B),
+    ("darkslategray", 0x2F4F4F),
+    ("darkturquoise", 0x00CED1),
+    ("darkviolet", 0x9400D3),
+    ("deeppink", 0xFF1493),
+    ("deepskyblue", 0x00BFFF),
+    ("dimgray", 0x696969),
+    ("dodgerblue", 0x1E90FF),
+    ("firebrick", 0xB22222),
+    ("floralwhite", 0xFFFAF0),
+    ("forestgreen", 0x228B22),
+    ("fuchsia", 0xFF00FF),
+    ("gainsboro", 0xDCDCDC),
+    ("ghostwhite", 0xF8F8FF),
+    ("gold", 0xFFD700),
+    ("goldenrod", 0xDAA520),
+    ("gray", 0x808080),
+    ("green", 0x008000),
+    ("greenyellow", 0xADFF2F),
+    ("honeydew", 0xF0FFF0),
+    ("hotpink", 0xFF69B4),
+    ("indianred", 0xCD5C5C),
+    ("indigo", 0x4B0082),
+    ("ivory", 0xFFFFF0),
+    ("khaki", 0xF0E68C),
+    ("lavender", 0xE6E6FA),
+    ("lavenderblush", 0xFFF0F5),
+    ("lawngreen", 0x7CFC00),
+    ("lemonchiffon", 0xFFFACD),
+    ("lightblue", 0xADD8E6),
+    ("lightcoral", 0xF08080),
+    ("lightcyan", 0xE0FFFF),
+    ("lightgoldenrodyellow", 0xFAFAD2),
+    ("lightgreen", 0x90EE90),
+    ("lightgray", 0xD3D3D3),
+    ("lightpink", 0xFFB6C1),
+    ("lightsalmon", 0xFFA07A),
+    ("lightseagreen", 0x20B2AA),
+    ("lightskyblue", 0x87CEFA),
+    ("lightslategray", 0x778899),
+    ("lightsteelblue", 0xB0C4DE),
+    ("lightyellow", 0xFFFFE0),
+    ("lime", 0x00FF00),
+    ("limegreen", 0x32CD32),
+    ("linen", 0xFAF0E6),
+    ("magenta", 0xFF00FF),
+    ("maroon", 0x800000),
+    ("mediumaquamarine", 0x66CDAA),
+    ("mediumblue", 0x0000CD),
+    ("mediumorchid", 0xBA55D3),
+    ("mediumpurple", 0x9370DB),
+    ("mediumseagreen", 0x3CB371),
+    ("mediumslateblue", 0x7B68EE),
+    ("mediumspringgreen", 0x00FA9A),
+    ("mediumturquoise", 0x48D1CC),
+    ("mediumvioletred", 0xC71585),
+    ("midnightblue", 0x191970),
+    ("mintcream", 0xF5FFFA),
+    ("mistyrose", 0xFFE4E1),
+    ("moccasin", 0xFFE4B5),
+    ("navajowhite", 0xFFDEAD),
+    ("navy", 0x000080),
+    ("oldlace", 0xFDF5E6),
+    ("olive", 0x808000),
+    ("olivedrab", 0x6B8E23),
+    ("orange", 0xFFA500),
+    ("orangered", 0xFF4500),
+    ("orchid", 0xDA70D6),
+    ("palegoldenrod", 0xEEE8AA),
+    ("palegreen", 0x98FB98),
+    ("paleturquoise", 0xAFEEEE),
+    ("palevioletred", 0xDB7093),
+    ("papayawhip", 0xFFEFD5),
+    ("peachpuff", 0xFFDAB9),
+    ("peru", 0xCD853F),
+    ("pink", 0xFFC0CB),
+    ("plum", 0xDDA0DD),
+    ("powderblue", 0xB0E0E6),
+    ("purple", 0x800080),
+    ("rebeccapurple", 0x663399),
+    ("red", 0xFF0000),
+    ("rosybrown", 0xBC8F8F),
+    ("royalblue", 0x4169E1),
+    ("saddlebrown", 0x8B4513),
+    ("salmon", 0xFA8072),
+    ("sandybrown", 0xF4A460),
+    ("seagreen", 0x2E8B57),
+    ("seashell", 0xFFF5EE),
+    ("sienna", 0xA0522D),
+    ("silver", 0xC0C0C0),
+    ("skyblue", 0x87CEEB),
+    ("slateblue", 0x6A5ACD),
+    ("slategray", 0x708090),
+    ("snow", 0xFFFAFA),
+    ("springgreen", 0x00FF7F),
+    ("steelblue", 0x4682B4),
+    ("tan", 0xD2B48C),
+    ("teal", 0x008080),
+    ("thistle", 0xD8BFD8),
+    ("tomato", 0xFF6347),
+    ("turquoise", 0x40E0D0),
+    ("violet", 0xEE82EE),
+    ("wheat", 0xF5DEB3),
+    ("white", 0xFFFFFF),
+    ("whitesmoke", 0xF5F5F5),
+    ("yellow", 0xFFFF00),
     ("yellowgreen", 0x9ACD32),
 ];
 
@@ -3211,7 +3292,16 @@ fn parse_svg_color(svg: &str, attr: &str) -> Option<u32> {
 }
 
 /// Bresenham çizgi algoritması.
-fn draw_line(rgb: &mut [u8], width: usize, height: usize, x0: i32, y0: i32, x1: i32, y1: i32, color: u32) {
+fn draw_line(
+    rgb: &mut [u8],
+    width: usize,
+    height: usize,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    color: u32,
+) {
     let r = ((color >> 16) & 0xFF) as u8;
     let g = ((color >> 8) & 0xFF) as u8;
     let b = (color & 0xFF) as u8;
@@ -3281,7 +3371,9 @@ fn parse_svg_points(svg: &str, attr: &str) -> Option<Vec<(f32, f32)>> {
             break;
         }
     }
-    if after_eq.as_bytes().get(offset) != Some(&b'"') && after_eq.as_bytes().get(offset) != Some(&b'\'') {
+    if after_eq.as_bytes().get(offset) != Some(&b'"')
+        && after_eq.as_bytes().get(offset) != Some(&b'\'')
+    {
         return None;
     }
     let quote = after_eq.as_bytes()[offset];

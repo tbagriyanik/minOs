@@ -216,6 +216,32 @@ impl ImageViewerApp {
         self.zoom_level = self.zoom_level.saturating_sub(1).max(1);
     }
 
+    pub fn wallpaper_rgb(&self) -> Option<alloc::sync::Arc<[u8]>> {
+        if !self.rgb.is_empty() {
+            return Some(self.rgb.clone());
+        }
+        if self.image.is_empty() || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let row_bytes = (self.width * 3 + 3) & !3;
+        let mut out = alloc::vec::Vec::with_capacity(self.width * self.height * 3);
+        for y in 0..self.height {
+            let sy = if self.top_down {
+                y
+            } else {
+                self.height - 1 - y
+            };
+            for x in 0..self.width {
+                let i = self.data_offset + sy * row_bytes + x * 3;
+                if i + 2 >= self.image.len() {
+                    return None;
+                }
+                out.extend_from_slice(&[self.image[i + 2], self.image[i + 1], self.image[i]]);
+            }
+        }
+        Some(alloc::sync::Arc::from(out.into_boxed_slice()))
+    }
+
     pub fn render_content(
         &self,
         fb: &mut Framebuffer,
@@ -233,6 +259,15 @@ impl ImageViewerApp {
             self.file_name,
             Color::TEXT_MAIN,
             (win_x + 8, win_y + 32, win_w.saturating_sub(200), 20),
+        );
+
+        fb.draw_rect(win_x + 8, win_y + 56, 142, 20, Color::ACCENT_BLUE);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 14,
+            win_y + 60,
+            crate::gui::ui_text("Masaüstüne döşe", "Tile on desktop"),
+            MinGuiCompositor::text_on(Color::ACCENT_BLUE),
         );
 
         // Yakınlaştırma ve Düğmeler

@@ -3,6 +3,12 @@
 Bu dosya minOs sürümlerinin ayrıntılı değişiklik listelerini içerir.
 README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradadır.
 
+## Güncel
+
+- WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
+- Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
+- Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.
+
 - [v2.2.0](#yenilikler-v210) — güncel sürüm
 - [v1.6.0 ve öncesi](releases.md)
 

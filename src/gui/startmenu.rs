@@ -95,7 +95,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 15] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12];
+        const APP_IDX: [usize; 16] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12, 15];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -131,12 +131,12 @@ impl MinGuiCompositor {
         None
     }
 
-    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 15]) -> usize {
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 16]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() {
             return 0;
         }
-        const NAMES: [[&str; 2]; 15] = [
+        const NAMES: [[&str; 2]; 16] = [
             ["Dosya Yöneticisi", "File Manager"],
             ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"],
@@ -152,9 +152,10 @@ impl MinGuiCompositor {
             ["3D Gösterici", "3D Viewer"],
             ["Paket Yöneticisi", "Package Manager"],
             ["Kontrol Paneli", "Control Panel"],
+            ["Oyunlar", "Games"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
-        let mut scored: [(usize, u8); 15] = [(0, 0); 15];
+        let mut scored: [(usize, u8); 16] = [(0, 0); 16];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
@@ -397,7 +398,7 @@ impl MinGuiCompositor {
     }
 
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
-        let mut results = [0; 15];
+        let mut results = [0; 16];
         let count = self.start_search_matches(english, &mut results);
         if down {
             if count > 0 {
@@ -409,7 +410,7 @@ impl MinGuiCompositor {
     }
 
     pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
-        let mut results = [0; 15];
+        let mut results = [0; 16];
         let count = self.start_search_matches(english, &mut results);
         (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
@@ -663,7 +664,7 @@ impl MinGuiCompositor {
         if self.start_search_len == 0 {
             self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
         } else {
-            let mut results = [0; 15];
+            let mut results = [0; 16];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) =
                 Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
@@ -704,6 +705,7 @@ impl MinGuiCompositor {
                 "3D Gösterici",
                 "Paket Yöneticisi",
                 "Kontrol Paneli",
+                "Oyunlar",
             ];
             let en_names = [
                 "File Manager",
@@ -721,6 +723,7 @@ impl MinGuiCompositor {
                 "3D Viewer",
                 "Package Manager",
                 "Control Panel",
+                "Games",
             ];
             if count == 0 {
                 Self::draw_string(
@@ -951,7 +954,7 @@ impl MinGuiCompositor {
             return;
         }
 
-        let menu_items: [(&str, u32, usize); 15] = if english {
+        let menu_items: [(&str, u32, usize); 16] = if english {
             [
                 ("File Manager", Color::ACCENT_YELLOW, 0),
                 ("Settings", Color::ACCENT_BLUE, 1usize),
@@ -968,6 +971,7 @@ impl MinGuiCompositor {
                 ("Music Player", Color::ACCENT_YELLOW, 5),
                 ("Video Player", Color::ACCENT_RED, 6),
                 ("3D Viewer", Color::ACCENT_BLUE, 12),
+                ("Games", Color::ACCENT_YELLOW, 15),
             ]
         } else {
             [
@@ -986,6 +990,7 @@ impl MinGuiCompositor {
                 ("Müzik Çalar", Color::ACCENT_YELLOW, 5),
                 ("Video Oynatıcı", Color::ACCENT_RED, 6),
                 ("3D Gösterici", Color::ACCENT_BLUE, 12),
+                ("Oyunlar", Color::ACCENT_YELLOW, 15),
             ]
         };
 

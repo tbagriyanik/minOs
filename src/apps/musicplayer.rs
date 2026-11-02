@@ -1,11 +1,15 @@
 use crate::drivers::video::Framebuffer;
 use crate::gui::{Color, MinGuiCompositor};
+use alloc::{string::String, vec::Vec};
 
 pub struct MusicPlayerApp {
     pub is_playing: bool,
     pub volume: usize,
     pub current_track: usize,
     pub progress: usize,
+    pub selected_file: Option<String>,
+    pub wav_data: Vec<i16>,
+    pub wav_position: usize,
 }
 
 impl MusicPlayerApp {
@@ -15,7 +19,54 @@ impl MusicPlayerApp {
             volume: 85,
             current_track: 0,
             progress: 0,
+            selected_file: None,
+            wav_data: Vec::new(),
+            wav_position: 0,
         }
+    }
+
+    /// Loads the clicked PCM WAV file as the active track.
+    pub fn load_wav(&mut self, path: &str, data: &[u8]) -> bool {
+        if data.len() < 44 || &data[0..4] != b"RIFF" || &data[8..12] != b"WAVE" {
+            return false;
+        }
+        let mut pos = 12usize;
+        let mut channels = 0u16;
+        let mut bits = 0u16;
+        let mut pcm = None;
+        while pos + 8 <= data.len() {
+            let size =
+                u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                    as usize;
+            let end = pos.saturating_add(8).saturating_add(size).min(data.len());
+            if &data[pos..pos + 4] == b"fmt " && end >= pos + 24 {
+                channels = u16::from_le_bytes([data[pos + 10], data[pos + 11]]);
+                bits = u16::from_le_bytes([data[pos + 22], data[pos + 23]]);
+            } else if &data[pos..pos + 4] == b"data" {
+                pcm = Some(&data[pos + 8..end]);
+            }
+            pos = end;
+        }
+        if channels == 0 || bits != 16 {
+            return false;
+        }
+        let bytes = match pcm {
+            Some(v) => v,
+            None => return false,
+        };
+        self.wav_data.clear();
+        for chunk in bytes.chunks_exact(2 * channels as usize) {
+            let left = i16::from_le_bytes([chunk[0], chunk[1]]);
+            self.wav_data.push(left);
+        }
+        if self.wav_data.is_empty() {
+            return false;
+        }
+        self.selected_file = Some(String::from(path));
+        self.wav_position = 0;
+        self.progress = 0;
+        self.is_playing = true;
+        true
     }
 
     pub fn render_content(
@@ -36,7 +87,11 @@ impl MusicPlayerApp {
         fb.draw_rect(win_x + 6, win_y + 28, win_w - 12, 42, Color::TITLE_BAR);
         let mut track_title = crate::gui::TextBuf::new();
         track_title.push_str(crate::gui::ui_text("Şimdi çalıyor: ", "Now playing: "));
-        track_title.push_str(tracks[self.current_track.min(4)]);
+        if let Some(path) = &self.selected_file {
+            track_title.push_str(path.rsplit('/').next().unwrap_or(path.as_str()));
+        } else {
+            track_title.push_str(tracks[self.current_track.min(4)]);
+        }
         MinGuiCompositor::draw_string(
             fb,
             win_x + 14,

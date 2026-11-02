@@ -115,6 +115,7 @@ $mediaFiles = @(
     "public\media\sample.jpg", "public\media\sunset.jpg",
     "public\media\real.jpg", "public\media\real.png",
     "public\media\real.bmp", 
+    "public\desktop1.png", "public\desktop2.png", "public\desktop3.png",
     "public\media\sample.wav", "public\media\scale_c_major.wav"
 )
 $mediaDestDir = Join-Path $root "root\Media"

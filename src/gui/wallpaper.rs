@@ -7,6 +7,7 @@
 
 use crate::drivers::video::Framebuffer;
 use crate::gui::Color;
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 /// Duvar kağıdı kimliği.
@@ -16,6 +17,18 @@ pub const COUNT: usize = 10;
 
 static CURRENT: AtomicU8 = AtomicU8::new(0);
 static SOLID: AtomicU32 = AtomicU32::new(0x1E3A5F);
+static mut CUSTOM_RGB: Option<Arc<[u8]>> = None;
+static mut CUSTOM_W: usize = 0;
+static mut CUSTOM_H: usize = 0;
+
+pub fn set_custom_image(rgb: Arc<[u8]>, width: usize, height: usize) {
+    unsafe {
+        CUSTOM_RGB = Some(rgb);
+        CUSTOM_W = width;
+        CUSTOM_H = height;
+    }
+    invalidate_cache();
+}
 
 // Duvar kağıdı önbelleği (prosedürel resimlerin ve gradyanların 60 FPS'de
 // her karede yeniden matematiksel olarak hesaplanıp çizilmesini önler; tek seferde
@@ -73,6 +86,11 @@ pub fn set_solid(color: u32) {
 }
 
 pub fn apply(id: u8, color: u32) {
+    unsafe {
+        CUSTOM_RGB = None;
+        CUSTOM_W = 0;
+        CUSTOM_H = 0;
+    }
     set(id);
     if id >= 1 && id <= 6 {
         set_solid(SOLID_COLORS[(id as usize - 1).min(5)]);
@@ -91,9 +109,9 @@ pub fn name_tr(id: u8) -> &'static str {
         4 => "Mor",
         5 => "Kahve",
         6 => "Koyu Gri",
-        7 => "Yıldızlı Gece",
-        8 => "Petek Dokusu",
-        9 => "Karbon Doku",
+        7 => "Masaüstü 1",
+        8 => "Masaüstü 2",
+        9 => "Masaüstü 3",
         _ => "Tema",
     }
 }
@@ -107,9 +125,9 @@ pub fn name_en(id: u8) -> &'static str {
         4 => "Purple",
         5 => "Brown",
         6 => "Dark Gray",
-        7 => "Starry Night",
-        8 => "Hexagon Matrix",
-        9 => "Carbon Fiber",
+        7 => "Desktop 1",
+        8 => "Desktop 2",
+        9 => "Desktop 3",
         _ => "Theme",
     }
 }
@@ -139,6 +157,7 @@ fn hash(mut x: u32) -> u32 {
     x
 }
 
+#[allow(static_mut_refs)]
 pub fn draw(fb: &mut Framebuffer) {
     let (w, h) = (fb.width, fb.height);
     let cur_id = get();
@@ -170,10 +189,29 @@ pub fn draw(fb: &mut Framebuffer) {
                 let c = SOLID_COLORS[(cur_id as usize - 1).min(5)];
                 fb.draw_vgradient(0, 0, w, h, c, shade(c, -14));
             }
-            7 => draw_starry(fb, w, h),
-            8 => draw_hex_pattern(fb, w, h),
-            9 => draw_carbon_fiber(fb, w, h),
+            7 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop1.png")),
+            8 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop2.png")),
+            9 => draw_png_tile(fb, w, h, include_bytes!("../../public/desktop3.png")),
             _ => draw_geometric(fb, w, h),
+        }
+        unsafe {
+            let custom_rgb = CUSTOM_RGB.clone();
+            if let (Some(rgb), true) = (custom_rgb, CUSTOM_W > 0 && CUSTOM_H > 0) {
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = ((y % CUSTOM_H) * CUSTOM_W + (x % CUSTOM_W)) * 3;
+                        if i + 2 < rgb.len() {
+                            fb.put_pixel(
+                                x,
+                                y,
+                                ((rgb[i] as u32) << 16)
+                                    | ((rgb[i + 1] as u32) << 8)
+                                    | rgb[i + 2] as u32,
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Çizilen pikselleri önbelleğe al
@@ -201,6 +239,29 @@ pub fn draw(fb: &mut Framebuffer) {
         let region = fb.base_clip();
         unsafe {
             fb.copy_region_from_raw(core::ptr::addr_of!(WALLPAPER_CACHE) as *const u32, region);
+        }
+    }
+}
+
+fn draw_png_tile(fb: &mut Framebuffer, w: usize, h: usize, data: &[u8]) {
+    if let Some(decoded) = crate::apps::imgdecode::decode_png(data) {
+        let (iw, ih) = (decoded.width, decoded.height);
+        if iw == 0 || ih == 0 {
+            return;
+        }
+        for y in 0..h {
+            for x in 0..w {
+                let i = ((y % ih) * iw + (x % iw)) * 3;
+                if i + 2 < decoded.rgb.len() {
+                    fb.put_pixel(
+                        x,
+                        y,
+                        ((decoded.rgb[i] as u32) << 16)
+                            | ((decoded.rgb[i + 1] as u32) << 8)
+                            | decoded.rgb[i + 2] as u32,
+                    );
+                }
+            }
         }
     }
 }

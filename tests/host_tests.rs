@@ -26,6 +26,9 @@ pub mod browser_types;
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 
+#[path = "../src/apps/game_core.rs"]
+pub mod game_core;
+
 #[path = "../src/gui/textbuf.rs"]
 pub mod textbuf;
 

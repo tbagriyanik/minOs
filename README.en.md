@@ -23,6 +23,10 @@
 
 ## What's New (v2.2.0)
 
+- **🔊 Direct WAV Playback:** Double-clicking a `.wav` file in File Manager plays that selected file in Music Player.
+- **🖼️ Tile Image on Desktop:** Image Viewer can apply PNG/JPEG/GIF/BMP images as tiled desktop wallpapers.
+- **🌄 New Desktop Images:** Settings now includes `desktop1.png`, `desktop2.png`, and `desktop3.png` wallpaper choices.
+
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.
   - **Finished key derivation (§4.4.4):** `finished_key` is derived directly from `server/client_hs_traffic_secret`; the extra HKDF steps in between caused a `verify_data` mismatch and stalled the handshake at the `CertificateReceived` stage.
@@ -81,6 +85,7 @@
 - **Default Hardware Driver Profile:** The full driver profile is used in normal Live and Installed boots; the Safe Mode option in the Limine menu is preserved for boots without drivers.
 - **More Readable Boot Log:** The text console flushes every completed line to the screen and waits 45 ms before moving to the next line once the time base is ready. Boot diagnostic messages are therefore easier to follow; early messages written before the time base is ready are not delayed.
 - **Browser Favorites (Bookmarks Bar):** An interactive bookmarks bar was added to the web browser; a pure HTTP test site and quick-access buttons for `minos://cats`, `minos://net`, `minos://history`, `minos://demo` and `minos://demo-img` / `minos://demo-video` plus the `minos://bookmarks` page were integrated.
+- **🎮 FPS Performance Test Game:** A new `FPS Game` application (app ID 15) was added. It features a raycasting-based 3D engine, mouse look, WASD movement, distance-shaded walls, enemy targets, radar, and PC Speaker/HDA sound effects. Launch from Start Menu → Media → FPS Game or Run Dialog → `fps` / `oyun`.
 
 ### 🛡️ Boot Recovery Console (`recovery#`)
 
@@ -195,7 +200,7 @@ Detailed guides and technical reference resources:
   - ℹ️ **[About & Architecture](https://github.com/tbagriyanik/minOs/wiki/Hakkinda)**: Design philosophy, `no_std` model, PMM and IDT structure.
   - 🚀 **[Installation and Running](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` options, creating a Live USB and installing to disk.
   - 💻 **[Supported Hardware List](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (tap-to-click), UVC camera, e1000/RTL8139/NE2000 Ethernet and Wi-Fi.
-  - 📦 **[15 Built-in Applications](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Browser, Notepad, File Manager, Control Panel, Package Manager etc.
+  - 📦 **[16 Built-in Applications](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Browser, Notepad, File Manager, Control Panel, Package Manager etc.
   - 🌐 **[Network and Internet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP stack, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and HTTP/2 infrastructure.
   - 💾 **[File Systems](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 and persistence (`VFS.DAT`).
   - ⌨️ **[User Guide and Shortcuts](https://github.com/tbagriyanik/minOs/wiki/Kullanici-Rehberi)**: Desktop shortcuts and MinShell command reference.

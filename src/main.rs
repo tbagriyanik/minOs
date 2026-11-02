@@ -390,6 +390,12 @@ pub extern "C" fn _start() -> ! {
 
     let mut imageviewer_app = apps::imageviewer::ImageViewerApp::new();
 
+    {
+        use alloc::string::String;
+        // Oyun uygulamasının sabit boyutlu durumu derleme sırasında çözülür.
+        let _ = core::mem::size_of::<apps::game::GameApp>();
+        let _ = String::new();
+    }
     let mut musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
 
     let mut videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
@@ -420,7 +426,9 @@ pub extern "C" fn _start() -> ! {
     pkgmgr_app.refresh_installed(&fs_mgr.vfs);
     compositor.sync_installed_apps(&fs_mgr.vfs);
 
-    // 15 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
+    let mut fps_game_app = apps::game::GameApp::new();
+
+    // 16 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
 
     // Acilista TuM pencereler kapalidir; kullanici temiz bir masaustuyle baslar
 
@@ -642,6 +650,24 @@ pub extern "C" fn _start() -> ! {
         false,
     ));
 
+    // 15: Oyunlar (dama + bulmaca + performans testi)
+
+    let fps_w = 700.min(width.saturating_sub(20)).max(300);
+
+    let fps_h = 540
+        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .max(200);
+
+    compositor.add_window(gui::Window::new(
+        "Oyunlar",
+        "Oyun",
+        width.saturating_sub(fps_w) / 2,
+        height.saturating_sub(fps_h + gui::taskbar_h()) / 2,
+        fps_w,
+        fps_h,
+        false,
+    ));
+
     // Acilista hicbir pencere odakli degildir (temiz masaustu).
 
     compositor.active_window_idx = None;
@@ -758,7 +784,7 @@ pub extern "C" fn _start() -> ! {
 
     audio_dev.play_chime();
 
-    // Etkilesim durumu
+    // Etkileşim durumu
 
     let mut last_mouse_x = mouse.x;
 
@@ -797,6 +823,8 @@ pub extern "C" fn _start() -> ! {
     let mut loop_counter: u64 = 0;
 
     let mut last_clock_update_ms = monotonic_ms();
+
+    let mut game_perf_us: u64 = 0;
 
     let mut last_music_beat: usize = 0;
 
@@ -901,6 +929,8 @@ pub extern "C" fn _start() -> ! {
          v3d: &apps::viewer3d::Viewer3DApp,
 
          pkg: &apps::pkgmgr::PackageManagerApp,
+
+         fps: &apps::game::GameApp,
 
          now: &drivers::rtc::DateTime,
 
@@ -1210,6 +1240,8 @@ pub extern "C" fn _start() -> ! {
                             used_ram_bytes,
                             kbd.layout,
                         ),
+
+                        15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
 
                         _ => {}
                     }
@@ -1671,6 +1703,7 @@ pub extern "C" fn _start() -> ! {
         &installer_app,
         &viewer3d_app,
         &pkgmgr_app,
+        &fps_game_app,
         &now,
         mouse,
         keyboard,
@@ -1696,6 +1729,13 @@ pub extern "C" fn _start() -> ! {
     let mut drag_dirty_rect: Option<(usize, usize, usize, usize)> = None;
 
     let mut _app_dirty_rect: Option<(usize, usize, usize, usize)> = None;
+
+    // Her tur sıfırlanan "ekran zorla çizilsin" işareti; oyun ve ses
+    // efektleri bu bayrağı kullanır (döngü başında sıfırlanır).
+    let mut force_render;
+
+    // Oyun motorunun son adım zamanı (TSC) — kare süresi ölçümü için.
+    let mut game_last_cycles: u64 = 0;
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
@@ -1745,7 +1785,7 @@ pub extern "C" fn _start() -> ! {
 
         // RTC saatini islem dongusu sayisina gore degil, gecen gercek zamana gore yenile.
 
-        let mut force_render = false;
+        force_render = false;
 
         // USB Hotplug (tak/çıkar) bildirimleri ve donanım envanteri canlı güncellemesi
         while let Some(ev) = drivers::usb_hid::pop_hotplug_event() {
@@ -2742,6 +2782,7 @@ pub extern "C" fn _start() -> ! {
                                                 &mut installer_app,
                                                 &mut viewer3d_app,
                                                 &mut pkgmgr_app,
+                                                &mut fps_game_app,
                                             );
                                         }
                                     }
@@ -2832,7 +2873,7 @@ pub extern "C" fn _start() -> ! {
                     gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
 
                 if compositor.start_search_len > 0 {
-                    let mut matches = [0; 15];
+                    let mut matches = [0; 16];
 
                     let count = compositor
                         .start_search_matches(settings_app.language.is_english(), &mut matches);
@@ -2846,7 +2887,7 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 if compositor.start_search_len > 0 && gui::in_rect(mx, my, sub_rect) {
-                    let mut matches = [0; 15];
+                    let mut matches = [0; 16];
 
                     let count = compositor
                         .start_search_matches(settings_app.language.is_english(), &mut matches);
@@ -3779,6 +3820,19 @@ pub extern "C" fn _start() -> ! {
 
                                                         open_app(&mut compositor, 4);
                                                     } else if tag == "SND" {
+                                                        if let Some(data) = with_busy_progress(
+                                                            &mut fb,
+                                                            mx,
+                                                            my,
+                                                            gui::ui_text(
+                                                                "Ses dosyası açılıyor...",
+                                                                "Opening audio file...",
+                                                            ),
+                                                            || fs_mgr.vfs.read_file(&path),
+                                                        ) {
+                                                            // Çalma listesi yerine tam olarak çift tıklanan dosyayı etkinleştir.
+                                                            musicplayer_app.load_wav(&path, &data);
+                                                        }
                                                         open_app(&mut compositor, 5);
                                                     } else if tag == "VID" {
                                                         open_app(&mut compositor, 6);
@@ -4805,7 +4859,20 @@ pub extern "C" fn _start() -> ! {
                             4 => {
                                 // Resim: yakinlastir / uzaklastir
 
-                                if my >= wy + 32 && my <= wy + 52 {
+                                if my >= wy + 56 && my <= wy + 76 && mx >= wx + 8 && mx <= wx + 150
+                                {
+                                    if let Some(rgb) = imageviewer_app.wallpaper_rgb() {
+                                        crate::gui::wallpaper::set_custom_image(
+                                            rgb,
+                                            imageviewer_app.width,
+                                            imageviewer_app.height,
+                                        );
+                                        imageviewer_app.status = gui::ui_text(
+                                            "Masaüstü arka planı ayarlandı",
+                                            "Desktop wallpaper set",
+                                        );
+                                    }
+                                } else if my >= wy + 32 && my <= wy + 52 {
                                     if mx >= wx + ww - 180 && mx <= wx + ww - 130 {
                                         imageviewer_app.zoom_in();
                                     } else if mx >= wx + ww - 124 && mx <= wx + ww - 74 {
@@ -4996,6 +5063,7 @@ pub extern "C" fn _start() -> ! {
                                                         &mut installer_app,
                                                         &mut viewer3d_app,
                                                         &mut pkgmgr_app,
+                                                        &mut fps_game_app,
                                                     );
                                                 }
                                             }
@@ -5593,6 +5661,21 @@ pub extern "C" fn _start() -> ! {
                                 }
                             }
 
+                            15 => {
+                                // Oyunlar: dama, bulmaca ve performans testi bölümleri.
+                                if let Some((_, w)) = focused_window_for_app(&compositor, 15) {
+                                    let changed = fps_game_app.click(
+                                        mx.saturating_sub(w.x),
+                                        my.saturating_sub(w.y),
+                                        w.width,
+                                        w.height,
+                                    );
+                                    if changed {
+                                        force_render = true;
+                                    }
+                                }
+                            }
+
                             _ => {}
                         }
 
@@ -5643,6 +5726,7 @@ pub extern "C" fn _start() -> ! {
                             &mut installer_app,
                             &mut viewer3d_app,
                             &mut pkgmgr_app,
+                            &mut fps_game_app,
                         );
                     } else {
                         // Masaustundeyken Alt+F4 guc menusunu acar.
@@ -5831,6 +5915,15 @@ pub extern "C" fn _start() -> ! {
                             settings_app.select_tab_prev();
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x -= 0.1;
+                        } else if app_is_focused(&compositor, 15) {
+                            // Oyunlar: sol/sağ ok bölüm (sekme) değiştirir.
+                            let tab = if fps_game_app.tab == 0 {
+                                apps::game::TAB_COUNT - 1
+                            } else {
+                                fps_game_app.tab - 1
+                            };
+                            fps_game_app.select_tab(tab);
+                            force_render = true;
                         }
                     }
                 }
@@ -5910,6 +6003,10 @@ pub extern "C" fn _start() -> ! {
                             settings_app.select_tab_next();
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x += 0.1;
+                        } else if app_is_focused(&compositor, 15) {
+                            let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
+                            fps_game_app.select_tab(tab);
+                            force_render = true;
                         }
                     }
                 }
@@ -5975,6 +6072,14 @@ pub extern "C" fn _start() -> ! {
                         settings_app.select_tab_prev();
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y -= 0.1;
+                    } else if app_is_focused(&compositor, 15) {
+                        let tab = if fps_game_app.tab == 0 {
+                            apps::game::TAB_COUNT - 1
+                        } else {
+                            fps_game_app.tab - 1
+                        };
+                        fps_game_app.select_tab(tab);
+                        force_render = true;
                     }
                 }
 
@@ -6038,6 +6143,10 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y += 0.1;
+                    } else if app_is_focused(&compositor, 15) {
+                        let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
+                        fps_game_app.select_tab(tab);
+                        force_render = true;
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
 
@@ -6276,6 +6385,7 @@ pub extern "C" fn _start() -> ! {
                                         &mut installer_app,
                                         &mut viewer3d_app,
                                         &mut pkgmgr_app,
+                                        &mut fps_game_app,
                                     );
                                 }
                             }
@@ -6866,6 +6976,7 @@ pub extern "C" fn _start() -> ! {
                                 &mut installer_app,
                                 &mut viewer3d_app,
                                 &mut pkgmgr_app,
+                                &mut fps_game_app,
                             );
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -7775,6 +7886,7 @@ pub extern "C" fn _start() -> ! {
                                 &mut installer_app,
                                 &mut viewer3d_app,
                                 &mut pkgmgr_app,
+                                &mut fps_game_app,
                             ),
                             1 => {
                                 compositor.focus_window(idx);
@@ -8013,6 +8125,8 @@ pub extern "C" fn _start() -> ! {
                         "kur" | "install" => Some(11),
 
                         "3d" => Some(12),
+                        "fps" => Some(15),
+                        "oyun" => Some(15),
 
                         "panel" | "kontrol" | "control" => Some(14),
 
@@ -8453,6 +8567,14 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                let fps_focused = app_is_focused(&compositor, 15);
+
+                if fps_focused {
+                    if fps_game_app.handle_key(ch) {
+                        force_render = true;
+                    }
+                }
+
                 if !run_dialog_open
                     && !compositor.is_start_menu_open
                     && !compositor.is_context_menu_open
@@ -8544,6 +8666,27 @@ pub extern "C" fn _start() -> ! {
             }
         }
 
+        // Oyun motoru: dama yapay zekâsı, bulmaca gösterisi ve performans testi
+        // yalnızca pencere açık ve zamanlayıcı işareti geldiğinde ilerler.
+        let game_open = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 15 && w.is_open && !w.is_minimized);
+        if game_open && timer_tick_fired {
+            let game_start_cycles = read_cpu_cycles();
+            // Kare süresi: bir önceki oyun adımından bu yana geçen süre (µs).
+            if fps_game_app.tab == 2 {
+                let delta = game_start_cycles.wrapping_sub(game_last_cycles);
+                let delta_us = delta / unsafe { TSC_CYCLES_PER_US as u64 }; // ~µs
+                fps_game_app.perf_sample(delta_us.min(1_000_000));
+            }
+            game_last_cycles = read_cpu_cycles();
+            if fps_game_app.tick() {
+                force_render = true;
+            }
+        }
+
         // Ag kartindan gelen paketleri isle (ARP cevaplari, ICMP vs.).
 
         drivers::e1000::poll();
@@ -8564,6 +8707,52 @@ pub extern "C" fn _start() -> ! {
         audio_dev.is_muted = settings_app.is_muted;
 
         musicplayer_app.volume = settings_app.volume as usize;
+
+        // Oyun ses efektleri: uygulama yalnızca istek bırakır, ton burada çalınır.
+        // HDA DMA aktifse kısa bir PCM darbesi gönderilir; aksi halde PC Speaker yedeği.
+
+        // no_std için hızlı sinüs (Taylor serisi).
+        fn fast_sin(mut x: f32) -> f32 {
+            while x > core::f32::consts::PI {
+                x -= core::f32::consts::TAU;
+            }
+            while x < -core::f32::consts::PI {
+                x += core::f32::consts::TAU;
+            }
+            let x2 = x * x;
+            let x3 = x * x2;
+            let x5 = x3 * x2;
+            let x7 = x5 * x2;
+            x - (x3 / 6.0) + (x5 / 120.0) - (x7 / 5040.0)
+        }
+
+        game_perf_us = game_perf_us.wrapping_add(1);
+        if let Some((freq, duration_ms)) =
+            apps::game::GameApp::sound_tone(fps_game_app.take_sound())
+        {
+            if !audio_dev.is_muted && audio_dev.volume_left > 0 {
+                if audio_dev.is_hda_active() {
+                    let frames = (48u32 * duration_ms.max(1)).min(4_800) as usize;
+                    let mut pcm = [0i16; 512];
+                    let chunks = frames.div_ceil(256);
+                    for chunk in 0..chunks {
+                        let count = (frames - chunk * 256).min(256);
+                        for k in 0..count {
+                            let angle = core::f32::consts::TAU
+                                * freq as f32
+                                * ((chunk * 256 + k) as f32 / 48_000.0);
+                            let sample = fast_sin(angle) as i16;
+                            pcm[k * 2] = sample;
+                            pcm[k * 2 + 1] = sample;
+                        }
+                        drivers::hda::push_pcm(&pcm[..count * 2]);
+                    }
+                } else {
+                    audio_dev.set_pc_speaker_tone(freq);
+                }
+                force_render = true;
+            }
+        }
 
         // Video kare sayaci gercek zamana bagli (~30 FPS) ve yalnizca oynatirken ilerler.
         if videoplayer_app.is_playing {
@@ -8589,6 +8778,23 @@ pub extern "C" fn _start() -> ! {
                 // HDA hazir ve DMA ilerliyorsa gercek PCM ornegi uret ve gonder.
 
                 if audio_dev.is_hda_active() {
+                    if !musicplayer_app.wav_data.is_empty() {
+                        let mut pcm = [0i16; 512];
+                        for frame in 0..256 {
+                            let sample = musicplayer_app.wav_data
+                                [musicplayer_app.wav_position % musicplayer_app.wav_data.len()];
+                            pcm[frame * 2] = sample;
+                            pcm[frame * 2 + 1] = sample;
+                            musicplayer_app.wav_position += 1;
+                        }
+                        drivers::hda::push_pcm(&pcm);
+                        if musicplayer_app.wav_position >= musicplayer_app.wav_data.len() {
+                            musicplayer_app.wav_position = 0;
+                            musicplayer_app.is_playing = false;
+                        }
+                        last_music_beat = anim_tick;
+                        continue;
+                    }
                     let sample_count = 1920; // 40 ms
 
                     let mut pcm: [i16; 512] = [0; 512]; // 256 L + 256 R cifti
@@ -8810,6 +9016,7 @@ pub extern "C" fn _start() -> ! {
                 &installer_app,
                 &viewer3d_app,
                 &pkgmgr_app,
+                &fps_game_app,
                 &now,
                 mouse,
                 keyboard,

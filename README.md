@@ -23,6 +23,10 @@
 
 ## Yenilikler (v2.2.0)
 
+- **🔊 WAV Dosyasını Doğrudan Oynatma:** Dosya Yöneticisi'nde `.wav` dosyasına çift tıklamak, seçilen dosyayı Müzik Çalar'da oynatır.
+- **🖼️ Resmi Masaüstüne Döşe:** Resim Gösterici, PNG/JPEG/GIF/BMP görüntüleri masaüstüne döşeli arka plan yapabilir.
+- **🌄 Yeni Masaüstü Görselleri:** Ayarlar'a `desktop1.png`, `desktop2.png` ve `desktop3.png` seçenekleri eklendi.
+
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.
   - **Finished anahtar türetimi (§4.4.4):** `server/client_hs_traffic_secret` üzerinden doğrudan `finished_key` türetiliyor; araya eklenen fazladan HKDF adımları `verify_data` uyuşmazlığına ve el sıkışmanın `CertificateReceived` aşamasında takılmasına neden oluyordu.
@@ -81,6 +85,7 @@
 - **Varsayılan Donanım Sürücü Profili:** Normal Live ve Installed açılışlarında tam sürücü profili kullanılır; sürücüsüz açılış için Limine menüsündeki Safe Mode seçeneği korunur.
 - **Daha Okunabilir Boot Günlüğü:** Metin konsolu her tamamlanan satırı ekrana aktarır ve zaman tabanı hazır olduktan sonra sonraki satıra geçmeden önce 45 ms bekler. Böylece açılış tanılama mesajları daha rahat izlenir; zaman tabanı hazır olmadan yazılan erken mesajlar geciktirilmez.
 - **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history`, `minos://demo` ve `minos://demo-img` / `minos://demo-video` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
+- **🎮 FPS Performans Testi Oyunu:** Yeni `FPS Oyunu` uygulaması (app ID 15) eklendi. Raycasting tabanlı 3D motoru, fare ile bakış, WASD hareket, uzaklasma gürültüsüyle gölgelendirme, düşman hedefleri, radar ve PC Speaker/HDA ses efektleri içerir. Başlat Menüsü → Medya → FPS Oyunu veya Komut İstemi → `fps` / `oyun` ile açılır.
 
 ### 🛡️ Açılış Kurtarma Konsolu (`recovery#`)
 
@@ -195,7 +200,7 @@ Ayrıntılı rehberler ve teknik başvuru kaynakları:
   - ℹ️ **[Hakkında & Mimari](https://github.com/tbagriyanik/minOs/wiki/Hakkinda)**: Tasarım felsefesi, `no_std` modeli, PMM ve IDT yapısı.
   - 🚀 **[Kurulum ve Çalıştırma](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` seçenekleri, Live USB oluşturma ve diske kurulum.
   - 💻 **[Desteklenen Donanım Listesi](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (Tap-to-click), UVC Kamera, e1000/RTL8139/NE2000 Ethernet ve Wi-Fi.
-  - 📦 **[Yerleşik 15 Uygulama](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Kontrol Paneli, Paket Yöneticisi vb.
+  - 📦 **[Yerleşik 16 Uygulama](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Kontrol Paneli, Paket Yöneticisi vb.
   - 🌐 **[Ağ ve İnternet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP yığını, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) ve HTTP/2 altyapısı.
   - 💾 **[Dosya Sistemleri](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 ve kalıcılık (`VFS.DAT`).
   - ⌨️ **[Kullanıcı Rehberi ve Kısayollar](https://github.com/tbagriyanik/minOs/wiki/Kullanici-Rehberi)**: Masaüstü kısayolları ve MinShell komut referansı.

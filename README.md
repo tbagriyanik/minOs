@@ -11,7 +11,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-115%2C749%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-121%2C919%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -26,6 +26,7 @@
 - **🔊 WAV Dosyasını Doğrudan Oynatma:** Dosya Yöneticisi'nde `.wav` dosyasına çift tıklamak, seçilen dosyayı Müzik Çalar'da oynatır.
 - **🖼️ Resmi Masaüstüne Döşe:** Resim Gösterici, PNG/JPEG/GIF/BMP görüntüleri masaüstüne döşeli arka plan yapabilir.
 - **🌄 Yeni Masaüstü Görselleri:** Ayarlar'a `desktop1.png`, `desktop2.png` ve `desktop3.png` seçenekleri eklendi.
+- **📁 ISO Örnek Medyaları:** Örnek PNG/JPEG/BMP ve WAV dosyaları ISO içinde `/root/Media` altında paketlenir; CD'den çalışırken `/media/cdrom/root/Media` yolundan erişilir.
 
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.

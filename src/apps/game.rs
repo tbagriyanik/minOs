@@ -190,7 +190,7 @@ impl GameApp {
         (x + (w - side) / 2, y + (h - side) / 2, side, side)
     }
 
-    /// Kare indeksinden piksel dikdörtgenine (tahta ve bulmaca için ortak).
+    /// Kare indeksinden piksel dikdörtgenine (bulmaca için 4x4 ızgara).
     pub fn cell_rect(
         rect: (usize, usize, usize, usize),
         index: usize,
@@ -198,7 +198,8 @@ impl GameApp {
         let (x, y, w, h) = rect;
         let cw = w / PUZZLE_SIDE;
         let chh = h / PUZZLE_SIDE;
-        let (row, col) = game_core::square(index);
+        let row = index / PUZZLE_SIDE;
+        let col = index % PUZZLE_SIDE;
         (x + col * cw, y + row * chh, cw, chh)
     }
 
@@ -637,6 +638,24 @@ impl GameApp {
                 sp(STATUS_H),
             ),
         );
+        // Dama oynanış kılavuzu.
+        let hint = crate::gui::ui_text(
+            "Tıkla taşı seç, hedefe tıkla oynayın",
+            "Click to select, click target to move",
+        );
+        MinGuiCompositor::draw_string_clipped(
+            fb,
+            x + sp(10),
+            sy + sp(7) + sp(14),
+            hint,
+            Color::TEXT_MUTED,
+            (
+                x + sp(4),
+                sy,
+                w.saturating_sub(sp(8) + sp(150)),
+                sp(STATUS_H),
+            ),
+        );
         let mut right = TextBuf::new();
         right.push_str("A ");
         right.push_usize(light_n + light_k);
@@ -657,8 +676,8 @@ impl GameApp {
     fn render_checkers(&self, fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize) {
         let board = Self::board_rect(w, h);
         let (bx, by, bw, bh) = (x + board.0, y + board.1, board.2, board.3);
-        let cell_w = bw / PUZZLE_SIDE;
-        let cell_h = bh / PUZZLE_SIDE;
+        let cell_w = bw / game_core::TILE;
+        let cell_h = bh / game_core::TILE;
         fb.draw_rounded_rect(bx - 4, by - 4, bw + 8, bh + 8, 6, Color::BORDER);
 
         // Tahta: açık/koyu kareler.
@@ -1014,8 +1033,22 @@ impl GameApp {
     }
 }
 
-/// Piksel koordinatını (pencere içi) kare indeksine çevirir.
-fn cell_of(px: usize, py: usize, rect: (usize, usize, usize, usize)) -> Option<usize> {
+/// Piksel koordinatını dama kare indeksine çevirir (8x8).
+fn cell_of_checkers(px: usize, py: usize, rect: (usize, usize, usize, usize)) -> Option<usize> {
+    let (x, y, w, h) = rect;
+    if w == 0 || h == 0 || px < x || py < y || px >= x + w || py >= y + h {
+        return None;
+    }
+    let cw = (w / game_core::TILE).max(1);
+    let ch = (h / game_core::TILE).max(1);
+    let max_side = game_core::TILE - 1;
+    let col = ((px - x) / cw).min(max_side);
+    let row = ((py - y) / ch).min(max_side);
+    Some(game_core::idx(row, col))
+}
+
+/// Piksel koordinatını bulmaca kare indeksine çevirir (4x4).
+fn cell_of_puzzle(px: usize, py: usize, rect: (usize, usize, usize, usize)) -> Option<usize> {
     let (x, y, w, h) = rect;
     if w == 0 || h == 0 || px < x || py < y || px >= x + w || py >= y + h {
         return None;
@@ -1025,7 +1058,7 @@ fn cell_of(px: usize, py: usize, rect: (usize, usize, usize, usize)) -> Option<u
     let max_side = PUZZLE_SIDE - 1;
     let col = ((px - x) / cw).min(max_side);
     let row = ((py - y) / ch).min(max_side);
-    Some(game_core::idx(row, col))
+    Some(row * PUZZLE_SIDE + col)
 }
 
 impl GameApp {
@@ -1045,7 +1078,7 @@ impl GameApp {
                     self.new_game(player_light);
                     return true;
                 }
-                if let Some(sq) = cell_of(px, py, Self::board_rect(w, h)) {
+                if let Some(sq) = cell_of_checkers(px, py, Self::board_rect(w, h)) {
                     self.click_cell(sq);
                     return true;
                 }
@@ -1053,7 +1086,7 @@ impl GameApp {
             }
             TAB_PUZZLE => {
                 let rect = Self::puzzle_rect(w, h);
-                if let Some(sq) = cell_of(px, py, rect) {
+                if let Some(sq) = cell_of_puzzle(px, py, rect) {
                     self.click_tile(sq);
                     return true;
                 }

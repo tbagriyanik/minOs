@@ -4859,7 +4859,7 @@ pub extern "C" fn _start() -> ! {
                             4 => {
                                 // Resim: yakinlastir / uzaklastir
 
-                                if my >= wy + 56 && my <= wy + 76 && mx >= wx + 8 && mx <= wx + 150
+                                if my >= wy + 32 && my <= wy + 52 && mx >= wx + 8 && mx <= wx + 150
                                 {
                                     if let Some(rgb) = imageviewer_app.wallpaper_rgb() {
                                         crate::gui::wallpaper::set_custom_image(

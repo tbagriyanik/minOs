@@ -83,6 +83,7 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
 - **Resim Görüntüleyici Arka Planı:** Açık resimde **Masaüstüne döşe** düğmesine basarak görüntüyü masaüstü arka planı yapın.
 - **Masaüstü Görselleri:** Sistem Ayarları'ndaki **Masaüstü 1**, **Masaüstü 2** ve **Masaüstü 3** seçenekleri yeni PNG görsellerini kullanır.
 - **WAV Oynatma:** Dosya Yöneticisi'nde `.wav` dosyasına çift tıklamak, seçilen dosyayı doğrudan oynatır.
+- **Örnek Medyalar:** ISO içindeki örnek dosyalar çalışan sistemde `/media/cdrom/root/Media` altında bulunur. PNG/JPEG/BMP dosyaları Resim Gösterici'de, WAV dosyaları Müzik Çalar'da açılabilir.
 - **Medya Tuşları:** Ses açma, kısma, susturma, oynat/duraklat, önceki/sonraki parça.
 - **Yenileme (`F5`):** Odaklı uygulamanın içeriğini tazeler.
 - **Video Oynatıcı:** `Oynat/Durdur` animasyonu ve zaman çizelgesini duraklatır/devam ettirir; `Durdur` başa sarar.

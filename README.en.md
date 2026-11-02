@@ -11,7 +11,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-115%2C749%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-121%2C919%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -26,6 +26,7 @@
 - **🔊 Direct WAV Playback:** Double-clicking a `.wav` file in File Manager plays that selected file in Music Player.
 - **🖼️ Tile Image on Desktop:** Image Viewer can apply PNG/JPEG/GIF/BMP images as tiled desktop wallpapers.
 - **🌄 New Desktop Images:** Settings now includes `desktop1.png`, `desktop2.png`, and `desktop3.png` wallpaper choices.
+- **📁 ISO Sample Media:** Sample PNG/JPEG/BMP and WAV files are packaged under `/root/Media` in the ISO and are available at `/media/cdrom/root/Media` when booted from CD.
 
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.

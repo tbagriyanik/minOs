@@ -254,18 +254,18 @@ impl ImageViewerApp {
         fb.draw_rect(win_x + 6, win_y + 30, win_w - 12, 24, Color::TITLE_BAR);
         MinGuiCompositor::draw_string_clipped(
             fb,
-            win_x + 12,
+            win_x + 158,
             win_y + 36,
             self.file_name,
             Color::TEXT_MAIN,
-            (win_x + 8, win_y + 32, win_w.saturating_sub(200), 20),
+            (win_x + 154, win_y + 32, win_w.saturating_sub(346), 20),
         );
 
-        fb.draw_rect(win_x + 8, win_y + 56, 142, 20, Color::ACCENT_BLUE);
+        fb.draw_rect(win_x + 8, win_y + 32, 142, 20, Color::ACCENT_BLUE);
         MinGuiCompositor::draw_string(
             fb,
             win_x + 14,
-            win_y + 60,
+            win_y + 36,
             crate::gui::ui_text("Masaüstüne döşe", "Tile on desktop"),
             MinGuiCompositor::text_on(Color::ACCENT_BLUE),
         );

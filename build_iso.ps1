@@ -62,17 +62,23 @@ if (Test-Path "boot\limine\BOOTIA32.EFI") {
     Copy-Item -Force "boot\limine\BOOTIA32.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTIA32.EFI"
 }
 
-# Copy media files to ISO root
+# Copy media files into the ISO's root/Media directory.
+# The booted ISO is exposed as /media/cdrom, so these files are available
+# under /media/cdrom/root/Media instead of being scattered at ISO root.
 $mediaFiles = @(
     "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
     "public\media\sample.png", "public\media\gradient.png",
     "public\media\sample.jpg", "public\media\sunset.jpg",
+    "public\media\real.jpg", "public\media\real.png",
+    "public\media\real.bmp",
     "public\desktop1.png", "public\desktop2.png", "public\desktop3.png",
     "public\media\sample.wav", "public\media\scale_c_major.wav"
 )
+$mediaDestDir = Join-Path $OutputDir "root\Media"
+New-Item -ItemType Directory -Force -Path $mediaDestDir | Out-Null
 foreach ($mf in $mediaFiles) {
     if (Test-Path $mf) {
-        Copy-Item -Force $mf -Destination (Join-Path $OutputDir (Split-Path $mf -Leaf))
+        Copy-Item -Force $mf -Destination (Join-Path $mediaDestDir (Split-Path $mf -Leaf))
     }
 }
 

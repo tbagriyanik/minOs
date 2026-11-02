@@ -83,6 +83,7 @@ Desktop usage, MinShell commands and shortcut reference.
 - **Image Viewer Wallpaper:** Press **Tile on desktop** for an opened image to use it as the desktop wallpaper.
 - **Desktop Images:** System Settings includes **Desktop 1**, **Desktop 2** and **Desktop 3** wallpaper choices.
 - **WAV Playback:** Double-clicking a `.wav` file in File Manager plays that selected file directly.
+- **Sample Media:** ISO sample files are available at `/media/cdrom/root/Media`; PNG/JPEG/BMP files open in Image Viewer and WAV files in Music Player.
 - **Media Keys:** Volume up, volume down, mute, play/pause, previous/next track.
 - **Refresh (`F5`):** Refreshes focused application content.
 - **Video Player:** `Play/Pause` toggles animation and timeline; `Stop` resets to beginning.

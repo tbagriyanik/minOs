@@ -95,7 +95,7 @@ impl MinGuiCompositor {
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
     pub fn start_menu_app_idx(index: usize) -> Option<usize> {
-        const APP_IDX: [usize; 16] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12, 15];
+        const APP_IDX: [usize; 17] = [0, 1, 14, 7, 10, 11, 13, 2, 8, 9, 3, 4, 5, 6, 12, 15, 16];
         APP_IDX.get(index).copied()
     }
     /// Sorguyu bir ad içinde **parça (substring)** olarak arar ve bulunduğu
@@ -954,7 +954,7 @@ impl MinGuiCompositor {
             return;
         }
 
-        let menu_items: [(&str, u32, usize); 16] = if english {
+        let menu_items: [(&str, u32, usize); 17] = if english {
             [
                 ("File Manager", Color::ACCENT_YELLOW, 0),
                 ("Settings", Color::ACCENT_BLUE, 1usize),
@@ -972,6 +972,7 @@ impl MinGuiCompositor {
                 ("Video Player", Color::ACCENT_RED, 6),
                 ("3D Viewer", Color::ACCENT_BLUE, 12),
                 ("Games", Color::ACCENT_YELLOW, 15),
+                ("FPS 3D Game", Color::ACCENT_YELLOW, 16),
             ]
         } else {
             [
@@ -991,6 +992,7 @@ impl MinGuiCompositor {
                 ("Video Oynatıcı", Color::ACCENT_RED, 6),
                 ("3D Gösterici", Color::ACCENT_BLUE, 12),
                 ("Oyunlar", Color::ACCENT_YELLOW, 15),
+                ("FPS 3D Oyun", Color::ACCENT_YELLOW, 16),
             ]
         };
 

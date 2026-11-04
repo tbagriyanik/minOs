@@ -231,12 +231,11 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
             if idle_spins % 500 == 0 {
                 HEARTBEAT[cpu].0.fetch_add(1, Ordering::Relaxed);
             }
-            // Boşta bekleme: VirtualBox gibi hipervizörlerde vCPU iş parçacıkları
-            // host scheduler'da BSP'yi (vCPU 0) starve edip GUI donmasına yol açar.
-            // spin_loop (PAUSE) çağrısı işlemci boru hattını gevşetir ve hipervizöre
-            // yield ipucu verir.
-            for _ in 0..50_000 {
-                core::hint::spin_loop();
+            // Boşta AP'yi döndürme: sürekli PAUSE/spin, özellikle sanal
+            // makinelerde host CPU'yu tüketip BSP'nin GUI/fare döngüsünü
+            // aç bırakıyordu. Timer veya iş kesmesi AP'yi HLT'den uyandırır.
+            unsafe {
+                core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
             }
         } else {
             idle_spins = 0;

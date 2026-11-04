@@ -428,7 +428,9 @@ pub extern "C" fn _start() -> ! {
 
     let mut fps_game_app = apps::game::GameApp::new();
 
-    // 16 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
+    let mut fps_3d_app = apps::fps_game::FpsGameApp::new();
+
+    // 17 Uygulama Penceresini Kaydet (indeks = sabit uygulama kimligi).
 
     // Acilista TuM pencereler kapalidir; kullanici temiz bir masaustuyle baslar
 
@@ -665,6 +667,24 @@ pub extern "C" fn _start() -> ! {
         height.saturating_sub(fps_h + gui::taskbar_h()) / 2,
         fps_w,
         fps_h,
+        false,
+    ));
+
+    // 16: FPS 3D Oyun (raycasting)
+
+    let fps3d_w = 700.min(width.saturating_sub(20)).max(300);
+
+    let fps3d_h = 540
+        .min(height.saturating_sub(gui::taskbar_h() + 10))
+        .max(200);
+
+    compositor.add_window(gui::Window::new(
+        "FPS 3D Oyun",
+        "FPS3D",
+        width.saturating_sub(fps3d_w) / 2,
+        height.saturating_sub(fps3d_h + gui::taskbar_h()) / 2,
+        fps3d_w,
+        fps3d_h,
         false,
     ));
 
@@ -932,6 +952,8 @@ pub extern "C" fn _start() -> ! {
 
          fps: &apps::game::GameApp,
 
+         fps_3d: &apps::fps_game::FpsGameApp,
+
          now: &drivers::rtc::DateTime,
 
          mouse: &drivers::mouse::MouseState,
@@ -1092,6 +1114,11 @@ pub extern "C" fn _start() -> ! {
 
                     let app_id = compositor.app_id_for_window(idx);
 
+                    // Bu pencerenin içerik ölçümü ve çizimi uygulama kodudur;
+                    // hata bu pencerenin uygulamasına atfedilir. Blok normal
+                    // biterse kapsam önceki bağlama döner.
+                    let _app_context = apps::guard::ContextScope::new(app_id, idx);
+
                     let content_h = window_content_h(app_id, win.height, win.width, fm, np, br);
 
                     let content_w = cw;
@@ -1242,6 +1269,8 @@ pub extern "C" fn _start() -> ! {
                         ),
 
                         15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
+
+                        16 => fps_3d.render_content(fb, win.x, win.y, win.width, win.height),
 
                         _ => {}
                     }
@@ -1683,10 +1712,18 @@ pub extern "C" fn _start() -> ! {
         5500,
     );
 
-    // Ilk kareyi ciz (tum ekran)
+    // Ilk kareyi ciz (tum ekran). Uygulama icerigi icin bir kurtarma noktasi
+    // acilir; hatali bir uygulama acilistaki kareyi dusuremez.
+    let initial_context = compositor
+        .active_window_idx
+        .and_then(|idx| compositor.windows[idx].map(|w| (w.app_id as usize, idx)))
+        .unwrap_or((apps::guard::NO_APP, apps::guard::NO_WINDOW));
 
-    render_full_frame(
-        &mut fb,
+    if let Some(_initial_guard) =
+        apps::guard::enter(initial_context.0, initial_context.1)
+    {
+        render_full_frame(
+            &mut fb,
         &compositor,
         &filemanager_app,
         &desktop_files,
@@ -1704,6 +1741,7 @@ pub extern "C" fn _start() -> ! {
         &viewer3d_app,
         &pkgmgr_app,
         &fps_game_app,
+        &fps_3d_app,
         &now,
         mouse,
         keyboard,
@@ -1723,6 +1761,7 @@ pub extern "C" fn _start() -> ! {
         None,
         None,
     );
+    }
 
     let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
 
@@ -1735,14 +1774,112 @@ pub extern "C" fn _start() -> ! {
     let mut force_render;
 
     // Oyun motorunun son adım zamanı (TSC) — kare süresi ölçümü için.
-    let mut game_last_cycles: u64 = 0;
+    let mut cp_last_cycles: u64 = 0;
 
     // 7. Ana Masaustu Etkilesim ve Olay Dongusu
 
     serial_print("[BOOT] Masaüstü döngüsü başladı.\n");
 
     loop {
+        // Bir onceki turda yakalanan uygulama hatasini raporla ve yalnizca
+        // hatali uygulamayi kapat; masaustu ve diger uygulamalar yasamaya
+        // devam eder.
+        if let Some(fault) = apps::guard::take_pending() {
+            let mut line = gui::TextBuf::new();
+            line.push_str("[GUARD] ");
+            line.push_str(fault.kind.as_str());
+            line.push_str(" vec=");
+            line.push_usize(fault.vector as usize);
+            line.push_str(" app=");
+            line.push_usize(fault.app_id);
+            line.push_str(" win=");
+            line.push_usize(fault.window_idx);
+            line.push_str(" rip=0x");
+            line.push_hex64(fault.rip);
+            line.push_str(" cr2=0x");
+            line.push_hex64(fault.cr2);
+            line.push_str("\n");
+            serial_print(line.as_str());
+
+            if fault.kind == apps::guard::FaultKind::Panic && !fault.file.is_empty() {
+                serial_print("[GUARD] Konum: ");
+                serial_print(fault.file);
+                serial_print(":");
+                serial_print_dec(fault.line as u64);
+                serial_print("\n");
+            }
+
+            let window_idx = if fault.window_idx < gui::MAX_WINDOWS
+                && compositor.windows[fault.window_idx].is_some_and(|w| w.is_open)
+            {
+                Some(fault.window_idx)
+            } else if fault.app_id != apps::guard::NO_APP {
+                compositor.windows.iter().position(|slot| {
+                    slot.is_some_and(|w| w.is_open && w.app_id as usize == fault.app_id)
+                })
+            } else {
+                None
+            };
+
+            if let Some(idx) = window_idx {
+                if fault.app_id != apps::guard::NO_APP {
+                    terminate_app(
+                        idx,
+                        &mut compositor,
+                        &mut filemanager_app,
+                        &mut settings_app,
+                        &mut notepad_app,
+                        &mut browser_app,
+                        &mut imageviewer_app,
+                        &mut musicplayer_app,
+                        &mut videoplayer_app,
+                        &mut taskmgr_app,
+                        &mut calculator_app,
+                        &mut paint_apps[idx],
+                        &mut terminal_app,
+                        &mut installer_app,
+                        &mut viewer3d_app,
+                        &mut pkgmgr_app,
+                        &mut fps_game_app,
+                        &mut fps_3d_app,
+                    );
+                }
+            }
+
+            let mut message = gui::TextBuf::new();
+            if fault.app_id != apps::guard::NO_APP {
+                message.push_str(gui::ui_text(
+                    "Bellek hatası yakalandı: ",
+                    "Memory fault contained: ",
+                ));
+                message.push_str(app_process_name(fault.app_id));
+            } else {
+                message.push_str(gui::ui_text(
+                    "Görev hatası yakalandı.",
+                    "Task fault contained.",
+                ));
+            }
+            compositor.push_toast(
+                gui::ToastKind::Error,
+                gui::ui_text("Uygulama durduruldu", "Application stopped"),
+                message.as_str(),
+                monotonic_ms(),
+                6000,
+            );
+        }
+
         let loop_start_cycles = read_cpu_cycles();
+
+        let focused_context = compositor
+            .active_window_idx
+            .and_then(|idx| compositor.windows[idx].map(|w| (w.app_id as usize, idx)))
+            .unwrap_or((apps::guard::NO_APP, apps::guard::NO_WINDOW));
+
+        let Some(_runtime_guard) = apps::guard::enter(focused_context.0, focused_context.1) else {
+            // Bu turda bir hata yakalandi; kurtarma noktasina donuldu.
+            // Bir sonraki turda raporlanip uygulama kapatilacak.
+            continue;
+        };
 
         apps::browser::begin_turn();
 
@@ -2783,6 +2920,7 @@ pub extern "C" fn _start() -> ! {
                                                 &mut viewer3d_app,
                                                 &mut pkgmgr_app,
                                                 &mut fps_game_app,
+                                                &mut fps_3d_app,
                                             );
                                         }
                                     }
@@ -3574,6 +3712,10 @@ pub extern "C" fn _start() -> ! {
 
                     if mx >= wx && mx < wx + ww && my >= wy && my < wy + wh {
                         let app_id = compositor.app_id_for_window(idx);
+
+                        // Tıklama işleyicileri uygulama kodu çalıştırır; olası
+                        // bir bellek hatası bu uygulamaya atfedilir.
+                        let _app_context = apps::guard::ContextScope::new(app_id, idx);
 
                         match app_id {
                             0 => {
@@ -5064,6 +5206,7 @@ pub extern "C" fn _start() -> ! {
                                                         &mut viewer3d_app,
                                                         &mut pkgmgr_app,
                                                         &mut fps_game_app,
+                                                        &mut fps_3d_app,
                                                     );
                                                 }
                                             }
@@ -5658,11 +5801,25 @@ pub extern "C" fn _start() -> ! {
                                     apps::controlpanel::theme_btn_rect(wx, wy, ww, wh),
                                 ) {
                                     settings_app.cycle_theme();
+                                } else if apps::controlpanel::active_tab() == 3 && gui::in_rect(
+                                    mx,
+                                    my,
+                                    apps::controlpanel::perf_btn_rect(wx, wy, ww, wh),
+                                ) {
+                                    apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
+                                    force_render = true;
+                                } else if apps::controlpanel::active_tab() == 3 && gui::in_rect(
+                                    mx,
+                                    my,
+                                    apps::controlpanel::perf_sound_btn_rect(wx, wy, ww, wh),
+                                ) {
+                                    apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
+                                    force_render = true;
                                 }
                             }
 
                             15 => {
-                                // Oyunlar: dama, bulmaca ve performans testi bölümleri.
+                                // Oyunlar: dama, mayın tarlası ve satranç bölümleri.
                                 if let Some((_, w)) = focused_window_for_app(&compositor, 15) {
                                     let changed = fps_game_app.click(
                                         mx.saturating_sub(w.x),
@@ -5670,6 +5827,16 @@ pub extern "C" fn _start() -> ! {
                                         w.width,
                                         w.height,
                                     );
+                                    if changed {
+                                        force_render = true;
+                                    }
+                                }
+                            }
+
+                            16 => {
+                                // FPS 3D oyun: fare ile bakış, WASD hareket, ateş.
+                                if let Some((_, _w)) = focused_window_for_app(&compositor, 16) {
+                                    let changed = fps_3d_app.handle_mouse_click(&mut audio_dev);
                                     if changed {
                                         force_render = true;
                                     }
@@ -5727,6 +5894,7 @@ pub extern "C" fn _start() -> ! {
                             &mut viewer3d_app,
                             &mut pkgmgr_app,
                             &mut fps_game_app,
+                            &mut fps_3d_app,
                         );
                     } else {
                         // Masaustundeyken Alt+F4 guc menusunu acar.
@@ -6080,6 +6248,9 @@ pub extern "C" fn _start() -> ! {
                         };
                         fps_game_app.select_tab(tab);
                         force_render = true;
+                    } else if app_is_focused(&compositor, 16) {
+                        fps_3d_app.handle_arrow(true, false);
+                        force_render = true;
                     }
                 }
 
@@ -6146,6 +6317,9 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 15) {
                         let tab = (fps_game_app.tab + 1) % apps::game::TAB_COUNT;
                         fps_game_app.select_tab(tab);
+                        force_render = true;
+                    } else if app_is_focused(&compositor, 16) {
+                        fps_3d_app.handle_arrow(false, true);
                         force_render = true;
                     } else if app_is_focused(&compositor, 7) && !taskmgr_app.launch_menu_open {
                         taskmgr_app.active_tab = 1;
@@ -6386,6 +6560,7 @@ pub extern "C" fn _start() -> ! {
                                         &mut viewer3d_app,
                                         &mut pkgmgr_app,
                                         &mut fps_game_app,
+                                        &mut fps_3d_app,
                                     );
                                 }
                             }
@@ -6977,6 +7152,7 @@ pub extern "C" fn _start() -> ! {
                                 &mut viewer3d_app,
                                 &mut pkgmgr_app,
                                 &mut fps_game_app,
+                                &mut fps_3d_app,
                             );
                         }
                     } else if app_is_focused(&compositor, 2) && notepad_app.menu == 0 {
@@ -7887,6 +8063,7 @@ pub extern "C" fn _start() -> ! {
                                 &mut viewer3d_app,
                                 &mut pkgmgr_app,
                                 &mut fps_game_app,
+                                &mut fps_3d_app,
                             ),
                             1 => {
                                 compositor.focus_window(idx);
@@ -8575,6 +8752,14 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
 
+                let fps3d_focused = app_is_focused(&compositor, 16);
+
+                if fps3d_focused {
+                    if fps_3d_app.handle_key(ch, &mut audio_dev) {
+                        force_render = true;
+                    }
+                }
+
                 if !run_dialog_open
                     && !compositor.is_start_menu_open
                     && !compositor.is_context_menu_open
@@ -8615,6 +8800,21 @@ pub extern "C" fn _start() -> ! {
                     }
                     break;
                 }
+            }
+        }
+
+        // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
+        // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
+        // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
+        if !mouse_moved || app_is_focused(&compositor, 16) {
+            last_mouse_x = mouse.x;
+            last_mouse_y = mouse.y;
+        }
+        if mouse_moved && app_is_focused(&compositor, 16) {
+            let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
+            if dx.abs() > 0.5 {
+                fps_3d_app.handle_mouse_look(dx);
+                force_render = true;
             }
         }
 
@@ -8674,17 +8874,40 @@ pub extern "C" fn _start() -> ! {
             .flatten()
             .any(|w| w.app_id == 15 && w.is_open && !w.is_minimized);
         if game_open && timer_tick_fired {
-            let game_start_cycles = read_cpu_cycles();
-            // Kare süresi: bir önceki oyun adımından bu yana geçen süre (µs).
-            if fps_game_app.tab == 2 {
-                let delta = game_start_cycles.wrapping_sub(game_last_cycles);
-                let delta_us = delta / unsafe { TSC_CYCLES_PER_US as u64 }; // ~µs
-                fps_game_app.perf_sample(delta_us.min(1_000_000));
-            }
-            game_last_cycles = read_cpu_cycles();
             if fps_game_app.tick() {
                 force_render = true;
             }
+        }
+
+        // Kontrol paneli performans testi örneklemesi (Testler sekmesi).
+        // Ölçüm çerçeve başına değil, iki zamanlayıcı işareti arasındaki süre
+        // üzerinden yapılır; bu yüzden TSC yalnızca tick anında güncellenir.
+        let controlpanel_open = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 14 && w.is_open && !w.is_minimized);
+        if controlpanel_open && timer_tick_fired {
+            let now_cycles = read_cpu_cycles();
+            if apps::controlpanel::active_tab() == 3 {
+                let delta = now_cycles.wrapping_sub(cp_last_cycles);
+                let delta_us = delta / unsafe { TSC_CYCLES_PER_US as u64 };
+                if apps::controlpanel::perf_sample(delta_us.min(1_000_000)) {
+                    force_render = true;
+                }
+            }
+            cp_last_cycles = now_cycles;
+        }
+
+        // FPS 3D oyun motoru: raycasting, hareket, düşman AI, ses.
+        let fps3d_open = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 16 && w.is_open && !w.is_minimized);
+        if fps3d_open && timer_tick_fired {
+            fps_3d_app.update(&mut audio_dev);
+            force_render = true;
         }
 
         // Ag kartindan gelen paketleri isle (ARP cevaplari, ICMP vs.).
@@ -8750,6 +8973,16 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     audio_dev.set_pc_speaker_tone(freq);
                 }
+                force_render = true;
+            }
+        }
+
+        // FPS 3D oyun ses efektleri.
+        if let Some((freq, _duration)) =
+            apps::fps_game::FpsGameApp::sound_tone(fps_3d_app.take_sound())
+        {
+            if !audio_dev.is_muted && audio_dev.volume_left > 0 && freq > 0 {
+                audio_dev.set_pc_speaker_tone(freq);
                 force_render = true;
             }
         }
@@ -9017,6 +9250,7 @@ pub extern "C" fn _start() -> ! {
                 &viewer3d_app,
                 &pkgmgr_app,
                 &fps_game_app,
+                &fps_3d_app,
                 &now,
                 mouse,
                 keyboard,

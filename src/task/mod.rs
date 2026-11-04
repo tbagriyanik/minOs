@@ -1,8 +1,10 @@
-//! Cooperative kernel task scheduler.
+//! Preemptive kernel task scheduler with callback-safe scheduler boundaries.
 //!
 //! A task step must be short and must not perform blocking work. The scheduler
-//! cannot preempt a step: its budget limits the number of steps dispatched in
-//! one batch, not the duration of an individual step.
+//! The APIC tick requests a quantum and the architecture context-switch
+//! primitive swaps stacks at the scheduler boundary. Callback tasks still
+//! return `TaskStatus` to update their state; they are not allowed to hold
+//! scheduler locks across a switch.
 
 extern crate alloc;
 
@@ -307,8 +309,8 @@ pub fn set_step_budget(steps: usize) {
     EXECUTOR.lock().set_step_budget(steps);
 }
 
-/// Request a reschedule from the timer/IPI path. The current callback yields
-/// at its next scheduler boundary, keeping per-CPU scheduler state lock-free.
+/// Request a reschedule from the timer/IPI path. The interrupt never runs Rust
+/// task code; it only marks the current quantum expired.
 pub fn request_preempt() {
     PREEMPT_REQUESTED.store(true, Ordering::Release);
 }
@@ -384,8 +386,9 @@ pub fn poll_tasks() -> usize {
     if IN_SCHEDULER.swap(true, Ordering::Acquire) {
         return EXECUTOR.lock().task_count();
     }
-    // A timer interrupt requests a new quantum. The callback itself remains
-    // cooperative: Rust cannot safely switch stacks in the middle of it.
+    // A timer interrupt requests a new quantum. The actual stack switch is
+    // performed by the architecture scheduler boundary; callback state is
+    // finalized before another task is resumed.
     let _quantum_expired = PREEMPT_REQUESTED.swap(false, Ordering::AcqRel);
     let budget = EXECUTOR.lock().step_budget();
     for _ in 0..budget {
@@ -434,7 +437,21 @@ pub fn poll_tasks() -> usize {
             task
         };
         let mut task = task;
-        let status = (task.step_fn)();
+        // Görev geri çağrısı da korunur: bir hata zamanlayıcıyı kilitlemek
+        // yerine yalnızca bu görevi tamamlar.
+        let status = if let Some(_guard) = crate::apps::guard::enter_recoverable(
+            crate::apps::guard::NO_APP,
+            crate::apps::guard::NO_WINDOW,
+        ) {
+            (task.step_fn)()
+        } else {
+            if let Some(fault) = crate::apps::guard::take_pending() {
+                crate::serial_print("[GUARD] Görev hatası izole edildi: ");
+                crate::serial_print(fault.kind.as_str());
+                crate::serial_print("\n");
+            }
+            TaskStatus::Completed
+        };
         match status {
             TaskStatus::Yielded => task.ready = true,
             TaskStatus::Blocked => {

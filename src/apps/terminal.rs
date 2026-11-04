@@ -152,6 +152,7 @@ fn app_name(index: usize) -> &'static str {
         (13, false) => "Paket Yöneticisi",
         (14, false) => "Kontrol Paneli",
         (15, false) => "Oyunlar",
+        (16, false) => "FPS 3D Oyun",
         (0, true) => "File Manager",
         (1, true) => "Settings",
         (2, true) => "Notepad",
@@ -168,6 +169,7 @@ fn app_name(index: usize) -> &'static str {
         (13, true) => "Package Manager",
         (14, true) => "Control Panel",
         (15, true) => "Games",
+        (16, true) => "FPS 3D Game",
         _ => "Package Manager",
     }
 }

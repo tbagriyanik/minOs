@@ -243,6 +243,74 @@ pub fn draw(fb: &mut Framebuffer) {
     }
 }
 
+/// Ayarlar penceresindeki PNG duvar kağıdı önizlemeleri için küçük resim
+/// ölçüsü. Tam boy PNG'yi her karede çözmek pahalı olduğundan bir kez
+/// küçültülüp önbelleğe alınır.
+const THUMB_W: usize = 128;
+const THUMB_H: usize = 48;
+
+static mut THUMB_PIXELS: [[u32; THUMB_W * THUMB_H]; 3] = [[0; THUMB_W * THUMB_H]; 3];
+static mut THUMB_READY: [bool; 3] = [false; 3];
+
+fn thumb_source(idx: usize) -> &'static [u8] {
+    match idx {
+        0 => include_bytes!("../../public/desktop1.png"),
+        1 => include_bytes!("../../public/desktop2.png"),
+        _ => include_bytes!("../../public/desktop3.png"),
+    }
+}
+
+/// 7..=9 numaralı PNG duvar kağıtlarının önizleme piksellerini bir kez hazırlar.
+#[allow(static_mut_refs)]
+fn ensure_thumb(idx: usize) {
+    unsafe {
+        if THUMB_READY[idx] {
+            return;
+        }
+        // Çözme başarısız olsa bile her karede yeniden denemeyi engelle.
+        THUMB_READY[idx] = true;
+        let Some(decoded) = crate::apps::imgdecode::decode_png(thumb_source(idx)) else {
+            return;
+        };
+        let (sw, sh) = (decoded.width, decoded.height);
+        if sw == 0 || sh == 0 {
+            return;
+        }
+        // Kutu oranına uydurmak için kaynağı ortadan kırp; böylece küçük
+        // resimlerde de duvar kağıdının tamamı değil, merkezi görünür.
+        let (crop_w, crop_h, x0, y0) = if sw * THUMB_H > sh * THUMB_W {
+            let cw = (sh * THUMB_W / THUMB_H).max(1);
+            (cw, sh, (sw - cw) / 2, 0)
+        } else {
+            let ch = (sw * THUMB_H / THUMB_W).max(1);
+            (sw, ch, 0, (sh - ch) / 2)
+        };
+        for ty in 0..THUMB_H {
+            let sy = y0 + ty * crop_h / THUMB_H;
+            for tx in 0..THUMB_W {
+                let sx = x0 + tx * crop_w / THUMB_W;
+                THUMB_PIXELS[idx][ty * THUMB_W + tx] = decoded.pixel(sx, sy);
+            }
+        }
+    }
+}
+
+/// PNG duvar kağıdının önbelleğe alınmış küçük resmini kutuya sığdırır.
+#[allow(static_mut_refs)]
+fn draw_thumb_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize, idx: usize) {
+    ensure_thumb(idx);
+    unsafe {
+        let px = &THUMB_PIXELS[idx];
+        for ty in 0..h {
+            let sy = ty * THUMB_H / h;
+            for tx in 0..w {
+                let sx = tx * THUMB_W / w;
+                fb.put_pixel(x + tx, y + ty, px[sy * THUMB_W + sx]);
+            }
+        }
+    }
+}
+
 fn draw_png_tile(fb: &mut Framebuffer, w: usize, h: usize, data: &[u8]) {
     if let Some(decoded) = crate::apps::imgdecode::decode_png(data) {
         let (iw, ih) = (decoded.width, decoded.height);
@@ -461,40 +529,10 @@ pub fn draw_preview(fb: &mut Framebuffer, x: usize, y: usize, w: usize, h: usize
             let c = SOLID_COLORS[(id as usize - 1).min(5)];
             fb.draw_rect(x, y, w, h, c);
         }
-        7 => {
-            // Yıldızlı Gece önizleme
-            fb.draw_vgradient(x, y, w, h, 0x070B1A, 0x101B3A);
-            fb.draw_rect(x + w * 3 / 4, y + h / 5, 4, 4, 0xE8EDF7);
-            fb.draw_rect(x + w / 4, y + h / 3, 2, 2, 0xB0C4DE);
-            fb.draw_rect(x + w / 2, y + h / 4, 2, 2, 0xD0E0FF);
-            fb.draw_rect(x, y + h * 5 / 6, w, h / 6, 0x05070F);
-        }
-        8 => {
-            // Petek Dokusu önizleme (Hexagon Matrix)
-            fb.draw_vgradient(x, y, w, h, 0x0E1420, 0x182438);
-            fb.draw_rect(x + 4, y + 4, 6, 1, 0x3882B8);
-            fb.draw_rect(x + 14, y + 8, 6, 1, 0x223652);
-            fb.draw_rect(x + 6, y + 14, 6, 1, 0x3882B8);
-            fb.draw_rect(x + 16, y + 18, 6, 1, 0x223652);
-        }
-        9 => {
-            // Karbon Doku önizleme (Carbon Fiber)
-            fb.draw_rect(x, y, w, h, 0x0C0D0F);
-            let mut cy = y;
-            while cy < y + h {
-                let row = (cy - y) / 3;
-                let mut cx = x;
-                while cx < x + w {
-                    let col = (cx - x) / 3;
-                    let is_horiz = ((row + col) & 1) == 0;
-                    let c = if is_horiz { 0x24262C } else { 0x16171A };
-                    let bw = 3.min(x + w - cx);
-                    let bh = 3.min(y + h - cy);
-                    fb.draw_rect(cx, cy, bw, bh, c);
-                    cx += 3;
-                }
-                cy += 3;
-            }
+        7..=9 => {
+            // Kutuda, seçildiğinde uygulanacak PNG duvar kağıdının kendisi
+            // görünür; başka bir masaüstü resmi önizlenmez.
+            draw_thumb_preview(fb, x, y, w, h, (id - 7) as usize);
         }
         _ => {
             fb.draw_rect(x, y, w, h, 0x1A1E2A);

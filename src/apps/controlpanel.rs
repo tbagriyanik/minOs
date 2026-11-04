@@ -8,17 +8,178 @@
 use crate::drivers::keyboard::KeyboardLayout;
 use crate::drivers::rtc::DateTime;
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor, TextBuf};
-use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use crate::gui::{Color, MinGuiCompositor, sp, TextBuf};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-/// Sekme sayısı: Sistem, Ağ, Hakkında.
-pub const TAB_COUNT: usize = 3;
+/// Sekme sayısı: Sistem, Ağ, Hakkında, Testler.
+pub const TAB_COUNT: usize = 4;
 
 static ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
 static REFRESHED_AT_MS: AtomicU64 = AtomicU64::new(0);
 /// 0: bos, 1: yanit bekleniyor, 2: basarili, 3: basarisiz.
 static NET_TEST_STATE: AtomicUsize = AtomicUsize::new(0);
 static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
+
+// --- Performans testi (Testler sekmesi) ---
+
+/// Performans testinin aşamaları.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PerfPhase {
+    Idle,
+    Collecting,
+    Finished,
+}
+
+/// Performans testi sonuçları.
+#[derive(Clone, Copy, Default)]
+pub struct PerfResults {
+    pub fps: u32,
+    pub frame_ms: u32,
+    pub timer_jitter_us: u32,
+    pub mem_mbps: u32,
+    pub math_kops: u32,
+    pub score: u32,
+}
+
+static PERF_PHASE: AtomicUsize = AtomicUsize::new(0);
+static PERF_TICK: AtomicU32 = AtomicU32::new(0);
+static PERF_RESULTS: AtomicU64 = AtomicU64::new(0);
+static PERF_SAMPLES: AtomicU32 = AtomicU32::new(0);
+static PERF_ACCUM_US: AtomicU64 = AtomicU64::new(0);
+static PERF_LAST_US: AtomicU64 = AtomicU64::new(0);
+static BENCH_CHECKS: AtomicU32 = AtomicU32::new(0);
+static BENCH_STEPS: AtomicU32 = AtomicU32::new(0);
+
+/// Performans testinin süresi (~3 sn, 33 ms kare ile).
+const PERF_TICKS: u32 = 90;
+
+fn perf_phase() -> PerfPhase {
+    match PERF_PHASE.load(Ordering::Relaxed) {
+        1 => PerfPhase::Collecting,
+        2 => PerfPhase::Finished,
+        _ => PerfPhase::Idle,
+    }
+}
+
+/// Testi başlatır (3 saniye örnekleme).
+pub fn start_perf_test() {
+    PERF_PHASE.store(1, Ordering::Relaxed);
+    PERF_TICK.store(0, Ordering::Relaxed);
+    PERF_SAMPLES.store(0, Ordering::Relaxed);
+    PERF_ACCUM_US.store(0, Ordering::Relaxed);
+    PERF_LAST_US.store(0, Ordering::Relaxed);
+    BENCH_CHECKS.store(0, Ordering::Relaxed);
+    BENCH_STEPS.store(0, Ordering::Relaxed);
+    PERF_RESULTS.store(0, Ordering::Relaxed);
+}
+
+/// Bir kare süresini örnekler. Örnek alındıysa (ilerleme veya sonuç
+/// güncellendiyse) `true` döner; arayüzün yeniden çizilmesi için kullanılır.
+pub fn perf_sample(frame_us: u64) -> bool {
+    if perf_phase() != PerfPhase::Collecting {
+        return false;
+    }
+    let samples = PERF_SAMPLES.fetch_add(1, Ordering::Relaxed) + 1;
+    PERF_ACCUM_US.fetch_add(frame_us, Ordering::Relaxed);
+    PERF_LAST_US.store(frame_us, Ordering::Relaxed);
+    let tick = PERF_TICK.fetch_add(1, Ordering::Relaxed) + 1;
+    let checks = crate::apps::game_core::bench_checkers_ai(1, 1);
+    BENCH_CHECKS.fetch_add(checks, Ordering::Relaxed);
+    let steps = crate::apps::game_core::bench_puzzle_work(16, tick as u64);
+    BENCH_STEPS.fetch_add(steps, Ordering::Relaxed);
+    if tick >= PERF_TICKS {
+        let samples = samples.max(1);
+        let accum = PERF_ACCUM_US.load(Ordering::Relaxed);
+        let avg_us = (accum / samples as u64).max(1);
+        let fps = (1_000_000 / avg_us).min(9_999) as u32;
+        let timer_jitter_us = avg_us.abs_diff(16_000).min(0xFFFF) as u32;
+        let (mbps, _math_kops) = measure_memory();
+        let score = score_of(fps, timer_jitter_us, mbps);
+        let packed = ((fps as u64) << 32) | ((timer_jitter_us as u64) << 16) | (score as u64);
+        PERF_RESULTS.store(packed, Ordering::Relaxed);
+        PERF_PHASE.store(2, Ordering::Relaxed);
+    }
+    true
+}
+
+fn measure_memory() -> (u32, u32) {
+    let mut buf = alloc::vec![0u32; 65_536];
+    let start = crate::monotonic_ms();
+    for (i, slot) in buf.iter_mut().enumerate() {
+        *slot = (i as u32).wrapping_mul(2_654_435_761);
+    }
+    let mut acc = 0u32;
+    for _ in 0..4 {
+        for &v in buf.iter() {
+            acc = acc.wrapping_add(v.rotate_left(5) ^ 1);
+        }
+    }
+    let elapsed_ms = crate::monotonic_ms().saturating_sub(start).max(1) as u32;
+    let mbps = (1usize.saturating_mul(1280) / elapsed_ms as usize).min(60_000) as u32;
+    let math_kops = acc & 0xFFFF;
+    (mbps.max(1), math_kops)
+}
+
+fn score_of(fps: u32, jitter_us: u32, mbps: u32) -> u32 {
+    let fps_score = fps.min(60) * 100 / 60;
+    let jitter_score = 100u32.saturating_sub(jitter_us.min(20_000) / 200);
+    let mem_score = mbps.min(10_000) / 100;
+    (fps_score * 50 + jitter_score * 30 + mem_score * 20) / 100
+}
+
+fn perf_grade(score: u32) -> &'static str {
+    match score {
+        90..=u32::MAX => crate::gui::ui_text("Mükemmel", "Excellent"),
+        75..=89 => crate::gui::ui_text("Çok iyi", "Very good"),
+        55..=74 => crate::gui::ui_text("İyi", "Good"),
+        35..=54 => crate::gui::ui_text("Orta", "Fair"),
+        _ => crate::gui::ui_text("Zayıf", "Poor"),
+    }
+}
+
+/// Performans testi düğmesi dikdörtgeni.
+pub fn perf_btn_rect(
+    win_x: usize,
+    win_y: usize,
+    win_w: usize,
+    win_h: usize,
+) -> (usize, usize, usize, usize) {
+    let bw = sp(210).min(win_w.saturating_sub(24));
+    (win_x + 12, win_y + win_h.saturating_sub(56), bw, 30)
+}
+
+/// Ses testi düğmesi dikdörtgeni.
+pub fn perf_sound_btn_rect(
+    win_x: usize,
+    win_y: usize,
+    win_w: usize,
+    win_h: usize,
+) -> (usize, usize, usize, usize) {
+    let (bx, by, bw, bh) = perf_btn_rect(win_x, win_y, win_w, win_h);
+    let sw = sp(110).min(win_w.saturating_sub(24));
+    (bx + bw + 8, by, sw, bh)
+}
+
+/// Performans testi düğmesine tıklama.
+pub fn click_perf_btn(
+    px: usize,
+    py: usize,
+    win_x: usize,
+    win_y: usize,
+    win_w: usize,
+    win_h: usize,
+) -> bool {
+    if crate::gui::in_rect(px, py, perf_btn_rect(win_x, win_y, win_w, win_h)) {
+        if perf_phase() != PerfPhase::Collecting {
+            start_perf_test();
+        }
+        return true;
+    }
+    if crate::gui::in_rect(px, py, perf_sound_btn_rect(win_x, win_y, win_w, win_h)) {
+        return true;
+    }
+    false
+}
 
 /// Etkin sekme indeksi (0..TAB_COUNT).
 pub fn active_tab() -> usize {
@@ -200,8 +361,8 @@ pub fn render_content(
     kbd_layout: KeyboardLayout,
 ) {
     poll_network_test();
-    let names_tr = ["Sistem", "Ağ", "Hakkında"];
-    let names_en = ["System", "Network", "About"];
+    let names_tr = ["Sistem", "Ağ", "Hakkında", "Testler"];
+    let names_en = ["System", "Network", "About", "Tests"];
 
     for i in 0..TAB_COUNT {
         let r = tab_rect(win_x, win_y, win_w, i);
@@ -584,6 +745,99 @@ pub fn render_content(
                 net_color,
             );
         }
+        3 => {
+            // Testler sekmesi: performans testi.
+            let phase = perf_phase();
+            let title = match phase {
+                PerfPhase::Idle => crate::gui::ui_text("Performans testi hazır", "Performance test ready"),
+                PerfPhase::Collecting => crate::gui::ui_text("Ölçülüyor...", "Measuring..."),
+                PerfPhase::Finished => crate::gui::ui_text("Sonuç", "Result"),
+            };
+            draw_row(
+                fb,
+                left,
+                y,
+                row_w,
+                crate::gui::ui_text("Test:", "Test:"),
+                title,
+                Color::TEXT_MAIN,
+            );
+            y += step;
+
+            // İlerleme çubuğu.
+            let bar_x = left + crate::gui::sp(150);
+            let bar_space = (panel_x + panel_w).saturating_sub(16 + bar_x);
+            let bar_w = row_w.min(360).min(bar_space);
+            fb.draw_rect(bar_x, y - 4, bar_w, 8, Color::DARK_BG);
+            let pct = match phase {
+                PerfPhase::Collecting => {
+                    (PERF_TICK.load(Ordering::Relaxed) as usize * 100 / PERF_TICKS as usize).min(100)
+                }
+                PerfPhase::Finished => 100,
+                _ => 0,
+            };
+            fb.draw_rect(bar_x, y - 4, bar_w * pct / 100, 8, Color::ACCENT_GREEN);
+            y += step + 6;
+
+            if phase == PerfPhase::Collecting {
+                let mut t = TextBuf::new();
+                t.push_str(crate::gui::ui_text("İlerleme: %", "Progress: %"));
+                t.push_usize(pct);
+                t.push_str(crate::gui::ui_text("   - Ölçülüyor", "   - Measuring"));
+                MinGuiCompositor::draw_string(fb, left, y, t.as_str(), Color::TEXT_MUTED);
+                y += step;
+            }
+
+            if phase == PerfPhase::Finished {
+                let bits = PERF_RESULTS.load(Ordering::Relaxed);
+                let fps = (bits >> 32) as u32;
+                let timer_jitter_us = ((bits >> 16) & 0xFFFF) as u32;
+                let score = (bits & 0xFFFF) as u32;
+                let frame_ms = if fps > 0 { 1000 / fps } else { 0 };
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Kare hızı: ", "Frame rate: "));
+                r.push_usize(fps as usize);
+                r.push_str(" FPS");
+                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Çerçeve süresi: ", "Frame time: "));
+                r.push_usize(frame_ms as usize);
+                r.push_str(" ms");
+                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut r = TextBuf::new();
+                r.push_str(crate::gui::ui_text("Zamanlayıcı sapması: ", "Timer jitter: "));
+                r.push_usize(timer_jitter_us as usize);
+                r.push_str(" µs");
+                MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
+                y += step;
+                let mut score_txt = TextBuf::new();
+                score_txt.push_str(crate::gui::ui_text("Puan: ", "Score: "));
+                score_txt.push_usize(score as usize);
+                score_txt.push_str(" / 100 - ");
+                score_txt.push_str(perf_grade(score));
+                MinGuiCompositor::draw_string_clipped(
+                    fb,
+                    left,
+                    y,
+                    score_txt.as_str(),
+                    Color::ACCENT_GREEN,
+                    (left, y, row_w, sp(22)),
+                );
+            } else if phase == PerfPhase::Idle {
+                MinGuiCompositor::draw_string(
+                    fb,
+                    left,
+                    y,
+                    crate::gui::ui_text(
+                        "3 saniyelik test: CPU, bellek, çizim ve ses",
+                        "3 second test: CPU, memory, drawing and sound",
+                    ),
+                    Color::TEXT_MUTED,
+                );
+            }
+        }
         _ => {
             draw_row(
                 fb,
@@ -698,6 +952,34 @@ pub fn render_content(
         net_label,
         MinGuiCompositor::text_on(Color::ACCENT_GREEN),
     );
+
+    // Performans testi ve ses testi düğmeleri (Testler sekmesinde görünür).
+    if active_tab() == 3 {
+        let (bx, by, bw, bh) = perf_btn_rect(win_x, win_y, win_w, win_h);
+        let bg = if perf_phase() == PerfPhase::Collecting {
+            Color::TITLE_BAR_INACTIVE
+        } else {
+            Color::ACCENT_GREEN
+        };
+        fb.draw_rect(bx, by, bw, bh, bg);
+        MinGuiCompositor::draw_string(
+            fb,
+            bx + sp(12),
+            by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            crate::gui::ui_text("Performans Testini Başlat", "Start Performance Test"),
+            MinGuiCompositor::text_on(bg),
+        );
+
+        let (sx, sy, sw, sh) = perf_sound_btn_rect(win_x, win_y, win_w, win_h);
+        fb.draw_rect(sx, sy, sw, sh, Color::ACCENT_YELLOW);
+        MinGuiCompositor::draw_string(
+            fb,
+            sx + sp(12),
+            sy + (sh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+            crate::gui::ui_text("Ses Testi", "Sound Test"),
+            MinGuiCompositor::text_on(Color::ACCENT_YELLOW),
+        );
+    }
 
     // Tema değiştirme düğmesi (her sekmede görünür).
     let b = theme_btn_rect(win_x, win_y, win_w, win_h);

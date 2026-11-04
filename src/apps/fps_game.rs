@@ -97,26 +97,33 @@ const MAP_W: usize = 16;
 const MAP_H: usize = 16;
 const FOV: f32 = PI / 3.0; // 60 derece
 const MAX_DEPTH: f32 = 16.0;
-const WALL_HEIGHT_SCALE: f32 = 400.0;
-const MOVE_SPEED: f32 = 0.08;
-const ROT_SPEED: f32 = 0.06;
-const MOUSE_SENS: f32 = 0.0015;
+const MOVE_SPEED: f32 = 0.14;
+const ROT_SPEED: f32 = 0.10;
+// Ana döngü fare delta'sını yarım ölçekle gönderiyor; bu değer 1:1'e yakın,
+// daha kontrollü bir FPS dönüşü için ayarlandı.
+const MOUSE_SENS: f32 = 0.0045;
+const PLAYER_RADIUS: f32 = 0.25;
 
-/// Harita: 1 = duvar, 0 = boş. Sınırlar duvarlı.
+/// Harita kare türleri: 0 = boş, 1 = duvar, 2 = kapı, 3 = canlı/pickup.
+const TILE_WALL: u8 = 1;
+const TILE_DOOR: u8 = 2;
+const TILE_PICKUP: u8 = 3;
+
+/// Harita: Wolfenstein 3D tarzı bölüm.
 static MAP: [[u8; MAP_W]; MAP_H] = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1],
+    [1, 0, 1, 2, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1],
     [1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1],
+    [1, 0, 1, 0, 2, 1, 0, 2, 1, 1, 1, 0, 1, 0, 0, 1],
     [1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    [1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1],
+    [1, 0, 1, 0, 2, 0, 1, 1, 2, 0, 1, 1, 1, 1, 0, 1],
     [1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1, 0, 1],
+    [1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 2, 1, 0, 1, 0, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
     [1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 1, 0, 1],
     [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1],
-    [1, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1],
+    [1, 0, 1, 0, 0, 2, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1],
     [1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
     [1, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
@@ -133,6 +140,32 @@ struct Enemy {
 
 const MAX_ENEMIES: usize = 8;
 
+/// Pickup: (x, y, tür, aktif) — 1 = can, 2 = puan.
+#[derive(Clone, Copy)]
+struct Pickup {
+    x: f32,
+    y: f32,
+    kind: u8,
+    active: bool,
+}
+
+const MAX_PICKUPS: usize = 6;
+
+/// Kapı durumu: 0 = kapalı, 1..=10 = açılıyor/kapalıyor, 11 = açık.
+#[derive(Clone, Copy)]
+struct Door {
+    x: usize,
+    y: usize,
+    state: u8, // 0 = kapalı, 11 = açık
+}
+
+/// Görünüm modu: 3D raycasting veya 2D üstten bakış.
+#[derive(Clone, Copy, PartialEq)]
+pub enum RenderMode {
+    Mode3D,
+    TopDown2D,
+}
+
 /// Oyun durumu.
 pub struct FpsGameApp {
     // Oyuncu durumu
@@ -144,14 +177,26 @@ pub struct FpsGameApp {
     pub plane_y: f32,
     pub health: u32,
     pub score: u32,
+    pub ammo: u32,
     pub shots_fired: u32,
     pub hits: u32,
     pub shooting: bool,
     pub shoot_timer: usize,
 
+    // Görünüm modu
+    pub render_mode: RenderMode,
+
     // Düşmanlar
     enemies: [Enemy; MAX_ENEMIES],
     enemy_count: usize,
+
+    // Pickuplar
+    pickups: [Pickup; MAX_PICKUPS],
+    pickup_count: usize,
+
+    // Kapılar
+    doors: [Door; 8],
+    door_count: usize,
 
     // Zamanlayıcılar / FPS
     pub frame_count: usize,
@@ -190,6 +235,48 @@ impl FpsGameApp {
             }
         }
 
+        // Pickupları boş hücrelere yerleştir.
+        let mut pickups = [Pickup {
+            x: 0.0,
+            y: 0.0,
+            kind: 0,
+            active: false,
+        }; MAX_PICKUPS];
+        let mut pcount = 0;
+        for ty in 2..MAP_H - 1 {
+            for tx in 2..MAP_W - 1 {
+                if MAP[ty][tx] == 0 && pcount < MAX_PICKUPS && (tx * 2 + ty) % 5 == 0 {
+                    pickups[pcount] = Pickup {
+                        x: tx as f32 + 0.5,
+                        y: ty as f32 + 0.5,
+                        kind: if (tx + ty) % 2 == 0 { 1 } else { 2 },
+                        active: true,
+                    };
+                    pcount += 1;
+                }
+            }
+        }
+
+        // Kapıları harita konumlarından kaydet.
+        let mut doors = [Door {
+            x: 0,
+            y: 0,
+            state: 0,
+        }; 8];
+        let mut dcount = 0;
+        for ty in 0..MAP_H {
+            for tx in 0..MAP_W {
+                if MAP[ty][tx] == TILE_DOOR && dcount < doors.len() {
+                    doors[dcount] = Door {
+                        x: tx,
+                        y: ty,
+                        state: 0,
+                    };
+                    dcount += 1;
+                }
+            }
+        }
+
         Self {
             pos_x: 3.5,
             pos_y: 3.5,
@@ -199,12 +286,18 @@ impl FpsGameApp {
             plane_y: 0.66,
             health: 100,
             score: 0,
+            ammo: 50,
             shots_fired: 0,
             hits: 0,
             shooting: false,
             shoot_timer: 0,
+            render_mode: RenderMode::Mode3D,
             enemies,
             enemy_count: n,
+            pickups,
+            pickup_count: pcount,
+            doors,
+            door_count: dcount,
             frame_count: 0,
             last_fps_tick: 0,
             fps: 0,
@@ -215,14 +308,50 @@ impl FpsGameApp {
         }
     }
 
-    /// Harita duvarı kontrolü.
+    /// Harita duvarı kontrolü (duvar veya kapalı kapı engeller).
     #[inline(always)]
-    fn is_wall(mx: usize, my: usize) -> bool {
-        mx < MAP_W && my < MAP_H && MAP[my][mx] != 0
+    /// Kapı açık mı?
+    fn door_is_open(&self, mx: usize, my: usize) -> bool {
+        for d in self.doors.iter().take(self.door_count) {
+            if d.x == mx && d.y == my {
+                return d.state >= 11;
+            }
+        }
+        false
     }
 
-    /// Düşmana ateş et, en yakın canlı düşmanı vursa true döner.
+    /// Alt-hücre çarpışma kontrolü: oyuncunun dört köşesini duvar/kapalı kapıya karşı test eder.
+    fn is_wall(&self, x: f32, y: f32) -> bool {
+        let r = PLAYER_RADIUS;
+        let corners = [
+            (x - r, y - r),
+            (x + r, y - r),
+            (x - r, y + r),
+            (x + r, y + r),
+        ];
+        for (cx, cy) in corners {
+            let mx = cx as usize;
+            let my = cy as usize;
+            if mx >= MAP_W || my >= MAP_H {
+                return true;
+            }
+            let t = MAP[my][mx];
+            if t == TILE_WALL {
+                return true;
+            }
+            if t == TILE_DOOR && !self.door_is_open(mx, my) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Düşmana ateş et, mermi varsa en yakın canlı düşmanı vursa true döner.
     fn shoot(&mut self) -> bool {
+        if self.ammo == 0 {
+            return false;
+        }
+        self.ammo = self.ammo.saturating_sub(1);
         self.shots_fired += 1;
         let mut best_dist = f32::MAX;
         let mut best_idx: Option<usize> = None;
@@ -260,6 +389,77 @@ impl FpsGameApp {
         }
     }
 
+    /// Oyuncunun baktığı yönde, erişim mesafesindeki kapı karesi.
+    fn facing_door(&self) -> Option<(usize, usize)> {
+        // Oyuncu duvara 0.25 birim yaklaşabildiği için 0.7..1.3 aralığı
+        // hem yakın hem de bir kare uzaktaki kapıyı yakalar.
+        for dist in [0.7f32, 1.0, 1.3] {
+            let fx = (self.pos_x + self.dir_x * dist) as usize;
+            let fy = (self.pos_y + self.dir_y * dist) as usize;
+            if fx < MAP_W && fy < MAP_H && MAP[fy][fx] == TILE_DOOR {
+                return Some((fx, fy));
+            }
+        }
+        None
+    }
+
+    /// Kapıyı aç/kapat (oyuncu karşısındaysa). Durum değiştiyse `true`.
+    fn toggle_door(&mut self) -> bool {
+        let Some((front_x, front_y)) = self.facing_door() else {
+            return false;
+        };
+        // Zaten listedeki kapıyı bul.
+        for d in self.doors.iter_mut().take(self.door_count) {
+            if d.x == front_x && d.y == front_y {
+                if d.state == 0 {
+                    d.state = 1; // açılmaya başla
+                    return true;
+                } else if d.state >= 11 {
+                    d.state = 21; // kapanmaya başla (21 = 10 kare kapanma animasyonu)
+                    return true;
+                }
+                return false;
+            }
+        }
+        // Yeni kapı kaydı ekle.
+        if self.door_count < self.doors.len() {
+            self.doors[self.door_count] = Door {
+                x: front_x,
+                y: front_y,
+                state: 1,
+            };
+            self.door_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// Pickup'ı topla (üstüne gelindiğinde).
+    fn collect_pickups(&mut self) {
+        for p in self.pickups.iter_mut().take(self.pickup_count) {
+            if !p.active {
+                continue;
+            }
+            let dx = p.x - self.pos_x;
+            let dy = p.y - self.pos_y;
+            let dist = fast_sqrt(dx * dx + dy * dy);
+            if dist < 0.6 {
+                p.active = false;
+                match p.kind {
+                    1 => {
+                        self.health = (self.health + 25).min(200);
+                        self.score += 50;
+                    }
+                    2 => {
+                        self.ammo = self.ammo.saturating_add(20);
+                        self.score += 25;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Düşmanları yeniden canlandır (canlı olmayanları).
     fn respawn_enemies(&mut self) {
         for e in self.enemies.iter_mut().take(self.enemy_count) {
@@ -284,12 +484,12 @@ impl FpsGameApp {
         let new_x = self.pos_x + dx;
         let new_y = self.pos_y + dy;
 
-        // X ekseni çarpışma
-        if !Self::is_wall(new_x as usize, self.pos_y as usize) {
+        // X ekseni çarpışma (alt-hücre kontrolü).
+        if !self.is_wall(new_x, self.pos_y) {
             self.pos_x = new_x;
         }
-        // Y ekseni çarpışma
-        if !Self::is_wall(self.pos_x as usize, new_y as usize) {
+        // Y ekseni çarpışma (alt-hücre kontrolü).
+        if !self.is_wall(self.pos_x, new_y) {
             self.pos_y = new_y;
         }
     }
@@ -328,6 +528,10 @@ impl FpsGameApp {
                 audio_dev.set_pc_speaker_tone(200);
                 self.sound_pending = Some((200, 30));
             }
+            SoundKind::Door => {
+                audio_dev.set_pc_speaker_tone(620);
+                self.sound_pending = Some((620, 90));
+            }
         }
     }
 
@@ -365,24 +569,40 @@ impl FpsGameApp {
         win_w: usize,
         win_h: usize,
     ) {
-        let render_y = win_y + 30; // Araç çubuğu altı
-        let render_h = win_h.saturating_sub(54); // Araç çubuğu + durum çubuğu
+        // Görünüm alanı render_content tarafından araç çubuğu ile HUD
+        // arasında hesaplanıp verilir.
+        let render_y = win_y;
+        let render_h = win_h;
         let render_x = win_x;
         let render_w = win_w;
+        if render_w < 8 || render_h < 8 {
+            return;
+        }
 
         // Z-buffer: her sütun için mesafe.
         let mut z_buffer: [f32; 1024] = [0.0; 1024];
         let w = render_w.min(1024);
 
-        // Siyah tavan / zemin.
-        fb.draw_rect(render_x, render_y, render_w, render_h / 2, 0x101010);
-        fb.draw_rect(
-            render_x,
-            render_y + render_h / 2,
-            render_w,
-            render_h / 2,
-            0x0a0a0a,
-        );
+        // Wolfenstein tarzı net iki bölge: tavan ve zemin birbirinden belirgin
+        // olmalı; çok koyu arka plan duvarları ve perspektifi yutuyordu.
+        let horizon = render_h / 2;
+        for y in 0..horizon {
+            let t = y as f32 / horizon.max(1) as f32;
+            let r = (18.0 + 18.0 * t) as u32;
+            let g = (28.0 + 18.0 * t) as u32;
+            let b = (52.0 + 22.0 * t) as u32;
+            fb.draw_rect(render_x, render_y + y, render_w, 1, (r << 16) | (g << 8) | b);
+        }
+        // Zemin: açık gri-kahverengi, yatay perspektif bantlarıyla okunaklı.
+        for y in horizon..render_h {
+            let t = (y - horizon) as f32 / horizon.max(1) as f32;
+            let r = (92.0 - 42.0 * t) as u32;
+            let g = (76.0 - 34.0 * t) as u32;
+            let b = (58.0 - 26.0 * t) as u32;
+            let color = (r << 16) | (g << 8) | b;
+            fb.draw_rect(render_x, render_y + y, render_w, 1, color);
+        }
+        fb.draw_rect(render_x, render_y + horizon, render_w, 3, 0xD0A060);
 
         for x in 0..w {
             // Kamera x koordinatı (-1 ile 1 arası).
@@ -424,7 +644,10 @@ impl FpsGameApp {
             let mut side = 0;
             let perp_wall_dist: f32;
 
-            while !hit {
+            // Harita bozuk olsa bile tek ray ana döngüyü kilitlemesin.
+            let mut ray_steps = 0usize;
+            while !hit && ray_steps < MAP_W + MAP_H + 4 {
+                ray_steps += 1;
                 if side_dist_x < side_dist_y {
                     side_dist_x += delta_dist_x;
                     map_x = (map_x as isize + step_x) as usize;
@@ -434,8 +657,15 @@ impl FpsGameApp {
                     map_y = (map_y as isize + step_y) as usize;
                     side = 1;
                 }
-                if map_x >= MAP_W || map_y >= MAP_H || Self::is_wall(map_x, map_y) {
+                if map_x >= MAP_W || map_y >= MAP_H {
                     hit = true;
+                } else {
+                    let t = MAP[map_y][map_x];
+                    // Kapılar açıkken de çizilir: koyu bir geçit + parlak
+                    // yeşil kasayla "açık kapı" olarak okunur.
+                    if t == TILE_WALL || t == TILE_DOOR {
+                        hit = true;
+                    }
                 }
             }
 
@@ -450,35 +680,109 @@ impl FpsGameApp {
 
             z_buffer[x] = perp_wall_dist;
 
-            // Duvar yüksekliği.
-            let line_h =
-                (render_h as f32 / perp_wall_dist.max(0.1) * WALL_HEIGHT_SCALE * 0.25) as usize;
+            // Duvar yüksekliği: standart raycasting projeksiyonu. Ekran
+            // yüksekliği / mesafe; böylece yakın duvar büyük, uzak duvar
+            // küçük görünür ve tavan/zemin görünür kalır.
+            let line_h = (render_h as f32 / perp_wall_dist.max(0.15))
+                .min(render_h as f32 * 4.0) as usize;
             let draw_start = (render_h / 2).saturating_sub(line_h / 2);
             let draw_end = (render_h / 2).saturating_add(line_h / 2).min(render_h);
 
-            // Duvar rengi (mesafeye göre gölgeli).
-            let base = match MAP[map_y][map_x] {
-                1 => 0x404040,
-                _ => 0x606060,
-            };
-            let shade = (1.0 - (perp_wall_dist / MAX_DEPTH).clamp(0.0, 1.0)) * 0.6 + 0.4;
-            let r = (((base >> 16) & 0xFF) as f32 * shade) as u32;
-            let g = (((base >> 8) & 0xFF) as f32 * shade) as u32;
-            let b = ((base & 0xFF) as f32 * shade) as u32;
-            let wall_color = (r << 16) | (g << 8) | b;
-
-            // Kenar duvarları daha koyu.
-            let wall_color = if side == 1 {
-                wall_color / 2
+            // Duvar tekstürü (Wolfenstein 3D tarzı desenli duvarlar).
+            // Ray harita sınırından çıktıysa son örneği dışarı taşırma.
+            let tile = if map_x < MAP_W && map_y < MAP_H {
+                MAP[map_y][map_x]
             } else {
-                wall_color
+                TILE_WALL
+            };
+            // Tekstür x koordinatı: duvara çarpan noktanın fractional kısmı.
+            let tex_x_raw = if side == 0 {
+                perp_wall_dist * ray_dir_y
+            } else {
+                perp_wall_dist * ray_dir_x
+            };
+            let int_part = tex_x_raw as i32 as f32;
+            let mut tex_x = tex_x_raw - int_part;
+            if tex_x < 0.0 {
+                tex_x += 1.0;
+            }
+            let tx = (tex_x * 8.0) as usize % 8;
+
+            // Duvar rengi (mesafeye göre gölgeli).
+            // Yakındaki duvarlar canlı, uzaktakiler hâlâ ayırt edilebilir.
+            let shade =
+                (0.5 + 0.5 * (1.0 - (perp_wall_dist / MAX_DEPTH).clamp(0.0, 1.0))).min(1.0);
+            let apply_shade = |color: u32| -> u32 {
+                let r = (((color >> 16) & 0xFF) as f32 * shade) as u32;
+                let g = (((color >> 8) & 0xFF) as f32 * shade) as u32;
+                let b = ((color & 0xFF) as f32 * shade) as u32;
+                (r << 16) | (g << 8) | b
             };
 
-            // Dikey çizgi olarak duvarı çiz.
+            // Dikey çizgi olarak duvarı çiz (tekstürlü).
             if draw_start < draw_end && draw_end > 0 && draw_start < render_h {
                 let ds = draw_start.max(0).min(render_h);
                 let de = draw_end.max(0).min(render_h);
                 for yy in ds..de {
+                    // Tekstür y koordinatı.
+                    let ty = ((yy - ds) as f32 / (de - ds).max(1) as f32 * 8.0) as usize % 8;
+                    let wall_color = match tile {
+                        TILE_WALL => {
+                            // Tuğla duvar: iki sıra, kaydırılmış dikey derzler
+                            // ve üst kenarda ışık vurgusu ile net okunur.
+                            let row = ty / 4;
+                            let brick = match ty % 4 {
+                                0 => 0x6F2A22,
+                                1 => 0xC25443,
+                                2 => 0xA8402F,
+                                _ => 0x8C352A,
+                            };
+                            let joint_x = if row == 0 { 0 } else { 4 };
+                            let color = if ty % 4 == 0 || tx == joint_x {
+                                0x3D1714 // harç
+                            } else {
+                                brick
+                            };
+                            apply_shade(color)
+                        }
+                        TILE_DOOR => {
+                            if self.door_is_open(map_x, map_y) {
+                                // Açık kapı: koyu geçit + parlak yeşil kasa.
+                                if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
+                                    apply_shade(0x45C766)
+                                } else {
+                                    apply_shade(0x07110E)
+                                }
+                            } else {
+                                // Kapalı kapı: metalik camgöbeği panel,
+                                // sarı tehlike şeritleri ve pirinç kol.
+                                let color = if tx == 0 || tx == 7 || ty == 0 || ty == 7 {
+                                    0x16323A // kasa
+                                } else if tx == 4 && (ty == 3 || ty == 4) {
+                                    0xFFD24A // kol
+                                } else if (ty == 2 || ty == 4) && (tx == 2 || tx == 5) {
+                                    0xE0A92E // tehlike şeridi
+                                } else if tx % 2 == 0 {
+                                    0x2E6B78
+                                } else {
+                                    0x377C8B
+                                };
+                                apply_shade(color)
+                            }
+                        }
+                        TILE_PICKUP => apply_shade(0x40E040),
+                        _ => apply_shade(0x604040),
+                    };
+                    // Yan yüzeyi kanal bazlı karart; packed RGB değerini bölmek
+                    // renk kanallarını bozuyordu ve duvarı görünmez yapıyordu.
+                    let wall_color = if side == 1 {
+                        let r = (((wall_color >> 16) & 0xFF) * 3) / 4;
+                        let g = (((wall_color >> 8) & 0xFF) * 3) / 4;
+                        let b = (wall_color & 0xFF) * 3 / 4;
+                        (r << 16) | (g << 8) | b
+                    } else {
+                        wall_color
+                    };
                     fb.put_pixel(render_x + x, render_y + yy, wall_color);
                 }
             }
@@ -517,13 +821,15 @@ impl FpsGameApp {
                 continue;
             }
 
-            // Mesafeye göre boyut.
-            let sprite_h = (render_h as f32 / dist.max(0.3) * 150.0) as usize;
-            let sprite_w = sprite_h;
+            // Mesafeye göre boyut: duvar yüksekliğinin yaklaşık yarısı
+            // kadar bir insan silueti.
+            let sprite_h = (render_h as f32 / dist.max(0.3) * 0.45) as usize;
+            let sprite_w = (sprite_h / 2).clamp(8, 96);
             let draw_start_y = (render_h / 2).saturating_sub(sprite_h / 2);
             let draw_end_y = (render_h / 2).saturating_add(sprite_h / 2).min(render_h);
 
-            // Z-buffer testi: duvarın önündeyse çiz.
+            // Z-buffer testi: duvarın önündeyse çiz. Sprite'ı tek sütun yerine
+            // gerçek bir billboard olarak çizmek düşmanları okunabilir kılar.
             if dist < z_buffer[sx] {
                 let color = if e.hit_timer > 0 {
                     Color::ACCENT_RED
@@ -533,52 +839,173 @@ impl FpsGameApp {
                 let cx = render_x + sx;
                 let cy0 = render_y + draw_start_y;
                 let cy1 = render_y + draw_end_y;
-                let sw = sprite_w.min(4);
+                let sw = sprite_w;
                 for yy in cy0..cy1 {
                     for xx in 0..sw {
                         let px = cx.saturating_sub(sw / 2) + xx;
                         if px < render_x + w {
-                            fb.put_pixel(px, yy, color);
+                            let rel_y = yy.saturating_sub(cy0) as f32 / (cy1.saturating_sub(cy0).max(1)) as f32;
+                            let is_head = rel_y < 0.28;
+                            let edge = xx < 2 || xx + 2 >= sw;
+                            let pixel_color = if edge { 0x190F22 } else if is_head { 0xF08A7C } else { color };
+                            fb.put_pixel(px, yy, pixel_color);
                         }
                     }
                 }
+                // Kontrastlı gözler/nişan alınabilir merkez.
+                let eye_y = cy0 + (cy1.saturating_sub(cy0) / 5);
+                fb.draw_rect(cx.saturating_sub(sw / 4), eye_y, 3, 3, 0xFFF1C1);
+                fb.draw_rect(cx + sw / 4, eye_y, 3, 3, 0xFFF1C1);
             }
         }
 
-        // Vurma efekti (kırmızı flaş).
+        // Vurma efekti: tüm görüntüyü piksel piksel yeniden okumak pahalıydı.
+        // Bunun yerine ekran kenarında küçük bir hasar/ateş çerçevesi çizilir.
         if self.shooting && self.shoot_timer > 0 {
-            let flash_alpha = (self.shoot_timer as f32 / 10.0).clamp(0.0, 1.0);
-            let overlay = (0xFF0000 as f32 * flash_alpha * 0.3) as u32;
-            for yy in render_y..render_y + render_h {
-                for xx in render_x..render_x + render_w {
-                    let cur = fb.get_pixel(xx, yy);
-                    let r = ((cur >> 16) & 0xFF) as u32;
-                    let g = ((cur >> 8) & 0xFF) as u32;
-                    let b = (cur & 0xFF) as u32;
-                    let nr = (r.saturating_add(overlay)).min(0xFF);
-                    let ng = g.saturating_sub(overlay / 2).max(0);
-                    let nb = b.saturating_sub(overlay / 2).max(0);
-                    fb.put_pixel(xx, yy, (nr << 16) | (ng << 8) | nb);
-                }
-            }
+            let pulse = if self.shoot_timer > 5 { 0xFFD34E } else { 0xA62E2E };
+            let edge = 3usize;
+            fb.draw_rect(render_x, render_y, render_w, edge, pulse);
+            fb.draw_rect(render_x, render_y + render_h.saturating_sub(edge), render_w, edge, pulse);
+            fb.draw_rect(render_x, render_y, edge, render_h, pulse);
+            fb.draw_rect(render_x + render_w.saturating_sub(edge), render_y, edge, render_h, pulse);
         }
     }
 
-    /// Radar / küçük haritayı çizer.
-    pub fn render_radar(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {
-        let radar_w = 80usize;
-        let radar_h = 60usize;
-        let rx = win_x + win_w.saturating_sub(radar_w).saturating_sub(10);
-        let ry = win_y + 40;
+    /// 2D üstten bakış sahnesini çizer.
+    pub fn render_2d_topdown(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        // Kare hücreler: harita en-boy oranı bozulmadan ortalanır.
+        let cell = (win_w / MAP_W).min(win_h / MAP_H).max(1);
+        let map_w = cell * MAP_W;
+        let map_h = cell * MAP_H;
+        let offset_x = win_x + win_w.saturating_sub(map_w) / 2;
+        let offset_y = win_y + win_h.saturating_sub(map_h) / 2;
 
-        fb.draw_rect(rx, ry, radar_w, radar_h, 0x000000);
+        // Harita karelerini çiz.
+        for ty in 0..MAP_H {
+            for tx in 0..MAP_W {
+                let x = offset_x + tx * cell;
+                let y = offset_y + ty * cell;
+                let t = MAP[ty][tx];
+                let color = match t {
+                    TILE_WALL => 0x6B7A8C,
+                    TILE_DOOR => {
+                        if self.door_is_open(tx, ty) {
+                            0x45C766
+                        } else {
+                            0xE0A92E
+                        }
+                    }
+                    TILE_PICKUP => 0x40E040,
+                    _ => 0x151A22,
+                };
+                fb.draw_rect(x + 1, y + 1, cell.saturating_sub(2), cell.saturating_sub(2), color);
+                // Hücre kenarlığı.
+                fb.draw_rect(x, y, cell, 1, 0x2A3340);
+                fb.draw_rect(x, y, 1, cell, 0x2A3340);
+            }
+        }
+
+        // Düşmanları çiz (kırmızı kare).
+        for e in self.enemies.iter().take(self.enemy_count) {
+            if !e.alive {
+                continue;
+            }
+            let ex = offset_x + (e.x as usize).min(MAP_W - 1) * cell + cell / 4;
+            let ey = offset_y + (e.y as usize).min(MAP_H - 1) * cell + cell / 4;
+            let size = (cell / 2).max(2);
+            fb.draw_rect(ex, ey, size, size, 0xFF4040);
+        }
+
+        // Pickupları çiz (yeşil küçük kare).
+        for p in self.pickups.iter().take(self.pickup_count) {
+            if !p.active {
+                continue;
+            }
+            let px = offset_x + (p.x as usize).min(MAP_W - 1) * cell + cell / 3;
+            let py = offset_y + (p.y as usize).min(MAP_H - 1) * cell + cell / 3;
+            let size = (cell / 3).max(2);
+            let color = if p.kind == 1 { 0x40FF40 } else { 0xFFFF40 };
+            fb.draw_rect(px, py, size, size, color);
+        }
+
+        // Oyuncuyu çiz (mavi kare + yön işareti).
+        let px = offset_x + (self.pos_x as usize).min(MAP_W - 1) * cell + cell / 4;
+        let py = offset_y + (self.pos_y as usize).min(MAP_H - 1) * cell + cell / 4;
+        let size = (cell / 2).max(2);
+        fb.draw_rect(px, py, size, size, 0x4040FF);
+
+        // Yön işareti (oyuncunun baktığı yön).
+        let dir_len = (cell / 2).max(4);
+        let dx = (self.dir_x * dir_len as f32) as isize;
+        let dy = (self.dir_y * dir_len as f32) as isize;
+        let cx = px + size / 2;
+        let cy = py + size / 2;
+        let end_x = (cx as isize + dx).max(0) as usize;
+        let end_y = (cy as isize + dy).max(0) as usize;
+        fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(1), 3, 3, 0xFFFFFF);
+        // Basit çizgi: yön noktasını işaretle.
+        fb.draw_rect(end_x.saturating_sub(1), end_y.saturating_sub(1), 3, 3, 0xFFFF00);
+
+        // Mod bilgisi.
+        let mut info = crate::gui::TextBuf::new();
+        info.push_str(crate::gui::ui_text("2D Üstten Bakış", "2D Top-Down View"));
+        MinGuiCompositor::draw_string(
+            fb,
+            offset_x + 4,
+            offset_y.saturating_add(win_h).saturating_sub(16),
+            info.as_str(),
+            Color::ACCENT_YELLOW,
+        );
+    }
+
+    /// Radar / küçük harita: duvarlar, kapılar ve düşmanlar.
+    pub fn render_radar(&self, fb: &mut Framebuffer, win_x: usize, win_y: usize, win_w: usize) {
+        let radar_w = 96usize;
+        let radar_h = 72usize;
+        let rx = win_x + win_w.saturating_sub(radar_w).saturating_sub(10);
+        let ry = win_y + 8;
+
+        fb.draw_rect(rx, ry, radar_w, radar_h, 0x05070A);
+        let cw = (radar_w / MAP_W).max(1);
+        let ch = (radar_h / MAP_H).max(1);
+
+        for ty in 0..MAP_H {
+            for tx in 0..MAP_W {
+                let t = MAP[ty][tx];
+                let color = match t {
+                    TILE_WALL => 0x4A5568,
+                    TILE_DOOR => {
+                        if self.door_is_open(tx, ty) {
+                            0x45C766
+                        } else {
+                            0xE0A92E
+                        }
+                    }
+                    TILE_PICKUP => 0x40E040,
+                    _ => 0x0C1018,
+                };
+                fb.draw_rect(rx + tx * cw, ry + ty * ch, cw, ch, color);
+            }
+        }
         fb.draw_rect_outline(rx, ry, radar_w, radar_h, Color::ACCENT_GREEN);
 
-        // Oyuncu noktası.
+        // Oyuncu noktası ve bakış yönü.
         let px = rx + (self.pos_x / MAP_W as f32 * radar_w as f32) as usize;
         let py = ry + (self.pos_y / MAP_H as f32 * radar_h as f32) as usize;
         if px > rx && px < rx + radar_w && py > ry && py < ry + radar_h {
-            fb.draw_rect(px, py, 2, 2, Color::ACCENT_BLUE);
+            fb.draw_rect(px.saturating_sub(1), py.saturating_sub(1), 3, 3, Color::ACCENT_BLUE);
+            let dx = (self.dir_x * 5.0) as isize;
+            let dy = (self.dir_y * 5.0) as isize;
+            let ex = (px as isize + dx).max(0) as usize;
+            let ey = (py as isize + dy).max(0) as usize;
+            fb.draw_rect(ex, ey, 1, 1, 0xFFFFFF);
         }
 
         // Düşmanlar.
@@ -589,7 +1016,7 @@ impl FpsGameApp {
             let ex = rx + (e.x / MAP_W as f32 * radar_w as f32) as usize;
             let ey = ry + (e.y / MAP_H as f32 * radar_h as f32) as usize;
             if ex > rx && ex < rx + radar_w && ey > ry && ey < ry + radar_h {
-                fb.draw_rect(ex, ey, 1, 1, Color::ACCENT_RED);
+                fb.draw_rect(ex, ey, 2, 2, Color::ACCENT_RED);
             }
         }
     }
@@ -628,6 +1055,18 @@ impl FpsGameApp {
             hud_y + 4,
             score_text.as_str(),
             Color::TEXT_MAIN,
+        );
+
+        // Mermi.
+        let mut ammo_text = crate::gui::TextBuf::new();
+        ammo_text.push_str(crate::gui::ui_text("Mermi: ", "Ammo: "));
+        ammo_text.push_u2(self.ammo);
+        MinGuiCompositor::draw_string(
+            fb,
+            win_x + 160,
+            hud_y + 4,
+            ammo_text.as_str(),
+            Color::ACCENT_YELLOW,
         );
 
         // FPS.
@@ -688,7 +1127,11 @@ impl FpsGameApp {
         win_w: usize,
         win_h: usize,
     ) {
-        // Araç çubuğu.
+        // Araç çubuğu — mod başlığı.
+        let mode_label = match self.render_mode {
+            RenderMode::Mode3D => crate::gui::ui_text("FPS 3D (T=2D Üstten)", "FPS 3D (T=Top-Down 2D)"),
+            RenderMode::TopDown2D => crate::gui::ui_text("FPS 2D Üstten (T=3D)", "FPS 2D Top-Down (T=3D)"),
+        };
         fb.draw_rect(
             win_x + 6,
             win_y + 30,
@@ -700,24 +1143,88 @@ impl FpsGameApp {
             fb,
             win_x + 12,
             win_y + 36,
-            crate::gui::ui_text("FPS Performans Testi", "FPS Performance Test"),
+            mode_label,
             Color::TEXT_MAIN,
         );
 
-        // 3D sahne.
-        self.render_3d(fb, win_x, win_y + 54, win_w, win_h);
+        // Karşıda bir kapı varsa kullanım ipucu göster.
+        if self.render_mode == RenderMode::Mode3D {
+            if let Some((door_x, door_y)) = self.facing_door() {
+                let label = if self.door_is_open(door_x, door_y) {
+                    crate::gui::ui_text("E: Kapıyı kapat", "E: Close door")
+                } else {
+                    crate::gui::ui_text("E: Kapıyı aç", "E: Open door")
+                };
+                let tw = MinGuiCompositor::text_width(label, 1);
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + win_w.saturating_sub(tw + 14),
+                    win_y + 36,
+                    label,
+                    Color::ACCENT_YELLOW,
+                );
+            }
+        }
 
-        // Radar.
-        self.render_radar(fb, win_x, win_y, win_w);
+        // Sahne alanı: araç çubuğu ile HUD arasında kalan bölge.
+        let view_y = win_y + 30 + crate::gui::sp(24) + 2;
+        let view_h = win_h.saturating_sub((view_y - win_y) + 26);
+
+        // Görünüm moduna göre sahne çiz.
+        match self.render_mode {
+            RenderMode::Mode3D => {
+                self.render_3d(fb, win_x, view_y, win_w, view_h);
+                self.render_radar(fb, win_x, view_y, win_w);
+            }
+            RenderMode::TopDown2D => {
+                self.render_2d_topdown(fb, win_x, view_y, win_w, view_h);
+            }
+        }
 
         // HUD.
         self.render_hud(fb, win_x, win_y, win_w, win_h);
 
-        // Merkez işaretçi (crosshair).
-        let cx = win_x + win_w / 2;
-        let cy = win_y + 54 + (win_h.saturating_sub(54)) / 2;
-        fb.draw_rect(cx.saturating_sub(2), cy, 4, 1, Color::WHITE);
-        fb.draw_rect(cx, cy.saturating_sub(2), 1, 4, Color::WHITE);
+        // 3D modunda yalnızca crosshair ve silah çiz.
+        if self.render_mode == RenderMode::Mode3D {
+            // Merkez işaretçi (crosshair) — büyük ve net.
+            let cx = win_x + win_w / 2;
+            let cy = view_y + view_h / 2;
+            // Dikey çizgi.
+            fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(6), 3, 13, 0xFFFF00);
+            // Yatay çizgi.
+            fb.draw_rect(cx.saturating_sub(6), cy.saturating_sub(1), 13, 3, 0xFFFF00);
+            // Merkez nokta.
+            fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(1), 3, 3, 0xFFFFFF);
+
+            // Daha okunaklı bir silah silüeti: gövde, sürgü, namlu ve kabza.
+            let gun_w = 92;
+            let gun_h = 58;
+            let gun_x = win_x + win_w / 2 - gun_w / 2;
+            let gun_y = win_y + win_h.saturating_sub(gun_h + 10);
+            let recoil = if self.shooting && self.shoot_timer > 0 {
+                (10 - self.shoot_timer) * 2
+            } else {
+                0
+            };
+            let gy = gun_y.saturating_add(recoil);
+            // Silah gövdesi.
+            fb.draw_rect(gun_x + 20, gy + 8, gun_w - 38, 25, 0x252A33);
+            fb.draw_rect(gun_x + 25, gy + 5, gun_w - 48, 6, 0x77808B);
+            fb.draw_rect(gun_x + gun_w / 2 - 5, gy, 10, 10, 0xAEB8C2);
+            // Silah kabzası.
+            fb.draw_rect(gun_x + 30, gy + 28, 28, 25, 0x4B3030);
+            fb.draw_rect(gun_x + 34, gy + 32, 20, 21, 0x6A3B36);
+            fb.draw_rect(gun_x + 18, gy + 30, 12, 7, 0x171A20);
+            // Mermi sayacı (silah üzerinde).
+            if self.ammo > 0 {
+                fb.draw_rect(gun_x + gun_w - 15, gy + 5, 10, 10, 0xFFD700);
+            }
+            // Ateş flaşı.
+            if self.shooting && self.shoot_timer > 5 {
+                fb.draw_rect(gun_x + gun_w / 2 - 5, gy.saturating_sub(8), 10, 10, 0xFFF4A3);
+                fb.draw_rect(gun_x + gun_w / 2 - 2, gy.saturating_sub(14), 4, 6, 0xFFFFFF);
+            }
+        }
 
         // Vuruş flaşı.
         if self.shooting && self.shoot_timer > 0 {
@@ -753,13 +1260,14 @@ impl FpsGameApp {
             }
             'a' | 'A' => {
                 // Sola strafe.
-                self.move_player(-self.dir_y * MOVE_SPEED, self.dir_x * MOVE_SPEED);
+                // Sağ vektör = (-dir_y, dir_x); sola bunun tersidir.
+                self.move_player(self.dir_y * MOVE_SPEED, -self.dir_x * MOVE_SPEED);
                 self.moving = true;
                 true
             }
             'd' | 'D' => {
                 // Sağa strafe.
-                self.move_player(self.dir_y * MOVE_SPEED, -self.dir_x * MOVE_SPEED);
+                self.move_player(-self.dir_y * MOVE_SPEED, self.dir_x * MOVE_SPEED);
                 self.moving = true;
                 true
             }
@@ -779,6 +1287,21 @@ impl FpsGameApp {
             }
             'r' | 'R' => {
                 self.respawn_enemies();
+                true
+            }
+            'e' | 'E' => {
+                // Kapı aç/kapat.
+                if self.toggle_door() {
+                    self.play_sound(audio_dev, SoundKind::Door);
+                }
+                true
+            }
+            't' | 'T' => {
+                // Görünüm modunu değiştir: 3D <-> 2D üstten bakış.
+                self.render_mode = match self.render_mode {
+                    RenderMode::Mode3D => RenderMode::TopDown2D,
+                    RenderMode::TopDown2D => RenderMode::Mode3D,
+                };
                 true
             }
             _ => false,
@@ -837,6 +1360,24 @@ impl FpsGameApp {
         }
         self.moving = false;
 
+        // Kapı animasyonları (açılıyor/kapalıyor).
+        for d in self.doors.iter_mut().take(self.door_count) {
+            if d.state > 0 && d.state < 11 {
+                d.state = d.state.saturating_add(1);
+                if d.state >= 11 {
+                    d.state = 11; // tamamen açık
+                }
+            } else if d.state > 11 {
+                d.state = d.state.saturating_sub(1);
+                if d.state <= 11 {
+                    d.state = 0; // tamamen kapalı
+                }
+            }
+        }
+
+        // Pickup toplama.
+        self.collect_pickups();
+
         // Düşmanları yenile.
         self.respawn_enemies();
     }
@@ -848,4 +1389,5 @@ pub enum SoundKind {
     Shoot,
     Hit,
     Step,
+    Door,
 }

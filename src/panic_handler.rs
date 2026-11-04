@@ -7,6 +7,12 @@ use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Etkin bir uygulama koruması varsa panic'i çekirdeğe yaymadan o
+    // uygulamayı sonlandır. `try_recover_panic` başarılıysa geri dönmez.
+    if crate::apps::guard::try_recover_panic(info) {
+        // Erişilemez: kurtarma yolu doğrudan korunan bloğun çağıranına döner.
+    }
+
     struct PanicSerial;
     impl FmtWrite for PanicSerial {
         fn write_str(&mut self, text: &str) -> core::fmt::Result {

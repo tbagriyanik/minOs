@@ -4,7 +4,7 @@
 use crate::{apps, drivers, fs, gui, mm};
 
 /// Pencereye bagli calisan surec adlari (gorev yoneticisi surec tablosu icin).
-fn app_process_name(app_id: usize) -> &'static str {
+pub fn app_process_name(app_id: usize) -> &'static str {
     match app_id {
         0 => "dosya_yoneticisi",
         1 => "sistem_ayarlari",
@@ -22,6 +22,7 @@ fn app_process_name(app_id: usize) -> &'static str {
         13 => "paket_yoneticisi",
         14 => "kontrol_paneli",
         15 => "oyunlar",
+        16 => "fps_3d_oyun",
         _ => "uygulama",
     }
 }
@@ -44,22 +45,13 @@ fn ensure_window_process(idx: usize, app_id: usize) {
 }
 
 /// Bir pencereye bagli sureci sonlandirir ve kaynaklarini serbest birakir.
-pub fn terminate_window_process(idx: usize) {
+pub fn terminate_window_process(idx: usize) -> bool {
     unsafe {
         let mgr = &mut *core::ptr::addr_of_mut!(crate::MEMORY_MGR);
-        let pid = mgr
-            .proc_mgr
-            .processes
-            .iter()
-            .find(|p| {
-                p.state != mm::process::ProcessState::Unused
-                    && p.state != mm::process::ProcessState::Terminated
-                    && p.resources.window_idx == Some(idx)
-            })
-            .map(|p| p.pid);
-        if let Some(pid) = pid {
-            let _ = mgr.proc_mgr.terminate(pid, 0, &mut mgr.pmm);
-        }
+        // The task manager must use the process table's kill path.  Closing a
+        // GUI slot is only presentation state; it must never be the thing
+        // that defines whether the process is alive.
+        mgr.proc_mgr.terminate_by_window(idx, &mut mgr.pmm)
     }
 }
 
@@ -207,10 +199,11 @@ pub fn terminate_app(
     viewer3d: &mut apps::viewer3d::Viewer3DApp,
     pkgmgr: &mut apps::pkgmgr::PackageManagerApp,
     fps: &mut apps::game::GameApp,
+    fps_3d: &mut apps::fps_game::FpsGameApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
     // Pencereyi kapatmakla kalma: pencereye bagli sureci de gercekten sonlandir.
-    terminate_window_process(idx);
+    let _was_running = terminate_window_process(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {
         window.is_open = false;
         window.is_minimized = false;
@@ -254,6 +247,7 @@ pub fn terminate_app(
             13 => *pkgmgr = apps::pkgmgr::PackageManagerApp::new(),
             14 => apps::controlpanel::reset(),
             15 => *fps = apps::game::GameApp::new(),
+            16 => *fps_3d = apps::fps_game::FpsGameApp::new(),
             _ => return,
         }
     }

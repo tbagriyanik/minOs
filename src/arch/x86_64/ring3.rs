@@ -68,6 +68,8 @@ const F_RSI: usize = 4;
 
 const F_RDI: usize = 5;
 
+pub(crate) const F_R15: usize = 14;
+
 /// CPU itmeli çerçeve (iretq hedefi): RIP/CS/RFLAGS/RSP/SS.
 
 const F_IRIP: usize = 15;
@@ -277,9 +279,11 @@ pub fn take_last_output() -> Option<alloc::string::String> {
 
 /// Hata kodlu kesici çerçevesi: int80 çerçevesi + tabanda hata kodu.
 
-const EF_RIP: usize = 16;
+pub(crate) const EF_RIP: usize = 16;
 
-const EF_CS: usize = 17;
+pub(crate) const EF_CS: usize = 17;
+
+pub(crate) const EF_RFLAGS: usize = 18;
 
 macro_rules! fault_entry {
 
@@ -512,8 +516,6 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         )
     };
 
-    let _ = err;
-
     if cs & 3 == 3 {
         // Kullanıcı kipi hatası: etkisizleştir ve Ring3 parkına dön.
 
@@ -532,6 +534,9 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         smp::print_locked_dec(vec as u64);
 
         smp::print_locked("); surec park edildi, cekirdek saglam.\n");
+    } else if unsafe { crate::apps::guard::try_recover_exception(frame, err, vec) } {
+        // Uygulama kodu içindeki hata yakalandı. Kesici çerçevesi kurtarma
+        // trampolinine yönlendirildi; buradan sonra normal akışa dönülür.
     } else {
         let cr2: u64;
 

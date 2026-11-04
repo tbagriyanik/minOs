@@ -328,9 +328,9 @@ pub const MENU_ITEM_STEP: usize = 20;
 pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
     ("Sistem", 0, 7),
     ("Üretkenlik", 7, 3),
-    ("Medya", 10, 6),
-    ("Kurulu", 16, 9),
-    ("Güç", 25, 2),
+    ("Medya", 10, 7),
+    ("Kurulu", 17, 9),
+    ("Güç", 26, 2),
 ];
 
 impl MinGuiCompositor {
@@ -355,6 +355,7 @@ impl MinGuiCompositor {
             13 => 5, // Paket Yöneticisi -> Paket / Kutu
             14 => 4, // Kontrol Paneli -> Dişli
             15 => 2, // Oyunlar -> Oyun tahtası
+            16 => 2, // FPS 3D Oyun -> Oyun tahtası
             _ => 0,
         }
     }
@@ -378,6 +379,7 @@ impl MinGuiCompositor {
                 13 => "Package Manager",
                 14 => "Control Panel",
                 15 => "Games",
+                16 => "FPS 3D Game",
                 _ => "Window",
             }
         } else {
@@ -398,6 +400,7 @@ impl MinGuiCompositor {
                 13 => "Paket Yöneticisi",
                 14 => "Kontrol Paneli",
                 15 => "Oyunlar",
+                16 => "FPS 3D Oyun",
                 _ => "Pencere",
             }
         }
@@ -422,6 +425,7 @@ impl MinGuiCompositor {
                 13 => "Packages",
                 14 => "Control",
                 15 => "Game",
+                16 => "FPS3D",
                 _ => "Win",
             }
         } else {
@@ -442,6 +446,7 @@ impl MinGuiCompositor {
                 13 => "Paketler",
                 14 => "Kontrol",
                 15 => "Oyun",
+                16 => "FPS3D",
                 _ => "Pencere",
             }
         }

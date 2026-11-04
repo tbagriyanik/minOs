@@ -525,6 +525,308 @@ impl MinGuiCompositor {
         Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
     }
 
+    /// Dama taşı simgesi (16x16) — Dama sekmesi için.
+    pub fn draw_checker_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
+        const ICON_MAP: [u16; 16] = [
+            0b0001111111100000,
+            0b0011111111110000,
+            0b0111111111111000,
+            0b1111111111111100,
+            0b1111111111111100,
+            0b1111111111111100,
+            0b1111111111111100,
+            0b1111111111111100,
+            0b0111111111111000,
+            0b0011111111110000,
+            0b0001111111100000,
+            0b0000111111000000,
+            0b0000011110000000,
+            0b0000001100000000,
+            0b0000000000000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    bitmap[row * 16 + col] = Color::ACCENT_PINK;
+                }
+            }
+        }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+    }
+
+    /// Mayın simgesi (16x16) — Mayın Tarlası sekmesi için.
+    pub fn draw_mine_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        let s = Self::icon_size();
+        let mut bitmap = [0u32; 256];
+        const ICON_MAP: [u16; 16] = [
+            0b0000000000000000,
+            0b0000011111100000,
+            0b0001111111111000,
+            0b0011111111111100,
+            0b0111111111111110,
+            0b0111111111111110,
+            0b0111111111111110,
+            0b0011111111111100,
+            0b0001111111111000,
+            0b0000111111100000,
+            0b0000011111100000,
+            0b0000001111000000,
+            0b0000000110000000,
+            0b0000000000000000,
+            0b0000000000000000,
+            0b0000000000000000,
+        ];
+        for (row, &mask) in ICON_MAP.iter().enumerate() {
+            for col in 0..16 {
+                if (mask & (1 << (15 - col))) != 0 {
+                    let c = if row <= 1 {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::ACCENT_RED
+                    };
+                    bitmap[row * 16 + col] = c;
+                }
+            }
+        }
+        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+    }
+
+    /// Satranç taşı silüeti (16x16). Her satır bir bit maskesidir; bit 15 en
+    /// soldaki sütundur. Satır 0 ve 15 bilinçli olarak boştur; böylece taşın
+    /// çevresine bir hücrelik kontur sığar.
+    ///
+    /// 8: Şah, 9: Vezir, 10: Kale, 11: At, 12: Fil, 13: Piyon.
+    fn chess_piece_mask(index: usize) -> [u16; 16] {
+        match index {
+            // Şah — tepesinde haç, altında çan biçimli gövde.
+            8 => [
+                0b0000000000000000,
+                0b0000000110000000,
+                0b0000011111100000,
+                0b0000000110000000,
+                0b0000001111000000,
+                0b0000011111100000,
+                0b0000011111100000,
+                0b0000111111110000,
+                0b0000011111100000,
+                0b0000011111100000,
+                0b0000111111110000,
+                0b0000111111110000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            // Vezir — beş uçlu taç ve ince belli gövde.
+            9 => [
+                0b0000000000000000,
+                0b0010010110100100,
+                0b0011011111101100,
+                0b0011111111111100,
+                0b0001111111111000,
+                0b0000111111110000,
+                0b0000011111100000,
+                0b0000001111000000,
+                0b0000011111100000,
+                0b0000111111110000,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0011111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            // Kale — mazgallı düz tepe ve dik gövde.
+            10 => [
+                0b0000000000000000,
+                0b0011011001101100,
+                0b0011111111111100,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0011111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            // At — sağa bakan, kulağı ve açık ağzı olan at başı.
+            11 => [
+                0b0000000000000000,
+                0b0000011000000000,
+                0b0000111100000000,
+                0b0001111110000000,
+                0b0011111111000000,
+                0b0011111111100000,
+                0b0011111111110000,
+                0b0011111111111000,
+                0b0011110000000000,
+                0b0011111111110000,
+                0b0011111111110000,
+                0b0011111111110000,
+                0b0011111111111000,
+                0b0111111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            // Fil — sivri mitre, ince boyun ve geniş taban.
+            12 => [
+                0b0000000000000000,
+                0b0000000110000000,
+                0b0000001111000000,
+                0b0000011111100000,
+                0b0000111111110000,
+                0b0001111111111000,
+                0b0000111111110000,
+                0b0000111111110000,
+                0b0000011111100000,
+                0b0000111111110000,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            // Piyon — yuvarlak baş, ince boyun ve geniş etek.
+            13 => [
+                0b0000000000000000,
+                0b0000001111000000,
+                0b0000011111100000,
+                0b0000011111100000,
+                0b0000001111000000,
+                0b0000001111000000,
+                0b0000011111100000,
+                0b0000011111100000,
+                0b0000001111000000,
+                0b0000001111000000,
+                0b0000111111110000,
+                0b0000111111110000,
+                0b0001111111111000,
+                0b0011111111111100,
+                0b0111111111111110,
+                0b0000000000000000,
+            ],
+            _ => [0u16; 16],
+        }
+    }
+
+    /// Taş gövdesinin içine kontur rengiyle çizilen detay pikselleri.
+    /// Yalnızca filin mitresindeki klasik çapraz yarık için kullanılır.
+    fn chess_piece_detail(index: usize) -> [u16; 16] {
+        match index {
+            12 => [
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000100000000,
+                0b0000000010000000,
+                0b0000000001000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+                0b0000000000000000,
+            ],
+            _ => [0u16; 16],
+        }
+    }
+
+    /// Satranç taşını istenen boyutta, seçilen dolgu ve kontur rengiyle çizer.
+    /// Kontur, silüetin bir hücre genişletilmesiyle üretilir; böylece taş hem
+    /// açık hem koyu kare üzerinde okunaklı kalır.
+    pub fn draw_chess_piece_styled(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        size: usize,
+        index: usize,
+        fill: u32,
+        outline: u32,
+    ) {
+        let mask = Self::chess_piece_mask(index);
+        let detail = Self::chess_piece_detail(index);
+        let mut border = [0u32; 256];
+        let mut body = [0u32; 256];
+        for (row, &bits) in mask.iter().enumerate() {
+            for col in 0..16 {
+                let bit = 1u16 << (15 - col);
+                if bits & bit == 0 {
+                    continue;
+                }
+                body[row * 16 + col] = if detail[row] & bit != 0 { outline } else { fill };
+                let r0 = row.saturating_sub(1);
+                let r1 = (row + 1).min(15);
+                let c0 = col.saturating_sub(1);
+                let c1 = (col + 1).min(15);
+                for nr in r0..=r1 {
+                    for nc in c0..=c1 {
+                        border[nr * 16 + nc] = outline;
+                    }
+                }
+            }
+        }
+        Self::draw_icon_bitmap(fb, x, y, size, &border);
+        Self::draw_icon_bitmap(fb, x, y, size, &body);
+    }
+
+    /// Satranç taşını varsayılan ikon boyutunda tema metin rengiyle çizer.
+    fn draw_chess_piece_plain(fb: &mut Framebuffer, x: usize, y: usize, index: usize) {
+        let mask = Self::chess_piece_mask(index);
+        let mut bitmap = [0u32; 256];
+        for (row, &bits) in mask.iter().enumerate() {
+            for col in 0..16 {
+                if bits & (1 << (15 - col)) != 0 {
+                    bitmap[row * 16 + col] = Color::TEXT_MAIN;
+                }
+            }
+        }
+        Self::draw_icon_bitmap(fb, x, y, Self::icon_size(), &bitmap);
+    }
+
+    /// Satranç Şah simgesi (16x16).
+    pub fn draw_chess_king_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 8);
+    }
+
+    /// Satranç Vezir simgesi (16x16).
+    pub fn draw_chess_queen_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 9);
+    }
+
+    /// Satranç Kale simgesi (16x16).
+    pub fn draw_chess_rook_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 10);
+    }
+
+    /// Satranç At simgesi (16x16).
+    pub fn draw_chess_knight_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 11);
+    }
+
+    /// Satranç Fil simgesi (16x16).
+    pub fn draw_chess_bishop_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 12);
+    }
+
+    /// Satranç Piyon simgesi (16x16).
+    pub fn draw_chess_pawn_icon(fb: &mut Framebuffer, x: usize, y: usize) {
+        Self::draw_chess_piece_plain(fb, x, y, 13);
+    }
+
     /// İndekse göre ilgili simgeyi çizer (aktif UI ölçeğinde).
     pub fn draw_icon_by_index(fb: &mut Framebuffer, x: usize, y: usize, index: usize) {
         Self::draw_icon_by_index_scaled(fb, x, y, index)
@@ -540,6 +842,14 @@ impl MinGuiCompositor {
             3 => Self::draw_music_icon(fb, x, y),
             4 => Self::draw_gear_icon(fb, x, y),
             5 => Self::draw_package_icon(fb, x, y),
+            6 => Self::draw_checker_icon(fb, x, y),
+            7 => Self::draw_mine_icon(fb, x, y),
+            8 => Self::draw_chess_king_icon(fb, x, y),
+            9 => Self::draw_chess_queen_icon(fb, x, y),
+            10 => Self::draw_chess_rook_icon(fb, x, y),
+            11 => Self::draw_chess_knight_icon(fb, x, y),
+            12 => Self::draw_chess_bishop_icon(fb, x, y),
+            13 => Self::draw_chess_pawn_icon(fb, x, y),
             _ => Self::draw_cat_icon(fb, x, y),
         }
     }

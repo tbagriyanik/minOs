@@ -1719,48 +1719,50 @@ pub extern "C" fn _start() -> ! {
         .and_then(|idx| compositor.windows[idx].map(|w| (w.app_id as usize, idx)))
         .unwrap_or((apps::guard::NO_APP, apps::guard::NO_WINDOW));
 
-    if let Some(_initial_guard) =
-        apps::guard::enter(initial_context.0, initial_context.1)
-    {
+    let (initial_guard, initial_start) = apps::guard::prepare(initial_context.0, initial_context.1);
+
+    if unsafe { apps::guard::begin(initial_start) } {
+        let _initial_guard = initial_guard;
+
         render_full_frame(
             &mut fb,
-        &compositor,
-        &filemanager_app,
-        &desktop_files,
-        &settings_app,
-        &notepad_app,
-        &browser_app,
-        &imageviewer_app,
-        &musicplayer_app,
-        &videoplayer_app,
-        &taskmgr_app,
-        &calculator_app,
-        &paint_apps,
-        &terminal_app,
-        &installer_app,
-        &viewer3d_app,
-        &pkgmgr_app,
-        &fps_game_app,
-        &fps_3d_app,
-        &now,
-        mouse,
-        keyboard,
-        memory_mgr.pmm.total_memory_bytes,
-        memory_mgr.pmm.used_memory_bytes,
-        anim_tick,
-        &mut app_render_cycles,
-        (run_dialog_open, &run_dialog_input),
-        (
-            properties_open,
-            &properties_name,
-            &properties_type,
-            &properties_size,
-            &properties_location,
-            &properties_path,
-        ),
-        None,
-        None,
-    );
+            &compositor,
+            &filemanager_app,
+            &desktop_files,
+            &settings_app,
+            &notepad_app,
+            &browser_app,
+            &imageviewer_app,
+            &musicplayer_app,
+            &videoplayer_app,
+            &taskmgr_app,
+            &calculator_app,
+            &paint_apps,
+            &terminal_app,
+            &installer_app,
+            &viewer3d_app,
+            &pkgmgr_app,
+            &fps_game_app,
+            &fps_3d_app,
+            &now,
+            mouse,
+            keyboard,
+            memory_mgr.pmm.total_memory_bytes,
+            memory_mgr.pmm.used_memory_bytes,
+            anim_tick,
+            &mut app_render_cycles,
+            (run_dialog_open, &run_dialog_input),
+            (
+                properties_open,
+                &properties_name,
+                &properties_type,
+                &properties_size,
+                &properties_location,
+                &properties_path,
+            ),
+            None,
+            None,
+        );
     }
 
     let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
@@ -1796,6 +1798,8 @@ pub extern "C" fn _start() -> ! {
             line.push_usize(fault.window_idx);
             line.push_str(" rip=0x");
             line.push_hex64(fault.rip);
+            line.push_str(" err=0x");
+            line.push_hex64(fault.error_code);
             line.push_str(" cr2=0x");
             line.push_hex64(fault.cr2);
             line.push_str("\n");
@@ -1875,11 +1879,18 @@ pub extern "C" fn _start() -> ! {
             .and_then(|idx| compositor.windows[idx].map(|w| (w.app_id as usize, idx)))
             .unwrap_or((apps::guard::NO_APP, apps::guard::NO_WINDOW));
 
-        let Some(_runtime_guard) = apps::guard::enter(focused_context.0, focused_context.1) else {
-            // Bu turda bir hata yakalandi; kurtarma noktasina donuldu.
-            // Bir sonraki turda raporlanip uygulama kapatilacak.
+        // Bu turun tamami, odakli uygulamanin baglamiyla korunur. `prepare`
+        // baglami kurar; `begin` dogrudan bu fonksiyonun canli yigin
+        // cercevesinden kurtarma noktasi alir. Hata olursa `begin` false
+        // doner ve tur atlanir; hata bir sonraki turda raporlanir.
+        let (runtime_guard, runtime_start) =
+            apps::guard::prepare(focused_context.0, focused_context.1);
+
+        if !unsafe { apps::guard::begin(runtime_start) } {
             continue;
-        };
+        }
+
+        let _runtime_guard = runtime_guard;
 
         apps::browser::begin_turn();
 
@@ -8862,6 +8873,7 @@ pub extern "C" fn _start() -> ! {
             anim_tick = anim_tick.wrapping_add(1);
 
             if viewer3d_open {
+                let _app_context = apps::guard::ContextScope::new(12, apps::guard::NO_WINDOW);
                 viewer3d_app.tick();
             }
         }
@@ -8874,6 +8886,7 @@ pub extern "C" fn _start() -> ! {
             .flatten()
             .any(|w| w.app_id == 15 && w.is_open && !w.is_minimized);
         if game_open && timer_tick_fired {
+            let _app_context = apps::guard::ContextScope::new(15, apps::guard::NO_WINDOW);
             if fps_game_app.tick() {
                 force_render = true;
             }
@@ -8890,6 +8903,7 @@ pub extern "C" fn _start() -> ! {
         if controlpanel_open && timer_tick_fired {
             let now_cycles = read_cpu_cycles();
             if apps::controlpanel::active_tab() == 3 {
+                let _app_context = apps::guard::ContextScope::new(14, apps::guard::NO_WINDOW);
                 let delta = now_cycles.wrapping_sub(cp_last_cycles);
                 let delta_us = delta / unsafe { TSC_CYCLES_PER_US as u64 };
                 if apps::controlpanel::perf_sample(delta_us.min(1_000_000)) {
@@ -8906,6 +8920,7 @@ pub extern "C" fn _start() -> ! {
             .flatten()
             .any(|w| w.app_id == 16 && w.is_open && !w.is_minimized);
         if fps3d_open && timer_tick_fired {
+            let _app_context = apps::guard::ContextScope::new(16, apps::guard::NO_WINDOW);
             fps_3d_app.update(&mut audio_dev);
             force_render = true;
         }
@@ -8918,10 +8933,14 @@ pub extern "C" fn _start() -> ! {
         // scheduler budget is one callback; a callback itself is not preempted.
         task::poll_tasks();
 
-        browser_app.poll_network(&mut fs_mgr.vfs);
+        {
+            let _browser_context = apps::guard::ContextScope::new(3, apps::guard::NO_WINDOW);
 
-        // Tarayıcı medya oynatıcılarının ses çıkışını render et.
-        browser_app.render_audio(&mut audio_dev);
+            browser_app.poll_network(&mut fs_mgr.vfs);
+
+            // Tarayıcı medya oynatıcılarının ses çıkışını render et.
+            browser_app.render_audio(&mut audio_dev);
+        }
 
         // Bes parcali, HDA PCM tabanli melodi yurutucusu. (HDA yoksa PIT/PC speaker fallback).
 
@@ -9199,6 +9218,7 @@ pub extern "C" fn _start() -> ! {
                 let tick = TM_UPDATE_TICK.fetch_add(1, Ordering::Relaxed);
 
                 if tick % 30 == 0 {
+                    let _app_context = apps::guard::ContextScope::new(7, apps::guard::NO_WINDOW);
                     taskmgr_app.update(
                         &memory_mgr.pmm,
                         &fs_mgr.vfs,
@@ -9312,19 +9332,12 @@ pub extern "C" fn _start() -> ! {
             && !buttons_changed
             && !force_render
         {
-            // Bosta bekleme: port 0x80 VM cikislari olmadan spin_loop ile bekle.
-
-            // PS/2 giris tamponunda veri algilandigi anda gecikmesiz donguden cik.
+            // Boşta bekleme: CPU'yu spin ederek tüketme. PS/2/USB/timer
+            // kesmeleri HLT durumundaki BSP'yi uyandırır; böylece tek çekirdekli
+            // sistemlerde GUI ve fare için gerçek CPU zamanı kalır.
 
             let wait_start = read_cpu_cycles();
 
-            // Ovme (spin) ile bekle: kesme (interrupt) yolu yok, bu yuzden
-            // ps2/USB tamponlarina bakarak giris geldiginde aninda cikilir.
-            //
-            // Tarayici ag istegi bekliyorsa ya da bir onceki turde sayfa
-            // duzeni butcesi asildiysa bekleme suresi kisaltilir; boylece
-            // tarayici bir siteye girerken masaustu kilitlenmez, ama CPU
-            // bosta %100 donmek yerine rahatlatilir.
             let browser_waiting = browser_app.take_net_idle_hint();
 
             let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
@@ -9339,8 +9352,12 @@ pub extern "C" fn _start() -> ! {
                 if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
                     break;
                 }
-
-                core::hint::spin_loop();
+                unsafe {
+                    // Bu döngüye bazı giriş yolları CLI ile gelebilir.
+                    // IF=0 iken HLT kalıcı uykuya neden olur; önce kesmeleri
+                    // aç, sonra timer/klavye/fare kesmesiyle uyan.
+                    core::arch::asm!("sti", "hlt", options(nomem, nostack));
+                }
             }
 
             let loop_end_cycles = read_cpu_cycles();
@@ -9354,7 +9371,11 @@ pub extern "C" fn _start() -> ! {
             cpu_sample_active_cycles =
                 cpu_sample_active_cycles.saturating_add(elapsed.saturating_sub(idle_elapsed));
         } else {
-            core::hint::spin_loop();
+            // Aktif olmayan ama kısa süre sonra tekrar değerlendirilecek
+            // durumlarda bile pipeline'ı döndürmek yerine kesmeyle uyan.
+            unsafe {
+                core::arch::asm!("sti", "hlt", options(nomem, nostack));
+            }
 
             let elapsed = read_cpu_cycles().wrapping_sub(loop_start_cycles);
 

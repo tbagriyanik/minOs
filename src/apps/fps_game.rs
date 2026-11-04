@@ -86,6 +86,7 @@ impl AtanApprox for f32 {
         } else {
             result
         }
+
     }
 }
 
@@ -166,6 +167,13 @@ pub enum RenderMode {
     TopDown2D,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GameResult {
+    Playing,
+    Won,
+    Lost,
+}
+
 /// Oyun durumu.
 pub struct FpsGameApp {
     // Oyuncu durumu
@@ -182,6 +190,7 @@ pub struct FpsGameApp {
     pub hits: u32,
     pub shooting: bool,
     pub shoot_timer: usize,
+    result: GameResult,
 
     // Görünüm modu
     pub render_mode: RenderMode,
@@ -291,6 +300,7 @@ impl FpsGameApp {
             hits: 0,
             shooting: false,
             shoot_timer: 0,
+            result: GameResult::Playing,
             render_mode: RenderMode::Mode3D,
             enemies,
             enemy_count: n,
@@ -460,19 +470,9 @@ impl FpsGameApp {
         }
     }
 
-    /// Düşmanları yeniden canlandır (canlı olmayanları).
+    /// Düşman vurulma zamanlayıcılarını ilerlet.
     fn respawn_enemies(&mut self) {
         for e in self.enemies.iter_mut().take(self.enemy_count) {
-            if !e.alive && e.hit_timer == 0 {
-                // Basit yeniden doğurma: rastgele bir boş hücreye.
-                let tx = (self.frame_count as usize * 7 + e.x as usize * 13) % (MAP_W - 2) + 1;
-                let ty = (self.frame_count as usize * 11 + e.y as usize * 17) % (MAP_H - 2) + 1;
-                if MAP[ty][tx] == 0 {
-                    e.x = tx as f32 + 0.5;
-                    e.y = ty as f32 + 0.5;
-                    e.alive = true;
-                }
-            }
             if e.hit_timer > 0 {
                 e.hit_timer -= 1;
             }
@@ -604,7 +604,11 @@ impl FpsGameApp {
         }
         fb.draw_rect(render_x, render_y + horizon, render_w, 3, 0xD0A060);
 
-        for x in 0..w {
+        // Geniş pencerelerde her ikinci sütun aynı duvar geometrisini paylaşır.
+        // Bu, DDA/f32 maliyetini yaklaşık yarıya indirirken küçük ekranlarda
+        // tam çözünürlüklü görünümü korur.
+        let column_step = if w >= 800 { 2 } else { 1 };
+        for x in (0..w).step_by(column_step) {
             // Kamera x koordinatı (-1 ile 1 arası).
             let camera_x = 2.0 * (x as f32) / (w as f32) - 1.0;
             let ray_dir_x = self.dir_x + self.plane_x * camera_x;
@@ -663,7 +667,10 @@ impl FpsGameApp {
                     let t = MAP[map_y][map_x];
                     // Kapılar açıkken de çizilir: koyu bir geçit + parlak
                     // yeşil kasayla "açık kapı" olarak okunur.
-                    if t == TILE_WALL || t == TILE_DOOR {
+                    // Açık kapı artık ray için boş geçit: oyuncu çarpışması
+                    // ile render aynı durumu paylaşmalı, aksi halde kapıdan
+                    // geçilse bile karşı odanın duvarı çizilmeye devam eder.
+                    if t == TILE_WALL || (t == TILE_DOOR && !self.door_is_open(map_x, map_y)) {
                         hit = true;
                     }
                 }
@@ -678,7 +685,9 @@ impl FpsGameApp {
                     (map_y as f32 - self.pos_y + (1.0 - step_y as f32) / 2.0) / ray_dir_y;
             }
 
-            z_buffer[x] = perp_wall_dist;
+            for z in x..(x + column_step).min(w) {
+                z_buffer[z] = perp_wall_dist;
+            }
 
             // Duvar yüksekliği: standart raycasting projeksiyonu. Ekran
             // yüksekliği / mesafe; böylece yakın duvar büyük, uzak duvar
@@ -783,7 +792,13 @@ impl FpsGameApp {
                     } else {
                         wall_color
                     };
-                    fb.put_pixel(render_x + x, render_y + yy, wall_color);
+                    fb.draw_rect(
+                        render_x + x,
+                        render_y + yy,
+                        column_step.min(w - x),
+                        1,
+                        wall_color,
+                    );
                 }
             }
 
@@ -1243,10 +1258,40 @@ impl FpsGameApp {
                 Color::WHITE,
             );
         }
+        self.render_result_menu(fb, win_x, view_y, view_h, win_w);
+    }
+
+    fn render_result_menu(&self, fb: &mut Framebuffer, win_x: usize, view_y: usize, view_h: usize, win_w: usize) {
+        if self.result == GameResult::Playing {
+            return;
+        }
+        let panel_w = win_w.min(360);
+        let panel_h = 92;
+        let panel_x = win_x + win_w.saturating_sub(panel_w) / 2;
+        let panel_y = view_y + view_h.saturating_sub(panel_h) / 2;
+        fb.draw_rounded_rect_alpha(panel_x, panel_y, panel_w, panel_h, 8, 0x080B12, 238);
+        let (title, color) = match self.result {
+            GameResult::Won => (crate::gui::ui_text("KAZANDIN!", "YOU WIN!"), Color::ACCENT_GREEN),
+            GameResult::Lost => (crate::gui::ui_text("KAYBETTIN", "YOU LOSE"), Color::ACCENT_RED),
+            GameResult::Playing => ("", Color::TEXT_MAIN),
+        };
+        MinGuiCompositor::draw_string(fb, panel_x + 58, panel_y + 20, title, color);
+        MinGuiCompositor::draw_string(
+            fb, panel_x + 58, panel_y + 52,
+            crate::gui::ui_text("R veya BOS: Yeniden baslat", "R or SPACE: Restart"),
+            Color::TEXT_MAIN,
+        );
     }
 
     /// Klavye girdisini işle. true dönerse tüketildi.
     pub fn handle_key(&mut self, ch: char, audio_dev: &mut AudioDevice) -> bool {
+        if self.result != GameResult::Playing {
+            if ch == 'r' || ch == 'R' || ch == ' ' {
+                *self = Self::new();
+                return true;
+            }
+            return false;
+        }
         match ch {
             'w' | 'W' => {
                 self.move_player(self.dir_x * MOVE_SPEED, self.dir_y * MOVE_SPEED);
@@ -1340,6 +1385,9 @@ impl FpsGameApp {
 
     /// Her frame'de çağrılan güncelleme.
     pub fn update(&mut self, audio_dev: &mut AudioDevice) {
+        if self.result != GameResult::Playing {
+            return;
+        }
         // Ateş sayacı.
         if self.shoot_timer > 0 {
             self.shoot_timer -= 1;
@@ -1380,6 +1428,18 @@ impl FpsGameApp {
 
         // Düşmanları yenile.
         self.respawn_enemies();
+
+        if self.health == 0 {
+            self.result = GameResult::Lost;
+        } else if self
+            .enemies
+            .iter()
+            .take(self.enemy_count)
+            .all(|enemy| !enemy.alive)
+        {
+            self.result = GameResult::Won;
+        }
+
     }
 }
 

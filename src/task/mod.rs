@@ -8,10 +8,11 @@
 
 extern crate alloc;
 
-use crate::arch::x86_64::sync::SpinMutex;
+use crate::arch::x86_64::sync::{SpinGuard, SpinMutex};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 static NEXT_TASK_ID: AtomicUsize = AtomicUsize::new(1);
@@ -201,6 +202,53 @@ impl SimpleExecutor {
 }
 
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
+
+// Zamanlayıcı defter tutma kodundaki bir hata, EXECUTOR kilidini tutarken
+// oluşabilir. Hangi CPU'nun hangi kilidi tuttuğunu izlemek, kurtarma yolunun
+// yalnızca gerçekten sahip olunan kilidi açmasını sağlar; başka bir CPU'nun
+// elindeki kilit asla zorla açılmaz.
+const SCHED_LOCK_EXECUTOR: usize = 1 << 0;
+static SCHED_LOCKS_HELD: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] =
+    [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
+
+struct SchedLockGuard<'a, T> {
+    guard: SpinGuard<'a, T>,
+    cpu: usize,
+    bit: usize,
+}
+
+impl<T> Deref for SchedLockGuard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.guard
+    }
+}
+
+impl<T> DerefMut for SchedLockGuard<'_, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.guard
+    }
+}
+
+impl<T> Drop for SchedLockGuard<'_, T> {
+    fn drop(&mut self) {
+        SCHED_LOCKS_HELD[self.cpu].fetch_and(!self.bit, Ordering::Release);
+    }
+}
+
+/// Zamanlayıcı kilidini alır ve sahipliğini hata kurtarma için kaydeder.
+fn lock_sched<T>(mutex: &'static SpinMutex<T>, bit: usize) -> SchedLockGuard<'static, T> {
+    let guard = mutex.lock();
+    let cpu = crate::arch::x86_64::smp::current_cpu_index().min(SCHED_LOCKS_HELD.len() - 1);
+    SCHED_LOCKS_HELD[cpu].fetch_or(bit, Ordering::Release);
+    SchedLockGuard { guard, cpu, bit }
+}
+
+fn lock_executor() -> SchedLockGuard<'static, SimpleExecutor> {
+    lock_sched(&EXECUTOR, SCHED_LOCK_EXECUTOR)
+}
+
 static RUN_QUEUE_DEPTH: [AtomicUsize; crate::arch::x86_64::smp::MAX_CPUS] =
     [const { AtomicUsize::new(0) }; crate::arch::x86_64::smp::MAX_CPUS];
 fn least_loaded_cpu() -> usize {
@@ -381,10 +429,30 @@ pub fn task_state_counts() -> TaskStateCounts {
 
 /// Bounded dispatch pump. Each callback runs without the global registry lock.
 /// A single callback still cannot be preempted, so it must return quickly.
+///
+/// Defter tutma kodu da korunur: uygulama geri çağrısı dışında oluşan bir hata
+/// `IN_SCHEDULER` bayrağını veya etkin görev yuvasını kalıcı olarak açık
+/// bırakamaz. Geri çağrı hataları ise aşağıdaki iç korumada yakalanır.
 pub fn poll_tasks() -> usize {
+    let (guard_scope, guard_start) = crate::apps::guard::prepare_recoverable(
+        crate::apps::guard::NO_APP,
+        crate::apps::guard::NO_WINDOW,
+    );
+    if unsafe { crate::apps::guard::begin(guard_start) } {
+        let _guard_scope = guard_scope;
+        poll_tasks_inner()
+    } else {
+        recover_scheduler_state();
+        crate::serial_print("[GUARD] Zamanlayıcı hatası izole edildi.\n");
+        // Bekleyen raporu tüketme; ana döngü bunu bildirim olarak gösterecek.
+        EXECUTOR.lock().task_count()
+    }
+}
+
+fn poll_tasks_inner() -> usize {
     // Prevent two CPUs from mutating/executing the same task simultaneously.
     if IN_SCHEDULER.swap(true, Ordering::Acquire) {
-        return EXECUTOR.lock().task_count();
+        return lock_executor().task_count();
     }
     // A timer interrupt requests a new quantum. The actual stack switch is
     // performed by the architecture scheduler boundary; callback state is
@@ -438,11 +506,14 @@ pub fn poll_tasks() -> usize {
         };
         let mut task = task;
         // Görev geri çağrısı da korunur: bir hata zamanlayıcıyı kilitlemek
-        // yerine yalnızca bu görevi tamamlar.
-        let status = if let Some(_guard) = crate::apps::guard::enter_recoverable(
+        // yerine yalnızca bu görevi tamamlar. `begin` doğrudan bu fonksiyonun
+        // canlı yığın çerçevesinden kurtarma noktası alır.
+        let (guard_scope, guard_start) = crate::apps::guard::prepare_recoverable(
             crate::apps::guard::NO_APP,
             crate::apps::guard::NO_WINDOW,
-        ) {
+        );
+        let status = if unsafe { crate::apps::guard::begin(guard_start) } {
+            let _guard = guard_scope;
             (task.step_fn)()
         } else {
             if let Some(fault) = crate::apps::guard::take_pending() {
@@ -489,6 +560,15 @@ pub fn poll_tasks() -> usize {
     }
     IN_SCHEDULER.store(false, Ordering::Release);
     EXECUTOR.lock().task_count()
+}
+
+fn recover_scheduler_state() {
+    IN_SCHEDULER.store(false, Ordering::Release);
+    RUNNING_CANCELLED.store(false, Ordering::Release);
+    RUNNING_WAIT_SET.store(false, Ordering::Release);
+    RUNNING_DEADLINE_SET.store(false, Ordering::Release);
+    RUNNING_TASK.store(0, Ordering::Release);
+    *RUNNING_INFO.lock() = None;
 }
 
 /// Priority aging promotes a ready task by one level for each eight dispatch

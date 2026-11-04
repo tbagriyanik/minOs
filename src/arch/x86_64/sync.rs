@@ -61,6 +61,17 @@ impl<T> SpinMutex<T> {
         self.lock.lock();
         SpinGuard { mutex: self }
     }
+
+    /// Kilidi zorla açar. Yalnızca kilidin sahibi olduğu bilinen bir CPU'nun
+    /// hata kurtarma yoluyla kaybedildiği durumlarda kullanılmalıdır.
+    ///
+    /// # Safety
+    /// Kilit sahibinin kritik bölümü yarıda kalmış olabilir; veri tutarlılığı
+    /// garanti edilmez. Başka bir CPU'nun elindeki kilidi açmak yarışa yol
+    /// açar, bu yüzden çağıran sahipliği doğrulamalıdır.
+    pub unsafe fn force_unlock(&self) {
+        self.lock.unlock();
+    }
 }
 
 unsafe impl<T: Send> Send for SpinMutex<T> {}

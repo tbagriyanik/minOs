@@ -2188,7 +2188,7 @@ impl BrowserApp {
                             text: String::from(" "),
                             color: Color::TEXT_MUTED,
                             bg_color: None,
-                    bg_image: None,
+                            bg_image: None,
                             is_link: false,
                             link_url: String::new(),
                             is_button: false,
@@ -2206,7 +2206,7 @@ impl BrowserApp {
                             text: url.clone(),
                             color: Color::TEXT_MAIN,
                             bg_color: None,
-                    bg_image: None,
+                            bg_image: None,
                             is_link: true,
                             link_url: url,
                             is_button: false,
@@ -2315,7 +2315,7 @@ impl BrowserApp {
                             Color::ACCENT_BLUE
                         },
                         bg_color: None,
-                    bg_image: None,
+                        bg_image: None,
                         is_link: false,
                         link_url: String::new(),
                         is_button: false,
@@ -2351,7 +2351,7 @@ impl BrowserApp {
                         text: alloc::format!("  {}", bm.url),
                         color: Color::ACCENT_BLUE,
                         bg_color: None,
-                    bg_image: None,
+                        bg_image: None,
                         is_link: true,
                         link_url: String::from(bm.url),
                         is_button: false,
@@ -3971,7 +3971,7 @@ impl BrowserApp {
                                     text: String::from(status_str),
                                     color: Color::ACCENT_BLUE,
                                     bg_color: None,
-                    bg_image: None,
+                                    bg_image: None,
                                     is_link: false,
                                     link_url: String::new(),
                                     is_button: false,
@@ -3999,7 +3999,7 @@ impl BrowserApp {
                                             text: String::from(line),
                                             color: Color::BLACK,
                                             bg_color: None,
-                    bg_image: None,
+                                            bg_image: None,
                                             is_link: false,
                                             link_url: String::new(),
                                             is_button: false,
@@ -4347,39 +4347,38 @@ impl BrowserApp {
             return;
         }
 
-        let (img_w, img_h, pos_x, pos_y, tile): (usize, usize, isize, isize, bool) =
-            match bg.fit {
-                BackgroundSize::Auto => (src_w, src_h, 0, 0, bg.repeat),
-                BackgroundSize::Stretch => (w, h, 0, 0, false),
-                BackgroundSize::Cover => {
-                    let sx = w as f32 / src_w as f32;
-                    let sy = h as f32 / src_h as f32;
-                    let s = sx.max(sy);
-                    let iw = ((src_w as f32 * s) as usize).max(1);
-                    let ih = ((src_h as f32 * s) as usize).max(1);
-                    (
-                        iw,
-                        ih,
-                        (w as isize - iw as isize) / 2,
-                        (h as isize - ih as isize) / 2,
-                        false,
-                    )
-                }
-                BackgroundSize::Contain => {
-                    let sx = w as f32 / src_w as f32;
-                    let sy = h as f32 / src_h as f32;
-                    let s = sx.min(sy);
-                    let iw = ((src_w as f32 * s) as usize).max(1);
-                    let ih = ((src_h as f32 * s) as usize).max(1);
-                    (
-                        iw,
-                        ih,
-                        (w as isize - iw as isize) / 2,
-                        (h as isize - ih as isize) / 2,
-                        false,
-                    )
-                }
-            };
+        let (img_w, img_h, pos_x, pos_y, tile): (usize, usize, isize, isize, bool) = match bg.fit {
+            BackgroundSize::Auto => (src_w, src_h, 0, 0, bg.repeat),
+            BackgroundSize::Stretch => (w, h, 0, 0, false),
+            BackgroundSize::Cover => {
+                let sx = w as f32 / src_w as f32;
+                let sy = h as f32 / src_h as f32;
+                let s = sx.max(sy);
+                let iw = ((src_w as f32 * s) as usize).max(1);
+                let ih = ((src_h as f32 * s) as usize).max(1);
+                (
+                    iw,
+                    ih,
+                    (w as isize - iw as isize) / 2,
+                    (h as isize - ih as isize) / 2,
+                    false,
+                )
+            }
+            BackgroundSize::Contain => {
+                let sx = w as f32 / src_w as f32;
+                let sy = h as f32 / src_h as f32;
+                let s = sx.min(sy);
+                let iw = ((src_w as f32 * s) as usize).max(1);
+                let ih = ((src_h as f32 * s) as usize).max(1);
+                (
+                    iw,
+                    ih,
+                    (w as isize - iw as isize) / 2,
+                    (h as isize - ih as isize) / 2,
+                    false,
+                )
+            }
+        };
 
         let clip_x1 = clip.0.saturating_add(clip.2).min(fb.width);
         let clip_y1 = clip.1.saturating_add(clip.3).min(fb.height);
@@ -4407,7 +4406,10 @@ impl BrowserApp {
                 }
                 let sx = (ix as usize).saturating_mul(src_w) / img_w.max(1);
                 let sy = (iy as usize).saturating_mul(src_h) / img_h.max(1);
-                let idx = sy.saturating_mul(src_w).saturating_add(sx).saturating_mul(3);
+                let idx = sy
+                    .saturating_mul(src_w)
+                    .saturating_add(sx)
+                    .saturating_mul(3);
                 if idx + 2 < rgb.len() {
                     let color = ((rgb[idx] as u32) << 16)
                         | ((rgb[idx + 1] as u32) << 8)

@@ -65,6 +65,7 @@ pub struct MineCell {
 
 /// Mayın Tarlası oyunu.
 pub struct Minesweeper {
+    pub level: usize,
     pub rows: usize,
     pub cols: usize,
     pub mine_count: usize,
@@ -79,6 +80,7 @@ pub struct Minesweeper {
 impl Minesweeper {
     pub fn new() -> Self {
         Self {
+            level: 0,
             rows: 9,
             cols: 9,
             mine_count: 10,
@@ -97,6 +99,19 @@ impl Minesweeper {
         self.flagged = 0;
         self.state = GameState::Playing;
         self.first_click = true;
+    }
+
+    pub fn set_level(&mut self, level: usize) {
+        self.level = level.min(2);
+        let (rows, cols, mines) = match self.level {
+            1 => (9, 9, 18),
+            2 => (9, 9, 28),
+            _ => (9, 9, 10),
+        };
+        self.rows = rows;
+        self.cols = cols;
+        self.mine_count = mines;
+        self.reset();
     }
 
     fn rng_next(&mut self) -> u64 {
@@ -873,6 +888,16 @@ impl GameApp {
         (x + w + sp(4), y, sp(76), h)
     }
 
+    pub fn mine_level_rect(level: usize) -> (usize, usize, usize, usize) {
+        let (x, y, _, h) = Self::sound_rect();
+        (x + sp(80) + level * sp(58), y, sp(54), h)
+    }
+
+    pub fn set_mine_level(&mut self, level: usize) {
+        self.mines.set_level(level);
+        self.sound_pending = Sound::None;
+    }
+
     pub fn toggle_sound(&mut self) {
         self.muted = !self.muted;
         if self.muted {
@@ -1208,6 +1233,29 @@ impl GameApp {
                 },
                 Color::TEXT_MAIN,
             );
+            if self.tab == TAB_MINES {
+                let labels = [
+                    crate::gui::ui_text("Kolay", "Easy"),
+                    crate::gui::ui_text("Orta", "Medium"),
+                    crate::gui::ui_text("Zor", "Hard"),
+                ];
+                for (level, label) in labels.iter().enumerate() {
+                    let (lx, ly, lw, lh) = Self::mine_level_rect(level);
+                    let bg = if self.mines.level == level {
+                        Color::ACCENT_BLUE
+                    } else {
+                        Color::TITLE_BAR
+                    };
+                    fb.draw_rounded_rect(x + lx, y + ly, lw, lh, 5, bg);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        x + lx + sp(7),
+                        y + ly + (lh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+                        label,
+                        Color::TEXT_MAIN,
+                    );
+                }
+            }
         }
     }
 
@@ -1629,6 +1677,14 @@ impl GameApp {
         if crate::gui::in_rect(px, py, Self::sound_rect()) {
             self.toggle_sound();
             return true;
+        }
+        if self.tab == TAB_MINES {
+            for level in 0..3 {
+                if crate::gui::in_rect(px, py, Self::mine_level_rect(level)) {
+                    self.set_mine_level(level);
+                    return true;
+                }
+            }
         }
         match self.tab {
             TAB_GAME => {

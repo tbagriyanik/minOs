@@ -724,20 +724,16 @@ pub fn render_html_to_lines(
         .color
         .or(root_style.color)
         .unwrap_or(Color::BLACK);
-    current_bg = body_style.bg_color.or(root_style.bg_color);
+    // body/html arka plan rengi sayfa katmanında (page_bg_color) çizilir;
+    // satır arka planına taşınırsa sayfa görselinin önüne geçer.
+    current_bg = None;
 
     // Sayfa (body/html) arka plan görseli: uzak URL'ler bekleme sırasına eklenir.
-    let page_bg_style = if body_style
-        .background_image
-        .as_deref()
-        .is_some_and(|u| !u.is_empty())
-    {
+    // `background` kısa gösterimi `background-image` alanını `Some("")` olarak
+    // işaretler; bu durumda alt öğenin (html) görseli bastırılır.
+    let page_bg_style = if body_style.background_image.is_some() {
         Some(&body_style)
-    } else if root_style
-        .background_image
-        .as_deref()
-        .is_some_and(|u| !u.is_empty())
-    {
+    } else if root_style.background_image.is_some() {
         Some(&root_style)
     } else {
         None
@@ -1160,8 +1156,10 @@ pub fn render_html_to_lines(
                     current_bg = Some(blend_color_with_opacity(bg, matched.opacity));
                 }
                 if eq_ascii(name, b"html") || eq_ascii(name, b"body") {
-                    // body/html arka planı sayfa katmanında (page_bg_image) çizilir;
-                    // satır arka planına taşınırsa görsel iki kez basılır.
+                    // body/html arka planı sayfa katmanında (page_bg_color /
+                    // page_bg_image) çizilir; satır arka planına taşınırsa
+                    // görsel iki kez basılır veya renk görselin önüne geçer.
+                    current_bg = None;
                     *current_bg_image.borrow_mut() = None;
                 } else if let Some(bg_url) = matched.background_image.as_deref() {
                     let resolved_bg = if bg_url.is_empty() {
@@ -1194,7 +1192,10 @@ pub fn render_html_to_lines(
                         }
                     }
                 }
-                if matched.bg_color.is_none() {
+                if matched.bg_color.is_none()
+                    && !eq_ascii(name, b"html")
+                    && !eq_ascii(name, b"body")
+                {
                     if let Some(value) = bgcolor_attr {
                         if let Some(c) = html_color(value.as_bytes()) {
                             current_bg = Some(c);

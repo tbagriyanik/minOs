@@ -23,7 +23,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::arch::x86_64::gdt;
 use crate::arch::x86_64::ring3::{EF_CS, EF_RFLAGS, EF_RIP, F_R15};
-use crate::arch::x86_64::smp::{MAX_CPUS, current_cpu_index};
+use crate::arch::x86_64::smp::{current_cpu_index, MAX_CPUS};
 
 /// Hiçbir uygulamaya bağlı olmayan bağlam (masaüstü / çekirdek kodu).
 pub const NO_APP: usize = usize::MAX;

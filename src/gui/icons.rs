@@ -767,7 +767,11 @@ impl MinGuiCompositor {
                 if bits & bit == 0 {
                     continue;
                 }
-                body[row * 16 + col] = if detail[row] & bit != 0 { outline } else { fill };
+                body[row * 16 + col] = if detail[row] & bit != 0 {
+                    outline
+                } else {
+                    fill
+                };
                 let r0 = row.saturating_sub(1);
                 let r1 = (row + 1).min(15);
                 let c0 = col.saturating_sub(1);

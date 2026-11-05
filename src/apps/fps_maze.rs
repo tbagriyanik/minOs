@@ -17,12 +17,17 @@ pub const EXIT_CELL: (usize, usize) = (MAZE_SIZE - 2, MAZE_SIZE - 2);
 /// Haritadaki kare türleri.
 pub const TILE_EMPTY: u8 = 0;
 pub const TILE_WALL: u8 = 1;
-/// Kilitli istasyon: anahtar toplanmadan içeri girilemez.
+/// Kilitli kapı: anahtar toplanmadan geçilemez.
 pub const TILE_LOCKED: u8 = 2;
-/// Açılan bölge duvarı (oyun sırasında boşaltılır).
+/// Açılan kapı / bölge (oyun sırasında kilidi açılır).
 pub const TILE_OPENED: u8 = 3;
 /// Asansör/çıkış işareti (yalnızca zemin boyaması; duvar değildir).
 pub const TILE_EXIT: u8 = 4;
+/// Anahtar eşyası (kapıları açmak için toplanır).
+pub const TILE_KEY: u8 = 5;
+
+/// Maksimum kapı sayısı.
+pub const MAX_DOORS: usize = 8;
 
 /// Basit xorshift64* üreticisi (deterministik labirent üretimi için).
 #[derive(Clone, Copy)]
@@ -30,7 +35,11 @@ pub struct Rng(u64);
 
 impl Rng {
     pub const fn new(seed: u64) -> Self {
-        Self(if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed })
+        Self(if seed == 0 {
+            0x9E37_79B9_7F4A_7C15
+        } else {
+            seed
+        })
     }
 
     #[inline]
@@ -81,6 +90,13 @@ pub struct MazeMap {
     pub exit: (usize, usize),
     /// Başlangıçtan çıkışa en kısa hücre yolu (BFS).
     pub solution: Vec<(usize, usize)>,
+    /// Anahtarın konumu (None = henüz yerleştirilmedi veya alındı).
+    pub key_pos: Option<(usize, usize)>,
+    /// Oyuncunun anahtara sahip olup olmadığı.
+    pub has_key: bool,
+    /// Kapı konumları.
+    pub doors: [(usize, usize); MAX_DOORS],
+    pub door_count: usize,
 }
 
 impl MazeMap {
@@ -93,6 +109,10 @@ impl MazeMap {
             start: (1, 1),
             exit: (w.saturating_sub(2).max(1), h.saturating_sub(2).max(1)),
             solution: Vec::new(),
+            key_pos: None,
+            has_key: false,
+            doors: [(0, 0); MAX_DOORS],
+            door_count: 0,
         }
     }
 
@@ -118,11 +138,42 @@ impl MazeMap {
         }
     }
 
-    /// Geçilebilir kare mi? (Duvar ve kilitli istasyon geçilmez.)
+    /// Geçilebilir kare mi? (Duvar ve kilitli kapı geçilmez; anahtar geçilebilir.)
     #[inline]
     pub fn walkable(&self, x: usize, y: usize) -> bool {
         let t = self.get(x, y);
-        t == TILE_EMPTY || t == TILE_OPENED || t == TILE_EXIT
+        t == TILE_EMPTY || t == TILE_OPENED || t == TILE_EXIT || t == TILE_KEY
+    }
+
+    /// Verilen hücre kapı mı?
+    #[inline]
+    pub fn is_door(&self, x: usize, y: usize) -> bool {
+        self.get(x, y) == TILE_LOCKED
+    }
+
+    /// Anahtarı al (üstüne gelindiğinde çağrılır). true dönerse anahtar alındı.
+    pub fn pickup_key(&mut self, x: usize, y: usize) -> bool {
+        if let Some((kx, ky)) = self.key_pos {
+            if kx == x && ky == y && !self.has_key {
+                self.has_key = true;
+                self.key_pos = None;
+                self.set(x, y, TILE_EMPTY);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Kapıyı aç (oyuncu anahtara sahipse). true dönerse kapı açıldı.
+    pub fn open_door(&mut self, x: usize, y: usize) -> bool {
+        if !self.has_key {
+            return false;
+        }
+        if self.get(x, y) == TILE_LOCKED {
+            self.set(x, y, TILE_OPENED);
+            return true;
+        }
+        false
     }
 
     /// İki hücre arasında doğrudan görüş var mı? (Basit ızgara yürüyüşü.)
@@ -214,12 +265,7 @@ pub fn fast_abs(x: f32) -> f32 {
 }
 
 /// Dört komşu hücre (harita sınırları içinde).
-pub fn neighbours4(
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-) -> impl Iterator<Item = (usize, usize)> {
+pub fn neighbours4(x: usize, y: usize, w: usize, h: usize) -> impl Iterator<Item = (usize, usize)> {
     let mut out = [(0usize, 0usize); 4];
     let mut n = 0;
     if x > 0 {
@@ -313,11 +359,74 @@ pub fn generate_maze(w: usize, h: usize, seed: u64) -> MazeMap {
     map.start = (1, 1);
     map.exit = ((mw - 2) | 1, (mh - 2) | 1);
     map.set(map.exit.0, map.exit.1, TILE_EXIT);
+
+    // Küçük odalar oluştur: bazı hücreleri 3x3 boş alan olarak aç ve
+    // girişine kilitli kapı koy. Anahtar başlangıç bölgesinde yerleştirilir.
+    carve_rooms_with_doors(&mut map, &mut rng);
+
     map.compute_solution();
     map
 }
 
+/// Labirente küçük odalar ekler ve odaların girişine kilitli kapılar koyar.
+/// Her oda 3x3 boş alandan oluşur; kapı yalnızca anahtar ile açılabilir.
+fn carve_rooms_with_doors(map: &mut MazeMap, rng: &mut Rng) {
+    let (mw, mh) = (map.w, map.h);
+    let room_count = 4usize.min((mw / 6).max(1) * (mh / 6).max(1));
+
+    for _ in 0..room_count {
+        // Rastgele bir oda merkezi seç (çift koordinatlar, duvarın içi).
+        let rx = 2 + rng.below((mw - 4) / 2) * 2;
+        let ry = 2 + rng.below((mh - 4) / 2) * 2;
+
+        // Zaten oda veya kapı varsa atla.
+        if map.get(rx, ry) != TILE_EMPTY && map.get(rx, ry) != TILE_WALL {
+            continue;
+        }
+
+        // 3x3 odayı aç (merkez ve komşuları).
+        for dy in 0..3 {
+            for dx in 0..3 {
+                let x = rx.saturating_sub(1) + dx;
+                let y = ry.saturating_sub(1) + dy;
+                if x > 0 && x < mw - 1 && y > 0 && y < mh - 1 {
+                    map.set(x, y, TILE_EMPTY);
+                }
+            }
+        }
+
+        // Oda girişine bir kapı koy (rastgele bir kenarda).
+        let side = rng.below(4);
+        let (dx, dy) = match side {
+            0 => (0, -1), // üst
+            1 => (0, 1),  // alt
+            2 => (-1, 0), // sol
+            _ => (1, 0),  // sağ
+        };
+        let door_x = rx as isize + dx;
+        let door_y = ry as isize + dy;
+        if door_x > 0 && door_x < mw as isize - 1 && door_y > 0 && door_y < mh as isize - 1 {
+            let dx = door_x as usize;
+            let dy = door_y as usize;
+            if map.get(dx, dy) == TILE_EMPTY || map.get(dx, dy) == TILE_WALL {
+                if map.door_count < MAX_DOORS {
+                    map.set(dx, dy, TILE_LOCKED);
+                    map.doors[map.door_count] = (dx, dy);
+                    map.door_count += 1;
+                }
+            }
+        }
+    }
+
+    // Anahtarı başlangıç bölgesine koy (kapıdan önce erişilebilir).
+    if map.key_pos.is_none() {
+        map.key_pos = Some((3, 3));
+        map.set(3, 3, TILE_KEY);
+    }
+}
+
 /// Labirentin tamamı başlangıçtan erişilebilir mi? (Bağlantılılık testi.)
+/// Kapılar kilitli olduğu için varsayılan olarak erişilebilir sayılmaz.
 pub fn all_cells_reachable(map: &MazeMap) -> bool {
     let n = map.w * map.h;
     let mut seen = alloc::vec![false; n];
@@ -328,12 +437,13 @@ pub fn all_cells_reachable(map: &MazeMap) -> bool {
     let mut open_count = 0usize;
     let mut reached_open = 0usize;
     for &c in map.cells.iter() {
-        if c == TILE_EMPTY || c == TILE_EXIT {
+        if c == TILE_EMPTY || c == TILE_EXIT || c == TILE_KEY {
             open_count += 1;
         }
     }
     while let Some(cur) = queue.pop_front() {
-        if map.cells[cur] == TILE_EMPTY || map.cells[cur] == TILE_EXIT {
+        if map.cells[cur] == TILE_EMPTY || map.cells[cur] == TILE_EXIT || map.cells[cur] == TILE_KEY
+        {
             reached_open += 1;
         }
         let cx = cur % map.w;
@@ -399,9 +509,17 @@ mod tests {
     #[test]
     fn generated_maze_is_connected() {
         for seed in [1u64, 7, 42, 1337, 0xDEAD_BEEF] {
-            let map = generate_maze(MAZE_SIZE, MAZE_SIZE, seed);
+            let mut map = generate_maze(MAZE_SIZE, MAZE_SIZE, seed);
             assert_eq!(map.w, MAZE_SIZE);
             assert_eq!(map.h, MAZE_SIZE);
+
+            // Anahtarı al ve tüm kapıları aç, ardından bağlantıyı kontrol et.
+            if let Some((kx, ky)) = map.key_pos {
+                map.pickup_key(kx, ky);
+            }
+            for d in map.doors.iter().take(map.door_count) {
+                map.open_door(d.0, d.1);
+            }
             assert!(all_cells_reachable(&map), "seed {seed} kopuk labirent");
             assert!(map.path_cells() > MAZE_SIZE, "seed {seed} çözüm çok kısa");
             let (ex, ey) = map.exit;
@@ -473,5 +591,67 @@ mod tests {
             let (f, amp, ms) = sfx(k);
             assert!(f > 0 && amp > 0 && amp <= 127 && ms > 0);
         }
+    }
+
+    #[test]
+    fn key_and_door_mechanics() {
+        let mut map = generate_maze(MAZE_SIZE, MAZE_SIZE, 42);
+
+        // Anahtar konumu olmalı.
+        assert!(map.key_pos.is_some());
+        let (kx, ky) = map.key_pos.unwrap();
+        assert_eq!(map.get(kx, ky), TILE_KEY);
+
+        // Kapılar olmalı ve kilitli olmalı.
+        assert!(map.door_count > 0);
+        for d in map.doors.iter().take(map.door_count) {
+            assert_eq!(map.get(d.0, d.1), TILE_LOCKED);
+        }
+
+        // Anahtar yoksa kapı açılamaz.
+        for d in map.doors.iter().take(map.door_count) {
+            assert!(!map.open_door(d.0, d.1));
+        }
+
+        // Anahtarı al.
+        assert!(map.pickup_key(kx, ky));
+        assert!(map.has_key);
+        assert_eq!(map.get(kx, ky), TILE_EMPTY); // anahtar hücresi boşaltıldı
+
+        // Artık kapılar açılebilir.
+        for d in map.doors.iter().take(map.door_count) {
+            assert!(map.open_door(d.0, d.1));
+            assert_eq!(map.get(d.0, d.1), TILE_OPENED);
+        }
+    }
+
+    #[test]
+    fn door_blocks_movement_until_opened() {
+        let mut map = generate_maze(MAZE_SIZE, MAZE_SIZE, 7);
+        assert!(map.door_count > 0);
+
+        // İlk kapının bir komşusu boş olmalı (koridorda).
+        let (dx, dy) = map.doors[0];
+        let mut has_walkable_neighbor = false;
+        for (nx, ny) in neighbours4(dx, dy, map.w, map.h) {
+            if map.walkable(nx, ny) {
+                has_walkable_neighbor = true;
+                break;
+            }
+        }
+        assert!(
+            has_walkable_neighbor,
+            "kapının komşusunda geçilebilir hücre olmalı"
+        );
+
+        // Kapı kilitli olduğu için geçilemez.
+        assert!(!map.walkable(dx, dy));
+
+        // Anahtarı al ve kapıyı aç.
+        if let Some((kx, ky)) = map.key_pos {
+            map.pickup_key(kx, ky);
+        }
+        assert!(map.open_door(dx, dy));
+        assert!(map.walkable(dx, dy));
     }
 }

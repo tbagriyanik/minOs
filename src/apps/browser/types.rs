@@ -3,91 +3,270 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-pub fn html_color(value: &[u8]) -> Option<u32> {
-    let mut v = value;
-    while v.first().map_or(false, |b| {
-        b.is_ascii_whitespace() || *b == b'\'' || *b == b'"'
-    }) {
-        v = &v[1..];
+/// Renk metnini kırp: boşluk, tırnak, noktalı virgül ve sondaki ayraçlar.
+fn trim_color_text(value: &[u8]) -> &str {
+    let s = core::str::from_utf8(value).ok().unwrap_or("");
+    s.trim().trim_matches(|c: char| {
+        c == '\'' || c == '"' || c == ';' || c == ',' || c.is_ascii_whitespace()
+    })
+}
+
+fn hex_digit(b: u8) -> Option<u32> {
+    match b {
+        b'0'..=b'9' => Some((b - b'0') as u32),
+        b'a'..=b'f' => Some((b - b'a' + 10) as u32),
+        b'A'..=b'F' => Some((b - b'A' + 10) as u32),
+        _ => None,
     }
-    if v.first() == Some(&b'#') && v.len() >= 7 {
-        let mut rgb = 0u32;
-        for &b in &v[1..7] {
-            let d = match b {
-                b'0'..=b'9' => (b - b'0') as u32,
-                b'a'..=b'f' => (b - b'a' + 10) as u32,
-                b'A'..=b'F' => (b - b'A' + 10) as u32,
-                _ => return None,
-            };
-            rgb = (rgb << 4) | d;
-        }
-        return Some(rgb);
-    }
-    // #abc kısa formu
-    if v.first() == Some(&b'#') && v.len() >= 4 {
-        let mut rgb = 0u32;
-        for &b in &v[1..4] {
-            let d = match b {
-                b'0'..=b'9' => (b - b'0') as u32,
-                b'a'..=b'f' => (b - b'a' + 10) as u32,
-                b'A'..=b'F' => (b - b'A' + 10) as u32,
-                _ => return None,
-            };
-            rgb = (rgb << 4) | d;
-        }
-        // 4-bit -> 8-bit genişletme (AA -> AA*17)
-        return Some(
-            (((rgb >> 8) & 0xF) * 0x11) << 16
-                | ((((rgb >> 4) & 0xF) * 0x11) << 8)
-                | (((rgb) & 0xF) * 0x11),
-        );
-    }
-    // rgb(...) / rgba(...)
-    if let Some(lp) = v.iter().position(|&b| b == b'(') {
-        let name = core::str::from_utf8(&v[..lp]).unwrap_or("");
-        if name.trim().eq_ignore_ascii_case("rgb") || name.trim().eq_ignore_ascii_case("rgba") {
-            let rp = v.iter().position(|&b| b == b')').unwrap_or(v.len());
-            let s = core::str::from_utf8(&v[lp + 1..rp]).unwrap_or("");
-            let mut comps = [0u32; 3];
-            let mut n = 0usize;
-            for part in s.split(|c| c == ',' || c == ' ' || c == '\t') {
-                let t = part.trim();
-                if t.is_empty() {
-                    continue;
-                }
-                if n >= 3 {
-                    break;
-                }
-                let num = if let Some(pc) = t.strip_suffix('%') {
-                    pc.parse::<f32>().ok()? * 2.55
-                } else {
-                    t.parse::<f32>().ok()?
-                };
-                if !num.is_finite() || num < 0.0 || num > 255.0 {
-                    return None;
-                }
-                comps[n] = (num + 0.5) as u32;
+}
+
+/// `#RGB`, `#RGBA`, `#RRGGBB` ve `#RRGGBBAA` biçimlerini çözer.
+/// Alfa kanalı 24 bitlik renk modelinde temsil edilemediği için yok sayılır.
+fn parse_hex_color(s: &str) -> Option<u32> {
+    let hex = s.trim().strip_prefix('#')?;
+    let bytes = hex.as_bytes();
+    let mut digits = [0u32; 8];
+    let mut n = 0usize;
+    for &b in bytes {
+        match hex_digit(b) {
+            Some(d) if n < digits.len() => {
+                digits[n] = d;
                 n += 1;
             }
-            if n == 3 {
-                return Some((comps[0] << 16) | (comps[1] << 8) | comps[2]);
-            }
-            return None;
+            _ => break,
         }
     }
-    let name_slice = v
-        .split(|b| *b == b';' || b.is_ascii_whitespace() || *b == b'\'' || *b == b'"' || *b == b'(')
-        .next()?;
+    match n {
+        3 | 4 => Some((digits[0] * 0x11) << 16 | (digits[1] * 0x11) << 8 | (digits[2] * 0x11)),
+        6 | 8 => Some(
+            (digits[0] << 20)
+                | (digits[1] << 16)
+                | (digits[2] << 12)
+                | (digits[3] << 8)
+                | (digits[4] << 4)
+                | digits[5],
+        ),
+        _ => None,
+    }
+}
 
-    if name_slice.len() > 32 || name_slice.is_empty() {
+fn clamp_channel(v: f32) -> u32 {
+    if !v.is_finite() {
+        return 0;
+    }
+    // `f32::round` is not available in this no_std target. Values are
+    // clamped to positive range, so truncating after adding 0.5 is equivalent.
+    (v.clamp(0.0, 255.0) + 0.5) as u32
+}
+
+fn parse_rgb_component(token: &str) -> Option<f32> {
+    let t = token.trim();
+    if let Some(p) = t.strip_suffix('%') {
+        let n = p.trim().parse::<f32>().ok()?;
+        if !n.is_finite() {
+            return None;
+        }
+        Some(n.clamp(0.0, 100.0) * 2.55)
+    } else {
+        let n = t.parse::<f32>().ok()?;
+        if !n.is_finite() {
+            return None;
+        }
+        Some(n.clamp(0.0, 255.0))
+    }
+}
+
+fn split_color_args(inner: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    for part in inner.split(|c: char| c == ',' || c == '/' || c.is_ascii_whitespace()) {
+        let t = part.trim();
+        if !t.is_empty() && t != "/" {
+            parts.push(t);
+        }
+    }
+    parts
+}
+
+fn parse_rgb_function(inner: &str) -> Option<u32> {
+    let parts = split_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let r = clamp_channel(parse_rgb_component(parts[0])?);
+    let g = clamp_channel(parse_rgb_component(parts[1])?);
+    let b = clamp_channel(parse_rgb_component(parts[2])?);
+    Some((r << 16) | (g << 8) | b)
+}
+
+fn hsl_to_rgb(hue: f32, sat: f32, light: f32) -> u32 {
+    let h = ((hue % 360.0) + 360.0) % 360.0;
+    let s = sat.clamp(0.0, 1.0);
+    let l = light.clamp(0.0, 1.0);
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - ((hp % 2.0) - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let r = clamp_channel((r1 + m) * 255.0);
+    let g = clamp_channel((g1 + m) * 255.0);
+    let b = clamp_channel((b1 + m) * 255.0);
+    (r << 16) | (g << 8) | b
+}
+
+fn parse_hsl_function(inner: &str) -> Option<u32> {
+    let parts = split_color_args(inner);
+    if parts.len() < 3 {
+        return None;
+    }
+    let mut hue_token = parts[0].trim();
+    let mut hue = if let Some(v) = hue_token.strip_suffix("deg") {
+        hue_token = v;
+        hue_token.trim().parse::<f32>().ok()?
+    } else if let Some(v) = hue_token.strip_suffix("turn") {
+        v.trim().parse::<f32>().ok()? * 360.0
+    } else if let Some(v) = hue_token.strip_suffix("grad") {
+        v.trim().parse::<f32>().ok()? * 0.9
+    } else if let Some(v) = hue_token.strip_suffix("rad") {
+        v.trim().parse::<f32>().ok()? * 57.295_78
+    } else {
+        hue_token.parse::<f32>().ok()?
+    };
+    if !hue.is_finite() {
+        return None;
+    }
+    hue = ((hue % 360.0) + 360.0) % 360.0;
+    let parse_percent = |token: &str| -> Option<f32> {
+        let t = token.trim();
+        let v = t
+            .strip_suffix('%')
+            .unwrap_or(t)
+            .trim()
+            .parse::<f32>()
+            .ok()?;
+        if !v.is_finite() {
+            return None;
+        }
+        Some((v / 100.0).clamp(0.0, 1.0))
+    };
+    let sat = parse_percent(parts[1])?;
+    let light = parse_percent(parts[2])?;
+    Some(hsl_to_rgb(hue, sat, light))
+}
+
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || n.len() > h.len() {
+        return None;
+    }
+    (0..=h.len() - n.len()).find(|&i| h[i..i + n.len()].eq_ignore_ascii_case(n))
+}
+
+/// Tek bir renk belirtecini (`#hex`, `rgb()`, `hsl()` veya isim) çözer.
+fn parse_single_color(s: &str) -> Option<u32> {
+    let t = s.trim();
+    if t.is_empty() {
+        return None;
+    }
+    if t.starts_with('#') {
+        return parse_hex_color(t);
+    }
+    if let Some(lp) = t.find('(') {
+        let name = t[..lp].trim();
+        let rp = t[lp + 1..].find(')').map(|p| lp + 1 + p).unwrap_or(t.len());
+        let inner = &t[lp + 1..rp];
+        if name.eq_ignore_ascii_case("rgb") || name.eq_ignore_ascii_case("rgba") {
+            return parse_rgb_function(inner);
+        }
+        if name.eq_ignore_ascii_case("hsl") || name.eq_ignore_ascii_case("hsla") {
+            return parse_hsl_function(inner);
+        }
+        return None;
+    }
+    if t.eq_ignore_ascii_case("transparent") {
+        return None;
+    }
+    named_color(t.as_bytes())
+}
+
+/// CSS rengini 0xRRGGBB biçimine çözer.
+///
+/// Desteklenen biçimler: isimli renkler, `#RGB`, `#RGBA`, `#RRGGBB`,
+/// `#RRGGBBAA`, `rgb()`, `rgba()`, `hsl()` ve `hsla()`. Kısa gösterimlerde
+/// (ör. `border: 1px solid red`) renk belirteci otomatik bulunur.
+pub fn html_color(value: &[u8]) -> Option<u32> {
+    let s = trim_color_text(value);
+    if s.is_empty() {
         return None;
     }
 
+    // Tek belirteç: hızlı yol.
+    if let Some(c) = parse_single_color(s) {
+        return Some(c);
+    }
+
+    // Kısa gösterim içinde hex renk ara (#fff, #ff0000 ...).
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'#' {
+            let mut end = i + 1;
+            while end < bytes.len() && hex_digit(bytes[end]).is_some() {
+                end += 1;
+            }
+            if end > i + 1 {
+                if let Some(c) = parse_hex_color(&s[i..end]) {
+                    return Some(c);
+                }
+            }
+            i = end.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+
+    // Kısa gösterim içinde rgb()/rgba()/hsl()/hsla() ara.
+    for func in ["rgb(", "rgba(", "hsl(", "hsla("] {
+        if let Some(pos) = find_ci(s, func) {
+            let end = s[pos..].find(')').map(|p| pos + p + 1).unwrap_or(s.len());
+            if let Some(c) = parse_single_color(&s[pos..end]) {
+                return Some(c);
+            }
+        }
+    }
+
+    // Son olarak isimli renkleri kelime kelime dene.
+    for token in s.split(|c: char| c.is_ascii_whitespace() || c == ',' || c == ';') {
+        let t = token.trim_matches(|c: char| !c.is_ascii_alphabetic());
+        if t.is_empty() || t.len() > 32 || !t.bytes().all(|b| b.is_ascii_alphabetic()) {
+            continue;
+        }
+        if let Some(c) = named_color(t.as_bytes()) {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn named_color(name: &[u8]) -> Option<u32> {
+    if name.is_empty() || name.len() > 32 {
+        return None;
+    }
     let mut buf = [0u8; 32];
-    for (i, &b) in name_slice.iter().enumerate() {
+    for (i, &b) in name.iter().enumerate() {
+        if !b.is_ascii_alphabetic() {
+            return None;
+        }
         buf[i] = b.to_ascii_lowercase();
     }
-    let lower_name = &buf[..name_slice.len()];
+    let lower_name = &buf[..name.len()];
 
     match lower_name {
         b"aliceblue" => Some(0xF0F8FF),
@@ -670,5 +849,25 @@ mod tests {
     fn test_html_colors() {
         assert_eq!(html_color(b"#ff0000"), Some(0xff0000));
         assert_eq!(html_color(b"red"), Some(0xff0000));
+    }
+
+    #[test]
+    fn test_html_color_formats() {
+        assert_eq!(html_color(b"#f00"), Some(0xff0000));
+        assert_eq!(html_color(b"#f008"), Some(0xff0000));
+        assert_eq!(html_color(b"#00ff0080"), Some(0x00ff00));
+        assert_eq!(html_color(b"rgb(0, 128, 255)"), Some(0x0080ff));
+        assert_eq!(html_color(b"rgb(255 0 0 / 50%)"), Some(0xff0000));
+        assert_eq!(html_color(b"rgba(0, 0, 255, 0.5)"), Some(0x0000ff));
+        assert_eq!(html_color(b"hsl(120, 100%, 50%)"), Some(0x00ff00));
+        assert_eq!(html_color(b"hsla(240, 100%, 50%, 0.3)"), Some(0x0000ff));
+        assert_eq!(html_color(b"transparent"), None);
+    }
+
+    #[test]
+    fn test_html_color_in_shorthand() {
+        assert_eq!(html_color(b"1px solid red"), Some(0xff0000));
+        assert_eq!(html_color(b"border: 1px solid #00ff00"), Some(0x00ff00));
+        assert_eq!(html_color(b"0 0 4px rgba(0, 0, 255, 0.5)"), Some(0x0000ff));
     }
 }

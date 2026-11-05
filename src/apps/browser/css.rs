@@ -88,6 +88,141 @@ fn strip_css_comments(css: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
+/// CSS özel değişkenlerini (`--ad: değer`) toplar.
+///
+/// Gerçek CSS'te değişkenler seçici kapsamına göre miras alınır; bu basit
+/// motor tüm sayfa için geçerli tek bir tablo tutar. `:root` ve `body`
+/// değişkenleri pratikte en yaygın kullanım olduğu için bu yaklaşım renk
+/// destekli sitelerin büyük bölümünü çalıştırır.
+fn collect_css_variables(css: &str, vars: &mut Vec<(String, String)>) {
+    let b = css.as_bytes();
+    let mut p = 0usize;
+    while p + 1 < b.len() {
+        if b[p] == b'-' && b[p + 1] == b'-' {
+            let name_start = p;
+            p += 2;
+            while p < b.len() && (b[p].is_ascii_alphanumeric() || b[p] == b'-' || b[p] == b'_') {
+                p += 1;
+            }
+            let name = &css[name_start..p];
+            let mut q = p;
+            while q < b.len() && b[q].is_ascii_whitespace() {
+                q += 1;
+            }
+            if q < b.len() && b[q] == b':' {
+                q += 1;
+                let val_start = q;
+                let mut depth = 0i32;
+                while q < b.len() {
+                    match b[q] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        b';' | b'}' if depth <= 0 => break,
+                        _ => {}
+                    }
+                    q += 1;
+                }
+                let val = css[val_start..q].trim();
+                if !name.is_empty() && !val.is_empty() && val.len() <= 256 {
+                    if let Some(entry) = vars.iter_mut().find(|(n, _)| n == name) {
+                        entry.1 = String::from(val);
+                    } else if vars.len() < 256 {
+                        vars.push((String::from(name), String::from(val)));
+                    }
+                }
+                p = q;
+                continue;
+            }
+        }
+        p += 1;
+    }
+}
+
+/// `var(--ad[, yedek])` çağrılarını toplanan değerlerle değiştirir.
+fn substitute_css_variables(css: &str, vars: &[(String, String)]) -> String {
+    let mut current = String::from(css);
+    for _ in 0..4 {
+        let bytes = current.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut i = 0usize;
+        let mut changed = false;
+        while i < bytes.len() {
+            if i + 4 <= bytes.len() && bytes[i..i + 4].eq_ignore_ascii_case(b"var(") {
+                let mut depth = 1i32;
+                let mut j = i + 4;
+                while j < bytes.len() && depth > 0 {
+                    if bytes[j] == b'(' {
+                        depth += 1;
+                    } else if bytes[j] == b')' {
+                        depth -= 1;
+                    }
+                    j += 1;
+                }
+                if depth == 0 {
+                    let inner = &current[i + 4..j - 1];
+                    let (name, fallback) = match inner.find(',') {
+                        Some(pos) => (inner[..pos].trim(), Some(inner[pos + 1..].trim())),
+                        None => (inner.trim(), None),
+                    };
+                    if name.starts_with("--") {
+                        if let Some((_, value)) = vars.iter().find(|(n, _)| n == name) {
+                            out.extend_from_slice(value.as_bytes());
+                            changed = true;
+                            i = j;
+                            continue;
+                        }
+                        if let Some(value) = fallback {
+                            out.extend_from_slice(value.as_bytes());
+                            changed = true;
+                            i = j;
+                            continue;
+                        }
+                    }
+                }
+            }
+            out.push(bytes[i]);
+            i += 1;
+        }
+        current = String::from_utf8(out)
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+        if !changed {
+            break;
+        }
+    }
+    current
+}
+
+/// Kısa gösterimdeki ilk geçerli rengi bulur (ör. `1px solid #f00`).
+fn shorthand_color(value: &str) -> Option<u32> {
+    html_color(value.as_bytes())
+}
+
+/// `border: 1px solid #f00` kısa gösterimini çözer.
+fn apply_border_shorthand(style: &mut ElementStyle, value: &str) {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("hidden") {
+        style.border_width = 0;
+        style.border_style = 0;
+        return;
+    }
+    for part in v.split_whitespace() {
+        if part.eq_ignore_ascii_case("solid") {
+            style.border_style = 1;
+        } else if part.eq_ignore_ascii_case("dashed") {
+            style.border_style = 2;
+        } else if part.eq_ignore_ascii_case("dotted") {
+            style.border_style = 3;
+        } else if part.eq_ignore_ascii_case("double") {
+            style.border_style = 1;
+        } else if let Some(px) = parse_px_value(part, None, None, None, None) {
+            style.border_width = px;
+        }
+    }
+    if let Some(c) = shorthand_color(v) {
+        style.border_color = Some(c);
+    }
+}
+
 /// Piksel, em, rem, %, vh, vw birimlerini piksel cinsinden çözer.
 ///
 /// # Arguments
@@ -192,18 +327,31 @@ fn is_bold_weight(val: &str) -> bool {
 #[allow(unreachable_patterns)]
 fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
     let mut val = raw_val.trim();
-    if let Some(stripped) = val.strip_suffix("!important") {
-        val = stripped.trim();
+    if val.len() >= 10 && val[val.len() - 10..].eq_ignore_ascii_case("!important") {
+        val = val[..val.len() - 10].trim();
     }
     match prop {
         "color" => {
-            if let Some(c) = html_color(val.as_bytes()) {
-                style.color = Some(c);
+            if !val.eq_ignore_ascii_case("inherit")
+                && !val.eq_ignore_ascii_case("initial")
+                && !val.eq_ignore_ascii_case("unset")
+                && !val.eq_ignore_ascii_case("currentcolor")
+            {
+                if let Some(c) = html_color(val.as_bytes()) {
+                    style.color = Some(c);
+                }
             }
         }
         "background-color" | "background" => {
-            if let Some(c) = html_color(val.as_bytes()) {
-                style.bg_color = Some(c);
+            // `transparent` / `none`: arka plan rengi yok. Kısa gösterimde
+            // (ör. `background: #fff url(...)`) renk otomatik bulunur.
+            if !val.eq_ignore_ascii_case("transparent")
+                && !val.eq_ignore_ascii_case("none")
+                && !val.eq_ignore_ascii_case("inherit")
+            {
+                if let Some(c) = html_color(val.as_bytes()) {
+                    style.bg_color = Some(c);
+                }
             }
         }
         "text-align" => {
@@ -298,12 +446,16 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 style.pre_formatted = true;
             }
         }
-        "border" => {
-            // Sınır stilleri basitçe işleniyor
+        "border" | "outline" => {
+            apply_border_shorthand(style, val);
         }
-        "border-top" | "border-right" | "border-bottom" | "border-left" => {}
+        "border-top" | "border-right" | "border-bottom" | "border-left" | "outline-color" => {
+            apply_border_shorthand(style, val);
+        }
         "border-width" => {
-            if let Some(px) = parse_px_value(val, None, None, None, None) {
+            // Çoklu değerlerde (`1px 2px`) ilk genişlik kullanılır.
+            let first = val.split_whitespace().next().unwrap_or(val);
+            if let Some(px) = parse_px_value(first, None, None, None, None) {
                 style.border_width = px;
             }
         }
@@ -770,7 +922,7 @@ fn parse_css_rules(
                 rules.push(CssRule {
                     selector: String::from(trimmed),
                     style: style.clone(),
-                    media: None,
+                    media: current_media.map(String::from),
                 });
             }
         }
@@ -786,12 +938,17 @@ pub struct ParsedCss {
 pub fn parse_css(css_code: &str) -> ParsedCss {
     let mut rules = Vec::new();
     let mut keyframes = Vec::new();
-    parse_css_rules(
-        strip_css_comments(css_code).as_bytes(),
-        &mut rules,
-        &mut keyframes,
-        None,
-    );
+    let cleaned = strip_css_comments(css_code);
+    // CSS değişkenleri renk değerlerinde çok yaygın; parse etmeden önce
+    // `var(--ad)` çağrılarını çözerek renk kaybını önle.
+    let mut variables: Vec<(String, String)> = Vec::new();
+    collect_css_variables(&cleaned, &mut variables);
+    let expanded = if variables.is_empty() {
+        cleaned
+    } else {
+        substitute_css_variables(&cleaned, &variables)
+    };
+    parse_css_rules(expanded.as_bytes(), &mut rules, &mut keyframes, None);
     ParsedCss { rules, keyframes }
 }
 
@@ -927,44 +1084,172 @@ fn media_matches(cond: &str, viewport_w: usize, viewport_h: usize) -> bool {
         return true;
     }
 
-    // "and" ile ayrılmış parçalar
-    for part in c.split("and") {
-        let part = part.trim();
-        if part.is_empty()
-            || part.eq_ignore_ascii_case("screen")
-            || part.eq_ignore_ascii_case("all")
-        {
-            continue;
-        }
-
-        // (min-width: 600px) veya (max-width: 800px) vb.
-        let inner = part
-            .strip_prefix('(')
-            .and_then(|s| s.strip_suffix(')'))
-            .unwrap_or(part);
-        let inner = inner.trim();
-
-        if let Some((prop, val)) = inner.split_once(':') {
-            let prop = prop.trim().to_ascii_lowercase();
-            let val = val.trim();
-            let px = val
-                .strip_suffix("px")
-                .and_then(|v| v.trim().parse::<usize>().ok())
-                .unwrap_or(0);
-
-            let ok = match prop.as_str() {
-                "min-width" => viewport_w >= px,
-                "max-width" => viewport_w <= px,
-                "min-height" => viewport_h >= px,
-                "max-height" => viewport_h <= px,
-                _ => true,
-            };
-            if !ok {
+    // "and" ile ayrılmış parçalar. `landscape` gibi kelimelerin içindeki
+    // "and" dizisini ayraç sanmamak için kelime sınırı aranır.
+    let mut start = 0usize;
+    let mut i = 0usize;
+    let bytes = c.as_bytes();
+    while i < bytes.len() {
+        let boundary = i + 3 <= bytes.len()
+            && bytes[i..i + 3].eq_ignore_ascii_case(b"and")
+            && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+            && (i + 3 == bytes.len() || !bytes[i + 3].is_ascii_alphanumeric());
+        if boundary {
+            if !media_part_matches(&c[start..i], viewport_w, viewport_h) {
                 return false;
             }
+            i += 3;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    media_part_matches(&c[start..], viewport_w, viewport_h)
+}
+
+/// Tek bir @media koşul parçasını değerlendirir (`screen`, `(min-width: 600px)`).
+fn media_part_matches(part: &str, viewport_w: usize, viewport_h: usize) -> bool {
+    let part = part.trim();
+    if part.is_empty() || part.eq_ignore_ascii_case("screen") || part.eq_ignore_ascii_case("all") {
+        return true;
+    }
+    // (min-width: 600px) veya (max-width: 800px) vb.
+    let inner = part
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(part);
+    let inner = inner.trim();
+
+    if let Some((prop, val)) = inner.split_once(':') {
+        let prop = prop.trim().to_ascii_lowercase();
+        let val = val.trim();
+        let px = val
+            .strip_suffix("px")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+
+        match prop.as_str() {
+            "min-width" => viewport_w >= px,
+            "max-width" => viewport_w <= px,
+            "min-height" => viewport_h >= px,
+            "max-height" => viewport_h <= px,
+            // Tarayıcı açık (light) temayla çizilir; koyu tema kuralları
+            // sayfanın varsayılan beyaz zeminini ezmemeli.
+            "prefers-color-scheme" => val.eq_ignore_ascii_case("light"),
+            "orientation" => {
+                if val.eq_ignore_ascii_case("portrait") {
+                    viewport_w < viewport_h
+                } else {
+                    viewport_w >= viewport_h
+                }
+            }
+            _ => true,
+        }
+    } else {
+        true
+    }
+}
+
+fn contains_ci(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() || n.len() > h.len() {
+        return false;
+    }
+    h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
+fn class_list_contains(class: Option<&str>, want: &str) -> bool {
+    class.is_some_and(|c| {
+        c.split_whitespace()
+            .any(|part| part.eq_ignore_ascii_case(want))
+    })
+}
+
+/// Bir bileşik seçiciyi (`div.card`, `.a.b`, `#id`, `*`) eşleştirir.
+/// Öznitelik ve sözde-sınıf bölümleri statik eşleştirmede yok sayılır.
+fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
+    let base: String = sel.chars().take_while(|&c| c != ':' && c != '[').collect();
+    let base = base.trim();
+    if base.is_empty() {
+        return false;
+    }
+    if base == "*" {
+        return true;
+    }
+
+    let (tag_part, mut rest) = match base.find(['#', '.']) {
+        Some(pos) => (&base[..pos], &base[pos..]),
+        None => (base, ""),
+    };
+    if !tag_part.is_empty() && tag_part != "*" && !tag_part.eq_ignore_ascii_case(tag) {
+        return false;
+    }
+    while let Some(ch) = rest.chars().next() {
+        if ch == '#' {
+            rest = &rest[1..];
+            let end = rest.find(['#', '.']).unwrap_or(rest.len());
+            let want = &rest[..end];
+            if !id.is_some_and(|v| v.eq_ignore_ascii_case(want)) {
+                return false;
+            }
+            rest = &rest[end..];
+        } else if ch == '.' {
+            rest = &rest[1..];
+            let end = rest.find(['#', '.']).unwrap_or(rest.len());
+            let want = &rest[..end];
+            if !class_list_contains(class, want) {
+                return false;
+            }
+            rest = &rest[end..];
+        } else {
+            rest = &rest[1..];
         }
     }
     true
+}
+
+/// Seçici eşleştirme: virgülle ayrılmış parçalar, torun/çocuk birleştiricileri
+/// ve bileşik seçiciler desteklenir. Dinamik sözde-sınıflar (`:hover`) statik
+/// çizimde uygulanmaz; aksi halde fare üzerinde olmayan öğeler hover rengini
+/// kalıcı olarak alırdı.
+fn selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
+    let sel = sel.trim();
+    if sel.is_empty() {
+        return false;
+    }
+    // Virgüllü gruplarda yalnızca dinamik/sözde-element içeren parçayı atla;
+    // `a, a:visited { color: red }` gibi yaygın grupların statik kısmı çalışsın.
+    for part in sel.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if contains_ci(part, "::")
+            || contains_ci(part, ":hover")
+            || contains_ci(part, ":focus")
+            || contains_ci(part, ":active")
+            || contains_ci(part, ":visited")
+            || contains_ci(part, ":link")
+        {
+            continue;
+        }
+        if contains_ci(part, ":root") {
+            if tag.eq_ignore_ascii_case("html") {
+                return true;
+            }
+            continue;
+        }
+        // Torun/çocuk seçicide son bileşik seçiciyi eşleştir.
+        let last = part
+            .rsplit(|c: char| c.is_ascii_whitespace() || c == '>' || c == '+' || c == '~')
+            .find(|s| !s.is_empty())
+            .unwrap_or(part);
+        if compound_selector_matches(last, tag, class, id) {
+            return true;
+        }
+    }
+    false
 }
 
 /// CSS Cascade: kuralları özgüllüğe göre sıralar ve en yüksek skoru uygular.
@@ -988,17 +1273,7 @@ fn apply_css_cascade(
         }
 
         let sel = rule.selector.as_str();
-        let matches = if sel.starts_with('.') {
-            class.map_or(false, |c| {
-                c.split_whitespace()
-                    .any(|part| part.eq_ignore_ascii_case(&sel[1..]))
-            })
-        } else if sel.starts_with('#') {
-            id.map_or(false, |i| i.eq_ignore_ascii_case(&sel[1..]))
-        } else {
-            sel.eq_ignore_ascii_case(tag)
-        };
-        if matches {
+        if selector_matches(sel, tag, class, id) {
             scored.push(ScoredRule {
                 specificity: selector_specificity(sel),
                 style: rule.style.clone(),
@@ -1142,4 +1417,68 @@ pub fn transition_progress(elapsed_ms: u64, duration_ms: f32) -> Option<f32> {
         return Some(1.0);
     }
     Some(elapsed_us as f32 / duration_us as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_css_variables_and_color_formats() {
+        let parsed = parse_css(
+            ":root { --brand: #123456; --accent: rgb(0 128 255); }\n\
+             body { background-color: var(--brand); color: rgb(255 0 0 / 50%); }\n\
+             .card { background: #abc url(bg.png); border: 1px solid hsl(120, 100%, 50%); }\n\
+             .link { color: var(--accent); }",
+        );
+
+        let body = match_css_style(&parsed.rules, "body", None, None, None, 600, 768);
+        assert_eq!(body.bg_color, Some(0x123456));
+        assert_eq!(body.color, Some(0xff0000));
+
+        let card = match_css_style(&parsed.rules, "div", Some("card"), None, None, 600, 768);
+        assert_eq!(card.bg_color, Some(0xaabbcc));
+        assert_eq!(card.border_color, Some(0x00ff00));
+
+        let link = match_css_style(&parsed.rules, "span", Some("link"), None, None, 600, 768);
+        assert_eq!(link.color, Some(0x0080ff));
+    }
+
+    #[test]
+    fn selector_groups_keep_static_parts() {
+        let parsed = parse_css("a, a:visited { color: #112233; } body.dark { background: white; }");
+        let link = match_css_style(&parsed.rules, "a", None, None, None, 600, 768);
+        assert_eq!(link.color, Some(0x112233));
+
+        let dark = match_css_style(&parsed.rules, "body", Some("dark"), None, None, 600, 768);
+        assert_eq!(dark.bg_color, Some(0xffffff));
+        let light = match_css_style(&parsed.rules, "body", None, None, None, 600, 768);
+        assert_eq!(light.bg_color, None);
+    }
+
+    #[test]
+    fn inline_style_color_overrides_rules() {
+        let parsed = parse_css(".card { color: red; }");
+        let card = match_css_style(
+            &parsed.rules,
+            "div",
+            Some("card"),
+            None,
+            Some("color: blue"),
+            600,
+            768,
+        );
+        assert_eq!(card.color, Some(0x0000ff));
+    }
+
+    #[test]
+    fn light_color_scheme_wins_over_dark() {
+        let parsed = parse_css(
+            "@media (prefers-color-scheme: dark) { body { background: black; color: white; } }\n\
+             @media (prefers-color-scheme: light) { body { background: white; color: black; } }",
+        );
+        let body = match_css_style(&parsed.rules, "body", None, None, None, 600, 768);
+        assert_eq!(body.bg_color, Some(0xffffff));
+        assert_eq!(body.color, Some(0x000000));
+    }
 }

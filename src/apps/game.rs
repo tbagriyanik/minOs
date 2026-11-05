@@ -100,10 +100,7 @@ impl Minesweeper {
     }
 
     fn rng_next(&mut self) -> u64 {
-        self.seed = self
-            .seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
+        self.seed = self.seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         self.seed
     }
 
@@ -149,7 +146,8 @@ impl Minesweeper {
                         }
                         let nr = r as isize + dr - 1;
                         let nc = c as isize + dc - 1;
-                        if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
+                        if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize
+                        {
                             continue;
                         }
                         let nidx = nr as usize * self.cols + nc as usize;
@@ -194,7 +192,11 @@ impl Minesweeper {
                                 }
                                 let nr = rr as isize + dr - 1;
                                 let nc = cc as isize + dc - 1;
-                                if nr < 0 || nr >= self.rows as isize || nc < 0 || nc >= self.cols as isize {
+                                if nr < 0
+                                    || nr >= self.rows as isize
+                                    || nc < 0
+                                    || nc >= self.cols as isize
+                                {
                                     continue;
                                 }
                                 let ni = nr as usize * self.cols + nc as usize;
@@ -316,28 +318,100 @@ impl ChessBoard {
     pub fn new() -> Self {
         let mut cells = [[None; 8]; 8];
         // Siyah arka sıra (satır 0).
-        cells[0][0] = Some(ChessPiece { kind: PieceKind::Rook, side: ChessSide::Black, has_moved: false });
-        cells[0][1] = Some(ChessPiece { kind: PieceKind::Knight, side: ChessSide::Black, has_moved: false });
-        cells[0][2] = Some(ChessPiece { kind: PieceKind::Bishop, side: ChessSide::Black, has_moved: false });
-        cells[0][3] = Some(ChessPiece { kind: PieceKind::Queen, side: ChessSide::Black, has_moved: false });
-        cells[0][4] = Some(ChessPiece { kind: PieceKind::King, side: ChessSide::Black, has_moved: false });
-        cells[0][5] = Some(ChessPiece { kind: PieceKind::Bishop, side: ChessSide::Black, has_moved: false });
-        cells[0][6] = Some(ChessPiece { kind: PieceKind::Knight, side: ChessSide::Black, has_moved: false });
-        cells[0][7] = Some(ChessPiece { kind: PieceKind::Rook, side: ChessSide::Black, has_moved: false });
+        cells[0][0] = Some(ChessPiece {
+            kind: PieceKind::Rook,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][1] = Some(ChessPiece {
+            kind: PieceKind::Knight,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][2] = Some(ChessPiece {
+            kind: PieceKind::Bishop,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][3] = Some(ChessPiece {
+            kind: PieceKind::Queen,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][4] = Some(ChessPiece {
+            kind: PieceKind::King,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][5] = Some(ChessPiece {
+            kind: PieceKind::Bishop,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][6] = Some(ChessPiece {
+            kind: PieceKind::Knight,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
+        cells[0][7] = Some(ChessPiece {
+            kind: PieceKind::Rook,
+            side: ChessSide::Black,
+            has_moved: false,
+        });
         for c in 0..8 {
-            cells[1][c] = Some(ChessPiece { kind: PieceKind::Pawn, side: ChessSide::Black, has_moved: false });
+            cells[1][c] = Some(ChessPiece {
+                kind: PieceKind::Pawn,
+                side: ChessSide::Black,
+                has_moved: false,
+            });
         }
         // Beyaz arka sıra (satır 7).
-        cells[7][0] = Some(ChessPiece { kind: PieceKind::Rook, side: ChessSide::White, has_moved: false });
-        cells[7][1] = Some(ChessPiece { kind: PieceKind::Knight, side: ChessSide::White, has_moved: false });
-        cells[7][2] = Some(ChessPiece { kind: PieceKind::Bishop, side: ChessSide::White, has_moved: false });
-        cells[7][3] = Some(ChessPiece { kind: PieceKind::Queen, side: ChessSide::White, has_moved: false });
-        cells[7][4] = Some(ChessPiece { kind: PieceKind::King, side: ChessSide::White, has_moved: false });
-        cells[7][5] = Some(ChessPiece { kind: PieceKind::Bishop, side: ChessSide::White, has_moved: false });
-        cells[7][6] = Some(ChessPiece { kind: PieceKind::Knight, side: ChessSide::White, has_moved: false });
-        cells[7][7] = Some(ChessPiece { kind: PieceKind::Rook, side: ChessSide::White, has_moved: false });
+        cells[7][0] = Some(ChessPiece {
+            kind: PieceKind::Rook,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][1] = Some(ChessPiece {
+            kind: PieceKind::Knight,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][2] = Some(ChessPiece {
+            kind: PieceKind::Bishop,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][3] = Some(ChessPiece {
+            kind: PieceKind::Queen,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][4] = Some(ChessPiece {
+            kind: PieceKind::King,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][5] = Some(ChessPiece {
+            kind: PieceKind::Bishop,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][6] = Some(ChessPiece {
+            kind: PieceKind::Knight,
+            side: ChessSide::White,
+            has_moved: false,
+        });
+        cells[7][7] = Some(ChessPiece {
+            kind: PieceKind::Rook,
+            side: ChessSide::White,
+            has_moved: false,
+        });
         for c in 0..8 {
-            cells[6][c] = Some(ChessPiece { kind: PieceKind::Pawn, side: ChessSide::White, has_moved: false });
+            cells[6][c] = Some(ChessPiece {
+                kind: PieceKind::Pawn,
+                side: ChessSide::White,
+                has_moved: false,
+            });
         }
         Self {
             cells,
@@ -364,7 +438,11 @@ impl ChessBoard {
         };
         match piece.kind {
             PieceKind::Pawn => {
-                let dir = if piece.side == ChessSide::White { -1 } else { 1 };
+                let dir = if piece.side == ChessSide::White {
+                    -1
+                } else {
+                    1
+                };
                 let start_row = if piece.side == ChessSide::White { 6 } else { 1 };
                 // İleri adım.
                 let nr = r as isize + dir;
@@ -377,7 +455,8 @@ impl ChessBoard {
                     // İki kare ileri.
                     if r == start_row {
                         let nr2 = r as isize + 2 * dir;
-                        if Self::in_bounds(nr2, c as isize) && self.cells[nr2 as usize][c].is_none() {
+                        if Self::in_bounds(nr2, c as isize) && self.cells[nr2 as usize][c].is_none()
+                        {
                             out.push(ChessMove {
                                 from: r * 8 + c,
                                 to: nr2 as usize * 8 + c,
@@ -437,7 +516,16 @@ impl ChessBoard {
                 }
             }
             PieceKind::Knight => {
-                let dirs = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)];
+                let dirs = [
+                    (-2, -1),
+                    (-2, 1),
+                    (-1, -2),
+                    (-1, 2),
+                    (1, -2),
+                    (1, 2),
+                    (2, -1),
+                    (2, 1),
+                ];
                 for (dr, dc) in dirs.iter() {
                     let nr = r as isize + dr;
                     let nc = c as isize + dc;
@@ -499,9 +587,14 @@ impl ChessBoard {
             }
             PieceKind::Queen => {
                 let dirs = [
-                    (-1, -1), (-1, 0), (-1, 1),
-                    (0, -1), (0, 1),
-                    (1, -1), (1, 0), (1, 1),
+                    (-1, -1),
+                    (-1, 0),
+                    (-1, 1),
+                    (0, -1),
+                    (0, 1),
+                    (1, -1),
+                    (1, 0),
+                    (1, 1),
                 ];
                 for (dr, dc) in dirs.iter() {
                     let mut nr = r as isize;
@@ -536,9 +629,14 @@ impl ChessBoard {
             }
             PieceKind::King => {
                 let dirs = [
-                    (-1, -1), (-1, 0), (-1, 1),
-                    (0, -1), (0, 1),
-                    (1, -1), (1, 0), (1, 1),
+                    (-1, -1),
+                    (-1, 0),
+                    (-1, 1),
+                    (0, -1),
+                    (0, 1),
+                    (1, -1),
+                    (1, 0),
+                    (1, 1),
                 ];
                 for (dr, dc) in dirs.iter() {
                     let nr = r as isize + dr;
@@ -720,7 +818,8 @@ impl GameApp {
             },
             sound_pending: Sound::None,
             sound_volume: 60,
-            muted: false,
+            // Oyun sesleri kullanıcı özellikle açana kadar kapalıdır.
+            muted: true,
         }
     }
 
@@ -767,6 +866,18 @@ impl GameApp {
     pub fn new_game_rect() -> (usize, usize, usize, usize) {
         let x = sp(8) + TAB_COUNT * (sp(TAB_W) + sp(4)) + sp(6);
         (x, sp(TAB_Y), sp(86), sp(TAB_H))
+    }
+
+    pub fn sound_rect() -> (usize, usize, usize, usize) {
+        let (x, y, w, h) = Self::new_game_rect();
+        (x + w + sp(4), y, sp(76), h)
+    }
+
+    pub fn toggle_sound(&mut self) {
+        self.muted = !self.muted;
+        if self.muted {
+            self.sound_pending = Sound::None;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1073,6 +1184,30 @@ impl GameApp {
                 crate::gui::ui_text("Yeni Oyun", "New Game"),
                 Color::TEXT_MAIN,
             );
+            let (sx, sy, sw, sh) = Self::sound_rect();
+            fb.draw_rounded_rect(
+                x + sx,
+                y + sy,
+                sw,
+                sh,
+                5,
+                if self.muted {
+                    Color::TITLE_BAR
+                } else {
+                    Color::ACCENT_GREEN
+                },
+            );
+            MinGuiCompositor::draw_string(
+                fb,
+                x + sx + sp(8),
+                y + sy + (sh.saturating_sub(MinGuiCompositor::text_height())) / 2,
+                if self.muted {
+                    crate::gui::ui_text("Ses Aç", "Sound On")
+                } else {
+                    crate::gui::ui_text("Sesi Kapat", "Mute")
+                },
+                Color::TEXT_MAIN,
+            );
         }
     }
 
@@ -1112,7 +1247,9 @@ impl GameApp {
                 left.push_str("   ");
                 match self.mines.state {
                     GameState::Won => left.push_str(crate::gui::ui_text("Kazandınız!", "You win!")),
-                    GameState::Lost => left.push_str(crate::gui::ui_text("Mayına bastınız!", "Mine hit!")),
+                    GameState::Lost => {
+                        left.push_str(crate::gui::ui_text("Mayına bastınız!", "Mine hit!"))
+                    }
                     _ => {}
                 }
             }
@@ -1143,9 +1280,18 @@ impl GameApp {
             (x + sp(4), sy, w.saturating_sub(sp(8)), sp(STATUS_H)),
         );
         let hint = match self.tab {
-            TAB_GAME => crate::gui::ui_text("Tıkla taşı seç, hedefe tıkla oynayın", "Click to select, click target to move"),
-            TAB_MINES => crate::gui::ui_text("Sol tık aç, sağ tık bayrak", "Left click reveal, right click flag"),
-            TAB_CHESS => crate::gui::ui_text("Taşı seç, hedefe tıkla oynayın", "Select piece, click target to move"),
+            TAB_GAME => crate::gui::ui_text(
+                "Tıkla taşı seç, hedefe tıkla oynayın",
+                "Click to select, click target to move",
+            ),
+            TAB_MINES => crate::gui::ui_text(
+                "Sol tık aç, sağ tık bayrak",
+                "Left click reveal, right click flag",
+            ),
+            TAB_CHESS => crate::gui::ui_text(
+                "Taşı seç, hedefe tıkla oynayın",
+                "Select piece, click target to move",
+            ),
             _ => crate::gui::ui_text("", ""),
         };
         MinGuiCompositor::draw_string_clipped(
@@ -1279,7 +1425,13 @@ impl GameApp {
                         if cell.is_mine {
                             // Mayın: koyu daire.
                             let r_ = (cell_w.min(cell_h) / 3).max(2);
-                            Self::fill_circle(fb, cx + cell_w / 2, cy + cell_h / 2, r_, Color::DARK_BG);
+                            Self::fill_circle(
+                                fb,
+                                cx + cell_w / 2,
+                                cy + cell_h / 2,
+                                r_,
+                                Color::DARK_BG,
+                            );
                         } else if cell.adjacent > 0 {
                             let mut label = TextBuf::new();
                             label.push_usize(cell.adjacent as usize);
@@ -1474,6 +1626,10 @@ impl GameApp {
                 return true;
             }
         }
+        if crate::gui::in_rect(px, py, Self::sound_rect()) {
+            self.toggle_sound();
+            return true;
+        }
         match self.tab {
             TAB_GAME => {
                 if crate::gui::in_rect(px, py, Self::new_game_rect()) {
@@ -1493,7 +1649,9 @@ impl GameApp {
                     return true;
                 }
                 let rect = Self::board_rect(w, h);
-                if let Some((r, c)) = Self::cell_of_mines(px, py, rect, self.mines.rows, self.mines.cols) {
+                if let Some((r, c)) =
+                    Self::cell_of_mines(px, py, rect, self.mines.rows, self.mines.cols)
+                {
                     self.click_mine_cell(r, c);
                     return true;
                 }
@@ -1535,7 +1693,7 @@ impl GameApp {
                 true
             }
             's' | 'S' => {
-                self.sound_pending = Sound::Win;
+                self.toggle_sound();
                 true
             }
             '1'..='3' => {
@@ -1550,7 +1708,11 @@ impl GameApp {
     pub fn take_sound(&mut self) -> Sound {
         let sound = self.sound_pending;
         self.sound_pending = Sound::None;
-        sound
+        if self.muted {
+            Sound::None
+        } else {
+            sound
+        }
     }
 
     /// Ses kimliğine karşılık gelen (frekans Hz, süre ms) çifti.

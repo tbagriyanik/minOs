@@ -17,10 +17,21 @@ const HALF_PI: f32 = PI / 2.0;
 /// Taylor serisi ile sinüs (viewer3d ile aynı).
 #[inline(always)]
 fn fast_sin(mut x: f32) -> f32 {
-    while x > PI {
+    if !x.is_finite() {
+        return 0.0;
+    }
+    // Açı normalizasyonu mutlaka sonlu kalsın. Bozuk/taşmış bir değer için
+    // `x -= TAU` sonsuz döngüye girebilirdi (özellikle uzun süreli dönüşte).
+    for _ in 0..8 {
+        if x <= PI {
+            break;
+        }
         x -= TAU;
     }
-    while x < -PI {
+    for _ in 0..8 {
+        if x >= -PI {
+            break;
+        }
         x += TAU;
     }
     let x2 = x * x;
@@ -51,6 +62,9 @@ fn fast_sqrt(x: f32) -> f32 {
 /// atan2 yaklaşımı.
 #[inline(always)]
 fn fast_atan2(y: f32, x: f32) -> f32 {
+    if !x.is_finite() || !y.is_finite() {
+        return 0.0;
+    }
     if x == 0.0 {
         if y > 0.0 {
             return HALF_PI;
@@ -86,7 +100,6 @@ impl AtanApprox for f32 {
         } else {
             result
         }
-
     }
 }
 
@@ -104,6 +117,15 @@ const ROT_SPEED: f32 = 0.10;
 // daha kontrollü bir FPS dönüşü için ayarlandı.
 const MOUSE_SENS: f32 = 0.0045;
 const PLAYER_RADIUS: f32 = 0.25;
+
+// Tuş durumu maske bayrakları (handle_key / handle_arrow ile ayarlanır,
+// update() içinde tek seferde uygulanır — çok tuşlu hareket destekler).
+const KEY_W: u16 = 1 << 0;
+const KEY_S: u16 = 1 << 1;
+const KEY_A: u16 = 1 << 2;
+const KEY_D: u16 = 1 << 3;
+const KEY_LEFT: u16 = 1 << 4;
+const KEY_RIGHT: u16 = 1 << 5;
 
 /// Harita kare türleri: 0 = boş, 1 = duvar, 2 = kapı, 3 = canlı/pickup.
 const TILE_WALL: u8 = 1;
@@ -171,7 +193,6 @@ pub enum RenderMode {
 enum GameResult {
     Playing,
     Won,
-    Lost,
 }
 
 /// Oyun durumu.
@@ -216,6 +237,7 @@ pub struct FpsGameApp {
     pub last_shot_tick: usize,
     pub last_step_tick: usize,
     pub moving: bool,
+    pub key_mask: u16,
     pub sound_pending: Option<(u32, usize)>,
 }
 
@@ -314,6 +336,7 @@ impl FpsGameApp {
             last_shot_tick: 0,
             last_step_tick: 0,
             moving: false,
+            key_mask: 0,
             sound_pending: None,
         }
     }
@@ -479,18 +502,22 @@ impl FpsGameApp {
         }
     }
 
-    /// Hareketi işle (duvar çarpması kontrolü ile).
+    /// Hareketi işle (duvar çarpması kontrolü ile, duvar boyunca kayma).
     fn move_player(&mut self, dx: f32, dy: f32) {
-        let new_x = self.pos_x + dx;
-        let new_y = self.pos_y + dy;
-
-        // X ekseni çarpışma (alt-hücre kontrolü).
-        if !self.is_wall(new_x, self.pos_y) {
-            self.pos_x = new_x;
+        // Tam hareketi dene (köşegen hareket de dahil).
+        if !self.is_wall(self.pos_x + dx, self.pos_y + dy) {
+            self.pos_x += dx;
+            self.pos_y += dy;
+            return;
         }
-        // Y ekseni çarpışma (alt-hücre kontrolü).
-        if !self.is_wall(self.pos_x, new_y) {
-            self.pos_y = new_y;
+        // X ekseniyle kaymaya çalış (duvara çarptığında yatay kayma).
+        if !self.is_wall(self.pos_x + dx, self.pos_y) {
+            self.pos_x += dx;
+            return;
+        }
+        // Y ekseniyle kaymaya çalış (dikey kayma).
+        if !self.is_wall(self.pos_x, self.pos_y + dy) {
+            self.pos_y += dy;
         }
     }
 
@@ -591,7 +618,13 @@ impl FpsGameApp {
             let r = (18.0 + 18.0 * t) as u32;
             let g = (28.0 + 18.0 * t) as u32;
             let b = (52.0 + 22.0 * t) as u32;
-            fb.draw_rect(render_x, render_y + y, render_w, 1, (r << 16) | (g << 8) | b);
+            fb.draw_rect(
+                render_x,
+                render_y + y,
+                render_w,
+                1,
+                (r << 16) | (g << 8) | b,
+            );
         }
         // Zemin: açık gri-kahverengi, yatay perspektif bantlarıyla okunaklı.
         for y in horizon..render_h {
@@ -684,6 +717,13 @@ impl FpsGameApp {
                 perp_wall_dist =
                     (map_y as f32 - self.pos_y + (1.0 - step_y as f32) / 2.0) / ray_dir_y;
             }
+            // Bozuk bir açı/mesafe hiçbir zaman dev bir çizim döngüsüne
+            // dönüşmesin.
+            let perp_wall_dist = if perp_wall_dist.is_finite() {
+                perp_wall_dist.abs().max(0.15).min(MAX_DEPTH * 4.0)
+            } else {
+                MAX_DEPTH
+            };
 
             for z in x..(x + column_step).min(w) {
                 z_buffer[z] = perp_wall_dist;
@@ -692,8 +732,8 @@ impl FpsGameApp {
             // Duvar yüksekliği: standart raycasting projeksiyonu. Ekran
             // yüksekliği / mesafe; böylece yakın duvar büyük, uzak duvar
             // küçük görünür ve tavan/zemin görünür kalır.
-            let line_h = (render_h as f32 / perp_wall_dist.max(0.15))
-                .min(render_h as f32 * 4.0) as usize;
+            let line_h =
+                (render_h as f32 / perp_wall_dist.max(0.15)).min(render_h as f32 * 4.0) as usize;
             let draw_start = (render_h / 2).saturating_sub(line_h / 2);
             let draw_end = (render_h / 2).saturating_add(line_h / 2).min(render_h);
 
@@ -719,8 +759,7 @@ impl FpsGameApp {
 
             // Duvar rengi (mesafeye göre gölgeli).
             // Yakındaki duvarlar canlı, uzaktakiler hâlâ ayırt edilebilir.
-            let shade =
-                (0.5 + 0.5 * (1.0 - (perp_wall_dist / MAX_DEPTH).clamp(0.0, 1.0))).min(1.0);
+            let shade = (0.5 + 0.5 * (1.0 - (perp_wall_dist / MAX_DEPTH).clamp(0.0, 1.0))).min(1.0);
             let apply_shade = |color: u32| -> u32 {
                 let r = (((color >> 16) & 0xFF) as f32 * shade) as u32;
                 let g = (((color >> 8) & 0xFF) as f32 * shade) as u32;
@@ -859,10 +898,17 @@ impl FpsGameApp {
                     for xx in 0..sw {
                         let px = cx.saturating_sub(sw / 2) + xx;
                         if px < render_x + w {
-                            let rel_y = yy.saturating_sub(cy0) as f32 / (cy1.saturating_sub(cy0).max(1)) as f32;
+                            let rel_y = yy.saturating_sub(cy0) as f32
+                                / (cy1.saturating_sub(cy0).max(1)) as f32;
                             let is_head = rel_y < 0.28;
                             let edge = xx < 2 || xx + 2 >= sw;
-                            let pixel_color = if edge { 0x190F22 } else if is_head { 0xF08A7C } else { color };
+                            let pixel_color = if edge {
+                                0x190F22
+                            } else if is_head {
+                                0xF08A7C
+                            } else {
+                                color
+                            };
                             fb.put_pixel(px, yy, pixel_color);
                         }
                     }
@@ -877,12 +923,28 @@ impl FpsGameApp {
         // Vurma efekti: tüm görüntüyü piksel piksel yeniden okumak pahalıydı.
         // Bunun yerine ekran kenarında küçük bir hasar/ateş çerçevesi çizilir.
         if self.shooting && self.shoot_timer > 0 {
-            let pulse = if self.shoot_timer > 5 { 0xFFD34E } else { 0xA62E2E };
+            let pulse = if self.shoot_timer > 5 {
+                0xFFD34E
+            } else {
+                0xA62E2E
+            };
             let edge = 3usize;
             fb.draw_rect(render_x, render_y, render_w, edge, pulse);
-            fb.draw_rect(render_x, render_y + render_h.saturating_sub(edge), render_w, edge, pulse);
+            fb.draw_rect(
+                render_x,
+                render_y + render_h.saturating_sub(edge),
+                render_w,
+                edge,
+                pulse,
+            );
             fb.draw_rect(render_x, render_y, edge, render_h, pulse);
-            fb.draw_rect(render_x + render_w.saturating_sub(edge), render_y, edge, render_h, pulse);
+            fb.draw_rect(
+                render_x + render_w.saturating_sub(edge),
+                render_y,
+                edge,
+                render_h,
+                pulse,
+            );
         }
     }
 
@@ -920,7 +982,13 @@ impl FpsGameApp {
                     TILE_PICKUP => 0x40E040,
                     _ => 0x151A22,
                 };
-                fb.draw_rect(x + 1, y + 1, cell.saturating_sub(2), cell.saturating_sub(2), color);
+                fb.draw_rect(
+                    x + 1,
+                    y + 1,
+                    cell.saturating_sub(2),
+                    cell.saturating_sub(2),
+                    color,
+                );
                 // Hücre kenarlığı.
                 fb.draw_rect(x, y, cell, 1, 0x2A3340);
                 fb.draw_rect(x, y, 1, cell, 0x2A3340);
@@ -966,7 +1034,13 @@ impl FpsGameApp {
         let end_y = (cy as isize + dy).max(0) as usize;
         fb.draw_rect(cx.saturating_sub(1), cy.saturating_sub(1), 3, 3, 0xFFFFFF);
         // Basit çizgi: yön noktasını işaretle.
-        fb.draw_rect(end_x.saturating_sub(1), end_y.saturating_sub(1), 3, 3, 0xFFFF00);
+        fb.draw_rect(
+            end_x.saturating_sub(1),
+            end_y.saturating_sub(1),
+            3,
+            3,
+            0xFFFF00,
+        );
 
         // Mod bilgisi.
         let mut info = crate::gui::TextBuf::new();
@@ -1015,7 +1089,13 @@ impl FpsGameApp {
         let px = rx + (self.pos_x / MAP_W as f32 * radar_w as f32) as usize;
         let py = ry + (self.pos_y / MAP_H as f32 * radar_h as f32) as usize;
         if px > rx && px < rx + radar_w && py > ry && py < ry + radar_h {
-            fb.draw_rect(px.saturating_sub(1), py.saturating_sub(1), 3, 3, Color::ACCENT_BLUE);
+            fb.draw_rect(
+                px.saturating_sub(1),
+                py.saturating_sub(1),
+                3,
+                3,
+                Color::ACCENT_BLUE,
+            );
             let dx = (self.dir_x * 5.0) as isize;
             let dy = (self.dir_y * 5.0) as isize;
             let ex = (px as isize + dx).max(0) as usize;
@@ -1144,8 +1224,12 @@ impl FpsGameApp {
     ) {
         // Araç çubuğu — mod başlığı.
         let mode_label = match self.render_mode {
-            RenderMode::Mode3D => crate::gui::ui_text("FPS 3D (T=2D Üstten)", "FPS 3D (T=Top-Down 2D)"),
-            RenderMode::TopDown2D => crate::gui::ui_text("FPS 2D Üstten (T=3D)", "FPS 2D Top-Down (T=3D)"),
+            RenderMode::Mode3D => {
+                crate::gui::ui_text("FPS 3D (T=2D Üstten)", "FPS 3D (T=Top-Down 2D)")
+            }
+            RenderMode::TopDown2D => {
+                crate::gui::ui_text("FPS 2D Üstten (T=3D)", "FPS 2D Top-Down (T=3D)")
+            }
         };
         fb.draw_rect(
             win_x + 6,
@@ -1154,13 +1238,7 @@ impl FpsGameApp {
             crate::gui::sp(24),
             Color::TITLE_BAR,
         );
-        MinGuiCompositor::draw_string(
-            fb,
-            win_x + 12,
-            win_y + 36,
-            mode_label,
-            Color::TEXT_MAIN,
-        );
+        MinGuiCompositor::draw_string(fb, win_x + 12, win_y + 36, mode_label, Color::TEXT_MAIN);
 
         // Karşıda bir kapı varsa kullanım ipucu göster.
         if self.render_mode == RenderMode::Mode3D {
@@ -1236,7 +1314,13 @@ impl FpsGameApp {
             }
             // Ateş flaşı.
             if self.shooting && self.shoot_timer > 5 {
-                fb.draw_rect(gun_x + gun_w / 2 - 5, gy.saturating_sub(8), 10, 10, 0xFFF4A3);
+                fb.draw_rect(
+                    gun_x + gun_w / 2 - 5,
+                    gy.saturating_sub(8),
+                    10,
+                    10,
+                    0xFFF4A3,
+                );
                 fb.draw_rect(gun_x + gun_w / 2 - 2, gy.saturating_sub(14), 4, 6, 0xFFFFFF);
             }
         }
@@ -1261,7 +1345,14 @@ impl FpsGameApp {
         self.render_result_menu(fb, win_x, view_y, view_h, win_w);
     }
 
-    fn render_result_menu(&self, fb: &mut Framebuffer, win_x: usize, view_y: usize, view_h: usize, win_w: usize) {
+    fn render_result_menu(
+        &self,
+        fb: &mut Framebuffer,
+        win_x: usize,
+        view_y: usize,
+        view_h: usize,
+        win_w: usize,
+    ) {
         if self.result == GameResult::Playing {
             return;
         }
@@ -1271,13 +1362,17 @@ impl FpsGameApp {
         let panel_y = view_y + view_h.saturating_sub(panel_h) / 2;
         fb.draw_rounded_rect_alpha(panel_x, panel_y, panel_w, panel_h, 8, 0x080B12, 238);
         let (title, color) = match self.result {
-            GameResult::Won => (crate::gui::ui_text("KAZANDIN!", "YOU WIN!"), Color::ACCENT_GREEN),
-            GameResult::Lost => (crate::gui::ui_text("KAYBETTIN", "YOU LOSE"), Color::ACCENT_RED),
+            GameResult::Won => (
+                crate::gui::ui_text("KAZANDIN!", "YOU WIN!"),
+                Color::ACCENT_GREEN,
+            ),
             GameResult::Playing => ("", Color::TEXT_MAIN),
         };
         MinGuiCompositor::draw_string(fb, panel_x + 58, panel_y + 20, title, color);
         MinGuiCompositor::draw_string(
-            fb, panel_x + 58, panel_y + 52,
+            fb,
+            panel_x + 58,
+            panel_y + 52,
             crate::gui::ui_text("R veya BOS: Yeniden baslat", "R or SPACE: Restart"),
             Color::TEXT_MAIN,
         );
@@ -1294,26 +1389,19 @@ impl FpsGameApp {
         }
         match ch {
             'w' | 'W' => {
-                self.move_player(self.dir_x * MOVE_SPEED, self.dir_y * MOVE_SPEED);
-                self.moving = true;
+                self.key_mask |= KEY_W;
                 true
             }
             's' | 'S' => {
-                self.move_player(-self.dir_x * MOVE_SPEED, -self.dir_y * MOVE_SPEED);
-                self.moving = true;
+                self.key_mask |= KEY_S;
                 true
             }
             'a' | 'A' => {
-                // Sola strafe.
-                // Sağ vektör = (-dir_y, dir_x); sola bunun tersidir.
-                self.move_player(self.dir_y * MOVE_SPEED, -self.dir_x * MOVE_SPEED);
-                self.moving = true;
+                self.key_mask |= KEY_A;
                 true
             }
             'd' | 'D' => {
-                // Sağa strafe.
-                self.move_player(-self.dir_y * MOVE_SPEED, self.dir_x * MOVE_SPEED);
-                self.moving = true;
+                self.key_mask |= KEY_D;
                 true
             }
             ' ' => {
@@ -1353,13 +1441,13 @@ impl FpsGameApp {
         }
     }
 
-    /// Ok tuşu ile dönüş.
+    /// Ok tuşu ile dönüş (tuş basımı kaydı, gerçek dönüş update() içinde).
     pub fn handle_arrow(&mut self, left: bool, right: bool) {
         if left {
-            self.rotate(-ROT_SPEED);
+            self.key_mask |= KEY_LEFT;
         }
         if right {
-            self.rotate(ROT_SPEED);
+            self.key_mask |= KEY_RIGHT;
         }
     }
 
@@ -1388,6 +1476,52 @@ impl FpsGameApp {
         if self.result != GameResult::Playing {
             return;
         }
+
+        // --- Çok tuşlu hareket ve dönüş (update içinde tek seferde uygulanır) ---
+        if self.key_mask != 0 {
+            let mut dx = 0.0f32;
+            let mut dy = 0.0f32;
+
+            if self.key_mask & KEY_W != 0 {
+                dx += self.dir_x * MOVE_SPEED;
+                dy += self.dir_y * MOVE_SPEED;
+            }
+            if self.key_mask & KEY_S != 0 {
+                dx -= self.dir_x * MOVE_SPEED;
+                dy -= self.dir_y * MOVE_SPEED;
+            }
+            if self.key_mask & KEY_A != 0 {
+                // Sola strafe: sağ vektör (-dir_y, dir_x)nin tersi.
+                dx += self.dir_y * MOVE_SPEED;
+                dy -= self.dir_x * MOVE_SPEED;
+            }
+            if self.key_mask & KEY_D != 0 {
+                // Sağa strafe.
+                dx -= self.dir_y * MOVE_SPEED;
+                dy += self.dir_x * MOVE_SPEED;
+            }
+
+            // Köşegen hareketi normalize et (√2 hız artışını önle).
+            if dx != 0.0 && dy != 0.0 {
+                let inv_sqrt2 = 0.70710678;
+                dx *= inv_sqrt2;
+                dy *= inv_sqrt2;
+            }
+
+            self.move_player(dx, dy);
+            self.moving = dx != 0.0 || dy != 0.0;
+
+            // Dönüş (sola / sağa) — hareketle aynı anda çalışabilir.
+            if self.key_mask & KEY_LEFT != 0 {
+                self.rotate(-ROT_SPEED);
+            }
+            if self.key_mask & KEY_RIGHT != 0 {
+                self.rotate(ROT_SPEED);
+            }
+
+            self.key_mask = 0;
+        }
+
         // Ateş sayacı.
         if self.shoot_timer > 0 {
             self.shoot_timer -= 1;
@@ -1430,7 +1564,9 @@ impl FpsGameApp {
         self.respawn_enemies();
 
         if self.health == 0 {
-            self.result = GameResult::Lost;
+            // Can bittiğinde oyunu kilitleme: oyuncuyu yeniden dogur ve
+            // oyuna devam et.
+            self.respawn_player();
         } else if self
             .enemies
             .iter()
@@ -1439,7 +1575,20 @@ impl FpsGameApp {
         {
             self.result = GameResult::Won;
         }
+    }
 
+    /// Can bittiğinde oyuncuyu yeniden dogur; oyunu kilitlemez.
+    fn respawn_player(&mut self) {
+        self.health = 100;
+        self.pos_x = 3.5;
+        self.pos_y = 3.5;
+        self.dir_x = 1.0;
+        self.dir_y = 0.0;
+        self.plane_x = 0.0;
+        self.plane_y = 0.66;
+        self.shooting = false;
+        self.shoot_timer = 0;
+        self.result = GameResult::Playing;
     }
 }
 

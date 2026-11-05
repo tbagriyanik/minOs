@@ -23,6 +23,15 @@ pub mod js;
 #[path = "../src/apps/browser/types.rs"]
 pub mod browser_types;
 
+/// `browser_css`, `super::types` yolunu bekler; host testlerinde bu adı
+/// `browser_types` modülüne yönlendir.
+pub mod types {
+    pub use crate::browser_types::*;
+}
+
+#[path = "../src/apps/browser/css.rs"]
+pub mod browser_css;
+
 #[path = "../src/apps/calc_core.rs"]
 pub mod calc_core;
 

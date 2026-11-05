@@ -62,24 +62,17 @@ if (Test-Path "boot\limine\BOOTIA32.EFI") {
     Copy-Item -Force "boot\limine\BOOTIA32.EFI" -Destination "$OutputDir\EFI\BOOT\BOOTIA32.EFI"
 }
 
-# Copy media files into the ISO's root/Media directory.
-# The booted ISO is exposed as /media/cdrom, so these files are available
-# under /media/cdrom/root/Media instead of being scattered at ISO root.
-$mediaFiles = @(
-    "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
-    "public\media\sample.png", "public\media\gradient.png",
-    "public\media\sample.jpg", "public\media\sunset.jpg",
-    "public\media\real.jpg", "public\media\real.png",
-    "public\media\real.bmp",
-    "public\desktop1.png", "public\desktop2.png", "public\desktop3.png",
-    "public\media\sample.wav", "public\media\scale_c_major.wav"
-)
+# Copy every test asset from public/media. Keep it in both locations: the
+# user-visible VFS folder (/root/Media) and the ISO's /media directory
+# (accessible at /media/cdrom/media after boot).
+$mediaFiles = @(Get-ChildItem -File "public\media" -ErrorAction SilentlyContinue)
 $mediaDestDir = Join-Path $OutputDir "root\Media"
+$isoMediaDestDir = Join-Path $OutputDir "media"
 New-Item -ItemType Directory -Force -Path $mediaDestDir | Out-Null
+New-Item -ItemType Directory -Force -Path $isoMediaDestDir | Out-Null
 foreach ($mf in $mediaFiles) {
-    if (Test-Path $mf) {
-        Copy-Item -Force $mf -Destination (Join-Path $mediaDestDir (Split-Path $mf -Leaf))
-    }
+    Copy-Item -Force $mf.FullName -Destination (Join-Path $mediaDestDir $mf.Name)
+    Copy-Item -Force $mf.FullName -Destination (Join-Path $isoMediaDestDir $mf.Name)
 }
 
 # 3. Çekirdek İkilisini Derle / Kopyala

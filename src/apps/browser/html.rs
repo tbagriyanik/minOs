@@ -67,7 +67,7 @@ fn blend_color_with_opacity(color: u32, opacity: f32) -> u32 {
     ((ar as u32) << 16) | ((ag as u32) << 8) | (ab as u32)
 }
 
-fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
+pub(crate) fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
     let mut i = 0;
     while i < attrs.len() {
         while i < attrs.len() && (attrs[i].is_ascii_whitespace() || attrs[i] == b'/') {
@@ -323,6 +323,57 @@ pub(crate) fn scale_rgb(
     scaled
 }
 
+/// Satır içi (inline) renk/stil durumu; açılış etiketlerinde yığına itilir,
+/// kapanışta geri yüklenir. Böylece renkler ebeveynden miras alınır ve
+/// `</p>`/`</span>` gibi kapanışlar rengi siyaha sıfırlamaz.
+#[derive(Clone, Copy)]
+struct InlineState {
+    color: u32,
+    bg: Option<u32>,
+    bold: bool,
+    underline: bool,
+    align: TextAlign,
+    indent: usize,
+}
+
+/// Kapanış etiketine karşılık gelen son durumu yığından çıkarır.
+/// Eşleşme bulunamazsa `None` döner (bozuk HTML güvenli biçimde yok sayılır).
+fn pop_inline_state(stack: &mut Vec<(Vec<u8>, InlineState)>, name: &[u8]) -> Option<InlineState> {
+    if name.is_empty() {
+        return None;
+    }
+    let pos = stack
+        .iter()
+        .rposition(|(tag_name, _)| tag_name.eq_ignore_ascii_case(name))?;
+    let (_, state) = stack.remove(pos);
+    // Kapanmamış iç etiketleri de düşür.
+    stack.truncate(pos);
+    Some(state)
+}
+
+/// Boşluklu (void) HTML etiketleri: kapanış etiketi yoktur, durum yığınına girmez.
+fn is_void_tag(name: &[u8]) -> bool {
+    const VOID_TAGS: [&[u8]; 16] = [
+        b"area",
+        b"base",
+        b"br",
+        b"col",
+        b"embed",
+        b"hr",
+        b"img",
+        b"input",
+        b"link",
+        b"meta",
+        b"param",
+        b"source",
+        b"track",
+        b"wbr",
+        b"basefont",
+        b"frame",
+    ];
+    VOID_TAGS.iter().any(|tag| name.eq_ignore_ascii_case(tag))
+}
+
 /// Tokenizer, CSS rule applicator, and word-wrapping HTML layout engine
 pub fn render_html_to_lines(
     body: &[u8],
@@ -344,8 +395,8 @@ pub fn render_html_to_lines(
     // script etiketleri ise çıktidan çıkarılır.
     let js_body = crate::apps::js::inline_scripts(body);
     let body: &[u8] = &js_body;
-    let mut current_color = Color::BLACK;
-    let mut current_bg: Option<u32> = None;
+    let mut current_color;
+    let mut current_bg: Option<u32>;
     let mut active_link: Option<String> = None;
     let mut active_onclick: Option<String> = None;
     let mut active_is_button = false;
@@ -354,8 +405,14 @@ pub fn render_html_to_lines(
     let mut active_id: Option<String> = None;
     let mut css_rules = Vec::new();
     let mut css_keyframes: Vec<super::css::Keyframes> = Vec::new();
+    let mut default_link_color: Option<u32> = None;
+    // Açılış/kapanış etiketleri arasında rengi ve metin süslemelerini korur.
+    let mut state_stack: Vec<(Vec<u8>, InlineState)> = Vec::new();
 
-    // 1. First extract all <style> blocks
+    // 1. Tüm <style> bloklarını topla. Tek bir metin olarak ayrıştırmak,
+    // bloklar arasında paylaşılan CSS değişkenlerinin (--renk) çözülmesini
+    // ve @keyframes tanımlarının korunmasını sağlar.
+    let mut css_source = String::new();
     let mut p = 0;
     while p < body.len() {
         if body[p] == b'<' && p + 6 <= body.len() && eq_ascii(&body[p..p + 6], b"<style") {
@@ -368,10 +425,8 @@ pub fn render_html_to_lines(
                 close_tag += 1;
                 let css_start = close_tag;
                 if let Some(pos) = find_bytes(&body[css_start..], b"</style>") {
-                    let css_text = decode_bytes_to_string(&body[css_start..css_start + pos]);
-                    let parsed = parse_css(&css_text);
-                    css_rules.extend(parsed.rules);
-                    css_keyframes = parsed.keyframes;
+                    css_source.push_str(&decode_bytes_to_string(&body[css_start..css_start + pos]));
+                    css_source.push('\n');
                     p = css_start + pos + 8;
                     continue;
                 }
@@ -379,6 +434,21 @@ pub fn render_html_to_lines(
         }
         p += 1;
     }
+    if !css_source.is_empty() {
+        let parsed = parse_css(&css_source);
+        css_rules = parsed.rules;
+        css_keyframes = parsed.keyframes;
+    }
+
+    // `body`/`html` üzerindeki renk kuralları belge geneline miras verilir.
+    // `<body>` etiketi eksik olsa bile CSS renkleri uygulanır.
+    let root_style = match_css_style(&css_rules, "html", None, None, None, wrap_width_px, 768);
+    let body_style = match_css_style(&css_rules, "body", None, None, None, wrap_width_px, 768);
+    current_color = body_style
+        .color
+        .or(root_style.color)
+        .unwrap_or(Color::BLACK);
+    current_bg = body_style.bg_color.or(root_style.bg_color);
 
     // Buffer of spans for the line currently being built
     let mut cur_line_spans: Vec<TextSpan> = Vec::new();
@@ -574,10 +644,22 @@ pub fn render_html_to_lines(
                 .unwrap_or(tag_content.len());
             let name = &tag_content[..name_end];
 
-            if let Some(ref h) = hidden_until_close {
-                if closing && eq_ascii(name, h) {
-                    hidden_until_close = None;
+            let hidden_close = hidden_until_close
+                .as_ref()
+                .is_some_and(|h| closing && eq_ascii(name, h));
+            if hidden_close {
+                // display:none ile gizlenen öğenin rengini geri yükle.
+                if let Some(saved) = pop_inline_state(&mut state_stack, name) {
+                    current_color = saved.color;
+                    current_bg = saved.bg;
+                    current_bold = saved.bold;
+                    current_underline = saved.underline;
+                    cur_line_align = saved.align;
+                    cur_line_indent.set(saved.indent);
                 }
+                hidden_until_close = None;
+            }
+            if hidden_until_close.is_some() || hidden_close {
                 p = end + 1;
                 continue;
             }
@@ -653,6 +735,9 @@ pub fn render_html_to_lines(
             let href_attr = extract_attr(attrs, b"href");
             let onclick_attr = extract_attr(attrs, b"onclick");
             let font_color_attr = extract_attr(attrs, b"color");
+            let bgcolor_attr = extract_attr(attrs, b"bgcolor");
+            let text_attr = extract_attr(attrs, b"text");
+            let link_attr = extract_attr(attrs, b"link");
 
             let mut matched = match_css_style(
                 &css_rules,
@@ -731,6 +816,21 @@ pub fn render_html_to_lines(
             }
 
             if !closing {
+                // Kapanışta geri yüklemek üzere mevcut durumu sakla.
+                if name.first().is_some_and(|b| b.is_ascii_alphabetic()) {
+                    state_stack.push((
+                        name.to_vec(),
+                        InlineState {
+                            color: current_color,
+                            bg: current_bg,
+                            bold: current_bold,
+                            underline: current_underline,
+                            align: cur_line_align,
+                            indent: cur_line_indent.get(),
+                        },
+                    ));
+                }
+
                 if let Some(c) = matched.color {
                     current_color = blend_color_with_opacity(c, matched.opacity);
                 }
@@ -743,6 +843,28 @@ pub fn render_html_to_lines(
                 }
                 if let Some(bg) = matched.bg_color {
                     current_bg = Some(blend_color_with_opacity(bg, matched.opacity));
+                }
+                // HTML sunum nitelikleri (CSS kuralı yoksa): bgcolor/text/link.
+                if eq_ascii(name, b"body") {
+                    if matched.color.is_none() {
+                        if let Some(value) = text_attr {
+                            if let Some(c) = html_color(value.as_bytes()) {
+                                current_color = c;
+                            }
+                        }
+                    }
+                    if let Some(value) = link_attr {
+                        if let Some(c) = html_color(value.as_bytes()) {
+                            default_link_color = Some(c);
+                        }
+                    }
+                }
+                if matched.bg_color.is_none() {
+                    if let Some(value) = bgcolor_attr {
+                        if let Some(c) = html_color(value.as_bytes()) {
+                            current_bg = Some(c);
+                        }
+                    }
                 }
                 if matched.align != TextAlign::Left {
                     cur_line_align = matched.align;
@@ -796,6 +918,11 @@ pub fn render_html_to_lines(
                     if let Some(oc) = onclick_attr {
                         active_onclick = Some(String::from(oc));
                     }
+                    // Bağlantı rengi: önce CSS `a { color }`, sonra
+                    // <body link="...">, yoksa varsayılan mavi.
+                    if matched.color.is_none() {
+                        current_color = default_link_color.unwrap_or(Color::ACCENT_BLUE);
+                    }
                 } else if eq_ascii(name, b"link") {
                     // <link rel="stylesheet" href="..."> — harici CSS.
                     // Engellemeyen: URL'yi kaydet, asenkron yükleme poll_network'de yapılır.
@@ -832,7 +959,8 @@ pub fn render_html_to_lines(
                     if let Some(oc) = onclick_attr {
                         active_onclick = Some(String::from(oc));
                     }
-                    if current_bg.is_none() {
+                    // CSS/HTML arka planı yoksa varsayılan düğme yüzeyi.
+                    if matched.bg_color.is_none() && bgcolor_attr.is_none() {
                         current_bg = Some(0xE0E0E8);
                     }
                 } else if eq_ascii(name, b"h1") {
@@ -845,9 +973,6 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Heading1;
-                    if matched.color.is_none() {
-                        current_color = Color::BLACK;
-                    }
                 } else if eq_ascii(name, b"h2") {
                     flush_line(
                         out_lines,
@@ -858,9 +983,6 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Heading2;
-                    if matched.color.is_none() {
-                        current_color = Color::BLACK;
-                    }
                 } else if eq_ascii(name, b"h3") {
                     flush_line(
                         out_lines,
@@ -871,9 +993,6 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     cur_line_tag = HtmlTagType::Heading3;
-                    if matched.color.is_none() {
-                        current_color = Color::BLACK;
-                    }
                 } else if eq_ascii(name, b"span") {
                     // <span>: inline container, stilleri uygulamak için kullanılır
                     // Renk/background/align/indent gibi CSS stilleri uygulanır
@@ -886,17 +1005,14 @@ pub fn render_html_to_lines(
                         hidden_until_close = Some(name.to_vec());
                     }
                 } else if eq_ascii(name, b"em") {
-                    // <em>: vurgulu metin
-                    if matched.color.is_none() {
-                        current_color = Color::BLACK;
-                    }
+                    // <em>: vurgulu metin; rengi ebeveynden miras alır.
                     if matched.underline {
                         current_underline = true;
                     }
                 } else if eq_ascii(name, b"mark") {
-                    // <mark>:Highlighted metin
-                    if current_bg.is_none() {
-                        current_bg = Some(0xFFFF00); // Sarı background
+                    // <mark>: varsayılan sarı vurgu (CSS/HTML rengi varsa o kazanır).
+                    if matched.bg_color.is_none() && bgcolor_attr.is_none() {
+                        current_bg = Some(0xFFFF00);
                     }
                 } else if eq_ascii(name, b"small") {
                     // <small>: Küçük metin
@@ -1900,8 +2016,31 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     if out_lines.len() < max_lines {
+                        let rule_color = matched
+                            .color
+                            .or(matched.bg_color)
+                            .or(matched.border_color)
+                            .or_else(|| font_color_attr.and_then(|v| html_color(v.as_bytes())))
+                            .unwrap_or(Color::BORDER);
                         out_lines.push(BrowserLine {
-                            spans: Vec::new(),
+                            // Boş metinli span yalnızca çizgi rengini taşır.
+                            spans: vec![TextSpan {
+                                text: String::new(),
+                                color: rule_color,
+                                bg_color: None,
+                                is_link: false,
+                                link_url: String::new(),
+                                is_button: false,
+                                is_image: false,
+                                image_width: 0,
+                                image_height: 0,
+                                image_rgb: None,
+                                image_url: String::new(),
+                                onclick: String::new(),
+                                elem_id: String::new(),
+                                bold: false,
+                                underline: false,
+                            }],
                             tag: HtmlTagType::Rule,
                             indent: 0,
                             align: TextAlign::Left,
@@ -1920,9 +2059,6 @@ pub fn render_html_to_lines(
                     );
                     cur_line_tag = HtmlTagType::Quote;
                     cur_line_indent.set(matched.indent_px.max(16));
-                    if matched.color.is_none() {
-                        current_color = Color::BLACK;
-                    }
                 } else if matches!(
                     name,
                     b"p" | b"div"
@@ -1951,6 +2087,18 @@ pub fn render_html_to_lines(
                 // id ataması, elem_id_str son kullanıldıktan sonra yapılır (borrow kuralı).
                 if id_attr.is_some() {
                     active_id = id_attr.map(String::from);
+                }
+                // Boşluklu etiketlerin kapanışı yok; rengi hemen geri yükle ki
+                // sonraki metne sızmasın (ör. `<hr style="color:red">`).
+                if is_void_tag(name) {
+                    if let Some(saved) = pop_inline_state(&mut state_stack, name) {
+                        current_color = saved.color;
+                        current_bg = saved.bg;
+                        current_bold = saved.bold;
+                        current_underline = saved.underline;
+                        cur_line_align = saved.align;
+                        cur_line_indent.set(saved.indent);
+                    }
                 }
             } else {
                 // CSS Grid konteynerını kapat ve grid'i render et
@@ -2227,6 +2375,15 @@ pub fn render_html_to_lines(
                     // Ses içeriği zaten açılışta eklendi
                 }
                 active_id = None;
+                // Açılışta saklanan renk/metin stilini geri yükle.
+                if let Some(saved) = pop_inline_state(&mut state_stack, name) {
+                    current_color = saved.color;
+                    current_bg = saved.bg;
+                    current_bold = saved.bold;
+                    current_underline = saved.underline;
+                    cur_line_align = saved.align;
+                    cur_line_indent.set(saved.indent);
+                }
             }
 
             p = end + 1;

@@ -5812,18 +5812,22 @@ pub extern "C" fn _start() -> ! {
                                     apps::controlpanel::theme_btn_rect(wx, wy, ww, wh),
                                 ) {
                                     settings_app.cycle_theme();
-                                } else if apps::controlpanel::active_tab() == 3 && gui::in_rect(
-                                    mx,
-                                    my,
-                                    apps::controlpanel::perf_btn_rect(wx, wy, ww, wh),
-                                ) {
+                                } else if apps::controlpanel::active_tab() == 3
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::controlpanel::perf_btn_rect(wx, wy, ww, wh),
+                                    )
+                                {
                                     apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
                                     force_render = true;
-                                } else if apps::controlpanel::active_tab() == 3 && gui::in_rect(
-                                    mx,
-                                    my,
-                                    apps::controlpanel::perf_sound_btn_rect(wx, wy, ww, wh),
-                                ) {
+                                } else if apps::controlpanel::active_tab() == 3
+                                    && gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::controlpanel::perf_sound_btn_rect(wx, wy, ww, wh),
+                                    )
+                                {
                                     apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
                                     force_render = true;
                                 }
@@ -9021,11 +9025,19 @@ pub extern "C" fn _start() -> ! {
 
         if musicplayer_app.is_playing && !audio_dev.is_muted && audio_dev.volume_left > 0 {
             if anim_tick.wrapping_sub(last_music_beat) >= 24 {
-                const NOTES: [u32; 8] = [440, 523, 587, 659, 587, 523, 494, 392];
+                // Her liste öğesi ayrı bir melodi kalıbına sahip olsun. Sadece
+                // frekansı biraz kaydırmak parçaların aynı duyulmasına neden
+                // oluyordu; artık ritmik/notsal dizileri de birbirinden farklı.
+                const TRACK_NOTES: [[u32; 8]; 5] = [
+                    [440, 523, 587, 659, 587, 523, 494, 392],
+                    [330, 392, 440, 494, 523, 494, 440, 392],
+                    [262, 330, 392, 523, 392, 330, 294, 262],
+                    [523, 659, 784, 659, 587, 494, 587, 659],
+                    [392, 494, 587, 784, 659, 587, 494, 392],
+                ];
 
-                let track_offset = musicplayer_app.current_track as u32 * 22;
-
-                let freq = NOTES[music_note % NOTES.len()] + track_offset;
+                let track = musicplayer_app.current_track.min(TRACK_NOTES.len() - 1);
+                let freq = TRACK_NOTES[track][music_note % TRACK_NOTES[track].len()];
 
                 // HDA hazir ve DMA ilerliyorsa gercek PCM ornegi uret ve gonder.
 
@@ -9097,7 +9109,7 @@ pub extern "C" fn _start() -> ! {
                     speaker_on = true;
                 }
 
-                music_note = (music_note + 1) % NOTES.len();
+                music_note = (music_note + 1) % TRACK_NOTES[track].len();
 
                 last_music_beat = anim_tick;
             }

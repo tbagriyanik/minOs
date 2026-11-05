@@ -44,8 +44,8 @@ use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 
-use css::parse_css;
-use html::{decode_bytes_to_string, eq_ascii, find_bytes, render_html_to_lines};
+use css::{match_css_style, parse_css};
+use html::{decode_bytes_to_string, eq_ascii, extract_attr, find_bytes, render_html_to_lines};
 
 extern crate alloc;
 
@@ -216,6 +216,123 @@ fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
     let path = suffix.split('#').next().unwrap_or("");
     let path = if path.is_empty() { "/" } else { path };
     Some((is_https, host, port, path))
+}
+
+/// Belirtilen etiketin (`<body ...>`) nitelik dilimini döndürür.
+fn find_tag_attrs<'a>(html: &'a [u8], tag: &[u8]) -> Option<&'a [u8]> {
+    let mut p = 0usize;
+    while p < html.len() {
+        if html[p] == b'<' {
+            let start = p + 1;
+            let mut name_end = start;
+            while name_end < html.len()
+                && (html[name_end].is_ascii_alphanumeric() || html[name_end] == b'-')
+            {
+                name_end += 1;
+            }
+            if name_end > start && html[start..name_end].eq_ignore_ascii_case(tag) {
+                let mut end = name_end;
+                while end < html.len() && html[end] != b'>' {
+                    end += 1;
+                }
+                return Some(&html[name_end..end]);
+            }
+            p = name_end.max(p + 1);
+        } else {
+            p += 1;
+        }
+    }
+    None
+}
+
+/// URL yolunun verilen uzantıyla bitip bitmediğini (sorgu dizesini yok sayarak) sınar.
+fn url_has_extension(url: &str, ext: &str) -> bool {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    path.len() >= ext.len()
+        && path.as_bytes()[path.len() - ext.len()..].eq_ignore_ascii_case(ext.as_bytes())
+}
+
+/// İndirilen bir kaynağın CSS olup olmadığını kabaca belirler.
+/// Görsel çözücü başarısız olduktan sonra çağrılır.
+fn looks_like_stylesheet(url: &str, body: &[u8]) -> bool {
+    let mut i = 0usize;
+    while i < body.len()
+        && (body[i].is_ascii_whitespace() || body[i] == 0xEF || body[i] == 0xBB || body[i] == 0xBF)
+    {
+        i += 1;
+    }
+    if i >= body.len() {
+        return false;
+    }
+    let rest = &body[i..];
+    // HTML hata sayfası (ör. 404) CSS sanılıp sayfaya uygulanmasın.
+    if rest.starts_with(b"<") {
+        return false;
+    }
+    if url_has_extension(url, ".css") {
+        return true;
+    }
+    if url_has_extension(url, ".js")
+        || url_has_extension(url, ".png")
+        || url_has_extension(url, ".jpg")
+        || url_has_extension(url, ".jpeg")
+        || url_has_extension(url, ".gif")
+        || url_has_extension(url, ".webp")
+        || url_has_extension(url, ".svg")
+        || url_has_extension(url, ".bmp")
+    {
+        return false;
+    }
+    let starts_like_css = rest.starts_with(b"@charset")
+        || rest.starts_with(b"@import")
+        || rest.starts_with(b":root")
+        || rest.starts_with(b"/*")
+        || rest.starts_with(b"html")
+        || rest.starts_with(b"body")
+        || rest.starts_with(b".")
+        || rest.starts_with(b"#")
+        || rest.starts_with(b"*");
+    let has_brace = body.contains(&b'{');
+    // CSS'te '<' yalnızca dizge/yorum içinde geçebilir; HTML karışmış
+    // yanıtları stil dosyası olarak uygulama.
+    (starts_like_css || has_brace) && !body.contains(&b'<')
+}
+
+/// `<link rel="stylesheet" href="...">` etiketini indirilen CSS ile
+/// değiştirir. Böylece harici stil dosyaları da renkleri uygular.
+fn inject_stylesheet(html: &mut Vec<u8>, base_url: Option<&str>, url: &str, css: &str) -> bool {
+    let mut out = Vec::with_capacity(html.len().saturating_add(css.len()).saturating_add(16));
+    let mut p = 0usize;
+    let mut replaced = false;
+    while p < html.len() {
+        if html[p] == b'<' && p + 5 <= html.len() && html[p..p + 5].eq_ignore_ascii_case(b"<link") {
+            let mut end = p + 5;
+            while end < html.len() && html[end] != b'>' {
+                end += 1;
+            }
+            if end < html.len() {
+                let attrs = &html[p + 5..end];
+                let rel = html::extract_attr(attrs, b"rel");
+                let href = html::extract_attr(attrs, b"href");
+                let is_css = rel.is_some_and(|r| r.eq_ignore_ascii_case("stylesheet"));
+                let target = href.and_then(|h| html::resolve_url(h, base_url));
+                if is_css && target.as_deref() == Some(url) {
+                    out.extend_from_slice(b"<style>");
+                    out.extend_from_slice(css.as_bytes());
+                    out.extend_from_slice(b"</style>");
+                    p = end + 1;
+                    replaced = true;
+                    continue;
+                }
+            }
+        }
+        out.push(html[p]);
+        p += 1;
+    }
+    if replaced {
+        *html = out;
+    }
+    replaced
 }
 
 // ── Tarayıcı geçmişi ──────────────────────────────────────────────────────
@@ -1496,7 +1613,9 @@ impl BrowserApp {
             p += 1;
         }
 
-        // Paint CSS body/html backgrounds on the document paper itself.
+        // Belge arka planı: tüm <style> kurallarını topla; <body>/<html>
+        // etiketlerinin class/id/style/bgcolor niteliklerini CSS ile eşleştir.
+        let mut css_source = String::new();
         let mut scan = 0usize;
         while scan < preprocessed_html.len() {
             if preprocessed_html[scan] == b'<'
@@ -1507,16 +1626,10 @@ impl BrowserApp {
                 if let Some(gt) = preprocessed_html[start..].iter().position(|&b| b == b'>') {
                     let css_start = start + gt + 1;
                     if let Some(end) = find_bytes(&preprocessed_html[css_start..], b"</style>") {
-                        let css_text =
-                            decode_bytes_to_string(&preprocessed_html[css_start..css_start + end]);
-                        for rule in parse_css(&css_text).rules {
-                            if (rule.selector.eq_ignore_ascii_case("body")
-                                || rule.selector.eq_ignore_ascii_case("html"))
-                                && rule.style.bg_color.is_some()
-                            {
-                                self.page_bg_color = rule.style.bg_color;
-                            }
-                        }
+                        css_source.push_str(&decode_bytes_to_string(
+                            &preprocessed_html[css_start..css_start + end],
+                        ));
+                        css_source.push('\n');
                         scan = css_start + end + 8;
                         continue;
                     }
@@ -1524,6 +1637,32 @@ impl BrowserApp {
             }
             scan += 1;
         }
+        let css_rules = if css_source.is_empty() {
+            Vec::new()
+        } else {
+            parse_css(&css_source).rules
+        };
+
+        let document_bg = |tag: &[u8]| -> Option<u32> {
+            let attrs = find_tag_attrs(&preprocessed_html, tag)?;
+            let class = extract_attr(attrs, b"class");
+            let id = extract_attr(attrs, b"id");
+            let inline_style = extract_attr(attrs, b"style");
+            let tag_name = core::str::from_utf8(tag).ok()?;
+            let style = match_css_style(
+                &css_rules,
+                tag_name,
+                class,
+                id,
+                inline_style,
+                wrap_width_px,
+                768,
+            );
+            style
+                .bg_color
+                .or_else(|| extract_attr(attrs, b"bgcolor").and_then(|v| html_color(v.as_bytes())))
+        };
+        self.page_bg_color = document_bg(b"body").or_else(|| document_bg(b"html"));
 
         let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         let mut pending_resources: Vec<String> = Vec::new();
@@ -2631,9 +2770,20 @@ impl BrowserApp {
                     .insert(url.clone(), (img.width, img.height, img.rgb));
             }
             None => {
-                // Çözülemeyen kaynak: 0x0 işaretiyle önbelleğe yazılır, böylece
-                // sayfa yeniden çizildiğinde tekrar istenmez (alt metin görünür).
-                self.image_cache.insert(url.clone(), (0, 0, Vec::new()));
+                // Görsel değil; harici CSS olabilir. `<link rel="stylesheet">`
+                // etiketini indirilen kurallarla değiştir, renkler uygulanır.
+                let mut injected = false;
+                if looks_like_stylesheet(&url, body) {
+                    let css_text = decode_bytes_to_string(body);
+                    let base_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
+                    injected =
+                        inject_stylesheet(&mut self.original_html, base_url, &url, &css_text);
+                }
+                if !injected {
+                    // Çözülemeyen kaynak: 0x0 işaretiyle önbelleğe yazılır, böylece
+                    // sayfa yeniden çizildiğinde tekrar istenmez (alt metin görünür).
+                    self.image_cache.insert(url.clone(), (0, 0, Vec::new()));
+                }
             }
         }
 
@@ -2687,6 +2837,7 @@ impl BrowserApp {
         };
         let scaled = html::scale_rgb(img.width, img.height, &img.rgb, disp_w, disp_h);
 
+        self.page_bg_color = None;
         self.page_lines.clear();
         self.page_lines.push(BrowserLine {
             spans: alloc::vec![TextSpan {
@@ -4441,14 +4592,16 @@ impl BrowserApp {
                             }
                         }
 
-                        // <hr> yatay ayraç çizgisi
+                        // <hr> yatay ayraç çizgisi (renk CSS/HTML'den gelebilir).
                         if line.tag == HtmlTagType::Rule {
                             let rule_y = draw_y + line_h / 2;
+                            let rule_color =
+                                line.spans.first().map_or(Color::BORDER, |span| span.color);
                             if rule_y >= doc_y && rule_y < doc_y + doc_h {
                                 let rule_x = doc_x + 12;
                                 let rule_w = doc_w.saturating_sub(24);
                                 if rule_w > 0 {
-                                    fb.draw_rect(rule_x, rule_y, rule_w, 1, Color::BORDER);
+                                    fb.draw_rect(rule_x, rule_y, rule_w, 1, rule_color);
                                 }
                             }
                         }
@@ -4480,11 +4633,9 @@ impl BrowserApp {
                                 } else {
                                     0
                                 };
-                            let text_color = if span.is_link {
-                                Color::ACCENT_BLUE
-                            } else {
-                                span.color
-                            };
+                            // Bağlantı rengi HTML tarafında çözülür; CSS
+                            // `a { color: ... }` ve <body link> burada korunur.
+                            let text_color = span.color;
                             let span_len = span.text.len();
                             let span_char_end = span_char_start + span_len;
 
@@ -4923,13 +5074,7 @@ impl BrowserApp {
                                     if underline_y >= doc_y && underline_y < doc_y + doc_h {
                                         let ul_w = span_w
                                             .min(doc_w.saturating_sub(cur_x.saturating_sub(doc_x)));
-                                        fb.draw_rect(
-                                            cur_x,
-                                            underline_y,
-                                            ul_w,
-                                            1,
-                                            Color::ACCENT_BLUE,
-                                        );
+                                        fb.draw_rect(cur_x, underline_y, ul_w, 1, text_color);
                                     }
                                     {
                                         links.push(RenderedLink {

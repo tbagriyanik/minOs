@@ -8,7 +8,7 @@
 use crate::drivers::keyboard::KeyboardLayout;
 use crate::drivers::rtc::DateTime;
 use crate::drivers::video::Framebuffer;
-use crate::gui::{Color, MinGuiCompositor, sp, TextBuf};
+use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 /// Sekme sayısı: Sistem, Ağ, Hakkında, Testler.
@@ -749,7 +749,9 @@ pub fn render_content(
             // Testler sekmesi: performans testi.
             let phase = perf_phase();
             let title = match phase {
-                PerfPhase::Idle => crate::gui::ui_text("Performans testi hazır", "Performance test ready"),
+                PerfPhase::Idle => {
+                    crate::gui::ui_text("Performans testi hazır", "Performance test ready")
+                }
                 PerfPhase::Collecting => crate::gui::ui_text("Ölçülüyor...", "Measuring..."),
                 PerfPhase::Finished => crate::gui::ui_text("Sonuç", "Result"),
             };
@@ -770,9 +772,9 @@ pub fn render_content(
             let bar_w = row_w.min(360).min(bar_space);
             fb.draw_rect(bar_x, y - 4, bar_w, 8, Color::DARK_BG);
             let pct = match phase {
-                PerfPhase::Collecting => {
-                    (PERF_TICK.load(Ordering::Relaxed) as usize * 100 / PERF_TICKS as usize).min(100)
-                }
+                PerfPhase::Collecting => (PERF_TICK.load(Ordering::Relaxed) as usize * 100
+                    / PERF_TICKS as usize)
+                    .min(100),
                 PerfPhase::Finished => 100,
                 _ => 0,
             };
@@ -807,7 +809,10 @@ pub fn render_content(
                 MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);
                 y += step;
                 let mut r = TextBuf::new();
-                r.push_str(crate::gui::ui_text("Zamanlayıcı sapması: ", "Timer jitter: "));
+                r.push_str(crate::gui::ui_text(
+                    "Zamanlayıcı sapması: ",
+                    "Timer jitter: ",
+                ));
                 r.push_usize(timer_jitter_us as usize);
                 r.push_str(" µs");
                 MinGuiCompositor::draw_string(fb, left, y, r.as_str(), Color::TEXT_MAIN);

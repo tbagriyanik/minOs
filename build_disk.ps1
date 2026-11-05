@@ -109,25 +109,13 @@ $enc = [Text.Encoding]::ASCII
 [IO.File]::WriteAllBytes((Join-Path $root "limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed full`n    resolution: 1280x720x32`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "boot\limine\limine.conf"), $enc.GetBytes("wallpaper: boot():/boot/cat_small.png`ntimeout: 5`n`n/minOs Installed System`n    protocol: limine`n    kernel_path: boot():/boot/minos-kernel`n    kernel_cmdline: installed full`n    resolution: 1280x720x32`n"))
 # Gecerli medya ornek dosyalari -> /root/Media/
-$mediaFiles = @(
-    "public\media\kedi_maskotu.bmp", "public\media\checker.bmp",
-    "public\media\sample.png", "public\media\gradient.png",
-    "public\media\sample.jpg", "public\media\sunset.jpg",
-    "public\media\real.jpg", "public\media\real.png",
-    "public\media\real.bmp", 
-    "public\desktop1.png", "public\desktop2.png", "public\desktop3.png",
-    "public\media\sample.wav", "public\media\scale_c_major.wav"
-)
+$mediaFiles = @(Get-ChildItem -File "public\media" -ErrorAction SilentlyContinue)
 $mediaDestDir = Join-Path $root "root\Media"
 New-Item -ItemType Directory -Force -Path $mediaDestDir | Out-Null
 foreach ($mf in $mediaFiles) {
-    if (Test-Path $mf) {
-        $dest = Join-Path $mediaDestDir (Split-Path $mf -Leaf)
-        Copy-Item -Force $mf $dest
-        Write-Host "[MEDIA] Kopyalandi: $mf -> $dest" -ForegroundColor Cyan
-    } else {
-        Write-Host "[MEDIA] Bulunamadi: $mf" -ForegroundColor Yellow
-    }
+    $dest = Join-Path $mediaDestDir $mf.Name
+    Copy-Item -Force $mf.FullName $dest
+    Write-Host "[MEDIA] Kopyalandi: $($mf.Name) -> $dest" -ForegroundColor Cyan
 }
 [IO.File]::WriteAllBytes((Join-Path $root "BENIOKU.TXT"), $enc.GetBytes("minOs Kurulumu Basariyla Tamamlandi!`n====================================`nBu bolumde tam okuma ve yazma hakkiniz bulunmaktadir.`n"))
 [IO.File]::WriteAllBytes((Join-Path $root "settings.cfg"), $enc.GetBytes("volume=75;muted=0;res=1280x720;night=0;night_level=55;keyboard=tr;language=tr;zoom=100;region=0;dhcp=1;theme=velvet"))

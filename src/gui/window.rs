@@ -300,7 +300,6 @@ pub struct TrayLayout {
     pub clock: (usize, usize, usize, usize),
     pub volume: (usize, usize, usize, usize),
     pub network: (usize, usize, usize, usize),
-    pub theme: (usize, usize, usize, usize),
     pub kbd: (usize, usize, usize, usize),
 }
 

@@ -88,7 +88,6 @@ impl MinGuiCompositor {
         // tamamı görünür olur; açık takvim ve ses panelinin sahibi de belli olur.
         let tray_items = [
             (l.kbd, false),
-            (l.theme, false),
             (l.network, false),
             (l.volume, self.is_volume_popup_open),
             (l.clock, self.is_calendar_open),
@@ -294,29 +293,6 @@ impl MinGuiCompositor {
             tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2,
             kbd_tag,
             kbd_col,
-        );
-
-        // 2. Tema Düğmesi (l.theme)
-        let theme_hover = in_rect(mx, my, l.theme);
-        fb.draw_rounded_rect(
-            l.theme.0 + sp(6),
-            l.theme.1 + sp(8),
-            sp(10),
-            sp(10),
-            3,
-            Color::ACCENT_PINK,
-        );
-        let t_name = theme::current().short_name();
-        Self::draw_string(
-            fb,
-            l.theme.0 + sp(22),
-            tb_y + (taskbar_h().saturating_sub(Self::text_height())) / 2,
-            t_name,
-            if theme_hover {
-                Color::ACCENT_PINK
-            } else {
-                Color::TEXT_MAIN
-            },
         );
 
         // 3. Ses Düğmesi (l.volume) - Yalnızca ses aygıtı varsa çiz

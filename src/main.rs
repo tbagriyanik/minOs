@@ -4227,12 +4227,6 @@ pub extern "C" fn _start() -> ! {
                                     } else if gui::in_rect(
                                         mx,
                                         my,
-                                        apps::settings::SystemSettings::theme_btn_rect(wx, wy, ww),
-                                    ) {
-                                        settings_app.cycle_theme();
-                                    } else if gui::in_rect(
-                                        mx,
-                                        my,
                                         apps::settings::SystemSettings::kbd_btn_rect(wx, wy, ww),
                                     ) {
                                         keyboard.toggle_layout();
@@ -4320,12 +4314,6 @@ pub extern "C" fn _start() -> ! {
                                     if swatch_hit {
 
                                         // Tema paletinden dogrudan secim yapildi.
-                                    } else if gui::in_rect(
-                                        mx,
-                                        my,
-                                        apps::settings::SystemSettings::theme_btn_rect(wx, wy, ww),
-                                    ) {
-                                        settings_app.cycle_theme();
                                     } else {
                                         let mut handled = false;
                                         for i in 0..3 {

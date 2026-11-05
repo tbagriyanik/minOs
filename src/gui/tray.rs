@@ -26,14 +26,10 @@ impl MinGuiCompositor {
         //   saat:  "HH:MM:SS" = 8 hücre = 80px + sol boşluk -> 92px
         //   ses:   ikon ~26px -> 46px
         //   ağ:    ikon 24px + "eth0" 40px -> 72px
-        //   tema:  örnek 16px + aktif tema adının ölçülen genişliği
         //   klavye:ikon 30px + "TR"/"EN" 20px -> 54px
         let clock_w = sp(92);
         let vol_w = sp(44);
         let net_w = sp(68);
-        let theme_w =
-            (sp(22) + MinGuiCompositor::text_width(theme::current().short_name(), 1) + sp(4))
-                .max(sp(38));
         let kbd_w = sp(50);
         let gap = sp(8);
 
@@ -56,8 +52,7 @@ impl MinGuiCompositor {
             (0, 0, 0, 0)
         };
 
-        let theme_x = curr_x.saturating_sub(gap + theme_w);
-        let kbd_x = theme_x.saturating_sub(gap + kbd_w);
+        let kbd_x = curr_x.saturating_sub(gap + kbd_w);
 
         TrayLayout {
             tb_y,
@@ -65,7 +60,6 @@ impl MinGuiCompositor {
             clock: (clock_x, by, clock_w, h),
             volume: volume_rect,
             network: network_rect,
-            theme: (theme_x, by, theme_w, h),
             kbd: (kbd_x, by, kbd_w, h),
         }
     }

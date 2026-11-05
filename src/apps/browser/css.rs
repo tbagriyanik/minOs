@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use super::types::{html_color, ElementStyle, GridTrack, TextAlign};
+use super::types::{html_color, BackgroundSize, ElementStyle, GridTrack, TextAlign};
 
 #[derive(Clone)]
 pub struct CssRule {
@@ -323,6 +323,178 @@ fn is_bold_weight(val: &str) -> bool {
     l.parse::<u32>().map_or(false, |w| w >= 600)
 }
 
+/// `;` ile ayrılmış bildirimleri böler; `url(data:...;base64,...)` gibi
+/// parantez içindeki ayraçları ve tırnaklı metinleri bölmez.
+fn split_css_declarations(input: &str) -> Vec<&str> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+    let mut depth = 0i32;
+    let mut quote = None::<u8>;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = quote {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => {
+                quote = Some(b);
+                i += 1;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
+            b';' if depth <= 0 => {
+                out.push(&input[start..i]);
+                start = i + 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out.push(&input[start..]);
+    out
+}
+
+/// `url(...)` içindeki ilk adresi döndürür (tırnaklar temizlenir).
+fn extract_css_url(value: &str) -> Option<String> {
+    let lower = value.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut start = 0usize;
+    while start + 4 <= bytes.len() {
+        let rel = match bytes[start..].windows(4).position(|w| w == b"url(") {
+            Some(pos) => start + pos,
+            None => break,
+        };
+        let inner_start = rel + 4;
+        let mut depth = 1i32;
+        let mut i = inner_start;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 {
+            break;
+        }
+        let inner = value[inner_start..i - 1].trim();
+        let inner = inner
+            .strip_prefix('"')
+            .or_else(|| inner.strip_prefix('\''))
+            .unwrap_or(inner);
+        let inner = inner
+            .strip_suffix('"')
+            .or_else(|| inner.strip_suffix('\''))
+            .unwrap_or(inner)
+            .trim();
+        if !inner.is_empty() {
+            return Some(String::from(inner));
+        }
+        start = i;
+    }
+    None
+}
+
+/// Renk ayrıştırmasını bozmamak için `url(...)` ve gradyan/image-set
+/// işlevlerini değer metninden çıkarır.
+fn strip_css_image_functions(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let rest = &value[i..];
+        let lower = rest.to_ascii_lowercase();
+        let mut func_len = None;
+        for name in [
+            "url(",
+            "image-set(",
+            "linear-gradient(",
+            "radial-gradient(",
+            "conic-gradient(",
+        ] {
+            if lower.starts_with(name) {
+                func_len = Some(name.len());
+                break;
+            }
+        }
+        if let Some(len) = func_len {
+            let mut depth = 1i32;
+            let mut j = i + len;
+            while j < bytes.len() && depth > 0 {
+                match bytes[j] {
+                    b'(' => depth += 1,
+                    b')' => depth -= 1,
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = j.min(bytes.len());
+            out.push(' ');
+            continue;
+        }
+        let ch_len = rest.chars().next().map_or(1, |c| c.len_utf8());
+        out.push_str(&rest[..ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
+fn parse_background_size(val: &str) -> Option<BackgroundSize> {
+    let l = val.trim().to_ascii_lowercase();
+    match l.as_str() {
+        "cover" => Some(BackgroundSize::Cover),
+        "contain" => Some(BackgroundSize::Contain),
+        "stretch" | "100%" | "100% 100%" => Some(BackgroundSize::Stretch),
+        "auto" => Some(BackgroundSize::Auto),
+        _ if l.contains('%') => Some(BackgroundSize::Stretch),
+        _ => None,
+    }
+}
+
+/// `background` kısa gösterimindeki tekrar/boyut anahtarlarını ayıklar.
+fn apply_background_tokens(style: &mut ElementStyle, value: &str) {
+    let masked = strip_css_image_functions(value);
+    for token in masked.split(|c: char| c.is_ascii_whitespace() || c == '/') {
+        let t = token.trim().to_ascii_lowercase();
+        if t.is_empty() {
+            continue;
+        }
+        match t.as_str() {
+            "no-repeat" => style.background_repeat = Some(false),
+            "repeat" | "repeat-x" | "repeat-y" | "space" | "round" => {
+                style.background_repeat = Some(true)
+            }
+            _ => {
+                // Kısa gösterimde `%` belirteci çoğunlukla konumdur; boyut
+                // olarak yalnızca cover/contain/auto/stretch gibi açık
+                // anahtarları ve `background-size` özelliği kullanılır.
+                if !t.contains('%') {
+                    if let Some(size) = parse_background_size(&t) {
+                        style.background_size = Some(size);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Tek bir `prop: value` bildirimini stile uygular.
 #[allow(unreachable_patterns)]
 fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
@@ -342,9 +514,8 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 }
             }
         }
-        "background-color" | "background" => {
-            // `transparent` / `none`: arka plan rengi yok. Kısa gösterimde
-            // (ör. `background: #fff url(...)`) renk otomatik bulunur.
+        "background-color" => {
+            // `transparent` / `none`: arka plan rengi yok.
             if !val.eq_ignore_ascii_case("transparent")
                 && !val.eq_ignore_ascii_case("none")
                 && !val.eq_ignore_ascii_case("inherit")
@@ -352,6 +523,55 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
                 if let Some(c) = html_color(val.as_bytes()) {
                     style.bg_color = Some(c);
                 }
+            }
+        }
+        "background" => {
+            // Kısa gösterim: renk + url(...) + tekrar/boyut anahtarları.
+            // url yoksa shorthand arka plan görselini sıfırlar (CSS cascade).
+            if let Some(url) = extract_css_url(val) {
+                style.background_image = Some(url);
+            } else if !val.eq_ignore_ascii_case("inherit")
+                && !val.eq_ignore_ascii_case("initial")
+                && !val.eq_ignore_ascii_case("unset")
+            {
+                style.background_image = Some(String::new());
+            }
+            style.background_repeat = Some(true);
+            style.background_size = Some(BackgroundSize::Auto);
+            apply_background_tokens(style, val);
+            let color_part = strip_css_image_functions(val);
+            if !color_part.trim().eq_ignore_ascii_case("transparent")
+                && !color_part.trim().eq_ignore_ascii_case("none")
+                && !color_part.trim().eq_ignore_ascii_case("inherit")
+            {
+                if let Some(c) = html_color(color_part.as_bytes()) {
+                    style.bg_color = Some(c);
+                }
+            }
+        }
+        "background-image" => {
+            if val.eq_ignore_ascii_case("none") {
+                style.background_image = Some(String::new());
+            } else if let Some(url) = extract_css_url(val) {
+                style.background_image = Some(url);
+            } else {
+                let lv = val.to_ascii_lowercase();
+                if lv.contains("gradient(") || lv.contains("image-set(") {
+                    // Gradyan/image-set henüz desteklenmiyor; önceki url'i ezme.
+                    style.background_image = Some(String::new());
+                }
+            }
+        }
+        "background-size" => {
+            if let Some(size) = parse_background_size(val) {
+                style.background_size = Some(size);
+            }
+        }
+        "background-repeat" => {
+            if val.contains("no-repeat") {
+                style.background_repeat = Some(false);
+            } else if val.contains("repeat") || val.contains("space") || val.contains("round") {
+                style.background_repeat = Some(true);
             }
         }
         "text-align" => {
@@ -567,12 +787,6 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             if let Some(px) = parse_px_value(val, None, None, None, None) {
                 style.min_height = px;
             }
-        }
-        "background-image" => {
-            // Background image - basit tanımla
-        }
-        "background-gradient" => {
-            // Background gradient - gelecek geliştirme
         }
         "animation" => {
             // CSS animation: animation-name <duration> <iteration-count> [easing]
@@ -838,7 +1052,7 @@ fn parse_css_rules(
                             let block_content =
                                 core::str::from_utf8(&b[i + 1..close.unwrap_or(b.len())])
                                     .unwrap_or("");
-                            for decl in block_content.split(';') {
+                            for decl in split_css_declarations(block_content) {
                                 if let Some((prop, val)) = decl.split_once(':') {
                                     let prop = prop.trim().to_ascii_lowercase();
                                     apply_css_decl(&mut style, &prop, val);
@@ -871,7 +1085,7 @@ fn parse_css_rules(
                     // @font-face { font-family: "CustomFont"; src: url("https://..."); }
                     let mut font_family = String::new();
                     let mut src_url = String::new();
-                    for decl in block.split(';') {
+                    for decl in split_css_declarations(block) {
                         if let Some((prop, val)) = decl.split_once(':') {
                             let prop = prop.trim().to_ascii_lowercase();
                             let val = val.trim();
@@ -910,7 +1124,7 @@ fn parse_css_rules(
         }
 
         let mut style = ElementStyle::new();
-        for decl in block.split(';') {
+        for decl in split_css_declarations(block) {
             if let Some((prop, val)) = decl.split_once(':') {
                 let prop = prop.trim().to_ascii_lowercase();
                 apply_css_decl(&mut style, &prop, val);
@@ -1302,7 +1516,7 @@ pub fn match_css_style(
 ) -> ElementStyle {
     let mut resolved = apply_css_cascade(rules, tag, class, id, viewport_w, viewport_h);
     if let Some(inline) = inline_style {
-        for decl in inline.split(';') {
+        for decl in split_css_declarations(inline) {
             if let Some((prop, val)) = decl.split_once(':') {
                 let prop = prop.trim().to_ascii_lowercase();
                 apply_css_decl(&mut resolved, &prop, val);
@@ -1439,6 +1653,9 @@ mod tests {
         let card = match_css_style(&parsed.rules, "div", Some("card"), None, None, 600, 768);
         assert_eq!(card.bg_color, Some(0xaabbcc));
         assert_eq!(card.border_color, Some(0x00ff00));
+        assert_eq!(card.background_image.as_deref(), Some("bg.png"));
+        assert_eq!(card.background_repeat, Some(true));
+        assert_eq!(card.background_size, Some(BackgroundSize::Auto));
 
         let link = match_css_style(&parsed.rules, "span", Some("link"), None, None, 600, 768);
         assert_eq!(link.color, Some(0x0080ff));

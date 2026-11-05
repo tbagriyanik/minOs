@@ -21,13 +21,12 @@ pub enum ContextKind {
 }
 
 /// Masaüstü sağ tık menüsü.
-pub const CTX_DESKTOP: [(&str, u32); 8] = [
+pub const CTX_DESKTOP: [(&str, u32); 7] = [
     ("Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
     ("Yeni >", Color::ACCENT_GREEN),
     ("Yapıştır", Color::ACCENT_GREEN),
     ("Sistem Ayarları", Color::ACCENT_PINK),
     ("Görev Yöneticisi", Color::ACCENT_YELLOW),
-    ("Tema Değiştir", Color::ACCENT_GREEN),
     ("Masaüstünü Yenile", Color::TEXT_MUTED),
     ("Yeni Not Oluştur", Color::TEXT_MAIN),
 ];
@@ -80,13 +79,12 @@ pub const CTX_WINDOW: [(&str, u32); 4] = [
     ("Kapat", Color::ACCENT_RED),
 ];
 
-const CTX_DESKTOP_EN: [(&str, u32); 8] = [
+const CTX_DESKTOP_EN: [(&str, u32); 7] = [
     ("Open File Manager", Color::ACCENT_BLUE),
     ("New >", Color::ACCENT_GREEN),
     ("Paste", Color::ACCENT_GREEN),
     ("System Settings", Color::ACCENT_PINK),
     ("Task Manager", Color::ACCENT_YELLOW),
-    ("Change Theme", Color::ACCENT_GREEN),
     ("Refresh Desktop", Color::TEXT_MUTED),
     ("New Note", Color::TEXT_MAIN),
 ];

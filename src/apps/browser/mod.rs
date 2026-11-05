@@ -25,8 +25,8 @@ pub use devtools::{DevToolsState, DevToolsTab};
 pub use iframe::{IFrame, IFrames};
 pub use media::{MediaPlayer, MediaPlayers, MediaState, MediaType};
 pub use types::{
-    html_color, Bookmark, BrowserLine, HtmlTagType, HttpCookie, RenderedImage, RenderedLink,
-    TextAlign, TextSpan, BOOKMARKS,
+    html_color, BackgroundImage, BackgroundSize, Bookmark, BrowserLine, HtmlTagType, HttpCookie,
+    RenderedImage, RenderedLink, TextAlign, TextSpan, BOOKMARKS,
 };
 pub use wasm::{WasmInstance, WasmModule, WasmModules};
 pub use worker::{Worker, WorkerMessage, WorkerState, Workers};
@@ -36,6 +36,7 @@ use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -298,6 +299,61 @@ fn looks_like_stylesheet(url: &str, body: &[u8]) -> bool {
     (starts_like_css || has_brace) && !body.contains(&b'<')
 }
 
+/// Harici CSS içindeki göreli `url(...)` kaynaklarını, stil dosyasının kendi
+/// adresine göre mutlaklaştırır. Böylece `background: url(img/a.png)` gibi
+/// kurallar stil dosyasıyla aynı klasördeki görselleri bulur.
+fn rewrite_css_urls(css: &str, base: &str) -> String {
+    let bytes = css.as_bytes();
+    let mut out = String::with_capacity(css.len() + 16);
+    let mut last = 0usize;
+    let mut i = 0usize;
+    while i + 4 <= bytes.len() {
+        if !bytes[i..i + 4].eq_ignore_ascii_case(b"url(") {
+            i += 1;
+            continue;
+        }
+        let mut depth = 1i32;
+        let mut j = i + 4;
+        while j < bytes.len() && depth > 0 {
+            match bytes[j] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        if depth != 0 {
+            break;
+        }
+        let inner = css[i + 4..j - 1].trim();
+        let unquoted = inner
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .or_else(|| inner.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')))
+            .unwrap_or(inner)
+            .trim();
+        let resolved = html::resolve_resource_url(unquoted, Some(base));
+        out.push_str(&css[last..i]);
+        match resolved {
+            Some(res)
+                if res.as_str() != unquoted
+                    && !unquoted
+                        .get(..5)
+                        .is_some_and(|p| p.eq_ignore_ascii_case("data:")) =>
+            {
+                out.push_str("url(\"");
+                out.push_str(&res);
+                out.push_str("\")");
+            }
+            _ => out.push_str(&css[i..j]),
+        }
+        last = j;
+        i = j;
+    }
+    out.push_str(&css[last..]);
+    out
+}
+
 /// `<link rel="stylesheet" href="...">` etiketini indirilen CSS ile
 /// değiştirir. Böylece harici stil dosyaları da renkleri uygular.
 fn inject_stylesheet(html: &mut Vec<u8>, base_url: Option<&str>, url: &str, css: &str) -> bool {
@@ -318,7 +374,8 @@ fn inject_stylesheet(html: &mut Vec<u8>, base_url: Option<&str>, url: &str, css:
                 let target = href.and_then(|h| html::resolve_url(h, base_url));
                 if is_css && target.as_deref() == Some(url) {
                     out.extend_from_slice(b"<style>");
-                    out.extend_from_slice(css.as_bytes());
+                    let rewritten = rewrite_css_urls(css, url);
+                    out.extend_from_slice(rewritten.as_bytes());
                     out.extend_from_slice(b"</style>");
                     p = end + 1;
                     replaced = true;
@@ -583,6 +640,7 @@ pub struct BrowserApp {
     /// TLS 1.3 istemci Finished kaydı gönderildi mi?
     pub tls13_finished_sent: bool,
     pub page_bg_color: Option<u32>,
+    pub page_bg_image: Option<Arc<BackgroundImage>>,
     pub js_alert: Option<String>,
     pub js_vars: Vec<(String, String)>,
     pub js_functions: Vec<(String, String)>,
@@ -788,6 +846,7 @@ impl BrowserApp {
             tls_request_sent: false,
             tls13_finished_sent: false,
             page_bg_color: None,
+            page_bg_image: None,
             js_alert: None,
             js_vars: Vec::new(),
             js_functions: Vec::new(),
@@ -1567,6 +1626,7 @@ impl BrowserApp {
         self.downloads.clear();
         self.form_autofill = FormAutofill::new();
         self.page_bg_color = None;
+        self.page_bg_image = None;
         self.js_alert = None;
         self.js_vars.clear();
         self.scroll_reset = true;
@@ -1666,7 +1726,7 @@ impl BrowserApp {
 
         let current_url = core::str::from_utf8(&self.url[..self.url_len]).ok();
         let mut pending_resources: Vec<String> = Vec::new();
-        let image_cache = self.image_cache.clone();
+        let mut page_bg_image = None;
         render_html_to_lines(
             &preprocessed_html,
             wrap_width_px,
@@ -1677,12 +1737,14 @@ impl BrowserApp {
             self.transition_start_ms,
             &mut self.previous_styles,
             vfs,
-            Some(&image_cache),
+            Some(&self.image_cache),
+            &mut page_bg_image,
             &mut self.canvases,
             &mut self.media_players,
             &mut self.iframes,
             &mut pending_resources,
         );
+        self.page_bg_image = page_bg_image;
         self.pending_resources = pending_resources;
         self.resource_fetch_state = if self.pending_resources.is_empty() {
             0
@@ -1938,6 +2000,7 @@ impl BrowserApp {
         self.page_title_len = tb.len().min(64);
         self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
 
+        self.page_bg_image = None;
         self.page_lines.clear();
         for &line in lines.iter().take(128) {
             self.page_lines.push(BrowserLine {
@@ -1945,6 +2008,7 @@ impl BrowserApp {
                     text: String::from(line),
                     color: Color::BLACK,
                     bg_color: None,
+                    bg_image: None,
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
@@ -1972,6 +2036,7 @@ impl BrowserApp {
         self.page_title_len = tb.len().min(64);
         self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
 
+        self.page_bg_image = None;
         self.page_lines.clear();
         let count = history_count().min(HISTORY_MAX);
 
@@ -1982,6 +2047,7 @@ impl BrowserApp {
             )),
             color: Color::TEXT_MUTED,
             bg_color: None,
+            bg_image: None,
             is_link: false,
             link_url: String::new(),
             is_button: false,
@@ -2001,6 +2067,7 @@ impl BrowserApp {
                 text: String::from("   "),
                 color: Color::TEXT_MUTED,
                 bg_color: None,
+                bg_image: None,
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
@@ -2021,6 +2088,7 @@ impl BrowserApp {
                 )),
                 color: Color::ACCENT_RED,
                 bg_color: Some(Color::TITLE_BAR),
+                bg_image: None,
                 is_link: true,
                 link_url: String::from("minos://history?action=clear"),
                 is_button: true,
@@ -2049,6 +2117,7 @@ impl BrowserApp {
                     text: String::from(crate::gui::ui_text("Henüz geçmiş yok.", "No history yet.")),
                     color: Color::TEXT_MAIN,
                     bg_color: None,
+                    bg_image: None,
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
@@ -2101,6 +2170,7 @@ impl BrowserApp {
                             text: String::from("[X] "),
                             color: Color::ACCENT_RED,
                             bg_color: Some(Color::TITLE_BAR),
+                            bg_image: None,
                             is_link: true,
                             link_url: remove_action,
                             is_button: true,
@@ -2118,6 +2188,7 @@ impl BrowserApp {
                             text: String::from(" "),
                             color: Color::TEXT_MUTED,
                             bg_color: None,
+                    bg_image: None,
                             is_link: false,
                             link_url: String::new(),
                             is_button: false,
@@ -2135,6 +2206,7 @@ impl BrowserApp {
                             text: url.clone(),
                             color: Color::TEXT_MAIN,
                             bg_color: None,
+                    bg_image: None,
                             is_link: true,
                             link_url: url,
                             is_button: false,
@@ -2164,6 +2236,7 @@ impl BrowserApp {
         self.page_title_len = tb.len().min(64);
         self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
 
+        self.page_bg_image = None;
         self.page_lines.clear();
 
         self.page_lines.push(BrowserLine {
@@ -2174,6 +2247,7 @@ impl BrowserApp {
                 )),
                 color: Color::ACCENT_PINK,
                 bg_color: None,
+                bg_image: None,
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
@@ -2200,6 +2274,7 @@ impl BrowserApp {
                 )),
                 color: Color::TEXT_MUTED,
                 bg_color: None,
+                bg_image: None,
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
@@ -2240,6 +2315,7 @@ impl BrowserApp {
                             Color::ACCENT_BLUE
                         },
                         bg_color: None,
+                    bg_image: None,
                         is_link: false,
                         link_url: String::new(),
                         is_button: false,
@@ -2257,6 +2333,7 @@ impl BrowserApp {
                         text: String::from(title_text),
                         color: Color::WHITE,
                         bg_color: Some(if is_web { 0x188040 } else { Color::TITLE_BAR }),
+                        bg_image: None,
                         is_link: true,
                         link_url: String::from(bm.url),
                         is_button: true,
@@ -2274,6 +2351,7 @@ impl BrowserApp {
                         text: alloc::format!("  {}", bm.url),
                         color: Color::ACCENT_BLUE,
                         bg_color: None,
+                    bg_image: None,
                         is_link: true,
                         link_url: String::from(bm.url),
                         is_button: false,
@@ -2298,6 +2376,7 @@ impl BrowserApp {
                     text: alloc::format!("      {}", desc_text),
                     color: Color::TEXT_MUTED,
                     bg_color: None,
+                    bg_image: None,
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,
@@ -2838,12 +2917,14 @@ impl BrowserApp {
         let scaled = html::scale_rgb(img.width, img.height, &img.rgb, disp_w, disp_h);
 
         self.page_bg_color = None;
+        self.page_bg_image = None;
         self.page_lines.clear();
         self.page_lines.push(BrowserLine {
             spans: alloc::vec![TextSpan {
                 text: String::new(),
                 color: Color::BLACK,
                 bg_color: None,
+                bg_image: None,
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
@@ -2867,6 +2948,7 @@ impl BrowserApp {
                 text: info,
                 color: Color::BLACK,
                 bg_color: None,
+                bg_image: None,
                 is_link: false,
                 link_url: String::new(),
                 is_button: false,
@@ -2901,6 +2983,7 @@ impl BrowserApp {
         // sayfa veya eski sayfanın resimleri kullanılır.
         self.original_html.clear();
         self.image_cache.clear();
+        self.page_bg_image = None;
         let mut input = [0u8; 128];
         input[..self.url_len].copy_from_slice(&self.url[..self.url_len]);
         let entered = core::str::from_utf8(&input[..self.url_len])
@@ -3888,6 +3971,7 @@ impl BrowserApp {
                                     text: String::from(status_str),
                                     color: Color::ACCENT_BLUE,
                                     bg_color: None,
+                    bg_image: None,
                                     is_link: false,
                                     link_url: String::new(),
                                     is_button: false,
@@ -3915,6 +3999,7 @@ impl BrowserApp {
                                             text: String::from(line),
                                             color: Color::BLACK,
                                             bg_color: None,
+                    bg_image: None,
                                             is_link: false,
                                             link_url: String::new(),
                                             is_button: false,
@@ -4108,6 +4193,9 @@ impl BrowserApp {
         }
         let url = self.current_resource_url.clone();
         self.pending_resources.retain(|u| u != &url);
+        // Başarısız kaynak "0x0" işaretiyle önbelleğe yazılır; sonraki yeniden
+        // çizimlerde aynı URL sonsuz döngüyle tekrar istenmez.
+        self.image_cache.insert(url, (0, 0, Vec::new()));
         self.request_is_resource = false;
         self.current_resource_url.clear();
         self.resource_fetch_state = if self.pending_resources.is_empty() {
@@ -4226,6 +4314,108 @@ impl BrowserApp {
     pub fn sync_external_scroll(&mut self, offset: usize) {
         self.scroll_animating = false;
         self.scroll_target = offset;
+    }
+
+    /// CSS arka plan görselini hedef dikdörtgene döşer/yerleştirir.
+    /// `offset_y` sayfa arka planının kaydırma ile birlikte hareket etmesi içindir;
+    /// öğe arka planlarında 0 geçilir (görsel öğeyle birlikte hareket eder).
+    fn draw_background_image(
+        &self,
+        fb: &mut Framebuffer,
+        bg: &BackgroundImage,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        offset_y: usize,
+        clip: (usize, usize, usize, usize),
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let (src_w, src_h, rgb): (usize, usize, &[u8]) = if let Some(rgb) = bg.rgb.as_deref() {
+            (bg.width, bg.height, rgb)
+        } else if let Some((iw, ih, data)) = self.image_cache.get(&bg.url) {
+            if *iw == 0 || *ih == 0 || data.is_empty() {
+                return;
+            }
+            (*iw, *ih, data.as_slice())
+        } else {
+            return;
+        };
+        if src_w == 0 || src_h == 0 || rgb.len() < src_w.saturating_mul(src_h).saturating_mul(3) {
+            return;
+        }
+
+        let (img_w, img_h, pos_x, pos_y, tile): (usize, usize, isize, isize, bool) =
+            match bg.fit {
+                BackgroundSize::Auto => (src_w, src_h, 0, 0, bg.repeat),
+                BackgroundSize::Stretch => (w, h, 0, 0, false),
+                BackgroundSize::Cover => {
+                    let sx = w as f32 / src_w as f32;
+                    let sy = h as f32 / src_h as f32;
+                    let s = sx.max(sy);
+                    let iw = ((src_w as f32 * s) as usize).max(1);
+                    let ih = ((src_h as f32 * s) as usize).max(1);
+                    (
+                        iw,
+                        ih,
+                        (w as isize - iw as isize) / 2,
+                        (h as isize - ih as isize) / 2,
+                        false,
+                    )
+                }
+                BackgroundSize::Contain => {
+                    let sx = w as f32 / src_w as f32;
+                    let sy = h as f32 / src_h as f32;
+                    let s = sx.min(sy);
+                    let iw = ((src_w as f32 * s) as usize).max(1);
+                    let ih = ((src_h as f32 * s) as usize).max(1);
+                    (
+                        iw,
+                        ih,
+                        (w as isize - iw as isize) / 2,
+                        (h as isize - ih as isize) / 2,
+                        false,
+                    )
+                }
+            };
+
+        let clip_x1 = clip.0.saturating_add(clip.2).min(fb.width);
+        let clip_y1 = clip.1.saturating_add(clip.3).min(fb.height);
+        let x0 = x.max(clip.0);
+        let y0 = y.max(clip.1);
+        let x1 = (x + w).min(clip_x1);
+        let y1 = (y + h).min(clip_y1);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+
+        let img_w_i = img_w as isize;
+        let img_h_i = img_h as isize;
+        for dy in y0..y1 {
+            let ry = dy.saturating_sub(y) as isize;
+            for dx in x0..x1 {
+                let rx = dx.saturating_sub(x) as isize;
+                let mut ix = rx - pos_x;
+                let mut iy = ry + offset_y as isize - pos_y;
+                if tile {
+                    ix = ix.rem_euclid(img_w_i);
+                    iy = iy.rem_euclid(img_h_i);
+                } else if ix < 0 || iy < 0 || ix >= img_w_i || iy >= img_h_i {
+                    continue;
+                }
+                let sx = (ix as usize).saturating_mul(src_w) / img_w.max(1);
+                let sy = (iy as usize).saturating_mul(src_h) / img_h.max(1);
+                let idx = sy.saturating_mul(src_w).saturating_add(sx).saturating_mul(3);
+                if idx + 2 < rgb.len() {
+                    let color = ((rgb[idx] as u32) << 16)
+                        | ((rgb[idx + 1] as u32) << 8)
+                        | (rgb[idx + 2] as u32);
+                    fb.put_pixel(dx, dy, color);
+                }
+            }
+        }
     }
 
     pub fn render_content(
@@ -4509,6 +4699,18 @@ impl BrowserApp {
                 let doc_h = page_h.saturating_sub(46);
                 let paper_bg = self.page_bg_color.unwrap_or(BROWSER_PAPER_BG);
                 fb.draw_rect(doc_x, doc_y, doc_w, doc_h, paper_bg);
+                if let Some(bg) = &self.page_bg_image {
+                    self.draw_background_image(
+                        fb,
+                        bg,
+                        doc_x,
+                        doc_y,
+                        doc_w,
+                        doc_h,
+                        scroll.y,
+                        (doc_x, doc_y, doc_w, doc_h),
+                    );
+                }
 
                 let doc_clip = (doc_x, doc_y, doc_w, doc_h);
                 let scroll_y = scroll.y;
@@ -4638,6 +4840,19 @@ impl BrowserApp {
                             let text_color = span.color;
                             let span_len = span.text.len();
                             let span_char_end = span_char_start + span_len;
+
+                            if span.is_image {
+                                if let Some(bg) = &span.bg_image {
+                                    let bg_h = if span.is_image {
+                                        span.image_height.max(line_h)
+                                    } else {
+                                        line_h
+                                    };
+                                    self.draw_background_image(
+                                        fb, bg, cur_x, draw_y, span_w, bg_h, 0, doc_clip,
+                                    );
+                                }
+                            }
 
                             // Draw image, canvas, or video for is_image spans
                             if span.is_image {
@@ -4943,6 +5158,11 @@ impl BrowserApp {
                             if span.is_button {
                                 let btn_bg = span.bg_color.unwrap_or(Color::TITLE_BAR);
                                 fb.draw_rect(cur_x, draw_y, span_w, line_h, btn_bg);
+                                if let Some(bg) = &span.bg_image {
+                                    self.draw_background_image(
+                                        fb, bg, cur_x, draw_y, span_w, line_h, 0, doc_clip,
+                                    );
+                                }
                                 fb.draw_rect_outline(cur_x, draw_y, span_w, line_h, Color::BORDER);
                                 MinGuiCompositor::draw_string_scaled_clipped(
                                     fb,
@@ -4963,6 +5183,11 @@ impl BrowserApp {
                             } else if let Some((s, e)) = sel_range {
                                 if let Some(bg) = span.bg_color {
                                     fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
+                                }
+                                if let Some(bg_img) = &span.bg_image {
+                                    self.draw_background_image(
+                                        fb, bg_img, cur_x, draw_y, span_w, line_h, 0, doc_clip,
+                                    );
                                 }
                                 let prefix = &span.text[..s];
                                 let selected = &span.text[s..e];
@@ -5007,6 +5232,11 @@ impl BrowserApp {
                             } else {
                                 if let Some(bg) = span.bg_color {
                                     fb.draw_rect(cur_x, draw_y, span_w, line_h, bg);
+                                }
+                                if let Some(bg_img) = &span.bg_image {
+                                    self.draw_background_image(
+                                        fb, bg_img, cur_x, draw_y, span_w, line_h, 0, doc_clip,
+                                    );
                                 }
                                 let query = core::str::from_utf8(&self.find_query[..self.find_len])
                                     .unwrap_or("");

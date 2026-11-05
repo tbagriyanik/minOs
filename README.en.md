@@ -11,7 +11,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-121%2C919%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-113%2C136%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -87,6 +87,9 @@
 - **More Readable Boot Log:** The text console flushes every completed line to the screen and waits 45 ms before moving to the next line once the time base is ready. Boot diagnostic messages are therefore easier to follow; early messages written before the time base is ready are not delayed.
 - **Browser Favorites (Bookmarks Bar):** An interactive bookmarks bar was added to the web browser; a pure HTTP test site and quick-access buttons for `minos://cats`, `minos://net`, `minos://history`, `minos://demo` and `minos://demo-img` / `minos://demo-video` plus the `minos://bookmarks` page were integrated.
 - **🎮 FPS Performance Test Game:** A new `FPS Game` application (app ID 15) was added. It features a raycasting-based 3D engine, mouse look, WASD movement, distance-shaded walls, enemy targets, radar, and PC Speaker/HDA sound effects. Launch from Start Menu → Media → FPS Game or Run Dialog → `fps` / `oyun`.
+- **🛡️ FPS Game Freeze Fix:** The game no longer freezes when health reaches zero; the player respawns and continues. Freezes caused by negative screen coordinates and direction vector floating-point drift were fixed.
+- **⚙️ Control Panel Cleanup:** Sound test button removed; network test button now appears only on the Network tab; overlapping button layout fixed.
+- **🎨 Theme Change Only in Settings:** Theme change button removed from taskbar, desktop right-click menu, and control panel; it remains available only in Settings > Display.
 
 ### 🛡️ Boot Recovery Console (`recovery#`)
 

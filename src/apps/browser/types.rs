@@ -1,6 +1,7 @@
 //! Tarayıcı için ortak veri tipleri ve renk çözümleyici (no_std).
 extern crate alloc;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 /// Renk metnini kırp: boşluk, tırnak, noktalı virgül ve sondaki ayraçlar.
@@ -447,10 +448,41 @@ pub enum GridTrack {
     Auto,          // İçeriğe göre otomatik
 }
 
+/// CSS `background-size` karşılığı (basit küme).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackgroundSize {
+    /// Görsel kendi boyutunda döşenir.
+    Auto,
+    /// Alanı kaplayacak şekilde ölçeklenir (taşma kırpılır).
+    Cover,
+    /// Alanı sığacak şekilde ölçeklenir.
+    Contain,
+    /// Alanın tamamına esnetilir.
+    Stretch,
+}
+
+/// Bir öğenin ya da sayfanın arka planında gösterilen çözülmüş görsel.
+#[derive(Clone)]
+pub struct BackgroundImage {
+    /// Önbellek ve yeniden çözümleme anahtarı.
+    pub url: String,
+    pub width: usize,
+    pub height: usize,
+    /// Yerel/data görseller için hazır RGB verisi; uzak görseller önbellekten okunur.
+    pub rgb: Option<Arc<[u8]>>,
+    pub fit: BackgroundSize,
+    pub repeat: bool,
+}
+
 #[derive(Clone)]
 pub struct ElementStyle {
     pub color: Option<u32>,
     pub bg_color: Option<u32>,
+    /// `background-image: url(...)`; `Some("")` açık `none` demektir.
+    pub background_image: Option<String>,
+    pub background_size: Option<BackgroundSize>,
+    /// `Some(false)` = `no-repeat`, `None`/`Some(true)` = döşeme.
+    pub background_repeat: Option<bool>,
     pub font_scale: usize,
     pub align: TextAlign,
     pub display_none: bool,
@@ -538,6 +570,9 @@ impl ElementStyle {
         Self {
             color: None,
             bg_color: None,
+            background_image: None,
+            background_size: None,
+            background_repeat: None,
             font_scale: 1,
             align: TextAlign::Left,
             display_none: false,
@@ -591,6 +626,15 @@ impl ElementStyle {
         }
         if let Some(bg) = other.bg_color {
             self.bg_color = Some(bg);
+        }
+        if let Some(img) = &other.background_image {
+            self.background_image = Some(img.clone());
+        }
+        if let Some(size) = other.background_size {
+            self.background_size = Some(size);
+        }
+        if let Some(repeat) = other.background_repeat {
+            self.background_repeat = Some(repeat);
         }
         if other.font_scale > 1 {
             self.font_scale = other.font_scale;
@@ -724,6 +768,8 @@ pub struct TextSpan {
     pub text: String,
     pub color: u32,
     pub bg_color: Option<u32>,
+    /// CSS `background-image` ile çözülen arka plan görseli.
+    pub bg_image: Option<Arc<BackgroundImage>>,
     pub is_link: bool,
     pub link_url: String,
     pub is_button: bool,

@@ -363,6 +363,10 @@ impl FpsGameApp {
             (x + r, y + r),
         ];
         for (cx, cy) in corners {
+            // Negatif koordinat usize cast'te panik yapar; duvar say.
+            if cx < 0.0 || cy < 0.0 {
+                return true;
+            }
             let mx = cx as usize;
             let my = cy as usize;
             if mx >= MAP_W || my >= MAP_H {
@@ -530,6 +534,18 @@ impl FpsGameApp {
         let old_plane_x = self.plane_x;
         self.plane_x = self.plane_x * cos_a - self.plane_y * sin_a;
         self.plane_y = old_plane_x * sin_a + self.plane_y * cos_a;
+        // Sürekli dönüşte kayan nokta sapmasını önlemek için vektörleri
+        // yeniden normalize et (boy 1, birbirine dik kalır).
+        let dir_len = fast_sqrt(self.dir_x * self.dir_x + self.dir_y * self.dir_y);
+        if dir_len > 0.0 {
+            self.dir_x /= dir_len;
+            self.dir_y /= dir_len;
+        }
+        let plane_len = fast_sqrt(self.plane_x * self.plane_x + self.plane_y * self.plane_y);
+        if plane_len > 0.0 {
+            self.plane_x /= plane_len;
+            self.plane_y /= plane_len;
+        }
     }
 
     /// Fare ile bakış açısını güncelle.
@@ -870,6 +886,11 @@ impl FpsGameApp {
 
             // Ekran x pozisyonu.
             let screen_x = (rel / (FOV / 2.0) + 1.0) / 2.0 * (w as f32);
+            // Negatif screen_x (ekran kenarındaki düşman) usize cast'te panik
+            // veya sapma yaratıyor; bu düşmanı atla.
+            if screen_x < 0.0 {
+                continue;
+            }
             let sx = screen_x as usize;
             if sx >= w {
                 continue;

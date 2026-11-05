@@ -2624,13 +2624,11 @@ pub extern "C" fn _start() -> ! {
 
                                 4 => open_app(&mut compositor, 7),
 
-                                5 => settings_app.cycle_theme(),
-
-                                6 => {
+                                5 => {
                                     desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                                 }
 
-                                7 => open_app(&mut compositor, 2),
+                                6 => open_app(&mut compositor, 2),
 
                                 _ => {}
                             },
@@ -3292,10 +3290,6 @@ pub extern "C" fn _start() -> ! {
 
                     settings_app.status_msg =
                         gui::ui_text("Ağ ayarları açıldı.", "Network settings opened.");
-
-                    consumed = true;
-                } else if gui::in_rect(mx, my, l.theme) {
-                    settings_app.cycle_theme();
 
                     consumed = true;
                 } else if gui::in_rect(mx, my, l.kbd) {
@@ -5806,26 +5800,11 @@ pub extern "C" fn _start() -> ! {
                                     apps::controlpanel::net_test_btn_rect(wx, wy, ww, wh),
                                 ) {
                                     apps::controlpanel::start_network_test();
-                                } else if gui::in_rect(
-                                    mx,
-                                    my,
-                                    apps::controlpanel::theme_btn_rect(wx, wy, ww, wh),
-                                ) {
-                                    settings_app.cycle_theme();
                                 } else if apps::controlpanel::active_tab() == 3
                                     && gui::in_rect(
                                         mx,
                                         my,
                                         apps::controlpanel::perf_btn_rect(wx, wy, ww, wh),
-                                    )
-                                {
-                                    apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);
-                                    force_render = true;
-                                } else if apps::controlpanel::active_tab() == 3
-                                    && gui::in_rect(
-                                        mx,
-                                        my,
-                                        apps::controlpanel::perf_sound_btn_rect(wx, wy, ww, wh),
                                     )
                                 {
                                     apps::controlpanel::click_perf_btn(mx, my, wx, wy, ww, wh);

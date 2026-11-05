@@ -148,18 +148,6 @@ pub fn perf_btn_rect(
     (win_x + 12, win_y + win_h.saturating_sub(56), bw, 30)
 }
 
-/// Ses testi düğmesi dikdörtgeni.
-pub fn perf_sound_btn_rect(
-    win_x: usize,
-    win_y: usize,
-    win_w: usize,
-    win_h: usize,
-) -> (usize, usize, usize, usize) {
-    let (bx, by, bw, bh) = perf_btn_rect(win_x, win_y, win_w, win_h);
-    let sw = sp(110).min(win_w.saturating_sub(24));
-    (bx + bw + 8, by, sw, bh)
-}
-
 /// Performans testi düğmesine tıklama.
 pub fn click_perf_btn(
     px: usize,
@@ -173,9 +161,6 @@ pub fn click_perf_btn(
         if perf_phase() != PerfPhase::Collecting {
             start_perf_test();
         }
-        return true;
-    }
-    if crate::gui::in_rect(px, py, perf_sound_btn_rect(win_x, win_y, win_w, win_h)) {
         return true;
     }
     false
@@ -744,6 +729,25 @@ pub fn render_content(
                 net_test,
                 net_color,
             );
+
+            // Ağ testi düğmesi (sadece Ağ sekmesinde görünür).
+            let net_btn = net_test_btn_rect(win_x, win_y, win_w, win_h);
+            fb.draw_rect(
+                net_btn.0,
+                net_btn.1,
+                net_btn.2,
+                net_btn.3,
+                Color::ACCENT_GREEN,
+            );
+            let net_label = crate::gui::ui_text("Ağ Testi", "Network Test");
+            let ntw = MinGuiCompositor::text_width(net_label, 1);
+            MinGuiCompositor::draw_string(
+                fb,
+                net_btn.0 + net_btn.2.saturating_sub(ntw) / 2,
+                net_btn.1 + 7,
+                net_label,
+                MinGuiCompositor::text_on(Color::ACCENT_GREEN),
+            );
         }
         3 => {
             // Testler sekmesi: performans testi.
@@ -915,7 +919,7 @@ pub fn render_content(
         }
     }
 
-    // Yenile ve Ağ Testi kısayolları (her sekmede görünür).
+    // Yenile kısayolu (her sekmede görünür).
     let refresh_btn = refresh_btn_rect(win_x, win_y, win_w, win_h);
     fb.draw_rect(
         refresh_btn.0,
@@ -940,25 +944,7 @@ pub fn render_content(
         Color::TEXT_MAIN,
     );
 
-    let net_btn = net_test_btn_rect(win_x, win_y, win_w, win_h);
-    fb.draw_rect(
-        net_btn.0,
-        net_btn.1,
-        net_btn.2,
-        net_btn.3,
-        Color::ACCENT_GREEN,
-    );
-    let net_label = crate::gui::ui_text("Ağ Testi", "Network Test");
-    let ntw = MinGuiCompositor::text_width(net_label, 1);
-    MinGuiCompositor::draw_string(
-        fb,
-        net_btn.0 + net_btn.2.saturating_sub(ntw) / 2,
-        net_btn.1 + 7,
-        net_label,
-        MinGuiCompositor::text_on(Color::ACCENT_GREEN),
-    );
-
-    // Performans testi ve ses testi düğmeleri (Testler sekmesinde görünür).
+    // Performans testi düğmesi (Testler sekmesinde görünür).
     if active_tab() == 3 {
         let (bx, by, bw, bh) = perf_btn_rect(win_x, win_y, win_w, win_h);
         let bg = if perf_phase() == PerfPhase::Collecting {
@@ -974,29 +960,5 @@ pub fn render_content(
             crate::gui::ui_text("Performans Testini Başlat", "Start Performance Test"),
             MinGuiCompositor::text_on(bg),
         );
-
-        let (sx, sy, sw, sh) = perf_sound_btn_rect(win_x, win_y, win_w, win_h);
-        fb.draw_rect(sx, sy, sw, sh, Color::ACCENT_YELLOW);
-        MinGuiCompositor::draw_string(
-            fb,
-            sx + sp(12),
-            sy + (sh.saturating_sub(MinGuiCompositor::text_height())) / 2,
-            crate::gui::ui_text("Ses Testi", "Sound Test"),
-            MinGuiCompositor::text_on(Color::ACCENT_YELLOW),
-        );
     }
-
-    // Tema değiştirme düğmesi (her sekmede görünür).
-    let b = theme_btn_rect(win_x, win_y, win_w, win_h);
-    fb.draw_rect(b.0, b.1, b.2, b.3, Color::ACCENT_BLUE);
-    let label = crate::gui::ui_text("Temayı Değiştir", "Change Theme");
-    let tw = MinGuiCompositor::text_width(label, 1);
-    let th = MinGuiCompositor::text_height();
-    MinGuiCompositor::draw_string(
-        fb,
-        b.0 + b.2.saturating_sub(tw) / 2,
-        b.1 + b.3.saturating_sub(th) / 2,
-        label,
-        MinGuiCompositor::text_on(Color::ACCENT_BLUE),
-    );
 }

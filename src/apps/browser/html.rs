@@ -5,13 +5,18 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+
 use super::css::blend_styles;
 use super::css::transition_progress;
 use super::css::{find_keyframes, match_css_style, parse_css};
-use super::types::{html_color, BrowserLine, ElementStyle, HtmlTagType, TextAlign, TextSpan};
+use super::types::{
+    html_color, BackgroundImage, BackgroundSize, BrowserLine, ElementStyle, HtmlTagType, TextAlign,
+    TextSpan,
+};
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
-use alloc::collections::BTreeMap;
 
 pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
@@ -109,6 +114,33 @@ pub(crate) fn extract_attr<'a>(attrs: &'a [u8], key: &[u8]) -> Option<&'a str> {
             }
         } else if i == k_start {
             i += 1;
+        }
+    }
+    None
+}
+
+/// Belirtilen etiketin (`<body ...>`) nitelik dilimini döndürür.
+pub(crate) fn find_tag_attrs<'a>(html: &'a [u8], tag: &[u8]) -> Option<&'a [u8]> {
+    let mut p = 0usize;
+    while p < html.len() {
+        if html[p] == b'<' {
+            let start = p + 1;
+            let mut name_end = start;
+            while name_end < html.len()
+                && (html[name_end].is_ascii_alphanumeric() || html[name_end] == b'-')
+            {
+                name_end += 1;
+            }
+            if name_end > start && html[start..name_end].eq_ignore_ascii_case(tag) {
+                let mut end = name_end;
+                while end < html.len() && html[end] != b'>' {
+                    end += 1;
+                }
+                return Some(&html[name_end..end]);
+            }
+            p = name_end.max(p + 1);
+        } else {
+            p += 1;
         }
     }
     None
@@ -292,6 +324,228 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
     None
 }
 
+/// `%XX` kaçışlarını bayt dizisine çözer (yerel yollar ve data URL'ler için).
+fn percent_decode(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let h = (bytes[i + 1] as char).to_digit(16);
+            let l = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(h), Some(l)) = (h, l) {
+                out.push(((h << 4) | l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+fn join_local_path(base: &str, rel: &str) -> String {
+    let base_clean = base.split(|c| c == '?' || c == '#').next().unwrap_or(base);
+    let dir_end = base_clean.rfind('/').map(|i| i + 1).unwrap_or(0);
+    let base_dir = &base_clean[..dir_end];
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in base_dir
+        .trim_start_matches('/')
+        .split('/')
+        .chain(rel.split('/'))
+    {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(seg),
+        }
+    }
+    if parts.is_empty() {
+        return String::from("/");
+    }
+    let mut out = String::from("/");
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+/// Kaynak URL'sini belge tabanına göre çözer.
+///
+/// `resolve_url` yalnızca ağ/minos bağlantıları içindi; resim ve CSS
+/// `url(...)` değerleri yerel VFS yollarını da desteklemelidir.
+pub fn resolve_resource_url(src: &str, base_url: Option<&str>) -> Option<String> {
+    let src = src.trim();
+    if src.is_empty() {
+        return None;
+    }
+    if src.starts_with("data:")
+        || src.starts_with("minos://")
+        || src.starts_with("http://")
+        || src.starts_with("https://")
+    {
+        return Some(String::from(src));
+    }
+    if let Some(rest) = src.strip_prefix("file://") {
+        let path = rest.strip_prefix('/').unwrap_or(rest);
+        return Some(join_local_path("/", path));
+    }
+    if src.starts_with("//") {
+        return base_url.and_then(|base| resolve_url(src, Some(base)));
+    }
+    if let Some(base) = base_url {
+        if base.starts_with("http://") || base.starts_with("https://") {
+            return resolve_url(src, Some(base));
+        }
+        if let Some(base_path) = base.strip_prefix("minos://") {
+            if src.starts_with('/') {
+                return Some(format!("minos://{}", src.trim_start_matches('/')));
+            }
+            let joined = join_local_path(&format!("/{}", base_path), src);
+            return Some(format!("minos://{}", joined.trim_start_matches('/')));
+        }
+        if src.starts_with('/') {
+            return Some(join_local_path("/", src));
+        }
+        return Some(join_local_path(base, src));
+    }
+    if src.starts_with('/') {
+        return Some(join_local_path("/", src));
+    }
+    Some(String::from(src))
+}
+
+/// `data:image/...` URL'sini çözer (base64 ve percent-encoded SVG/metin dahil).
+fn decode_data_image_url(src: &str) -> Option<crate::apps::imgdecode::DecodedImage> {
+    let comma = src.find(',')?;
+    let header = &src[..comma];
+    let data = &src[comma + 1..];
+    let bytes = if header.contains("base64") {
+        base64_decode(data)?
+    } else {
+        percent_decode(data)
+    };
+    crate::apps::imgdecode::decode(&bytes)
+}
+
+fn same_background_image(
+    a: &Option<Arc<BackgroundImage>>,
+    b: &Option<Arc<BackgroundImage>>,
+) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// VFS yolundaki görseli okur/çözer (küçük ve büyük dosya kayıtları).
+fn read_vfs_image(
+    vfs: &VirtualFileSystem,
+    path: &str,
+) -> Option<crate::apps::imgdecode::DecodedImage> {
+    let decoded_path = percent_decode(path);
+    let clean_path = String::from_utf8_lossy(&decoded_path).into_owned();
+    if let Some(bytes) = vfs.read_file(&clean_path) {
+        if !bytes.is_empty() {
+            return crate::apps::imgdecode::decode(bytes);
+        }
+    }
+    if let Some(large) = vfs.read_large_file(&clean_path) {
+        return crate::apps::imgdecode::decode(&large);
+    }
+    None
+}
+
+/// `minos://`, `file://` veya VFS yerel yolundaki görseli çözer.
+fn decode_local_image(
+    url: &str,
+    vfs: Option<&VirtualFileSystem>,
+) -> Option<crate::apps::imgdecode::DecodedImage> {
+    if let Some(bytes) = crate::apps::browser::local_image_bytes(url) {
+        return crate::apps::imgdecode::decode(bytes);
+    }
+    let vfs = vfs?;
+    let clean = url.split(|c| c == '?' || c == '#').next().unwrap_or(url);
+    if let Some(rest) = clean.strip_prefix("minos://") {
+        for candidate in [format!("/{}", rest), String::from(rest)] {
+            if let Some(img) = read_vfs_image(vfs, &candidate) {
+                return Some(img);
+            }
+        }
+    }
+    read_vfs_image(vfs, clean)
+}
+
+/// CSS/HTML arka plan görselini çözer; uzak kaynakları `pending_resources`'a ekler.
+fn build_background_image(
+    url: &str,
+    fit: BackgroundSize,
+    repeat: bool,
+    base_url: Option<&str>,
+    image_cache: Option<&BTreeMap<String, (usize, usize, Vec<u8>)>>,
+    pending_resources: &mut Vec<String>,
+    vfs: Option<&VirtualFileSystem>,
+) -> Option<Arc<BackgroundImage>> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let resolved = resolve_resource_url(url, base_url)?;
+    if resolved.starts_with("data:") {
+        let img = decode_data_image_url(&resolved)?;
+        return Some(Arc::new(BackgroundImage {
+            url: resolved,
+            width: img.width,
+            height: img.height,
+            rgb: Some(Arc::from(img.rgb)),
+            fit,
+            repeat,
+        }));
+    }
+    if resolved.starts_with("http://") || resolved.starts_with("https://") {
+        if let Some((w, h, _)) = image_cache.and_then(|cache| cache.get(&resolved)) {
+            if *w == 0 || *h == 0 {
+                return None;
+            }
+            return Some(Arc::new(BackgroundImage {
+                url: resolved,
+                width: *w,
+                height: *h,
+                rgb: None,
+                fit,
+                repeat,
+            }));
+        }
+        if !pending_resources.iter().any(|u| u == &resolved) {
+            pending_resources.push(resolved.clone());
+        }
+        return Some(Arc::new(BackgroundImage {
+            url: resolved,
+            width: 0,
+            height: 0,
+            rgb: None,
+            fit,
+            repeat,
+        }));
+    }
+    let img = decode_local_image(&resolved, vfs)?;
+    Some(Arc::new(BackgroundImage {
+        url: resolved,
+        width: img.width,
+        height: img.height,
+        rgb: Some(Arc::from(img.rgb)),
+        fit,
+        repeat,
+    }))
+}
+
 /// Scales RGB pixel array to target dimensions using nearest-neighbor sampling.
 pub(crate) fn scale_rgb(
     orig_w: usize,
@@ -326,10 +580,11 @@ pub(crate) fn scale_rgb(
 /// Satır içi (inline) renk/stil durumu; açılış etiketlerinde yığına itilir,
 /// kapanışta geri yüklenir. Böylece renkler ebeveynden miras alınır ve
 /// `</p>`/`</span>` gibi kapanışlar rengi siyaha sıfırlamaz.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct InlineState {
     color: u32,
     bg: Option<u32>,
+    bg_image: Option<Arc<BackgroundImage>>,
     bold: bool,
     underline: bool,
     align: TextAlign,
@@ -384,8 +639,9 @@ pub fn render_html_to_lines(
     animation_start_ms: usize,
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
-    _vfs: Option<&mut VirtualFileSystem>,
+    vfs: Option<&mut VirtualFileSystem>,
     image_cache: Option<&BTreeMap<String, (usize, usize, Vec<u8>)>>,
+    page_background: &mut Option<Arc<BackgroundImage>>,
     canvases: &mut Vec<super::canvas::CanvasElement>,
     media_players: &mut super::media::MediaPlayers,
     iframes: &mut super::iframe::IFrames,
@@ -395,6 +651,7 @@ pub fn render_html_to_lines(
     // script etiketleri ise çıktidan çıkarılır.
     let js_body = crate::apps::js::inline_scripts(body);
     let body: &[u8] = &js_body;
+    let vfs_ref = vfs.as_ref().map(|v| &**v);
     let mut current_color;
     let mut current_bg: Option<u32>;
     let mut active_link: Option<String> = None;
@@ -403,6 +660,7 @@ pub fn render_html_to_lines(
     let mut current_bold = false;
     let mut current_underline = false;
     let mut active_id: Option<String> = None;
+    let current_bg_image = core::cell::RefCell::new(None::<Arc<BackgroundImage>>);
     let mut css_rules = Vec::new();
     let mut css_keyframes: Vec<super::css::Keyframes> = Vec::new();
     let mut default_link_color: Option<u32> = None;
@@ -442,13 +700,63 @@ pub fn render_html_to_lines(
 
     // `body`/`html` üzerindeki renk kuralları belge geneline miras verilir.
     // `<body>` etiketi eksik olsa bile CSS renkleri uygulanır.
-    let root_style = match_css_style(&css_rules, "html", None, None, None, wrap_width_px, 768);
-    let body_style = match_css_style(&css_rules, "body", None, None, None, wrap_width_px, 768);
+    let root_attrs = find_tag_attrs(body, b"html");
+    let body_attrs = find_tag_attrs(body, b"body");
+    let root_style = match_css_style(
+        &css_rules,
+        "html",
+        root_attrs.and_then(|a| extract_attr(a, b"class")),
+        root_attrs.and_then(|a| extract_attr(a, b"id")),
+        root_attrs.and_then(|a| extract_attr(a, b"style")),
+        wrap_width_px,
+        768,
+    );
+    let body_style = match_css_style(
+        &css_rules,
+        "body",
+        body_attrs.and_then(|a| extract_attr(a, b"class")),
+        body_attrs.and_then(|a| extract_attr(a, b"id")),
+        body_attrs.and_then(|a| extract_attr(a, b"style")),
+        wrap_width_px,
+        768,
+    );
     current_color = body_style
         .color
         .or(root_style.color)
         .unwrap_or(Color::BLACK);
     current_bg = body_style.bg_color.or(root_style.bg_color);
+
+    // Sayfa (body/html) arka plan görseli: uzak URL'ler bekleme sırasına eklenir.
+    let page_bg_style = if body_style
+        .background_image
+        .as_deref()
+        .is_some_and(|u| !u.is_empty())
+    {
+        Some(&body_style)
+    } else if root_style
+        .background_image
+        .as_deref()
+        .is_some_and(|u| !u.is_empty())
+    {
+        Some(&root_style)
+    } else {
+        None
+    };
+    if let Some(style) = page_bg_style {
+        if let Some(url) = style.background_image.as_deref() {
+            if let Some(bg) = build_background_image(
+                url,
+                style.background_size.unwrap_or(BackgroundSize::Auto),
+                style.background_repeat.unwrap_or(true),
+                base_url,
+                image_cache,
+                pending_resources,
+                vfs_ref,
+            ) {
+                *page_background = Some(bg);
+            }
+        }
+    }
 
     // Buffer of spans for the line currently being built
     let mut cur_line_spans: Vec<TextSpan> = Vec::new();
@@ -525,6 +833,7 @@ pub fn render_html_to_lines(
         let space_w = MinGuiCompositor::text_width(" ", scale);
         let indent = tag_indent(tag);
         let eff_wrap = wrap_width_px.saturating_sub(indent).max(100);
+        let span_bg_image = current_bg_image.borrow().clone();
 
         if *line_w > 0 && *line_w + space_w + word_w > eff_wrap {
             flush_line(lines, spans, line_w, tag, align, max);
@@ -536,6 +845,7 @@ pub fn render_html_to_lines(
                 text: String::from(word),
                 color,
                 bg_color,
+                bg_image: span_bg_image.clone(),
                 is_link,
                 link_url: String::from(link_url),
                 is_button,
@@ -556,6 +866,7 @@ pub fn render_html_to_lines(
                     && !is_image
                     && last.color == color
                     && last.bg_color == bg_color
+                    && same_background_image(&last.bg_image, &span_bg_image)
                     && last.is_link == is_link
                     && last.link_url == link_url
                     && !last.is_button
@@ -575,6 +886,7 @@ pub fn render_html_to_lines(
                 text: s,
                 color,
                 bg_color,
+                bg_image: span_bg_image.clone(),
                 is_link,
                 link_url: String::from(link_url),
                 is_button,
@@ -656,6 +968,7 @@ pub fn render_html_to_lines(
                     current_underline = saved.underline;
                     cur_line_align = saved.align;
                     cur_line_indent.set(saved.indent);
+                    *current_bg_image.borrow_mut() = saved.bg_image;
                 }
                 hidden_until_close = None;
             }
@@ -686,6 +999,7 @@ pub fn render_html_to_lines(
                     text: core::mem::take(&mut word_buf),
                     color: current_color,
                     bg_color: current_bg,
+                    bg_image: current_bg_image.borrow().clone(),
                     is_link,
                     link_url: String::from(link_target),
                     is_button: active_is_button,
@@ -823,6 +1137,7 @@ pub fn render_html_to_lines(
                         InlineState {
                             color: current_color,
                             bg: current_bg,
+                            bg_image: current_bg_image.borrow().clone(),
                             bold: current_bold,
                             underline: current_underline,
                             align: cur_line_align,
@@ -843,6 +1158,26 @@ pub fn render_html_to_lines(
                 }
                 if let Some(bg) = matched.bg_color {
                     current_bg = Some(blend_color_with_opacity(bg, matched.opacity));
+                }
+                if eq_ascii(name, b"html") || eq_ascii(name, b"body") {
+                    // body/html arka planı sayfa katmanında (page_bg_image) çizilir;
+                    // satır arka planına taşınırsa görsel iki kez basılır.
+                    *current_bg_image.borrow_mut() = None;
+                } else if let Some(bg_url) = matched.background_image.as_deref() {
+                    let resolved_bg = if bg_url.is_empty() {
+                        None
+                    } else {
+                        build_background_image(
+                            bg_url,
+                            matched.background_size.unwrap_or(BackgroundSize::Auto),
+                            matched.background_repeat.unwrap_or(true),
+                            base_url,
+                            image_cache,
+                            pending_resources,
+                            vfs_ref,
+                        )
+                    };
+                    *current_bg_image.borrow_mut() = resolved_bg;
                 }
                 // HTML sunum nitelikleri (CSS kuralı yoksa): bgcolor/text/link.
                 if eq_ascii(name, b"body") {
@@ -1384,29 +1719,10 @@ pub fn render_html_to_lines(
                     let mut image_decoded: Option<(usize, usize, Vec<u8>)> = None;
                     if let Some(src) = extract_attr(attrs, b"src") {
                         if src.starts_with("data:image/") {
-                            if let Some(comma_pos) = src.find(',') {
-                                let data_part = &src[comma_pos + 1..];
-                                let is_base64 = src[..comma_pos].contains("base64");
-                                if is_base64 {
-                                    if let Some(decoded_bytes) = base64_decode(data_part) {
-                                        if let Some(img) =
-                                            crate::apps::imgdecode::decode(&decoded_bytes)
-                                        {
-                                            image_decoded = Some((img.width, img.height, img.rgb));
-                                        }
-                                    }
-                                }
+                            if let Some(img) = decode_data_image_url(src) {
+                                image_decoded = Some((img.width, img.height, img.rgb));
                             }
-                        } else if let Some(resolved_url) = resolve_url(src, base_url) {
-                            // Local minos:// resources do not go through the
-                            // network queue. Resolve and decode them directly.
-                            if let Some(bytes) =
-                                crate::apps::browser::local_image_bytes(&resolved_url)
-                            {
-                                if let Some(img) = crate::apps::imgdecode::decode(bytes) {
-                                    image_decoded = Some((img.width, img.height, img.rgb));
-                                }
-                            }
+                        } else if let Some(resolved_url) = resolve_resource_url(src, base_url) {
                             if resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://")
                             {
@@ -1431,6 +1747,8 @@ pub fn render_html_to_lines(
                                             Some((cached.0, cached.1, cached.2.clone()));
                                     }
                                 }
+                            } else if let Some(img) = decode_local_image(&resolved_url, vfs_ref) {
+                                image_decoded = Some((img.width, img.height, img.rgb));
                             }
                         }
                     }
@@ -1484,6 +1802,7 @@ pub fn render_html_to_lines(
                             text: format!("[{}]", label),
                             color: current_color,
                             bg_color: current_bg,
+                            bg_image: current_bg_image.borrow().clone(),
                             is_link,
                             link_url: String::from(link_target),
                             is_button: active_is_button,
@@ -1506,6 +1825,7 @@ pub fn render_html_to_lines(
                             text: alt_text,
                             color: current_color,
                             bg_color: current_bg,
+                            bg_image: current_bg_image.borrow().clone(),
                             is_link,
                             link_url: String::from(link_target),
                             is_button: active_is_button,
@@ -1614,6 +1934,7 @@ pub fn render_html_to_lines(
                         text: format!("[canvas:{}]", canvas_id),
                         color: current_color,
                         bg_color: current_bg,
+                        bg_image: current_bg_image.borrow().clone(),
                         is_link,
                         link_url: String::from(link_target),
                         is_button: active_is_button,
@@ -1744,6 +2065,7 @@ pub fn render_html_to_lines(
                         text: format!("[video:{}]", video_id),
                         color: current_color,
                         bg_color: current_bg,
+                        bg_image: current_bg_image.borrow().clone(),
                         is_link,
                         link_url: String::from(link_target),
                         is_button: active_is_button,
@@ -1934,6 +2256,7 @@ pub fn render_html_to_lines(
                         text: format!("[iframe:{}]", iframe_id),
                         color: current_color,
                         bg_color: current_bg,
+                        bg_image: current_bg_image.borrow().clone(),
                         is_link,
                         link_url: String::from(link_target),
                         is_button: active_is_button,
@@ -2028,6 +2351,7 @@ pub fn render_html_to_lines(
                                 text: String::new(),
                                 color: rule_color,
                                 bg_color: None,
+                                bg_image: None,
                                 is_link: false,
                                 link_url: String::new(),
                                 is_button: false,
@@ -2098,6 +2422,7 @@ pub fn render_html_to_lines(
                         current_underline = saved.underline;
                         cur_line_align = saved.align;
                         cur_line_indent.set(saved.indent);
+                        *current_bg_image.borrow_mut() = saved.bg_image;
                     }
                 }
             } else {
@@ -2383,6 +2708,7 @@ pub fn render_html_to_lines(
                     current_underline = saved.underline;
                     cur_line_align = saved.align;
                     cur_line_indent.set(saved.indent);
+                    *current_bg_image.borrow_mut() = saved.bg_image;
                 }
             }
 
@@ -2495,6 +2821,34 @@ mod tests {
             Some("http://example.com/sub/banner.gif")
         );
     }
+
+    #[test]
+    fn test_resolve_resource_url() {
+        assert_eq!(
+            resolve_resource_url("bg.png", Some("/root/docs/page.html")).as_deref(),
+            Some("/root/docs/bg.png")
+        );
+        assert_eq!(
+            resolve_resource_url("../img/a.png", Some("/root/docs/sub/page.html")).as_deref(),
+            Some("/root/docs/img/a.png")
+        );
+        assert_eq!(
+            resolve_resource_url("/root/media/a.png", Some("/root/docs/page.html")).as_deref(),
+            Some("/root/media/a.png")
+        );
+        assert_eq!(
+            resolve_resource_url("icon.png", Some("http://site.test/dir/page.html")).as_deref(),
+            Some("http://site.test/dir/icon.png")
+        );
+        assert_eq!(
+            resolve_resource_url("file:///root/media/a.png", None).as_deref(),
+            Some("/root/media/a.png")
+        );
+        assert_eq!(
+            resolve_resource_url("data:image/png;base64,AA==", None).as_deref(),
+            Some("data:image/png;base64,AA==")
+        );
+    }
 }
 
 /// CSS Grid render etme: hucreleri satir satir, sutunlara gore yerlestir.
@@ -2568,6 +2922,7 @@ fn render_grid(
                     text: String::from(" "),
                     color: 0x000000,
                     bg_color: None,
+                    bg_image: None,
                     is_link: false,
                     link_url: String::new(),
                     is_button: false,

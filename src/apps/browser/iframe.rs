@@ -84,6 +84,7 @@ impl IFrame {
         let mut media_players: super::media::MediaPlayers = super::media::MediaPlayers::new();
         let mut previous_styles: BTreeMap<String, ElementStyle> = BTreeMap::new();
         let mut iframes: super::iframe::IFrames = super::iframe::IFrames::new();
+        let mut page_background = None;
 
         render_html_to_lines(
             html,
@@ -96,6 +97,7 @@ impl IFrame {
             &mut previous_styles,
             None as Option<&mut VirtualFileSystem>,
             None,
+            &mut page_background,
             &mut canvases,
             &mut media_players,
             &mut iframes,

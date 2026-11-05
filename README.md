@@ -11,7 +11,7 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-121%2C919%20(Rust)-lightgrey.svg)]()
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-113%2C136%20(Rust)-lightgrey.svg)]()
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -87,6 +87,9 @@
 - **Daha Okunabilir Boot Günlüğü:** Metin konsolu her tamamlanan satırı ekrana aktarır ve zaman tabanı hazır olduktan sonra sonraki satıra geçmeden önce 45 ms bekler. Böylece açılış tanılama mesajları daha rahat izlenir; zaman tabanı hazır olmadan yazılan erken mesajlar geciktirilmez.
 - **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history`, `minos://demo` ve `minos://demo-img` / `minos://demo-video` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
 - **🎮 FPS Performans Testi Oyunu:** Yeni `FPS Oyunu` uygulaması (app ID 15) eklendi. Raycasting tabanlı 3D motoru, fare ile bakış, WASD hareket, uzaklasma gürültüsüyle gölgelendirme, düşman hedefleri, radar ve PC Speaker/HDA ses efektleri içerir. Başlat Menüsü → Medya → FPS Oyunu veya Komut İstemi → `fps` / `oyun` ile açılır.
+- **🛡️ FPS Oyunu Kilitlenme Düzeltmesi:** Can bittiğinde oyun artık kilitlenmiyor; oyuncu yeniden doğurularak oyuna devam eder. Negatif ekran koordinatları ve yön vektörü kayan nokta sapması nedeniyle oluşan donmalar giderildi.
+- **⚙️ Kontrol Paneli Düzenleme:** Ses testi düğmesi kaldırıldı; ağ testi düğmesi yalnızca Ağ sekmesinde görünür; performans testi ve diğer düğmelerin üst üste gelmesi engellendi.
+- **🎨 Tema Değiştirme Yalnızca Ayarlar'da:** Tema değiştirme düğmesi başlat çubuğu, masaüstü sağ tık menüsü ve kontrol panelinden kaldırıldı; yalnızca Ayarlar > Ekran sekmesinde kullanılabilir.
 
 ### 🛡️ Açılış Kurtarma Konsolu (`recovery#`)
 

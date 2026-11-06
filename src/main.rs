@@ -6030,6 +6030,9 @@ pub extern "C" fn _start() -> ! {
                             &mut browser_app,
                             -(gui::sp(30) as isize),
                         );
+                    } else if app_is_focused(&compositor, 16) {
+                        fps_3d_app.handle_arrow_up_down(true, false);
+                        force_render = true;
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -6118,6 +6121,9 @@ pub extern "C" fn _start() -> ! {
                     } else if app_is_focused(&compositor, 3) && !browser_app.address_focused {
                         // Arrow down scrolls the browser page
                         browser_scroll_by(&mut compositor, &mut browser_app, gui::sp(30) as isize);
+                    } else if app_is_focused(&compositor, 16) {
+                        fps_3d_app.handle_arrow_up_down(false, true);
+                        force_render = true;
                     } else {
                         let np_focused = app_is_focused(&compositor, 2);
 
@@ -9311,9 +9317,9 @@ pub extern "C" fn _start() -> ! {
             && !buttons_changed
             && !force_render
         {
-            // Boşta bekleme: CPU'yu spin ederek tüketme. PS/2/USB/timer
-            // kesmeleri HLT durumundaki BSP'yi uyandırır; böylece tek çekirdekli
-            // sistemlerde GUI ve fare için gerçek CPU zamanı kalır.
+            // Boşta bekleme: CPU'yu spin ederek tüketme. HLT kullanılmaz çünkü
+            // PIC devre dışı bırakılmış ve periyodik timer kesmesi yapılandırılmamış;
+            // VMware gibi hipervizörlerde HLT sonsuza kadar bekleyip sistemi donabilir.
 
             let wait_start = read_cpu_cycles();
 
@@ -9331,12 +9337,7 @@ pub extern "C" fn _start() -> ! {
                 if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
                     break;
                 }
-                unsafe {
-                    // Bu döngüye bazı giriş yolları CLI ile gelebilir.
-                    // IF=0 iken HLT kalıcı uykuya neden olur; önce kesmeleri
-                    // aç, sonra timer/klavye/fare kesmesiyle uyan.
-                    core::arch::asm!("sti", "hlt", options(nomem, nostack));
-                }
+                core::hint::spin_loop();
             }
 
             let loop_end_cycles = read_cpu_cycles();
@@ -9351,10 +9352,8 @@ pub extern "C" fn _start() -> ! {
                 cpu_sample_active_cycles.saturating_add(elapsed.saturating_sub(idle_elapsed));
         } else {
             // Aktif olmayan ama kısa süre sonra tekrar değerlendirilecek
-            // durumlarda bile pipeline'ı döndürmek yerine kesmeyle uyan.
-            unsafe {
-                core::arch::asm!("sti", "hlt", options(nomem, nostack));
-            }
+            // durumlarda bile pipeline'ı döndürmek yerine spin ile bekle.
+            core::hint::spin_loop();
 
             let elapsed = read_cpu_cycles().wrapping_sub(loop_start_cycles);
 

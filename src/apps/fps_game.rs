@@ -126,6 +126,8 @@ const KEY_A: u16 = 1 << 2;
 const KEY_D: u16 = 1 << 3;
 const KEY_LEFT: u16 = 1 << 4;
 const KEY_RIGHT: u16 = 1 << 5;
+const KEY_UP: u16 = 1 << 6;
+const KEY_DOWN: u16 = 1 << 7;
 
 /// Harita kare türleri: 0 = boş, 1 = duvar, 2 = kapı, 3 = canlı/pickup.
 const TILE_WALL: u8 = 1;
@@ -1472,6 +1474,16 @@ impl FpsGameApp {
         }
     }
 
+    /// Ok tuşu ile ileri/geri hareket (tuş basımı kaydı, gerçek hareket update() içinde).
+    pub fn handle_arrow_up_down(&mut self, up: bool, down: bool) {
+        if up {
+            self.key_mask |= KEY_UP;
+        }
+        if down {
+            self.key_mask |= KEY_DOWN;
+        }
+    }
+
     /// Fare hareketi ile bakış.
     pub fn handle_mouse_look(&mut self, dx: f32) {
         self.look(dx);
@@ -1528,6 +1540,17 @@ impl FpsGameApp {
                 dx *= inv_sqrt2;
                 dy *= inv_sqrt2;
             }
+
+            // İleri / geri hareket (ok tuşu, yön vektörü üzerinden).
+            let mut forward = 0.0f32;
+            if self.key_mask & KEY_UP != 0 {
+                forward += MOVE_SPEED;
+            }
+            if self.key_mask & KEY_DOWN != 0 {
+                forward -= MOVE_SPEED;
+            }
+            dx += forward * self.dir_x;
+            dy += forward * self.dir_y;
 
             self.move_player(dx, dy);
             self.moving = dx != 0.0 || dy != 0.0;

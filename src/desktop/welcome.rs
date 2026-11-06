@@ -130,6 +130,19 @@ pub fn run_welcome_screen(
 
         let clicked = mouse.left_button && !welcome_was_left_down;
         welcome_was_left_down = mouse.left_button;
+        // Boşta bekleme: PS/2 veya USB'de olay yoksa CPU'yu spin ile bekle.
+        // hlt kullanılmaz çünkü PIC devre dışı bırakılmış ve periyodik timer
+        // kesmesi yapılandırılmamış; VMware gibi hipervizörlerde hlt sonsuza
+        // kadar bekleyip sistemi donabilir.
+        if !welcome_update.mouse && !welcome_update.keyboard {
+            for _ in 0..1_000 {
+                if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+        }
+
         if !clicked {
             continue;
         }
@@ -170,12 +183,6 @@ pub fn run_welcome_screen(
         } else if point_in(gui::welcome_continue_rect(width, height)) {
             settings_app.save_all(compositor, &mut fs_mgr.vfs);
             break;
-        }
-
-        if !welcome_update.mouse && !welcome_update.keyboard {
-            for _ in 0..1_000 {
-                core::hint::spin_loop();
-            }
         }
     }
 }

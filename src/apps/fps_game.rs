@@ -195,6 +195,7 @@ pub enum RenderMode {
 enum GameResult {
     Playing,
     Won,
+    Lost,
 }
 
 /// Oyun durumu.
@@ -1389,6 +1390,10 @@ impl FpsGameApp {
                 crate::gui::ui_text("KAZANDIN!", "YOU WIN!"),
                 Color::ACCENT_GREEN,
             ),
+            GameResult::Lost => (
+                crate::gui::ui_text("GAME OVER!", "GAME OVER!"),
+                Color::ACCENT_RED,
+            ),
             GameResult::Playing => ("", Color::TEXT_MAIN),
         };
         MinGuiCompositor::draw_string(fb, panel_x + 58, panel_y + 20, title, color);
@@ -1608,9 +1613,8 @@ impl FpsGameApp {
         self.respawn_enemies();
 
         if self.health == 0 {
-            // Can bittiğinde oyunu kilitleme: oyuncuyu yeniden dogur ve
-            // oyuna devam et.
-            self.respawn_player();
+            // Can bittiğinde oyun sonu menüsü göster.
+            self.result = GameResult::Lost;
         } else if self
             .enemies
             .iter()
@@ -1619,20 +1623,6 @@ impl FpsGameApp {
         {
             self.result = GameResult::Won;
         }
-    }
-
-    /// Can bittiğinde oyuncuyu yeniden dogur; oyunu kilitlemez.
-    fn respawn_player(&mut self) {
-        self.health = 100;
-        self.pos_x = 3.5;
-        self.pos_y = 3.5;
-        self.dir_x = 1.0;
-        self.dir_y = 0.0;
-        self.plane_x = 0.0;
-        self.plane_y = 0.66;
-        self.shooting = false;
-        self.shoot_timer = 0;
-        self.result = GameResult::Playing;
     }
 }
 

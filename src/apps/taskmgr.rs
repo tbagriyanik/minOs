@@ -53,18 +53,18 @@ const ALL_APP_LABELS_EN: [&str; ALL_APP_COUNT] = [
 // 4. Hesap Makinesi (8)
 // 5. Komut İstemi (10)
 // 6. Kontrol Paneli (14)
-// 7. Oyunlar (15)
 // 7. Kurulum Sihirbazı (11)
 // 8. Müzik Çalar (5)
 // 9. Not Defteri (2)
-// 10. Paket Yöneticisi (13)
-// 11. Resim Gösterici (4)
-// 12. Sistem Ayarları (1)
-// 13. Video Oynatıcı (6)
-// 14. Web Gezgini (3)
+// 10. Oyunlar (15)
+// 11. Paket Yöneticisi (13)
+// 12. Resim Gösterici (4)
+// 13. Sistem Ayarları (1)
+// 14. Video Oynatıcı (6)
+// 15. Web Gezgini (3)
 pub const LAUNCH_APP_COUNT: usize = 15;
 const LAUNCH_APP_IDS: [usize; LAUNCH_APP_COUNT] =
-    [12, 9, 0, 8, 10, 14, 11, 5, 2, 13, 4, 1, 6, 3, 15];
+    [12, 9, 0, 8, 10, 14, 11, 5, 2, 15, 13, 4, 1, 6, 3];
 const LAUNCH_APP_LABELS: [&str; LAUNCH_APP_COUNT] = [
     "3D Gösterici",
     "Çizim Tahtası",

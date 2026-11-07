@@ -16,6 +16,113 @@ use crate::drivers::crypto::sha384::Sha384;
 use crate::drivers::crypto::x509::{parse_x509_ec_public_key, parse_x509_rsa_public_key};
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write;
+
+#[cfg(not(test))]
+use heapless::String as HeaplessString;
+#[cfg(not(test))]
+use heapless::Vec as HeaplessVec;
+
+/// Host test build (`rustc --test` harness) derlemesinde `heapless` crate'i
+/// doğrudan bağlanmadığı için, kullanılan en küçük API yüzeyini `alloc`
+/// üzerine kuran uyum katmanı sağlanır. Çekirdek derlemesinde gerçek
+/// `heapless` sabit kapasiteli tipleri kullanılır.
+#[cfg(test)]
+mod heapless_compat {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+    use core::fmt;
+    use core::ops::{Deref, DerefMut};
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct HeaplessVec<T, const N: usize>(Vec<T>);
+
+    impl<T, const N: usize> HeaplessVec<T, N> {
+        pub fn new() -> Self {
+            Self(Vec::new())
+        }
+        pub fn extend_from_slice(&mut self, other: &[T]) -> Result<(), ()>
+        where
+            T: Clone,
+        {
+            if self.0.len() + other.len() > N {
+                return Err(());
+            }
+            self.0.extend_from_slice(other);
+            Ok(())
+        }
+        pub fn push(&mut self, value: T) -> Result<(), T> {
+            if self.0.len() >= N {
+                return Err(value);
+            }
+            self.0.push(value);
+            Ok(())
+        }
+        pub fn clear(&mut self) {
+            self.0.clear();
+        }
+        pub fn len(&self) -> usize {
+            self.0.len()
+        }
+        pub fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
+    }
+
+    impl<T, const N: usize> Deref for HeaplessVec<T, N> {
+        type Target = [T];
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl<T, const N: usize> DerefMut for HeaplessVec<T, N> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.0
+        }
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct HeaplessString<const N: usize>(String);
+
+    impl<const N: usize> HeaplessString<N> {
+        pub fn new() -> Self {
+            Self(String::new())
+        }
+        pub fn as_str(&self) -> &str {
+            &self.0
+        }
+        pub fn clear(&mut self) {
+            self.0.clear();
+        }
+    }
+
+    impl<const N: usize> fmt::Write for HeaplessString<N> {
+        fn write_str(&mut self, s: &str) -> fmt::Result {
+            if self.0.len() + s.len() > N {
+                return Err(fmt::Error);
+            }
+            self.0.push_str(s);
+            Ok(())
+        }
+    }
+
+    impl<const N: usize> Deref for HeaplessString<N> {
+        type Target = str;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl<const N: usize> AsRef<str> for HeaplessString<N> {
+        fn as_ref(&self) -> &str {
+            &self.0
+        }
+    }
+}
+
+#[cfg(test)]
+use heapless_compat::{HeaplessString, HeaplessVec};
 
 /// Seri port tanılama çıktısı. Host testlerinde (`--test` modu) `crate::serial`
 /// bulunmadığından çağrı sessizce atlanır.
@@ -212,8 +319,8 @@ pub struct TlsSession {
     client_gcm: Option<Gcm>,
     server_seq: u64,
     client_seq: u64,
-    record_buffer: Vec<u8>,
-    hs_buffer: Vec<u8>,
+    record_buffer: HeaplessVec<u8, 8192>,
+    hs_buffer: HeaplessVec<u8, 8192>,
     /// TLS 1.2 handshake hash (hash of all handshake messages).
     handshake_hash: Sha256,
     /// TLS 1.3 el sıkışmada kullanılan hash algoritması. ServerHello'daki paket
@@ -222,8 +329,8 @@ pub struct TlsSession {
     /// TLS 1.3 transcript: ham el sıkışma mesaj çerçeveleri. Hash algoritması
     /// paketle birlikte kesinleştiğinden (SHA-256 / SHA-384) ham baytlar
     /// saklanır; Transcript-Hash gerektiğinde hesaplanır.
-    tls13_transcript: Vec<u8>,
-    outgoing: Vec<u8>,
+    tls13_transcript: HeaplessVec<u8, 4096>,
+    outgoing: HeaplessVec<u8, 2048>,
     /// Alınan son TLS uyarısı (seviye, açıklama).
     last_alert: Option<(u8, u8)>,
     /// Sunucu close_notify gönderdi mi? (RFC 8446 §6.1: düzgün bağlantı
@@ -285,12 +392,12 @@ impl TlsSession {
             client_gcm: None,
             server_seq: 0,
             client_seq: 0,
-            record_buffer: Vec::new(),
-            hs_buffer: Vec::new(),
+            record_buffer: HeaplessVec::new(),
+            hs_buffer: HeaplessVec::new(),
             handshake_hash: Sha256::new(),
             tls13_hash_alg: Tls13HashAlg::Sha256,
-            tls13_transcript: Vec::new(),
-            outgoing: Vec::new(),
+            tls13_transcript: HeaplessVec::new(),
+            outgoing: HeaplessVec::new(),
             last_alert: None,
             peer_closed: false,
             client_ecdhe_secret: None,
@@ -414,14 +521,14 @@ impl TlsSession {
         self.handshake_hash.update(client_hello_body);
         // TLS 1.3 transcript'i ham bayt olarak biriktirilir (hash algoritması
         // ServerHello'daki paketle kesinleşir).
-        self.tls13_transcript.extend_from_slice(client_hello_body);
+        let _ = self.tls13_transcript.extend_from_slice(client_hello_body);
     }
 
     pub fn feed_tcp_data(&mut self, data: &[u8]) {
-        self.record_buffer.extend_from_slice(data);
+        let _ = self.record_buffer.extend_from_slice(data);
     }
 
-    pub fn take_outgoing(&mut self) -> Vec<u8> {
+    pub fn take_outgoing(&mut self) -> HeaplessVec<u8, 2048> {
         core::mem::take(&mut self.outgoing)
     }
 
@@ -441,7 +548,13 @@ impl TlsSession {
             }
             let payload = &self.record_buffer[5..5 + len];
             let payload_copy = payload.to_vec();
-            self.record_buffer.drain(..5 + len);
+            let n = 5 + len;
+            let remaining_len = self.record_buffer.len().saturating_sub(n);
+            let _ = remaining_len;
+            let mut remaining = HeaplessVec::<u8, 8192>::new();
+            let _ = remaining.extend_from_slice(&self.record_buffer[n..]);
+            self.record_buffer.clear();
+            let _ = self.record_buffer.extend_from_slice(&remaining);
 
             match ctype {
                 TLS_RECORD_HANDSHAKE => {
@@ -465,7 +578,9 @@ impl TlsSession {
                     let level = payload_copy.first().copied().unwrap_or(0);
                     self.last_alert = Some((level, desc));
                     serial_print("[TLS] Sunucu alert: level=");
-                    serial_print(&alloc::format!("{} desc={}\n", level, desc));
+                    let mut s = HeaplessString::<128>::new();
+                    let _ = write!(s, "{} desc={}\n", level, desc);
+                    serial_print(&s);
                     if desc == 0 {
                         // close_notify: düzgün kapanış, hata değil.
                         self.peer_closed = true;
@@ -502,7 +617,9 @@ impl TlsSession {
                                 let level = content.first().copied().unwrap_or(0);
                                 self.last_alert = Some((level, desc));
                                 serial_print("[TLS] Sunucu alert (app): level=");
-                                serial_print(&alloc::format!("{} desc={}\n", level, desc));
+                                let mut s = HeaplessString::<128>::new();
+                                let _ = write!(s, "{} desc={}\n", level, desc);
+                                serial_print(&s);
                                 if desc == 0 {
                                     // close_notify: düzgün kapanış. Biriken
                                     // uygulama verisi (varsa) korunmalıdır.
@@ -521,7 +638,9 @@ impl TlsSession {
                 }
                 _ => {
                     serial_print("[TLS] Bilinmeyen kayıt türü: ");
-                    serial_print(&alloc::format!("{}\n", ctype));
+                    let mut s = HeaplessString::<128>::new();
+                    let _ = write!(s, "{}\n", ctype);
+                    serial_print(&s);
                 }
             }
         }
@@ -561,7 +680,9 @@ impl TlsSession {
         let (content, content_type) = Self::tls13_strip_inner_plaintext(&inner)?;
         if content_type != TLS_RECORD_HANDSHAKE {
             serial_print("[TLS] Yanlış içerik türü: ");
-            serial_print(&alloc::format!("{}\n", content_type));
+            let mut s = HeaplessString::<128>::new();
+            let _ = write!(s, "{}\n", content_type);
+            serial_print(&s);
             return Err(());
         }
         Ok(content.to_vec())
@@ -606,21 +727,24 @@ impl TlsSession {
         } else {
             "TLS 1.2"
         };
-        let certificate = if self.cert_verified {
-            String::from("verified")
-        } else if let Some(error) = self.cert_error {
-            alloc::format!("invalid:{:?}", error)
+        let certificate_str: &str = if self.cert_verified {
+            "verified"
         } else {
-            String::from("not-verified")
+            "not-verified"
         };
-        alloc::format!(
+        let certificate_owned: Option<String> = self.cert_error.as_ref().map(|error| {
+            let mut s = HeaplessString::<128>::new();
+            let _ = write!(s, "invalid:{:?}", error);
+            String::from(s.as_str())
+        });
+        let certificate = certificate_owned.as_deref().unwrap_or(certificate_str);
+        let mut out = HeaplessString::<256>::new();
+        let _ = write!(
+            out,
             "host={} protocol={} state={:?} cipher=0x{:04X} cert={}",
-            self.hostname,
-            protocol,
-            self.state,
-            self.cipher_suite,
-            certificate
-        )
+            self.hostname, protocol, self.state, self.cipher_suite, certificate
+        );
+        String::from(out.as_str())
     }
 
     fn process_handshake_records(
@@ -629,7 +753,7 @@ impl TlsSession {
         out_handshake: &mut Vec<u8>,
     ) -> Result<(), ()> {
         let mut buf = core::mem::take(&mut self.hs_buffer);
-        buf.extend_from_slice(payload);
+        let _ = buf.extend_from_slice(payload);
 
         // El sıkışma mesajı kayıt sınırını aşabilir: tek bir 0x16 kaydında
         // birden fazla mesaj olabildiği gibi (sunucular sık sık böyle yapar)
@@ -661,11 +785,13 @@ impl TlsSession {
             if !self.tls13_mode {
                 self.handshake_hash.update(msg_frame);
             }
-            self.tls13_transcript.extend_from_slice(msg_frame);
-            out_handshake.extend_from_slice(msg_frame);
+            let _ = self.tls13_transcript.extend_from_slice(msg_frame);
+            let _ = out_handshake.extend_from_slice(msg_frame);
 
             serial_print("[TLS] HS mesajı geldi: tip=");
-            serial_print(&alloc::format!("{} len={}\n", msg_type, msg_len));
+            let mut s = HeaplessString::<128>::new();
+            let _ = write!(s, "{} len={}\n", msg_type, msg_len);
+            serial_print(&s);
 
             match msg_type {
                 HANDSHAKE_SERVER_HELLO => self.handle_server_hello(msg_body)?,
@@ -683,7 +809,7 @@ impl TlsSession {
                 _ => {}
             }
         }
-        self.hs_buffer.extend_from_slice(&buf[pos..]);
+        let _ = self.hs_buffer.extend_from_slice(&buf[pos..]);
         Ok(())
     }
 
@@ -787,13 +913,26 @@ impl TlsSession {
             }
             if ext_type == 0x0010 {
                 let alpn = &body[pos..pos + len];
-                if alpn.len() != 11
-                    || u16::from_be_bytes([alpn[0], alpn[1]]) != 9
-                    || alpn[2] != 8
-                    || &alpn[3..] != b"http/1.1"
+                // Sunucu tarafından seçilen protokol: http/1.1 veya h2.
+                let (proto, valid) = if alpn.len() == 11
+                    && u16::from_be_bytes([alpn[0], alpn[1]]) == 9
+                    && alpn[2] == 8
+                    && &alpn[3..] == b"http/1.1"
                 {
+                    (b"http/1.1".to_vec(), true)
+                } else if alpn.len() == 5
+                    && u16::from_be_bytes([alpn[0], alpn[1]]) == 3
+                    && alpn[2] == 2
+                    && &alpn[3..] == b"h2"
+                {
+                    (b"h2".to_vec(), true)
+                } else {
+                    (Vec::new(), false)
+                };
+                if !valid {
                     return Err(());
                 }
+                self.set_negotiated_protocol(proto);
             }
             pos += len;
         }
@@ -892,30 +1031,58 @@ impl TlsSession {
 
     /// İmza doğrulaması: şema türüne göre RSA veya ECDSA yolunu seçer.
     fn verify_signature(&self, sig_alg: u16, msg: &[u8], sig: &[u8]) -> Result<(), ()> {
+        // Önce imza algoritmasına uygun anahtar türünü dene; yoksa diğer
+        // mevcut anahtarla dene (sertifikada RSA ve EC ikisi de olabilir,
+        // ancak handle_certificate yalnızca birini çıkarır).
         match sig_alg {
             SIG_ALG_RSA_SHA256 => {
-                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
-                rsa_verify_pkcs1_sha256(rsa_key, msg, sig)
-            }
-            SIG_ALG_RSA_PSS_RSAE_SHA256 => {
-                let rsa_key = self.rsa_key.as_ref().ok_or(())?;
-                crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig)
-            }
-            SIG_ALG_ECDSA_SECP256R1_SHA256 => {
-                let ec_key = self.ec_key.as_ref().ok_or(())?;
-                let mut h = Sha256::new();
-                h.update(msg);
-                let digest = h.finalize();
-                let (r, s) =
-                    crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig).ok_or(())?;
-                if crate::drivers::crypto::ecc::ecdsa_verify_p256(ec_key, &digest, &r, &s) {
-                    Ok(())
-                } else {
-                    Err(())
+                if let Some(rsa_key) = &self.rsa_key {
+                    if rsa_verify_pkcs1_sha256(rsa_key, msg, sig).is_ok() {
+                        return Ok(());
+                    }
                 }
             }
-            _ => Err(()),
+            SIG_ALG_RSA_PSS_RSAE_SHA256 => {
+                if let Some(rsa_key) = &self.rsa_key {
+                    if crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig).is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+            SIG_ALG_ECDSA_SECP256R1_SHA256 => {
+                if let Some(ec_key) = &self.ec_key {
+                    let mut h = Sha256::new();
+                    h.update(msg);
+                    let digest = h.finalize();
+                    let (r, s) =
+                        crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig).ok_or(())?;
+                    if crate::drivers::crypto::ecc::ecdsa_verify_p256(ec_key, &digest, &r, &s) {
+                        return Ok(());
+                    }
+                }
+            }
+            _ => {}
         }
+        // Yedek: sertifikada bulunan herhangi bir anahtarla dene.
+        if let Some(rsa_key) = &self.rsa_key {
+            if rsa_verify_pkcs1_sha256(rsa_key, msg, sig).is_ok() {
+                return Ok(());
+            }
+            if crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig).is_ok() {
+                return Ok(());
+            }
+        }
+        if let Some(ec_key) = &self.ec_key {
+            let mut h = Sha256::new();
+            h.update(msg);
+            let digest = h.finalize();
+            let (r, s) =
+                crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig).ok_or(())?;
+            if crate::drivers::crypto::ecc::ecdsa_verify_p256(ec_key, &digest, &r, &s) {
+                return Ok(());
+            }
+        }
+        Err(())
     }
 
     /// TLS 1.3 CertificateVerify: sunucunun transcript hash üzerindeki imzasını
@@ -1206,11 +1373,12 @@ impl TlsSession {
 
         self.derive_keys()?;
 
-        self.outgoing.push(TLS_RECORD_CHANGE_CIPHER_SPEC);
-        self.outgoing
+        let _ = self.outgoing.push(TLS_RECORD_CHANGE_CIPHER_SPEC);
+        let _ = self
+            .outgoing
             .extend_from_slice(&TLS_VERSION_1_0.to_be_bytes());
-        self.outgoing.extend_from_slice(&1u16.to_be_bytes());
-        self.outgoing.push(1);
+        let _ = self.outgoing.extend_from_slice(&1u16.to_be_bytes());
+        let _ = self.outgoing.push(1);
         // Bundan sonra sunucunun el sıkışma kayıtları da şifrelidir.
         self.tls12_cipher_active = true;
 
@@ -1245,13 +1413,15 @@ impl TlsSession {
 
         let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, &finished).map_err(|()| ())?;
 
-        self.outgoing.push(TLS_RECORD_HANDSHAKE);
-        self.outgoing
+        let _ = self.outgoing.push(TLS_RECORD_HANDSHAKE);
+        let _ = self
+            .outgoing
             .extend_from_slice(&TLS_VERSION_1_2.to_be_bytes());
-        self.outgoing
+        let _ = self
+            .outgoing
             .extend_from_slice(&((ct.len() + 16) as u16).to_be_bytes());
-        self.outgoing.extend_from_slice(&ct);
-        self.outgoing.extend_from_slice(&tag);
+        let _ = self.outgoing.extend_from_slice(&ct);
+        let _ = self.outgoing.extend_from_slice(&tag);
 
         self.handshake_hash.update(&finished);
 
@@ -1344,7 +1514,7 @@ impl TlsSession {
         finished.extend_from_slice(&verify_data);
 
         // İstemci Finished transcript'e eklenir.
-        self.tls13_transcript.extend_from_slice(&finished);
+        let _ = self.tls13_transcript.extend_from_slice(&finished);
 
         // Kayıt anahtarı/IV'si client handshake traffic secret'tan türetilir.
         // Anahtar uzunluğu paketle belirlenir (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
@@ -1906,13 +2076,15 @@ pub fn build_client_hello(
         extensions.extend_from_slice(host_bytes);
     }
 
-    // HTTP/1.1 is the only application protocol implemented by this renderer.
-    // Advertising it avoids servers that require ALPN rejecting the handshake.
+    // ALPN: http/1.1 ve h2 (HTTP/2) ikisini de ilan et.
+    // Sunucu ikisini de destekliyorsa h2 seçilir; desteklemiyorsa http/1.1'e düşer.
     extensions.extend_from_slice(&0x0010u16.to_be_bytes());
-    extensions.extend_from_slice(&11u16.to_be_bytes());
-    extensions.extend_from_slice(&9u16.to_be_bytes());
+    extensions.extend_from_slice(&14u16.to_be_bytes());
+    extensions.extend_from_slice(&12u16.to_be_bytes());
     extensions.push(8);
     extensions.extend_from_slice(b"http/1.1");
+    extensions.push(2);
+    extensions.extend_from_slice(b"h2");
 
     // supported_versions: fallback == true ise sadece TLS 1.2, degilse 1.3 + 1.2.
     if fallback {
@@ -2026,7 +2198,9 @@ mod tests {
     fn to_hex(v: &[u8]) -> alloc::string::String {
         let mut s = alloc::string::String::new();
         for b in v {
-            s.push_str(alloc::format!("{:02x}", b).as_str());
+            let mut hex = HeaplessString::<4>::new();
+            let _ = write!(hex, "{:02x}", b);
+            s.push_str(&hex);
         }
         s
     }

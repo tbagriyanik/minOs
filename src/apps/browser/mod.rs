@@ -37,9 +37,12 @@ use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
+use core::fmt::Write;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use heapless::String as HeaplessString;
 
 use crate::drivers::video::Framebuffer;
 use crate::fs::vfs::VirtualFileSystem;
@@ -145,6 +148,7 @@ fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
 }
 
 // URL'den path kısmını çıkar (minos://demo/img -> "/img")
+#[allow(dead_code)]
 fn url_path(url: &[u8]) -> Option<&str> {
     let url_str = core::str::from_utf8(url).ok()?;
     // minos:// prefixini kaldır
@@ -901,13 +905,11 @@ impl BrowserApp {
         }
         let mut lines: Vec<u8> = Vec::new();
         for bm in &self.bookmarks_extra {
-            let line = alloc::format!(
+            let mut line = HeaplessString::<256>::new();
+            let _ = write!(
+                line,
                 "{}|{}|{}|{}|{}\n",
-                bm.title,
-                bm.title_en,
-                bm.url,
-                bm.description,
-                bm.description_en
+                bm.title, bm.title_en, bm.url, bm.description, bm.description_en
             );
             lines.extend_from_slice(line.as_bytes());
         }
@@ -942,9 +944,14 @@ impl BrowserApp {
             self.status = crate::gui::ui_text("İndirilecek içerik yok.", "Nothing to download.");
             return false;
         };
-        let path = alloc::format!("/root/Downloads/indirme_{}.html", crate::monotonic_ms());
+        let mut path = HeaplessString::<128>::new();
+        let _ = write!(
+            path,
+            "/root/Downloads/indirme_{}.html",
+            crate::monotonic_ms()
+        );
         if vfs.write_file(&path, &data) {
-            self.download_path = Some(path);
+            self.download_path = Some(String::from(path.as_str()));
             self.status = crate::gui::ui_text(
                 "İndirme /root/Downloads klasörüne kaydedildi.",
                 "Download saved to /root/Downloads.",
@@ -1070,6 +1077,7 @@ impl BrowserApp {
                     .map(|s| {
                         MinGuiCompositor::text_width(&s.text, scale)
                             + if s.is_button { 16 } else { 0 }
+                            + if s.is_image { s.image_width.max(1) } else { 0 }
                     })
                     .sum();
 
@@ -1085,7 +1093,12 @@ impl BrowserApp {
                 let mut char_offset = 0usize;
                 for span in &line.spans {
                     let span_w = MinGuiCompositor::text_width(&span.text, scale)
-                        + if span.is_button { 16 } else { 0 };
+                        + if span.is_button { 16 } else { 0 }
+                        + if span.is_image {
+                            span.image_width.max(1)
+                        } else {
+                            0
+                        };
                     if mx < cur_x {
                         return Some((line_idx, char_offset));
                     } else if mx >= cur_x && mx < cur_x + span_w {
@@ -1443,8 +1456,10 @@ impl BrowserApp {
                         if ctx_type == "2d" {
                             // Store a canvas2d reference for this element ID.
                             // We use a special variable naming convention: __ctx_<id>
-                            let ctx_var = alloc::format!("__ctx_{}", id);
-                            self.js_vars.push((ctx_var, String::from("canvas2d")));
+                            let mut ctx_var = HeaplessString::<32>::new();
+                            let _ = write!(ctx_var, "__ctx_{}", id);
+                            self.js_vars
+                                .push((String::from(ctx_var.as_str()), String::from("canvas2d")));
                         }
                     }
                 }
@@ -2348,7 +2363,11 @@ impl BrowserApp {
                         elem_id: String::new(),
                     },
                     TextSpan {
-                        text: alloc::format!("  {}", bm.url),
+                        text: {
+                            let mut s = HeaplessString::<128>::new();
+                            let _ = write!(s, "  {}", bm.url);
+                            String::from(s.as_str())
+                        },
                         color: Color::ACCENT_BLUE,
                         bg_color: None,
                         bg_image: None,
@@ -2373,7 +2392,11 @@ impl BrowserApp {
 
             self.page_lines.push(BrowserLine {
                 spans: alloc::vec![TextSpan {
-                    text: alloc::format!("      {}", desc_text),
+                    text: {
+                        let mut s = HeaplessString::<128>::new();
+                        let _ = write!(s, "      {}", desc_text);
+                        String::from(s.as_str())
+                    },
                     color: Color::TEXT_MUTED,
                     bg_color: None,
                     bg_image: None,
@@ -3209,11 +3232,14 @@ impl BrowserApp {
                 let tb = title.as_bytes();
                 self.page_title_len = tb.len().min(64);
                 self.page_title[..self.page_title_len].copy_from_slice(&tb[..self.page_title_len]);
-                // Demo sayfası seçimine göre farklı HTML içeriği göster
-                let demo_html = match url_path(&self.url) {
-                    Some(path) if path == "/img" => DEMO_HTML_IMG,
-                    Some(path) if path == "/video" => DEMO_HTML_VIDEO,
-                    _ => DEMO_HTML_BASIC,
+                // Demo sayfası seçimine göre farklı HTML içeriği göster.
+                // url_path("minos://demo-img") -> "demo-img", url_path("minos://demo-video") -> "demo-video"
+                let demo_html = if self.url.starts_with(b"minos://demo-img") {
+                    DEMO_HTML_IMG
+                } else if self.url.starts_with(b"minos://demo-video") {
+                    DEMO_HTML_VIDEO
+                } else {
+                    DEMO_HTML_BASIC
                 };
                 self.load_html(demo_html, 600, 256, None);
                 self.status = crate::gui::ui_text(
@@ -3274,11 +3300,9 @@ impl BrowserApp {
             self.request_state = 0;
             self.request_deadline = 0;
             // Zaman aşımına uğrayan alt kaynak kuyruktan düşürülür; sayfa
-            // yine de yüklü kalır.
+            // içeriği temizlenmez, yüklenmiş kısmı ekranda kalır.
             if self.request_is_resource {
                 self.fail_resource_request();
-            } else {
-                self.page_loaded = false;
             }
             return;
         }
@@ -3558,24 +3582,34 @@ impl BrowserApp {
                             let alert = tls.last_alert();
                             let context = tls.diagnostic_context();
                             let detail = match alert {
-                                Some((level, desc)) => alloc::format!(
-                                    "{} (description={}, level={} ({}))\n{}",
-                                    crate::drivers::tls::alert_description_text(desc),
-                                    desc,
-                                    crate::drivers::tls::alert_level_text(level),
-                                    level,
-                                    context
-                                ),
-                                None => alloc::format!(
-                                    "{}\n{}",
-                                    crate::gui::ui_text(
-                                        "TLS kayıt işleme hatası",
-                                        "TLS record processing failed"
-                                    ),
-                                    context
-                                ),
+                                Some((level, desc)) => {
+                                    let mut s = HeaplessString::<256>::new();
+                                    let _ = write!(
+                                        s,
+                                        "{} (description={}, level={} ({}))\n{}",
+                                        crate::drivers::tls::alert_description_text(desc),
+                                        desc,
+                                        crate::drivers::tls::alert_level_text(level),
+                                        level,
+                                        context
+                                    );
+                                    s
+                                }
+                                None => {
+                                    let mut s = HeaplessString::<256>::new();
+                                    let _ = write!(
+                                        s,
+                                        "{}\n{}",
+                                        crate::gui::ui_text(
+                                            "TLS kayıt işleme hatası",
+                                            "TLS record processing failed"
+                                        ),
+                                        context
+                                    );
+                                    s
+                                }
                             };
-                            tls_failed = Some((alert, detail));
+                            tls_failed = Some((alert, String::from(detail.as_str())));
                         }
                     }
                     self.tls_app_data.extend_from_slice(&app_out);
@@ -3659,6 +3693,100 @@ impl BrowserApp {
                 let tls_established = self.tls_session.as_ref().map_or(false, |t| {
                     t.state() == crate::drivers::tls::TlsState::Established
                 });
+
+                // ── HTTP/2 entegrasyonu ─────────────────────────────────────
+                // ALPN ile h2leşmişse http2_get üzerinden HTTP/2 isteği yapar.
+                // http2_get kendi TCP/TLS bağlantısını kurar; mevcut bağlantı
+                // zaman aşımına uğrayarak temizlenir.
+                if tls_established
+                    && !self.tls_request_sent
+                    && self
+                        .tls_session
+                        .as_ref()
+                        .and_then(|t| t.negotiated_protocol())
+                        .map_or(false, |p| p == b"h2")
+                {
+                    let host_str =
+                        core::str::from_utf8(&self.request_host[..self.request_host_len])
+                            .unwrap_or("");
+                    let path_str =
+                        core::str::from_utf8(&self.request_path[..self.request_path_len])
+                            .unwrap_or("/");
+                    let mut url = HeaplessString::<256>::new();
+                    let _ = write!(
+                        url,
+                        "{}://{}{}",
+                        if self.is_https { "https" } else { "http" },
+                        host_str,
+                        path_str
+                    );
+
+                    self.load_progress = 55;
+                    self.status = crate::gui::ui_text(
+                        "HTTP/2 bağlantısı kuruluyor...",
+                        "Establishing HTTP/2 connection...",
+                    );
+
+                    let mut resp_buf = vec![0u8; 64 * 1024];
+                    match crate::drivers::http::http2_get(&url, &mut resp_buf) {
+                        Ok((status, _hlen, body_len)) => {
+                            self.load_progress = 100;
+                            self.status = crate::gui::ui_text(
+                                "HTTP/2 yanıtı alındı.",
+                                "HTTP/2 response received.",
+                            );
+                            let body = &resp_buf[..body_len.min(resp_buf.len())];
+
+                            // Yönlendirme kodlarını işle
+                            if (status == 301
+                                || status == 302
+                                || status == 303
+                                || status == 307
+                                || status == 308)
+                                && self.redirect_count < 3
+                            {
+                                self.redirect_count += 1;
+                                // Location başlığı HTTP/2'de HPACK ile kodlu;
+                                // http2_get gövdeyi döndürür, başlıkları ayrıştırılabilir.
+                                // Basitlik için aynı URL'yi yeniden dene.
+                                self.finish_network_error(crate::gui::ui_text(
+                                    "HTTP/2 yönlendirme henüz desteklenmiyor.",
+                                    "HTTP/2 redirect not yet supported.",
+                                ));
+                                self.request_pending = false;
+                                self.request_state = 0;
+                                self.request_deadline = 0;
+                                self.tls_request_sent = true;
+                                return;
+                            }
+
+                            // HTML gövdesini render et
+                            self.load_html(body, 600, 256, None);
+                            self.page_loaded = true;
+                            self.request_pending = false;
+                            self.request_state = 0;
+                            self.request_deadline = 0;
+                            self.tls_request_sent = true;
+                            crate::drivers::netstack::tcp_clear_result();
+                            return;
+                        }
+                        Err(e) => {
+                            self.finish_network_error(crate::gui::ui_text(
+                                "HTTP/2 isteği başarısız.",
+                                "HTTP/2 request failed.",
+                            ));
+                            crate::serial_print("[H2] http2_get hata: ");
+                            crate::serial::print_dec(e as u64);
+                            crate::serial_print("\n");
+                            self.request_pending = false;
+                            self.request_state = 0;
+                            self.request_deadline = 0;
+                            self.tls_request_sent = true;
+                            return;
+                        }
+                    }
+                }
+
                 if tls_established && !self.tls_request_sent && !self.tls_pending_request.is_empty()
                 {
                     let request = core::mem::take(&mut self.tls_pending_request);
@@ -4233,8 +4361,9 @@ impl BrowserApp {
             core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("(unknown URL)"),
         );
         let severity = crate::gui::ui_text("HATA", "ERROR");
-        self.error_logs
-            .push(alloc::format!("{} | {} | {}", severity, url, message));
+        let mut log_entry = HeaplessString::<256>::new();
+        let _ = write!(log_entry, "{} | {} | {}", severity, url, message);
+        self.error_logs.push(String::from(log_entry.as_str()));
         if self.error_logs.len() > BROWSER_ERROR_LOG_LIMIT {
             self.error_logs.remove(0);
         }
@@ -4608,7 +4737,8 @@ impl BrowserApp {
                     ),
                     Color::ACCENT_BLUE,
                 );
-                let count = alloc::format!("{}", self.error_logs.len());
+                let mut count = HeaplessString::<16>::new();
+                let _ = write!(count, "{}", self.error_logs.len());
                 MinGuiCompositor::draw_string(
                     fb,
                     page_x + page_w.saturating_sub(48),
@@ -4679,12 +4809,13 @@ impl BrowserApp {
                     26,
                     BROWSER_TITLE_BG,
                 );
-                let title_str = if self.page_title_len > 0 {
+                let mut title_str = HeaplessString::<64>::new();
+                if self.page_title_len > 0 {
                     let page =
                         core::str::from_utf8(&self.page_title[..self.page_title_len]).unwrap_or("");
-                    alloc::format!("SarmanNet - {}", page)
+                    let _ = write!(title_str, "SarmanNet - {}", page);
                 } else {
-                    alloc::format!("SarmanNet - Title")
+                    let _ = write!(title_str, "SarmanNet - Title");
                 };
                 MinGuiCompositor::draw_string(
                     fb,
@@ -4763,8 +4894,8 @@ impl BrowserApp {
                         _ => 1,
                     };
 
-                    let visible = cur_line_y + visual_h >= doc_y + scroll_y
-                        && cur_line_y <= doc_y + scroll_y + doc_h + 30;
+                    let visible = cur_line_y + visual_h > doc_y + scroll_y
+                        && cur_line_y < doc_y + scroll_y + doc_h;
                     let draw_y = cur_line_y.saturating_sub(scroll_y);
 
                     if visible {
@@ -5513,7 +5644,9 @@ impl BrowserApp {
                 Color::ACCENT_YELLOW,
                 (find_x + 46, find_y + 2, 132, 20),
             );
-            let count_text = alloc::format!(
+            let mut count_text = HeaplessString::<16>::new();
+            let _ = write!(
+                count_text,
                 "{}/{}",
                 if self.find_match_count.get() == 0 {
                     0
@@ -5645,7 +5778,8 @@ impl BrowserApp {
                     Color::ACCENT_BLUE,
                 );
             }
-            let pct_text = alloc::format!("{}%", self.load_progress);
+            let mut pct_text = HeaplessString::<8>::new();
+            let _ = write!(pct_text, "{}%", self.load_progress);
             let pct_w = MinGuiCompositor::text_width(&pct_text, 1);
             let pct_x = win_x + win_w.saturating_sub(12).saturating_sub(pct_w);
             MinGuiCompositor::draw_string(fb, pct_x, status_y + 3, &pct_text, Color::ACCENT_BLUE);

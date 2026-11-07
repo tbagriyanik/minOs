@@ -431,6 +431,7 @@ pub enum HtmlTagType {
     Sup,   // Superscript
     Rule,  // <hr> yatay ayraç çizgisi
     Quote, // <blockquote> — sol kenarlıklı alıntı bloğu
+    Table, // <table> — tablo satırı
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -760,6 +760,9 @@ pub fn render_html_to_lines(
     let mut cur_line_tag = HtmlTagType::Normal;
     let mut cur_line_align = TextAlign::Left;
 
+    // Tablo durumu: mevcut satırda kaçıncı hücreyiz.
+    let mut table_cell_count: usize = 0;
+
     // Sol kenar boşluğu (CSS margin-left / padding-left) — kapanışta sıfırlanır.
     let cur_line_indent = core::cell::Cell::new(0usize);
 
@@ -1611,33 +1614,30 @@ pub fn render_html_to_lines(
                 {
                     // Semantic elementler kapanıyor, normal moduna
                 } else if eq_ascii(name, b"table") {
-                    // <table>: Tablo elementi
+                    // <table>: Tablo elementi — yeni satırda başlat, hücre sayacını sıfırla
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    table_cell_count = 0;
+                    cur_line_tag = HtmlTagType::Table;
                 } else if eq_ascii(name, b"tr") {
-                    // <tr>: Satir elementi
-                    if !word_buf.is_empty() {
-                        flush_word(
-                            out_lines,
-                            &mut cur_line_spans,
-                            &mut cur_line_w,
-                            &mut word_buf,
-                            current_color,
-                            current_bg,
-                            is_link,
-                            link_target,
-                            active_is_button,
-                            false,
-                            onclick_str,
-                            elem_id_str,
-                            current_bold,
-                            current_underline,
-                            cur_line_tag,
-                            cur_line_align,
-                            max_lines,
-                        );
-                    }
-                    word_buf.push('|'); // Satir ayracı
+                    // <tr>: Tablo satırı — mevcut satırı bitir, yeni satır başlat
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    table_cell_count = 0;
                 } else if eq_ascii(name, b"th") {
-                    // <th>: Tablo baslik hucresi
+                    // <th>: Tablo başlık hücresi — hücre ayracı ekle, kalın yazı
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -1659,10 +1659,13 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
-                    word_buf.push('['); // Baslik simgesi
-                    word_buf.push('[');
+                    if table_cell_count > 0 {
+                        word_buf.push_str(" | ");
+                    }
+                    table_cell_count += 1;
+                    current_bold = true;
                 } else if eq_ascii(name, b"td") {
-                    // <td>: Tablo veri hucresi
+                    // <td>: Tablo veri hücresi — hücre ayracı ekle
                     if !word_buf.is_empty() {
                         flush_word(
                             out_lines,
@@ -1684,9 +1687,20 @@ pub fn render_html_to_lines(
                             max_lines,
                         );
                     }
-                    word_buf.push(']'); // Veri simgesi
+                    if table_cell_count > 0 {
+                        word_buf.push_str(" | ");
+                    }
+                    table_cell_count += 1;
                 } else if eq_ascii(name, b"caption") {
-                    // <caption>: Tablo basligi
+                    // <caption>: Tablo başlığı — yeni satırda başlat
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                 } else if eq_ascii(name, b"img") {
                     // <img>: Görsel işleme
                     let label = extract_attr(attrs, b"alt")
@@ -2271,6 +2285,17 @@ pub fn render_html_to_lines(
                         bold: current_bold,
                         underline: current_underline,
                     });
+                } else if eq_ascii(name, b"source") {
+                    // <source src="..."> — <video>/<audio> için kaynak kaydı.
+                    // `<source>` boş bir etikettir; içeriği yoktur, yalnızca
+                    // `src` niteliği okunur ve son eklenen medya oynatıcıya atanır.
+                    if let Some(src) = extract_attr(attrs, b"src") {
+                        if let Some(last_player) = media_players.players.last_mut() {
+                            if last_player.src.is_empty() {
+                                last_player.src = String::from(src);
+                            }
+                        }
+                    }
                 } else if matches!(name, b"ul" | b"ol") {
                     flush_line(
                         out_lines,
@@ -2470,15 +2495,7 @@ pub fn render_html_to_lines(
                     cur_line_align = TextAlign::Left;
                 } else if matches!(
                     name,
-                    b"h1"
-                        | b"h2"
-                        | b"h3"
-                        | b"p"
-                        | b"div"
-                        | b"table"
-                        | b"caption"
-                        | b"section"
-                        | b"article"
+                    b"h1" | b"h2" | b"h3" | b"p" | b"div" | b"section" | b"article"
                 ) {
                     flush_line(
                         out_lines,
@@ -2683,16 +2700,42 @@ pub fn render_html_to_lines(
                     // <dd>: Tanım defini
                     word_buf.push(' '); // Giriş boşluğu
                 } else if eq_ascii(name, b"table") {
-                    // <table> kapanıyor
+                    // </table>: Tablo bitti — mevcut satırı bitir, tablo modunu kapat
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    table_cell_count = 0;
+                    cur_line_tag = HtmlTagType::Normal;
+                } else if eq_ascii(name, b"caption") {
+                    // </caption>: Tablo başlığı bitti — mevcut satırı bitir
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
                 } else if eq_ascii(name, b"tr") {
-                    // <tr> kapanıyor, satır sonu
-                    word_buf.push('\n');
+                    // </tr>: Satır bitti — mevcut satırı bitir
+                    flush_line(
+                        out_lines,
+                        &mut cur_line_spans,
+                        &mut cur_line_w,
+                        cur_line_tag,
+                        cur_line_align,
+                        max_lines,
+                    );
+                    table_cell_count = 0;
                 } else if eq_ascii(name, b"th") {
-                    // <th> kapanıyor, zaten metin eklendi
-                    word_buf.push(']');
+                    // </th>: Başlık hücresi bitti — stil state stack ile geri yüklenir
                 } else if eq_ascii(name, b"td") {
-                    // <td> kapanıyor, zaten metin eklendi
-                    word_buf.push('[');
+                    // </td>: Veri hücresi bitti — içerik zaten word_buf'de
                 } else if eq_ascii(name, b"video") {
                     // <video> kapanıyor
                     // Video içeriği zaten açılışta eklendi

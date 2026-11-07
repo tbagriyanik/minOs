@@ -9,6 +9,8 @@ use crate::fs;
 use crate::mm;
 use crate::task;
 use alloc::vec::Vec;
+use core::fmt::Write;
+use heapless::String as HeaplessString;
 
 pub struct BootSubsystems {
     pub fs_mgr: fs::FileSystemManager,
@@ -273,7 +275,8 @@ pub fn init_subsystems(
     serial_print("[DRIVERS] Profil: ");
     serial_print(driver_profile);
     serial_print("\n");
-    let profile_line = alloc::format!("[DRIVERS] profile: {}", driver_profile);
+    let mut profile_line = HeaplessString::<64>::new();
+    let _ = write!(profile_line, "[DRIVERS] profile: {}", driver_profile);
     let _ = fs_mgr
         .vfs
         .write_file("/root/Documents/boot.log", profile_line.as_bytes());

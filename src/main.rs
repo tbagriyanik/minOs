@@ -5781,7 +5781,7 @@ pub extern "C" fn _start() -> ! {
                                     my,
                                     apps::controlpanel::refresh_btn_rect(wx, wy, ww, wh),
                                 ) {
-                                    apps::controlpanel::refresh();
+                                    open_app(&mut compositor, 1);
                                 } else if gui::in_rect(
                                     mx,
                                     my,

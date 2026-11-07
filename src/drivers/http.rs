@@ -2253,7 +2253,7 @@ impl Http2Connection {
         })?;
 
         // TLS el sıkışması (HTTPS için)
-        let tls_session: Option<crate::drivers::tls::TlsSession> = if is_https {
+        let mut tls_session: Option<crate::drivers::tls::TlsSession> = if is_https {
             let _host_str = host.as_bytes();
             let mut client_random = [0u8; 32];
             let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
@@ -2326,8 +2326,27 @@ impl Http2Connection {
             None
         };
 
-        // HTTP/2 bağlantı önyüzünü gönder
-        h2_send_preface(fd)?;
+        // HTTP/2 bağlantı önyüzünü gönder (TLS ile şifrele)
+        if is_https {
+            if let Some(ref mut session) = tls_session {
+                let mut preface_data = Vec::new();
+                preface_data.extend_from_slice(h2::PREFACE);
+                preface_data.extend_from_slice(&h2::build_client_settings_full());
+                if let Some(encrypted) = session.encrypt_app_data(&preface_data) {
+                    socket::send(fd, &encrypted).map_err(|_| E_TLS)?;
+                } else {
+                    return Err(E_TLS);
+                }
+                let outgoing = session.take_outgoing();
+                if !outgoing.is_empty() {
+                    socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
+                }
+            } else {
+                return Err(E_TLS);
+            }
+        } else {
+            h2_send_preface(fd)?;
+        }
 
         // Sunucu SETTINGS'ını oku (ilk gelen çerçeve SETTINGS olmalı)
         let mut buf = [0u8; 4096];

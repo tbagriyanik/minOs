@@ -935,7 +935,7 @@ pub fn render_content(
         refresh_btn.3,
         Color::BORDER,
     );
-    let refresh_label = crate::gui::ui_text("Yenile", "Refresh");
+    let refresh_label = crate::gui::ui_text("Ayarlar", "Settings");
     MinGuiCompositor::draw_string(
         fb,
         refresh_btn.0 + 10,

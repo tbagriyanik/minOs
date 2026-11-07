@@ -328,8 +328,10 @@ pub struct TlsSession {
     tls13_hash_alg: Tls13HashAlg,
     /// TLS 1.3 transcript: ham el sıkışma mesaj çerçeveleri. Hash algoritması
     /// paketle birlikte kesinleştiğinden (SHA-256 / SHA-384) ham baytlar
-    /// saklanır; Transcript-Hash gerektiğinde hesaplanır.
-    tls13_transcript: HeaplessVec<u8, 4096>,
+    /// saklanır; Transcript-Hash gerektiğinde hesaplanır. 8192 bayt, büyük
+    /// sertifika zincirleri (örn. example.com ~3.7 KB) ile birlikte tüm el
+    /// sıkışma mesajlarını sarmak için yeterlidir.
+    tls13_transcript: HeaplessVec<u8, 8192>,
     outgoing: HeaplessVec<u8, 2048>,
     /// Alınan son TLS uyarısı (seviye, açıklama).
     last_alert: Option<(u8, u8)>,
@@ -785,7 +787,11 @@ impl TlsSession {
             if !self.tls13_mode {
                 self.handshake_hash.update(msg_frame);
             }
-            let _ = self.tls13_transcript.extend_from_slice(msg_frame);
+            self.tls13_transcript
+                .extend_from_slice(msg_frame)
+                .map_err(|_| {
+                    serial_print("[TLS] Transcript tamponu doldu, el sıkışma iptal ediliyor.\n");
+                })?;
             let _ = out_handshake.extend_from_slice(msg_frame);
 
             serial_print("[TLS] HS mesajı geldi: tip=");
@@ -912,33 +918,45 @@ impl TlsSession {
                 return Err(());
             }
             if ext_type == 0x0010 {
-                let alpn = &body[pos..pos + len];
-                // Sunucu tarafından seçilen protokol: http/1.1 veya h2.
-                let (proto, valid) = if alpn.len() == 11
-                    && u16::from_be_bytes([alpn[0], alpn[1]]) == 9
-                    && alpn[2] == 8
-                    && &alpn[3..] == b"http/1.1"
-                {
-                    (b"http/1.1".to_vec(), true)
-                } else if alpn.len() == 5
-                    && u16::from_be_bytes([alpn[0], alpn[1]]) == 3
-                    && alpn[2] == 2
-                    && &alpn[3..] == b"h2"
-                {
-                    (b"h2".to_vec(), true)
-                } else {
-                    (Vec::new(), false)
-                };
-                if !valid {
-                    return Err(());
-                }
-                self.set_negotiated_protocol(proto);
+                self.handle_alpn_extension(&body[pos..pos + len])?;
             }
             pos += len;
         }
         if pos != body.len() {
             return Err(());
         }
+        Ok(())
+    }
+
+    /// ALPN uzantı gövdesini çözer ve seçilen protokolü kaydeder.
+    /// TLS 1.3'te EncryptedExtensions, TLS 1.2'de ServerHello içinden gelir.
+    /// Sunucu biçimi tek bir `ProtocolName`'dir (1 bayt uzunluk + baytlar);
+    /// istemci-tarafı 2 baytlık liste biçimi de tolerans için kabul edilir.
+    /// Desteklenen seçimler: `http/1.1` ve `h2`.
+    fn handle_alpn_extension(&mut self, alpn: &[u8]) -> Result<(), ()> {
+        let proto: &[u8] = if alpn.len() >= 2 && alpn[0] as usize + 1 == alpn.len() {
+            // Sunucu biçimi: opaque ProtocolName<1..255> (tek uzunluk baytı).
+            &alpn[1..]
+        } else if alpn.len() >= 4 {
+            // Liste biçimi: 2 bayt toplam uzunluk + (1 bayt uzunluk + ad).
+            let list_len = u16::from_be_bytes([alpn[0], alpn[1]]) as usize;
+            if list_len + 2 == alpn.len() && alpn[2] as usize + 3 <= alpn.len() {
+                let n = alpn[2] as usize;
+                &alpn[3..3 + n]
+            } else {
+                return Err(());
+            }
+        } else {
+            return Err(());
+        };
+        let proto_vec = if proto == b"http/1.1" {
+            b"http/1.1".to_vec()
+        } else if proto == b"h2" {
+            b"h2".to_vec()
+        } else {
+            return Err(());
+        };
+        self.set_negotiated_protocol(proto_vec);
         Ok(())
     }
 
@@ -963,6 +981,11 @@ impl TlsSession {
                     }
                     let selected = u16::from_be_bytes([ext_body[0], ext_body[1]]);
                     self.tls13_mode = selected == TLS_VERSION_1_3;
+                }
+                0x0010 => {
+                    // ALPN: sunucunun seçtiği uygulama katmanı protokolü
+                    // (TLS 1.2'de ServerHello uzantısı olarak gelir).
+                    self.handle_alpn_extension(ext_body)?;
                 }
                 0x0033 => {
                     // key_share: server's ECDHE share.
@@ -1044,7 +1067,8 @@ impl TlsSession {
             }
             SIG_ALG_RSA_PSS_RSAE_SHA256 => {
                 if let Some(rsa_key) = &self.rsa_key {
-                    if crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig).is_ok() {
+                    if crate::drivers::crypto::rsa::rsa_verify_pss_sha256(rsa_key, msg, sig).is_ok()
+                    {
                         return Ok(());
                     }
                 }
@@ -1076,8 +1100,7 @@ impl TlsSession {
             let mut h = Sha256::new();
             h.update(msg);
             let digest = h.finalize();
-            let (r, s) =
-                crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig).ok_or(())?;
+            let (r, s) = crate::drivers::crypto::ecc::parse_ecdsa_der_signature(sig).ok_or(())?;
             if crate::drivers::crypto::ecc::ecdsa_verify_p256(ec_key, &digest, &r, &s) {
                 return Ok(());
             }
@@ -2011,6 +2034,32 @@ pub fn build_client_hello(
     session_id: Option<&[u8]>,
     session_ticket: Option<&[u8]>,
 ) {
+    build_client_hello_with_alpn(
+        hostname,
+        client_random,
+        out,
+        ecdhe_secret_out,
+        fallback,
+        session_id,
+        session_ticket,
+        &[b"http/1.1"],
+    );
+}
+
+/// `build_client_hello`'nun ALPN protokol listesi parametreli sürümü.
+/// `alpn_protocols` sıralı tercihtir (ör. `&[b"h2", b"http/1.1"]`); boş
+/// verilirse ALPN uzantısı hiç gönderilmez.
+#[allow(clippy::too_many_arguments)]
+pub fn build_client_hello_with_alpn(
+    hostname: &str,
+    client_random: &[u8; 32],
+    out: &mut Vec<u8>,
+    ecdhe_secret_out: &mut [u8; 32],
+    fallback: bool,
+    session_id: Option<&[u8]>,
+    session_ticket: Option<&[u8]>,
+    alpn_protocols: &[&[u8]],
+) {
     out.clear();
 
     let mut handshake = Vec::new();
@@ -2076,15 +2125,25 @@ pub fn build_client_hello(
         extensions.extend_from_slice(host_bytes);
     }
 
-    // ALPN: http/1.1 ve h2 (HTTP/2) ikisini de ilan et.
-    // Sunucu ikisini de destekliyorsa h2 seçilir; desteklemiyorsa http/1.1'e düşer.
-    extensions.extend_from_slice(&0x0010u16.to_be_bytes());
-    extensions.extend_from_slice(&14u16.to_be_bytes());
-    extensions.extend_from_slice(&12u16.to_be_bytes());
-    extensions.push(8);
-    extensions.extend_from_slice(b"http/1.1");
-    extensions.push(2);
-    extensions.extend_from_slice(b"h2");
+    // ALPN (Application-Layer Protocol Negotiation): `alpn_protocols`
+    // sıralı tercih listesidir. Tarayıcının ana UI döngüsü http/1.1
+    // kullanır; HTTP/2 istemcisi `h2` ilave eder.
+    if !alpn_protocols.is_empty() {
+        let mut list = Vec::new();
+        for proto in alpn_protocols {
+            if proto.len() > 255 {
+                continue;
+            }
+            list.push(proto.len() as u8);
+            list.extend_from_slice(proto);
+        }
+        if !list.is_empty() {
+            extensions.extend_from_slice(&0x0010u16.to_be_bytes());
+            extensions.extend_from_slice(&((list.len() + 2) as u16).to_be_bytes());
+            extensions.extend_from_slice(&(list.len() as u16).to_be_bytes());
+            extensions.extend_from_slice(&list);
+        }
+    }
 
     // supported_versions: fallback == true ise sadece TLS 1.2, degilse 1.3 + 1.2.
     if fallback {

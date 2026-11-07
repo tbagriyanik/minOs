@@ -12,9 +12,18 @@
 //! - Aritmetik ve işlem önceliği: `+`, `-`, `*`, `/`, `%`, parantezler `(...)`, tekli `+`, `-`, `!`
 //! - Koşullar: `!`, `&&`, `||`, `==`/`!=`/`===`/`!==`, `<=`, `>=`, `<`, `>`, doğru/yanlış
 //! - Fonksiyonlar: `function name(a, b) { ... }`, `return expr`, parametre geri yükleme, fonksiyon içi çağrılar
+//! - Closure'lar: `var f = function (a) { ... }`, `var f = (a) => ...`, `a => expr`, anonim
+//!   geri çağrılar (`arr.forEach(function (x) { ... })`) ve hemen çağrılan fonksiyon
+//!   ifadeleri (`(function () { ... })()`). Closure, oluşturulma anındaki kapsamı
+//!   yakalar; her closure kendi gizli durumunu taşır (sayaç örneği gibi).
+//! - Zamanlayıcılar: `setTimeout(cb, ms)` / `setInterval(cb, ms)` — gerçek zamanlayıcı
+//!   kimliği döner, geri çağrı olarak fonksiyon adı / fonksiyon ifadesi / ok fonksiyonu /
+//!   ham kod kabul edilir; `clearTimeout(id)` / `clearInterval(id)` ile iptal edilir.
+//!   Zamanı gelen zamanlayıcılar `check_timers(now_ms, out)` ile çalıştırılır.
 //! - Döngüler: gerçek `for (init; cond; step) { ... }`, `for (item of array)`, `for (key in object)`, `while (cond) { ... }`, `break`, `continue`
 //! - Diziler: `[1, 2]`, `arr[i] = v`, `arr.length`, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
-//! - Nesneler: `{ a: 1 }`, `obj.prop = v`, `obj["key"] = v`, iç içe nesneler (`a.b.c`), `delete obj.prop`, `Object.keys()`, `Object.values()`
+//! - Dizi geri çağırmaları: `.forEach()`, `.map()`, `.filter()`, `.find()`, `.findIndex()`, `.some()`, `.every()`, `.reduce()` (closure/ok fonksiyonu kabul eder)
+//! - Nesneler: `{ a: 1 }`, `obj.prop = v`, `obj["key"] = v`, iç içe nesneler (`a.b.c`), `delete obj.prop`, `Object.keys()`, `Object.values()`, `Object.entries()`
 //! - JSON ve Global API'ler: `JSON.stringify()`, `JSON.parse()`, `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`
 //! - Matematik ve Dize: `Math.{abs, min, max, pow, floor, ceil, round}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`
 //! - DOM API'leri: `getElementById`, `getElementsByClassName`, `innerHTML`, `textContent`, `createElement`, `appendChild`, `setAttribute`, `getAttribute`, `addEventListener`, `dispatchEvent`
@@ -39,6 +48,7 @@ use alloc::collections::btree_map::BTreeMap;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::vec;
 use alloc::vec::Vec;
 
 #[cfg(not(any(test, host_fs_tests)))]
@@ -166,6 +176,8 @@ pub enum JsValue {
     Object(BTreeMap<String, JsValue>),
     /// Promise değeri: beklemede / yerine geldi / reddedildi.
     Promise(Box<PromiseObj>),
+    /// Fonksiyon değeri: closure, fonksiyon ifadesi veya ok fonksiyonu.
+    Function(Box<JsFunction>),
 }
 
 /// Promise durumu.
@@ -269,6 +281,17 @@ impl JsValue {
                 };
                 format!("[object Promise:{}]", state_str)
             }
+            JsValue::Function(f) => {
+                // Function.prototype.toString benzeri: kaynak görünümü.
+                let mut res = String::from("function ");
+                if !f.name.is_empty() {
+                    res.push_str(&f.name);
+                }
+                res.push('(');
+                res.push_str(&f.params.join(", "));
+                res.push_str(") { ... }");
+                res
+            }
         }
     }
 
@@ -279,6 +302,7 @@ impl JsValue {
             JsValue::Number(n) => *n != 0,
             JsValue::String(s) => !s.is_empty(),
             JsValue::Array(_) | JsValue::Object(_) | JsValue::Promise(_) => true,
+            JsValue::Function(_) => true,
         }
     }
 
@@ -313,6 +337,11 @@ pub struct JsFunction {
     pub body: String,
     /// async işareti: true ise çağrıldığında sonuç Promise ile sarmalanır.
     pub is_async: bool,
+    /// Closure kapsamı: fonksiyonun oluşturulduğu andaki çevre değişkenleri
+    /// (isim -> değer). Fonksiyon her çağrıldığında bu kapsam global
+    /// değişkenlerin üzerine bind edilir; çağrı sonundaki değişiklikler geri
+    /// yazılır. Böylece her closure kendi gizli durumunu taşır.
+    pub captured: Vec<(String, JsValue)>,
 }
 
 /// Kayıtlı olay dinleyicisi (addEventListener).
@@ -327,10 +356,13 @@ pub struct EventListener {
 #[derive(Clone, Debug)]
 pub struct Timer {
     pub id: u32,
-    pub callback: String, // fonksiyon adı veya JS kodu
+    pub callback: String,
+    /// `callback` bir fonksiyon adı mı (true) yoksa ham JS kodu mu (false)?
+    pub is_function: bool,
     pub delay_ms: u32,
     pub repeat: bool, // true = setInterval, false = setTimeout
-    pub fire_at: u64, // ticks'de ateşleme zamanı
+    /// Ateşleme zamanı (milisaniye, `main_monotonic_ms()` tabanlı); 0 = planlanmadı.
+    pub fire_at: u64,
 }
 
 // Sayfa boyunca süren JS durumu: değişkenler ve konsol çıktısı.
@@ -358,6 +390,8 @@ pub struct JsRuntime {
     pub timers: Vec<Timer>,
     /// Bir sonraki zamanlayıcı kimliği.
     pub next_timer_id: u32,
+    /// Anonim closure'lar için sayaç (fonksiyon adı üretimi).
+    next_closure_id: u32,
     /// localStorage kalıcı anahtar-değer deposu.
     pub local_storage: BTreeMap<String, String>,
     /// sessionStorage oturum bazlı anahtar-değer deposu.
@@ -404,6 +438,7 @@ impl Clone for JsRuntime {
             strict_mode: self.strict_mode,
             timers: self.timers.clone(),
             next_timer_id: self.next_timer_id,
+            next_closure_id: self.next_closure_id,
             local_storage: self.local_storage.clone(),
             session_storage: self.session_storage.clone(),
             websockets,
@@ -474,6 +509,7 @@ impl JsRuntime {
             strict_mode: false,
             timers: Vec::new(),
             next_timer_id: 1,
+            next_closure_id: 1,
             local_storage: BTreeMap::new(),
             session_storage: BTreeMap::new(),
             websockets: BTreeMap::new(),
@@ -502,6 +538,9 @@ impl JsRuntime {
     }
 
     pub fn var_set_val(&mut self, name: &str, val: JsValue) {
+        // Fonksiyon değerleri closure olarak kaydedilir; değişken fonksiyonun
+        // adını taşır (tek doğruluk kaynağı `functions` tablosudur).
+        let val = self.store_function_value(val);
         let s = val.to_str();
         if let Some(entry) = self.vars.iter_mut().find(|(k, _)| k == name) {
             entry.1 = s;
@@ -722,16 +761,31 @@ impl JsRuntime {
         }
     }
 
-    /// Zamanlayıcı ekler (setTimeout / setInterval).
+    /// Zamanlayıcı ekler (setTimeout / setInterval). `callback` ham JS kodu
+    /// ya da bir fonksiyon adı olabilir; `is_function` bunu ayırt eder.
+    /// Ateşleme zamanı şu anki zamana `delay_ms` eklenerek hesaplanır.
     pub fn add_timer(&mut self, callback: String, delay_ms: u32, repeat: bool) -> u32 {
+        self.add_timer_kind(callback, delay_ms, repeat, false)
+    }
+
+    /// Zamanlayıcı ekler; `is_function` true ise `callback` bir fonksiyon adıdır.
+    pub fn add_timer_kind(
+        &mut self,
+        callback: String,
+        delay_ms: u32,
+        repeat: bool,
+        is_function: bool,
+    ) -> u32 {
         let id = self.next_timer_id;
         self.next_timer_id += 1;
+        let now = crate::boot::time::main_monotonic_ms() as u64;
         self.timers.push(Timer {
             id,
             callback,
+            is_function,
             delay_ms,
             repeat,
-            fire_at: 0, // caller tarafından ayarlanır
+            fire_at: now.saturating_add(delay_ms as u64),
         });
         id
     }
@@ -741,27 +795,99 @@ impl JsRuntime {
         self.timers.retain(|t| t.id != id);
     }
 
-    /// Zamanlayıcıları kontrol eder ve hazır olanları çalıştırır.
-    pub fn check_timers(&mut self, now_ticks: u64, _ticks_per_ms: u64, _out: &mut Vec<u8>) {
-        let mut to_run: Vec<String> = Vec::new();
-        let mut to_remove: Vec<u32> = Vec::new();
-        for t in &self.timers {
-            if t.fire_at != 0 && now_ticks >= t.fire_at {
-                to_run.push(t.callback.clone());
-                if t.repeat {
-                    // tekrarlayan: tekrar programla
-                    // (basit implementasyon: fire_at'i güncelle)
+    /// Kayıtlı zamanlayıcı sayısı.
+    pub fn timer_count(&self) -> usize {
+        self.timers.len()
+    }
+
+    /// `setTimeout` / `setInterval` geri çağrısını çözümleyip zamanlayıcı kaydeder.
+    ///
+    /// Geri çağrı olarak şunlar kabul edilir:
+    /// - fonksiyon adı ya da closure taşıyan değişken (`setTimeout(tick, 100)`)
+    /// - fonksiyon ifadesi / ok fonksiyonu (`setTimeout(() => { ... }, 100)`)
+    /// - tırnaklı ham JS kodu (`setTimeout("tick()", 100)`)
+    ///
+    /// Dönüş: zamanlayıcı kimliği.
+    pub fn register_timer_callback(&mut self, cb_expr: &str, delay_ms: u32, repeat: bool) -> u32 {
+        let e = cb_expr.trim();
+        // Tırnaklı ham kod: `setTimeout("tick()", 100)`.
+        let quoted = e.len() >= 2
+            && ((e.starts_with('"') && e.ends_with('"')) || (e.starts_with('\'') && e.ends_with('\'')));
+        if quoted {
+            let code = String::from(&e[1..e.len() - 1]);
+            return self.add_timer(code, delay_ms, repeat);
+        }
+        // Fonksiyon ifadesi / ok fonksiyonu: closure olarak kaydet.
+        if let Some((params, body, is_async)) = parse_function_expr(e) {
+            let func = JsFunction {
+                name: String::new(),
+                params,
+                body,
+                is_async,
+                captured: self.capture_env(),
+            };
+            let name = self.register_closure(func);
+            return self.add_timer_kind(name, delay_ms, repeat, true);
+        }
+        // Fonksiyon adı ya da closure taşıyan değişken.
+        if let Some(fname) = self.resolve_function_name(e) {
+            return self.add_timer_kind(fname, delay_ms, repeat, true);
+        }
+        // Ham kod parçası (örn. `counter++`).
+        self.add_timer(String::from(e), delay_ms, repeat)
+    }
+
+    /// Zamanlayıcıları kontrol eder; zamanı gelenleri çalıştırır.
+    ///
+    /// `now_ms` verilirse o zaman damgası kullanılır (test edilebilirlik için),
+    /// 0 verilirse sistem saati okunur. Tek seferlik zamanlayıcılar kaldırılır,
+    /// yineleyiciler bir sonraki ateşleme zamanına ötelenir. Geri çağrıların
+    /// `document.write` çıktısü `out`'a eklenir; Promise microtask'ları da
+    /// çağrı sonunda boşaltılır.
+    pub fn check_timers(&mut self, now_ms: u64, out: &mut Vec<u8>) {
+        if self.timers.is_empty() {
+            return;
+        }
+        let now = if now_ms == 0 {
+            crate::boot::time::main_monotonic_ms() as u64
+        } else {
+            now_ms
+        };
+        // Zamanı gelmiş zamanlayıcıları topla (yineleyenleri ötele).
+        let mut due: Vec<(String, bool)> = Vec::new();
+        let mut i = 0usize;
+        while i < self.timers.len() {
+            let fire = {
+                let t = &self.timers[i];
+                t.fire_at != 0 && now >= t.fire_at
+            };
+            if fire {
+                let (callback, is_function, repeat, delay, id) = {
+                    let t = &self.timers[i];
+                    (t.callback.clone(), t.is_function, t.repeat, t.delay_ms, t.id)
+                };
+                due.push((callback, is_function));
+                if repeat {
+                    let step = (delay as u64).max(1);
+                    let next = self.timers[i].fire_at.saturating_add(step);
+                    // Birikmiş gecikmeyi sınırla: en kötü durumda bir adım ileri.
+                    self.timers[i].fire_at = if next > now { next } else { now + step };
                 } else {
-                    to_remove.push(t.id);
+                    self.timers.retain(|t| t.id != id);
+                    continue;
                 }
             }
+            i += 1;
         }
-        for id in &to_remove {
-            self.remove_timer(*id);
+        for (callback, is_function) in due {
+            if is_function {
+                let _ = self.call_function(&callback, &[], out);
+            } else {
+                self.run(&callback, out);
+            }
         }
-        for cb in &to_run {
-            self.microtask_queue.push(cb.clone());
-        }
+        // Zamanlayıcı geri çağrıları Promise microtask bırakmış olabilir.
+        self.run_microtasks(out);
     }
 
     pub fn define_function(&mut self, name: &str, params: Vec<String>, body: &str, is_async: bool) {
@@ -772,15 +898,62 @@ impl JsRuntime {
                 params,
                 body: String::from(body),
                 is_async,
+                captured: Vec::new(),
             },
         );
     }
 
-    pub fn call_function(&mut self, name: &str, args: &[JsValue], out: &mut Vec<u8>) -> JsValue {
-        let func = match self.functions.get(name).cloned() {
-            Some(f) => f,
-            None => return JsValue::Undefined,
-        };
+    /// Bir fonksiyon değerini runtime'a kaydeder ve benzersiz dahili adını
+    /// döndürür (`__closure_N`). Closure'ların kapsamı bu kayıtla birlikte
+    /// saklanır; çağrı sonundaki değişiklikler bu kayda geri yazılır.
+    pub fn register_closure(&mut self, func: JsFunction) -> String {
+        let name = format!("__closure_{}", self.next_closure_id);
+        self.next_closure_id += 1;
+        self.functions.insert(name.clone(), func);
+        name
+    }
+
+    /// Bir ismin fonksiyona karşılık geldiğini çözer: doğrudan bir fonksiyon
+    /// adı olabileceği gibi, bir fonksiyon tutan değişkenin adı da olabilir.
+    pub fn resolve_function_name(&self, name: &str) -> Option<String> {
+        if self.functions.contains_key(name) {
+            return Some(String::from(name));
+        }
+        if let Some(JsValue::String(inner)) = self.values.get(name) {
+            if self.functions.contains_key(inner) {
+                return Some(inner.clone());
+            }
+        }
+        None
+    }
+
+    /// Fonksiyon değerini değişkenlere/nesnelere yazılabilir biçime çevirir:
+    /// closure'lar `self.functions` içine kaydedilir ve adı bir dize olarak
+    /// saklanır (tek doğruluk kaynağı runtime'ın fonksiyon tablosudur).
+    pub fn store_function_value(&mut self, val: JsValue) -> JsValue {
+        match val {
+            JsValue::Function(f) => {
+                let name = self.register_closure(*f);
+                JsValue::String(name)
+            }
+            other => other,
+        }
+    }
+
+    /// Bir fonksiyonun gövdesini çalıştırır ve kapsamdaki değişiklikleri
+    /// (closure durumu) döndürür: `(dönüş_değeri, güncel_kapsam)`.
+    fn run_function_body(
+        &mut self,
+        func: &JsFunction,
+        args: &[JsValue],
+        out: &mut Vec<u8>,
+    ) -> (JsValue, Vec<(String, JsValue)>) {
+        // Closure kapsamını bind et: yakalanan değişkenler global değişkenlerin
+        // üzerine yazılır (gölgeler).
+        for (k, v) in &func.captured {
+            self.values.insert(k.clone(), v.clone());
+            self.sync_var_from_val(k);
+        }
         let old_values = self.values.clone();
         for (i, param) in func.params.iter().enumerate() {
             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
@@ -816,7 +989,190 @@ impl JsRuntime {
                 self.vars.retain(|(k, _)| k != param);
             }
         }
+        // Kapsamdaki değişiklikleri topla: closure'ın kalıcı durumu budur.
+        let mut captured: Vec<(String, JsValue)> = Vec::with_capacity(func.captured.len());
+        for (k, _) in &func.captured {
+            let v = self.values.get(k).cloned().unwrap_or(JsValue::Undefined);
+            captured.push((k.clone(), v));
+        }
+        (ret, captured)
+    }
+
+    pub fn call_function(&mut self, name: &str, args: &[JsValue], out: &mut Vec<u8>) -> JsValue {
+        let func = match self.functions.get(name).cloned() {
+            Some(f) => f,
+            None => return JsValue::Undefined,
+        };
+        let (ret, captured) = self.run_function_body(&func, args, out);
+        // Closure kapsamı geri yazılır: bir sonraki çağrı güncel durumu görür.
+        if !func.captured.is_empty() {
+            if let Some(f) = self.functions.get_mut(name) {
+                f.captured = captured;
+            }
+        }
         ret
+    }
+
+    /// Bir fonksiyon değerini (closure) çağırır. Kapsam değişiklikleri
+    /// `func` kopyasına yazılır ve `updated` ile döndürülür; çağıran taraf
+    /// fonksiyon değerini tuttuğu yerde bu kopyayı geri yazmalıdır.
+    fn call_function_value(
+        &mut self,
+        func: &JsFunction,
+        args: &[JsValue],
+        out: &mut Vec<u8>,
+    ) -> (JsValue, JsFunction) {
+        let (ret, captured) = self.run_function_body(func, args, out);
+        let mut updated = func.clone();
+        if !captured.is_empty() {
+            updated.captured = captured;
+        }
+        (ret, updated)
+    }
+
+    /// Bir geri çağrı ifadesini çalıştırır: fonksiyon ifadesi, ok fonksiyonu,
+    /// fonksiyon adı/closure taşıyan değişken ya da ham JS kodu olabilir.
+    /// Dönüş: çağrı sonucu.
+    fn invoke_callback(&mut self, cb_expr: &str, args: &[JsValue], out: &mut Vec<u8>) -> JsValue {
+        let e = cb_expr.trim();
+        if e.is_empty() {
+            return JsValue::Undefined;
+        }
+        // 1) Fonksiyon ifadesi / ok fonksiyonu: `function (x) { ... }`, `(x) => ...`
+        if let Some((params, body, is_async)) = parse_function_expr(e) {
+            let func = JsFunction {
+                name: String::new(),
+                params,
+                body,
+                is_async,
+                captured: self.capture_env(),
+            };
+            let (ret, _) = self.call_function_value(&func, args, out);
+            return ret;
+        }
+        // 2) Fonksiyon adı ya da closure taşıyan değişken.
+        if let Some(fname) = self.resolve_function_name(e) {
+            return self.call_function(&fname, args, out);
+        }
+        // 3) Ham kod: `counter++` gibi bir deyim olarak çalıştır.
+        let code = String::from(e);
+        self.run(&code, out);
+        JsValue::Undefined
+    }
+
+    /// Dizi geri çağırmalı metotlarını çalıştırır: `forEach`, `map`, `filter`,
+    /// `find`, `findIndex`, `some`, `every`, `reduce`.
+    ///
+    /// Geri çağrı imzası: `(item, index, array)`. `reduce` için ilk değer
+    /// olarak verilen ikinci argüman kullanılır (yoksa dizinin ilk elemanı).
+    fn run_array_callback(
+        &mut self,
+        method: &str,
+        items: &[JsValue],
+        cb_expr: &str,
+        args: &str,
+        out: &mut Vec<u8>,
+    ) -> JsValue {
+        let array_val = JsValue::Array(items.to_vec());
+        // reduce başlangıç değeri (ikinci argüman).
+        let mut acc: Option<JsValue> = None;
+        let mut start = 0usize;
+        if method == "reduce" {
+            let parts = split_top_level_comma(args);
+            if parts.len() >= 2 {
+                acc = Some(self.eval_val(parts[1]));
+            } else if !items.is_empty() {
+                acc = Some(items[0].clone());
+                start = 1;
+            }
+        }
+
+        let mut result_items: Vec<JsValue> = Vec::new();
+        let mut found = JsValue::Undefined;
+        let mut found_idx: i64 = -1;
+        let mut short_out = false;
+
+        for (i, item) in items.iter().enumerate() {
+            if i < start {
+                continue;
+            }
+            let cb_args = if method == "reduce" {
+                alloc::vec![
+                    acc.clone().unwrap_or(JsValue::Undefined),
+                    item.clone(),
+                    JsValue::Number(i as i64),
+                    array_val.clone()
+                ]
+            } else {
+                alloc::vec![
+                    item.clone(),
+                    JsValue::Number(i as i64),
+                    array_val.clone()
+                ]
+            };
+            let ret = self.invoke_callback(cb_expr, &cb_args, out);
+            match method {
+                "forEach" => {}
+                "map" => result_items.push(ret),
+                "filter" => {
+                    if ret.is_truthy() {
+                        result_items.push(item.clone());
+                    }
+                }
+                "find" => {
+                    if ret.is_truthy() {
+                        found = item.clone();
+                        found_idx = i as i64;
+                        short_out = true;
+                    }
+                }
+                "findIndex" => {
+                    if ret.is_truthy() {
+                        found_idx = i as i64;
+                        short_out = true;
+                    }
+                }
+                "some" => {
+                    if ret.is_truthy() {
+                        short_out = true;
+                    }
+                }
+                "every" => {
+                    if !ret.is_truthy() {
+                        short_out = true;
+                    }
+                }
+                "reduce" => acc = Some(ret),
+                _ => {}
+            }
+            if short_out {
+                break;
+            }
+        }
+
+        match method {
+            "forEach" => JsValue::Undefined,
+            "map" => JsValue::Array(result_items),
+            "filter" => JsValue::Array(result_items),
+            "find" => found,
+            "findIndex" => JsValue::Number(found_idx),
+            "some" => JsValue::Bool(short_out),
+            "every" => JsValue::Bool(!short_out),
+            "reduce" => acc.unwrap_or(JsValue::Undefined),
+            _ => JsValue::Undefined,
+        }
+    }
+
+    /// Çağrı anındaki kullanıcı kapsamının anlık görüntüsü (closure yakalaması).
+    fn capture_env(&self) -> Vec<(String, JsValue)> {
+        let mut captured: Vec<(String, JsValue)> = Vec::new();
+        for (k, v) in &self.values {
+            // Dahili motor değişkenleri closure kapsamına sızmaz.
+            if !k.starts_with("__") {
+                captured.push((k.clone(), v.clone()));
+            }
+        }
+        captured
     }
 
     pub fn call_function_pure(&self, name: &str, args: &[JsValue]) -> JsValue {
@@ -1075,6 +1431,39 @@ impl JsRuntime {
             return self.eval_val(stripped);
         }
 
+        // Fonksiyon ifadesi / ok fonksiyonu: `function (a) { ... }`, `(a) => ...`
+        // (ikili işlem ayrıştırmasından ÖNCE — gövde aritmetik içerebilir).
+        // Oluşturulma anındaki kapsam yakalanır: closure semantiği.
+        if let Some((params, body, is_async)) = parse_function_expr(e) {
+            let func = JsFunction {
+                name: String::new(),
+                params,
+                body,
+                is_async,
+                captured: self.capture_env(),
+            };
+            return JsValue::Function(Box::new(func));
+        }
+
+        // Hemen çağrılan fonksiyon ifadesi (IIFE): `(function () { ... })()`
+        if let Some((callee, arg_str)) = split_iife(e) {
+            if let Some((params, body, is_async)) = parse_function_expr(callee) {
+                let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                    .into_iter()
+                    .map(|a| self.eval_val(a))
+                    .collect();
+                let func = JsFunction {
+                    name: String::new(),
+                    params,
+                    body,
+                    is_async,
+                    captured: self.capture_env(),
+                };
+                let (ret, _) = self.call_function_value(&func, &args, &mut Vec::new());
+                return ret;
+            }
+        }
+
         // `obj instanceof Constructor` — sınıf/miras zinciri kontrolü.
         if let Some(idx) = find_top_level_word(e.as_bytes(), b"instanceof") {
             let left = e[..idx].trim();
@@ -1202,10 +1591,16 @@ impl JsRuntime {
                     "keys" => {
                         let v = self.eval_val(args);
                         let keys = match v {
-                            JsValue::Object(map) => {
-                                map.keys().cloned().map(JsValue::String).collect()
-                            }
+                            JsValue::Object(map) => map
+                                .keys()
+                                .filter(|k| !is_internal_key(k))
+                                .cloned()
+                                .map(JsValue::String)
+                                .collect(),
                             JsValue::Array(items) => (0..items.len())
+                                .map(|i| JsValue::String(i.to_string()))
+                                .collect(),
+                            JsValue::String(s) => (0..s.chars().count())
                                 .map(|i| JsValue::String(i.to_string()))
                                 .collect(),
                             _ => Vec::new(),
@@ -1215,11 +1610,40 @@ impl JsRuntime {
                     "values" => {
                         let v = self.eval_val(args);
                         let vals = match v {
-                            JsValue::Object(map) => map.into_values().collect(),
+                            JsValue::Object(map) => map
+                                .into_iter()
+                                .filter(|(k, _)| !is_internal_key(k))
+                                .map(|(_, v)| v)
+                                .collect(),
                             JsValue::Array(items) => items,
+                            JsValue::String(s) => {
+                                s.chars().map(|c| JsValue::String(c.to_string())).collect()
+                            }
                             _ => Vec::new(),
                         };
                         return JsValue::Array(vals);
+                    }
+                    "entries" => {
+                        // Object.entries(obj) — [ [anahtar, değer], ... ]
+                        let v = self.eval_val(args);
+                        let entries: Vec<JsValue> = match v {
+                            JsValue::Object(map) => map
+                                .into_iter()
+                                .filter(|(k, _)| !is_internal_key(k))
+                                .map(|(k, val)| {
+                                    JsValue::Array(vec![JsValue::String(k), val])
+                                })
+                                .collect(),
+                            JsValue::Array(items) => items
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, val)| {
+                                    JsValue::Array(vec![JsValue::String(i.to_string()), val])
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        };
+                        return JsValue::Array(entries);
                     }
                     "create" => {
                         // Object.create(proto) — yeni nesne, prototip zinciri kurulur.
@@ -1548,6 +1972,24 @@ impl JsRuntime {
                                     }
                                 }
                                 return JsValue::Array(new_items);
+                            }
+                            // Geri çağırmalı dizi metotları: closure / ok
+                            // fonksiyonu / fonksiyon adı kabul edilir.
+                            "forEach" | "map" | "filter" | "find" | "findIndex" | "some"
+                            | "every" | "reduce" => {
+                                let cb = split_top_level_comma(args)
+                                    .first()
+                                    .map(|s| s.trim().to_string())
+                                    .unwrap_or_default();
+                                let mut sink = Vec::new();
+                                let result = self.run_array_callback(
+                                    method,
+                                    &items,
+                                    &cb,
+                                    args,
+                                    &mut sink,
+                                );
+                                return result;
                             }
                             _ => {}
                         },
@@ -2056,6 +2498,56 @@ impl JsRuntime {
                         }
                     }
                 }
+
+                // Nesne özelliği olarak saklanan closure çağrısı:
+                // `obj.f(...)` — `this` nesneye bağlanır.
+                let prop_fn: Option<(String, JsFunction)> = match &base_val {
+                    JsValue::Object(map) => match map.get(mname) {
+                        Some(JsValue::String(fn_name)) => self
+                            .functions
+                            .get(fn_name)
+                            .cloned()
+                            .map(|f| (fn_name.clone(), f)),
+                        Some(JsValue::Function(f)) => Some((String::new(), (**f).clone())),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some((fn_name, func)) = prop_fn {
+                    let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                        .into_iter()
+                        .map(|a| self.eval_val(a))
+                        .collect();
+                    let old_this = self.values.get("this").cloned();
+                    if let JsValue::Object(ref map) = base_val {
+                        self.values
+                            .insert(String::from("this"), JsValue::Object(map.clone()));
+                    }
+                    let (ret, updated) = if fn_name.is_empty() {
+                        // Anonim fonksiyon değeri: kapsamı özelliğe geri yaz.
+                        let (ret, updated) = self.call_function_value(&func, &args, &mut Vec::new());
+                        if let Some(JsValue::Object(ref mut map)) =
+                            self.values.get_mut(obj_name).map(|v| &mut *v)
+                        {
+                            if let Some(slot) = map.get_mut(mname) {
+                                *slot = JsValue::Function(Box::new(updated.clone()));
+                            }
+                        }
+                        (ret, updated)
+                    } else {
+                        (self.call_function(&fn_name, &args, &mut Vec::new()), func)
+                    };
+                    let _ = updated;
+                    match old_this {
+                        Some(v) => {
+                            self.values.insert(String::from("this"), v);
+                        }
+                        None => {
+                            self.values.remove("this");
+                        }
+                    }
+                    return ret;
+                }
             }
         }
 
@@ -2104,12 +2596,13 @@ impl JsRuntime {
                         return JsValue::Bool(self.eval_val(arg_str).is_truthy());
                     }
                     _ => {
-                        if self.functions.contains_key(fname) {
+                        // Kullanıcı fonksiyonu ya da closure taşıyan değişken.
+                        if let Some(target) = self.resolve_function_name(fname) {
                             let args: Vec<JsValue> = split_top_level_comma(arg_str)
                                 .into_iter()
                                 .map(|a| self.eval_val(a))
                                 .collect();
-                            return self.call_function_pure(fname, &args);
+                            return self.call_function_pure(&target, &args);
                         }
                     }
                 }
@@ -2471,6 +2964,7 @@ impl JsRuntime {
                                             params,
                                             body: body.to_string(),
                                             is_async: false,
+                                            captured: Vec::new(),
                                         };
                                         if is_static {
                                             js_class
@@ -2543,8 +3037,13 @@ impl JsRuntime {
                             }
                         }
                         let obj_val = self.eval_val(obj_expr.trim());
+                        // Dahili anahtarlar (`__class__` vb.) kullanıcıya görünmez.
                         let keys: Vec<String> = match obj_val {
-                            JsValue::Object(map) => map.keys().cloned().collect(),
+                            JsValue::Object(map) => map
+                                .keys()
+                                .filter(|k| !is_internal_key(k))
+                                .cloned()
+                                .collect(),
                             JsValue::Array(items) => {
                                 (0..items.len()).map(|i| i.to_string()).collect()
                             }
@@ -2874,9 +3373,25 @@ impl JsRuntime {
                 if parts.len() >= 2 {
                     let ev_type = self.eval_expr(parts[0]);
                     let handler_arg = parts[1].trim();
-                    if let Some(rest) = keyword(handler_arg, "function") {
-                        let anon_name = format!("__anon_evt_{}", self.listeners.len());
-                        let r = rest.trim_start();
+                    // Geri çağrı bir fonksiyon ifadesi / ok fonksiyonu olabilir.
+                    let handler_expr = if let Some((params, body, is_async)) =
+                        parse_function_expr(handler_arg)
+                    {
+                        let func = JsFunction {
+                            name: String::new(),
+                            params,
+                            body,
+                            is_async,
+                            captured: self.capture_env(),
+                        };
+                        self.register_closure(func)
+                    } else if let Some(fname) = self.resolve_function_name(handler_arg) {
+                        fname
+                    } else {
+                        let r = match keyword(handler_arg, "function") {
+                            Some(rest) => rest.trim_start(),
+                            None => handler_arg,
+                        };
                         if let Some(open) = r.find('(') {
                             if let Some((pstr, after_p)) = call_args(r, open) {
                                 let bpart = r[after_p..].trim_start();
@@ -2886,17 +3401,27 @@ impl JsRuntime {
                                         .map(|p| p.trim().to_string())
                                         .filter(|p| !p.is_empty())
                                         .collect();
+                                    let anon_name = format!("__anon_evt_{}", self.listeners.len());
                                     self.define_function(&anon_name, params, b, false);
-                                    self.add_event_listener(target, &ev_type, &anon_name);
-                                    return;
+                                    anon_name
+                                } else {
+                                    handler_arg
+                                        .trim_matches(|c| c == '\'' || c == '"')
+                                        .to_string()
                                 }
+                            } else {
+                                handler_arg
+                                    .trim_matches(|c| c == '\'' || c == '"')
+                                    .to_string()
                             }
+                        } else {
+                            handler_arg
+                                .trim_matches(|c| c == '\'' || c == '"')
+                                .to_string()
                         }
-                    } else {
-                        let handler_name = handler_arg.trim_matches(|c| c == '\'' || c == '"');
-                        self.add_event_listener(target, &ev_type, handler_name);
-                        return;
-                    }
+                    };
+                    self.add_event_listener(target, &ev_type, &handler_expr);
+                    return;
                 }
             }
             return;
@@ -2929,7 +3454,8 @@ impl JsRuntime {
                         let var_name = s[..open_br].trim();
                         let idx_str = &s[open_br + 1..close_br];
                         let evaluated_idx = self.eval_val(idx_str).to_str();
-                        let val = self.eval_val(eq.trim());
+                        let raw_val = self.eval_val(eq.trim());
+                        let val = self.store_function_value(raw_val);
                         if let Some(existing) = self.values.get_mut(var_name) {
                             match existing {
                                 JsValue::Array(ref mut items) => {
@@ -2966,7 +3492,8 @@ impl JsRuntime {
                         && !obj_name.starts_with("document.")
                         && !obj_name.starts_with("element.")
                     {
-                        let val = self.eval_val(rhs);
+                        let raw_val = self.eval_val(rhs);
+                        let val = self.store_function_value(raw_val);
                         if let Some(existing) = self.values.get_mut(obj_name) {
                             if let JsValue::Object(ref mut map) = existing {
                                 map.insert(String::from(prop), val);
@@ -2980,15 +3507,38 @@ impl JsRuntime {
         }
 
         // Kullanıcı tanımlı fonksiyon çağrısı: fname(args)
+        // `fname` doğrudan bir fonksiyon adı olabileceği gibi, closure taşıyan
+        // bir değişkenin adı da olabilir (`resolve_function_name` çözer).
         if let Some(open) = s.find('(') {
             let fname = s[..open].trim();
-            if self.functions.contains_key(fname) && s.ends_with(')') {
-                if let Some((arg_str, _)) = call_args(s, open) {
-                    let args: Vec<JsValue> = split_top_level_comma(arg_str)
-                        .into_iter()
-                        .map(|a| self.eval_val(a.trim()))
-                        .collect();
-                    let _ = self.call_function(fname, &args, out);
+            if s.ends_with(')') && !fname.contains('.') && is_simple_ident(fname) {
+                if let Some(target) = self.resolve_function_name(fname) {
+                    if let Some((arg_str, _)) = call_args(s, open) {
+                        let args: Vec<JsValue> = split_top_level_comma(arg_str)
+                            .into_iter()
+                            .map(|a| self.eval_val(a.trim()))
+                            .collect();
+                        let _ = self.call_function(&target, &args, out);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Dizi geri çağırmalı metotları (deyim düzeyinde): çıktı `out`'a
+        // yazılabilsin diye `eval_val` yerine burada çalıştırılır.
+        // Örn. `arr.forEach(function (x) { document.write(x); });`
+        if let Some((base, method, args)) = extract_method_call(s) {
+            if matches!(
+                method,
+                "forEach" | "map" | "filter" | "find" | "findIndex" | "some" | "every" | "reduce"
+            ) {
+                if let JsValue::Array(items) = self.eval_val(base) {
+                    let cb = split_top_level_comma(args)
+                        .first()
+                        .map(|c| c.trim().to_string())
+                        .unwrap_or_default();
+                    let _ = self.run_array_callback(method, &items, &cb, args, out);
                     return;
                 }
             }
@@ -3087,36 +3637,39 @@ impl JsRuntime {
                 } else if name == "element.getAttribute" {
                     out.extend_from_slice(b"null");
                 } else if name == "setTimeout" {
-                    // setTimeout(callback, ms) — microtask sırasına ekler.
+                    // setTimeout(callback, ms) — zamanlayıcı kaydeder, kimlik döner.
                     let parts: Vec<&str> = split_top_level_comma(args);
                     if let Some(cb) = parts.first() {
                         let ms = parts
                             .get(1)
-                            .map(|m| m.trim().parse::<u32>().unwrap_or(0))
+                            .map(|m| self.eval_val(m).to_i64().max(0) as u32)
                             .unwrap_or(0);
-                        let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
-                        self.add_timer(cb_str.to_string(), ms, false);
+                        let id = self.register_timer_callback(cb, ms, false);
+                        out.extend_from_slice(id.to_string().as_bytes());
+                    } else {
+                        out.extend_from_slice(b"0");
                     }
-                    out.extend_from_slice(b"0");
                 } else if name == "setInterval" {
                     // setInterval(callback, ms) — tekrarlayan zamanlayıcı.
                     let parts: Vec<&str> = split_top_level_comma(args);
                     if let Some(cb) = parts.first() {
                         let ms = parts
                             .get(1)
-                            .map(|m| m.trim().parse::<u32>().unwrap_or(0))
+                            .map(|m| self.eval_val(m).to_i64().max(0) as u32)
                             .unwrap_or(0);
-                        let cb_str = cb.trim().trim_matches(|c| c == '\'' || c == '"');
-                        self.add_timer(cb_str.to_string(), ms, true);
+                        let id = self.register_timer_callback(cb, ms, true);
+                        out.extend_from_slice(id.to_string().as_bytes());
+                    } else {
+                        out.extend_from_slice(b"0");
                     }
-                    out.extend_from_slice(b"0");
                 } else if name == "clearTimeout" || name == "clearInterval" {
+                    // clearTimeout(id) / clearInterval(id) — zamanlayıcıyı iptal et.
                     let parts: Vec<&str> = split_top_level_comma(args);
                     if let Some(id_str) = parts.first() {
-                        let id: u32 = id_str.trim().parse().unwrap_or(0);
+                        let id = self.eval_val(id_str).to_i64().max(0) as u32;
                         self.remove_timer(id);
                     }
-                    out.extend_from_slice(b"");
+                    out.extend_from_slice(b"undefined");
                 } else if name == "fetch" {
                     // fetch(url) — HTTP GET isteği yapar, Promise döndürür.
                     let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
@@ -3282,6 +3835,150 @@ fn keyword<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
     } else {
         None
     }
+}
+
+/// Motorun dahili olarak kullandığı anahtarlar: kullanıcı koduna görünmez
+/// (`Object.keys`, `for...in`, `JSON.stringify` bunları atlar).
+fn is_internal_key(key: &str) -> bool {
+    matches!(
+        key,
+        "__class__"
+            | "__extends__"
+            | "__fn__"
+            | "__params__"
+            | "__storage_type__"
+            | "__ws_id__"
+            | "__then_value"
+            | "__catch_reason"
+            | "__proto__"
+    ) || key.starts_with("__closure_")
+        || key.starts_with("__async_promise_")
+        || key.starts_with("__resp_")
+        || key.starts_with("__obj_")
+        || key.starts_with("__ws_")
+        || key.starts_with("__anon_evt_")
+}
+
+/// Virgülle ayrılmış bir listeyi parametre isimlerine çevirir.
+fn parse_param_list(param_str: &str) -> Vec<String> {
+    split_top_level_comma(param_str)
+        .into_iter()
+        .map(|p| {
+            // Varsayılan değer (`a = 1`) ve tip işaretlerini at.
+            let name = p.split('=').next().unwrap_or("").trim();
+            name.to_string()
+        })
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Bir fonksiyon ifadesini ayrıştırır.
+///
+/// Kabul edilen biçimler:
+/// - `function (a, b) { ... }` — isimsiz fonksiyon ifadesi
+/// - `function ad(a, b) { ... }` — isimli fonksiyon ifadesi
+/// - `(a, b) => { ... }` ve `() => { ... }` — blok gövdeli ok fonksiyonu
+/// - `(a, b) => expr` ve `a => expr` — ifade gövdeli ok fonksiyonu
+/// - `async` önekli tümü (`async function ...`, `async (a) => ...`)
+///
+/// Dönüş: `(parametreler, gövde, async_mi)`.
+fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool)> {
+    let s = src.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (is_async, s) = match keyword(s, "async") {
+        Some(rest) => (true, rest.trim_start()),
+        None => (false, s),
+    };
+
+    // `function [ad] (params) { body }`
+    if let Some(rest) = keyword(s, "function") {
+        let r = rest.trim_start();
+        let open = r.find('(')?;
+        // İsim (varsa) basit bir tanımlayıcı olmalı.
+        let fname = r[..open].trim();
+        if !fname.is_empty() && !is_simple_ident(fname) {
+            return None;
+        }
+        let (param_str, after) = call_args(r, open)?;
+        let body = extract_block(r[after..].trim_start())?;
+        return Some((parse_param_list(param_str), String::from(body), is_async));
+    }
+
+    // Ok fonksiyonu: `params => body`
+    let arrow = find_top_level(s.as_bytes(), b"=>")?;
+    let params_src = s[..arrow].trim();
+    let body_src = s[arrow + 2..].trim();
+    if body_src.is_empty() {
+        return None;
+    }
+    let params = if let Some(inner) = params_src
+        .strip_prefix('(')
+        .and_then(|p| p.strip_suffix(')'))
+    {
+        parse_param_list(inner)
+    } else if is_simple_ident(params_src) {
+        alloc::vec![String::from(params_src)]
+    } else {
+        return None;
+    };
+    // Blok gövdeli ok fonksiyonu mu, ifade gövdeli mi?
+    let body = if let Some(block) = extract_block(body_src) {
+        String::from(block)
+    } else {
+        // İfade gövdesi: `return` ile sarılır.
+        format!("return {}", body_src)
+    };
+    Some((params, body, is_async))
+}
+
+/// Hemen çağrılan fonksiyon ifadesini (IIFE) ayırır: `(callee)(args)`.
+///
+/// Yalnızca `callee` bir fonksiyon ifadesi/ok fonksiyonu gibi görünüyorsa
+/// `Some` döner; sıradan `foo(1)` çağrılarında `None` döner.
+fn split_iife(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim();
+    if !s.ends_with(')') {
+        return None;
+    }
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut open = None;
+    for i in (0..b.len()).rev() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = Some(c),
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let callee = s[..open].trim();
+    // Sıradan çağrılar (`foo(1)`, `arr.map(f)`) burada değerlendirilmez.
+    let looks_like_fn = callee.starts_with('(')
+        || callee.starts_with("function")
+        || callee.starts_with("async")
+        || callee.contains("=>");
+    if !looks_like_fn {
+        return None;
+    }
+    let args = &s[open + 1..s.len() - 1];
+    Some((callee, args))
 }
 
 /// Parantez/süslü parantez içermeyen ilk eşleşmenin konumunu bulur.
@@ -3692,10 +4389,16 @@ fn json_stringify(val: &JsValue) -> String {
         }
         JsValue::Object(map) => {
             let mut res = String::from("{");
-            for (i, (k, v)) in map.iter().enumerate() {
-                if i > 0 {
+            let mut first = true;
+            for (k, v) in map.iter() {
+                // Dahili anahtarlar JSON çıktısına sızmaz.
+                if is_internal_key(k) {
+                    continue;
+                }
+                if !first {
                     res.push(',');
                 }
+                first = false;
                 res.push_str(&json_stringify(&JsValue::String(k.clone())));
                 res.push(':');
                 res.push_str(&json_stringify(v));
@@ -3704,6 +4407,8 @@ fn json_stringify(val: &JsValue) -> String {
             res
         }
         JsValue::Promise(_) => String::from("Promise { <pending> }"),
+        // Fonksiyonlar JSON'da `undefined` olarak serileşir.
+        JsValue::Function(_) => String::from("undefined"),
     }
 }
 

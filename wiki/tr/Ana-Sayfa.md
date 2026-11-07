@@ -28,8 +28,8 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.101.0-nightly |
-| **Toplam Kod Satırı** | ~100.971 satır (Rust) |
-| **Birim Testleri** | 195 geçti / 0 hata |
+| **Toplam Kod Satırı** | ~129.179 satır (Rust) |
+| **Birim Testleri** | 228 geçti / 0 hata |
 | **Güvenilen Kök CA** | 51 sertifika |
 | **Yerleşik Uygulama** | 15 masaüstü uygulaması |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |
@@ -40,6 +40,7 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 - **TLS 1.3 HTTPS:** Tarayıcı `https://` bağlantılarını RFC 8446 uyumlu olarak tamamlar; IPv6 (AAAA) öncelikli, IPv4 geri düşüşlü bağlantı.
 - **Tarayıcı Motoru:** Progresif (SOF2) JPEG çözme, `@font-face` kural ayrıştırma ve `@keyframes` renk/opaklık animasyonu.
+- **minJs JavaScript Çalışma Zamanı:** Yerleşik `no_std` JavaScript motoru **closure** (fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama), **`setTimeout`/`setInterval`** zamanlayıcılarının `clearTimeout`/`clearInterval` ile iptali, **`Object.keys()`/`Object.values()`/`Object.entries()`** ve dizi geri çağırmalı metotları (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`) ile genişletildi. Fonksiyon değerleri değişkene/nesne özelliğine atanıp `obj.method()` biçiminde çağrılabilir.
 - **Dinamik Tema:** 5 tema (Kadife Gece, Gün Işığı, Kutup Mavisi, Yeşil Terminal, Gün Batımı) canlı geçiş.
 - **xHCI USB HID:** Yerel USB klavye/fare desteği, PS/2 fallback ile.
 - **Ağ:** Intel PRO/1000, RTL8139, AMD PCnet algılama, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net ve VMware VMXNET3.

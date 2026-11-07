@@ -20,6 +20,7 @@ minOs release notes and future plans.
 - **Live USB Hot-plug:** USB devices detected instantly with toast notifications.
 - **OHCI & UHCI & EHCI Transfer Layer:** Complete transfer layer and port handoff infrastructure.
 - **minJs Advanced JavaScript Runtime:** Binary arithmetic, loops, variable mutations, array methods, object properties, JSON, math/string helpers, global conversions.
+- **minJs Closures & Timers:** Closure support (function expressions, arrow functions, scope capture, private state per closure), `setTimeout`/`setInterval` timers with `clearTimeout`/`clearInterval`, `Object.keys()`/`Object.values()`/`Object.entries()`, array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`), and IIFE support.
 - **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress`, RFC 4291, RFC 2464, RFC 8200, ICMPv6 (`ping6`), Neighbor Discovery, `ETHERTYPE_IPV6`; terminal `ipconfig` IPv6 and `ping`/`ping6` support.
 - **exFAT and ext4 Fragmentation & Deep Directory Integrity:** Verified with host stress tests.
 - **Expanded Trust Store (Root CA):** 51 trusted root CA certificates embedded into the kernel.
@@ -74,6 +75,7 @@ minOs release notes and future plans.
 - **Live USB Hot-plug:** USB devices detected instantly while running with toast notifications.
 - **OHCI & UHCI & EHCI Transfer Layer:** Complete transfer layer and port handoff infrastructure integrated.
 - **minJs Advanced JavaScript Runtime:** Binary arithmetic, loops, variable mutations, array methods, object properties, JSON, math/string helpers, global conversions.
+- **minJs Closures & Timers:** Closure support (function expressions, arrow functions, scope capture, private state per closure), `setTimeout`/`setInterval` timers with `clearTimeout`/`clearInterval`, `Object.keys()`/`Object.values()`/`Object.entries()`, array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`), and IIFE support.
 - **IPv6 Protocol & Socket Infrastructure:** `Ipv6Address`, `IpAddress`, RFC 4291, RFC 2464, RFC 8200, ICMPv6, Neighbor Discovery, `ETHERTYPE_IPV6`.
 - **exFAT and ext4 Fragmentation & Deep Directory Integrity:** Verified with host stress tests.
 - **Expanded Trust Store (Root CA):** 51 trusted root CA certificates embedded into the kernel.
@@ -121,4 +123,4 @@ minOs release notes and future plans.
 - **SD/MMC Card Writing:** CSD register parsing and block write reliability WIP.
 - **CRL/OCSP Revocation Checking:** Automatic HTTP/OCSP download requests planned.
 - **IPv6 DNS (AAAA) Resolution:** No AAAA query sent and AAAA answers not parsed.
-- **minJs JavaScript Limitations:** Complex closures, prototype chain, class inheritance, async/await/Promises not yet implemented.
+- **minJs JavaScript Limitations:** Deep lexical scoping rules, full prototype chain mechanism, getters/setters, `Proxy`, module system (`import`/`export`), `yield`/generators and complete Promise/microtask scheduling not yet implemented.

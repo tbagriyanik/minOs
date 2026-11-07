@@ -4180,10 +4180,14 @@ impl BrowserApp {
                     }
                 }
                 self.flush_network_errors();
-                if self.request_pending
-                    && (crate::drivers::netstack::tcp_finished()
-                        || self.response_len >= self.response_data.len())
-                {
+                // `response_data` kapasitesi gerçek yanıt uzunluğu değildir;
+                // buffer başlangıçta 64 KiB sıfırlarla ayrılır. Bu nedenle
+                // `response_len >= response_data.len()` isteğin daha yanıt
+                // gelmeden tamamlanmasına ve HTTPS'te `app_len=0` görülmesine
+                // yol açıyordu. İstek yalnızca TCP gerçekten kapandığında
+                // sonlandırılmalı; buffer doluluğu yukarıdaki genişletme
+                // mantığı tarafından yönetilir.
+                if self.request_pending && crate::drivers::netstack::tcp_finished() {
                     crate::serial_print("[HTTPS] Bitiş: resp_len=");
                     crate::serial::print_dec(self.response_len as u64);
                     crate::serial_print(" app_len=");

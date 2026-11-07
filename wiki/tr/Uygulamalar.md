@@ -40,12 +40,15 @@ minOs, tarayıcı `<script>` blokları için kullanılan minimal bir istemci tar
 - Aritmetik: `+`, `-`, `*`, `/`, `%`, parantezler, tekli `+`/`-`/`!`
 - Karşılaştırmalar: `!`, `&&`, `||`, `==`/`!=`/`===`/`!==`, `<=`, `>=`, `<`, `>`
 - Fonksiyonlar: `function name(a, b) { ... }`, `return`, çağrılar
+- **Closure'lar:** fonksiyon ifadeleri (`var f = function (a) { ... }`), ok fonksiyonları (`var f = (a) => ...`, `a => expr`) ve anonim geri çağırmalar (`arr.forEach(function (x) { ... })`) oluşturma anındaki kapsamı yakalar; her closure kendi gizli durumunu taşır. Fonksiyon değerleri değişkene/nesne özelliğine atanıp `obj.method()` biçiminde çağrılabilir.
 - Döngüler: `for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`
 - Diziler: litaller, indeksleme, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
-- Nesneler: litaller, özellik erişimi, `delete`, `Object.keys()`, `Object.values()`
+- **Dizi geri çağırmaları:** `.forEach()`, `.map()`, `.filter()`, `.find()`, `.findIndex()`, `.some()`, `.every()`, `.reduce()` closure/ok fonksiyonu kabul eder
+- Nesneler: litaller, özellik erişimi, `delete`, `Object.keys()`, `Object.values()`, `Object.entries()`
 - JSON: `JSON.stringify()`, `JSON.parse()`
 - Küresel API'ler: `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`, `Math.*`, `String.prototype.*`
 - DOM: `getElementById`, `getElementsByClassName`, `innerHTML`, `textContent`, `createElement`, `appendChild`, `setAttribute`, `getAttribute`, `addEventListener`, `dispatchEvent`
+- **Zamanlayıcılar:** `setTimeout(cb, ms)` / `setInterval(cb, ms)` (geri çağrı = fonksiyon adı, closure taşıyan değişken, ok/fonksiyon ifadesi veya tırnaklı ham JS kodu), `clearTimeout(id)` / `clearInterval(id)`
 - Promises: `new Promise(executor)`, `.then()`, `.catch()`, `await`, `Promise.resolve()`, `Promise.reject()`, `Promise.all()`, `Promise.race()`, `Promise.allSettled()`
 - Strict mode: `"use strict"` yönergesi algılanır; bildirilmemiş değişkene atama reddedilir
 
@@ -56,13 +59,17 @@ minOs, tarayıcı `<script>` blokları için kullanılan minimal bir istemci tar
 | `class` sözdizimi | ✅ Desteklenir | `class Name [extends Parent] { constructor() { } method() { } }`, `new Name(args)`, örnek metod çağrıları |
 | Strict mode | ✅ Desteklenir | `"use strict"` algılanır; bildirilmemiş değişkene atama reddedilir |
 | `Promise.all/race/allSettled` | ✅ Desteklenir | Promise üzerinde statik metodlar |
+| **Closure'lar** | ✅ Desteklenir | Fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama, closure başına gizli durum |
+| **Zamanlayıcılar (`setTimeout`/`setInterval`)** | ✅ Desteklenir | `clearTimeout`/`clearInterval` ile iptal |
+| **Dizi geri çağırmaları (`forEach`/`map`/`filter`/…)** | ✅ Desteklenir | Closure/ok fonksiyonu geri çağırmaları |
+| **`Object.entries()`** | ✅ Desteklenir | `Object.keys()`/`Object.values()` ile birlikte |
 | `with` ifadesi | ❌ Desteklenmez | Ayrıştırıcıda yok |
 | `eval()` kapsam izolasyonu | ❌ Desteklenmez | `eval` geçerli kapsamı paylaşır |
 | `let`/`const` blok kapsamı | ⚠️ Kısım | `var` gibi davranır (fonksiyon/global kapsam) |
 | Şablon litalleri | ⚠️ Kısım | Backtick dizgileri desteklenir, `${}` interpolasyonu yok |
 | İsteğe bağlı zincirleme (`?.`) | ❌ Desteklenmez | |
 | Nullish birleşme (`??`) | ❌ Desteklenmez | |
-| Ok fonksiyonları | ❌ Desteklenmez | |
+| Ok fonksiyonları | ✅ Desteklenir | `var f = (a) => ...`, `a => expr` |
 | Üreteçler / async-await | ⚠️ Kısım | `await` Promise değerlerinde desteklenir; `async function` yok |
 
 > **Not:** minJs kasıtlı olarak küçüktür — amacı basit sayfa iyileştirme betiklerini çalıştırmak, tam web uygulaması uyumluluğu değil.

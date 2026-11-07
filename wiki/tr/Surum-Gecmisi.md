@@ -20,6 +20,7 @@ minOs sürüm notları ve gelecek planları.
 - **Canlı USB Tak/Çıkar:** USB cihazları anında algılanır, toast bildirimi gösterilir.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** Tam transfer katmanı ve port handoff altyapısı.
 - **minJs İleri Düzey JavaScript Çalışma Zamanı:** İkili aritmetik, döngüler, değişken mutasyonları, dizi metotları, nesne özellikleri, JSON, matematiksel/dize yardımcıları, global dönüşümler.
+- **minJs Closure'lar ve Zamanlayıcılar:** Closure desteği (fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama, closure başına gizli durum), `setTimeout`/`setInterval` zamanlayıcıları `clearTimeout`/`clearInterval` ile, `Object.keys()`/`Object.values()`/`Object.entries()`, dizi geri çağırmalı metotları (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`) ve IIFE desteği.
 - **IPv6 Protokol & Soket Altyapısı:** `Ipv6Address`, `IpAddress`, RFC 4291, RFC 2464, RFC 8200, ICMPv6 (`ping6`), Neighbor Discovery, `ETHERTYPE_IPV6`; `ipconfig` IPv6 ve `ping`/`ping6` desteği.
 - **exFAT ve ext4 Parçalanma & Derin Dizin Bütünlüğü:** Host stres testleriyle doğrulandı.
 - **Genişletilmiş Güven Deposu (Root CA):** 51 güvenilen kök CA sertifikası çekirdeğe gömüldü.

@@ -28,8 +28,8 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.101.0-nightly |
-| **Total Lines of Code** | ~100,971 lines (Rust) |
-| **Unit Tests** | 195 passed / 0 failed |
+| **Total Lines of Code** | ~129,179 lines (Rust) |
+| **Unit Tests** | 228 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 15 desktop applications |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
@@ -40,6 +40,7 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 
 - **TLS 1.3 HTTPS:** Browser completes `https://` connections per RFC 8446, preferring IPv6 (AAAA) with an IPv4 fallback.
 - **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.
+- **minJs JavaScript Runtime:** Built-in `no_std` JavaScript engine expanded with **closures** (function expressions, arrow functions, scope capture), **`setTimeout`/`setInterval`** timers with `clearTimeout`/`clearInterval`, **`Object.keys()`/`Object.values()`/`Object.entries()`**, and array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`). Function values can be assigned to variables/object properties and invoked as `obj.method()`.
 - **Dynamic Themes:** 5 themes (Velvet Dark, Daylight, Nord, Terminal Green, Sunset) with live switching.
 - **xHCI USB HID:** Native USB keyboard/mouse support with PS/2 fallback.
 - **Networking:** Intel PRO/1000, RTL8139, AMD PCnet detection, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net and VMware VMXNET3.

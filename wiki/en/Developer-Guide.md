@@ -69,9 +69,9 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 | Metric | Value |
 | :--- | :--- |
 | **Total Rust Source Files** | 150 files |
-| **Total Lines of Code** | ~103,865 lines |
+| **Total Lines of Code** | ~129,179 lines |
 | **Language** | Rust (Nightly, `no_std`) |
 | **Build Target** | `x86_64-minos` (custom bare-metal) |
-| **Unit Tests** | 210 tests (0 failed, 100% passing) |
+| **Unit Tests** | 228 tests (0 failed, 100% passing) |
 | **Built-in Applications** | 15 desktop applications + Window Manager |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

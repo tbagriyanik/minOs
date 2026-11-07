@@ -15,6 +15,7 @@ pub mod fan_temp;
 pub mod gpu;
 pub mod hda;
 pub mod http;
+pub mod http2;
 pub mod i219;
 pub mod keyboard;
 pub mod legacy_audio;

@@ -40,12 +40,15 @@ minOs includes a minimal client-side JavaScript engine (`src/apps/js.rs`, `no_st
 - Arithmetic: `+`, `-`, `*`, `/`, `%`, parentheses, unary `+`/`-`/`!`
 - Comparisons: `!`, `&&`, `||`, `==`/`!=`/`===`/`!==`, `<=`, `>=`, `<`, `>`
 - Functions: `function name(a, b) { ... }`, `return`, calls
+- **Closures:** function expressions (`var f = function (a) { ... }`), arrow functions (`var f = (a) => ...`, `a => expr`), anonymous callbacks (`arr.forEach(function (x) { ... })`) capture creation-time scope; each closure carries its own private state. Function values assignable to variables/object properties, invocable as `obj.method()`.
 - Loops: `for (init; cond; step)`, `for (item of array)`, `for (key in object)`, `while`, `break`, `continue`
 - Arrays: literals, indexing, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
-- Objects: literals, property access, `delete`, `Object.keys()`, `Object.values()`
+- **Array callbacks:** `.forEach()`, `.map()`, `.filter()`, `.find()`, `.findIndex()`, `.some()`, `.every()`, `.reduce()` accept closures/arrow functions
+- Objects: literals, property access, `delete`, `Object.keys()`, `Object.values()`, `Object.entries()`
 - JSON: `JSON.stringify()`, `JSON.parse()`
 - Globals: `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`, `Math.*`, `String.prototype.*`
 - DOM: `getElementById`, `getElementsByClassName`, `innerHTML`, `textContent`, `createElement`, `appendChild`, `setAttribute`, `getAttribute`, `addEventListener`, `dispatchEvent`
+- **Timers:** `setTimeout(cb, ms)` / `setInterval(cb, ms)` (callback = function name, closure variable, arrow/function expression, or quoted raw JS code), `clearTimeout(id)` / `clearInterval(id)`
 - Promises: `new Promise(executor)`, `.then()`, `.catch()`, `await`, `Promise.resolve()`, `Promise.reject()`, `Promise.all()`, `Promise.race()`, `Promise.allSettled()`
 - Strict mode: `"use strict"` directive detected; undeclared variable assignment is rejected
 
@@ -56,13 +59,17 @@ minOs includes a minimal client-side JavaScript engine (`src/apps/js.rs`, `no_st
 | `class` syntax | ✅ Supported | `class Name [extends Parent] { constructor() { } method() { } }`, `new Name(args)`, instance method calls |
 | Strict mode | ✅ Supported | `"use strict"` detected; undeclared variable assignment rejected |
 | `Promise.all/race/allSettled` | ✅ Supported | Static methods on Promise |
+| **Closures** | ✅ Supported | Function expressions, arrow functions, scope capture, private state per closure |
+| **Timers (`setTimeout`/`setInterval`)** | ✅ Supported | `clearTimeout`/`clearInterval` for cancellation |
+| **Array callbacks (`forEach`/`map`/`filter`/…)** | ✅ Supported | Closure/arrow function callbacks |
+| **`Object.entries()`** | ✅ Supported | Alongside `Object.keys()`/`Object.values()` |
 | `with` statement | ❌ Not supported | Parsing not implemented |
 | `eval()` scope isolation | ❌ Not supported | `eval` shares current scope |
 | `let`/`const` block scoping | ⚠️ Partial | Treated like `var` (function/global scope) |
 | Template literals | ⚠️ Partial | Backtick strings supported, `${}` interpolation not |
 | Optional chaining (`?.`) | ❌ Not supported | |
 | Nullish coalescing (`??`) | ❌ Not supported | |
-| Arrow functions | ❌ Not supported | |
+| Arrow functions | ✅ Supported | `var f = (a) => ...`, `a => expr` |
 | Generators / async-await | ⚠️ Partial | `await` supported on Promise values; `async function` not |
 
 > **Note:** minJs is intentionally small — its goal is running simple page-enhancing scripts, not full web application compatibility.

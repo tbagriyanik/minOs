@@ -334,6 +334,13 @@ fn render_device_inventory(
                     crate::drivers::usb_hid::HidKind::Mouse => {
                         dev_line.push(if english { "USB Mouse" } else { "USB Fare" });
                     }
+                    crate::drivers::usb_hid::HidKind::Touchscreen => {
+                        dev_line.push(if english {
+                            "USB Touchscreen"
+                        } else {
+                            "USB Dokunmatik Ekran"
+                        });
+                    }
                 }
                 dev_line.push(" | Port: ");
                 dev_line.number(port as u64);

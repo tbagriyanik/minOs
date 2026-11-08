@@ -48,7 +48,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | :--- | :--- | :---: | :--- |
 | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce tuş eşleme |
 | USB HID Klavye & Fare | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI tam transfer katmanı, 16-bit eksen, tekerlek, hotplug |
-| USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | Tek parmak dokunma/tıklama (çoklu dokunma analizi TODO) |
+| USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | HID Digitizer tespiti, rapor tanımlayıcısı ayrıştırma, çoklu dokunma (Contact Count / kişi başına Report ID) |
 
 ---
 

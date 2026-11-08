@@ -5,6 +5,7 @@ use crate::drivers::mouse::MouseState;
 pub struct InputUpdate {
     pub mouse: bool,
     pub keyboard: bool,
+    pub touch: bool,
 }
 
 #[inline(always)]

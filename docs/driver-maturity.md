@@ -49,7 +49,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce |
 | USB HID Klavye & Fare | `usb_hid.rs`, `usb_keyboard.rs`, `usb_mouse.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI, 16-bit eksen, tekerlek, hotplug |
-| USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🔴 İskelet | HID sabitleri ve state machine, gerçek Interrupt IN yok |
+| USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | Gerçek HID Digitizer tespiti (Usage Page 0x0D), rapor tanımlayıcısı ayrıştırma, çoklu dokunma (Contact Count + kişi başına Report ID), xHCI Interrupt IN akışı; kalibrasyon/aygıta özel Feature raporları yok |
 
 ### Depolama
 
@@ -104,8 +104,8 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Maturite | Sayı | Yüzde |
 | :--- | :---: | :---: |
 | 🟢 Tam | 27 | ~69% |
-| 🟡 Kısmi | 9 | ~23% | (Atheros ve Marvell Ethernet güncellendi) |
-| 🔴 İskelet / WIP | 3 | ~8% | |
+| 🟡 Kısmi | 10 | ~26% | (Atheros/Marvell Ethernet ve USB dokunmatik ekran güncellendi) |
+| 🔴 İskelet / WIP | 2 | ~5% | |
 | **Toplam** | **39** | **100%** |
 
 ---
@@ -118,7 +118,7 @@ Aşağıdaki sürücüler **işkelet (skeleton)** durumundadır; gerçek donanı
 4. **`bluetooth.rs`** — Gerçek USB/PCI Bluetooth denetleyicisi tespiti, HCI komut gönderimi
 5. **`usb_audio.rs`** — USB Audio Class interface enum'ası, isokronik endpoint tespiti, DMA akışı
 6. **`usb_printer.rs`** — USB Bulk IN/OUT endpoint tespiti, IEEE 1284 Device ID, yazdırma akışı
-7. **`usb_touchscreen.rs`** — USB HID Interrupt IN endpoint, Report Descriptor ayrıştırma, multitouch
+7. **`usb_touchscreen.rs`** — ✅ Gerçek HID Digitizer tespiti, Interrupt IN ve çoklu dokunma tamamlandı; kalan iş: dört noktalı kalibrasyon ve aygıta özel Feature raporları
 8. **`camera.rs`** — Gerçek UVC cihaz tespiti, video akışı başlatma, kare yakalama
 9. **`amdgpu.rs`** — 3D hızlandırma (Vulkan/Gallium), güç yönetimi
 10. **`nvidia.rs`** — 3D hızlandırma (Vulkan/Gallium), güç yönetimi

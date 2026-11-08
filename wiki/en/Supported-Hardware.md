@@ -48,7 +48,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | :--- | :--- | :---: | :--- |
 | PS/2 Keyboard & Mouse | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Full | Interrupt-driven input, Turkish Q / English key mapping |
 | USB HID Keyboard & Mouse | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Full | xHCI/EHCI/UHCI/OHCI full transfer layer, 16-bit axes, wheel, hotplug |
-| USB Touchscreen | `usb_touchscreen.rs` | 🟡 Partial | Single-finger touch/click (multi-touch analysis TODO) |
+| USB Touchscreen | `usb_touchscreen.rs` | 🟡 Partial | HID Digitizer detection, report descriptor parsing, multi-touch (Contact Count / per-contact Report ID) |
 
 ---
 

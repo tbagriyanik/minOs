@@ -601,7 +601,7 @@ pub fn fetch_once(
 
                     let mut hello = Vec::new();
                     let mut ecdhe_secret = [0u8; 32];
-                    crate::drivers::tls::build_client_hello(
+                    crate::drivers::tls::build_client_hello_with_alpn(
                         host_str,
                         &client_random,
                         &mut hello,
@@ -609,6 +609,7 @@ pub fn fetch_once(
                         false,
                         None,
                         None,
+                        &[b"h2", b"http/1.1"],
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
@@ -879,7 +880,7 @@ fn fetch_https(
 
     let mut hello = Vec::new();
     let mut ecdhe_secret = [0u8; 32];
-    crate::drivers::tls::build_client_hello(
+    crate::drivers::tls::build_client_hello_with_alpn(
         host_str,
         &client_random,
         &mut hello,
@@ -887,6 +888,7 @@ fn fetch_https(
         false,
         None,
         None,
+        &[b"h2", b"http/1.1"],
     );
     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
     let mut session = TlsSession::new(host_str, client_random);
@@ -1047,7 +1049,7 @@ pub fn http_get_range(
 }
 
 /// Internal implementation for http_get variants.
-fn http_get_impl(
+pub(crate) fn http_get_impl(
     url: &str,
     resp_buf: &mut [u8],
     cache_headers: Option<&str>,
@@ -1104,7 +1106,7 @@ fn http_get_impl(
 
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello(
+                        crate::drivers::tls::build_client_hello_with_alpn(
                             host_str,
                             &client_random,
                             &mut hello,
@@ -1112,6 +1114,7 @@ fn http_get_impl(
                             false,
                             None,
                             None,
+                            &[b"h2", b"http/1.1"],
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut session = TlsSession::new(host_str, client_random);
@@ -2016,90 +2019,124 @@ impl WebSocketConnection {
             None => (authority.to_string(), if is_wss { 443 } else { 80 }),
         };
 
-        let ip = socket::resolve_host(&host)?;
-        let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
-            crate::serial_print("[WS] socket oluşturulamadı: ");
-            crate::serial_print(&e.to_string());
-            crate::serial_print("\n");
-            e
-        })?;
-        let _ = socket::set_timeout(fd, 8000);
-        socket::connect(fd, ip, port).map_err(|e| {
-            let _ = socket::close(fd);
-            e
-        })?;
+        let (fd, mut tls_session) =
+            (|| -> Result<(i32, Option<crate::drivers::tls::TlsSession>), i32> {
+                // TLS el sıkışması yardımcı closure (IPv6 ve IPv4 için ortak).
+                let tls_handshake =
+                    |fd: i32, host: &str| -> Result<Option<crate::drivers::tls::TlsSession>, i32> {
+                        if !is_wss {
+                            return Ok(None);
+                        }
+                        let mut client_random = [0u8; 32];
+                        let mut state =
+                            crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
+                        for b in client_random.iter_mut() {
+                            state ^= state >> 12;
+                            state ^= state << 25;
+                            state ^= state >> 27;
+                            *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
+                        }
 
-        // TLS el sıkışması (wss:// için)
-        let mut tls_session = if is_wss {
-            let mut client_random = [0u8; 32];
-            let mut state = crate::boot::time::main_monotonic_ms() as u64 ^ 0x9e37_79b9_7f4a_7c15;
-            for b in client_random.iter_mut() {
-                state ^= state >> 12;
-                state ^= state << 25;
-                state ^= state >> 27;
-                *b = (state.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 56) as u8;
-            }
+                        let mut hello = Vec::new();
+                        let mut ecdhe_secret = [0u8; 32];
+                        crate::drivers::tls::build_client_hello_with_alpn(
+                            host,
+                            &client_random,
+                            &mut hello,
+                            &mut ecdhe_secret,
+                            false,
+                            None,
+                            None,
+                            &[b"h2", b"http/1.1"],
+                        );
+                        let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+                        let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
+                        session.note_client_hello(ch_body);
+                        session.set_client_ecdhe_secret(ecdhe_secret);
 
-            let mut hello = Vec::new();
-            let mut ecdhe_secret = [0u8; 32];
-            crate::drivers::tls::build_client_hello(
-                &host,
-                &client_random,
-                &mut hello,
-                &mut ecdhe_secret,
-                false,
-                None,
-                None,
-            );
-            let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
-            let mut session = crate::drivers::tls::TlsSession::new(&host, client_random);
-            session.note_client_hello(ch_body);
-            session.set_client_ecdhe_secret(ecdhe_secret);
+                        socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
-            socket::send(fd, &hello).map_err(|_| E_TLS)?;
+                        let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+                        loop {
+                            let mut raw = [0u8; 4096];
+                            let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
+                            if n == 0 {
+                                return Err(E_TLS);
+                            }
+                            session.feed_tcp_data(&raw[..n]);
 
-            let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
-            loop {
-                let mut raw = [0u8; 4096];
-                let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
-                if n == 0 {
-                    return Err(E_TLS);
-                }
-                session.feed_tcp_data(&raw[..n]);
+                            let mut app = Vec::new();
+                            let mut hs = Vec::new();
+                            match session.process_records(&mut hs, &mut app) {
+                                Ok(_) => {}
+                                Err(_) => return Err(E_TLS),
+                            }
 
-                let mut app = Vec::new();
-                let mut hs = Vec::new();
-                match session.process_records(&mut hs, &mut app) {
-                    Ok(_) => {}
-                    Err(_) => return Err(E_TLS),
-                }
+                            if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished
+                            {
+                                if let Some(ccs) = session.tls13_change_cipher_spec() {
+                                    socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                                }
+                                if let Some(record) = session.build_tls13_client_finished() {
+                                    socket::send(fd, &record).map_err(|_| E_TLS)?;
+                                }
+                            }
 
-                if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
-                    if let Some(ccs) = session.tls13_change_cipher_spec() {
-                        socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                            let outgoing = session.take_outgoing();
+                            if !outgoing.is_empty() {
+                                socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
+                            }
+
+                            if session.state() == crate::drivers::tls::TlsState::Established {
+                                break;
+                            }
+                            if crate::boot::time::main_monotonic_ms() > handshake_deadline {
+                                return Err(E_TLS);
+                            }
+                        }
+
+                        Ok(Some(session))
+                    };
+
+                // IPv6 (AAAA) öncelikli, IPv4'e otomatik geri düşme — bağlantı/TLS
+                // hatasında IPv4 yoluna düşülür (dual-stack fallback).
+                if let Ok(v6) = socket::resolve_host_aaaa(&host) {
+                    let fd6 =
+                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).map_err(|e| {
+                            crate::serial_print("[WSv6] socket oluşturulamadı: ");
+                            crate::serial_print(&e.to_string());
+                            crate::serial_print("\n");
+                            e
+                        })?;
+                    let _ = socket::set_timeout(fd6, 8000);
+                    if socket::connect_v6(fd6, v6, port).is_ok() {
+                        match tls_handshake(fd6, &host) {
+                            Ok(tls) => return Ok((fd6, tls)),
+                            Err(e) => {
+                                let _ = socket::close(fd6);
+                                return Err(e);
+                            }
+                        }
                     }
-                    if let Some(record) = session.build_tls13_client_finished() {
-                        socket::send(fd, &record).map_err(|_| E_TLS)?;
-                    }
+                    let _ = socket::close(fd6);
                 }
 
-                let outgoing = session.take_outgoing();
-                if !outgoing.is_empty() {
-                    socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
-                }
-
-                if session.state() == crate::drivers::tls::TlsState::Established {
-                    break;
-                }
-                if crate::boot::time::main_monotonic_ms() > handshake_deadline {
-                    return Err(E_TLS);
-                }
-            }
-
-            Some(session)
-        } else {
-            None
-        };
+                // IPv4 yolu
+                let ip = socket::resolve_host(&host)?;
+                let fd4 = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                    crate::serial_print("[WS] socket oluşturulamadı: ");
+                    crate::serial_print(&e.to_string());
+                    crate::serial_print("\n");
+                    e
+                })?;
+                let _ = socket::set_timeout(fd4, 8000);
+                socket::connect(fd4, ip, port).map_err(|e| {
+                    let _ = socket::close(fd4);
+                    e
+                })?;
+                let tls = tls_handshake(fd4, &host)?;
+                Ok((fd4, tls))
+            })()?;
 
         // WebSocket Upgrade isteği gönder.
         let key = crate::drivers::tls::TlsSession::new("", [0u8; 32]); // dummy for random

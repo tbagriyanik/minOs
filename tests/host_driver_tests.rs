@@ -588,3 +588,80 @@ fn test_ipv6_ping6_loopback_and_reply() {
     assert_eq!(rep.hop_limit, 64);
     assert!(!has_ping6_reply());
 }
+
+// ---------------------------------------------------------------------------
+// 7. USB HID Digitizer / Çoklu Dokunma Testleri
+// ---------------------------------------------------------------------------
+
+/// Windows Precision Touchpad benzeri descriptor:
+/// Contact Count + Tip Switch[2] + Contact ID[2] + X[2] + Y[2].
+fn ptp_multitouch_descriptor() -> [u8; 71] {
+    [
+        0x05, 0x0D, // Usage Page (Digitizer)
+        0x09, 0x05, // Usage (Touch Pad)
+        0xA1, 0x01, // Collection (Application)
+        0x85, 0x01, // Report ID (1)
+        // Contact Count
+        0x09, 0x54, 0x15, 0x00, 0x25, 0x02, 0x75, 0x08, 0x95, 0x01, 0x81, 0x02,
+        // Tip Switch[2]
+        0x09, 0x42, 0x15, 0x00, 0x25, 0x01, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+        // Contact Identifier[2]
+        0x09, 0x51, 0x15, 0x00, 0x25, 0x02, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02, // X[2]
+        0x05, 0x01, 0x09, 0x30, 0x15, 0x00, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+        // Y[2]
+        0x09, 0x31, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x81, 0x02,
+        0xC0, // End Collection
+    ]
+}
+
+#[test]
+fn test_touch_descriptor_parses_multitouch_layout() {
+    use crate::drivers::usb_touchscreen::parse_report_descriptor;
+
+    let layout = parse_report_descriptor(&ptp_multitouch_descriptor());
+    assert!(layout.is_digitizer());
+    assert!(layout.is_multitouch());
+    assert!(layout.has_report_id);
+    assert!(!layout.per_report_id);
+    assert!(layout.contact_count.present);
+    assert_eq!(layout.max_x, 32767);
+    assert_eq!(layout.max_y, 32767);
+
+    let used = layout.contacts.iter().filter(|c| c.used()).count();
+    assert_eq!(used, 2);
+    assert!(layout.contacts[0].x.present && layout.contacts[0].y.present);
+    assert!(layout.contacts[1].x.present && layout.contacts[1].y.present);
+    assert!(layout.contacts[0].contact_id.present);
+    assert!(layout.contacts[1].contact_id.present);
+}
+
+#[test]
+fn test_touch_report_updates_two_contacts() {
+    use crate::drivers::usb_touchscreen::*;
+
+    let layout = parse_report_descriptor(&ptp_multitouch_descriptor());
+    assert!(layout.is_digitizer());
+
+    // Report ID 1 | count=2 | tip 1,1 | id 5,7 | X 1000,2000 | Y 3000,4000
+    let report = [
+        0x01, 0x02, 0x01, 0x01, 0x05, 0x07, 0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B, 0xA0, 0x0F,
+    ];
+    assert!(process_report(&report, &layout));
+
+    assert!(supports_multitouch());
+    let touches = read_all_touches();
+    assert_eq!(touches.len(), 2);
+    assert_eq!((touches[0].id, touches[0].x, touches[0].y), (5, 1000, 3000));
+    assert_eq!((touches[1].id, touches[1].x, touches[1].y), (7, 2000, 4000));
+    assert!(touches.iter().all(|t| t.contact));
+    assert_eq!(max_x(), 32767);
+    assert_eq!(max_y(), 32767);
+    assert_eq!(read_touch().unwrap().id, 5);
+
+    // Tüm parmaklar kalkınca liste boşalmalı.
+    let release = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+    assert!(process_report(&release, &layout));
+    assert!(read_all_touches().is_empty());
+}

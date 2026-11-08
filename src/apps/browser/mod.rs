@@ -3482,7 +3482,7 @@ impl BrowserApp {
                         }
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello(
+                        crate::drivers::tls::build_client_hello_with_alpn(
                             host,
                             &client_random,
                             &mut hello,
@@ -3490,6 +3490,7 @@ impl BrowserApp {
                             false,
                             None,
                             None,
+                            &[b"h2", b"http/1.1"],
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut tls_session =

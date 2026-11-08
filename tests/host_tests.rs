@@ -79,6 +79,9 @@ pub mod acpi_battery_mod;
 #[path = "../src/drivers/usb_transfer.rs"]
 pub mod usb_transfer_mod;
 
+#[path = "../src/drivers/usb_touchscreen.rs"]
+pub mod usb_touchscreen_mod;
+
 #[path = "../src/drivers/netstack.rs"]
 pub mod netstack_mod;
 
@@ -198,6 +201,17 @@ pub mod drivers {
     }
     pub mod usb {
         pub use crate::usb_transfer_mod::*;
+    }
+    pub mod usb_hid {
+        pub fn touchscreen_present() -> bool {
+            false
+        }
+        pub fn touchscreen_info() -> Option<(u32, u32, bool)> {
+            None
+        }
+    }
+    pub mod usb_touchscreen {
+        pub use crate::usb_touchscreen_mod::*;
     }
     pub mod e1000 {
         pub static mut MAC_ADDR: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];

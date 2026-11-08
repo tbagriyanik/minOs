@@ -20,7 +20,7 @@
 //!   kimliği döner, geri çağrı olarak fonksiyon adı / fonksiyon ifadesi / ok fonksiyonu /
 //!   ham kod kabul edilir; `clearTimeout(id)` / `clearInterval(id)` ile iptal edilir.
 //!   Zamanı gelen zamanlayıcılar `check_timers(now_ms, out)` ile çalıştırılır.
-//! - Döngüler: gerçek `for (init; cond; step) { ... }`, `for (item of array)`, `for (key in object)`, `while (cond) { ... }`, `break`, `continue`
+//! - Döngüler: gerçek `for (init; cond; step) { ... }`, `for (item of array|generator)`, `for (key in object)`, `while (cond) { ... }`, `break`, `continue`
 //! - Diziler: `[1, 2]`, `arr[i] = v`, `arr.length`, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
 //! - Dizi geri çağırmaları: `.forEach()`, `.map()`, `.filter()`, `.find()`, `.findIndex()`, `.some()`, `.every()`, `.reduce()` (closure/ok fonksiyonu kabul eder)
 //! - Nesneler: `{ a: 1 }`, `obj.prop = v`, `obj["key"] = v`, iç içe nesneler (`a.b.c`), `delete obj.prop`, `Object.keys()`, `Object.values()`, `Object.entries()`
@@ -29,6 +29,8 @@
 //! - Getter/setter: nesne literalinde `get x() {}` / `set x(v) {}`, ayrıca
 //!   `Object.defineProperty(obj, key, { get, set, value, enumerable })`
 //! - Proxy: `new Proxy(target, handler)`; `get`, `set`, `ownKeys`, `deleteProperty` tuzakları
+//! - Generator'lar: `function* gen() { ... }` ve `yield expr`; `.next()` ile iterasyon,
+//!   `for...of` döngüsüyle kullanım
 //! - Modüller: `register_module(name, source)`, `import ... from "..."`, `export`,
 //!   `export default`, `require()` ve `module.exports` (kayıt tabanlı; URL'den yükleme yok)
 //! - JSON ve Global API'ler: `JSON.stringify()`, `JSON.parse()`, `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`
@@ -185,6 +187,37 @@ pub enum JsValue {
     Promise(Box<PromiseObj>),
     /// Fonksiyon değeri: closure, fonksiyon ifadesi veya ok fonksiyonu.
     Function(Box<JsFunction>),
+    /// Generator değeri: `function*` ile oluşturulmuş, `yield` ile duraklatılabilir.
+    Generator(Box<GeneratorObj>),
+}
+
+/// Generator durumu.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GeneratorState {
+    /// Başlatılmamış veya çalışıyor.
+    Running,
+    /// `yield` ile duraklatıldı; `.next()` ile devam ettirilebilir.
+    Suspended,
+    /// `return` ile tamamlandı veya gövde sonuna erişildi.
+    Completed,
+}
+
+/// Bir Generator örneği: `function*` gövdesi, mevcut konum ve son yielded değer.
+#[derive(Clone, Debug)]
+pub struct GeneratorObj {
+    pub state: GeneratorState,
+    /// Son `yield` edilen değer (Suspended durumunda) veya dönüş değeri (Completed durumunda).
+    pub value: Option<JsValue>,
+    /// Generator fonksiyonunun gövdesi (string olarak saklanan JS kodu).
+    pub body: String,
+    /// Generator fonksiyonunun parametreleri.
+    pub params: Vec<String>,
+    /// Çağrı anındaki yakalanan ortam (closure captured).
+    pub captured: Vec<(String, JsValue)>,
+    /// Mevcut ifade indeksi (program sayacı): bir sonraki `.next()` buradan devam eder.
+    pub pc: usize,
+    /// Ayrıştırılmış ifadeler (yield ile bölünmüş segmentler).
+    pub statements: Vec<String>,
 }
 
 /// Promise durumu.
@@ -299,6 +332,14 @@ impl JsValue {
                 res.push_str(") { ... }");
                 res
             }
+            JsValue::Generator(g) => {
+                let state_str = match g.state {
+                    GeneratorState::Running => "running",
+                    GeneratorState::Suspended => "suspended",
+                    GeneratorState::Completed => "completed",
+                };
+                format!("[object Generator:{}]", state_str)
+            }
         }
     }
 
@@ -308,7 +349,10 @@ impl JsValue {
             JsValue::Bool(b) => *b,
             JsValue::Number(n) => *n != 0,
             JsValue::String(s) => !s.is_empty(),
-            JsValue::Array(_) | JsValue::Object(_) | JsValue::Promise(_) => true,
+            JsValue::Array(_)
+            | JsValue::Object(_)
+            | JsValue::Promise(_)
+            | JsValue::Generator(_) => true,
             JsValue::Function(_) => true,
         }
     }
@@ -1127,7 +1171,7 @@ impl JsRuntime {
             return self.add_timer(code, delay_ms, repeat);
         }
         // Fonksiyon ifadesi / ok fonksiyonu: closure olarak kaydet.
-        if let Some((params, body, is_async)) = parse_function_expr(e) {
+        if let Some((params, body, is_async, _is_generator)) = parse_function_expr(e) {
             let func = JsFunction {
                 name: String::new(),
                 params,
@@ -1216,6 +1260,15 @@ impl JsRuntime {
                 captured: Vec::new(),
             },
         );
+    }
+
+    /// Bir JsValue'ı runtime'ın değer tablosuna kaydeder ve benzersiz dahili
+    /// adını döndürür (`__val_N`). Bu, Generator .next() gibi araç sonuçlarının
+    /// çağrıcısına iletilmesi için kullanılır.
+    pub fn store_value(&mut self, val: JsValue) -> String {
+        let name = format!("__val_{}", self.values.len());
+        self.values.insert(name.clone(), val);
+        name
     }
 
     /// Bir fonksiyon değerini runtime'a kaydeder ve benzersiz dahili adını
@@ -1354,7 +1407,7 @@ impl JsRuntime {
             return JsValue::Undefined;
         }
         // 1) Fonksiyon ifadesi / ok fonksiyonu: `function (x) { ... }`, `(x) => ...`
-        if let Some((params, body, is_async)) = parse_function_expr(e) {
+        if let Some((params, body, is_async, _is_generator)) = parse_function_expr(e) {
             let func = JsFunction {
                 name: String::new(),
                 params,
@@ -1499,49 +1552,14 @@ impl JsRuntime {
             return Err(http::E_HTTP);
         }
 
-        let mut host = [0u8; http::MAX_HOST];
-        let mut path = [0u8; http::MAX_PATH];
-        let (port, host_len, path_len) = http::parse_url(url, &mut host, &mut path)?;
-        let is_https = url.starts_with("https://");
-        let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| http::E_URL)?;
-        let ip = crate::drivers::socket::resolve_host(host_str)?;
-
         let mut resp_buf = [0u8; 8192];
-        let config = http::HttpClientConfig::default();
-        let (status, hlen, total) = http::fetch_once(
-            &host[..host_len],
-            port,
-            &path[..path_len],
-            ip,
-            &mut resp_buf,
-            is_https,
-            None,
-            &config,
-        )?;
+        // http_get_impl IPv6 (AAAA) öncelikli, IPv4'ye otomatik geri düşme
+        // (TCP/TLS/HTTP hatasında) ile dual-stack bağlantı kurar.
+        let (status, hlen, total) = http::http_get_impl(url, &mut resp_buf, None)?;
 
-        // Chunked gövdeyi çöz
-        let headers = &resp_buf[..hlen];
-        let is_chunked = http::header_value(headers, b"transfer-encoding")
-            .map(|v| {
-                v.iter()
-                    .zip(b"chunked".iter())
-                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
-                    && v.len() == 7
-            })
-            .unwrap_or(false);
+        let _headers = &resp_buf[..hlen];
         let body_start = hlen;
-        let body_end = if is_chunked {
-            let body_len = total - hlen;
-            let mut tmp = resp_buf[hlen..total].to_vec();
-            http::decode_chunked(&mut tmp, body_len)
-                .map(|decoded| {
-                    resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
-                    hlen + decoded
-                })
-                .unwrap_or(total)
-        } else {
-            total
-        };
+        let body_end = total;
 
         let body = core::str::from_utf8(&resp_buf[body_start..body_end]).unwrap_or("");
         let status_text = match status {
@@ -1745,7 +1763,7 @@ impl JsRuntime {
         // Fonksiyon ifadesi / ok fonksiyonu: `function (a) { ... }`, `(a) => ...`
         // (ikili işlem ayrıştırmasından ÖNCE — gövde aritmetik içerebilir).
         // Oluşturulma anındaki kapsam yakalanır: closure semantiği.
-        if let Some((params, body, is_async)) = parse_function_expr(e) {
+        if let Some((params, body, is_async, _is_generator)) = parse_function_expr(e) {
             let func = JsFunction {
                 name: String::new(),
                 params,
@@ -1758,7 +1776,7 @@ impl JsRuntime {
 
         // Hemen çağrılan fonksiyon ifadesi (IIFE): `(function () { ... })()`
         if let Some((callee, arg_str)) = split_iife(e) {
-            if let Some((params, body, is_async)) = parse_function_expr(callee) {
+            if let Some((params, body, is_async, _is_generator)) = parse_function_expr(callee) {
                 let args: Vec<JsValue> = split_top_level_comma(arg_str)
                     .into_iter()
                     .map(|a| self.eval_val(a))
@@ -2560,6 +2578,80 @@ impl JsRuntime {
                                 self.values
                                     .insert(pvar.clone(), JsValue::Promise(Box::new(new_p)));
                                 return JsValue::String(pvar);
+                            }
+                            _ => {}
+                        },
+                        JsValue::Generator(mut g) => match method {
+                            "next" => {
+                                // Generator .next(): gövdeyi pc'den itibaren çalıştır,
+                                // ilk `yield` ile duraklat, değerini döndür.
+                                if g.state == GeneratorState::Completed {
+                                    let result = JsValue::Object(BTreeMap::from([
+                                        (String::from("value"), JsValue::Undefined),
+                                        (String::from("done"), JsValue::Bool(true)),
+                                    ]));
+                                    return JsValue::String(self.store_value(result));
+                                }
+                                g.state = GeneratorState::Running;
+                                let mut sink = Vec::new();
+                                let statements = &g.statements;
+                                while g.pc < statements.len() {
+                                    let stmt = &statements[g.pc];
+                                    let trimmed = stmt.trim();
+                                    if trimmed.starts_with("yield ")
+                                        || trimmed.starts_with("yield(")
+                                    {
+                                        // yield ifadesi: değeri hesapla ve duraklat.
+                                        let expr = if trimmed.starts_with("yield(") {
+                                            &trimmed[6..trimmed.len() - 1]
+                                        } else {
+                                            &trimmed[6..]
+                                        };
+                                        let val = self.eval_val(expr.trim());
+                                        g.pc += 1;
+                                        g.state = GeneratorState::Suspended;
+                                        g.value = Some(val.clone());
+                                        let result = JsValue::Object(BTreeMap::from([
+                                            (String::from("value"), val),
+                                            (String::from("done"), JsValue::Bool(false)),
+                                        ]));
+                                        self.values.insert(
+                                            format!("__gen_{}", self.values.len()),
+                                            JsValue::Generator(Box::new((*g).clone())),
+                                        );
+                                        return JsValue::String(self.store_value(result));
+                                    }
+                                    self.exec(stmt, &mut sink);
+                                    g.pc += 1;
+                                    if self.last_return.is_some() {
+                                        // `return` içinde generator: değerle tamamla.
+                                        let ret =
+                                            self.last_return.take().unwrap_or(JsValue::Undefined);
+                                        g.state = GeneratorState::Completed;
+                                        g.value = Some(ret.clone());
+                                        let result = JsValue::Object(BTreeMap::from([
+                                            (String::from("value"), ret),
+                                            (String::from("done"), JsValue::Bool(true)),
+                                        ]));
+                                        self.values.insert(
+                                            format!("__gen_{}", self.values.len()),
+                                            JsValue::Generator(Box::new((*g).clone())),
+                                        );
+                                        return JsValue::String(self.store_value(result));
+                                    }
+                                }
+                                // Tüm ifadeler bitti.
+                                g.state = GeneratorState::Completed;
+                                g.value = None;
+                                let result = JsValue::Object(BTreeMap::from([
+                                    (String::from("value"), JsValue::Undefined),
+                                    (String::from("done"), JsValue::Bool(true)),
+                                ]));
+                                self.values.insert(
+                                    format!("__gen_{}", self.values.len()),
+                                    JsValue::Generator(Box::new((*g).clone())),
+                                );
+                                return JsValue::String(self.store_value(result));
                             }
                             _ => {}
                         },
@@ -3411,8 +3503,11 @@ impl JsRuntime {
 
         // Fonksiyon tanımı: function name(arg1, arg2) { body }
         // async function name(arg1, arg2) { body } — Promise döndüren fonksiyon.
+        // function* name(arg1, arg2) { body } — generator fonksiyon.
         if let Some(rest) = keyword(s, "function") {
             let r = rest.trim_start();
+            let is_generator = r.starts_with('*');
+            let r = if is_generator { r[1..].trim_start() } else { r };
             let is_async = r.starts_with("async ");
             let r = if is_async { &r[6..] } else { r };
             if let Some(open) = r.find('(') {
@@ -3425,6 +3520,23 @@ impl JsRuntime {
                             .map(|p| p.trim().to_string())
                             .filter(|p| !p.is_empty())
                             .collect();
+                        if is_generator {
+                            // Generator: çağrıldığında GeneratorObj döndürür, gövde çalıştırılmaz.
+                            let gvar = format!("__gen_{}", self.values.len());
+                            let gen = GeneratorObj {
+                                state: GeneratorState::Suspended,
+                                value: None,
+                                body: body.to_string(),
+                                params: params.clone(),
+                                captured: self.capture_env(),
+                                pc: 0,
+                                statements: split_generator_statements(&body),
+                            };
+                            self.values
+                                .insert(gvar.clone(), JsValue::Generator(Box::new(gen)));
+                            self.var_set_val(fname, JsValue::String(gvar));
+                            return;
+                        }
                         self.define_function(fname, params.clone(), body, is_async);
                         return;
                     }
@@ -3549,30 +3661,78 @@ impl JsRuntime {
                             }
                         }
                         let arr_val = self.eval_val(arr_expr.trim());
-                        if let JsValue::Array(items) = arr_val {
-                            for item in items {
-                                self.var_set_val(var_name, item);
-                                if body_opt.is_some() {
-                                    for stmt in split_statements(body) {
-                                        if stmt.trim() == "break" || stmt.trim() == "break;" {
-                                            break;
+                        match arr_val {
+                            JsValue::Array(items) => {
+                                for item in items {
+                                    self.var_set_val(var_name, item);
+                                    if body_opt.is_some() {
+                                        for stmt in split_statements(body) {
+                                            if stmt.trim() == "break" || stmt.trim() == "break;" {
+                                                break;
+                                            }
+                                            if stmt.trim() == "continue"
+                                                || stmt.trim() == "continue;"
+                                            {
+                                                continue;
+                                            }
+                                            self.exec(&stmt, out);
+                                            if self.last_return.is_some() {
+                                                return;
+                                            }
                                         }
-                                        if stmt.trim() == "continue" || stmt.trim() == "continue;" {
-                                            continue;
-                                        }
-                                        self.exec(&stmt, out);
+                                    } else if !body.is_empty() {
+                                        self.exec(body, out);
                                         if self.last_return.is_some() {
                                             return;
                                         }
                                     }
-                                } else if !body.is_empty() {
-                                    self.exec(body, out);
-                                    if self.last_return.is_some() {
-                                        return;
+                                }
+                                return;
+                            }
+                            JsValue::Generator(_) => {
+                                // Generator üzerinde for...of: .next() ile değerleri al.
+                                let gen_var = self.store_value(arr_val);
+                                loop {
+                                    let next_code = format!("{}.next()", gen_var);
+                                    let next_val = self.eval_val(&next_code);
+                                    if let JsValue::Object(map) = next_val {
+                                        let done =
+                                            map.get("done").cloned().unwrap_or(JsValue::Bool(true));
+                                        if done.is_truthy() {
+                                            break;
+                                        }
+                                        let value =
+                                            map.get("value").cloned().unwrap_or(JsValue::Undefined);
+                                        self.var_set_val(var_name, value);
+                                        if body_opt.is_some() {
+                                            for stmt in split_statements(body) {
+                                                if stmt.trim() == "break" || stmt.trim() == "break;"
+                                                {
+                                                    return;
+                                                }
+                                                if stmt.trim() == "continue"
+                                                    || stmt.trim() == "continue;"
+                                                {
+                                                    break;
+                                                }
+                                                self.exec(&stmt, out);
+                                                if self.last_return.is_some() {
+                                                    return;
+                                                }
+                                            }
+                                        } else if !body.is_empty() {
+                                            self.exec(body, out);
+                                            if self.last_return.is_some() {
+                                                return;
+                                            }
+                                        }
+                                    } else {
+                                        break;
                                     }
                                 }
+                                return;
                             }
-                            return;
+                            _ => {}
                         }
                     } else if let Some((key_var, obj_expr)) = header.split_once(" in ") {
                         let mut var_name = key_var.trim();
@@ -3916,7 +4076,7 @@ impl JsRuntime {
                     let ev_type = self.eval_expr(parts[0]);
                     let handler_arg = parts[1].trim();
                     // Geri çağrı bir fonksiyon ifadesi / ok fonksiyonu olabilir.
-                    let handler_expr = if let Some((params, body, is_async)) =
+                    let handler_expr = if let Some((params, body, is_async, _is_generator)) =
                         parse_function_expr(handler_arg)
                     {
                         let func = JsFunction {
@@ -4707,12 +4867,14 @@ fn parse_param_list(param_str: &str) -> Vec<String> {
 /// Kabul edilen biçimler:
 /// - `function (a, b) { ... }` — isimsiz fonksiyon ifadesi
 /// - `function ad(a, b) { ... }` — isimli fonksiyon ifadesi
+/// - `function* (a, b) { ... }` — generator fonksiyon ifadesi
+/// - `function* ad(a, b) { ... }` — isimli generator fonksiyon ifadesi
 /// - `(a, b) => { ... }` ve `() => { ... }` — blok gövdeli ok fonksiyonu
 /// - `(a, b) => expr` ve `a => expr` — ifade gövdeli ok fonksiyonu
 /// - `async` önekli tümü (`async function ...`, `async (a) => ...`)
 ///
-/// Dönüş: `(parametreler, gövde, async_mi)`.
-fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool)> {
+/// Dönüş: `(parametreler, gövde, async_mi, generator_mi)`.
+fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool, bool)> {
     let s = src.trim();
     if s.is_empty() {
         return None;
@@ -4722,9 +4884,12 @@ fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool)> {
         None => (false, s),
     };
 
-    // `function [ad] (params) { body }`
+    // `function* [ad] (params) { body }` veya `function [ad] (params) { body }`
     if let Some(rest) = keyword(s, "function") {
         let r = rest.trim_start();
+        // Generator işareti: `function*`
+        let is_generator = r.starts_with('*');
+        let r = if is_generator { r[1..].trim_start() } else { r };
         let open = r.find('(')?;
         // İsim (varsa) basit bir tanımlayıcı olmalı.
         let fname = r[..open].trim();
@@ -4733,7 +4898,12 @@ fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool)> {
         }
         let (param_str, after) = call_args(r, open)?;
         let body = extract_block(r[after..].trim_start())?;
-        return Some((parse_param_list(param_str), String::from(body), is_async));
+        return Some((
+            parse_param_list(param_str),
+            String::from(body),
+            is_async,
+            is_generator,
+        ));
     }
 
     // Ok fonksiyonu: `params => body`
@@ -4760,7 +4930,7 @@ fn parse_function_expr(src: &str) -> Option<(Vec<String>, String, bool)> {
         // İfade gövdesi: `return` ile sarılır.
         format!("return {}", body_src)
     };
-    Some((params, body, is_async))
+    Some((params, body, is_async, false))
 }
 
 /// Hemen çağrılan fonksiyon ifadesini (IIFE) ayırır: `(callee)(args)`.
@@ -5237,6 +5407,7 @@ fn json_stringify(val: &JsValue) -> String {
             res
         }
         JsValue::Promise(_) => String::from("Promise { <pending> }"),
+        JsValue::Generator(_) => String::from("Generator { <suspended> }"),
         // Fonksiyonlar JSON'da `undefined` olarak serileşir.
         JsValue::Function(_) => String::from("undefined"),
     }
@@ -5466,6 +5637,35 @@ fn split_statements(code: &str) -> Vec<String> {
     let tail = code[start..].trim();
     if !tail.is_empty() {
         out.push(String::from(tail));
+    }
+    out
+}
+
+/// Generator gövdesini üst düzey ifadelere böler; `yield` deyimleri kendi
+/// segmentleri olur (basit durumlar için: `yield` blok dışında).
+fn split_generator_statements(body: &str) -> Vec<String> {
+    let stmts = split_statements(body);
+    let mut out: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    for stmt in stmts {
+        let trimmed = stmt.trim();
+        // Üst düzey `yield ` ile başlayan ifade: kendi segmenti.
+        if trimmed.starts_with("yield ") || trimmed.starts_with("yield(") {
+            if !buf.is_empty() {
+                out.push(core::mem::take(&mut buf));
+            }
+            out.push(String::from(trimmed));
+        } else {
+            if !buf.is_empty() {
+                buf.push(' ');
+                buf.push_str(trimmed);
+            } else {
+                buf = String::from(trimmed);
+            }
+        }
+    }
+    if !buf.is_empty() {
+        out.push(buf);
     }
     out
 }

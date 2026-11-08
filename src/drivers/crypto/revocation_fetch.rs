@@ -7,8 +7,9 @@
 //! sorgulanır; sonucun ne zaman kontrol edileceği çağıranın sorumluluğudur.
 //!
 //! Sınırlar:
-//! - OCSP yanıtlarının imzası henüz doğrulanmaz (RFC 6960 §4.2.1 imza
-//!   doğrulaması CA sertifikasıyla yapılır; mevcut çekirdekte henüz yoktur).
+//! - OCSP yanıtlarının imzası `apply_ocsp_verified` ile yanıtlayıcı/CA
+//!   sertifikasıyla doğrulanır (RFC 6960 §4.2.1); geçersiz imzalı yanıtlar
+//!   `Unknown` ile reddedilir (fail-closed).
 //! - Yalnızca HTTP GET ile indirme yapılır (OCSP POST üretimi gerekmez; birçok
 //!   CA hem GET hem POST destekler, RFC 6960 §A.1 GET şablonu kullanılır).
 //! - HTTPS URL'lerinde güvenlik el sıkışması TLS istemcisinden geçmez; HTTP
@@ -308,6 +309,28 @@ fn decode_chunked_body(data: &[u8]) -> Option<Vec<u8>> {
     }
 }
 
+/// OCSP yanıtını imza doğrulamalı olarak depoya yazar. Yanıtın imzası
+/// verilen yanıtlayıcı/CA sertifikasıyla (`OcspResponseInfo::verify_signature`)
+/// doğrulanır; ayrıştırma veya imza doğrulaması başarısızsa `Unknown` döner
+/// (fail-closed, RFC 6960 §4.2.1).
+fn apply_ocsp_verified(
+    ocsp_der: &[u8],
+    issuer_der: &[u8],
+    leaf_serial: &[u8],
+    now: &super::x509::X509Time,
+) -> RevocationResult {
+    let Ok(info) = super::revocation_core::parse_ocsp_response(ocsp_der) else {
+        return RevocationResult::unknown();
+    };
+    if info.verify_signature(issuer_der).is_err() {
+        return RevocationResult::unknown();
+    }
+    let r = super::revocation_core::check_ocsp(ocsp_der, leaf_serial, now)
+        .unwrap_or_else(|_| RevocationResult::unknown());
+    super::revocation::set_status(super::revocation::RevocationSource::Ocsp, r);
+    r
+}
+
 /// Sertifika zincirindeki yaprak (leaf) sertifika için iptal durumunu otomatik
 /// sorgular: önce CRL DP, sonra OCSP AIA. İlk `Good`/`Revoked` sonucu depoya
 /// yazılır ve döndürülür; hiçbir kaynak bulunamazsa `Unknown` döner.
@@ -339,7 +362,7 @@ pub fn fetch_and_apply_revocation(
             continue;
         }
         if let Some(ocsp_der) = http_fetch_der(url) {
-            last = super::revocation::apply_ocsp(&ocsp_der, &serial_of(leaf_der), now);
+            last = apply_ocsp_verified(&ocsp_der, issuer_der, &serial_of(leaf_der), now);
             if last.status != revocation_core::RevocationStatus::Unknown {
                 return last;
             }
@@ -368,7 +391,7 @@ pub fn fetch_and_apply_ocsp(
     let Some(ocsp_der) = http_fetch_der(&url) else {
         return RevocationResult::unknown();
     };
-    super::revocation::apply_ocsp(&ocsp_der, &serial_of(leaf_der), now)
+    apply_ocsp_verified(&ocsp_der, issuer_der, &serial_of(leaf_der), now)
 }
 
 /// Sonucu kaynak etiketiyle raporlamak için yardımcı.

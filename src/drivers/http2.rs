@@ -1207,84 +1207,115 @@ impl Http2Connection {
             return Err(socket::E_NOTCONN);
         }
 
-        let ip = socket::resolve_host(host)?;
-        let fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
-            crate::serial_print("[H2] socket oluşturulamadı: ");
-            crate::serial_print(&e.to_string());
-            crate::serial_print("\n");
-        })?;
-        let _ = socket::set_timeout(fd, 8000);
-        socket::connect(fd, ip, port).inspect_err(|_| {
-            socket::close(fd);
-        })?;
+        let (fd, tls_session) =
+            (|| -> Result<(i32, Option<crate::drivers::tls::TlsSession>), i32> {
+                // TLS el sıkışması yardımcı closure (IPv6 ve IPv4 için ortak).
+                let tls_handshake =
+                    |fd: i32, host: &str| -> Result<Option<crate::drivers::tls::TlsSession>, i32> {
+                        if !is_https {
+                            return Ok(None);
+                        }
+                        let client_random = make_client_random();
 
-        // TLS el sıkışması (HTTPS için). ALPN: h2 tercih edilir,
-        // sunucu desteklemezse http/1.1'e düşülür.
-        let tls_session: Option<crate::drivers::tls::TlsSession> = if is_https {
-            let client_random = make_client_random();
+                        let mut hello = Vec::new();
+                        let mut ecdhe_secret = [0u8; 32];
+                        crate::drivers::tls::build_client_hello_with_alpn(
+                            host,
+                            &client_random,
+                            &mut hello,
+                            &mut ecdhe_secret,
+                            false,
+                            None,
+                            None,
+                            &[b"h2", b"http/1.1"],
+                        );
+                        let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
+                        let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
+                        session.note_client_hello(ch_body);
+                        session.set_client_ecdhe_secret(ecdhe_secret);
 
-            let mut hello = Vec::new();
-            let mut ecdhe_secret = [0u8; 32];
-            crate::drivers::tls::build_client_hello_with_alpn(
-                host,
-                &client_random,
-                &mut hello,
-                &mut ecdhe_secret,
-                false,
-                None,
-                None,
-                &[b"h2", b"http/1.1"],
-            );
-            let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
-            let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
-            session.note_client_hello(ch_body);
-            session.set_client_ecdhe_secret(ecdhe_secret);
+                        socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
-            socket::send(fd, &hello).map_err(|_| E_TLS)?;
+                        let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
+                        loop {
+                            let mut raw = [0u8; 4096];
+                            let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
+                            if n == 0 {
+                                return Err(E_TLS);
+                            }
+                            session.feed_tcp_data(&raw[..n]);
 
-            let handshake_deadline = crate::boot::time::main_monotonic_ms() + 8_000;
-            loop {
-                let mut raw = [0u8; 4096];
-                let n = socket::recv(fd, &mut raw).map_err(|_| E_TLS)?;
-                if n == 0 {
-                    return Err(E_TLS);
-                }
-                session.feed_tcp_data(&raw[..n]);
+                            let mut app = Vec::new();
+                            let mut hs = Vec::new();
+                            match session.process_records(&mut hs, &mut app) {
+                                Ok(_) => {}
+                                Err(_) => return Err(E_TLS),
+                            }
 
-                let mut app = Vec::new();
-                let mut hs = Vec::new();
-                match session.process_records(&mut hs, &mut app) {
-                    Ok(_) => {}
-                    Err(_) => return Err(E_TLS),
-                }
+                            if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished
+                            {
+                                if let Some(ccs) = session.tls13_change_cipher_spec() {
+                                    socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                                }
+                                if let Some(record) = session.build_tls13_client_finished() {
+                                    socket::send(fd, &record).map_err(|_| E_TLS)?;
+                                }
+                            }
 
-                if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
-                    if let Some(ccs) = session.tls13_change_cipher_spec() {
-                        socket::send(fd, &ccs).map_err(|_| E_TLS)?;
+                            let outgoing = session.take_outgoing();
+                            if !outgoing.is_empty() {
+                                socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
+                            }
+
+                            if session.state() == crate::drivers::tls::TlsState::Established {
+                                break;
+                            }
+                            if crate::boot::time::main_monotonic_ms() > handshake_deadline {
+                                return Err(E_TLS);
+                            }
+                        }
+
+                        // TLS session'ı sakla — istek gönderilirken şifreleme için kullanılacak.
+                        Ok(Some(session))
+                    };
+
+                // IPv6 (AAAA) öncelikli, IPv4'e otomatik geri düşme — bağlantı/TLS
+                // hatasında IPv4 yoluna düşülür (dual-stack fallback).
+                if let Ok(v6) = socket::resolve_host_aaaa(host) {
+                    let fd6 =
+                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
+                            crate::serial_print("[H2v6] socket oluşturulamadı: ");
+                            crate::serial_print(&e.to_string());
+                            crate::serial_print("\n");
+                        })?;
+                    let _ = socket::set_timeout(fd6, 8000);
+                    if socket::connect_v6(fd6, v6, port).is_ok() {
+                        match tls_handshake(fd6, host) {
+                            Ok(tls) => return Ok((fd6, tls)),
+                            Err(e) => {
+                                let _ = socket::close(fd6);
+                                return Err(e);
+                            }
+                        }
                     }
-                    if let Some(record) = session.build_tls13_client_finished() {
-                        socket::send(fd, &record).map_err(|_| E_TLS)?;
-                    }
+                    let _ = socket::close(fd6);
                 }
 
-                let outgoing = session.take_outgoing();
-                if !outgoing.is_empty() {
-                    socket::send(fd, &outgoing).map_err(|_| E_TLS)?;
-                }
-
-                if session.state() == crate::drivers::tls::TlsState::Established {
-                    break;
-                }
-                if crate::boot::time::main_monotonic_ms() > handshake_deadline {
-                    return Err(E_TLS);
-                }
-            }
-
-            // TLS session'ı sakla — istek gönderilirken şifreleme için kullanılacak.
-            Some(session)
-        } else {
-            None
-        };
+                // IPv4 yolu
+                let ip = socket::resolve_host(host)?;
+                let fd4 =
+                    socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
+                        crate::serial_print("[H2] socket oluşturulamadı: ");
+                        crate::serial_print(&e.to_string());
+                        crate::serial_print("\n");
+                    })?;
+                let _ = socket::set_timeout(fd4, 8000);
+                socket::connect(fd4, ip, port).inspect_err(|_| {
+                    socket::close(fd4);
+                })?;
+                let tls = tls_handshake(fd4, host)?;
+                Ok((fd4, tls))
+            })()?;
 
         // ALPN sonucu: h2 seçildiyse HTTP/2, değilse HTTP/1.1'e düş.
         // Şifresiz http:// için prior-knowledge HTTP/2 varsayılır.

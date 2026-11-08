@@ -1153,6 +1153,7 @@ static mut INITIALIZED: bool = false;
 pub enum HidKind {
     Keyboard,
     Mouse,
+    Touchscreen,
 }
 
 impl HidKind {
@@ -1160,6 +1161,7 @@ impl HidKind {
         match self {
             HidKind::Keyboard => "klavye",
             HidKind::Mouse => "fare",
+            HidKind::Touchscreen => "dokunmatik ekran",
         }
     }
 }
@@ -1249,6 +1251,8 @@ struct HidDevice {
     led_report_id: u8,
     /// Aygıta en son gönderilen LED değeri; 0xFF = henüz gönderilmedi.
     leds: u8,
+    /// Dokunmatik ekran (HID Digitizer) rapor yerleşimi.
+    touch_layout: crate::drivers::usb_touchscreen::TouchLayout,
 }
 
 impl HidDevice {
@@ -1275,6 +1279,7 @@ impl HidDevice {
             led_capable: false,
             led_report_id: 0,
             leds: 0xFF,
+            touch_layout: crate::drivers::usb_touchscreen::TouchLayout::empty(),
         }
     }
 }
@@ -1297,6 +1302,8 @@ struct HidCandidate {
     custom: bool,
     /// Rapor tanımlayıcısından çıkarılan düzen.
     layout: HidReportLayout,
+    /// Dokunmatik ekran ise digitizer rapor yerleşimi.
+    touch_layout: crate::drivers::usb_touchscreen::TouchLayout,
 }
 
 impl HidCandidate {
@@ -1310,6 +1317,7 @@ impl HidCandidate {
             boot: false,
             custom: true,
             layout: HidReportLayout::empty(),
+            touch_layout: crate::drivers::usb_touchscreen::TouchLayout::empty(),
         }
     }
 }
@@ -1895,6 +1903,7 @@ fn parse_hid_interfaces(config: &[u8], out: &mut [HidCandidate; MAX_HID_INTERFAC
                                 boot,
                                 custom: !boot,
                                 layout: HidReportLayout::empty(),
+                                touch_layout: crate::drivers::usb_touchscreen::TouchLayout::empty(),
                             };
                             count += 1;
                         }
@@ -1925,6 +1934,7 @@ unsafe fn load_report_layout(
 ) -> bool {
     let explicit_kind = candidate.kind;
     let mut layout = HidReportLayout::empty();
+    let mut touch_layout = crate::drivers::usb_touchscreen::TouchLayout::empty();
 
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
     if let Some(n) = c.control_in(
@@ -1940,7 +1950,18 @@ unsafe fn load_report_layout(
         if n > 0 {
             let desc = core::slice::from_raw_parts(buffer, n.min(PAGE as usize));
             layout = parse_hid_report_descriptor(desc);
+            touch_layout = crate::drivers::usb_touchscreen::parse_report_descriptor(desc);
         }
+    }
+
+    candidate.touch_layout = touch_layout;
+
+    // Digitizer (Usage Page 0x0D) arayüzü klavye/fare değil, dokunmatik
+    // ekrandır. X/Y alanları ayrıştırılabildiyse bu arayüzü öyle sınıflandır.
+    if touch_layout.is_digitizer() {
+        candidate.kind = Some(HidKind::Touchscreen);
+        candidate.custom = true;
+        return true;
     }
 
     match explicit_kind {
@@ -1963,6 +1984,9 @@ unsafe fn load_report_layout(
             }
             true
         }
+        // Digitizer arayüzleri yukarıda ele alınır; buraya yalnızca protokol
+        // alanı digitizer olmayan bir arayüzü işaret ederse düşer.
+        Some(HidKind::Touchscreen) => touch_layout.is_digitizer(),
         None => {
             if layout.keyboard_valid() {
                 candidate.kind = Some(HidKind::Keyboard);
@@ -2456,6 +2480,7 @@ unsafe fn enumerate_device(
             led_capable: false,
             led_report_id: 0,
             leds: 0xFF,
+            touch_layout: usable[i].touch_layout,
         };
 
         if kind == HidKind::Keyboard
@@ -2793,6 +2818,24 @@ unsafe fn handle_transfer_event(
                             crate::serial::print("\n");
                         }
                     }
+                    HidKind::Touchscreen => {
+                        if crate::drivers::usb_touchscreen::process_report(
+                            data,
+                            &device.touch_layout,
+                        ) {
+                            updated.touch = true;
+                        }
+                        // Tanılama: ilk 8 digitizer raporunun hex dökümü.
+                        if device.samples < 8 {
+                            device.samples += 1;
+                            crate::serial::print("[USB-HID] dokunma raporu: ");
+                            for b in data.iter().take(8) {
+                                crate::serial::print_hex(*b as u64);
+                                crate::serial::print(" ");
+                            }
+                            crate::serial::print("\n");
+                        }
+                    }
                     HidKind::Mouse => {
                         // Mutlak/göreli karar rapor uzunluğuna göre değil,
                         // rapor tanımlayıcısındaki Input öğesinin Absolute
@@ -3067,22 +3110,26 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
 
         let mut keyboards = 0usize;
         let mut mice = 0usize;
+        let mut touchscreens = 0usize;
         for device in HID_DEVICES.iter() {
             if device.active {
                 match device.kind {
                     HidKind::Keyboard => keyboards += 1,
                     HidKind::Mouse => mice += 1,
+                    HidKind::Touchscreen => touchscreens += 1,
                 }
             }
         }
-        if keyboards == 0 && mice == 0 {
-            crate::serial::print("[USB-HID] Bağlı USB HID klavye/fare bulunamadı; PS/2 fallback devrede (BIOS Legacy USB/CSM açık olmalıdır).\n");
+        if keyboards == 0 && mice == 0 && touchscreens == 0 {
+            crate::serial::print("[USB-HID] Bağlı USB HID klavye/fare/dokunmatik ekran bulunamadı; PS/2 fallback devrede (BIOS Legacy USB/CSM açık olmalıdır).\n");
         } else {
             crate::serial::print("[USB-HID] Hazır: ");
             crate::serial::print_dec(keyboards as u64);
             crate::serial::print(" klavye, ");
             crate::serial::print_dec(mice as u64);
-            crate::serial::print(" fare.\n");
+            crate::serial::print(" fare, ");
+            crate::serial::print_dec(touchscreens as u64);
+            crate::serial::print(" dokunmatik ekran.\n");
         }
     }
 }
@@ -3321,6 +3368,31 @@ pub fn mouse_present() -> bool {
     }
 }
 
+/// Etkin bir USB HID dokunmatik ekran (digitizer) var mı?
+pub fn touchscreen_present() -> bool {
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .any(|d| d.active && d.kind == HidKind::Touchscreen)
+    }
+}
+
+/// İlk etkin dokunmatik ekranın (max_x, max_y, çoklu dokunma) bilgisini döner.
+pub fn touchscreen_info() -> Option<(u32, u32, bool)> {
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .find(|d| d.active && d.kind == HidKind::Touchscreen)
+            .map(|d| {
+                (
+                    d.touch_layout.max_x,
+                    d.touch_layout.max_y,
+                    d.touch_layout.is_multitouch(),
+                )
+            })
+    }
+}
+
 pub fn device_count() -> usize {
     unsafe { HID_DEVICES.iter().filter(|d| d.active).count() }
 }
@@ -3343,6 +3415,15 @@ pub fn mouse_count() -> usize {
         HID_DEVICES
             .iter()
             .filter(|d| d.active && d.kind == HidKind::Mouse)
+            .count()
+    }
+}
+
+pub fn touchscreen_count() -> usize {
+    unsafe {
+        HID_DEVICES
+            .iter()
+            .filter(|d| d.active && d.kind == HidKind::Touchscreen)
             .count()
     }
 }

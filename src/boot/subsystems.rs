@@ -325,6 +325,16 @@ pub fn init_subsystems(
         drivers::wifi::init();
         serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
         drivers::usb_hid::init(&mut memory_mgr.pmm);
+        if drivers::usb_touchscreen::init() {
+            serial_print("[DRIVER] USB dokunmatik ekran hazır (");
+            crate::serial::print_dec(drivers::usb_touchscreen::max_x() as u64);
+            serial_print("x");
+            crate::serial::print_dec(drivers::usb_touchscreen::max_y() as u64);
+            if drivers::usb_touchscreen::supports_multitouch() {
+                serial_print(", multi-touch");
+            }
+            serial_print(").\n");
+        }
         serial_print("[DRIVER] USB HID sürücüsü hazır.\n");
         serial_print("[DRIVER] USB sürücüsü hazır.\n");
     }

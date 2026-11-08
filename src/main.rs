@@ -1967,6 +1967,8 @@ pub extern "C" fn _start() -> ! {
                 (drivers::usb_hid::HidKind::Keyboard, true) => "USB Keyboard",
                 (drivers::usb_hid::HidKind::Mouse, false) => "USB Fare",
                 (drivers::usb_hid::HidKind::Mouse, true) => "USB Mouse",
+                (drivers::usb_hid::HidKind::Touchscreen, false) => "USB Dokunmatik Ekran",
+                (drivers::usb_hid::HidKind::Touchscreen, true) => "USB Touchscreen",
             };
             let toast_title = if is_en {
                 "USB Device Event"
@@ -8760,8 +8762,8 @@ pub extern "C" fn _start() -> ! {
                 let fps3d_focused = app_is_focused(&compositor, 16);
 
                 if fps3d_focused && fps_3d_app.handle_key(ch, &mut audio_dev) {
-                        force_render = true;
-                    }
+                    force_render = true;
+                }
 
                 if !run_dialog_open
                     && !compositor.is_start_menu_open

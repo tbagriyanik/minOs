@@ -41,7 +41,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
 | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
 | Wi-Fi 802.11 | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
-| Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | HCI paketleme/ayrıştırma, synthetic yanıtlar, gerçek USB/PCI yok |
+| Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | HCI paketleme/ayrıştırma, synthetic yanıtlar, gerçek USB/PCI yok; A2DP/BLE GATT yok |
 
 ### Giriş Aygıtları
 
@@ -60,7 +60,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | NVMe SSD | `nvme.rs` | 🟢 Tam | NVMe komut kuyrukları ve blok okuma/yazma |
 | VirtIO-blk | `virtio_blk.rs` | 🟢 Tam | Sanal blok aygıtı |
 | USB Mass Storage | `usb_mass_storage.rs` | 🟢 Tam | SCSI BOT transfer protokolü |
-| SD / MMC | `sdmmc.rs` | 🟡 Kısmi | Sektör okuma aktif, CSD ayrıştırma ve yazma WIP |
+| SD / MMC | `sdmmc.rs` | 🟡 Kısmi | Sektör okuma aktif, CSD ayrıştırma ve yazma WIP; yazma yolu güvenilir değil |
 
 ### Ses & Multimedya
 
@@ -78,7 +78,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | ACPI AML & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML, _BST/_BIX/_BIF |
 | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | _S0_.._S5, PowerResource |
-| Fan & Sıcaklık | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone okuma, fan RPM izleme, EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş; gerçek EC kayıt ofsetleri placa özel |
+| Fan & Sıcaklık | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone okuma, fan RPM izleme, EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş; EC profilleri varsayımsal/örnek ofsetler, gerçek EC kayıt ofsetleri placa özel |
 | PCI / PCIe | `pci.rs`, `pcie.rs` | 🟢 Tam | Konfigürasyon altyapısı |
 | Zamanlayıcı | `timer.rs` | 🟢 Tam | PIT/HPET/APIC/TSC |
 | RTC | `rtc.rs` | 🟢 Tam | Gerçek zamanlı saat |
@@ -89,6 +89,13 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | USB Çekirdek | `usb.rs`, `usb_transfer.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI transfer katmanı |
 | I2C | `i2c.rs` | 🔴 İskelet | (henüz eklenmemiş / planlama aşamasında) |
+| Preemptive Scheduler | `task/mod.rs` | 🟢 Tam | Preemptive kernel task scheduler, APIC timer 1000 Hz tick, per-CPU run queue, work-stealing, callback-safe boundaries |
+
+### Güvenlik
+
+| Sürücü | Dosya | Durum | Açıklama |
+| :--- | :--- | :---: | :--- |
+| CRL/OCSP İndirme | `drivers/crypto/revocation_fetch.rs` | 🟡 Kısmi | CRL/OCSP HTTP GET indirme iskeleti; OCSP imza doğrulaması yok, HTTPS indirme TLS'ten geçmiyor, otomatik indirme sınırlı |
 
 ---
 
@@ -96,10 +103,10 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 
 | Maturite | Sayı | Yüzde |
 | :--- | :---: | :---: |
-| 🟢 Tam | 26 | ~70% |
-| 🟡 Kısmi | 8 | ~21% | (Atheros ve Marvell Ethernet güncellendi) |
+| 🟢 Tam | 27 | ~69% |
+| 🟡 Kısmi | 9 | ~23% | (Atheros ve Marvell Ethernet güncellendi) |
 | 🔴 İskelet / WIP | 3 | ~8% | |
-| **Toplam** | **37** | **100%** |
+| **Toplam** | **39** | **100%** |
 
 ---
 

@@ -3067,11 +3067,7 @@ impl SystemSettings {
                         fb,
                         win_x + CONTENT_X,
                         hw_y,
-                        &format!(
-                            "{}: {} RPM",
-                            fan_sensor_label(&fs.name, i, english),
-                            fs.rpm
-                        ),
+                        &format!("{}: {} RPM", fan_sensor_label(&fs.name, i, english), fs.rpm),
                         Color::TEXT_MAIN,
                     );
                     hw_y = hw_y.saturating_add(sp(UI_ROW_STEP));

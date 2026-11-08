@@ -8811,16 +8811,19 @@ pub extern "C" fn _start() -> ! {
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
         // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
-        if !mouse_moved || app_is_focused(&compositor, 16) {
-            last_mouse_x = mouse.x;
-            last_mouse_y = mouse.y;
-        }
         if mouse_moved && app_is_focused(&compositor, 16) {
             let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
             if dx.abs() > 0.5 {
                 fps_3d_app.handle_mouse_look(dx);
                 force_render = true;
             }
+        }
+        // Delta hesaplandıktan sonra referans konumunu güncelle. Önceki sıra
+        // odaklı pencerede delta'yı her zaman sıfırlıyordu; ayrıca odak dışı
+        // hareketin sonraki FPS karesine taşınmasını engeller.
+        if mouse_moved {
+            last_mouse_x = mouse.x;
+            last_mouse_y = mouse.y;
         }
 
         let buttons_changed = (mouse.left_button, mouse.right_button) != last_buttons;

@@ -33,7 +33,7 @@ const MARVELL_DEVICES: [u32; 10] = [
 // ---------------------------------------------------------------------------
 
 // Marvell 88E8070/88E8072 kontrol registerları PCI config space üzerinden
-const MRV_REG_CMD: u8 = 0x04;    // Command register (PCI config offset)
+const MRV_REG_CMD: u8 = 0x04; // Command register (PCI config offset)
 const MRV_REG_STATUS: u8 = 0x04; // Status register (PCI config offset)
 
 // Marvell register bit definitions (PCI config space bit positions)

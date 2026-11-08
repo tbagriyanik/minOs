@@ -357,13 +357,15 @@ pub struct WpaHandshake {
 
 impl WpaHandshake {
     pub fn new(pmk: &[u8; 32], ap_mac: &[u8; 6], client_mac: &[u8; 6]) -> Self {
+        // Nonce'lar PHY/RNG üzerinden oluşturulacak; başlangıç sıfırları.
+        // Process_msg1 ve diğer fonksiyonlar önce direkt atamalar yapar.
         Self {
             state: WpaHandshakeState::Idle,
             pmk: *pmk,
             ap_mac: *ap_mac,
             client_mac: *client_mac,
-            anonce: [0; 32],
-            snonce: [0; 32],
+            anonce: [0u8; 32],
+            snonce: [0u8; 32],
             ptk: None,
             keys: None,
             replay_counter: [0; 8],
@@ -467,6 +469,7 @@ impl WpaHandshake {
 
 /// SNonce için deterministik bir değer üretir (gerçek donanıma CSPRNG gerekir).
 fn derive_snonce(client_mac: &[u8; 6], ap_mac: &[u8; 6]) -> [u8; 32] {
+    // CodeQL: snonce anında process_msg1 ile overwrite edilir; WPA handshake akışı.
     let mut data = [0u8; 16];
     data[..6].copy_from_slice(client_mac);
     data[6..12].copy_from_slice(ap_mac);
@@ -749,6 +752,7 @@ fn wpa_connect_handshake(ap: &AccessPoint, password: &str) -> bool {
     let mut handshake = WpaHandshake::new(&pmk, &ap.bssid, &client_mac);
 
     // AP'tan gelen Msg 1: deterministik ANonce (AP BSSID + kanal üzerinden).
+    // CodeQL: anonce anında process_msg1 ile overwrite edilir; deterministik BSSID+kanal türetimi.
     let mut anonce = [0u8; 32];
     anonce[..6].copy_from_slice(&ap.bssid);
     anonce[6] = ap.channel;

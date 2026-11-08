@@ -538,9 +538,7 @@ pub fn find_ocsp_urls(cert_der: &[u8]) -> Vec<String> {
                                 if let Ok((loc_tag, lvo, lvl, _)) = read_der_tlv(&v, p) {
                                     if loc_tag == 0x86 && p < ad_end {
                                         // URI GeneralName
-                                        if let Ok(s) = core::str::from_utf8(
-                                            &v[lvo..lvo + lvl],
-                                        ) {
+                                        if let Ok(s) = core::str::from_utf8(&v[lvo..lvo + lvl]) {
                                             urls.push(String::from(s));
                                         }
                                     }
@@ -627,15 +625,12 @@ pub fn find_crl_urls(cert_der: &[u8]) -> Vec<String> {
                                 let mut g = dpt_vo;
                                 let g_end = dpt_vo + dpt_vl;
                                 while g < g_end {
-                                    let Ok((gn_tag, gvo, gvl, gnext)) = read_der_tlv(&v, g)
-                                    else {
+                                    let Ok((gn_tag, gvo, gvl, gnext)) = read_der_tlv(&v, g) else {
                                         break;
                                     };
                                     if gn_tag == 0x86 {
                                         // uniformResourceIdentifier
-                                        if let Ok(s) = core::str::from_utf8(
-                                            &v[gvo..gvo + gvl],
-                                        ) {
+                                        if let Ok(s) = core::str::from_utf8(&v[gvo..gvo + gvl]) {
                                             urls.push(String::from(s));
                                         }
                                     }

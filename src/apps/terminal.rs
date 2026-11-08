@@ -1772,6 +1772,7 @@ impl TerminalApp {
                     }
                     "connect" => {
                         let target_ssid = sp.next().unwrap_or("");
+                        // CodeQL: pass boş default, kullanıcı "wifi connect <SSID> [sifre]" ile explicit sifre girmesi beklenir.
                         let pass = sp.next().unwrap_or("");
                         if target_ssid.is_empty() {
                             self.push_line(

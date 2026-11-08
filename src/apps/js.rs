@@ -24,6 +24,13 @@
 //! - Diziler: `[1, 2]`, `arr[i] = v`, `arr.length`, `.push()`, `.pop()`, `.shift()`, `.unshift()`, `.reverse()`, `.join()`, `.indexOf()`, `.includes()`, `.slice()`, `.concat()`
 //! - Dizi geri çağırmaları: `.forEach()`, `.map()`, `.filter()`, `.find()`, `.findIndex()`, `.some()`, `.every()`, `.reduce()` (closure/ok fonksiyonu kabul eder)
 //! - Nesneler: `{ a: 1 }`, `obj.prop = v`, `obj["key"] = v`, iç içe nesneler (`a.b.c`), `delete obj.prop`, `Object.keys()`, `Object.values()`, `Object.entries()`
+//! - Prototip zinciri: `Object.create(proto)`, `Object.getPrototypeOf()`, `Object.setPrototypeOf()`,
+//!   `obj.__proto__`, sınıf `prototype` nesnesi ve `prop in obj`
+//! - Getter/setter: nesne literalinde `get x() {}` / `set x(v) {}`, ayrıca
+//!   `Object.defineProperty(obj, key, { get, set, value, enumerable })`
+//! - Proxy: `new Proxy(target, handler)`; `get`, `set`, `ownKeys`, `deleteProperty` tuzakları
+//! - Modüller: `register_module(name, source)`, `import ... from "..."`, `export`,
+//!   `export default`, `require()` ve `module.exports` (kayıt tabanlı; URL'den yükleme yok)
 //! - JSON ve Global API'ler: `JSON.stringify()`, `JSON.parse()`, `parseInt()`, `parseFloat()`, `String()`, `Number()`, `Boolean()`
 //! - Matematik ve Dize: `Math.{abs, min, max, pow, floor, ceil, round}`, `str.{indexOf, includes, slice, split, trim, toLowerCase, toUpperCase, charAt}`
 //! - DOM API'leri: `getElementById`, `getElementsByClassName`, `innerHTML`, `textContent`, `createElement`, `appendChild`, `setAttribute`, `getAttribute`, `addEventListener`, `dispatchEvent`
@@ -400,6 +407,10 @@ pub struct JsRuntime {
     pub websockets: BTreeMap<u32, WebSocketConn>,
     /// Bir sonraki WebSocket kimliği.
     pub next_ws_id: u32,
+    /// Kayıtlı modüller: modül adı -> dışa aktarılan ad alanı (namespace).
+    pub modules: BTreeMap<String, JsValue>,
+    /// `register_module` sırasında toplanan ESM dışa aktarımları.
+    current_exports: Option<BTreeMap<String, JsValue>>,
 }
 
 impl Clone for JsRuntime {
@@ -443,6 +454,8 @@ impl Clone for JsRuntime {
             session_storage: self.session_storage.clone(),
             websockets,
             next_ws_id: self.next_ws_id,
+            modules: self.modules.clone(),
+            current_exports: self.current_exports.clone(),
         }
     }
 }
@@ -514,6 +527,8 @@ impl JsRuntime {
             session_storage: BTreeMap::new(),
             websockets: BTreeMap::new(),
             next_ws_id: 1,
+            modules: BTreeMap::new(),
+            current_exports: None,
         }
     }
 
@@ -657,6 +672,299 @@ impl JsRuntime {
             }
         }
         out
+    }
+
+    /// Bir fonksiyon değerini (`String` closure adı veya `Function`) verilen
+    /// `this` bağlamında çağırır ve güncellenmiş `this` değerini de döndürür.
+    /// Getter/setter, Proxy tuzakları ve prototip metotları bu yardımcıyı kullanır.
+    fn call_fn_with_this(
+        &mut self,
+        f: &JsValue,
+        this: JsValue,
+        args: &[JsValue],
+    ) -> (JsValue, JsValue) {
+        let old_this = self.values.get("this").cloned();
+        self.values.insert(String::from("this"), this.clone());
+        let ret = match f {
+            JsValue::String(name) => self.call_function(name, args, &mut Vec::new()),
+            JsValue::Function(func) => {
+                let (ret, _) = self.call_function_value(func, args, &mut Vec::new());
+                ret
+            }
+            _ => JsValue::Undefined,
+        };
+        let updated = self.values.get("this").cloned().unwrap_or(this);
+        match old_this {
+            Some(v) => {
+                self.values.insert(String::from("this"), v);
+            }
+            None => {
+                self.values.remove("this");
+            }
+        }
+        (ret, updated)
+    }
+
+    /// `obj.prop` okuması: Proxy `get`, kendi erişimcisi (getter), kendi veri
+    /// özelliği ve `__proto_obj__` zinciri sırasıyla denenir.
+    fn get_member_mut(&mut self, receiver: &mut JsValue, prop: &str) -> JsValue {
+        let proxy = match receiver {
+            JsValue::Object(map) => match (
+                map.get(PROTO_PROXY_TARGET).cloned(),
+                map.get(PROTO_PROXY_HANDLER).cloned(),
+            ) {
+                (Some(target), Some(handler)) => Some((target, handler)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((target, handler)) = proxy {
+            if let Some(trap) = handler_trap(&handler, "get") {
+                let recv = receiver.clone();
+                let (ret, _) = self.call_fn_with_this(
+                    &trap,
+                    handler.clone(),
+                    &[target, JsValue::String(String::from(prop)), recv],
+                );
+                return ret;
+            }
+            let mut t = target;
+            let v = self.get_member_mut(&mut t, prop);
+            if let JsValue::Object(map) = receiver {
+                map.insert(String::from(PROTO_PROXY_TARGET), t);
+            }
+            return v;
+        }
+
+        let mut current = receiver.clone();
+        let mut depth = 0u32;
+        while depth < 64 {
+            let map = match &current {
+                JsValue::Object(m) => m.clone(),
+                _ => break,
+            };
+            if let Some(getter) = map.get(&accessor_key("get", prop)).cloned() {
+                let (ret, updated) = self.call_fn_with_this(&getter, receiver.clone(), &[]);
+                *receiver = updated;
+                return ret;
+            }
+            if let Some(v) = map.get(prop) {
+                return v.clone();
+            }
+            match map.get(PROTO_OBJ_KEY).cloned() {
+                Some(p) => current = p,
+                None => break,
+            }
+            depth += 1;
+        }
+        JsValue::Undefined
+    }
+
+    /// `obj.prop = val`: Proxy `set`, erişimci setter veya kendi veri özelliği.
+    fn set_member(&mut self, obj: &mut JsValue, prop: &str, val: JsValue) {
+        if prop == "__proto__" {
+            if let JsValue::Object(map) = obj {
+                match val {
+                    JsValue::Object(_) => {
+                        map.insert(String::from(PROTO_OBJ_KEY), val);
+                    }
+                    JsValue::Null => {
+                        map.remove(PROTO_OBJ_KEY);
+                    }
+                    _ => {}
+                }
+            }
+            return;
+        }
+
+        let proxy = match obj {
+            JsValue::Object(map) => match (
+                map.get(PROTO_PROXY_TARGET).cloned(),
+                map.get(PROTO_PROXY_HANDLER).cloned(),
+            ) {
+                (Some(target), Some(handler)) => Some((target, handler)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((target, handler)) = proxy {
+            let mut t = target;
+            let applied = match handler_trap(&handler, "set") {
+                Some(trap) => {
+                    let recv = obj.clone();
+                    let (ret, _) = self.call_fn_with_this(
+                        &trap,
+                        handler.clone(),
+                        &[
+                            t.clone(),
+                            JsValue::String(String::from(prop)),
+                            val.clone(),
+                            recv,
+                        ],
+                    );
+                    ret.is_truthy()
+                }
+                None => true,
+            };
+            if applied {
+                self.set_member(&mut t, prop, val);
+            }
+            if let JsValue::Object(map) = obj {
+                map.insert(String::from(PROTO_PROXY_TARGET), t);
+            }
+            return;
+        }
+
+        let mut current = obj.clone();
+        let mut depth = 0u32;
+        while depth < 64 {
+            let map = match &current {
+                JsValue::Object(m) => m.clone(),
+                _ => break,
+            };
+            if let Some(setter) = map.get(&accessor_key("set", prop)).cloned() {
+                let (_, updated) = self.call_fn_with_this(&setter, obj.clone(), &[val]);
+                *obj = updated;
+                return;
+            }
+            if map.contains_key(&accessor_key("get", prop)) {
+                // Yalnızca getter var: atama sessizce yok sayılır.
+                return;
+            }
+            if map.contains_key(prop) {
+                break;
+            }
+            match map.get(PROTO_OBJ_KEY).cloned() {
+                Some(p) => current = p,
+                None => break,
+            }
+            depth += 1;
+        }
+        if let JsValue::Object(map) = obj {
+            map.insert(String::from(prop), val);
+        }
+    }
+
+    /// `prop in obj` / `hasOwnProperty`: prototip zinciri ve Proxy hedefi dahil.
+    fn has_member(&self, obj: &JsValue, prop: &str) -> bool {
+        let mut current = obj.clone();
+        let mut depth = 0u32;
+        while depth < 64 {
+            match &current {
+                JsValue::Object(map) => {
+                    if let Some(target) = map.get(PROTO_PROXY_TARGET) {
+                        current = target.clone();
+                        depth += 1;
+                        continue;
+                    }
+                    if map.contains_key(prop) || map.contains_key(&accessor_key("get", prop)) {
+                        return true;
+                    }
+                    match map.get(PROTO_OBJ_KEY).cloned() {
+                        Some(p) => current = p,
+                        None => break,
+                    }
+                }
+                _ => break,
+            }
+            depth += 1;
+        }
+        false
+    }
+
+    /// Proxy ise hedef nesneyi döndürür; değilse kendisini.
+    fn unwrap_proxy(&self, val: &JsValue) -> JsValue {
+        if let JsValue::Object(map) = val {
+            if let Some(target) = map.get(PROTO_PROXY_TARGET) {
+                return target.clone();
+            }
+        }
+        val.clone()
+    }
+
+    /// `Object.keys` / `for...in` için görünür anahtarlar. Proxy `ownKeys`
+    /// tuzağı varsa ona danışır.
+    fn own_keys(&mut self, val: &JsValue) -> Vec<String> {
+        if let JsValue::Object(map) = val {
+            if let Some(target) = map.get(PROTO_PROXY_TARGET).cloned() {
+                if let Some(handler) = map.get(PROTO_PROXY_HANDLER).cloned() {
+                    if let Some(trap) = handler_trap(&handler, "ownKeys") {
+                        let (ret, _) =
+                            self.call_fn_with_this(&trap, handler.clone(), &[target.clone()]);
+                        if let JsValue::Array(items) = ret {
+                            return items.iter().map(|v| v.to_str()).collect();
+                        }
+                    }
+                }
+                return self.own_keys(&target);
+            }
+        }
+        match val {
+            JsValue::Object(map) => map
+                .keys()
+                .filter(|k| !is_internal_key(k))
+                .filter(|k| !map.contains_key(&nonenum_key(k)))
+                .cloned()
+                .collect(),
+            JsValue::Array(items) => (0..items.len()).map(|i| i.to_string()).collect(),
+            JsValue::String(s) => (0..s.chars().count()).map(|i| i.to_string()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `delete obj.prop`: Proxy `deleteProperty` tuzağı ve erişimci temizliği.
+    fn delete_member(&mut self, obj: &mut JsValue, prop: &str) {
+        if let JsValue::Object(map) = obj.clone() {
+            if let (Some(target), Some(handler)) = (
+                map.get(PROTO_PROXY_TARGET).cloned(),
+                map.get(PROTO_PROXY_HANDLER).cloned(),
+            ) {
+                let mut t = target;
+                if let Some(trap) = handler_trap(&handler, "deleteProperty") {
+                    let recv = obj.clone();
+                    let _ = self.call_fn_with_this(
+                        &trap,
+                        handler.clone(),
+                        &[t.clone(), JsValue::String(String::from(prop)), recv],
+                    );
+                }
+                self.delete_member(&mut t, prop);
+                if let JsValue::Object(map) = obj {
+                    map.insert(String::from(PROTO_PROXY_TARGET), t);
+                }
+                return;
+            }
+        }
+        if let JsValue::Object(map) = obj {
+            map.remove(prop);
+            map.remove(&accessor_key("get", prop));
+            map.remove(&accessor_key("set", prop));
+            map.remove(&nonenum_key(prop));
+        }
+    }
+
+    /// `Object.defineProperty` / `Object.create(proto, props)` tanımlayıcısını.
+    fn apply_descriptor(&mut self, map: &mut BTreeMap<String, JsValue>, key: &str, desc: JsValue) {
+        let d = match desc {
+            JsValue::Object(m) => m,
+            _ => return,
+        };
+        if let Some(g) = d.get("get").cloned() {
+            let g = self.store_function_value(g);
+            map.insert(accessor_key("get", key), g);
+        }
+        if let Some(s) = d.get("set").cloned() {
+            let s = self.store_function_value(s);
+            map.insert(accessor_key("set", key), s);
+        }
+        if let Some(v) = d.get("value").cloned() {
+            map.insert(String::from(key), v);
+        }
+        if let Some(JsValue::Bool(false)) = d.get("enumerable") {
+            map.insert(nonenum_key(key), JsValue::Bool(true));
+        } else {
+            map.remove(&nonenum_key(key));
+        }
     }
 
     /// `class_name` sınıfının constructor'ını mevcut `this` üzerinde çalıştırır.
@@ -1593,30 +1901,17 @@ impl JsRuntime {
                 "Object" => match method {
                     "keys" => {
                         let v = self.eval_val(args);
-                        let keys = match v {
-                            JsValue::Object(map) => map
-                                .keys()
-                                .filter(|k| !is_internal_key(k))
-                                .cloned()
-                                .map(JsValue::String)
-                                .collect(),
-                            JsValue::Array(items) => (0..items.len())
-                                .map(|i| JsValue::String(i.to_string()))
-                                .collect(),
-                            JsValue::String(s) => (0..s.chars().count())
-                                .map(|i| JsValue::String(i.to_string()))
-                                .collect(),
-                            _ => Vec::new(),
-                        };
+                        let keys = self.own_keys(&v).into_iter().map(JsValue::String).collect();
                         return JsValue::Array(keys);
                     }
                     "values" => {
-                        let v = self.eval_val(args);
+                        let evaluated = self.eval_val(args);
+                        let v = self.unwrap_proxy(&evaluated);
                         let vals = match v {
-                            JsValue::Object(map) => map
+                            JsValue::Object(map) => self
+                                .own_keys(&JsValue::Object(map.clone()))
                                 .into_iter()
-                                .filter(|(k, _)| !is_internal_key(k))
-                                .map(|(_, v)| v)
+                                .filter_map(|k| map.get(&k).cloned())
                                 .collect(),
                             JsValue::Array(items) => items,
                             JsValue::String(s) => {
@@ -1628,12 +1923,17 @@ impl JsRuntime {
                     }
                     "entries" => {
                         // Object.entries(obj) — [ [anahtar, değer], ... ]
-                        let v = self.eval_val(args);
+                        let evaluated = self.eval_val(args);
+                        let v = self.unwrap_proxy(&evaluated);
                         let entries: Vec<JsValue> = match v {
-                            JsValue::Object(map) => map
+                            JsValue::Object(map) => self
+                                .own_keys(&JsValue::Object(map.clone()))
                                 .into_iter()
-                                .filter(|(k, _)| !is_internal_key(k))
-                                .map(|(k, val)| JsValue::Array(vec![JsValue::String(k), val]))
+                                .filter_map(|k| {
+                                    map.get(&k)
+                                        .cloned()
+                                        .map(|val| JsValue::Array(vec![JsValue::String(k), val]))
+                                })
                                 .collect(),
                             JsValue::Array(items) => items
                                 .into_iter()
@@ -1646,24 +1946,124 @@ impl JsRuntime {
                         };
                         return JsValue::Array(entries);
                     }
-                    "create" => {
-                        // Object.create(proto) — yeni nesne, prototip zinciri kurulur.
-                        let proto_val = self.eval_val(args);
-                        let proto_name = match &proto_val {
-                            JsValue::String(s) => s.clone(),
-                            JsValue::Object(_) => {
-                                // Anonim nesne: bir değişken ismi olarak saklanamaz,
-                                // burada basitçe boş bir prototip kullanılır.
-                                String::new()
+                    "defineProperty" => {
+                        let parts = split_top_level_comma(args);
+                        if parts.len() >= 3 {
+                            let target_expr = parts[0].trim();
+                            let key = self.eval_val(parts[1]).to_str();
+                            let desc = self.eval_val(parts[2]);
+                            let mut target = self.eval_val(target_expr);
+                            if let JsValue::Object(mut map) = target.clone() {
+                                self.apply_descriptor(&mut map, &key, desc);
+                                target = JsValue::Object(map);
+                                if is_simple_ident(target_expr) {
+                                    self.values
+                                        .insert(String::from(target_expr), target.clone());
+                                    self.sync_var_from_val(target_expr);
+                                }
+                                return target;
                             }
-                            _ => String::new(),
-                        };
-                        let new_var = format!("__obj_{}", self.values.len());
-                        self.var_set_val(&new_var, JsValue::Object(BTreeMap::new()));
-                        if !proto_name.is_empty() {
-                            self.set_proto(&new_var, &proto_name);
                         }
-                        return JsValue::Object(BTreeMap::new());
+                        return JsValue::Undefined;
+                    }
+                    "getOwnPropertyDescriptor" => {
+                        let parts = split_top_level_comma(args);
+                        let target = self.eval_val(parts.first().copied().unwrap_or(""));
+                        let key = self.eval_val(parts.get(1).copied().unwrap_or("")).to_str();
+                        let mut d = BTreeMap::new();
+                        if let JsValue::Object(map) = target {
+                            let mut has = false;
+                            if let Some(g) = map.get(&accessor_key("get", &key)) {
+                                d.insert(String::from("get"), g.clone());
+                                has = true;
+                            }
+                            if let Some(s) = map.get(&accessor_key("set", &key)) {
+                                d.insert(String::from("set"), s.clone());
+                                has = true;
+                            }
+                            if let Some(v) = map.get(&key) {
+                                d.insert(String::from("value"), v.clone());
+                                has = true;
+                            }
+                            if has {
+                                d.insert(
+                                    String::from("enumerable"),
+                                    JsValue::Bool(!map.contains_key(&nonenum_key(&key))),
+                                );
+                                d.insert(String::from("configurable"), JsValue::Bool(true));
+                                return JsValue::Object(d);
+                            }
+                        }
+                        return JsValue::Undefined;
+                    }
+                    "getPrototypeOf" => {
+                        let v = self.eval_val(args);
+                        if let JsValue::Object(map) = v {
+                            return map.get(PROTO_OBJ_KEY).cloned().unwrap_or(JsValue::Null);
+                        }
+                        return JsValue::Null;
+                    }
+                    "setPrototypeOf" => {
+                        let parts = split_top_level_comma(args);
+                        let target_expr = parts.first().copied().unwrap_or("").trim();
+                        let proto = self.eval_val(parts.get(1).copied().unwrap_or(""));
+                        let mut target = self.eval_val(target_expr);
+                        if let JsValue::Object(mut map) = target.clone() {
+                            match proto {
+                                JsValue::Object(_) => {
+                                    map.insert(String::from(PROTO_OBJ_KEY), proto);
+                                }
+                                JsValue::Null => {
+                                    map.remove(PROTO_OBJ_KEY);
+                                }
+                                _ => {}
+                            }
+                            target = JsValue::Object(map);
+                            if is_simple_ident(target_expr) {
+                                self.values
+                                    .insert(String::from(target_expr), target.clone());
+                                self.sync_var_from_val(target_expr);
+                            }
+                        }
+                        return target;
+                    }
+                    "defineProperties" => {
+                        let parts = split_top_level_comma(args);
+                        let target_expr = parts.first().copied().unwrap_or("").trim();
+                        let mut target = self.eval_val(target_expr);
+                        if let JsValue::Object(mut map) = target.clone() {
+                            if let JsValue::Object(props) =
+                                self.eval_val(parts.get(1).copied().unwrap_or(""))
+                            {
+                                for (k, desc) in props {
+                                    self.apply_descriptor(&mut map, &k, desc);
+                                }
+                            }
+                            target = JsValue::Object(map);
+                            if is_simple_ident(target_expr) {
+                                self.values
+                                    .insert(String::from(target_expr), target.clone());
+                                self.sync_var_from_val(target_expr);
+                            }
+                        }
+                        return target;
+                    }
+                    "create" => {
+                        // Object.create(proto[, properties]) — gerçek prototip nesnesi.
+                        let parts = split_top_level_comma(args);
+                        let proto_val = self.eval_val(parts.first().copied().unwrap_or(""));
+                        let mut map = BTreeMap::new();
+                        if let JsValue::Object(_) = &proto_val {
+                            map.insert(String::from(PROTO_OBJ_KEY), proto_val);
+                        }
+                        if let Some(props) = parts.get(1) {
+                            if let JsValue::Object(prop_map) = self.eval_val(props) {
+                                for (k, desc) in prop_map {
+                                    self.apply_descriptor(&mut map, &k, desc);
+                                }
+                            }
+                        }
+                        return JsValue::Object(map);
                     }
                     _ => {}
                 },
@@ -2230,15 +2630,55 @@ impl JsRuntime {
             }
         }
 
-        // Nesne literali: { a: 1, b: "x" }
+        // Nesne literali: { a: 1, b: "x", get y() {...}, set y(v) {...} }
         if e.starts_with('{') && e.ends_with('}') && e.len() >= 2 {
             let inner = &e[1..e.len() - 1].trim();
             let mut map = BTreeMap::new();
             if !inner.is_empty() {
                 for pair in split_top_level_comma(inner) {
-                    if let Some(colon) = find_top_level_char(pair.as_bytes(), ':') {
-                        let k = pair[..colon].trim().trim_matches(|c| c == '\'' || c == '"');
-                        let v = self.eval_val(&pair[colon + 1..]);
+                    let p = pair.trim();
+                    if p.is_empty() {
+                        continue;
+                    }
+                    // Erişimci sözdizimi: `get ad() { ... }` / `set ad(v) { ... }`.
+                    let accessor = if let Some(rest) = keyword(p, "get") {
+                        if rest.trim_start().starts_with(':') {
+                            None
+                        } else {
+                            Some(("get", rest.trim_start()))
+                        }
+                    } else if let Some(rest) = keyword(p, "set") {
+                        if rest.trim_start().starts_with(':') {
+                            None
+                        } else {
+                            Some(("set", rest.trim_start()))
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some((kind, rest)) = accessor {
+                        if let Some(open) = rest.find('(') {
+                            let name = rest[..open].trim();
+                            if let Some((param_str, after)) = call_args(rest, open) {
+                                if let Some(body) = extract_block(&rest[after..]) {
+                                    let func = JsFunction {
+                                        name: String::from(name),
+                                        params: parse_param_list(param_str),
+                                        body: String::from(body),
+                                        is_async: false,
+                                        captured: Vec::new(),
+                                    };
+                                    let fv = self
+                                        .store_function_value(JsValue::Function(Box::new(func)));
+                                    map.insert(accessor_key(kind, name), fv);
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    if let Some(colon) = find_top_level_char(p.as_bytes(), ':') {
+                        let k = p[..colon].trim().trim_matches(|c| c == '\'' || c == '"');
+                        let v = self.eval_val(&p[colon + 1..]);
                         map.insert(String::from(k), v);
                     }
                 }
@@ -2283,6 +2723,11 @@ impl JsRuntime {
                 && !rhs.chars().next().map_or(false, |c| c.is_ascii_digit())
             {
                 let base_val = self.eval_val(lhs);
+                // `Foo.prototype` gibi ad alanı biçiminde saklanan değerler.
+                let flat_key = format!("{}.{}", lhs.trim(), rhs);
+                if let Some(v) = self.values.get(&flat_key) {
+                    return v.clone();
+                }
                 match base_val {
                     JsValue::Array(items) => {
                         if rhs == "length" {
@@ -2295,33 +2740,62 @@ impl JsRuntime {
                         }
                     }
                     JsValue::Object(map) => {
-                        if rhs == "__proto__" {
-                            // Prototip zincirinden prototip nesnesini döndür.
-                            let lhs_name = lhs.trim();
-                            if let Some(proto_name) = self.protos.get(lhs_name) {
-                                if let Some(JsValue::Object(proto_map)) =
-                                    self.values.get(proto_name)
-                                {
-                                    return JsValue::Object(proto_map.clone());
-                                }
-                            }
-                            return JsValue::Undefined;
-                        }
                         if rhs == "length" {
                             return JsValue::Number(map.len() as i64);
                         }
-                        // Önce kendi özelliklerde, sonra prototip zincirinde ara.
-                        if let Some(v) = map.get(rhs) {
-                            return v.clone();
-                        }
-                        // Prototip zincirinde ara (lhs bir değişken ismiyse).
                         let lhs_name = lhs.trim();
-                        if let Some(v) = self.val_get_proto(lhs_name, rhs) {
-                            return v;
+                        let mut base = JsValue::Object(map);
+                        let v = if rhs == "__proto__" {
+                            match &base {
+                                JsValue::Object(m) => {
+                                    m.get(PROTO_OBJ_KEY).cloned().unwrap_or(JsValue::Undefined)
+                                }
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            // Kendi özellikleri, getter, Proxy ve prototip zinciri.
+                            self.get_member_mut(&mut base, rhs)
+                        };
+                        // Getter `this` üzerinde değişiklik yaptıysa geri yaz.
+                        if is_simple_ident(lhs_name) {
+                            self.values.insert(String::from(lhs_name), base);
+                            self.sync_var_from_val(lhs_name);
                         }
-                        return JsValue::Undefined;
+                        return v;
                     }
                     _ => {}
+                }
+            }
+        }
+
+        // `new Proxy(target, handler)` — ES6 Proxy nesnesi.
+        if let Some(rest) = e.strip_prefix("new Proxy") {
+            let rest = rest.trim();
+            if rest.starts_with('(') && rest.ends_with(')') {
+                let inner = &rest[1..rest.len() - 1];
+                let parts = split_top_level_comma(inner);
+                if parts.len() >= 2 {
+                    let target = self.eval_val(parts[0].trim());
+                    let mut handler = self.eval_val(parts[1].trim());
+                    // Tuzak fonksiyonlarını closure olarak kaydet: sayaç gibi
+                    // durumlar çağrılar arasında korunur.
+                    if let JsValue::Object(map) = &handler {
+                        let entries: Vec<(String, JsValue)> = map
+                            .iter()
+                            .filter(|(_, v)| matches!(v, JsValue::Function(_)))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        for (k, v) in entries {
+                            let stored = self.store_function_value(v);
+                            if let JsValue::Object(m) = &mut handler {
+                                m.insert(k, stored);
+                            }
+                        }
+                    }
+                    let mut map = BTreeMap::new();
+                    map.insert(String::from(PROTO_PROXY_TARGET), target);
+                    map.insert(String::from(PROTO_PROXY_HANDLER), handler);
+                    return JsValue::Object(map);
                 }
             }
         }
@@ -2358,6 +2832,14 @@ impl JsRuntime {
                         // Sınıf ve miras alınan metodları ekle.
                         for (mname, mfunc) in &methods {
                             obj.insert(mname.clone(), method_object(mfunc));
+                        }
+                        // Sınıf prototipi: sonradan eklenen özellikler miras alınır.
+                        if let Some(proto) = self
+                            .values
+                            .get(&format!("{}.prototype", class_name))
+                            .cloned()
+                        {
+                            obj.insert(String::from(PROTO_OBJ_KEY), proto);
                         }
                         // Constructor'ı `this` örneğe bağlı olarak çalıştır.
                         // `extends` varsa ebeveyn constructor'ı `super()` ile ya da
@@ -2436,6 +2918,13 @@ impl JsRuntime {
 
                 // Örnek metot çağrısı: obj.method(args)
                 let base_val = self.eval_val(obj_name);
+                // Prototip zinciri / getter / Proxy üzerinden metodu çöz.
+                let mut recv = base_val.clone();
+                let member = self.get_member_mut(&mut recv, mname);
+                if is_simple_ident(obj_name) {
+                    self.values.insert(String::from(obj_name), recv.clone());
+                    self.sync_var_from_val(obj_name);
+                }
                 if let JsValue::Object(map) = &base_val {
                     if let Some(JsValue::Object(method_map)) = map.get(mname) {
                         if let Some(JsValue::String(body)) = method_map.get("__fn__") {
@@ -2495,18 +2984,26 @@ impl JsRuntime {
                     }
                 }
 
+                if mname == "hasOwnProperty" && matches!(member, JsValue::Undefined) {
+                    let key = self.eval_val(arg_str).to_str();
+                    let own = match &recv {
+                        JsValue::Object(map) => {
+                            map.contains_key(&key) || map.contains_key(&accessor_key("get", &key))
+                        }
+                        _ => false,
+                    };
+                    return JsValue::Bool(own);
+                }
+
                 // Nesne özelliği olarak saklanan closure çağrısı:
                 // `obj.f(...)` — `this` nesneye bağlanır.
-                let prop_fn: Option<(String, JsFunction)> = match &base_val {
-                    JsValue::Object(map) => match map.get(mname) {
-                        Some(JsValue::String(fn_name)) => self
-                            .functions
-                            .get(fn_name)
-                            .cloned()
-                            .map(|f| (fn_name.clone(), f)),
-                        Some(JsValue::Function(f)) => Some((String::new(), (**f).clone())),
-                        _ => None,
-                    },
+                let prop_fn: Option<(String, JsFunction)> = match &member {
+                    JsValue::String(fn_name) if self.functions.contains_key(fn_name) => self
+                        .functions
+                        .get(fn_name)
+                        .cloned()
+                        .map(|f| (fn_name.clone(), f)),
+                    JsValue::Function(f) => Some((String::new(), (**f).clone())),
                     _ => None,
                 };
                 if let Some((fn_name, func)) = prop_fn {
@@ -2515,10 +3012,7 @@ impl JsRuntime {
                         .map(|a| self.eval_val(a))
                         .collect();
                     let old_this = self.values.get("this").cloned();
-                    if let JsValue::Object(ref map) = base_val {
-                        self.values
-                            .insert(String::from("this"), JsValue::Object(map.clone()));
-                    }
+                    self.values.insert(String::from("this"), recv.clone());
                     let (ret, updated) = if fn_name.is_empty() {
                         // Anonim fonksiyon değeri: kapsamı özelliğe geri yaz.
                         let (ret, updated) =
@@ -2561,6 +3055,15 @@ impl JsRuntime {
                 }
                 let arg_str = &e[open + 1..e.len() - 1];
                 match fname {
+                    "require" => {
+                        let name = self.eval_val(arg_str).to_str();
+                        let key = normalize_module_name(&name);
+                        return self
+                            .modules
+                            .get(&key)
+                            .cloned()
+                            .unwrap_or(JsValue::Undefined);
+                    }
                     "parseInt" => {
                         let parts = split_top_level_comma(arg_str);
                         let first = self.eval_val(parts.first().unwrap_or(&"")).to_str();
@@ -2838,6 +3341,31 @@ impl JsRuntime {
                 return if op == '<' { ln < rn } else { ln > rn };
             }
         }
+        // in: 'prop' in obj (prototip zinciri dahil)
+        if let Some(idx) = find_top_level_word(c.as_bytes(), b"in") {
+            let key = self.eval_val(&c[..idx]).to_str();
+            let obj = self.eval_val(&c[idx + 2..]);
+            let found = match &obj {
+                JsValue::Object(_) => self.has_member(&obj, &key),
+                JsValue::Array(items) => {
+                    key.trim()
+                        .parse::<usize>()
+                        .map(|i| i < items.len())
+                        .unwrap_or(false)
+                        || key == "length"
+                }
+                JsValue::String(s) => {
+                    key == "length"
+                        || key
+                            .trim()
+                            .parse::<usize>()
+                            .map(|i| i < s.chars().count())
+                            .unwrap_or(false)
+                }
+                _ => false,
+            };
+            return found;
+        }
         // instanceof: obj instanceof Constructor
         if let Some(idx) = find_top_level(c.as_bytes(), b"instanceof") {
             let left = c[..idx].trim();
@@ -2868,6 +3396,16 @@ impl JsRuntime {
         s = s.trim_end_matches(|c| c == ';' || c == '\n' || c == '\r');
         s = s.trim();
         if s.is_empty() {
+            return;
+        }
+
+        // ESM: import / export deyimleri (modül kaydı üzerinden).
+        if let Some(rest) = keyword(s, "import") {
+            self.handle_import(rest.trim());
+            return;
+        }
+        if let Some(rest) = keyword(s, "export") {
+            self.handle_export(rest.trim());
             return;
         }
 
@@ -2927,7 +3465,7 @@ impl JsRuntime {
                     } else {
                         None
                     };
-                    let mut js_class = JsClass::new(name.to_string(), extends);
+                    let mut js_class = JsClass::new(name.to_string(), extends.clone());
                     // Parse methods: methodName(params) { body }
                     let method_stmts = split_statements(class_body);
                     for mstmt in &method_stmts {
@@ -2976,6 +3514,17 @@ impl JsRuntime {
                         }
                     }
                     self.classes.insert(name.to_string(), js_class);
+                    // `Foo.prototype` nesnesi: sonradan eklenen özellikler
+                    // (`Foo.prototype.x = ...`) yeni örneklerce miras alınır.
+                    let parent_proto = extends
+                        .as_ref()
+                        .and_then(|p| self.values.get(&format!("{}.prototype", p)).cloned());
+                    let mut proto_map = BTreeMap::new();
+                    if let Some(pp) = parent_proto {
+                        proto_map.insert(String::from(PROTO_OBJ_KEY), pp);
+                    }
+                    self.values
+                        .insert(format!("{}.prototype", name), JsValue::Object(proto_map));
                     return;
                 }
             }
@@ -3035,17 +3584,7 @@ impl JsRuntime {
                         }
                         let obj_val = self.eval_val(obj_expr.trim());
                         // Dahili anahtarlar (`__class__` vb.) kullanıcıya görünmez.
-                        let keys: Vec<String> = match obj_val {
-                            JsValue::Object(map) => map
-                                .keys()
-                                .filter(|k| !is_internal_key(k))
-                                .cloned()
-                                .collect(),
-                            JsValue::Array(items) => {
-                                (0..items.len()).map(|i| i.to_string()).collect()
-                            }
-                            _ => Vec::new(),
-                        };
+                        let keys: Vec<String> = self.own_keys(&obj_val);
                         for k in keys {
                             self.var_set_val(var_name, JsValue::String(k));
                             if body_opt.is_some() {
@@ -3206,20 +3745,26 @@ impl JsRuntime {
                     let obj_name = t[..open_br].trim();
                     let key_str = t[open_br + 1..t.len() - 1].trim();
                     let key_val = self.eval_val(key_str).to_str();
-                    if let Some(JsValue::Object(map)) = self.values.get_mut(obj_name) {
-                        map.remove(&key_val);
-                        self.sync_var_from_val(obj_name);
-                        return;
+                    if let Some(mut obj) = self.values.get(obj_name).cloned() {
+                        if matches!(obj, JsValue::Object(_)) {
+                            self.delete_member(&mut obj, &key_val);
+                            self.values.insert(String::from(obj_name), obj);
+                            self.sync_var_from_val(obj_name);
+                            return;
+                        }
                     }
                 }
             }
             if let Some((obj_name, prop)) = t.rsplit_once('.') {
                 let obj_name = obj_name.trim();
                 let prop = prop.trim();
-                if let Some(JsValue::Object(map)) = self.values.get_mut(obj_name) {
-                    map.remove(prop);
-                    self.sync_var_from_val(obj_name);
-                    return;
+                if let Some(mut obj) = self.values.get(obj_name).cloned() {
+                    if matches!(obj, JsValue::Object(_)) {
+                        self.delete_member(&mut obj, prop);
+                        self.values.insert(String::from(obj_name), obj);
+                        self.sync_var_from_val(obj_name);
+                        return;
+                    }
                 }
             }
             return;
@@ -3491,9 +4036,10 @@ impl JsRuntime {
                     {
                         let raw_val = self.eval_val(rhs);
                         let val = self.store_function_value(raw_val);
-                        if let Some(existing) = self.values.get_mut(obj_name) {
-                            if let JsValue::Object(ref mut map) = existing {
-                                map.insert(String::from(prop), val);
+                        if let Some(mut target) = self.values.get(obj_name).cloned() {
+                            if matches!(target, JsValue::Object(_)) {
+                                self.set_member(&mut target, prop, val);
+                                self.values.insert(String::from(obj_name), target);
                                 self.sync_var_from_val(obj_name);
                                 return;
                             }
@@ -3757,6 +4303,249 @@ impl JsRuntime {
         // Promise microtask'larını çalıştır (.then() işleyicileri vb.).
         self.run_microtasks(out);
     }
+
+    // ── Modül sistemi ──────────────────────────────────────────────
+
+    /// Bir modül kaynağını çalıştırır ve dışa aktarımlarını kaydeder.
+    /// `export` deyimleri (ESM) ve `module.exports` (CommonJS) desteklenir.
+    pub fn register_module(&mut self, name: &str, source: &str) -> JsValue {
+        let prev_exports = self.current_exports.replace(BTreeMap::new());
+        let prev_module = self.values.get("module").cloned();
+        let mut module_map = BTreeMap::new();
+        module_map.insert(String::from("exports"), JsValue::Object(BTreeMap::new()));
+        self.values
+            .insert(String::from("module"), JsValue::Object(module_map));
+        let mut sink: Vec<u8> = Vec::new();
+        self.run(source, &mut sink);
+        let mut exports = self.current_exports.take().unwrap_or_default();
+        if let Some(JsValue::Object(m)) = self.values.get("module") {
+            if let Some(JsValue::Object(e)) = m.get("exports") {
+                for (k, v) in e {
+                    exports.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+        }
+        match prev_module {
+            Some(v) => {
+                self.values.insert(String::from("module"), v);
+            }
+            None => {
+                self.values.remove("module");
+            }
+        }
+        self.current_exports = prev_exports;
+        let ns = JsValue::Object(exports);
+        self.modules.insert(normalize_module_name(name), ns.clone());
+        ns
+    }
+
+    /// Modül ad alanını (namespace) döndürür; yoksa boş nesne.
+    pub fn module_namespace(&self, name: &str) -> Option<JsValue> {
+        self.modules.get(&normalize_module_name(name)).cloned()
+    }
+
+    fn record_export(&mut self, name: &str, value: JsValue) {
+        if let Some(map) = self.current_exports.as_mut() {
+            map.insert(String::from(name), value);
+        }
+    }
+
+    fn export_local(&mut self, local: &str, exported: &str) {
+        let value = self
+            .values
+            .get(local)
+            .cloned()
+            .or_else(|| {
+                self.functions
+                    .get(local)
+                    .map(|f| JsValue::Function(Box::new(f.clone())))
+            })
+            .unwrap_or(JsValue::Undefined);
+        self.record_export(exported, value);
+    }
+
+    fn bind_import(&mut self, local: &str, value: JsValue) {
+        let value = match value {
+            JsValue::Function(f) => {
+                let name = self.register_closure(*f);
+                JsValue::String(name)
+            }
+            other => other,
+        };
+        self.var_set_val(local, value);
+    }
+
+    fn handle_import(&mut self, rest: &str) {
+        let r = rest.trim();
+        // Yan etkili import: `import "modül";`
+        if r.starts_with('"') || r.starts_with('\'') {
+            return;
+        }
+        let from_idx = match find_top_level(r.as_bytes(), b" from ") {
+            Some(i) => i,
+            None => return,
+        };
+        let head = r[..from_idx].trim();
+        let spec = r[from_idx + 6..].trim().trim_end_matches(';').trim();
+        let module_name = normalize_module_name(&strip_quotes(spec));
+        let ns = self
+            .modules
+            .get(&module_name)
+            .cloned()
+            .unwrap_or(JsValue::Object(BTreeMap::new()));
+
+        let bind_default = |this: &mut Self, local: &str| {
+            let value = match &ns {
+                JsValue::Object(map) => map.get("default").cloned().unwrap_or_else(|| ns.clone()),
+                _ => ns.clone(),
+            };
+            this.bind_import(local, value);
+        };
+
+        if let Some(open) = head.find('{') {
+            let def = head[..open].trim().trim_end_matches(',').trim();
+            if !def.is_empty() && def != "*" {
+                bind_default(self, def);
+            }
+            if let Some(close) = head[open..].find('}') {
+                let inner = &head[open + 1..open + close];
+                for item in split_top_level_comma(inner) {
+                    let parts: Vec<&str> = item.split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    let local = parts[0];
+                    let exported = if parts.len() >= 3 && parts[1] == "as" {
+                        parts[2]
+                    } else {
+                        local
+                    };
+                    let value = match &ns {
+                        JsValue::Object(map) => {
+                            map.get(local).cloned().unwrap_or(JsValue::Undefined)
+                        }
+                        _ => JsValue::Undefined,
+                    };
+                    self.bind_import(exported, value);
+                }
+            }
+        } else if let Some(alias) = head.strip_prefix("* as ") {
+            self.bind_import(alias.trim(), ns.clone());
+        } else {
+            bind_default(self, head);
+        }
+    }
+
+    fn handle_export(&mut self, rest: &str) {
+        let r = rest.trim();
+        // `export default [...]`
+        if let Some(def) = keyword(r, "default") {
+            let d = def.trim_start();
+            if d.starts_with("function")
+                || d.starts_with("async function")
+                || d.starts_with("class")
+            {
+                // Adlandırılmış tanımı normal yoldan çalıştır, sonra dışa aktar.
+                self.exec(d, &mut Vec::new());
+                let name = d
+                    .split_whitespace()
+                    .skip(1)
+                    .find(|w| *w != "async" && !w.starts_with('('))
+                    .unwrap_or("")
+                    .split('(')
+                    .next()
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    self.export_local(&name, "default");
+                    self.export_local(&name, &name);
+                }
+            } else if !d.is_empty() {
+                let value = self.eval_val(d);
+                self.record_export("default", value);
+            }
+            return;
+        }
+        // `export { a, b as c } [from "modül"]`
+        if r.starts_with('{') {
+            if let Some(close) = r.find('}') {
+                let inner = &r[1..close];
+                let tail = r[close + 1..].trim();
+                let from = tail
+                    .strip_prefix("from ")
+                    .map(|s| normalize_module_name(&strip_quotes(s.trim().trim_end_matches(';'))));
+                let remote = from.and_then(|n| self.modules.get(&n).cloned());
+                for item in split_top_level_comma(inner) {
+                    let parts: Vec<&str> = item.split_whitespace().collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    let local = parts[0];
+                    let exported = if parts.len() >= 3 && parts[1] == "as" {
+                        parts[2]
+                    } else {
+                        local
+                    };
+                    match &remote {
+                        Some(JsValue::Object(map)) => {
+                            let v = map.get(local).cloned().unwrap_or(JsValue::Undefined);
+                            self.record_export(exported, v);
+                        }
+                        _ => self.export_local(local, exported),
+                    }
+                }
+            }
+            return;
+        }
+        // `export {const|let|var} ...` ve `export [async] function ...`
+        let is_decl = [
+            "const ",
+            "let ",
+            "var ",
+            "function ",
+            "async function ",
+            "class ",
+        ]
+        .iter()
+        .any(|kw| r.starts_with(kw));
+        if !is_decl {
+            return;
+        }
+        self.exec(r, &mut Vec::new());
+        if let Some(after) = r.strip_prefix("async function ") {
+            let name = after.split('(').next().unwrap_or("").trim();
+            self.export_local(name, name);
+            return;
+        }
+        if let Some(after) = r.strip_prefix("function ") {
+            let name = after.split('(').next().unwrap_or("").trim();
+            self.export_local(name, name);
+            return;
+        }
+        if let Some(after) = r.strip_prefix("class ") {
+            let name = after.split_whitespace().next().unwrap_or("").trim();
+            if !name.is_empty() {
+                self.record_export(name, JsValue::String(String::from(name)));
+            }
+            return;
+        }
+        let list = ["const ", "let ", "var "]
+            .iter()
+            .find_map(|kw| r.strip_prefix(kw))
+            .unwrap_or("");
+        for decl in split_top_level_comma(list) {
+            let name = decl
+                .split('=')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches(';')
+                .trim();
+            if !name.is_empty() {
+                self.export_local(name, name);
+            }
+        }
+    }
 }
 
 fn find_bytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -3839,7 +4628,10 @@ fn keyword<'a>(s: &'a str, kw: &str) -> Option<&'a str> {
 fn is_internal_key(key: &str) -> bool {
     matches!(
         key,
-        "__class__"
+        PROTO_OBJ_KEY
+            | PROTO_PROXY_TARGET
+            | PROTO_PROXY_HANDLER
+            | "__class__"
             | "__extends__"
             | "__fn__"
             | "__params__"
@@ -3854,6 +4646,47 @@ fn is_internal_key(key: &str) -> bool {
         || key.starts_with("__obj_")
         || key.starts_with("__ws_")
         || key.starts_with("__anon_evt_")
+        || key.starts_with("__get_")
+        || key.starts_with("__set_")
+        || key.starts_with("__nonenum_")
+}
+
+/// Gizli prototip bağlantısı: `obj.__proto__` / `Object.setPrototypeOf`.
+const PROTO_OBJ_KEY: &str = "__proto_obj__";
+/// Proxy hedefi ve işleyicisi (gizli alanlar).
+const PROTO_PROXY_TARGET: &str = "__proxy_target__";
+const PROTO_PROXY_HANDLER: &str = "__proxy_handler__";
+
+/// Getter/setter için gizli anahtar adı: `__get_x`, `__set_x`.
+fn accessor_key(kind: &str, prop: &str) -> String {
+    format!("__{}_{}", kind, prop)
+}
+
+/// `enumerable: false` işaretli özellik anahtarı.
+fn nonenum_key(prop: &str) -> String {
+    format!("__nonenum_{}", prop)
+}
+
+/// Proxy işleyici nesnesinden bir tuzak (get/set/...) çıkarır.
+fn handler_trap(handler: &JsValue, name: &str) -> Option<JsValue> {
+    match handler {
+        JsValue::Object(map) => map.get(name).cloned(),
+        _ => None,
+    }
+}
+
+/// Modül adını normalize eder: `./util.js` -> `util.js`, tırnakları atar.
+fn normalize_module_name(name: &str) -> String {
+    let mut n = name.trim();
+    n = n.trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    n = n.strip_prefix("./").unwrap_or(n);
+    n = n.strip_suffix(';').unwrap_or(n);
+    String::from(n)
+}
+
+/// Basit tırnak temizliği.
+fn strip_quotes(s: &str) -> String {
+    String::from(s.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`'))
 }
 
 /// Virgülle ayrılmış bir listeyi parametre isimlerine çevirir.
@@ -5222,5 +6055,131 @@ mod tests {
             document.write("," + (q instanceof Pixel));
         "#;
         assert_eq!(render(code), "true,true,true");
+    }
+
+    // ── Prototip zinciri / getter-setter / Proxy / modül testleri ──
+
+    #[test]
+    fn object_create_prototype_chain() {
+        let code = r#"
+            var base = { greet: function () { return "hi"; } };
+            var child = Object.create(base);
+            child.name = "x";
+            document.write(child.greet());
+        "#;
+        assert_eq!(render(code), "hi");
+    }
+
+    #[test]
+    fn proto_assignment_and_lookup() {
+        let code = r#"
+            var p = { a: 1 };
+            var o = {};
+            o.__proto__ = p;
+            var got = Object.getPrototypeOf(o);
+            document.write(o.a);
+            document.write(":" + got.a);
+        "#;
+        assert_eq!(render(code), "1:1");
+    }
+
+    #[test]
+    fn object_literal_accessors() {
+        let code = r#"
+            var o = {
+                _v: 1,
+                get v() { return this._v * 2; },
+                set v(x) { this._v = x; }
+            };
+            o.v = 5;
+            document.write(o.v);
+        "#;
+        assert_eq!(render(code), "10");
+    }
+
+    #[test]
+    fn define_property_accessor_and_enumerable() {
+        let code = r#"
+            var o = { x: 1 };
+            Object.defineProperty(o, "y", {
+                get: function () { return this.x + 1; },
+                enumerable: false
+            });
+            document.write(o.y);
+            document.write(":" + Object.keys(o).length);
+        "#;
+        assert_eq!(render(code), "2:1");
+    }
+
+    #[test]
+    fn proxy_get_set_traps() {
+        let code = r#"
+            var target = { x: 1 };
+            var p = new Proxy(target, {
+                get: function (t, k) {
+                    if (k == "x") { return 99; }
+                    return t[k];
+                },
+                set: function (t, k, v) { return false; }
+            });
+            p.x = 7;
+            document.write(p.x);
+            document.write(":" + target.x);
+        "#;
+        assert_eq!(render(code), "99:1");
+    }
+
+    #[test]
+    fn esm_register_and_import_named() {
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.register_module("math", "export function double(x) { return x * 2; }");
+        rt.run(
+            "import { double } from 'math'; document.write(double(4));",
+            &mut out,
+        );
+        assert_eq!(String::from_utf8_lossy(&out), "8");
+    }
+
+    #[test]
+    fn esm_default_export() {
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.register_module("cfg", "export default 42;");
+        rt.run("import cfg from 'cfg'; document.write(cfg);", &mut out);
+        assert_eq!(String::from_utf8_lossy(&out), "42");
+    }
+
+    #[test]
+    fn commonjs_module_exports_and_require() {
+        let mut rt = JsRuntime::new();
+        let mut out: Vec<u8> = Vec::new();
+        rt.register_module("util", "module.exports = { answer: 7 };");
+        rt.run(
+            "var u = require('util'); document.write(u.answer);",
+            &mut out,
+        );
+        assert_eq!(String::from_utf8_lossy(&out), "7");
+    }
+
+    #[test]
+    fn class_prototype_extension_is_inherited() {
+        let code = r#"
+            class A { constructor() { this.x = 1; } }
+            A.prototype.y = 5;
+            var a = new A();
+            document.write(a.x + ":" + a.y);
+        "#;
+        assert_eq!(render(code), "1:5");
+    }
+
+    #[test]
+    fn in_operator_sees_non_enumerable() {
+        let code = r#"
+            var o = { x: 1 };
+            Object.defineProperty(o, "hidden", { value: 3, enumerable: false });
+            if ("hidden" in o) { document.write("yes"); }
+        "#;
+        assert_eq!(render(code), "yes");
     }
 }

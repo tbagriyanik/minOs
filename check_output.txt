@@ -1,0 +1,2 @@
+   Compiling minos-kernel v2.2.0 (D:\minos)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.22s

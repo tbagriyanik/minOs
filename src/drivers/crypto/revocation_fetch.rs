@@ -128,7 +128,7 @@ fn build_ocsp_get_url(ocsp_url: &str, leaf_der: &[u8], issuer_der: &[u8]) -> Opt
     cert_id.extend_from_slice(&[0x30, 0x09]);
     cert_id.extend_from_slice(&[0x06, 0x05, 0x2b, 0x0e, 0x03, 0x02, 0x1a]); // 1.3.14.3.2.26 sha1
     cert_id.extend_from_slice(&[0x05, 0x00]); // NULL
-    // issuerNameHash OCTET STRING
+                                              // issuerNameHash OCTET STRING
     let nh = sha1_hex(&issuer_name_der);
     cert_id.extend_from_slice(&[0x04, nh.len() as u8]);
     cert_id.extend_from_slice(nh.as_bytes());
@@ -189,10 +189,7 @@ fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
         None => (rest, "/"),
     };
     let (host, port) = match authority.rfind(':') {
-        Some(i) => (
-            &authority[..i],
-            authority[i + 1..].parse::<u16>().ok()?,
-        ),
+        Some(i) => (&authority[..i], authority[i + 1..].parse::<u16>().ok()?),
         None => (authority, 80),
     };
     if host.is_empty() {

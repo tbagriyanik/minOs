@@ -33,7 +33,7 @@ const ATHEROS_DEVICES: [u32; 8] = [
 
 // Atheros AR8161/8171 kontrol registerları PCI config space üzerinden
 // Genel amaçlı register'lar; gerçek MMIO erişimi BAR0 üzerinden yapılır.
-const ATH_REG_CMD: u8 = 0x04;    // Command register (PCI config offset)
+const ATH_REG_CMD: u8 = 0x04; // Command register (PCI config offset)
 const ATH_REG_STATUS: u8 = 0x04; // Status register (PCI config offset)
 
 // Atheros register bit definitions (PCI config space bit positions)

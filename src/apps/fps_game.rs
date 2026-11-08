@@ -553,7 +553,14 @@ impl FpsGameApp {
 
     /// Fare ile bakış açısını güncelle.
     fn look(&mut self, dx: f32) {
-        self.rotate(-dx * MOUSE_SENS);
+        // USB/PS2 raporu veya imleç yakalama sırasında tek turda çok büyük
+        // bir delta gelebilir. Bunu doğrudan açıya çevirmek yön vektörünü
+        // bozup raycaster'ı anlamsız değerlerle çalıştırabilir.
+        if !dx.is_finite() {
+            return;
+        }
+        let bounded_dx = dx.clamp(-128.0, 128.0);
+        self.rotate(-bounded_dx * MOUSE_SENS);
     }
 
     /// Ses efektleri: ateş, adım, vurma.
@@ -774,7 +781,9 @@ impl FpsGameApp {
             if tex_x < 0.0 {
                 tex_x += 1.0;
             }
-            let tx = (tex_x * 8.0) as usize % 8;
+            // Duvar tekstürü daha küçük, kapı daha büyük görünsün diye ölçek ayarı
+            let tex_scale = if tile == TILE_DOOR { 0.5 } else { 64.0 };
+            let tx = (tex_x * tex_scale) as usize % 8;
 
             // Duvar rengi (mesafeye göre gölgeli).
             // Yakındaki duvarlar canlı, uzaktakiler hâlâ ayırt edilebilir.
@@ -792,7 +801,9 @@ impl FpsGameApp {
                 let de = draw_end.max(0).min(render_h);
                 for yy in ds..de {
                     // Tekstür y koordinatı.
-                    let ty = ((yy - ds) as f32 / (de - ds).max(1) as f32 * 8.0) as usize % 8;
+                    let tex_scale_y = if tile == TILE_DOOR { 0.5 } else { 64.0 };
+                    let ty =
+                        ((yy - ds) as f32 / (de - ds).max(1) as f32 * tex_scale_y) as usize % 8;
                     let wall_color = match tile {
                         TILE_WALL => {
                             // Tuğla duvar: iki sıra, kaydırılmış dikey derzler
@@ -1514,6 +1525,7 @@ impl FpsGameApp {
         if self.result != GameResult::Playing {
             return;
         }
+        // FPS oyununda kritik hata/loglama: sonuç belirlenmedikçe güncelleme yapma
 
         // --- Çok tuşlu hareket ve dönüş (update içinde tek seferde uygulanır) ---
         if self.key_mask != 0 {
@@ -1614,6 +1626,7 @@ impl FpsGameApp {
 
         if self.health == 0 {
             // Can bittiğinde oyun sonu menüsü göster.
+            crate::serial_print("[FPS-GAME] Oyun sonu: Can tükendi (Lost)\n");
             self.result = GameResult::Lost;
         } else if self
             .enemies
@@ -1621,6 +1634,7 @@ impl FpsGameApp {
             .take(self.enemy_count)
             .all(|enemy| !enemy.alive)
         {
+            crate::serial_print("[FPS-GAME] Oyun sonu: Tüm düşmanler vuruldu (Won)\n");
             self.result = GameResult::Won;
         }
     }

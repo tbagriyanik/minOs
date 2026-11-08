@@ -1,6 +1,6 @@
 # minOs Wiki – Hoş Geldiniz
 
-minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
+minOs (Sarman Edition) v2.2.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
 
 > 📄 **Proje:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Dil:** [English](../en/)
@@ -27,9 +27,9 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 
 | Ölçüm | Değer |
 | :--- | :--- |
-| **Rust Derleyici** | 1.101.0-nightly |
-| **Toplam Kod Satırı** | ~129.179 satır (Rust) |
-| **Birim Testleri** | 228 geçti / 0 hata |
+| **Rust Derleyici** | 1.102.0-nightly |
+| **Toplam Kod Satırı** | ~116.264 satır (Rust) |
+| **Birim Testleri** | 234 geçti / 0 hata |
 | **Güvenilen Kök CA** | 51 sertifika |
 | **Yerleşik Uygulama** | 15 masaüstü uygulaması |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |
@@ -47,4 +47,6 @@ minOs (Sarman Edition) v2.1.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Depolama:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **Dosya Sistemleri:** FAT32, Ext2, Ext4, exFAT (okuma/yazma/biçimlendirme).
 - **Kripto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.
-- **Kurtarma Konsolu:** `recovery#` etkileşimli metin konsolu.
+- **Wi-Fi (802.11):** 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması ve PCI/USB arayüz tespiti.
+- **EC Fan Profilleri:** `fan_temp.rs` için EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş.
+- **Ekran Ayarları:** PNG duvar kağıdı küçük resimleri önyükleme sırasında önceden çözülür; uzun işlemlerde kum saati imleci gösterilir.

@@ -6,12 +6,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-228%20registered-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-234%20registered-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-129%2C179%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-116%2C264%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -135,7 +135,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
 | | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
-| | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🔴 İskelet | PCI/USB arayüz tespiti (WPA el sıkışması WIP) |
+| | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | **Giriş Aygıtları** | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce tuş eşleme |
 | | USB HID Klavye & Fare | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Tam | xHCI/EHCI/UHCI/OHCI tam transfer katmanı (QH, TD, ED, HCCA), 16-bit eksen, tekerlek, hotplug tak/çıkar |
 | | USB Dokunmatik Ekran | `usb_touchscreen.rs` | 🟡 Kısmi | Tek parmak dokunma/tıklama (Çoklu dokunma analizi TODO) |
@@ -149,7 +149,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Tam | Dosya okuma ve sistem dizinleri |
 | **Güç & Sensör** | ACPI AML Yorumlayıcısı & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML ayrıştırma (Method, Device, Scope, Math/Logic), `_BST`/`_BIX`/`_BIF` canlı yüzde, voltaj, akım, döngü |
 | | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | `_S0`..`_S5` uyku durumları tespiti, PowerResource (`_ON_`/`_OFF`/`_STA`), dinamik AC/Pil durum izleme |
-| | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) ayrıştırma, Celsius dönüşümü ve fan RPM izleme |
+| | Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) ayrıştırma, Celsius dönüşümü, fan RPM izleme ve EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ile sıcaklığa göre otomatik geçiş |
 | | Veri Yolu & Zamanlayıcı | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Tam | PCI/PCIe konfigürasyonu, TSC/HPET/APIC zamanlayıcıları |
 | **Ses & Multimedya**| Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Tam | DMA akış halkaları, mikser, WAV/MP3 oynatma |
 | | PC Speaker (PWM) | `audio.rs` | 🟢 Tam | Donanımsal zamanlayıcı bip ve PWM tonları |
@@ -161,7 +161,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 
 - **Bluetooth Üst Katman Profilleri:** Temel HCI katmanı, Inquiry ve bağlantı yönetimi hazırdır; A2DP ses akışı ve BLE GATT profilleri gelecekteki sürümler için planlanmaktadır.
 - **NVIDIA / AMD 3D Hızlandırma:** Doğrusal çerçeve belleği (VRAM LFB), 2D çizim ve dinamik çözünürlük değişimi hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
-- **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri.
+- ✅ **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri tamamlandı (Silent/Normal/Performance/Full/Auto, sıcaklığa göre otomatik geçiş, 0x66/0x62 EC protokolü).
 - **Atheros / Marvell Ethernet:** Temel RX/TX aktarımı aktiftir; donanımsal checksum offload ve gelişmiş paket filtreleri planlanmaktadır.
 - **RTL8139 / NE2000 Ağ Sürücüleri:** Paket aktarımı, MAC okuma ve bağlantı durumu tamamlandı. Planlananlar: çoklu segment (jumbo) çerçeveler, 8 ham TX kanalını kullanan daha derin TX kuyruğu, NE2000 için kesme (IRQ) tabanlı RX ve gerçek donanımda otomatik `ne2k_pci` (RTL8029AS) kart doğrulaması. Yönetim (SNMP/IPMI) için henüz promiscuous mod yoktur.
 - **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.

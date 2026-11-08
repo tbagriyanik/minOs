@@ -17,7 +17,9 @@ minOs release notes and future plans.
 - **🚫 Browser Freeze Fix:** External resources collected into `pending_resources` and fetched one per frame asynchronously by `poll_network()`; main event loop never blocked.
 - **🛠️ Browser Developer Tools:** `Ctrl+Shift+D` DevTools panel (Elements, Console, Network, Storage).
 - **Expanded Hardware Drivers (20+):** Networking (VirtIO-net, Intel I219-V, Atheros, Marvell, Realtek RTL8139, NE2000), Bluetooth HCI, Storage (AHCI/SATA, NVMe, VirtIO-blk, SD/MMC), USB (Mass Storage, Printer, Audio, Touchscreen), Graphics (VirtIO-gpu, AMD Radeon, NVIDIA GeForce), Sensors & Power (ACPI AML, battery, sleep, ThermalZone, fan), Bus & Timing (PCIe, PCI, PIT/HPET/APIC/TSC).
-- **Live USB Hot-plug:** USB devices detected instantly with toast notifications.
+- **📶 Wi-Fi (802.11) WPA 4-Way Handshake:** `wifi.rs` WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake (EAPOL-Key, KCK/KEK/TK, MIC verification) and PCI/USB interface detection added.
+- **🌀 EC Fan Profiles:** `fan_temp.rs` EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching added.
+- **🖼️ Display Settings Thumbnails:** PNG wallpaper thumbnails pre-decoded during boot; hourglass cursor shown during long operations.
 - **OHCI & UHCI & EHCI Transfer Layer:** Complete transfer layer and port handoff infrastructure.
 - **minJs Advanced JavaScript Runtime:** Binary arithmetic, loops, variable mutations, array methods, object properties, JSON, math/string helpers, global conversions.
 - **minJs Closures & Timers:** Closure support (function expressions, arrow functions, scope capture, private state per closure), `setTimeout`/`setInterval` timers with `clearTimeout`/`clearInterval`, `Object.keys()`/`Object.values()`/`Object.entries()`, array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`), and IIFE support.

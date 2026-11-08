@@ -37,7 +37,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
 | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
-| Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🔴 İskelet | PCI/USB arayüz tespiti (WPA el sıkışması WIP) |
+| Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Tam | VMware PCI vendor `0x15AD`, MAC adresi, bağlantı yoklaması |
 
 ---
@@ -71,7 +71,7 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | :--- | :--- | :---: | :--- |
 | ACPI AML Yorumlayıcısı & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML ayrıştırma, `_BST`/`_BIX`/`_BIF` canlı yüzde, voltaj, akım, döngü |
 | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | `_S0`..`_S5` uyku durumları, PowerResource, dinamik AC/Pil durum izleme |
-| Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone ayrıştırma, Celsius dönüşümü, fan RPM izleme |
+| Fan & Sıcaklık Sensörleri | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) ayrıştırma, Celsius dönüşümü, fan RPM izleme ve EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ile sıcaklığa göre otomatik geçiş |
 | Veri Yolu & Zamanlayıcı | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Tam | PCI/PCIe konfigürasyonu, TSC/HPET/APIC zamanlayıcıları |
 | SMP & Scheduler | `smp.rs`, `task/mod.rs` | 🟢 Etkin | Limine AP başlatma, per-CPU run queue, work-stealing, 1000 Hz tick |
 

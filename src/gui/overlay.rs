@@ -144,6 +144,11 @@ impl MinGuiCompositor {
     }
     pub fn draw_mouse_cursor(&self, fb: &mut Framebuffer, mx: usize, my: usize, pressed: bool) {
         fb.save_cursor_background(mx, my);
+        // Meşgul (kum saati) imleci: uzun işlem sırasında fare takılı gibi görünmez.
+        if crate::gui::screens::is_cursor_busy() {
+            crate::gui::screens::draw_busy_hourglass(fb, mx, my);
+            return;
+        }
         // Not: BGA/VGA grafik modda HW sprite yoktur; yazılım imleci her
         // zaman çizilir. HW bayrağı yalnızca CRTC konum takibi içindir.
         // Fare bir pencere kenarı üzerindeyse yönlü yeniden boyutlandırma imleci çiz.

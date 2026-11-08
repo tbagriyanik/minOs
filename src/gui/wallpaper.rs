@@ -5,6 +5,8 @@
 //! PNG çözücüye ihtiyaç duymaz; her karede hızlı çizilecek
 //! şekilde tasarlanmıştır.
 
+#![allow(static_mut_refs)]
+
 use crate::drivers::video::Framebuffer;
 use crate::gui::Color;
 use alloc::sync::Arc;
@@ -260,20 +262,24 @@ fn thumb_source(idx: usize) -> &'static [u8] {
     }
 }
 
-/// 7..=9 numaralı PNG duvar kağıtlarının önizleme piksellerini bir kez hazırlar.
+/// 7..=9 numaralı PNG duvar kağıtı için önizleme piksellerini bir kez hazırlar.
+/// Tam boy PNG'yi çözüp 128x48 lik küçük resime indirir. Bu işlem pahalıdır;
+/// çağrıcı bunu ekran ayarları açılışında değil, önyükleme sırasında tek seferlik
+/// yapmalıdır.
 #[allow(static_mut_refs)]
-fn ensure_thumb(idx: usize) {
+pub fn ensure_thumb(idx: usize) {
     unsafe {
         if THUMB_READY[idx] {
             return;
         }
-        // Çözme başarısız olsa bile her karede yeniden denemeyi engelle.
-        THUMB_READY[idx] = true;
         let Some(decoded) = crate::apps::imgdecode::decode_png(thumb_source(idx)) else {
+            // Çözme başarısız olsa bile işaretleyip tekrar denemeyi engelle.
+            THUMB_READY[idx] = true;
             return;
         };
         let (sw, sh) = (decoded.width, decoded.height);
         if sw == 0 || sh == 0 {
+            THUMB_READY[idx] = true;
             return;
         }
         // Kutu oranına uydurmak için kaynağı ortadan kırp; böylece küçük
@@ -292,7 +298,31 @@ fn ensure_thumb(idx: usize) {
                 THUMB_PIXELS[idx][ty * THUMB_W + tx] = decoded.pixel(sx, sy);
             }
         }
+        THUMB_READY[idx] = true;
     }
+}
+
+/// Tüm PNG duvar kağıdı küçük resimlerini (7, 8, 9) önceden çözer.
+/// Önyükleme ekranında tek seferlik çağrılmalıdır; böylece ekran ayarları
+/// açıldığında fare takılmaz.
+pub fn ensure_all_thumbs() {
+    unsafe {
+        for idx in 0..3 {
+            if !THUMB_READY[idx] {
+                ensure_thumb(idx);
+            }
+        }
+    }
+}
+
+/// Tüm PNG küçük resimleri hazır mı?
+pub fn thumbs_ready() -> bool {
+    unsafe { THUMB_READY[0] && THUMB_READY[1] && THUMB_READY[2] }
+}
+
+/// Belirli bir PNG küçük resmi hazır mı?
+pub fn thumb_ready(idx: usize) -> bool {
+    unsafe { THUMB_READY.get(idx).copied().unwrap_or(false) }
 }
 
 /// PNG duvar kağıdının önbelleğe alınmış küçük resmini kutuya sığdırır.

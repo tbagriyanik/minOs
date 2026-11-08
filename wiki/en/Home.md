@@ -1,6 +1,6 @@
 # minOs Wiki – Welcome
 
-minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
+minOs (Sarman Edition) v2.2.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
 
 > 📄 **Project:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Language:** [English](/)| [Türkçe](../tr/)
@@ -27,9 +27,9 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 
 | Metric | Value |
 | :--- | :--- |
-| **Rust Compiler** | 1.101.0-nightly |
-| **Total Lines of Code** | ~129,179 lines (Rust) |
-| **Unit Tests** | 228 passed / 0 failed |
+| **Rust Compiler** | 1.102.0-nightly |
+| **Total Lines of Code** | ~116,264 lines (Rust) |
+| **Unit Tests** | 234 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 15 desktop applications |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
@@ -47,4 +47,6 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 - **Storage:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **File Systems:** FAT32, Ext2, Ext4, exFAT (read/write/format).
 - **Crypto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.
-- **Recovery Console:** `recovery#` interactive text console.
+- **Wi-Fi (802.11):** 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake and PCI/USB interface detection.
+- **EC Fan Profiles:** `fan_temp.rs` EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching.
+- **Display Settings:** PNG wallpaper thumbnails are pre-decoded during boot; hourglass cursor shown during long operations.

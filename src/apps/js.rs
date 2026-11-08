@@ -812,7 +812,8 @@ impl JsRuntime {
         let e = cb_expr.trim();
         // Tırnaklı ham kod: `setTimeout("tick()", 100)`.
         let quoted = e.len() >= 2
-            && ((e.starts_with('"') && e.ends_with('"')) || (e.starts_with('\'') && e.ends_with('\'')));
+            && ((e.starts_with('"') && e.ends_with('"'))
+                || (e.starts_with('\'') && e.ends_with('\'')));
         if quoted {
             let code = String::from(&e[1..e.len() - 1]);
             return self.add_timer(code, delay_ms, repeat);
@@ -864,7 +865,13 @@ impl JsRuntime {
             if fire {
                 let (callback, is_function, repeat, delay, id) = {
                     let t = &self.timers[i];
-                    (t.callback.clone(), t.is_function, t.repeat, t.delay_ms, t.id)
+                    (
+                        t.callback.clone(),
+                        t.is_function,
+                        t.repeat,
+                        t.delay_ms,
+                        t.id,
+                    )
                 };
                 due.push((callback, is_function));
                 if repeat {
@@ -1104,11 +1111,7 @@ impl JsRuntime {
                     array_val.clone()
                 ]
             } else {
-                alloc::vec![
-                    item.clone(),
-                    JsValue::Number(i as i64),
-                    array_val.clone()
-                ]
+                alloc::vec![item.clone(), JsValue::Number(i as i64), array_val.clone()]
             };
             let ret = self.invoke_callback(cb_expr, &cb_args, out);
             match method {
@@ -1630,9 +1633,7 @@ impl JsRuntime {
                             JsValue::Object(map) => map
                                 .into_iter()
                                 .filter(|(k, _)| !is_internal_key(k))
-                                .map(|(k, val)| {
-                                    JsValue::Array(vec![JsValue::String(k), val])
-                                })
+                                .map(|(k, val)| JsValue::Array(vec![JsValue::String(k), val]))
                                 .collect(),
                             JsValue::Array(items) => items
                                 .into_iter()
@@ -1982,13 +1983,8 @@ impl JsRuntime {
                                     .map(|s| s.trim().to_string())
                                     .unwrap_or_default();
                                 let mut sink = Vec::new();
-                                let result = self.run_array_callback(
-                                    method,
-                                    &items,
-                                    &cb,
-                                    args,
-                                    &mut sink,
-                                );
+                                let result =
+                                    self.run_array_callback(method, &items, &cb, args, &mut sink);
                                 return result;
                             }
                             _ => {}
@@ -2525,7 +2521,8 @@ impl JsRuntime {
                     }
                     let (ret, updated) = if fn_name.is_empty() {
                         // Anonim fonksiyon değeri: kapsamı özelliğe geri yaz.
-                        let (ret, updated) = self.call_function_value(&func, &args, &mut Vec::new());
+                        let (ret, updated) =
+                            self.call_function_value(&func, &args, &mut Vec::new());
                         if let Some(JsValue::Object(ref mut map)) =
                             self.values.get_mut(obj_name).map(|v| &mut *v)
                         {

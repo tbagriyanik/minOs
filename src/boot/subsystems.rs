@@ -321,6 +321,8 @@ pub fn init_subsystems(
         serial_print("[DRIVER] USB sürücüsü başlatılıyor...\n");
         drivers::usb::init();
         drivers::usb::test_usb_subsystems();
+        serial_print("[DRIVER] Wi-Fi (802.11) alt sistemi başlatılıyor...\n");
+        drivers::wifi::init();
         serial_print("[DRIVER] USB HID (xHCI) sürücüsü başlatılıyor...\n");
         drivers::usb_hid::init(&mut memory_mgr.pmm);
         serial_print("[DRIVER] USB HID sürücüsü hazır.\n");

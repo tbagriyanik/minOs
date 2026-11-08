@@ -17,7 +17,9 @@ minOs sürüm notları ve gelecek planları.
 - **🚫 Tarayıcı Donma Düzeltmesi:** Harici kaynaklar `pending_resources` listesine alınır ve `poll_network()` ile kare başına asenkron getirilir; ana olay döngüsü bloke edilmez.
 - **🛠️ Tarayıcı Geliştirici Araçları:** `Ctrl+Shift+D` ile DevTools (Elements, Console, Network, Storage).
 - **Genişletilmiş Donanım Sürücüleri (20+):** Ağ (VirtIO-net, Intel I219-V, Atheros, Marvell, Realtek RTL8139, NE2000), Bluetooth HCI, Depolama (AHCI/SATA, NVMe, VirtIO-blk, SD/MMC), USB (Mass Storage, Printer, Audio, Touchscreen), Grafik (VirtIO-gpu, AMD Radeon, NVIDIA GeForce), Sensör & Güç (ACPI AML, pil, uyku, ThermalZone, fan), Veri Yolu & Zaman (PCIe, PCI, PIT/HPET/APIC/TSC).
-- **Canlı USB Tak/Çıkar:** USB cihazları anında algılanır, toast bildirimi gösterilir.
+- **📶 Wi-Fi (802.11) WPA 4-Way El Sıkışması:** `wifi.rs` WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması (EAPOL-Key, KCK/KEK/TK, MIC doğrulama) ve PCI/USB arayüz tespiti eklendi.
+- **🌀 EC Fan Profilleri:** `fan_temp.rs` için EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik profil geçişi eklendi.
+- **🖼️ Ekran Ayarları Küçük Resimleri:** PNG duvar kağıdı önizlemeleri önyükleme sırasında önceden çözülür; uzun işlemlerde kum saati imleci gösterilir.
 - **OHCI & UHCI & EHCI Transfer Katmanı:** Tam transfer katmanı ve port handoff altyapısı.
 - **minJs İleri Düzey JavaScript Çalışma Zamanı:** İkili aritmetik, döngüler, değişken mutasyonları, dizi metotları, nesne özellikleri, JSON, matematiksel/dize yardımcıları, global dönüşümler.
 - **minJs Closure'lar ve Zamanlayıcılar:** Closure desteği (fonksiyon ifadeleri, ok fonksiyonları, kapsam yakalama, closure başına gizli durum), `setTimeout`/`setInterval` zamanlayıcıları `clearTimeout`/`clearInterval` ile, `Object.keys()`/`Object.values()`/`Object.entries()`, dizi geri çağırmalı metotları (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`) ve IIFE desteği.

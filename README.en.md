@@ -6,12 +6,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-228%20registered-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-234%20registered-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-129%2C179%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-116%2C264%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -135,7 +135,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
 | | Marvell Ethernet | `marvell.rs` | 🟡 Partial | Basic RX/TX packet processing |
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
-| | Wi-Fi (802.11 Wireless) | `wifi.rs` | 🔴 Skeleton | PCI/USB interface detection (WPA handshake WIP) |
+| | Wi-Fi (802.11 Wireless) | `wifi.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake, PCI/USB interface detection; real PHY/RX-TX not yet |
 | **Input Devices** | PS/2 Keyboard & Mouse | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Full | Interrupt-driven input, Turkish Q / English key mapping |
 | | USB HID Keyboard & Mouse | `usb_hid.rs`, `usb_transfer.rs` | 🟢 Full | xHCI/EHCI/UHCI/OHCI full transfer layer (QH, TD, ED, HCCA), 16-bit axes, wheel, hotplug |
 | | USB Touchscreen | `usb_touchscreen.rs` | 🟡 Partial | Single-finger touch/click (multi-touch analysis TODO) |
@@ -149,7 +149,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Full | File reading and system directories |
 | **Power & Sensors** | ACPI AML Interpreter & Battery | `acpi_battery.rs` | 🟢 Full | DSDT/SSDT AML parsing (Method, Device, Scope, Math/Logic), `_BST`/`_BIX`/`_BIF` live percentage, voltage, current, cycles |
 | | ACPI Power Management | `acpi_power.rs` | 🟢 Full | `_S0`..`_S5` sleep states detection, PowerResource (`_ON_`/`_OFF`/`_STA`), dynamic AC/Battery status tracking |
-| | Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) parsing, Celsius conversion and fan RPM monitoring |
+| | Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) parsing, Celsius conversion and fan RPM monitoring; EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching |
 | | Bus & Timers | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Full | PCI/PCIe configuration, TSC/HPET/APIC timers |
 | **Audio & Multimedia** | Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Full | DMA stream rings, mixer, WAV/MP3 playback |
 | | PC Speaker (PWM) | `audio.rs` | 🟢 Full | Hardware timer beeps and PWM tones |
@@ -161,7 +161,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 
 - **Bluetooth Upper-Layer Profiles:** The basic HCI layer, inquiry and connection management are ready; A2DP audio streaming and BLE GATT profiles are planned for future releases.
 - **NVIDIA / AMD 3D Acceleration:** Linear frame buffer (VRAM LFB), 2D drawing and dynamic resolution change are ready; 3D acceleration (Vulkan/Gallium) is a separate stage.
-- **Sensor & Fan Management:** Hardware-specific EC (Embedded Controller) fan profiles for `fan_temp.rs`.
+- ✅ **Sensor & Fan Management:** Hardware-specific EC (Embedded Controller) fan profiles for `fan_temp.rs` completed (Silent/Normal/Performance/Full/Auto, temperature-based auto-switching, 0x66/0x62 EC protocol).
 - **Atheros / Marvell Ethernet:** Basic RX/TX transfer is active; hardware checksum offload and advanced packet filters are planned.
 - **RTL8139 / NE2000 Network Drivers:** Packet transfer, MAC reading and link state are complete. Planned: multi-segment (jumbo) frames, a deeper TX queue using all four RTL8139 channels, interrupt-driven RX for NE2000, and validation on real `ne2k_pci` (RTL8029AS) hardware. Promiscuous mode for management (SNMP/IPMI) is not available yet.
 - **USB Audio Recording:** Speaker output (playback) is active; PCM recording via microphone is TODO.

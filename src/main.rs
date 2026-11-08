@@ -712,6 +712,17 @@ pub extern "C" fn _start() -> ! {
         serial_print("[BOOT] Kurulu sistem tespit edildi; masaüstü hazırlanıyor...\n");
 
         for phase in 0..4 {
+            // PNG duvar kağıdı küçük resimlerini önyükleme sırasında tek seferlik
+            // çöz; böylece ekran ayarları açıldığında fare takılmaz.
+            crate::gui::screens::set_cursor_busy(true);
+            match phase {
+                0 => crate::gui::wallpaper::ensure_thumb(0),
+                1 => crate::gui::wallpaper::ensure_thumb(1),
+                2 => crate::gui::wallpaper::ensure_thumb(2),
+                _ => crate::gui::wallpaper::ensure_all_thumbs(),
+            }
+            crate::gui::screens::set_cursor_busy(false);
+
             gui::render_loading_transition(
                 &mut fb,
                 width,
@@ -728,6 +739,12 @@ pub extern "C" fn _start() -> ! {
         }
     } else {
         for phase in 0..8 {
+            crate::gui::screens::set_cursor_busy(true);
+            if phase == 0 {
+                crate::gui::wallpaper::ensure_all_thumbs();
+            }
+            crate::gui::screens::set_cursor_busy(false);
+
             gui::render_loading_transition(
                 &mut fb,
                 width,

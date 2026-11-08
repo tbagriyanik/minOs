@@ -2331,14 +2331,36 @@ impl SystemSettings {
                     if r.1 + r.3 > win_y + win_h {
                         continue;
                     }
-                    crate::gui::wallpaper::draw_preview(
-                        fb,
-                        r.0 + 2,
-                        r.1 + 2,
-                        r.2 - 4,
-                        r.3 - 4,
-                        i as u8,
-                    );
+                    if i >= 7 && !crate::gui::wallpaper::thumb_ready((i - 7) as usize) {
+                        // PNG küçük resmi henüz çözülmemiş: bekleme imleci ve yer tutucu.
+                        crate::gui::screens::set_cursor_busy(true);
+                        fb.draw_rect(r.0, r.1, r.2, r.3, Color::TITLE_BAR_INACTIVE);
+                        fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::BORDER);
+                        let mut lbl = TextBuf::new();
+                        lbl.push_str(if self.language.is_english() {
+                            "…"
+                        } else {
+                            "…"
+                        });
+                        MinGuiCompositor::draw_string_clipped(
+                            fb,
+                            r.0 + r.2 / 2 - 4,
+                            r.1 + r.3 / 2 - 6,
+                            lbl.as_str(),
+                            Color::TEXT_MUTED,
+                            (r.0, r.1, r.2, r.3),
+                        );
+                    } else {
+                        crate::gui::screens::set_cursor_busy(false);
+                        crate::gui::wallpaper::draw_preview(
+                            fb,
+                            r.0 + 2,
+                            r.1 + 2,
+                            r.2 - 4,
+                            r.3 - 4,
+                            i as u8,
+                        );
+                    }
                     if i == self.wallpaper as usize {
                         fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::ACCENT_GREEN);
                         fb.draw_rect_outline(

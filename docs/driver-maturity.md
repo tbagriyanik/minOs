@@ -40,7 +40,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Ağ otobüsü seçimi (PCI / ISA) | `net.rs` | 🟢 Tam | `BusKind`, ISA PnP izolasyonu, NE2000 DMA veri portu |
 | Atheros Ethernet | `atheros.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
 | Marvell Ethernet | `marvell.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
-| Wi-Fi 802.11 | `wifi.rs` | 🔴 İskelet | 802.11 çerçeve yapıları, WPA2-PSK anahtar türetimi, gerçek PHY yok |
+| Wi-Fi 802.11 | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | HCI paketleme/ayrıştırma, synthetic yanıtlar, gerçek USB/PCI yok |
 
 ### Giriş Aygıtları
@@ -78,7 +78,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | :--- | :--- | :---: | :--- |
 | ACPI AML & Pil | `acpi_battery.rs` | 🟢 Tam | DSDT/SSDT AML, _BST/_BIX/_BIF |
 | ACPI Güç Yönetimi | `acpi_power.rs` | 🟢 Tam | _S0_.._S5, PowerResource |
-| Fan & Sıcaklık | `fan_temp.rs` | 🟡 Kısmi | ThermalZone ayrıştırma, fan RPM izleme |
+| Fan & Sıcaklık | `fan_temp.rs` | 🟡 Kısmi | ACPI ThermalZone okuma, fan RPM izleme, EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş; gerçek EC kayıt ofsetleri placa özel |
 | PCI / PCIe | `pci.rs`, `pcie.rs` | 🟢 Tam | Konfigürasyon altyapısı |
 | Zamanlayıcı | `timer.rs` | 🟢 Tam | PIT/HPET/APIC/TSC |
 | RTC | `rtc.rs` | 🟢 Tam | Gerçek zamanlı saat |
@@ -109,7 +109,7 @@ Aşağıdaki sürücüler **işkelet (skeleton)** durumundadır; gerçek donanı
 
 1. **`atheros.rs`** — Gerçek MAC adresi okuma, RX/TX descriptor halkaları, interrupt handling
 2. **`marvell.rs`** — Gerçek MAC adresi okuma, RX/TX descriptor halkaları, interrupt handling
-3. **`wifi.rs`** — Gerçek 802.11 PHY tespiti, beacon/probe yanıtı, WPA 4-way handshake entegrasyonu
+3. **`wifi.rs`** — Gerçek 802.11 PHY/RX-TX entegrasyonu, beacon/probe yanıtı, kesme işleme ve donanımdan MAC adresi okuma (WPA 4-way el sıkışması ve PCI/USB tespiti eklendi)
 4. **`bluetooth.rs`** — Gerçek USB/PCI Bluetooth denetleyicisi tespiti, HCI komut gönderimi
 5. **`usb_audio.rs`** — USB Audio Class interface enum'ası, isokronik endpoint tespiti, DMA akışı
 6. **`usb_printer.rs`** — USB Bulk IN/OUT endpoint tespiti, IEEE 1284 Device ID, yazdırma akışı

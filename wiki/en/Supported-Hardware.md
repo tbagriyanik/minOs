@@ -37,7 +37,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
 | Marvell Ethernet | `marvell.rs` | 🟡 Partial | Basic RX/TX packet processing |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
-| Wi-Fi (802.11 Wireless) | `wifi.rs` | 🔴 Skeleton | PCI/USB interface detection (WPA handshake WIP) |
+| Wi-Fi (802.11 Wireless) | `wifi.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake, PCI/USB interface detection; real PHY/RX-TX not yet |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Full | VMware PCI vendor `0x15AD`, MAC address, link polling |
 
 ---
@@ -71,7 +71,7 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | :--- | :--- | :---: | :--- |
 | ACPI AML Interpreter & Battery | `acpi_battery.rs` | 🟢 Full | DSDT/SSDT AML parsing, `_BST`/`_BIX`/`_BIF` live percentage, voltage, current, cycles |
 | ACPI Power Management | `acpi_power.rs` | 🟢 Full | `_S0`..`_S5` sleep states detection, PowerResource, dynamic AC/Battery status tracking |
-| Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone parsing, Celsius conversion, fan RPM monitoring |
+| Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) parsing, Celsius conversion and fan RPM monitoring; EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching |
 | Bus & Timers | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Full | PCI/PCIe configuration, TSC/HPET/APIC timers |
 | SMP & Scheduler | `smp.rs`, `task/mod.rs` | 🟢 Enabled | Limine AP startup, per-CPU run queues, work stealing, 1000 Hz tick |
 

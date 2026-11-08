@@ -1,6 +1,22 @@
 //! Loading, boot and welcome screens.
 
 use super::*;
+use core::sync::atomic::{AtomicBool, Ordering};
+
+/// Fare imlecinin "meşgul" (kum saati) kipinde olup olmadığı.
+/// `true` olduğunda `draw_mouse_cursor` ok yerine kum saati çizer.
+static CURSOR_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Meşgul durumunu ayarlar. Uzun işlemler (PNG çözme, kopyalama vb.) sırasında
+/// `true`, işlem bittiğinde `false` yapılmalıdır.
+pub fn set_cursor_busy(busy: bool) {
+    CURSOR_BUSY.store(busy, Ordering::SeqCst);
+}
+
+/// Meşgul durumu döner.
+pub fn is_cursor_busy() -> bool {
+    CURSOR_BUSY.load(Ordering::SeqCst)
+}
 
 /// Draw one frame of the centered minOs loading transition.
 pub fn render_loading_transition(

@@ -8,7 +8,7 @@
 //! anahtar türetimi (PBKDF2-HMAC, 4-Way Handshake, PTK/GTK), kablosuz ağ taraması
 //! ve `netstack` TCP/IP yığını ile kablosuz bağdaştırıcı entegrasyonunu yönetir.
 
-use crate::drivers::crypto::sha1::{HmacSha1, Sha1};
+use crate::drivers::crypto::sha1::HmacSha1;
 use crate::drivers::pci;
 
 // ---------------------------------------------------------------------------
@@ -357,15 +357,18 @@ pub struct WpaHandshake {
 
 impl WpaHandshake {
     pub fn new(pmk: &[u8; 32], ap_mac: &[u8; 6], client_mac: &[u8; 6]) -> Self {
-        // Nonce'lar PHY/RNG üzerinden oluşturulacak; başlangıç sıfırları.
-        // Process_msg1 ve diğer fonksiyonlar önce direkt atamalar yapar.
+        // Nonce'lar donanım RNG'sinden üretilir; handshake sırasında tazelenir.
+        let mut anonce: [u8; 32] = Default::default();
+        let mut snonce: [u8; 32] = Default::default();
+        crate::random::fill_bytes(&mut anonce);
+        crate::random::fill_bytes(&mut snonce);
         Self {
             state: WpaHandshakeState::Idle,
             pmk: *pmk,
             ap_mac: *ap_mac,
             client_mac: *client_mac,
-            anonce: [0u8; 32],
-            snonce: [0u8; 32],
+            anonce,
+            snonce,
             ptk: None,
             keys: None,
             replay_counter: [0; 8],
@@ -377,8 +380,8 @@ impl WpaHandshake {
     /// Döndürülen değer: (msg2_frame_len, snonce).
     pub fn process_msg1(&mut self, anonce: &[u8; 32], out: &mut [u8]) -> (usize, [u8; 32]) {
         self.anonce = *anonce;
-        // SNonce: basit deterministik nonce (gerçek donanıma RNG gerekir).
-        self.snonce = derive_snonce(&self.client_mac, &self.ap_mac);
+        // SNonce: her el sıkışmasında taze kriptografik rastgele değer.
+        self.snonce = generate_snonce();
 
         let ptk = derive_ptk(
             &self.pmk,
@@ -467,17 +470,10 @@ impl WpaHandshake {
     }
 }
 
-/// SNonce için deterministik bir değer üretir (gerçek donanıma CSPRNG gerekir).
-fn derive_snonce(client_mac: &[u8; 6], ap_mac: &[u8; 6]) -> [u8; 32] {
-    // CodeQL: snonce anında process_msg1 ile overwrite edilir; WPA handshake akışı.
-    let mut data = [0u8; 16];
-    data[..6].copy_from_slice(client_mac);
-    data[6..12].copy_from_slice(ap_mac);
-    let h = Sha1::hash(&data);
-    let mut snonce = [0u8; 32];
-    snonce[..20].copy_from_slice(&h);
-    let h2 = Sha1::hash(&snonce[..20]);
-    snonce[20..32].copy_from_slice(&h2[..12]);
+/// SNonce için kriptografik rastgele değer üretir (WPA 4-way handshake).
+fn generate_snonce() -> [u8; 32] {
+    let mut snonce: [u8; 32] = Default::default();
+    crate::random::fill_bytes(&mut snonce);
     snonce
 }
 
@@ -751,13 +747,9 @@ fn wpa_connect_handshake(ap: &AccessPoint, password: &str) -> bool {
     let client_mac = unsafe { WIFI_STATUS.mac_addr };
     let mut handshake = WpaHandshake::new(&pmk, &ap.bssid, &client_mac);
 
-    // AP'tan gelen Msg 1: deterministik ANonce (AP BSSID + kanal üzerinden).
-    // CodeQL: anonce anında process_msg1 ile overwrite edilir; deterministik BSSID+kanal türetimi.
-    let mut anonce = [0u8; 32];
-    anonce[..6].copy_from_slice(&ap.bssid);
-    anonce[6] = ap.channel;
-    let h = Sha1::hash(&anonce[..7]);
-    anonce[7..27].copy_from_slice(&h);
+    // AP'tan gelen Msg 1: donanım RNG'sinden taze ANonce.
+    let mut anonce: [u8; 32] = Default::default();
+    crate::random::fill_bytes(&mut anonce);
 
     let mut out = [0u8; 4 + EAPOL_KEY_BODY_BASE];
     let (msg2_len, _snonce) = handshake.process_msg1(&anonce, &mut out);

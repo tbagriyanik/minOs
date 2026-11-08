@@ -8759,11 +8759,9 @@ pub extern "C" fn _start() -> ! {
 
                 let fps3d_focused = app_is_focused(&compositor, 16);
 
-                if fps3d_focused {
-                    if fps_3d_app.handle_key(ch, &mut audio_dev) {
+                if fps3d_focused && fps_3d_app.handle_key(ch, &mut audio_dev) {
                         force_render = true;
                     }
-                }
 
                 if !run_dialog_open
                     && !compositor.is_start_menu_open
@@ -8902,7 +8900,7 @@ pub extern "C" fn _start() -> ! {
             if apps::controlpanel::active_tab() == 3 {
                 let _app_context = apps::guard::ContextScope::new(14, apps::guard::NO_WINDOW);
                 let delta = now_cycles.wrapping_sub(cp_last_cycles);
-                let delta_us = delta / unsafe { TSC_CYCLES_PER_US as u64 };
+                let delta_us = delta / unsafe { TSC_CYCLES_PER_US };
                 if apps::controlpanel::perf_sample(delta_us.min(1_000_000)) {
                     force_render = true;
                 }

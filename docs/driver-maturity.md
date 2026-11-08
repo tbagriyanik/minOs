@@ -38,8 +38,8 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | VirtIO-net | `virtio_net.rs` | 🟢 Tam | Sanallaştırılmış ağ adaptörü |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Tam | PCI vendor 0x15AD, MAC ve link |
 | Ağ otobüsü seçimi (PCI / ISA) | `net.rs` | 🟢 Tam | `BusKind`, ISA PnP izolasyonu, NE2000 DMA veri portu |
-| Atheros Ethernet | `atheros.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
-| Marvell Ethernet | `marvell.rs` | 🔴 İskelet | PCI vendor/device ID listesi, gerçek RX/TX yok |
+| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
+| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
 | Wi-Fi 802.11 | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | HCI paketleme/ayrıştırma, synthetic yanıtlar, gerçek USB/PCI yok |
 
@@ -97,8 +97,8 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 | Maturite | Sayı | Yüzde |
 | :--- | :---: | :---: |
 | 🟢 Tam | 26 | ~70% |
-| 🟡 Kısmi | 6 | ~16% |
-| 🔴 İskelet / WIP | 5 | ~14% |
+| 🟡 Kısmi | 8 | ~21% | (Atheros ve Marvell Ethernet güncellendi) |
+| 🔴 İskelet / WIP | 3 | ~8% | |
 | **Toplam** | **37** | **100%** |
 
 ---
@@ -107,9 +107,7 @@ Bu belge, `src/drivers/` altındaki tüm sürücülerin uygulama durumunu ve mat
 
 Aşağıdaki sürücüler **işkelet (skeleton)** durumundadır; gerçek donanım entegrasyonu için aşağıdaki işler yapılması gerekiyor:
 
-1. **`atheros.rs`** — Gerçek MAC adresi okuma, RX/TX descriptor halkaları, interrupt handling
-2. **`marvell.rs`** — Gerçek MAC adresi okuma, RX/TX descriptor halkaları, interrupt handling
-3. **`wifi.rs`** — Gerçek 802.11 PHY/RX-TX entegrasyonu, beacon/probe yanıtı, kesme işleme ve donanımdan MAC adresi okuma (WPA 4-way el sıkışması ve PCI/USB tespiti eklendi)
+1. **`wifi.rs`** — Gerçek 802.11 PHY/RX-TX entegrasyonu, beacon/probe yanıtı, kesme işleme ve donanımdan MAC adresi okuma (WPA 4-way el sıkışması ve PCI/USB tespiti eklendi)
 4. **`bluetooth.rs`** — Gerçek USB/PCI Bluetooth denetleyicisi tespiti, HCI komut gönderimi
 5. **`usb_audio.rs`** — USB Audio Class interface enum'ası, isokronik endpoint tespiti, DMA akışı
 6. **`usb_printer.rs`** — USB Bulk IN/OUT endpoint tespiti, IEEE 1284 Device ID, yazdırma akışı

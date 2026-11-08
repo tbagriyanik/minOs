@@ -34,8 +34,8 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
-| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
-| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |
+| Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
+| Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
 | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Tam | VMware PCI vendor `0x15AD`, MAC adresi, bağlantı yoklaması |

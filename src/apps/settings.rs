@@ -3,6 +3,8 @@ use crate::drivers::rtc::DateTime;
 use crate::drivers::video::Framebuffer;
 use crate::gui::theme::{self, ThemeId};
 use crate::gui::{sp, Color, MinGuiCompositor, TextBuf};
+use alloc::format;
+use alloc::string::String;
 
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::WindowState;
@@ -3007,5 +3009,125 @@ impl SystemSettings {
                 Color::TEXT_MAIN
             },
         );
+
+        // Donanım İzleme bloğu (sadece Tests sekmesinde - satır 4)
+        if self.active_tab == 4 {
+            crate::drivers::fan_temp::update_temperatures();
+            crate::drivers::fan_temp::update_fan_speeds();
+
+            let english = self.language.is_english();
+            let temp_list = crate::drivers::fan_temp::get_all_temp_sensors();
+            let fan_list = crate::drivers::fan_temp::get_all_fan_sensors();
+
+            let mut hw_y = win_y + sp(UI_TOP_Y + 8 * UI_ROW_STEP + UI_LABEL_OFFSET);
+
+            MinGuiCompositor::draw_string(
+                fb,
+                win_x + CONTENT_X,
+                hw_y,
+                crate::gui::ui_text("Donanım İzleme:", "Hardware Monitoring:"),
+                Color::ACCENT_YELLOW,
+            );
+            hw_y = hw_y.saturating_add(sp(UI_ROW_STEP));
+
+            if temp_list.is_empty() {
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + CONTENT_X,
+                    hw_y,
+                    crate::gui::ui_text("Sıcaklık sensörü yok.", "No temperature sensors."),
+                    Color::TEXT_MAIN,
+                );
+                hw_y = hw_y.saturating_add(sp(UI_ROW_STEP));
+            } else {
+                for (i, ts) in temp_list.iter().enumerate() {
+                    let label = temp_sensor_label(&ts.name, i, english);
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        hw_y,
+                        &format!("{}: {}°C", label, ts.temperature),
+                        Color::TEXT_MAIN,
+                    );
+                    hw_y = hw_y.saturating_add(sp(UI_ROW_STEP));
+                }
+            }
+
+            if fan_list.is_empty() {
+                MinGuiCompositor::draw_string(
+                    fb,
+                    win_x + CONTENT_X,
+                    hw_y,
+                    crate::gui::ui_text("Fan sensörü yok.", "No fan sensors."),
+                    Color::TEXT_MAIN,
+                );
+            } else {
+                for (i, fs) in fan_list.iter().enumerate() {
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        win_x + CONTENT_X,
+                        hw_y,
+                        &format!(
+                            "{}: {} RPM",
+                            fan_sensor_label(&fs.name, i, english),
+                            fs.rpm
+                        ),
+                        Color::TEXT_MAIN,
+                    );
+                    hw_y = hw_y.saturating_add(sp(UI_ROW_STEP));
+                }
+            };
+        }
+    }
+}
+fn temp_sensor_label(name: &[u8; 32], index: usize, english: bool) -> String {
+    let len = name.iter().position(|&b| b == 0).unwrap_or(32);
+    let s = core::str::from_utf8(&name[..len]).unwrap_or("").trim();
+    let meaningful = !s.is_empty() && !s.starts_with("THM");
+    if meaningful {
+        return String::from(s);
+    }
+    match index {
+        0 => {
+            if english {
+                String::from("CPU")
+            } else {
+                String::from("İşlemci")
+            }
+        }
+        1 => {
+            if english {
+                String::from("Motherboard")
+            } else {
+                String::from("Anakart")
+            }
+        }
+        2 => {
+            if english {
+                String::from("GPU")
+            } else {
+                String::from("Grafik")
+            }
+        }
+        i => {
+            if english {
+                format!("Temperature {}", i)
+            } else {
+                format!("Sıcaklık {}", i)
+            }
+        }
+    }
+}
+
+fn fan_sensor_label(name: &[u8; 32], index: usize, _english: bool) -> String {
+    let len = name.iter().position(|&b| b == 0).unwrap_or(32);
+    let s = core::str::from_utf8(&name[..len]).unwrap_or("").trim();
+    if !s.is_empty() {
+        return String::from(s);
+    }
+    match index {
+        0 => String::from("CPU Fan"),
+        1 => String::from("Chassis Fan"),
+        i => format!("Fan {}", i),
     }
 }

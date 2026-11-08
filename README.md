@@ -132,8 +132,8 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 | | NE2000 uyumlu PCI (RTL8029AS) | `ne2000.rs` | 🟢 Tam | PCI I/O BAR, uzak DMA, otomatik 8/16-bit seçimi |
 | | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Tam | MAC hash, RX/TX, PHY link kontrolü |
 | | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Tam | Yüksek hızlı sanallaştırılmış ağ adaptörü |
-| | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | Temel bağlantı ve paket transferi (offload filtreleri TODO) |
-| | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | Temel RX/TX paket işleme |
+| | Atheros Ethernet | `atheros.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
+| | Marvell Ethernet | `marvell.rs` | 🟡 Kısmi | PCI tespit + 2D mode-set iskeleti, RX/TX basic; checksum offload ve filtreler TODO |
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Kısmi | Komut (0x01), ACL (0x02), Olay (0x04), Inquiry, bağlantı yönetimi (A2DP/GATT TODO) |
 | | Wi-Fi (802.11 Kablosuz) | `wifi.rs` | 🟡 Kısmi | 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması, PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok |
 | **Giriş Aygıtları** | PS/2 Klavye & Fare | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Tam | Kesme tabanlı girdi, Türkçe Q / İngilizce tuş eşleme |
@@ -162,6 +162,12 @@ minOs çekirdeği bünyesindeki yerel sürücülerin ve donanım katmanlarının
 - **Bluetooth Üst Katman Profilleri:** Temel HCI katmanı, Inquiry ve bağlantı yönetimi hazırdır; A2DP ses akışı ve BLE GATT profilleri gelecekteki sürümler için planlanmaktadır.
 - **NVIDIA / AMD 3D Hızlandırma:** Doğrusal çerçeve belleği (VRAM LFB), 2D çizim ve dinamik çözünürlük değişimi hazırdır; 3D hızlandırma (Vulkan/Gallium) ayrı bir aşamadır.
 - ✅ **Sensör & Fan Yönetimi:** `fan_temp.rs` için donanıma özel EC (Embedded Controller) fan profilleri tamamlandı (Silent/Normal/Performance/Full/Auto, sıcaklığa göre otomatik geçiş, 0x66/0x62 EC protokolü).
+
+- 📋 **Ayarlar Uygulaması Güncellemeleri:**
+  - **Tests Sekmesinde Donanım İzleme:** Ayarlar > Tests sekmesinde CPU/Anakart/GPU sıcaklıkları ve fan hızları (RPM) gösterilen yeni "Donanım İzleme" bloğu eklendi.
+  - **Ağ Sekmesinde Wi-Fi Tarama:** Ayarlar > Ağ sekmesinde "Ağları Tara" butonu eklendi; tarama yapıldığında yakın çevredeki Wi-Fi ağları (SSID, sinyal gücü, kanal, güvenlik) listelenir.
+  - **Saydırma Destekı:** Ayarlar uygulamasında 5 tab (Basic, Display, Network, Devices, Tests) arasında uzun içerikler saydırılarak görüntülenebilir; `ScrollState` ile içerik kaydırımı destekleniyor.
+  - **Ayarlar Sekmesinde Donanım İzleme:** Ayarlar > Temel sekmesinde donanım izleme bilgileri gösteriliyor; arayüzün alt kısmında fan hızları ve sıcaklıklar güncel olarak refresh ediliyor.
 - **Atheros / Marvell Ethernet:** Temel RX/TX aktarımı aktiftir; donanımsal checksum offload ve gelişmiş paket filtreleri planlanmaktadır.
 - **RTL8139 / NE2000 Ağ Sürücüleri:** Paket aktarımı, MAC okuma ve bağlantı durumu tamamlandı. Planlananlar: çoklu segment (jumbo) çerçeveler, 8 ham TX kanalını kullanan daha derin TX kuyruğu, NE2000 için kesme (IRQ) tabanlı RX ve gerçek donanımda otomatik `ne2k_pci` (RTL8029AS) kart doğrulaması. Yönetim (SNMP/IPMI) için henüz promiscuous mod yoktur.
 - **USB Audio Kayıt:** Hoparlör çıkışı (playback) aktiftir; mikrofon üzerinden PCM kayıt desteği TODO.

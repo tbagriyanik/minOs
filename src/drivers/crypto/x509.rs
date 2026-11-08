@@ -423,6 +423,238 @@ fn find_common_name(der: &[u8], sub_vo: usize, sub_vl: usize) -> Option<String> 
     None
 }
 
+/// Sertifikadaki uzantı listesinden verilen OID'ye sahip uzantının
+/// `extnValue` içeriğini döndürür (birden fazla varsa hepsi).
+/// `find_san_dns_names` ile aynı gezinme düzenini kullanır.
+fn find_extension_values_by_oid(der: &[u8], ext_vo: usize, oid: &[u8]) -> Vec<Vec<u8>> {
+    let mut results = Vec::new();
+    let Ok((seq_tag, seq_vo, seq_vl, _)) = read_der_tlv(der, ext_vo) else {
+        return results;
+    };
+    if seq_tag != TAG_SEQUENCE {
+        return results;
+    }
+    let mut cur = seq_vo;
+    let cur_end = seq_vo + seq_vl;
+
+    while cur < cur_end {
+        let Ok((etag, evo, _evl, enext)) = read_der_tlv(der, cur) else {
+            break;
+        };
+        if etag == TAG_SEQUENCE {
+            let mut p = evo;
+            if let Ok((oid_tag, o_vo, o_vl, oid_next)) = read_der_tlv(der, p) {
+                if oid_tag == TAG_OID && o_vl == oid.len() && &der[o_vo..o_vo + o_vl] == oid {
+                    p = oid_next;
+                    // Optional critical BOOLEAN
+                    if let Ok((btag, _, _, bnext)) = read_der_tlv(der, p) {
+                        if btag == 0x01 {
+                            p = bnext;
+                        }
+                    }
+                    // extnValue OCTET STRING
+                    if let Ok((otag, ovo, ovl, _)) = read_der_tlv(der, p) {
+                        if otag == TAG_OCTET_STRING {
+                            results.push(der[ovo..ovo + ovl].to_vec());
+                        }
+                    }
+                }
+            }
+        }
+        cur = enext;
+    }
+    results
+}
+
+/// Authority Information Access (RFC 5280 §4.2.2.1) uzantısından
+/// id-pe-authorityInfoAccess OCSP URL'lerini çıkarır.
+/// AccessDescription ::= SEQUENCE { accessMethod OID, accessLocation GeneralName }
+/// id-ad-ocsp = 1.3.6.1.5.5.7.48.1 → OID baytları 0x2B 06 01 05 05 07 30 01
+/// dNSName/URI (0x86 context tag) URI olarak kodlanır.
+pub fn find_ocsp_urls(cert_der: &[u8]) -> Vec<String> {
+    const AIA_OID: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01]; // 1.3.6.1.5.5.7.1.1
+    let mut urls = Vec::new();
+
+    // Sertifikadaki uzantı bloğu [3] (0xA3) bulunur.
+    let Ok((cert_tag, cert_vo, _, _)) = read_der_tlv(cert_der, 0) else {
+        return urls;
+    };
+    if cert_tag != TAG_SEQUENCE {
+        return urls;
+    }
+    let Ok((tbs_tag, tbs_vo, tbs_vl, _)) = read_der_tlv(cert_der, cert_vo) else {
+        return urls;
+    };
+    if tbs_tag != TAG_SEQUENCE {
+        return urls;
+    }
+    let tbs_end = tbs_vo + tbs_vl;
+
+    // Sıralı alanlar: [0]?, serial, signature, issuer, validity, subject,
+    // subjectPublicKeyInfo, ... uzantılar
+    let mut pos = tbs_vo;
+    if let Ok((first_tag, _, _, first_next)) = read_der_tlv(cert_der, pos) {
+        if first_tag == TAG_CONTEXT_0 {
+            pos = first_next;
+        }
+    }
+    for _ in 0..6 {
+        let Ok((_, _, _, next)) = read_der_tlv(cert_der, pos) else {
+            return urls;
+        };
+        pos = next;
+    }
+
+    // Kalan alanlar arasında [3] uzantılar aranır.
+    while pos < tbs_end {
+        let Ok((ext_tag, ext_vo, _ext_vl, ext_next)) = read_der_tlv(cert_der, pos) else {
+            break;
+        };
+        if ext_tag == TAG_CONTEXT_3 {
+            let values = find_extension_values_by_oid(cert_der, ext_vo, AIA_OID);
+            for v in values {
+                // v: AuthorityInfoAccessSyntax SEQUENCE
+                let Ok((aia_tag, aia_vo, aia_vl, _)) = read_der_tlv(&v, 0) else {
+                    continue;
+                };
+                if aia_tag != TAG_SEQUENCE {
+                    continue;
+                }
+                let mut cur = aia_vo;
+                let end = aia_vo + aia_vl;
+                while cur < end {
+                    let Ok((ad_tag, ad_vo, ad_vl, ad_next)) = read_der_tlv(&v, cur) else {
+                        break;
+                    };
+                    if ad_tag == TAG_SEQUENCE {
+                        let mut p = ad_vo;
+                        let ad_end = ad_vo + ad_vl;
+                        if let Ok((m_tag, m_vo, m_vl, m_next)) = read_der_tlv(&v, p) {
+                            if m_tag == TAG_OID
+                                && m_vl == OCSP_ACCESS_METHOD.len()
+                                && &v[m_vo..m_vo + m_vl] == OCSP_ACCESS_METHOD
+                            {
+                                p = m_next;
+                                if let Ok((loc_tag, lvo, lvl, _)) = read_der_tlv(&v, p) {
+                                    if loc_tag == 0x86 && p < ad_end {
+                                        // URI GeneralName
+                                        if let Ok(s) = core::str::from_utf8(
+                                            &v[lvo..lvo + lvl],
+                                        ) {
+                                            urls.push(String::from(s));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    cur = ad_next;
+                }
+            }
+            break;
+        }
+        pos = ext_next;
+    }
+    urls
+}
+
+/// id-ad-ocsp (1.3.6.1.5.5.7.48.1) accessMethod OID'i.
+const OCSP_ACCESS_METHOD: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01];
+
+/// CRL Distribution Points (RFC 5280 §4.2.1.13) uzantısından HTTP(S) URL'leri
+/// çıkarır. CRLDistributionPoints ::= SEQUENCE OF DistributionPoint
+/// DistributionPoint ::= SEQUENCE { distributionPoint [0] EXPLICIT OPTIONAL, ... }
+/// DistributionPointName içinde [6] (0x86) uniformResourceIdentifier aranır.
+/// AIA OID'i: 2.5.29.31 aslında CRL DP'dir; AIA 1.3.6.1.5.5.7.1.1'dir.
+/// (Doğru OID eşlemesi aşağıdaki fonksiyonlarda yapılır.)
+pub fn find_crl_urls(cert_der: &[u8]) -> Vec<String> {
+    const CRL_DP_OID: &[u8] = &[0x55, 0x1d, 0x1f]; // 2.5.29.31 = CRLDistributionPoints
+    let mut urls = Vec::new();
+
+    let Ok((cert_tag, cert_vo, _, _)) = read_der_tlv(cert_der, 0) else {
+        return urls;
+    };
+    if cert_tag != TAG_SEQUENCE {
+        return urls;
+    }
+    let Ok((tbs_tag, tbs_vo, tbs_vl, _)) = read_der_tlv(cert_der, cert_vo) else {
+        return urls;
+    };
+    if tbs_tag != TAG_SEQUENCE {
+        return urls;
+    }
+    let tbs_end = tbs_vo + tbs_vl;
+
+    let mut pos = tbs_vo;
+    if let Ok((first_tag, _, _, first_next)) = read_der_tlv(cert_der, pos) {
+        if first_tag == TAG_CONTEXT_0 {
+            pos = first_next;
+        }
+    }
+    for _ in 0..6 {
+        let Ok((_, _, _, next)) = read_der_tlv(cert_der, pos) else {
+            return urls;
+        };
+        pos = next;
+    }
+
+    while pos < tbs_end {
+        let Ok((ext_tag, ext_vo, _ext_vl, ext_next)) = read_der_tlv(cert_der, pos) else {
+            break;
+        };
+        if ext_tag == TAG_CONTEXT_3 {
+            let values = find_extension_values_by_oid(cert_der, ext_vo, CRL_DP_OID);
+            for v in values {
+                // SEQUENCE OF DistributionPoint
+                let Ok((dp_seq_tag, dp_seq_vo, dp_seq_vl, _)) = read_der_tlv(&v, 0) else {
+                    continue;
+                };
+                if dp_seq_tag != TAG_SEQUENCE {
+                    continue;
+                }
+                let mut cur = dp_seq_vo;
+                let end = dp_seq_vo + dp_seq_vl;
+                while cur < end {
+                    let Ok((dp_tag, dp_vo, dp_vl, dp_next)) = read_der_tlv(&v, cur) else {
+                        break;
+                    };
+                    if dp_tag == TAG_SEQUENCE {
+                        let p = dp_vo;
+                        let dp_end = dp_vo + dp_vl;
+                        if let Ok((dpt_tag, dpt_vo, dpt_vl, _)) = read_der_tlv(&v, p) {
+                            // distributionPoint [0] EXPLICIT GeneralNames
+                            if dpt_tag == TAG_CONTEXT_0 {
+                                let mut g = dpt_vo;
+                                let g_end = dpt_vo + dpt_vl;
+                                while g < g_end {
+                                    let Ok((gn_tag, gvo, gvl, gnext)) = read_der_tlv(&v, g)
+                                    else {
+                                        break;
+                                    };
+                                    if gn_tag == 0x86 {
+                                        // uniformResourceIdentifier
+                                        if let Ok(s) = core::str::from_utf8(
+                                            &v[gvo..gvo + gvl],
+                                        ) {
+                                            urls.push(String::from(s));
+                                        }
+                                    }
+                                    g = gnext;
+                                }
+                                let _ = dp_end;
+                            }
+                        }
+                    }
+                    cur = dp_next;
+                }
+            }
+            break;
+        }
+        pos = ext_next;
+    }
+    urls
+}
+
 fn find_san_dns_names(der: &[u8], ext_vo: usize, _ext_vl: usize) -> Vec<String> {
     const SAN_OID: &[u8] = &[0x55, 0x1d, 0x11]; // 2.5.29.17
     let mut results = Vec::new();

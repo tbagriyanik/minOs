@@ -167,8 +167,10 @@ pub fn certificate_serial(cert_der: &[u8]) -> Result<Vec<u8>, ()> {
     Ok(cert_der[ser_vo..ser_vo + ser_vl].to_vec())
 }
 
-/// Öznitelik (attribute) değerini okur; değer bir SET içindedir.
-/// `atv_vo` AttributeTypeAndValue SEQUENCE'inin başlangıcıdır.
+/// `tlv` için public sarmalayıcı (OCSP isteği üretimi kullanır).
+pub fn tlv_pub(data: &[u8], offset: usize) -> Result<(u8, usize, usize, usize), ()> {
+    tlv(data, offset)
+}
 fn atv_value<'a>(der: &'a [u8], atv_vo: usize) -> Result<(u8, usize, usize), ()> {
     let (oid_tag, _oid_vo, _oid_vl, oid_next) = tlv(der, atv_vo)?;
     if oid_tag != TAG_OID {

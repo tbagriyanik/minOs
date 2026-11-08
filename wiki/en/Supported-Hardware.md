@@ -34,8 +34,8 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA |
 | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
 | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Full | High-speed virtualized network adapter |
-| Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
-| Marvell Ethernet | `marvell.rs` | 🟡 Partial | Basic RX/TX packet processing |
+| Atheros Ethernet | `atheros.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
+| Marvell Ethernet | `marvell.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
 | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
 | Wi-Fi (802.11 Wireless) | `wifi.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake, PCI/USB interface detection; real PHY/RX-TX not yet |
 | VMware VMXNET3 | `e1000.rs` | 🟢 Full | VMware PCI vendor `0x15AD`, MAC address, link polling |

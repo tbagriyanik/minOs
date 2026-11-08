@@ -1069,8 +1069,11 @@ fn http_get_impl(
         let config = HttpClientConfig::default();
 
         if use_v6 {
-            // IPv6 yolu: connect_v6 ile bağlantı
+            // IPv6 yolu: connect_v6 ile bağlantı. Bağlantı kurulduktan sonra
+            // oluşan TCP/TLS/HTTP hatalarında IPv4 yoluna otomatik geri düşülür
+            // (dual-stack fallback); bu yüzden deneme bir closure içine alınır.
             if let Ok(v6) = socket::resolve_host_aaaa(host_str) {
+                let v6_result = (|| -> Result<(u16, usize, usize), i32> {
                 let fd = socket::socket(socket::AF_INET6, socket::SOCK_STREAM).map_err(|e| {
                     crate::serial_print("[HTTPv6] socket oluşturulamadı: ");
                     crate::serial_print(&e.to_string());
@@ -1208,6 +1211,11 @@ fn http_get_impl(
                     (status, hlen, total)
                 };
 
+                Ok((status, hlen, total))
+                })();
+
+                match v6_result {
+                    Ok((status, hlen, total)) => {
                 // IPv6 yanıtı: chunked çözüm ve redirect kontrolü (basit, döngüye devam et)
                 if (300..400).contains(&status) && hops < MAX_REDIRECTS {
                     let headers = &resp_buf[..hlen];
@@ -1250,7 +1258,13 @@ fn http_get_impl(
                     }
                     return Err(E_HTTP);
                 }
-                return Ok((status, hlen, total));
+                    return Ok((status, hlen, total));
+                    }
+                    Err(_e) => {
+                        // IPv6 yolu başarısız (TCP/TLS/HTTP hatası): IPv4'e düş.
+                        crate::serial_print("[HTTPv6] IPv6 yolu basarisiz, IPv4'e dusuluyor\n");
+                    }
+                }
             }
         }
 

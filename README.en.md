@@ -132,8 +132,8 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | NE2000 compatible PCI (RTL8029AS) | `ne2000.rs` | 🟢 Full | PCI I/O BAR, remote DMA, automatic 8/16-bit selection |
 | | Broadcom NetXtreme (BCM57xx) | `e1000.rs` | 🟢 Full | MAC hash, RX/TX, PHY link check |
 | | VirtIO-net (QEMU/KVM/Cloud) | `virtio_net.rs` | 🟢 Full | High-speed virtualized network adapter |
-| | Atheros Ethernet | `atheros.rs` | 🟡 Partial | Basic link and packet transfer (offload filters TODO) |
-| | Marvell Ethernet | `marvell.rs` | 🟡 Partial | Basic RX/TX packet processing |
+| | Atheros Ethernet | `atheros.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
+| | Marvell Ethernet | `marvell.rs` | 🟡 Partial | PCI detection + 2D mode-set skeleton, basic RX/TX; checksum offload and filters TODO |
 | | Bluetooth HCI | `bluetooth.rs` | 🟡 Partial | Command (0x01), ACL (0x02), Event (0x04), Inquiry, connection management (A2DP/GATT TODO) |
 | | Wi-Fi (802.11 Wireless) | `wifi.rs` | 🟡 Partial | 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake, PCI/USB interface detection; real PHY/RX-TX not yet |
 | **Input Devices** | PS/2 Keyboard & Mouse | `ps2.rs`, `keyboard.rs`, `mouse.rs` | 🟢 Full | Interrupt-driven input, Turkish Q / English key mapping |
@@ -147,153 +147,19 @@ Current status table of native drivers and hardware layers inside the minOs kern
 | | SD / MMC Card | `sdmmc.rs` | 🟡 Partial | Sector reading active (CSD parsing and reliable writes WIP) |
 | **File Systems** | exFAT & ext4 | `exfat_rw.rs`, `ext4_rw.rs` | 🟢 Full | Deep directory hierarchy, fragmentation resistance, full read/write |
 | | ext2 & FAT32 | `ext2.rs`, `diskfs.rs` | 🟢 Full | File reading and system directories |
-| **Power & Sensors** | ACPI AML Interpreter & Battery | `acpi_battery.rs` | 🟢 Full | DSDT/SSDT AML parsing (Method, Device, Scope, Math/Logic), `_BST`/`_BIX`/`_BIF` live percentage, voltage, current, cycles |
-| | ACPI Power Management | `acpi_power.rs` | 🟢 Full | `_S0`..`_S5` sleep states detection, PowerResource (`_ON_`/`_OFF`/`_STA`), dynamic AC/Battery status tracking |
-| | Fan & Temperature Sensors | `fan_temp.rs` | 🟡 Partial | ACPI ThermalZone (`_TZ_`, `_TMP`, `_CRT`, `_HOT`, `_PSV`) parsing, Celsius conversion and fan RPM monitoring; EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching |
-| | Bus & Timers | `pci.rs`, `pcie.rs`, `timer.rs` | 🟢 Full | PCI/PCIe configuration, TSC/HPET/APIC timers |
-| **Audio & Multimedia** | Intel High Definition Audio (HDA) | `hda.rs`, `audio.rs` | 🟢 Full | DMA stream rings, mixer, WAV/MP3 playback |
-| | PC Speaker (PWM) | `audio.rs` | 🟢 Full | Hardware timer beeps and PWM tones |
-| | USB Audio | `usb_audio.rs` | 🟡 Partial | Speaker/headphone output (microphone recording TODO) |
-
----
-
-### ⚠️ Roadmap & Advanced Development
-
-- **Bluetooth Upper-Layer Profiles:** The basic HCI layer, inquiry and connection management are ready; A2DP audio streaming and BLE GATT profiles are planned for future releases.
-- **NVIDIA / AMD 3D Acceleration:** Linear frame buffer (VRAM LFB), 2D drawing and dynamic resolution change are ready; 3D acceleration (Vulkan/Gallium) is a separate stage.
+| **Power & Sensors**
+- ✅ **Sensors & Power:** ACPI AML interpreter (Method, Device, Scope, Math/Logic), `_BST` / `_BIX` / `_BIF` battery status reading, `_S0`..`_S5` sleep states and PowerResource management, ThermalZone (`_TZ_`, `_TMP`, `_CRT`) and fan sensors.
 - ✅ **Sensor & Fan Management:** Hardware-specific EC (Embedded Controller) fan profiles for `fan_temp.rs` completed (Silent/Normal/Performance/Full/Auto, temperature-based auto-switching, 0x66/0x62 EC protocol).
-- **Atheros / Marvell Ethernet:** Basic RX/TX transfer is active; hardware checksum offload and advanced packet filters are planned.
-- **RTL8139 / NE2000 Network Drivers:** Packet transfer, MAC reading and link state are complete. Planned: multi-segment (jumbo) frames, a deeper TX queue using all four RTL8139 channels, interrupt-driven RX for NE2000, and validation on real `ne2k_pci` (RTL8029AS) hardware. Promiscuous mode for management (SNMP/IPMI) is not available yet.
-- **USB Audio Recording:** Speaker output (playback) is active; PCM recording via microphone is TODO.
-- **SD/MMC Card Writing:** Sector reading is active; CSD register parsing and block write reliability are WIP.
-- **CRL/OCSP Revocation Checking:** Parsing algorithms are integrated; automatic HTTP/OCSP download requests are planned.
-- **HTTPS/IPv6 Path Reliability:** Name resolution now supports AAAA (`dns_query_aaaa` / `resolve_host_aaaa`, with a 5-minute AAAA cache). Automatic fallback (IPv6 → IPv4) is still limited: automatic switching to the IPv4 path after an IPv6 TCP/TLS connect failure, and AAAA reporting in `dns`/`nslookup` output, are planned. In addition, the HTTP/2 client still needs HTTPS frame encryption, ALPN `h2` negotiation and full HPACK decoding (dynamic table + all headers).
-- **minJs JavaScript Limitations:** minJs supports functions, arrays, objects, loops (`for`/`while`), JSON, core DOM APIs, **closures** (function expressions, arrow functions and scope capture) and **`setTimeout` / `setInterval`** timers in a `no_std` environment. Deep lexical scoping rules, a full prototype inheritance chain mechanism, getters/setters, `Proxy`, a module system (`import`/`export`), `yield`/generators and a complete Promise/microtask scheduling model are not yet implemented.
+- 📋 **Settings App Updates:**
+  - **Hardware Monitoring in Tests Tab:** A new "Hardware Monitoring" block has been added to the Settings > Tests tab, showing CPU/Chipset/GPU temperatures and fan speeds (RPM).
+  - **Wi-Fi Scan in Network Tab:** A "Scan Networks" button has been added to the Settings > Network tab; scanning detects nearby Wi-Fi networks (SSID, signal strength, channel, security).
+  - **Scroll Support:** The Settings app now supports scrolling through content across its 5 tabs (Basic, Display, Network, Devices, Tests) using `ScrollState`; long content can be scrolled.
+  - **Hardware Monitoring in Basic Tab:** Hardware monitoring information is shown in the Settings > Basic tab; fan speeds and temperatures are refreshed at the bottom of the interface.
+- ✅ **Sensors & Power:** ACPI AML interpreter (Method, Device, Scope, Math/Logic), `_BST` / `_BIX` / `_BIF` battery status reading, `_S0`..`_S5` sleep states and PowerResource management, ThermalZone (`_TZ_`, `_TMP`, `_CRT`) and fan sensors.
+- ✅ **Sensor & Fan Management:** Hardware-specific EC (Embedded Controller) fan profiles for `fan_temp.rs` completed (Silent/Normal/Performance/Full/Auto, temperature-based auto-switching, 0x66/0x62 EC protocol).
 
----
-
-## 💽 Ready-to-Run ISO Image
-
-A ready ISO image for testing minOs directly on QEMU, VirtualBox (64bit) or real hardware without building:
-
-🔗 **Download Directly from the Repo:**
-[https://github.com/tbagriyanik/minos/blob/main/minos.iso](https://github.com/tbagriyanik/minos/blob/main/minos.iso)
-
----
-
-## 🎥 Promo Video
-
-[![Watch the minOs promo video](https://img.youtube.com/vi/fB1MQPZTMEg/hqdefault.jpg)](https://www.youtube.com/watch?v=fB1MQPZTMEg)
-
-▶️ [Watch the video on YouTube](https://youtu.be/fB1MQPZTMEg)
-
----
-
-## 📸 Screenshots
-
-### Welcome Screen
-![Welcome](docs/screenshots/welcome.png)
-
-### Theme 1
-![Theme 1](docs/screenshots/tema1.png)
-
-### Theme 2
-![Theme 2](docs/screenshots/tema2.png)
-
----
-
-## 📚 Documentation and Wiki
-
-Detailed guides and technical reference resources:
-
-- 📖 **[minOs GitHub Wiki (Home)](https://github.com/tbagriyanik/minOs/wiki)**
-  - ℹ️ **[About & Architecture](https://github.com/tbagriyanik/minOs/wiki/Hakkinda)**: Design philosophy, `no_std` model, PMM and IDT structure.
-  - 🚀 **[Installation and Running](https://github.com/tbagriyanik/minOs/wiki/Kurulum-ve-Calistirma)**: `run.ps1` options, creating a Live USB and installing to disk.
-  - 💻 **[Supported Hardware List](https://github.com/tbagriyanik/minOs/wiki/Desteklenen-Donanimlar)**: xHCI USB HID, Touchpad (tap-to-click), UVC camera, e1000/RTL8139/NE2000 Ethernet and Wi-Fi.
-  - 📦 **[16 Built-in Applications](https://github.com/tbagriyanik/minOs/wiki/Uygulamalar)**: Web Browser, Notepad, File Manager, Control Panel, Package Manager etc.
-  - 🌐 **[Network and Internet](https://github.com/tbagriyanik/minOs/wiki/Ag-ve-Internet)**: TCP/IP stack, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS) and HTTP/2 infrastructure.
-  - 💾 **[File Systems](https://github.com/tbagriyanik/minOs/wiki/Dosya-Sistemleri)**: VFS, FAT32 (r/w/format), Ext2, ISO9660 and persistence (`VFS.DAT`).
-  - ⌨️ **[User Guide and Shortcuts](https://github.com/tbagriyanik/minOs/wiki/Kullanici-Rehberi)**: Desktop shortcuts and MinShell command reference.
-  - 🛠️ **[Developer Guide](https://github.com/tbagriyanik/minOs/wiki/Gelistirici-Rehberi)**: Source tree map, unit tests (`test_host.ps1`) and building.
-  - 🗺️ **[Release History and Roadmap](https://github.com/tbagriyanik/minOs/wiki/Surum-Gecmisi)**: Release notes and future plans.
-
-Local Markdown documents (Turkish):
-- [Features and Roadmap](docs/features.md)
-- [Commands, Shortcuts and Project Structure](docs/usage.md)
-- [Hardware, Requirements and Building](docs/building.md)
-- [Previous Release Notes](docs/releases.md)
-
----
-
-## 💾 File System Support and Format Limits
-
-The minOs VFS layer supports several file systems, but each file system's capability level differs:
-
-| File System | Support Level | Description |
-| :--- | :--- | :--- |
-| **FAT32** | **Full Read / Write / Format / Persistence** | Full file reading, writing, creation and deletion on MBR/GPT disks; `settings.cfg` and `VFS.DAT` system persistence. |
-| **Ext2** | **Read / Write / Format** | Mounting ATA disk partitions via `src/fs/ext2.rs`, directory listing and file read/write. |
-| **Ext4** | **Read / Write / Format** | `src/fs/ext4.rs` (format) + `src/fs/ext4_rw.rs` (read/write) with 1024-byte blocks, 256-byte inodes and multiple block groups. Block mapping is ext2-compatible (direct + single/double indirect); **extents tree, journal (JBD2), htree (dir_index) and inline data are not supported** — volumes with these features enabled are not mounted. The Linux `ext4` driver mounts the volume without problems. |
-| **exFAT** | **Read / Write / Format** (default **disabled**) | `src/fs/exfat.rs` (format: VBR, FAT, allocation bitmap, up-case table) + `src/fs/exfat_rw.rs` (read/write: root/sub directories, file creation/deletion, FAT-chained multi-cluster files, Unicode names). Full validation of long-name entries and timestamp/ACL writing are not yet available. Requires `cargo build --features exfat` to build. |
-| **ISO9660** | **Read-only** | Read support for live CD/DVD and installation media contents. |
-| **exFAT Patent Note** | **Microsoft Patent License** | exFAT was published by Microsoft as an open specification in 2019. Microsoft provides a “free, irrevocable” patent license commitment for exFAT implementations (`https://learn.microsoft.com/en-us/windows/win32/fileio/exfat-specification`). Although minOs is not a member of OIN (Open Invention Network), this license commitment is generally considered sufficient protection for personal/open-source use. exFAT support is disabled by default; enabling it constitutes a conscious risk acceptance. |
-
----
-
-### ⚡ Kernel Architecture and Hardware Status (UEFI, USB-HID, SMP)
-
-- **Dependency Hygiene (No Dead Crates):** The kernel depends only on the 8 small crates it actually calls: `linked_list_allocator` (heap), `p384` (P-384 signatures), `bitflags`, `heapless`, `zerocopy`, `crc32fast`, `raw-cpuid` and `log` — all reached through `src/main.rs`, `src/kernel_primitives.rs`, `src/kernel_diag.rs` and `src/drivers/crypto/x509.rs`. `webpki-roots`, `rand_hc`, `rand_core`, `smoltcp`, `elf`, `embedded-io`, `postcard`, `serde` and `acpi` were **removed from the dependency list**: the root-CA store lives in `drivers/crypto/roots/`, the RNG is `src/random.rs` (xorshift64*), IPC messages use the 5-byte layout in `src/kernel_formats.rs`, and the network stack `drivers/netstack.rs` runs with zero dependencies. `Cargo.lock` now carries only reachable packages (verified against the `cargo metadata` dependency graph).
-
-- **UEFI & BIOS Dual-Boot:** Thanks to the Limine v8 bootloader, the system boots smoothly on both modern x86_64 UEFI systems and traditional BIOS (Legacy) environments.
-- **Native xHCI USB HID & PS/2 Fallback:** A native USB keyboard and mouse driver (`src/drivers/usb_hid.rs`) is active over xHCI (USB 3.x) controllers. Initialization/handoff and a transfer layer exist for EHCI/UHCI/OHCI controllers (see `src/drivers/usb.rs`), but HID report parsing is not yet available on these controllers; when no USB device is found or BIOS CSM/Legacy USB is disabled, the system automatically switches to PS/2 fallback mode for stability and logs an informational message to the boot console. To completely disable PS/2 in QEMU and test input only through a USB keyboard/mouse use `.\run.ps1 -NoPs2`; for end-to-end verification including automated keyboard/mouse injection over QMP use `.\test_qemu.ps1 -NoPs2`.
-- **SMP (Symmetric Multiprocessing):** CPUs reported by Limine are brought online with per-AP GDTs/stacks, per-CPU run-queue assignment, local-queue preference and work stealing. The 1000 Hz APIC scheduler tick requests preemption; failed AP startup falls back safely to BSP-only mode.
-
----
-
-### 💻 Direct QEMU Run Examples (Including Audio and Network)
-
-If you want to run directly from the QEMU command line without the `run.ps1` automation, the audio (HDA) and network (e1000) flags must be supplied completely:
-
-#### Linux (PulseAudio + Intel HDA Duplex + e1000):
-```bash
-qemu-system-x86_64 -m 512M -smp 2 \
-  -cdrom minos.iso -boot d \
-  -vga virtio \
-  -rtc base=utc,clock=host,driftfix=slew \
-  -audiodev pa,id=snd0 \
-  -device intel-hda -device hda-duplex,audiodev=snd0 \
-  -netdev user,id=n0 -device e1000,netdev=n0
-```
-
-#### Windows (SDL or DirectSound + Intel HDA Output + e1000):
-```powershell
-# The SDL audio backend prevents the DirectSoundCapture (microphone open) error:
-qemu-system-x86_64.exe -m 512M -smp 2 `
-  -cdrom .\minos.iso -boot d `
-  -vga virtio `
-  -rtc base=utc,clock=host,driftfix=slew `
-  -audiodev driver=sdl,id=snd0 `
-  -device intel-hda -device hda-output,audiodev=snd0 `
-  -netdev user,id=n0 -device e1000,netdev=n0
-```
-> 💡 *Note: If you use DirectSound, using `hda-output` instead of `hda-duplex` or `-audiodev driver=sdl` prevents QEMU startup crashes caused by a missing microphone capture device.*
-> 💡 *Note: minOs also works with other network cards; instead of `-device e1000,netdev=n0` use `-device rtl8139,netdev=n0` (PCI RTL8139) or `-device ne2k_isa,netdev=n0` (ISA NE2000, found via ISA PnP). Only driver selection differs — the upper layers (DHCP/ARP/DNS/TCP/UDP/TLS) are identical.*
-> 💡 *Note: VirtIO-GPU (`-vga virtio`) provides direct 2D hardware acceleration and scanout flush queues in QEMU/KVM environments. For legacy/standard VGA, `-vga std -global VGA.vgamem_mb=64` can be used.*
-> 💡 *Note: In QEMU, VirtualBox, and VMware, hardware RTC operates in UTC and minOs applies the timezone offset (`settings.cfg: region`, default UTC+3) to ensure exact synchronization with host real time.*
-
----
-
-### 🚀 Quick Start
-
-```powershell
-git clone https://github.com/tbagriyanik/minOs.git
-cd minOs
-powershell -ExecutionPolicy Bypass -File .\run.ps1
-```
-
----
-
-## 📄 License
-
-This project is open source and developed for educational/research purposes.
-Feel free to contribute and suggest improvements! 🐾
+- 📋 **Settings App Updates:**
+  - **Hardware Monitoring in Tests Tab:** A new "Hardware Monitoring" block has been added to the Settings > Tests tab, showing CPU/Chipset/GPU temperatures and fan speeds (RPM).
+  - **Wi-Fi Scan in Network Tab:** A "Scan Networks" button has been added to the Settings > Network tab; scanning detects nearby Wi-Fi networks (SSID, signal strength, channel, security).
+  - **Scroll Support:** The Settings app now supports scrolling through content across its 5 tabs (Basic, Display, Network, Devices, Tests) using `ScrollState`; long content can be scrolled.
+  - **Hardware Monitoring in Basic Tab:** Hardware monitoring information is shown in the Settings > Basic tab; fan speeds and temperatures are refreshed at the bottom of the interface.

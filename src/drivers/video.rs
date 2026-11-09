@@ -655,6 +655,35 @@ impl Framebuffer {
         }
     }
 
+    /// 1px genişliğinde dikey renk dilimi. Kırpma bir kez hesaplanır ve
+    /// sütun doğrudan arka tampona yazılır; piksel başına `draw_rect`
+    /// çağırmanın kırpma/çağrı maliyeti olmadan raycasting duvarlarını
+    /// çizmeyi sağlar.
+    pub fn draw_vstrip(&mut self, x: usize, y: usize, h: usize, color: u32) {
+        if h == 0 || x < self.clip.x0 || x >= self.clip.x1 || x >= self.width {
+            return;
+        }
+        let y0 = y.max(self.clip.y0);
+        let y1 = y.saturating_add(h).min(self.clip.y1).min(self.height);
+        if y0 >= y1 {
+            return;
+        }
+        // Taşma denetimi bir kez: son satırın ofseti tampon içinde kalmalı.
+        if (y1 - 1).saturating_mul(self.width).saturating_add(x) >= BACKBUFFER_LEN {
+            return;
+        }
+        let c = rgb(color);
+        let ptr = core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32;
+        let stride = self.width;
+        unsafe {
+            let mut off = y0 * stride + x;
+            for _ in y0..y1 {
+                ptr.add(off).write(c);
+                off += stride;
+            }
+        }
+    }
+
     /// 1px kalınlığında içi boş dikdörtgen (çerçeve).
     pub fn draw_rect_outline(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
         if w == 0 || h == 0 {

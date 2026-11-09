@@ -603,6 +603,33 @@ impl TaskManagerApp {
                     Color::ACCENT_YELLOW,
                 );
             }
+
+            // Force-kill button for frozen applications (prominent red button)
+            let kill = Self::kill_btn_rect(win_x, win_y, win_w);
+            let kill_hover = false; // Could track hover state
+            fb.draw_rect(
+                kill.0,
+                kill.1,
+                kill.2,
+                kill.3,
+                if kill_hover {
+                    Color::ACCENT_RED
+                } else {
+                    Color::TITLE_BAR
+                },
+            );
+            fb.draw_rect_outline(kill.0, kill.1, kill.2, kill.3, Color::ACCENT_RED);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                kill.0 + 12,
+                kill.1 + 4,
+                crate::gui::ui_text("Zorla Kapat", "Force Kill"),
+                Color::WHITE,
+                (kill.0 + 4, kill.1 + 2, kill.2 - 8, kill.3 - 4),
+            );
+            if self.focused_control == 3 {
+                fb.draw_rect_outline(kill.0, kill.1, kill.2, kill.3, Color::ACCENT_YELLOW);
+            }
             // Sütun başlıkları (genişletilmiş ve ferah aralıklar)
             MinGuiCompositor::draw_string_clipped(
                 fb,

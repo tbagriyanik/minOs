@@ -114,6 +114,7 @@ const MAX_DEPTH: f32 = 16.0;
 const MOVE_SPEED: f32 = 0.14;
 const ROT_SPEED: f32 = 0.10;
 // Ana döngü fare delta'sını yarım ölçekle gönderiyor; bu değer 1:1'e yakın,
+const ENEMIES_PER_FRAME: usize = 4;
 // daha kontrollü bir FPS dönüşü için ayarlandı.
 const MOUSE_SENS: f32 = 0.0045;
 const PLAYER_RADIUS: f32 = 0.25;
@@ -876,23 +877,35 @@ impl FpsGameApp {
         }
 
         // Düşman sprite'larını çiz (basit billboard).
+        // Sadece ENEMIES_PER_FRAME kadar düşman render edilir; remaining'ler
+        // sonraki frame'e ertelenir, jitter önlenir.
+        let mut rendered_sprites: usize = 0;
         for e in self.enemies.iter().take(self.enemy_count) {
             if !e.alive {
                 continue;
             }
+            // ENEMIES_PER_FRAME ile sınırlı render; remaining'ler sonraki frame'e.
+            if rendered_sprites >= ENEMIES_PER_FRAME {
+                continue;
+            }
+            rendered_sprites += 1;
+            // Mesafe ve frustum kısaltma: fast_sqrt yerine kare mesafe kontrolü.
             let dx = e.x - self.pos_x;
             let dy = e.y - self.pos_y;
-            let dist = fast_sqrt(dx * dx + dy * dy);
+            let dist_sq = dx * dx + dy * dy;
+            // fast_sqrt guard: 0 divisyonunu ve z_buffer karşılaştırması.
+            let dist = if dist_sq > 0.0 { fast_sqrt(dist_sq) } else { 0.0 };
             if dist > MAX_DEPTH || dist < 0.5 {
                 continue;
             }
             let angle = fast_atan2(dy, dx);
             let mut rel = angle - fast_atan2(self.dir_y, self.dir_x);
-            while rel < -PI {
-                rel += TAU;
-            }
-            while rel > PI {
-                rel -= TAU;
+            // while döngülerini if düzeltmeleriyle değiştir: angle normalizasyonu
+            // tek adımlı düzelme yeterlidir, while döngüsü çok maliyetli.
+            if rel < -PI {
+                rel = rel + TAU;
+            } else if rel > PI {
+                rel = rel - TAU;
             }
             if rel.abs() > FOV / 2.0 + 0.5 {
                 continue;

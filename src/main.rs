@@ -887,6 +887,40 @@ pub extern "C" fn _start() -> ! {
 
     let mut speaker_on = false;
 
+    // 3-Masa oyunu (dama/mayın/satranç) PC Speaker sesi için otomatik
+    // susturma zamanı; süresi dolduysa ses takılmasını önlemek için kapatılır.
+    let mut game_sound_until_ms: u64 = 0;
+
+    // FPS 3D oyun güncellemesi için zaman bütçesi (ms). Uygulama çok uzun
+    // sürerse sistem donmasını önlemek için atlanır ve uyarı gösterilir.
+    const GAME_UPDATE_BUDGET_MS: u64 = 30; // Stricter: 30ms for games
+
+    // FPS limit for games (30 FPS = ~33.33ms per frame).
+    const GAME_FPS_LIMIT_MS: u64 = 33;
+    // Raycasting oyunu 60 Hz hedefler: 33 ms taban, 16 ms'lik kare aralığıyla
+    // birleşince etkin hız ~15 FPS'e düşüyordu.
+    const FPS3D_FPS_LIMIT_MS: u64 = 16;
+    let mut last_game_tick_ms: u64 = monotonic_ms();
+    let mut last_fps3d_tick_ms: u64 = monotonic_ms();
+
+    // Watchdog timer: detect frozen applications (5 seconds without activity).
+    const WATCHDOG_TIMEOUT_MS: u64 = 5_000;
+    // 0 = uygulama henüz etkinleştirilmedi (izleme atla).
+    let mut app_last_activity: [u64; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
+
+    // Track per-application render time (Cell allows interior mutability
+    // so the render closure can capture it immutably and still update values).
+    // Render bütçesi aşımı sadece seri konsola yazılır; uygulama otomatik
+    // kapatılmaz, böylece kullanıcı her zaman yeniden açabilir.
+    let app_render_time_ms: [core::cell::Cell<u64>; gui::MAX_WINDOWS] =
+        [const { core::cell::Cell::new(0) }; gui::MAX_WINDOWS];
+    const RENDER_BUDGET_MS: u64 = 16; // ~60 FPS for rendering
+
+    // Uyarı zaten gösterildi mi? Sürekli toast spam'ini önler.
+    let mut cpu_warn_shown: bool = false;
+    let mut ram_warn_shown: bool = false;
+    const CPU_WARN_PCT: usize = 90;
+    const RAM_WARN_PCT: usize = 90;
     let mut last_title_idx: Option<usize> = None;
 
     let mut last_title_click_ms: u64 = 0;
@@ -1172,6 +1206,7 @@ pub extern "C" fn _start() -> ! {
                         content_area.3.max(1),
                     );
 
+                    let render_start_ms = crate::monotonic_ms();
                     let render_start = read_cpu_cycles();
 
                     match app_id {
@@ -1292,7 +1327,21 @@ pub extern "C" fn _start() -> ! {
                         _ => {}
                     }
 
+                    let render_elapsed_ms = crate::monotonic_ms().saturating_sub(render_start_ms);
                     app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
+                    app_render_time_ms[idx].set(render_elapsed_ms);
+
+                    // Render workload budget enforcement: measure time (post-processing after closure)
+                    if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
+                        let app_name = app_process_name(app_id);
+                        crate::serial_print("[RENDER] Uygulama render bütçesi aştı: ");
+                        crate::serial_print(app_name);
+                        crate::serial_print(" (");
+                        crate::serial_print_dec(render_elapsed_ms);
+                        crate::serial_print(" ms > ");
+                        crate::serial_print_dec(RENDER_BUDGET_MS);
+                        crate::serial_print(" ms)\n");
+                    }
 
                     // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.
 
@@ -1780,6 +1829,16 @@ pub extern "C" fn _start() -> ! {
             None,
             None,
         );
+
+        // Izleme damgasi: ilk karede acik pencereleri canli olarak isaretle.
+        let now_ms = crate::monotonic_ms();
+        for idx in 0..gui::MAX_WINDOWS {
+            if let Some(win) = compositor.windows[idx] {
+                if win.is_open && !win.is_minimized {
+                    app_last_activity[idx] = now_ms;
+                }
+            }
+        }
     }
 
     let mut drag_prev_box: Option<(usize, usize, usize, usize)> = None;
@@ -1929,6 +1988,15 @@ pub extern "C" fn _start() -> ! {
         input_update.keyboard |= usb_input_update.keyboard;
 
         input_update.mouse |= usb_input_update.mouse;
+
+        // Update activity timestamps for focused application on input
+        if input_update.keyboard || input_update.mouse {
+            if let Some(idx) = compositor.active_window_idx {
+                if idx < gui::MAX_WINDOWS {
+                    app_last_activity[idx] = crate::monotonic_ms();
+                }
+            }
+        }
 
         loop_counter = loop_counter.wrapping_add(1);
 
@@ -5184,6 +5252,39 @@ pub extern "C" fn _start() -> ! {
 
                                         taskmgr_app.actions_menu_open =
                                             !taskmgr_app.actions_menu_open;
+                                    } else if gui::in_rect(
+                                        mx,
+                                        my,
+                                        apps::taskmgr::TaskManagerApp::kill_btn_rect(wx, wy, ww),
+                                    ) {
+                                        // Force-kill button pressed
+                                        if let Some(target) = taskmgr_app.selected_app_idx() {
+                                            taskmgr_app.focused_control = 3;
+                                            taskmgr_app.status = gui::ui_text(
+                                                "Uygulama zorla kapatıldı.",
+                                                "Application force-killed.",
+                                            );
+                                            terminate_app(
+                                                target,
+                                                &mut compositor,
+                                                &mut filemanager_app,
+                                                &mut settings_app,
+                                                &mut notepad_app,
+                                                &mut browser_app,
+                                                &mut imageviewer_app,
+                                                &mut musicplayer_app,
+                                                &mut videoplayer_app,
+                                                &mut taskmgr_app,
+                                                &mut calculator_app,
+                                                &mut paint_apps[idx],
+                                                &mut terminal_app,
+                                                &mut installer_app,
+                                                &mut viewer3d_app,
+                                                &mut pkgmgr_app,
+                                                &mut fps_game_app,
+                                                &mut fps_3d_app,
+                                            );
+                                        }
                                     } else if taskmgr_app.actions_menu_open {
                                         let action = (0..2).find(|&i| gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_menu_item_rect(wx, wy, ww, i)));
                                         taskmgr_app.actions_menu_open = false;
@@ -8856,7 +8957,15 @@ pub extern "C" fn _start() -> ! {
             || videoplayer_app.is_playing
             || viewer3d_animating;
 
-        let frame_interval_ms = if is_interacting || viewer3d_animating {
+        // FPS 3D oyunu açıkken ana döngü 60 Hz'e çıkar; oyunun kendi
+        // güncelleme kapısı da buna göre ayarlanır.
+        let fps3d_running = compositor
+            .windows
+            .iter()
+            .flatten()
+            .any(|w| w.app_id == 16 && w.is_open && !w.is_minimized);
+
+        let frame_interval_ms = if is_interacting || viewer3d_animating || fps3d_running {
             16
         } else {
             33
@@ -8873,19 +8982,132 @@ pub extern "C" fn _start() -> ! {
                 let _app_context = apps::guard::ContextScope::new(12, apps::guard::NO_WINDOW);
                 viewer3d_app.tick();
             }
+
+            // Watchdog: check for frozen applications
+            let now_ms = crate::monotonic_ms();
+            for idx in 0..gui::MAX_WINDOWS {
+                if let Some(win) = compositor.windows[idx] {
+                    if win.is_open && !win.is_minimized {
+                        // Henüz render edilmeyen/yeni açılan uygulamayı atla.
+                        if app_last_activity[idx] == 0 {
+                            continue;
+                        }
+                        let idle_time = now_ms.saturating_sub(app_last_activity[idx]);
+                        if idle_time > WATCHDOG_TIMEOUT_MS {
+                            // Application appears frozen - mark for termination
+                            crate::serial_print("[WATCHDOG] Uygulama donmuş görünüyor: app_id=");
+                            crate::serial_print_dec(win.app_id as u64);
+                            crate::serial_print(" window_idx=");
+                            crate::serial_print_dec(idx as u64);
+                            crate::serial_print(" idle=");
+                            crate::serial_print_dec(idle_time);
+                            crate::serial_print(" ms\n");
+
+                            // Terminate the frozen app so it cannot block the OS
+                            terminate_app(
+                                idx,
+                                &mut compositor,
+                                &mut filemanager_app,
+                                &mut settings_app,
+                                &mut notepad_app,
+                                &mut browser_app,
+                                &mut imageviewer_app,
+                                &mut musicplayer_app,
+                                &mut videoplayer_app,
+                                &mut taskmgr_app,
+                                &mut calculator_app,
+                                &mut paint_apps[idx],
+                                &mut terminal_app,
+                                &mut installer_app,
+                                &mut viewer3d_app,
+                                &mut pkgmgr_app,
+                                &mut fps_game_app,
+                                &mut fps_3d_app,
+                            );
+
+                            // Update activity timestamp to prevent repeated warnings
+                            app_last_activity[idx] = now_ms;
+                        }
+                    }
+                }
+            }
         }
 
         // Oyun motoru: dama yapay zekâsı, bulmaca gösterisi ve performans testi
         // yalnızca pencere açık ve zamanlayıcı işareti geldiğinde ilerler.
+        // FPS limiti (30 FPS = 33ms) uygulanır.
+        // Guard koruması: oyun içi hata/panic sistem donutmemesini sağlar,
+        // yalnızca bu uygulama kapatılır.
         let game_open = compositor
             .windows
             .iter()
             .flatten()
             .any(|w| w.app_id == 15 && w.is_open && !w.is_minimized);
         if game_open && timer_tick_fired {
-            let _app_context = apps::guard::ContextScope::new(15, apps::guard::NO_WINDOW);
-            if fps_game_app.tick() {
-                force_render = true;
+            let now_ms = crate::monotonic_ms();
+            let time_since_last_tick = now_ms.saturating_sub(last_game_tick_ms);
+            if time_since_last_tick >= GAME_FPS_LIMIT_MS {
+                let (game_guard, game_start) =
+                    apps::guard::prepare_recoverable(15, apps::guard::NO_WINDOW);
+                if unsafe { apps::guard::begin(game_start) } {
+                    let game_start_ms = crate::monotonic_ms();
+                    let changed = fps_game_app.tick();
+                    let game_elapsed_ms = crate::monotonic_ms().saturating_sub(game_start_ms);
+                    last_game_tick_ms = now_ms;
+                    // Update activity timestamp for watchdog
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 15))
+                    {
+                        app_last_activity[idx] = now_ms;
+                    }
+                    if game_elapsed_ms > GAME_UPDATE_BUDGET_MS {
+                        crate::serial_print("[GAMES] Uyarı: güncelleme bütçesi aştı (");
+                        crate::serial_print_dec(game_elapsed_ms);
+                        crate::serial_print(" ms > ");
+                        crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
+                        crate::serial_print(" ms)\n");
+                    }
+                    if changed {
+                        force_render = true;
+                    }
+                } else {
+                    // Guard recovery: oyun içinde hata oluştu, uygulama kapatılacak
+                    crate::serial_print("[GAMES] Guard recovery: oyun hata verdi, kapatılıyor\n");
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 15))
+                    {
+                        if let Some(fault) = apps::guard::take_pending() {
+                            crate::serial_print("[GAMES] Hata türü: ");
+                            crate::serial_print(fault.kind.as_str());
+                            crate::serial_print("\n");
+                        }
+                        terminate_app(
+                            idx,
+                            &mut compositor,
+                            &mut filemanager_app,
+                            &mut settings_app,
+                            &mut notepad_app,
+                            &mut browser_app,
+                            &mut imageviewer_app,
+                            &mut musicplayer_app,
+                            &mut videoplayer_app,
+                            &mut taskmgr_app,
+                            &mut calculator_app,
+                            &mut paint_apps[idx],
+                            &mut terminal_app,
+                            &mut installer_app,
+                            &mut viewer3d_app,
+                            &mut pkgmgr_app,
+                            &mut fps_game_app,
+                            &mut fps_3d_app,
+                        );
+                    }
+                }
+                drop(game_guard);
             }
         }
 
@@ -8911,14 +9133,78 @@ pub extern "C" fn _start() -> ! {
         }
 
         // FPS 3D oyun motoru: raycasting, hareket, düşman AI, ses.
+        // FPS limiti (30 FPS = 33ms) uygulanır.
+        // Guard koruması: oyun içi hata/panic sistem donutmemesini sağlar,
+        // yalnızca bu uygulama kapatılır.
         let fps3d_open = compositor
             .windows
             .iter()
             .flatten()
             .any(|w| w.app_id == 16 && w.is_open && !w.is_minimized);
         if fps3d_open && timer_tick_fired {
-            let _app_context = apps::guard::ContextScope::new(16, apps::guard::NO_WINDOW);
-            fps_3d_app.update(&mut audio_dev);
+            let now_ms = crate::monotonic_ms();
+            let time_since_last_tick = now_ms.saturating_sub(last_fps3d_tick_ms);
+            if time_since_last_tick >= FPS3D_FPS_LIMIT_MS {
+                let (fps3d_guard, fps3d_start) =
+                    apps::guard::prepare_recoverable(16, apps::guard::NO_WINDOW);
+                if unsafe { apps::guard::begin(fps3d_start) } {
+                    let fps3d_start_ms = crate::monotonic_ms();
+                    fps_3d_app.update(&mut audio_dev);
+                    fps_3d_app.tick_fps(time_since_last_tick as usize);
+                    let fps3d_elapsed_ms = crate::monotonic_ms().saturating_sub(fps3d_start_ms);
+                    last_fps3d_tick_ms = now_ms;
+                    // Update activity timestamp for watchdog
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 16))
+                    {
+                        app_last_activity[idx] = now_ms;
+                    }
+                    if fps3d_elapsed_ms > GAME_UPDATE_BUDGET_MS {
+                        crate::serial_print("[FPS-3D] Uyarı: güncelleme bütçesi aştı (");
+                        crate::serial_print_dec(fps3d_elapsed_ms);
+                        crate::serial_print(" ms > ");
+                        crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
+                        crate::serial_print(" ms)\n");
+                    }
+                } else {
+                    // Guard recovery: oyun içinde hata oluştu, uygulama kapatılacak
+                    crate::serial_print("[FPS-3D] Guard recovery: oyun hata verdi, kapatılıyor\n");
+                    if let Some(idx) = compositor
+                        .windows
+                        .iter()
+                        .position(|w| w.is_some_and(|w| w.app_id == 16))
+                    {
+                        if let Some(fault) = apps::guard::take_pending() {
+                            crate::serial_print("[FPS-3D] Hata türü: ");
+                            crate::serial_print(fault.kind.as_str());
+                            crate::serial_print("\n");
+                        }
+                        terminate_app(
+                            idx,
+                            &mut compositor,
+                            &mut filemanager_app,
+                            &mut settings_app,
+                            &mut notepad_app,
+                            &mut browser_app,
+                            &mut imageviewer_app,
+                            &mut musicplayer_app,
+                            &mut videoplayer_app,
+                            &mut taskmgr_app,
+                            &mut calculator_app,
+                            &mut paint_apps[idx],
+                            &mut terminal_app,
+                            &mut installer_app,
+                            &mut viewer3d_app,
+                            &mut pkgmgr_app,
+                            &mut fps_game_app,
+                            &mut fps_3d_app,
+                        );
+                    }
+                }
+                drop(fps3d_guard);
+            }
             force_render = true;
         }
 
@@ -8988,9 +9274,16 @@ pub extern "C" fn _start() -> ! {
                     }
                 } else {
                     audio_dev.set_pc_speaker_tone(freq);
+                    game_sound_until_ms = crate::monotonic_ms().saturating_add(duration_ms as u64);
                 }
                 force_render = true;
             }
+        }
+
+        // 3-Masa oyunu PC Speaker sesi süresi dolduysa otomatik olarak sustur.
+        if game_sound_until_ms > 0 && crate::monotonic_ms() >= game_sound_until_ms {
+            audio_dev.set_pc_speaker_tone(0);
+            game_sound_until_ms = 0;
         }
 
         // FPS 3D oyun ses efektleri.
@@ -9296,6 +9589,16 @@ pub extern "C" fn _start() -> ! {
                 target_dirty,
             );
 
+            // Izleme damgasi: her karede acik pencereleri canli olarak isaretle.
+            let now_ms = crate::monotonic_ms();
+            for idx in 0..gui::MAX_WINDOWS {
+                if let Some(win) = compositor.windows[idx] {
+                    if win.is_open && !win.is_minimized {
+                        app_last_activity[idx] = now_ms;
+                    }
+                }
+            }
+
             drag_dirty_rect = None;
 
             _app_dirty_rect = None;
@@ -9428,6 +9731,37 @@ pub extern "C" fn _start() -> ! {
             cpu_sample_total_cycles = 0;
 
             cpu_sample_active_cycles = 0;
+
+            // --- Kaynak uyarıları: CPU ve RAM (sadece seri konsola, toast yok) ---
+
+            // CPU uyarısı: sadece ilk kez aştığında serial'e yazılır.
+            if bsp_pct >= CPU_WARN_PCT {
+                if !cpu_warn_shown {
+                    crate::serial_print("[WARN] CPU kullanımı yüksek: ");
+                    crate::serial_print_dec(bsp_pct as u64);
+                    crate::serial_print("%\n");
+                    cpu_warn_shown = true;
+                }
+            } else {
+                cpu_warn_shown = false;
+            }
+
+            // RAM uyarısı: sadece ilk kez aştığında serial'e yazılır.
+            let total_ram = memory_mgr.pmm.total_memory_bytes;
+            let used_ram = memory_mgr.pmm.used_memory_bytes;
+            if total_ram > 0 {
+                let ram_pct = (used_ram.saturating_mul(100) / total_ram) as usize;
+                if ram_pct >= RAM_WARN_PCT {
+                    if !ram_warn_shown {
+                        crate::serial_print("[WARN] RAM kullanımı yüksek: ");
+                        crate::serial_print_dec(ram_pct as u64);
+                        crate::serial_print("%\n");
+                        ram_warn_shown = true;
+                    }
+                } else {
+                    ram_warn_shown = false;
+                }
+            }
         }
     }
 }

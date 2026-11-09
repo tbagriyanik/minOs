@@ -2,6 +2,8 @@
 
 [Türkçe](README.md) | [English](README.en.md)
 
+![minOs Sarman Edition](public/minOs%20Sarman%20Edition.png)
+
 [![Rust](https://img.shields.io/badge/Language-Rust%20nightly-orange.svg)](https://www.rust-lang.org/)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)

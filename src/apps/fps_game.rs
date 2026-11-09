@@ -1074,7 +1074,13 @@ impl FpsGameApp {
             let px = offset_x + (p.x as usize).min(MAP_W - 1) * cell + cell / 3;
             let py = offset_y + (p.y as usize).min(MAP_H - 1) * cell + cell / 3;
             let size = (cell / 3).max(2);
-            let color = if p.kind == 1 { 0x40FF40 } else if p.kind == 2 { 0xFFFF40 } else { 0xFFD700 }; /* kind 1: health(green), kind 2: ammo(yellow), kind 3: score(gold) */
+            let color = if p.kind == 1 {
+                0x40FF40
+            } else if p.kind == 2 {
+                0xFFFF40
+            } else {
+                0xFFD700
+            }; /* kind 1: health(green), kind 2: ammo(yellow), kind 3: score(gold) */
             fb.draw_rect(px, py, size, size, color);
         }
 

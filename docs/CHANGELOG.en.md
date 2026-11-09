@@ -9,12 +9,12 @@ The README files only summarise the highlights; the full list lives here.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.
 
-- [v2.2.0](#whats-new-v210) — current release
+- [v2.3.0](#whats-new-v230) — current release
 - [v1.6.0 and earlier](releases.md)
 
 ---
 
-## What's New (v2.2.0)
+## What's New (v2.3.0)
 
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.
@@ -75,6 +75,7 @@ The README files only summarise the highlights; the full list lives here.
 - **Default Hardware Driver Profile:** The full driver profile is used in normal Live and Installed boots; the Safe Mode option in the Limine menu is preserved for boots without drivers.
 - **More Readable Boot Log:** The text console flushes every completed line to the screen and waits 45 ms before moving to the next line once the time base is ready. Boot diagnostic messages are therefore easier to follow; early messages written before the time base is ready are not delayed.
 - **Browser Favorites (Bookmarks Bar):** An interactive bookmarks bar was added to the web browser; a pure HTTP test site and quick-access buttons for `minos://cats`, `minos://net`, `minos://history`, `minos://demo` and `minos://demo-img` / `minos://demo-video` plus the `minos://bookmarks` page were integrated.
+- **🐾 Application Close Fix (Watchdog):** The watchdog timer that automatically closed applications after 5 seconds of inactivity has been fixed. Newly opened windows are added to the watch list only after their first render; open windows are marked as active every frame. As a result, applications no longer close even if the user does not interact with them.
 
 ### ⚠️ Known Limitations
 

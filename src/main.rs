@@ -1333,14 +1333,13 @@ pub extern "C" fn _start() -> ! {
 
                     // Render workload budget enforcement: measure time (post-processing after closure)
                     if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
-                        let app_name = app_process_name(app_id);
-                        crate::serial_print("[RENDER] Uygulama render bütçesi aştı: ");
+                        /* crate::serial_print("[RENDER] Uygulama render bütçesi aştı: ");
                         crate::serial_print(app_name);
                         crate::serial_print(" (");
                         crate::serial_print_dec(render_elapsed_ms);
                         crate::serial_print(" ms > ");
                         crate::serial_print_dec(RENDER_BUDGET_MS);
-                        crate::serial_print(" ms)\n");
+                        crate::serial_print(" ms)\n");*/
                     }
 
                     // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.
@@ -5937,7 +5936,8 @@ pub extern "C" fn _start() -> ! {
 
                             16 => {
                                 // FPS 3D oyun: fare ile bakış, WASD hareket, ateş.
-                                if let Some((_, _w)) = focused_window_for_app(&compositor, 16) {
+                                // Fare butonu değiştiyse ateş et (focus bağımsızğı)
+                                if mouse.left_button != last_buttons.0 {
                                     let changed = fps_3d_app.handle_mouse_click(&mut audio_dev);
                                     if changed {
                                         force_render = true;
@@ -8912,7 +8912,7 @@ pub extern "C" fn _start() -> ! {
         // FPS 3D oyun fare bakışı (sadece pencere odaklıyken).
         // Fare `mouse` değişkeni ile toplandığı için önceki konum tur başında
         // güncellenmeli; aksi hâlde imleç pencere kenarına dayanınca bakış durur.
-        if mouse_moved && app_is_focused(&compositor, 16) {
+        if mouse_moved {
             let dx = (mouse.x as f32 - last_mouse_x as f32) * 0.5;
             if dx.abs() > 0.5 {
                 fps_3d_app.handle_mouse_look(dx);

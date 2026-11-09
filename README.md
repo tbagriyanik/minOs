@@ -11,17 +11,17 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-116%2C264%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![GitHub Release](https://img.shields.io/badge/Release-v2.2.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-119%2C427%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.2.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v2.3.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 > 📚 **Resmi Kılavuz ve Dokümantasyon:** Tüm donanım sürücüleri, uygulama kılavuzları, ağ/TLS yapılandırması ve geliştirici belgeleri için **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** sayfasını ziyaret edebilirsiniz.
 
 ---
 
-## Yenilikler (v2.2.0)
+## Yenilikler (v2.3.0)
 
 - **🔊 WAV Dosyasını Doğrudan Oynatma:** Dosya Yöneticisi'nde `.wav` dosyasına çift tıklamak, seçilen dosyayı Müzik Çalar'da oynatır.
 - **🖼️ Resmi Masaüstüne Döşe:** Resim Gösterici, PNG/JPEG/GIF/BMP görüntüleri masaüstüne döşeli arka plan yapabilir.
@@ -92,6 +92,7 @@
 - **Varsayılan Donanım Sürücü Profili:** Normal Live ve Installed açılışlarında tam sürücü profili kullanılır; sürücüsüz açılış için Limine menüsündeki Safe Mode seçeneği korunur.
 - **Daha Okunabilir Boot Günlüğü:** Metin konsolu her tamamlanan satırı ekrana aktarır ve zaman tabanı hazır olduktan sonra sonraki satıra geçmeden önce 45 ms bekler. Böylece açılış tanılama mesajları daha rahat izlenir; zaman tabanı hazır olmadan yazılan erken mesajlar geciktirilmez.
 - **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history`, `minos://demo` ve `minos://demo-img` / `minos://demo-video` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
+- **🐾 Uygulama Kapanma Düzeltmesi (Watchdog):** 5 saniyelik işlemssizlik sonrası uygulamaların otomatik olarak kapatılmasını engelleyen watchdog timer düzeltildi. Yeni açılan pencereler izleme listesine eklenmeden önce render edilir; açık pencereler her karede canlı olarak işaretlenir. Böylece kullanıcı etkileşimde bulunmasa bile uygulamalar artık kapanmıyor.
 - **🎮 FPS Performans Testi Oyunu:** Yeni `FPS Oyunu` uygulaması (app ID 15) eklendi. Raycasting tabanlı 3D motoru, fare ile bakış, WASD hareket, uzaklasma gürültüsüyle gölgelendirme, düşman hedefleri, radar ve PC Speaker/HDA ses efektleri içerir. Başlat Menüsü → Medya → FPS Oyunu veya Komut İstemi → `fps` / `oyun` ile açılır.
 - **🛡️ FPS Oyunu Kilitlenme Düzeltmesi:** Can bittiğinde oyun artık kilitlenmiyor; oyuncu yeniden doğurularak oyuna devam eder. Negatif ekran koordinatları ve yön vektörü kayan nokta sapması nedeniyle oluşan donmalar giderildi.
 - **⚙️ Kontrol Paneli Düzenleme:** Ses testi düğmesi kaldırıldı; ağ testi düğmesi yalnızca Ağ sekmesinde görünür; performans testi ve diğer düğmelerin üst üste gelmesi engellendi.

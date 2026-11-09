@@ -9,12 +9,12 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.
 
-- [v2.2.0](#yenilikler-v210) — güncel sürüm
+- [v2.3.0](#yenilikler-v230) — güncel sürüm
 - [v1.6.0 ve öncesi](releases.md)
 
 ---
 
-## Yenilikler (v2.2.0)
+## Yenilikler (v2.3.0)
 
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.
@@ -75,6 +75,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - **Varsayılan Donanım Sürücü Profili:** Normal Live ve Installed açılışlarında tam sürücü profili kullanılır; sürücüsüz açılış için Limine menüsündeki Safe Mode seçeneği korunur.
 - **Daha Okunabilir Boot Günlüğü:** Metin konsolu her tamamlanan satırı ekrana aktarır ve zaman tabanı hazır olduktan sonra sonraki satıra geçmeden önce 45 ms bekler. Böylece açılış tanılama mesajları daha rahat izlenir; zaman tabanı hazır olmadan yazılan erken mesajlar geciktirilmez.
 - **Tarayıcı Sık Kullanılanlar (Yer İmleri Çubuğu):** Web tarayıcısına interaktif yer imleri çubuğu eklendi; saf HTTP test sitesi, `minos://cats`, `minos://net`, `minos://history`, `minos://demo` ve `minos://demo-img` / `minos://demo-video` hızlı erişim butonları ile `minos://bookmarks` sayfası entegre edildi.
+- **🐾 Uygulama Kapanma Düzeltmesi (Watchdog):** 5 saniyelik işlemssizlik sonrası uygulamaların otomatik olarak kapatılmasını engelleyen watchdog timer düzeltildi. Yeni açılan pencereler izleme listesine eklenmeden önce render edilir; açık pencereler her karede canlı olarak işaretlenir. Böylece kullanıcı etkileşimde bulunmasa bile uygulamalar artık kapanmıyor.
 
 ### ⚠️ Bilinen Sınırlar
 

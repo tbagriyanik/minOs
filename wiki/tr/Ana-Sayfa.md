@@ -1,6 +1,6 @@
 # minOs Wiki – Hoş Geldiniz
 
-minOs (Sarman Edition) v2.2.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
+minOs (Sarman Edition) v2.3.0, Rust ile geliştirilmiş, `no_std` ve `no_main` kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS ortamlarında çalışır.
 
 > 📄 **Proje:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Dil:** [English](../en/)

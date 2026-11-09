@@ -4,7 +4,7 @@ minOs sürüm notları ve gelecek planları.
 
 ---
 
-## v2.2.0 (Güncel)
+## v2.3.0 (Güncel)
 
 ### Yenilikler
 

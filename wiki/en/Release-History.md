@@ -4,7 +4,7 @@ minOs release notes and future plans.
 
 ---
 
-## v2.2.0 (Current)
+## v2.3.0 (Current)
 
 ### What's New
 

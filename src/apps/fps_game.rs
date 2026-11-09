@@ -495,6 +495,10 @@ impl FpsGameApp {
                         self.ammo = self.ammo.saturating_add(20);
                         self.score += 25;
                     }
+                    3 => {
+                        // Extra life or score pickup
+                        self.score += 100;
+                    }
                     _ => {}
                 }
             }
@@ -585,6 +589,10 @@ impl FpsGameApp {
             SoundKind::Door => {
                 audio_dev.set_pc_speaker_tone(620);
                 self.sound_pending = Some((620, 90));
+            }
+            SoundKind::Pickup => {
+                audio_dev.set_pc_speaker_tone(1000);
+                self.sound_pending = Some((1000, 30));
             }
         }
     }
@@ -894,7 +902,11 @@ impl FpsGameApp {
             let dy = e.y - self.pos_y;
             let dist_sq = dx * dx + dy * dy;
             // fast_sqrt guard: 0 divisyonunu ve z_buffer karşılaştırması.
-            let dist = if dist_sq > 0.0 { fast_sqrt(dist_sq) } else { 0.0 };
+            let dist = if dist_sq > 0.0 {
+                fast_sqrt(dist_sq)
+            } else {
+                0.0
+            };
             if dist > MAX_DEPTH || dist < 0.5 {
                 continue;
             }
@@ -1062,7 +1074,7 @@ impl FpsGameApp {
             let px = offset_x + (p.x as usize).min(MAP_W - 1) * cell + cell / 3;
             let py = offset_y + (p.y as usize).min(MAP_H - 1) * cell + cell / 3;
             let size = (cell / 3).max(2);
-            let color = if p.kind == 1 { 0x40FF40 } else { 0xFFFF40 };
+            let color = if p.kind == 1 { 0x40FF40 } else if p.kind == 2 { 0xFFFF40 } else { 0xFFD700 }; /* kind 1: health(green), kind 2: ammo(yellow), kind 3: score(gold) */
             fb.draw_rect(px, py, size, size, color);
         }
 
@@ -1476,8 +1488,18 @@ impl FpsGameApp {
             }
             'e' | 'E' => {
                 // Kapı aç/kapat.
-                if self.toggle_door() {
+                // Sadece kapı tamamen kapalıysa (state 0) açılma sesi çal.
+                // Açıkken basma kapatma işlemi yapar ama ses tekrar çalmaz.
+                let was_closed = self
+                    .doors
+                    .iter()
+                    .take(self.door_count)
+                    .all(|d| d.state == 0);
+                if self.toggle_door() && was_closed {
                     self.play_sound(audio_dev, SoundKind::Door);
+                } else if self.toggle_door() {
+                    // Kapı zaten açıksa veya yarım animasyondaysa,
+                    // sesi çalmama (tek basımda bir ses yeterli).
                 }
                 true
             }
@@ -1660,4 +1682,5 @@ pub enum SoundKind {
     Hit,
     Step,
     Door,
+    Pickup,
 }

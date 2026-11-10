@@ -67,7 +67,15 @@ $pkgDir = Join-Path $repoRoot "target\host-tests\deps"
 New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
 function Get-RegistrySrc {
     param([string]$Name, [string]$Version)
-    $srcRoot = Join-Path $env:USERPROFILE ".cargo\registry\src"
+    # Cargo registry konumu platforma gore degisir:
+    # Windows: %USERPROFILE%\.cargo\registry\src
+    # Linux/macOS: $HOME/.cargo/registry/src
+    $cargoHome = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
+    if (-not $cargoHome) {
+        Write-Host "[HATA] Cargo ev dizini (USERPROFILE/HOME) tanimli degil." -ForegroundColor Red
+        return $null
+    }
+    $srcRoot = Join-Path $cargoHome ".cargo/registry/src"
     return Get-ChildItem -LiteralPath $srcRoot -Directory -ErrorAction SilentlyContinue |
         ForEach-Object { Join-Path $_.FullName "$Name-$Version" } |
         Where-Object { Test-Path -LiteralPath (Join-Path $_ "Cargo.toml") } |

@@ -38,6 +38,18 @@ if (-not (Test-Path $harness)) {
 # `[build] target` ve `-Z build-std` ayarlari boylece uygulanmaz.
 $hostTriple = (& rustc --version --verbose | Select-String '^host: ').Line -replace '^host: ', ''
 
+# Cargo bagimliliklarini (miniz_oxide, adler2 ve digerleri) varsayilan
+# cargo registry onbelleklerine indir. Get-RegistrySrc bu onbellekten
+# kaynak dizinini bulur. Bu adim CARGO_HOME izolasyonundan once calismali,
+# aksi halde bos bir cargo-home'da arama yapilir ve kaynak bulunamaz.
+Write-Host "[1/3] Cargo bagimliliklari indiriliyor..." -ForegroundColor Yellow
+$fetchOutput = & cargo fetch 2>&1
+if ($LASTEXITCODE -ne 0) {
+    $fetchOutput | ForEach-Object { Write-Host $_ }
+    Write-Host "[HATA] Cargo bagimliliklari indirilemedi." -ForegroundColor Red
+    exit 1
+}
+
 # rustc also reads Cargo configuration from the environment. In particular,
 # CARGO_ENCODED_RUSTFLAGS can inject the kernel linker script and target flags
 # into this host build. Use an isolated Cargo home and clear Cargo's per-process

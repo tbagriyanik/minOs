@@ -8,7 +8,7 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-244%20registered-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-261-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
@@ -252,7 +252,7 @@ minOs VFS katmanı farklı dosya sistemlerini destekler; ancak her dosya sistemi
 
 ### ⚡ Çekirdek Mimarisi ve Donanım Durumu (UEFI, USB-HID, SMP)
 
-- **Bağımlılık Hijyeni (Sıfır "ölü" Kütüphane):** Çekirdek yalnızca gerçekten çağırdığı 8 küçük crate'e bağımlıdır: `linked_list_allocator` (heap), `p384` (P-384 imza), `bitflags`, `heapless`, `zerocopy`, `crc32fast`, `raw-cpuid` ve `log` — hepsi `src/main.rs`, `src/kernel_primitives.rs`, `src/kernel_diag.rs`, `src/drivers/crypto/x509.rs` üzerinden kullanılıyor. `webpki-roots`, `rand_hc`, `rand_core`, `smoltcp`, `elf`, `embedded-io`, `postcard`, `serde` ve `acpi` **bağımlılıktan çıkarıldı**: kök CA deposu `drivers/crypto/roots/` içinde yerel, RNG `src/random.rs` (xorshift64*), IPC mesajları `src/kernel_formats.rs` (5 baytlık düzen), ağ yığını `drivers/netstack.rs` sıfır bağımlılıkla çalışır. `Cargo.lock` yalnızca erişilebilir paketleri taşır (doğrulama: `cargo metadata` bağımlılık grafiği + lock taraması).
+- **Bağımlılık Hijyeni (Sıfır "ölü" Kütüphane):** Çekirdek yalnızca gerçekten çağırdığı 9 küçük crate'e bağımlıdır: `linked_list_allocator` (heap), `p384` (P-384 imza), `bitflags`, `heapless`, `zerocopy`, `crc32fast`, `raw-cpuid`, `log` ve `miniz_oxide` (gzip/deflate çözümleme) — hepsi `src/main.rs`, `src/kernel_primitives.rs`, `src/kernel_diag.rs`, `src/drivers/crypto/x509.rs`, `src/drivers/compression.rs` üzerinden kullanılıyor. `webpki-roots`, `rand_hc`, `rand_core`, `smoltcp`, `elf`, `embedded-io`, `postcard`, `serde` ve `acpi` **bağımlılıktan çıkarıldı**: kök CA deposu `drivers/crypto/roots/` içinde yerel, RNG `src/random.rs` (xorshift64*), IPC mesajları `src/kernel_formats.rs` (5 baytlık düzen), ağ yığını `drivers/netstack.rs` sıfır bağımlılıkla çalışır. `Cargo.lock` yalnızca erişilebilir paketleri taşır (doğrulama: `cargo metadata` bağımlılık grafiği + lock taraması).
 
 - **UEFI & BIOS Dual-Boot:** Limine v8 önyükleyici sayesinde sistem hem modern x86_64 UEFI sistemlerde hem de geleneksel BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
 - **Yerel xHCI USB HID & PS/2 Fallback:** xHCI (USB 3.x) denetleyicileri üzerinden yerel USB klavye ve fare sürücüsü (`src/drivers/usb_hid.rs`) aktiftir. EHCI/UHCI/OHCI denetleyicileri için başlatma/handoff ve transfer katmanı mevcuttur (bkz. `src/drivers/usb.rs`) ancak bu denetleyicilerde HID rapor ayrıştırma henüz yoktur; USB aygıtı bulunamadığında veya BIOS CSM/Legacy USB kapalı olduğunda sistem kararlılık için otomatik olarak PS/2 fallback moduna geçer ve önyükleme konsoluna bilgilendirme günlüğü düşer. QEMU'da PS/2'yi tamamen kapatıp girdiyi yalnızca USB klavye/fare üzerinden test etmek için `.\run.ps1 -NoPs2`; QMP ile otomatik klavye/fare enjeksiyonu dahil uçtan uca doğrulama için `.\test_qemu.ps1 -NoPs2` kullanılabilir.
@@ -290,6 +290,7 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
 > 💡 *Not: minOs farklı ağ kartlarıyla da çalışır; `-device e1000,netdev=n0` yerine `-device rtl8139,netdev=n0` (PCI RTL8139) veya `-device ne2k_isa,netdev=n0` (ISA NE2000, ISA PnP ile bulunur) kullanabilirsiniz. Sisteme özgü farkı yalnızca sürücü seçimi oluşturur; üst katman (DHCP/ARP/DNS/TCP/UDP/TLS) aynıdır.*
 > 💡 *Not: VirtIO-GPU (`-vga virtio`), QEMU/KVM ortamında doğrudan donanım 2D hızlandırma ve scanout flush mekanizması sunar. Standart VGA için `-vga std -global VGA.vgamem_mb=64` kullanılabilir.*
 > 💡 *Not: QEMU, VirtualBox ve VMware sanal makinelerinde gerçek zamanlı saat senkronizasyonu için donanım RTC saati UTC olarak çalışır ve minOs bölge/saat dilimi farkını (`settings.cfg: region`, varsayılan UTC+3) uygulayarak ana makine saati ile tam senkronize çalışır.*
+> 💡 *Not: Fare takılmasını önlemek için yukarıdaki QEMU örneklerine `-device qemu-xhci,id=xhci -device usb-kbd,bus=xhci.0 -device usb-tablet,bus=xhci.0` ekleyin. USB Tablet mutlak koordinat raporlar ve VMware'deki kadar akıcı fare deneyimi sağlar. `run.ps1` ve `test_qemu.ps1` bu ayarları zaten içerir.*
 
 #### Donanım Profilleri (Çok Düşük / Yüksek Donanım)
 
@@ -313,6 +314,39 @@ qemu-system-x86_64.exe -m 512M -smp 2 `
 > ℹ️ *Not: SMP etkin profilde `-CpuCount` ile verilen vCPU'lar Limine üzerinden başlatılır ve scheduler tarafından kullanılır. AP başlatılamayan firmware/hipervizörlerde güvenli BSP/tek CPU fallback'i uygulanır.*
 
 ---
+
+### ⚡ Performans Optimizasyonları
+
+| Değişiklik | Dosya | Etki |
+|---|---|---|
+| `strip = true` | `Cargo.toml` `[profile.release]` | Debug sembolleri çıkarılır; ISO boyutu küçülür |
+| `--gc-sections` | `.cargo/config.toml` `rustflags` | Kullanılmayan kod bölümleri bağlayıcı seviyesinde çıkarılır |
+| `-Wl,-z,now` | `.cargo/config.toml` `rustflags` | Lazy binding kapatılır; çekirdek başlatma hızlanır |
+| `opt-level = "z"` + `lto = true` + `codegen-units = 1` | `Cargo.toml` | Boyut ve çapraz-krate optimizasyonu |
+| Boşta bekleme 2.5 ms → 20 ms | `src/main.rs` | Boşta CPU kullanımı yaklaşık 8× azalır |
+| Aktif bekleme ~100 µs | `src/main.rs` | Fare hareketi gibi düşük yoğunluklu etkinliklerde döngü binlerce kez dönmez |
+
+#### QEMU'da Akıcı Fare ve Daha Yüksek Performans
+
+QEMU'da PS/2 fare (göreceli delta) yerine **USB Tablet** (mutlak koordinat) kullanılması önerilir. Bu sayede fare imleci VMware'deki kadar akıcı olur:
+
+```powershell
+qemu-system-x86_64.exe -m 512M -smp 2 `
+  -cdrom .\minos.iso -boot d `
+  -vga virtio `
+  -accel tcg,thread=multi `
+  -device qemu-xhci,id=xhci `
+  -device usb-kbd,bus=xhci.0 `
+  -device usb-tablet,bus=xhci.0
+```
+
+`run.ps1` ve `test_qemu.ps1` zaten `usb-tablet` ve `-accel tcg,thread=multi` bayraklarını içerir.
+
+#### CPU Kullanımı Düzeltmesi
+
+Önceki sürümlerde boşta iken ana döngü sürekli spin-loop yapıyordu (%90+ CPU). `src/main.rs`'teki bekleme süresi 2.5 ms'den 20 ms'ye çıkarıldı ve aktif durumlarda kısa bir spin beklemesi (~100 µs) eklendi. Bu sayede boşta CPU kullanımı tek rakamlara düştü.
+
+> ⚠️ **Not:** `-cpu host` QEMU bayrağı Windows'ta KVM/HVF gerektirdiğinden çıkarıldı. `-vga virtio` ve `-accel tcg,thread=multi` yeterli performans sağlar.
 
 ### 🚀 Hızlı Başlangıç
 

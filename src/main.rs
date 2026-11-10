@@ -9643,15 +9643,17 @@ pub extern "C" fn _start() -> ! {
             // Boşta bekleme: CPU'yu spin ederek tüketme. HLT kullanılmaz çünkü
             // PIC devre dışı bırakılmış ve periyodik timer kesmesi yapılandırılmamış;
             // VMware gibi hipervizörlerde HLT sonsuza kadar bekleyip sistemi donabilir.
+            // Bekleme süresi 2.5 ms → 20 ms olarak çıkarıldı; boşta CPU kullanımı
+            // yaklaşık 8 kat azalır.
 
             let wait_start = read_cpu_cycles();
 
             let browser_waiting = browser_app.take_net_idle_hint();
 
-            let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_500);
+            let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(20_000);
 
             let busy_wait_cycles = if browser_waiting {
-                unsafe { TSC_CYCLES_PER_US }.saturating_mul(250)
+                unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_000)
             } else {
                 idle_wait_cycles
             };
@@ -9674,9 +9676,14 @@ pub extern "C" fn _start() -> ! {
             cpu_sample_active_cycles =
                 cpu_sample_active_cycles.saturating_add(elapsed.saturating_sub(idle_elapsed));
         } else {
-            // Aktif olmayan ama kısa süre sonra tekrar değerlendirilecek
-            // durumlarda bile pipeline'ı döndürmek yerine spin ile bekle.
-            core::hint::spin_loop();
+            // Aktif durumda sürekli %100 CPU'yu önlemek için kısa bir
+            // spin beklemesi (~100 µs) eklendi. Fare hareketi gibi düşük
+            // yoğunluklu etkinliklerde döngü saniyede binlerce kez dönmez.
+            let active_wait_start = read_cpu_cycles();
+            let active_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(100);
+            while read_cpu_cycles().wrapping_sub(active_wait_start) < active_wait_cycles {
+                core::hint::spin_loop();
+            }
 
             let elapsed = read_cpu_cycles().wrapping_sub(loop_start_cycles);
 

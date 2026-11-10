@@ -139,7 +139,8 @@ $qemuArgs = @(
     "-vga", $Vga,
     "-rtc", "base=utc,clock=host,driftfix=slew",
     "-serial", "stdio",
-    "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait"
+    "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait",
+    "-accel", "tcg,thread=multi"
 )
 
 if (-not $Minimal) {
@@ -165,7 +166,7 @@ if ($UsbHid) {
     $qemuArgs += @(
         "-device", "qemu-xhci,id=xhci",
         "-device", "usb-kbd,bus=xhci.0",
-        "-device", "usb-mouse,bus=xhci.0"
+        "-device", "usb-tablet,bus=xhci.0"
     )
 }
 
@@ -400,7 +401,7 @@ if ($UsbHid) {
         @{
             Name = "USB HID Numaralandirma (xHCI)";
             Pattern = "\[USB-HID\] Haz.*: [0-9]+ klavye, [0-9]+ fare";
-            Description = "qemu-xhci uzerinde usb-kbd ve usb-mouse numaralandirildi"
+            Description = "qemu-xhci uzerinde usb-kbd ve usb-tablet numaralandirildi"
         },
         @{
             Name = "USB HID Etkin Girdi Yolu";

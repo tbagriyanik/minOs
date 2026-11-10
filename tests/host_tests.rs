@@ -14,8 +14,14 @@
 #[macro_use]
 extern crate alloc;
 
+
+
 #[path = "../src/drivers/crypto/mod.rs"]
 pub mod crypto;
+
+// HTTP `Content-Encoding` çözücüsü (miniz_oxide tabanlı).
+#[path = "../src/drivers/compression.rs"]
+pub mod compression;
 
 #[path = "../src/apps/js.rs"]
 pub mod js;
@@ -366,3 +372,7 @@ mod host_fs_tests;
 #[cfg(test)]
 #[path = "host_driver_tests.rs"]
 mod host_driver_tests;
+
+#[cfg(test)]
+#[path = "host_compression_tests.rs"]
+mod host_compression_tests;

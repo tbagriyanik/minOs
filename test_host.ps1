@@ -32,7 +32,7 @@ if (-not (Test-Path $harness)) {
     exit 1
 }
 
-Write-Host "[1/2] Host testleri derleniyor..." -ForegroundColor Yellow
+
 
 # --target explicit olarak host'a sabitlenir; .cargo/config.toml icindeki
 # `[build] target` ve `-Z build-std` ayarlari boylece uygulanmaz.
@@ -55,11 +55,78 @@ $env:CARGO_TARGET_DIR = $null
 $env:CARGO_ENCODED_RUSTFLAGS = $null
 $env:CARGO_BUILD_TARGET = $null
 
+Write-Host "[2/3] Host testleri derleniyor..." -ForegroundColor Yellow
+
+# `--test` modunda rustc, `--extern` verilen crate'leri arar. `miniz_oxide` gibi
+# Cargo bagimliliklari bu betikte Cargo tarafindan derlenmez (Cargo, depo kokundeki
+# `.cargo/config.toml` icindeki `-Z build-std`'yi miras alip `core`'u yeniden
+# derliyor ve E0152 duplicate lang item hatasi veriyor). Bunun yerine bagimlilik
+# crate'leri (adler2, miniz_oxide) kaynaktan dogrudan rustc ile derlenir; boylece
+# sysroot `core`/`alloc` kullanilir ve derleme tamamen deterministiktir.
+$pkgDir = Join-Path $repoRoot "target\host-tests\deps"
+New-Item -ItemType Directory -Force -Path $pkgDir | Out-Null
+function Get-RegistrySrc {
+    param([string]$Name, [string]$Version)
+    $srcRoot = Join-Path $env:USERPROFILE ".cargo\registry\src"
+    return Get-ChildItem -LiteralPath $srcRoot -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName "$Name-$Version" } |
+        Where-Object { Test-Path -LiteralPath (Join-Path $_ "Cargo.toml") } |
+        Select-Object -First 1
+}
+# Surumler `Cargo.lock`'tan okunur; boylece bagimlilik guncellendiginde betik
+# guncelleme gerektirmez.
+function Get-LockedVersion {
+    param([string]$Name)
+    $lock = Get-Content -LiteralPath (Join-Path $repoRoot "Cargo.lock") -Raw
+    $m = [regex]::Match($lock, '\[\[package\]\]\s*name = "' + [regex]::Escape($Name) + '"\s*version = "([^"]+)"')
+    if (-not $m.Success) { throw "Cargo.lock icinde $Name bulunamadi" }
+    return $m.Groups[1].Value
+}
+$minizSrc = Get-RegistrySrc -Name "miniz_oxide" -Version (Get-LockedVersion -Name "miniz_oxide")
+$adlerSrc = Get-RegistrySrc -Name "adler2" -Version (Get-LockedVersion -Name "adler2")
+if (-not $minizSrc -or -not $adlerSrc) {
+    Write-Host "[HATA] miniz_oxide/adler2 kaynak dizini bulunamadi." -ForegroundColor Red
+    exit 1
+}
+
+function Build-HostCrate {
+    param([string]$Manifest, [string]$CrateName, [string[]]$ExtraArgs, [string]$Cfg)
+    $rlib = Join-Path $pkgDir "lib$CrateName.rlib"
+    $args = @("+nightly", "--edition", "2021", "--crate-type", "rlib", "--crate-name", $CrateName,
+              $Manifest, "--target", $hostTriple, "-o", $rlib) + $ExtraArgs
+    if ($Cfg) {
+        # PowerShell native argument passing can strip the quotes from
+        # `feature="with-alloc"` (or leave backslashes behind). Rustc response
+        # files preserve the cfg expression exactly.
+        $cfgFile = Join-Path $pkgDir "$CrateName.cfg.rsp"
+        Set-Content -LiteralPath $cfgFile -Value "--cfg`n$Cfg" -Encoding Ascii
+        $args += "@$cfgFile"
+    }
+    $hostOut = & rustc @args 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $hostOut | ForEach-Object { Write-Host $_ }
+        throw "$CrateName derlenemedi"
+    }
+    # Adi sabit bir yola kopyalamak yetmiyor: metadata adi sabit oldugu icin
+    # `--extern` farkli metadata tasiyan rlib'i reddediyor. `--extern`'e verilen
+    # degeri adin = adiyla degil, tam dosya yolu ile gecirdigimiz icin sorun yok.
+    return $rlib
+}
+
+Build-HostCrate -Manifest (Join-Path $adlerSrc "src\lib.rs") -CrateName "adler2" -ExtraArgs @()
+$minizRlib = Build-HostCrate -Manifest (Join-Path $minizSrc "src\lib.rs") -CrateName "miniz_oxide" `
+    -ExtraArgs @("-L", "dependency=$pkgDir", "--extern", "adler2=$(Join-Path $pkgDir 'libadler2.rlib')") `
+    -Cfg 'feature="with-alloc"'
+Write-Host "        miniz_oxide -> $minizRlib"
+
 $rustcArgs = @(
     "+nightly", "--edition", "2021", "--test", $harness,
     "--target", $hostTriple,
     "-o", $binary,
     "--extern", "alloc",
+    "--extern", "miniz_oxide=$minizRlib",
+# miniz_oxide'nin kendi bagimliligi (transitif `-L` doyaylastirilamaz).
+    "-L", "dependency=$pkgDir",
     "--cfg", "host_fs_tests"
 )
 $output = & rustc @rustcArgs 2>&1
@@ -80,7 +147,7 @@ if ($NoRun) {
     exit 0
 }
 
-Write-Host "[2/2] Testler calistiriliyor..." -ForegroundColor Yellow
+Write-Host "[3/3] Testler calistiriliyor..." -ForegroundColor Yellow
 & $binary --test-threads=1
 $code = $LASTEXITCODE
 

@@ -26,7 +26,11 @@ linked_list_allocator = { version = "0.10", default-features = false, features =
 #   acpi            — ACPI tabloları Limine RSDP'sinden yerel ayrıştırılıyor.
 # Kullanımda kalanlar: p384 (P-384 imza), bitflags, heapless, zerocopy,
 # crc32fast, raw-cpuid, log, linked_list_allocator, spin, x86_64.
+#
+# miniz_oxide — HTTP `Content-Encoding: gzip/deflate` için tam RFC 1951/1952
+# çözücüsü (dinamik Huffman dahil). `no_std` + `alloc`, ~30 KB.
 p384 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 bitflags = { version = "2.10.0", default-features = false }
 heapless = { version = "0.9.3", default-features = false }
 zerocopy = { version = "0.8.27", default-features = false, features = ["derive"] }
@@ -37,6 +41,12 @@ log = { version = "0.4.29", default-features = false }
 [build-dependencies]
 fontdue = "0.9.4"
 
+# Host birim testleri (`test_host.ps1`) çekirdek modüllerini HOST hedefi için
+# derler; `cargo test` ile aynı özellik kümesini görsün diye `miniz_oxide`
+# burada da açılır (bkz. tests/host_tests.rs).
+[target.'cfg(not(target_os = "none"))'.dependencies]
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+
 [profile.dev]
 panic = "abort"
 
@@ -46,3 +56,6 @@ lto = true
 opt-level = "z"
 codegen-units = 1
 overflow-checks = false
+strip = true
+
+

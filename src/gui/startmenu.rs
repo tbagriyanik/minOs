@@ -315,7 +315,8 @@ impl MinGuiCompositor {
             return;
         }
         let mut at = index.min(self.start_search_len);
-        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'_' || b == b'.';
+        let is_word =
+            |b: u8| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'_' || b == b'.';
         if at == self.start_search_len || !is_word(self.start_search[at]) {
             if at > 0 && is_word(self.start_search[at - 1]) {
                 at -= 1;
@@ -368,11 +369,9 @@ impl MinGuiCompositor {
         let len = crate::gui::clipboard::copy_chars(&mut chars);
         self.delete_start_search_selection();
         self.start_search_focused = true;
-        for ch in chars[..len]
-            .iter()
-            .copied()
-            .filter(|ch| ch.is_ascii_alphanumeric() || *ch == ' ' || *ch == '-' || *ch == '_' || *ch == '.')
-        {
+        for ch in chars[..len].iter().copied().filter(|ch| {
+            ch.is_ascii_alphanumeric() || *ch == ' ' || *ch == '-' || *ch == '_' || *ch == '.'
+        }) {
             self.push_start_search(ch);
         }
     }

@@ -17,7 +17,6 @@
 /// - Thread-safe via [`SpinMutex`]
 /// - Allocation tracking for debugging
 /// - Configurable heap size at init
-
 use crate::arch::x86_64::sync::SpinMutex;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ptr::null_mut;

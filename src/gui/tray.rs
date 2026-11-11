@@ -19,27 +19,23 @@ impl MinGuiCompositor {
         let by = tb_y + 5;
         // Tray düğmeleri aktif font ölçeğine göre büyür.
         let h = sp(26).min(taskbar_h().saturating_sub(8));
-        let pad = 8;
-        // Genişlikler, çizilen ikon + metnin gerçek piksel genişliğine göre
-        // seçilir; hiçbir tepsi öğesi metni yanındaki öğeye taşmaz veya
-        // yapışmaz. (Metin hücresi artık 10px olduğu için ölçüler buna göre.)
-        //   saat:  "HH:MM:SS" = 8 hücre = 80px + sol boşluk -> 92px
-        //   minimize_all: ince mavi çizgi -> 12px
-        //   ses:   ikon ~26px -> 46px
-        //   ağ:    ikon 24px + "eth0" 40px -> 72px
-        //   klavye:ikon 30px + "TR"/"EN" 20px -> 54px
+        // "Masaüstünü Göster" şeridi en sağda (Windows benzeri ince dikey alan).
+        let show_desktop_w = sp(10);
+        let show_desktop_x = width.saturating_sub(show_desktop_w);
+
+        // Genişlikler, çizilen ikon + metnin gerçek piksel genişliğine göre seçilir.
+        //   saat:  "HH:MM:SS" = 8 hücre -> 92px
+        //   ses:   ikon ~26px -> 44px
+        //   ağ:    ikon 24px + "eth0" 40px -> 68px
+        //   klavye:ikon 30px + "TR"/"EN" 20px -> 50px
         let clock_w = sp(92);
-        let minimize_all_w = sp(12);
         let vol_w = sp(44);
         let net_w = sp(68);
         let kbd_w = sp(50);
         let gap = sp(8);
 
-        let clock_x = width.saturating_sub(pad + clock_w);
+        let clock_x = show_desktop_x.saturating_sub(gap + clock_w);
         let mut curr_x = clock_x;
-
-        // "Show Desktop" düğmesi (ince mavi dikey çizgi - saat sağına taşındı)
-        let minimize_all_rect = (clock_x + clock_w + gap, by, minimize_all_w, h);
 
         let volume_rect = if audio_available {
             let x = curr_x.saturating_sub(gap + vol_w);
@@ -59,15 +55,17 @@ impl MinGuiCompositor {
 
         let kbd_x = curr_x.saturating_sub(gap + kbd_w);
 
+        let desktop_rect = (show_desktop_x, tb_y, show_desktop_w, taskbar_h());
+
         TrayLayout {
             tb_y,
             start: (6, by, sp(112), h),
             clock: (clock_x, by, clock_w, h),
-            minimize_all: minimize_all_rect,
+            minimize_all: desktop_rect,
             volume: volume_rect,
             network: network_rect,
             kbd: (kbd_x, by, kbd_w, h),
-            desktop: (0, 0, 0, 0),
+            desktop: desktop_rect,
         }
     }
     // -----------------------------------------------------------------------

@@ -3333,8 +3333,8 @@ pub extern "C" fn _start() -> ! {
                     }
 
                     consumed = true;
-                } else if gui::in_rect(mx, my, l.minimize_all) {
-                    // "Show Desktop" düğmesi (ince mavi çizgi): tüm pencereleri küçült/geri getir
+                } else if gui::in_rect(mx, my, l.desktop) {
+                    // "Masaüstünü Göster" şeridi: tüm pencereleri küçült/geri getir
                     let all_minimized = compositor
                         .windows
                         .iter()

@@ -400,59 +400,25 @@ impl MinGuiCompositor {
             );
         }
 
-        // 4. "Masaüstü Göster" Düğmesi (l.desktop)
-        let desktop_hover = in_rect(mx, my, l.desktop);
-        let all_minimized = self
-            .windows
-            .iter()
-            .flatten()
-            .all(|w| !w.is_open || w.is_minimized);
-        let desktop_bg = if all_minimized {
-            Color::ACCENT_BLUE
-        } else if desktop_hover {
-            Self::shade(Color::TITLE_BAR, 16)
-        } else {
-            Color::TASKBAR_BG
-        };
-        fb.draw_rounded_rect(
-            l.desktop.0,
-            l.desktop.1,
-            l.desktop.2,
-            l.desktop.3,
-            5,
-            desktop_bg,
-        );
-        fb.draw_rounded_rect_outline(
-            l.desktop.0,
-            l.desktop.1,
-            l.desktop.2,
-            l.desktop.3,
-            5,
-            Color::BORDER,
-        );
-        // Masaüstü ikonu: basit bir pencere çizimi
-        let icon_w = sp(14);
-        let icon_h = sp(14);
-        let icon_x = l.desktop.0 + (l.desktop.2.saturating_sub(icon_w)) / 2;
-        let icon_y = l.desktop.1 + (l.desktop.3.saturating_sub(icon_h)) / 2;
-        fb.draw_rect_outline(
-            icon_x,
-            icon_y,
-            icon_w,
-            icon_h,
-            if desktop_hover {
-                Color::TEXT_MAIN
+        // 4. "Masaüstünü Göster" şeridi (en sağda ince alan)
+        if l.desktop.2 > 0 {
+            let desktop_hover = in_rect(mx, my, l.desktop);
+            let all_minimized = self
+                .windows
+                .iter()
+                .flatten()
+                .all(|w| !w.is_open || w.is_minimized);
+            let line_color = if all_minimized || desktop_hover {
+                Color::ACCENT_BLUE
             } else {
-                Color::TEXT_MUTED
-            },
-        );
-        fb.draw_rect(
-            icon_x + 2,
-            icon_y + 2,
-            icon_w.saturating_sub(4),
-            icon_h.saturating_sub(4),
-            Color::TASKBAR_BG,
-        );
+                Self::shade(Color::BORDER, 12)
+            };
+            if desktop_hover || all_minimized {
+                fb.draw_rect(l.desktop.0, tb_y, l.desktop.2, taskbar_h(), Self::shade(Color::TITLE_BAR, 10));
+            }
+            // Ayrıştırıcı çizgi
+            fb.draw_rect(l.desktop.0, tb_y + sp(6), 1, taskbar_h().saturating_sub(sp(12)), line_color);
+        }
 
         // 5. Saat Düğmesi (l.clock)
         let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;

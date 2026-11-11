@@ -123,7 +123,8 @@ pub fn apply_ocsp(
     now: &super::x509::X509Time,
     issuer_der: &[u8],
 ) -> RevocationResult {
-    let r = check_ocsp(ocsp_der, leaf_serial, now, issuer_der).unwrap_or_else(|_| RevocationResult::unknown());
+    let r = check_ocsp(ocsp_der, leaf_serial, now, issuer_der)
+        .unwrap_or_else(|_| RevocationResult::unknown());
     set_status(RevocationSource::Ocsp, r);
     r
 }

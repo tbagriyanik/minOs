@@ -201,60 +201,71 @@ impl MinGuiCompositor {
     pub(crate) fn draw_cat_icon_at_size(fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
         let mut bitmap = [0u32; 1024];
 
-        // 32x32 kedi ikonu - daha yüksek çözünürlük
-        // Her satır 32 bitlik maskeler (iki u32 ile temsil edilebilir)
-        const CAT_ICON_MAP: [u32; 32] = [
-            0b00000000001100000000000000011000, // Row 0
-            0b00000000111100000000000011110000, // Row 1
-            0b00000011111100000000000011111100, // Row 2
-            0b00000111111100000000000011111110, // Row 3
-            0b00001111111100000000000011111111, // Row 4
-            0b00001111111100000000000011111111, // Row 5
-            0b00011111111100000000000011111111, // Row 6
-            0b00011111111100000000000011111111, // Row 7
-            0b00111111111100000000000011111111, // Row 8
-            0b00111111111100000000000011111111, // Row 9
-            0b00111111111100000000000011111111, // Row 10
-            0b00111111111100000000000011111111, // Row 11
-            0b00111111111100000000000011111111, // Row 12
-            0b00111111111100000000000011111111, // Row 13
-            0b00111111111100000000000011111111, // Row 14
-            0b00111111111100000000000011111111, // Row 15
-            0b00111111111100000000000011111111, // Row 16
-            0b00111111111100000000000011111111, // Row 17
-            0b00111111111100000000000011111111, // Row 18
-            0b00111111111100000000000011111111, // Row 19
-            0b00111111111100000000000011111111, // Row 20
-            0b00111111111100000000000011111111, // Row 21
-            0b00111111111100000000000011111111, // Row 22
-            0b00111111111100000000000011111111, // Row 23
-            0b00111111111100000000000011111111, // Row 24
-            0b00111111111100000000000011111111, // Row 25
-            0b00111111111100000000000011111111, // Row 26
-            0b00111111111100000000000011111111, // Row 27
-            0b00111111111100000000000011111111, // Row 28
-            0b00111111111100000000000011111111, // Row 29
-            0b00111111111100000000000011111111, // Row 30
-            0b00000000000000000000000000000000, // Row 31
+        // 32x32 kedi ikonu - beyaz kedi, pembe kulaklar, siyah gözler ve burun
+        // X = beyaz gövde, E = pembe kulaklar, G = siyah göz, N = siyah burun, C = mavi tasma, boşluk = şeffaf
+        const CAT_PATTERN: [&str; 32] = [
+            "  EEEE                    EEEE  ",
+            "  EEEE                    EEEE  ",
+            "  EEEE                    EEEE  ",
+            "  EEEE                    EEEE  ",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XXXX       XXXXXXXXXX       XXXX",
+            "XXXX       XXXXXXXXXX       XXXX",
+            "XXXX       XXXXXXXXXX       XXXX",
+            "XXXX       XXXXXXXXXX       XXXX",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            "XX          NNNNNNNN          XX",
+            "XX          NNNNNNNN          XX",
+            "XX          NNNNNNNN          XX",
+            "XX          NNNNNNNN          XX",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
+            "  XXXXXX    XXXXXXXX    XXXXXX  ",
+            "  XXXXXX    XXXXXXXX    XXXXXX  ",
+            "  XXXXXX    XXXXXXXX    XXXXXX  ",
+            "  XXXXXX    XXXXXXXX    XXXXXX  ",
+            "XX    XXXXXXXXXXXX    XXXX    XX",
+            "XX    XXXXXXXXXXXX    XXXX    XX",
         ];
 
-        for (row, &mask) in CAT_ICON_MAP.iter().enumerate() {
-            for col in 0..32 {
-                if (mask & (1 << (31 - col))) != 0 {
-                    let pixel_color = if (row >= 8 && row <= 9)
-                        && (col >= 4 || col <= 5 || col >= 26 || col <= 27)
-                    {
-                        Color::ACCENT_BLUE
-                    } else if row >= 16 && row <= 17 && col >= 14 && col <= 17 {
-                        Color::ACCENT_PINK
-                    } else if theme::current() == theme::ThemeId::Daylight {
-                        0xE67E22
-                    } else if row <= 3 {
-                        Color::ACCENT_CAT_EARS
-                    } else {
-                        Color::TEXT_MAIN
-                    };
-                    bitmap[row * 32 + col] = pixel_color;
+        // ASCII pattern'i pixel dizisine dönüştür
+        let body_color = theme::resolve(Color::TEXT_MAIN);
+        for (row_idx, row) in CAT_PATTERN.iter().enumerate() {
+            for (col_idx, ch) in row.chars().enumerate() {
+                let pixel_idx = row_idx * 32 + col_idx;
+                // Bazı ASCII satırları 32 karakterden uzun olabilir; bitmap
+                // ise sabit olarak 32x32'dir. Fazla karakterleri kırp.
+                if pixel_idx >= bitmap.len() {
+                    continue;
+                }
+                if ch == 'X' {
+                    // Ekran görüntüsündeki gibi opak, açık renkli gövde.
+                    bitmap[pixel_idx] = body_color | 0xFF000000;
+                } else if ch == 'G' {
+                    // Siyah gözler (daha yüksek alpha)
+                    bitmap[pixel_idx] = 0x000000 | 0xFF000000; // tam opak
+                } else if ch == 'N' {
+                    // Siyah burun (daha yüksek alpha)
+                    bitmap[pixel_idx] = 0x000000 | 0xFF000000; // tam opak
+                } else if ch == 'C' {
+                    // Mavi tasma
+                    bitmap[pixel_idx] = Color::ACCENT_BLUE | 0xFF000000; // tam opak
+                } else if ch == 'E' {
+                    // Pembe kulaklar (yüksek alpha)
+                    bitmap[pixel_idx] = Color::ACCENT_PINK | 0xFF000000; // tam opak
+                } else {
+                    // Tam şeffaf
+                    bitmap[pixel_idx] = 0;
                 }
             }
         }

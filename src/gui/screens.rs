@@ -220,13 +220,22 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
     let w = 520.min(width.saturating_sub(24)).max(320);
-    let cols = if w >= 420 { 4 } else if w >= 350 { 3 } else { 2 };
+    let cols = if w >= 420 {
+        4
+    } else if w >= 350 {
+        3
+    } else {
+        2
+    };
     let rows = (theme::ThemeId::ALL.len() + cols - 1) / cols;
     let row_gap = 10;
     let card_h = 46;
     let theme_h = rows * card_h + (rows.saturating_sub(1)) * row_gap;
     let reserve_h = 190; // dil, başlık, alt bilgi ve düğme alanı için boşluk.
-    let h = (reserve_h + theme_h).max(310).min(height.saturating_sub(24)).max(260);
+    let h = (reserve_h + theme_h)
+        .max(310)
+        .min(height.saturating_sub(24))
+        .max(260);
     (
         (width.saturating_sub(w)) / 2,
         (height.saturating_sub(h)) / 2,
@@ -250,7 +259,13 @@ pub fn welcome_theme_rect(
     index: usize,
 ) -> (usize, usize, usize, usize) {
     let (x, y, w, h) = welcome_panel(width, height);
-    let cols = if w >= 420 { 4 } else if w >= 350 { 3 } else { 2 };
+    let cols = if w >= 420 {
+        4
+    } else if w >= 350 {
+        3
+    } else {
+        2
+    };
     let gap_x = 10;
     let gap_y = 10;
     let card_h = 46;

@@ -260,7 +260,12 @@ impl TaskManagerApp {
             .saturating_sub(menu_w)
             .max(win_x + 12)
             .min(kill.0.saturating_sub(menu_w + 12).max(win_x + 12));
-        (x, win_y + TM_ACTION_Y + TM_ACTION_H + 4, menu_w, 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H)
+        (
+            x,
+            win_y + TM_ACTION_Y + TM_ACTION_H + 4,
+            menu_w,
+            28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H,
+        )
     }
 
     pub fn launch_item_rect(

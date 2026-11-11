@@ -813,11 +813,11 @@ pub fn check_ocsp(
     issuer_cert_der: &[u8],
 ) -> Result<RevocationResult, CertValidationError> {
     let info = parse_ocsp_response(response_der)?;
-    
+
     // İmza doğrulaması: önce issuer sertifikasıyla dene, başarısızsa
     // delegated yanıtlayıcı sertifikasıyla dene
     info.verify_signature_with_issuer(issuer_cert_der)?;
-    
+
     if let Some(produced) = &info.produced_at {
         if now < produced {
             return Ok(RevocationResult::unknown());
@@ -841,7 +841,7 @@ pub fn check_ocsp_unverified(
     now: &X509Time,
 ) -> Result<RevocationResult, CertValidationError> {
     let info = parse_ocsp_response(response_der)?;
-    
+
     if let Some(produced) = &info.produced_at {
         if now < produced {
             return Ok(RevocationResult::unknown());

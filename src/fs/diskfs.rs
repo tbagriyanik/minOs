@@ -65,7 +65,6 @@ impl DiskEntry {
 
 /// USB (master ATA) aygıtı için önbellek penceresi: her sektör okuması PIO ile
 /// yapıldığı için yalnızca çok küçük bir pencere tutulur.
-
 static mut KIND0: FsKind = FsKind::None;
 static mut KIND1: FsKind = FsKind::None;
 static mut READY: bool = false;

@@ -132,7 +132,7 @@ const B57_HOST_CTRL: u32 = B57_BASE | 0x00; // Host Control (FW boot / sıfırla
 const B57_MAC_HASH0: u32 = B57_BASE | 0x08;
 const B57_MAC_HASH1: u32 = B57_BASE | 0x0C;
 /// Host Status Word: bit 0-15 TX indeksi, bit 16-31 RX indeksi.
-const B57_HOST_STAT: u32 = B57_BASE | 0x0C + 0; // 0x0C ARL bloğunda host status
+const B57_HOST_STAT: u32 = B57_BASE | (0x0C + 0); // 0x0C ARL bloğunda host status
 /// RX descriptor halkası tabanı (alma penceresi, 0xC000 + 0x40).
 const B57_RX_LIST_ADDR: u32 = 0xC000 | 0x40;
 /// TX descriptor halkası tabanı (gönderme penceresi, 0x1000 + 0x40).

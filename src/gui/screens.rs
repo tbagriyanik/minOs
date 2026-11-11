@@ -361,6 +361,9 @@ pub fn render_welcome_screen(
                 theme::ThemeId::Nord => "Nord",
                 theme::ThemeId::TerminalGreen => "Terminal",
                 theme::ThemeId::Sunset => "Sunset",
+                theme::ThemeId::Dracula => "Dracula",
+                theme::ThemeId::Monokai => "Monokai",
+                theme::ThemeId::SolarizedDark => "Solarized",
             }
         } else {
             id.short_name()

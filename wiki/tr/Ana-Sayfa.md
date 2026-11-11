@@ -46,7 +46,7 @@ minOs (Sarman Edition) v2.3.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Ağ:** Intel PRO/1000, RTL8139, AMD PCnet algılama, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net ve VMware VMXNET3.
 - **Depolama:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **Dosya Sistemleri:** FAT32, Ext2, Ext4, exFAT (okuma/yazma/biçimlendirme).
-- **Kripto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.
-- **Wi-Fi (802.11):** 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması ve PCI/USB arayüz tespiti.
+- **Kripto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP (imza doğrulamalı, fail-closed).
+- **Wi-Fi (802.11):** 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması (simüle edilen AP ile), PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok.
 - **EC Fan Profilleri:** `fan_temp.rs` için EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş.
 - **Ekran Ayarları:** PNG duvar kağıdı küçük resimleri önyükleme sırasında önceden çözülür; uzun işlemlerde kum saati imleci gösterilir.

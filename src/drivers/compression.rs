@@ -20,7 +20,9 @@ pub fn inflate(input: &[u8]) -> Option<Vec<u8>> {
     // önce olası kuyruğu çıkarılmış biçimi deniyoruz; kısa ham akışları
     // bozmamak için yalnızca 8 bayttan uzun girdilerde bunu yapıyoruz.
     if input.len() > 8 {
-        if let Some(result) = miniz_oxide::inflate::decompress_to_vec(&input[..input.len() - 8]).ok() {
+        if let Some(result) =
+            miniz_oxide::inflate::decompress_to_vec(&input[..input.len() - 8]).ok()
+        {
             return Some(result);
         }
     }
@@ -117,7 +119,8 @@ mod tests {
     /// eski elle yazılmış çözücünün başarısız olduğu yol.
     const HELLO_WORLD_GZIP: &[u8] = &[
         0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xcb, 0x48, 0xcd, 0xc9, 0xc9,
-        0x57, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x01, 0x00, 0x85, 0x11, 0x4a, 0x0d, 0x0b, 0x00, 0x00, 0x00,
+        0x57, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x01, 0x00, 0x85, 0x11, 0x4a, 0x0d, 0x0b, 0x00, 0x00,
+        0x00,
     ];
 
     /// Aynı metnin zlib sarmalı (RFC 1950) içindeki DEFLATE çıktısı
@@ -171,7 +174,10 @@ mod tests {
     fn test_corrupt_input_is_rejected() {
         assert_eq!(inflate(&[0xFF, 0xFF, 0xFF, 0xFF]), None);
         // gzip sihirli baytları yok.
-        assert_eq!(decode_content_encoding(Some("gzip"), b"not a gzip body"), None);
+        assert_eq!(
+            decode_content_encoding(Some("gzip"), b"not a gzip body"),
+            None
+        );
     }
 
     #[test]

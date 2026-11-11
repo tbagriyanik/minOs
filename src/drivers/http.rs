@@ -510,6 +510,9 @@ pub fn fetch_once(
 
     let mut last_err: Option<i32> = None;
     let mut delay = config.retry_delay_ms;
+    // ALPN ile h2 negotiate edilmişse HTTP/2 yığına geçilir; bu bayrak mevcut
+    // TLS bağlantısının havuza boşuna geri alınmasını (veya iki kez kapatılmasını) engeller.
+    let mut http2_used = false;
 
     for attempt in 0..=config.max_retries {
         // Havuzdan mevcut bağlantıyı almayı dene (sadece doğrudan bağlantı için)
@@ -657,13 +660,27 @@ pub fn fetch_once(
                         }
                     }
 
-                    // ALPN sonucuna göre HTTP/2 yığına geçiş kancası
-                    // Eğer sunucu h2 protokolünü seçerse, bağlantı HTTP/2 üzerinden devam eder.
-                    if session.negotiated_protocol().map_or(false, |p| p == b"h2") {
-                        crate::serial_print("[HTTP] HTTP/2 protokolü ALPN ile negotiati edildi, HTTP/2 kullaniliyor\n");
+                    // ALPN sonucuna göre protokol yığını seç.
+                    // Eğer sunucu h2 protokolünü seçerse, bağlantı HTTP/2 üzerinden devam eder;
+                    // aksi takdirde klasik HTTP/1.1 isteği gönderilir.
+                    http2_used = session.negotiated_protocol().map_or(false, |p| p == b"h2");
+                    if http2_used {
+                        crate::serial_print(
+                            "[HTTP] ALPN ile h2 negotiate edildi, HTTP/2 yığını kullanılıyor\n",
+                        );
+                        // http2_get kendi TCP/TLS bağlantısını kurar, bu yüzden sadece
+                        // el sıkışması yapılmış mevcut bağlantıyı serbest bırakırız.
+                        let _ = socket::close(fd);
+                        let url_str = alloc::format!(
+                            "{}://{}{}",
+                            if is_https { "https" } else { "http" },
+                            host_str,
+                            core::str::from_utf8(path).unwrap_or("/")
+                        );
+                        return http2_get(&url_str, resp_buf);
                     }
 
-                    // Şifreli HTTP isteğini hazırla ve gönder
+                    // Şifreli HTTP/1.1 isteğini hazırla ve gönder
                     let mut req = [0u8; 768];
                     let reqlen = build_request_with_headers(
                         &mut req,
@@ -723,11 +740,14 @@ pub fn fetch_once(
             }
         })();
 
-        // Bağlantıyı havuza geri ver (doğrudan bağlantı ve başarılıysa)
-        if use_pool {
-            connection_pool().release(fd, host_str.to_string(), port, is_https, None);
-        } else {
-            socket::close(fd);
+        // http2_get kendi bağlantısını kurduğunda mevcut fd artık kullanılmaz;
+        // havuza geri verilmeden (veya iki kez kapatılmadan) burayı atlıyoruz.
+        if !http2_used {
+            if use_pool {
+                connection_pool().release(fd, host_str.to_string(), port, is_https, None);
+            } else {
+                socket::close(fd);
+            }
         }
 
         match res {

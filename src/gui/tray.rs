@@ -31,10 +31,15 @@ impl MinGuiCompositor {
         let vol_w = sp(44);
         let net_w = sp(68);
         let kbd_w = sp(50);
+        let desktop_w = sp(44);
         let gap = sp(8);
 
         let clock_x = width.saturating_sub(pad + clock_w);
         let mut curr_x = clock_x;
+
+        // "Show Desktop" düğmesi (saat solunda)
+        let desktop_rect = (curr_x.saturating_sub(gap + desktop_w), by, desktop_w, h);
+        curr_x = desktop_rect.0;
 
         let volume_rect = if audio_available {
             let x = curr_x.saturating_sub(gap + vol_w);
@@ -61,6 +66,7 @@ impl MinGuiCompositor {
             volume: volume_rect,
             network: network_rect,
             kbd: (kbd_x, by, kbd_w, h),
+            desktop: desktop_rect,
         }
     }
     // -----------------------------------------------------------------------

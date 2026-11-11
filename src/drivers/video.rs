@@ -606,7 +606,7 @@ impl Framebuffer {
                 let f = (fg >> shift) & 0xFF;
                 let b = (bg >> shift) & 0xFF;
                 let a = coverage[channel] as u32;
-                out |= (b * (255 - a) + f * a + 127) / 255 << shift;
+                out |= ((b * (255 - a) + f * a + 127) / 255) << shift;
             }
             BACKBUFFER[offset] = out;
         }

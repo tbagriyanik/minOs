@@ -47,9 +47,9 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | **HPACK** | `encode_get_headers` encodes `:method GET`, `:scheme`, `:authority`, `:path` (static table indices) |
 | **Connection** | `Http2Connection::connect` (client preface + server SETTINGS wait), `get()` (multiplexed streams on one socket, odd stream IDs), `close()` (GOAWAY) |
 | **Convenience API** | `http2_get(url, &mut buf)` |
-| **Limits** | No TLS record encryption on HTTPS, no `Upgrade: h2c` / ALPN `h2` negotiation, and no HPACK dynamic table or full header decoding yet (only `:status 200` is detected heuristically) |
+| **Limits** | No TLS record encryption on HTTPS, no `Upgrade: h2c` and no HPACK dynamic table or full header decoding yet (only `:status 200` is detected heuristically); ALPN `h2` negotiation now works |
 
-> The browser still uses **HTTP/1.1**; it will switch once the HTTP/2 path is complete.
+> If the server selects `h2` via ALPN, the browser uses HTTP/2 via `http2_get()`; otherwise it falls back to HTTP/1.1.
 
 ---
 
@@ -62,7 +62,7 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | **Encryption** | AES-128-GCM |
 | **Certificate Verification** | X.509, RFC 5280, `not_before` / `not_after` (against CMOS RTC clock), CN and SAN DNS records (RFC 6125), wildcard `*.domain.com` |
 | **Chain Depth Limit** | `MAX_CHAIN_DEPTH` (6) certificates |
-| **Revocation Checking** | CRL & OCSP parsing, fail-closed policy |
+| **Revocation Checking** | CRL & OCSP parsing, signature-verified, fail-closed policy; delegated OCSP responder supported |
 | **Root CA Store** | 51 trusted root CA certificates (`src/drivers/crypto/roots/`) |
 
 > Includes Let's Encrypt ISRG Root X1 & X2, Google Trust Services, DigiCert, SSL.com, GoDaddy, Starfield, IdenTrust, QuoVadis, Certum, Buypass, Actalis, T-TeleSec, Microsoft, D-TRUST, Telia, SwissSign, OISTE WISeKey, FNMT-RCM, SECOM roots.

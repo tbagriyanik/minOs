@@ -509,6 +509,8 @@ pub struct OcspResponseInfo {
     pub tbs_raw: Vec<u8>,
     pub sig_alg_oid: Vec<u8>,
     pub signature: Vec<u8>,
+    /// `BasicOCSPResponse` içindeki `certs [0]` sertifikası zinciri (delegated yanıtlayıcı).
+    pub certs: Vec<Vec<u8>>,
 }
 
 impl OcspResponseInfo {
@@ -523,6 +525,35 @@ impl OcspResponseInfo {
             cert_der: responder_cert_der,
         };
         fake.verify_signature_with_issuer(responder_cert_der)
+    }
+
+    /// Yanıt imzasını doğrular: önce doğrudan CA (issuer) sertifikasıyla dener;
+    /// başarısızsa `certs [0]` zincirindeki yanıtlayıcı sertifikasıyla deneyip,
+    /// o sertifikayı CA'ya zincirler (delegated OCSP yanıtlayıcısı, RFC 6960 §4.2.1).
+    pub fn verify_signature_with_issuer(
+        &self,
+        issuer_cert_der: &[u8],
+    ) -> Result<(), CertValidationError> {
+        // 1) CA doğrudan yanıtı imzalamış olabilir.
+        if self.verify_signature(issuer_cert_der).is_ok() {
+            return Ok(());
+        }
+        // 2) Delegated yanıtlayıcı: certs [0] içindeki her sertifikayı dene.
+        for cert in &self.certs {
+            if self.verify_signature(cert).is_ok() {
+                let responder = match ParsedX509Cert::parse(cert) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                if responder
+                    .verify_signature_with_issuer(issuer_cert_der)
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+        }
+        Err(CertValidationError::InvalidSignature)
     }
 
     pub fn find(&self, serial: &[u8]) -> Option<&OcspSingleResponse> {
@@ -634,11 +665,36 @@ pub fn parse_ocsp_response(der: &[u8]) -> Result<OcspResponseInfo, CertValidatio
     }
     let sig_alg_oid = basic[alg_oid_vo..alg_oid_vo + alg_oid_vl].to_vec();
 
-    let (sig_tag, sig_vo, sig_vl, _) = tlv(basic, sa_next).map_err(|_| E)?;
+    let (sig_tag, sig_vo, sig_vl, sig_next) = tlv(basic, sa_next).map_err(|_| E)?;
     if sig_tag != TAG_BIT_STRING || sig_vl < 2 || basic[sig_vo] != 0 {
         return Err(E);
     }
     let signature = basic[sig_vo + 1..sig_vo + sig_vl].to_vec();
+
+    // certs [0] EXPLICIT SEQUENCE OF Certificate OPTIONAL (delegated yanıtlayıcı zinciri)
+    let mut certs: Vec<Vec<u8>> = Vec::new();
+    if sig_next < basic.len() {
+        if let Ok((tag, vo, _vl, _)) = tlv(basic, sig_next) {
+            if tag == TAG_CONTEXT_0 {
+                if let Ok((seq_tag, seq_vo, seq_vl, _)) = tlv(basic, vo) {
+                    if seq_tag == TAG_SEQUENCE {
+                        let end = seq_vo + seq_vl;
+                        let mut p = seq_vo;
+                        while p < end {
+                            if let Ok((c_tag, c_vo, c_vl, c_next)) = tlv(basic, p) {
+                                if c_tag == TAG_SEQUENCE {
+                                    certs.push(basic[c_vo..c_vo + c_vl].to_vec());
+                                }
+                                p = c_next;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // ResponseData ::= SEQUENCE {
     //     version [0] EXPLICIT, responderID, producedAt, responses SEQUENCE OF SingleResponse,
@@ -684,6 +740,7 @@ pub fn parse_ocsp_response(der: &[u8]) -> Result<OcspResponseInfo, CertValidatio
         tbs_raw,
         sig_alg_oid,
         signature,
+        certs,
     })
 }
 

@@ -1590,6 +1590,9 @@ impl SystemSettings {
                 ThemeId::Nord => b"nord",
                 ThemeId::TerminalGreen => b"terminal",
                 ThemeId::Sunset => b"sunset",
+                ThemeId::Dracula => b"dracula",
+                ThemeId::Monokai => b"monokai",
+                ThemeId::SolarizedDark => b"solarized",
             },
         );
         put(&mut cfg, &mut n, b";wallpaper=");

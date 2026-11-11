@@ -2,7 +2,7 @@
 //!
 //! Sertifikadan çıkarılan CRL Dağıtım Noktası (CDP) ve Authority Information
 //! Access (AIA) URL'lerine HTTP GET isteği yapar; gelen DER yanıtı
-//! `revocation::apply_crl` / `apply_ocsp` ile depoya işler. Fail-closed
+//! `revocation::apply_crl` / `apply_ocsp_verified` ile depoya işler. Fail-closed
 //! politika (`revocation::check_certificate`) TLS katmanı tarafından
 //! sorgulanır; sonucun ne zaman kontrol edileceği çağıranın sorumluluğudur.
 //!
@@ -322,7 +322,7 @@ fn apply_ocsp_verified(
     let Ok(info) = super::revocation_core::parse_ocsp_response(ocsp_der) else {
         return RevocationResult::unknown();
     };
-    if info.verify_signature(issuer_der).is_err() {
+    if info.verify_signature_with_issuer(issuer_der).is_err() {
         return RevocationResult::unknown();
     }
     let r = super::revocation_core::check_ocsp(ocsp_der, leaf_serial, now)

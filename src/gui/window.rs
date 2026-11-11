@@ -2,69 +2,150 @@
 
 use super::*;
 
-// ---------------------------------------------------------------------------
-// Pencere
-// ---------------------------------------------------------------------------
+/// Window model, layout types and frame rendering.
+///
+/// This module defines the core window data structures and frame rendering logic
+/// for the MinGui compositor. It includes window state management, title bar
+/// controls, resize grips, and Aero Snap functionality.
+///
+/// # Examples
+///
+/// ```ignore
+/// let window = Window::new(
+///     "My Application",
+///     "App",
+///     100,
+///     100,
+///     800,
+///     600,
+///     true,
+/// );
+/// ```
+
+/// Represents the minimal state of a window for persistence.
+///
+/// This struct contains only the essential geometric and visibility state
+/// needed to restore a window's position and size. It is used for
+/// serialization and window state management.
 #[derive(Copy, Clone, Debug)]
 pub struct WindowState {
+    /// X coordinate of the window's top-left corner.
     pub x: usize,
+    /// Y coordinate of the window's top-left corner.
     pub y: usize,
+    /// Window width in pixels.
     pub width: usize,
+    /// Window height in pixels.
     pub height: usize,
+    /// Whether the window is currently open/visible.
     pub is_open: bool,
 }
 
-/// Temel pencere başlık çubuğu yüksekliği (100% ölçekte).
+/// Base title bar height at 100% UI scale (pixels).
 pub const TITLEBAR_BASE: usize = 24;
-/// Temel görev çubuğu yüksekliği (100% ölçekte).
+/// Base taskbar height at 100% UI scale (pixels).
 pub const TASKBAR_BASE: usize = 36;
+/// Maximum number of concurrent windows supported by the compositor.
 pub const MAX_WINDOWS: usize = 32;
 
-/// Aktif font ölçeğine göre başlık çubuğu yüksekliği (px).
+/// Returns the current title bar height scaled by the active font zoom level.
+///
+/// The height scales proportionally with the UI scale factor (100%, 125%, or 150%).
+/// This ensures UI elements remain usable at higher DPI settings.
+///
+/// # Returns
+/// The scaled title bar height in pixels.
 #[inline(always)]
 pub fn titlebar_h() -> usize {
     sp(TITLEBAR_BASE)
 }
 
-/// Aktif font ölçeğine göre görev çubuğu yüksekliği (px).
+/// Returns the current taskbar height scaled by the active font zoom level.
+///
+/// The height scales proportionally with the UI scale factor.
+///
+/// # Returns
+/// The scaled taskbar height in pixels.
 #[inline(always)]
 pub fn taskbar_h() -> usize {
     sp(TASKBAR_BASE)
 }
 
+/// Main window structure representing a top-level GUI window.
+///
+/// This struct contains all state needed to render and manage a window,
+/// including geometry, visibility, focus, and content scrolling state.
+/// Windows are managed by the [`MinGuiCompositor`] which handles
+/// Z-ordering, focus management, and rendering.
+///
+/// # Fields
+/// - `app_id`: Identifies which application this window belongs to
+/// - `title`: Full window title (displayed in title bar)
+/// - `tab_title`: Short title for taskbar tab
+/// - `x`, `y`: Top-left position
+/// - `width`, `height`: Current dimensions
+/// - `min_width`/`min_height`: Minimum allowed size when resizing
+/// - `max_width`/`max_height`: Maximum allowed size
+/// - `is_focused`: Whether this window has keyboard focus
+/// - `is_minimized`: Whether window is minimized to taskbar
+/// - `is_open`: Whether window is currently visible
+/// - `is_maximized`: Whether window is maximized
+/// - `restore`: Previous geometry for un-maximize
+/// - `z`: Z-order index (higher = on top)
+/// - `scroll`: Content scroll position
+/// - `content_w`/`content_h`: Reported content size for scrollbar calculation
 #[derive(Copy, Clone, Debug)]
 pub struct Window {
-    /// Uygulama türü; aynı uygulamanın birden çok pencere örneğini tanımlar.
+    /// Application identifier; allows multiple instances of the same app.
     pub app_id: u8,
+    /// Full window title displayed in the title bar.
     pub title: &'static str,
+    /// Short title for taskbar tab display.
     pub tab_title: &'static str,
+    /// X coordinate of window top-left corner.
     pub x: usize,
+    /// Y coordinate of window top-left corner.
     pub y: usize,
+    /// Window width in pixels.
     pub width: usize,
+    /// Window height in pixels.
     pub height: usize,
+    /// Minimum allowed width when resizing.
     pub min_width: usize,
+    /// Minimum allowed height when resizing.
     pub min_height: usize,
+    /// Maximum allowed width (screen boundary constraint).
     pub max_width: usize,
+    /// Maximum allowed height (screen boundary constraint).
     pub max_height: usize,
+    /// Whether this window currently has keyboard focus.
     pub is_focused: bool,
+    /// Whether window is minimized to taskbar.
     pub is_minimized: bool,
+    /// Whether window is currently open and should be rendered.
     pub is_open: bool,
+    /// Whether window is maximized to full screen.
     pub is_maximized: bool,
-    /// Maksimize öncesi konum/boyut (geri yükleme için).
+    /// Previous geometry for restoring after maximize.
     pub restore: Option<(usize, usize, usize, usize)>,
-    /// Z-sırası: büyük olan üstte çizilir.
+    /// Z-order index; higher values render on top.
     pub z: u8,
-    /// İçerik kaydırma durumu (pencere içeriği taşarsa kaydırılır).
+    /// Content scroll state for overflow handling.
     pub scroll: scrollbar::ScrollState,
-    /// Uygulamanın bir önceki karede bildirdiği içerik boyutu (px).
-    /// Kaydırma çubuğunun gerekip gerekmediğini belirlemek için kullanılır.
+    /// Last reported content width (for horizontal scrollbar).
     pub content_w: usize,
+    /// Last reported content height (for vertical scrollbar).
     pub content_h: usize,
 }
 
 impl Window {
-    /// Pencerenin içerik (çerçeve dışı, başlık çubuğu altı) alanı.
-    /// Sağ altta durum çubuğu için ayrılan alan çağıran tarafından düşülür.
+    /// Returns the content rectangle of the window (excluding frame and title bar).
+    ///
+    /// This is the area where application content is rendered. The returned
+    /// coordinates are relative to the framebuffer origin.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in pixels.
     pub fn content_rect(&self) -> (usize, usize, usize, usize) {
         let x = self.x + 1;
         let y = self.y + titlebar_h();
@@ -73,6 +154,19 @@ impl Window {
         (x, y, w, h)
     }
 
+    /// Creates a new window with the specified parameters.
+    ///
+    /// # Arguments
+    /// * `title` - Full window title for the title bar
+    /// * `tab_title` - Short title for taskbar tab
+    /// * `x` - Initial X position
+    /// * `y` - Initial Y position
+    /// * `width` - Initial width
+    /// * `height` - Initial height
+    /// * `is_open` - Whether the window should be initially visible
+    ///
+    /// # Returns
+    /// A new `Window` with default min/max sizes and zero scroll state.
     pub fn new(
         title: &'static str,
         tab_title: &'static str,
@@ -92,8 +186,8 @@ impl Window {
             height,
             min_width: 200,
             min_height: 120,
-            // Sürükleme ile yeniden boyutlandırma ekran sınırlarına kadar serbest
-            // olmalı; tam ekran (1280x720, 1920x1080, 2560x1600) ile tutarlılık için.
+            // Resize bounds up to 4096px for multi-monitor and future-proofing
+            // (consistent with 1280x720, 1920x1080, 2560x1600 displays).
             max_width: 4096,
             max_height: 4096,
             is_focused: false,
@@ -108,6 +202,12 @@ impl Window {
         }
     }
 
+    /// Extracts the minimal persistable state from this window.
+    ///
+    /// Used for serialization and window management operations.
+    ///
+    /// # Returns
+    /// A [`WindowState]` containing position, size, and visibility.
     pub fn get_state(&self) -> WindowState {
         WindowState {
             x: self.x,
@@ -118,6 +218,13 @@ impl Window {
         }
     }
 
+    /// Applies a previously saved state to this window.
+    ///
+    /// Restores position, size, and visibility. If the window is being
+    /// opened, also clears the minimized flag.
+    ///
+    /// # Arguments
+    /// * `state` - The state to apply
     pub fn apply_state(&mut self, state: WindowState) {
         self.x = state.x;
         self.y = state.y;
@@ -129,8 +236,13 @@ impl Window {
         }
     }
 
-    /// Başlık çubuğu kontrol düğmesi dikdörtgenleri.
-    /// Boyutlar aktif font ölçeğine göre büyür; başlık çubuğunda dikey ortalanır.
+    /// Returns the visual bounds of the close button (for rendering).
+    ///
+    /// The button is centered vertically in the title bar and sized according
+    /// to the current UI scale factor.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn close_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
         (
@@ -140,9 +252,15 @@ impl Window {
             b,
         )
     }
-    /// Kapat düğmesi tıklama alanı (hit rect).
-    /// Düğme basılıyken görsel olarak küçülür (inset) ancak tıklama alanı
-    /// pencere sağ üst köşesini kapsayacak şekilde geniş kalır ve asla küçülmez.
+
+    /// Returns the hit-test rectangle for the close button.
+    ///
+    /// This is larger than the visual button to provide a comfortable
+    /// click target. It spans the full title bar height and extends further
+    /// horizontally. It never shrinks even when the visual button is pressed.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn close_hit_rect(&self) -> (usize, usize, usize, usize) {
         let w = sp(34);
         (
@@ -152,6 +270,11 @@ impl Window {
             titlebar_h(),
         )
     }
+
+    /// Returns the visual bounds of the maximize/restore button.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn max_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
         (
@@ -161,6 +284,11 @@ impl Window {
             b,
         )
     }
+
+    /// Returns the hit-test rectangle for the maximize button.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn max_hit_rect(&self) -> (usize, usize, usize, usize) {
         let w = sp(22);
         (
@@ -170,6 +298,11 @@ impl Window {
             titlebar_h(),
         )
     }
+
+    /// Returns the visual bounds of the minimize button.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn min_rect(&self) -> (usize, usize, usize, usize) {
         let b = sp(18);
         (
@@ -179,6 +312,11 @@ impl Window {
             b,
         )
     }
+
+    /// Returns the hit-test rectangle for the minimize button.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn min_hit_rect(&self) -> (usize, usize, usize, usize) {
         let w = sp(22);
         (
@@ -188,7 +326,11 @@ impl Window {
             titlebar_h(),
         )
     }
-    /// Pencere kenarlarını yeniden boyutlandırmak için hit alanı.
+
+    /// Returns the hit-test rectangle for the bottom-right resize grip.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn resize_grip_rect(&self) -> (usize, usize, usize, usize) {
         let g = RESIZE_GRIP;
         (
@@ -198,12 +340,26 @@ impl Window {
             g,
         )
     }
-    /// Kontrol düğmelerinin bulunduğu başlık bölgesini resize hit-testinden çıkarır.
+
+    /// Returns the title bar region occupied by control buttons.
+    ///
+    /// This region is excluded from resize hit-testing to prevent
+    /// accidental resize when clicking window controls.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     fn title_controls_rect(&self) -> (usize, usize, usize, usize) {
         let left = self.min_rect().0;
         let right = self.x + self.width;
         (left, self.y, right.saturating_sub(left), titlebar_h())
     }
+
+    /// Returns the title bar drag region (for window movement).
+    ///
+    /// Excludes the control button area on the right side.
+    ///
+    /// # Returns
+    /// Tuple of (x, y, width, height) in framebuffer coordinates.
     pub fn title_drag_rect(&self) -> (usize, usize, usize, usize) {
         (
             self.x,
@@ -214,32 +370,54 @@ impl Window {
     }
 }
 
-/// Yeniden boyutlandırma yönü.
+/// Resize edge/corner identifier for window resizing operations.
+///
+/// Used to determine which edge or corner of a window the user is
+/// interacting with for resize operations.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum ResizeEdge {
+    /// Left edge
     Left,
+    /// Right edge
     Right,
+    /// Top edge
     Top,
+    /// Bottom edge
     Bottom,
+    /// Top-left corner
     TopLeft,
+    /// Top-right corner
     TopRight,
+    /// Bottom-left corner
     BottomLeft,
+    /// Bottom-right corner
     BottomRight,
 }
 
-/// Yan/alt resize alanı 12px; başlık çakışmasını önlemek için üst alan 4px.
+/// Resize grip size for side/bottom edges (pixels at 100% scale).
+/// Top edge uses a smaller grip to avoid title bar overlap.
 pub const RESIZE_GRIP: usize = 12;
 const TOP_RESIZE_GRIP: usize = 4;
 
 impl Window {
-    /// Fare konumundaki kenar/köşe resize yönünü bulur. Başlık düğmeleri,
-    /// pencere gövdesi ve maximize edilmiş pencereler resize edilmez.
+    /// Determines which resize edge (if any) contains the given point.
+    ///
+    /// Returns the appropriate [`ResizeEdge`] variant if the point falls
+    /// within the resize grip area of any edge or corner. Returns `None`
+    /// for maximized/minimized/closed windows, or points in the title
+    /// bar control area.
+    ///
+    /// # Arguments
+    /// * `mx` - Mouse X coordinate (framebuffer space)
+    /// * `my` - Mouse Y coordinate (framebuffer space)
+    ///
+    /// # Returns
+    /// The detected resize edge, or `None` if not in a resize area.
     pub fn resize_edge_at(&self, mx: usize, my: usize) -> Option<ResizeEdge> {
         if !self.is_open || self.is_minimized || self.is_maximized {
             return None;
         }
-        // Başlık düğmeleri sağ üst köşeye yakın olsa da tıklama her zaman
-        // düğmelere ait olsun; köşe resize alanı bu bölgeye taşmasın.
+        // Title bar controls take precedence; resize grips don't overlap them.
         if in_rect(mx, my, self.title_controls_rect()) {
             return None;
         }
@@ -282,48 +460,69 @@ impl Window {
     }
 }
 
-/// Aero Snap yaslama türleri: Sol yarı, Sağ yarı veya Tam ekran.
+/// Aero Snap window positioning targets.
+///
+/// Defines the standard snap positions for window tiling operations
+/// (Windows 10/11 style Aero Snap).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum SnapPosition {
+    /// Left half of screen
     Left,
+    /// Right half of screen
     Right,
-    Top, // Maximize
+    /// Full screen (maximize)
+    Top,
+    /// Top-left quarter
+    TopLeft,
+    /// Top-right quarter
+    TopRight,
+    /// Bottom-left quarter
+    BottomLeft,
+    /// Bottom-right quarter
+    BottomRight,
 }
 
-// ---------------------------------------------------------------------------
-// Görev çubuğu yerleşimi (hem çizim hem tıklama testi için ortak)
-// ---------------------------------------------------------------------------
+/// Taskbar layout coordinates (single source of truth for rendering and hit-testing).
+///
+/// This struct contains pre-computed rectangles for all taskbar elements,
+/// ensuring visual layout matches click targets exactly.
 #[derive(Copy, Clone)]
 pub struct TrayLayout {
+    /// Y coordinate of the taskbar top edge.
     pub tb_y: usize,
+    /// Start button bounds.
     pub start: (usize, usize, usize, usize),
+    /// Clock/time display bounds.
     pub clock: (usize, usize, usize, usize),
+    /// Volume control bounds.
     pub volume: (usize, usize, usize, usize),
+    /// Network status bounds.
     pub network: (usize, usize, usize, usize),
+    /// Keyboard layout indicator bounds.
     pub kbd: (usize, usize, usize, usize),
+    /// Show desktop button bounds.
+    pub desktop: (usize, usize, usize, usize),
 }
 
-/// Başlat menüsü yerleşimi — TEK kanonik kaynak.
+/// Start menu layout constants — single canonical source.
 ///
-/// Grup başlıkları ve öğeler aynı sıralı düzende yerleştirilir; hem çizim hem
-/// tıklama testi bu fonksiyonları kullanır, böylece görsel öğe ile tıklanan öğe
-/// matematiksel olarak birebir örtüşür (yanlış öğe tetiklenmez).
+/// Group headers and items share the same ordered layout; both rendering
+/// and hit-testing use these functions so visual items and click targets
+/// match exactly.
 ///
-/// Düzen: profil şeridi (40px) → her grup için bir başlık (GRP_H) + öğeler (ITEM_H).
-
-/// Başlat menüsünün toplam yüksekliği.
+/// Start menu total height (pixels).
 pub const MENU_H: usize = 230;
-/// Menü içerik başlangıcı (profil ve arama alanından sonra).
+/// Menu content start Y (after profile and search).
 pub const MENU_CONTENT_TOP: usize = 82;
-/// Grup başlığı yüksekliği.
+/// Group header height.
 pub const MENU_GROUP_H: usize = 18;
-/// Menü öğesi yüksekliği (satır aralığı).
+/// Menu item height (row spacing).
 pub const MENU_ITEM_H: usize = 20;
-/// Menü öğesi yüksekliği (tıklanabilir alan) — eski adlarla uyumluluk için.
+/// Menu item click target height (legacy compatibility).
 pub const MENU_ITEM_STEP: usize = 20;
 
-/// Grup tanımı: (görünen başlık, ilk öğe indeksi, öğe sayısı).
-/// İndeksler menü öğesi sırasına göre ardışıktır (bkz. `menu_items`).
+/// Group definitions: (display title, first item index, item count).
+/// Indices correspond to the sequential menu item order (see `menu_items`).
 pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
     ("Sistem", 0, 7),
     ("Üretkenlik", 7, 3),
@@ -334,31 +533,60 @@ pub const MENU_GROUPS: [(&str, usize, usize); 5] = [
 
 impl MinGuiCompositor {
     // -----------------------------------------------------------------------
-    // 2. Pencere Çerçevesi ve Başlık Çubuğu
+    // 2. Window Frame and Title Bar
     // -----------------------------------------------------------------------
+
+    /// Maps a window index to its corresponding icon index.
+    ///
+    /// Used for rendering the application icon in the window title bar
+    /// and taskbar tab.
+    ///
+    /// # Arguments
+    /// * `win_idx` - The window index (0-16 for built-in apps)
+    ///
+    /// # Returns
+    /// The icon index from the icon sheet.
+    /// Maps a window index to its corresponding icon index.
+    ///
+    /// Used for rendering the application icon in the window title bar
+    /// and taskbar tab.
+    ///
+    /// # Arguments
+    /// * `win_idx` - The window index (0-16 for built-in apps)
+    ///
+    /// # Returns
+    /// The icon index from the icon sheet.
     pub fn window_icon_index(win_idx: usize) -> usize {
         match win_idx {
-            0 => 0,  // Dosya Yöneticisi -> Bilgisayarım
-            1 => 4,  // Ayarlar -> Dişli
-            2 => 1,  // Not Defteri -> Notlar
-            3 => 2,  // Web Tarayıcısı -> SarmanNet
-            4 => 1,  // Resim Gösterici -> Görsel
-            5 => 3,  // Müzik Çalar -> Çalma Listesi
-            6 => 3,  // Video Oynatıcı -> Medya
-            7 => 0,  // Görev Yöneticisi -> Bilgisayarım
-            8 => 4,  // Hesap Makinesi -> Dişli
-            9 => 1,  // Çizim Tahtası -> Çizim
-            10 => 0, // Terminal -> Komut İstemi
-            11 => 0, // Kurulum Sihirbazı -> Bilgisayarım / Disk
-            12 => 1, // 3D Gösterici -> Görsel/Çizim
-            13 => 5, // Paket Yöneticisi -> Paket / Kutu
-            14 => 4, // Kontrol Paneli -> Dişli
-            15 => 2, // Oyunlar -> Oyun tahtası
-            16 => 2, // FPS 3D Oyun -> Oyun tahtası
+            0 => 0,  // File Manager -> Computer
+            1 => 4,  // Settings -> Gear
+            2 => 1,  // Notepad -> Notes
+            3 => 2,  // Web Browser -> SarmanNet
+            4 => 1,  // Image Viewer -> Image
+            5 => 3,  // Music Player -> Playlist
+            6 => 3,  // Video Player -> Media
+            7 => 0,  // Task Manager -> Computer
+            8 => 4,  // Calculator -> Gear
+            9 => 1,  // Paint -> Drawing
+            10 => 0, // Terminal -> Command Prompt
+            11 => 0, // Installer -> Computer/Disk
+            12 => 1, // 3D Viewer -> Visual/Drawing
+            13 => 5, // Package Manager -> Package/Box
+            14 => 4, // Control Panel -> Gear
+            15 => 2, // Games -> Game board
+            16 => 2, // FPS 3D Game -> Game board
             _ => 0,
         }
     }
 
+    /// Returns the localized full window title for a given index.
+    ///
+    /// # Arguments
+    /// * `win_idx` - Window index
+    /// * `english` - Whether to use English localization
+    ///
+    /// # Returns
+    /// The window title string.
     pub(crate) fn window_title(win_idx: usize, english: bool) -> &'static str {
         if english {
             match win_idx {
@@ -405,6 +633,14 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Returns the localized short window title for taskbar tabs.
+    ///
+    /// # Arguments
+    /// * `win_idx` - Window index
+    /// * `english` - Whether to use English localization
+    ///
+    /// # Returns
+    /// The short title string for taskbar display.
     pub(crate) fn window_tab_title(win_idx: usize, english: bool) -> &'static str {
         if english {
             match win_idx {
@@ -451,6 +687,21 @@ impl MinGuiCompositor {
         }
     }
 
+    /// Renders a window frame with title bar, controls, and borders.
+    ///
+    /// This is the primary window frame rendering function. It draws:
+    /// - Drop shadow
+    /// - Rounded window border (focused = blue, unfocused = border color)
+    /// - Title bar with vertical gradient
+    /// - Application icon and title
+    /// - Close/Maximize/Minimize buttons with hover/press states
+    /// - Appropriate button icons (X, square, line, or restore symbol)
+    ///
+    /// # Arguments
+    /// * `fb` - Target framebuffer
+    /// * `win` - Window to render
+    /// * `mouse` - Current mouse state (for hover detection)
+    /// * `_win_idx` - Window index (unused, kept for compatibility)
     pub fn render_window_frame(
         &self,
         fb: &mut Framebuffer,
@@ -464,10 +715,10 @@ impl MinGuiCompositor {
         let mx = mouse.x as usize;
         let my = mouse.y as usize;
 
-        // Gölge (pencere arkasına derinlik)
+        // Drop shadow for depth
         fb.draw_shadow(win.x, win.y, win.width, win.height, Color::SHADOW);
 
-        // Çerçeve (border) ve Pencere Gövdesi (Yuvarlatılmış 6px)
+        // Window border and body (rounded 6px)
         let border = if win.is_focused {
             Color::ACCENT_BLUE
         } else {

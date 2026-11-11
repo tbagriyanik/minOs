@@ -12,7 +12,7 @@ minOs sürüm notları ve gelecek planları.
 - **🌐 Tarayıcı Geliştirmeleri (Önbellek ve Görselleştirme):** VFS tabanlı önbellek (`/browser/cache/`); CSS `transform`, `transition`/`animation`, `flexbox`/`grid`, gölgeler, border-radius, opacity desteği; `imgdecode` iyileştirmeleri ve SVG temsili.
 - **🌍 Progresif JPEG & @font-face Desteği:** Çok taramalı progresif JPEG (SOF2) çözümlemesi; CSS `@font-face` ve `@keyframes` (`color`/`background-color` interpolasyonu).
 - **⏱️ IPv6 Öncelikli HTTP (Dual-Stack):** Önce AAAA çözülür, IPv6 bağlantısı denenir; başarısız olursa IPv4'ye düşülür. 3xx yönlendirme ve `chunked` çözümü IPv6'de uygulanır.
-- **🧩 HTTP/2 İstemci Çekirdeği:** RFC 7540 çerçeve katmanı (`h2`), HPACK kodlayıcısı, `Http2Connection`, `http2_get()`. Altyapı hazır; tarayıcı hâlâ HTTP/1.1 kullanır.
+- **🧩 HTTP/2 İstemci Çekirdeği:** RFC 7540 çerçeve katmanı (`h2`), HPACK kodlayıcısı, `Http2Connection`, `http2_get()`. ALPN `h2` pazarlığı artık etkin; sunucu `h2` seçerse tarayıcı `http2_get()` üzerinden HTTP/2 kullanır.
 - **🐾 Tarayıcı Demo Sayfaları:** `minos://demo`, `minos://demo-img`, `minos://demo-video`.
 - **🚫 Tarayıcı Donma Düzeltmesi:** Harici kaynaklar `pending_resources` listesine alınır ve `poll_network()` ile kare başına asenkron getirilir; ana olay döngüsü bloke edilmez.
 - **🛠️ Tarayıcı Geliştirici Araçları:** `Ctrl+Shift+D` ile DevTools (Elements, Console, Network, Storage).
@@ -71,7 +71,7 @@ minOs sürüm notları ve gelecek planları.
   - **`close_notify` zarif kapanış (§6.1):** Sunucunun gönderdiği `close_notify` artık fatal hata sayılmıyor.
 - **🌐 Tarayıcı Sayfa İndirme ve HTML Entegrasyonu:** İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir. Dosya Yöneticisi'nde `.html`, `.htm`, `.xhtml` ve `.url` dosyalarına çift tıklandığında tarayıcıda açılır.
 - **🌍 Progresif JPEG, `@font-face` & `@keyframes` Renk Animasyonu:** Görsel çözücü çok taramalı **progresif JPEG** (SOF2) dosyalarını katsayı biriktirerek çözer; CSS motoru `@font-face` kurallarını ayrıştırıp `font-family` bilgisini `ElementStyle` üzerinde taşır; `@keyframes` animasyonları `opacity` yanında `color`/`background-color` değerlerini de interpolasyonla canlandırır. Sınır: uzak TTF/WOFF verisi indirilip rasterleştirilmiyor.
-- **⏱️ IPv6 Öncelikli HTTP & HTTP/2 İstemci Altyapısı:** `http_get_impl` önce AAAA çözüp IPv6 bağlantısı kurar (HTTPS'te TLS el sıkışması IPv6 üzerinden), başarısız olursa IPv4 yoluna düşer. `http.rs` içine RFC 7540 çerçeve katmanı, HPACK istek kodlayıcısı ve `Http2Connection` (`http2_get`) eklendi. Sınır: HTTPS'te çerçeve şifrelemesi, ALPN `h2` pazarlığı ve HPACK çözümlemesi eksik olduğu için tarayıcı hâlâ HTTP/1.1 kullanır.
+- **⏱️ IPv6 Öncelikli HTTP & HTTP/2 İstemci Altyapısı:** `http_get_impl` önce AAAA çözüp IPv6 bağlantısı kurar (HTTPS'te TLS el sıkışması IPv6 üzerinden), başarısız olursa IPv4 yoluna düşer. `http.rs` içine RFC 7540 çerçeve katmanı, HPACK istek kodlayıcısı ve `Http2Connection` (`http2_get`) eklendi. ALPN `h2` pazarlığı artık etkin; sunucu `h2` seçerse tarayıcı `http2_get()` üzerinden HTTP/2 kullanır. Sınır: HTTPS'te çerçeve şifrelemesi ve HPACK dinamik tablo + tam başlık çözümlemesi henüz yok.
 - **🐾 Tarayıcı Demo Sayfaları:** `minos://demo`, `minos://demo-img`, `minos://demo-video` yerel demo sayfaları eklendi.
 - **Genişletilmiş Donanım Sürücüleri (20+ Yeni Sürücü):** Ağ, Bluetooth HCI, Depolama, USB, Grafik, Sensör & Güç, Veri Yolu & Zaman.
 - **Canlı USB Tak/Çıkar:** Çalışma sırasında USB cihazlarının anında algılanıp toast bildirimleri gösteriliyor.

@@ -7,11 +7,9 @@ extern crate alloc;
 use linked_list_allocator::LockedHeap;
 
 #[allow(dead_code)]
-
 const HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 #[allow(dead_code)]
-
 static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 #[global_allocator]
@@ -19,61 +17,28 @@ static mut HEAP_MEMORY: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 #[alloc_error_handler]
-
 fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
-    serial_print("[PANIC] Kernel heap allocation failed: size=");
-
-    let mut v = layout.size() as u64;
-
-    let mut buf = [0u8; 20];
-
-    let mut i = buf.len();
-
-    if v == 0 {
-        serial_print("0");
-    } else {
-        while v > 0 && i > 0 {
-            i -= 1;
-
-            buf[i] = b'0' + (v % 10) as u8;
-
-            v /= 10;
-        }
-
-        if let Ok(s) = core::str::from_utf8(&buf[i..]) {
-            serial_print(s);
-        }
-    }
-
+    serial_print("[OOM] Kernel heap allocation failed: size=");
+    crate::serial::print_dec(layout.size() as u64);
     serial_print(" align=");
-
-    let mut a = layout.align() as u64;
-
-    let mut i2 = buf.len();
-
-    while a > 0 && i2 > 0 {
-        i2 -= 1;
-
-        buf[i2] = b'0' + (a % 10) as u8;
-
-        a /= 10;
-    }
-
-    if let Ok(s) = core::str::from_utf8(&buf[i2..]) {
-        serial_print(s);
-    }
-
+    crate::serial::print_dec(layout.align() as u64);
     serial_print("\n");
 
-    panic!("Allocation error");
+    // Best-effort diagnostic; avoid further allocations.
+    crate::serial_print("[OOM] Halting system to prevent memory corruption.\n");
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 #[allow(static_mut_refs)]
-
 fn init_heap() {
     unsafe {
         ALLOCATOR.lock().init(HEAP_MEMORY.as_mut_ptr(), HEAP_SIZE);
     }
+    serial_print("[HEAP] Kernel heap initialized: ");
+    crate::serial::print_dec(HEAP_SIZE as u64);
+    serial_print(" bytes\n");
 }
 
 pub mod arch;
@@ -140,9 +105,7 @@ fn alloc_pmm_frame_global() -> Option<u64> {
 }
 
 /// Basit metin cizim fonksiyonu (font sistemi olmadan)
-
 #[no_mangle]
-
 pub extern "C" fn _start() -> ! {
     arch::x86_64::enable_sse();
 
@@ -894,6 +857,12 @@ pub extern "C" fn _start() -> ! {
     // FPS 3D oyun güncellemesi için zaman bütçesi (ms). Uygulama çok uzun
     // sürerse sistem donmasını önlemek için atlanır ve uyarı gösterilir.
     const GAME_UPDATE_BUDGET_MS: u64 = 30; // Stricter: 30ms for games
+                                           // Bir uygulama bu bütcheyi kaç kez üst üste aşarsa koruma tarafından sonlandırılır.
+                                           // Tek seferlik aşım (ör. ilk kare yüklemesi) sadece uyarıyla sonuçlanır; bu sayede
+                                           // mantıksal sonsuz döngü gibi tekrarlayan aşımlar tek bir uygulamanın ana döngüyü
+                                           // bloke etmesini engeller. (Gerçek izolasyon henüz ring 3 süreçleri gerektirir;
+                                           // bkz. src/apps/guard.rs modül yorumu.)
+    const GAME_BUDGET_MAX_STRIKES: u32 = 3;
 
     // FPS limit for games (30 FPS = ~33.33ms per frame).
     const GAME_FPS_LIMIT_MS: u64 = 33;
@@ -907,6 +876,10 @@ pub extern "C" fn _start() -> ! {
     const WATCHDOG_TIMEOUT_MS: u64 = 5_000;
     // 0 = uygulama henüz etkinleştirilmedi (izleme atla).
     let mut app_last_activity: [u64; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
+    // Oyun bütçesi aşımı sayaçları (üst üste gelen aşım sayısı; bütche altında bir
+    // kare geldiğinde sıfırlanır). Yalnızca tekrarlayan aşımlar sonlandırmayı tetikler.
+    let mut game_budget_strikes: u32 = 0;
+    let mut fps3d_budget_strikes: u32 = 0;
 
     // Track per-application render time (Cell allows interior mutability
     // so the render closure can capture it immutably and still update values).
@@ -3362,6 +3335,25 @@ pub extern "C" fn _start() -> ! {
                         compositor.cal_month = now.month;
                     }
 
+                    consumed = true;
+                } else if gui::in_rect(mx, my, l.desktop) {
+                    // Masaüstü Göster düğmesi: tüm pencereleri kucult/geri getir
+                    let all_minimized = compositor
+                        .windows
+                        .iter()
+                        .flatten()
+                        .all(|w| !w.is_open || w.is_minimized);
+                    for w in compositor.windows.iter_mut().flatten() {
+                        if w.is_open {
+                            w.is_minimized = !all_minimized;
+                            w.is_focused = false;
+                        }
+                    }
+                    if all_minimized {
+                        compositor.focus_top_window();
+                    } else {
+                        compositor.active_window_idx = None;
+                    }
                     consumed = true;
                 } else if l.volume.2 > 0 && gui::in_rect(mx, my, l.volume) {
                     compositor.is_volume_popup_open = !compositor.is_volume_popup_open;
@@ -6120,6 +6112,16 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::ArrowUp => {
+                    // Win + Yukari Ok: pencereyi tam ekrana getir (maximize)
+                    if keyboard.super_key {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.toggle_maximize(idx, width, height);
+                                force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if compositor.is_start_menu_open {
                         if compositor.start_search_len > 0 {
                             compositor.move_start_search_selection(
@@ -6202,6 +6204,28 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::ArrowDown => {
+                    // Win + Asagi Ok: pencereyi kucult/restore et
+                    if keyboard.super_key {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                if let Some(win) = compositor.windows[idx].as_mut() {
+                                    if win.is_maximized {
+                                        if let Some((x, y, w, h)) = win.restore {
+                                            win.x = x;
+                                            win.y = y;
+                                            win.width = w;
+                                            win.height = h;
+                                            win.is_maximized = false;
+                                        }
+                                    } else {
+                                        win.is_minimized = true;
+                                    }
+                                }
+                                force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if compositor.is_start_menu_open {
                         if compositor.start_search_len > 0 {
                             compositor.move_start_search_selection(
@@ -6288,6 +6312,16 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::ArrowLeft => {
+                    // Win + Sol Ok: pencereyi sol yarısına yasla (Aero Snap)
+                    if keyboard.super_key {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(idx, gui::SnapPosition::Left, width, height);
+                                force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if desktop_files.rename_active {
                         desktop_files.rename_move_cursor(false);
                     } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
@@ -6363,6 +6397,21 @@ pub extern "C" fn _start() -> ! {
                 }
 
                 drivers::keyboard::KeyAction::ArrowRight => {
+                    // Win + Sag Ok: pencereyi sag yarısına yasla (Aero Snap)
+                    if keyboard.super_key {
+                        if let Some(idx) = compositor.active_window_idx {
+                            if idx < gui::MAX_WINDOWS {
+                                compositor.snap_window(
+                                    idx,
+                                    gui::SnapPosition::Right,
+                                    width,
+                                    height,
+                                );
+                                force_render = true;
+                            }
+                        }
+                        continue;
+                    }
                     if desktop_files.rename_active {
                         desktop_files.rename_move_cursor(true);
                     } else if app_is_focused(&compositor, 0) && filemanager_app.rename_active {
@@ -7973,21 +8022,58 @@ pub extern "C" fn _start() -> ! {
 
                     w.y = my.saturating_sub(drag_offset_y).min(max_y);
 
-                    // Aero Snap kenar algilama & onizleme kutusu
+                    // Aero Snap kenar/köşe algılama & önizleme kutusu
 
                     let old_snap = active_snap_preview;
 
                     let usable_h = height.saturating_sub(gui::taskbar_h());
 
                     let half_w = width / 2;
+                    let half_h = usable_h / 2;
 
                     if my <= 4 {
                         active_snap_preview = Some((0, 0, width, usable_h));
+                    } else if my >= usable_h.saturating_sub(5) {
+                        if mx <= 4 {
+                            active_snap_preview =
+                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
+                        } else if mx >= width.saturating_sub(5) {
+                            active_snap_preview = Some((
+                                half_w,
+                                half_h,
+                                width.saturating_sub(half_w),
+                                usable_h.saturating_sub(half_h),
+                            ));
+                        } else if mx < half_w {
+                            active_snap_preview =
+                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
+                        } else {
+                            active_snap_preview = Some((
+                                half_w,
+                                half_h,
+                                width.saturating_sub(half_w),
+                                usable_h.saturating_sub(half_h),
+                            ));
+                        }
                     } else if mx <= 4 {
-                        active_snap_preview = Some((0, 0, half_w, usable_h));
+                        if my < half_h {
+                            active_snap_preview = Some((0, 0, half_w, half_h));
+                        } else {
+                            active_snap_preview =
+                                Some((0, half_h, half_w, usable_h.saturating_sub(half_h)));
+                        }
                     } else if mx >= width.saturating_sub(5) {
-                        active_snap_preview =
-                            Some((half_w, 0, width.saturating_sub(half_w), usable_h));
+                        if my < half_h {
+                            active_snap_preview =
+                                Some((half_w, 0, width.saturating_sub(half_w), half_h));
+                        } else {
+                            active_snap_preview = Some((
+                                half_w,
+                                half_h,
+                                width.saturating_sub(half_w),
+                                usable_h.saturating_sub(half_h),
+                            ));
+                        }
                     } else {
                         active_snap_preview = None;
                     }
@@ -8329,20 +8415,39 @@ pub extern "C" fn _start() -> ! {
             // Modern Aero Snap: baslik cubugu ekran kenarlarina suruklenip birakildiginda:
 
             // - Ekranin ustu: Tam ekran (Maximize)
-
-            // - Ekranin solu: Sol 50% bolunmus ekran
-
-            // - Ekranin sagi: Sag 50% bolunmus ekran
+            // - Ekranin kenarları: Yarı ekran
+            // - Ekranin köşeleri: Çeyrek ekran
 
             if let Some(idx) = dragging_win {
                 compositor.focus_window(idx);
+                let usable_h = height.saturating_sub(gui::taskbar_h());
+                let half_w = width / 2;
+                let half_h = usable_h / 2;
 
                 if my <= 4 {
                     compositor.snap_window(idx, gui::SnapPosition::Top, width, height);
+                } else if my >= usable_h.saturating_sub(5) {
+                    if mx <= 4 {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
+                    } else if mx >= width.saturating_sub(5) {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
+                    } else if mx < half_w {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
+                    } else {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
+                    }
                 } else if mx <= 4 {
-                    compositor.snap_window(idx, gui::SnapPosition::Left, width, height);
+                    if my < half_h {
+                        compositor.snap_window(idx, gui::SnapPosition::TopLeft, width, height);
+                    } else {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomLeft, width, height);
+                    }
                 } else if mx >= width.saturating_sub(5) {
-                    compositor.snap_window(idx, gui::SnapPosition::Right, width, height);
+                    if my < half_h {
+                        compositor.snap_window(idx, gui::SnapPosition::TopRight, width, height);
+                    } else {
+                        compositor.snap_window(idx, gui::SnapPosition::BottomRight, width, height);
+                    }
                 }
             }
 
@@ -8624,7 +8729,9 @@ pub extern "C" fn _start() -> ! {
             } else if compositor.is_start_menu_open && ch == '\x08' {
                 compositor.start_search_focused = true;
                 compositor.backspace_start_search();
-            } else if compositor.is_start_menu_open && ch.is_ascii_alphanumeric() {
+            } else if compositor.is_start_menu_open
+                && (ch.is_ascii_alphanumeric() || ch == ' ' || ch == '-' || ch == '_' || ch == '.')
+            {
                 compositor.start_search_focused = true;
 
                 compositor.push_start_search(ch);
@@ -9055,19 +9162,50 @@ pub extern "C" fn _start() -> ! {
                     let game_elapsed_ms = crate::monotonic_ms().saturating_sub(game_start_ms);
                     last_game_tick_ms = now_ms;
                     // Update activity timestamp for watchdog
-                    if let Some(idx) = compositor
+                    let game_idx = compositor
                         .windows
                         .iter()
-                        .position(|w| w.is_some_and(|w| w.app_id == 15))
-                    {
+                        .position(|w| w.is_some_and(|w| w.app_id == 15));
+                    if let Some(idx) = game_idx {
                         app_last_activity[idx] = now_ms;
                     }
                     if game_elapsed_ms > GAME_UPDATE_BUDGET_MS {
-                        crate::serial_print("[GAMES] Uyarı: güncelleme bütçesi aştı (");
-                        crate::serial_print_dec(game_elapsed_ms);
-                        crate::serial_print(" ms > ");
-                        crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
-                        crate::serial_print(" ms)\n");
+                        game_budget_strikes = game_budget_strikes.saturating_add(1);
+                        if game_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
+                            crate::serial_print(
+                                "[GAMES] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
+                            );
+                            if let Some(idx) = game_idx {
+                                terminate_app(
+                                    idx,
+                                    &mut compositor,
+                                    &mut filemanager_app,
+                                    &mut settings_app,
+                                    &mut notepad_app,
+                                    &mut browser_app,
+                                    &mut imageviewer_app,
+                                    &mut musicplayer_app,
+                                    &mut videoplayer_app,
+                                    &mut taskmgr_app,
+                                    &mut calculator_app,
+                                    &mut paint_apps[idx],
+                                    &mut terminal_app,
+                                    &mut installer_app,
+                                    &mut viewer3d_app,
+                                    &mut pkgmgr_app,
+                                    &mut fps_game_app,
+                                    &mut fps_3d_app,
+                                );
+                            }
+                        } else {
+                            crate::serial_print("[GAMES] Uyarı: güncelleme bütçesi aştı (");
+                            crate::serial_print_dec(game_elapsed_ms);
+                            crate::serial_print(" ms > ");
+                            crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
+                            crate::serial_print(" ms)\n");
+                        }
+                    } else {
+                        game_budget_strikes = 0;
                     }
                     if changed {
                         force_render = true;
@@ -9154,19 +9292,50 @@ pub extern "C" fn _start() -> ! {
                     let fps3d_elapsed_ms = crate::monotonic_ms().saturating_sub(fps3d_start_ms);
                     last_fps3d_tick_ms = now_ms;
                     // Update activity timestamp for watchdog
-                    if let Some(idx) = compositor
+                    let fps3d_idx = compositor
                         .windows
                         .iter()
-                        .position(|w| w.is_some_and(|w| w.app_id == 16))
-                    {
+                        .position(|w| w.is_some_and(|w| w.app_id == 16));
+                    if let Some(idx) = fps3d_idx {
                         app_last_activity[idx] = now_ms;
                     }
                     if fps3d_elapsed_ms > GAME_UPDATE_BUDGET_MS {
-                        crate::serial_print("[FPS-3D] Uyarı: güncelleme bütçesi aştı (");
-                        crate::serial_print_dec(fps3d_elapsed_ms);
-                        crate::serial_print(" ms > ");
-                        crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
-                        crate::serial_print(" ms)\n");
+                        fps3d_budget_strikes = fps3d_budget_strikes.saturating_add(1);
+                        if fps3d_budget_strikes >= GAME_BUDGET_MAX_STRIKES {
+                            crate::serial_print(
+                                "[FPS-3D] Guard: oyun bütçeyi sürekli aşıyor, sonlandırılıyor\n",
+                            );
+                            if let Some(idx) = fps3d_idx {
+                                terminate_app(
+                                    idx,
+                                    &mut compositor,
+                                    &mut filemanager_app,
+                                    &mut settings_app,
+                                    &mut notepad_app,
+                                    &mut browser_app,
+                                    &mut imageviewer_app,
+                                    &mut musicplayer_app,
+                                    &mut videoplayer_app,
+                                    &mut taskmgr_app,
+                                    &mut calculator_app,
+                                    &mut paint_apps[idx],
+                                    &mut terminal_app,
+                                    &mut installer_app,
+                                    &mut viewer3d_app,
+                                    &mut pkgmgr_app,
+                                    &mut fps_game_app,
+                                    &mut fps_3d_app,
+                                );
+                            }
+                        } else {
+                            crate::serial_print("[FPS-3D] Uyarı: güncelleme bütçesi aştı (");
+                            crate::serial_print_dec(fps3d_elapsed_ms);
+                            crate::serial_print(" ms > ");
+                            crate::serial_print_dec(GAME_UPDATE_BUDGET_MS);
+                            crate::serial_print(" ms)\n");
+                        }
+                    } else {
+                        fps3d_budget_strikes = 0;
                     }
                 } else {
                     // Guard recovery: oyun içinde hata oluştu, uygulama kapatılacak

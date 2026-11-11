@@ -39,9 +39,7 @@ fn serial_print(s: &str) {
 // PCI ve MMIO yardımcıları
 
 // ---------------------------------------------------------------------------
-
 #[inline]
-
 fn io_out32(port: u16, val: u32) {
     unsafe {
         asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
@@ -49,7 +47,6 @@ fn io_out32(port: u16, val: u32) {
 }
 
 #[inline]
-
 fn io_in32(port: u16) -> u32 {
     let ret: u32;
 
@@ -61,7 +58,6 @@ fn io_in32(port: u16) -> u32 {
 }
 
 #[inline]
-
 unsafe fn mmio_read32(base: u64, off: u32) -> u32 {
     core::ptr::read_volatile((base + off as u64) as *const u32)
 }
@@ -121,7 +117,6 @@ fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
 }
 
 #[inline]
-
 fn pci_write32(bus: u8, dev: u8, func: u8, off: u8, val: u32) {
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -228,9 +223,7 @@ pub struct HdaBdlEntry {
 }
 
 // 128-byte hizalı DMA havuz yapısı
-
 #[repr(C, align(256))]
-
 pub struct HdaDmaPool {
     pub corb: [u32; CORB_SIZE], // 1024 B (0)
 
@@ -282,19 +275,16 @@ pub fn is_ready() -> bool {
 }
 
 /// DMA akışının sağlıklı ilerleyip ilerlemediğini döner.
-
 pub fn is_dma_progressing() -> bool {
     DMA_ADVANCES.load(Ordering::Relaxed) > 0 && DMA_STALL_COUNT.load(Ordering::Relaxed) < 6
 }
 
 /// DMA'nın takılıp takılmadığını döner (aralıksız 6 push boyunca LPIB değişmediyse).
-
 pub fn is_dma_stalled() -> bool {
     DMA_STALL_COUNT.load(Ordering::Relaxed) >= 6
 }
 
 /// Başlangıç veya ilerleme aşamasında DMA'nın geçerli olup olmadığını döner.
-
 pub fn is_dma_progressing_or_starting() -> bool {
     is_ready() && !is_dma_stalled()
 }
@@ -382,15 +372,12 @@ fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
 // ---------------------------------------------------------------------------
 
 #[inline]
-
 pub unsafe fn stream_lpib() -> u32 {
     mmio_read32(HDA_MMIO_BASE, HDA_SD_BASE + SD_LPIB)
 }
 
 /// Donanımsal DMA pozisyonunu döner. Önce DMA Position Buffer (RAM),
-
 /// yoksa donanım MMIO SD_LPIB register'ından okur.
-
 pub fn current_dma_pos() -> u32 {
     if !is_ready() {
         return 0;
@@ -416,7 +403,6 @@ pub fn current_dma_pos() -> u32 {
 }
 
 #[inline]
-
 pub unsafe fn stream_clear_sts() {
     // W1C: BCIS (bit2), FIFOE (bit4), DESCE (bit5)
 

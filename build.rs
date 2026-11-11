@@ -2,7 +2,7 @@ use fontdue::{Font, FontSettings};
 use std::env;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const FONT_SIZE: f32 = 14.0;
 
@@ -24,7 +24,7 @@ fn load_font(path: &str) -> Option<Font> {
 }
 
 /// Dosya yoksa indirmeyi dener; ağ yoksa sessizce `None` döner.
-fn ensure_fallback(name: &str, url: &str, dir: &PathBuf) -> Option<PathBuf> {
+fn ensure_fallback(name: &str, url: &str, dir: &Path) -> Option<PathBuf> {
     let path = dir.join(name);
     if path.exists() {
         return Some(path);

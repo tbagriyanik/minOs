@@ -197,7 +197,7 @@ impl MinGuiCompositor {
     }
 
     pub fn push_start_search(&mut self, ch: char) {
-        if !ch.is_ascii_alphanumeric() {
+        if !(ch.is_ascii_alphanumeric() || ch == ' ' || ch == '-' || ch == '_' || ch == '.') {
             return;
         }
         self.delete_start_search_selection();
@@ -315,20 +315,21 @@ impl MinGuiCompositor {
             return;
         }
         let mut at = index.min(self.start_search_len);
-        if at == self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() {
-            if at > 0 && self.start_search[at - 1].is_ascii_alphanumeric() {
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'_' || b == b'.';
+        if at == self.start_search_len || !is_word(self.start_search[at]) {
+            if at > 0 && is_word(self.start_search[at - 1]) {
                 at -= 1;
             }
         }
-        if at >= self.start_search_len || !self.start_search[at].is_ascii_alphanumeric() {
+        if at >= self.start_search_len || !is_word(self.start_search[at]) {
             return;
         }
         let mut start = at;
         let mut end = at + 1;
-        while start > 0 && self.start_search[start - 1].is_ascii_alphanumeric() {
+        while start > 0 && is_word(self.start_search[start - 1]) {
             start -= 1;
         }
-        while end < self.start_search_len && self.start_search[end].is_ascii_alphanumeric() {
+        while end < self.start_search_len && is_word(self.start_search[end]) {
             end += 1;
         }
         self.start_search_anchor = Some(start);
@@ -370,7 +371,7 @@ impl MinGuiCompositor {
         for ch in chars[..len]
             .iter()
             .copied()
-            .filter(|ch| ch.is_ascii_alphanumeric())
+            .filter(|ch| ch.is_ascii_alphanumeric() || *ch == ' ' || *ch == '-' || *ch == '_' || *ch == '.')
         {
             self.push_start_search(ch);
         }

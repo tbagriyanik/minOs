@@ -12,7 +12,7 @@ minOs release notes and future plans.
 - **🌐 Browser Improvements (Caching & Visualization):** VFS-based cache (`/browser/cache/`); CSS `transform`, `transition`/`animation`, `flexbox`/`grid`, shadows, border-radius, opacity; `imgdecode` improvements and SVG support.
 - **🌍 Progressive JPEG & @font-face Support:** Multi-scan progressive JPEG (SOF2) decoding; CSS `@font-face` and `@keyframes` (`color`/`background-color` interpolation).
 - **⏱️ IPv6-First HTTP (Dual-Stack):** AAAA resolved first, IPv6 connection attempted; falls back to IPv4 on failure. 3xx redirects and `chunked` decoding applied to IPv6 responses.
-- **🧩 HTTP/2 Client Core:** RFC 7540 frame layer (`h2`), HPACK encoder, `Http2Connection`, `http2_get()`. Infrastructure ready; browser still uses HTTP/1.1.
+- **🧩 HTTP/2 Client Core:** RFC 7540 frame layer (`h2`), HPACK encoder, `Http2Connection`, `http2_get()`. ALPN `h2` negotiation now active; browser uses HTTP/2 via `http2_get()` when the server selects `h2`.
 - **🐾 Browser Demo Pages:** `minos://demo`, `minos://demo-img`, `minos://demo-video`.
 - **🚫 Browser Freeze Fix:** External resources collected into `pending_resources` and fetched one per frame asynchronously by `poll_network()`; main event loop never blocked.
 - **🛠️ Browser Developer Tools:** `Ctrl+Shift+D` DevTools panel (Elements, Console, Network, Storage).
@@ -71,7 +71,7 @@ minOs release notes and future plans.
   - **Graceful `close_notify` (§6.1):** Server's `close_notify` no longer treated as fatal error.
 - **🌐 Browser Page Download and HTML Integration:** Downloaded pages saved under `/root/Downloads/` with `.html` extension. Double-clicking `.html`, `.htm`, `.xhtml` and `.url` files in File Manager opens them in the browser via `load_html`.
 - **🌍 Progressive JPEG, `@font-face` & `@keyframes` Color Animation:** The image decoder handles multi-scan **progressive JPEG** (SOF2) by accumulating coefficients; the CSS engine parses `@font-face` rules and carries `font-family` on `ElementStyle`; `@keyframes` now animates `color`/`background-color` in addition to `opacity`. Limit: remote TTF/WOFF data is not downloaded or rasterized.
-- **⏱️ IPv6-First HTTP & HTTP/2 Client Infrastructure:** `http_get_impl` resolves AAAA first and connects over IPv6 (TLS handshake over IPv6 for HTTPS), falling back to IPv4 on failure. `http.rs` gained the RFC 7540 frame layer, an HPACK request encoder and `Http2Connection` (`http2_get`). Limit: HTTPS frame encryption, ALPN `h2` negotiation and HPACK decoding are missing, so the browser still uses HTTP/1.1.
+- **⏱️ IPv6-First HTTP & HTTP/2 Client Infrastructure:** `http_get_impl` resolves AAAA first and connects over IPv6 (TLS handshake over IPv6 for HTTPS), falling back to IPv4 on failure. `http.rs` gained the RFC 7540 frame layer, an HPACK request encoder and `Http2Connection` (`http2_get`). ALPN `h2` negotiation now active; browser uses HTTP/2 via `http2_get()` when the server selects `h2`. Limit: HTTPS frame encryption and HPACK dynamic table / full header decoding still missing.
 - **🐾 Browser Demo Pages:** Three local demo pages added: `minos://demo`, `minos://demo-img`, `minos://demo-video`.
 - **Expanded Hardware Drivers (20+ New Drivers):** Networking, Bluetooth HCI, Storage, USB, Graphics, Sensors & Power, Bus & Timing.
 - **Live USB Hot-plug:** USB devices detected instantly while running with toast notifications.

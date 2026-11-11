@@ -47,9 +47,9 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | **HPACK** | `encode_get_headers` ile `:method GET`, `:scheme`, `:authority`, `:path` başlık bloğu kodlaması (statik tablo indeksleri) |
 | **Bağlantı** | `Http2Connection::connect` (istemci önyüzü + sunucu SETTINGS bekleme), `get()` (tek soket üzerinden çoklu akış, tek sayılı akış ID'leri), `close()` (GOAWAY) |
 | **Kolaylık API** | `http2_get(url, &mut buf)` |
-| **Sınırlar** | HTTPS'te TLS kaydı şifrelemesi, `Upgrade: h2c` / ALPN `h2` pazarlığı ve HPACK dinamik tablo + tam başlık çözümlemesi henüz yok (yalnızca `:status 200` sezgisel olarak bulunur) |
+| **Sınırlar** | HTTPS'te TLS kaydı şifrelemesi, `Upgrade: h2c` ve HPACK dinamik tablo + tam başlık çözümlemesi henüz yok (yalnızca `:status 200` sezgisel olarak bulunur); ALPN `h2` pazarlığı artık çalışmaktadır |
 
-> Tarayıcı hâlâ **HTTP/1.1** kullanır; HTTP/2 yolu tamamlandığında bağlanacaktır.
+> Sunucu ALPN ile `h2` seçerse tarayıcı `http2_get()` üzerinden HTTP/2 kullanır; aksi takdirde HTTP/1.1'e düşülür.
 
 ---
 
@@ -62,7 +62,7 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | **Şifreleme** | AES-128-GCM |
 | **Sertifika Doğrulama** | X.509, RFC 5280, `not_before` / `not_after` (CMOS RTC ile), CN ve SAN DNS kayıtları (RFC 6125), joker `*.domain.com` |
 | **Zincir Derinliği** | `MAX_CHAIN_DEPTH` (6) sertifika sınırı |
-| **İptal Kontrolü** | CRL & OCSP ayrıştırma, fail-closed politika |
+| **İptal Kontrolü** | CRL & OCSP ayrıştırma, imza doğrulamalı, fail-closed politika; delegated OCSP yanıtlayıcısı desteklenir |
 | **Kök CA Deposu** | 51 güvenilen kök CA sertifikası (`src/drivers/crypto/roots/`) |
 
 > Let's Encrypt ISRG Root X1 & X2, Google Trust Services, DigiCert, SSL.com, GoDaddy, Starfield, IdenTrust, QuoVadis, Certum, Buypass, Actalis, T-TeleSec, Microsoft, D-TRUST, Telia, SwissSign, OISTE WISeKey, FNMT-RCM, SECOM kökleri dahil.

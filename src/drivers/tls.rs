@@ -676,7 +676,6 @@ impl TlsSession {
 
         let inner = gcm.decrypt(&nonce, &gcm_aad, ct, &tag_arr).map_err(|_| {
             serial_print("[TLS] GCM şifre çözme hatası\n");
-            ()
         })?;
         // Ic duz metinden el sikisma icerigini ve icerik turunu ayir.
         let (content, content_type) = Self::tls13_strip_inner_plaintext(&inner)?;
@@ -1271,25 +1270,6 @@ impl TlsSession {
                     }
                     _ => {
                         serial_print("alan doğrulama hatası\n");
-                    }
-                }
-                return Err(());
-            } else if let Err(e) = chain_res {
-                self.cert_verified = false;
-                self.cert_error = Some(e);
-                serial_print("[TLS] Sertifika zincir hatası: ");
-                match e {
-                    crate::drivers::crypto::x509::CertValidationError::UntrustedRoot => {
-                        serial_print("kök sertifika güvenilmiyor (gömülü kök CA'lar eşleşmedi)\n");
-                    }
-                    crate::drivers::crypto::x509::CertValidationError::InvalidSignature => {
-                        serial_print("geçersiz CA imzası\n");
-                    }
-                    crate::drivers::crypto::x509::CertValidationError::UnsupportedSignatureAlgorithm => {
-                        serial_print("desteklenmeyen imza algoritması\n");
-                    }
-                    _ => {
-                        serial_print("zincir doğrulama hatası\n");
                     }
                 }
                 return Err(());

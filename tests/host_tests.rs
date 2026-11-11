@@ -14,8 +14,6 @@
 #[macro_use]
 extern crate alloc;
 
-
-
 #[path = "../src/drivers/crypto/mod.rs"]
 pub mod crypto;
 

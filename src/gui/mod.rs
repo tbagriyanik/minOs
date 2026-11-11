@@ -2,11 +2,14 @@ pub mod clipboard;
 pub mod context;
 pub mod desktop;
 pub mod draw;
+pub mod event_loop;
 pub mod font_render;
 pub mod icons;
 pub mod overlay;
+pub mod renderer;
 pub mod screens;
 pub mod scrollbar;
+pub mod setup;
 pub mod startmenu;
 pub mod taskbar;
 pub mod textbuf;
@@ -20,8 +23,10 @@ pub mod widget;
 pub mod window;
 
 pub use context::*;
+pub use event_loop::*;
 pub use screens::*;
 pub use scrollbar::{ScrollState, ScrollbarGeom};
+pub use setup::*;
 pub use textbuf::TextBuf;
 pub use toast::*;
 pub use window::*;
@@ -463,7 +468,7 @@ impl MinGuiCompositor {
         }
     }
 
-    /// Pencereyi ekranın sol yarısına, sağ yarısına veya tam ekrana yaslar (Aero Snap).
+    /// Pencereyi ekranın sol yarısına, sağ yarısına, tam ekrana veya çeyreklere yaslar (Aero Snap).
     pub fn snap_window(
         &mut self,
         idx: usize,
@@ -476,6 +481,8 @@ impl MinGuiCompositor {
             if !win.is_maximized && win.restore.is_none() {
                 win.restore = Some((win.x, win.y, win.width, win.height));
             }
+            let half_w = screen_w / 2;
+            let half_h = usable_h / 2;
             match snap {
                 SnapPosition::Top => {
                     win.x = 0;
@@ -487,16 +494,43 @@ impl MinGuiCompositor {
                 SnapPosition::Left => {
                     win.x = 0;
                     win.y = 0;
-                    win.width = screen_w / 2;
+                    win.width = half_w;
                     win.height = usable_h;
                     win.is_maximized = false;
                 }
                 SnapPosition::Right => {
-                    let half_w = screen_w / 2;
                     win.x = half_w;
                     win.y = 0;
                     win.width = screen_w.saturating_sub(half_w);
                     win.height = usable_h;
+                    win.is_maximized = false;
+                }
+                SnapPosition::TopLeft => {
+                    win.x = 0;
+                    win.y = 0;
+                    win.width = half_w;
+                    win.height = half_h;
+                    win.is_maximized = false;
+                }
+                SnapPosition::TopRight => {
+                    win.x = half_w;
+                    win.y = 0;
+                    win.width = screen_w.saturating_sub(half_w);
+                    win.height = half_h;
+                    win.is_maximized = false;
+                }
+                SnapPosition::BottomLeft => {
+                    win.x = 0;
+                    win.y = half_h;
+                    win.width = half_w;
+                    win.height = usable_h.saturating_sub(half_h);
+                    win.is_maximized = false;
+                }
+                SnapPosition::BottomRight => {
+                    win.x = half_w;
+                    win.y = half_h;
+                    win.width = screen_w.saturating_sub(half_w);
+                    win.height = usable_h.saturating_sub(half_h);
                     win.is_maximized = false;
                 }
             }

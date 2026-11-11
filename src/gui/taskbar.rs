@@ -399,7 +399,61 @@ impl MinGuiCompositor {
             );
         }
 
-        // 4. Saat Düğmesi (l.clock)
+        // 4. "Masaüstü Göster" Düğmesi (l.desktop)
+        let desktop_hover = in_rect(mx, my, l.desktop);
+        let all_minimized = self
+            .windows
+            .iter()
+            .flatten()
+            .all(|w| !w.is_open || w.is_minimized);
+        let desktop_bg = if all_minimized {
+            Color::ACCENT_BLUE
+        } else if desktop_hover {
+            Self::shade(Color::TITLE_BAR, 16)
+        } else {
+            Color::TASKBAR_BG
+        };
+        fb.draw_rounded_rect(
+            l.desktop.0,
+            l.desktop.1,
+            l.desktop.2,
+            l.desktop.3,
+            5,
+            desktop_bg,
+        );
+        fb.draw_rounded_rect_outline(
+            l.desktop.0,
+            l.desktop.1,
+            l.desktop.2,
+            l.desktop.3,
+            5,
+            Color::BORDER,
+        );
+        // Masaüstü ikonu: basit bir pencere çizimi
+        let icon_w = sp(14);
+        let icon_h = sp(14);
+        let icon_x = l.desktop.0 + (l.desktop.2.saturating_sub(icon_w)) / 2;
+        let icon_y = l.desktop.1 + (l.desktop.3.saturating_sub(icon_h)) / 2;
+        fb.draw_rect_outline(
+            icon_x,
+            icon_y,
+            icon_w,
+            icon_h,
+            if desktop_hover {
+                Color::TEXT_MAIN
+            } else {
+                Color::TEXT_MUTED
+            },
+        );
+        fb.draw_rect(
+            icon_x + 2,
+            icon_y + 2,
+            icon_w.saturating_sub(4),
+            icon_h.saturating_sub(4),
+            Color::TASKBAR_BG,
+        );
+
+        // 5. Saat Düğmesi (l.clock)
         let clock_hover = in_rect(mx, my, l.clock) || self.is_calendar_open;
         let mut clock = TextBuf::new();
         clock.push_u2(now.hour as u32);

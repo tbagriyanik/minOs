@@ -1594,7 +1594,7 @@ impl FpsGameApp {
 
             // Köşegen hareketi normalize et (√2 hız artışını önle).
             if dx != 0.0 && dy != 0.0 {
-                let inv_sqrt2 = 0.70710678;
+                let inv_sqrt2 = core::f32::consts::FRAC_1_SQRT_2;
                 dx *= inv_sqrt2;
                 dy *= inv_sqrt2;
             }

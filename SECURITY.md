@@ -44,8 +44,12 @@ minOs'ta kriptografik ilkeller ağırlıklı olarak **elle yazılmıştır** (`s
 ### Bilinen kısıtlar ve riskler
 
 - **Sertifika zinciri doğrulaması gömülü kök CA deposuyla sınırlıdır.** Depoda bulunmayan bir kök CA'ya
-  dayanan siteler (`UntrustedRoot`) reddedilir; ayrıca CRL/OCSP yanıtlarının **otomatik indirilmesi
-  (HTTP/OCSP isteği üretimi) henüz yoktur**, iptal durumu `Manual` kaynakla elle işaretlenebilir.
+  dayanan siteler (`UntrustedRoot`) reddedilir; CRL/OCSP yanıtlarının otomatik indirilmesi
+  (`revocation_fetch.rs`, HTTP GET üzerinden) imza doğrulamalı olarak çalışır, iptal durumu
+  `Manual` kaynakla elle işaretlenebilir. `revocation::apply_ocsp` (imza doğrulamasız) kullanım
+  dışı bırakıldı; doğrulanmış yol `revocation_fetch::apply_ocsp_verified` /
+  `fetch_and_apply_revocation` üzerinden zorunlu tutulmuştur. Delegated OCSP yanıtlayıcısı
+  (`certs [0]` zinciri) `OcspResponseInfo::verify_signature_with_issuer` ile desteklenir.
 - **CSPRNG yoktur.** İstemci `random` ve `pre_master_secret`/`master_secret` üretimi
   `main_monotonic_ms()` tabanlıdır; kriptografik olarak güvenli rastgelelik sağlanmaz.
 - **Anahtar materyali bellekte düz (plaintext) tutulur.** `master_secret`, oturum anahtarları ve

@@ -2005,8 +2005,6 @@ unsafe fn load_report_layout(
     }
 }
 
-/// HID kullanım kimliğini PS/2 set-1 tarama koduna çevirir.
-/// Dönüş: (scancode, genişletilmiş mi?)
 // ---------------------------------------------------------------------------
 // Aygıt numaralandırma
 // ---------------------------------------------------------------------------

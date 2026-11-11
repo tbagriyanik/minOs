@@ -71,7 +71,6 @@ const F_RDI: usize = 5;
 pub(crate) const F_R15: usize = 14;
 
 /// CPU itmeli çerçeve (iretq hedefi): RIP/CS/RFLAGS/RSP/SS.
-
 const F_IRIP: usize = 15;
 
 const F_ICS: usize = 16;
@@ -81,10 +80,8 @@ const F_IRSP: usize = 18;
 const F_ISS: usize = 19;
 
 /// Naked `int $0x80` işleyicisi: yazmaçları saklar, Rust'a devreder, `iretq`.
-
 #[no_mangle]
 #[unsafe(naked)]
-
 pub unsafe extern "C" fn int80_entry() {
     core::arch::naked_asm!(
 
@@ -278,7 +275,6 @@ pub fn take_last_output() -> Option<alloc::string::String> {
 }
 
 /// Hata kodlu kesici çerçevesi: int80 çerçevesi + tabanda hata kodu.
-
 pub(crate) const EF_RIP: usize = 16;
 
 pub(crate) const EF_CS: usize = 17;
@@ -504,9 +500,7 @@ fault_entry!(gp_entry, 13u32, rust_fault);
 fault_entry!(pf_entry, 14u32, rust_fault);
 
 /// Ring3 hatası: kaydet, RIP'i park döngüsüne yönlendir, `iretq` ile dön.
-
 /// Çekirdek hatası: seriye yazıp dur (üçlü hata yerine kontrollü durma).
-
 #[no_mangle]
 pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
     let (cs, rip) = unsafe {
@@ -786,15 +780,12 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
 // --- Ring3 girişi ----------------------------------------------------------------
 
 #[repr(C, align(16))]
-
 struct AlignedKStack([u8; 16 * 1024]);
 
 /// Ring3 -> Ring0 geçiş yığını (yalnızca BSP demosu için 16 KiB, 16 bayt hizalı).
-
 static mut RING3_KSTACK: AlignedKStack = AlignedKStack([0; 16 * 1024]);
 
 /// `enter_usermode` girişindeki çekirdek RSP'si (EXIT dönüşü için).
-
 static SAVED_KRSP: AtomicU64 = AtomicU64::new(0);
 
 fn ring3_kstack_top() -> u64 {
@@ -802,18 +793,14 @@ fn ring3_kstack_top() -> u64 {
 }
 
 /// EXIT dönüş trampolini: `iretq` buraya (Ring0) dallanır; `ret`
-
 /// `enter_usermode` çağrıcısına döner.
-
 #[no_mangle]
 #[unsafe(naked)]
-
 pub unsafe extern "C" fn ring3_exit_trampoline() {
     core::arch::naked_asm!("ret", options(),)
 }
 
 /// Ring3 giriş yığınını hazırlar (TSS.rsp0) ve tepesini döndürür.
-
 pub fn prepare_usermode_stack() -> u64 {
     let top = ring3_kstack_top();
 
@@ -823,14 +810,10 @@ pub fn prepare_usermode_stack() -> u64 {
 }
 
 /// Kullanıcı giriş noktasına `iretq` ile geçer (çıplak sarmalayıcı).
-
 /// RDI = giriş RIP'i, RSI = kullanıcı yığın tepesi (C ABI).
-
 /// Prolog yoktur; ilk iş RSP'yi (dönüş adresi yuvası) kaydetmektir.
-
 #[no_mangle]
 #[unsafe(naked)]
-
 pub unsafe extern "C" fn enter_usermode_raw(entry: u64, stack_top: u64) {
     core::arch::naked_asm!(
 
@@ -862,11 +845,8 @@ pub unsafe extern "C" fn enter_usermode_raw(entry: u64, stack_top: u64) {
 }
 
 /// Kullanıcı giriş noktasına `iretq` ile geçer.
-
 /// Kullanıcı `SYS_EXIT` çağırırsa bu fonksiyon normal şekilde döner;
-
 /// aksi halde (parkta takılma) dönmez.
-
 pub unsafe fn enter_usermode(entry: u64, stack_top: u64) {
     prepare_usermode_stack();
 
@@ -882,9 +862,7 @@ const DEMO_RESULT: u64 = 0x0000_0000_0060_0000;
 const DEMO_STACK_TOP: u64 = crate::mm::loader::USER_STACK_TOP - 16;
 
 /// Demo program A: getpid -> paylaşılan sayfaya yaz -> EXIT -> (park).
-
 /// B8 02 00 00 00 | CD 80 | 48 A3 <imm64=RESULT> | B8 01 00 00 00 | CD 80 | EB FE
-
 fn prog_getpid() -> [u8; 26] {
     let mut p = [0u8; 26];
 
@@ -910,9 +888,7 @@ fn prog_getpid() -> [u8; 26] {
 const PROG_A_PARK_OFF: u64 = 24;
 
 /// Demo program B: hlt (#GP üretir) -> EXIT saplaması -> park.
-
 /// +0: F4 | +1: B8 01 00 00 00 | CD 80 | EB FE
-
 fn prog_fault() -> [u8; 10] {
     [0xF4, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xEB, 0xFE]
 }
@@ -1006,7 +982,6 @@ fn read_result() -> u64 {
 }
 
 /// Ring3 izolasyon demosu. Başarıda true döner; her adım seriye raporlanır.
-
 pub fn demo(
     aspace: &mut crate::mm::vmm::AddressSpace,
 
@@ -1132,9 +1107,7 @@ pub fn demo(
 }
 
 /// Yüklenen bir kullanıcı programını Ring 3'te çalıştırır.
-
 /// Giriş noktasına atlar, program `SYS_EXIT` çağırdığında veya bir istisnada güvenle çekirdeğe döner.
-
 pub fn execute_loaded_program(prog: &crate::mm::loader::LoadedProgram) -> bool {
     install_gates();
 

@@ -109,8 +109,14 @@ pub fn apply_crl(
     r
 }
 
-/// Bir OCSP yanıtını ayrıştırıp depoya yazar (imza doğrulaması çağıranın
-/// sorumluluğundadır; `OcspResponseInfo::verify_signature`).
+/// Bir OCSP yanıtını ayrıştırıp depoya yazar.
+///
+/// **Kullanım dışı:** imza doğrulaması yapmaz; sahte yanıtlara karşı savunmasızdır.
+/// Doğrulanmış yolu tercih edin: `fetch_and_apply_revocation` / `apply_ocsp_verified`
+/// (revocation_fetch modülü).
+#[deprecated(
+    note = "use fetch_and_apply_revocation / apply_ocsp_verified which verify the OCSP signature"
+)]
 pub fn apply_ocsp(
     ocsp_der: &[u8],
     leaf_serial: &[u8],

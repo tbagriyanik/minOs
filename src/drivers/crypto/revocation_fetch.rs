@@ -319,13 +319,8 @@ fn apply_ocsp_verified(
     leaf_serial: &[u8],
     now: &super::x509::X509Time,
 ) -> RevocationResult {
-    let Ok(info) = super::revocation_core::parse_ocsp_response(ocsp_der) else {
-        return RevocationResult::unknown();
-    };
-    if info.verify_signature_with_issuer(issuer_der).is_err() {
-        return RevocationResult::unknown();
-    }
-    let r = super::revocation_core::check_ocsp(ocsp_der, leaf_serial, now)
+    // check_ocsp artık imza doğrulaması yapıyor
+    let r = super::revocation_core::check_ocsp(ocsp_der, leaf_serial, now, issuer_der)
         .unwrap_or_else(|_| RevocationResult::unknown());
     super::revocation::set_status(super::revocation::RevocationSource::Ocsp, r);
     r

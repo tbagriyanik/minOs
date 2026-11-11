@@ -24,22 +24,22 @@ impl MinGuiCompositor {
         // seçilir; hiçbir tepsi öğesi metni yanındaki öğeye taşmaz veya
         // yapışmaz. (Metin hücresi artık 10px olduğu için ölçüler buna göre.)
         //   saat:  "HH:MM:SS" = 8 hücre = 80px + sol boşluk -> 92px
+        //   minimize_all: ince mavi çizgi -> 12px
         //   ses:   ikon ~26px -> 46px
         //   ağ:    ikon 24px + "eth0" 40px -> 72px
         //   klavye:ikon 30px + "TR"/"EN" 20px -> 54px
         let clock_w = sp(92);
+        let minimize_all_w = sp(12);
         let vol_w = sp(44);
         let net_w = sp(68);
         let kbd_w = sp(50);
-        let desktop_w = sp(44);
         let gap = sp(8);
 
         let clock_x = width.saturating_sub(pad + clock_w);
         let mut curr_x = clock_x;
 
-        // "Show Desktop" düğmesi (saat solunda)
-        let desktop_rect = (curr_x.saturating_sub(gap + desktop_w), by, desktop_w, h);
-        curr_x = desktop_rect.0;
+        // "Show Desktop" düğmesi (ince mavi dikey çizgi - saat sağına taşındı)
+        let minimize_all_rect = (clock_x + clock_w + gap, by, minimize_all_w, h);
 
         let volume_rect = if audio_available {
             let x = curr_x.saturating_sub(gap + vol_w);
@@ -63,10 +63,11 @@ impl MinGuiCompositor {
             tb_y,
             start: (6, by, sp(112), h),
             clock: (clock_x, by, clock_w, h),
+            minimize_all: minimize_all_rect,
             volume: volume_rect,
             network: network_rect,
             kbd: (kbd_x, by, kbd_w, h),
-            desktop: desktop_rect,
+            desktop: (0, 0, 0, 0),
         }
     }
     // -----------------------------------------------------------------------

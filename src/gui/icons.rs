@@ -4,7 +4,70 @@ use super::*;
 
 impl MinGuiCompositor {
     /// minOs kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
+    /// 32x32 kaynak çözünürlük kullanır - daha yüksek kalite için.
     fn draw_icon_bitmap(
+        fb: &mut Framebuffer,
+        x: usize,
+        y: usize,
+        size: usize,
+        source: &[u32; 1024],
+    ) {
+        let mut resolved = [0u32; 1024];
+        for (output, input) in resolved.iter_mut().zip(source.iter()) {
+            if *input != 0 {
+                *output = theme::resolve(*input);
+            }
+        }
+        const SRC_SIZE: usize = 32;
+        for dy in 0..size {
+            let sy0 = dy * SRC_SIZE;
+            let sy1 = (dy + 1) * SRC_SIZE;
+            let row_start = sy0 / size;
+            let row_end = ((sy1 - 1) / size).min(SRC_SIZE - 1);
+            for dx in 0..size {
+                let sx0 = dx * SRC_SIZE;
+                let sx1 = (dx + 1) * SRC_SIZE;
+                let col_start = sx0 / size;
+                let col_end = ((sx1 - 1) / size).min(SRC_SIZE - 1);
+                let mut covered = 0u32;
+                let mut red = 0u32;
+                let mut green = 0u32;
+                let mut blue = 0u32;
+                for row in row_start..=row_end {
+                    let oy = sy1
+                        .min((row + 1) * size)
+                        .saturating_sub(sy0.max(row * size));
+                    for col in col_start..=col_end {
+                        let color = resolved[row * SRC_SIZE + col];
+                        if color == 0 {
+                            continue;
+                        }
+                        let ox = sx1
+                            .min((col + 1) * size)
+                            .saturating_sub(sx0.max(col * size));
+                        let weight = (ox * oy) as u32;
+                        covered += weight;
+                        red += ((color >> 16) & 0xFF) * weight;
+                        green += ((color >> 8) & 0xFF) * weight;
+                        blue += (color & 0xFF) * weight;
+                    }
+                }
+                if covered == 0 {
+                    continue;
+                }
+                let color = ((red / covered) << 16) | ((green / covered) << 8) | (blue / covered);
+                let alpha = ((covered * 255 + 128) / 256) as u8;
+                if alpha == 255 {
+                    fb.put_pixel(x + dx, y + dy, color);
+                } else {
+                    fb.put_subpixel_text(x + dx, y + dy, color, [alpha; 3]);
+                }
+            }
+        }
+    }
+
+    /// 16x16 kaynak için geriye dönük uyumluluk (eski ikonlar için)
+    fn draw_icon_bitmap_16x16(
         fb: &mut Framebuffer,
         x: usize,
         y: usize,
@@ -136,43 +199,62 @@ impl MinGuiCompositor {
     }
 
     pub(crate) fn draw_cat_icon_at_size(fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
-        let mut bitmap = [0u32; 256];
-        const CAT_ICON_MAP: [u16; 16] = [
-            0b0110000000000110,
-            0b1111000000001111,
-            0b1111111111111111,
-            0b1111111111111111,
-            0b1100111111110011,
-            0b1100111111110011,
-            0b1111111111111111,
-            0b1001111001111001,
-            0b1111110000111111,
-            0b0111111111111110,
-            0b0011111111111100,
-            0b0011111111111100,
-            0b0111001111001110,
-            0b0111001111001110,
-            0b0011111111111100,
-            0b0000000000000000,
+        let mut bitmap = [0u32; 1024];
+
+        // 32x32 kedi ikonu - daha yüksek çözünürlük
+        // Her satır 32 bitlik maskeler (iki u32 ile temsil edilebilir)
+        const CAT_ICON_MAP: [u32; 32] = [
+            0b00000000001100000000000000011000, // Row 0
+            0b00000000111100000000000011110000, // Row 1
+            0b00000011111100000000000011111100, // Row 2
+            0b00000111111100000000000011111110, // Row 3
+            0b00001111111100000000000011111111, // Row 4
+            0b00001111111100000000000011111111, // Row 5
+            0b00011111111100000000000011111111, // Row 6
+            0b00011111111100000000000011111111, // Row 7
+            0b00111111111100000000000011111111, // Row 8
+            0b00111111111100000000000011111111, // Row 9
+            0b00111111111100000000000011111111, // Row 10
+            0b00111111111100000000000011111111, // Row 11
+            0b00111111111100000000000011111111, // Row 12
+            0b00111111111100000000000011111111, // Row 13
+            0b00111111111100000000000011111111, // Row 14
+            0b00111111111100000000000011111111, // Row 15
+            0b00111111111100000000000011111111, // Row 16
+            0b00111111111100000000000011111111, // Row 17
+            0b00111111111100000000000011111111, // Row 18
+            0b00111111111100000000000011111111, // Row 19
+            0b00111111111100000000000011111111, // Row 20
+            0b00111111111100000000000011111111, // Row 21
+            0b00111111111100000000000011111111, // Row 22
+            0b00111111111100000000000011111111, // Row 23
+            0b00111111111100000000000011111111, // Row 24
+            0b00111111111100000000000011111111, // Row 25
+            0b00111111111100000000000011111111, // Row 26
+            0b00111111111100000000000011111111, // Row 27
+            0b00111111111100000000000011111111, // Row 28
+            0b00111111111100000000000011111111, // Row 29
+            0b00111111111100000000000011111111, // Row 30
+            0b00000000000000000000000000000000, // Row 31
         ];
 
         for (row, &mask) in CAT_ICON_MAP.iter().enumerate() {
-            for col in 0..16 {
-                if (mask & (1 << (15 - col))) != 0 {
-                    let pixel_color = if (row == 4 || row == 5)
-                        && (col == 2 || col == 3 || col == 12 || col == 13)
+            for col in 0..32 {
+                if (mask & (1 << (31 - col))) != 0 {
+                    let pixel_color = if (row >= 8 && row <= 9)
+                        && (col >= 4 || col <= 5 || col >= 26 || col <= 27)
                     {
                         Color::ACCENT_BLUE
-                    } else if row == 8 && (col == 7 || col == 8) {
+                    } else if row >= 16 && row <= 17 && col >= 14 && col <= 17 {
                         Color::ACCENT_PINK
                     } else if theme::current() == theme::ThemeId::Daylight {
                         0xE67E22
-                    } else if row <= 1 {
+                    } else if row <= 3 {
                         Color::ACCENT_CAT_EARS
                     } else {
                         Color::TEXT_MAIN
                     };
-                    bitmap[row * 16 + col] = pixel_color;
+                    bitmap[row * 32 + col] = pixel_color;
                 }
             }
         }
@@ -215,7 +297,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Notlar / Not Defteri Simgesi (16x16)
@@ -256,7 +338,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Web Tarayıcısı / Ağ Simgesi (16x16)
@@ -293,7 +375,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Müzik Çalar / Çalma Listesi Simgesi (16x16)
@@ -330,7 +412,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Sistem Ayarları / Dişli Çark Simgesi (16x16)
@@ -367,7 +449,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// 16x16 3D İzometrik Paket / Koli Kutusu simgesi (Paket Yöneticisi ve Kurulu Uygulamalar için).
@@ -522,7 +604,7 @@ impl MinGuiCompositor {
             set_px(14, c, c_edge);
         }
 
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Dama taşı simgesi (16x16) — Dama sekmesi için.
@@ -554,7 +636,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Mayın simgesi (16x16) — Mayın Tarlası sekmesi için.
@@ -591,7 +673,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, s, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, s, &bitmap);
     }
 
     /// Satranç taşı silüeti (16x16). Her satır bir bit maskesidir; bit 15 en
@@ -783,8 +865,8 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, size, &border);
-        Self::draw_icon_bitmap(fb, x, y, size, &body);
+        Self::draw_icon_bitmap_16x16(fb, x, y, size, &border);
+        Self::draw_icon_bitmap_16x16(fb, x, y, size, &body);
     }
 
     /// Satranç taşını varsayılan ikon boyutunda tema metin rengiyle çizer.
@@ -798,7 +880,7 @@ impl MinGuiCompositor {
                 }
             }
         }
-        Self::draw_icon_bitmap(fb, x, y, Self::icon_size(), &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, Self::icon_size(), &bitmap);
     }
 
     /// Satranç Şah simgesi (16x16).

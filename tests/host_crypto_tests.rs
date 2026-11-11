@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 
 use crate::drivers::crypto::revocation_core::{
-    certificate_serial, check_crl_verified, check_ocsp, serials_equal, RevocationStatus,
+    certificate_serial, check_crl_verified, check_ocsp_unverified, serials_equal, RevocationStatus,
 };
 use crate::drivers::crypto::x509::X509Time;
 
@@ -299,7 +299,7 @@ fn ocsp_crl_invalid_ocsp_returns_unknown() {
         Err(_) => return,
     };
 
-    let result = check_ocsp(&[], &serial, &test_now());
+    let result = check_ocsp_unverified(&[], &serial, &test_now());
     match result {
         Ok(r) => assert_eq!(
             r.status,
@@ -309,7 +309,7 @@ fn ocsp_crl_invalid_ocsp_returns_unknown() {
         Err(_) => {} // Ayrıştırma hatasi kabul edilebilir
     }
 
-    let result = check_ocsp(&[0xff, 0xff, 0xff], &serial, &test_now());
+    let result = check_ocsp_unverified(&[0xff, 0xff, 0xff], &serial, &test_now());
     match result {
         Ok(r) => assert_eq!(
             r.status,
@@ -344,7 +344,7 @@ fn ocsp_crl_fail_closed_core() {
     }
 
     // Gecersiz OCSP -> Unknown
-    let result = check_ocsp(&[], &serial, &test_now());
+    let result = check_ocsp_unverified(&[], &serial, &test_now());
     match result {
         Ok(r) => assert_eq!(
             r.status,
@@ -379,7 +379,7 @@ fn ocsp_crl_check_all_roots() {
         }
 
         // Gecersiz OCSP -> Unknown veya hata
-        let result = check_ocsp(&[], &serial, &test_now());
+        let result = check_ocsp_unverified(&[], &serial, &test_now());
         match result {
             Ok(r) => assert_eq!(
                 r.status,

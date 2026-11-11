@@ -271,8 +271,9 @@ pub fn net_test_btn_rect(
     win_w: usize,
     win_h: usize,
 ) -> (usize, usize, usize, usize) {
-    let refresh = refresh_btn_rect(win_x, win_y, win_w, win_h);
-    (refresh.0.saturating_sub(124 + 8), refresh.1, 124, refresh.3)
+    let anchor = perf_btn_rect(win_x, win_y, win_w, win_h);
+    let bw = 124.min(win_w.saturating_sub(24));
+    (anchor.0, anchor.1, bw, anchor.3)
 }
 
 fn draw_row(

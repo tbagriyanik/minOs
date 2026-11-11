@@ -230,12 +230,11 @@ impl TaskManagerApp {
         win_y: usize,
         win_w: usize,
     ) -> (usize, usize, usize, usize) {
-        (
-            win_x + win_w.saturating_sub(190),
-            win_y + TM_ACTION_Y + TM_ACTION_H + 4,
-            180,
-            52,
-        )
+        let kill = Self::kill_btn_rect(win_x, win_y, win_w);
+        let menu_w = 180.min(win_w.saturating_sub(24));
+        // Menüyü kill button'un tam soluna yerleştir, asla üzerine gelmesin
+        let x = kill.0.saturating_sub(menu_w + 12).max(win_x + 12);
+        (x, win_y + TM_ACTION_Y + TM_ACTION_H + 4, menu_w, 52)
     }
 
     pub fn actions_menu_item_rect(
@@ -253,12 +252,15 @@ impl TaskManagerApp {
         win_y: usize,
         win_w: usize,
     ) -> (usize, usize, usize, usize) {
-        (
-            win_x + win_w.saturating_sub(270),
-            win_y + TM_ACTION_Y + TM_ACTION_H + 4,
-            260,
-            28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H,
-        )
+        let button = Self::launch_button_rect(win_x, win_y, win_w);
+        let kill = Self::kill_btn_rect(win_x, win_y, win_w);
+        let menu_w = 260.min(win_w.saturating_sub(24));
+        let x = button
+            .0
+            .saturating_sub(menu_w)
+            .max(win_x + 12)
+            .min(kill.0.saturating_sub(menu_w + 12).max(win_x + 12));
+        (x, win_y + TM_ACTION_Y + TM_ACTION_H + 4, menu_w, 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H)
     }
 
     pub fn launch_item_rect(

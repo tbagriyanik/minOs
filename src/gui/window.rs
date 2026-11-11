@@ -494,6 +494,8 @@ pub struct TrayLayout {
     pub start: (usize, usize, usize, usize),
     /// Clock/time display bounds.
     pub clock: (usize, usize, usize, usize),
+    /// Minimize all button bounds (thin blue vertical line).
+    pub minimize_all: (usize, usize, usize, usize),
     /// Volume control bounds.
     pub volume: (usize, usize, usize, usize),
     /// Network status bounds.

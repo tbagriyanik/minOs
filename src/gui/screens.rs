@@ -219,8 +219,14 @@ pub fn render_boot_error(fb: &mut Framebuffer, width: usize, height: usize) {
 
 /// Hoş geldin ekranı seçim alanları; çizim ve giriş işleme aynı geometriyi kullanır.
 fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    let w = 480.min(width.saturating_sub(24)).max(320);
-    let h = 290.min(height.saturating_sub(24)).max(240);
+    let w = 520.min(width.saturating_sub(24)).max(320);
+    let cols = if w >= 420 { 4 } else if w >= 350 { 3 } else { 2 };
+    let rows = (theme::ThemeId::ALL.len() + cols - 1) / cols;
+    let row_gap = 10;
+    let card_h = 46;
+    let theme_h = rows * card_h + (rows.saturating_sub(1)) * row_gap;
+    let reserve_h = 190; // dil, başlık, alt bilgi ve düğme alanı için boşluk.
+    let h = (reserve_h + theme_h).max(310).min(height.saturating_sub(24)).max(260);
     (
         (width.saturating_sub(w)) / 2,
         (height.saturating_sub(h)) / 2,
@@ -235,7 +241,7 @@ pub fn welcome_language_rect(
     index: usize,
 ) -> (usize, usize, usize, usize) {
     let (x, y, _, _) = welcome_panel(width, height);
-    (x + 28 + index * 140, y + 94, 126, 32)
+    (x + 28 + index * 140, y + 84, 126, 32)
 }
 
 pub fn welcome_theme_rect(
@@ -243,8 +249,26 @@ pub fn welcome_theme_rect(
     height: usize,
     index: usize,
 ) -> (usize, usize, usize, usize) {
-    let (x, y, _, _) = welcome_panel(width, height);
-    (x + 28 + index * 82, y + 164, 74, 50)
+    let (x, y, w, h) = welcome_panel(width, height);
+    let cols = if w >= 420 { 4 } else if w >= 350 { 3 } else { 2 };
+    let gap_x = 10;
+    let gap_y = 10;
+    let card_h = 46;
+    let available_w = w.saturating_sub(56).max(1);
+    let card_w = available_w.saturating_sub(gap_x * (cols - 1)) / cols;
+    let rows = (theme::ThemeId::ALL.len() + cols - 1) / cols;
+    let theme_total_h = rows * card_h + (rows.saturating_sub(1)) * gap_y;
+    let theme_top = y + 148;
+    let bottom_limit = y + h.saturating_sub(76);
+    let theme_y = theme_top.min(bottom_limit.saturating_sub(theme_total_h));
+    let col = index % cols;
+    let row = index / cols;
+    (
+        x + 28 + col * (card_w + gap_x),
+        theme_y + row * (card_h + gap_y),
+        card_w,
+        card_h,
+    )
 }
 
 pub fn welcome_continue_rect(width: usize, height: usize) -> (usize, usize, usize, usize) {
@@ -334,7 +358,7 @@ pub fn render_welcome_screen(
     MinGuiCompositor::draw_string(
         fb,
         x + 28,
-        y + 140,
+        y + 130,
         if english {
             "Desktop Theme"
         } else {

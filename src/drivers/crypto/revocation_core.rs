@@ -803,15 +803,45 @@ fn parse_single_response(der: &[u8], vo: usize) -> Result<OcspSingleResponse, ()
     })
 }
 
-/// Sertifikanın OCSP yanıtına göre durumunu döner (imza doğrulaması ayrıca
-/// `verify_signature` ile yapılmalıdır). Yanıtta sertifika yoksa `Unknown`,
-/// yanıtın üretim zamanı sorgu saatinden ileride ise yine `Unknown` döner.
+/// Sertifikanın OCSP yanıtına göre durumunu döner ve imza doğrular.
+/// Yanıtta sertifika yoksa `Unknown`, yanıtın üretim zamanı sorgu saatinden
+/// ileride ise yine `Unknown` döner. İmza doğrulaması otomatik yapılır.
 pub fn check_ocsp(
+    response_der: &[u8],
+    leaf_serial: &[u8],
+    now: &X509Time,
+    issuer_cert_der: &[u8],
+) -> Result<RevocationResult, CertValidationError> {
+    let info = parse_ocsp_response(response_der)?;
+    
+    // İmza doğrulaması: önce issuer sertifikasıyla dene, başarısızsa
+    // delegated yanıtlayıcı sertifikasıyla dene
+    info.verify_signature_with_issuer(issuer_cert_der)?;
+    
+    if let Some(produced) = &info.produced_at {
+        if now < produced {
+            return Ok(RevocationResult::unknown());
+        }
+    }
+    let Some(resp) = info.find(leaf_serial) else {
+        return Ok(RevocationResult::unknown());
+    };
+    Ok(RevocationResult {
+        status: resp.status,
+        revoked_at: resp.revoked_at,
+        reason: resp.reason,
+    })
+}
+
+/// Test için imza doğrulaması olmadan OCSP kontrolü
+#[cfg(test)]
+pub fn check_ocsp_unverified(
     response_der: &[u8],
     leaf_serial: &[u8],
     now: &X509Time,
 ) -> Result<RevocationResult, CertValidationError> {
     let info = parse_ocsp_response(response_der)?;
+    
     if let Some(produced) = &info.produced_at {
         if now < produced {
             return Ok(RevocationResult::unknown());
@@ -1045,12 +1075,12 @@ mod tests {
         let good = test_ocsp(&[0x10], 0);
         let now = t(2025, 3, 2);
         assert_eq!(
-            check_ocsp(&good, &[0x10], &now).unwrap().status,
+            check_ocsp_unverified(&good, &[0x10], &now).unwrap().status,
             RevocationStatus::Good
         );
 
         let revoked = test_ocsp(&[0x10], 1);
-        let r = check_ocsp(&revoked, &[0x10], &now).unwrap();
+        let r = check_ocsp_unverified(&revoked, &[0x10], &now).unwrap();
         assert_eq!(r.status, RevocationStatus::Revoked);
         assert_eq!(r.reason, Some(4));
         assert_eq!(r.revoked_at.map(|t| t.month), Some(2));
@@ -1060,7 +1090,7 @@ mod tests {
     fn ocsp_unknown_serial_is_not_acceptable() {
         let good = test_ocsp(&[0x10], 0);
         let now = t(2025, 3, 2);
-        let r = check_ocsp(&good, &[0x99], &now).unwrap();
+        let r = check_ocsp_unverified(&good, &[0x99], &now).unwrap();
         assert_eq!(r.status, RevocationStatus::Unknown);
         assert!(!r.is_acceptable());
     }
@@ -1081,7 +1111,7 @@ mod tests {
         assert!(parse_ocsp_response(&[0x30, 0x03, 0x0A, 0x01, 0x00]).is_err());
         let good = test_ocsp(&[0x10], 0);
         for cut in 0..good.len() {
-            let _ = check_ocsp(&good[..cut], &[0x10], &t(2025, 3, 2));
+            let _ = check_ocsp_unverified(&good[..cut], &[0x10], &t(2025, 3, 2));
         }
     }
 
@@ -1124,7 +1154,7 @@ mod tests {
 
             // İyi OCSP yanıtı.
             let good_ocsp = test_ocsp(&serial, 0);
-            if let Ok(r) = check_ocsp(&good_ocsp, &serial, &now) {
+            if let Ok(r) = check_ocsp_unverified(&good_ocsp, &serial, &now) {
                 if r.status != RevocationStatus::Good {
                     failures += 1;
                 }
@@ -1134,7 +1164,7 @@ mod tests {
 
             // İptal edilmiş OCSP yanıtı.
             let revoked_ocsp = test_ocsp(&serial, 1);
-            if let Ok(r) = check_ocsp(&revoked_ocsp, &serial, &now) {
+            if let Ok(r) = check_ocsp_unverified(&revoked_ocsp, &serial, &now) {
                 if r.status != RevocationStatus::Revoked {
                     failures += 1;
                 }

@@ -90,6 +90,7 @@ impl MinGuiCompositor {
             (l.kbd, false),
             (l.network, false),
             (l.volume, self.is_volume_popup_open),
+            (l.minimize_all, false),
             (l.clock, self.is_calendar_open),
         ];
         for (rect, panel_open) in tray_items {
@@ -472,6 +473,18 @@ impl MinGuiCompositor {
                 Color::TEXT_MAIN
             },
         );
+
+        // 6. "Minimize All" Düğmesi (ince mavi dikey çizgi - saat solunda)
+        let minimize_all_hover = in_rect(mx, my, l.minimize_all);
+        let line_color = if minimize_all_hover {
+            Self::shade(Color::ACCENT_BLUE, 30)
+        } else {
+            Color::ACCENT_BLUE
+        };
+        let line_x = l.minimize_all.0 + l.minimize_all.2 / 2;
+        let line_top = l.minimize_all.1 + 4;
+        let line_bottom = l.minimize_all.1 + l.minimize_all.3 - 4;
+        fb.draw_rect(line_x, line_top, 2, line_bottom - line_top, line_color);
 
         // Akıllı tepsi ağı simgesi
 

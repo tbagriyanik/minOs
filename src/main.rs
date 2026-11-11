@@ -857,12 +857,7 @@ pub extern "C" fn _start() -> ! {
     // FPS 3D oyun güncellemesi için zaman bütçesi (ms). Uygulama çok uzun
     // sürerse sistem donmasını önlemek için atlanır ve uyarı gösterilir.
     const GAME_UPDATE_BUDGET_MS: u64 = 30; // Stricter: 30ms for games
-                                           // Bir uygulama bu bütcheyi kaç kez üst üste aşarsa koruma tarafından sonlandırılır.
-                                           // Tek seferlik aşım (ör. ilk kare yüklemesi) sadece uyarıyla sonuçlanır; bu sayede
-                                           // mantıksal sonsuz döngü gibi tekrarlayan aşımlar tek bir uygulamanın ana döngüyü
-                                           // bloke etmesini engeller. (Gerçek izolasyon henüz ring 3 süreçleri gerektirir;
-                                           // bkz. src/apps/guard.rs modül yorumu.)
-    const GAME_BUDGET_MAX_STRIKES: u32 = 3;
+    const GAME_BUDGET_MAX_STRIKES: u32 = 2; // Daha agresif: 2 kerede sonlandır
 
     // FPS limit for games (30 FPS = ~33.33ms per frame).
     const GAME_FPS_LIMIT_MS: u64 = 33;
@@ -880,6 +875,8 @@ pub extern "C" fn _start() -> ! {
     // kare geldiğinde sıfırlanır). Yalnızca tekrarlayan aşımlar sonlandırmayı tetikler.
     let mut game_budget_strikes: u32 = 0;
     let mut fps3d_budget_strikes: u32 = 0;
+    // Tüm uygulamalar için render bütçesi aşımı sayaçları
+    let _app_render_strikes: [u32; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
 
     // Track per-application render time (Cell allows interior mutability
     // so the render closure can capture it immutably and still update values).
@@ -1304,15 +1301,15 @@ pub extern "C" fn _start() -> ! {
                     app_render_cycles[idx] = read_cpu_cycles().wrapping_sub(render_start);
                     app_render_time_ms[idx].set(render_elapsed_ms);
 
-                    // Render workload budget enforcement: measure time (post-processing after closure)
+                    // Render workload budget enforcement: uyarı logla
                     if render_elapsed_ms > RENDER_BUDGET_MS && idx < gui::MAX_WINDOWS {
-                        /* crate::serial_print("[RENDER] Uygulama render bütçesi aştı: ");
-                        crate::serial_print(app_name);
+                        crate::serial_print("[RENDER] Uyarı: render bütçesi aştı: ID=");
+                        crate::serial_print_dec(idx as u64);
                         crate::serial_print(" (");
                         crate::serial_print_dec(render_elapsed_ms);
                         crate::serial_print(" ms > ");
                         crate::serial_print_dec(RENDER_BUDGET_MS);
-                        crate::serial_print(" ms)\n");*/
+                        crate::serial_print(" ms)\n");
                     }
 
                     // Kirpmayi kaldir ve kaydirma cubuklarini pencerenin icinde ciz.
@@ -3336,8 +3333,8 @@ pub extern "C" fn _start() -> ! {
                     }
 
                     consumed = true;
-                } else if gui::in_rect(mx, my, l.desktop) {
-                    // Masaüstü Göster düğmesi: tüm pencereleri kucult/geri getir
+                } else if gui::in_rect(mx, my, l.minimize_all) {
+                    // "Show Desktop" düğmesi (ince mavi çizgi): tüm pencereleri küçült/geri getir
                     let all_minimized = compositor
                         .windows
                         .iter()

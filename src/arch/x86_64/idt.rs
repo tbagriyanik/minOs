@@ -72,3 +72,9 @@ impl InterruptDescriptorTable {
         }
     }
 }
+
+impl Default for InterruptDescriptorTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}

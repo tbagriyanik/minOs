@@ -103,7 +103,7 @@ impl MinGuiCompositor {
         let mut current_bottom = tb_y.saturating_sub(toast_margin);
         let toast_x = fb_w.saturating_sub(toast_w + toast_margin);
 
-        for (_i, slot) in self.toasts.iter_mut().enumerate() {
+        for slot in self.toasts.iter_mut() {
             if slot.is_some() {
                 let toast_y = current_bottom.saturating_sub(toast_h);
                 if in_rect(mx, my, (toast_x, toast_y, toast_w, toast_h)) {

@@ -212,6 +212,12 @@ impl CalcCore {
     }
 }
 
+impl Default for CalcCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

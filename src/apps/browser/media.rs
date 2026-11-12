@@ -247,8 +247,8 @@ impl MediaPlayer {
                         break;
                     }
                     let sample = if i + 1 < self.audio_data.len() {
-                        let v = self.audio_data[i] as i16 | ((self.audio_data[i + 1] as i16) << 8);
-                        v
+                        
+                        self.audio_data[i] as i16 | ((self.audio_data[i + 1] as i16) << 8)
                     } else {
                         0
                     };
@@ -319,5 +319,11 @@ impl MediaPlayers {
         for p in &mut self.players {
             p.render_audio(audio);
         }
+    }
+}
+
+impl Default for MediaPlayers {
+    fn default() -> Self {
+        Self::new()
     }
 }

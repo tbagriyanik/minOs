@@ -51,7 +51,7 @@ pub fn init_subsystems(
                 count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
             if count > 0 && is_mapped_limine_ptr(entries) && array_bytes.is_some() {
                 let array_end = (entries as usize).checked_add(array_bytes.unwrap());
-                if array_end.map_or(false, |end| {
+                if array_end.is_some_and(|end| {
                     is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)
                 }) {
                     for i in 0..count {
@@ -408,6 +408,19 @@ pub fn init_subsystems(
         serial_print("[BOOT] 'installed' modu istendi ancak diskte kurulum bulunamadı.\n");
         boot::text_console::fatal("Kurulu sistem seçildi ancak MINOS.SYS bulunamadı");
     }
+
+    // Sürücü çerçevesi: mevcut alt sistemleri ortak arayüze bağla ve otomatik
+    // keşif/başlatma turunu çalıştır. Hazır olmayan adaptörler kayıtlı kalır.
+    {
+        use crate::drivers::adapters::{AudioAdapter, NetworkAdapter, UsbAdapter};
+        use crate::drivers::framework::{probe_and_init_all, register};
+
+        register(alloc::boxed::Box::new(NetworkAdapter));
+        register(alloc::boxed::Box::new(AudioAdapter));
+        register(alloc::boxed::Box::new(UsbAdapter));
+        probe_and_init_all();
+    }
+    serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");
 
     serial_print("[BOOT] Tüm kritik alt sistemler başlatıldı. GUI ve uygulamalar yükleniyor...\n");
 

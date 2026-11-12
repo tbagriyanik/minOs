@@ -318,11 +318,10 @@ impl MinGuiCompositor {
         let mut at = index.min(self.start_search_len);
         let is_word =
             |b: u8| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'_' || b == b'.';
-        if at == self.start_search_len || !is_word(self.start_search[at]) {
-            if at > 0 && is_word(self.start_search[at - 1]) {
+        if (at == self.start_search_len || !is_word(self.start_search[at]))
+            && at > 0 && is_word(self.start_search[at - 1]) {
                 at -= 1;
             }
-        }
         if at >= self.start_search_len || !is_word(self.start_search[at]) {
             return;
         }
@@ -849,16 +848,16 @@ impl MinGuiCompositor {
                 }
                 let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
 
-                let app_name;
-                if k == 0 {
+                
+                let app_name = if k == 0 {
                     // En üstte Paket Yöneticisi
                     let icon_idx = Self::window_icon_index(13);
                     Self::draw_icon_by_index_scaled(fb, r.0 + sp(6), icon_y, icon_idx);
-                    app_name = crate::gui::ui_text("Paket Yöneticisi", "Package Manager");
+                    crate::gui::ui_text("Paket Yöneticisi", "Package Manager")
                 } else {
                     Self::draw_package_icon(fb, r.0 + sp(6), icon_y);
-                    app_name = self.installed_app_name(k - 1);
-                }
+                    self.installed_app_name(k - 1)
+                };
 
                 let text_col = if is_hovered {
                     Self::text_on(bg_col)

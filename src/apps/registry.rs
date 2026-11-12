@@ -96,6 +96,49 @@ impl AppRegistry {
             .find(|e| e.name == query || e.path == query)
     }
 
+    /// Kimliğe göre uygulama bul.
+    pub fn find_by_id(&self, id: u32) -> Option<&AppEntry> {
+        self.entries.iter().find(|e| e.id == id)
+    }
+
+    /// Harici bir uygulamayı `/bin` yolundan yükleyip çalıştırır.
+    ///
+    /// Yerleşik girdiler için `None` döner; harici ELF/ikili dosyalar
+    /// `mm::loader` + `ring3` üzerinden izole biçimde çalıştırılır.
+    pub fn load_and_run(
+        &self,
+        id: u32,
+        vfs: &VirtualFileSystem,
+        pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
+    ) -> Option<Result<u64, &'static str>> {
+        let entry = self.find_by_id(id)?;
+        if entry.builtin {
+            return None;
+        }
+
+        let data = match vfs.read_file(&entry.path) {
+            Some(data) => data,
+            None => return Some(Err("uygulama dosyasi bulunamadi")),
+        };
+
+        let mut address_space = crate::mm::vmm::AddressSpace::current();
+        let loaded =
+            match crate::mm::loader::AppLoader::load_binary(data, &mut address_space, pmm) {
+                Ok(loaded) => loaded,
+                Err(err) => return Some(Err(err)),
+            };
+
+        let entry_point = loaded.entry_point;
+        let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);
+        loaded.unmap_and_free(&mut address_space, pmm);
+
+        if ok {
+            Some(Ok(entry_point))
+        } else {
+            Some(Err("uygulama calisirken hata olustu"))
+        }
+    }
+
     pub fn entries(&self) -> &[AppEntry] {
         &self.entries
     }

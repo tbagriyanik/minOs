@@ -299,7 +299,7 @@ impl AppLoader {
         let mut allocated_frames = [0u64; MAX_LOADED_FRAMES];
         let mut mapped_vaddrs = [0u64; MAX_LOADED_FRAMES];
         let code_len = data.len() as u64;
-        let num_pages = ((code_len + PAGE_SIZE - 1) / PAGE_SIZE) as usize;
+        let num_pages = code_len.div_ceil(PAGE_SIZE) as usize;
 
         for page_idx in 0..num_pages {
             let virt_addr = USER_CODE_BASE + (page_idx as u64) * PAGE_SIZE;

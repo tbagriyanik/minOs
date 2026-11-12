@@ -142,7 +142,7 @@ impl JsDocumentRef {
             if elem
                 .class_name
                 .as_ref()
-                .map_or(false, |c| c.contains(class))
+                .is_some_and(|c| c.contains(class))
             {
                 results.push(idx);
             }
@@ -168,6 +168,12 @@ impl JsDocumentRef {
         let idx = self.index_subtree(&element, Some(self.root_idx));
         self.elements[self.root_idx].children.push(element);
         idx
+    }
+}
+
+impl Default for JsDocumentRef {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -276,6 +282,12 @@ impl PromiseObj {
     }
 }
 
+impl Default for PromiseObj {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsValue {
     pub fn to_str(&self) -> String {
         match self {
@@ -368,13 +380,10 @@ impl JsValue {
                 }
             }
             JsValue::String(s) => s.trim().parse::<i64>().unwrap_or(0),
-            JsValue::Array(items) => {
-                if items.len() == 1 {
+            JsValue::Array(items)
+                if items.len() == 1 => {
                     items[0].to_i64()
-                } else {
-                    0
                 }
-            }
             _ => 0,
         }
     }
@@ -934,7 +943,7 @@ impl JsRuntime {
                 if let Some(handler) = map.get(PROTO_PROXY_HANDLER).cloned() {
                     if let Some(trap) = handler_trap(&handler, "ownKeys") {
                         let (ret, _) =
-                            self.call_fn_with_this(&trap, handler.clone(), &[target.clone()]);
+                            self.call_fn_with_this(&trap, handler.clone(), core::slice::from_ref(&target));
                         if let JsValue::Array(items) = ret {
                             return items.iter().map(|v| v.to_str()).collect();
                         }
@@ -1068,7 +1077,7 @@ impl JsRuntime {
     pub fn run_microtasks(&mut self, out: &mut Vec<u8>) {
         while !self.microtask_queue.is_empty() {
             let code = self.microtask_queue.remove(0);
-            let _ = self.run(&code, out);
+            self.run(&code, out);
         }
     }
 
@@ -1582,7 +1591,7 @@ impl JsRuntime {
         let mut resp_obj = BTreeMap::new();
         resp_obj.insert(
             String::from("ok"),
-            JsValue::Bool(status >= 200 && status < 300),
+            JsValue::Bool((200..300).contains(&status)),
         );
         resp_obj.insert(String::from("status"), JsValue::Number(status as i64));
         resp_obj.insert(
@@ -1733,7 +1742,7 @@ impl JsRuntime {
     pub fn eval_val(&mut self, expr: &str) -> JsValue {
         let e = expr
             .trim()
-            .trim_end_matches(|c| c == ';' || c == '\n' || c == '\r')
+            .trim_end_matches([';', '\n', '\r'])
             .trim();
         if e.is_empty() {
             return JsValue::Undefined;
@@ -1832,13 +1841,10 @@ impl JsRuntime {
                         0
                     }
                 }
-                b'%' => {
-                    if b != 0 {
+                b'%'
+                    if b != 0 => {
                         a % b
-                    } else {
-                        0
                     }
-                }
                 _ => 0,
             };
             return JsValue::Number(res);
@@ -2581,79 +2587,76 @@ impl JsRuntime {
                             }
                             _ => {}
                         },
-                        JsValue::Generator(mut g) => match method {
-                            "next" => {
-                                // Generator .next(): gövdeyi pc'den itibaren çalıştır,
-                                // ilk `yield` ile duraklat, değerini döndür.
-                                if g.state == GeneratorState::Completed {
-                                    let result = JsValue::Object(BTreeMap::from([
-                                        (String::from("value"), JsValue::Undefined),
-                                        (String::from("done"), JsValue::Bool(true)),
-                                    ]));
-                                    return JsValue::String(self.store_value(result));
-                                }
-                                g.state = GeneratorState::Running;
-                                let mut sink = Vec::new();
-                                let statements = &g.statements;
-                                while g.pc < statements.len() {
-                                    let stmt = &statements[g.pc];
-                                    let trimmed = stmt.trim();
-                                    if trimmed.starts_with("yield ")
-                                        || trimmed.starts_with("yield(")
-                                    {
-                                        // yield ifadesi: değeri hesapla ve duraklat.
-                                        let expr = if trimmed.starts_with("yield(") {
-                                            &trimmed[6..trimmed.len() - 1]
-                                        } else {
-                                            &trimmed[6..]
-                                        };
-                                        let val = self.eval_val(expr.trim());
-                                        g.pc += 1;
-                                        g.state = GeneratorState::Suspended;
-                                        g.value = Some(val.clone());
-                                        let result = JsValue::Object(BTreeMap::from([
-                                            (String::from("value"), val),
-                                            (String::from("done"), JsValue::Bool(false)),
-                                        ]));
-                                        self.values.insert(
-                                            format!("__gen_{}", self.values.len()),
-                                            JsValue::Generator(Box::new((*g).clone())),
-                                        );
-                                        return JsValue::String(self.store_value(result));
-                                    }
-                                    self.exec(stmt, &mut sink);
-                                    g.pc += 1;
-                                    if self.last_return.is_some() {
-                                        // `return` içinde generator: değerle tamamla.
-                                        let ret =
-                                            self.last_return.take().unwrap_or(JsValue::Undefined);
-                                        g.state = GeneratorState::Completed;
-                                        g.value = Some(ret.clone());
-                                        let result = JsValue::Object(BTreeMap::from([
-                                            (String::from("value"), ret),
-                                            (String::from("done"), JsValue::Bool(true)),
-                                        ]));
-                                        self.values.insert(
-                                            format!("__gen_{}", self.values.len()),
-                                            JsValue::Generator(Box::new((*g).clone())),
-                                        );
-                                        return JsValue::String(self.store_value(result));
-                                    }
-                                }
-                                // Tüm ifadeler bitti.
-                                g.state = GeneratorState::Completed;
-                                g.value = None;
+                        JsValue::Generator(mut g) if method == "next" => {
+                            // Generator .next(): gövdeyi pc'den itibaren çalıştır,
+                            // ilk `yield` ile duraklat, değerini döndür.
+                            if g.state == GeneratorState::Completed {
                                 let result = JsValue::Object(BTreeMap::from([
                                     (String::from("value"), JsValue::Undefined),
                                     (String::from("done"), JsValue::Bool(true)),
                                 ]));
-                                self.values.insert(
-                                    format!("__gen_{}", self.values.len()),
-                                    JsValue::Generator(Box::new((*g).clone())),
-                                );
                                 return JsValue::String(self.store_value(result));
                             }
-                            _ => {}
+                            g.state = GeneratorState::Running;
+                            let mut sink = Vec::new();
+                            let statements = &g.statements;
+                            while g.pc < statements.len() {
+                                let stmt = &statements[g.pc];
+                                let trimmed = stmt.trim();
+                                if trimmed.starts_with("yield ")
+                                    || trimmed.starts_with("yield(")
+                                {
+                                    // yield ifadesi: değeri hesapla ve duraklat.
+                                    let expr = if trimmed.starts_with("yield(") {
+                                        &trimmed[6..trimmed.len() - 1]
+                                    } else {
+                                        &trimmed[6..]
+                                    };
+                                    let val = self.eval_val(expr.trim());
+                                    g.pc += 1;
+                                    g.state = GeneratorState::Suspended;
+                                    g.value = Some(val.clone());
+                                    let result = JsValue::Object(BTreeMap::from([
+                                        (String::from("value"), val),
+                                        (String::from("done"), JsValue::Bool(false)),
+                                    ]));
+                                    self.values.insert(
+                                        format!("__gen_{}", self.values.len()),
+                                        JsValue::Generator(Box::new((*g).clone())),
+                                    );
+                                    return JsValue::String(self.store_value(result));
+                                }
+                                self.exec(stmt, &mut sink);
+                                g.pc += 1;
+                                if self.last_return.is_some() {
+                                    // `return` içinde generator: değerle tamamla.
+                                    let ret =
+                                        self.last_return.take().unwrap_or(JsValue::Undefined);
+                                    g.state = GeneratorState::Completed;
+                                    g.value = Some(ret.clone());
+                                    let result = JsValue::Object(BTreeMap::from([
+                                        (String::from("value"), ret),
+                                        (String::from("done"), JsValue::Bool(true)),
+                                    ]));
+                                    self.values.insert(
+                                        format!("__gen_{}", self.values.len()),
+                                        JsValue::Generator(Box::new((*g).clone())),
+                                    );
+                                    return JsValue::String(self.store_value(result));
+                                }
+                            }
+                            // Tüm ifadeler bitti.
+                            g.state = GeneratorState::Completed;
+                            g.value = None;
+                            let result = JsValue::Object(BTreeMap::from([
+                                (String::from("value"), JsValue::Undefined),
+                                (String::from("done"), JsValue::Bool(true)),
+                            ]));
+                            self.values.insert(
+                                format!("__gen_{}", self.values.len()),
+                                JsValue::Generator(Box::new((*g).clone())),
+                            );
+                            return JsValue::String(self.store_value(result));
                         },
                         _ => {}
                     }
@@ -2812,7 +2815,7 @@ impl JsRuntime {
                 && rhs
                     .chars()
                     .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
-                && !rhs.chars().next().map_or(false, |c| c.is_ascii_digit())
+                && !rhs.chars().next().is_some_and(|c| c.is_ascii_digit())
             {
                 let base_val = self.eval_val(lhs);
                 // `Foo.prototype` gibi ad alanı biçiminde saklanan değerler.
@@ -3214,7 +3217,7 @@ impl JsRuntime {
             if let Some((args, _)) = call_args(e, 5) {
                 let url = self.eval_val(args.trim()).to_str();
                 let url = url.trim_matches(|c| c == '\'' || c == '"');
-                match self.do_fetch(&url) {
+                match self.do_fetch(url) {
                     Ok(promise_val) => {
                         return promise_val;
                     }
@@ -3256,7 +3259,7 @@ impl JsRuntime {
                 #[cfg(not(any(test, host_fs_tests)))]
                 {
                     let mut conn = WebSocketConn::new(url.to_string());
-                    match crate::drivers::http::WebSocketConnection::connect(&url) {
+                    match crate::drivers::http::WebSocketConnection::connect(url) {
                         Ok(ws_conn) => {
                             conn.ready_state = 1; // OPEN
                             conn.connection = Some(ws_conn);
@@ -3485,7 +3488,7 @@ impl JsRuntime {
         s = s.trim_start_matches(|c| {
             c == '{' || c == '}' || c == ')' || c == ',' || c == ';' || c == '\n' || c == '\r'
         });
-        s = s.trim_end_matches(|c| c == ';' || c == '\n' || c == '\r');
+        s = s.trim_end_matches([';', '\n', '\r']);
         s = s.trim();
         if s.is_empty() {
             return;
@@ -3530,7 +3533,7 @@ impl JsRuntime {
                                 params: params.clone(),
                                 captured: self.capture_env(),
                                 pc: 0,
-                                statements: split_generator_statements(&body),
+                                statements: split_generator_statements(body),
                             };
                             self.values
                                 .insert(gvar.clone(), JsValue::Generator(Box::new(gen)));
@@ -4255,8 +4258,8 @@ impl JsRuntime {
                 let tail_ok = s
                     .as_bytes()
                     .get(after)
-                    .map_or(false, |c| *c == b'(' || c.is_ascii_whitespace());
-                if tail_ok && best.map_or(true, |(b, _)| idx < b) {
+                    .is_some_and(|c| *c == b'(' || c.is_ascii_whitespace());
+                if tail_ok && best.is_none_or(|(b, _)| idx < b) {
                     best = Some((idx, name));
                 }
             }
@@ -4376,7 +4379,7 @@ impl JsRuntime {
                 } else if name == "fetch" {
                     // fetch(url) — HTTP GET isteği yapar, Promise döndürür.
                     let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
-                    let _ = self.do_fetch(&url);
+                    let _ = self.do_fetch(url);
                     out.extend_from_slice(b"0");
                 } else if name == "localStorage" {
                     out.extend_from_slice(b"0");
@@ -4705,6 +4708,12 @@ impl JsRuntime {
                 self.export_local(name, name);
             }
         }
+    }
+}
+
+impl Default for JsRuntime {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -5048,7 +5057,7 @@ fn find_top_level_word(hay: &[u8], word: &[u8]) -> Option<usize> {
             _ => {
                 if depth == 0 && i + word.len() <= hay.len() && &hay[i..i + word.len()] == word {
                     let before_ok = i == 0 || !is_word(hay[i - 1]);
-                    let after_ok = hay.get(i + word.len()).map_or(true, |n| !is_word(*n));
+                    let after_ok = hay.get(i + word.len()).is_none_or(|n| !is_word(*n));
                     if before_ok && after_ok {
                         return Some(i);
                     }
@@ -5139,7 +5148,7 @@ fn call_args(s: &str, open_idx: usize) -> Option<(&str, usize)> {
     }
     // Kapanmayan parantez: kalanı argüman say.
     let rest = s[open_idx + 1..]
-        .trim_end_matches(|c| c == ')' || c == '}' || c == ';' || c == '\n' || c == '\r');
+        .trim_end_matches([')', '}', ';', '\n', '\r']);
     Some((rest, b.len()))
 }
 
@@ -5414,7 +5423,7 @@ fn json_stringify(val: &JsValue) -> String {
 }
 
 /// Metot çağrısını ayıklar: `base.method(args)`
-fn extract_method_call<'a>(s: &'a str) -> Option<(&'a str, &'a str, &'a str)> {
+fn extract_method_call(s: &str) -> Option<(&str, &str, &str)> {
     let s = s.trim();
     if !s.ends_with(')') {
         return None;
@@ -5530,7 +5539,7 @@ fn find_method_call_dot(s: &str) -> Option<usize> {
 /// `a`, `a_b`, `$x1` gibi basit bir tanımlayıcı mı?
 fn is_simple_ident(s: &str) -> bool {
     !s.is_empty()
-        && !s.chars().next().map_or(true, |c| c.is_ascii_digit())
+        && !s.chars().next().is_none_or(|c| c.is_ascii_digit())
         && s.chars()
             .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }

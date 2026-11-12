@@ -1164,11 +1164,10 @@ impl VirtualFileSystem {
             return Err("Hedef klasor bulunamadi / Destination folder not found");
         }
         let src_is_dir = self.is_dir(&src_norm);
-        if src_is_dir {
-            if dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")) {
+        if src_is_dir
+            && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/"))) {
                 return Err("Hedef kaynak klasorun icinde / Destination is inside source");
             }
-        }
 
         let base_name = Self::file_name_from_path(&src_norm);
         let (stem, ext) = Self::split_name_ext(&base_name);
@@ -1265,11 +1264,10 @@ impl VirtualFileSystem {
             return Err("Hedef klasor bulunamadi / Destination folder not found");
         }
         let src_is_dir = self.is_dir(&src_norm);
-        if src_is_dir {
-            if dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")) {
+        if src_is_dir
+            && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/"))) {
                 return Err("Hedef kaynak klasorun icinde / Destination is inside source");
             }
-        }
         if Self::parent_path_from_path(&src_norm) == dest_norm {
             return Err("Zaten bu klasorde / Already in this folder");
         }
@@ -1540,5 +1538,11 @@ impl VirtualFileSystem {
             }
         }
         None
+    }
+}
+
+impl Default for VirtualFileSystem {
+    fn default() -> Self {
+        Self::new()
     }
 }

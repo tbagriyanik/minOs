@@ -169,7 +169,7 @@ impl ImageViewerApp {
                 if offset >= 54
                     && offset
                         .checked_add(n)
-                        .map_or(false, |end| end <= bytes_data.len()) =>
+                        .is_some_and(|end| end <= bytes_data.len()) =>
             {
                 n
             }
@@ -455,7 +455,7 @@ impl ImageViewerApp {
                             Color::ACCENT_PINK // Pembe Burun
                         } else if row <= 1 {
                             Color::ACCENT_CAT_EARS // Pembe Kulaklar
-                        } else if row >= 10 && row <= 11 {
+                        } else if (10..=11).contains(&row) {
                             Color::ACCENT_BLUE // Siber Tasma
                         } else {
                             Color::TEXT_MAIN // Sevimli Kedi Gövdesi
@@ -553,5 +553,11 @@ impl ImageViewerApp {
             Color::TEXT_MUTED,
             (win_x + 8, status_y + 2, win_w.saturating_sub(16), 14),
         );
+    }
+}
+
+impl Default for ImageViewerApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

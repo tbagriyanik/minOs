@@ -1118,7 +1118,7 @@ impl Framebuffer {
         }
         let c = rgb(color);
         let r_outer_sq = (r * r) as isize;
-        let r_inner = if r > 1 { r - 1 } else { 0 };
+        let r_inner = r.saturating_sub(1);
         let r_inner_sq = (r_inner * r_inner) as isize;
 
         let x0 = x.max(self.clip.x0);
@@ -1309,7 +1309,7 @@ impl Framebuffer {
         let bb = cx & 0xFF;
         // Alt kenar (yumuşak katman)
         for i in 0..5 {
-            let alpha = (150 - i * 28).max(0) as u32;
+            let alpha = (150 - i * 28) as u32;
             let inv_alpha = 256 - alpha;
             let br_a = br * alpha;
             let bg_a = bg * alpha;
@@ -1329,8 +1329,8 @@ impl Framebuffer {
                 unsafe {
                     if off < BACKBUFFER_LEN {
                         let base = BACKBUFFER[off];
-                        let r = ((base >> 16) & 0xFF) as u32;
-                        let g = ((base >> 8) & 0xFF) as u32;
+                        let r = (base >> 16) & 0xFF;
+                        let g = (base >> 8) & 0xFF;
                         let b = base & 0xFF;
                         let nr = (r * inv_alpha + br_a) >> 8;
                         let ng = (g * inv_alpha + bg_a) >> 8;
@@ -1342,7 +1342,7 @@ impl Framebuffer {
         }
         // Sağ kenar
         for i in 0..3 {
-            let alpha = (110 - i * 30).max(0) as u32;
+            let alpha = (110 - i * 30) as u32;
             let inv_alpha = 256 - alpha;
             let br_a = br * alpha;
             let bg_a = bg * alpha;
@@ -1358,8 +1358,8 @@ impl Framebuffer {
                 unsafe {
                     if off < BACKBUFFER_LEN {
                         let base = BACKBUFFER[off];
-                        let r = ((base >> 16) & 0xFF) as u32;
-                        let g = ((base >> 8) & 0xFF) as u32;
+                        let r = (base >> 16) & 0xFF;
+                        let g = (base >> 8) & 0xFF;
                         let b = base & 0xFF;
                         let nr = (r * inv_alpha + br_a) >> 8;
                         let ng = (g * inv_alpha + bg_a) >> 8;

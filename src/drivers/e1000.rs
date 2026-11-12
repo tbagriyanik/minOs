@@ -128,11 +128,11 @@ const BROADCOM_DEVICES: [u32; 14] = [
 // Recognition Logic) bloğu tüm diğer bloklara ayna görevi görür. Bu nedenle
 // ayni adlı register'lara erişim daima bu blok üzerinden yapılır.
 const B57_BASE: u32 = 0xE000; // ARL: ortak kayıtlar
-const B57_HOST_CTRL: u32 = B57_BASE | 0x00; // Host Control (FW boot / sıfırlama)
+const B57_HOST_CTRL: u32 = B57_BASE; // Host Control (FW boot / sıfırlama)
 const B57_MAC_HASH0: u32 = B57_BASE | 0x08;
 const B57_MAC_HASH1: u32 = B57_BASE | 0x0C;
 /// Host Status Word: bit 0-15 TX indeksi, bit 16-31 RX indeksi.
-const B57_HOST_STAT: u32 = B57_BASE | (0x0C + 0); // 0x0C ARL bloğunda host status
+const B57_HOST_STAT: u32 = B57_BASE | 0x0C; // 0x0C ARL bloğunda host status
 /// RX descriptor halkası tabanı (alma penceresi, 0xC000 + 0x40).
 const B57_RX_LIST_ADDR: u32 = 0xC000 | 0x40;
 /// TX descriptor halkası tabanı (gönderme penceresi, 0x1000 + 0x40).
@@ -959,7 +959,7 @@ unsafe fn init_broadcom(rings_addr: u64) {
     }
 
     // Host status word: RX indeksi = RX_TAIL, TX indeksi = TX_TAIL
-    mmio_write32(B57_HOST_STAT, ((RX_RING_SIZE as u32 - 1) << 16) | 0);
+    mmio_write32(B57_HOST_STAT, (RX_RING_SIZE as u32 - 1) << 16);
 
     // TX/RX etkinleştir
     mmio_write32(B57_COMMAND, B57_COMMAND_RX_ENABLE | B57_COMMAND_TX_ENABLE);
@@ -1239,7 +1239,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                     if id == 0xFFFF_FFFF || id == 0 {
                         continue;
                     }
-                    let vid = (id & 0xFFFF) as u32;
+                    let vid = id & 0xFFFF;
                     let did = (id >> 16) & 0xFFFF;
 
                     if did == 0x8029 {
@@ -1360,8 +1360,8 @@ pub fn init(pmm_dma_phys: Option<u64>) {
         }
 
         RINGS_ADDR = phys;
-        let base = crate::drivers::phys_to_virt(base_phys as u64);
-        crate::arch::x86_64::mmio_map_2mb(base_phys as u64 & !0x1F_FFFF);
+        let base = crate::drivers::phys_to_virt(base_phys);
+        crate::arch::x86_64::mmio_map_2mb(base_phys & !0x1F_FFFF);
 
         match ntype {
             NicType::IntelE1000 => {

@@ -277,7 +277,7 @@ pub fn cmdline_resolution() -> Option<(usize, usize)> {
 
 /// Kernel'in kurulu sistem modunda baslatilmak istenip istenmedigini bildirir.
 pub fn boot_wants_installed() -> bool {
-    limine_boot_cmdline().map_or(false, |cmdline| cmdline_has_token(cmdline, "installed"))
+    limine_boot_cmdline().is_some_and(|cmdline| cmdline_has_token(cmdline, "installed"))
 }
 
 #[inline]
@@ -287,7 +287,7 @@ pub fn is_canonical_ptr<T>(ptr: *const T) -> bool {
     }
     let addr = ptr as usize as u64;
     let upper = addr >> 47;
-    (upper == 0 || upper == 0x1_FFFF) && addr % core::mem::align_of::<T>() as u64 == 0
+    (upper == 0 || upper == 0x1_FFFF) && addr.is_multiple_of(core::mem::align_of::<T>() as u64)
 }
 
 /// Limine response pointers are expected in the mapped higher half. Reject

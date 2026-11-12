@@ -330,7 +330,7 @@ fn alloc_inode(sb: &Sb, drive: u8, is_dir: bool) -> Option<u32> {
                 for bit in 0..8 {
                     if *byte & (1 << bit) == 0 {
                         *byte |= 1 << bit;
-                        if !write_block(sb, drive, bmp, &mut b) {
+                        if !write_block(sb, drive, bmp, &b) {
                             return None;
                         }
                         let ino = g * sb.inodes_per_group + bi as u32 * 8 + bit as u32 + 1;
@@ -433,9 +433,7 @@ pub fn list_dir(path: &str) -> Vec<(Vec<u8>, bool, u32)> {
     dir_entries(sb, drive, &ino)
         .into_iter()
         .map(|e| {
-            let sz = read_inode_raw(sb, drive, e.inode, &mut Vec::new())
-                .then(|| 0)
-                .unwrap_or(0);
+            let sz = if read_inode_raw(sb, drive, e.inode, &mut Vec::new()) { 0 } else { 0 };
             let _ = sz;
             let mut raw = Vec::new();
             let size = if read_inode_raw(sb, drive, e.inode, &mut raw) {
@@ -588,7 +586,7 @@ fn dir_add_entry(
                 break;
             }
             if ino == 0 {
-                let need = ((8 + name.len() + 3) / 4) * 4;
+                let need = (8 + name.len()).div_ceil(4) * 4;
                 if reclen >= need {
                     wle32(&mut b, off, child);
                     wle16(&mut b, off + 4, reclen as u16);
@@ -599,9 +597,9 @@ fn dir_add_entry(
                 }
             } else {
                 let namelen = b[off + 6] as usize;
-                let ideal = ((8 + namelen + 3) / 4) * 4;
+                let ideal = (8 + namelen).div_ceil(4) * 4;
                 if reclen > ideal {
-                    let need = ((8 + name.len() + 3) / 4) * 4;
+                    let need = (8 + name.len()).div_ceil(4) * 4;
                     if reclen - ideal >= need {
                         wle16(&mut b, off + 4, ideal as u16);
                         let noff = off + ideal;
@@ -623,7 +621,7 @@ fn dir_add_entry(
     };
     let mut nb_data = Vec::new();
     nb_data.resize(bs, 0);
-    let need = ((8 + name.len() + 3) / 4) * 4;
+    let need = (8 + name.len()).div_ceil(4) * 4;
     wle32(&mut nb_data, 0, child);
     wle16(&mut nb_data, 4, bs as u16);
     nb_data[6] = name.len() as u8;
@@ -768,12 +766,12 @@ pub fn format(drive: u8, part_lba: u32, part_sectors: u64) -> bool {
     }
     let bs: u32 = 1024;
     let inodes = (total_blocks / 4).max(64);
-    let groups = (total_blocks + 8191) / 8192;
+    let groups = total_blocks.div_ceil(8192);
     let _ = groups;
     // Tek grup basitliği: groups=1 kabulü yerine gerçek çok grup değil —
     // küçük diskler (<8MB blok) için 1 grup yeterli.
     let g = 1u32;
-    let itable_blocks = (inodes * 128 + bs - 1) / bs;
+    let itable_blocks = (inodes * 128).div_ceil(bs);
     // blok yerleşimi (1K blok): 0=boot, 1=sb, 2=bgdt, 3=bblock-bmp, 4=ibmp, 5..=itable, sonra root
     let root_blk = 5 + itable_blocks;
     let first_free = root_blk + 1;

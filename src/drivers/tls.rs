@@ -581,7 +581,7 @@ impl TlsSession {
                     self.last_alert = Some((level, desc));
                     serial_print("[TLS] Sunucu alert: level=");
                     let mut s = HeaplessString::<128>::new();
-                    let _ = write!(s, "{} desc={}\n", level, desc);
+                    let _ = writeln!(s, "{} desc={}", level, desc);
                     serial_print(&s);
                     if desc == 0 {
                         // close_notify: düzgün kapanış, hata değil.
@@ -620,7 +620,7 @@ impl TlsSession {
                                 self.last_alert = Some((level, desc));
                                 serial_print("[TLS] Sunucu alert (app): level=");
                                 let mut s = HeaplessString::<128>::new();
-                                let _ = write!(s, "{} desc={}\n", level, desc);
+                                let _ = writeln!(s, "{} desc={}", level, desc);
                                 serial_print(&s);
                                 if desc == 0 {
                                     // close_notify: düzgün kapanış. Biriken
@@ -641,7 +641,7 @@ impl TlsSession {
                 _ => {
                     serial_print("[TLS] Bilinmeyen kayıt türü: ");
                     let mut s = HeaplessString::<128>::new();
-                    let _ = write!(s, "{}\n", ctype);
+                    let _ = writeln!(s, "{}", ctype);
                     serial_print(&s);
                 }
             }
@@ -655,11 +655,11 @@ impl TlsSession {
         let key = self.tls13_server_hs_key.as_ref().ok_or(())?;
         let iv = self.tls13_server_hs_iv.as_ref().ok_or(())?;
 
-        let gcm = Gcm::new(&key).map_err(|_| ())?;
+        let gcm = Gcm::new(key).map_err(|_| ())?;
         let seq = self.tls13_server_hs_seq;
         self.tls13_server_hs_seq = self.tls13_server_hs_seq.wrapping_add(1);
 
-        let nonce = Self::tls13_nonce(&iv, seq);
+        let nonce = Self::tls13_nonce(iv, seq);
         // Şifreli kayıtların dış türü her zaman application_data (0x17)'dir.
         let gcm_aad = Self::tls13_aad(TLS_RECORD_APPLICATION_DATA, ciphertext.len());
 
@@ -682,7 +682,7 @@ impl TlsSession {
         if content_type != TLS_RECORD_HANDSHAKE {
             serial_print("[TLS] Yanlış içerik türü: ");
             let mut s = HeaplessString::<128>::new();
-            let _ = write!(s, "{}\n", content_type);
+            let _ = writeln!(s, "{}", content_type);
             serial_print(&s);
             return Err(());
         }
@@ -791,11 +791,11 @@ impl TlsSession {
                 .map_err(|_| {
                     serial_print("[TLS] Transcript tamponu doldu, el sıkışma iptal ediliyor.\n");
                 })?;
-            let _ = out_handshake.extend_from_slice(msg_frame);
+            out_handshake.extend_from_slice(msg_frame);
 
             serial_print("[TLS] HS mesajı geldi: tip=");
             let mut s = HeaplessString::<128>::new();
-            let _ = write!(s, "{} len={}\n", msg_type, msg_len);
+            let _ = writeln!(s, "{} len={}", msg_type, msg_len);
             serial_print(&s);
 
             match msg_type {
@@ -1414,7 +1414,7 @@ impl TlsSession {
         gcm_aad[9..11].copy_from_slice(&TLS_VERSION_1_2.to_be_bytes());
         gcm_aad[11..13].copy_from_slice(&(finished.len() as u16).to_be_bytes());
 
-        let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, &finished).map_err(|()| ())?;
+        let (ct, tag) = gcm.encrypt(&nonce, &gcm_aad, &finished)?;
 
         let _ = self.outgoing.push(TLS_RECORD_HANDSHAKE);
         let _ = self
@@ -1449,7 +1449,7 @@ impl TlsSession {
             let alg = self.tls13_hash_alg;
             let server_hs = self.tls13_server_hs_secret.as_ref().ok_or(())?;
             let finished_key =
-                Self::hkdf_expand_label(alg, &server_hs, b"finished", b"", alg.hash_len());
+                Self::hkdf_expand_label(alg, server_hs, b"finished", b"", alg.hash_len());
 
             // Transcript-Hash, sunucu Finished mesajı eklenmeden önceki hâli.
             let transcript = alg.hash(pre_transcript);
@@ -1505,7 +1505,7 @@ impl TlsSession {
 
         // RFC 8446 §4.4.4: finished_key = HKDF-Expand-Label(client_hs_traffic_secret, "finished", "")
         let finished_key =
-            Self::hkdf_expand_label(alg, &client_hs, b"finished", b"", alg.hash_len());
+            Self::hkdf_expand_label(alg, client_hs, b"finished", b"", alg.hash_len());
         let verify_data = alg.hmac(&finished_key, &transcript);
 
         let hash_len = alg.hash_len();
@@ -1521,8 +1521,8 @@ impl TlsSession {
 
         // Kayıt anahtarı/IV'si client handshake traffic secret'tan türetilir.
         // Anahtar uzunluğu paketle belirlenir (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
-        let key = Self::hkdf_expand_label(alg, &client_hs, b"key", b"", alg.key_len());
-        let iv = Self::hkdf_expand_label(alg, &client_hs, b"iv", b"", 12);
+        let key = Self::hkdf_expand_label(alg, client_hs, b"key", b"", alg.key_len());
+        let iv = Self::hkdf_expand_label(alg, client_hs, b"iv", b"", 12);
         let iv: [u8; 12] = iv.try_into().ok()?;
 
         let gcm = Gcm::new(&key).ok()?;
@@ -1718,14 +1718,14 @@ impl TlsSession {
 
         let client_ap_secret = Self::hkdf_expand_label(
             alg,
-            &master_secret,
+            master_secret,
             b"c ap traffic",
             &transcript,
             alg.hash_len(),
         );
         let server_ap_secret = Self::hkdf_expand_label(
             alg,
-            &master_secret,
+            master_secret,
             b"s ap traffic",
             &transcript,
             alg.hash_len(),

@@ -379,7 +379,7 @@ fn visit(
     let Some(entry) = catalog
         .iter()
         .filter(|e| e.name == name)
-        .filter(|e| constraint.map_or(true, |req| req.matches(&e.version)))
+        .filter(|e| constraint.is_none_or(|req| req.matches(&e.version)))
         .max_by(|a, b| compare_version(&a.version, &b.version))
     else {
         return Err(missing_error(catalog, name, constraint));

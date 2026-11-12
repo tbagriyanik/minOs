@@ -162,7 +162,7 @@ pub fn init() -> GpuCaps {
     // BGA yalnızca gerçek QEMU/Bochs BGA PCI aygıtı (0x1234:0x1111) mevcutsa etkinleştirilir.
     // Gerçek donanımda (Intel/AMD/Nvidia) I/O portları 0x1CE/0x1CF'ye dokunulmaz.
     let id = if bga_pci { bga_read(BGA_IDX_ID) } else { 0 };
-    let bga = bga_pci && id >= BGA_VERSION_MIN && id < 0xB0C6;
+    let bga = bga_pci && (BGA_VERSION_MIN..0xB0C6).contains(&id);
     let virtio_gpu = crate::drivers::virtio_gpu::detect();
     if virtio_gpu {
         crate::drivers::virtio_gpu::init();
@@ -228,21 +228,18 @@ pub fn try_set_resolution(w: usize, h: usize) -> (bool, Option<usize>) {
     if w > 1920 || h > 1080 || w == 0 || h == 0 {
         return (false, None);
     }
-    if unsafe { CAPS.virtio_gpu_present } {
-        if crate::drivers::virtio_gpu::set_mode(w as u32, h as u32) {
+    if unsafe { CAPS.virtio_gpu_present }
+        && crate::drivers::virtio_gpu::set_mode(w as u32, h as u32) {
             return (true, Some(w * 4));
         }
-    }
-    if unsafe { CAPS.nvidia_present } {
-        if crate::drivers::nvidia::set_mode(w as u32, h as u32, 32) {
+    if unsafe { CAPS.nvidia_present }
+        && crate::drivers::nvidia::set_mode(w as u32, h as u32, 32) {
             return (true, Some(w * 4));
         }
-    }
-    if unsafe { CAPS.amd_present } {
-        if crate::drivers::amdgpu::set_mode(w as u32, h as u32, 32) {
+    if unsafe { CAPS.amd_present }
+        && crate::drivers::amdgpu::set_mode(w as u32, h as u32, 32) {
             return (true, Some(w * 4));
         }
-    }
     if let Some(pitch) = bga_set_mode(w as u16, h as u16, 32) {
         // Kısa bir dikey-blank beklemesi: yırtılmayı azaltır.
         vsync_wait();

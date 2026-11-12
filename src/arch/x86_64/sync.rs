@@ -48,6 +48,12 @@ impl Spinlock {
     }
 }
 
+impl Default for Spinlock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 unsafe impl Send for Spinlock {}
 unsafe impl Sync for Spinlock {}
 

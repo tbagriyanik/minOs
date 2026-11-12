@@ -225,7 +225,7 @@ pub fn terminate_app(
     }
 
     let another_instance_open = compositor.windows.iter().any(|slot| {
-        slot.map_or(false, |window| {
+        slot.is_some_and(|window| {
             window.app_id as usize == app_id && window.is_open
         })
     });
@@ -265,7 +265,7 @@ pub fn terminate_app(
 
 pub fn app_is_focused(compositor: &gui::MinGuiCompositor, app_id: usize) -> bool {
     compositor.windows.iter().any(|slot| {
-        slot.map_or(false, |window| {
+        slot.is_some_and(|window| {
             window.app_id as usize == app_id
                 && window.is_open
                 && !window.is_minimized

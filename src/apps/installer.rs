@@ -188,7 +188,7 @@ impl InstallerApp {
         }
 
         // 1. Limine MBR Stage sektörlerini (LBA 0..42) diske yaz
-        let stage_sectors = (Self::LIMINE_MBR_STAGE.len() + 511) / 512;
+        let stage_sectors = Self::LIMINE_MBR_STAGE.len().div_ceil(512);
         for s in 0..stage_sectors {
             let mut sec = [0u8; 512];
             let start = s * 512;
@@ -216,7 +216,7 @@ impl InstallerApp {
             return false;
         }
         let part_lba: u32 = 2048;
-        let part_sectors = (cap.saturating_sub(part_lba as u64) as u32).min(0xFFFF_FFFF);
+        let part_sectors = cap.saturating_sub(part_lba as u64) as u32;
         let o = 0x1BE; // Birincil bölüm girdisi
         mbr[o] = 0x80; // Aktif / Bootable
         mbr[o + 1] = 0x20;
@@ -325,11 +325,10 @@ impl InstallerApp {
         }
 
         // 1. Adim: Disk henuz bicimlendirilmediyse simdi bicimlendir.
-        if !self.disk_formatted {
-            if !self.format_selected_drive() {
+        if !self.disk_formatted
+            && !self.format_selected_drive() {
                 return false;
             }
-        }
 
         self.state = InstallState::Copying;
         self.progress_pct = 65;
@@ -947,5 +946,11 @@ impl InstallerApp {
         let tx = bx + (bw.saturating_sub(tw)) / 2;
         let ty = by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2;
         MinGuiCompositor::draw_string(fb, tx, ty, btn_text, MinGuiCompositor::text_on(btn_bg));
+    }
+}
+
+impl Default for InstallerApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

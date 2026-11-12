@@ -178,3 +178,9 @@ impl CalculatorApp {
         Some(BUTTONS[row][col])
     }
 }
+
+impl Default for CalculatorApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

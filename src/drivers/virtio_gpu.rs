@@ -263,19 +263,12 @@ pub struct VirtioGpuDisplayOne {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+#[derive(Default)]
 pub struct VirtioGpuRespDisplayInfo {
     pub hdr: VirtioGpuCtrlHdr,
     pub pmodes: [VirtioGpuDisplayOne; 16],
 }
 
-impl Default for VirtioGpuRespDisplayInfo {
-    fn default() -> Self {
-        Self {
-            hdr: VirtioGpuCtrlHdr::default(),
-            pmodes: [VirtioGpuDisplayOne::default(); 16],
-        }
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]
@@ -523,7 +516,7 @@ unsafe fn parse_pci_capabilities(bus: u8, dev: u8, func: u8) {
             let offset = pci_read32(bus, dev, func, cap_ptr + 8);
             let length = pci_read32(bus, dev, func, cap_ptr + 12);
 
-            let bar_reg = 0x10 + (bar as u8) * 4;
+            let bar_reg = 0x10 + bar * 4;
             let bar_val = pci_read32(bus, dev, func, bar_reg);
             if bar_val != 0 && bar_val & 1 == 0 {
                 let bar_phys = (bar_val & 0xFFFF_FFF0) as u64;
@@ -575,7 +568,7 @@ pub fn init() -> bool {
             );
 
             // 3. Özellikleri oku ve doğrula
-            write_reg32(DEVICE.common_cfg_addr + 0, 0); // device_feature_select = 0
+            write_reg32(DEVICE.common_cfg_addr, 0); // device_feature_select = 0
             let _features = read_reg32(DEVICE.common_cfg_addr + 4); // device_feature
 
             write_reg32(DEVICE.common_cfg_addr + 8, 0); // driver_feature_select = 0
@@ -605,7 +598,7 @@ pub fn init() -> bool {
             );
         } else if DEVICE.mmio_mode && DEVICE.mmio_base != 0 {
             // MMIO Yedek Başlatma
-            let magic = read_reg32(DEVICE.mmio_base + 0x00);
+            let magic = read_reg32(DEVICE.mmio_base);
             if magic != 0x74726976 {
                 return false;
             }
@@ -651,7 +644,7 @@ pub fn init() -> bool {
 
         // Ekran tamponunu iliştir
         let fb_phys = crate::drivers::video::PANIC_FB_ADDR as u64;
-        let fb_size = (w * h * 4) as u32;
+        let fb_size = w * h * 4;
         if fb_phys != 0 {
             attach_backing(res_id, fb_phys, fb_size);
             set_scanout(0, res_id, 0, 0, w, h);

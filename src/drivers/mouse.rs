@@ -152,3 +152,9 @@ impl MouseState {
         }
     }
 }
+
+impl Default for MouseState {
+    fn default() -> Self {
+        Self::new()
+    }
+}

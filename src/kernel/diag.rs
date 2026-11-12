@@ -18,11 +18,11 @@ pub fn cpu_features() -> CpuFeatures {
     let extended = cpuid.get_extended_feature_info();
     CpuFeatures {
         invariant_tsc: cpuid.get_processor_frequency_info().is_some(),
-        apic: feature.as_ref().map_or(false, |v| v.has_apic()),
-        x2apic: feature.as_ref().map_or(false, |v| v.has_x2apic()),
-        sse2: feature.as_ref().map_or(false, |v| v.has_sse2()),
-        avx: feature.as_ref().map_or(false, |v| v.has_avx())
-            && extended.map_or(false, |v| v.has_avx2()),
+        apic: feature.as_ref().is_some_and(|v| v.has_apic()),
+        x2apic: feature.as_ref().is_some_and(|v| v.has_x2apic()),
+        sse2: feature.as_ref().is_some_and(|v| v.has_sse2()),
+        avx: feature.as_ref().is_some_and(|v| v.has_avx())
+            && extended.is_some_and(|v| v.has_avx2()),
     }
 }
 

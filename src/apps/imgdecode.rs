@@ -97,12 +97,10 @@ pub fn decode_bmp(data: &[u8]) -> Option<DecodedImage> {
     let bytes_per_pixel = bits_per_pixel / 8;
     let row_bytes = (width * bytes_per_pixel + 3) & !3;
 
-    if for_pixels(width, height).is_none() {
-        return None;
-    }
+    for_pixels(width, height)?;
     if offset
         .checked_add(row_bytes.checked_mul(height)?)
-        .map_or(false, |end| end > data.len())
+        .is_some_and(|end| end > data.len())
     {
         return None;
     }
@@ -283,8 +281,8 @@ pub fn decode_png(data: &[u8]) -> Option<DecodedImage> {
         return None;
     }
     let bits_per_pixel = channels.checked_mul(hdr.bit_depth as usize)?;
-    let bpp = (bits_per_pixel + 7) / 8;
-    let stride = (hdr.width.checked_mul(bits_per_pixel)? + 7) / 8;
+    let bpp = bits_per_pixel.div_ceil(8);
+    let stride = hdr.width.checked_mul(bits_per_pixel)?.div_ceil(8);
     let expected = hdr.height.checked_mul(stride + 1)?;
     let mut raw = inflate_zlib(&idat, expected)?;
     if raw.len() < expected {
@@ -1221,9 +1219,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 if n == 0 || n > 4 || seg.len() < 6 + n * 3 {
                     return None;
                 }
-                if for_pixels(width, height).is_none() {
-                    return None;
-                }
+                for_pixels(width, height)?;
                 let mut comps = Vec::new();
                 let mut max_h = 1usize;
                 let mut max_v = 1usize;
@@ -1252,8 +1248,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 }
                 let mcu_w = 8 * max_h;
                 let mcu_h = 8 * max_v;
-                let mcus_x = (width + mcu_w - 1) / mcu_w;
-                let mcus_y = (height + mcu_h - 1) / mcu_h;
+                let mcus_x = width.div_ceil(mcu_w);
+                let mcus_y = height.div_ceil(mcu_h);
                 let mut total_plane = 0usize;
                 for c in comps.iter_mut() {
                     c.bw = mcus_x * c.h;
@@ -1297,9 +1293,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 if n == 0 || n > 4 || seg.len() < 6 + n * 3 {
                     return None;
                 }
-                if for_pixels(width, height).is_none() {
-                    return None;
-                }
+                for_pixels(width, height)?;
                 let mut comps = Vec::new();
                 let mut max_h = 1usize;
                 let mut max_v = 1usize;
@@ -1328,8 +1322,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                 }
                 let mcu_w = 8 * max_h;
                 let mcu_h = 8 * max_v;
-                let mcus_x = (width + mcu_w - 1) / mcu_w;
-                let mcus_y = (height + mcu_h - 1) / mcu_h;
+                let mcus_x = width.div_ceil(mcu_w);
+                let mcus_y = height.div_ceil(mcu_h);
                 let mut total_plane = 0usize;
                 for c in comps.iter_mut() {
                     c.bw = mcus_x * c.h;
@@ -1366,18 +1360,15 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
     // Progresif JPEG: taramalar katsayıları kademeli olarak doldurur.
     // Önce tüm katsayılar toplanır, sonra tek bir IDCT + renk dönüşümü yapılır.
     if is_progressive {
-        let fr = match frame {
-            Some(f) => f,
-            None => return None,
-        };
+        let fr = frame?;
         if prog_scans.is_empty() {
             return None;
         }
 
         let mcu_w = 8 * fr.max_h;
         let mcu_h = 8 * fr.max_v;
-        let mcus_x = (fr.width + mcu_w - 1) / mcu_w;
-        let mcus_y = (fr.height + mcu_h - 1) / mcu_h;
+        let mcus_x = fr.width.div_ceil(mcu_w);
+        let mcus_y = fr.height.div_ceil(mcu_h);
 
         let mut coefs: Vec<Vec<i32>> = Vec::new();
         for c in &fr.comps {
@@ -1412,7 +1403,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let (aw, ahh) = component_block_dims(&fr, comp);
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
+                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1437,7 +1428,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     // Örgülü tarama: MCU bazlı, bileşenler arası geçişli.
                     for my in 0..mcus_y {
                         for mx in 0..mcus_x {
-                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
+                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1482,7 +1473,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let row_blocks = comp.bw;
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0 && unit > 0 && unit % restart_interval == 0 {
+                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1631,10 +1622,7 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
         for (ci, c) in fr.comps.iter().enumerate() {
             // Kuantizasyon tablosu zikzak sırasında saklanır; katsayılar ise
             // doğal (satır-sütun) sırada biriktirilir.
-            let qt = match quant[c.tq] {
-                Some(q) => q,
-                None => return None,
-            };
+            let qt = quant[c.tq]?;
             let mut qnat = [0i32; 64];
             for k in 0..64 {
                 qnat[ZIGZAG[k]] = qt[k];
@@ -1674,8 +1662,8 @@ fn decode_jpeg_scan(
 ) -> Option<Vec<u8>> {
     let mcu_w = 8 * frame.max_h;
     let mcu_h = 8 * frame.max_v;
-    let mcus_x = (frame.width + mcu_w - 1) / mcu_w;
-    let mcus_y = (frame.height + mcu_h - 1) / mcu_h;
+    let mcus_x = frame.width.div_ceil(mcu_w);
+    let mcus_y = frame.height.div_ceil(mcu_h);
     let mut planes: Vec<Vec<u8>> = Vec::new();
     for c in &frame.comps {
         planes.push(vec![0u8; c.bw * c.bh * 64]);
@@ -1690,7 +1678,7 @@ fn decode_jpeg_scan(
 
     for my in 0..mcus_y {
         for mx in 0..mcus_x {
-            if restart_interval > 0 && mcu > 0 && mcu % restart_interval == 0 {
+            if restart_interval > 0 && mcu > 0 && mcu.is_multiple_of(restart_interval) {
                 if !br.reset_at_restart() {
                     return None;
                 }
@@ -1782,9 +1770,9 @@ fn decode_jpeg_scan(
 /// Bileşenin gerçek (dolgusuz) blok sayısı. Progresif AC taramaları yalnızca
 /// bu blokları kodlar; dolgu blokları interleaved DC taramalarında yer alır.
 fn component_block_dims(frame: &JFrame, comp: &JComponent) -> (usize, usize) {
-    let cw = (frame.width * comp.h + frame.max_h - 1) / frame.max_h;
-    let ch = (frame.height * comp.v + frame.max_v - 1) / frame.max_v;
-    ((cw + 7) / 8, (ch + 7) / 8)
+    let cw = (frame.width * comp.h).div_ceil(frame.max_h);
+    let ch = (frame.height * comp.v).div_ceil(frame.max_v);
+    (cw.div_ceil(8), ch.div_ceil(8))
 }
 
 /// Çözülen bileşen düzlemlerini yukarıdan aşağıya RGB'ye dönüştürür.
@@ -1846,9 +1834,7 @@ pub fn decode_gif(data: &[u8]) -> Option<DecodedImage> {
     let has_gct = (packed & 0x80) != 0;
     let gct_size = 2usize << (packed & 7);
 
-    if for_pixels(width, height).is_none() {
-        return None;
-    }
+    for_pixels(width, height)?;
 
     let mut pos = 13usize;
     let mut gct: Option<Vec<u8>> = None;
@@ -2200,12 +2186,10 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
     }
 
     let bits = le32(data, 1)?;
-    let width = ((bits & 0x3FFF) + 1) as usize;
-    let height = (((bits >> 14) & 0x3FFF) + 1) as usize;
+    let width = (bits & 0x3FFF) + 1;
+    let height = ((bits >> 14) & 0x3FFF) + 1;
 
-    if for_pixels(width, height).is_none() {
-        return None;
-    }
+    for_pixels(width, height)?;
 
     let mut br = BitReader::new(&data[5..]);
 
@@ -2399,7 +2383,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
         let t_b = (top & 0xFF) as i32;
         let t_a = ((top >> 24) & 0xFF) as i32;
 
-        let wrap = |v: i32| -> u8 { ((v % 256 + 256) % 256) as u8 };
+        let wrap = |v: i32| -> u8 { v.rem_euclid(256) as u8 };
 
         let (r, g, b, a) = match mode {
             0 => (wrap(er), wrap(eg), wrap(eb), wrap(ea)), // Green: no prediction
@@ -2590,7 +2574,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
         } else if sym == 256 {
             // End of block (VP8L'de kullanılmaz, ama güvenlik için)
             break;
-        } else if sym >= 257 && sym <= 275 {
+        } else if (257..=275).contains(&sym) {
             // Uzunluk ön eki
             let li = sym - 257;
             const LEN_BASE: [u32; 19] = [
@@ -2637,7 +2621,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
                 if px >= width * height {
                     break;
                 }
-                let src = px - distance as usize;
+                let src = px - distance;
                 let val = argb[src];
                 argb[px] = val;
                 // Renk önbelleğini güncelle
@@ -2647,7 +2631,7 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
                 }
                 px += 1;
             }
-        } else if sym >= 276 && sym <= 280 {
+        } else if (276..=280).contains(&sym) {
             // Mesafe ön eki (uzunluk olmadan - VP8L'de kullanılmaz)
             return None;
         } else {
@@ -2691,12 +2675,10 @@ fn decode_webp_lossy(data: &[u8]) -> Option<DecodedImage> {
     }
     // VP8 frame header
     let frame_tag = le16(data, 3)?;
-    let width = ((frame_tag & 0x3FFF) as usize) + 1;
-    let height = (((frame_tag >> 14) & 0x3FFF) as usize) + 1;
+    let width = (frame_tag & 0x3FFF) + 1;
+    let height = ((frame_tag >> 14) & 0x3FFF) + 1;
 
-    if for_pixels(width, height).is_none() {
-        return None;
-    }
+    for_pixels(width, height)?;
 
     // Full VP8 decoding requires complex DCT + motion compensation
     // This is a simplified version that returns a placeholder
@@ -2743,11 +2725,7 @@ fn is_svg(data: &[u8]) -> bool {
         offset += 1;
     }
 
-    if offset + 4 <= remaining.len() && &remaining[offset..offset + 4] == b"<svg" {
-        return true;
-    }
-
-    false
+    offset + 4 <= remaining.len() && &remaining[offset..offset + 4] == b"<svg"
 }
 
 /// Basit SVG kod çözücü (temel şekiller için).
@@ -2792,9 +2770,7 @@ pub fn decode_svg(data: &[u8]) -> Option<DecodedImage> {
         }
     }
 
-    if for_pixels(width, height).is_none() {
-        return None;
-    }
+    for_pixels(width, height)?;
 
     // Create a basic white background
     let mut rgb = vec![255u8; width * height * 3];

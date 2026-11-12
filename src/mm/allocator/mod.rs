@@ -259,7 +259,7 @@ impl FixedSizeBlockAllocator {
         let mut current = &mut self.large_free_list;
         while let Some(ref mut node) = current {
             let node_addr = *node as *mut LargeBlockHeader as usize;
-            if node.size >= required_size && (node_addr % required_align == 0) {
+            if node.size >= required_size && node_addr.is_multiple_of(required_align) {
                 let next_node = node.next.take();
                 let matched_ptr = node_addr as *mut u8;
                 *current = next_node;

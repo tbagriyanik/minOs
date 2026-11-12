@@ -134,7 +134,7 @@ pub fn ec_write(offset: u8, value: u8) -> bool {
 /// EC'nin varlığını dene. Birkaç offset'ten okuma denenir; herhangi biri
 /// 0xFF dışında bir değer dönerse EC varsayılır.
 pub fn ec_detect() -> bool {
-    (0..3).any(|off| ec_read(off as u8).map_or(false, |v| v != 0xFF))
+    (0..3).any(|off| ec_read(off as u8).is_some_and(|v| v != 0xFF))
 }
 
 /// EC mevcut mu?

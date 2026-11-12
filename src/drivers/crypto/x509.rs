@@ -810,8 +810,7 @@ pub fn match_hostname(pattern: &str, hostname: &str) -> bool {
         return true;
     }
     // Joker karakterli eşleşme: *.example.com
-    if pattern.starts_with("*.") {
-        let suffix = &pattern[2..];
+    if let Some(suffix) = pattern.strip_prefix("*.") {
         if let Some(dot_idx) = hostname.find('.') {
             let host_prefix = &hostname[..dot_idx];
             let host_suffix = &hostname[dot_idx + 1..];
@@ -1447,7 +1446,7 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
         if current.issuer_raw == current.subject_raw {
             if chain
                 .get(depth)
-                .is_some_and(|cert| TRUSTED_ROOTS.iter().any(|&root| root == *cert))
+                .is_some_and(|cert| TRUSTED_ROOTS.contains(cert))
             {
                 return Ok(());
             }

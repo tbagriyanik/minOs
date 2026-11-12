@@ -309,7 +309,7 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
     };
     if let Some(scheme_end) = base.find("://") {
         let rest = &base[scheme_end + 3..];
-        let host_and_path = if let Some(q_or_h) = rest.find(|c| c == '?' || c == '#') {
+        let host_and_path = if let Some(q_or_h) = rest.find(['?', '#']) {
             &rest[..q_or_h]
         } else {
             rest
@@ -346,7 +346,7 @@ fn percent_decode(input: &str) -> Vec<u8> {
 }
 
 fn join_local_path(base: &str, rel: &str) -> String {
-    let base_clean = base.split(|c| c == '?' || c == '#').next().unwrap_or(base);
+    let base_clean = base.split(['?', '#']).next().unwrap_or(base);
     let dir_end = base_clean.rfind('/').map(|i| i + 1).unwrap_or(0);
     let base_dir = &base_clean[..dir_end];
     let mut parts: Vec<&str> = Vec::new();
@@ -472,7 +472,7 @@ fn decode_local_image(
         return crate::apps::imgdecode::decode(bytes);
     }
     let vfs = vfs?;
-    let clean = url.split(|c| c == '?' || c == '#').next().unwrap_or(url);
+    let clean = url.split(['?', '#']).next().unwrap_or(url);
     if let Some(rest) = clean.strip_prefix("minos://") {
         for candidate in [format!("/{}", rest), String::from(rest)] {
             if let Some(img) = read_vfs_image(vfs, &candidate) {
@@ -651,7 +651,7 @@ pub fn render_html_to_lines(
     // script etiketleri ise çıktidan çıkarılır.
     let js_body = crate::apps::js::inline_scripts(body);
     let body: &[u8] = &js_body;
-    let vfs_ref = vfs.as_ref().map(|v| &**v);
+    let vfs_ref = vfs.as_deref();
     let mut current_color;
     let mut current_bg: Option<u32>;
     let mut active_link: Option<String> = None;
@@ -1266,16 +1266,14 @@ pub fn render_html_to_lines(
                     // <link rel="stylesheet" href="..."> — harici CSS.
                     // Engellemeyen: URL'yi kaydet, asenkron yükleme poll_network'de yapılır.
                     let rel_attr = extract_attr(attrs, b"rel");
-                    if rel_attr.map_or(false, |r| r.eq_ignore_ascii_case("stylesheet")) {
+                    if rel_attr.is_some_and(|r| r.eq_ignore_ascii_case("stylesheet")) {
                         if let Some(href) = href_attr {
                             if let Some(resolved_url) = resolve_url(href, base_url) {
-                                if resolved_url.starts_with("http://")
-                                    || resolved_url.starts_with("https://")
-                                {
-                                    if !pending_resources.iter().any(|u| u == &resolved_url) {
+                                if (resolved_url.starts_with("http://")
+                                    || resolved_url.starts_with("https://"))
+                                    && !pending_resources.iter().any(|u| u == &resolved_url) {
                                         pending_resources.push(resolved_url.clone());
                                     }
-                                }
                             }
                         }
                     }
@@ -1284,13 +1282,11 @@ pub fn render_html_to_lines(
                     // Engellemeyen: URL'yi kaydet, asenkron yükleme poll_network'de yapılır.
                     if let Some(src) = extract_attr(attrs, b"src") {
                         if let Some(resolved_url) = resolve_url(src, base_url) {
-                            if resolved_url.starts_with("http://")
-                                || resolved_url.starts_with("https://")
-                            {
-                                if !pending_resources.iter().any(|u| u == &resolved_url) {
+                            if (resolved_url.starts_with("http://")
+                                || resolved_url.starts_with("https://"))
+                                && !pending_resources.iter().any(|u| u == &resolved_url) {
                                     pending_resources.push(resolved_url.clone());
                                 }
-                            }
                         }
                     }
                 } else if eq_ascii(name, b"button") {
@@ -1364,7 +1360,7 @@ pub fn render_html_to_lines(
                         .or_else(|| extract_attr(attrs, b"placeholder"))
                         .unwrap_or("input");
 
-                    if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("text"))
+                    if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("text"))
                         || type_attr.is_none()
                     {
                         // Tek satır text input
@@ -1396,7 +1392,7 @@ pub fn render_html_to_lines(
                             }
                         }
                         word_buf.push('"');
-                    } else if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("password")) {
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("password")) {
                         // Password input - gizli metin
                         if !word_buf.is_empty() {
                             flush_word(
@@ -1426,8 +1422,8 @@ pub fn render_html_to_lines(
                             }
                         }
                         word_buf.push('●');
-                    } else if type_attr.map_or(false, |t| t.eq_ignore_ascii_case("checkbox"))
-                        || type_attr.map_or(false, |t| t.eq_ignore_ascii_case("radio"))
+                    } else if type_attr.is_some_and(|t| t.eq_ignore_ascii_case("checkbox"))
+                        || type_attr.is_some_and(|t| t.eq_ignore_ascii_case("radio"))
                     {
                         // Checkbox/radio - basit gösterim
                         if !word_buf.is_empty() {
@@ -2992,7 +2988,7 @@ fn render_grid(
             for span in cell_spans.iter() {
                 let mut s = span.clone();
                 // Girinti ekle (basit: x_offset kadar bosluk onune)
-                if x_offset > 0 && s.text.starts_with(' ') == false {
+                if x_offset > 0 && !s.text.starts_with(' ') {
                     s.text = format!("{}{}", " ".repeat(x_offset.min(50)), s.text);
                 }
                 line_spans.push(s);

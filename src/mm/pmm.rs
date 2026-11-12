@@ -141,7 +141,7 @@ impl PhysicalMemoryManager {
 
     /// Verilen fiziksel adresi global çerçeve indeksine çevirir.
     pub fn address_to_frame_index(&self, addr: u64) -> Option<usize> {
-        if addr % PAGE_SIZE != 0 {
+        if !addr.is_multiple_of(PAGE_SIZE) {
             return None;
         }
         let mut base_index = 0usize;
@@ -280,5 +280,11 @@ impl PhysicalMemoryManager {
             let addr = start_addr + (offset as u64) * PAGE_SIZE;
             self.free_frame(addr);
         }
+    }
+}
+
+impl Default for PhysicalMemoryManager {
+    fn default() -> Self {
+        Self::new()
     }
 }

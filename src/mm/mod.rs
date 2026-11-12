@@ -23,3 +23,9 @@ impl MemoryManager {
         vmm::AddressSpace::current()
     }
 }
+
+impl Default for MemoryManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

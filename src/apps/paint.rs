@@ -1117,6 +1117,12 @@ impl PaintApp {
     }
 }
 
+impl Default for PaintApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Bresenham çizgi rasterleştiricisi.
 fn raster_line<F: FnMut(usize, usize)>(x0: isize, y0: isize, x1: isize, y1: isize, emit: &mut F) {
     let mut x = x0;
@@ -1186,7 +1192,7 @@ fn integer_sqrt(value: usize) -> usize {
         return value;
     }
     let mut guess = value;
-    let mut next = (guess + 1) / 2;
+    let mut next = guess.div_ceil(2);
     while next < guess {
         guess = next;
         next = (guess + value / guess) / 2;
@@ -1194,7 +1200,7 @@ fn integer_sqrt(value: usize) -> usize {
     guess
 }
 
-fn format_num<'a>(mut n: usize, buf: &'a mut [u8; 8]) -> &'a str {
+fn format_num(mut n: usize, buf: &mut [u8; 8]) -> &str {
     if n == 0 {
         return "0";
     }

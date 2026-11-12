@@ -52,7 +52,7 @@ fn sub_word(w: u32) -> u32 {
 }
 
 fn rot_word(w: u32) -> u32 {
-    (w << 8) | (w >> 24)
+    w.rotate_left(8)
 }
 
 pub struct Aes {
@@ -86,7 +86,7 @@ impl Aes {
             let mut temp = w[i - 1];
             if i % nk == 0 {
                 // RCON occupies the most significant byte of the round constant word.
-                temp = sub_word(rot_word(temp)) ^ ((RCON[(i / nk - 1) as usize] as u32) << 24);
+                temp = sub_word(rot_word(temp)) ^ ((RCON[i / nk - 1] as u32) << 24);
             } else if nk > 6 && i % nk == 4 {
                 temp = sub_word(temp);
             }

@@ -148,6 +148,7 @@ pub enum BluetoothState {
 
 // Keşfedilen Aygıt Kaydı
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 pub struct DiscoveredDevice {
     pub mac: [u8; 6],
     pub class_of_device: [u8; 3],
@@ -158,19 +159,6 @@ pub struct DiscoveredDevice {
     pub handle: u16,
 }
 
-impl Default for DiscoveredDevice {
-    fn default() -> Self {
-        Self {
-            mac: [0; 6],
-            class_of_device: [0; 3],
-            rssi: 0,
-            name: [0; 32],
-            name_len: 0,
-            connected: false,
-            handle: 0,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Global Sürücü Durumu ve Arabellekler
@@ -577,15 +565,14 @@ unsafe fn handle_cmd_complete_return(opcode: u16, ret_params: &[u8]) {
                 MAC_ADDR.copy_from_slice(&ret_params[..6]);
             }
         }
-        HCI_OP_READ_LOCAL_VERSION => {
-            if ret_params.len() >= 8 {
+        HCI_OP_READ_LOCAL_VERSION
+            if ret_params.len() >= 8 => {
                 HCI_VERSION = ret_params[0];
                 HCI_REVISION = (ret_params[1] as u16) | ((ret_params[2] as u16) << 8);
                 LMP_VERSION = ret_params[3];
                 MANUFACTURER_NAME = (ret_params[4] as u16) | ((ret_params[5] as u16) << 8);
                 LMP_SUBVERSION = (ret_params[6] as u16) | ((ret_params[7] as u16) << 8);
             }
-        }
         _ => {}
     }
 }
@@ -690,8 +677,8 @@ unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
                 process_hci_event(&resp);
             }
         }
-        HCI_OP_DISCONNECT => {
-            if params.len() >= 2 {
+        HCI_OP_DISCONNECT
+            if params.len() >= 2 => {
                 let h_lo = params[0];
                 let h_hi = params[1];
                 let resp = [
@@ -705,7 +692,6 @@ unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
                 ];
                 process_hci_event(&resp);
             }
-        }
         _ => {}
     }
 }

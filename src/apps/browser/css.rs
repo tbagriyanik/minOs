@@ -304,14 +304,8 @@ fn font_scale_from_size(val: &str) -> usize {
     }
     // Varsayılan viewport ve parent boyutları ile px değerini hesapla
     match parse_px_value(&l, None, None, None, None) {
-        Some(px) => {
-            if px >= 20 {
-                2
-            } else {
-                1
-            }
-        }
-        None => 1,
+        Some(px) if px >= 20 => 2,
+        _ => 1,
     }
 }
 
@@ -320,7 +314,7 @@ fn is_bold_weight(val: &str) -> bool {
     if l == "bold" || l == "bolder" || l == "bolder " {
         return true;
     }
-    l.parse::<u32>().map_or(false, |w| w >= 600)
+    l.parse::<u32>().is_ok_and(|w| w >= 600)
 }
 
 /// `;` ile ayrılmış bildirimleri böler; `url(data:...;base64,...)` gibi
@@ -1496,7 +1490,7 @@ fn apply_css_cascade(
     }
 
     // Özgüllüğe göre sırala (aşşağıdan yukarıya); eşit skorlarda orijinal sırayı koru (stabil).
-    scored.sort_by(|a, b| a.specificity.cmp(&b.specificity));
+    scored.sort_by_key(|a| a.specificity);
 
     let mut resolved = ElementStyle::new();
     for sr in scored {

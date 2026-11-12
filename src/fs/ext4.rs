@@ -73,14 +73,14 @@ pub fn layout(total_blocks: u32) -> Option<Layout> {
     if total_blocks < 256 {
         return None;
     }
-    let groups = (total_blocks + BLOCKS_PER_GROUP - 1) / BLOCKS_PER_GROUP;
+    let groups = total_blocks.div_ceil(BLOCKS_PER_GROUP);
     let groups = groups.max(1);
-    let itable_blocks = (INODES_PER_GROUP * EXT4_INODE_SIZE as u32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let itable_blocks = (INODES_PER_GROUP * EXT4_INODE_SIZE as u32).div_ceil(BLOCK_SIZE);
     let inodes_count = groups * INODES_PER_GROUP;
     // Grup 0 yerleşimi: süperblok(1) + GDT(gdt_blocks) + blok bitmap +
     // inode bitmap + inode tablosu. Kök dizin, tablonun bitiminden sonraki
     // ilk boş bloktur.
-    let gdt_blocks = (groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let gdt_blocks = (groups * 32).div_ceil(BLOCK_SIZE);
     let root_block = 2 + gdt_blocks + 2 + itable_blocks + 1;
     Some(Layout {
         total_blocks,
@@ -115,7 +115,7 @@ pub fn has_super(_l: &Layout, g: u32) -> bool {
 
 /// Block Group Descriptor Table'ın kapladığı blok sayısı.
 pub fn gdt_blocks(l: &Layout) -> u32 {
-    (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE
+    (l.groups * 32).div_ceil(BLOCK_SIZE)
 }
 
 /// Grubun blok bitmap'i. Grup 0 yerleşimi: blok 1 süperblok, blok 2..2+gdt
@@ -205,7 +205,7 @@ pub fn write_superblock(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) ->
 
 /// Block Group Descriptor Table'ı yaz.
 fn write_group_descriptors(dev: &mut dyn BlockDevice, base_lba: u32, l: &Layout) -> bool {
-    let gdt_blocks = (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let gdt_blocks = (l.groups * 32).div_ceil(BLOCK_SIZE);
     for i in 0..gdt_blocks {
         let blk = 2 + i;
         let mut buf = [0u8; BLOCK_SIZE as usize];
@@ -259,7 +259,7 @@ pub fn format_device(dev: &mut dyn BlockDevice, base_lba: u32) -> bool {
         return false;
     }
 
-    let gdt_blocks = (l.groups * 32 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let gdt_blocks = (l.groups * 32).div_ceil(BLOCK_SIZE);
 
     for g in 0..l.groups {
         let first = group_first_block(&l, g);

@@ -208,7 +208,7 @@ fn http_fetch_der(url: &str) -> Option<Vec<u8>> {
     let path: &str = &path;
     let fd = crate::drivers::socket::socket(crate::drivers::socket::AF_INET, 1).ok()?;
     let _ = crate::drivers::socket::set_timeout(fd, 10_000);
-    let ip = crate::drivers::socket::resolve_host(&host).ok()?;
+    let ip = crate::drivers::socket::resolve_host(host).ok()?;
     crate::drivers::socket::connect(fd, ip, port).ok()?;
 
     let req = alloc::format!(
@@ -226,7 +226,7 @@ fn http_fetch_der(url: &str) -> Option<Vec<u8>> {
     let mut chunk = [0u8; 4096];
     loop {
         let n = match crate::drivers::socket::recv(fd, &mut chunk) {
-            Ok(n) => n as usize,
+            Ok(n) => n,
             Err(_) => break,
         };
         if n == 0 {
@@ -237,7 +237,7 @@ fn http_fetch_der(url: &str) -> Option<Vec<u8>> {
             break; // güvenlik sınırı
         }
     }
-    let _ = crate::drivers::socket::close(fd);
+    crate::drivers::socket::close(fd);
 
     // Başlık/gövde ayrımı
     let header_end = find_subslice(&buf, b"\r\n\r\n")?;

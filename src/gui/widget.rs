@@ -323,7 +323,7 @@ pub trait Widget {
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
-fn find<'a>(node: &'a dyn Widget, id: u32) -> Option<&'a dyn Widget> {
+fn find(node: &dyn Widget, id: u32) -> Option<&dyn Widget> {
     if node.id() == id {
         return Some(node);
     }
@@ -337,7 +337,7 @@ fn find<'a>(node: &'a dyn Widget, id: u32) -> Option<&'a dyn Widget> {
     None
 }
 
-fn find_mut<'a>(node: &'a mut dyn Widget, id: u32) -> Option<&'a mut dyn Widget> {
+fn find_mut(node: &mut dyn Widget, id: u32) -> Option<&mut dyn Widget> {
     if node.id() == id {
         return Some(node);
     }
@@ -1528,7 +1528,7 @@ impl Ui {
         if let Some(widget) = find_mut(&mut self.root, self.focused) {
             widget.on_focus(false);
         }
-        self.focused = if id != 0 && find(&self.root, id).map_or(false, |w| w.focusable()) {
+        self.focused = if id != 0 && find(&self.root, id).is_some_and(|w| w.focusable()) {
             id
         } else {
             0
@@ -1589,7 +1589,7 @@ impl Ui {
                     return WidgetEvent::Ignored;
                 }
                 self.active_tree = true;
-                if find(&self.root, hit).map_or(false, |w| w.focusable()) {
+                if find(&self.root, hit).is_some_and(|w| w.focusable()) {
                     self.set_focus(hit);
                 }
                 self.captured = hit;
@@ -1766,13 +1766,13 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     );
 
     ui.set_focus(text_id);
-    for ch in [b'm', b'i'] {
+    for ch in *b"mi" {
         ui.handle_key(Key::Char(ch));
     }
     ui.handle_key(Key::Backspace);
     report(
         ui.widget_as::<TextBox>(text_id)
-            .map_or(false, |t| t.text() == "m"),
+            .is_some_and(|t| t.text() == "m"),
         "Metin kutusu yazma ve geri silme",
         &mut ok,
     );
@@ -1788,7 +1788,7 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
         toggled == WidgetEvent::Toggled(check_id, true)
             && ui
                 .widget_as::<CheckBox>(check_id)
-                .map_or(false, |c| c.is_checked()),
+                .is_some_and(|c| c.is_checked()),
         "Onay kutusu Space ile degisiyor",
         &mut ok,
     );

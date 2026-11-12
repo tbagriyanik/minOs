@@ -866,7 +866,7 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
         if free.len() < need {
             let slots_per_cluster = (FAT.sectors_per_cluster * 16) as usize;
             let extra = need - free.len();
-            let clusters_needed = (extra + slots_per_cluster - 1) / slots_per_cluster;
+            let clusters_needed = extra.div_ceil(slots_per_cluster);
             // zincirin son kümesini bul
             let mut last = dir_cluster;
             loop {
@@ -907,7 +907,7 @@ fn fat_dir_add_entry(parent: u32, name: &str, is_dir: bool, first: u32, size: u3
             return false;
         }
         let units: alloc::vec::Vec<u16> = name.encode_utf16().collect();
-        let lfn_count = (units.len() + 12) / 13;
+        let lfn_count = units.len().div_ceil(13);
         let mut short = [b' '; 11];
         let mut found = false;
         for seq in 0..10u32 {
@@ -1135,7 +1135,7 @@ fn fat_write_file_in(parent: u32, name: &str, data: &[u8]) -> bool {
         let need = if data.is_empty() {
             0
         } else {
-            (data.len() + cluster_bytes - 1) / cluster_bytes
+            data.len().div_ceil(cluster_bytes)
         };
         let chain = if need == 0 {
             alloc::vec::Vec::new()
@@ -1462,7 +1462,7 @@ fn iso_mount(drive: u8) -> bool {
 fn iso_list_root() -> bool {
     unsafe {
         let mut buf = [0u8; 2048];
-        let sectors = ((ISO.root_size as usize + 2047) / 2048).min(4);
+        let sectors = (ISO.root_size as usize).div_ceil(2048).min(4);
         let mut count = 0usize;
         for s in 0..sectors {
             if !ata::atapi_read_block(ISO.drive, ISO.root_lba + s as u32, &mut buf) {
@@ -1542,7 +1542,7 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
         return false;
     }
     let total_drive_sectors = ata::drive_capacity_sectors(drive);
-    if total_drive_sectors < 65_600 || total_drive_sectors > 0xFFFF_FFFF {
+    if !(65_600..=0xFFFF_FFFF).contains(&total_drive_sectors) {
         serial("[FS] FAT32 bicimlendirme desteklenmeyen disk kapasitesi.\n");
         return false;
     }
@@ -1561,7 +1561,7 @@ pub fn fat_format_at(drive: u8, partition_lba: u32) -> bool {
             .saturating_sub(reserved_sectors)
             .saturating_sub(num_fats.saturating_mul(fat_size))
             / sectors_per_cluster as u32;
-        let needed = (clusters.saturating_add(2).saturating_mul(4) + 511) / 512;
+        let needed = clusters.saturating_add(2).saturating_mul(4).div_ceil(512);
         if needed <= fat_size {
             break;
         }
@@ -1778,14 +1778,13 @@ pub fn init() {
         } else {
             serial("[FS] Depolama aygiti bulundu ancak dosya sistemi taninamadi.\n");
         }
-    } else if ata::master_kind() == ata::DeviceKind::Atapi {
-        if iso_mount(0) {
+    } else if ata::master_kind() == ata::DeviceKind::Atapi
+        && iso_mount(0) {
             unsafe {
                 KIND0 = FsKind::Iso9660;
             }
             serial("[FS] Master ATAPI ISO9660 olarak baglandi.\n");
         }
-    }
 
     // 2) Slave → CD-ROM (ISO9660)
     if ata::slave_kind() == ata::DeviceKind::Atapi {
@@ -1900,14 +1899,13 @@ pub fn drive_formatted_on(drive: u8) -> bool {
     }
     // Diskin MBR bölümü var mı ve içi boş değil mi kontrol et
     let mut mbr = [0u8; 512];
-    if ata::read_sector(drive, 0, &mut mbr) {
-        if mbr[510] == 0x55 && mbr[511] == 0xAA {
+    if ata::read_sector(drive, 0, &mut mbr)
+        && mbr[510] == 0x55 && mbr[511] == 0xAA {
             let part_type = mbr[0x1BE + 4];
             if matches!(part_type, 0x07 | 0x0C | 0x83) {
                 return true;
             }
         }
-    }
     false
 }
 
@@ -2031,7 +2029,7 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
         refresh();
     }
     let index = (0..unsafe { ENTRY_COUNT }).find(|&i| {
-        entry(i).map_or(false, |e| {
+        entry(i).is_some_and(|e| {
             !e.is_dir && e.as_str().eq_ignore_ascii_case(name)
         })
     })?;
@@ -2300,7 +2298,7 @@ fn fat_read_chain(start_cluster: u32, size: usize) -> usize {
 fn iso_load_file(index: usize, size: usize) -> usize {
     unsafe {
         let mut buf = [0u8; 2048];
-        let sectors = ((ISO.root_size as usize + 2047) / 2048).min(4);
+        let sectors = (ISO.root_size as usize).div_ceil(2048).min(4);
         let mut count = 0usize;
         for s in 0..sectors {
             if !ata::atapi_read_block(ISO.drive, ISO.root_lba + s as u32, &mut buf) {
@@ -2327,7 +2325,7 @@ fn iso_load_file(index: usize, size: usize) -> usize {
                         let extent = le32(&buf, off + 2);
                         let file_size = le32(&buf, off + 10) as usize;
                         let take = file_size.min(size).min(CONTENT_MAX);
-                        let n_sectors = (take + 2047) / 2048;
+                        let n_sectors = take.div_ceil(2048);
                         let mut written = 0usize;
                         let mut block = [0u8; 2048];
                         for b in 0..n_sectors {

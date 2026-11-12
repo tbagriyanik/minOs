@@ -933,7 +933,7 @@ impl SystemSettings {
     fn sync_utc_input(&mut self) {
         self.utc_input = [0; 3];
         self.utc_input_len = 0;
-        let magnitude = self.utc_offset.abs() as u8;
+        let magnitude = self.utc_offset.unsigned_abs();
         if self.utc_offset < 0 {
             self.utc_input[0] = b'-';
             self.utc_input_len = 1;
@@ -2343,7 +2343,7 @@ impl SystemSettings {
                     if r.1 + r.3 > win_y + win_h {
                         continue;
                     }
-                    if i >= 7 && !crate::gui::wallpaper::thumb_ready((i - 7) as usize) {
+                    if i >= 7 && !crate::gui::wallpaper::thumb_ready(i - 7) {
                         // PNG küçük resmi henüz çözülmemiş: bekleme imleci ve yer tutucu.
                         crate::gui::screens::set_cursor_busy(true);
                         fb.draw_rect(r.0, r.1, r.2, r.3, Color::TITLE_BAR_INACTIVE);
@@ -2806,7 +2806,7 @@ impl SystemSettings {
                 fb,
                 ix + 22,
                 y + sp(1),
-                *name,
+                name,
                 if on {
                     Color::TEXT_MAIN
                 } else {

@@ -29,6 +29,12 @@ impl TaskId {
     }
 }
 
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskStatus {
     /// The task may run again on the next scheduler batch.
@@ -201,6 +207,12 @@ impl SimpleExecutor {
     }
 }
 
+impl Default for SimpleExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub static EXECUTOR: SpinMutex<SimpleExecutor> = SpinMutex::new(SimpleExecutor::new());
 
 // Zamanlayıcı defter tutma kodundaki bir hata, EXECUTOR kilidini tutarken
@@ -301,11 +313,9 @@ pub fn notify(event: TaskEvent) -> usize {
     if RUNNING_TASK.load(Ordering::Acquire) != 0
         && RUNNING_WAIT_SET.load(Ordering::Acquire)
         && RUNNING_WAIT_EVENT.load(Ordering::Acquire) == event.0
-    {
-        if !RUNNING_WOKEN.swap(true, Ordering::AcqRel) {
+        && !RUNNING_WOKEN.swap(true, Ordering::AcqRel) {
             count += 1;
         }
-    }
     count
 }
 
@@ -465,7 +475,7 @@ fn poll_tasks_inner() -> usize {
             // Promote expired event waits before selecting ready work.
             let now = crate::monotonic_ms();
             for task in executor.tasks.iter_mut() {
-                if !task.ready && task.deadline_ms.map_or(false, |deadline| now >= deadline) {
+                if !task.ready && task.deadline_ms.is_some_and(|deadline| now >= deadline) {
                     task.ready = true;
                     task.waiting_for = None;
                     task.deadline_ms = None;

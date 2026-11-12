@@ -334,7 +334,7 @@ impl TaskManagerApp {
                 .iter()
                 .enumerate()
                 .fold(0u64, |total, (app_idx, window)| {
-                    if window.map_or(false, |window| window.is_open && !window.is_minimized) {
+                    if window.is_some_and(|window| window.is_open && !window.is_minimized) {
                         total.saturating_add(render_cycles[app_idx])
                     } else {
                         total
@@ -1045,5 +1045,11 @@ impl TaskManagerApp {
                 );
             }
         }
+    }
+}
+
+impl Default for TaskManagerApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

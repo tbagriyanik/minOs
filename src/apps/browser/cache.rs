@@ -57,6 +57,12 @@ impl CacheMetadata {
     }
 }
 
+impl Default for CacheMetadata {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Önbellek kök dizini (VFS yolu).
 const CACHE_DIR: &str = "/browser/cache";
 
@@ -113,7 +119,7 @@ fn record_cache_entry(path: &str, size: usize) {
             }
         }
         // Tümü dolu: ilkini değiştir
-        if let Some(first) = CACHE_ENTRY_SIZES.iter_mut().next() {
+        if let Some(first) = CACHE_ENTRY_SIZES.first_mut() {
             *first = Some(CacheEntrySize {
                 path: path.to_string(),
                 size,
@@ -126,12 +132,10 @@ fn record_cache_entry(path: &str, size: usize) {
 #[allow(dead_code)]
 fn update_cache_entry_size(path: &str, _old_size: usize, new_size: usize) {
     unsafe {
-        for entry in CACHE_ENTRY_SIZES.iter_mut() {
-            if let Some(ref mut e) = entry {
-                if e.path == path {
-                    e.size = new_size;
-                    return;
-                }
+        for ref mut e in CACHE_ENTRY_SIZES.iter_mut().flatten() {
+            if e.path == path {
+                e.size = new_size;
+                return;
             }
         }
     }
@@ -339,7 +343,7 @@ pub fn cache_get_with_metadata(
     // Meta veri dosyasını oku (.meta uzantısı)
     let meta_path = format!("{}.meta", path);
     let meta_data = vfs.read_file(&meta_path)?;
-    let meta_str = core::str::from_utf8(&meta_data).ok()?;
+    let meta_str = core::str::from_utf8(meta_data).ok()?;
 
     // Meta veriyi parse et
     let mut meta = CacheMetadata::new();
@@ -380,12 +384,10 @@ pub fn cache_store_with_metadata(
     // Aynı URL zaten önbellekteyse boyutu güncelle
     let existing_size = unsafe {
         let mut size = 0usize;
-        for entry in CACHE_ENTRY_SIZES.iter() {
-            if let Some(ref e) = entry {
-                if e.path == path {
-                    size = e.size;
-                    break;
-                }
+        for e in CACHE_ENTRY_SIZES.iter().flatten() {
+            if e.path == path {
+                size = e.size;
+                break;
             }
         }
         size

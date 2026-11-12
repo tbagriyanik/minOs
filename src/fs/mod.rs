@@ -23,3 +23,9 @@ impl FileSystemManager {
         }
     }
 }
+
+impl Default for FileSystemManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

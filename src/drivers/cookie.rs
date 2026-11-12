@@ -29,17 +29,14 @@ pub struct Cookie {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub enum SameSite {
+    #[default]
     Lax,
     Strict,
     None,
 }
 
-impl Default for SameSite {
-    fn default() -> Self {
-        SameSite::Lax
-    }
-}
 
 /// Çerez jarı: tüm çerezleri saklar ve eşleştirir.
 pub struct CookieJar {
@@ -256,10 +253,7 @@ fn domain_matches(domain: &str, cookie_domain: &str) -> bool {
 
 /// Path eşleşmesi: istek path'i, cookie path ile başlıyor olmalı.
 fn path_matches(request_path: &str, cookie_path: &str) -> bool {
-    if request_path.starts_with(cookie_path) {
-        return true;
-    }
-    false
+    request_path.starts_with(cookie_path)
 }
 
 /// HTTP çerez tarihini (RFC 1123) epoch seconds'a çevirir.

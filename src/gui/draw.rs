@@ -17,9 +17,9 @@ impl MinGuiCompositor {
     /// Siyah veya beyaz metinden, verilen zemin üzerinde daha okunaklı olanı seçer.
     pub fn text_on(background: u32) -> u32 {
         let c = theme::resolve(background);
-        let r = ((c >> 16) & 0xFF) as u32;
-        let g = ((c >> 8) & 0xFF) as u32;
-        let b = (c & 0xFF) as u32;
+        let r = (c >> 16) & 0xFF;
+        let g = (c >> 8) & 0xFF;
+        let b = c & 0xFF;
         if r * 299 + g * 587 + b * 114 >= 140_000 {
             Color::BLACK
         } else {

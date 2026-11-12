@@ -76,9 +76,9 @@ pub fn run_welcome_screen(
         if welcome_now.wrapping_sub(welcome_diag_last) >= 5000 {
             welcome_diag_last = welcome_now;
             serial_print("[BOOT] Hoş geldin döngüsü: geçen süre (ms)=");
-            serial_print_dec(welcome_now.wrapping_sub(welcome_start_time) as u64);
+            serial_print_dec(welcome_now.wrapping_sub(welcome_start_time));
             serial_print(" yineleme=");
-            serial_print_dec(_welcome_diag_iters as u64);
+            serial_print_dec(_welcome_diag_iters);
             serial_print("\n");
         }
 

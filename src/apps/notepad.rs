@@ -1366,8 +1366,7 @@ impl NotepadApp {
             for i in start_pos..=(self.len.saturating_sub(n_len)) {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if self.buffer[i + j].to_ascii_lowercase()
-                        != needle_chars[j].to_ascii_lowercase()
+                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
                     {
                         match_ok = false;
                         break;
@@ -1383,8 +1382,7 @@ impl NotepadApp {
                 for i in 0..start_pos.min(self.len.saturating_sub(n_len) + 1) {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if self.buffer[i + j].to_ascii_lowercase()
-                            != needle_chars[j].to_ascii_lowercase()
+                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
                         {
                             match_ok = false;
                             break;
@@ -1402,8 +1400,7 @@ impl NotepadApp {
             for i in (0..=check_limit).rev() {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if self.buffer[i + j].to_ascii_lowercase()
-                        != needle_chars[j].to_ascii_lowercase()
+                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
                     {
                         match_ok = false;
                         break;
@@ -1418,8 +1415,7 @@ impl NotepadApp {
                 for i in (start_pos..=(self.len - n_len)).rev() {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if self.buffer[i + j].to_ascii_lowercase()
-                            != needle_chars[j].to_ascii_lowercase()
+                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
                         {
                             match_ok = false;
                             break;
@@ -1459,8 +1455,7 @@ impl NotepadApp {
             if e - s == needle_chars.len() {
                 let mut ok = true;
                 for j in 0..needle_chars.len() {
-                    if self.buffer[s + j].to_ascii_lowercase()
-                        != needle_chars[j].to_ascii_lowercase()
+                    if !self.buffer[s + j].eq_ignore_ascii_case(&needle_chars[j])
                     {
                         ok = false;
                         break;
@@ -1530,7 +1525,7 @@ impl NotepadApp {
         while i + n_len <= self.len {
             let mut match_ok = true;
             for j in 0..n_len {
-                if self.buffer[i + j].to_ascii_lowercase() != needle_chars[j].to_ascii_lowercase() {
+                if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j]) {
                     match_ok = false;
                     break;
                 }
@@ -2119,5 +2114,11 @@ impl NotepadApp {
                 }
             }
         }
+    }
+}
+
+impl Default for NotepadApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

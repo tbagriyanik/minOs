@@ -574,6 +574,12 @@ impl ProcessManager {
     }
 }
 
+impl Default for ProcessManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // System Call Interface / Sistem cagrisi (Syscall) Arabirimi
 // ---------------------------------------------------------------------------

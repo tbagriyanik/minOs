@@ -1293,12 +1293,12 @@ impl Http2Connection {
                         match tls_handshake(fd6, host) {
                             Ok(tls) => return Ok((fd6, tls)),
                             Err(e) => {
-                                let _ = socket::close(fd6);
+                                socket::close(fd6);
                                 return Err(e);
                             }
                         }
                     }
-                    let _ = socket::close(fd6);
+                    socket::close(fd6);
                 }
 
                 // IPv4 yolu

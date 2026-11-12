@@ -516,7 +516,7 @@ pub fn init(pmm_dma_phys: Option<u64>) {
                         continue;
                     }
 
-                    let vid = (id & 0xFFFF) as u32;
+                    let vid = id & 0xFFFF;
 
                     let did = (id >> 16) & 0xFFFF;
 

@@ -123,7 +123,7 @@ impl Sha256 {
         if self.buffer_len > 0 && self.buffer_len + data.len() >= 64 {
             let need = 64 - self.buffer_len;
             self.buffer[self.buffer_len..64].copy_from_slice(&data[..need]);
-            let buf = self.buffer.clone();
+            let buf = self.buffer;
             self.compress_block(&buf);
             self.buffer_len = 0;
             data = &data[need..];
@@ -148,7 +148,7 @@ impl Sha256 {
             for i in self.buffer_len..64 {
                 self.buffer[i] = 0;
             }
-            let buf = self.buffer.clone();
+            let buf = self.buffer;
             self.compress_block(&buf);
             self.buffer = [0; 64];
             self.buffer_len = 0;
@@ -158,7 +158,7 @@ impl Sha256 {
             self.buffer[i] = 0;
         }
         self.buffer[56..64].copy_from_slice(&bit_len.to_be_bytes());
-        let buf = self.buffer.clone();
+        let buf = self.buffer;
         self.compress_block(&buf);
 
         let mut out = [0u8; 32];
@@ -172,6 +172,12 @@ impl Sha256 {
         let mut s = Sha256::new();
         s.update(data);
         s.finalize()
+    }
+}
+
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

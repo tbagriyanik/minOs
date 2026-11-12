@@ -153,7 +153,7 @@ pub fn parse_superblock(raw: &[u8]) -> Option<Superblock> {
         inode_size,
         desc_size,
         feature_incompat: le32(raw, 96),
-        groups: (blocks_count + blocks_per_group - 1) / blocks_per_group,
+        groups: blocks_count.div_ceil(blocks_per_group),
     })
 }
 
@@ -577,7 +577,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
         let need = if data.is_empty() {
             0
         } else {
-            (data.len() + bs - 1) / bs
+            data.len().div_ceil(bs)
         };
         let single_capacity = 12 + per_block as usize;
         let double_capacity = single_capacity + per_block as usize * per_block as usize;
@@ -673,7 +673,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
         }
 
         self.inode_set_size(inode, data.len() as u64);
-        let sectors = ((need * bs) / SECTOR as usize) as u32;
+        let sectors = ((need * bs) / SECTOR) as u32;
         wle32(inode, 28, sectors);
         self.write_inode(ino, inode)
     }
@@ -692,7 +692,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
         if name_bytes.is_empty() || name_bytes.len() > 255 {
             return Err(Ext4Error::Invalid);
         }
-        let need = ((8 + name_bytes.len() + 3) / 4) * 4;
+        let need = (8 + name_bytes.len()).div_ceil(4) * 4;
         if need > bs {
             return Err(Ext4Error::Invalid);
         }
@@ -718,7 +718,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
                     }
                 } else {
                     let namelen = data[off + 6] as usize;
-                    let ideal = ((8 + namelen + 3) / 4) * 4;
+                    let ideal = (8 + namelen).div_ceil(4) * 4;
                     if reclen >= ideal + need {
                         wle16(&mut data, off + 4, ideal as u16);
                         let new_off = off + ideal;
@@ -771,7 +771,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
         wle32(
             dir_inode,
             28,
-            (new_blocks.len() * bs / SECTOR as usize) as u32,
+            (new_blocks.len() * bs / SECTOR) as u32,
         );
         self.write_inode(dir_ino, dir_inode)
     }
@@ -833,7 +833,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
         self.inode_set_size(&mut raw, bs as u64);
         wle32(&mut raw, 40, blk);
         wle16(&mut raw, 26, 2);
-        wle32(&mut raw, 28, (bs / SECTOR as usize) as u32);
+        wle32(&mut raw, 28, (bs / SECTOR) as u32);
         self.write_inode(ino, &raw)?;
         self.dir_add_entry(parent_ino, &mut parent, ino, name, true)?;
         self.inode_add_links(&mut parent, 1);

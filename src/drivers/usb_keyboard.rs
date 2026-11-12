@@ -126,6 +126,12 @@ impl UsbKeyboardDevice {
     }
 }
 
+impl Default for UsbKeyboardDevice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Rapor tanımlayıcısından (Report Descriptor) çıkarılan tuş alanı yerleşimi.
 ///
 /// Boot protokolündeki klavyelerde rapor her zaman `[modifier, reserved, 6 tuş]`
@@ -370,7 +376,7 @@ fn apply_keyboard_report(
     current_keys[..count].copy_from_slice(&keys[..count]);
 
     // Rollover (0x01): aynı anda izin verilenden fazla tuş basıldı; bu raporu atla.
-    if current_keys.iter().any(|&k| k == HID_KEY_ERROR_ROLLOVER) {
+    if current_keys.contains(&HID_KEY_ERROR_ROLLOVER) {
         return false;
     }
 

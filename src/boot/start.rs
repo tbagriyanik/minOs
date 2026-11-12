@@ -20,6 +20,22 @@ pub struct BootDisplay {
     pub bpp: usize,
 }
 
+/// Erken çekirdek başlatması: CPU/SSE, seri konsol, yığın ayırıcı, PRNG ve
+/// erken ekran/zaman altyapısını hazırlar.
+pub fn init() -> BootDisplay {
+    crate::arch::x86_64::enable_sse();
+    crate::arch::x86_64::disable_pic();
+
+    // Seri konsolu ilk iş olarak hazırla: sonraki tüm loglar (PMM/VMM/SMP…)
+    // 115200 8N1 ile çerçeveye oturur.
+    crate::serial::init();
+
+    crate::kernel::heap::init();
+    crate::random::init();
+
+    early_init()
+}
+
 /// Framebuffer'ı doğrular, metin konsolunu kurar, PIT/TSC zaman tabanını
 /// başlatır ve HHDM ofsetini sürücü katmanına bildirir.
 pub fn early_init() -> BootDisplay {
@@ -61,7 +77,7 @@ pub fn early_init() -> BootDisplay {
         || pitch % 4 != 0
         || width
             .checked_mul(height)
-            .map_or(true, |n| n > drivers::video::BACKBUFFER_LEN)
+            .is_none_or(|n| n > drivers::video::BACKBUFFER_LEN)
     {
         crate::boot::text_console::fatal("Framebuffer dogrulamasi basarisiz; GUI acilmadi");
     }

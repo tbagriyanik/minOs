@@ -408,13 +408,12 @@ fn carve_rooms_with_doors(map: &mut MazeMap, rng: &mut Rng) {
         if door_x > 0 && door_x < mw as isize - 1 && door_y > 0 && door_y < mh as isize - 1 {
             let dx = door_x as usize;
             let dy = door_y as usize;
-            if map.get(dx, dy) == TILE_EMPTY || map.get(dx, dy) == TILE_WALL {
-                if map.door_count < MAX_DOORS {
+            if (map.get(dx, dy) == TILE_EMPTY || map.get(dx, dy) == TILE_WALL)
+                && map.door_count < MAX_DOORS {
                     map.set(dx, dy, TILE_LOCKED);
                     map.doors[map.door_count] = (dx, dy);
                     map.door_count += 1;
                 }
-            }
         }
     }
 

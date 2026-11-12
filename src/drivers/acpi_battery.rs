@@ -27,6 +27,7 @@ pub enum BatteryState {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 pub struct BatteryInfo {
     pub design_capacity: u32,    // Tasarım kapasitesi (mWh veya mAh)
     pub last_full_capacity: u32, // Son tam kapasite (mWh veya mAh)
@@ -44,26 +45,6 @@ pub struct BatteryInfo {
     pub serial_number_len: usize,
 }
 
-impl Default for BatteryInfo {
-    fn default() -> Self {
-        Self {
-            design_capacity: 0,
-            last_full_capacity: 0,
-            technology: [0; 32],
-            technology_len: 0,
-            voltage: 0,
-            current: 0,
-            capacity: 0,
-            remaining_percentage: 0,
-            cycle_count: None,
-            power_unit: 0,
-            model_number: [0; 32],
-            model_number_len: 0,
-            serial_number: [0; 32],
-            serial_number_len: 0,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // ACPI Tablo Yapıları
@@ -234,7 +215,7 @@ unsafe fn validate_rsdp(vaddr: u64) -> bool {
             return false;
         }
         let len = len_ptr.read_volatile();
-        if len >= 36 && len <= 4096 {
+        if (36..=4096).contains(&len) {
             let mut ext_sum: u8 = 0;
             for i in 0..len as usize {
                 ext_sum = ext_sum.wrapping_add(ptr.add(i).read_volatile());
@@ -344,13 +325,12 @@ unsafe fn inspect_acpi_table(table_vaddr: u64) {
                 }
             }
         }
-        b"SSDT" => {
-            if SSDT_COUNT < 16 {
+        b"SSDT"
+            if SSDT_COUNT < 16 => {
                 SSDT_VADDRS[SSDT_COUNT] = table_vaddr + 36;
                 SSDT_LENS[SSDT_COUNT] = (hdr.length - 36) as usize;
                 SSDT_COUNT += 1;
             }
-        }
         _ => {}
     }
 }
@@ -849,15 +829,9 @@ pub fn scan_aml_for_battery(aml_bytes: &[u8], out: &mut BatteryParsedData) {
         // 1. `_HID` tespiti: EISA ID PNP0C0A (0x0A0CD041) veya "PNP0C0A"
         if i + 8 <= len && &aml_bytes[i..i + 4] == b"_HID" {
             let next_bytes = &aml_bytes[i + 4..];
-            let is_battery_hid = if next_bytes.starts_with(b"\x0C\x41\xD0\x0C\x0A")
+            let is_battery_hid = next_bytes.starts_with(b"\x0C\x41\xD0\x0C\x0A")
                 || next_bytes.starts_with(b"\x0D\x50\x4E\x50\x30\x43\x30\x41")
-                || next_bytes.starts_with(b"PNP0C0A")
-                || next_bytes.starts_with(b"ACPI0008")
-            {
-                true
-            } else {
-                false
-            };
+                || next_bytes.starts_with(b"PNP0C0A") || next_bytes.starts_with(b"ACPI0008");
 
             if is_battery_hid {
                 out.found = true;
@@ -955,6 +929,7 @@ fn find_package_in_range(slice: &[u8]) -> Option<AmlValue> {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 pub struct ThermalZoneParsedData {
     pub name: [u8; 4],
     pub current_temp_k: u32, // 0.1 Kelvin cinsinden (örn. 3000 = 300.0 K = 26.85 °C)
@@ -964,18 +939,6 @@ pub struct ThermalZoneParsedData {
     pub found: bool,
 }
 
-impl Default for ThermalZoneParsedData {
-    fn default() -> Self {
-        Self {
-            name: [0; 4],
-            current_temp_k: 0,
-            critical_temp_k: 0,
-            hot_temp_k: 0,
-            passive_temp_k: 0,
-            found: false,
-        }
-    }
-}
 
 /// 0.1 Kelvin (deci-Kelvin) değerini Celsius (°C) tam sayısına dönüştürür.
 /// ACPI spesifikasyonuna göre: T(°C) = (T_dK - 2732) / 10
@@ -987,6 +950,7 @@ pub fn kelvin_tenths_to_celsius(k: u32) -> i32 {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[derive(Default)]
 pub struct PowerDeviceParsedData {
     pub name: [u8; 4],
     pub supported_states: u8, // S0..S5 durumları için bitmask
@@ -996,18 +960,6 @@ pub struct PowerDeviceParsedData {
     pub found: bool,
 }
 
-impl Default for PowerDeviceParsedData {
-    fn default() -> Self {
-        Self {
-            name: [0; 4],
-            supported_states: 0,
-            has_on: false,
-            has_off: false,
-            status: 0,
-            found: false,
-        }
-    }
-}
 
 fn extract_method_return_val(slice: &[u8]) -> Option<u64> {
     if slice.is_empty() {
@@ -1499,7 +1451,7 @@ pub fn remaining_time() -> Option<u32> {
             return None;
         }
 
-        let rate = BATTERY_INFO.current.abs() as u32;
+        let rate = BATTERY_INFO.current.unsigned_abs();
         if rate == 0 {
             return None;
         }

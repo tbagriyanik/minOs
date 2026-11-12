@@ -231,3 +231,9 @@ impl WasmModules {
         instance.call(*func_idx, args)
     }
 }
+
+impl Default for WasmModules {
+    fn default() -> Self {
+        Self::new()
+    }
+}

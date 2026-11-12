@@ -278,3 +278,9 @@ impl MusicPlayerApp {
         );
     }
 }
+
+impl Default for MusicPlayerApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

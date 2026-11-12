@@ -208,3 +208,9 @@ impl IFrames {
         self.frames.iter().find(|f| f.id == id)
     }
 }
+
+impl Default for IFrames {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -885,3 +885,9 @@ impl Viewer3DApp {
         }
     }
 }
+
+impl Default for Viewer3DApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

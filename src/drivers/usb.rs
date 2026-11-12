@@ -370,7 +370,7 @@ fn enable_usb_legacy_support(bus: u8, dev: u8, func: u8, ctype: UsbControllerTyp
             if status & 0x0010 != 0 {
                 let mut cap_ptr = (pci_read32(bus, dev, func, 0x34) & 0xFF) as u8;
                 let mut depth = 0;
-                while cap_ptr >= 0x40 && cap_ptr <= 0xFC && depth < 48 {
+                while (0x40..=0xFC).contains(&cap_ptr) && depth < 48 {
                     let cap_val = pci_read32(bus, dev, func, cap_ptr);
                     let cap_id = (cap_val & 0xFF) as u8;
                     let next = ((cap_val >> 8) & 0xFF) as u8;
@@ -499,16 +499,16 @@ fn init_uhci_controller(bus: u8, dev: u8, func: u8) {
     crate::serial::print(")\n");
 
     // 1. Global Reset (GRESET = bit 2) ve Host Controller Reset (HCRESET = bit 1)
-    io_out16(bar4 + 0x00, 4); // GRESET
+    io_out16(bar4, 4); // GRESET
     let start = crate::boot::time::monotonic_ms();
     while crate::boot::time::monotonic_ms().wrapping_sub(start) < 20 {
         core::hint::spin_loop();
     }
-    io_out16(bar4 + 0x00, 0);
+    io_out16(bar4, 0);
 
-    io_out16(bar4 + 0x00, 2); // HCRESET
+    io_out16(bar4, 2); // HCRESET
     let start2 = crate::boot::time::monotonic_ms();
-    while (io_in16(bar4 + 0x00) & 2) != 0 {
+    while (io_in16(bar4) & 2) != 0 {
         if crate::boot::time::monotonic_ms().wrapping_sub(start2) > 50 {
             break;
         }
@@ -545,8 +545,8 @@ fn init_uhci_controller(bus: u8, dev: u8, func: u8) {
         io_out16(bar4 + 0x06, 0);
 
         // USBCMD (ofset 0x00): Run/Stop=1, MaxPacket=64B (bit 7)
-        let cmd = io_in16(bar4 + 0x00);
-        io_out16(bar4 + 0x00, cmd | 0x0001 | 0x0080);
+        let cmd = io_in16(bar4);
+        io_out16(bar4, cmd | 0x0001 | 0x0080);
     }
     crate::serial::print("[USB-UHCI] Transfer katmanı aktif: 1024-girdi Frame List ve TD/QH kuyruk yönetimi devrede.\n");
 }
@@ -697,11 +697,7 @@ pub fn test_mass_storage_protocol() -> bool {
         status: 0, // 0 = Command Passed
     };
 
-    if csw.signature != CSW_SIGNATURE || csw.tag != cbw_read.tag || csw.status != 0 {
-        return false;
-    }
-
-    true
+    !(csw.signature != CSW_SIGNATURE || csw.tag != cbw_read.tag || csw.status != 0)
 }
 
 /// 3. Aşama Testi: FAT32 dosya sistemi BPB, küme zinciri ve dizin çözümlemesini doğrular.
@@ -740,12 +736,8 @@ pub fn test_fat32_access() -> bool {
     }
 
     // Küme 3 LBA karşılığı data_lba + 8 olmalı
-    let cluster_3_lba = data_lba + (3 - 2) * sectors_per_cluster;
-    if cluster_3_lba != data_lba + sectors_per_cluster {
-        return false;
-    }
-
-    true
+    let cluster_3_lba = data_lba + sectors_per_cluster;
+    cluster_3_lba == data_lba + sectors_per_cluster
 }
 
 /// 4. Aşama Testi: Yazılabilir Sanal Disk (Virtual / RAM Disk) Blok Okuma, Yazma ve İçerik Doğrulama

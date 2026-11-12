@@ -62,7 +62,7 @@ impl<T: BlockDevice + ?Sized> BlockDevice for &mut T {
 
 /// `count` bayt için gereken sektör sayısı.
 pub const fn sectors_for(bytes: u64) -> u64 {
-    (bytes + SECTOR as u64 - 1) / SECTOR as u64
+    bytes.div_ceil(SECTOR as u64)
 }
 
 /// Tek sektör okuma (dilim tabanlı, 512 bayt zorunlu).
@@ -231,7 +231,7 @@ impl BlockDevice for AtaPartition {
     }
 
     fn read(&self, lba: u64, buf: &mut [u8]) -> bool {
-        if lba >= self.sector_count || buf.is_empty() || buf.len() % SECTOR != 0 {
+        if lba >= self.sector_count || buf.is_empty() || !buf.len().is_multiple_of(SECTOR) {
             return false;
         }
         let count = buf.len() / SECTOR;
@@ -239,7 +239,7 @@ impl BlockDevice for AtaPartition {
     }
 
     fn write(&mut self, lba: u64, buf: &[u8]) -> bool {
-        if lba >= self.sector_count || buf.is_empty() || buf.len() % SECTOR != 0 {
+        if lba >= self.sector_count || buf.is_empty() || !buf.len().is_multiple_of(SECTOR) {
             return false;
         }
         let count = buf.len() / SECTOR;

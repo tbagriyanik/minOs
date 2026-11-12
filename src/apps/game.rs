@@ -284,6 +284,12 @@ impl Minesweeper {
     }
 }
 
+impl Default for Minesweeper {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Satranç taşı türleri.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum PieceKind {
@@ -442,7 +448,7 @@ impl ChessBoard {
     }
 
     fn in_bounds(r: isize, c: isize) -> bool {
-        r >= 0 && r < 8 && c >= 0 && c < 8
+        (0..8).contains(&r) && (0..8).contains(&c)
     }
 
     /// Verilen karedeki taşı hareket ettirebilecek hedefleri listeler (şah kontrolü hariç basit).
@@ -770,6 +776,12 @@ impl ChessBoard {
             }
         }
         false
+    }
+}
+
+impl Default for ChessBoard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1114,31 +1126,27 @@ impl GameApp {
 
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
-        match self.tab {
-            TAB_GAME => {
-                if self.thinking && !self.player_to_move() && self.board.winner().is_none() {
-                    if self.ai_wait > 0 {
-                        self.ai_wait -= 1;
-                    } else if let Some(mv) = game_core::choose_move(&self.board, 3) {
-                        if self.board.apply(&mv) {
-                            self.last_move = Some(mv);
-                            self.sound_pending = if mv.is_capture() {
-                                Sound::Capture
-                            } else {
-                                Sound::Move
-                            };
-                            changed = true;
-                        }
-                        self.thinking = false;
-                        self.finish_turn();
-                    } else {
-                        self.thinking = false;
-                        self.finish_turn();
+        if self.tab == TAB_GAME
+            && self.thinking && !self.player_to_move() && self.board.winner().is_none() {
+                if self.ai_wait > 0 {
+                    self.ai_wait -= 1;
+                } else if let Some(mv) = game_core::choose_move(&self.board, 3) {
+                    if self.board.apply(&mv) {
+                        self.last_move = Some(mv);
+                        self.sound_pending = if mv.is_capture() {
+                            Sound::Capture
+                        } else {
+                            Sound::Move
+                        };
+                        changed = true;
                     }
+                    self.thinking = false;
+                    self.finish_turn();
+                } else {
+                    self.thinking = false;
+                    self.finish_turn();
                 }
             }
-            _ => {}
-        }
         changed
     }
 

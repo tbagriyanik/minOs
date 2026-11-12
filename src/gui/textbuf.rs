@@ -121,6 +121,12 @@ impl TextBuf {
     }
 }
 
+impl Default for TextBuf {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::TextBuf;

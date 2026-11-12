@@ -46,6 +46,12 @@ impl UsbMouseDevice {
     }
 }
 
+impl Default for UsbMouseDevice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // USB Fare ve Tablet Rapor Ayrıştırma
 // ---------------------------------------------------------------------------

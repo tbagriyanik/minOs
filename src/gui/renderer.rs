@@ -270,12 +270,12 @@ pub fn render_properties_modal(
 
     for (i, (label, value)) in rows.iter().enumerate() {
         let ry = start_y + row_gap * i;
-        MinGuiCompositor::draw_string(fb, px + 20, ry, *label, Color::TEXT_MUTED);
+        MinGuiCompositor::draw_string(fb, px + 20, ry, label, Color::TEXT_MUTED);
         MinGuiCompositor::draw_string_clipped(
             fb,
             px + 90,
             ry,
-            *value,
+            value,
             Color::TEXT_MAIN,
             (px + 90, ry, pw.saturating_sub(100), 20),
         );

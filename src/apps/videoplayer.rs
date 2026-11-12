@@ -235,3 +235,9 @@ impl VideoPlayerApp {
         );
     }
 }
+
+impl Default for VideoPlayerApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

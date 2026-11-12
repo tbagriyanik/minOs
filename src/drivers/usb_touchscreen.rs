@@ -427,7 +427,7 @@ pub fn parse_report_descriptor(desc: &[u8]) -> TouchLayout {
                             let contact = &mut layout.contacts[slot];
 
                             match (digitizer_page, uid) {
-                                (true, 0x30) | (false, 0x30) if contact.x.present == false => {
+                                (true, 0x30) | (false, 0x30) if !contact.x.present => {
                                     contact.x = TouchField {
                                         start: field_bit as u16,
                                         size: report_size.min(32) as u8,
@@ -438,7 +438,7 @@ pub fn parse_report_descriptor(desc: &[u8]) -> TouchLayout {
                                         layout.max_x = logical_max as u32;
                                     }
                                 }
-                                (true, 0x31) | (false, 0x31) if contact.y.present == false => {
+                                (true, 0x31) | (false, 0x31) if !contact.y.present => {
                                     contact.y = TouchField {
                                         start: field_bit as u16,
                                         size: report_size.min(32) as u8,

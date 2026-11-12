@@ -138,7 +138,7 @@ impl ConnectionPool {
                 }
             }
         }
-        let _ = socket::close(self.connections[oldest_idx].take().unwrap().fd);
+        socket::close(self.connections[oldest_idx].take().unwrap().fd);
         self.connections[oldest_idx] = Some(PooledConnection {
             fd,
             host,
@@ -155,7 +155,7 @@ impl ConnectionPool {
         for entry in self.connections.iter_mut() {
             if let Some(ref conn) = entry {
                 if now.wrapping_sub(conn.last_used) > max_idle_ms {
-                    let _ = socket::close(conn.fd);
+                    socket::close(conn.fd);
                     *entry = None;
                 }
             }
@@ -274,8 +274,8 @@ fn proxy_connect(fd: i32, host_port: &str, config: &HttpClientConfig) -> Result<
 
 /// `http[s]://host[:port][/path]` ayrıştırır. `host`/`path` çıktı tamponlarına
 /// yazılır, port ve (is_https) bilgisi döner.
-pub fn parse_url<'a>(
-    url: &'a str,
+pub fn parse_url(
+    url: &str,
     host_out: &mut [u8; MAX_HOST],
     path_out: &mut [u8; MAX_PATH],
 ) -> Result<(u16, usize, usize), i32> {
@@ -452,7 +452,7 @@ fn build_request_with_headers(
         if n + p.len() > req.len() {
             return None;
         }
-        req[n..n + p.len()].copy_from_slice(*p);
+        req[n..n + p.len()].copy_from_slice(p);
         n += p.len();
     }
 
@@ -520,28 +520,24 @@ pub fn fetch_once(
             if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
                 cached_fd
             } else {
-                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
                     last_err = Some(e);
-                    e
                 })?;
                 let _ = socket::set_timeout(new_fd, config.timeout_ms);
-                socket::connect(new_fd, ip, port).map_err(|e| {
-                    let _ = socket::close(new_fd);
+                socket::connect(new_fd, ip, port).inspect_err(|&e| {
+                    socket::close(new_fd);
                     last_err = Some(e);
-                    e
                 })?;
                 new_fd
             }
         } else {
-            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
                 last_err = Some(e);
-                e
             })?;
             let _ = socket::set_timeout(new_fd, config.timeout_ms);
-            socket::connect(new_fd, ip, port).map_err(|e| {
-                let _ = socket::close(new_fd);
+            socket::connect(new_fd, ip, port).inspect_err(|&e| {
+                socket::close(new_fd);
                 last_err = Some(e);
-                e
             })?;
             new_fd
         };
@@ -565,7 +561,7 @@ pub fn fetch_once(
                     let host_port = format!("{}:{}", host_str, port);
                     proxy_connect(fd, &host_port, config)?;
                     // TLS el sıkışması tünel üzerinden
-                    fetch_https(fd, host, &mut [0u8; 0], 0, resp_buf)
+                    fetch_https(fd, host, &[0u8; 0], 0, resp_buf)
                 } else {
                     // HTTP üzerinden proxy: mutlak URL formu kullan
                     let mut req = [0u8; 1024];
@@ -663,14 +659,14 @@ pub fn fetch_once(
                     // ALPN sonucuna göre protokol yığını seç.
                     // Eğer sunucu h2 protokolünü seçerse, bağlantı HTTP/2 üzerinden devam eder;
                     // aksi takdirde klasik HTTP/1.1 isteği gönderilir.
-                    http2_used = session.negotiated_protocol().map_or(false, |p| p == b"h2");
+                    http2_used = session.negotiated_protocol().is_some_and(|p| p == b"h2");
                     if http2_used {
                         crate::serial_print(
                             "[HTTP] ALPN ile h2 negotiate edildi, HTTP/2 yığını kullanılıyor\n",
                         );
                         // http2_get kendi TCP/TLS bağlantısını kurar, bu yüzden sadece
                         // el sıkışması yapılmış mevcut bağlantıyı serbest bırakırız.
-                        let _ = socket::close(fd);
+                        socket::close(fd);
                         let url_str = alloc::format!(
                             "{}://{}{}",
                             if is_https { "https" } else { "http" },
@@ -1097,17 +1093,16 @@ pub(crate) fn http_get_impl(
             if let Ok(v6) = socket::resolve_host_aaaa(host_str) {
                 let v6_result = (|| -> Result<(u16, usize, usize), i32> {
                     let fd =
-                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).map_err(|e| {
+                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
                             crate::serial_print("[HTTPv6] socket oluşturulamadı: ");
                             crate::serial_print(&e.to_string());
                             crate::serial_print("\n");
-                            e
                         })?;
                     let _ = socket::set_timeout(fd, 8000);
                     match socket::connect_v6(fd, v6, port) {
                         Ok(()) => {}
                         Err(e) => {
-                            let _ = socket::close(fd);
+                            socket::close(fd);
                             return Err(e);
                         }
                     }
@@ -1196,7 +1191,7 @@ pub(crate) fn http_get_impl(
                         socket::send(fd, &record).map_err(|_| E_TLS)?;
 
                         let (total, _) = read_http_response(fd, resp_buf, Some(&mut session))?;
-                        let _ = socket::close(fd);
+                        socket::close(fd);
                         if total < 12 {
                             return Err(E_HTTP);
                         }
@@ -1227,7 +1222,7 @@ pub(crate) fn http_get_impl(
                             })?;
                         }
                         let (total, _) = read_http_response(fd, resp_buf, None)?;
-                        let _ = socket::close(fd);
+                        socket::close(fd);
                         if total < 12 {
                             return Err(E_HTTP);
                         }
@@ -1612,28 +1607,24 @@ fn fetch_once_with_method(
             if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
                 cached_fd
             } else {
-                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
                     last_err = Some(e);
-                    e
                 })?;
                 let _ = socket::set_timeout(new_fd, config.timeout_ms);
-                socket::connect(new_fd, ip, port).map_err(|e| {
-                    let _ = socket::close(new_fd);
+                socket::connect(new_fd, ip, port).inspect_err(|&e| {
+                    socket::close(new_fd);
                     last_err = Some(e);
-                    e
                 })?;
                 new_fd
             }
         } else {
-            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
                 last_err = Some(e);
-                e
             })?;
             let _ = socket::set_timeout(new_fd, config.timeout_ms);
-            socket::connect(new_fd, ip, port).map_err(|e| {
-                let _ = socket::close(new_fd);
+            socket::connect(new_fd, ip, port).inspect_err(|&e| {
+                socket::close(new_fd);
                 last_err = Some(e);
-                e
             })?;
             new_fd
         };
@@ -2122,37 +2113,34 @@ impl WebSocketConnection {
                 // hatasında IPv4 yoluna düşülür (dual-stack fallback).
                 if let Ok(v6) = socket::resolve_host_aaaa(&host) {
                     let fd6 =
-                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).map_err(|e| {
+                        socket::socket(socket::AF_INET6, socket::SOCK_STREAM).inspect_err(|e| {
                             crate::serial_print("[WSv6] socket oluşturulamadı: ");
                             crate::serial_print(&e.to_string());
                             crate::serial_print("\n");
-                            e
                         })?;
                     let _ = socket::set_timeout(fd6, 8000);
                     if socket::connect_v6(fd6, v6, port).is_ok() {
                         match tls_handshake(fd6, &host) {
                             Ok(tls) => return Ok((fd6, tls)),
                             Err(e) => {
-                                let _ = socket::close(fd6);
+                                socket::close(fd6);
                                 return Err(e);
                             }
                         }
                     }
-                    let _ = socket::close(fd6);
+                    socket::close(fd6);
                 }
 
                 // IPv4 yolu
                 let ip = socket::resolve_host(&host)?;
-                let fd4 = socket::socket(socket::AF_INET, socket::SOCK_STREAM).map_err(|e| {
+                let fd4 = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
                     crate::serial_print("[WS] socket oluşturulamadı: ");
                     crate::serial_print(&e.to_string());
                     crate::serial_print("\n");
-                    e
                 })?;
                 let _ = socket::set_timeout(fd4, 8000);
-                socket::connect(fd4, ip, port).map_err(|e| {
-                    let _ = socket::close(fd4);
-                    e
+                socket::connect(fd4, ip, port).inspect_err(|_e| {
+                    socket::close(fd4);
                 })?;
                 let tls = tls_handshake(fd4, &host)?;
                 Ok((fd4, tls))
@@ -2350,7 +2338,7 @@ impl WebSocketConnection {
             close_frame
         };
         let _ = socket::send(self.fd, &close_bytes);
-        let _ = socket::close(self.fd);
+        socket::close(self.fd);
         self.state = WsState::Closed;
         Ok(())
     }

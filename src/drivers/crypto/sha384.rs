@@ -233,7 +233,7 @@ impl Sha512 {
         if self.buffer_len > 0 && self.buffer_len + data.len() >= BLOCK_SIZE {
             let need = BLOCK_SIZE - self.buffer_len;
             self.buffer[self.buffer_len..BLOCK_SIZE].copy_from_slice(&data[..need]);
-            let buf = self.buffer.clone();
+            let buf = self.buffer;
             self.compress_block(&buf);
             self.buffer_len = 0;
             data = &data[need..];
@@ -256,7 +256,7 @@ impl Sha512 {
             for i in self.buffer_len..BLOCK_SIZE {
                 self.buffer[i] = 0;
             }
-            let buf = self.buffer.clone();
+            let buf = self.buffer;
             self.compress_block(&buf);
             self.buffer = [0; BLOCK_SIZE];
             self.buffer_len = 0;
@@ -267,7 +267,7 @@ impl Sha512 {
         // 128-bit uzunluk alani: ust 8 bayt sifir, alt 8 bayt bit sayisi.
         self.buffer[BLOCK_SIZE - 16..BLOCK_SIZE - 8].copy_from_slice(&[0u8; 8]);
         self.buffer[BLOCK_SIZE - 8..BLOCK_SIZE].copy_from_slice(&bit_len.to_be_bytes());
-        let buf = self.buffer.clone();
+        let buf = self.buffer;
         self.compress_block(&buf);
 
         let mut out = [0u8; DIGEST_SIZE_512];
@@ -281,6 +281,12 @@ impl Sha512 {
         let mut s = Sha512::new();
         s.update(data);
         s.finalize()
+    }
+}
+
+impl Default for Sha512 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -315,6 +321,12 @@ impl Sha384 {
         let mut s = Sha384::new();
         s.update(data);
         s.finalize()
+    }
+}
+
+impl Default for Sha384 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

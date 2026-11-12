@@ -112,7 +112,7 @@ pub fn init() {
 /// PRNG'i belirli bir tohumla başlatır (testler için).
 pub fn seed(seed: [u8; 32]) {
     let mut value = 0u64;
-    for chunk in seed.chunks_exact(8) {
+    for chunk in seed.as_chunks::<8>().0 {
         value ^= u64::from_le_bytes([
             chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
         ]);

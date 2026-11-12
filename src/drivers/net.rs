@@ -304,3 +304,9 @@ impl NetworkInterface {
         self.packets_tx += 1;
     }
 }
+
+impl Default for NetworkInterface {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -298,7 +298,7 @@ fn poll_job(cpu: usize) -> bool {
         let remaining = job.total_u64 - start;
         let len = remaining.min(job.chunk_u64);
         job.next_chunk += 1;
-        let total_chunks = (job.total_u64 + job.chunk_u64 - 1) / job.chunk_u64;
+        let total_chunks = job.total_u64.div_ceil(job.chunk_u64);
         let last = job.next_chunk >= total_chunks;
         (job.data_phys, start, len, last)
     };
@@ -369,7 +369,7 @@ pub fn cpu_count() -> usize {
 }
 
 pub fn current_cpu_index() -> usize {
-    let id = (lapic_read(0x20) >> 24) as u32;
+    let id = lapic_read(0x20) >> 24;
     for cpu in 0..cpu_count().min(MAX_CPUS) {
         if LAPIC_ID[cpu].load(Ordering::Relaxed) == id {
             return cpu;

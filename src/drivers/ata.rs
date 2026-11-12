@@ -285,7 +285,7 @@ fn identify(drive: u8, packet: bool) -> Device {
 
     let mut data = [0u16; 256];
     for word in data.iter_mut() {
-        *word = inw(base + 0);
+        *word = inw(base);
     }
 
     dev.kind = if packet {
@@ -555,7 +555,7 @@ fn read_sector_once(drive: u8, lba: u32, buf: &mut [u8; SECTOR_SIZE]) -> bool {
         return false;
     }
     for i in 0..SECTOR_SIZE / 2 {
-        let word = inw(base + 0);
+        let word = inw(base);
         buf[i * 2] = (word & 0xFF) as u8;
         buf[i * 2 + 1] = (word >> 8) as u8;
     }
@@ -705,7 +705,7 @@ fn write_sector_once(drive: u8, lba: u32, buf: &[u8; SECTOR_SIZE]) -> bool {
     // 256 kelime (512 bayt) yazımı
     for i in 0..SECTOR_SIZE / 2 {
         let word = (buf[i * 2] as u16) | ((buf[i * 2 + 1] as u16) << 8);
-        outw(base + 0, word);
+        outw(base, word);
     }
     io_delay(ctrl);
 
@@ -838,7 +838,7 @@ fn atapi_packet(drive: u8, packet: &[u8; 12], buf: &mut [u8]) -> bool {
     }
     for i in 0..6 {
         let word = (packet[i * 2] as u16) | ((packet[i * 2 + 1] as u16) << 8);
-        outw(base + 0, word);
+        outw(base, word);
     }
     io_delay(ctrl);
 
@@ -846,7 +846,7 @@ fn atapi_packet(drive: u8, packet: &[u8; 12], buf: &mut [u8]) -> bool {
         return false;
     }
     for i in 0..buf.len() / 2 {
-        let word = inw(base + 0);
+        let word = inw(base);
         buf[i * 2] = (word & 0xFF) as u8;
         buf[i * 2 + 1] = (word >> 8) as u8;
     }

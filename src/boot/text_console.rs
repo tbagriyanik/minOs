@@ -148,9 +148,7 @@ pub fn is_active() -> bool {
 pub unsafe fn save_screen() {
     if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
         let len = screen
-            .width
-            .checked_mul(screen.height)
-            .unwrap_or(usize::MAX);
+            .width.saturating_mul(screen.height);
         if len <= crate::drivers::video::BACKBUFFER_LEN {
             let pitch_words = screen.pitch / 4;
             for y in 0..screen.height {
@@ -171,9 +169,7 @@ pub unsafe fn restore_screen() {
     if let Some((saved_w, saved_h)) = SAVED_SCREEN_DIM {
         if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
             let len = screen
-                .width
-                .checked_mul(screen.height)
-                .unwrap_or(usize::MAX);
+                .width.saturating_mul(screen.height);
             if len <= crate::drivers::video::BACKBUFFER_LEN
                 && screen.width == saved_w
                 && screen.height == saved_h
@@ -347,7 +343,7 @@ pub fn write_color(text: &str, color: u32) {
             colors.drain(..drop_len.min(colors.len()));
         }
         log.extend_from_slice(text.as_bytes());
-        colors.extend(core::iter::repeat(color).take(text.len()));
+        colors.extend(core::iter::repeat_n(color, text.len()));
         let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
             return;
         };
@@ -446,7 +442,7 @@ pub fn poll_input_char() -> Option<char> {
             if byte == 0x7F || byte == 0x08 {
                 return Some('\x08');
             }
-            if byte >= 32 && byte < 127 {
+            if (32..127).contains(&byte) {
                 return Some(byte as char);
             }
         }

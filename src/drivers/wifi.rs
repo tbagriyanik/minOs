@@ -164,6 +164,12 @@ impl WifiStatus {
     }
 }
 
+impl Default for WifiStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 static mut WIFI_STATUS: WifiStatus = WifiStatus::new();
 static mut WIFI_INITIALIZED: bool = false;
 
@@ -181,7 +187,7 @@ pub fn derive_pmk(password: &[u8], ssid: &[u8], iterations: u32) -> [u8; 32] {
 
     let mut pmk = [0u8; 32];
     // SHA-1 bloğu 20 bayt; 32 baytlık PMK için 2 blok (block 1 ve 2) gerekir.
-    let blocks = (32 + 19) / 20;
+    let blocks = 32_usize.div_ceil(20);
     let iters = iterations.max(1);
     for block in 1..=blocks {
         salt[slen..slen + 4].copy_from_slice(&(block as u32).to_be_bytes());

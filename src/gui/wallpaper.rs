@@ -94,7 +94,7 @@ pub fn apply(id: u8, color: u32) {
         CUSTOM_H = 0;
     }
     set(id);
-    if id >= 1 && id <= 6 {
+    if (1..=6).contains(&id) {
         set_solid(SOLID_COLORS[(id as usize - 1).min(5)]);
     } else if color != 0 {
         set_solid(color);
@@ -374,7 +374,7 @@ fn draw_starry(fb: &mut Framebuffer, w: usize, h: usize) {
     let y_end = (my + mr).min(h);
     while y < y_end {
         let dy = y as isize - my as isize;
-        let dx = int_sqrt((mr * mr).saturating_sub((dy * dy) as usize)) as usize;
+        let dx = int_sqrt((mr * mr).saturating_sub((dy * dy) as usize));
         let x0 = mx.saturating_sub(dx);
         let x1 = (mx + dx).min(w);
         if x1 > x0 {
@@ -535,7 +535,7 @@ fn draw_geometric(fb: &mut Framebuffer, w: usize, h: usize) {
             continue;
         }
         let d = dy as isize - r as isize;
-        let dx = int_sqrt((r * r).saturating_sub((d * d) as usize)) as usize;
+        let dx = int_sqrt((r * r).saturating_sub((d * d) as usize));
         let x0 = cx.saturating_sub(dx);
         let x1 = (cx + dx).min(w.saturating_sub(1));
         if x1 > x0 {

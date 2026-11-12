@@ -150,3 +150,9 @@ impl Workers {
         self.workers.clear();
     }
 }
+
+impl Default for Workers {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -269,7 +269,7 @@ pub fn pkcs1_v1_5_sign(key: &RsaPrivateKey, msg: &[u8]) -> Result<Vec<u8>, ()> {
     let mut em = Vec::with_capacity(k);
     em.push(0x00);
     em.push(0x01);
-    em.extend(core::iter::repeat(0xFFu8).take(ps_len));
+    em.extend(core::iter::repeat_n(0xFFu8, ps_len));
     em.push(0x00);
     em.extend_from_slice(&t);
 
@@ -367,7 +367,7 @@ pub fn rsa_verify_pss_sha256(key: &RsaPublicKey, msg: &[u8], sig: &[u8]) -> Resu
 
     let modulus_bits = k * 8 - key.n[0].leading_zeros() as usize;
     let em_bits = modulus_bits.checked_sub(1).ok_or(())?;
-    let em_len = (em_bits + 7) / 8;
+    let em_len = em_bits.div_ceil(8);
     if em_len < 2 * H_LEN + 2 || em_len > k {
         return Err(());
     }

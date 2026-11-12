@@ -438,6 +438,12 @@ impl OutLine {
     }
 }
 
+impl Default for OutLine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct TerminalApp {
     /// Aktif girdi satırı.
     pub input: [u8; LINE_MAX],
@@ -926,7 +932,7 @@ impl TerminalApp {
         let mut match_count = 0usize;
         let mut selected = "";
         for candidate in candidates.iter().copied() {
-            if candidate.as_bytes().len() >= prefix.len()
+            if candidate.len() >= prefix.len()
                 && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
             {
                 if match_count == self.completion_index {
@@ -943,7 +949,7 @@ impl TerminalApp {
             self.completion_index = 0;
             selected = "";
             for candidate in candidates.iter().copied() {
-                if candidate.as_bytes().len() >= prefix.len()
+                if candidate.len() >= prefix.len()
                     && candidate.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix)
                 {
                     selected = candidate;
@@ -1134,7 +1140,7 @@ impl TerminalApp {
                     let path = self.resolve_path(&target);
                     let mut data = if append {
                         vfs.read_file(&path)
-                            .map(|bytes| alloc::vec::Vec::from(bytes))
+                            .map(alloc::vec::Vec::from)
                             .unwrap_or_default()
                     } else {
                         alloc::vec::Vec::new()
@@ -1765,17 +1771,15 @@ impl TerminalApp {
                             Color::ACCENT_PINK,
                         );
                         let aps = crate::drivers::wifi::scan_networks();
-                        for ap_opt in aps {
-                            if let Some(ap) = ap_opt {
-                                let mut b = TextBuf::new();
-                                b.push_str(ap.ssid_str());
-                                b.push_str(" (CH ");
-                                b.push_usize(ap.channel as usize);
-                                b.push_str(", %");
-                                b.push_usize(ap.signal_percent() as usize);
-                                b.push_str(")");
-                                self.push_line(b.as_str(), Color::ACCENT_GREEN);
-                            }
+                        for ap in aps.iter().flatten() {
+                            let mut b = TextBuf::new();
+                            b.push_str(ap.ssid_str());
+                            b.push_str(" (CH ");
+                            b.push_usize(ap.channel as usize);
+                            b.push_str(", %");
+                            b.push_usize(ap.signal_percent() as usize);
+                            b.push_str(")");
+                            self.push_line(b.as_str(), Color::ACCENT_GREEN);
                         }
                     }
                     "connect" => {
@@ -3135,7 +3139,7 @@ impl TerminalApp {
                                 b.push_str("HTTP ");
                                 b.push_usize(status as usize);
                                 b.push_str("  (");
-                                b.push_usize(total as usize);
+                                b.push_usize(total);
                                 b.push_str(crate::gui::ui_text(" bayt)", " bytes)"));
                                 self.push_line(
                                     b.as_str(),
@@ -4054,5 +4058,11 @@ impl TerminalApp {
             " commands | UTF-8 / TR-Q",
         ));
         MinGuiCompositor::draw_terminal_string(fb, x + 16, status_y, status.as_str(), muted_fg);
+    }
+}
+
+impl Default for TerminalApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

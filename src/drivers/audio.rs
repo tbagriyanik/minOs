@@ -126,7 +126,7 @@ impl AudioDevice {
                 -15863, -15454, -14782, -13856, -12693, -11313, -9740, -8000, -6122, -4141, -2088,
             ];
             let mut pcm = [0i16; 384];
-            for (idx, sample) in pcm.chunks_exact_mut(2).enumerate() {
+            for (idx, sample) in pcm.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let s = SINE_48[idx % 48];
                 sample[0] = s;
                 sample[1] = s;
@@ -165,5 +165,11 @@ impl AudioDevice {
             core::hint::spin_loop();
         }
         self.set_pc_speaker_tone(0);
+    }
+}
+
+impl Default for AudioDevice {
+    fn default() -> Self {
+        Self::new()
     }
 }

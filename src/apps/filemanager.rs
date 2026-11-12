@@ -64,6 +64,12 @@ impl FileClipboard {
     }
 }
 
+impl Default for FileClipboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct FileItem {
     pub name: &'static str,
@@ -108,7 +114,7 @@ fn parse_size(s: &str) -> u64 {
     let mut i = 0usize;
     while i < s.len() {
         let c = s.as_bytes()[i];
-        if c >= b'0' && c <= b'9' {
+        if c.is_ascii_digit() {
             num = num * 10 + (c - b'0') as u64;
         } else if c == b'.' {
             // Ondalık kısmı atla (basitleştirilmiş)
@@ -616,9 +622,7 @@ impl FileManagerApp {
                     }
                 };
                 if should_swap {
-                    let temp = indices[i];
-                    indices[i] = indices[j];
-                    indices[j] = temp;
+                    indices.swap(i, j);
                 }
             }
         }
@@ -762,7 +766,7 @@ impl FileManagerApp {
             ViewMode::List => visible * ROW_H,
             ViewMode::Grid => {
                 let cols = Self::grid_columns(self.list_width(win_w));
-                let rows = (visible + cols - 1) / cols;
+                let rows = visible.div_ceil(cols);
                 rows * GRID_CELL_H
             }
         }
@@ -1791,14 +1795,13 @@ impl FileManagerApp {
         let list_top = win_y + LIST_TOP;
         let list_bottom = win_y + win_h - STATUS_H;
         for i in 0..self.file_count {
-            if self.files[i].is_dir && Some(i) != self.drag_item {
-                if my >= list_top && my < list_bottom {
+            if self.files[i].is_dir && Some(i) != self.drag_item
+                && my >= list_top && my < list_bottom {
                     let r = self.item_rect(win_x, win_y, win_w, i, sy);
                     if crate::gui::in_rect(mx, my, r) {
                         return Some(DropTarget::Folder(i));
                     }
                 }
-            }
         }
 
         // Dropping anywhere else inside file manager window targets current directory
@@ -2006,10 +2009,10 @@ impl FileManagerApp {
     pub fn draw_folder_icon_sized(fb: &mut Framebuffer, x: usize, y: usize, s: usize, is_up: bool) {
         let s = s.max(1);
         // Klasör Arka Sekmesi (Tab)
-        fb.draw_rect(x + 1 * s, y, 6 * s, 3 * s, Color::ACCENT_YELLOW);
+        fb.draw_rect(x + s, y, 6 * s, 3 * s, Color::ACCENT_YELLOW);
         // Klasör Arka Gövdesi (Back Body)
         fb.draw_rect(
-            x + 1 * s,
+            x + s,
             y + 2 * s,
             14 * s,
             10 * s,
@@ -2018,7 +2021,7 @@ impl FileManagerApp {
         // Klasör Ön Kapağı (Front Flap - canlı parlak sarı)
         fb.draw_rect(x, y + 4 * s, 16 * s, 9 * s, Color::ACCENT_YELLOW);
         // Üst kenar parıltısı (Highlight)
-        fb.draw_line(x + 1 * s, y + 4 * s, x + 15 * s, y + 4 * s, 0xFFE082);
+        fb.draw_line(x + s, y + 4 * s, x + 15 * s, y + 4 * s, 0xFFE082);
         // İnce alt kenarlık / gölge
         fb.draw_line(
             x,
@@ -2054,15 +2057,15 @@ impl FileManagerApp {
             _ => Color::TEXT_MAIN,
         };
         // Sayfa beyaz kağıt gövdesi
-        fb.draw_rect(x + 2 * s, y + 1 * s, 11 * s, 13 * s, Color::WHITE);
+        fb.draw_rect(x + 2 * s, y + s, 11 * s, 13 * s, Color::WHITE);
         // Sağ üst katlanmış köşe (Folded Corner)
-        fb.draw_rect(x + 9 * s, y + 1 * s, 4 * s, 4 * s, Color::TITLE_BAR);
+        fb.draw_rect(x + 9 * s, y + s, 4 * s, 4 * s, Color::TITLE_BAR);
         // İçerik satır çizgileri
         fb.draw_line(x + 4 * s, y + 5 * s, x + 10 * s, y + 5 * s, accent);
         fb.draw_line(x + 4 * s, y + 7 * s, x + 10 * s, y + 7 * s, accent);
         fb.draw_line(x + 4 * s, y + 9 * s, x + 8 * s, y + 9 * s, accent);
         // İnce sayfa çerçevesi
-        fb.draw_rect_outline(x + 2 * s, y + 1 * s, 11 * s, 13 * s, Color::BORDER);
+        fb.draw_rect_outline(x + 2 * s, y + s, 11 * s, 13 * s, Color::BORDER);
     }
 
     /// Geri Dönüşüm Kutusu Simgesi: Kapaklı, çizgili bir çöp kutusu.
@@ -2777,6 +2780,12 @@ impl FileManagerApp {
                 clip,
             );
         }
+    }
+}
+
+impl Default for FileManagerApp {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

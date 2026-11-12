@@ -145,84 +145,82 @@ impl MinGuiCompositor {
         let open_count = self
             .windows
             .iter()
-            .filter(|slot| slot.map_or(false, |win| win.is_open))
+            .filter(|slot| slot.is_some_and(|win| win.is_open))
             .count();
         let (tab_start, tab_width, tab_step, shown_tabs, tab_slots) =
             Self::taskbar_tabs_layout(fb.width, fb.height, open_count);
         let mut tab_slot = 0usize;
-        for opt_win in self.windows.iter() {
-            if let Some(win) = opt_win {
-                if win.is_open {
-                    if tab_slot >= shown_tabs {
-                        break;
-                    }
-                    let tab_x = tab_start + tab_slot * tab_step;
-                    let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
-                    let tw = tw.min(tab_width);
-                    let rect = (tab_x, tb_y + 5, tw, th);
-                    let active = win.is_focused && !win.is_minimized;
-                    let base = if active {
-                        Color::TITLE_BAR
-                    } else {
-                        Color::TITLE_BAR_INACTIVE
-                    };
-                    let hovered = in_rect(mx, my, rect);
-                    let bg = if hovered { Self::shade(base, 20) } else { base };
-                    fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
-                    fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
-                    if active {
-                        fb.draw_rounded_rect(
-                            rect.0 + 2,
-                            rect.1 + 2,
-                            3,
-                            rect.3 - 4,
-                            1,
-                            Color::ACCENT_BLUE,
-                        );
-                    }
-                    let tab_text_color = if win.is_minimized {
-                        Color::TEXT_MUTED
-                    } else {
-                        Color::TEXT_MAIN
-                    };
-                    let loc_tab = Self::window_tab_title(win.app_id as usize, ui_english());
-                    let tab_title = if !loc_tab.is_empty() {
-                        loc_tab
-                    } else {
-                        win.tab_title
-                    };
-                    let text_h = Self::text_height();
-                    let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
-                    if tw >= sp(58) {
-                        Self::draw_icon_by_index(
-                            fb,
-                            tab_x + 5,
-                            text_y,
-                            Self::window_icon_index(win.app_id as usize),
-                        );
-                        Self::draw_string_clipped(
-                            fb,
-                            tab_x + sp(30),
-                            text_y,
-                            tab_title,
-                            tab_text_color,
-                            (
-                                tab_x + sp(28),
-                                rect.1,
-                                rect.2.saturating_sub(sp(32)),
-                                rect.3,
-                            ),
-                        );
-                    } else {
-                        Self::draw_icon_by_index(
-                            fb,
-                            tab_x + tw.saturating_sub(Self::icon_size()) / 2,
-                            text_y,
-                            Self::window_icon_index(win.app_id as usize),
-                        );
-                    }
-                    tab_slot += 1;
+        for win in self.windows.iter().flatten() {
+            if win.is_open {
+                if tab_slot >= shown_tabs {
+                    break;
                 }
+                let tab_x = tab_start + tab_slot * tab_step;
+                let (_, _, tw, th) = MinGuiCompositor::taskbar_tab_rect_at(tab_x, tb_y);
+                let tw = tw.min(tab_width);
+                let rect = (tab_x, tb_y + 5, tw, th);
+                let active = win.is_focused && !win.is_minimized;
+                let base = if active {
+                    Color::TITLE_BAR
+                } else {
+                    Color::TITLE_BAR_INACTIVE
+                };
+                let hovered = in_rect(mx, my, rect);
+                let bg = if hovered { Self::shade(base, 20) } else { base };
+                fb.draw_rounded_rect(rect.0, rect.1, rect.2, rect.3, 5, bg);
+                fb.draw_rounded_rect_outline(rect.0, rect.1, rect.2, rect.3, 5, Color::BORDER);
+                if active {
+                    fb.draw_rounded_rect(
+                        rect.0 + 2,
+                        rect.1 + 2,
+                        3,
+                        rect.3 - 4,
+                        1,
+                        Color::ACCENT_BLUE,
+                    );
+                }
+                let tab_text_color = if win.is_minimized {
+                    Color::TEXT_MUTED
+                } else {
+                    Color::TEXT_MAIN
+                };
+                let loc_tab = Self::window_tab_title(win.app_id as usize, ui_english());
+                let tab_title = if !loc_tab.is_empty() {
+                    loc_tab
+                } else {
+                    win.tab_title
+                };
+                let text_h = Self::text_height();
+                let text_y = rect.1 + rect.3.saturating_sub(text_h) / 2;
+                if tw >= sp(58) {
+                    Self::draw_icon_by_index(
+                        fb,
+                        tab_x + 5,
+                        text_y,
+                        Self::window_icon_index(win.app_id as usize),
+                    );
+                    Self::draw_string_clipped(
+                        fb,
+                        tab_x + sp(30),
+                        text_y,
+                        tab_title,
+                        tab_text_color,
+                        (
+                            tab_x + sp(28),
+                            rect.1,
+                            rect.2.saturating_sub(sp(32)),
+                            rect.3,
+                        ),
+                    );
+                } else {
+                    Self::draw_icon_by_index(
+                        fb,
+                        tab_x + tw.saturating_sub(Self::icon_size()) / 2,
+                        text_y,
+                        Self::window_icon_index(win.app_id as usize),
+                    );
+                }
+                tab_slot += 1;
             }
         }
         if tab_slots > shown_tabs {

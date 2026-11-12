@@ -1,5 +1,6 @@
 pub mod acpi_battery;
 pub mod acpi_power;
+pub mod adapters;
 pub mod framework;
 
 pub use framework::{Driver, DriverRegistry, DriverState, HotplugEvent};

@@ -1065,3 +1065,9 @@ impl PackageManagerApp {
         }
     }
 }
+
+impl Default for PackageManagerApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}

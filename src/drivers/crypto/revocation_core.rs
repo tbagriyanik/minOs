@@ -125,7 +125,7 @@ fn tlv(data: &[u8], offset: usize) -> Result<(u8, usize, usize, usize), ()> {
     let tag = data[offset];
     let (lc, len) = der_len(data, offset + 1)?;
     let vo = offset + 1 + lc;
-    if vo.checked_add(len).map_or(true, |end| end > data.len()) {
+    if vo.checked_add(len).is_none_or(|end| end > data.len()) {
         return Err(());
     }
     Ok((tag, vo, len, vo + len))
@@ -171,7 +171,7 @@ pub fn certificate_serial(cert_der: &[u8]) -> Result<Vec<u8>, ()> {
 pub fn tlv_pub(data: &[u8], offset: usize) -> Result<(u8, usize, usize, usize), ()> {
     tlv(data, offset)
 }
-fn atv_value<'a>(der: &'a [u8], atv_vo: usize) -> Result<(u8, usize, usize), ()> {
+fn atv_value(der: &[u8], atv_vo: usize) -> Result<(u8, usize, usize), ()> {
     let (oid_tag, _oid_vo, _oid_vl, oid_next) = tlv(der, atv_vo)?;
     if oid_tag != TAG_OID {
         return Err(());
@@ -706,11 +706,7 @@ pub fn parse_ocsp_response(der: &[u8]) -> Result<OcspResponseInfo, CertValidatio
     }
     // responderID: [1] byName (Name) veya [2] byKey (KeyHash)
     let (rid_tag, rid_vo, _rid_vl, rid_next) = tlv(basic, pos).map_err(|_| E)?;
-    let responder_cn = if let Some(cn) = issuer_common_name_der(basic, rid_vo, rid_tag) {
-        Some(cn)
-    } else {
-        None
-    };
+    let responder_cn = issuer_common_name_der(basic, rid_vo, rid_tag);
     pos = rid_next;
 
     let (produced_at, after_produced) = time_at(basic, pos).ok_or(E)?;

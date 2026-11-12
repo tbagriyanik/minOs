@@ -123,7 +123,7 @@ const SAMPLE_IMAGE_DATA: [u8; 68] = [
 /// Built-in image resources used by `minos://` pages. These are deliberately
 /// exposed to the HTML renderer instead of being sent through the HTTP client.
 pub(crate) fn local_image_bytes(url: &str) -> Option<&'static [u8]> {
-    let path = url.split(|c| c == '?' || c == '#').next().unwrap_or(url);
+    let path = url.split(['?', '#']).next().unwrap_or(url);
     match path {
         "minos://demo-img" | "minos://demo-img/cat.png" | "minos://cats/cat.png" => {
             Some(&SAMPLE_IMAGE_DATA)
@@ -160,7 +160,7 @@ fn url_path(url: &[u8]) -> Option<&str> {
         return None;
     };
     // Sorguyu ve frammenti kaldır
-    let path = rest.split(|c: char| c == '?' || c == '#').next()?;
+    let path = rest.split(['?', '#']).next()?;
     // Trailing slash'i temizle
     let path = path.trim_end_matches('/');
     if path.is_empty() {
@@ -192,13 +192,12 @@ fn header_is_chunked(headers: &[u8]) -> bool {
 fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
     let (is_https, rest) = if let Some(rest) = url.strip_prefix("https://") {
         (true, rest)
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        (false, rest)
     } else {
-        return None;
+        let rest = url.strip_prefix("http://")?;
+        (false, rest)
     };
     let authority_end = rest
-        .find(|c| c == '/' || c == '?' || c == '#')
+        .find(['/', '?', '#'])
         .unwrap_or(rest.len());
     let authority = &rest[..authority_end];
     let suffix = &rest[authority_end..];
@@ -731,6 +730,12 @@ impl FormAutofill {
     }
 }
 
+impl Default for FormAutofill {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserApp {
     pub fn open_find(&mut self) {
         self.find_active = true;
@@ -906,9 +911,9 @@ impl BrowserApp {
         let mut lines: Vec<u8> = Vec::new();
         for bm in &self.bookmarks_extra {
             let mut line = HeaplessString::<256>::new();
-            let _ = write!(
+            let _ = writeln!(
                 line,
-                "{}|{}|{}|{}|{}\n",
+                "{}|{}|{}|{}|{}",
                 bm.title, bm.title_en, bm.url, bm.description, bm.description_en
             );
             lines.extend_from_slice(line.as_bytes());
@@ -1585,7 +1590,7 @@ impl BrowserApp {
                             let radius = parts[2].parse::<f32>().unwrap_or(0.0);
                             let start = parts[3].parse::<f32>().unwrap_or(0.0);
                             let end = parts[4].parse::<f32>().unwrap_or(0.0);
-                            let anticlockwise = parts.get(5).map_or(false, |s| s.trim() == "true");
+                            let anticlockwise = parts.get(5).is_some_and(|s| s.trim() == "true");
                             ctx.arc(x, y, radius, start, end, anticlockwise);
                         }
                     } else if rest == "closePath()" {
@@ -1971,11 +1976,10 @@ impl BrowserApp {
         }
         let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
         let mut at = index.min(self.url_len);
-        if at == self.url_len || !is_word(self.url[at]) {
-            if at > 0 && is_word(self.url[at - 1]) {
+        if (at == self.url_len || !is_word(self.url[at]))
+            && at > 0 && is_word(self.url[at - 1]) {
                 at -= 1;
             }
-        }
         if at >= self.url_len || !is_word(self.url[at]) {
             return;
         }
@@ -3037,7 +3041,7 @@ impl BrowserApp {
 
         if let Some(rest) = rest_opt {
             let authority_end = rest
-                .find(|c| c == '/' || c == '?' || c == '#')
+                .find(['/', '?', '#'])
                 .unwrap_or(rest.len());
             let authority = &rest[..authority_end];
             let suffix = &rest[authority_end..];
@@ -3668,7 +3672,7 @@ impl BrowserApp {
                 // anahtarıyla şifrelenir). Bu kayıt gönderilmeden uygulama
                 // verisi gönderilemez.
                 if !self.tls13_finished_sent {
-                    let server_finished = self.tls_session.as_ref().map_or(false, |t| {
+                    let server_finished = self.tls_session.as_ref().is_some_and(|t| {
                         t.state() == crate::drivers::tls::TlsState::Tls13ServerFinished
                     });
                     if server_finished {
@@ -3691,7 +3695,7 @@ impl BrowserApp {
                 }
 
                 // El sıkışma tamamlandıysa HTTP isteğini şifreleyip gönder.
-                let tls_established = self.tls_session.as_ref().map_or(false, |t| {
+                let tls_established = self.tls_session.as_ref().is_some_and(|t| {
                     t.state() == crate::drivers::tls::TlsState::Established
                 });
 
@@ -3705,7 +3709,7 @@ impl BrowserApp {
                         .tls_session
                         .as_ref()
                         .and_then(|t| t.negotiated_protocol())
-                        .map_or(false, |p| p == b"h2")
+                        .is_some_and(|p| p == b"h2")
                 {
                     let host_str =
                         core::str::from_utf8(&self.request_host[..self.request_host_len])
@@ -3825,7 +3829,7 @@ impl BrowserApp {
                         &self.response_data[..self.response_len]
                     };
 
-                if data_to_parse.len() > 0 {
+                if !data_to_parse.is_empty() {
                     if let Some(end) = find_bytes(data_to_parse, b"\r\n\r\n") {
                         self.load_progress = 70;
                         self.net_idle_hint = true;
@@ -3922,13 +3926,13 @@ impl BrowserApp {
                                                 let mut val = &l[colon + 1..];
                                                 while val
                                                     .first()
-                                                    .map_or(false, |b| b.is_ascii_whitespace())
+                                                    .is_some_and(|b| b.is_ascii_whitespace())
                                                 {
                                                     val = &val[1..];
                                                 }
                                                 while val
                                                     .last()
-                                                    .map_or(false, |b| b.is_ascii_whitespace())
+                                                    .is_some_and(|b| b.is_ascii_whitespace())
                                                 {
                                                     val = &val[..val.len() - 1];
                                                 }
@@ -4037,7 +4041,7 @@ impl BrowserApp {
                         let is_chunked = header_is_chunked(headers);
                         let content_length = header_content_length(headers);
                         let peer_closed =
-                            self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                            self.tls_session.as_ref().is_some_and(|t| t.peer_closed());
                         let eof = crate::drivers::netstack::tcp_finished() || peer_closed;
 
                         // Chunked gövde ancak tamamen geldiğinde çözülebilir;
@@ -4119,7 +4123,7 @@ impl BrowserApp {
                                 align: TextAlign::Left,
                             });
 
-                            if body_bytes.iter().any(|b| *b == b'<') {
+                            if body_bytes.contains(&b'<') {
                                 self.load_html(&body_bytes, 600, 256, Some(vfs));
                             } else {
                                 for line in split_http_lines(&body_bytes).take(256) {
@@ -4170,7 +4174,7 @@ impl BrowserApp {
                     // Sunucu close_notify gönderdiyse ve yanıt zaten çözülüp
                     // işlendiyse isteği başarıyla bitir. close_notify bir hata
                     // değil, düzgün bağlantı kapanışıdır (RFC 8446 §6.1).
-                    let peer_closed = self.tls_session.as_ref().map_or(false, |t| t.peer_closed());
+                    let peer_closed = self.tls_session.as_ref().is_some_and(|t| t.peer_closed());
                     if peer_closed && self.page_loaded {
                         self.status =
                             crate::gui::ui_text("HTTP yanıtı alındı.", "HTTP response received.");
@@ -4947,8 +4951,8 @@ impl BrowserApp {
                         }
 
                         // <blockquote> sol dikey çubuk
-                        if line.tag == HtmlTagType::Quote {
-                            if draw_y + line_h > doc_y && draw_y < doc_y + doc_h {
+                        if line.tag == HtmlTagType::Quote
+                            && draw_y + line_h > doc_y && draw_y < doc_y + doc_h {
                                 let bar_top = draw_y.max(doc_y);
                                 let bar_bottom = (draw_y + line_h).min(doc_y + doc_h);
                                 if bar_bottom > bar_top {
@@ -4961,7 +4965,6 @@ impl BrowserApp {
                                     );
                                 }
                             }
-                        }
 
                         let mut span_char_start = 0usize;
                         for span in &line.spans {
@@ -5916,5 +5919,11 @@ impl BrowserApp {
                 self,
             );
         }
+    }
+}
+
+impl Default for BrowserApp {
+    fn default() -> Self {
+        Self::new()
     }
 }

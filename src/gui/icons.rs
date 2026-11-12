@@ -204,7 +204,7 @@ impl MinGuiCompositor {
         for (row, &mask) in ICON_MAP.iter().enumerate() {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
-                    let c = if row >= 2 && row <= 6 && col >= 2 && col <= 13 {
+                    let c = if (2..=6).contains(&row) && (2..=13).contains(&col) {
                         Color::ACCENT_BLUE
                     } else if row >= 9 {
                         Color::TEXT_MUTED
@@ -244,7 +244,7 @@ impl MinGuiCompositor {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
                     let c =
-                        if (row == 5 || row == 7 || row == 9 || row == 11) && col >= 4 && col <= 10
+                        if (row == 5 || row == 7 || row == 9 || row == 11) && (4..=10).contains(&col)
                         {
                             Color::ACCENT_BLUE
                         } else if row <= 2 && col >= 9 {
@@ -358,7 +358,7 @@ impl MinGuiCompositor {
         for (row, &mask) in ICON_MAP.iter().enumerate() {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
-                    let c = if row >= 6 && row <= 9 && col >= 6 && col <= 9 {
+                    let c = if (6..=9).contains(&row) && (6..=9).contains(&col) {
                         Color::ACCENT_BLUE
                     } else {
                         Color::TEXT_MAIN

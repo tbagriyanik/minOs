@@ -794,7 +794,7 @@ impl FpsGameApp {
             // DDA: duvara kadar ilerle.
             let mut hit = false;
             let mut side = 0;
-            let perp_wall_dist: f32;
+            
 
             // Harita bozuk olsa bile tek ray ana döngüyü kilitlemesin.
             // Bütçe kontrolü ile DDA döngüsünün sonsuzlaşması engellenir.
@@ -828,13 +828,11 @@ impl FpsGameApp {
             }
 
             // Duvara gerçek mesafe (fisheye düzeltmesi).
-            if side == 0 {
-                perp_wall_dist =
-                    (map_x as f32 - self.pos_x + (1.0 - step_x as f32) / 2.0) / ray_dir_x;
+            let perp_wall_dist: f32 = if side == 0 {
+                (map_x as f32 - self.pos_x + (1.0 - step_x as f32) / 2.0) / ray_dir_x
             } else {
-                perp_wall_dist =
-                    (map_y as f32 - self.pos_y + (1.0 - step_y as f32) / 2.0) / ray_dir_y;
-            }
+                (map_y as f32 - self.pos_y + (1.0 - step_y as f32) / 2.0) / ray_dir_y
+            };
             // Bozuk bir açı/mesafe hiçbir zaman dev bir çizim döngüsüne
             // dönüşmesin.
             let perp_wall_dist = if perp_wall_dist.is_finite() {
@@ -889,8 +887,8 @@ impl FpsGameApp {
 
             // Dikey çizgi olarak duvarı çiz (tekstürlü).
             if draw_start < draw_end && draw_end > 0 && draw_start < render_h {
-                let ds = draw_start.max(0).min(render_h);
-                let de = draw_end.max(0).min(render_h);
+                let ds = draw_start.min(render_h);
+                let de = draw_end.min(render_h);
                 for yy in ds..de {
                     if budget.is_expired() {
                         cancelled = true;
@@ -1007,9 +1005,9 @@ impl FpsGameApp {
                 // while döngülerini if düzeltmeleriyle değiştir: angle normalizasyonu
                 // tek adımlı düzelme yeterlidir, while döngüsü çok maliyetli.
                 if rel < -PI {
-                    rel = rel + TAU;
+                    rel += TAU;
                 } else if rel > PI {
-                    rel = rel - TAU;
+                    rel -= TAU;
                 }
                 if rel.abs() > FOV / 2.0 + 0.5 {
                     continue;
@@ -1875,6 +1873,12 @@ impl FpsGameApp {
     /// Geriye uyumlu: bütçe kontrolü olmadan güncelleme yapar.
     pub fn update(&mut self, audio_dev: &mut AudioDevice) {
         let _ = self.update_with_budget(audio_dev, u64::MAX);
+    }
+}
+
+impl Default for FpsGameApp {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

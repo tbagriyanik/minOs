@@ -227,7 +227,7 @@ fn welcome_panel(width: usize, height: usize) -> (usize, usize, usize, usize) {
     } else {
         2
     };
-    let rows = (theme::ThemeId::ALL.len() + cols - 1) / cols;
+    let rows = theme::ThemeId::ALL.len().div_ceil(cols);
     let row_gap = 10;
     let card_h = 46;
     let theme_h = rows * card_h + (rows.saturating_sub(1)) * row_gap;
@@ -271,7 +271,7 @@ pub fn welcome_theme_rect(
     let card_h = 46;
     let available_w = w.saturating_sub(56).max(1);
     let card_w = available_w.saturating_sub(gap_x * (cols - 1)) / cols;
-    let rows = (theme::ThemeId::ALL.len() + cols - 1) / cols;
+    let rows = theme::ThemeId::ALL.len().div_ceil(cols);
     let theme_total_h = rows * card_h + (rows.saturating_sub(1)) * gap_y;
     let theme_top = y + 148;
     let bottom_limit = y + h.saturating_sub(76);

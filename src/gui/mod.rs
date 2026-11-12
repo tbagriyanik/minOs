@@ -4,6 +4,7 @@ pub mod desktop;
 pub mod draw;
 pub mod event_loop;
 pub mod font_render;
+pub mod frame;
 pub mod icons;
 pub mod overlay;
 pub mod renderer;
@@ -24,6 +25,7 @@ pub mod window;
 
 pub use context::*;
 pub use event_loop::*;
+pub use frame::*;
 pub use screens::*;
 pub use scrollbar::{ScrollState, ScrollbarGeom};
 pub use setup::*;
@@ -260,7 +262,7 @@ impl MinGuiCompositor {
         let source_idx = existing.or_else(|| {
             self.windows
                 .iter()
-                .position(|slot| slot.map_or(false, |w| w.app_id as usize == app_id))
+                .position(|slot| slot.is_some_and(|w| w.app_id as usize == app_id))
         })?;
         if existing.is_none() {
             if let Some(win) = self.windows[source_idx].as_mut() {
@@ -275,7 +277,7 @@ impl MinGuiCompositor {
         let instances = self
             .windows
             .iter()
-            .filter(|slot| slot.map_or(false, |w| w.app_id as usize == app_id))
+            .filter(|slot| slot.is_some_and(|w| w.app_id as usize == app_id))
             .count();
         let offset = (instances % 8) * 24;
         win.x = win.x.saturating_add(offset);
@@ -347,10 +349,8 @@ impl MinGuiCompositor {
             self.focus_window(i);
         } else {
             self.active_window_idx = None;
-            for slot in self.windows.iter_mut() {
-                if let Some(w) = slot {
-                    w.is_focused = false;
-                }
+            for w in self.windows.iter_mut().flatten() {
+                w.is_focused = false;
             }
         }
     }
@@ -419,7 +419,7 @@ impl MinGuiCompositor {
         let mut order = [0; MAX_WINDOWS];
         let mut count = 0;
         for (i, slot) in self.windows.iter().enumerate() {
-            if slot.map_or(false, |w| w.is_open) {
+            if slot.is_some_and(|w| w.is_open) {
                 order[count] = i;
                 count += 1;
             }
@@ -438,14 +438,11 @@ impl MinGuiCompositor {
 
     /// Verilen `(x, y)` noktasının açık ve küçültülmemiş herhangi bir pencere alanında olup olmadığını kontrol eder.
     pub fn is_point_covered_by_window(&self, x: usize, y: usize) -> bool {
-        for slot in self.windows.iter() {
-            if let Some(w) = slot {
-                if w.is_open && !w.is_minimized {
-                    if in_rect(x, y, (w.x, w.y, w.width, w.height)) {
-                        return true;
-                    }
+        for w in self.windows.iter().flatten() {
+            if w.is_open && !w.is_minimized
+                && in_rect(x, y, (w.x, w.y, w.width, w.height)) {
+                    return true;
                 }
-            }
         }
         false
     }
@@ -615,5 +612,11 @@ impl MinGuiCompositor {
             }
         }
         self.installed_apps_count = count;
+    }
+}
+
+impl Default for MinGuiCompositor {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -126,7 +126,7 @@ impl AddressSpace {
         flags: u64,
         pmm: &mut PhysicalMemoryManager,
     ) -> Result<(), &'static str> {
-        if (virt_addr % PAGE_SIZE) != 0 || (phys_addr % PAGE_SIZE) != 0 {
+        if !virt_addr.is_multiple_of(PAGE_SIZE) || !phys_addr.is_multiple_of(PAGE_SIZE) {
             return Err("Adresler 4KB sayfa sinirina hizali degil");
         }
 
@@ -166,7 +166,7 @@ impl AddressSpace {
 
     /// Bir sanal adresin eşlemesini (mapping) kaldırır (unmap) ve fiziksel adresi döner.
     pub fn unmap_page(&mut self, virt_addr: u64) -> Option<u64> {
-        if (virt_addr % PAGE_SIZE) != 0 {
+        if !virt_addr.is_multiple_of(PAGE_SIZE) {
             return None;
         }
 

@@ -1006,7 +1006,7 @@ impl XhciController {
         };
 
         let dcbaa_entries = self.max_slots as usize + 1 + scratch_count;
-        let dcbaa_frames = ((dcbaa_entries * 8) + PAGE as usize - 1) / PAGE as usize;
+        let dcbaa_frames = (dcbaa_entries * 8).div_ceil(PAGE as usize);
         let Some(dcbaa_phys) = pmm.allocate_contiguous_frames(dcbaa_frames.max(1)) else {
             pmm.free_frame(cmd_phys);
             pmm.free_frame(evt_phys);
@@ -1065,7 +1065,7 @@ impl XhciController {
 
         // Interrupter 0 — kesme kapalı, yalnızca olay halkası yoklaması.
         let intr = self.rt + 0x20;
-        core::ptr::write_volatile((intr + 0x00) as *mut u32, 0);
+        core::ptr::write_volatile(intr as *mut u32, 0);
         core::ptr::write_volatile((intr + 0x04) as *mut u32, 0);
         core::ptr::write_volatile((intr + 0x08) as *mut u32, 1);
         core::ptr::write_volatile((intr + 0x10) as *mut u64, erst_phys);
@@ -1762,7 +1762,7 @@ fn handle_custom_mouse_report(
     let wheel_end = layout.wheel_start as u32 + layout.wheel_size as u32;
     let button_end = layout.button_start as u32 + layout.buttons as u32;
     let bits_total = x_end.max(y_end).max(wheel_end).max(button_end);
-    let bytes_needed = ((bits_total + 7) / 8) as usize;
+    let bytes_needed = bits_total.div_ceil(8) as usize;
     if body.len() < bytes_needed.max(3) {
         return false;
     }
@@ -2186,8 +2186,8 @@ unsafe fn enumerate_device(
     } else {
         max_packet0
     };
-    if ep0_mps != max_packet0 {
-        if !c.update_ep0_max_packet(
+    if ep0_mps != max_packet0
+        && !c.update_ep0_max_packet(
             slot,
             input_phys,
             speed,
@@ -2202,7 +2202,6 @@ unsafe fn enumerate_device(
             abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
             return;
         }
-    }
 
     // Tam aygıt tanımlayıcısı
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
@@ -2350,7 +2349,7 @@ unsafe fn enumerate_device(
 
     for i in 0..count {
         if usable[i].boot {
-            if c.control_out(
+            usable[i].custom = c.control_out(
                 &mut ep0_ring,
                 slot,
                 0x21,
@@ -2360,12 +2359,7 @@ unsafe fn enumerate_device(
                 0,
                 0,
             )
-            .is_none()
-            {
-                usable[i].custom = true;
-            } else {
-                usable[i].custom = false;
-            }
+            .is_none();
         } else {
             usable[i].custom = true;
         }
@@ -2391,7 +2385,7 @@ unsafe fn enumerate_device(
     let mut ctx_flags = 1u32;
     let mut max_dci = 0u8;
     for i in 0..count {
-        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        let dci = (usable[i].endpoint & 0x0F) * 2 + 1;
         ctx_flags |= 1 << dci;
         if dci > max_dci {
             max_dci = dci;
@@ -2414,7 +2408,7 @@ unsafe fn enumerate_device(
         );
     }
     for i in 0..count {
-        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        let dci = (usable[i].endpoint & 0x0F) * 2 + 1;
         let ep_index = dci as usize + 1;
         let ring_phys = blocks[i];
         c.ctx_write(
@@ -2453,7 +2447,7 @@ unsafe fn enumerate_device(
         let kind = usable[i].kind.unwrap_or(HidKind::Keyboard);
         let ring_phys = blocks[i];
         let report_phys = ring_phys + PAGE;
-        let dci = ((usable[i].endpoint & 0x0F) * 2 + 1) as u8;
+        let dci = (usable[i].endpoint & 0x0F) * 2 + 1;
         let report_len = usable[i].max_packet.clamp(1, 1024);
         let custom = usable[i].custom;
         let mut device = HidDevice {

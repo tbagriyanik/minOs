@@ -153,6 +153,12 @@ impl Sha1 {
     }
 }
 
+impl Default for Sha1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// HMAC-SHA1 (RFC 2104 / FIPS 198-1).
 pub struct HmacSha1 {
     ipad: [u8; 64],

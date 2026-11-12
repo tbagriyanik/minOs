@@ -56,6 +56,12 @@ impl DevToolsState {
     }
 }
 
+impl Default for DevToolsState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Render the DevTools panel to the framebuffer.
 /// `fb` - framebuffer to draw on
 /// `dx, dy` - top-left position of the DevTools panel
@@ -107,7 +113,7 @@ pub fn render_devtools(
             fb,
             tx + 6,
             dy + tab_h + 4,
-            *label,
+            label,
             tab_fg,
             (
                 tx + 6,
@@ -267,7 +273,7 @@ pub fn render_devtools(
             cy += 18;
 
             // Show last few error logs
-            let start = if log_count > 10 { log_count - 10 } else { 0 };
+            let start = log_count.saturating_sub(10);
             for log in browser.error_logs.iter().skip(start).take(10) {
                 let truncated = if log.len() > 60 {
                     format!("{}...", &log[..57])

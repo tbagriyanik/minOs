@@ -14,7 +14,7 @@ minOs (Sarman Edition) v2.3.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | [Hakkında & Mimari](Hakkinda) | Tasarım felsefesi, `no_std` modeli, PMM ve IDT yapısı |
 | [Kurulum ve Çalıştırma](Kurulum-ve-Calistirma) | `run.ps1` seçenekleri, Live USB oluşturma, diske kurulum |
 | [Desteklenen Donanım Listesi](Desteklenen-Donanimlar) | Sürücü matrisi, ağ, grafik, depolama, giriş aygıtları |
-| [Yerleşik 15 Uygulama](Uygulamalar) | Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, vb. |
+| [Yerleşik 17 Uygulama](Uygulamalar) | Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, vb. |
 | [Ağ ve İnternet](Ag-ve-Internet) | TCP/IP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS), HTTP/2 altyapısı |
 | [Dosya Sistemleri](Dosya-Sistemleri) | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 | [Kullanıcı Rehberi](Kullanici-Rehberi) | Masaüstü kısayolları, MinShell komutları |
@@ -28,10 +28,10 @@ minOs (Sarman Edition) v2.3.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı** | ~116.264 satır (Rust) |
-| **Birim Testleri** | 234 geçti / 0 hata |
+| **Toplam Kod Satırı** | ~134.929 satır (Rust) |
+| **Birim Testleri** | 271 geçti / 0 hata |
 | **Güvenilen Kök CA** | 51 sertifika |
-| **Yerleşik Uygulama** | 15 masaüstü uygulaması |
+| **Yerleşik Uygulama** | 17 masaüstü uygulaması |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |
 
 ---
@@ -50,3 +50,5 @@ minOs (Sarman Edition) v2.3.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Wi-Fi (802.11):** 802.11 çerçeve yapıları, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK türetimi, WPA 4-way el sıkışması (simüle edilen AP ile), PCI/USB arayüz tespiti; gerçek PHY/RX-TX yok.
 - **EC Fan Profilleri:** `fan_temp.rs` için EC (0x66/0x62) fan profilleri (Silent/Normal/Performance/Full/Auto) ve sıcaklığa göre otomatik geçiş.
 - **Ekran Ayarları:** PNG duvar kağıdı küçük resimleri önyükleme sırasında önceden çözülür; uzun işlemlerde kum saati imleci gösterilir.
+- **Watchdog:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde bağımsız çalışır; sonlandırma ana döngüde `drain_frozen()` ile ertelenir ve yalnızca takılan uygulama işaretlenir.
+- **FPS 3D Performans Metrikleri:** FPS 3D Oyun tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` ölçer (`[FPS3D-METRICS]`); bütçe aşımında kısmi kare geri yüklenir. `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres doğrulaması.

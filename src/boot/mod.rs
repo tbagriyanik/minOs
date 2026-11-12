@@ -8,6 +8,7 @@ pub mod cpu;
 pub mod devices;
 pub mod limine;
 pub mod progress;
+pub mod start;
 pub mod subsystems;
 pub mod text_console;
 pub mod time;

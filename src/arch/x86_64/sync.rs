@@ -37,6 +37,15 @@ impl Spinlock {
     pub fn unlock(&self) {
         self.locked.store(false, Ordering::Release);
     }
+
+    /// Kilidi yalnızca boşsa alır; meşgulse `None` döner. Kesme bağlamında
+    /// ana döngünün kilidi tuttuğu sırada dönüp beklemeyi (deadlock) önler.
+    #[inline(always)]
+    pub fn try_lock(&self) -> bool {
+        self.locked
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+    }
 }
 
 unsafe impl Send for Spinlock {}
@@ -60,6 +69,16 @@ impl<T> SpinMutex<T> {
     pub fn lock(&self) -> SpinGuard<'_, T> {
         self.lock.lock();
         SpinGuard { mutex: self }
+    }
+
+    /// Kilit boşsa koruma nesnesi döndürür; meşgulse `None` döner.
+    #[inline(always)]
+    pub fn try_lock(&self) -> Option<SpinGuard<'_, T>> {
+        if self.lock.try_lock() {
+            Some(SpinGuard { mutex: self })
+        } else {
+            None
+        }
     }
 
     /// Kilidi zorla açar. Yalnızca kilidin sahibi olduğu bilinen bir CPU'nun

@@ -21,6 +21,7 @@ param(
     [switch]$BootShutdownCycle,
     [int]$BootShutdownCycles = 3,
     [switch]$FpsStressTest,
+    [int]$FpsStressMinutes = 0,
     [int]$FpsStressSeconds = 30
 )
 
@@ -67,16 +68,19 @@ Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host "   minOs QEMU Entegrasyon Test Kosucusu  " -ForegroundColor Cyan
 Write-Host "=========================================" -ForegroundColor Cyan
 
-# 1. QEMU kontrolu
-$qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
-if (-not (Test-Path $qemu)) {
-    $cmd = Get-Command "qemu-system-x86_64.exe" -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $qemu = $cmd.Source
-    } else {
-        Write-Host "[HATA] QEMU bulunamadi: $qemu" -ForegroundColor Red
-        exit 1
-    }
+# 1. QEMU kontrolu (Windows + Linux/macOS)
+$qemu = $null
+foreach ($candidate in @("qemu-system-x86_64", "qemu-system-x86_64.exe")) {
+    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($cmd) { $qemu = $cmd.Source; break }
+}
+if (-not $qemu) {
+    $winPath = "C:\Program Files\qemu\qemu-system-x86_64.exe"
+    if (Test-Path $winPath) { $qemu = $winPath }
+}
+if (-not $qemu) {
+    Write-Host "[HATA] QEMU bulunamadi (qemu-system-x86_64 PATH'te yok)." -ForegroundColor Red
+    exit 1
 }
 
 # 2. ISO Tazelik Denetimi
@@ -250,15 +254,24 @@ function Send-InputEvents($qmp, [string]$eventsJson) {
     }
 }
 
+function Send-KeyTap($qmp, [string]$qcode, [int]$holdMs = 70) {
+    if (-not $qmp) { return }
+    $down = '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"' + $qcode + '"}}}]'
+    $up = '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"' + $qcode + '"}}}]'
+    Send-InputEvents $qmp $down
+    Start-Sleep -Milliseconds $holdMs
+    Send-InputEvents $qmp $up
+}
+
 $qmp = $null
-if ($UsbHid) {
+if ($UsbHid -or $FpsStressTest) {
     $qmpDeadline = [System.DateTime]::UtcNow.AddSeconds(5)
     while (-not $qmp -and [System.DateTime]::UtcNow -lt $qmpDeadline) {
         $qmp = Connect-Qmp $qmpPort
         if (-not $qmp) { Start-Sleep -Milliseconds 150 }
     }
     if (-not $qmp) {
-        Write-Host "[UYARI] QMP baglantisi kurulamadi; USB girdi enjeksiyonu atlanacak." -ForegroundColor DarkYellow
+        Write-Host "[UYARI] QMP baglantisi kurulamadi; USB/FPS girdi enjeksiyonu atlanacak." -ForegroundColor DarkYellow
     }
 }
 
@@ -299,6 +312,94 @@ if ($UsbHid) {
         Start-Sleep -Milliseconds 800
     } else {
         Write-Host "[UYARI] QMP yok; USB klavye/fare enjeksiyonu dogrulanamadi." -ForegroundColor DarkYellow
+    }
+}
+
+# ========================================================================
+# FPS 3D Stres Testi (QEMU calisirken; 10/30/60 dk icin -FpsStressMinutes)
+# ========================================================================
+$stressSeconds = if ($FpsStressMinutes -gt 0) { $FpsStressMinutes * 60 } else { $FpsStressSeconds }
+$fpsStressOpened = $false
+$fpsMetricCount = 0
+$fpsLast = 0
+$fpsMin = 0
+$fpsMaxFrame = 0
+$fpsMaxInterval = 0
+$fpsMaxFrames = 0
+$fpsStressOk = $false
+
+if ($FpsStressTest) {
+    Write-Host "`n=========================================" -ForegroundColor Cyan
+    Write-Host "      FPS 3D Stres Testi (${stressSeconds}s)      " -ForegroundColor Cyan
+    Write-Host "=========================================" -ForegroundColor Cyan
+
+    if ($qmp) {
+        Write-Host "[BILGI] Baslat menusu -> 'fps' aramasi -> FPS 3D aciliyor..." -ForegroundColor Yellow
+        Send-KeyTap $qmp "lsuper" 140
+        Start-Sleep -Milliseconds 500
+        foreach ($k in @("f", "p", "s")) {
+            Send-KeyTap $qmp $k 50
+            Start-Sleep -Milliseconds 90
+        }
+        Start-Sleep -Milliseconds 250
+        Send-KeyTap $qmp "ret" 90
+
+        $openDeadline = [System.DateTime]::UtcNow.AddSeconds(15)
+        while ([System.DateTime]::UtcNow -lt $openDeadline) {
+            $openOut = $outputBuilder.ToString()
+            if ($openOut -match "\[FPS3D\] Uygulama") { break }
+            if ($proc.HasExited) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        $fpsStressOpened = ($outputBuilder.ToString() -match "\[FPS3D\] Uygulama")
+    } else {
+        Write-Host "[FAIL] QMP yok; FPS 3D otomatik acilamadi." -ForegroundColor Red
+    }
+
+    if ($fpsStressOpened -and -not $proc.HasExited) {
+        $stressStart = [System.DateTime]::UtcNow
+        $stressCrashed = $false
+        while (([System.DateTime]::UtcNow - $stressStart).TotalSeconds -lt $stressSeconds) {
+            Start-Sleep -Milliseconds 1000
+            if ($proc.HasExited) {
+                $stressCrashed = $true
+                break
+            }
+        }
+
+        $stressElapsed = ([System.DateTime]::UtcNow - $stressStart).TotalSeconds
+        Write-Host "[BILGI] FPS 3D stres testi ${stressSeconds}s istendi, geçen süre: $([math]::Round($stressElapsed, 1))s" -ForegroundColor Green
+
+        if (-not $stressCrashed) {
+            $stressOut = $outputBuilder.ToString()
+            $metricMatches = [regex]::Matches(
+                $stressOut,
+                "\[FPS3D-METRICS\] fps=(\d+) min_fps=(\d+) frame_ms=(\d+) interval_ms=(\d+) max_interval_ms=(\d+) frames=(\d+)"
+            )
+            $fpsMetricCount = $metricMatches.Count
+            if ($fpsMetricCount -gt 0) {
+                $last = $metricMatches[$fpsMetricCount - 1]
+                $fpsLast = [int]$last.Groups[1].Value
+                $fpsMin = [int]$last.Groups[2].Value
+                foreach ($m in $metricMatches) {
+                    $fpsMin = [math]::Min($fpsMin, [int]$m.Groups[2].Value)
+                    $fpsMaxFrame = [math]::Max($fpsMaxFrame, [int]$m.Groups[3].Value)
+                    $fpsMaxInterval = [math]::Max($fpsMaxInterval, [int]$m.Groups[5].Value)
+                    $fpsMaxFrames = [math]::Max($fpsMaxFrames, [int]$m.Groups[6].Value)
+                }
+            }
+            $fpsStressOk = ($fpsMetricCount -gt 0) -and ($fpsLast -gt 0) -and ($fpsMin -gt 0)
+        }
+
+        if ($fpsStressOk) {
+            Write-Host "[OK] FPS 3D acildi ve ${fpsMetricCount} metrik ornegi toplandi: son FPS=$fpsLast min FPS=$fpsMin max frame=${fpsMaxFrame}ms max interval=${fpsMaxInterval}ms frames=$fpsMaxFrames" -ForegroundColor Green
+        } elseif ($stressCrashed) {
+            Write-Host "[FAIL] FPS 3D stres testi sirasinda QEMU cikti." -ForegroundColor Red
+        } else {
+            Write-Host "[FAIL] FPS 3D acildi ancak [FPS3D-METRICS] ornegi uretilemedi (metrik=$fpsMetricCount)." -ForegroundColor Red
+        }
+    } elseif (-not $fpsStressOpened) {
+        Write-Host "[FAIL] FPS 3D uygulamasi acilamadi; stres metrigi dogrulanamadi." -ForegroundColor Red
     }
 }
 
@@ -366,10 +467,10 @@ if ($BootShutdownCycle) {
         Unregister-Event -SourceIdentifier $errEvent2.Name -ErrorAction SilentlyContinue
 
         if ($cycleDesktop) {
-            Write-Host "  [OK] Döngü $cycle: Masaüstüne başarıyla ulaşıldı" -ForegroundColor Green
+            Write-Host "  [OK] Döngü ${cycle}: Masaüstüne başarıyla ulaşıldı" -ForegroundColor Green
             $cyclePassed++
         } else {
-            Write-Host "  [FAIL] Döngü $cycle: Masaüstüne ulaşılamadı" -ForegroundColor Red
+            Write-Host "  [FAIL] Döngü ${cycle}: Masaüstüne ulaşılamadı" -ForegroundColor Red
             $cycleFailed++
         }
 
@@ -453,66 +554,6 @@ Set-Content -Path (Join-Path $targetDir "qemu_serial.log") -Value $logOutput -En
 
 Write-Host "[3/3] Cekirdek ciktisi ve donanim akisi cozumleniyor..." -ForegroundColor Yellow
 
-# ========================================================================
-# FPS Stres Testi (isteğe bağlı: 10 / 30 / 60 saniye)
-# ========================================================================
-if ($FpsStressTest) {
-    Write-Host "`n=========================================" -ForegroundColor Cyan
-    Write-Host "      FPS Stres Testi (${FpsStressSeconds}s)       " -ForegroundColor Cyan
-    Write-Host "=========================================" -ForegroundColor Cyan
-
-    Write-Host "[BILGI] FPS 3D penceresi açılıyor ve stres testi başlatılıyor..." -ForegroundColor Yellow
-
-    # FPS 3D penceresini aç (QMP ile klavye enjeksiyonu veya başlat menüsü üzerinden)
-    if ($qmp) {
-        # Başlat menüsünü aç ve FPS 3D uygulamasını başlat
-        Send-InputEvents $qmp '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"lsuper"}}}]'
-        Start-Sleep -Milliseconds 200
-        Send-InputEvents $qmp '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"lsuper"}}}]'
-        Start-Sleep -Milliseconds 500
-
-        # "fps" yaz ve Enter'a bas (çalıştır dialogu üzerinden)
-        # Bu basit bir yaklaşımdır; gerçekte QMP ile metin enjeksiyonu gerekir.
-        Write-Host "[UYARI] FPS 3D otomatik başlatma QMP metin enjeksiyonu ile sınırlıdır." -ForegroundColor DarkYellow
-        Write-Host "[BILGI] Kullanıcı FPS 3D penceresini manuel olarak açabilir." -ForegroundColor DarkYellow
-    }
-
-    $stressStart = [System.DateTime]::UtcNow
-    $stressEnd = $stressStart.AddSeconds($FpsStressSeconds)
-    $lastFpsOutput = $false
-    $fpsSamples = @()
-
-    while (([System.DateTime]::UtcNow - $stressStart).TotalSeconds -lt $FpsStressSeconds) {
-        Start-Sleep -Milliseconds 1000
-        $currentOut = $outputBuilder.ToString()
-
-        # FPS değerlerini seri çıkışından ara (FPS-3D güncelleme uyarıları veya oyun FPS raporu)
-        if ($currentOut -match "\[FPS-3D\]") {
-            if (-not $lastFpsOutput) {
-                Write-Host "[BILGI] FPS-3D etkinlikleri algılanıyor..." -ForegroundColor Green
-                $lastFpsOutput = $true
-            }
-        }
-
-        # Sistem hâlâ çalışıyor mu kontrol et (seri çıkış akışı)
-        if (-not $proc.HasExited) {
-            # Sistem canlı
-        } else {
-            Write-Host "[FAIL] QEMU stres testi sırasında çıkış yaptı!" -ForegroundColor Red
-            break
-        }
-    }
-
-    $stressElapsed = ([System.DateTime]::UtcNow - $stressStart).TotalSeconds
-    Write-Host "[BILGI] FPS stres testi ${FpsStressSeconds}s süresinde çalıştı, geçen süre: $([math]::Round($stressElapsed, 1))s" -ForegroundColor Green
-
-    if (-not $proc.HasExited) {
-        Write-Host "[OK] FPS stres testi tamamlandı: Sistem çökmeden devam etti" -ForegroundColor Green
-    } else {
-        Write-Host "[FAIL] FPS stres testi sırasında sistem çöktü" -ForegroundColor Red
-    }
-}
-
 # 4. Kesin ve Olumlu Dogrulama Kriterleri (Karakter kodlamasindan bagimsiz guclu kaliplar)
 $checks = @(
     @{
@@ -562,6 +603,36 @@ if ($Minimal) {
     $checks = @($checks | Where-Object { $_.Name -notmatch 'Ag Adaptoru|Ses Denetleyicisi' })
 }
 
+if (-not $Minimal) {
+    # Ağ yığını özyin testi boot sırasında çalışır (netstack::run_network_self_test).
+    # QEMU user-net ağ geçidi 10.0.2.2 üzerinden ARP/ICMP/TCP/HTTP + soket/HTTP
+    # mantık testlerini doğrular. TCP başarısı ağ geçidinde dinleyici gerektirir;
+    # bu yüzden burada yalnızca testin çalıştığı ve mantık testlerinin geçtiği
+    # doğrulanır (SYN-ACK sonucu log'da ayrı görünür).
+    $checks += @(
+        @{
+            Name = "Ag Yigini On Testi (ARP TX)";
+            Pattern = "\[NET-TEST\] 1\. ARP.*TX iletildi";
+            Description = "Boot sirasinda ARP istegi TX halkasindan iletildi"
+        },
+        @{
+            Name = "ICMP (Ping) Testi";
+            Pattern = "\[NET-TEST\] 2\. ICMP";
+            Description = "Gateway'e ICMP Echo Request gonderildi"
+        },
+        @{
+            Name = "TCP 3-Way Handshake Testi";
+            Pattern = "\[NET-TEST\] 3\. TCP";
+            Description = "Gateway HTTP portuna SYN paketi gonderildi"
+        },
+        @{
+            Name = "Soket + HTTP Mantik Testleri";
+            Pattern = "Soket \+ HTTP";
+            Description = "NIC'den bagimsiz soket ve HTTP istemci mantigi dogrulandi"
+        }
+    )
+}
+
 if ($UsbHid) {
     $checks += @(
         @{
@@ -600,6 +671,21 @@ if ($UsbHid) {
     }
 }
 
+if ($FpsStressTest) {
+    $checks += @(
+        @{
+            Name = "FPS 3D Uygulama Acilisi";
+            Pattern = "\[FPS3D\] Uygulama";
+            Description = "Baslat menusu aramasi ile FPS 3D penceresi gercekten acildi"
+        },
+        @{
+            Name = "FPS 3D Metrik Akisi";
+            Pattern = "\[FPS3D-METRICS\] fps=\d+ min_fps=\d+ frame_ms=\d+ interval_ms=\d+ max_interval_ms=\d+ frames=\d+";
+            Description = "Tamamlanan karelerden uretilen gercek FPS/min-FPS/frame-time ornekleri"
+        }
+    )
+}
+
 $allPassed = $true
 Write-Host "`n--- ENTEGRASYON TESTI RAPORU ---" -ForegroundColor Cyan
 
@@ -613,15 +699,40 @@ foreach ($check in $checks) {
     }
 }
 
+if ($FpsStressTest -and -not $fpsStressOk) {
+    Write-Host "  [FAIL] FPS 3D stres ozeti dogrulanamadi (acilis=$fpsStressOpened metrik=$fpsMetricCount)." -ForegroundColor Red
+    $allPassed = $false
+}
+
 # 5. Gercek Ses Ciktisi (QEMU WAV Dosyasi ve Intel HDA DMA Akisi)
 $audioFileCreated = (Test-Path $audioWavPath) -and ((Get-Item $audioWavPath).Length -ge 44)
 $hdaHardwareReady = $logOutput -match "\[HDA\] Intel HDA.*48kHz"
+
+# WAV 'data' chunk boyutunu oku: 0'dan buyukse gercek PCM akisi diske yazildi.
+$wavDataBytes = 0
+if ($audioFileCreated) {
+    try {
+        $wb = [System.IO.File]::ReadAllBytes($audioWavPath)
+        for ($i = 12; $i -lt $wb.Length - 8; $i++) {
+            if ($wb[$i] -eq 0x64 -and $wb[$i + 1] -eq 0x61 -and $wb[$i + 2] -eq 0x74 -and $wb[$i + 3] -eq 0x61) {
+                $wavDataBytes = [BitConverter]::ToUInt32($wb, $i + 4)
+                break
+            }
+        }
+    } catch {
+        $wavDataBytes = 0
+    }
+}
 
 if ($Minimal) {
     Write-Host "  [SKIP] Gercek Ses Cikisi (minimal profilde HDA aygiti yok)" -ForegroundColor DarkGray
 } elseif ($audioFileCreated -and $hdaHardwareReady) {
     $audioBytes = (Get-Item $audioWavPath).Length
-    Write-Host "  [OK] Gercek Ses Cikisi (Intel HDA WAV Aygiti & 48kHz DMA Akisi Hazir: $audioBytes bayt)" -ForegroundColor Green
+    if ($wavDataBytes -gt 0) {
+        Write-Host "  [OK] Gercek Ses Akisi (48kHz DMA -> WAV: $wavDataBytes bayt PCM, dosya $audioBytes bayt)" -ForegroundColor Green
+    } else {
+        Write-Host "  [OK] Intel HDA Hazir (WAV dosyasi olustu; bu pencerede PCM verisi yok)" -ForegroundColor Yellow
+    }
 } elseif ($hdaHardwareReady) {
     Write-Host "  [OK] Ses Denetleyicisi (Intel HDA MMIO & DMA Hazir)" -ForegroundColor Green
 } else {
@@ -644,6 +755,58 @@ if ($errOutput) {
     Write-Host "`n[QEMU STDERR Bildirimleri]:" -ForegroundColor DarkYellow
     Write-Host $errOutput -ForegroundColor Gray
 }
+
+# 8. Markdown Test Raporu (surum surecine baglanir)
+$profileName = if ($Minimal) { "minimal" } elseif ($HighEnd) { "high" } else { "default" }
+$stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss") + " UTC"
+$audioReady = $audioFileCreated -and $hdaHardwareReady
+$audioBytes = if (Test-Path $audioWavPath) { (Get-Item $audioWavPath).Length } else { 0 }
+$desktopReady = $reachedDesktop -or ($logOutput -match "\[BOOT\] Masa.st. d.ng.s. ba.lad")
+
+$report = [System.Text.StringBuilder]::new()
+[void]$report.AppendLine("# minOs QEMU Entegrasyon Test Raporu")
+[void]$report.AppendLine("")
+[void]$report.AppendLine("| Alan | Değer |")
+[void]$report.AppendLine("| :--- | :--- |")
+[void]$report.AppendLine("| Zaman | $stamp |")
+[void]$report.AppendLine("| ISO | ``$isoPath`` |")
+[void]$report.AppendLine("| QEMU profili | $profileName |")
+[void]$report.AppendLine("| Bellek / vCPU | ${memMb} MB / $smpCpus |")
+[void]$report.AppendLine("| VGA | $Vga |")
+[void]$report.AppendLine("| USB HID / PS/2 | $(if ($UsbHid) { 'açık' } else { 'kapalı' }) / $(if ($NoPs2) { 'devre dışı' } else { 'açık' }) |")
+[void]$report.AppendLine("| HDA WAV çıktısı | $(if ($audioReady) { "$wavDataBytes bayt PCM / dosya $audioBytes bayt" } else { 'yok' }) |")
+[void]$report.AppendLine("")
+[void]$report.AppendLine("## Kontroller")
+[void]$report.AppendLine("")
+[void]$report.AppendLine("| Kontrol | Durum | Açıklama |")
+[void]$report.AppendLine("| :--- | :---: | :--- |")
+foreach ($check in $checks) {
+    $st = if ($logOutput -match $check.Pattern) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
+    [void]$report.AppendLine("| $($check.Name) | $st | $($check.Description) |")
+}
+$audioStatus = if ($Minimal) { "⏭️ ATLANDI" } elseif ($audioReady) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
+[void]$report.AppendLine("| Gerçek Ses Çıkışı (Intel HDA / WAV) | $audioStatus | 48 kHz DMA akışı ve WAV dosyası |")
+$desktopStatus = if ($desktopReady) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
+[void]$report.AppendLine("| Masaüstü Olay Döngüsü | $desktopStatus | Ana etkileşim döngüsüne giriş |")
+if ($FpsStressTest) {
+    $fpsStatus = if ($fpsStressOk) { "✅ GEÇTİ" } else { "❌ BAŞARISIZ" }
+    $fpsDetail = "açılış=$fpsStressOpened metrik_ornegi=$fpsMetricCount son_fps=$fpsLast min_fps=$fpsMin max_frame_ms=$fpsMaxFrame max_interval_ms=$fpsMaxInterval frames=$fpsMaxFrames"
+    [void]$report.AppendLine("| FPS 3D Stres Testi | $fpsStatus | $fpsDetail |")
+}
+[void]$report.AppendLine("")
+[void]$report.AppendLine("## Sonuç")
+[void]$report.AppendLine("")
+if ($allPassed) {
+    [void]$report.AppendLine("**BAŞARILI** — tüm kontroller geçti.")
+} else {
+    [void]$report.AppendLine("**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.")
+}
+[void]$report.AppendLine("")
+[void]$report.AppendLine("> Bu rapor `test_qemu.ps1` tarafından otomatik üretilmiştir.")
+
+$reportPath = Join-Path $repoRoot "test-report.md"
+Set-Content -LiteralPath $reportPath -Value $report.ToString() -Encoding UTF8
+Write-Host "`n[RAPOR] Markdown test raporu: $reportPath" -ForegroundColor Cyan
 
 Write-Host "--------------------------------" -ForegroundColor Cyan
 

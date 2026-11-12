@@ -131,12 +131,12 @@ impl MinGuiCompositor {
         None
     }
 
-    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 16]) -> usize {
+    pub fn start_search_matches(&self, english: bool, results: &mut [usize; 32]) -> usize {
         let query = &self.start_search[..self.start_search_len];
         if query.is_empty() {
             return 0;
         }
-        const NAMES: [[&str; 2]; 16] = [
+        const NAMES: [[&str; 2]; 17] = [
             ["Dosya Yöneticisi", "File Manager"],
             ["Sistem Ayarları", "Settings"],
             ["Not Defteri", "Notepad"],
@@ -153,9 +153,10 @@ impl MinGuiCompositor {
             ["Paket Yöneticisi", "Package Manager"],
             ["Kontrol Paneli", "Control Panel"],
             ["Oyunlar", "Games"],
+            ["FPS 3D Oyun", "FPS 3D Game"],
         ];
         // Önce tüm eşleşmeleri (app_id, puan) olarak topla.
-        let mut scored: [(usize, u8); 16] = [(0, 0); 16];
+        let mut scored: [(usize, u8); 32] = [(0, 0); 32];
         let mut count = 0;
         for (app_id, names) in NAMES.iter().enumerate() {
             let localized = Self::start_search_score(names[english as usize].as_bytes(), query);
@@ -398,7 +399,7 @@ impl MinGuiCompositor {
     }
 
     pub fn move_start_search_selection(&mut self, english: bool, down: bool) {
-        let mut results = [0; 16];
+        let mut results = [0; 32];
         let count = self.start_search_matches(english, &mut results);
         if down {
             if count > 0 {
@@ -410,7 +411,7 @@ impl MinGuiCompositor {
     }
 
     pub fn selected_start_search_result(&self, english: bool) -> Option<usize> {
-        let mut results = [0; 16];
+        let mut results = [0; 32];
         let count = self.start_search_matches(english, &mut results);
         (self.selected_start_item < count).then_some(results[self.selected_start_item])
     }
@@ -664,7 +665,7 @@ impl MinGuiCompositor {
         if self.start_search_len == 0 {
             self.render_start_submenu(fb, menu_y, active_g, tb_y, english, mx, my);
         } else {
-            let mut results = [0; 16];
+            let mut results = [0; 32];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) =
                 Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));

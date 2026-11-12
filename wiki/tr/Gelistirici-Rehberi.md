@@ -20,10 +20,10 @@ minos/
 │   │                        # ext4/exFAT biçimlendirme, MBR/GPT bölümleme
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru,
 │   │                        # kaydırma çubuğu ve pano
-│   ├── apps/                # 15 Masaüstü uygulaması
+│   ├── apps/                # 17 Masaüstü uygulaması
 │   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici
 │   └── main.rs              # Çekirdek giriş noktası (_start)
-├── tests/                   # Host birim testleri (210 test)
+├── tests/                   # Host birim testleri (271 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
 ├── docs/                    # Yerel Markdown dokümanları
 ├── wiki/                    # Wiki sayfaları (bu dizin)
@@ -49,13 +49,13 @@ kodlarıyla, sıfır harici bağımlılıkla çalışır; `webpki-roots`, `smolt
 
 ## Birim Testleri (`test_host.ps1`)
 
-Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika, zincir derinliği ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu (`TextBuf`) testlerini içeren 210 birim testi host ortamında yürütülür:
+Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika, zincir derinliği ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu (`TextBuf`) testlerini içeren 271 birim testi host ortamında yürütülür:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test sonuçları: **210 geçti / 0 hata**
+Test sonuçları: **271 geçti / 0 hata**
 
 ---
 
@@ -78,10 +78,10 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 150 dosya |
-| **Toplam Kod Satırı** | ~129.179 satır |
+| **Toplam Rust Kaynak Dosyası** | 179 dosya |
+| **Toplam Kod Satırı** | ~134.929 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri** | 228 test (0 hata, %100 başarılı) |
-| **Yerleşik Uygulama** | 15 masaüstü uygulaması + Pencere Yöneticisi |
+| **Birim Testleri** | 271 test (0 hata, %100 başarılı) |
+| **Yerleşik Uygulama** | 17 masaüstü uygulaması + Pencere Yöneticisi |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |

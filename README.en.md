@@ -6,12 +6,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-261-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-271-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-131%2C550%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-134%2C929%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![GitHub Release](https://img.shields.io/badge/Release-v2.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -27,6 +27,12 @@
 - **🖼️ Tile Image on Desktop:** Image Viewer can apply PNG/JPEG/GIF/BMP images as tiled desktop wallpapers.
 - **🌄 New Desktop Images:** Settings now includes `desktop1.png`, `desktop2.png`, and `desktop3.png` wallpaper choices.
 - **📁 ISO Sample Media:** Sample PNG/JPEG/BMP and WAV files are packaged under `/root/Media` in the ISO and are available at `/media/cdrom/root/Media` when booted from CD.
+
+- **🛡️ Watchdog Independent of the Main Loop:** Frozen-app detection now runs in the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context only performs atomic state updates inside a short `try_lock`-guarded critical section, and termination is deferred to the main loop via `drain_frozen()`. Even if the render/event loop fully stalls, the watchdog still detects the freeze; the `guard` context ensures only the stuck app is flagged — healthy windows are never terminated by mistake.
+- **🎮 Real FPS 3D Performance Metrics:** `FPS 3D Game` (app ID 16) now produces real measurements from completed frames: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` serial output plus live/minimum FPS and frame time on the HUD. Launch is verified via the `[FPS3D] Uygulama açıldı` marker; the old fixed 60-tick assumption was removed.
+- **🧪 FPS 3D Stress Test Automation:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game through the Start menu via QMP and verifies QEMU stays alive while positive FPS/min-FPS metrics are reported during 10/30/60-minute stress runs.
+- **🖼️ Partial-Frame Protection on Budget Expiry:** When `RENDER_BUDGET_MS` is exceeded, a half-drawn framebuffer no longer reaches the screen; the FPS 3D content region is copied to a static backup and restored if the render cannot complete (`copy/restore_clip_region`).
+- **⏱️ Deterministic TimeBudget Tests:** `TimeBudget` gained an injectable test clock; time progression, exact-boundary expiry, zero budget, backward-clock saturation, `reset()` and `OperationGuard` cancel/budget behavior are covered by host tests (271 host tests passing).
 
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** The browser's `https://` connections can now complete the TLS 1.3 handshake end-to-end and process the encrypted HTTP response. Three critical fixes were made in line with RFC 8446:
   - **AAD length (§5.2):** The Additional Authenticated Data of encrypted records is now computed as exactly 5 bytes (content type + version + length); the previous 11-byte length caused a GCM tag mismatch.

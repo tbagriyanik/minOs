@@ -1,6 +1,6 @@
-# Yerleşik 15 Uygulama
+# Yerleşik 17 Uygulama
 
-minOs, tam teşekküllü bir masaüstü deneyimi sunan **15 adet yerleşik uygulama** ve pencere yöneticisi içerir.
+minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygulama** ve pencere yöneticisi içerir.
 
 | Uygulama | Açıklama |
 | :--- | :--- |
@@ -83,5 +83,7 @@ minOs, tarayıcı `<script>` blokları için kullanılan minimal bir istemci tar
 | **⌨️ Komut İstemi (MinShell)** | UNIX/DOS benzeri etkileşimli kabuk: dosya/klasör yönetimi, bellek durumu, ağ teşhisi, `curl` ile HTTP indirme, `format` ile disk biçimlendirme (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab tamamlama ve komut geçmişi. |
 | **💽 Tek Tıkla Kur (Kurulum Sihirbazı)** | Adımlı kurulum penceresi: **1)** hedef disk seçimi (ATA sabit disk / QCOW2), **2)** `Biçimlendir (FAT32)` butonu ile diski biçimlendirme ve **3)** `Tek Tıkla Kur` ile kalıcı kurulum. Kurulum; `MINOS.SYS` işaret dosyasını, `BENIOKU.TXT`, mevcut `settings.cfg` ayarlarını ve VFS ağacının tamamını (`VFS.DAT` anlık görüntüsü) diske yazar. |
 | **🧊 3D Gösterici** | Küp, silindir, küre ve piramit mesh'lerini dolgulu gölgelendirme veya tel kafes modunda gösterir; sürükleyerek döndürme, yakınlaştırma, otomatik döndürme ve `.3d` dosyalarından şekil/metin yükleme. Arka-yüz eleme ve uzaktan-yakına ressam sıralaması ile doğru katı cisim görünümü. |
+| **🎮 FPS Oyunu** | Raycasting tabanlı 3D motor; fare ile bakış, WASD hareket, gölgelendirme, düşman hedefleri, radar ve ses efektleri. |
+| **🎯 FPS 3D Oyun** | Gerçek performans ölçümlü FPS uygulaması (app ID 16): tamamlanan karelerden `fps`/`min_fps`/`frame_ms`/`interval_ms` metrikleri (`[FPS3D-METRICS]`), HUD'da canlı ve minimum FPS, bütçe aşımında kısmi karenin geri yüklenmesi. `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres testi. |
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.

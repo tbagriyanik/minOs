@@ -4,9 +4,9 @@
 //! bir "son etkinlik zamanı" tutar ve bu zaman `WATCHDOG_TIMEOUT_MS`'ı aştığında
 //! uygulamayı donmuş olarak işaretler ve sonlandırır.
 //!
-//! Watchdog, `main.rs` ana döngüsünde `timer_tick_fired` olduğunda çağrılan
-//! `watchdog_tick()` ile ilerler. AP (uygulama işlemci) kalp atışları ve
-//! render/render etkinlikleri de izlenebilir.
+//! Watchdog, APIC zamanlayıcı kesmesinde `timer_tick()` ile ilerler; yalnızca
+//! atomik/kısa kritik bölümlerde durum günceller ve donmuş adayları kuyruğa
+//! alır. Sonlandırma ve GUI mutasyonu ana döngüde `drain_frozen()` ile yapılır.
 //!
 //! no_std + alloc ortamında çalışır.
 
@@ -40,6 +40,8 @@ pub fn reset_clock_for_test() {
         CLOCK_FN = || 0;
     }
 }
+
+use crate::arch::x86_64::sync::SpinMutex;
 
 /// Varsayılan watchdog zaman aşımı: 5 saniye.
 pub const WATCHDOG_TIMEOUT_MS: u64 = 5_000;
@@ -82,12 +84,12 @@ pub struct Watchdog {
 
 impl Watchdog {
     /// Varsayılan zaman aşımıyla yeni bir watchdog oluşturur.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self::with_timeout(WATCHDOG_TIMEOUT_MS)
     }
 
     /// Özel zaman aşımıyla yeni bir watchdog oluşturur.
-    pub fn with_timeout(timeout_ms: u64) -> Self {
+    pub const fn with_timeout(timeout_ms: u64) -> Self {
         Self {
             timeout_ms,
             windows: [WatchedWindow {
@@ -99,7 +101,7 @@ impl Watchdog {
             }; MAX_WATCHED_WINDOWS],
             watch_count: 0,
             total_terminations: 0,
-            last_tick_ms: now_ms(),
+            last_tick_ms: 0,
         }
     }
 
@@ -259,6 +261,72 @@ impl Default for Watchdog {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// APIC zamanlayıcı bağlamında çalışan watchdog ve ertelenmiş dondurma kuyruğu.
+/// Kesme işleyicisi yalnızca kısa kritik bölümlerde `try_lock` kullanır; ana
+/// döngü kilidi tutuyorsa o tik atlanır, deadlock oluşmaz.
+struct SharedWatchdog {
+    watchdog: Watchdog,
+    pending: heapless::Vec<FrozenWindow, 16>,
+}
+
+impl SharedWatchdog {
+    const fn new() -> Self {
+        Self {
+            watchdog: Watchdog::with_timeout(WATCHDOG_TIMEOUT_MS),
+            pending: heapless::Vec::new(),
+        }
+    }
+}
+
+static SHARED: SpinMutex<SharedWatchdog> = SpinMutex::new(SharedWatchdog::new());
+
+/// Açık bir pencere için etkinlik bildirir (ana döngü bağlamı).
+pub fn heartbeat(idx: usize, app_id: usize) {
+    let now_ms = now_ms();
+    let mut shared = SHARED.lock();
+    shared.watchdog.heartbeat(idx, app_id, now_ms);
+}
+
+/// Pencereyi izleme dışı bırakır (kapatma/sonlandırma yollarında çağrılır).
+pub fn unwatch(idx: usize) {
+    let mut shared = SHARED.lock();
+    shared.watchdog.unwatch(idx);
+}
+
+/// Dondurma olayını kuyruktan temizler (terminate_app sonrası çağrılır).
+pub fn clear_frozen(idx: usize) {
+    let mut shared = SHARED.lock();
+    shared.watchdog.clear_frozen(idx);
+}
+
+/// APIC timer interrupt'ından çağrılır. Donanım kesmesi bağlamında çalışır;
+/// burada yalnızca durum güncellenir ve donmuş pencereler kuyruğa alınır.
+/// Sonlandırma kararı ve GUI durumu değişikliği ana döngüye aittir.
+pub fn timer_tick() {
+    let Some(mut shared) = SHARED.try_lock() else {
+        return;
+    };
+    let now_ms = now_ms();
+    let (cur_app, cur_win, _) = crate::apps::guard::current_context();
+    let frozen = shared.watchdog.tick(now_ms, |idx, app_id, _idle_ms| {
+        // Yalnızca o anda korunan uygulama bağlamı dondurma adayı olabilir.
+        // Bu, ana döngü bir uygulamanın çiziminde takıldığında diğer sağlıklı
+        // pencerelerin de yanlışlıkla sonlandırılmasını engeller.
+        cur_app != crate::apps::guard::NO_APP
+            && app_id == cur_app
+            && (cur_win == crate::apps::guard::NO_WINDOW || cur_win == idx)
+    });
+    for fw in frozen {
+        let _ = shared.pending.push(fw);
+    }
+}
+
+/// Ana döngünün işlemesi gereken bekleyen dondurma olaylarını boşaltır.
+pub fn drain_frozen() -> heapless::Vec<FrozenWindow, 16> {
+    let mut shared = SHARED.lock();
+    core::mem::replace(&mut shared.pending, heapless::Vec::new())
 }
 
 #[cfg(test)]

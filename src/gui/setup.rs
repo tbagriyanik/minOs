@@ -32,6 +32,30 @@ pub fn init_apps(
 ) -> (AppInstances, gui::MinGuiCompositor) {
     let mut compositor = gui::MinGuiCompositor::new();
 
+    // Yerleşik uygulamaları kayıt defterine ekle; `/bin` taraması
+    // `sync_installed_apps` içinde harici/hot-load girdilerini ekler.
+    for (id, name) in [
+        (0u32, "Dosyalar"),
+        (1, "Ayarlar"),
+        (2, "Notlar"),
+        (3, "Web"),
+        (4, "Resim"),
+        (5, "Muzik"),
+        (6, "Video"),
+        (7, "Gorevler"),
+        (8, "Hesap"),
+        (9, "cizim"),
+        (10, "Komut"),
+        (11, "Kurulum"),
+        (12, "3D"),
+        (13, "Paketler"),
+        (14, "Kontrol"),
+        (15, "Oyun"),
+        (16, "FPS3D"),
+    ] {
+        compositor.app_registry.register_builtin(id, name);
+    }
+
     let mut filemanager_app = apps::filemanager::FileManagerApp::new();
     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 

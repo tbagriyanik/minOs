@@ -523,6 +523,66 @@ impl Framebuffer {
         }
     }
 
+    /// Aktif kırpma bölgesini sıkıştırılmış (packed) ham arabelleğe kopyalar.
+    /// Her satır yalnızca bölge genişliği kadar piksel içerir.
+    pub unsafe fn copy_clip_region_to_packed(
+        &self,
+        dst: *mut u32,
+        max_len: usize,
+        region: ClipRect,
+    ) {
+        let w = region.x1.saturating_sub(region.x0);
+        let h = region.y1.saturating_sub(region.y0);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let stride = self.width;
+        for row in 0..h {
+            let out_off = row.saturating_mul(w);
+            if out_off >= max_len {
+                break;
+            }
+            let copy_w = w.min(max_len.saturating_sub(out_off));
+            let y = region.y0.saturating_add(row);
+            let src_off = y.saturating_mul(stride).saturating_add(region.x0);
+            if src_off >= BACKBUFFER_LEN {
+                continue;
+            }
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    (core::ptr::addr_of!(BACKBUFFER) as *const u32).add(src_off),
+                    dst.add(out_off),
+                    copy_w,
+                );
+            }
+        }
+    }
+
+    /// Sıkıştırılmış yedekten `region` alanını backbuffer'a geri yükler.
+    pub unsafe fn restore_clip_region_from_packed(&mut self, src: *const u32, region: ClipRect) {
+        let w = region.x1.saturating_sub(region.x0);
+        let h = region.y1.saturating_sub(region.y0);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let stride = self.width;
+        for row in 0..h {
+            let y = region.y0.saturating_add(row);
+            let dst_off = y.saturating_mul(stride).saturating_add(region.x0);
+            if dst_off >= BACKBUFFER_LEN {
+                continue;
+            }
+            let copy_w = w.min(BACKBUFFER_LEN.saturating_sub(dst_off));
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    src.add(row.saturating_mul(w)),
+                    (core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32).add(dst_off),
+                    copy_w,
+                );
+            }
+        }
+    }
+
     /// Aktif kırpma bölgesi.
     #[inline(always)]
     pub fn clip(&self) -> ClipRect {

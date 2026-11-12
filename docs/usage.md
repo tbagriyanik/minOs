@@ -136,7 +136,7 @@ minos/
 │   │                        #   klavye/fare sürücüsü (usb_hid.rs)
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru (theme.rs),
 │   │                        #   kaydırma çubuğu ve pano (clipboard)
-│   ├── apps/                # 15 Masaüstü uygulaması (Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
+│   ├── apps/                # 17 Masaüstü uygulaması (Web Tarayıcısı, Not Defteri, Dosya Yöneticisi, Paket Yöneticisi, Görev Yöneticisi, 3D Gösterici...)
 │   ├── desktop/             # Masaüstü oturumu (session.rs: DesktopState kurulumu + ana olay döngüsü) ve yardımcılar
 │   ├── mm/                  # Fiziksel bellek yöneticisi (PMM), süreç tablosu ve ELF yükleyici
 │   ├── fs/                  # Sanal dosya sistemi (vfs.rs) + disk okuyucuları (diskfs.rs: FAT32 + ISO9660),
@@ -160,12 +160,12 @@ minos/
 > Son güncelleme: 09 Kasım 2026 (v2.3.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 147 dosya (`src/**/*.rs` + `tests/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | ~89.992 satır (`src/**/*.rs` + `tests/**/*.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 187 dosya (`src/**/*.rs` + `tests/**/*.rs`) |
+| **Toplam Kod Satırı (ham)** | ~137.647 satır (`src/**/*.rs` + `tests/**/*.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri (`test_host.ps1`)** | 190 test (0 hata, %100 başarılı) |
-| **Yerleşik Uygulama Sayısı** | 15 masaüstü uygulaması + Pencere Yöneticisi |
+| **Birim Testleri (`test_host.ps1`)** | 271 test (0 hata, %100 başarılı) |
+| **Yerleşik Uygulama Sayısı** | 17 masaüstü uygulaması + Pencere Yöneticisi |
 | **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 
 ---

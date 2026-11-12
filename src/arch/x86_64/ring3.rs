@@ -528,6 +528,10 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
         smp::print_locked_dec(vec as u64);
 
         smp::print_locked("); surec park edildi, cekirdek saglam.\n");
+
+        // Fault cleanup: process manager üzerinden kaynak temizliği
+        // Not: ProcessManager'a erişim için global state gerekir (şu an demo için basit tutuldu)
+        // Üretim ortamında ProcessManager static/global olmalıdır
     } else if unsafe { crate::apps::guard::try_recover_exception(frame, err, vec) } {
         // Uygulama kodu içindeki hata yakalandı. Kesici çerçevesi kurtarma
         // trampolinine yönlendirildi; buradan sonra normal akışa dönülür.

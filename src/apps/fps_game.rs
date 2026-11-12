@@ -234,9 +234,15 @@ pub struct FpsGameApp {
     door_count: usize,
 
     // Zamanlayıcılar / FPS
-    pub frame_count: usize,
-    pub last_fps_tick: usize,
     pub fps: usize,
+    pub min_fps: usize,
+    pub frame_time_ms: u64,
+    pub frame_interval_ms: u64,
+    pub rendered_frames: u64,
+    last_completed_frame_ms: u64,
+    metrics_window_start_ms: u64,
+    metrics_window_frames: u64,
+    metrics_window_max_interval_ms: u64,
 
     // Ses durumu
     pub last_shot_tick: usize,
@@ -335,9 +341,15 @@ impl FpsGameApp {
             pickup_count: pcount,
             doors,
             door_count: dcount,
-            frame_count: 0,
-            last_fps_tick: 0,
             fps: 0,
+            min_fps: 0,
+            frame_time_ms: 0,
+            frame_interval_ms: 0,
+            rendered_frames: 0,
+            last_completed_frame_ms: 0,
+            metrics_window_start_ms: 0,
+            metrics_window_frames: 0,
+            metrics_window_max_interval_ms: 0,
             last_shot_tick: 0,
             last_step_tick: 0,
             moving: false,
@@ -612,15 +624,60 @@ impl FpsGameApp {
         audio_dev.set_pc_speaker_tone(0);
     }
 
-    /// FPS sayacını güncelle.
-    pub fn tick_fps(&mut self, tick: usize) {
-        self.frame_count += 1;
-        if tick.saturating_sub(self.last_fps_tick) >= 60 {
-            // Yaklaşık saniyede bir (60 tick varsayımıyla).
-            self.fps = self.frame_count.saturating_sub(self.last_fps_tick);
-            self.last_fps_tick = tick;
-            self.frame_count = 0;
+    /// Tamamlanan bir içerik karesini gerçek zaman ölçümleriyle kaydeder.
+    /// `render_ms` uygulama içeriğinin çizim süresidir; FPS ve frame-time
+    /// penceresi tamamlanan karelerin `monotonic_ms` damgalarından hesaplanır.
+    /// İlk 30 kare ısınma (warm-up) sayılmaz.
+    pub fn record_completed_frame(&mut self, render_ms: u64) {
+        const WARMUP_FRAMES: u64 = 30;
+        const WINDOW_MS: u64 = 1000;
+
+        let now = crate::monotonic_ms();
+        self.frame_time_ms = render_ms;
+        if self.last_completed_frame_ms != 0 {
+            self.frame_interval_ms = now.saturating_sub(self.last_completed_frame_ms);
         }
+        self.last_completed_frame_ms = now;
+        self.rendered_frames = self.rendered_frames.saturating_add(1);
+        if self.rendered_frames <= WARMUP_FRAMES {
+            return;
+        }
+        if self.metrics_window_start_ms == 0 {
+            self.metrics_window_start_ms = now;
+            self.metrics_window_frames = 0;
+            self.metrics_window_max_interval_ms = 0;
+        }
+        self.metrics_window_frames = self.metrics_window_frames.saturating_add(1);
+        self.metrics_window_max_interval_ms = self
+            .metrics_window_max_interval_ms
+            .max(self.frame_interval_ms);
+        let elapsed = now.saturating_sub(self.metrics_window_start_ms);
+        if elapsed < WINDOW_MS {
+            return;
+        }
+        let window_fps = self.metrics_window_frames.max(1).saturating_mul(1000) / elapsed;
+        self.fps = window_fps.min(u64::from(u32::MAX)) as usize;
+        self.min_fps = if self.min_fps == 0 {
+            self.fps
+        } else {
+            self.min_fps.min(self.fps)
+        };
+        crate::boot::console::serial_print("[FPS3D-METRICS] fps=");
+        crate::boot::console::serial_print_dec(window_fps);
+        crate::boot::console::serial_print(" min_fps=");
+        crate::boot::console::serial_print_dec(self.min_fps as u64);
+        crate::boot::console::serial_print(" frame_ms=");
+        crate::boot::console::serial_print_dec(render_ms);
+        crate::boot::console::serial_print(" interval_ms=");
+        crate::boot::console::serial_print_dec(self.frame_interval_ms);
+        crate::boot::console::serial_print(" max_interval_ms=");
+        crate::boot::console::serial_print_dec(self.metrics_window_max_interval_ms);
+        crate::boot::console::serial_print(" frames=");
+        crate::boot::console::serial_print_dec(self.rendered_frames);
+        crate::boot::console::serial_print("\n");
+        self.metrics_window_start_ms = now;
+        self.metrics_window_frames = 0;
+        self.metrics_window_max_interval_ms = 0;
     }
 
     /// 3D sahneyi çizer (raycasting). `budget_ms` ile render süresi sınırlanır;
@@ -1289,10 +1346,15 @@ impl FpsGameApp {
             Color::ACCENT_YELLOW,
         );
 
-        // FPS.
+        // FPS / minimum FPS / kare süresi.
         let mut fps_text = crate::gui::TextBuf::new();
         fps_text.push_str(crate::gui::ui_text("FPS: ", "FPS: "));
-        fps_text.push_u2(self.fps as u32);
+        fps_text.push_usize(self.fps);
+        fps_text.push_str(crate::gui::ui_text(" (min ", " (min "));
+        fps_text.push_usize(self.min_fps);
+        fps_text.push_str(") ");
+        fps_text.push_usize(self.frame_time_ms as usize);
+        fps_text.push_str("ms");
         MinGuiCompositor::draw_string(
             fb,
             win_x + 220,
@@ -1792,7 +1854,7 @@ impl FpsGameApp {
 
         if !cancelled {
             if self.health == 0 {
-                crate::serial_print("[FPS-GAME] Oyun sonu: Can tükendi (Lost)\n");
+                crate::boot::console::serial_print("[FPS-GAME] Oyun sonu: Can tükendi (Lost)\n");
                 self.result = GameResult::Lost;
             } else if self
                 .enemies
@@ -1800,7 +1862,9 @@ impl FpsGameApp {
                 .take(self.enemy_count)
                 .all(|enemy| !enemy.alive)
             {
-                crate::serial_print("[FPS-GAME] Oyun sonu: Tüm düşmanler vuruldu (Won)\n");
+                crate::boot::console::serial_print(
+                    "[FPS-GAME] Oyun sonu: Tüm düşmanler vuruldu (Won)\n",
+                );
                 self.result = GameResult::Won;
             }
         }

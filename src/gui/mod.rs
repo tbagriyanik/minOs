@@ -171,6 +171,8 @@ pub struct MinGuiCompositor {
     pub installed_apps: [[u8; 24]; 8],
     pub installed_apps_len: [u8; 8],
     pub installed_apps_count: usize,
+    /// Yerleşik ve `/bin` üzerinden keşfedilen uygulamaların kayıt defteri.
+    pub app_registry: crate::apps::registry::AppRegistry,
     alt_tab_order: [usize; MAX_WINDOWS],
     alt_tab_count: usize,
     alt_tab_selection: usize,
@@ -212,6 +214,7 @@ impl MinGuiCompositor {
             installed_apps: [[0; 24]; 8],
             installed_apps_len: [0; 8],
             installed_apps_count: 0,
+            app_registry: crate::apps::registry::AppRegistry::new(),
             alt_tab_order: [0; MAX_WINDOWS],
             alt_tab_count: 0,
             alt_tab_selection: 0,
@@ -596,6 +599,8 @@ impl MinGuiCompositor {
     }
 
     pub fn sync_installed_apps(&mut self, vfs: &crate::fs::vfs::VirtualFileSystem) {
+        // `/bin` içeriğini uygulama kayıt defterine de yansıt (hot-load keşfi).
+        self.app_registry.scan_bin(vfs);
         let items = vfs.list_dir("/bin");
         let mut count = 0;
         for it in items {

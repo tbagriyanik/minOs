@@ -14,7 +14,7 @@ minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system
 | [About & Architecture](About-Architecture) | Design philosophy, `no_std` model, PMM and IDT structure |
 | [Installation and Running](Installation-and-Running) | `run.ps1` options, Live USB creation, disk installation |
 | [Supported Hardware List](Supported-Hardware) | Driver matrix, network, graphics, storage, input devices |
-| [15 Built-in Applications](Built-in-Applications) | Web Browser, Notepad, File Manager, etc. |
+| [17 Built-in Applications](Built-in-Applications) | Web Browser, Notepad, File Manager, etc. |
 | [Network and Internet](Network-and-Internet) | TCP/IP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS), HTTP/2 infrastructure |
 | [File Systems](File-Systems) | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 | [User Guide](User-Guide) | Desktop shortcuts, MinShell commands |
@@ -28,10 +28,10 @@ minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Lines of Code** | ~116,264 lines (Rust) |
-| **Unit Tests** | 234 passed / 0 failed |
+| **Total Lines of Code** | ~134,929 lines (Rust) |
+| **Unit Tests** | 271 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
-| **Built-in Applications** | 15 desktop applications |
+| **Built-in Applications** | 17 desktop applications |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
 
 ---
@@ -50,3 +50,5 @@ minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system
 - **Wi-Fi (802.11):** 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake and PCI/USB interface detection.
 - **EC Fan Profiles:** `fan_temp.rs` EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching.
 - **Display Settings:** PNG wallpaper thumbnails are pre-decoded during boot; hourglass cursor shown during long operations.
+- **Watchdog:** Frozen-app detection runs independently in the APIC timer interrupt; termination is deferred to the main loop via `drain_frozen()` and only the stuck app is flagged.
+- **FPS 3D Performance Metrics:** FPS 3D Game measures real `fps`/`min_fps`/`frame_ms` from completed frames (`[FPS3D-METRICS]`); partial frames are rolled back on budget expiry. `test_qemu.ps1 -FpsStressTest` runs 10/30/60-minute stress validation.

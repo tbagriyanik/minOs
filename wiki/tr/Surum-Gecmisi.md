@@ -8,6 +8,11 @@ minOs sürüm notları ve gelecek planları.
 
 ### Yenilikler
 
+- **🛡️ Watchdog Artık Ana Döngüden Bağımsız:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde (`watchdog::timer_tick()`) çalışır; kesme bağlamında yalnızca `try_lock` korumalı kısa kritik bölümde durum güncellenir, sonlandırma ana döngüde `drain_frozen()` ile ertelenir. `guard` bağlamı sayesinde yalnızca takılan uygulama işaretlenir.
+- **🎮 FPS 3D Gerçek Performans Metrikleri:** `FPS 3D Oyun` (app ID 16) tamamlanan karelerden gerçek ölçüm üretir: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` seri çıktısı ve HUD'da anlık/minimum FPS + kare süresi. Açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
+- **🧪 FPS 3D Stres Testi Otomasyonu:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu Başlat menüsünden açar; 10/30/60 dakikalık koşularda QEMU canlılığı ve pozitif FPS/min-FPS metrikleri doğrulanır.
+- **🖼️ Bütçe Aşımında Kısmi Kare Koruması:** `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp render tamamlanamazsa geri yüklenir.
+- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır (271 test).
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlıyor. RFC 8446'ya uygun üç düzeltme: AAD uzunluğu 5 bayt (§5.2), `finished_key` doğrudan `server/client_hs_traffic_secret` üzerinden türetiliyor (§4.4.4), `close_notify` artık fatal hata değil (§6.1).
 - **🌐 Tarayıcı Geliştirmeleri (Önbellek ve Görselleştirme):** VFS tabanlı önbellek (`/browser/cache/`); CSS `transform`, `transition`/`animation`, `flexbox`/`grid`, gölgeler, border-radius, opacity desteği; `imgdecode` iyileştirmeleri ve SVG temsili.
 - **🌍 Progresif JPEG & @font-face Desteği:** Çok taramalı progresif JPEG (SOF2) çözümlemesi; CSS `@font-face` ve `@keyframes` (`color`/`background-color` interpolasyonu).

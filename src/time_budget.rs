@@ -186,9 +186,38 @@ impl core::fmt::Display for BudgetExceeded {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    static TEST_NOW: AtomicU64 = AtomicU64::new(0);
+    static TEST_LOCK: AtomicBool = AtomicBool::new(false);
+
+    fn test_clock() -> u64 {
+        TEST_NOW.load(Ordering::Relaxed)
+    }
+
+    struct TestClockGuard;
+
+    impl Drop for TestClockGuard {
+        fn drop(&mut self) {
+            TEST_LOCK.store(false, Ordering::Release);
+        }
+    }
+
+    fn acquire_test_clock() -> TestClockGuard {
+        while TEST_LOCK
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        TEST_NOW.store(0, Ordering::Relaxed);
+        set_clock_for_test(test_clock);
+        TestClockGuard
+    }
 
     #[test]
     fn test_budget_not_expired_immediately() {
+        let _guard = acquire_test_clock();
         let b = TimeBudget::new(1000);
         assert!(!b.is_expired());
         assert!(b.is_active());
@@ -197,6 +226,7 @@ mod tests {
 
     #[test]
     fn test_token_cancel() {
+        let _guard = acquire_test_clock();
         let mut t = CancellationToken::new();
         assert!(!t.is_cancelled());
         t.cancel();
@@ -206,9 +236,85 @@ mod tests {
 
     #[test]
     fn test_guard_should_stop_on_cancel() {
+        let _guard = acquire_test_clock();
         let mut g = OperationGuard::new(1000);
         assert!(!g.should_stop());
         g.cancel();
         assert!(g.should_stop());
+    }
+
+    #[test]
+    fn time_progression_and_timeout() {
+        let _guard = acquire_test_clock();
+        let mut b = TimeBudget::new(100);
+
+        assert_eq!(b.elapsed_ms(), 0);
+        assert_eq!(b.remaining_ms(), 100);
+        assert!(b.is_active());
+        assert!(!b.is_expired());
+
+        TEST_NOW.store(40, Ordering::Relaxed);
+        assert_eq!(b.elapsed_ms(), 40);
+        assert_eq!(b.remaining_ms(), 60);
+        assert!(b.is_active());
+
+        TEST_NOW.store(99, Ordering::Relaxed);
+        assert_eq!(b.remaining_ms(), 1);
+        assert!(!b.is_expired());
+
+        TEST_NOW.store(100, Ordering::Relaxed);
+        assert!(b.is_expired());
+        assert!(!b.is_active());
+        assert_eq!(b.remaining_ms(), 0);
+
+        TEST_NOW.store(250, Ordering::Relaxed);
+        assert_eq!(b.elapsed_ms(), 250);
+        assert_eq!(b.remaining_ms(), 0);
+        assert!(b.is_expired());
+
+        b.reset();
+        TEST_NOW.store(260, Ordering::Relaxed);
+        assert_eq!(b.elapsed_ms(), 10);
+        assert_eq!(b.remaining_ms(), 90);
+        assert!(b.is_active());
+        assert!(!b.is_expired());
+    }
+
+    #[test]
+    fn zero_budget_expires_immediately() {
+        let _guard = acquire_test_clock();
+        let b = TimeBudget::new(0);
+        assert!(b.is_expired());
+        assert!(!b.is_active());
+        assert_eq!(b.remaining_ms(), 0);
+        assert_eq!(b.elapsed_ms(), 0);
+    }
+
+    #[test]
+    fn backward_clock_saturates_elapsed() {
+        let _guard = acquire_test_clock();
+        TEST_NOW.store(1_000, Ordering::Relaxed);
+        let b = TimeBudget::new(100);
+        TEST_NOW.store(500, Ordering::Relaxed);
+        assert_eq!(b.elapsed_ms(), 0);
+        assert_eq!(b.remaining_ms(), 100);
+        assert!(b.is_active());
+
+        TEST_NOW.store(1_050, Ordering::Relaxed);
+        assert_eq!(b.elapsed_ms(), 50);
+        assert_eq!(b.remaining_ms(), 50);
+    }
+
+    #[test]
+    fn guard_stops_on_budget_expiry() {
+        let _guard = acquire_test_clock();
+        let g = OperationGuard::new(50);
+        TEST_NOW.store(40, Ordering::Relaxed);
+        assert!(!g.should_stop());
+        assert!(g.check_budget().is_ok());
+
+        TEST_NOW.store(50, Ordering::Relaxed);
+        assert!(g.should_stop());
+        assert!(g.check_budget().is_err());
     }
 }

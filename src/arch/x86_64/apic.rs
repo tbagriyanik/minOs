@@ -49,6 +49,7 @@ pub fn send_eoi() {
 pub extern "C" fn apic_timer_handler_rust() {
     SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::scheduler_tick();
+    crate::watchdog::timer_tick();
     send_eoi();
 }
 

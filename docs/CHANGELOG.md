@@ -5,6 +5,11 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 
 ## Güncel
 
+- Watchdog donmuş uygulama tespiti APIC zamanlayıcı kesmesine taşındı (`watchdog::timer_tick()`); kesme bağlamında `try_lock` korumalı kısa kritik bölüm çalışır, sonlandırma ana döngüde `drain_frozen()` ile ertelenir.
+- FPS 3D Oyun (app ID 16) tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` metrikleri üretir (`[FPS3D-METRICS]`); açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
+- `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu açar ve 10/30/60 dakikalık stres koşularında QEMU canlılığı ile pozitif metrikleri doğrular.
+- `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
+- `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi; host test sayısı 271.
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

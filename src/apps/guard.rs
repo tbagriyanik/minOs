@@ -236,7 +236,7 @@ fn set_context_inner(app_id: usize, window_idx: usize, recoverable: bool) {
     }
 }
 
-fn current_context() -> (usize, usize, bool) {
+pub fn current_context() -> (usize, usize, bool) {
     if ACTIVE_GUARDS.load(Ordering::Acquire) == 0 {
         return (NO_APP, NO_WINDOW, false);
     }

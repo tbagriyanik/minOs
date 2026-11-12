@@ -13,6 +13,7 @@
 
 #[macro_use]
 extern crate alloc;
+extern crate heapless;
 
 #[path = "../src/drivers/crypto/mod.rs"]
 pub mod crypto;
@@ -105,6 +106,10 @@ pub mod boot {
             // that can occur with QEMU when using specific calendar dates.
             1704067200000
         }
+
+        pub fn monotonic_ms() -> u64 {
+            main_monotonic_ms()
+        }
     }
     pub mod limine {
         pub fn is_canonical_ptr<T>(ptr: *const T) -> bool {
@@ -131,8 +136,26 @@ pub mod boot {
     }
 }
 
+// Watchdog kesme-bağımsız denetimde uygulama bağlamını okur; host testinde
+// her zaman masaüstü/uygulama-dışı bağlam döndürülür.
+pub mod apps {
+    pub mod guard {
+        pub const NO_APP: usize = usize::MAX;
+        pub const NO_WINDOW: usize = usize::MAX;
+        pub fn current_context() -> (usize, usize, bool) {
+            (NO_APP, NO_WINDOW, false)
+        }
+    }
+}
+
 #[path = "../src/drivers/tls.rs"]
 pub mod tls;
+
+#[path = "../src/time_budget.rs"]
+pub mod time_budget;
+
+#[path = "../src/watchdog.rs"]
+pub mod watchdog;
 
 // Host test icin rastgelelik stub'i: Gercek donanim RDRAND/RDSEED yok,
 // bu yuzde basit bir xorshift PRNG kullanilir.
@@ -283,6 +306,9 @@ pub mod arch {
                 }
                 pub fn lock(&self) -> SpinGuard<'_, T> {
                     SpinGuard { lock: self }
+                }
+                pub fn try_lock(&self) -> Option<SpinGuard<'_, T>> {
+                    Some(SpinGuard { lock: self })
                 }
             }
 

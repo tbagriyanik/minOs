@@ -84,7 +84,7 @@ impl AddressSpace {
 
     /// Fiziksel bir sayfa tablosu adresini HHDM üzerinden erişilebilir işaretçiye çevirir.
     #[inline(always)]
-    fn table_ptr(phys: u64) -> *mut PageTable {
+    pub fn table_ptr(phys: u64) -> *mut PageTable {
         phys_to_virt(phys) as *mut PageTable
     }
 
@@ -251,6 +251,32 @@ impl AddressSpace {
 
             Some((entry & 0x000F_FFFF_FFFF_F000) + page_offset)
         }
+    }
+
+    /// Mevcut kernel adres uzayından kernel mapping'leri bu adres uzayına kopyalar.
+    /// Bu, kullanıcı süreçlerinin syscall sonrası kernel'e güvenle dönmesi için gereklidir.
+    /// Kernel mapping'ler PML4'in üst yarısında (canonical üst uzay, indeks 256-511) bulunur.
+    pub fn clone_kernel_mappings(
+        &mut self,
+        _pmm: &mut PhysicalMemoryManager,
+    ) -> Result<(), &'static str> {
+        let kernel_as = AddressSpace::current();
+
+        unsafe {
+            let src_pml4 = &*Self::table_ptr(kernel_as.pml4_phys);
+            let dst_pml4 = &mut *Self::table_ptr(self.pml4_phys);
+
+            // Kernel mapping'ler PML4 indeks 256-511 aralığında (canonical üst uzay)
+            for i in 256..512 {
+                let entry = src_pml4.entries[i];
+                if (entry & PageFlags::PRESENT) != 0 {
+                    // Kernel girişlerini doğrudan kopyala (USER bayrağı olmamalı)
+                    dst_pml4.entries[i] = entry;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 

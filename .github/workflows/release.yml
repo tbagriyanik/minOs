@@ -54,7 +54,7 @@ jobs:
       - name: Install ISO Creation Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xorriso mtools build-essential git
+          sudo apt-get install -y xorriso mtools build-essential git qemu-system-x86
           # Limine binary utility (for limine bios-install)
           git clone https://github.com/limine-bootloader/limine.git --branch=v8.x-binary --depth=1 /tmp/limine
           make -C /tmp/limine limine
@@ -109,11 +109,32 @@ jobs:
           name: minos-iso
           path: target/release/minos.iso
 
+      - name: Run QEMU Integration Test
+        shell: pwsh
+        continue-on-error: true
+        timeout-minutes: 12
+        run: ./test_qemu.ps1 -TimeoutSeconds 40
+
+      - name: Ensure Test Report Exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path test-report.md)) {
+            "# minOs QEMU Test Raporu`n`nQEMU testi bu ortamda tamamlanamadi veya zaman asimina ugradi." | Set-Content -LiteralPath test-report.md -Encoding UTF8
+          }
+
+      - name: Upload Test Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: test-report.md
+
       - name: Create Tagged Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/minos.iso
+          files: |
+            target/release/minos.iso
+            test-report.md
           name: minOs Release ${{ github.ref_name }}
           body: |
             🐾 **minOs (Cat Edition) Bootable ISO Release**
@@ -134,7 +155,9 @@ jobs:
         with:
           tag_name: latest
           target_commitish: main
-          files: target/release/minos.iso
+          files: |
+            target/release/minos.iso
+            test-report.md
           name: minOs Latest (Rolling Release)
           body: |
             🐾 **minOs (Cat Edition) Latest Automated ISO Build**

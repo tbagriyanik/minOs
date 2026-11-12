@@ -1,5 +1,8 @@
 pub mod acpi_battery;
 pub mod acpi_power;
+pub mod framework;
+
+pub use framework::{Driver, DriverRegistry, DriverState, HotplugEvent};
 pub mod ahci;
 pub mod amdgpu;
 pub mod ata;

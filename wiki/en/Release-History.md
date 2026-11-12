@@ -8,6 +8,11 @@ minOs release notes and future plans.
 
 ### What's New
 
+- **🛡️ Watchdog Independent of the Main Loop:** Frozen-app detection runs in the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context only updates state under a short `try_lock`-guarded section and termination is deferred to the main loop via `drain_frozen()`. The `guard` context flags only the stuck app, so healthy windows are never terminated.
+- **🎮 Real FPS 3D Performance Metrics:** `FPS 3D Game` (app ID 16) measures real metrics from completed frames: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` plus live/minimum FPS and frame time on the HUD. Launch verified via the `[FPS3D] Uygulama açıldı` marker; the fixed 60-tick assumption was removed.
+- **🧪 FPS 3D Stress Test Automation:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game via the Start menu over QMP and validates QEMU liveness plus positive FPS/min-FPS metrics during 10/30/60-minute runs.
+- **🖼️ Partial-Frame Protection on Budget Expiry:** When `RENDER_BUDGET_MS` is exceeded, half-drawn framebuffer content no longer becomes visible; the FPS 3D content region is backed up to a static buffer and restored if the render does not complete.
+- **⏱️ Deterministic TimeBudget Tests:** `TimeBudget` gained an injectable test clock; time progression, exact-boundary expiry, zero budget, backward-clock saturation, `reset()` and `OperationGuard` cancel/budget behavior covered by host tests (271 passing).
 - **🔐 TLS 1.3 HTTPS Handshake Completed:** Browser's `https://` connections now complete the TLS 1.3 handshake end-to-end. Three RFC 8446 fixes: AAD length is exactly 5 bytes (§5.2), `finished_key` derived directly from `server/client_hs_traffic_secret` (§4.4.4), graceful `close_notify` (§6.1).
 - **🌐 Browser Improvements (Caching & Visualization):** VFS-based cache (`/browser/cache/`); CSS `transform`, `transition`/`animation`, `flexbox`/`grid`, shadows, border-radius, opacity; `imgdecode` improvements and SVG support.
 - **🌍 Progressive JPEG & @font-face Support:** Multi-scan progressive JPEG (SOF2) decoding; CSS `@font-face` and `@keyframes` (`color`/`background-color` interpolation).

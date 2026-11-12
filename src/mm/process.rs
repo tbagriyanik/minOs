@@ -68,6 +68,104 @@ pub struct ProcessContext {
     pub cr3: u64,
 }
 
+impl ProcessContext {
+    /// Mevcut CPU bağlamını kaydeder ve bu yapıya doldurur.
+    /// Genellikle interrupt veya syscall sırasında çağrılır.
+    pub unsafe fn save_current() -> Self {
+        let mut ctx = Self::default();
+        core::arch::asm!(
+            "mov {rax}, rax",
+            "mov {rbx}, rbx",
+            "mov {rcx}, rcx",
+            "mov {rdx}, rdx",
+            "mov {rsi}, rsi",
+            "mov {rdi}, rdi",
+            "mov {rbp}, rbp",
+            "mov {rsp}, rsp",
+            "mov {r8}, r8",
+            "mov {r9}, r9",
+            "mov {r10}, r10",
+            "mov {r11}, r11",
+            "mov {r12}, r12",
+            "mov {r13}, r13",
+            "mov {r14}, r14",
+            "mov {r15}, r15",
+            "lea {rip}, [rip + 1]", // Sonraki instruction adresi
+            "pushfq",
+            "pop {rflags}",
+            "mov {cr3}, cr3",
+            rax = out(reg) ctx.rax,
+            rbx = out(reg) ctx.rbx,
+            rcx = out(reg) ctx.rcx,
+            rdx = out(reg) ctx.rdx,
+            rsi = out(reg) ctx.rsi,
+            rdi = out(reg) ctx.rdi,
+            rbp = out(reg) ctx.rbp,
+            rsp = out(reg) ctx.rsp,
+            r8 = out(reg) ctx.r8,
+            r9 = out(reg) ctx.r9,
+            r10 = out(reg) ctx.r10,
+            r11 = out(reg) ctx.r11,
+            r12 = out(reg) ctx.r12,
+            r13 = out(reg) ctx.r13,
+            r14 = out(reg) ctx.r14,
+            r15 = out(reg) ctx.r15,
+            rip = out(reg) ctx.rip,
+            rflags = out(reg) ctx.rflags,
+            cr3 = out(reg) ctx.cr3,
+            options(nostack, preserves_flags),
+        );
+        ctx
+    }
+
+    /// Bu bağlamı CPU'ya geri yükler ve süreci devam ettirir.
+    /// CR3 değişikliği ve register geri yükleme içerir.
+    pub unsafe fn restore(&self) {
+        core::arch::asm!(
+            "mov cr3, {cr3}",
+            "mov rax, {rax}",
+            "mov rbx, {rbx}",
+            "mov rcx, {rcx}",
+            "mov rdx, {rdx}",
+            "mov rsi, {rsi}",
+            "mov rdi, {rdi}",
+            "mov rbp, {rbp}",
+            "mov rsp, {rsp}",
+            "mov r8, {r8}",
+            "mov r9, {r9}",
+            "mov r10, {r10}",
+            "mov r11, {r11}",
+            "mov r12, {r12}",
+            "mov r13, {r13}",
+            "mov r14, {r14}",
+            "mov r15, {r15}",
+            "push {rflags}",
+            "popfq",
+            "jmp {rip}",
+            cr3 = in(reg) self.cr3,
+            rax = in(reg) self.rax,
+            rbx = in(reg) self.rbx,
+            rcx = in(reg) self.rcx,
+            rdx = in(reg) self.rdx,
+            rsi = in(reg) self.rsi,
+            rdi = in(reg) self.rdi,
+            rbp = in(reg) self.rbp,
+            rsp = in(reg) self.rsp,
+            r8 = in(reg) self.r8,
+            r9 = in(reg) self.r9,
+            r10 = in(reg) self.r10,
+            r11 = in(reg) self.r11,
+            r12 = in(reg) self.r12,
+            r13 = in(reg) self.r13,
+            r14 = in(reg) self.r14,
+            r15 = in(reg) self.r15,
+            rflags = in(reg) self.rflags,
+            rip = in(reg) self.rip,
+            options(noreturn, nostack),
+        );
+    }
+}
+
 /// Bir surece tahsis edilen kaynaklar (Sayfa cerceveleri, dosya taniticilari vb.)
 pub const MAX_PROC_FRAMES: usize = 64;
 
@@ -229,13 +327,17 @@ impl ProcessManager {
             core::ptr::write_bytes(pml4_ptr, 0, 4096);
         }
 
-        let address_space = AddressSpace {
+        let mut address_space = AddressSpace {
             pml4_phys: pml4_frame,
         };
 
-        // Note: Kernel mapping should be copied to user address space for proper isolation.
-        // This is a simplified implementation; production requires full kernel mapping.
+        // Kernel mapping'leri yeni adres uzayına kopyala (tam izolasyon için gerekli)
         // Kernel eşlemesi kullanıcı adres uzayına kopyalanmalı (tam izolasyon için).
+        if let Err(e) = address_space.clone_kernel_mappings(pmm) {
+            // Hata durumunda tahsis edilen frame'i iade et
+            pmm.free_frame(pml4_frame);
+            return Err(e);
+        }
 
         let mut p = Process::empty();
         p.pid = pid;
@@ -323,6 +425,35 @@ impl ProcessManager {
         }
     }
 
+    /// Mevcut çalışan süreci fault sonrası temizler (Ring 3 fault cleanup).
+    /// Sürecin kaynaklarını serbest bırakır ve durumunu Terminated olarak işaretler.
+    pub fn cleanup_faulted_process(&mut self, pmm: &mut PhysicalMemoryManager) -> bool {
+        let current = self.current_pid;
+        if current == 0 {
+            // Kernel süreci temizlenemez
+            return false;
+        }
+
+        if let Some(p) = self.processes.iter_mut().find(|p| p.pid == current) {
+            p.state = ProcessState::Terminated;
+            p.exit_code = -11; // SIGSEGV
+
+            // Kaynakları temizle
+            for i in 0..p.resources.frame_count {
+                let frame = p.resources.allocated_frames[i];
+                if frame != 0 {
+                    pmm.free_frame(frame);
+                }
+            }
+            p.resources.frame_count = 0;
+
+            self.active_count = self.active_count.saturating_sub(1);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Bir sonraki calistirilabilir sureci doner (oncelikli Preemptive Round-Robin Zamanlayici).
     /// Kullanici sureclerini oncelik sirasina (Realtime > High > Normal > Low) gore zamanlar,
     /// calistirilabilir kullanici sureci yoksa PID 0 (kernel_core) fallback doner.
@@ -392,6 +523,51 @@ impl ProcessManager {
                 unsafe {
                     // CR3'ü yükle (adres uzayını değiştir)
                     core::arch::asm!("mov cr3, {}", in(reg) p.address_space.pml4_phys, options(nostack, preserves_flags));
+                }
+            }
+        }
+    }
+
+    /// Mevcut sürecin bağlamını kaydeder ve yeni sürece geçiş yapar (context switch).
+    /// Şu an basit bir implementasyon: sadece CR3 değiştirir ve context'i günceller.
+    /// Tam preemptive scheduling için interrupt handler'dan çağrılmalıdır.
+    pub fn context_switch(&mut self, next_pid: usize) {
+        let current_pid = self.current_pid;
+
+        // Mevcut sürecin bağlamını kaydet (gerekirse)
+        if let Some(curr_p) = self.processes.iter_mut().find(|p| p.pid == current_pid) {
+            if curr_p.state == ProcessState::Running {
+                unsafe {
+                    curr_p.context = ProcessContext::save_current();
+                }
+                curr_p.state = ProcessState::Ready;
+            }
+        }
+
+        // Adres uzayını ve bağlamı yeni süreç için hazırla
+        let next_pml4 = self
+            .get_process(next_pid)
+            .map(|p| p.address_space.pml4_phys);
+        let next_context = self.get_process(next_pid).map(|p| p.context);
+
+        // Yeni sürece geç
+        if let Some(next_p) = self.processes.iter_mut().find(|p| p.pid == next_pid) {
+            self.current_pid = next_pid;
+            next_p.state = ProcessState::Running;
+
+            // Adres uzayını değiştir (doğrudan CR3)
+            if let Some(pml4) = next_pml4 {
+                if pml4 != 0 {
+                    unsafe {
+                        core::arch::asm!("mov cr3, {}", in(reg) pml4, options(nostack, preserves_flags));
+                    }
+                }
+            }
+
+            // Bağlamı geri yükle (şu an sadece CR3 ve basic register'lar)
+            if let Some(ctx) = next_context {
+                unsafe {
+                    ctx.restore();
                 }
             }
         }
@@ -591,4 +767,85 @@ pub fn test_process_lifecycle_and_fault_recovery(
         crate::serial_print("[PROC-TEST] 6. Zamanlayıcı öncelik testi: BAŞARISIZ\n");
         false
     }
+}
+
+/// Ring 3 adres uzayı izolasyonu ve kernel mapping kopyalama testi.
+/// Yeni bir süreç oluşturur, kernel mapping'lerin kopyalandığını doğrular.
+pub fn test_ring3_isolation(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[RING3-TEST] --- Ring 3 İzolasyon ve Kernel Mapping Testi ---\n");
+
+    let initial_free = pmm.free_memory_bytes;
+
+    // 1. Yeni bir kullanıcı süreci oluştur
+    let pid = match proc_mgr.spawn("ring3_test", 0x1000, 0x7000_2000, 100, None, pmm) {
+        Ok(id) => id,
+        Err(e) => {
+            crate::serial_print("[RING3-TEST] Süreç oluşturma hatası: ");
+            crate::serial_print(e);
+            crate::serial_print("\n");
+            return false;
+        }
+    };
+    crate::serial_print("[RING3-TEST] 1. Süreç oluşturuldu (PID ");
+    crate::serial::print_dec(pid as u64);
+    crate::serial_print("): BAŞARILI\n");
+
+    // 2. Kernel mapping kopyalanmasını ve supervisor-only izinlerini doğrula.
+    if let Some(p) = proc_mgr.get_process(pid) {
+        let aspace = p.address_space;
+        let kernel_cr3 = AddressSpace::current().pml4_phys;
+        if aspace.pml4_phys == kernel_cr3 || p.context.cr3 != aspace.pml4_phys {
+            crate::serial_print("[RING3-TEST] Ayrı CR3/adres uzayı: BAŞARISIZ\n");
+            let _ = proc_mgr.terminate(pid, 0, pmm);
+            return false;
+        }
+
+        // Kernel mapping'ler PML4 üst yarısında (indeks 256-511) olmalı
+        unsafe {
+            let pml4 = &*crate::mm::vmm::AddressSpace::table_ptr(aspace.pml4_phys);
+            let mut kernel_entries = 0usize;
+            let mut user_visible_kernel_entries = 0usize;
+            for i in 256..512 {
+                if (pml4.entries[i] & crate::mm::vmm::PageFlags::PRESENT) != 0 {
+                    kernel_entries += 1;
+                    if (pml4.entries[i] & crate::mm::vmm::PageFlags::USER) != 0 {
+                        user_visible_kernel_entries += 1;
+                    }
+                }
+            }
+
+            if kernel_entries > 0 && user_visible_kernel_entries == 0 {
+                crate::serial_print("[RING3-TEST] 2. Kernel mapping kopyalandı (");
+                crate::serial::print_dec(kernel_entries as u64);
+                crate::serial_print(" giriş), USER biti yok: BAŞARILI\n");
+                crate::serial_print("[P1] CR3 ayri ve kernel mapping Ring3'e kapali: BASARILI\n");
+            } else {
+                crate::serial_print(
+                    "[RING3-TEST] Kernel mapping USER erişimine açık veya yok: BAŞARISIZ\n",
+                );
+                let _ = proc_mgr.terminate(pid, 0, pmm);
+                return false;
+            }
+        }
+    }
+
+    // 3. Süreci temizle ve kaynak iadesini kontrol et
+    let terminated = proc_mgr.terminate(pid, 0, pmm);
+    if !terminated {
+        crate::serial_print("[RING3-TEST] 3. Süreç sonlandırma: BAŞARISIZ\n");
+        return false;
+    }
+
+    let free_after = pmm.free_memory_bytes;
+    if free_after != initial_free {
+        crate::serial_print("[RING3-TEST] 3. Kaynak temizleme sızıntısı: BAŞARISIZ\n");
+        return false;
+    }
+
+    crate::serial_print("[RING3-TEST] 3. Kaynak temizleme sızıntısız: BAŞARILI\n");
+    crate::serial_print("[P1] process kaynak temizligi: BASARILI\n");
+    true
 }

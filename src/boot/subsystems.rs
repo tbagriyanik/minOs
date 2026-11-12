@@ -200,6 +200,9 @@ pub fn init_subsystems(
         &mut memory_mgr.pmm,
     );
 
+    serial_print("[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n");
+    mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+
     serial_print("[BOOT] SMP başlatılıyor...\n");
     serial_print("[SMP] BSP GDT yükleniyor...\n");
     unsafe { arch::x86_64::gdt::load_for_cpu(0) };

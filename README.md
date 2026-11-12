@@ -8,12 +8,12 @@
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20Long%20Mode-blue.svg)]()
 [![Bootloader](https://img.shields.io/badge/Bootloader-Limine%20v8-green.svg)](https://limine-bootloader.org/)
 [![Build](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
-[![Tests](https://img.shields.io/badge/Tests-261-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/Tests-271-brightgreen.svg)]()
 [![Trusted Root CAs](https://img.shields.io/badge/Trusted%20Root%20CAs-51-blue.svg)]()
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-131%2C550%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-134%2C929%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
 [![GitHub Release](https://img.shields.io/badge/Release-v2.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
@@ -29,6 +29,12 @@
 - **🖼️ Resmi Masaüstüne Döşe:** Resim Gösterici, PNG/JPEG/GIF/BMP görüntüleri masaüstüne döşeli arka plan yapabilir.
 - **🌄 Yeni Masaüstü Görselleri:** Ayarlar'a `desktop1.png`, `desktop2.png` ve `desktop3.png` seçenekleri eklendi.
 - **📁 ISO Örnek Medyaları:** Örnek PNG/JPEG/BMP ve WAV dosyaları ISO içinde `/root/Media` altında paketlenir; CD'den çalışırken `/media/cdrom/root/Media` yolundan erişilir.
+
+- **🛡️ Watchdog Artık Ana Döngüden Bağımsız:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde (`watchdog::timer_tick()`) çalışır; kesme bağlamında yalnızca atomik durum güncellemesi ve `try_lock` ile korunan kısa kritik bölüm yapılır, sonlandırma ana döngüde `drain_frozen()` ile ertelenir. Böylece render/olay döngüsü tamamen kilitlense bile watchdog donmayı tespit eder; `guard` bağlamı sayesinde yalnızca takılan uygulama işaretlenir, sağlıklı pencereler yanlışlıkla sonlandırılmaz.
+- **🎮 FPS 3D Gerçek Performans Metrikleri:** `FPS 3D Oyun` (app ID 16) artık tamamlanan karelerden gerçek ölçüm üretir: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` seri çıktısı ve HUD'da anlık/minimum FPS + kare süresi gösterilir. Açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır; eski sabit 60 tick varsayımı kaldırıldı.
+- **🧪 FPS 3D Stres Testi Otomasyonu:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile Başlat menüsünden oyunu gerçekten açar, 10/30/60 dakikalık stres koşularında QEMU'nun hayatta kalmasını ve pozitif FPS/min-FPS metriklerini doğrular.
+- **🖼️ Bütçe Aşımında Kısmi Kare Koruması:** `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık ekrana yansımaz; FPS 3D içerik bölgesi statik yedek tampona alınıp render tamamlanamazsa geri yüklenir (`copy/restore_clip_region`).
+- **⏱️ TimeBudget Deterministik Testleri:** `TimeBudget` için enjekte edilebilir test saati eklendi; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` iptal/bütçe davranışı host testleriyle kapsanır (271 host testi geçiyor).
 
 - **🔐 TLS 1.3 HTTPS El Sıkışması Tamamlandı:** Tarayıcının `https://` bağlantıları artık TLS 1.3 el sıkışmasını uçtan uca tamamlayıp şifreli HTTP yanıtını işleyebiliyor. RFC 8446'ya uygun üç kritik düzeltme yapıldı:
   - **AAD uzunluğu (§5.2):** Şifreli kayıtların Ek Kimlik Doğrulama Verisi tam olarak 5 bayt (içerik tipi + sürüm + uzunluk) olarak hesaplanıyor; önceki 11 baytlık uzunluk GCM etiketi uyuşmazlığına yol açıyordu.

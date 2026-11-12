@@ -20,10 +20,10 @@ minos/
 │   │                        # ext4/exFAT formatting, MBR/GPT partitioning
 │   ├── gui/                 # MinGUI window manager, font engine, theme engine,
 │   │                        # scrollbar and clipboard
-│   ├── apps/                # 15 desktop applications
+│   ├── apps/                # 17 desktop applications
 │   ├── mm/                  # Physical memory manager (PMM), process table, ELF loader
 │   └── main.rs              # Kernel entry point (_start)
-├── tests/                   # Host unit tests (210 tests)
+├── tests/                   # Host unit tests (271 tests)
 ├── boot/                    # Limine bootloader configuration (limine.conf)
 ├── docs/                    # Local Markdown documents
 ├── wiki/                    # Wiki pages (this directory)
@@ -39,13 +39,13 @@ minos/
 
 ## Unit Tests (`test_host.ps1`)
 
-Cryptography (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 certificate, chain depth and validity period/hostname verification, TLS 1.2 / TLS 1.3 handshake, JavaScript engine, HTML parser and GUI text buffer (`TextBuf`) — 210 unit tests executed in the host environment:
+Cryptography (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 certificate, chain depth and validity period/hostname verification, TLS 1.2 / TLS 1.3 handshake, JavaScript engine, HTML parser and GUI text buffer (`TextBuf`) — 271 unit tests executed in the host environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test results: **210 passed / 0 failed**
+Test results: **271 passed / 0 failed**
 
 ---
 
@@ -68,10 +68,10 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Metric | Value |
 | :--- | :--- |
-| **Total Rust Source Files** | 150 files |
-| **Total Lines of Code** | ~129,179 lines |
+| **Total Rust Source Files** | 179 files |
+| **Total Lines of Code** | ~134,929 lines |
 | **Language** | Rust (Nightly, `no_std`) |
 | **Build Target** | `x86_64-minos` (custom bare-metal) |
-| **Unit Tests** | 228 tests (0 failed, 100% passing) |
-| **Built-in Applications** | 15 desktop applications + Window Manager |
+| **Unit Tests** | 271 tests (0 failed, 100% passing) |
+| **Built-in Applications** | 17 desktop applications + Window Manager |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

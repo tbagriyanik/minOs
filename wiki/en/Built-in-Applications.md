@@ -1,6 +1,6 @@
-# 15 Built-in Applications
+# 17 Built-in Applications
 
-minOs includes **15 built-in applications** and a window manager, providing a full desktop experience.
+minOs includes **17 built-in applications** and a window manager, providing a full desktop experience.
 
 | Application | Description |
 | :--- | :--- |
@@ -83,5 +83,7 @@ minOs includes a minimal client-side JavaScript engine (`src/apps/js.rs`, `no_st
 | **⌨️ Command Prompt (MinShell)** | UNIX/DOS-like interactive shell: file/folder management, memory status, network diagnostics, `curl` HTTP download, `format` disk formatting (FAT32/ext4/exFAT/ext2), `pkg`, `exec`, Tab completion and command history. |
 | **💽 One-Click Install (Installation Wizard)** | Step-by-step installation window: **1)** target disk selection (ATA hard disk / QCOW2), **2)** `Format (FAT32)` button to format disk, **3)** `One-Click Install` for permanent installation. Installation writes `MINOS.SYS` marker file, `README.TXT`, current `settings.cfg` settings and the entire VFS tree (`VFS.DAT` snapshot) to disk. |
 | **🧊 3D Viewer** | Cube, cylinder, sphere and pyramid meshes displayed in solid shading or wireframe mode; drag to rotate, zoom, auto-rotate and load shape/text from `.3d` files. Back-face culling and far-to-near painter's algorithm for correct solid object appearance. |
+| **🎮 FPS Game** | Raycasting-based 3D engine; mouse look, WASD movement, shading, enemy targets, radar and sound effects. |
+| **🎯 FPS 3D Game** | Real-metrics FPS application (app ID 16): `fps`/`min_fps`/`frame_ms`/`interval_ms` measured from completed frames (`[FPS3D-METRICS]`), live and minimum FPS on the HUD, partial-frame rollback on budget expiry. 10/30/60-minute stress validation via `test_qemu.ps1 -FpsStressTest`. |
 
 > **Note:** The **Control Panel** (`controlpanel.rs`) exists in `src/apps/`; settings and customization functions are executed via **System Settings** (`settings.rs`).

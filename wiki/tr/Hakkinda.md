@@ -22,7 +22,7 @@ minOs (Sarman Edition) v2.1.0, Rust programlama diliyle geliştirilmiş, `no_std
 | **Önyükleme** | `src/boot/` | Limine konsolu, metin çizimi, ilerleme çubuğu |
 | **Sürücüler** | `src/drivers/` | GPU, ağ, depolama, giriş, ses, USB, ACPI, kripto |
 | **GUI** | `src/gui/` | Pencere yöneticisi, font motoru, tema motoru |
-| **Uygulamalar** | `src/apps/` | 15 masaüstü uygulaması |
+| **Uygulamalar** | `src/apps/` | 17 masaüstü uygulaması |
 | **Masaüstü** | `src/desktop/` | Oturum yönetimi, ana olay döngüsü |
 | **Bellek** | `src/mm/` | Fiziksel bellek yöneticisi (PMM), ELF yükleyici |
 | **Dosya Sistemi** | `src/fs/` | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |

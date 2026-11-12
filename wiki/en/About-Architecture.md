@@ -22,7 +22,7 @@ minOs (Sarman Edition) v2.1.0 is a standalone 64-bit (`x86_64`) operating system
 | **Boot** | `src/boot/` | Limine console, text rendering, progress bar |
 | **Drivers** | `src/drivers/` | GPU, network, storage, input, audio, USB, ACPI, crypto |
 | **GUI** | `src/gui/` | Window manager, font engine, theme engine |
-| **Applications** | `src/apps/` | 15 desktop applications |
+| **Applications** | `src/apps/` | 17 desktop applications |
 | **Desktop** | `src/desktop/` | Session management, main event loop |
 | **Memory** | `src/mm/` | Physical memory manager (PMM), ELF loader |
 | **File System** | `src/fs/` | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |

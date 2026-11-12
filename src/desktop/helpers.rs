@@ -70,6 +70,9 @@ pub fn open_app(compositor: &mut gui::MinGuiCompositor, app_id: usize) {
         }
         ensure_window_process(idx, app_id);
         compositor.focus_window(idx);
+        if app_id == 16 {
+            crate::boot::console::serial_print("[FPS3D] Uygulama açıldı / Application opened\n");
+        }
     }
 }
 
@@ -207,6 +210,7 @@ pub fn terminate_app(
     fps_3d: &mut apps::fps_game::FpsGameApp,
 ) {
     let app_id = compositor.app_id_for_window(idx);
+    crate::watchdog::unwatch(idx);
     // Pencereyi kapatmakla kalma: pencereye bagli sureci de gercekten sonlandir.
     let _was_running = terminate_window_process(idx);
     if let Some(window) = compositor.windows.get_mut(idx).and_then(Option::as_mut) {

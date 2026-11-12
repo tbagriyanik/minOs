@@ -139,12 +139,33 @@ $minizRlib = Build-HostCrate -Manifest (Join-Path $minizSrc "src\lib.rs") -Crate
     -Cfg 'feature="with-alloc"'
 Write-Host "        miniz_oxide -> $minizRlib"
 
+# heapless bagimlilik zinciri (src/watchdog.rs host testlerinde heapless::Vec
+# kullaniyor): byteorder -> hash32 -> stable_deref_trait -> heapless.
+$byteorderSrc = Get-RegistrySrc -Name "byteorder" -Version (Get-LockedVersion -Name "byteorder")
+$hash32Src = Get-RegistrySrc -Name "hash32" -Version (Get-LockedVersion -Name "hash32")
+$stableDerefSrc = Get-RegistrySrc -Name "stable_deref_trait" -Version (Get-LockedVersion -Name "stable_deref_trait")
+$heaplessSrc = Get-RegistrySrc -Name "heapless" -Version (Get-LockedVersion -Name "heapless")
+if (-not $byteorderSrc -or -not $hash32Src -or -not $stableDerefSrc -or -not $heaplessSrc) {
+    Write-Host "[HATA] heapless bagimlilik kaynak dizini bulunamadi." -ForegroundColor Red
+    exit 1
+}
+$byteorderRlib = Build-HostCrate -Manifest (Join-Path $byteorderSrc "src\lib.rs") -CrateName "byteorder" -ExtraArgs @()
+$stableDerefRlib = Build-HostCrate -Manifest (Join-Path $stableDerefSrc "src\lib.rs") -CrateName "stable_deref_trait" -ExtraArgs @()
+$hash32Rlib = Build-HostCrate -Manifest (Join-Path $hash32Src "src\lib.rs") -CrateName "hash32" `
+    -ExtraArgs @("-L", "dependency=$pkgDir", "--extern", "byteorder=$byteorderRlib")
+$heaplessRlib = Build-HostCrate -Manifest (Join-Path $heaplessSrc "src\lib.rs") -CrateName "heapless" `
+    -ExtraArgs @("-L", "dependency=$pkgDir",
+        "--extern", "hash32=$hash32Rlib",
+        "--extern", "stable_deref_trait=$stableDerefRlib")
+Write-Host "        heapless -> $heaplessRlib"
+
 $rustcArgs = @(
     "+nightly", "--edition", "2021", "--test", $harness,
     "--target", $hostTriple,
     "-o", $binary,
     "--extern", "alloc",
     "--extern", "miniz_oxide=$minizRlib",
+    "--extern", "heapless=$heaplessRlib",
 # miniz_oxide'nin kendi bagimliligi (transitif `-L` doyaylastirilamaz).
     "-L", "dependency=$pkgDir",
     "--cfg", "host_fs_tests"

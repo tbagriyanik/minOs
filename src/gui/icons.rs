@@ -201,45 +201,56 @@ impl MinGuiCompositor {
     pub(crate) fn draw_cat_icon_at_size(fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
         let mut bitmap = [0u32; 1024];
 
-        // 32x32 kedi ikonu - beyaz kedi, pembe kulaklar, siyah gözler ve burun
-        // X = beyaz gövde, E = pembe kulaklar, G = siyah göz, N = siyah burun, C = mavi tasma, boşluk = şeffaf
+        // 32x32 kedi ikonu — sarman/beyaz kedi yüzü, pembe kulaklar,
+        // iri siyah gözler (parlak nokta), pembe burun, ağız, bıyıklar ve
+        // mavi tasma + altın zil.
+        //
+        // Lejant: X = gövde (tema metin rengi), E = pembe kulak,
+        //         P = koyu pembe iç kulak, W = beyaz ağız bölgesi,
+        //         G = siyah göz/ağız, H = göz parlaklığı, N = pembe burun,
+        //         C = mavi tasma, B = altın zil, boşluk = şeffaf.
         const CAT_PATTERN: [&str; 32] = [
-            "  EEEE                    EEEE  ",
-            "  EEEE                    EEEE  ",
-            "  EEEE                    EEEE  ",
-            "  EEEE                    EEEE  ",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XXXX       XXXXXXXXXX       XXXX",
-            "XXXX       XXXXXXXXXX       XXXX",
-            "XXXX       XXXXXXXXXX       XXXX",
-            "XXXX       XXXXXXXXXX       XXXX",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            "XX          NNNNNNNN          XX",
-            "XX          NNNNNNNN          XX",
-            "XX          NNNNNNNN          XX",
-            "XX          NNNNNNNN          XX",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXXXXXXXXXXXXXXXXXXXXXXXX  ",
-            "  XXXXXX    XXXXXXXX    XXXXXX  ",
-            "  XXXXXX    XXXXXXXX    XXXXXX  ",
-            "  XXXXXX    XXXXXXXX    XXXXXX  ",
-            "  XXXXXX    XXXXXXXX    XXXXXX  ",
-            "XX    XXXXXXXXXXXX    XXXX    XX",
-            "XX    XXXXXXXXXXXX    XXXX    XX",
+            "                                ",
+            "      E                   E     ",
+            "     EEE                 EEE    ",
+            "     EPE                 EPE    ",
+            "    EEPPE               EPPEE   ",
+            "    EPPPPE             EPPPPE   ",
+            "   EPPPPPEEXXXXXXXXXXXEEPPPPPE  ",
+            "   EPPPPPPEXXXXXXXXXXXEPPPPPPE  ",
+            "  EEEEEEEEEEXXXXXXXXXEEEEEEEEEE ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "    XXXXXXGXXXXXXXXXXXGXXXXXX   ",
+            "    XXXXGHGGGXXXXXXXGHGGGXXXX   ",
+            "    XXXGGGGGGGXXXXXGGGGGGGXXX   ",
+            "    XXXXGGGGGXXXXXXXGGGGGXXXX   ",
+            "    XXXXXXGXXXXXXXXXXXGXXXXXX   ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "  GGGGXXXXXWWWNNNNNWWWXXXXXGGGG ",
+            "    XXXXXXWWWGGGGGGGWWWXXXXXX   ",
+            "    XXXXXXXWWWWWWWWWWWXXXXXXX   ",
+            "  GGGGXXXXXXXXXXXXXXXXXXXXGGGG  ",
+            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
+            "     CCCCCCCCCCCBCCCCCCCCCCC    ",
+            "      CCCCCCCCCBBBCCCCCCCCC     ",
+            "        CCCCCCBBBBBCCCCCC       ",
+            "           XXXXBBBXXXX          ",
+            "                B               ",
+            "                                ",
+            "                                ",
         ];
 
-        // ASCII pattern'i pixel dizisine dönüştür
+        // ASCII pattern'i pixel dizisine dönüştür.
+        // Not: bitmap kuyusunda 0 = şeffaf kabul edilir; bu yüzden siyah
+        // için 0x101010 (sıfırdan farklı, koyu) kullanılır. Token renkler
+        // olduğu gibi saklanır ve `draw_icon_bitmap` içinde çözülür.
         let body_color = theme::resolve(Color::TEXT_MAIN);
+        let pink = theme::resolve(Color::ACCENT_PINK);
+        let pink_dark = Self::shade(pink, -55);
         for (row_idx, row) in CAT_PATTERN.iter().enumerate() {
             for (col_idx, ch) in row.chars().enumerate() {
                 let pixel_idx = row_idx * 32 + col_idx;
@@ -248,25 +259,17 @@ impl MinGuiCompositor {
                 if pixel_idx >= bitmap.len() {
                     continue;
                 }
-                if ch == 'X' {
-                    // Ekran görüntüsündeki gibi opak, açık renkli gövde.
-                    bitmap[pixel_idx] = body_color | 0xFF000000;
-                } else if ch == 'G' {
-                    // Siyah gözler (daha yüksek alpha)
-                    bitmap[pixel_idx] = 0x000000 | 0xFF000000; // tam opak
-                } else if ch == 'N' {
-                    // Siyah burun (daha yüksek alpha)
-                    bitmap[pixel_idx] = 0x000000 | 0xFF000000; // tam opak
-                } else if ch == 'C' {
-                    // Mavi tasma
-                    bitmap[pixel_idx] = Color::ACCENT_BLUE | 0xFF000000; // tam opak
-                } else if ch == 'E' {
-                    // Pembe kulaklar (yüksek alpha)
-                    bitmap[pixel_idx] = Color::ACCENT_PINK | 0xFF000000; // tam opak
-                } else {
-                    // Tam şeffaf
-                    bitmap[pixel_idx] = 0;
-                }
+                bitmap[pixel_idx] = match ch {
+                    'X' => body_color,
+                    'E' => pink,
+                    'P' => pink_dark,
+                    'W' | 'H' => 0x00FF_FFFF,
+                    'G' => 0x0010_1010,
+                    'N' => pink,
+                    'C' => Color::ACCENT_BLUE,
+                    'B' => 0x00FF_C8_3C,
+                    _ => 0,
+                };
             }
         }
         Self::draw_icon_bitmap(fb, x, y, size, &bitmap);

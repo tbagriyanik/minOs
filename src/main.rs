@@ -75,6 +75,8 @@ pub mod desktop;
 pub mod task;
 
 pub mod panic_handler;
+pub mod time_budget;
+pub mod watchdog;
 
 // These modules were split out of this file, but the rest of the kernel still
 
@@ -867,10 +869,8 @@ pub extern "C" fn _start() -> ! {
     let mut last_game_tick_ms: u64 = monotonic_ms();
     let mut last_fps3d_tick_ms: u64 = monotonic_ms();
 
-    // Watchdog timer: detect frozen applications (5 seconds without activity).
-    const WATCHDOG_TIMEOUT_MS: u64 = 5_000;
-    // 0 = uygulama henüz etkinleştirilmedi (izleme atla).
-    let mut app_last_activity: [u64; gui::MAX_WINDOWS] = [0; gui::MAX_WINDOWS];
+    // Bağımsız watchdog: ana döngüden bağımsız olarak donmuş uygulamaları tespit eder.
+    let mut watchdog = watchdog::Watchdog::with_timeout(5_000);
     // Oyun bütçesi aşımı sayaçları (üst üste gelen aşım sayısı; bütche altında bir
     // kare geldiğinde sıfırlanır). Yalnızca tekrarlayan aşımlar sonlandırmayı tetikler.
     let mut game_budget_strikes: u32 = 0;
@@ -1292,7 +1292,16 @@ pub extern "C" fn _start() -> ! {
 
                         15 => fps.render_content(fb, win.x, win.y, win.width, win.height),
 
-                        16 => fps_3d.render_content(fb, win.x, win.y, win.width, win.height),
+                        16 => {
+                            let _render_completed = fps_3d.render_content_with_budget(
+                                fb,
+                                win.x,
+                                win.y,
+                                win.width,
+                                win.height,
+                                RENDER_BUDGET_MS,
+                            );
+                        }
 
                         _ => {}
                     }
@@ -1804,7 +1813,7 @@ pub extern "C" fn _start() -> ! {
         for idx in 0..gui::MAX_WINDOWS {
             if let Some(win) = compositor.windows[idx] {
                 if win.is_open && !win.is_minimized {
-                    app_last_activity[idx] = now_ms;
+                    watchdog.heartbeat(idx, win.app_id as usize, now_ms);
                 }
             }
         }
@@ -1962,7 +1971,9 @@ pub extern "C" fn _start() -> ! {
         if input_update.keyboard || input_update.mouse {
             if let Some(idx) = compositor.active_window_idx {
                 if idx < gui::MAX_WINDOWS {
-                    app_last_activity[idx] = crate::monotonic_ms();
+                    if let Some(win) = compositor.windows[idx] {
+                        watchdog.heartbeat(idx, win.app_id as usize, crate::monotonic_ms());
+                    }
                 }
             }
         }
@@ -9087,53 +9098,40 @@ pub extern "C" fn _start() -> ! {
                 viewer3d_app.tick();
             }
 
-            // Watchdog: check for frozen applications
+            // Bağımsız watchdog: donmuş uygulamaları tespit eder ve sonlandırır.
             let now_ms = crate::monotonic_ms();
-            for idx in 0..gui::MAX_WINDOWS {
-                if let Some(win) = compositor.windows[idx] {
-                    if win.is_open && !win.is_minimized {
-                        // Henüz render edilmeyen/yeni açılan uygulamayı atla.
-                        if app_last_activity[idx] == 0 {
-                            continue;
-                        }
-                        let idle_time = now_ms.saturating_sub(app_last_activity[idx]);
-                        if idle_time > WATCHDOG_TIMEOUT_MS {
-                            // Application appears frozen - mark for termination
-                            crate::serial_print("[WATCHDOG] Uygulama donmuş görünüyor: app_id=");
-                            crate::serial_print_dec(win.app_id as u64);
-                            crate::serial_print(" window_idx=");
-                            crate::serial_print_dec(idx as u64);
-                            crate::serial_print(" idle=");
-                            crate::serial_print_dec(idle_time);
-                            crate::serial_print(" ms\n");
-
-                            // Terminate the frozen app so it cannot block the OS
-                            terminate_app(
-                                idx,
-                                &mut compositor,
-                                &mut filemanager_app,
-                                &mut settings_app,
-                                &mut notepad_app,
-                                &mut browser_app,
-                                &mut imageviewer_app,
-                                &mut musicplayer_app,
-                                &mut videoplayer_app,
-                                &mut taskmgr_app,
-                                &mut calculator_app,
-                                &mut paint_apps[idx],
-                                &mut terminal_app,
-                                &mut installer_app,
-                                &mut viewer3d_app,
-                                &mut pkgmgr_app,
-                                &mut fps_game_app,
-                                &mut fps_3d_app,
-                            );
-
-                            // Update activity timestamp to prevent repeated warnings
-                            app_last_activity[idx] = now_ms;
-                        }
-                    }
-                }
+            let frozen = watchdog.tick(now_ms, |idx, app_id, idle_ms| {
+                crate::serial_print("[WATCHDOG] Uygulama donmuş görünüyor: app_id=");
+                crate::serial_print_dec(app_id as u64);
+                crate::serial_print(" window_idx=");
+                crate::serial_print_dec(idx as u64);
+                crate::serial_print(" idle=");
+                crate::serial_print_dec(idle_ms);
+                crate::serial_print(" ms\n");
+                true // sonlandırma onayı
+            });
+            for fw in frozen.iter() {
+                terminate_app(
+                    fw.idx,
+                    &mut compositor,
+                    &mut filemanager_app,
+                    &mut settings_app,
+                    &mut notepad_app,
+                    &mut browser_app,
+                    &mut imageviewer_app,
+                    &mut musicplayer_app,
+                    &mut videoplayer_app,
+                    &mut taskmgr_app,
+                    &mut calculator_app,
+                    &mut paint_apps[fw.idx],
+                    &mut terminal_app,
+                    &mut installer_app,
+                    &mut viewer3d_app,
+                    &mut pkgmgr_app,
+                    &mut fps_game_app,
+                    &mut fps_3d_app,
+                );
+                watchdog.clear_frozen(fw.idx);
             }
         }
 
@@ -9164,7 +9162,7 @@ pub extern "C" fn _start() -> ! {
                         .iter()
                         .position(|w| w.is_some_and(|w| w.app_id == 15));
                     if let Some(idx) = game_idx {
-                        app_last_activity[idx] = now_ms;
+                        watchdog.heartbeat(idx, 15, now_ms);
                     }
                     if game_elapsed_ms > GAME_UPDATE_BUDGET_MS {
                         game_budget_strikes = game_budget_strikes.saturating_add(1);
@@ -9284,17 +9282,23 @@ pub extern "C" fn _start() -> ! {
                     apps::guard::prepare_recoverable(16, apps::guard::NO_WINDOW);
                 if unsafe { apps::guard::begin(fps3d_start) } {
                     let fps3d_start_ms = crate::monotonic_ms();
-                    fps_3d_app.update(&mut audio_dev);
+                    let fps3d_completed =
+                        fps_3d_app.update_with_budget(&mut audio_dev, GAME_UPDATE_BUDGET_MS);
                     fps_3d_app.tick_fps(time_since_last_tick as usize);
                     let fps3d_elapsed_ms = crate::monotonic_ms().saturating_sub(fps3d_start_ms);
                     last_fps3d_tick_ms = now_ms;
+                    if !fps3d_completed {
+                        crate::serial_print(
+                            "[FPS-3D] Uyarı: güncelleme bütçesi aştı, kare atlandı\n",
+                        );
+                    }
                     // Update activity timestamp for watchdog
                     let fps3d_idx = compositor
                         .windows
                         .iter()
                         .position(|w| w.is_some_and(|w| w.app_id == 16));
                     if let Some(idx) = fps3d_idx {
-                        app_last_activity[idx] = now_ms;
+                        watchdog.heartbeat(idx, 16, now_ms);
                     }
                     if fps3d_elapsed_ms > GAME_UPDATE_BUDGET_MS {
                         fps3d_budget_strikes = fps3d_budget_strikes.saturating_add(1);
@@ -9760,7 +9764,7 @@ pub extern "C" fn _start() -> ! {
             for idx in 0..gui::MAX_WINDOWS {
                 if let Some(win) = compositor.windows[idx] {
                     if win.is_open && !win.is_minimized {
-                        app_last_activity[idx] = now_ms;
+                        watchdog.heartbeat(idx, win.app_id as usize, now_ms);
                     }
                 }
             }

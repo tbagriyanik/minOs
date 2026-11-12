@@ -3,69 +3,6 @@
 use super::*;
 
 impl MinGuiCompositor {
-    /// minOs kedi logosunu alan örneklemeli yumuşatma ile hedef boyuta taşır.
-    /// 32x32 kaynak çözünürlük kullanır - daha yüksek kalite için.
-    fn draw_icon_bitmap(
-        fb: &mut Framebuffer,
-        x: usize,
-        y: usize,
-        size: usize,
-        source: &[u32; 1024],
-    ) {
-        let mut resolved = [0u32; 1024];
-        for (output, input) in resolved.iter_mut().zip(source.iter()) {
-            if *input != 0 {
-                *output = theme::resolve(*input);
-            }
-        }
-        const SRC_SIZE: usize = 32;
-        for dy in 0..size {
-            let sy0 = dy * SRC_SIZE;
-            let sy1 = (dy + 1) * SRC_SIZE;
-            let row_start = sy0 / size;
-            let row_end = ((sy1 - 1) / size).min(SRC_SIZE - 1);
-            for dx in 0..size {
-                let sx0 = dx * SRC_SIZE;
-                let sx1 = (dx + 1) * SRC_SIZE;
-                let col_start = sx0 / size;
-                let col_end = ((sx1 - 1) / size).min(SRC_SIZE - 1);
-                let mut covered = 0u32;
-                let mut red = 0u32;
-                let mut green = 0u32;
-                let mut blue = 0u32;
-                for row in row_start..=row_end {
-                    let oy = sy1
-                        .min((row + 1) * size)
-                        .saturating_sub(sy0.max(row * size));
-                    for col in col_start..=col_end {
-                        let color = resolved[row * SRC_SIZE + col];
-                        if color == 0 {
-                            continue;
-                        }
-                        let ox = sx1
-                            .min((col + 1) * size)
-                            .saturating_sub(sx0.max(col * size));
-                        let weight = (ox * oy) as u32;
-                        covered += weight;
-                        red += ((color >> 16) & 0xFF) * weight;
-                        green += ((color >> 8) & 0xFF) * weight;
-                        blue += (color & 0xFF) * weight;
-                    }
-                }
-                if covered == 0 {
-                    continue;
-                }
-                let color = ((red / covered) << 16) | ((green / covered) << 8) | (blue / covered);
-                let alpha = ((covered * 255 + 128) / 256) as u8;
-                if alpha == 255 {
-                    fb.put_pixel(x + dx, y + dy, color);
-                } else {
-                    fb.put_subpixel_text(x + dx, y + dy, color, [alpha; 3]);
-                }
-            }
-        }
-    }
-
     /// 16x16 kaynak için geriye dönük uyumluluk (eski ikonlar için)
     fn draw_icon_bitmap_16x16(
         fb: &mut Framebuffer,
@@ -198,81 +135,35 @@ impl MinGuiCompositor {
         Self::draw_cat_icon_at_size(fb, x, y, Self::icon_size());
     }
 
+    /// minOs kedi maskotu — `public/media/kedi_maskotu.bmp` (16x16, 24-bit BMP)
+    /// dosyasından alınan pikseller. 0x00008B zemin, 0xFFFFFF gözler.
+    pub(crate) const CAT_MASCOT: [u32; 256] = [
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0xFFFFFF, 0x00008B, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0xFFFFFF, 0xFFFFFF, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+        0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B, 0x00008B,
+    ];
+
+    /// Kedi maskotunu hedef boyuta ölçekleyerek çizer.
+    ///
+    /// Kaynak görsel `public/media/kedi_maskotu.bmp` dosyasının 16x16
+    /// pikselleridir (`CAT_MASCOT`). Bu fonksiyon görev çubuğu, başlat menüsü,
+    /// masaüstü filigranı ve açılış ekranındaki tüm kedi simgeleri tarafından
+    /// kullanılır.
     pub(crate) fn draw_cat_icon_at_size(fb: &mut Framebuffer, x: usize, y: usize, size: usize) {
-        let mut bitmap = [0u32; 1024];
-
-        // 32x32 kedi ikonu — sarman/beyaz kedi yüzü, pembe kulaklar,
-        // iri siyah gözler (parlak nokta), pembe burun, ağız, bıyıklar ve
-        // mavi tasma + altın zil.
-        //
-        // Lejant: X = gövde (tema metin rengi), E = pembe kulak,
-        //         P = koyu pembe iç kulak, W = beyaz ağız bölgesi,
-        //         G = siyah göz/ağız, H = göz parlaklığı, N = pembe burun,
-        //         C = mavi tasma, B = altın zil, boşluk = şeffaf.
-        const CAT_PATTERN: [&str; 32] = [
-            "                                ",
-            "      E                   E     ",
-            "     EEE                 EEE    ",
-            "     EPE                 EPE    ",
-            "    EEPPE               EPPEE   ",
-            "    EPPPPE             EPPPPE   ",
-            "   EPPPPPEEXXXXXXXXXXXEEPPPPPE  ",
-            "   EPPPPPPEXXXXXXXXXXXEPPPPPPE  ",
-            "  EEEEEEEEEEXXXXXXXXXEEEEEEEEEE ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "    XXXXXXGXXXXXXXXXXXGXXXXXX   ",
-            "    XXXXGHGGGXXXXXXXGHGGGXXXX   ",
-            "    XXXGGGGGGGXXXXXGGGGGGGXXX   ",
-            "    XXXXGGGGGXXXXXXXGGGGGXXXX   ",
-            "    XXXXXXGXXXXXXXXXXXGXXXXXX   ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "  GGGGXXXXXWWWNNNNNWWWXXXXXGGGG ",
-            "    XXXXXXWWWGGGGGGGWWWXXXXXX   ",
-            "    XXXXXXXWWWWWWWWWWWXXXXXXX   ",
-            "  GGGGXXXXXXXXXXXXXXXXXXXXGGGG  ",
-            "    XXXXXXXXXXXXXXXXXXXXXXXXX   ",
-            "     CCCCCCCCCCCBCCCCCCCCCCC    ",
-            "      CCCCCCCCCBBBCCCCCCCCC     ",
-            "        CCCCCCBBBBBCCCCCC       ",
-            "           XXXXBBBXXXX          ",
-            "                B               ",
-            "                                ",
-            "                                ",
-        ];
-
-        // ASCII pattern'i pixel dizisine dönüştür.
-        // Not: bitmap kuyusunda 0 = şeffaf kabul edilir; bu yüzden siyah
-        // için 0x101010 (sıfırdan farklı, koyu) kullanılır. Token renkler
-        // olduğu gibi saklanır ve `draw_icon_bitmap` içinde çözülür.
-        let body_color = theme::resolve(Color::TEXT_MAIN);
-        let pink = theme::resolve(Color::ACCENT_PINK);
-        let pink_dark = Self::shade(pink, -55);
-        for (row_idx, row) in CAT_PATTERN.iter().enumerate() {
-            for (col_idx, ch) in row.chars().enumerate() {
-                let pixel_idx = row_idx * 32 + col_idx;
-                // Bazı ASCII satırları 32 karakterden uzun olabilir; bitmap
-                // ise sabit olarak 32x32'dir. Fazla karakterleri kırp.
-                if pixel_idx >= bitmap.len() {
-                    continue;
-                }
-                bitmap[pixel_idx] = match ch {
-                    'X' => body_color,
-                    'E' => pink,
-                    'P' => pink_dark,
-                    'W' | 'H' => 0x00FF_FFFF,
-                    'G' => 0x0010_1010,
-                    'N' => pink,
-                    'C' => Color::ACCENT_BLUE,
-                    'B' => 0x00FF_C8_3C,
-                    _ => 0,
-                };
-            }
-        }
-        Self::draw_icon_bitmap(fb, x, y, size, &bitmap);
+        Self::draw_icon_bitmap_16x16(fb, x, y, size, &Self::CAT_MASCOT);
     }
 
     /// Bilgisayarım / Dosya Yöneticisi Simgesi (16x16)

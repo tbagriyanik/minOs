@@ -64,6 +64,7 @@ impl PageTable {
 }
 
 /// Sanal Bellek Adres Uzayı
+#[derive(Debug, Clone, Copy)]
 pub struct AddressSpace {
     /// PML4 kök tablosunun fiziksel adresi (CR3'e yüklenecek değer)
     pub pml4_phys: u64,

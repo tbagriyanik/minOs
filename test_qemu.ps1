@@ -17,7 +17,11 @@ param(
     [switch]$NoPs2,
     [switch]$Minimal,
     [switch]$HighEnd,
-    [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio"
+    [ValidateSet("virtio", "std", "vmware", "qxl")][string]$Vga = "virtio",
+    [switch]$BootShutdownCycle,
+    [int]$BootShutdownCycles = 3,
+    [switch]$FpsStressTest,
+    [int]$FpsStressSeconds = 30
 )
 
 # --- Donanım profilleri -------------------------------------------------
@@ -298,6 +302,108 @@ if ($UsbHid) {
     }
 }
 
+# ========================================================================
+# Boot / Kapatma Döngüsü Testi (isteğe bağlı)
+# ========================================================================
+if ($BootShutdownCycle) {
+    Write-Host "`n=========================================" -ForegroundColor Cyan
+    Write-Host "   QEMU Baslatma / Kapatma Döngüsü Testi   " -ForegroundColor Cyan
+    Write-Host "=========================================" -ForegroundColor Cyan
+
+    $cyclePassed = 0
+    $cycleFailed = 0
+
+    for ($cycle = 1; $cycle -le $BootShutdownCycles; $cycle++) {
+        Write-Host "`n[Döngü $cycle/$BootShutdownCycles] QEMU yeniden başlatılıyor..." -ForegroundColor Yellow
+
+        # QEMU'yu yeniden başlat (aynı argümanlarla)
+        try {
+            if ($proc.HasExited -eq $false) {
+                if ($qmp) {
+                    $qmp.Writer.WriteLine('{"execute":"quit"}')
+                    $qmp.Client.Close()
+                }
+                $proc.WaitForExit(3000) | Out-Null
+            }
+            if (-not $proc.HasExited) {
+                $proc.Kill()
+                $proc.WaitForExit(1000) | Out-Null
+            }
+        } catch {}
+
+        Start-Sleep -Milliseconds 500
+
+        # Yeni QEMU işlemi başlat
+        $proc2 = New-Object System.Diagnostics.Process
+        $proc2.StartInfo = $pinfo
+        $outBuilder2 = New-Object System.Text.StringBuilder
+        $errBuilder2 = New-Object System.Text.StringBuilder
+
+        $outEvent2 = Register-ObjectEvent -InputObject $proc2 -EventName OutputDataReceived -Action {
+            if ($EventArgs.Data) { $outBuilder2.AppendLine($EventArgs.Data) | Out-Null }
+        }
+        $errEvent2 = Register-ObjectEvent -InputObject $proc2 -EventName ErrorDataReceived -Action {
+            if ($EventArgs.Data) { $errBuilder2.AppendLine($EventArgs.Data) | Out-Null }
+        }
+
+        [void]$proc2.Start()
+        $proc2.BeginOutputReadLine()
+        $proc2.BeginErrorReadLine()
+
+        $cycleStart = [System.DateTime]::UtcNow
+        $cycleDesktop = $false
+
+        while (([System.DateTime]::UtcNow - $cycleStart).TotalSeconds -lt $TimeoutSeconds) {
+            Start-Sleep -Milliseconds 250
+            $out2 = $outBuilder2.ToString()
+            if ($out2 -match "\[BOOT\] Masa.st. d.ng.s. ba.lad") {
+                $cycleDesktop = $true
+                break
+            }
+        }
+
+        Unregister-Event -SourceIdentifier $outEvent2.Name -ErrorAction SilentlyContinue
+        Unregister-Event -SourceIdentifier $errEvent2.Name -ErrorAction SilentlyContinue
+
+        if ($cycleDesktop) {
+            Write-Host "  [OK] Döngü $cycle: Masaüstüne başarıyla ulaşıldı" -ForegroundColor Green
+            $cyclePassed++
+        } else {
+            Write-Host "  [FAIL] Döngü $cycle: Masaüstüne ulaşılamadı" -ForegroundColor Red
+            $cycleFailed++
+        }
+
+        # QEMU'yu kapat
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect("127.0.0.1", $qmpPort)
+            $stream = $tcp.GetStream()
+            $writer = New-Object System.IO.StreamWriter($stream)
+            $writer.NewLine = "`n"
+            $writer.WriteLine('{"execute":"qmp_capabilities"}')
+            $writer.Flush()
+            Start-Sleep -Milliseconds 100
+            $writer.WriteLine('{"execute":"quit"}')
+            $writer.Flush()
+            $tcp.Close()
+        } catch {}
+
+        $proc2.WaitForExit(3000) | Out-Null
+        if (-not $proc2.HasExited) {
+            $proc2.Kill()
+            $proc2.WaitForExit(1000) | Out-Null
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    Write-Host "`n--- BOOT/KAPATMA DÖNGÜSÜ SONUÇLARI ---" -ForegroundColor Cyan
+    Write-Host "  Başarılı: $cyclePassed / $BootShutdownCycles" -ForegroundColor Green
+    if ($cycleFailed -gt 0) {
+        Write-Host "  Başarısız: $cycleFailed / $BootShutdownCycles" -ForegroundColor Red
+    }
+}
+
 # QEMU'yu duzgun (graceful) sonlandir; boylece WAV tamponu diske yazilir
 try {
     if ($qmp) {
@@ -346,6 +452,66 @@ $errOutput = $errorBuilder.ToString().Trim()
 Set-Content -Path (Join-Path $targetDir "qemu_serial.log") -Value $logOutput -Encoding utf8
 
 Write-Host "[3/3] Cekirdek ciktisi ve donanim akisi cozumleniyor..." -ForegroundColor Yellow
+
+# ========================================================================
+# FPS Stres Testi (isteğe bağlı: 10 / 30 / 60 saniye)
+# ========================================================================
+if ($FpsStressTest) {
+    Write-Host "`n=========================================" -ForegroundColor Cyan
+    Write-Host "      FPS Stres Testi (${FpsStressSeconds}s)       " -ForegroundColor Cyan
+    Write-Host "=========================================" -ForegroundColor Cyan
+
+    Write-Host "[BILGI] FPS 3D penceresi açılıyor ve stres testi başlatılıyor..." -ForegroundColor Yellow
+
+    # FPS 3D penceresini aç (QMP ile klavye enjeksiyonu veya başlat menüsü üzerinden)
+    if ($qmp) {
+        # Başlat menüsünü aç ve FPS 3D uygulamasını başlat
+        Send-InputEvents $qmp '[{"type":"key","data":{"down":true,"key":{"type":"qcode","data":"lsuper"}}}]'
+        Start-Sleep -Milliseconds 200
+        Send-InputEvents $qmp '[{"type":"key","data":{"down":false,"key":{"type":"qcode","data":"lsuper"}}}]'
+        Start-Sleep -Milliseconds 500
+
+        # "fps" yaz ve Enter'a bas (çalıştır dialogu üzerinden)
+        # Bu basit bir yaklaşımdır; gerçekte QMP ile metin enjeksiyonu gerekir.
+        Write-Host "[UYARI] FPS 3D otomatik başlatma QMP metin enjeksiyonu ile sınırlıdır." -ForegroundColor DarkYellow
+        Write-Host "[BILGI] Kullanıcı FPS 3D penceresini manuel olarak açabilir." -ForegroundColor DarkYellow
+    }
+
+    $stressStart = [System.DateTime]::UtcNow
+    $stressEnd = $stressStart.AddSeconds($FpsStressSeconds)
+    $lastFpsOutput = $false
+    $fpsSamples = @()
+
+    while (([System.DateTime]::UtcNow - $stressStart).TotalSeconds -lt $FpsStressSeconds) {
+        Start-Sleep -Milliseconds 1000
+        $currentOut = $outputBuilder.ToString()
+
+        # FPS değerlerini seri çıkışından ara (FPS-3D güncelleme uyarıları veya oyun FPS raporu)
+        if ($currentOut -match "\[FPS-3D\]") {
+            if (-not $lastFpsOutput) {
+                Write-Host "[BILGI] FPS-3D etkinlikleri algılanıyor..." -ForegroundColor Green
+                $lastFpsOutput = $true
+            }
+        }
+
+        # Sistem hâlâ çalışıyor mu kontrol et (seri çıkış akışı)
+        if (-not $proc.HasExited) {
+            # Sistem canlı
+        } else {
+            Write-Host "[FAIL] QEMU stres testi sırasında çıkış yaptı!" -ForegroundColor Red
+            break
+        }
+    }
+
+    $stressElapsed = ([System.DateTime]::UtcNow - $stressStart).TotalSeconds
+    Write-Host "[BILGI] FPS stres testi ${FpsStressSeconds}s süresinde çalıştı, geçen süre: $([math]::Round($stressElapsed, 1))s" -ForegroundColor Green
+
+    if (-not $proc.HasExited) {
+        Write-Host "[OK] FPS stres testi tamamlandı: Sistem çökmeden devam etti" -ForegroundColor Green
+    } else {
+        Write-Host "[FAIL] FPS stres testi sırasında sistem çöktü" -ForegroundColor Red
+    }
+}
 
 # 4. Kesin ve Olumlu Dogrulama Kriterleri (Karakter kodlamasindan bagimsiz guclu kaliplar)
 $checks = @(

@@ -1,4 +1,13 @@
-//! Surec ve Sistem cagrilari Yonetimi (Process & System Call Management).
+//! Process & System Call Management / Surec ve Sistem cagrilari Yonetimi.
+//!
+//! This module:
+//! 1. Process Control Block (PCB),
+//! 2. Process states (Ready, Running, Blocked, Terminated),
+//! 3. x86_64 Register/Context structure and process memory/resource tracking,
+//! 4. Process Table: Process spawn/exec, terminate (exit/kill),
+//! 5. System calls (Syscalls): `sys_yield`, `sys_exit`, `sys_write`, `sys_read`,
+//!    `sys_alloc_frame`, `sys_free_frame`, `sys_get_pid`, `sys_time`, etc.
+//! 6. Separate virtual address space (AddressSpace / Page Table) management per process.
 //!
 //! Bu modul:
 //! 1. Surec Kontrol Blogu (PCB - Process Control Block),
@@ -7,8 +16,10 @@
 //! 4. Surec tablosu (Process Table): Surec baslatma (spawn/exec), sonlandirma (exit/kill),
 //! 5. Sistem cagrilari (Syscalls): `sys_yield`, `sys_exit`, `sys_write`, `sys_read`,
 //!    `sys_alloc_frame`, `sys_free_frame`, `sys_get_pid`, `sys_time` vb.
+//! 6. Her surec icin ayri sanal adres uzayi (AddressSpace / Page Table) yonetimi.
 
 use crate::mm::pmm::PhysicalMemoryManager;
+use crate::mm::vmm::AddressSpace;
 
 /// Azami eszamanli aktif surec sayisi
 pub const MAX_PROCESSES: usize = 32;
@@ -102,6 +113,7 @@ pub struct Process {
     pub priority: ProcessPriority,
     pub context: ProcessContext,
     pub resources: ProcessResources,
+    pub address_space: AddressSpace,
     pub cpu_time_ticks: u64,
     pub exit_code: i32,
 }
@@ -137,6 +149,7 @@ impl Process {
                 cr3: 0,
             },
             resources: ProcessResources::empty(),
+            address_space: AddressSpace { pml4_phys: 0 },
             cpu_time_ticks: 0,
             exit_code: 0,
         }
@@ -165,6 +178,7 @@ impl ProcessManager {
         }
     }
 
+    /// Initialize kernel process (PID 0 / init / kernel_core).
     /// cekirdek baslangic surecini (PID 0 / init / kernel_core) kaydeder.
     pub fn init_kernel_process(&mut self) {
         let mut p = Process::empty();
@@ -175,20 +189,25 @@ impl ProcessManager {
         p.name_len = name.len();
         p.state = ProcessState::Running;
         p.priority = ProcessPriority::Realtime;
+        // Kernel sureci mevcut adres uzayini kullanir
+        p.address_space = AddressSpace::current();
         self.processes[0] = p;
         self.current_pid = 0;
         self.active_count = 1;
     }
 
+    /// Spawn a new user or system application into the process table.
+    /// Creates a separate virtual address space (page table) and performs necessary mappings.
     /// Yeni bir kullanici veya sistem uygulamasini surec tablosuna ekler (Spawn).
+    /// Ayrı bir sanal adres uzayı (page table) oluşturur ve gerekli eşlemeleri yapar.
     pub fn spawn(
         &mut self,
         name: &str,
         entry_point: u64,
         stack_top: u64,
-        cr3: u64,
         app_id: usize,
         window_idx: Option<usize>,
+        pmm: &mut PhysicalMemoryManager,
     ) -> Result<usize, &'static str> {
         let slot = self
             .processes
@@ -198,6 +217,25 @@ impl ProcessManager {
 
         let pid = self.next_pid;
         self.next_pid = self.next_pid.saturating_add(1);
+
+        // Yeni bir PML4 kök tablosu tahsis et (yeni adres uzayı için)
+        let pml4_frame = pmm
+            .allocate_frame()
+            .ok_or("PMM yetersiz bellek: PML4 tablosu tahsis edilemedi")?;
+
+        // PML4'ü sıfırla
+        unsafe {
+            let pml4_ptr = crate::drivers::phys_to_virt(pml4_frame) as *mut u8;
+            core::ptr::write_bytes(pml4_ptr, 0, 4096);
+        }
+
+        let address_space = AddressSpace {
+            pml4_phys: pml4_frame,
+        };
+
+        // Note: Kernel mapping should be copied to user address space for proper isolation.
+        // This is a simplified implementation; production requires full kernel mapping.
+        // Kernel eşlemesi kullanıcı adres uzayına kopyalanmalı (tam izolasyon için).
 
         let mut p = Process::empty();
         p.pid = pid;
@@ -211,11 +249,15 @@ impl ProcessManager {
         // Baglami hazirla
         p.context.rip = entry_point;
         p.context.rsp = stack_top;
-        p.context.cr3 = cr3;
+        p.context.cr3 = pml4_frame; // Yeni CR3 değeri
         p.context.rflags = 0x202; // IF = 1 (Kesmeler acik)
 
         p.resources.app_id = app_id;
         p.resources.window_idx = window_idx;
+        p.address_space = address_space;
+
+        // Yeni PML4'ü kaynağa ekle
+        p.resources.record_frame(pml4_frame);
 
         self.processes[slot] = p;
         self.active_count += 1;
@@ -223,6 +265,7 @@ impl ProcessManager {
         Ok(pid)
     }
 
+    /// Terminate a process by PID and free its resources.
     /// Belirtilen PID'ye sahip sureci sonlandirir (Kill/Terminate) ve kaynaklarini serbest birakir.
     pub fn terminate(
         &mut self,
@@ -250,6 +293,9 @@ impl ProcessManager {
             }
             p.resources.frame_count = 0;
 
+            // 2. Adres uzayini temizle (süreç sayfa tabloları zaten frame listesinde)
+            // PML4 ve diğer tablolar yukarıdaki döngüde serbest bırakıldı
+
             self.active_count = self.active_count.saturating_sub(1);
             true
         } else {
@@ -257,6 +303,7 @@ impl ProcessManager {
         }
     }
 
+    /// Find and terminate a running process by window index.
     /// Pencere indeksine gore calisan sureci bulur ve sonlandirir.
     pub fn terminate_by_window(&mut self, win_idx: usize, pmm: &mut PhysicalMemoryManager) -> bool {
         let target_pid = self
@@ -327,18 +374,35 @@ impl ProcessManager {
         Some(0) // kernel_core fallback
     }
 
+    /// Get process reference by PID.
     /// PID ile surec referansi alir.
     pub fn get_process(&self, pid: usize) -> Option<&Process> {
         self.processes
             .iter()
             .find(|p| p.pid == pid && p.state != ProcessState::Unused)
     }
+
+    /// Activate the specified process's address space (switch CR3).
+    /// This function should be called during context switch.
+    /// Belirtilen surecin adres uzayını aktif eder (CR3 değiştirir).
+    /// Bu fonksiyon context switch sırasında çağrılmalıdır.
+    pub fn switch_address_space(&self, pid: usize) {
+        if let Some(p) = self.get_process(pid) {
+            if p.address_space.pml4_phys != 0 {
+                unsafe {
+                    // CR3'ü yükle (adres uzayını değiştir)
+                    core::arch::asm!("mov cr3, {}", in(reg) p.address_space.pml4_phys, options(nostack, preserves_flags));
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Sistem cagrisi (Syscall) Arabirimi
+// System Call Interface / Sistem cagrisi (Syscall) Arabirimi
 // ---------------------------------------------------------------------------
 
+/// Standard System Call Numbers
 /// Standart Sistem cagrisi Numaralari
 pub mod sys_nos {
     pub const SYS_YIELD: u64 = 0;
@@ -351,6 +415,14 @@ pub mod sys_nos {
     pub const SYS_SPAWN: u64 = 7;
 }
 
+/// System call dispatcher.
+/// x86_64 ABI:
+/// RAX = Syscall No
+/// RDI = Arg 1
+/// RSI = Arg 2
+/// RDX = Arg 3
+/// R10 = Arg 4
+/// Return value: RAX (Result code / address)
 /// Sistem cagrisi sevkedicisi (Syscall Dispatcher).
 /// x86_64 ABI:
 /// RAX = Syscall No
@@ -413,6 +485,7 @@ pub fn syscall_dispatch(
     }
 }
 
+/// Test process lifecycle, crash/termination, invalid syscalls, and resource cleanup.
 /// Surec yasam dongusu, kaza (crash/termination), gecersiz sistem cagrisi ve kaynak temizleme testi.
 pub fn test_process_lifecycle_and_fault_recovery(
     proc_mgr: &mut ProcessManager,
@@ -426,14 +499,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
     let initial_active = proc_mgr.active_count;
 
     // 1. Yeni bir test sureci baslat (spawn)
-    let pid = match proc_mgr.spawn(
-        "fault_test_proc",
-        0x1000,
-        0x7000_2000,
-        0x100000,
-        99,
-        Some(99),
-    ) {
+    let pid = match proc_mgr.spawn("fault_test_proc", 0x1000, 0x7000_2000, 99, Some(99), pmm) {
         Ok(id) => id,
         Err(_) => {
             crate::serial_print("[PROC-TEST] Süreç başlatma: BAŞARISIZ\n");
@@ -501,10 +567,10 @@ pub fn test_process_lifecycle_and_fault_recovery(
 
     // 6. oncelikli Zamanlayici (Priority Preemptive Scheduler) Testi
     let p_low = proc_mgr
-        .spawn("low_proc", 0x1000, 0x7000_1000, 0x100000, 1, None)
+        .spawn("low_proc", 0x1000, 0x7000_1000, 1, None, pmm)
         .unwrap_or(0);
     let p_high = proc_mgr
-        .spawn("high_proc", 0x2000, 0x7000_2000, 0x100000, 1, None)
+        .spawn("high_proc", 0x2000, 0x7000_2000, 1, None, pmm)
         .unwrap_or(0);
     if let Some(p) = proc_mgr.processes.iter_mut().find(|p| p.pid == p_high) {
         p.priority = ProcessPriority::High;

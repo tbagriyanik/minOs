@@ -37,9 +37,14 @@ fn ensure_window_process(idx: usize, app_id: usize) {
                 && p.resources.window_idx == Some(idx)
         });
         if !exists {
-            let _ = mgr
-                .proc_mgr
-                .spawn(app_process_name(app_id), 0, 0, 0, app_id, Some(idx));
+            let _ = mgr.proc_mgr.spawn(
+                app_process_name(app_id),
+                0,
+                0,
+                app_id,
+                Some(idx),
+                &mut mgr.pmm,
+            );
         }
     }
 }

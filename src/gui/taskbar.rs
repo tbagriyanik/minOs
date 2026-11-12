@@ -23,7 +23,7 @@ impl MinGuiCompositor {
         open_count: usize,
     ) -> (usize, usize, usize, usize, usize) {
         let start = Self::taskbar_tab_start();
-        let right = Self::tray_layout(width, height).kbd.0.saturating_sub(sp(4));
+        let right = Self::tray_left_bound(width, height).saturating_sub(sp(4));
         let available = right.saturating_sub(start);
         let min_slot = sp(30).max(1);
         let capacity = (available / min_slot).max(1);
@@ -228,7 +228,11 @@ impl MinGuiCompositor {
         if tab_slots > shown_tabs {
             let badge_x = tab_start + shown_tabs * tab_step;
             let (_, _, _, tab_h) = MinGuiCompositor::taskbar_tab_rect_at(badge_x, tb_y);
-            let badge_w = tab_width.min(l.kbd.0.saturating_sub(sp(4)).saturating_sub(badge_x));
+            let badge_w = tab_width.min(
+                Self::tray_left_bound(fb.width, fb.height)
+                    .saturating_sub(sp(4))
+                    .saturating_sub(badge_x),
+            );
             if badge_w > 0 {
                 let badge = (badge_x, tb_y + 5, badge_w, tab_h);
                 fb.draw_rounded_rect(badge.0, badge.1, badge.2, badge.3, 5, Color::ACCENT_BLUE);
@@ -414,10 +418,22 @@ impl MinGuiCompositor {
                 Self::shade(Color::BORDER, 12)
             };
             if desktop_hover || all_minimized {
-                fb.draw_rect(l.desktop.0, tb_y, l.desktop.2, taskbar_h(), Self::shade(Color::TITLE_BAR, 10));
+                fb.draw_rect(
+                    l.desktop.0,
+                    tb_y,
+                    l.desktop.2,
+                    taskbar_h(),
+                    Self::shade(Color::TITLE_BAR, 10),
+                );
             }
             // Ayrıştırıcı çizgi
-            fb.draw_rect(l.desktop.0, tb_y + sp(6), 1, taskbar_h().saturating_sub(sp(12)), line_color);
+            fb.draw_rect(
+                l.desktop.0,
+                tb_y + sp(6),
+                1,
+                taskbar_h().saturating_sub(sp(12)),
+                line_color,
+            );
         }
 
         // 5. Saat Düğmesi (l.clock)
@@ -441,16 +457,9 @@ impl MinGuiCompositor {
         );
 
         // 6. "Minimize All" Düğmesi (ince mavi dikey çizgi - saat solunda)
-        let minimize_all_hover = in_rect(mx, my, l.minimize_all);
-        let line_color = if minimize_all_hover {
-            Self::shade(Color::ACCENT_BLUE, 30)
-        } else {
-            Color::ACCENT_BLUE
-        };
-        let line_x = l.minimize_all.0 + l.minimize_all.2 / 2;
-        let line_top = l.minimize_all.1 + 4;
-        let line_bottom = l.minimize_all.1 + l.minimize_all.3 - 4;
-        fb.draw_rect(line_x, line_top, 2, line_bottom - line_top, line_color);
+        // Not: "Masaüstünü Göster" şeridi (l.desktop) ile aynı dikdörtgeni
+        // paylaşır; çizim yukarıdaki 4. adımda tek noktadan yapılır, burada
+        // ikinci kez çizilmez (çift çizgi/çakışma olmasın).
 
         // Akıllı tepsi ağı simgesi
 

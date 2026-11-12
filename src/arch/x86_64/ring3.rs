@@ -1162,3 +1162,66 @@ pub fn execute_loaded_program(prog: &crate::mm::loader::LoadedProgram) -> bool {
         true
     }
 }
+
+/// Process Manager'dan bir süreci Ring 3'te çalıştırır.
+/// Ayrı adres uzayına geçiş yapar ve CR3'ü değiştirir.
+pub fn execute_process(pid: usize, proc_mgr: &crate::mm::process::ProcessManager) -> bool {
+    install_gates();
+
+    prepare_usermode_stack();
+
+    if let Some(p) = proc_mgr.get_process(pid) {
+        // Sürecin adres uzayına geç (CR3 değiştir)
+        proc_mgr.switch_address_space(pid);
+
+        PARK_RIP.store(p.context.rip, Ordering::Relaxed);
+        USER_FAULT_VEC.store(0, Ordering::Relaxed);
+        USER_FAULT_RIP.store(0, Ordering::Relaxed);
+        USER_EXITED.store(false, Ordering::Relaxed);
+        unsafe {
+            LAST_RING3_OUTPUT_LEN = 0;
+        }
+
+        smp::print_locked("[RING3] Surec baslatiliyor (PID=");
+        smp::print_locked_dec(pid as u64);
+        smp::print_locked(" RIP=");
+        smp::print_locked_hex(p.context.rip);
+        smp::print_locked(" RSP=");
+        smp::print_locked_hex(p.context.rsp);
+        smp::print_locked(" CR3=");
+        smp::print_locked_hex(p.context.cr3);
+        smp::print_locked(")...\n");
+
+        unsafe {
+            enter_usermode(p.context.rip, p.context.rsp);
+        }
+
+        let fault = USER_FAULT_VEC.load(Ordering::Acquire);
+        let exited = USER_EXITED.load(Ordering::Acquire);
+
+        // Kernel adres uzayına geri dön
+        if let Some(kernel_p) = proc_mgr.get_process(0) {
+            unsafe {
+                core::arch::asm!("mov cr3, {}", in(reg) kernel_p.address_space.pml4_phys, options(nostack, preserves_flags));
+            }
+        }
+
+        if fault != 0 {
+            smp::print_locked("[RING3] Surecte hata olustu (Istisna #");
+            smp::print_locked_dec(fault);
+            smp::print_locked("). Surec guvenle sonlandirildi.\n");
+            false
+        } else if exited {
+            smp::print_locked("[RING3] Surec basariyla tamamlandi (SYS_EXIT).\n");
+            true
+        } else {
+            smp::print_locked("[RING3] Surecten donuldu.\n");
+            true
+        }
+    } else {
+        smp::print_locked("[RING3] Surec bulunamadi (PID=");
+        smp::print_locked_dec(pid as u64);
+        smp::print_locked(").\n");
+        false
+    }
+}

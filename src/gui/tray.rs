@@ -34,26 +34,44 @@ impl MinGuiCompositor {
         let kbd_w = sp(50);
         let gap = sp(8);
 
+        // Küçük ekran / yüksek ölçekte çakışmayı önlemek için sol sınır:
+        // Başlat düğmesi sağ kenarı + boşluk. Bu sınırın altına düşen düşük
+        // öncelikli tepsi öğeleri (klavye -> ağ -> ses) gizlenir.
+        let left_limit = sp(6) + sp(112) + gap;
+
         let clock_x = show_desktop_x.saturating_sub(gap + clock_w);
         let mut curr_x = clock_x;
 
         let volume_rect = if audio_available {
             let x = curr_x.saturating_sub(gap + vol_w);
-            curr_x = x;
-            (x, by, vol_w, h)
+            if x >= left_limit {
+                curr_x = x;
+                (x, by, vol_w, h)
+            } else {
+                (0, 0, 0, 0)
+            }
         } else {
             (0, 0, 0, 0)
         };
 
         let network_rect = if net_available {
             let x = curr_x.saturating_sub(gap + net_w);
-            curr_x = x;
-            (x, by, net_w, h)
+            if x >= left_limit {
+                curr_x = x;
+                (x, by, net_w, h)
+            } else {
+                (0, 0, 0, 0)
+            }
         } else {
             (0, 0, 0, 0)
         };
 
         let kbd_x = curr_x.saturating_sub(gap + kbd_w);
+        let kbd_rect = if kbd_x >= left_limit {
+            (kbd_x, by, kbd_w, h)
+        } else {
+            (0, 0, 0, 0)
+        };
 
         let desktop_rect = (show_desktop_x, tb_y, show_desktop_w, taskbar_h());
 
@@ -64,10 +82,24 @@ impl MinGuiCompositor {
             minimize_all: desktop_rect,
             volume: volume_rect,
             network: network_rect,
-            kbd: (kbd_x, by, kbd_w, h),
+            kbd: kbd_rect,
             desktop: desktop_rect,
         }
     }
+
+    /// Tepside görünen en sol öğenin X konumu (gizli öğeler yok sayılır).
+    /// Görev çubuğu sekmeleri bu sınıra kadar uzayabilir.
+    pub fn tray_left_bound(width: usize, height: usize) -> usize {
+        let l = Self::tray_layout(width, height);
+        let mut right = l.clock.0;
+        for r in [l.volume, l.network, l.kbd] {
+            if r.2 > 0 {
+                right = right.min(r.0);
+            }
+        }
+        right
+    }
+
     // -----------------------------------------------------------------------
     // 4. Takvim Kaplaması (Clock -> Calendar)
     // -----------------------------------------------------------------------

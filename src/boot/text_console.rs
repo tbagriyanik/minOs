@@ -145,10 +145,13 @@ pub fn is_active() -> bool {
 }
 
 /// Mevcut ekran durumunu kaydet (GUI'den boot mesajlarına geçiş için)
+///
+/// # Safety
+/// `FB` geçerli bir framebuffer içermeli veya `None` olmalı; fonksiyon yalnızca
+/// framebuffer pointer'ı üzerinden volatile okuma yapar.
 pub unsafe fn save_screen() {
     if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-        let len = screen
-            .width.saturating_mul(screen.height);
+        let len = screen.width.saturating_mul(screen.height);
         if len <= crate::drivers::video::BACKBUFFER_LEN {
             let pitch_words = screen.pitch / 4;
             for y in 0..screen.height {
@@ -165,11 +168,14 @@ pub unsafe fn save_screen() {
 }
 
 /// Kaydedilen ekran durumunu geri yükle (boot mesajlarından GUI'ye dönüş için)
+///
+/// # Safety
+/// `FB` geçerli bir framebuffer içermeli veya `None` olmalı; fonksiyon yalnızca
+/// framebuffer pointer'ı üzerinden volatile yazma yapar.
 pub unsafe fn restore_screen() {
     if let Some((saved_w, saved_h)) = SAVED_SCREEN_DIM {
         if let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() {
-            let len = screen
-                .width.saturating_mul(screen.height);
+            let len = screen.width.saturating_mul(screen.height);
             if len <= crate::drivers::video::BACKBUFFER_LEN
                 && screen.width == saved_w
                 && screen.height == saved_h
@@ -191,6 +197,9 @@ pub unsafe fn restore_screen() {
 }
 
 /// Keep the boot console framebuffer in sync when the main GUI changes video mode.
+///
+/// # Safety
+/// `fb` geçerli ve ömrü boyunca mapped kalacak bir framebuffer olmalıdır.
 pub unsafe fn update_framebuffer(fb: Framebuffer) {
     FB = Some(fb);
     SAVED_SCREEN_DIM = None;
@@ -199,6 +208,9 @@ pub unsafe fn update_framebuffer(fb: Framebuffer) {
 }
 
 /// Text console'u tekrar aktif hale getir (welcome ekranından boot mesajlarına dönüş için)
+///
+/// # Safety
+/// `FB` geçerli bir framebuffer içermeli veya `None` olmalı.
 pub unsafe fn toggle_active() {
     if ACTIVE.load(Ordering::Acquire) {
         ACTIVE.store(false, Ordering::Release);
@@ -208,6 +220,10 @@ pub unsafe fn toggle_active() {
 }
 
 /// Force the buffered boot transcript onto the framebuffer, including after GUI output.
+///
+/// # Safety
+/// `FB` geçerli bir framebuffer içermeli veya `None` olmalı; `None` ise fonksiyon
+/// erken döner.
 pub unsafe fn show_boot_log() {
     let Some(screen) = (&mut *core::ptr::addr_of_mut!(FB)).as_mut() else {
         return;
@@ -273,8 +289,7 @@ fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: char, color: u32)
         FONT_8X8[(b'?' - 32) as usize]
     };
 
-    for row in 0..8 {
-        let row_data = font_data[row];
+    for (row, &row_data) in font_data.iter().enumerate() {
         for col in 0..8 {
             if (row_data >> (7 - col)) & 1 == 1 {
                 // Yatay ayna (horizontal mirror): x ekseninde sütunları tersine çevir
@@ -296,6 +311,9 @@ fn draw_char(screen: &mut Framebuffer, x: usize, y: usize, ch: char, color: u32)
 }
 
 /// Install a validated framebuffer as a text console before lengthy init work.
+///
+/// # Safety
+/// `fb` geçerli ve ömrü boyunca mapped kalacak bir framebuffer olmalıdır.
 pub unsafe fn init(fb: Framebuffer) {
     FB = Some(fb);
     CURSOR_X = 16;

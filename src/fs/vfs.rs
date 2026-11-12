@@ -55,6 +55,9 @@ const SNAPSHOT_NAME: &str = "VFS.DAT";
 const SNAPSHOT_MAGIC: &[u8; 6] = b"MVFS01";
 const SNAPSHOT_MAX: usize = 16 * 1024 * 1024;
 
+/// Anlık görüntü çözümlemesinin döndürdüğü (VFS öğeleri, büyük dosya blob'ları) çifti.
+type SnapshotPayload = (Vec<VfsItem>, Vec<(String, Arc<[u8]>)>);
+
 impl VirtualFileSystem {
     pub fn new() -> Self {
         let mut vfs = Self {
@@ -326,7 +329,7 @@ impl VirtualFileSystem {
     }
 
     /// Anlık görüntü blob'unu çözer; bozuksa `None` döner.
-    fn parse_snapshot(blob: &[u8]) -> Option<(Vec<VfsItem>, Vec<(String, Arc<[u8]>)>)> {
+    fn parse_snapshot(blob: &[u8]) -> Option<SnapshotPayload> {
         if blob.len() < 10 || &blob[..6] != SNAPSHOT_MAGIC {
             return None;
         }
@@ -895,13 +898,11 @@ impl VirtualFileSystem {
         }
 
         // Geriye dönük uyumlululuk: static nodes tablosu (önbellekli arama)
-        for i in 0..16 {
-            if let Some(node) = &self.nodes[i] {
-                if node.node_type == NodeType::File
-                    && (node.name == path_or_name || norm.ends_with(node.name))
-                {
-                    return Some(node.data);
-                }
+        for node in self.nodes.iter().flatten() {
+            if node.node_type == NodeType::File
+                && (node.name == path_or_name || norm.ends_with(node.name))
+            {
+                return Some(node.data);
             }
         }
 
@@ -1164,10 +1165,10 @@ impl VirtualFileSystem {
             return Err("Hedef klasor bulunamadi / Destination folder not found");
         }
         let src_is_dir = self.is_dir(&src_norm);
-        if src_is_dir
-            && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/"))) {
-                return Err("Hedef kaynak klasorun icinde / Destination is inside source");
-            }
+        if src_is_dir && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")))
+        {
+            return Err("Hedef kaynak klasorun icinde / Destination is inside source");
+        }
 
         let base_name = Self::file_name_from_path(&src_norm);
         let (stem, ext) = Self::split_name_ext(&base_name);
@@ -1264,10 +1265,10 @@ impl VirtualFileSystem {
             return Err("Hedef klasor bulunamadi / Destination folder not found");
         }
         let src_is_dir = self.is_dir(&src_norm);
-        if src_is_dir
-            && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/"))) {
-                return Err("Hedef kaynak klasorun icinde / Destination is inside source");
-            }
+        if src_is_dir && (dest_norm == src_norm || dest_norm.starts_with(&(src_norm.clone() + "/")))
+        {
+            return Err("Hedef kaynak klasorun icinde / Destination is inside source");
+        }
         if Self::parent_path_from_path(&src_norm) == dest_norm {
             return Err("Zaten bu klasorde / Already in this folder");
         }
@@ -1530,14 +1531,10 @@ impl VirtualFileSystem {
     }
 
     pub fn find_file(&self, name: &str) -> Option<&VfsNode> {
-        for i in 0..16 {
-            if let Some(node) = &self.nodes[i] {
-                if node.node_type == NodeType::File && node.name == name {
-                    return Some(node);
-                }
-            }
-        }
-        None
+        self.nodes
+            .iter()
+            .flatten()
+            .find(|node| node.node_type == NodeType::File && node.name == name)
     }
 }
 

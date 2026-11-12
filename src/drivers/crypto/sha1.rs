@@ -1,9 +1,8 @@
 //! SHA-1 (FIPS 180-1 / RFC 3174) — no_std, no external dependencies.
 //!
-//! WPA2-PSK 4-way el sıkışması için zorunlu:
-//!   * PBKDF2-HMAC-SHA1 ile 256-bit PMK türetimi (4096 tur)
-//!   * HMAC-SHA1 ile EAPOL-Key MIC (anahtar onayı)
-//! SHA-1 çıktısı 20 bayt (160 bit), blok boyutu 64 bayttır.
+//! WPA2-PSK 4-way el sıkışması için zorunludur: PBKDF2-HMAC-SHA1 ile
+//! 256-bit PMK türetimi (4096 tur) ve HMAC-SHA1 ile EAPOL-Key MIC
+//! (anahtar onayı). SHA-1 çıktısı 20 bayt (160 bit), blok boyutu 64 bayttır.
 
 const K0: u32 = 0x5A82_7999; // 0 <= t <= 19
 const K1: u32 = 0x6ED9_EBA1; // 20 <= t <= 39
@@ -71,7 +70,7 @@ impl Sha1 {
         let mut d = self.h[3];
         let mut e = self.h[4];
 
-        for i in 0..80 {
+        for (i, &wv) in w.iter().enumerate() {
             let (f, k) = if i < 20 {
                 (f0(b, c, d), K0)
             } else if i < 40 {
@@ -85,7 +84,7 @@ impl Sha1 {
                 .wrapping_add(f)
                 .wrapping_add(e)
                 .wrapping_add(k)
-                .wrapping_add(w[i]);
+                .wrapping_add(wv);
             e = d;
             d = c;
             c = rotl(b, 30);

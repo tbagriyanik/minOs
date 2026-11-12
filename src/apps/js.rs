@@ -139,11 +139,7 @@ impl JsDocumentRef {
     pub fn get_elements_by_class_name(&self, class: &str) -> Vec<usize> {
         let mut results = Vec::new();
         for (idx, elem) in self.elements.iter().enumerate() {
-            if elem
-                .class_name
-                .as_ref()
-                .is_some_and(|c| c.contains(class))
-            {
+            if elem.class_name.as_ref().is_some_and(|c| c.contains(class)) {
                 results.push(idx);
             }
         }
@@ -380,10 +376,7 @@ impl JsValue {
                 }
             }
             JsValue::String(s) => s.trim().parse::<i64>().unwrap_or(0),
-            JsValue::Array(items)
-                if items.len() == 1 => {
-                    items[0].to_i64()
-                }
+            JsValue::Array(items) if items.len() == 1 => items[0].to_i64(),
             _ => 0,
         }
     }
@@ -942,8 +935,11 @@ impl JsRuntime {
             if let Some(target) = map.get(PROTO_PROXY_TARGET).cloned() {
                 if let Some(handler) = map.get(PROTO_PROXY_HANDLER).cloned() {
                     if let Some(trap) = handler_trap(&handler, "ownKeys") {
-                        let (ret, _) =
-                            self.call_fn_with_this(&trap, handler.clone(), core::slice::from_ref(&target));
+                        let (ret, _) = self.call_fn_with_this(
+                            &trap,
+                            handler.clone(),
+                            core::slice::from_ref(&target),
+                        );
                         if let JsValue::Array(items) = ret {
                             return items.iter().map(|v| v.to_str()).collect();
                         }
@@ -1740,10 +1736,7 @@ impl JsRuntime {
 
     /// İfadeleri `JsValue` olarak değerlendirir.
     pub fn eval_val(&mut self, expr: &str) -> JsValue {
-        let e = expr
-            .trim()
-            .trim_end_matches([';', '\n', '\r'])
-            .trim();
+        let e = expr.trim().trim_end_matches([';', '\n', '\r']).trim();
         if e.is_empty() {
             return JsValue::Undefined;
         }
@@ -1841,10 +1834,7 @@ impl JsRuntime {
                         0
                     }
                 }
-                b'%'
-                    if b != 0 => {
-                        a % b
-                    }
+                b'%' if b != 0 => a % b,
                 _ => 0,
             };
             return JsValue::Number(res);
@@ -2603,9 +2593,7 @@ impl JsRuntime {
                             while g.pc < statements.len() {
                                 let stmt = &statements[g.pc];
                                 let trimmed = stmt.trim();
-                                if trimmed.starts_with("yield ")
-                                    || trimmed.starts_with("yield(")
-                                {
+                                if trimmed.starts_with("yield ") || trimmed.starts_with("yield(") {
                                     // yield ifadesi: değeri hesapla ve duraklat.
                                     let expr = if trimmed.starts_with("yield(") {
                                         &trimmed[6..trimmed.len() - 1]
@@ -2630,8 +2618,7 @@ impl JsRuntime {
                                 g.pc += 1;
                                 if self.last_return.is_some() {
                                     // `return` içinde generator: değerle tamamla.
-                                    let ret =
-                                        self.last_return.take().unwrap_or(JsValue::Undefined);
+                                    let ret = self.last_return.take().unwrap_or(JsValue::Undefined);
                                     g.state = GeneratorState::Completed;
                                     g.value = Some(ret.clone());
                                     let result = JsValue::Object(BTreeMap::from([
@@ -2657,7 +2644,7 @@ impl JsRuntime {
                                 JsValue::Generator(Box::new((*g).clone())),
                             );
                             return JsValue::String(self.store_value(result));
-                        },
+                        }
                         _ => {}
                     }
                 }
@@ -3055,10 +3042,10 @@ impl JsRuntime {
                             if let Some(JsValue::Object(mutated)) = self.values.get("this").cloned()
                             {
                                 if is_simple_ident(obj_name) {
-                                    if let Some(existing) = self.values.get_mut(obj_name) {
-                                        if let JsValue::Object(target) = existing {
-                                            *target = mutated;
-                                        }
+                                    if let Some(JsValue::Object(target)) =
+                                        self.values.get_mut(obj_name)
+                                    {
+                                        *target = mutated;
                                     }
                                     self.sync_var_from_val(obj_name);
                                 }
@@ -3974,8 +3961,8 @@ impl JsRuntime {
         }
 
         // Artırma / Azaltma: i++, ++i, i--, --i
-        if s.ends_with("++") {
-            let name = s[..s.len() - 2].trim();
+        if let Some(name) = s.strip_suffix("++") {
+            let name = name.trim();
             if !name.is_empty()
                 && name
                     .chars()
@@ -3986,8 +3973,8 @@ impl JsRuntime {
                 return;
             }
         }
-        if s.starts_with("++") {
-            let name = s[2..].trim();
+        if let Some(rest) = s.strip_prefix("++") {
+            let name = rest.trim();
             if !name.is_empty()
                 && name
                     .chars()
@@ -3998,8 +3985,8 @@ impl JsRuntime {
                 return;
             }
         }
-        if s.ends_with("--") {
-            let name = s[..s.len() - 2].trim();
+        if let Some(name) = s.strip_suffix("--") {
+            let name = name.trim();
             if !name.is_empty()
                 && name
                     .chars()
@@ -4010,8 +3997,8 @@ impl JsRuntime {
                 return;
             }
         }
-        if s.starts_with("--") {
-            let name = s[2..].trim();
+        if let Some(rest) = s.strip_prefix("--") {
+            let name = rest.trim();
             if !name.is_empty()
                 && name
                     .chars()
@@ -4138,12 +4125,10 @@ impl JsRuntime {
             if !var_name.contains(' ') {
                 if let Some((args_str, _)) = call_args(&s[dot_push + 5..], 0) {
                     let val = self.eval_val(args_str.trim());
-                    if let Some(existing) = self.values.get_mut(var_name) {
-                        if let JsValue::Array(ref mut items) = existing {
-                            items.push(val);
-                            self.sync_var_from_val(var_name);
-                            return;
-                        }
+                    if let Some(JsValue::Array(items)) = self.values.get_mut(var_name) {
+                        items.push(val);
+                        self.sync_var_from_val(var_name);
+                        return;
                     }
                 }
             }
@@ -4334,9 +4319,7 @@ impl JsRuntime {
                         });
                         out.extend_from_slice(format!("element{}", new_idx).as_bytes());
                     }
-                } else if name == "element.innerHTML" {
-                    out.extend_from_slice(b"null");
-                } else if name == "element.textContent" {
+                } else if name == "element.innerHTML" || name == "element.textContent" {
                     out.extend_from_slice(b"null");
                 } else if name == "element.setAttribute" {
                     out.extend_from_slice(b"");
@@ -4381,9 +4364,7 @@ impl JsRuntime {
                     let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
                     let _ = self.do_fetch(url);
                     out.extend_from_slice(b"0");
-                } else if name == "localStorage" {
-                    out.extend_from_slice(b"0");
-                } else if name == "sessionStorage" {
+                } else if name == "localStorage" || name == "sessionStorage" {
                     out.extend_from_slice(b"0");
                 } else if name == "WebSocket" {
                     let url = value.trim().trim_matches(|c| c == '\'' || c == '"');
@@ -5147,8 +5128,7 @@ fn call_args(s: &str, open_idx: usize) -> Option<(&str, usize)> {
         i += 1;
     }
     // Kapanmayan parantez: kalanı argüman say.
-    let rest = s[open_idx + 1..]
-        .trim_end_matches([')', '}', ';', '\n', '\r']);
+    let rest = s[open_idx + 1..].trim_end_matches([')', '}', ';', '\n', '\r']);
     Some((rest, b.len()))
 }
 

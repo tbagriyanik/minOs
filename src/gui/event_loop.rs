@@ -299,8 +299,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     let mut last_ap_heartbeats = [0u64; arch::x86_64::smp::MAX_CPUS];
 
-    for c in 0..arch::x86_64::smp::MAX_CPUS {
-        last_ap_heartbeats[c] = arch::x86_64::smp::heartbeat(c);
+    for (c, slot) in last_ap_heartbeats.iter_mut().enumerate() {
+        *slot = arch::x86_64::smp::heartbeat(c);
     }
 
     let mut music_note: usize = 0;
@@ -463,8 +463,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         );
 
         // İzleme damgası: ilk karede açık pencereleri canlı olarak işaretle.
-        for idx in 0..gui::MAX_WINDOWS {
-            if let Some(win) = compositor.windows[idx] {
+        for (idx, slot) in compositor.windows.iter().enumerate().take(gui::MAX_WINDOWS) {
+            if let Some(win) = slot {
                 if win.is_open && !win.is_minimized {
                     watchdog::heartbeat(idx, win.app_id as usize);
                 }
@@ -1620,39 +1620,41 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 _ => notepad_app.clear(),
                             },
 
-                            gui::ContextKind::TaskManager => if clicked_item == 0 {
-                                // Sonlandir (Del): secili sureci kapat
+                            gui::ContextKind::TaskManager => {
+                                if clicked_item == 0 {
+                                    // Sonlandir (Del): secili sureci kapat
 
-                                if let Some(target) = taskmgr_app.selected_app_idx() {
-                                    taskmgr_app.status = gui::ui_text(
-                                        "Uygulama sonlandırıldı.",
-                                        "Application terminated.",
-                                    );
-
-                                    if let Some(wi) = compositor.context_window {
-                                        terminate_app(
-                                            target,
-                                            &mut compositor,
-                                            &mut filemanager_app,
-                                            &mut settings_app,
-                                            &mut notepad_app,
-                                            &mut browser_app,
-                                            &mut imageviewer_app,
-                                            &mut musicplayer_app,
-                                            &mut videoplayer_app,
-                                            &mut taskmgr_app,
-                                            &mut calculator_app,
-                                            &mut paint_apps[wi],
-                                            &mut terminal_app,
-                                            &mut installer_app,
-                                            &mut viewer3d_app,
-                                            &mut pkgmgr_app,
-                                            &mut fps_game_app,
-                                            &mut fps_3d_app,
+                                    if let Some(target) = taskmgr_app.selected_app_idx() {
+                                        taskmgr_app.status = gui::ui_text(
+                                            "Uygulama sonlandırıldı.",
+                                            "Application terminated.",
                                         );
+
+                                        if let Some(wi) = compositor.context_window {
+                                            terminate_app(
+                                                target,
+                                                &mut compositor,
+                                                &mut filemanager_app,
+                                                &mut settings_app,
+                                                &mut notepad_app,
+                                                &mut browser_app,
+                                                &mut imageviewer_app,
+                                                &mut musicplayer_app,
+                                                &mut videoplayer_app,
+                                                &mut taskmgr_app,
+                                                &mut calculator_app,
+                                                &mut paint_apps[wi],
+                                                &mut terminal_app,
+                                                &mut installer_app,
+                                                &mut viewer3d_app,
+                                                &mut pkgmgr_app,
+                                                &mut fps_game_app,
+                                                &mut fps_3d_app,
+                                            );
+                                        }
                                     }
                                 }
-                            },
+                            }
 
                             gui::ContextKind::Window => {
                                 if let Some(wi) = compositor.context_window {
@@ -2105,8 +2107,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                         let mut focused_hidden_ordinal = None;
 
-                        for hidden_idx in 0..gui::MAX_WINDOWS {
-                            if let Some(hidden) = compositor.windows[hidden_idx] {
+                        for (hidden_idx, slot) in compositor.windows.iter().enumerate() {
+                            if let Some(hidden) = slot {
                                 if hidden.is_open {
                                     if ordinal >= shown_tabs {
                                         if first_hidden.is_none() {
@@ -2128,8 +2130,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         if let Some(active_ordinal) = focused_hidden_ordinal {
                             let mut ordinal = 0usize;
 
-                            for hidden_idx in 0..gui::MAX_WINDOWS {
-                                if let Some(hidden) = compositor.windows[hidden_idx] {
+                            for (hidden_idx, slot) in compositor.windows.iter().enumerate() {
+                                if let Some(hidden) = slot {
                                     if hidden.is_open {
                                         if ordinal > active_ordinal {
                                             next_hidden = Some(hidden_idx);
@@ -4167,6 +4169,21 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
                                 }
 
+                                // Renk kutularından birine basıldı mı? (if zinciri
+                                // dışında hesaplanır; blok koşul olarak
+                                // kullanılamaz).
+                                let swatch_hit = {
+                                    let mut hit = false;
+                                    for i in 0..4 {
+                                        let r = apps::paint::PaintApp::swatch_rect(i);
+                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) {
+                                            hit = true;
+                                            break;
+                                        }
+                                    }
+                                    hit
+                                };
+
                                 if menu_handled {
 
                                     // Menu islemi tamamlandi; diger isabet testleri atlanir.
@@ -4259,8 +4276,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                     paint_apps[idx].as_mut().unwrap().picker_open =
                                         !paint_apps[idx].as_mut().unwrap().picker_open;
-                                } else if paint_apps[idx].as_ref().is_some_and(|p| p.picker_open)
-                                {
+                                } else if paint_apps[idx].as_ref().is_some_and(|p| p.picker_open) {
                                     // renk secici
                                     if paint_apps[idx].is_none() {
                                         paint_apps[idx] = Some(apps::paint::PaintApp::new());
@@ -4318,22 +4334,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     }
 
                                     paint_apps[idx].as_mut().unwrap().adjust_zoom(1);
-                                } else if {
-                                    // Renk kutularindan birine basildi mi?
-
-                                    let mut hit: Option<usize> = None;
-
-                                    for i in 0..4 {
-                                        let r = apps::paint::PaintApp::swatch_rect(i);
-
-                                        if gui::in_rect(mx, my, (wx + r.0, wy + r.1, r.2, r.3)) {
-                                            hit = Some(i);
-                                            break;
-                                        }
-                                    }
-
-                                    hit.is_some()
-                                } {
+                                } else if swatch_hit {
                                     if paint_apps[idx].is_none() {
                                         paint_apps[idx] = Some(apps::paint::PaintApp::new());
                                     }
@@ -7619,10 +7620,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                 let fps_focused = app_is_focused(&compositor, 15);
 
-                if fps_focused
-                    && fps_game_app.handle_key(ch) {
-                        force_render = true;
-                    }
+                if fps_focused && fps_game_app.handle_key(ch) {
+                    force_render = true;
+                }
 
                 let fps3d_focused = app_is_focused(&compositor, 16);
 
@@ -7750,8 +7750,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             // Ana döngü yaşadıkça açık pencereleri canlı işaretle. APIC
             // zamanlayıcısı bu işaretleri kesme bağlamında denetler; burada
             // yalnızca ertelenmiş dondurma olayları güvenli şekilde tüketilir.
-            for idx in 0..gui::MAX_WINDOWS {
-                if let Some(win) = compositor.windows[idx] {
+            for (idx, slot) in compositor.windows.iter().enumerate() {
+                if let Some(win) = slot {
                     if win.is_open && !win.is_minimized {
                         watchdog::heartbeat(idx, win.app_id as usize);
                     }
@@ -8415,8 +8415,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             );
 
             // İzleme damgası: her karede açık pencereleri canlı olarak işaretle.
-            for idx in 0..gui::MAX_WINDOWS {
-                if let Some(win) = compositor.windows[idx] {
+            for (idx, slot) in compositor.windows.iter().enumerate() {
+                if let Some(win) = slot {
                     if win.is_open && !win.is_minimized {
                         watchdog::heartbeat(idx, win.app_id as usize);
                     }
@@ -8581,7 +8581,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             let total_ram = memory_mgr.pmm.total_memory_bytes;
             let used_ram = memory_mgr.pmm.used_memory_bytes;
             if total_ram > 0 {
-                let ram_pct = (used_ram.saturating_mul(100) / total_ram) as usize;
+                let ram_pct = used_ram
+                    .saturating_mul(100)
+                    .checked_div(total_ram)
+                    .unwrap_or(0) as usize;
                 if ram_pct >= RAM_WARN_PCT {
                     if !ram_warn_shown {
                         crate::serial_print("[WARN] RAM kullanımı yüksek: ");

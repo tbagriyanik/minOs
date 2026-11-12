@@ -54,6 +54,10 @@ pub extern "C" fn apic_timer_handler_rust() {
 }
 
 /// Naked interrupt kapısı (tüm yazmaçları korur, Rust işleyicisini çağırır, EOI sonrası iretq ile döner).
+///
+/// # Safety
+/// Donanım kesmesi tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan
+/// çağrılmamalıdır.
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn apic_timer_entry() {

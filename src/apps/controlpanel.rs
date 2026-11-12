@@ -438,11 +438,11 @@ pub fn render_content(
 
             let total_mb = total_ram_bytes / (1024 * 1024);
             let used_mb = used_ram_bytes / (1024 * 1024);
-            let percent = if total_ram_bytes > 0 {
-                (used_ram_bytes.saturating_mul(100) / total_ram_bytes) as usize
-            } else {
-                0
-            };
+            let percent = used_ram_bytes
+                .saturating_mul(100)
+                .checked_div(total_ram_bytes)
+                .map(|v| v as usize)
+                .unwrap_or(0);
             let mut ram = TextBuf::new();
             ram.push_usize(used_mb as usize);
             ram.push_str(" / ");
@@ -800,7 +800,7 @@ pub fn render_content(
                 let fps = (bits >> 32) as u32;
                 let timer_jitter_us = ((bits >> 16) & 0xFFFF) as u32;
                 let score = (bits & 0xFFFF) as u32;
-                let frame_ms = if fps > 0 { 1000 / fps } else { 0 };
+                let frame_ms = 1000u32.checked_div(fps).unwrap_or(0);
                 let mut r = TextBuf::new();
                 r.push_str(crate::gui::ui_text("Kare hızı: ", "Frame rate: "));
                 r.push_usize(fps as usize);

@@ -243,15 +243,15 @@ impl MinGuiCompositor {
         for (row, &mask) in ICON_MAP.iter().enumerate() {
             for col in 0..16 {
                 if (mask & (1 << (15 - col))) != 0 {
-                    let c =
-                        if (row == 5 || row == 7 || row == 9 || row == 11) && (4..=10).contains(&col)
-                        {
-                            Color::ACCENT_BLUE
-                        } else if row <= 2 && col >= 9 {
-                            Color::ACCENT_YELLOW
-                        } else {
-                            Color::TEXT_MAIN
-                        };
+                    let c = if (row == 5 || row == 7 || row == 9 || row == 11)
+                        && (4..=10).contains(&col)
+                    {
+                        Color::ACCENT_BLUE
+                    } else if row <= 2 && col >= 9 {
+                        Color::ACCENT_YELLOW
+                    } else {
+                        Color::TEXT_MAIN
+                    };
                     bitmap[row * 16 + col] = c;
                 }
             }

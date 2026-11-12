@@ -122,11 +122,11 @@ impl AppRegistry {
         };
 
         let mut address_space = crate::mm::vmm::AddressSpace::current();
-        let loaded =
-            match crate::mm::loader::AppLoader::load_binary(data, &mut address_space, pmm) {
-                Ok(loaded) => loaded,
-                Err(err) => return Some(Err(err)),
-            };
+        let loaded = match crate::mm::loader::AppLoader::load_binary(data, &mut address_space, pmm)
+        {
+            Ok(loaded) => loaded,
+            Err(err) => return Some(Err(err)),
+        };
 
         let entry_point = loaded.entry_point;
         let ok = crate::arch::x86_64::ring3::execute_loaded_program(&loaded);

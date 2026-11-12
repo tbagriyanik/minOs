@@ -97,9 +97,9 @@ fn is_arabic_mark(c: char) -> bool {
 /// Arapça harfin bitişiklik türü.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Join {
-    NonJoining,
-    RightJoining,
-    DualJoining,
+    Isolated,
+    RightOnly,
+    Dual,
 }
 
 fn arabic_join(c: char) -> Join {
@@ -128,9 +128,9 @@ fn arabic_join(c: char) -> Join {
         | 0x06CF
         | 0x06D2
         | 0x06D3
-        | 0x06D5 => Join::RightJoining,
+        | 0x06D5 => Join::RightOnly,
         // Hiçbir yöne bağlanmayanlar (hemze, işaretler...).
-        0x0621 => Join::NonJoining,
+        0x0621 => Join::Isolated,
         // Hem öncekiyle hem sonrakiyle birleşebilen harfler.
         0x0626
         | 0x0628
@@ -152,10 +152,10 @@ fn arabic_join(c: char) -> Join {
         | 0x06FA..=0x06FC
         | 0x06FF
         | 0x0750..=0x077F
-        | 0x08A0..=0x08B4 => Join::DualJoining,
+        | 0x08A0..=0x08B4 => Join::Dual,
         // Yalnızca kendinden önceki harfe bağlananlar (elif, dal, re, vav...)
         // ve işaretler: bunlar sonraki harfi başlatmaz.
-        _ => Join::RightJoining,
+        _ => Join::RightOnly,
     }
 }
 
@@ -263,13 +263,13 @@ fn shape_arabic(chars: &[char]) -> Vec<char> {
             // `join` bu harfin kendi bağlanma yeteneğidir; harf ancak
             // birleşebilir türdeyse komşusuna bağlanır.
             // Not: `join` harfin BAĞLANMA YETENEĞİDIR:
-            // - DualJoining: iki yana bağlanır.
+            // - Dual: iki yana bağlanır.
             // - RightJoining: SAĞDAN bağlanır — yani kendinden ÖNCEKİ harfin
             //   ucuna yapışır (joins_prev = true), kendi soluna bağlanamaz.
             // - NonJoining: hiç bağlanmaz.
-            let joins_prev = join != Join::NonJoining && prev_connects;
-            let joins_next = join == Join::DualJoining
-                && after.is_some_and(|n| arabic_join(n) != Join::NonJoining);
+            let joins_prev = join != Join::Isolated && prev_connects;
+            let joins_next =
+                join == Join::Dual && after.is_some_and(|n| arabic_join(n) != Join::Isolated);
             if let Some(forms) = arabic_forms(c) {
                 let form = match (joins_prev, joins_next) {
                     (true, true) => 3,  // orta (medial)

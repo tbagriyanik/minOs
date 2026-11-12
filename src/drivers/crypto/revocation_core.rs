@@ -1,4 +1,6 @@
 //! Sertifika iptal kontrolü (CRL ve OCSP) — `no_std` + `alloc`.
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri çağıran katmanda.
+#![allow(clippy::result_unit_err)]
 //!
 //! TLS zincir doğrulaması bir sertifikanın güvenilir bir kök CA'ya kadar
 //! imzalandığını kanıtlar; ancak süresi dolmadan iptal edilmiş (anahtar sızıntısı,

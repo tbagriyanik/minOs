@@ -2,25 +2,25 @@
 
 use super::*;
 
-/// Window model, layout types and frame rendering.
-///
-/// This module defines the core window data structures and frame rendering logic
-/// for the MinGui compositor. It includes window state management, title bar
-/// controls, resize grips, and Aero Snap functionality.
-///
-/// # Examples
-///
-/// ```ignore
-/// let window = Window::new(
-///     "My Application",
-///     "App",
-///     100,
-///     100,
-///     800,
-///     600,
-///     true,
-/// );
-/// ```
+// Window model, layout types and frame rendering.
+//
+// This module defines the core window data structures and frame rendering logic
+// for the MinGui compositor. It includes window state management, title bar
+// controls, resize grips, and Aero Snap functionality.
+//
+// # Examples
+//
+// ```ignore
+// let window = Window::new(
+//     "My Application",
+//     "App",
+//     100,
+//     100,
+//     800,
+//     600,
+//     true,
+// );
+// ```
 
 /// Represents the minimal state of a window for persistence.
 ///

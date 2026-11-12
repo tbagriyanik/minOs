@@ -379,8 +379,8 @@ impl ChessBoard {
             side: ChessSide::Black,
             has_moved: false,
         });
-        for c in 0..8 {
-            cells[1][c] = Some(ChessPiece {
+        for slot in cells[1].iter_mut() {
+            *slot = Some(ChessPiece {
                 kind: PieceKind::Pawn,
                 side: ChessSide::Black,
                 has_moved: false,
@@ -427,8 +427,8 @@ impl ChessBoard {
             side: ChessSide::White,
             has_moved: false,
         });
-        for c in 0..8 {
-            cells[6][c] = Some(ChessPiece {
+        for slot in cells[6].iter_mut() {
+            *slot = Some(ChessPiece {
                 kind: PieceKind::Pawn,
                 side: ChessSide::White,
                 has_moved: false,
@@ -740,9 +740,9 @@ impl ChessBoard {
 
     /// Şahın konumu.
     fn find_king(&self, side: ChessSide) -> Option<(usize, usize)> {
-        for r in 0..8 {
-            for c in 0..8 {
-                if let Some(p) = self.cells[r][c] {
+        for (r, row) in self.cells.iter().enumerate() {
+            for (c, cell) in row.iter().enumerate() {
+                if let Some(p) = *cell {
                     if p.kind == PieceKind::King && p.side == side {
                         return Some((r, c));
                     }
@@ -1127,26 +1127,29 @@ impl GameApp {
     pub fn tick(&mut self) -> bool {
         let mut changed = false;
         if self.tab == TAB_GAME
-            && self.thinking && !self.player_to_move() && self.board.winner().is_none() {
-                if self.ai_wait > 0 {
-                    self.ai_wait -= 1;
-                } else if let Some(mv) = game_core::choose_move(&self.board, 3) {
-                    if self.board.apply(&mv) {
-                        self.last_move = Some(mv);
-                        self.sound_pending = if mv.is_capture() {
-                            Sound::Capture
-                        } else {
-                            Sound::Move
-                        };
-                        changed = true;
-                    }
-                    self.thinking = false;
-                    self.finish_turn();
-                } else {
-                    self.thinking = false;
-                    self.finish_turn();
+            && self.thinking
+            && !self.player_to_move()
+            && self.board.winner().is_none()
+        {
+            if self.ai_wait > 0 {
+                self.ai_wait -= 1;
+            } else if let Some(mv) = game_core::choose_move(&self.board, 3) {
+                if self.board.apply(&mv) {
+                    self.last_move = Some(mv);
+                    self.sound_pending = if mv.is_capture() {
+                        Sound::Capture
+                    } else {
+                        Sound::Move
+                    };
+                    changed = true;
                 }
+                self.thinking = false;
+                self.finish_turn();
+            } else {
+                self.thinking = false;
+                self.finish_turn();
             }
+        }
         changed
     }
 

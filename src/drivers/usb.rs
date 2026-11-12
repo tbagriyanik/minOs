@@ -164,8 +164,8 @@ pub fn get_disk(index: usize) -> Option<DiskDevice> {
 
 pub fn usb_available() -> bool {
     unsafe {
-        for i in 0..DISK_COUNT {
-            if DISKS[i].storage_type == StorageType::UsbDrive {
+        for disk in DISKS.iter().take(DISK_COUNT) {
+            if disk.storage_type == StorageType::UsbDrive {
                 return true;
             }
         }
@@ -176,8 +176,8 @@ pub fn usb_available() -> bool {
 
 pub fn hdd_available() -> bool {
     unsafe {
-        for i in 0..DISK_COUNT {
-            if DISKS[i].storage_type == StorageType::HardDisk {
+        for disk in DISKS.iter().take(DISK_COUNT) {
+            if disk.storage_type == StorageType::HardDisk {
                 return true;
             }
         }
@@ -187,8 +187,8 @@ pub fn hdd_available() -> bool {
 
 pub fn cdrom_available() -> bool {
     unsafe {
-        for i in 0..DISK_COUNT {
-            if DISKS[i].storage_type == StorageType::CdRom {
+        for disk in DISKS.iter().take(DISK_COUNT) {
+            if disk.storage_type == StorageType::CdRom {
                 return true;
             }
         }
@@ -534,9 +534,9 @@ fn init_uhci_controller(bus: u8, dev: u8, func: u8) {
         UHCI_DMA.qh.head_link = 1; // Terminate
         UHCI_DMA.qh.element_link = 1; // Boş kuyruk
 
-        for i in 0..1024 {
+        for entry in UHCI_DMA.frame_list.iter_mut() {
             // Frame List işaretçilerini oluşturulan Queue Head'e bağla (bit 1 = QH tipi: 0x02)
-            UHCI_DMA.frame_list[i] = qh_phys | 2;
+            *entry = qh_phys | 2;
         }
 
         // Frame List Base Address (FLBASEADD ofset 0x08)

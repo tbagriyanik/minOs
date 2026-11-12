@@ -577,12 +577,12 @@ impl FileManagerApp {
     /// Geçerli sıralama ölçütüne göre dosya listesini yeniden sıralar.
     pub fn resort_files(&mut self) {
         let mut indices: [usize; MAX_ITEMS] = [0; MAX_ITEMS];
-        for i in 0..self.file_count {
-            indices[i] = i;
+        for (i, slot) in indices[..self.file_count].iter_mut().enumerate() {
+            *slot = i;
         }
 
         // Basit bubble sort (MAX_ITEMS küçük olduğu için yeterli)
-        for i in 0..self.file_count {
+        for i in 0..self.file_count.saturating_sub(1) {
             for j in (i + 1)..self.file_count {
                 let should_swap = match self.sort_by {
                     SortBy::Name => {
@@ -641,16 +641,14 @@ impl FileManagerApp {
         }
 
         // Klasörleri sonra dosyaları ekle
-        for i in 0..self.file_count {
-            let idx = indices[i];
+        for &idx in indices[..self.file_count].iter() {
             if self.files[idx].display_name() != ".." && self.files[idx].is_dir {
                 new_files[write_idx] = self.files[idx];
                 write_idx += 1;
             }
         }
 
-        for i in 0..self.file_count {
-            let idx = indices[i];
+        for &idx in indices[..self.file_count].iter() {
             if !self.files[idx].is_dir && self.files[idx].display_name() != ".." {
                 new_files[write_idx] = self.files[idx];
                 write_idx += 1;
@@ -1795,13 +1793,16 @@ impl FileManagerApp {
         let list_top = win_y + LIST_TOP;
         let list_bottom = win_y + win_h - STATUS_H;
         for i in 0..self.file_count {
-            if self.files[i].is_dir && Some(i) != self.drag_item
-                && my >= list_top && my < list_bottom {
-                    let r = self.item_rect(win_x, win_y, win_w, i, sy);
-                    if crate::gui::in_rect(mx, my, r) {
-                        return Some(DropTarget::Folder(i));
-                    }
+            if self.files[i].is_dir
+                && Some(i) != self.drag_item
+                && my >= list_top
+                && my < list_bottom
+            {
+                let r = self.item_rect(win_x, win_y, win_w, i, sy);
+                if crate::gui::in_rect(mx, my, r) {
+                    return Some(DropTarget::Folder(i));
                 }
+            }
         }
 
         // Dropping anywhere else inside file manager window targets current directory

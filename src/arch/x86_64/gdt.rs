@@ -100,7 +100,10 @@ fn tss_descriptor(tss: &Tss) -> (u64, u64) {
 }
 
 /// `cpu` için GDT+TSS kurar ve yükler. BSP için `cpu = 0`.
-/// SAFETY: her CPU yalnızca kendi slotuna dokunmalıdır.
+///
+/// # Safety
+/// `cpu` çağıranın kendi CPU indeksini taşımalıdır; her CPU yalnızca kendi
+/// slotuna dokunur (`cpu < MAX_CPUS` kontrolü içeride yapılır).
 pub unsafe fn load_for_cpu(cpu: usize) {
     if cpu >= MAX_CPUS {
         return;

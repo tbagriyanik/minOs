@@ -193,7 +193,7 @@ impl Key {
             0x1b => Some(Key::Escape),
             0x08 => Some(Key::Backspace),
             0x7f => Some(Key::Delete),
-            0x20..=0x7e => Some(Key::Char(byte)),
+            0x21..=0x7e => Some(Key::Char(byte)),
             _ => None,
         }
     }
@@ -1014,8 +1014,8 @@ impl TextBox {
     fn visible_text(&self) -> [u8; TEXTBOX_CAPACITY] {
         let mut out = [0u8; TEXTBOX_CAPACITY];
         if self.masked {
-            for i in 0..self.len {
-                out[i] = b'*';
+            for slot in out.iter_mut().take(self.len) {
+                *slot = b'*';
             }
         } else {
             out[..self.len].copy_from_slice(&self.buf[..self.len]);

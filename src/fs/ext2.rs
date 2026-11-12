@@ -273,8 +273,7 @@ fn alloc_block(sb: &Sb, drive: u8) -> Option<u32> {
                         let mut gd2 = gd;
                         wle16(&mut gd2, 12, le16(&gd, 12) - 1);
                         let _ = write_gd(sb, drive, g, &gd2);
-                        let mut z = Vec::new();
-                        z.resize(sb.block_size as usize, 0);
+                        let z = alloc::vec![0; sb.block_size as usize];
                         let _ = write_block(sb, drive, blk, &z);
                         return Some(blk);
                     }
@@ -433,8 +432,6 @@ pub fn list_dir(path: &str) -> Vec<(Vec<u8>, bool, u32)> {
     dir_entries(sb, drive, &ino)
         .into_iter()
         .map(|e| {
-            let sz = if read_inode_raw(sb, drive, e.inode, &mut Vec::new()) { 0 } else { 0 };
-            let _ = sz;
             let mut raw = Vec::new();
             let size = if read_inode_raw(sb, drive, e.inode, &mut raw) {
                 le32(&raw, 4)
@@ -479,7 +476,7 @@ pub fn read_file(path: &str, out: &mut Vec<u8>) -> bool {
 }
 
 /// inode veri bloklarını `data` ile değiştirir (gerekirse blok ayırır/boşaltır).
-fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut Vec<u8>, data: &[u8]) -> bool {
+fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut [u8], data: &[u8]) -> bool {
     let bs = sb.block_size as usize;
     // This implementation currently supports 12 direct blocks plus one
     // single-indirect block. Do the capacity check before allocating blocks;
@@ -502,9 +499,8 @@ fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut Vec<u8>, data:
         free_block(sb, drive, b);
     }
     // direct + single indirect yaz
-    let direct_n = need.min(12);
     for i in 0..12 {
-        let v = if i < direct_n { blocks[i] } else { 0 };
+        let v = blocks.get(i).copied().unwrap_or(0);
         wle32(ino_raw, 40 + i * 4, v);
     }
     let old_ind = le32(ino_raw, 40 + 12 * 4);
@@ -543,8 +539,7 @@ fn write_inode_data(sb: &Sb, drive: u8, inode: u32, ino_raw: &mut Vec<u8>, data:
     let mut off = 0usize;
     for blk in blocks.iter().take(need) {
         let take = (data.len() - off).min(bs);
-        let mut tmp = Vec::new();
-        tmp.resize(bs, 0);
+        let mut tmp = alloc::vec![0; bs];
         if take > 0 {
             tmp[..take].copy_from_slice(&data[off..off + take]);
         }
@@ -565,7 +560,7 @@ fn dir_add_entry(
     sb: &Sb,
     drive: u8,
     dir_inode: u32,
-    dir_raw: &mut Vec<u8>,
+    dir_raw: &mut [u8],
     child: u32,
     name: &[u8],
     is_dir: bool,
@@ -619,8 +614,7 @@ fn dir_add_entry(
     let Some(nb) = alloc_block(sb, drive) else {
         return false;
     };
-    let mut nb_data = Vec::new();
-    nb_data.resize(bs, 0);
+    let mut nb_data = alloc::vec![0; bs];
     let need = (8 + name.len()).div_ceil(4) * 4;
     wle32(&mut nb_data, 0, child);
     wle16(&mut nb_data, 4, bs as u16);
@@ -632,8 +626,7 @@ fn dir_add_entry(
         return false;
     }
     // blok listesine ekle
-    let mut nb2 = Vec::new();
-    nb2.resize(bs, 0);
+    let nb2 = alloc::vec![0; bs];
     // basit: mevcut blok verisini oku, sonuna ekle — bunun yerine inode blok listesini genişlet
     let size = le32(dir_raw, 4) as usize;
     let mut all = Vec::new();
@@ -720,8 +713,7 @@ pub fn mkdir(path: &str) -> bool {
         return false;
     };
     let bs = sb.block_size as usize;
-    let mut dd = Vec::new();
-    dd.resize(bs, 0);
+    let mut dd = alloc::vec![0; bs];
     wle32(&mut dd, 0, nino);
     wle16(&mut dd, 4, 12);
     dd[6] = 1;

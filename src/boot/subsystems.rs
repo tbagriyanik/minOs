@@ -49,11 +49,11 @@ pub fn init_subsystems(
             let count = count.min(256) as usize;
             let array_bytes =
                 count.checked_mul(core::mem::size_of::<*const LimineMemoryMapEntry>());
-            if count > 0 && is_mapped_limine_ptr(entries) && array_bytes.is_some() {
-                let array_end = (entries as usize).checked_add(array_bytes.unwrap());
-                if array_end.is_some_and(|end| {
-                    is_mapped_limine_ptr(end as *const LimineMemoryMapEntry)
-                }) {
+            if count > 0 && is_mapped_limine_ptr(entries) {
+                let array_end = array_bytes.and_then(|b| (entries as usize).checked_add(b));
+                if array_end
+                    .is_some_and(|end| is_mapped_limine_ptr(end as *const LimineMemoryMapEntry))
+                {
                     for i in 0..count {
                         let slot_addr = match (entries as usize)
                             .checked_add(i * core::mem::size_of::<*const LimineMemoryMapEntry>())

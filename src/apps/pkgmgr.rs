@@ -89,8 +89,7 @@ impl MinPkg {
         };
 
         // Paket indirme tamponu (32 KB)
-        let mut buf = Vec::new();
-        buf.resize(32768, 0);
+        let mut buf = alloc::vec![0; 32768];
 
         match crate::drivers::http::http_get(&url, &mut buf) {
             Ok((status, hlen, total)) => {

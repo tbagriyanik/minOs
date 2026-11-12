@@ -8,7 +8,9 @@ use crate::boot::limine::{
 };
 use crate::boot::time::init_timebase;
 use crate::drivers;
-use crate::drivers::video::{Framebuffer, PANIC_FB_ADDR, PANIC_FB_BPP, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_W};
+use crate::drivers::video::{
+    Framebuffer, PANIC_FB_ADDR, PANIC_FB_BPP, PANIC_FB_H, PANIC_FB_PITCH, PANIC_FB_W,
+};
 
 /// Erken önyüklemeden sonra ana çekirdeğe devredilen ekran bilgisi.
 pub struct BootDisplay {

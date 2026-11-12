@@ -325,10 +325,9 @@ impl InstallerApp {
         }
 
         // 1. Adim: Disk henuz bicimlendirilmediyse simdi bicimlendir.
-        if !self.disk_formatted
-            && !self.format_selected_drive() {
-                return false;
-            }
+        if !self.disk_formatted && !self.format_selected_drive() {
+            return false;
+        }
 
         self.state = InstallState::Copying;
         self.progress_pct = 65;

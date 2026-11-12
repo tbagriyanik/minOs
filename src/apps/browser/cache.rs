@@ -188,13 +188,10 @@ pub fn url_to_cache_path(url: &str) -> String {
     path.push('/');
 
     // Şemayı kaldır (http://, https://)
-    let rest = if url.starts_with("http://") {
-        &url[7..]
-    } else if url.starts_with("https://") {
-        &url[8..]
-    } else {
-        url
-    };
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
 
     // Tüm karakterleri geçerli dosya adı karakterlerine dönüştür
     for ch in rest.chars() {
@@ -265,8 +262,8 @@ pub fn parse_cache_headers(headers: &str, current_time: u64) -> CacheMetadata {
                     // max-age=N, no-cache, no-store, private, public
                     for directive in value.split(',') {
                         let directive = directive.trim();
-                        if directive.starts_with("max-age=") {
-                            if let Ok(seconds) = directive[8..].parse::<u32>() {
+                        if let Some(raw) = directive.strip_prefix("max-age=") {
+                            if let Ok(seconds) = raw.parse::<u32>() {
                                 meta.max_age = Some(seconds);
                                 meta.expires = current_time + seconds as u64;
                             }

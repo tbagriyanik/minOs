@@ -1,4 +1,6 @@
 //! TLS 1.2 / TLS 1.3 Protokol İstemci Katmanı (no_std)
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri TLS katmanında.
+#![allow(clippy::result_unit_err)]
 //! TLS 1.2: ClientHello → ServerHello → Certificate → ServerKeyExchange →
 //!          ServerHelloDone → ClientKeyExchange → ChangeCipherSpec → Finished → şifreli Application Data.
 //! TLS 1.3: ClientHello → ServerHello → EncryptedExtensions → Certificate →
@@ -1366,11 +1368,12 @@ impl TlsSession {
         }
 
         let cke_body_len = cke_body.len();
-        let mut cke = Vec::new();
-        cke.push(HANDSHAKE_CLIENT_KEY_EXCHANGE);
-        cke.push(((cke_body_len >> 16) & 0xFF) as u8);
-        cke.push(((cke_body_len >> 8) & 0xFF) as u8);
-        cke.push((cke_body_len & 0xFF) as u8);
+        let mut cke = alloc::vec![
+            HANDSHAKE_CLIENT_KEY_EXCHANGE,
+            ((cke_body_len >> 16) & 0xFF) as u8,
+            ((cke_body_len >> 8) & 0xFF) as u8,
+            (cke_body_len & 0xFF) as u8,
+        ];
         cke.extend_from_slice(&cke_body);
         self.handshake_hash.update(&cke);
 
@@ -1393,11 +1396,7 @@ impl TlsSession {
         )[..TLS_VERIFY_DATA_LEN]
             .to_vec();
 
-        let mut finished = Vec::new();
-        finished.push(HANDSHAKE_FINISHED);
-        finished.push(0);
-        finished.push(0);
-        finished.push(TLS_VERIFY_DATA_LEN as u8);
+        let mut finished = alloc::vec![HANDSHAKE_FINISHED, 0, 0, TLS_VERIFY_DATA_LEN as u8,];
         finished.extend_from_slice(&verify_data);
 
         let client_iv = self.client_write_iv.ok_or(())?;

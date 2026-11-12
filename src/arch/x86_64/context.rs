@@ -18,6 +18,11 @@ pub struct Context {
 /// owns the stacks and must keep them mapped for the whole lifetime of the
 /// context.  This is the primitive used by the preemptive scheduler; it does
 /// not invoke Rust while the old stack is being modified.
+///
+/// # Safety
+/// `old` ve `new`, context yaşamı boyunca eşlenmiş kalacak geçerli yığın
+/// bağlamlarına işaret etmelidir; her iki yığının tepesinde de geçerli bir
+/// dönüş adresi bulunmalıdır.
 #[inline(never)]
 pub unsafe extern "C" fn switch_context(old: *mut Context, new: *const Context) {
     core::arch::asm!(

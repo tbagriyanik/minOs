@@ -569,7 +569,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
     pub fn write_inode_data(
         &mut self,
         ino: u32,
-        inode: &mut Vec<u8>,
+        inode: &mut [u8],
         data: &[u8],
     ) -> Result<(), Ext4Error> {
         let bs = self.sb.block_size as usize;
@@ -682,7 +682,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
     fn dir_add_entry(
         &mut self,
         dir_ino: u32,
-        dir_inode: &mut Vec<u8>,
+        dir_inode: &mut [u8],
         child: u32,
         name: &str,
         is_dir: bool,
@@ -768,11 +768,7 @@ impl<D: BlockDevice> Ext4Fs<D> {
             return Err(Ext4Error::NoSpace);
         }
         self.inode_set_size(dir_inode, (new_blocks.len() * bs) as u64);
-        wle32(
-            dir_inode,
-            28,
-            (new_blocks.len() * bs / SECTOR) as u32,
-        );
+        wle32(dir_inode, 28, (new_blocks.len() * bs / SECTOR) as u32);
         self.write_inode(dir_ino, dir_inode)
     }
 

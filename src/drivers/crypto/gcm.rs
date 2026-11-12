@@ -1,5 +1,8 @@
 //! GCM mode (NIST SP 800-38D) built on AES — no_std.
 
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri TLS katmanında.
+#![allow(clippy::result_unit_err)]
+
 use crate::drivers::crypto::aes::Aes;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -34,8 +37,7 @@ fn gf_mul(x: &mut [u8; 16], y: &[u8; 16]) {
     let mut z = [0u8; 16];
     let mut v = *y;
     let xb = *x;
-    for byte_idx in 0..16 {
-        let mut byte = xb[byte_idx];
+    for mut byte in xb {
         for _ in 0..8 {
             if byte & 0x80 != 0 {
                 for i in 0..16 {

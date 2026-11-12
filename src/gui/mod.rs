@@ -42,6 +42,10 @@ use crate::drivers::rtc::DateTime;
 #[allow(unused_imports)]
 use crate::drivers::video::Framebuffer;
 
+/// `topmost_v_scrollbar` sonucu: (pencere idx, dikey track dikdörtgeni,
+/// içerik yüksekliği, görünüm yüksekliği).
+pub type VScrollHit = (usize, (usize, usize, usize, usize), usize, usize);
+
 /// Arayüz renkleri artık *tema jetonu* taşır. Gerçek RGB değeri çizim anında
 /// aktif temadan okunur (bkz. `theme::resolve`). Böylece tema değişimi tüm
 /// arayüzü tek seferde günceller.
@@ -439,10 +443,9 @@ impl MinGuiCompositor {
     /// Verilen `(x, y)` noktasının açık ve küçültülmemiş herhangi bir pencere alanında olup olmadığını kontrol eder.
     pub fn is_point_covered_by_window(&self, x: usize, y: usize) -> bool {
         for w in self.windows.iter().flatten() {
-            if w.is_open && !w.is_minimized
-                && in_rect(x, y, (w.x, w.y, w.width, w.height)) {
-                    return true;
-                }
+            if w.is_open && !w.is_minimized && in_rect(x, y, (w.x, w.y, w.width, w.height)) {
+                return true;
+            }
         }
         false
     }
@@ -553,10 +556,7 @@ impl MinGuiCompositor {
     }
 
     /// En üstteki pencerenin dikey kaydırma çubuğu (varsa) `(idx, track, content_h, view_h)`.
-    pub fn topmost_v_scrollbar(
-        &self,
-        content_h_of: impl Fn(usize) -> usize,
-    ) -> Option<(usize, (usize, usize, usize, usize), usize, usize)> {
+    pub fn topmost_v_scrollbar(&self, content_h_of: impl Fn(usize) -> usize) -> Option<VScrollHit> {
         let (order, count) = self.draw_order();
         for k in (0..count).rev() {
             let idx = order[k];

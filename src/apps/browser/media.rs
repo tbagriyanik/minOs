@@ -247,7 +247,6 @@ impl MediaPlayer {
                         break;
                     }
                     let sample = if i + 1 < self.audio_data.len() {
-                        
                         self.audio_data[i] as i16 | ((self.audio_data[i + 1] as i16) << 8)
                     } else {
                         0

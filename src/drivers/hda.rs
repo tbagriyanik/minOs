@@ -63,31 +63,26 @@ unsafe fn mmio_read32(base: u64, off: u32) -> u32 {
 }
 
 #[inline]
-
 unsafe fn mmio_write32(base: u64, off: u32, val: u32) {
     core::ptr::write_volatile((base + off as u64) as *mut u32, val);
 }
 
 #[inline]
-
 unsafe fn mmio_read16(base: u64, off: u32) -> u16 {
     core::ptr::read_volatile((base + off as u64) as *const u16)
 }
 
 #[inline]
-
 unsafe fn mmio_write16(base: u64, off: u32, val: u16) {
     core::ptr::write_volatile((base + off as u64) as *mut u16, val);
 }
 
 #[inline]
-
 unsafe fn mmio_read8(base: u64, off: u32) -> u8 {
     core::ptr::read_volatile((base + off as u64) as *const u8)
 }
 
 #[inline]
-
 unsafe fn mmio_write8(base: u64, off: u32, val: u8) {
     core::ptr::write_volatile((base + off as u64) as *mut u8, val);
 }
@@ -103,7 +98,6 @@ const PCI_CONFIG_ADDR: u16 = 0xCF8;
 const PCI_CONFIG_DATA: u16 = 0xCFC;
 
 #[inline]
-
 fn pci_read32(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
     let addr: u32 = 0x8000_0000
         | ((bus as u32) << 16)
@@ -356,7 +350,6 @@ unsafe fn send_verb(verb: u32) -> u64 {
 }
 
 #[inline]
-
 fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
     if verb < 0x10 {
         ((cad as u32) << 28) | (nid << 20) | (verb << 16) | (payload & 0xFFFF)
@@ -372,6 +365,8 @@ fn make_verb(cad: u8, nid: u32, verb: u32, payload: u32) -> u32 {
 // ---------------------------------------------------------------------------
 
 #[inline]
+/// # Safety
+/// HDA denetleyicisinin MMIO tabanı eşlenmiş olmalıdır.
 pub unsafe fn stream_lpib() -> u32 {
     mmio_read32(HDA_MMIO_BASE, HDA_SD_BASE + SD_LPIB)
 }
@@ -403,6 +398,8 @@ pub fn current_dma_pos() -> u32 {
 }
 
 #[inline]
+/// # Safety
+/// HDA denetleyicisinin MMIO tabanı eşlenmiş olmalıdır.
 pub unsafe fn stream_clear_sts() {
     // W1C: BCIS (bit2), FIFOE (bit4), DESCE (bit5)
 
@@ -415,6 +412,9 @@ pub unsafe fn stream_clear_sts() {
     }
 }
 
+/// # Safety
+/// HDA stream'i başlatılmadan önce DMA tamponları ve BDL kurulmuş olmalıdır;
+/// MMIO tabanı eşlenmiş olmalıdır.
 pub unsafe fn stream_stop() {
     let mmio = HDA_MMIO_BASE;
 
@@ -433,6 +433,9 @@ pub unsafe fn stream_stop() {
     }
 }
 
+/// # Safety
+/// HDA stream DMA tamponları ve BDL geçerli olmalıdır; MMIO tabanı
+/// eşlenmiş olmalıdır.
 pub unsafe fn stream_start() -> bool {
     let mmio = HDA_MMIO_BASE;
 
@@ -457,6 +460,8 @@ pub unsafe fn stream_start() -> bool {
     (mmio_read32(mmio, sd + SD_CTL) & 0x02) != 0
 }
 
+/// # Safety
+/// HDA denetleyicisi başlatılmış ve MMIO tabanı eşlenmiş olmalıdır.
 pub unsafe fn ensure_stream_running() -> bool {
     let mmio = HDA_MMIO_BASE;
 

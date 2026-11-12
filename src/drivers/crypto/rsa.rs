@@ -1,5 +1,7 @@
 //! Minimal RSA public-key operations (PKCS#1 v1.5) for TLS key exchange — no_std.
 //!
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri TLS katmanında.
+#![allow(clippy::result_unit_err)]
 //! The big-integer core works on 32-bit limbs stored least-significant-word-first.
 //! Reduction uses binary long division, which is simple and easy to verify;
 //! it is slower than Knuth's algorithm D but fast enough for a TLS handshake.
@@ -55,14 +57,14 @@ fn limbs_to_bytes(limbs: &[u32], out_len: usize) -> Vec<u8> {
     let mut out = vec![0u8; out_len];
     for (idx, limb) in limbs.iter().enumerate() {
         let bytes = limb.to_be_bytes();
-        for j in 0..4 {
+        for (j, &byte) in bytes.iter().enumerate() {
             // Bu baytin, tum sayinin en anlamsiz baytina uzakligi.
             let rev = 4 * idx + (3 - j);
             if rev >= out_len {
                 continue;
             }
             // Big-endian ciktida bu bayt, sagdan `rev` konumunda durur.
-            out[out_len - 1 - rev] = bytes[j];
+            out[out_len - 1 - rev] = byte;
         }
     }
     out
@@ -84,14 +86,14 @@ fn cmp_limbs(a: &[u32], b: &[u32]) -> Ordering {
 /// `a -= b` in place (assumes `a >= b`).
 fn sub_limbs(a: &mut [u32], b: &[u32]) {
     let mut borrow: i64 = 0;
-    for i in 0..a.len() {
+    for (i, av) in a.iter_mut().enumerate() {
         let bv = *b.get(i).unwrap_or(&0) as i64;
-        let diff = a[i] as i64 - bv - borrow;
+        let diff = *av as i64 - bv - borrow;
         if diff < 0 {
-            a[i] = (diff + (1i64 << 32)) as u32;
+            *av = (diff + (1i64 << 32)) as u32;
             borrow = 1;
         } else {
-            a[i] = diff as u32;
+            *av = diff as u32;
             borrow = 0;
         }
     }

@@ -385,8 +385,8 @@ impl PaintApp {
         canvas_h: usize,
         path: &str,
     ) -> bool {
-        let w = canvas_w.min(BMP_W).max(1);
-        let h = canvas_h.min(BMP_H).max(1);
+        let w = canvas_w.clamp(1, BMP_W);
+        let h = canvas_h.clamp(1, BMP_H);
         let row_bytes = (w * 3 + 3) & !3;
         let image_size = row_bytes * h;
         let file_size = 54 + image_size;
@@ -863,11 +863,10 @@ impl PaintApp {
             fb.draw_shadow(pxr, pyr, pr.2, pr.3, Color::SHADOW);
             fb.draw_rect(pxr, pyr, pr.2, pr.3, Color::WINDOW_BG);
             fb.draw_rect_outline(pxr, pyr, pr.2, pr.3, Color::BORDER);
-            for i in 0..PICKER_COLORS.len() {
+            for (i, &cc) in PICKER_COLORS.iter().enumerate() {
                 let cr = Self::picker_cell_rect(i);
                 let cxr = x + cr.0;
                 let cyr = y + cr.1;
-                let cc = PICKER_COLORS[i];
                 fb.draw_rect(cxr, cyr, cr.2, cr.3, cc);
                 fb.draw_rect_outline(cxr, cyr, cr.2, cr.3, Color::BORDER);
                 if self.color == cc {

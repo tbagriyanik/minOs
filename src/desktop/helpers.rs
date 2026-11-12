@@ -224,11 +224,10 @@ pub fn terminate_app(
         return;
     }
 
-    let another_instance_open = compositor.windows.iter().any(|slot| {
-        slot.is_some_and(|window| {
-            window.app_id as usize == app_id && window.is_open
-        })
-    });
+    let another_instance_open = compositor
+        .windows
+        .iter()
+        .any(|slot| slot.is_some_and(|window| window.app_id as usize == app_id && window.is_open));
     if !another_instance_open {
         match app_id {
             0 => *fm = apps::filemanager::FileManagerApp::new(),

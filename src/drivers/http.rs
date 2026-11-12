@@ -520,9 +520,10 @@ pub fn fetch_once(
             if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
                 cached_fd
             } else {
-                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
-                    last_err = Some(e);
-                })?;
+                let new_fd =
+                    socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
+                        last_err = Some(e);
+                    })?;
                 let _ = socket::set_timeout(new_fd, config.timeout_ms);
                 socket::connect(new_fd, ip, port).inspect_err(|&e| {
                     socket::close(new_fd);
@@ -531,9 +532,10 @@ pub fn fetch_once(
                 new_fd
             }
         } else {
-            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
-                last_err = Some(e);
-            })?;
+            let new_fd =
+                socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
+                    last_err = Some(e);
+                })?;
             let _ = socket::set_timeout(new_fd, config.timeout_ms);
             socket::connect(new_fd, ip, port).inspect_err(|&e| {
                 socket::close(new_fd);
@@ -1007,8 +1009,10 @@ pub fn http_get_range(
         let host_str = core::str::from_utf8(&host[..host_len]).map_err(|_| E_URL)?;
         let path_str = core::str::from_utf8(&path[..path_len]).map_err(|_| E_URL)?;
         let ip = socket::resolve_host(host_str)?;
-        let mut config = HttpClientConfig::default();
-        config.range = Some(range.to_string());
+        let config = HttpClientConfig {
+            range: Some(range.to_string()),
+            ..Default::default()
+        };
         let (status, hlen, total) = fetch_once(
             &host[..host_len],
             port,
@@ -1607,9 +1611,10 @@ fn fetch_once_with_method(
             if let Some(cached_fd) = connection_pool().acquire(host_str, port, is_https) {
                 cached_fd
             } else {
-                let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
-                    last_err = Some(e);
-                })?;
+                let new_fd =
+                    socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
+                        last_err = Some(e);
+                    })?;
                 let _ = socket::set_timeout(new_fd, config.timeout_ms);
                 socket::connect(new_fd, ip, port).inspect_err(|&e| {
                     socket::close(new_fd);
@@ -1618,9 +1623,10 @@ fn fetch_once_with_method(
                 new_fd
             }
         } else {
-            let new_fd = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
-                last_err = Some(e);
-            })?;
+            let new_fd =
+                socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|&e| {
+                    last_err = Some(e);
+                })?;
             let _ = socket::set_timeout(new_fd, config.timeout_ms);
             socket::connect(new_fd, ip, port).inspect_err(|&e| {
                 socket::close(new_fd);
@@ -2133,11 +2139,12 @@ impl WebSocketConnection {
 
                 // IPv4 yolu
                 let ip = socket::resolve_host(&host)?;
-                let fd4 = socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
-                    crate::serial_print("[WS] socket oluşturulamadı: ");
-                    crate::serial_print(&e.to_string());
-                    crate::serial_print("\n");
-                })?;
+                let fd4 =
+                    socket::socket(socket::AF_INET, socket::SOCK_STREAM).inspect_err(|e| {
+                        crate::serial_print("[WS] socket oluşturulamadı: ");
+                        crate::serial_print(&e.to_string());
+                        crate::serial_print("\n");
+                    })?;
                 let _ = socket::set_timeout(fd4, 8000);
                 socket::connect(fd4, ip, port).inspect_err(|_e| {
                     socket::close(fd4);

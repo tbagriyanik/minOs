@@ -71,6 +71,11 @@ pub struct ProcessContext {
 impl ProcessContext {
     /// Mevcut CPU bağlamını kaydeder ve bu yapıya doldurur.
     /// Genellikle interrupt veya syscall sırasında çağrılır.
+    ///
+    /// # Safety
+    /// Kesme veya syscall bağlamında çağrılmalıdır; `options(nostack)`
+    /// kullandığından yığın gereksinimi düşüktür ancak bağlamın tutarlı
+    /// olması çağıranın sorumluluğundadır.
     pub unsafe fn save_current() -> Self {
         let mut ctx = Self::default();
         core::arch::asm!(
@@ -120,6 +125,11 @@ impl ProcessContext {
 
     /// Bu bağlamı CPU'ya geri yükler ve süreci devam ettirir.
     /// CR3 değişikliği ve register geri yükleme içerir.
+    ///
+    /// # Safety
+    /// `self` geçerli bir `ProcessContext` olmalıdır; `cr3` alanı geçerli,
+    /// eşlenmiş bir PML4 fiziksel adresine işaret etmelidir. Çağrı sonrası
+    /// eski yığına dönülemez.
     pub unsafe fn restore(&self) {
         core::arch::asm!(
             "mov cr3, {cr3}",
@@ -387,8 +397,12 @@ impl ProcessManager {
             p.exit_code = exit_code;
 
             // 1. Surecin sahip oldugu tum fiziksel sayfa cercevelerini PMM'e iade et
-            for i in 0..p.resources.frame_count {
-                let frame = p.resources.allocated_frames[i];
+            for &frame in p
+                .resources
+                .allocated_frames
+                .iter()
+                .take(p.resources.frame_count)
+            {
                 if frame != 0 {
                     pmm.free_frame(frame);
                 }
@@ -439,8 +453,12 @@ impl ProcessManager {
             p.exit_code = -11; // SIGSEGV
 
             // Kaynakları temizle
-            for i in 0..p.resources.frame_count {
-                let frame = p.resources.allocated_frames[i];
+            for &frame in p
+                .resources
+                .allocated_frames
+                .iter()
+                .take(p.resources.frame_count)
+            {
                 if frame != 0 {
                     pmm.free_frame(frame);
                 }
@@ -814,10 +832,10 @@ pub fn test_ring3_isolation(
             let pml4 = &*crate::mm::vmm::AddressSpace::table_ptr(aspace.pml4_phys);
             let mut kernel_entries = 0usize;
             let mut user_visible_kernel_entries = 0usize;
-            for i in 256..512 {
-                if (pml4.entries[i] & crate::mm::vmm::PageFlags::PRESENT) != 0 {
+            for entry in pml4.entries[256..512].iter() {
+                if (entry & crate::mm::vmm::PageFlags::PRESENT) != 0 {
                     kernel_entries += 1;
-                    if (pml4.entries[i] & crate::mm::vmm::PageFlags::USER) != 0 {
+                    if (entry & crate::mm::vmm::PageFlags::USER) != 0 {
                         user_visible_kernel_entries += 1;
                     }
                 }

@@ -1,5 +1,8 @@
 //! AES (FIPS 197) — ECB encrypt/decrypt, 128 and 256 bit keys — no_std.
 
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri TLS katmanında.
+#![allow(clippy::result_unit_err)]
+
 use alloc::vec::Vec;
 
 const SBOX: [u8; 256] = [

@@ -1917,8 +1917,7 @@ impl TerminalApp {
                         ),
                         Color::TEXT_MUTED,
                     );
-                } else {
-                    let drive = drive_num.unwrap();
+                } else if let Some(drive) = drive_num {
                     if drive >= 4
                         || crate::drivers::ata::device(drive)
                             .map(|d| d.kind != crate::drivers::ata::DeviceKind::Ata)
@@ -3093,8 +3092,7 @@ impl TerminalApp {
                         ),
                         Color::ACCENT_RED,
                     );
-                } else {
-                    let target_url = raw_url.unwrap();
+                } else if let Some(target_url) = raw_url {
                     let normalized_url = if target_url.starts_with("http://")
                         || target_url.starts_with("https://")
                         || target_url.contains("://")
@@ -3130,8 +3128,7 @@ impl TerminalApp {
                         self.push_line(msg.as_str(), Color::TEXT_MUTED);
                     }
 
-                    let mut buf = alloc::vec::Vec::new();
-                    buf.resize(32768, 0);
+                    let mut buf = alloc::vec![0; 32768];
                     match crate::drivers::http::http_get(&normalized_url, &mut buf) {
                         Ok((status, hlen, total)) => {
                             if !silent {

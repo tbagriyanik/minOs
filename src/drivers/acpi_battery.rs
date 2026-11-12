@@ -26,8 +26,7 @@ pub enum BatteryState {
     Error,
 }
 
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct BatteryInfo {
     pub design_capacity: u32,    // Tasarım kapasitesi (mWh veya mAh)
     pub last_full_capacity: u32, // Son tam kapasite (mWh veya mAh)
@@ -44,7 +43,6 @@ pub struct BatteryInfo {
     pub serial_number: [u8; 32],
     pub serial_number_len: usize,
 }
-
 
 // ---------------------------------------------------------------------------
 // ACPI Tablo Yapıları
@@ -325,12 +323,11 @@ unsafe fn inspect_acpi_table(table_vaddr: u64) {
                 }
             }
         }
-        b"SSDT"
-            if SSDT_COUNT < 16 => {
-                SSDT_VADDRS[SSDT_COUNT] = table_vaddr + 36;
-                SSDT_LENS[SSDT_COUNT] = (hdr.length - 36) as usize;
-                SSDT_COUNT += 1;
-            }
+        b"SSDT" if SSDT_COUNT < 16 => {
+            SSDT_VADDRS[SSDT_COUNT] = table_vaddr + 36;
+            SSDT_LENS[SSDT_COUNT] = (hdr.length - 36) as usize;
+            SSDT_COUNT += 1;
+        }
         _ => {}
     }
 }
@@ -831,7 +828,8 @@ pub fn scan_aml_for_battery(aml_bytes: &[u8], out: &mut BatteryParsedData) {
             let next_bytes = &aml_bytes[i + 4..];
             let is_battery_hid = next_bytes.starts_with(b"\x0C\x41\xD0\x0C\x0A")
                 || next_bytes.starts_with(b"\x0D\x50\x4E\x50\x30\x43\x30\x41")
-                || next_bytes.starts_with(b"PNP0C0A") || next_bytes.starts_with(b"ACPI0008");
+                || next_bytes.starts_with(b"PNP0C0A")
+                || next_bytes.starts_with(b"ACPI0008");
 
             if is_battery_hid {
                 out.found = true;
@@ -844,14 +842,14 @@ pub fn scan_aml_for_battery(aml_bytes: &[u8], out: &mut BatteryParsedData) {
             // _BST etiketinin çevresindeki PackageOp (0x12) yapısını tara
             let search_start = i + 4;
             let search_end = (i + 128).min(len);
-            if let Some(pkg_val) = find_package_in_range(&aml_bytes[search_start..search_end]) {
-                if let AmlValue::Package(elements) = pkg_val {
-                    if elements.len() >= 4 {
-                        out.bst_state = elements[0].as_u32();
-                        out.bst_present_rate = elements[1].as_u32();
-                        out.bst_remaining_capacity = elements[2].as_u32();
-                        out.bst_present_voltage = elements[3].as_u32();
-                    }
+            if let Some(AmlValue::Package(elements)) =
+                find_package_in_range(&aml_bytes[search_start..search_end])
+            {
+                if elements.len() >= 4 {
+                    out.bst_state = elements[0].as_u32();
+                    out.bst_present_rate = elements[1].as_u32();
+                    out.bst_remaining_capacity = elements[2].as_u32();
+                    out.bst_present_voltage = elements[3].as_u32();
                 }
             }
         }
@@ -862,45 +860,45 @@ pub fn scan_aml_for_battery(aml_bytes: &[u8], out: &mut BatteryParsedData) {
             let is_bix = &aml_bytes[i..i + 4] == b"_BIX";
             let search_start = i + 4;
             let search_end = (i + 512).min(len);
-            if let Some(pkg_val) = find_package_in_range(&aml_bytes[search_start..search_end]) {
-                if let AmlValue::Package(elements) = pkg_val {
-                    if is_bix && elements.len() >= 16 {
-                        out.bix_power_unit = elements[1].as_u32();
-                        out.bix_design_capacity = elements[2].as_u32();
-                        out.bix_last_full_capacity = elements[3].as_u32();
-                        out.bix_technology = elements[4].as_u32();
-                        out.bix_design_voltage = elements[5].as_u32();
-                        out.bix_cycle_count = Some(elements[8].as_u32());
+            if let Some(AmlValue::Package(elements)) =
+                find_package_in_range(&aml_bytes[search_start..search_end])
+            {
+                if is_bix && elements.len() >= 16 {
+                    out.bix_power_unit = elements[1].as_u32();
+                    out.bix_design_capacity = elements[2].as_u32();
+                    out.bix_last_full_capacity = elements[3].as_u32();
+                    out.bix_technology = elements[4].as_u32();
+                    out.bix_design_voltage = elements[5].as_u32();
+                    out.bix_cycle_count = Some(elements[8].as_u32());
 
-                        let (model, mlen) = elements[16].as_string_bytes();
+                    let (model, mlen) = elements[16].as_string_bytes();
+                    let copy_len = mlen.min(32);
+                    out.model_number[..copy_len].copy_from_slice(&model[..copy_len]);
+                    out.model_number_len = copy_len;
+
+                    if elements.len() > 17 {
+                        let (serial, slen) = elements[17].as_string_bytes();
+                        let scopy = slen.min(32);
+                        out.serial_number[..scopy].copy_from_slice(&serial[..scopy]);
+                        out.serial_number_len = scopy;
+                    }
+                } else if !is_bix && elements.len() >= 9 {
+                    out.bix_power_unit = elements[0].as_u32();
+                    out.bix_design_capacity = elements[1].as_u32();
+                    out.bix_last_full_capacity = elements[2].as_u32();
+                    out.bix_technology = elements[3].as_u32();
+                    out.bix_design_voltage = elements[4].as_u32();
+
+                    if elements.len() >= 11 {
+                        let (model, mlen) = elements[9].as_string_bytes();
                         let copy_len = mlen.min(32);
                         out.model_number[..copy_len].copy_from_slice(&model[..copy_len]);
                         out.model_number_len = copy_len;
 
-                        if elements.len() > 17 {
-                            let (serial, slen) = elements[17].as_string_bytes();
-                            let scopy = slen.min(32);
-                            out.serial_number[..scopy].copy_from_slice(&serial[..scopy]);
-                            out.serial_number_len = scopy;
-                        }
-                    } else if !is_bix && elements.len() >= 9 {
-                        out.bix_power_unit = elements[0].as_u32();
-                        out.bix_design_capacity = elements[1].as_u32();
-                        out.bix_last_full_capacity = elements[2].as_u32();
-                        out.bix_technology = elements[3].as_u32();
-                        out.bix_design_voltage = elements[4].as_u32();
-
-                        if elements.len() >= 11 {
-                            let (model, mlen) = elements[9].as_string_bytes();
-                            let copy_len = mlen.min(32);
-                            out.model_number[..copy_len].copy_from_slice(&model[..copy_len]);
-                            out.model_number_len = copy_len;
-
-                            let (serial, slen) = elements[10].as_string_bytes();
-                            let scopy = slen.min(32);
-                            out.serial_number[..scopy].copy_from_slice(&serial[..scopy]);
-                            out.serial_number_len = scopy;
-                        }
+                        let (serial, slen) = elements[10].as_string_bytes();
+                        let scopy = slen.min(32);
+                        out.serial_number[..scopy].copy_from_slice(&serial[..scopy]);
+                        out.serial_number_len = scopy;
                     }
                 }
             }
@@ -928,8 +926,7 @@ fn find_package_in_range(slice: &[u8]) -> Option<AmlValue> {
 // Thermal Zone ve Güç Cihazı AML Ayrıştırma
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ThermalZoneParsedData {
     pub name: [u8; 4],
     pub current_temp_k: u32, // 0.1 Kelvin cinsinden (örn. 3000 = 300.0 K = 26.85 °C)
@@ -938,7 +935,6 @@ pub struct ThermalZoneParsedData {
     pub passive_temp_k: u32,
     pub found: bool,
 }
-
 
 /// 0.1 Kelvin (deci-Kelvin) değerini Celsius (°C) tam sayısına dönüştürür.
 /// ACPI spesifikasyonuna göre: T(°C) = (T_dK - 2732) / 10
@@ -949,8 +945,7 @@ pub fn kelvin_tenths_to_celsius(k: u32) -> i32 {
     ((k as i32) - 2732) / 10
 }
 
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PowerDeviceParsedData {
     pub name: [u8; 4],
     pub supported_states: u8, // S0..S5 durumları için bitmask
@@ -959,7 +954,6 @@ pub struct PowerDeviceParsedData {
     pub status: u32,
     pub found: bool,
 }
-
 
 fn extract_method_return_val(slice: &[u8]) -> Option<u64> {
     if slice.is_empty() {
@@ -1045,9 +1039,11 @@ pub fn scan_aml_for_thermal_zones(aml_bytes: &[u8], out: &mut [ThermalZoneParsed
                         &[]
                     };
 
-                    let mut tz = ThermalZoneParsedData::default();
-                    tz.name = name;
-                    tz.found = true;
+                    let mut tz = ThermalZoneParsedData {
+                        name,
+                        found: true,
+                        ..Default::default()
+                    };
 
                     extract_temp_methods(body, &mut tz);
                     out[count] = tz;
@@ -1062,8 +1058,10 @@ pub fn scan_aml_for_thermal_zones(aml_bytes: &[u8], out: &mut [ThermalZoneParsed
 
     // 2. Eğer açık ThermalZoneOp bulunamadıysa ama genel _TMP tanımları varsa:
     if count == 0 {
-        let mut tz = ThermalZoneParsedData::default();
-        tz.name = *b"THM0";
+        let mut tz = ThermalZoneParsedData {
+            name: *b"THM0",
+            ..Default::default()
+        };
         extract_temp_methods(aml_bytes, &mut tz);
         if tz.current_temp_k > 0 || tz.critical_temp_k > 0 {
             tz.found = true;
@@ -1105,10 +1103,12 @@ pub fn scan_aml_for_power_devices(
             let mut parser = AmlParser::new(&aml_bytes[i + 2..]);
             if let Some(pkg_len) = parser.parse_pkg_length() {
                 if let Some(name) = parser.parse_name_string() {
-                    let mut pw = PowerDeviceParsedData::default();
-                    pw.name = name;
-                    pw.found = true;
-                    pw.status = 1;
+                    let mut pw = PowerDeviceParsedData {
+                        name,
+                        found: true,
+                        status: 1,
+                        ..Default::default()
+                    };
 
                     let body_start = i + 2 + parser.cursor;
                     let body_end = (i + 2 + pkg_len).min(aml_bytes.len());
@@ -1154,12 +1154,14 @@ pub fn scan_aml_for_power_devices(
                             }
                         }
                         if has_ps0 || has_ps3 {
-                            let mut pw = PowerDeviceParsedData::default();
-                            pw.name = name;
-                            pw.found = true;
-                            pw.has_on = has_ps0;
-                            pw.has_off = has_ps3;
-                            pw.status = 1;
+                            let pw = PowerDeviceParsedData {
+                                name,
+                                found: true,
+                                has_on: has_ps0,
+                                has_off: has_ps3,
+                                status: 1,
+                                ..Default::default()
+                            };
                             out[count] = pw;
                             count += 1;
                             i = body_end;
@@ -1207,11 +1209,12 @@ pub fn scan_acpi_thermal_zones(out: &mut [ThermalZoneParsedData; 8]) -> usize {
                     let ssdt = core::slice::from_raw_parts(ptr, SSDT_LENS[i]);
                     let mut tmp = [ThermalZoneParsedData::default(); 8];
                     let c = scan_aml_for_thermal_zones(ssdt, &mut tmp);
-                    for j in 0..c {
-                        if count < 8 {
-                            out[count] = tmp[j];
-                            count += 1;
+                    for &tz in tmp.iter().take(c) {
+                        if count >= 8 {
+                            break;
                         }
+                        out[count] = tz;
+                        count += 1;
                     }
                 }
             }
@@ -1245,11 +1248,12 @@ pub fn scan_acpi_power_devices(out: &mut [PowerDeviceParsedData; 8]) -> (usize, 
                     let mut tmp = [PowerDeviceParsedData::default(); 8];
                     let (c, s) = scan_aml_for_power_devices(ssdt, &mut tmp);
                     states |= s;
-                    for j in 0..c {
-                        if count < 8 {
-                            out[count] = tmp[j];
-                            count += 1;
+                    for &pw in tmp.iter().take(c) {
+                        if count >= 8 {
+                            break;
                         }
+                        out[count] = pw;
+                        count += 1;
                     }
                 }
             }

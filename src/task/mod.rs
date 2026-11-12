@@ -313,9 +313,10 @@ pub fn notify(event: TaskEvent) -> usize {
     if RUNNING_TASK.load(Ordering::Acquire) != 0
         && RUNNING_WAIT_SET.load(Ordering::Acquire)
         && RUNNING_WAIT_EVENT.load(Ordering::Acquire) == event.0
-        && !RUNNING_WOKEN.swap(true, Ordering::AcqRel) {
-            count += 1;
-        }
+        && !RUNNING_WOKEN.swap(true, Ordering::AcqRel)
+    {
+        count += 1;
+    }
     count
 }
 

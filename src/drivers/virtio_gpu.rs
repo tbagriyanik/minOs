@@ -262,13 +262,11 @@ pub struct VirtioGpuDisplayOne {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub struct VirtioGpuRespDisplayInfo {
     pub hdr: VirtioGpuCtrlHdr,
     pub pmodes: [VirtioGpuDisplayOne; 16],
 }
-
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Debug)]

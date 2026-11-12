@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+// Çekirdek içi API'ler (render/event/driver yolları) çok parametreli çalışır;
+// imza başına parametre demeti refactor'u bu aşamada risklidir.
+#![allow(clippy::too_many_arguments)]
 
 extern crate alloc;
 
@@ -78,7 +81,6 @@ fn alloc_pmm_frame_global() -> Option<u64> {
 pub extern "C" fn _start() -> ! {
     gui::event_loop::run_desktop(boot::start::init())
 }
-
 
 /// Terminalde `edit <dosya>` / `start <dosya>` calistirildiysa istenen
 /// dosyayi uygun uygulamada acar (metin -> Not Defteri, digerleri -> Gezgin).

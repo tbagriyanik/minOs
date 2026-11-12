@@ -151,6 +151,12 @@ impl BumpAllocator {
     }
 }
 
+impl Default for BumpAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 2. Fixed-Size Block Allocator
 // ---------------------------------------------------------------------------
@@ -332,6 +338,12 @@ impl FixedSizeBlockAllocator {
     /// Returns bytes remaining before heap end in the bump frontier.
     pub fn free_bytes(&self) -> usize {
         self.heap_end.saturating_sub(self.next)
+    }
+}
+
+impl Default for FixedSizeBlockAllocator {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

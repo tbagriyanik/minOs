@@ -126,8 +126,7 @@ impl PhysicalMemoryManager {
         if index >= self.total_managed_frames || index >= MAX_FRAMES {
             return None;
         }
-        for i in 0..self.region_count {
-            let region = &self.usable_regions[i];
+        for region in self.usable_regions.iter().take(self.region_count) {
             let region_frames = (region.length / PAGE_SIZE) as usize;
             if index < region_frames {
                 return region

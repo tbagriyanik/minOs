@@ -314,8 +314,7 @@ fn identify(drive: u8, packet: bool) -> Device {
     }
 
     let mut n = 0;
-    for w in 27..47 {
-        let word = data[w];
+    for word in data[27..47].iter().copied() {
         let a = (word >> 8) as u8;
         let b = (word & 0xFF) as u8;
         if n < 40 && a != 0 {

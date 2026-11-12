@@ -2094,9 +2094,9 @@ unsafe fn abort_slot(
             c.port_base_dma[idx] = 0;
         }
     }
-    for i in 0..block_count {
-        if blocks[i] != 0 {
-            free_frames(pmm, blocks[i], 2);
+    for &block in blocks.iter().take(block_count) {
+        if block != 0 {
+            free_frames(pmm, block, 2);
         }
     }
     free_frames(pmm, base, 4);
@@ -2197,11 +2197,12 @@ unsafe fn enumerate_device(
             route_string,
             tt_hub_slot,
             tt_port,
-        ) {
-            crate::serial::print("[USB-HID] EP0 max packet güncellenemedi.\n");
-            abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
-            return;
-        }
+        )
+    {
+        crate::serial::print("[USB-HID] EP0 max packet güncellenemedi.\n");
+        abort_slot(c, pmm, root_port, slot, base, &blocks, block_count, is_root);
+        return;
+    }
 
     // Tam aygıt tanımlayıcısı
     core::ptr::write_bytes(buffer, 0, PAGE as usize);
@@ -2298,20 +2299,13 @@ unsafe fn enumerate_device(
 
     let mut usable = [HidCandidate::empty(); MAX_HID_INTERFACES];
     let mut usable_count = 0usize;
-    for i in 0..found {
-        if load_report_layout(
-            c,
-            &mut ep0_ring,
-            slot,
-            &mut candidates[i],
-            buffer_phys,
-            buffer,
-        ) {
-            usable[usable_count] = candidates[i];
+    for candidate in candidates.iter_mut().take(found) {
+        if load_report_layout(c, &mut ep0_ring, slot, candidate, buffer_phys, buffer) {
+            usable[usable_count] = *candidate;
             usable_count += 1;
         } else {
             crate::serial::print("[USB-HID] Arayüz ");
-            crate::serial::print_dec(candidates[i].interface as u64);
+            crate::serial::print_dec(candidate.interface as u64);
             crate::serial::print(" HID klavye/fare değil; atlandı.\n");
         }
     }
@@ -2347,21 +2341,14 @@ unsafe fn enumerate_device(
         return;
     }
 
-    for i in 0..count {
-        if usable[i].boot {
-            usable[i].custom = c.control_out(
-                &mut ep0_ring,
-                slot,
-                0x21,
-                0x0B,
-                0,
-                usable[i].interface as u16,
-                0,
-                0,
-            )
-            .is_none();
+    for interface in usable.iter_mut().take(count) {
+        let iface = interface.interface as u16;
+        if interface.boot {
+            interface.custom = c
+                .control_out(&mut ep0_ring, slot, 0x21, 0x0B, 0, iface, 0, 0)
+                .is_none();
         } else {
-            usable[i].custom = true;
+            interface.custom = true;
         }
     }
 
@@ -2384,8 +2371,8 @@ unsafe fn enumerate_device(
     zero_page(input_phys);
     let mut ctx_flags = 1u32;
     let mut max_dci = 0u8;
-    for i in 0..count {
-        let dci = (usable[i].endpoint & 0x0F) * 2 + 1;
+    for interface in usable.iter().take(count) {
+        let dci = (interface.endpoint & 0x0F) * 2 + 1;
         ctx_flags |= 1 << dci;
         if dci > max_dci {
             max_dci = dci;
@@ -2906,18 +2893,18 @@ unsafe fn sync_keyboard_leds(keyboard: &KeyboardState) {
     let desired =
         crate::drivers::usb_keyboard::led_value(keyboard.caps_lock, keyboard.num_lock, false);
 
-    for i in 0..HID_DEVICES.len() {
-        if !HID_DEVICES[i].active || !HID_DEVICES[i].led_capable || HID_DEVICES[i].leds == desired {
+    for dev in HID_DEVICES.iter_mut() {
+        if !dev.active || !dev.led_capable || dev.leds == desired {
             continue;
         }
 
-        let ci = HID_DEVICES[i].controller as usize;
-        let slot = HID_DEVICES[i].slot;
-        let interface = HID_DEVICES[i].interface;
-        let ctrl_phys = HID_DEVICES[i].ctrl_phys;
-        let report_id = HID_DEVICES[i].led_report_id;
+        let ci = dev.controller as usize;
+        let slot = dev.slot;
+        let interface = dev.interface;
+        let ctrl_phys = dev.ctrl_phys;
+        let report_id = dev.led_report_id;
         if ci >= CONTROLLER_COUNT || ctrl_phys == 0 {
-            HID_DEVICES[i].led_capable = false;
+            dev.led_capable = false;
             continue;
         }
 
@@ -2931,7 +2918,7 @@ unsafe fn sync_keyboard_leds(keyboard: &KeyboardState) {
             1
         };
 
-        let mut ring = HID_DEVICES[i].ep0_ring;
+        let mut ring = dev.ep0_ring;
         let c = &mut CONTROLLERS[ci];
         let ok = c
             .control_out(
@@ -2945,16 +2932,16 @@ unsafe fn sync_keyboard_leds(keyboard: &KeyboardState) {
                 length,
             )
             .is_some();
-        HID_DEVICES[i].ep0_ring = ring;
+        dev.ep0_ring = ring;
 
         if ok {
-            HID_DEVICES[i].leds = desired;
+            dev.leds = desired;
             crate::serial::print("[USB-HID] Klavye LED güncellendi: ");
             crate::serial::print_hex(desired as u64);
             crate::serial::print("\n");
         } else {
             // Aygıt SET_REPORT'u reddetti; her karede yeniden denemeyi bırak.
-            HID_DEVICES[i].led_capable = false;
+            dev.led_capable = false;
             crate::serial::print(
                 "[USB-HID] Klavye LED raporu gönderilemedi; LED eşitleme kapatıldı.\n",
             );
@@ -3080,7 +3067,9 @@ pub fn init(pmm: &mut PhysicalMemoryManager) {
         }
 
         for ci in 0..CONTROLLER_COUNT {
-            let c = &mut CONTROLLERS[ci];
+            let Some(c) = CONTROLLERS.get_mut(ci) else {
+                continue;
+            };
             if !c.present {
                 continue;
             }
@@ -3211,14 +3200,11 @@ pub fn poll_events(
 
         // Donanım olay halkalarını boşalt.
         for ci in 0..CONTROLLER_COUNT {
-            if !CONTROLLERS[ci].present {
+            if CONTROLLERS.get(ci).is_none_or(|c| !c.present) {
                 continue;
             }
             for _ in 0..64 {
-                let event = {
-                    let c = &mut CONTROLLERS[ci];
-                    c.pop_event()
-                };
+                let event = CONTROLLERS.get_mut(ci).unwrap().pop_event();
                 let Some(event) = event else {
                     break;
                 };
@@ -3273,31 +3259,38 @@ pub fn poll_input(
         // Periyodik port taraması (tak/çıkar) ve PCD olayları.
         let now = crate::boot::time::monotonic_ms();
         for ci in 0..CONTROLLER_COUNT {
-            if !CONTROLLERS[ci].present {
-                continue;
-            }
-            let state = CONTROLLERS[ci].rd32(CONTROLLERS[ci].op + USBSTS);
-            let pcd = state & USBSTS_PCD != 0;
-            if pcd {
-                CONTROLLERS[ci].wr32(CONTROLLERS[ci].op + USBSTS, USBSTS_PCD | USBSTS_EINT);
-            }
-            let due = now.wrapping_sub(CONTROLLERS[ci].last_scan_ms) >= 1_000;
-            if pcd || due {
-                CONTROLLERS[ci].last_scan_ms = now;
+            let need_scan = {
+                let Some(c) = CONTROLLERS.get_mut(ci) else {
+                    continue;
+                };
+                if !c.present {
+                    continue;
+                }
+                let state = c.rd32(c.op + USBSTS);
+                let pcd = state & USBSTS_PCD != 0;
+                if pcd {
+                    c.wr32(c.op + USBSTS, USBSTS_PCD | USBSTS_EINT);
+                }
+                let due = now.wrapping_sub(c.last_scan_ms) >= 1_000;
+                if pcd || due {
+                    c.last_scan_ms = now;
+                    true
+                } else {
+                    false
+                }
+            };
+            if need_scan {
                 scan_ports(ci, pmm, false);
             }
         }
 
         // Donanım olay halkalarını boşalt.
         for ci in 0..CONTROLLER_COUNT {
-            if !CONTROLLERS[ci].present {
+            if CONTROLLERS.get(ci).is_none_or(|c| !c.present) {
                 continue;
             }
             for _ in 0..64 {
-                let event = {
-                    let c = &mut CONTROLLERS[ci];
-                    c.pop_event()
-                };
+                let event = CONTROLLERS.get_mut(ci).unwrap().pop_event();
                 let Some(event) = event else {
                     break;
                 };
@@ -3447,7 +3440,10 @@ pub fn has_event() -> bool {
             }
         }
         for ci in 0..CONTROLLER_COUNT {
-            if CONTROLLERS[ci].present && CONTROLLERS[ci].has_event() {
+            if CONTROLLERS
+                .get(ci)
+                .is_some_and(|c| c.present && c.has_event())
+            {
                 return true;
             }
         }

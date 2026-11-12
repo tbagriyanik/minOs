@@ -1,6 +1,8 @@
 //! Minimal X.509 certificate parser — extracts the RSA public key from a DER
 //! certificate — no_std.
 //!
+// İç API'ler hatayı `()` ile bildirir; ayrıntılı hata tipleri TLS katmanında.
+#![allow(clippy::result_unit_err)]
 //! The parser follows the certificate structure instead of scanning for byte
 //! patterns, so it also works for 2048-bit moduli (whose INTEGER TLV uses a
 //! long-form length).

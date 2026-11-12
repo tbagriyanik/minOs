@@ -147,8 +147,7 @@ pub enum BluetoothState {
 }
 
 // Keşfedilen Aygıt Kaydı
-#[derive(Clone, Copy, Debug)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct DiscoveredDevice {
     pub mac: [u8; 6],
     pub class_of_device: [u8; 3],
@@ -158,7 +157,6 @@ pub struct DiscoveredDevice {
     pub connected: bool,
     pub handle: u16,
 }
-
 
 // ---------------------------------------------------------------------------
 // Global Sürücü Durumu ve Arabellekler
@@ -380,7 +378,7 @@ pub fn receive_hci_event() -> Option<&'static [u8]> {
 
         if RX_EVENT_LEN > 0 {
             let slice = &RX_EVENT_BUFFER[..RX_EVENT_LEN];
-            Some(core::mem::transmute(slice))
+            Some(core::mem::transmute::<&[u8], &'static [u8]>(slice))
         } else {
             None
         }
@@ -414,7 +412,7 @@ pub fn receive_acl_data() -> Option<&'static [u8]> {
 
         if ACL_RX_LEN > 0 {
             let slice = &ACL_RX_BUFFER[..ACL_RX_LEN];
-            Some(core::mem::transmute(slice))
+            Some(core::mem::transmute::<&[u8], &'static [u8]>(slice))
         } else {
             None
         }
@@ -565,14 +563,13 @@ unsafe fn handle_cmd_complete_return(opcode: u16, ret_params: &[u8]) {
                 MAC_ADDR.copy_from_slice(&ret_params[..6]);
             }
         }
-        HCI_OP_READ_LOCAL_VERSION
-            if ret_params.len() >= 8 => {
-                HCI_VERSION = ret_params[0];
-                HCI_REVISION = (ret_params[1] as u16) | ((ret_params[2] as u16) << 8);
-                LMP_VERSION = ret_params[3];
-                MANUFACTURER_NAME = (ret_params[4] as u16) | ((ret_params[5] as u16) << 8);
-                LMP_SUBVERSION = (ret_params[6] as u16) | ((ret_params[7] as u16) << 8);
-            }
+        HCI_OP_READ_LOCAL_VERSION if ret_params.len() >= 8 => {
+            HCI_VERSION = ret_params[0];
+            HCI_REVISION = (ret_params[1] as u16) | ((ret_params[2] as u16) << 8);
+            LMP_VERSION = ret_params[3];
+            MANUFACTURER_NAME = (ret_params[4] as u16) | ((ret_params[5] as u16) << 8);
+            LMP_SUBVERSION = (ret_params[6] as u16) | ((ret_params[7] as u16) << 8);
+        }
         _ => {}
     }
 }
@@ -677,21 +674,20 @@ unsafe fn handle_synthetic_response(opcode: u16, params: &[u8]) {
                 process_hci_event(&resp);
             }
         }
-        HCI_OP_DISCONNECT
-            if params.len() >= 2 => {
-                let h_lo = params[0];
-                let h_hi = params[1];
-                let resp = [
-                    HCI_EVENT_PKT,
-                    HCI_EV_DISCONN_COMPLETE,
-                    4,
-                    0,
-                    h_lo,
-                    h_hi,
-                    0x16,
-                ];
-                process_hci_event(&resp);
-            }
+        HCI_OP_DISCONNECT if params.len() >= 2 => {
+            let h_lo = params[0];
+            let h_hi = params[1];
+            let resp = [
+                HCI_EVENT_PKT,
+                HCI_EV_DISCONN_COMPLETE,
+                4,
+                0,
+                h_lo,
+                h_hi,
+                0x16,
+            ];
+            process_hci_event(&resp);
+        }
         _ => {}
     }
 }

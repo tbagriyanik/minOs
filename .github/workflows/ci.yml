@@ -18,10 +18,10 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Rust Stable & Components
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust Nightly & Components
+        uses: dtolnay/rust-toolchain@nightly
         with:
-          components: rustfmt, clippy
+          components: rust-src, rustfmt, clippy
 
       - name: Check Formatting (cargo fmt)
         run: cargo fmt --all -- --check
@@ -31,6 +31,7 @@ jobs:
         run: ./test_host.ps1
 
       - name: Clippy Lint Check (Warnings only, non-blocking)
+        continue-on-error: true
         run: cargo clippy --target x86_64-unknown-linux-gnu -- -D warnings
 
   kernel-build:

@@ -28,15 +28,13 @@ pub struct Cookie {
     pub same_site: SameSite,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SameSite {
     #[default]
     Lax,
     Strict,
     None,
 }
-
 
 /// Çerez jarı: tüm çerezleri saklar ve eşleştirir.
 pub struct CookieJar {

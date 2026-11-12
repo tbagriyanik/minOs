@@ -337,8 +337,8 @@ pub fn detect() -> bool {
 
         // Varsayılan profil: Normal
         CURRENT_PROFILE = FanProfile::Normal;
-        for i in 0..FAN_SENSOR_COUNT {
-            FAN_PROFILES[i] = Some(FanProfile::Normal);
+        for slot in FAN_PROFILES.iter_mut().take(FAN_SENSOR_COUNT) {
+            *slot = Some(FanProfile::Normal);
         }
 
         DETECTED
@@ -386,8 +386,8 @@ pub fn fan_profile_set(name: &str) -> bool {
     };
     unsafe {
         CURRENT_PROFILE = profile;
-        for i in 0..FAN_SENSOR_COUNT {
-            FAN_PROFILES[i] = Some(profile);
+        for slot in FAN_PROFILES.iter_mut().take(FAN_SENSOR_COUNT) {
+            *slot = Some(profile);
         }
     }
     let _ = apply_fan_profiles();
@@ -521,9 +521,9 @@ pub fn fan_sensor_count() -> usize {
 /// Sıcaklık sensörünü oku
 pub fn get_temp_sensor(id: u8) -> Option<TemperatureSensor> {
     unsafe {
-        for i in 0..TEMP_SENSOR_COUNT {
-            if TEMP_SENSORS[i].id == id {
-                return Some(TEMP_SENSORS[i]);
+        for sensor in TEMP_SENSORS.iter().take(TEMP_SENSOR_COUNT) {
+            if sensor.id == id {
+                return Some(*sensor);
             }
         }
         None
@@ -538,9 +538,9 @@ pub fn get_all_temp_sensors() -> &'static [TemperatureSensor] {
 /// Fan sensörünü oku
 pub fn get_fan_sensor(id: u8) -> Option<FanSensor> {
     unsafe {
-        for i in 0..FAN_SENSOR_COUNT {
-            if FAN_SENSORS[i].id == id {
-                return Some(FAN_SENSORS[i]);
+        for sensor in FAN_SENSORS.iter().take(FAN_SENSOR_COUNT) {
+            if sensor.id == id {
+                return Some(*sensor);
             }
         }
         None
@@ -572,8 +572,8 @@ pub fn update_temperatures() -> bool {
                 }
             }
         } else {
-            for i in 0..TEMP_SENSOR_COUNT {
-                TEMP_SENSORS[i].temperature = 40 + (i as i32 * 5);
+            for (i, sensor) in TEMP_SENSORS.iter_mut().enumerate().take(TEMP_SENSOR_COUNT) {
+                sensor.temperature = 40 + (i as i32 * 5);
             }
         }
 
@@ -641,8 +641,8 @@ pub fn set_fan_auto(id: u8) -> bool {
 /// Kritik sıcaklık uyarısı
 pub fn is_critical_temperature() -> bool {
     unsafe {
-        for i in 0..TEMP_SENSOR_COUNT {
-            if TEMP_SENSORS[i].temperature >= TEMP_SENSORS[i].critical {
+        for sensor in TEMP_SENSORS.iter().take(TEMP_SENSOR_COUNT) {
+            if sensor.temperature >= sensor.critical {
                 return true;
             }
         }
@@ -658,8 +658,8 @@ pub fn average_temperature() -> Option<i32> {
         }
 
         let mut sum = 0i32;
-        for i in 0..TEMP_SENSOR_COUNT {
-            sum += TEMP_SENSORS[i].temperature;
+        for sensor in TEMP_SENSORS.iter().take(TEMP_SENSOR_COUNT) {
+            sum += sensor.temperature;
         }
         Some(sum / TEMP_SENSOR_COUNT as i32)
     }

@@ -129,9 +129,8 @@ impl CalculatorApp {
         let gap_x = BUTTON_GAP_X;
         let button_w = display_w.saturating_sub(gap_x * 3) / 4;
         let button_y = y + BUTTON_TOP;
-        for row in 0..BUTTONS.len() {
-            for col in 0..4 {
-                let key = BUTTONS[row][col];
+        for (row, row_buttons) in BUTTONS.iter().enumerate() {
+            for (col, &key) in row_buttons.iter().enumerate() {
                 let bx = display_x + col * (button_w + gap_x);
                 let by = button_y + row * (BUTTON_HEIGHT + BUTTON_GAP_Y);
                 let color = match key {

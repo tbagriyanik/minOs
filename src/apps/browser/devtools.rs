@@ -337,11 +337,11 @@ pub fn render_devtools(
             cy += 18;
 
             for dl in browser.downloads.iter().take(8) {
-                let progress = if dl.total_bytes > 0 {
-                    dl.received_bytes * 100 / dl.total_bytes
-                } else {
-                    0
-                };
+                let progress = dl
+                    .received_bytes
+                    .saturating_mul(100)
+                    .checked_div(dl.total_bytes)
+                    .unwrap_or(0);
                 let status_str = match dl.status {
                     crate::apps::browser::DownloadStatus::Queued => "Queued",
                     crate::apps::browser::DownloadStatus::Downloading => "Downloading",

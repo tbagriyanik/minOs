@@ -152,13 +152,10 @@ fn split_http_lines(body: &[u8]) -> impl Iterator<Item = &str> {
 fn url_path(url: &[u8]) -> Option<&str> {
     let url_str = core::str::from_utf8(url).ok()?;
     // minos:// prefixini kaldır
-    let rest = if url_str.starts_with("minos://") {
-        &url_str[8..]
-    } else if url_str.starts_with("http://") || url_str.starts_with("https://") {
-        &url_str[7..]
-    } else {
-        return None;
-    };
+    let rest = url_str
+        .strip_prefix("minos://")
+        .or_else(|| url_str.strip_prefix("https://"))
+        .or_else(|| url_str.strip_prefix("http://"))?;
     // Sorguyu ve frammenti kaldır
     let path = rest.split(['?', '#']).next()?;
     // Trailing slash'i temizle
@@ -196,9 +193,7 @@ fn split_resource_url(url: &str) -> Option<(bool, &str, u16, &str)> {
         let rest = url.strip_prefix("http://")?;
         (false, rest)
     };
-    let authority_end = rest
-        .find(['/', '?', '#'])
-        .unwrap_or(rest.len());
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let authority = &rest[..authority_end];
     let suffix = &rest[authority_end..];
     let default_port = if is_https { 443 } else { 80 };
@@ -512,8 +507,8 @@ fn history_forward() -> Option<String> {
 pub fn history_clear() {
     HISTORY_COUNT.store(0, Ordering::Release);
     HISTORY_POS.store(0, Ordering::Release);
-    for i in 0..HISTORY_MAX {
-        HISTORY_LEN[i].store(0, Ordering::Release);
+    for slot in HISTORY_LEN.iter() {
+        slot.store(0, Ordering::Release);
     }
 }
 
@@ -1223,8 +1218,14 @@ impl BrowserApp {
         if let (Some((start_line, start_col)), Some((end_line, end_col))) =
             (self.page_selection_start, self.page_selection_end)
         {
-            for line_idx in start_line..=end_line.min(self.page_lines.len().saturating_sub(1)) {
-                let line = &self.page_lines[line_idx];
+            let last_line = end_line.min(self.page_lines.len().saturating_sub(1));
+            for (line_idx, line) in self
+                .page_lines
+                .iter()
+                .enumerate()
+                .take(last_line.saturating_add(1))
+                .skip(start_line)
+            {
                 let mut line_text = String::new();
                 for span in &line.spans {
                     line_text.push_str(&span.text);
@@ -1288,9 +1289,8 @@ impl BrowserApp {
         if clicked_js.is_none() {
             // Iterate through page lines and spans to find the clicked element
             for (line_idx, line) in self.page_lines.iter().enumerate() {
-                let mut span_idx = 0usize; // Reset for each line
                 let mut char_offset = 0usize;
-                for span in &line.spans {
+                for (span_idx, span) in line.spans.iter().enumerate() {
                     let span_w = MinGuiCompositor::text_width(&span.text, 1)
                         + if span.is_button { 16 } else { 0 };
                     // Check if mouse is within this span's area
@@ -1312,7 +1312,6 @@ impl BrowserApp {
                         }
                     }
                     char_offset += span.text.len() + 1; // +1 for space
-                    span_idx += 1;
                 }
                 if clicked_js.is_some() {
                     break;
@@ -1378,11 +1377,10 @@ impl BrowserApp {
         } else if stmt.starts_with("console.log(") && stmt.ends_with(')') {
             // No-op (logs are collected but not displayed in this simple env)
         } else if stmt.starts_with("document.title =") || stmt.starts_with("document.title=") {
-            let val_part = if stmt.starts_with("document.title =") {
-                &stmt[16..]
-            } else {
-                &stmt[15..]
-            };
+            let val_part = stmt
+                .strip_prefix("document.title =")
+                .or_else(|| stmt.strip_prefix("document.title="))
+                .unwrap_or(stmt);
             let val = self.eval_js_expr(val_part);
             let vb = val.as_bytes();
             self.page_title_len = vb.len().min(64);
@@ -1976,10 +1974,9 @@ impl BrowserApp {
         }
         let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_' || b == b'-';
         let mut at = index.min(self.url_len);
-        if (at == self.url_len || !is_word(self.url[at]))
-            && at > 0 && is_word(self.url[at - 1]) {
-                at -= 1;
-            }
+        if (at == self.url_len || !is_word(self.url[at])) && at > 0 && is_word(self.url[at - 1]) {
+            at -= 1;
+        }
         if at >= self.url_len || !is_word(self.url[at]) {
             return;
         }
@@ -3040,9 +3037,7 @@ impl BrowserApp {
         };
 
         if let Some(rest) = rest_opt {
-            let authority_end = rest
-                .find(['/', '?', '#'])
-                .unwrap_or(rest.len());
+            let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
             let authority = &rest[..authority_end];
             let suffix = &rest[authority_end..];
             let suffix = suffix.split('#').next().unwrap_or("");
@@ -3695,9 +3690,10 @@ impl BrowserApp {
                 }
 
                 // El sıkışma tamamlandıysa HTTP isteğini şifreleyip gönder.
-                let tls_established = self.tls_session.as_ref().is_some_and(|t| {
-                    t.state() == crate::drivers::tls::TlsState::Established
-                });
+                let tls_established = self
+                    .tls_session
+                    .as_ref()
+                    .is_some_and(|t| t.state() == crate::drivers::tls::TlsState::Established);
 
                 // ── HTTP/2 entegrasyonu ─────────────────────────────────────
                 // ALPN ile h2leşmişse http2_get üzerinden HTTP/2 isteği yapar.
@@ -4952,19 +4948,21 @@ impl BrowserApp {
 
                         // <blockquote> sol dikey çubuk
                         if line.tag == HtmlTagType::Quote
-                            && draw_y + line_h > doc_y && draw_y < doc_y + doc_h {
-                                let bar_top = draw_y.max(doc_y);
-                                let bar_bottom = (draw_y + line_h).min(doc_y + doc_h);
-                                if bar_bottom > bar_top {
-                                    fb.draw_rect(
-                                        doc_x + 8,
-                                        bar_top,
-                                        3,
-                                        bar_bottom - bar_top,
-                                        Color::BORDER,
-                                    );
-                                }
+                            && draw_y + line_h > doc_y
+                            && draw_y < doc_y + doc_h
+                        {
+                            let bar_top = draw_y.max(doc_y);
+                            let bar_bottom = (draw_y + line_h).min(doc_y + doc_h);
+                            if bar_bottom > bar_top {
+                                fb.draw_rect(
+                                    doc_x + 8,
+                                    bar_top,
+                                    3,
+                                    bar_bottom - bar_top,
+                                    Color::BORDER,
+                                );
                             }
+                        }
 
                         let mut span_char_start = 0usize;
                         for span in &line.spans {
@@ -5823,11 +5821,11 @@ impl BrowserApp {
                 let bar_w = dl_bar_w.saturating_sub(100);
                 fb.draw_rect(bar_x, y, bar_w, dl_bar_h, Color::DARK_BG);
                 fb.draw_rect_outline(bar_x, y, bar_w, dl_bar_h, Color::BORDER);
-                let progress = if dl.total_bytes > 0 {
-                    dl.received_bytes * 100 / dl.total_bytes
-                } else {
-                    0
-                };
+                let progress = dl
+                    .received_bytes
+                    .saturating_mul(100)
+                    .checked_div(dl.total_bytes)
+                    .unwrap_or(0);
                 let fill_w = bar_w.saturating_sub(2) * progress / 100;
                 if fill_w > 0 {
                     fb.draw_rect(

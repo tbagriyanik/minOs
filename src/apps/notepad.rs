@@ -1130,8 +1130,7 @@ impl NotepadApp {
     pub fn cursor_row_col(&self, wrap_cols: usize) -> (usize, usize) {
         let mut line = 0usize;
         let mut col = 0usize;
-        for i in 0..self.cursor.min(self.len) {
-            let ch = self.buffer[i];
+        for &ch in self.buffer[..self.cursor.min(self.len)].iter() {
             if ch == '\n' {
                 line += 1;
                 col = 0;
@@ -1241,9 +1240,9 @@ impl NotepadApp {
             self.status_msg = crate::gui::ui_text("Bellek yetersiz", "Not enough memory");
             return false;
         }
-        for i in 0..self.len {
+        for &ch in self.buffer[..self.len].iter() {
             let mut char_buf = [0u8; 4];
-            let s = self.buffer[i].encode_utf8(&mut char_buf);
+            let s = ch.encode_utf8(&mut char_buf);
             utf8_buf.extend_from_slice(s.as_bytes());
         }
         let ok = vfs.write_file(path, &utf8_buf);
@@ -1366,8 +1365,7 @@ impl NotepadApp {
             for i in start_pos..=(self.len.saturating_sub(n_len)) {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
-                    {
+                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j]) {
                         match_ok = false;
                         break;
                     }
@@ -1382,8 +1380,7 @@ impl NotepadApp {
                 for i in 0..start_pos.min(self.len.saturating_sub(n_len) + 1) {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
-                        {
+                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j]) {
                             match_ok = false;
                             break;
                         }
@@ -1400,8 +1397,7 @@ impl NotepadApp {
             for i in (0..=check_limit).rev() {
                 let mut match_ok = true;
                 for j in 0..n_len {
-                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
-                    {
+                    if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j]) {
                         match_ok = false;
                         break;
                     }
@@ -1415,8 +1411,7 @@ impl NotepadApp {
                 for i in (start_pos..=(self.len - n_len)).rev() {
                     let mut match_ok = true;
                     for j in 0..n_len {
-                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j])
-                        {
+                        if !self.buffer[i + j].eq_ignore_ascii_case(&needle_chars[j]) {
                             match_ok = false;
                             break;
                         }
@@ -1455,8 +1450,7 @@ impl NotepadApp {
             if e - s == needle_chars.len() {
                 let mut ok = true;
                 for j in 0..needle_chars.len() {
-                    if !self.buffer[s + j].eq_ignore_ascii_case(&needle_chars[j])
-                    {
+                    if !self.buffer[s + j].eq_ignore_ascii_case(&needle_chars[j]) {
                         ok = false;
                         break;
                     }
@@ -1707,8 +1701,7 @@ impl NotepadApp {
         let mut lines = 1usize;
         let mut col = 0usize;
         let mut max_cols = 0usize;
-        for i in 0..self.len {
-            let ch = self.buffer[i];
+        for &ch in self.buffer[..self.len].iter() {
             if ch == '\n' {
                 max_cols = max_cols.max(col);
                 lines += 1;

@@ -611,8 +611,8 @@ pub fn init() {
         crate::serial::print("[WIFI] ");
         crate::serial::print_dec(WIFI_INTERFACE_COUNT as u64);
         crate::serial::print(" kablosuz arayüzü algılandı.\n");
-        for i in 0..WIFI_INTERFACE_COUNT {
-            if let Some(iface) = WIFI_INTERFACES[i] {
+        for iface in WIFI_INTERFACES[..WIFI_INTERFACE_COUNT].iter().flatten() {
+            {
                 crate::serial::print("[WIFI]   ");
                 match iface.bus {
                     WifiBusKind::Pci => crate::serial::print("PCI "),
@@ -712,8 +712,8 @@ pub fn status() -> WifiStatus {
 
 pub fn connect(ssid: &str, password: &str) -> bool {
     unsafe {
-        for i in 0..SCAN_COUNT {
-            if let Some(ap) = SCAN_RESULTS[i] {
+        for ap in SCAN_RESULTS[..SCAN_COUNT].iter().flatten() {
+            {
                 if ap.ssid_str() == ssid {
                     WIFI_STATUS.state = WifiState::Authenticating;
                     WIFI_STATUS.connected_ssid_len = ap.ssid_len;
@@ -725,7 +725,7 @@ pub fn connect(ssid: &str, password: &str) -> bool {
 
                     // WPA2-PSK 4-way el sıkışması: PMK → PTK → KCK/KEK/TK,
                     // ardından Msg 1/2/3/4 değişimi (simüle edilen AP ile).
-                    if !wpa_connect_handshake(&ap, password) {
+                    if !wpa_connect_handshake(ap, password) {
                         WIFI_STATUS.state = WifiState::Failed;
                         crate::serial::print("[WIFI] WPA el sıkışması başarısız.\n");
                         return false;

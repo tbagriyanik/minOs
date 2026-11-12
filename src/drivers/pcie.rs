@@ -226,9 +226,9 @@ pub fn get_device(index: usize) -> Option<PcieDevice> {
 /// Belirli bir class/subclass ile aygıt ara
 pub fn find_device(class: u8, subclass: u8) -> Option<PcieDevice> {
     unsafe {
-        for i in 0..DEVICE_COUNT {
-            if DEVICES[i].class == class && DEVICES[i].subclass == subclass {
-                return Some(DEVICES[i]);
+        for dev in DEVICES[..DEVICE_COUNT].iter() {
+            if dev.class == class && dev.subclass == subclass {
+                return Some(*dev);
             }
         }
         None
@@ -238,9 +238,9 @@ pub fn find_device(class: u8, subclass: u8) -> Option<PcieDevice> {
 /// Belirli bir vendor/device ile aygıt ara
 pub fn find_device_by_ids(vendor_id: u16, device_id: u16) -> Option<PcieDevice> {
     unsafe {
-        for i in 0..DEVICE_COUNT {
-            if DEVICES[i].vendor_id == vendor_id && DEVICES[i].device_id == device_id {
-                return Some(DEVICES[i]);
+        for dev in DEVICES[..DEVICE_COUNT].iter() {
+            if dev.vendor_id == vendor_id && dev.device_id == device_id {
+                return Some(*dev);
             }
         }
         None

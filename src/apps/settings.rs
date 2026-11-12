@@ -2349,11 +2349,7 @@ impl SystemSettings {
                         fb.draw_rect(r.0, r.1, r.2, r.3, Color::TITLE_BAR_INACTIVE);
                         fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::BORDER);
                         let mut lbl = TextBuf::new();
-                        lbl.push_str(if self.language.is_english() {
-                            "…"
-                        } else {
-                            "…"
-                        });
+                        lbl.push_str("…");
                         MinGuiCompositor::draw_string_clipped(
                             fb,
                             r.0 + r.2 / 2 - 4,

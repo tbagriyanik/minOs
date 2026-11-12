@@ -229,17 +229,16 @@ pub fn try_set_resolution(w: usize, h: usize) -> (bool, Option<usize>) {
         return (false, None);
     }
     if unsafe { CAPS.virtio_gpu_present }
-        && crate::drivers::virtio_gpu::set_mode(w as u32, h as u32) {
-            return (true, Some(w * 4));
-        }
-    if unsafe { CAPS.nvidia_present }
-        && crate::drivers::nvidia::set_mode(w as u32, h as u32, 32) {
-            return (true, Some(w * 4));
-        }
-    if unsafe { CAPS.amd_present }
-        && crate::drivers::amdgpu::set_mode(w as u32, h as u32, 32) {
-            return (true, Some(w * 4));
-        }
+        && crate::drivers::virtio_gpu::set_mode(w as u32, h as u32)
+    {
+        return (true, Some(w * 4));
+    }
+    if unsafe { CAPS.nvidia_present } && crate::drivers::nvidia::set_mode(w as u32, h as u32, 32) {
+        return (true, Some(w * 4));
+    }
+    if unsafe { CAPS.amd_present } && crate::drivers::amdgpu::set_mode(w as u32, h as u32, 32) {
+        return (true, Some(w * 4));
+    }
     if let Some(pitch) = bga_set_mode(w as u16, h as u16, 32) {
         // Kısa bir dikey-blank beklemesi: yırtılmayı azaltır.
         vsync_wait();
@@ -318,6 +317,10 @@ pub fn vsync_wait() {
 /// Donanım hızlandırmalı 2D dikdörtgen dolgusu (Hardware Rect Fill).
 /// Framebuffer veya Backbuffer üzerinde 64-bit / SSE talimatları ve önbellek hizalaması
 /// kullanarak ultra hızlı piksel blok dolgusu gerçekleştirir.
+///
+/// # Safety
+/// `dst`, `w * h` piksel kaplayacak şekilde eşlenmiş ve yazılabilir olmalı;
+/// `pitch_words` satır adımını (piksel cinsinden) doğru vermelidir.
 pub unsafe fn hw_accel_fill_rect(
     dst: *mut u32,
     pitch_words: usize,
@@ -342,6 +345,10 @@ pub unsafe fn hw_accel_fill_rect(
 
 /// Donanım hızlandırmalı 2D blok kopyalama (Hardware Bit Blit).
 /// Kaynak bellekten hedef ekrana/tampona satır satır optimize edilmiş veri kopyalama yapar.
+///
+/// # Safety
+/// `src` ve `dst` ilgili `w * h` bölgesi için eşlenmiş, geçerli pointer
+/// olmalı; pitch değerleri doğru verilmelidir. Bölgeler çakışmamalıdır.
 pub unsafe fn hw_accel_bit_blit(
     src: *const u32,
     src_pitch_words: usize,

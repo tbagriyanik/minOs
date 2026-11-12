@@ -263,9 +263,9 @@ impl FpsGameApp {
 
         // Başlangıç düşmanlarını harita üzerindeki boş hücrelere yerleştir.
         let mut n = 0;
-        for ty in 2..MAP_H - 1 {
-            for tx in 2..MAP_W - 1 {
-                if MAP[ty][tx] == 0 && n < MAX_ENEMIES && (tx + ty) % 3 == 0 {
+        for (ty, row) in MAP.iter().enumerate().skip(2).take(MAP_H.saturating_sub(3)) {
+            for (tx, &cell) in row.iter().enumerate().skip(2).take(MAP_W.saturating_sub(3)) {
+                if cell == 0 && n < MAX_ENEMIES && (tx + ty) % 3 == 0 {
                     enemies[n] = Enemy {
                         x: tx as f32 + 0.5,
                         y: ty as f32 + 0.5,
@@ -285,9 +285,9 @@ impl FpsGameApp {
             active: false,
         }; MAX_PICKUPS];
         let mut pcount = 0;
-        for ty in 2..MAP_H - 1 {
-            for tx in 2..MAP_W - 1 {
-                if MAP[ty][tx] == 0 && pcount < MAX_PICKUPS && (tx * 2 + ty) % 5 == 0 {
+        for (ty, row) in MAP.iter().enumerate().skip(2).take(MAP_H.saturating_sub(3)) {
+            for (tx, &cell) in row.iter().enumerate().skip(2).take(MAP_W.saturating_sub(3)) {
+                if cell == 0 && pcount < MAX_PICKUPS && (tx * 2 + ty) % 5 == 0 {
                     pickups[pcount] = Pickup {
                         x: tx as f32 + 0.5,
                         y: ty as f32 + 0.5,
@@ -306,9 +306,9 @@ impl FpsGameApp {
             state: 0,
         }; 8];
         let mut dcount = 0;
-        for ty in 0..MAP_H {
-            for tx in 0..MAP_W {
-                if MAP[ty][tx] == TILE_DOOR && dcount < doors.len() {
+        for (ty, row) in MAP.iter().enumerate() {
+            for (tx, &cell) in row.iter().enumerate() {
+                if cell == TILE_DOOR && dcount < doors.len() {
                     doors[dcount] = Door {
                         x: tx,
                         y: ty,
@@ -794,7 +794,6 @@ impl FpsGameApp {
             // DDA: duvara kadar ilerle.
             let mut hit = false;
             let mut side = 0;
-            
 
             // Harita bozuk olsa bile tek ray ana döngüyü kilitlemesin.
             // Bütçe kontrolü ile DDA döngüsünün sonsuzlaşması engellenir.
@@ -836,13 +835,13 @@ impl FpsGameApp {
             // Bozuk bir açı/mesafe hiçbir zaman dev bir çizim döngüsüne
             // dönüşmesin.
             let perp_wall_dist = if perp_wall_dist.is_finite() {
-                perp_wall_dist.abs().max(0.15).min(MAX_DEPTH * 4.0)
+                perp_wall_dist.abs().clamp(0.15, MAX_DEPTH * 4.0)
             } else {
                 MAX_DEPTH
             };
 
-            for z in x..(x + column_step).min(w) {
-                z_buffer[z] = perp_wall_dist;
+            for slot in z_buffer[x..(x + column_step).min(w)].iter_mut() {
+                *slot = perp_wall_dist;
             }
 
             // Duvar yüksekliği: standart raycasting projeksiyonu. Ekran
@@ -1139,11 +1138,10 @@ impl FpsGameApp {
         let offset_y = win_y + win_h.saturating_sub(map_h) / 2;
 
         // Harita karelerini çiz.
-        for ty in 0..MAP_H {
-            for tx in 0..MAP_W {
+        for (ty, row) in MAP.iter().enumerate() {
+            for (tx, &t) in row.iter().enumerate() {
                 let x = offset_x + tx * cell;
                 let y = offset_y + ty * cell;
-                let t = MAP[ty][tx];
                 let color = match t {
                     TILE_WALL => 0x6B7A8C,
                     TILE_DOOR => {
@@ -1245,9 +1243,8 @@ impl FpsGameApp {
         let cw = (radar_w / MAP_W).max(1);
         let ch = (radar_h / MAP_H).max(1);
 
-        for ty in 0..MAP_H {
-            for tx in 0..MAP_W {
-                let t = MAP[ty][tx];
+        for (ty, row) in MAP.iter().enumerate() {
+            for (tx, &t) in row.iter().enumerate() {
                 let color = match t {
                     TILE_WALL => 0x4A5568,
                     TILE_DOOR => {

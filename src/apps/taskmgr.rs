@@ -824,9 +824,9 @@ impl TaskManagerApp {
                 let total_gaps = gap * cores.saturating_sub(1);
                 let per_core_w = (content_w.saturating_sub(total_gaps) / cores).max(12);
 
-                for c in 0..cores {
+                for (c, &core_pct) in self.core_usage_pct[..cores].iter().enumerate() {
                     let cx = content_x + c * (per_core_w + gap);
-                    let pct = self.core_usage_pct[c].min(100);
+                    let pct = core_pct.min(100);
 
                     // Çekirdek Etiketi (C0, C1...) ve % değeri
                     let mut core_lbl = TextBuf::new();
@@ -870,11 +870,11 @@ impl TaskManagerApp {
 
             // 2. RAM (BELLEK) BÖLÜMÜ
             let mem_y = cpu_y + 8;
-            let memory_pct = if self.total_memory_kb == 0 {
-                0
-            } else {
-                self.used_memory_kb.saturating_mul(100) / self.total_memory_kb
-            };
+            let memory_pct = self
+                .used_memory_kb
+                .saturating_mul(100)
+                .checked_div(self.total_memory_kb)
+                .unwrap_or(0);
 
             let mut memory_label = TextBuf::new();
             memory_label.push_str(crate::gui::ui_text("RAM Kullanımı: %", "RAM Usage: %"));

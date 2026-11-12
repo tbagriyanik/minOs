@@ -606,8 +606,8 @@ impl Huffman {
 
 fn fixed_tables() -> Option<(Huffman, Huffman)> {
     let mut lit = [0u8; 288];
-    for i in 0..288 {
-        lit[i] = match i {
+    for (i, slot) in lit.iter_mut().enumerate() {
+        *slot = match i {
             0..=143 => 8,
             144..=255 => 9,
             256..=279 => 7,
@@ -1009,8 +1009,8 @@ fn idct_block(coeff: &[i32], out: &mut [u8], out_w: usize, ox: usize, oy: usize)
         let mut s = [0i64; 8];
         s.copy_from_slice(&tmp[row * 8..row * 8 + 8]);
         let v = idct_1d(s);
-        for col in 0..8 {
-            let value = ((v[col] + 65536 + (128 << 17)) >> 17).clamp(0, 255) as u8;
+        for (col, &vc) in v.iter().enumerate() {
+            let value = ((vc + 65536 + (128 << 17)) >> 17).clamp(0, 255) as u8;
             let idx = (oy + row) * out_w + ox + col;
             if idx < out.len() {
                 out[idx] = value;
@@ -1155,8 +1155,8 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                         if p + 128 > seg.len() {
                             return None;
                         }
-                        for i in 0..64 {
-                            table[i] = be16(seg, p + i * 2)? as i32;
+                        for (i, slot) in table.iter_mut().enumerate() {
+                            *slot = be16(seg, p + i * 2)? as i32;
                         }
                         p += 128;
                     } else {
@@ -1403,7 +1403,10 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let (aw, ahh) = component_block_dims(&fr, comp);
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit.is_multiple_of(restart_interval)
+                            {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1428,7 +1431,10 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     // Örgülü tarama: MCU bazlı, bileşenler arası geçişli.
                     for my in 0..mcus_y {
                         for mx in 0..mcus_x {
-                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit.is_multiple_of(restart_interval)
+                            {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1473,7 +1479,10 @@ pub fn decode_jpeg(data: &[u8]) -> Option<DecodedImage> {
                     let row_blocks = comp.bw;
                     for by in 0..ahh {
                         for bx in 0..aw {
-                            if restart_interval > 0 && unit > 0 && unit.is_multiple_of(restart_interval) {
+                            if restart_interval > 0
+                                && unit > 0
+                                && unit.is_multiple_of(restart_interval)
+                            {
                                 if !br.reset_at_restart() {
                                     return None;
                                 }
@@ -1996,8 +2005,8 @@ fn lzw_decompress(data: &[u8], min_code_size: usize) -> Option<Vec<u8>> {
     // Code table: each entry is (prefix_code, suffix_byte)
     let mut prefix: Vec<Option<usize>> = vec![None; 4096];
     let mut suffix: Vec<u8> = vec![0; 4096];
-    for i in 0..clear_code {
-        suffix[i] = i as u8;
+    for (i, slot) in suffix[..clear_code].iter_mut().enumerate() {
+        *slot = i as u8;
     }
 
     // Bit reader
@@ -2335,10 +2344,10 @@ fn decode_webp_lossless(data: &[u8]) -> Option<DecodedImage> {
         let cache_huffman = Huffman::from_lengths(&cache_lengths)?;
         let mut cache_values = vec![0u32; size];
         // Önbellek değerlerini oku (8 bit her kanal)
-        for i in 0..size {
+        for slot in cache_values.iter_mut() {
             let sym = cache_huffman.decode(&mut br)? as usize;
             if sym < 256 {
-                cache_values[i] = sym as u32;
+                *slot = sym as u32;
             } else {
                 return None;
             }

@@ -307,8 +307,8 @@ pub fn ensure_thumb(idx: usize) {
 /// açıldığında fare takılmaz.
 pub fn ensure_all_thumbs() {
     unsafe {
-        for idx in 0..3 {
-            if !THUMB_READY[idx] {
+        for idx in 0..THUMB_READY.len() {
+            if !thumb_ready(idx) {
                 ensure_thumb(idx);
             }
         }

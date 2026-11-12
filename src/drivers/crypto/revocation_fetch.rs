@@ -224,11 +224,7 @@ fn http_fetch_der(url: &str) -> Option<Vec<u8>> {
     // Yanıtı oku (başlık + gövde)
     let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut chunk = [0u8; 4096];
-    loop {
-        let n = match crate::drivers::socket::recv(fd, &mut chunk) {
-            Ok(n) => n,
-            Err(_) => break,
-        };
+    while let Ok(n) = crate::drivers::socket::recv(fd, &mut chunk) {
         if n == 0 {
             break;
         }

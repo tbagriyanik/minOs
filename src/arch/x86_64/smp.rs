@@ -157,6 +157,10 @@ pub fn lapic_id_of(cpu: usize) -> u32 {
 
 /// AP giriş noktası. Yığına dokunmadan atomik kimlik alır, kendi yığınına
 /// geçer ve [`ap_main_rust`] fonksiyonuna dallanır. Asla dönmez.
+///
+/// # Safety
+/// Limine önyükleyicisi tarafından AP başlatma sırasında çağrılır; Rust
+/// kodundan doğrudan çağrılmamalıdır.
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn ap_entry() {
@@ -370,8 +374,8 @@ pub fn cpu_count() -> usize {
 
 pub fn current_cpu_index() -> usize {
     let id = lapic_read(0x20) >> 24;
-    for cpu in 0..cpu_count().min(MAX_CPUS) {
-        if LAPIC_ID[cpu].load(Ordering::Relaxed) == id {
+    for (cpu, slot) in LAPIC_ID.iter().enumerate().take(cpu_count().min(MAX_CPUS)) {
+        if slot.load(Ordering::Relaxed) == id {
             return cpu;
         }
     }

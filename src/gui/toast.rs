@@ -135,8 +135,8 @@ impl MinGuiCompositor {
         let mut current_bottom = tb_y.saturating_sub(toast_margin);
         let toast_x = fb.width.saturating_sub(toast_w + toast_margin);
 
-        for slot in &self.toasts {
-            if let Some(t) = slot {
+        for t in self.toasts.iter().flatten() {
+            {
                 let toast_y = current_bottom.saturating_sub(toast_h);
 
                 // 1. Yumuşak Gölgelendirme

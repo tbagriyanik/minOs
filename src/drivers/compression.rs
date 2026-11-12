@@ -20,8 +20,7 @@ pub fn inflate(input: &[u8]) -> Option<Vec<u8>> {
     // önce olası kuyruğu çıkarılmış biçimi deniyoruz; kısa ham akışları
     // bozmamak için yalnızca 8 bayttan uzun girdilerde bunu yapıyoruz.
     if input.len() > 8 {
-        if let Ok(result) = miniz_oxide::inflate::decompress_to_vec(&input[..input.len() - 8])
-        {
+        if let Ok(result) = miniz_oxide::inflate::decompress_to_vec(&input[..input.len() - 8]) {
             return Some(result);
         }
     }

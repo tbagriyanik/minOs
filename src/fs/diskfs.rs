@@ -462,9 +462,9 @@ fn push_short_name(entry: &mut DiskEntry, raw: &[u8]) {
     }
     let mut ext = [0u8; 3];
     let mut en = 0;
-    for k in 8..11 {
-        if raw[k] != b' ' && en < 3 {
-            ext[en] = lower(raw[k]);
+    for &b in &raw[8..11] {
+        if b != b' ' && en < 3 {
+            ext[en] = lower(b);
             en += 1;
         }
     }
@@ -655,11 +655,11 @@ fn fat_dir_lookup(dir_cluster: u32, name: &str) -> Option<(bool, u32, u32)> {
     res
 }
 
+/// `fat_find_entry_ex` sonucundaki LFN parça konumları bileşeni.
+type FatEntryLocation = alloc::vec::Vec<(u32, usize)>;
+
 /// Dizinde `name` girdisini ve ona ait LFN parçalarının konumlarını bulur.
-fn fat_find_entry_ex(
-    dir_cluster: u32,
-    name: &str,
-) -> Option<(u32, usize, alloc::vec::Vec<(u32, usize)>)> {
+fn fat_find_entry_ex(dir_cluster: u32, name: &str) -> Option<(u32, usize, FatEntryLocation)> {
     let mut res = None;
     let mut lfn: alloc::vec::Vec<u16> = alloc::vec::Vec::new();
     let mut lfn_pos: alloc::vec::Vec<(u32, usize)> = alloc::vec::Vec::new();
@@ -717,8 +717,8 @@ fn fat_find_entry_ex(
 
 fn lfn_checksum(short: &[u8; 11]) -> u8 {
     let mut sum = 0u8;
-    for i in 0..11 {
-        sum = (((sum & 1) << 7) | (sum >> 1)).wrapping_add(short[i]);
+    for &b in short.iter() {
+        sum = (((sum & 1) << 7) | (sum >> 1)).wrapping_add(b);
     }
     sum
 }
@@ -869,11 +869,8 @@ fn fat_dir_alloc_slots(dir_cluster: u32, need: usize) -> Option<alloc::vec::Vec<
             let clusters_needed = extra.div_ceil(slots_per_cluster);
             // zincirin son kümesini bul
             let mut last = dir_cluster;
-            loop {
-                match fat_next(last) {
-                    Some(n) => last = n,
-                    None => break,
-                }
+            while let Some(n) = fat_next(last) {
+                last = n;
             }
             for _ in 0..clusters_needed {
                 let newc = fat_allocate_chain(1)?[0];
@@ -928,8 +925,7 @@ fn fat_dir_add_entry(parent: u32, name: &str, is_dir: bool, first: u32, size: u3
         };
         let checksum = lfn_checksum(&short);
         let slots13: [usize; 13] = [1, 3, 5, 7, 9, 14, 16, 18, 20, 22, 24, 28, 30];
-        for i in 0..lfn_count {
-            let seq = lfn_count - i;
+        for (i, seq) in (1..=lfn_count).rev().enumerate() {
             let mut e = [0u8; 32];
             e[0] = (seq as u8) | if seq == lfn_count { 0x40 } else { 0 };
             e[11] = FAT_ATTR_LFN;
@@ -1778,13 +1774,12 @@ pub fn init() {
         } else {
             serial("[FS] Depolama aygiti bulundu ancak dosya sistemi taninamadi.\n");
         }
-    } else if ata::master_kind() == ata::DeviceKind::Atapi
-        && iso_mount(0) {
-            unsafe {
-                KIND0 = FsKind::Iso9660;
-            }
-            serial("[FS] Master ATAPI ISO9660 olarak baglandi.\n");
+    } else if ata::master_kind() == ata::DeviceKind::Atapi && iso_mount(0) {
+        unsafe {
+            KIND0 = FsKind::Iso9660;
         }
+        serial("[FS] Master ATAPI ISO9660 olarak baglandi.\n");
+    }
 
     // 2) Slave → CD-ROM (ISO9660)
     if ata::slave_kind() == ata::DeviceKind::Atapi {
@@ -1899,13 +1894,12 @@ pub fn drive_formatted_on(drive: u8) -> bool {
     }
     // Diskin MBR bölümü var mı ve içi boş değil mi kontrol et
     let mut mbr = [0u8; 512];
-    if ata::read_sector(drive, 0, &mut mbr)
-        && mbr[510] == 0x55 && mbr[511] == 0xAA {
-            let part_type = mbr[0x1BE + 4];
-            if matches!(part_type, 0x07 | 0x0C | 0x83) {
-                return true;
-            }
+    if ata::read_sector(drive, 0, &mut mbr) && mbr[510] == 0x55 && mbr[511] == 0xAA {
+        let part_type = mbr[0x1BE + 4];
+        if matches!(part_type, 0x07 | 0x0C | 0x83) {
+            return true;
         }
+    }
     false
 }
 
@@ -2028,11 +2022,8 @@ pub fn load_file_alloc(name: &str) -> Option<alloc::vec::Vec<u8>> {
     if !unsafe { LISTED } {
         refresh();
     }
-    let index = (0..unsafe { ENTRY_COUNT }).find(|&i| {
-        entry(i).is_some_and(|e| {
-            !e.is_dir && e.as_str().eq_ignore_ascii_case(name)
-        })
-    })?;
+    let index = (0..unsafe { ENTRY_COUNT })
+        .find(|&i| entry(i).is_some_and(|e| !e.is_dir && e.as_str().eq_ignore_ascii_case(name)))?;
     let meta = entry(index)?;
     let mut cluster = unsafe { FAT.root_cluster };
     let mut found = None;
@@ -2361,8 +2352,8 @@ pub fn content_len() -> usize {
 pub fn file_count() -> usize {
     unsafe {
         let mut n = 0;
-        for i in 0..ENTRY_COUNT {
-            if !ENTRIES[i].is_dir {
+        for entry in ENTRIES.iter().take(ENTRY_COUNT) {
+            if !entry.is_dir {
                 n += 1;
             }
         }

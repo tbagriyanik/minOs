@@ -151,8 +151,8 @@ impl Watchdog {
     /// Bir penceyi izleme listesinden çıkar.
     pub fn unwatch(&mut self, idx: usize) {
         let mut found = None;
-        for i in 0..self.watch_count {
-            if self.windows[i].idx == idx {
+        for (i, window) in self.windows.iter().enumerate().take(self.watch_count) {
+            if window.idx == idx {
                 found = Some(i);
                 break;
             }

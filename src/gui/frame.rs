@@ -77,8 +77,8 @@ pub struct EventLoopState {
 impl Default for EventLoopState {
     fn default() -> Self {
         let mut last_ap_heartbeats = [0u64; crate::arch::x86_64::smp::MAX_CPUS];
-        for c in 0..crate::arch::x86_64::smp::MAX_CPUS {
-            last_ap_heartbeats[c] = crate::arch::x86_64::smp::heartbeat(c);
+        for (c, slot) in last_ap_heartbeats.iter_mut().enumerate() {
+            *slot = crate::arch::x86_64::smp::heartbeat(c);
         }
 
         Self {
@@ -283,9 +283,7 @@ pub fn render_frame(ctx: RenderContext) {
     // 2. Open windows in z-order
     let (order, count) = compositor.draw_order();
 
-    for k in 0..count {
-        let idx = order[k];
-
+    for &idx in order.iter().take(count) {
         if let Some(win) = compositor.windows[idx] {
             if !win.is_open || win.is_minimized {
                 continue;
@@ -888,9 +886,7 @@ pub fn render_full_frame(
 
     let (order, count) = compositor.draw_order();
 
-    for k in 0..count {
-        let idx = order[k];
-
+    for &idx in order.iter().take(count) {
         if let Some(win) = compositor.windows[idx] {
             if !win.is_open || win.is_minimized {
                 continue;
@@ -1080,8 +1076,7 @@ pub fn render_full_frame(
                     let backup_w = backup_region.x1.saturating_sub(backup_region.x0);
                     let backup_h = backup_region.y1.saturating_sub(backup_region.y0);
                     let backup_len = backup_w.saturating_mul(backup_h);
-                    let backup_ptr =
-                        core::ptr::addr_of_mut!(FPS3D_FRAME_BACKUP).cast::<u32>();
+                    let backup_ptr = core::ptr::addr_of_mut!(FPS3D_FRAME_BACKUP).cast::<u32>();
                     unsafe {
                         fb.copy_clip_region_to_packed(backup_ptr, backup_len, backup_region);
                     }
@@ -1527,4 +1522,3 @@ pub fn render_full_frame(
 
     fb.clear_frame_clip();
 }
-

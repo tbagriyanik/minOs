@@ -343,12 +343,12 @@ pub fn init() -> bool {
         let rings = RINGS.as_mut().unwrap();
 
         // RX descriptor'ları hazırla
-        for i in 0..RX_RING_SIZE {
+        for (i, desc) in rings.rx_ring.iter_mut().enumerate().take(RX_RING_SIZE) {
             let buf_addr = RINGS_ADDR
                 + core::mem::offset_of!(I219Rings, rx_bufs) as u64
                 + (i * RX_BUF_SIZE) as u64;
-            rings.rx_ring[i].addr = buf_addr;
-            rings.rx_ring[i].status = 0;
+            desc.addr = buf_addr;
+            desc.status = 0;
         }
 
         // RX ring kayıtlarını ayarla

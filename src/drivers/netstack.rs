@@ -2111,8 +2111,8 @@ pub fn take_ping6_reply() -> Option<PingReply6> {
 pub fn ping6_ex(target: Ipv6Address, seq: u16, payload_len: usize) -> bool {
     let mut data = [0u8; 64];
     let plen = payload_len.min(64);
-    for i in 0..plen {
-        data[i] = b'a' + ((i % 26) as u8);
+    for (i, slot) in data.iter_mut().enumerate().take(plen) {
+        *slot = b'a' + ((i % 26) as u8);
     }
     send_icmpv6_echo(target, 0x1234, seq, &data[..plen])
 }
@@ -2174,13 +2174,13 @@ pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
 
         let zeros = 8 - (left_count + right_count);
         let mut idx = 0;
-        for i in 0..left_count {
-            parts[idx] = left_parts[i];
+        for &v in left_parts.iter().take(left_count) {
+            parts[idx] = v;
             idx += 1;
         }
         idx += zeros;
-        for i in 0..right_count {
-            parts[idx] = right_parts[i];
+        for &v in right_parts.iter().take(right_count) {
+            parts[idx] = v;
             idx += 1;
         }
     } else {

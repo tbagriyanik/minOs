@@ -628,16 +628,22 @@ fn read_contact(
 
 fn remove_touch(id: u8) {
     unsafe {
+        let mut kept = [TouchEvent::empty(); MAX_CONTACTS];
         let mut out = 0usize;
-        for i in 0..TOUCH_COUNT {
-            if TOUCHES[i].id != id {
-                TOUCHES[out] = TOUCHES[i];
+        for t in TOUCHES[..TOUCH_COUNT].iter() {
+            if t.id != id {
+                kept[out] = *t;
                 out += 1;
             }
         }
+        core::ptr::copy_nonoverlapping(
+            kept.as_ptr(),
+            core::ptr::addr_of_mut!(TOUCHES) as *mut TouchEvent,
+            out,
+        );
         TOUCH_COUNT = out;
         CURRENT_TOUCH = if out > 0 {
-            TOUCHES[0]
+            kept[0]
         } else {
             TouchEvent::empty()
         };
@@ -650,9 +656,9 @@ fn upsert_touch(event: TouchEvent) {
             remove_touch(event.id);
             return;
         }
-        for i in 0..TOUCH_COUNT {
-            if TOUCHES[i].id == event.id {
-                TOUCHES[i] = event;
+        for t in TOUCHES[..TOUCH_COUNT].iter_mut() {
+            if t.id == event.id {
+                *t = event;
                 CURRENT_TOUCH = TOUCHES[0];
                 return;
             }

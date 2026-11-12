@@ -319,9 +319,11 @@ impl MinGuiCompositor {
         let is_word =
             |b: u8| b.is_ascii_alphanumeric() || b == b' ' || b == b'-' || b == b'_' || b == b'.';
         if (at == self.start_search_len || !is_word(self.start_search[at]))
-            && at > 0 && is_word(self.start_search[at - 1]) {
-                at -= 1;
-            }
+            && at > 0
+            && is_word(self.start_search[at - 1])
+        {
+            at -= 1;
+        }
         if at >= self.start_search_len || !is_word(self.start_search[at]) {
             return;
         }
@@ -706,6 +708,7 @@ impl MinGuiCompositor {
                 "Paket Yöneticisi",
                 "Kontrol Paneli",
                 "Oyunlar",
+                "FPS 3D Oyun",
             ];
             let en_names = [
                 "File Manager",
@@ -724,6 +727,7 @@ impl MinGuiCompositor {
                 "Package Manager",
                 "Control Panel",
                 "Games",
+                "FPS 3D Game",
             ];
             if count == 0 {
                 Self::draw_string(
@@ -734,7 +738,7 @@ impl MinGuiCompositor {
                     Color::TEXT_MUTED,
                 );
             }
-            for row in 0..count {
+            for (row, &app_id) in results.iter().enumerate().take(count) {
                 let r = (
                     sub_x + sp(6),
                     sub_y + sp(30) + row * sp(28),
@@ -748,7 +752,6 @@ impl MinGuiCompositor {
                 } else if is_hovered {
                     fb.draw_rounded_rect(r.0, r.1, r.2, r.3, 4, Color::TITLE_BAR);
                 }
-                let app_id = results[row];
                 let (app_name, icon_idx) = if app_id >= 100 {
                     (self.installed_app_name(app_id - 100), 5)
                 } else {
@@ -848,7 +851,6 @@ impl MinGuiCompositor {
                 }
                 let icon_y = r.1 + r.3.saturating_sub(Self::icon_size()) / 2;
 
-                
                 let app_name = if k == 0 {
                     // En üstte Paket Yöneticisi
                     let icon_idx = Self::window_icon_index(13);
@@ -890,8 +892,7 @@ impl MinGuiCompositor {
             } else {
                 [("Sistemi Kapat", 255usize), ("Yeniden Başlat", 254usize)]
             };
-            for k in 0..2 {
-                let (name, _code) = power_items[k];
+            for (k, &(name, _code)) in power_items.iter().enumerate() {
                 let r = (
                     sub_x + sp(6),
                     sub_y + sp(30) + k * sp(28),

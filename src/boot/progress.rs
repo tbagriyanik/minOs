@@ -18,7 +18,7 @@ fn busy_percent(state: &mut BusyProgressContext, done: usize, total: usize) -> u
     let mut p = if total == 0 {
         (state.last_percent + 1).min(90)
     } else {
-        5 + done.saturating_mul(90) / total
+        5 + done.saturating_mul(90).checked_div(total).unwrap_or(0)
     };
     if p < state.last_percent {
         p = state.last_percent;

@@ -128,6 +128,12 @@ pub static mut PANIC_FB_PITCH: usize = 0;
 pub static mut PANIC_FB_BPP: usize = 0;
 
 impl Framebuffer {
+    /// Yeni bir framebuffer tanımlayıcı oluşturur.
+    ///
+    /// # Safety
+    /// `address` en az `width * height` piksel ve `pitch` bayt kaplayacak
+    /// şekilde eşlenmiş, yazılabilir bir tampon olmalıdır; `pitch >= width * 4`
+    /// ve 4 bayt hizalı olmalıdır.
     pub unsafe fn new(
         address: *mut u32,
         width: usize,
@@ -500,6 +506,9 @@ impl Framebuffer {
 
     /// Kaynak arabellekten yalnızca `region` bölgesini backbuffer'a kopyalar.
     /// Kaynak, backbuffer ile aynı satır adımına (width) sahiptir.
+    ///
+    /// # Safety
+    /// `src`, kopyalanan aralık boyunca eşlenmiş ve okunabilir olmalıdır.
     pub unsafe fn copy_region_from_raw(&mut self, src: *const u32, region: ClipRect) {
         let stride = self.width;
         for y in region.y0..region.y1 {
@@ -525,6 +534,9 @@ impl Framebuffer {
 
     /// Aktif kırpma bölgesini sıkıştırılmış (packed) ham arabelleğe kopyalar.
     /// Her satır yalnızca bölge genişliği kadar piksel içerir.
+    ///
+    /// # Safety
+    /// `dst`, `max_len` piksele kadar yazılabilir eşlenmiş bellek olmalıdır.
     pub unsafe fn copy_clip_region_to_packed(
         &self,
         dst: *mut u32,
@@ -559,6 +571,10 @@ impl Framebuffer {
     }
 
     /// Sıkıştırılmış yedekten `region` alanını backbuffer'a geri yükler.
+    ///
+    /// # Safety
+    /// `src`, `region` boyutundaki sıkıştırılmış veriyi içerecek kadar
+    /// eşlenmiş ve okunabilir olmalıdır.
     pub unsafe fn restore_clip_region_from_packed(&mut self, src: *const u32, region: ClipRect) {
         let w = region.x1.saturating_sub(region.x0);
         let h = region.y1.saturating_sub(region.y0);
@@ -661,11 +677,11 @@ impl Framebuffer {
                 fg
             };
             let mut out = 0u32;
-            for channel in 0..3 {
+            for (channel, &cov) in coverage.iter().enumerate() {
                 let shift = 16 - channel * 8;
                 let f = (fg >> shift) & 0xFF;
                 let b = (bg >> shift) & 0xFF;
-                let a = coverage[channel] as u32;
+                let a = cov as u32;
                 out |= ((b * (255 - a) + f * a + 127) / 255) << shift;
             }
             BACKBUFFER[offset] = out;
@@ -681,12 +697,18 @@ impl Framebuffer {
     }
 
     /// Backbuffer'ın mevcut piksel içeriğini hedef arabelleğe kopyalar.
+    ///
+    /// # Safety
+    /// `dst`, `max_len` piksele kadar yazılabilir eşlenmiş bellek olmalıdır.
     pub unsafe fn copy_backbuffer_to_raw(&self, dst: *mut u32, max_len: usize) {
         let len = (self.width * self.height).min(BACKBUFFER_LEN).min(max_len);
         core::ptr::copy_nonoverlapping(core::ptr::addr_of!(BACKBUFFER) as *const u32, dst, len);
     }
 
     /// Kaynak piksel arabelleğini doğrudan backbuffer'a kopyalar.
+    ///
+    /// # Safety
+    /// `src`, `max_len` piksel kadar okunabilir eşlenmiş bellek olmalıdır.
     #[allow(dead_code)]
     pub unsafe fn copy_backbuffer_from_raw(&mut self, src: *const u32, max_len: usize) {
         let len = (self.width * self.height).min(BACKBUFFER_LEN).min(max_len);
@@ -1411,15 +1433,19 @@ impl Framebuffer {
         }
         let limit = (self.width * self.height).min(BACKBUFFER_LEN);
         unsafe {
-            for i in 0..limit {
-                let c = BACKBUFFER[i];
+            let bb = core::slice::from_raw_parts_mut(
+                core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32,
+                BACKBUFFER_LEN,
+            );
+            for px in bb[..limit].iter_mut() {
+                let c = *px;
                 let r = (c >> 16) & 255;
                 let g = (c >> 8) & 255;
                 let b = c & 255;
                 let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
                 let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
                 let nb = b * (100 - 45 * strength / 100) / 100;
-                BACKBUFFER[i] = (nr << 16) | (ng << 8) | nb;
+                *px = (nr << 16) | (ng << 8) | nb;
             }
         }
     }
@@ -1440,15 +1466,19 @@ impl Framebuffer {
                 if start >= end {
                     continue;
                 }
-                for i in start..end {
-                    let c = BACKBUFFER[i];
+                let bb = core::slice::from_raw_parts_mut(
+                    core::ptr::addr_of_mut!(BACKBUFFER) as *mut u32,
+                    BACKBUFFER_LEN,
+                );
+                for px in bb[start..end].iter_mut() {
+                    let c = *px;
                     let r = (c >> 16) & 255;
                     let g = (c >> 8) & 255;
                     let b = c & 255;
                     let nr = (r + ((255 - r) * 12 * strength / 10_000)).min(255);
                     let ng = (g + ((255 - g) * 4 * strength / 10_000)).min(255);
                     let nb = b * (100 - 45 * strength / 100) / 100;
-                    BACKBUFFER[i] = (nr << 16) | (ng << 8) | nb;
+                    *px = (nr << 16) | (ng << 8) | nb;
                 }
             }
         }

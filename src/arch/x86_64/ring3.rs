@@ -80,6 +80,10 @@ const F_IRSP: usize = 18;
 const F_ISS: usize = 19;
 
 /// Naked `int $0x80` işleyicisi: yazmaçları saklar, Rust'a devreder, `iretq`.
+///
+/// # Safety
+/// IDT üzerinden donanım kesmesi olarak çağrılır; Rust kodundan doğrudan
+/// çağrılmamalıdır.
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn int80_entry() {
@@ -160,6 +164,11 @@ pub unsafe extern "C" fn int80_entry() {
     )
 }
 
+/// `int $0x80` için Rust işleyicisi; kesme çerçevesini yorumlar.
+///
+/// # Safety
+/// `frame`, naked `int80_entry` tarafından hazırlanan geçerli bir kesme
+/// çerçevesine işaret etmelidir; yalnızca kesme bağlamında çağrılmalıdır.
 #[no_mangle]
 pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
     let (no, a1, a2, a3) = unsafe {
@@ -222,8 +231,8 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
 
             let mut buf = [0u8; 256];
 
-            for i in 0..len {
-                buf[i] = unsafe { core::ptr::read_volatile((a1 + i as u64) as *const u8) };
+            for (i, slot) in buf.iter_mut().enumerate().take(len) {
+                *slot = unsafe { core::ptr::read_volatile((a1 + i as u64) as *const u8) };
             }
 
             match core::str::from_utf8(&buf[..len]) {
@@ -285,6 +294,10 @@ macro_rules! fault_entry {
 
     ($name:ident, $vec:expr, $rust:ident) => {
 
+        #[doc = "Naked fault entry stub; donanım kesmesi giriş noktası."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "CPU tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan çağrılmamalıdır."]
         #[no_mangle]
 
         #[unsafe(naked)]
@@ -387,6 +400,10 @@ macro_rules! fault_entry_no_err {
 
     ($name:ident, $vec:expr, $rust:ident) => {
 
+        #[doc = "Naked fault entry stub (hatasız); donanım kesmesi giriş noktası."]
+        #[doc = ""]
+        #[doc = "# Safety"]
+        #[doc = "CPU tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan çağrılmamalıdır."]
         #[no_mangle]
 
         #[unsafe(naked)]
@@ -501,6 +518,10 @@ fault_entry!(pf_entry, 14u32, rust_fault);
 
 /// Ring3 hatası: kaydet, RIP'i park döngüsüne yönlendir, `iretq` ile dön.
 /// Çekirdek hatası: seriye yazıp dur (üçlü hata yerine kontrollü durma).
+///
+/// # Safety
+/// `frame`, fault entry stub tarafından hazırlanan geçerli kesme çerçevesine;
+/// `err`/`vec` ilgili hata kodu ve vektörüne işaret etmelidir.
 #[no_mangle]
 pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
     let (cs, rip) = unsafe {
@@ -798,6 +819,10 @@ fn ring3_kstack_top() -> u64 {
 
 /// EXIT dönüş trampolini: `iretq` buraya (Ring0) dallanır; `ret`
 /// `enter_usermode` çağrıcısına döner.
+///
+/// # Safety
+/// `SYS_EXIT` sırasında kesme çerçevesinin RIP'i bu adrese yazılır;
+/// yalnızca o bağlamda çalışır, Rust kodundan çağrılmamalıdır.
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn ring3_exit_trampoline() {
@@ -816,6 +841,10 @@ pub fn prepare_usermode_stack() -> u64 {
 /// Kullanıcı giriş noktasına `iretq` ile geçer (çıplak sarmalayıcı).
 /// RDI = giriş RIP'i, RSI = kullanıcı yığın tepesi (C ABI).
 /// Prolog yoktur; ilk iş RSP'yi (dönüş adresi yuvası) kaydetmektir.
+///
+/// # Safety
+/// `entry` ve `stack_top` geçerli kullanıcı adresleri olmalıdır; yalnızca
+/// Ring0 bağlamında, hazırlanmış kullanıcı sayfası varken çağrılmalıdır.
 #[no_mangle]
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_usermode_raw(entry: u64, stack_top: u64) {
@@ -851,6 +880,10 @@ pub unsafe extern "C" fn enter_usermode_raw(entry: u64, stack_top: u64) {
 /// Kullanıcı giriş noktasına `iretq` ile geçer.
 /// Kullanıcı `SYS_EXIT` çağırırsa bu fonksiyon normal şekilde döner;
 /// aksi halde (parkta takılma) dönmez.
+///
+/// # Safety
+/// `entry` ve `stack_top` geçerli, eşlenmiş kullanıcı adresleri olmalıdır;
+/// çağrıdan sonra süreç `SYS_EXIT` verene kadar dönmez.
 pub unsafe fn enter_usermode(entry: u64, stack_top: u64) {
     prepare_usermode_stack();
 

@@ -381,8 +381,7 @@ fn apply_keyboard_report(
     }
 
     // 1. Bırakılan tuşlar.
-    for i in 0..6 {
-        let old_key = dev.prev_keys[i];
+    for &old_key in dev.prev_keys.iter() {
         if old_key >= 0x04 && !current_keys.contains(&old_key) {
             emit_key_event(kb, old_key, false);
         }
@@ -400,8 +399,7 @@ fn apply_keyboard_report(
     }
 
     // 3. Yeni basılan tuşlar.
-    for i in 0..count {
-        let new_key = current_keys[i];
+    for &new_key in current_keys.iter().take(count) {
         if new_key >= 0x04 && !dev.prev_keys.contains(&new_key) {
             emit_key_event(kb, new_key, true);
         }

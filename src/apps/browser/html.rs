@@ -18,6 +18,9 @@ use super::types::{
 use crate::fs::vfs::VirtualFileSystem;
 use crate::gui::{Color, MinGuiCompositor};
 
+/// Tarayıcı resim önbelleği: URL → (genişlik, yükseklik, RGB pikseller).
+type ImageCache = BTreeMap<String, (usize, usize, Vec<u8>)>;
+
 pub fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || needle.len() > haystack.len() {
         return None;
@@ -180,17 +183,15 @@ fn decode_html_char(bytes: &[u8], p: usize) -> (char, usize) {
                 "inodot" => Some('ı'),
                 "Idot" => Some('İ'),
                 _ => {
-                    if ent_str.starts_with('#') {
-                        if ent_str.starts_with("#x") || ent_str.starts_with("#X") {
-                            u32::from_str_radix(&ent_str[2..], 16)
-                                .ok()
-                                .and_then(core::char::from_u32)
-                        } else {
-                            ent_str[1..]
-                                .parse::<u32>()
-                                .ok()
-                                .and_then(core::char::from_u32)
-                        }
+                    if let Some(hex) = ent_str
+                        .strip_prefix("#x")
+                        .or_else(|| ent_str.strip_prefix("#X"))
+                    {
+                        u32::from_str_radix(hex, 16)
+                            .ok()
+                            .and_then(core::char::from_u32)
+                    } else if let Some(dec) = ent_str.strip_prefix('#') {
+                        dec.parse::<u32>().ok().and_then(core::char::from_u32)
                     } else {
                         None
                     }
@@ -302,11 +303,7 @@ pub fn resolve_url(src: &str, base_url: Option<&str>) -> Option<String> {
         }
         return None;
     }
-    let src_clean = if src.starts_with("./") {
-        &src[2..]
-    } else {
-        src
-    };
+    let src_clean = src.strip_prefix("./").unwrap_or(src);
     if let Some(scheme_end) = base.find("://") {
         let rest = &base[scheme_end + 3..];
         let host_and_path = if let Some(q_or_h) = rest.find(['?', '#']) {
@@ -489,7 +486,7 @@ fn build_background_image(
     fit: BackgroundSize,
     repeat: bool,
     base_url: Option<&str>,
-    image_cache: Option<&BTreeMap<String, (usize, usize, Vec<u8>)>>,
+    image_cache: Option<&ImageCache>,
     pending_resources: &mut Vec<String>,
     vfs: Option<&VirtualFileSystem>,
 ) -> Option<Arc<BackgroundImage>> {
@@ -640,7 +637,7 @@ pub fn render_html_to_lines(
     transition_start_ms: usize,
     previous_styles: &mut BTreeMap<String, ElementStyle>,
     vfs: Option<&mut VirtualFileSystem>,
-    image_cache: Option<&BTreeMap<String, (usize, usize, Vec<u8>)>>,
+    image_cache: Option<&ImageCache>,
     page_background: &mut Option<Arc<BackgroundImage>>,
     canvases: &mut Vec<super::canvas::CanvasElement>,
     media_players: &mut super::media::MediaPlayers,
@@ -1229,7 +1226,7 @@ pub fn render_html_to_lines(
                     in_grid = true;
                     grid_columns = matched.grid_template_columns.clone();
                     grid_gap = matched.grid_gap;
-                    grid_cells = Vec::new();
+                    grid_cells.clear();
                     grid_current_row = 0;
                     grid_current_col = 0;
                     grid_col_count = if grid_columns.is_empty() {
@@ -1271,9 +1268,10 @@ pub fn render_html_to_lines(
                             if let Some(resolved_url) = resolve_url(href, base_url) {
                                 if (resolved_url.starts_with("http://")
                                     || resolved_url.starts_with("https://"))
-                                    && !pending_resources.iter().any(|u| u == &resolved_url) {
-                                        pending_resources.push(resolved_url.clone());
-                                    }
+                                    && !pending_resources.iter().any(|u| u == &resolved_url)
+                                {
+                                    pending_resources.push(resolved_url.clone());
+                                }
                             }
                         }
                     }
@@ -1284,9 +1282,10 @@ pub fn render_html_to_lines(
                         if let Some(resolved_url) = resolve_url(src, base_url) {
                             if (resolved_url.starts_with("http://")
                                 || resolved_url.starts_with("https://"))
-                                && !pending_resources.iter().any(|u| u == &resolved_url) {
-                                    pending_resources.push(resolved_url.clone());
-                                }
+                                && !pending_resources.iter().any(|u| u == &resolved_url)
+                            {
+                                pending_resources.push(resolved_url.clone());
+                            }
                         }
                     }
                 } else if eq_ascii(name, b"button") {
@@ -2461,8 +2460,8 @@ pub fn render_html_to_lines(
                         max_lines,
                     );
                     in_grid = false;
-                    grid_cells = Vec::new();
-                    grid_columns = Vec::new();
+                    grid_cells.clear();
+                    grid_columns.clear();
                     grid_gap = 0;
                     grid_current_row = 0;
                     grid_current_col = 0;
@@ -2894,7 +2893,7 @@ mod tests {
 /// CSS Grid render etme: hucreleri satir satir, sutunlara gore yerlestir.
 fn render_grid(
     out_lines: &mut Vec<BrowserLine>,
-    grid_cells: &mut Vec<Vec<Vec<TextSpan>>>,
+    grid_cells: &mut [Vec<Vec<TextSpan>>],
     grid_columns: &[super::types::GridTrack],
     grid_gap: usize,
     _total_rows: usize,

@@ -169,9 +169,9 @@ impl Sha512 {
 
     fn compress_block(&mut self, block: &[u8]) {
         let mut w = [0u64; 80];
-        for i in 0..16 {
+        for (i, wslot) in w.iter_mut().enumerate().take(16) {
             let off = i * 8;
-            w[i] = u64::from_be_bytes([
+            *wslot = u64::from_be_bytes([
                 block[off],
                 block[off + 1],
                 block[off + 2],

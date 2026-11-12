@@ -7,6 +7,9 @@ use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
+    // Kesmeleri hemen kapat: panik sırasında kesme fırtınası oluşmasın.
+    unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
+
     // Etkin bir uygulama koruması varsa panic'i çekirdeğe yaymadan o
     // uygulamayı sonlandır. `try_recover_panic` başarılıysa geri dönmez.
     if crate::apps::guard::try_recover_panic(info) {

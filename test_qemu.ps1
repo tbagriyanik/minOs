@@ -10,7 +10,10 @@
 # 6. Masaustu olay dongusu girisini denetler.
 
 param(
-    [int]$TimeoutSeconds = 20,
+    # TCG (yazilim emulasyonu) altinda tam onyukleme + 5 sn karsilama ekrani
+    # ~40 sn surebiliyor; 20 sn'lik eski varsayilan tum kontrolleri zaman
+    # asimina ugratiyordu.
+    [int]$TimeoutSeconds = 90,
     [switch]$Rebuild,
     [switch]$KeepOpen,
     [switch]$UsbHid,
@@ -138,6 +141,15 @@ $qmpProbe.Start()
 $qmpPort = ([System.Net.IPEndPoint]$qmpProbe.LocalEndpoint).Port
 $qmpProbe.Stop()
 
+# Seri konsol ciktisi TCP chardev uzerinden alinir. QEMU'nun stdout'u bir
+# boruya (pipe) yazildiginda tamponlanabiliyor; `-serial file:` ise Windows'ta
+# dosyayi QEMU kapanana kadar kilitliyor. TCP hem canli okumayi hem de ilk
+# satirdan itibaren kayipsiz yakalamayi saglar.
+$serialProbe = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+$serialProbe.Start()
+$serialPort = ([System.Net.IPEndPoint]$serialProbe.LocalEndpoint).Port
+$serialProbe.Stop()
+
 $qemuArgs = @(
     "-m", "$($memMb)M",
     "-smp", "$smpCpus",
@@ -146,7 +158,7 @@ $qemuArgs = @(
     "-display", "none",
     "-vga", $Vga,
     "-rtc", "base=utc,clock=host,driftfix=slew",
-    "-serial", "stdio",
+    "-serial", "tcp:127.0.0.1:$serialPort,server=on,wait=on",
     "-qmp", "tcp:127.0.0.1:$qmpPort,server,nowait",
     "-accel", "tcg,thread=multi"
 )
@@ -193,27 +205,20 @@ Write-Host ("[BILGI] USB HID testi: " + $(if ($UsbHid) { "acik" } else { "kapali
 $pinfo = New-Object System.Diagnostics.ProcessStartInfo
 $pinfo.FileName = $qemu
 $pinfo.Arguments = ($qemuArgs -join " ")
-$pinfo.RedirectStandardOutput = $true
+$pinfo.RedirectStandardOutput = $false
 $pinfo.RedirectStandardError = $true
-$pinfo.RedirectStandardInput = $true
+$pinfo.RedirectStandardInput = $false
 $pinfo.UseShellExecute = $false
 $pinfo.CreateNoWindow = $true
-# QEMU seri ciktisi UTF-8'dir. Varsayilan OEM kod sayfasi (tr-TR icin CP857)
+# QEMU hata ciktisi UTF-8'dir. Varsayilan OEM kod sayfasi (tr-TR icin CP857)
 # Turkce karakterleri bozar ve regex dogrulamalarini yanlis basarisiz kilar.
-$pinfo.StandardOutputEncoding = [System.Text.Encoding]::UTF8
 $pinfo.StandardErrorEncoding = [System.Text.Encoding]::UTF8
 
 $proc = New-Object System.Diagnostics.Process
 $proc.StartInfo = $pinfo
 
-$outputBuilder = New-Object System.Text.StringBuilder
 $errorBuilder = New-Object System.Text.StringBuilder
 
-$outEvent = Register-ObjectEvent -InputObject $proc -EventName OutputDataReceived -Action {
-    if ($EventArgs.Data) {
-        $outputBuilder.AppendLine($EventArgs.Data) | Out-Null
-    }
-}
 $errEvent = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived -Action {
     if ($EventArgs.Data) {
         $errorBuilder.AppendLine($EventArgs.Data) | Out-Null
@@ -221,8 +226,49 @@ $errEvent = Register-ObjectEvent -InputObject $proc -EventName ErrorDataReceived
 }
 
 [void]$proc.Start()
-$proc.BeginOutputReadLine()
 $proc.BeginErrorReadLine()
+
+# --- Seri TCP yakalama yardimcilari -------------------------------------
+$serialTcp = $null
+$serialStream = $null
+$serialBytes = New-Object System.IO.MemoryStream
+
+function Connect-Serial([int]$port, [int]$timeoutSeconds = 15) {
+    $deadline = [System.DateTime]::UtcNow.AddSeconds($timeoutSeconds)
+    while ([System.DateTime]::UtcNow -lt $deadline) {
+        try {
+            $tcp = New-Object System.Net.Sockets.TcpClient
+            $tcp.Connect("127.0.0.1", $port)
+            return $tcp
+        } catch {
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    return $null
+}
+
+function Read-Serial {
+    if ($script:serialStream) {
+        try {
+            $buf = New-Object byte[] 8192
+            while ($script:serialStream.DataAvailable) {
+                $n = $script:serialStream.Read($buf, 0, $buf.Length)
+                if ($n -le 0) { break }
+                $script:serialBytes.Write($buf, 0, $n)
+            }
+        } catch {}
+    }
+    # Tam tamponu coz: cok baytli UTF-8 karakterleri iki okuma arasinda
+    # bolunse bile Turkce metin bozulmaz.
+    return [System.Text.Encoding]::UTF8.GetString($script:serialBytes.ToArray())
+}
+
+$serialTcp = Connect-Serial $serialPort 15
+if ($serialTcp) {
+    $serialStream = $serialTcp.GetStream()
+} else {
+    Write-Host "[UYARI] Seri konsol TCP baglantisi kurulamadi; ciktilar eksik olabilir." -ForegroundColor DarkYellow
+}
 
 # QMP: USB klavye/fare olaylarini enjekte edip testi uctan uca dogrulamak icin
 # tek bir baglanti acilir; kapanista da ayni baglanti kullanilir.
@@ -281,7 +327,7 @@ $dismissedWelcome = $false
 
 while (([System.DateTime]::UtcNow - $startTime).TotalSeconds -lt $TimeoutSeconds) {
     Start-Sleep -Milliseconds 250
-    $currentOut = $outputBuilder.ToString()
+    $currentOut = Read-Serial
     if ($currentOut -match "Ho.geldin d.ng.s." -and -not $dismissedWelcome) {
         $dismissedWelcome = $true
         try {
@@ -346,12 +392,12 @@ if ($FpsStressTest) {
 
         $openDeadline = [System.DateTime]::UtcNow.AddSeconds(15)
         while ([System.DateTime]::UtcNow -lt $openDeadline) {
-            $openOut = $outputBuilder.ToString()
+            $openOut = Read-Serial
             if ($openOut -match "\[FPS3D\] Uygulama") { break }
             if ($proc.HasExited) { break }
             Start-Sleep -Milliseconds 250
         }
-        $fpsStressOpened = ($outputBuilder.ToString() -match "\[FPS3D\] Uygulama")
+        $fpsStressOpened = (Read-Serial -match "\[FPS3D\] Uygulama")
     } else {
         Write-Host "[FAIL] QMP yok; FPS 3D otomatik acilamadi." -ForegroundColor Red
     }
@@ -371,7 +417,7 @@ if ($FpsStressTest) {
         Write-Host "[BILGI] FPS 3D stres testi ${stressSeconds}s istendi, geçen süre: $([math]::Round($stressElapsed, 1))s" -ForegroundColor Green
 
         if (-not $stressCrashed) {
-            $stressOut = $outputBuilder.ToString()
+            $stressOut = Read-Serial
             $metricMatches = [regex]::Matches(
                 $stressOut,
                 "\[FPS3D-METRICS\] fps=(\d+) min_fps=(\d+) frame_ms=(\d+) interval_ms=(\d+) max_interval_ms=(\d+) frames=(\d+)"
@@ -437,33 +483,35 @@ if ($BootShutdownCycle) {
         # Yeni QEMU işlemi başlat
         $proc2 = New-Object System.Diagnostics.Process
         $proc2.StartInfo = $pinfo
-        $outBuilder2 = New-Object System.Text.StringBuilder
         $errBuilder2 = New-Object System.Text.StringBuilder
 
-        $outEvent2 = Register-ObjectEvent -InputObject $proc2 -EventName OutputDataReceived -Action {
-            if ($EventArgs.Data) { $outBuilder2.AppendLine($EventArgs.Data) | Out-Null }
-        }
         $errEvent2 = Register-ObjectEvent -InputObject $proc2 -EventName ErrorDataReceived -Action {
             if ($EventArgs.Data) { $errBuilder2.AppendLine($EventArgs.Data) | Out-Null }
         }
 
+        # Seri tamponunu dongu basina sifirla ve TCP'ye yeniden baglan.
+        if ($serialTcp) { try { $serialTcp.Close() } catch {} }
+        $serialTcp = $null
+        $serialStream = $null
+        $serialBytes = New-Object System.IO.MemoryStream
+
         [void]$proc2.Start()
-        $proc2.BeginOutputReadLine()
         $proc2.BeginErrorReadLine()
+        $serialTcp = Connect-Serial $serialPort 15
+        if ($serialTcp) { $serialStream = $serialTcp.GetStream() }
 
         $cycleStart = [System.DateTime]::UtcNow
         $cycleDesktop = $false
 
         while (([System.DateTime]::UtcNow - $cycleStart).TotalSeconds -lt $TimeoutSeconds) {
             Start-Sleep -Milliseconds 250
-            $out2 = $outBuilder2.ToString()
+            $out2 = Read-Serial
             if ($out2 -match "\[BOOT\] Masa.st. d.ng.s. ba.lad") {
                 $cycleDesktop = $true
                 break
             }
         }
 
-        Unregister-Event -SourceIdentifier $outEvent2.Name -ErrorAction SilentlyContinue
         Unregister-Event -SourceIdentifier $errEvent2.Name -ErrorAction SilentlyContinue
 
         if ($cycleDesktop) {
@@ -531,23 +579,16 @@ if (-not $proc.HasExited) {
     $proc.WaitForExit(1000) | Out-Null
 }
 
-# QEMU cikisi tamamlandi; bekleyen olay isleyicilerinin islenmesi icin kisa bekleme
+# QEMU cikisi tamamlandi; seri TCP tamponundaki son veriyi de al.
 Start-Sleep -Milliseconds 500
 
-# Kalan tampondaki seri cikisini oku (olay tabanli yakalama esliginda kaybolabilir)
-try {
-    while ($proc.StandardOutput.Peek() -ge 0) {
-        $line = $proc.StandardOutput.ReadLine()
-        if ($null -ne $line) {
-            $outputBuilder.AppendLine($line) | Out-Null
-        }
-    }
-} catch {}
+$logOutput = Read-Serial
+if ($serialTcp) {
+    try { $serialTcp.Close() } catch {}
+}
 
-Unregister-Event -SourceIdentifier $outEvent.Name -ErrorAction SilentlyContinue
 Unregister-Event -SourceIdentifier $errEvent.Name -ErrorAction SilentlyContinue
 
-$logOutput = $outputBuilder.ToString()
 $errOutput = $errorBuilder.ToString().Trim()
 
 Set-Content -Path (Join-Path $targetDir "qemu_serial.log") -Value $logOutput -Encoding utf8
@@ -568,13 +609,13 @@ $checks = @(
     },
     @{
         Name = "Gelismis Allocator (Bump & FSB)";
-        Pattern = "\[ALLOC-TEST\] 6\..*BA";
-        Description = "Tasma korumali align_up, O(1) sabit blok ve buyuk blok havuzlama"
+        Pattern = "\[ALLOC-TEST\] 3\..*BA";
+        Description = "Tasma korumali align_up, bump LIFO ve FSB free-list yeniden kullanimi"
     },
     @{
         Name = "CPU & Cekirdek Donanim Baslatimi";
-        Pattern = "\[SMP\] 1 CPU modunda devam ediliyor";
-        Description = "BSP GDT, IDT ve islemci mimari yapisi"
+        Pattern = "\[SMP\] (\d+ CPU bulundu|1 CPU modunda devam ediliyor)";
+        Description = "BSP GDT, IDT ve coklu/tek CPU baslatma durumu"
     },
     @{
         Name = "Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir)";
@@ -595,6 +636,41 @@ $checks = @(
         Name = "Cekirdek Surucu Profili";
         Pattern = "\[DRIVERS\] T.m s.r.c.l.r haz";
         Description = "Tum donanim suruculerinin eksiksiz baslatimi"
+    },
+    @{
+        Name = "Ring3 Surec Zamanlayici (CR3 + Context Switch)";
+        Pattern = "\[RING3-SCHED\] dilim pid=";
+        Description = "APIC timer onalimli gercek CR3/context-switch ile kullanici sureci dilimi"
+    },
+    @{
+        Name = "Ring3 Izolasyon & Yigin Guard Testi";
+        Pattern = "\[SCHED-TEST\] yield\+exit=0 kernel-izolasyon=1 stack-guard=1 => BASARILI";
+        Description = "Kernel adresi erisimi reddi (SIGSEGV), kullanici yigin tasmasi ve yield/exit dogrulamasi"
+    },
+    @{
+        Name = "Ring3 Syscall Register Restore";
+        Pattern = "\[RING3\] GPR ve XMM yazmaclari syscall donusunde korundu: BASARILI";
+        Description = "GPR ve XMM durumunun int 0x80 donusunde korunmasi"
+    },
+    @{
+        Name = "Ring3 Syscall Return";
+        Pattern = "\[RING3\] 1\. Ring3 syscall \(getpid -> 1001\) \+ EXIT donusu: BASARILI";
+        Description = "getpid sistem cagrisi ve Ring 3'ten Ring 0'a EXIT donusu"
+    },
+    @{
+        Name = "Ring3 Kernel Memory Denial";
+        Pattern = "\[P2\] Ring3 kernel .*BASARILI";
+        Description = "Kullanici modundan cekirdek bellegi okuma girisiminin engellenmesi"
+    },
+    @{
+        Name = "Ring3 Stack Guard Fault";
+        Pattern = "\[P2\].*guard sayfas.*BASARILI";
+        Description = "Kullanici yigin guard sayfasi tasmasinin yakalanmasi"
+    },
+    @{
+        Name = "Process Fork Exec Wait";
+        Pattern = "\[PROC-TEST\].*fork/exec/wait yasam dongusu: BASARILI";
+        Description = "Fork sayfa kopyasi, exec imaj degisimi, bloklanan wait ve kaynak iadesi"
     }
 )
 

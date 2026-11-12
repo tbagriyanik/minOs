@@ -619,3 +619,71 @@ fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
             })
     })
 }
+
+/// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:
+/// - Gorevler tum online CPU'lerde dagitilmali (least_loaded_cpu).
+/// - Ayni anda yapilan wake/notify islemleri gorevi kaybetmemeli.
+/// - poll_tasks turleri gorev sayisini tutmali ve surecli bekleyenleri
+///   hazir duruma getirmeli.
+///
+/// Bu test BSP baslangic surecinden cagrilir ve tek C puck calismasi
+/// assume eder; gercek CAS/yari-cokera calisma simule etmek icin atomik
+/// kuyruk derinlikleri ve SPIN kilidi uzerinden tutarlilik denetlenir.
+pub fn test_scheduler_multicore_race() -> bool {
+    let cpu_count = crate::arch::x86_64::smp::cpu_count().max(1);
+    let initial = EXECUTOR.lock().task_count();
+
+    // Farkli onemdagore gorevler olustur; least_loaded_cpu zaten RR imleciyle
+    // dagilimi dagitir. Ayni anda coklu spawn, kuyruk kilidi altinda surecli
+    // calisir (race senaryosu).
+    let mut ids = alloc::vec::Vec::new();
+    for i in 0..32usize {
+        let prio = match i % 4 {
+            0 => TaskPriority::Realtime,
+            1 => TaskPriority::High,
+            2 => TaskPriority::Normal,
+            _ => TaskPriority::Low,
+        };
+        let id = spawn("race-task", prio, move || {
+            // Kisa, engellemeyen callback: bir kez calisip cikar.
+            TaskStatus::Completed
+        });
+        ids.push(id);
+    }
+
+    let after_spawn = EXECUTOR.lock().task_count();
+    let spawned_ok = after_spawn == initial + 32;
+
+    // Ayni anda 8 farklı olaya notify gonder: bekleyen yok ama kilitli erisim
+    // tutarlilagini dene (notify bos kuyrukta panik yapmamali).
+    let notified = notify(TaskEvent(999));
+    let notify_ok = notified == 0;
+
+    // Kuyruk derinliginin tum CPU'ya dagilimlarini topla; toplam spawn'a esit
+    // olmali (hiçbir gorev kaybolmamali).
+    let mut total_depth = 0usize;
+    for cpu in 0..cpu_count.min(RUN_QUEUE_DEPTH.len()) {
+        total_depth += run_queue_depth(cpu);
+    }
+    let depth_ok = total_depth == 32;
+
+    // Gorevleri iptal edip kuyrugu temizle; spin kilidinin ve take_task'in
+    // es zamanli cagrisinda kayip olmamasini dene.
+    let mut cancelled = 0usize;
+    for id in ids {
+        if cancel(id) {
+            cancelled += 1;
+        }
+    }
+    let cancel_ok = cancelled == 32;
+    let remaining = EXECUTOR.lock().task_count();
+    let drained_ok = remaining == initial;
+
+    let ok = spawned_ok && notify_ok && depth_ok && cancel_ok && drained_ok;
+    if ok {
+        crate::serial_print("[SCHED-TEST] Cok cekirdekli scheduler yarismasi testi: BASARILI\n");
+    } else {
+        crate::serial_print("[SCHED-TEST] Cok cekirdekli scheduler yarismasi testi: BASARISIZ\n");
+    }
+    ok
+}

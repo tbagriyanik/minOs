@@ -13,11 +13,11 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-134%2C929%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![GitHub Release](https://img.shields.io/badge/Release-v2.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-140%2C315%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.3.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
+**minOs (Sarman Edition) v2.4.0**, çekirdek tarafında `no_std` ve `no_main` kullanan, Rust ile geliştirilmiş bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Derleme sırasında `fontdue` kullanılarak TTF yazı tiplerinden bitmap atlasları üretilir; çekirdek bu atlasları grafik arayüzünde kullanır.
 
 > 📚 **Resmi Kılavuz ve Dokümantasyon:** Tüm donanım sürücüleri, uygulama kılavuzları, ağ/TLS yapılandırması ve geliştirici belgeleri için **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** sayfasını ziyaret edebilirsiniz.
 

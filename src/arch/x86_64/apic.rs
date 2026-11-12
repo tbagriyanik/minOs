@@ -45,15 +45,27 @@ pub fn send_eoi() {
 }
 
 /// Timer kesmesi geldiğinde çağrılan Rust işleyicisi.
+///
+/// `frame`, naked `apic_timer_entry` tarafından hazırlanan tam yazmaç +
+/// CPU çerçevesini gösterir; `ring3::timer_preempt` Ring3 süreçlerini
+/// önalım için kullanır.
+/// # Safety
+/// `frame`, `apic_timer_entry` tarafından hazırlanan geçerli kesme
+/// çerçevesine işaret etmelidir; yalnızca kesme bağlamında çağrılmalıdır.
 #[no_mangle]
-pub extern "C" fn apic_timer_handler_rust() {
+pub unsafe extern "C" fn apic_timer_handler_rust(frame: *mut u64) {
     SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed);
     crate::task::scheduler_tick();
     crate::watchdog::timer_tick();
+    // Ring3 kullanıcı süreçleri için gerçek önalım: quantum dolmuşsa tam
+    // bağlam kaydedilir ve kesme çekirdek trampoline'ine yönlendirilir.
+    unsafe { crate::arch::x86_64::ring3::timer_preempt(frame) };
     send_eoi();
 }
 
 /// Naked interrupt kapısı (tüm yazmaçları korur, Rust işleyicisini çağırır, EOI sonrası iretq ile döner).
+/// Çerçeve yerleşimi `ring3::int80_entry` ile aynıdır: [0]=rax .. [14]=r15,
+/// [15]=rip, [16]=cs, [17]=rflags, [18]=rsp, [19]=ss.
 ///
 /// # Safety
 /// Donanım kesmesi tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan
@@ -62,25 +74,44 @@ pub extern "C" fn apic_timer_handler_rust() {
 #[unsafe(naked)]
 pub unsafe extern "C" fn apic_timer_entry() {
     core::arch::naked_asm!(
-        "push rax",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push r8",
-        "push r9",
-        "push r10",
+        "push r15",
+        "push r14",
+        "push r13",
+        "push r12",
         "push r11",
+        "push r10",
+        "push r9",
+        "push r8",
+        "push rbp",
+        "push rdi",
+        "push rsi",
+        "push rdx",
+        "push rcx",
+        "push rbx",
+        "push rax",
+        "mov r12, rsp",
+        "and rsp, -16",
+        "sub rsp, 512",
+        "fxsave64 [rsp]",
+        "mov rdi, r12",
         "call {handler}",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
+        "fxrstor64 [rsp]",
+        "mov rsp, r12",
         "pop rax",
+        "pop rbx",
+        "pop rcx",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rbp",
+        "pop r8",
+        "pop r9",
+        "pop r10",
+        "pop r11",
+        "pop r12",
+        "pop r13",
+        "pop r14",
+        "pop r15",
         "iretq",
         handler = sym apic_timer_handler_rust,
         options(),

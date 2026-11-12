@@ -11,11 +11,11 @@
 [![Display](https://img.shields.io/badge/Resolution-1080p%20%7C%20720p%2032--bit%20RGB-purple.svg)]()
 [![Min RAM](https://img.shields.io/badge/Min%20RAM-128%20MB-red.svg)]()
 [![Min CPU](https://img.shields.io/badge/Min%20CPU-x86__64%20SSE2-red.svg)]()
-[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-134%2C929%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
-[![GitHub Release](https://img.shields.io/badge/Release-v2.3.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
+[![Lines of Code](https://img.shields.io/badge/Lines%20of%20Code-140%2C315%20(Rust)-lightgrey.svg)](https://github.com/tbagriyanik/minos)
+[![GitHub Release](https://img.shields.io/badge/Release-v2.4.0-brightgreen.svg)](https://github.com/tbagriyanik/minos/releases)
 [![Wiki](https://img.shields.io/badge/Docs-GitHub%20Wiki-blueviolet.svg)](https://github.com/tbagriyanik/minOs/wiki)
 
-**minOs (Sarman Edition) v2.3.0** is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. During the build, bitmap atlases are generated from TTF fonts using `fontdue`; the kernel uses these atlases in its graphical interface.
+**minOs (Sarman Edition) v2.4.0** is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. During the build, bitmap atlases are generated from TTF fonts using `fontdue`; the kernel uses these atlases in its graphical interface.
 
 > 📚 **Official Guide and Documentation:** Visit the **[minOs GitHub Wiki](https://github.com/tbagriyanik/minOs/wiki)** for all hardware drivers, application guides, network/TLS configuration and developer documents.
 

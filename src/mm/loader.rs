@@ -219,6 +219,11 @@ impl AppLoader {
 
             let mut page_vaddr = aligned_start;
             while page_vaddr < aligned_end {
+                if allocated_pages >= MAX_LOADED_FRAMES - USER_STACK_PAGES
+                    || address_space.translate(page_vaddr).is_some()
+                {
+                    return Err("ELF segment cakismasi veya kaynak siniri asildi");
+                }
                 let phys_frame = pmm
                     .allocate_frame()
                     .ok_or("PMM: Yetersiz fiziksel bellek")?;
@@ -264,7 +269,13 @@ impl AppLoader {
                 let _ = copy_len;
 
                 // Sayfayı adres uzayına eşle
-                address_space.map_page(page_vaddr, phys_frame, page_flags, pmm)?;
+                if address_space
+                    .map_page(page_vaddr, phys_frame, page_flags, pmm)
+                    .is_err()
+                {
+                    pmm.free_frame(phys_frame);
+                    return Err("ELF segment sayfasi eslenemedi");
+                }
                 page_vaddr += PAGE_SIZE;
             }
         }
@@ -300,9 +311,15 @@ impl AppLoader {
         let mut mapped_vaddrs = [0u64; MAX_LOADED_FRAMES];
         let code_len = data.len() as u64;
         let num_pages = code_len.div_ceil(PAGE_SIZE) as usize;
+        if num_pages > MAX_LOADED_FRAMES - USER_STACK_PAGES {
+            return Err("Ham ikili kaynak sinirini asiyor");
+        }
 
         for page_idx in 0..num_pages {
             let virt_addr = USER_CODE_BASE + (page_idx as u64) * PAGE_SIZE;
+            if address_space.translate(virt_addr).is_some() {
+                return Err("Ham ikili mevcut bir sayfayla cakismiyor");
+            }
             let phys_frame = pmm
                 .allocate_frame()
                 .ok_or("PMM: Yetersiz fiziksel bellek")?;
@@ -325,7 +342,13 @@ impl AppLoader {
             }
 
             // Kod segmenti: Kullanıcı + Yürütülebilir (Yazma kapalı)
-            address_space.map_page(virt_addr, phys_frame, PageFlags::USER_CODE, pmm)?;
+            if address_space
+                .map_page(virt_addr, phys_frame, PageFlags::USER_CODE, pmm)
+                .is_err()
+            {
+                pmm.free_frame(phys_frame);
+                return Err("Ham ikili kod sayfasi eslenemedi");
+            }
         }
 
         // Kullanıcı yığını
@@ -360,6 +383,10 @@ impl AppLoader {
 
         for i in 0..USER_STACK_PAGES {
             let virt_addr = stack_base + (i as u64) * PAGE_SIZE;
+            if *allocated_pages >= MAX_LOADED_FRAMES || address_space.translate(virt_addr).is_some()
+            {
+                return Err("Kullanici yigini kaynak siniri veya adres cakismasi");
+            }
             let phys_frame = pmm
                 .allocate_frame()
                 .ok_or("PMM: Yigin icin yetersiz bellek")?;
@@ -375,7 +402,13 @@ impl AppLoader {
             }
 
             // Yığın: Yazılabilir, Çalıştırılamaz (NX)
-            address_space.map_page(virt_addr, phys_frame, PageFlags::USER_STACK, pmm)?;
+            if address_space
+                .map_page(virt_addr, phys_frame, PageFlags::USER_STACK, pmm)
+                .is_err()
+            {
+                pmm.free_frame(phys_frame);
+                return Err("Kullanici yigini sayfasi eslenemedi");
+            }
         }
 
         // Yığın x86-64 ABI kuralı gereği 16-bayt hizalı olmalıdır

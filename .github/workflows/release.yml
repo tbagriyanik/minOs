@@ -113,7 +113,7 @@ jobs:
         shell: pwsh
         continue-on-error: true
         timeout-minutes: 12
-        run: ./test_qemu.ps1 -TimeoutSeconds 40
+        run: ./test_qemu.ps1 -TimeoutSeconds 90
 
       - name: Ensure Test Report Exists
         shell: pwsh

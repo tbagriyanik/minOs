@@ -71,6 +71,8 @@ pub struct AddressSpace {
 }
 
 impl AddressSpace {
+    const USER_ADDRESS_END: u64 = 0x0000_8000_0000_0000;
+
     /// Mevcut etkin olan çekirdek adres uzayını (aktif CR3) okuyarak nesne oluşturur.
     pub fn current() -> Self {
         let cr3: u64;
@@ -128,6 +130,9 @@ impl AddressSpace {
     ) -> Result<(), &'static str> {
         if !virt_addr.is_multiple_of(PAGE_SIZE) || !phys_addr.is_multiple_of(PAGE_SIZE) {
             return Err("Adresler 4KB sayfa sinirina hizali degil");
+        }
+        if flags & PageFlags::USER != 0 && virt_addr >= Self::USER_ADDRESS_END {
+            return Err("Kullanici sayfasi kullanici adres alaninin disinda");
         }
 
         let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
@@ -222,6 +227,7 @@ impl AddressSpace {
             if (pml4.entries[pml4_idx] & PageFlags::PRESENT) == 0 {
                 return None;
             }
+
             let pdpt_phys = pml4.entries[pml4_idx] & 0x000F_FFFF_FFFF_F000;
 
             let pdpt = &*Self::table_ptr(pdpt_phys);
@@ -253,6 +259,131 @@ impl AddressSpace {
         }
     }
 
+    /// Translate an address only if every paging level grants user access.
+    pub fn translate_user(&self, virt_addr: u64) -> Option<u64> {
+        if virt_addr >= Self::USER_ADDRESS_END {
+            return None;
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let pt_idx = ((virt_addr >> 12) & 0x1FF) as usize;
+        let page_offset = virt_addr & (PAGE_SIZE - 1);
+        let user_present = PageFlags::PRESENT | PageFlags::USER;
+
+        unsafe {
+            let pml4 = &*Self::table_ptr(self.pml4_phys);
+            let pml4_entry = pml4.entries[pml4_idx];
+            if pml4_entry & user_present != user_present {
+                return None;
+            }
+
+            let pdpt = &*Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
+            let pdpt_entry = pdpt.entries[pdpt_idx];
+            if pdpt_entry & user_present != user_present {
+                return None;
+            }
+
+            let pd = &*Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+            let pd_entry = pd.entries[pd_idx];
+            if pd_entry & user_present != user_present {
+                return None;
+            }
+            if (pd_entry & PageFlags::HUGE_PAGE) != 0 {
+                let phys_2mb = pd_entry & 0x000F_FFFF_FFE0_0000;
+                return Some(phys_2mb + (virt_addr & 0x1F_FFFF));
+            }
+
+            let pt = &*Self::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
+            let pt_entry = pt.entries[pt_idx];
+            if pt_entry & user_present != user_present {
+                return None;
+            }
+
+            Some((pt_entry & 0x000F_FFFF_FFFF_F000) + page_offset)
+        }
+    }
+
+    /// Kullanıcı adres uzayının altındaki tüm sayfa tablosu çerçevelerini
+    /// (PDPT/PD/PT) PMM'e iade eder. Yalnızca PML4'ün kullanıcı yarısı
+    /// (indeks 0-255) yürütülür; üst yarı (256-511) çekirdek adres uzacıyla
+    /// paylaşılan klonlanmış tabloları işaret eder ve ASLA serbest bırakılmaz.
+    ///
+    /// Çağıranın süreç artık kendi CR3'ü altında çalışmıyor olması gerekir;
+    /// aksi halde serbest bırakılan tablolar anında kullanıma açık CR3'ü bozar.
+    pub fn free_user_page_tables(&mut self, pmm: &mut PhysicalMemoryManager) {
+        self.free_user_address_space_tables(pmm, false);
+    }
+
+    /// Releases user mappings, their page tables, and the PML4 root.
+    /// Use only for a newly-created address space whose user frames are owned
+    /// exclusively by that address space (for example, a failed exec image).
+    pub fn destroy_user_address_space(&mut self, pmm: &mut PhysicalMemoryManager) {
+        self.free_user_address_space_tables(pmm, true);
+        if self.pml4_phys != 0 {
+            pmm.free_frame(self.pml4_phys);
+            self.pml4_phys = 0;
+        }
+    }
+
+    fn free_user_address_space_tables(
+        &mut self,
+        pmm: &mut PhysicalMemoryManager,
+        free_leaf_frames: bool,
+    ) {
+        if self.pml4_phys == 0 {
+            return;
+        }
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            for entry_slot in pml4.entries.iter_mut().take(256) {
+                let entry = *entry_slot;
+                if entry & PageFlags::PRESENT == 0 {
+                    continue;
+                }
+                *entry_slot = 0;
+                let child = entry & 0x000F_FFFF_FFFF_F000;
+                // PDPT girdisi 1 GB huge page ise alt seviye yoktur.
+                if entry & PageFlags::HUGE_PAGE == 0 {
+                    Self::free_lower_tables(child, pmm, 3, free_leaf_frames);
+                }
+            }
+        }
+    }
+
+    /// `depth` = 3 (PDPT → PD), 2 (PD → PT), 1 (PT → yaprak).
+    /// Her seviyede PRESENT girdi çocuk tabloya işaret eder; HUGE_PAGE
+    /// girdileri sayfa tablosu üretmez (veri sayfası kaynak listesinde izlenir).
+    unsafe fn free_lower_tables(
+        table_phys: u64,
+        pmm: &mut PhysicalMemoryManager,
+        depth: u32,
+        free_leaf_frames: bool,
+    ) {
+        let table = &mut *Self::table_ptr(table_phys);
+        for entry_slot in table.entries.iter_mut() {
+            let entry = *entry_slot;
+            if entry & PageFlags::PRESENT == 0 {
+                continue;
+            }
+            *entry_slot = 0;
+            let child = entry & 0x000F_FFFF_FFFF_F000;
+            match depth {
+                3 if entry & PageFlags::HUGE_PAGE == 0 => {
+                    Self::free_lower_tables(child, pmm, 2, free_leaf_frames);
+                }
+                2 if entry & PageFlags::HUGE_PAGE == 0 => {
+                    Self::free_lower_tables(child, pmm, 1, free_leaf_frames);
+                }
+                1 if free_leaf_frames && entry & PageFlags::USER != 0 => {
+                    pmm.free_frame(child);
+                }
+                _ => {}
+            }
+        }
+        pmm.free_frame(table_phys);
+    }
+
     /// Mevcut kernel adres uzayından kernel mapping'leri bu adres uzayına kopyalar.
     /// Bu, kullanıcı süreçlerinin syscall sonrası kernel'e güvenle dönmesi için gereklidir.
     /// Kernel mapping'ler PML4'in üst yarısında (canonical üst uzay, indeks 256-511) bulunur.
@@ -267,11 +398,11 @@ impl AddressSpace {
             let dst_pml4 = &mut *Self::table_ptr(self.pml4_phys);
 
             // Kernel mapping'ler PML4 indeks 256-511 aralığında (canonical üst uzay)
-            for i in 256..512 {
+            for (i, dst_entry) in dst_pml4.entries.iter_mut().enumerate().skip(256) {
                 let entry = src_pml4.entries[i];
                 if (entry & PageFlags::PRESENT) != 0 {
                     // Kernel girişlerini doğrudan kopyala (USER bayrağı olmamalı)
-                    dst_pml4.entries[i] = entry;
+                    *dst_entry = entry & !PageFlags::USER;
                 }
             }
         }

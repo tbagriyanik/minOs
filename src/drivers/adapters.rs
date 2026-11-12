@@ -74,3 +74,69 @@ impl Driver for UsbAdapter {
         }
     }
 }
+
+/// Depolama alt sistemi adaptörü (ATA/ATAPI, AHCI, NVMe, SD/MMC).
+pub struct StorageAdapter;
+
+impl Driver for StorageAdapter {
+    fn name(&self) -> &str {
+        "storage"
+    }
+
+    fn probe(&mut self) -> bool {
+        crate::drivers::ata::drive_count() > 0
+            || crate::drivers::ahci::port_count() > 0
+            || crate::drivers::nvme::is_detected()
+            || crate::drivers::sdmmc::is_detected()
+    }
+
+    fn init(&mut self) -> Result<(), &'static str> {
+        if self.probe() {
+            Ok(())
+        } else {
+            Err("depolama aygiti bulunamadi")
+        }
+    }
+}
+
+/// Görüntü alt sistemi adaptörü (VGA/BGA, VirtIO-gpu, AMD, NVIDIA).
+pub struct DisplayAdapter;
+
+impl Driver for DisplayAdapter {
+    fn name(&self) -> &str {
+        "display"
+    }
+
+    fn probe(&mut self) -> bool {
+        crate::drivers::gpu::caps().vga_present
+    }
+
+    fn init(&mut self) -> Result<(), &'static str> {
+        if self.probe() {
+            Ok(())
+        } else {
+            Err("goruntu aygiti bulunamadi")
+        }
+    }
+}
+
+/// Giriş alt sistemi adaptörü (PS/2 klavye/fare; USB HID ayrı adaptörde).
+pub struct InputAdapter;
+
+impl Driver for InputAdapter {
+    fn name(&self) -> &str {
+        "input"
+    }
+
+    fn probe(&mut self) -> bool {
+        crate::drivers::ps2::present()
+    }
+
+    fn init(&mut self) -> Result<(), &'static str> {
+        if self.probe() {
+            Ok(())
+        } else {
+            Err("giris aygiti bulunamadi")
+        }
+    }
+}

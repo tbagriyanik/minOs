@@ -656,6 +656,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // USB Hotplug (tak/çıkar) bildirimleri ve donanım envanteri canlı güncellemesi
         while let Some(ev) = drivers::usb_hid::pop_hotplug_event() {
             force_render = true;
+            drivers::framework::broadcast_hotplug(match ev.action {
+                drivers::usb_hid::HotplugAction::Connected => drivers::HotplugEvent::Added,
+                drivers::usb_hid::HotplugAction::Disconnected => drivers::HotplugEvent::Removed,
+            });
             let is_en = settings_app.language.is_english();
             let action_str = match (ev.action, is_en) {
                 (drivers::usb_hid::HotplugAction::Connected, false) => "takıldı",
@@ -8039,6 +8043,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
         // Run one short cooperative task step per event-loop turn. The
         // scheduler budget is one callback; a callback itself is not preempted.
         task::poll_tasks();
+
+        // Kullanıcı süreçleri: hazır bir Ring3 süreci varsa bir zaman dilimi
+        // çalıştır (yoksa hızlı döner). APIC timer önalımı ve SYS_YIELD ile
+        // dilimler arasında çekirdeğe dönülür.
+        arch::x86_64::ring3::schedule_user_processes();
 
         {
             let _browser_context = apps::guard::ContextScope::new(3, apps::guard::NO_WINDOW);

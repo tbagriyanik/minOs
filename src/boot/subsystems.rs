@@ -159,6 +159,14 @@ pub fn init_subsystems(
     // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
     serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
     memory_mgr.proc_mgr.init_kernel_process();
+    // Çekirdek CR3'ünü kaydet: kullanıcı→çekirdek trampoline'leri ve
+    // zamanlayıcı CR3'ü buraya geri yükler.
+    arch::x86_64::ring3::note_kernel_cr3(
+        memory_mgr
+            .proc_mgr
+            .get_process(0)
+            .map_or(0, |p| p.address_space.pml4_phys),
+    );
 
     let test_pid = mm::process::syscall_dispatch(
         mm::process::sys_nos::SYS_GETPID,
@@ -202,6 +210,11 @@ pub fn init_subsystems(
 
     serial_print("[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n");
     mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n");
+    let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
+    if !ring3_demo_ok {
+        serial_print("[RING3-TEST] Syscall/register dönüş doğrulaması: BAŞARISIZ\n");
+    }
 
     serial_print("[BOOT] SMP başlatılıyor...\n");
     serial_print("[SMP] BSP GDT yükleniyor...\n");
@@ -222,6 +235,14 @@ pub fn init_subsystems(
     arch::x86_64::apic::init_timer();
     serial_print("[APIC] 1000Hz scheduler timer etkin; TSC monotonik saat olarak korunuyor.\n");
     serial_print("[SCHED] 1000Hz round-robin scheduler; network downloads yield cooperatively.\n");
+
+    // Ring3 süreç zamanlayıcısı sınavı: yield, kernel-izolasyon ve yığın
+    // taşması senaryolarını gerçek CR3/context-switch yoluyla doğrular.
+    let _ = arch::x86_64::ring3::scheduler_self_test();
+
+    // Cok cekirdekli scheduler davranisini dogrula: gorev dagilimi, notify ve
+    // spin-kilitli kuyruk erisiminin tutarliligi.
+    let _ = task::test_scheduler_multicore_race();
 
     // Paralel saglama toplami: AP'ler + BSP ayni tamponu parcali isler.
     {
@@ -412,12 +433,17 @@ pub fn init_subsystems(
     // Sürücü çerçevesi: mevcut alt sistemleri ortak arayüze bağla ve otomatik
     // keşif/başlatma turunu çalıştır. Hazır olmayan adaptörler kayıtlı kalır.
     {
-        use crate::drivers::adapters::{AudioAdapter, NetworkAdapter, UsbAdapter};
+        use crate::drivers::adapters::{
+            AudioAdapter, DisplayAdapter, InputAdapter, NetworkAdapter, StorageAdapter, UsbAdapter,
+        };
         use crate::drivers::framework::{probe_and_init_all, register};
 
         register(alloc::boxed::Box::new(NetworkAdapter));
         register(alloc::boxed::Box::new(AudioAdapter));
         register(alloc::boxed::Box::new(UsbAdapter));
+        register(alloc::boxed::Box::new(StorageAdapter));
+        register(alloc::boxed::Box::new(DisplayAdapter));
+        register(alloc::boxed::Box::new(InputAdapter));
         probe_and_init_all();
     }
     serial_print("[BOOT] Sürücü kayıt defteri hazır; otomatik keşif tamamlandı.\n");

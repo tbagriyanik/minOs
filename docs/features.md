@@ -1,6 +1,16 @@
 # Özellikler ve Yol Haritası
 
-Uygulama kataloğu ve proje yol haritası.
+Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
+
+## Güncel sürüm: v2.4.0
+
+- Donmuş uygulamalar APIC zamanlayıcı kesmesinde izlenir; uygulamanın kapatılması ana döngüye bırakılır.
+- FPS 3D Oyunu tamamlanan karelerden gerçek FPS ve kare süresi ölçümleri üretir. QEMU stres testi `test_qemu.ps1 -FpsStressTest` ile başlatılabilir.
+- Render bütçesi aşılırsa tamamlanmamış kare geri yüklenir; `TimeBudget` zaman aşımı davranışı deterministik host testleriyle kapsanır.
+- Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı Müzik Çalar'da açar. Resim Gösterici görüntüyü döşeli masaüstü arka planı yapabilir.
+- Ayarlar'da ek masaüstü görselleri bulunur.
+
+Önceki sürümlerin ayrıntıları için [sürüm günlüğüne](CHANGELOG.md), tam değişiklik listesi için [değişiklik arşivine](releases.md) bakın.
 
 ## ✨ Özellikler ve Uygulama Paketi
 
@@ -10,7 +20,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygul
 | :--- | :--- |
 | **🔘 Başlat Menüsü** | Kategori menüleri (`Sistem`, `Üretkenlik`, `Medya`, `Güç`) altında simgeli grafik listeleme. Klavye ok tuşları, Enter, fare tekerleği gezintisi ve arama. |
 | **📁 Dosya Yöneticisi** | Sanal dosya sistemi (VFS/TarFS) gezgini; dosya türü simgeleri (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), boyutlar ve konum çubuğu. `-UsbDisks` ile bağlanan USB belleğin **FAT32** ve CD'nin **ISO9660** içeriği de listelenir. Masaüstü (`/desktop`) gezgenden bağımsız, sabit bir alandır; iki görünüm birbirinin seçim ve gezinme durumunu etkilemez. |
-| **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v2.3.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve 3 masaüstü resmi) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
+| **⚙️ Sistem Ayarları** | Beş sekme (Temel / Ekran / Ağ / Aygıtlar / Testler): v2.4.0 sürüm bilgisi ve çekirdek durumu, beş tema, ses düzeyi, gece ışığı, dil (TR/EN), klavye düzeni, yazı yakınlaştırma, hedef çözünürlük ve bölge seçimi; seçilebilir arka plan/duvar kağıdı (tema rengi, tek renk seçenekleri ve masaüstü resimleri) ve anında önizleme; pencere düzeni kaydetme ve **`settings.cfg` üzerinden kalıcı ayar saklama**. Gerçek ekran modu Limine önyükleme menüsünden seçilir. |
 | **🎛️ Kontrol Paneli** | Canlı sistem bilgisi: işletim sistemi/çekirdek sürümü, CPU üreticisi ve mantıksal çekirdek sayısı, RAM kullanımı ve doluluk çubuğu, çözünürlük, tema, klavye düzeni, çalışma süresi ve tarih. Ağ sekmesinde etkin ağ sürücüsü (e1000 / RTL816x / RTL8139 / NE2000), link durumu, DHCP/IP/maske/ağ geçidi/DNS ve ses sürücüsü; tek düğmeyle tema değiştirme. |
 | **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
@@ -29,13 +39,30 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygul
 
 > **Not:** `src/apps/` altındaki **Kontrol Paneli** (`controlpanel.rs`) kod tabanında mevcuttur; ayarlar ve kişiselleştirme işlevleri **Sistem Ayarları** (`settings.rs`) üzerinden yürütülmektedir.
 
+## Çekirdek, donanım ve dosya sistemi özellikleri
+
+- **Önyükleme ve kurtarma:** Limine v8 ile x86_64 BIOS ve UEFI önyükleme; kritik açılış hatalarında hata bilgisi ve `restart`, `halt`, `help` komutları sunan `recovery#` metin konsolu.
+- **İşlemci ve giriş:** SMP zamanlayıcısı ve tek CPU'ya güvenli geri dönüş; xHCI USB HID klavye/fare ve PS/2 yedek yolu. EHCI/UHCI/OHCI transfer altyapısı bulunsa da HID raporlarının ayrıştırılması bu denetleyicilerde tamamlanmış değildir.
+- **Grafik:** QEMU/Bochs framebuffer ve VirtIO-GPU 2D yolu desteklenir. AMD ve NVIDIA sürücüleri temel framebuffer/2D işlemleri sunar; 3D hızlandırma kapsam dışıdır.
+- **Ağ:** IPv4/IPv6, TCP/UDP, DNS, HTTP ve TLS 1.3 altyapısı; ağ kartlarının model bazında uyumluluk durumu [donanım tablosunda](HARDWARE_DRIVER_SUPPORT_MATRIX.md) yer alır.
+- **Tarayıcı:** Yerel demo sayfaları, HTML/CSS/JavaScript işleme, çeşitli görsel biçimleri, HTTPS ve ağ kaynaklarını ana döngüyü engellemeden yükleme.
+
+| Dosya sistemi | Destek | Önemli sınırlar |
+|---|---|---|
+| FAT32 | Okuma, yazma, biçimlendirme ve kalıcılık | Sistem ayarları ve VFS verisi diskte saklanabilir. |
+| ext2 | Okuma ve yazma | ATA disk bölümlerinden bağlanır. |
+| ext4 | Okuma, yazma ve biçimlendirme | Extents, JBD2 journal, htree ve inline data desteklenmez; bu özellikleri etkin birimler bağlanmayabilir. |
+| exFAT | Okuma, yazma ve biçimlendirme | Varsayılan olarak kapalıdır; `cargo build --features exfat` ile etkinleştirilir. |
+| ISO9660 | Salt okunur | Canlı CD/DVD medyasını okur. |
+
+Derleme profilleri, QEMU örnekleri ve ayrıntılı donanım sınırları için [derleme rehberine](building.md) ve [Hardware & Driver Support Matrix](HARDWARE_DRIVER_SUPPORT_MATRIX.md) belgesine bakın.
 
 ---
 
 
 ## 🗺️ Gelecek Planları ve Yol Haritası (Roadmap)
 
-> Detaylı mimari ve faz planı için: [`planlama.md`](../planlama.md)
+> Detaylı mimari ve faz planı için: [`planlama.md`](planlama.md)
 
 Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 

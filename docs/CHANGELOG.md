@@ -3,7 +3,7 @@
 Bu dosya minOs sürümlerinin ayrıntılı değişiklik listelerini içerir.
 README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradadır.
 
-## Güncel
+## Güncel · v2.4.0
 
 - Watchdog donmuş uygulama tespiti APIC zamanlayıcı kesmesine taşındı (`watchdog::timer_tick()`); kesme bağlamında `try_lock` korumalı kısa kritik bölüm çalışır, sonlandırma ana döngüde `drain_frozen()` ile ertelenir.
 - FPS 3D Oyun (app ID 16) tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` metrikleri üretir (`[FPS3D-METRICS]`); açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
@@ -14,7 +14,7 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.
 
-- [v2.3.0](#yenilikler-v230) — güncel sürüm
+- [v2.3.0](#yenilikler-v230) — önceki sürüm
 - [v1.6.0 ve öncesi](releases.md)
 
 ---

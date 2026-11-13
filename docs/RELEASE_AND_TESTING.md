@@ -111,7 +111,7 @@ sürücüleri, Intel HDA + gerçek WAV PCM çıkışı ve masaüstü olay döng�
 ## 🧷 Gerçek Donanım Doğrulama
 
 QEMU emülasyonu mantığı doğrular; gerçek donanım için aşağıdaki adımlar
-izlenir (ayrıntılı tablo: [`HARDWARE_COMPATIBILITY.md`](./HARDWARE_COMPATIBILITY.md)):
+izlenir (ayrıntılı tablo: [`Hardware & Driver Support Matrix`](./HARDWARE_DRIVER_SUPPORT_MATRIX.md)):
 
 1. `minos.iso`'yu Rufus/Ventoy ile USB'ye yazdırın.
 2. Sistemi USB'den başlatın.
@@ -140,4 +140,4 @@ izlenir (ayrıntılı tablo: [`HARDWARE_COMPATIBILITY.md`](./HARDWARE_COMPATIBIL
 - [`../test_host.ps1`](../test_host.ps1), [`../test_qemu.ps1`](../test_qemu.ps1)
 - [`.github/workflows/ci.yml`](../.github/workflows/ci.yml)
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-- [`HARDWARE_COMPATIBILITY.md`](./HARDWARE_COMPATIBILITY.md)
+- [`Hardware & Driver Support Matrix`](./HARDWARE_DRIVER_SUPPORT_MATRIX.md)

@@ -3,7 +3,7 @@
 This file contains the detailed change lists for minOs releases.
 The README files only summarise the highlights; the full list lives here.
 
-## Current
+## Current · v2.4.0
 
 - Watchdog frozen-app detection moved to the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context uses a short `try_lock`-guarded section and termination is deferred to the main loop via `drain_frozen()`.
 - FPS 3D Game (app ID 16) reports real `fps`/`min_fps`/`frame_ms` metrics from completed frames (`[FPS3D-METRICS]`); launch is verified via the `[FPS3D] Uygulama açıldı` marker.
@@ -14,7 +14,7 @@ The README files only summarise the highlights; the full list lives here.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.
 
-- [v2.3.0](#whats-new-v230) — current release
+- [v2.3.0](#whats-new-v230) — previous release
 - [v1.6.0 and earlier](releases.md)
 
 ---

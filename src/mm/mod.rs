@@ -1,8 +1,11 @@
 pub mod allocator;
+pub mod fd;
 pub mod loader;
 pub mod paging;
 pub mod pmm;
 pub mod process;
+pub mod uaccess;
+pub mod user_mem;
 pub mod vmm;
 
 use crate::arch::x86_64::sync::{SpinGuard, SpinMutex};

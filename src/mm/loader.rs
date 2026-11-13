@@ -16,6 +16,133 @@ pub const USER_CODE_BASE: u64 = 0x0000_0000_0040_0000; // 4 MB (Standart kullan�
 pub const USER_STACK_TOP: u64 = 0x0000_7FFF_FFFF_0000; // Kullanıcı yığını üst sınırı
 pub const USER_STACK_PAGES: usize = 4; // 16 KB kullanıcı yığını (4 x 4KB sayfa)
 
+/// Kullanıcı yığınının hemen altındaki koruma (guard) sayfasının sanal adresi.
+/// Kasıtlı olarak hiç eşlenmez: yığın taşması bu adrese yazma denediğinde
+/// donanım #PF (BP=0, U/S=1) üretir ve çekirdek süreci SIGSEGV ile sonlandırır.
+pub const USER_STACK_GUARD: u64 = USER_STACK_TOP - ((USER_STACK_PAGES + 1) as u64) * PAGE_SIZE;
+
+/// Yığının rastgele kaydırılabileceği üst sınır (256 KiB, 4 KiB hizalı).
+pub const ASLR_STACK_MAX_SLIDE: u64 = 0x0004_0000;
+/// mmap arenasının rastgele başlangıç aralığı (64 MiB – 256 MiB).
+///
+/// Alt sınır, heap'in büyüyebileceği en yüksek adres olan `user_mem::HEAP_LIMIT`
+/// (64 MiB) değerinden küçük olmamalıdır. Aksi halde ASLR dilimlerinin bir
+/// kısmı heap aralığına düşer: `brk` ile eşlenmiş bir sayfanın üzerine `mmap`
+/// koymak "Bellek araligi zaten eslenmis" hatası verir ve test/uygulama
+/// `mmap`'i yalpalı biçimde (dilime bağlı %20 olasılıkla) kaybeder.
+pub const ASLR_MMAP_MIN: u64 = 0x0400_0000;
+pub const ASLR_MMAP_MAX: u64 = 0x1000_0000;
+
+/// Derleme zamanı güvencesi: mmap arenası heap sınırının altında başlamasın.
+const _: () = assert!(ASLR_MMAP_MIN >= crate::mm::user_mem::HEAP_LIMIT);
+
+/// ASLR için kullanılabilir bir entropi kaynağıdır. TSC (Time Stamp Counter)
+/// düşük bitleri her önyüklemede ve her süreçte farklıdır; QEMU/gerçek
+/// donanım fark etmeksizin deterministik olmayan bir kaydırma üretir.
+pub fn aslr_entropy() -> u64 {
+    let lo: u32;
+    let hi: u32;
+    unsafe {
+        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags));
+    }
+    let tsc = ((hi as u64) << 32) | lo as u64;
+    let mut x = tsc ^ 0x9E37_79B9_7F4A_7C15;
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xFF51_AFD7_ED55_8CCD);
+    x ^= x >> 29;
+    x
+}
+
+/// Kullanıcı yığınını (`USER_STACK_PAGES` sayfa, üstten aşağı) eşler ve
+/// altındaki guard sayfasını eşlemeden bırakır. `allocated_*` listelerine
+/// kaydedilen çerçeveler çağıranın sahipliğindedir.
+///
+/// Dönen değer: ABI gereği 16 bayt hizalı ilk RSP değeri.
+pub fn map_user_stack(
+    address_space: &mut AddressSpace,
+    pmm: &mut PhysicalMemoryManager,
+    allocated_pages: &mut usize,
+    allocated_frames: &mut [u64; MAX_LOADED_FRAMES],
+    mapped_vaddrs: &mut [u64; MAX_LOADED_FRAMES],
+) -> Result<u64, &'static str> {
+    map_user_stack_at(
+        USER_STACK_TOP,
+        address_space,
+        pmm,
+        allocated_pages,
+        allocated_frames,
+        mapped_vaddrs,
+    )
+}
+
+/// Verilen rastgele üst adres ile yığın sayfalarını eşler (ASLR).
+pub fn map_user_stack_at(
+    stack_top: u64,
+    address_space: &mut AddressSpace,
+    pmm: &mut PhysicalMemoryManager,
+    allocated_pages: &mut usize,
+    allocated_frames: &mut [u64; MAX_LOADED_FRAMES],
+    mapped_vaddrs: &mut [u64; MAX_LOADED_FRAMES],
+) -> Result<u64, &'static str> {
+    let stack_top = stack_top & !(PAGE_SIZE - 1);
+    let stack_base = stack_top - (USER_STACK_PAGES as u64) * PAGE_SIZE;
+
+    for i in 0..USER_STACK_PAGES {
+        let virt_addr = stack_base + (i as u64) * PAGE_SIZE;
+        if *allocated_pages >= MAX_LOADED_FRAMES || address_space.translate(virt_addr).is_some() {
+            return Err("Kullanici yigini kaynak siniri veya adres cakismasi");
+        }
+        let phys_frame = pmm
+            .allocate_frame()
+            .ok_or("PMM: Yigin icin yetersiz bellek")?;
+        if *allocated_pages < MAX_LOADED_FRAMES {
+            allocated_frames[*allocated_pages] = phys_frame;
+            mapped_vaddrs[*allocated_pages] = virt_addr;
+        }
+        *allocated_pages += 1;
+
+        let virt_frame = phys_to_virt(phys_frame) as *mut u8;
+        unsafe {
+            core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize);
+        }
+
+        // Yığın: Yazılabilir, Çalıştırılamaz (NX)
+        if address_space
+            .map_page(virt_addr, phys_frame, PageFlags::USER_STACK, pmm)
+            .is_err()
+        {
+            pmm.free_frame(phys_frame);
+            return Err("Kullanici yigini sayfasi eslenemedi");
+        }
+    }
+
+    // Guard sayfası kasıtlı olarak eşlenmez.
+    debug_assert!(address_space
+        .translate(stack_top - (USER_STACK_PAGES as u64 + 1) * PAGE_SIZE)
+        .is_none());
+
+    // Yığın x86-64 ABI kuralı gereği 16-bayt hizalı olmalıdır
+    Ok(stack_top - 16)
+}
+
+/// ASLR için rastgele, 4 KiB hizalı bir yığın üstü seçer.
+pub fn randomized_stack_top() -> u64 {
+    let slide = (aslr_entropy() % (ASLR_STACK_MAX_SLIDE / PAGE_SIZE)) * PAGE_SIZE;
+    (USER_STACK_TOP - slide) & !(PAGE_SIZE - 1)
+}
+
+/// Bu sürecin ASLR kaydırmasıyla yığın guard sayfası adresi.
+pub fn stack_guard_for(stack_top: u64) -> u64 {
+    stack_top - (USER_STACK_PAGES as u64 + 1) * PAGE_SIZE
+}
+
+/// ASLR için rastgele, 2 MiB hizalı mmap tabanı seçer.
+pub fn randomized_mmap_base() -> u64 {
+    let span = (ASLR_MMAP_MAX - ASLR_MMAP_MIN) / 0x20_0000; // 2 MiB'lik dilim sayısı
+    let slice = aslr_entropy() % span.max(1);
+    ASLR_MMAP_MIN + slice * 0x20_0000
+}
+
 /// ELF64 Sihirli Numaraları
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const ELF_CLASS_64: u8 = 2;
@@ -379,40 +506,13 @@ impl AppLoader {
         allocated_frames: &mut [u64; MAX_LOADED_FRAMES],
         mapped_vaddrs: &mut [u64; MAX_LOADED_FRAMES],
     ) -> Result<u64, &'static str> {
-        let stack_base = USER_STACK_TOP - (USER_STACK_PAGES as u64) * PAGE_SIZE;
-
-        for i in 0..USER_STACK_PAGES {
-            let virt_addr = stack_base + (i as u64) * PAGE_SIZE;
-            if *allocated_pages >= MAX_LOADED_FRAMES || address_space.translate(virt_addr).is_some()
-            {
-                return Err("Kullanici yigini kaynak siniri veya adres cakismasi");
-            }
-            let phys_frame = pmm
-                .allocate_frame()
-                .ok_or("PMM: Yigin icin yetersiz bellek")?;
-            if *allocated_pages < MAX_LOADED_FRAMES {
-                allocated_frames[*allocated_pages] = phys_frame;
-                mapped_vaddrs[*allocated_pages] = virt_addr;
-            }
-            *allocated_pages += 1;
-
-            let virt_frame = phys_to_virt(phys_frame) as *mut u8;
-            unsafe {
-                core::ptr::write_bytes(virt_frame, 0, PAGE_SIZE as usize);
-            }
-
-            // Yığın: Yazılabilir, Çalıştırılamaz (NX)
-            if address_space
-                .map_page(virt_addr, phys_frame, PageFlags::USER_STACK, pmm)
-                .is_err()
-            {
-                pmm.free_frame(phys_frame);
-                return Err("Kullanici yigini sayfasi eslenemedi");
-            }
-        }
-
-        // Yığın x86-64 ABI kuralı gereği 16-bayt hizalı olmalıdır
-        Ok(USER_STACK_TOP - 16)
+        map_user_stack(
+            address_space,
+            pmm,
+            allocated_pages,
+            allocated_frames,
+            mapped_vaddrs,
+        )
     }
 
     /// Test veya VFS üzerinde dosya olarak saklamak için geçerli bir ELF64 test ikilisi üretir.

@@ -2777,13 +2777,70 @@ impl TerminalApp {
             }
             "ps" => {
                 self.push_line(
-                    crate::gui::ui_text("PID  İSİM", "PID  NAME"),
+                    crate::gui::ui_text(
+                        "PID  PPID  DURUM     ÖNC.     BELLEK  İSİM",
+                        "PID  PPID  STATE     PRIO     MEMORY  NAME",
+                    ),
                     Color::TEXT_MUTED,
                 );
-                self.push_line("1    kernel_core", Color::TEXT_MAIN);
-                self.push_line("2    mingui_compositor", Color::TEXT_MAIN);
-                self.push_line("3    net_stack", Color::TEXT_MAIN);
-                self.push_line("4    minshell", Color::TEXT_MAIN);
+                if let Some(mut guard) = crate::mm::try_lock_memory() {
+                    let memory = guard.get();
+                    let mut lines: alloc::vec::Vec<alloc::string::String> = alloc::vec::Vec::new();
+                    for p in memory.proc_mgr.processes.iter() {
+                        if p.state == crate::mm::process::ProcessState::Unused {
+                            continue;
+                        }
+                        let state = match p.state {
+                            crate::mm::process::ProcessState::Ready => "READY",
+                            crate::mm::process::ProcessState::Running => "RUN",
+                            crate::mm::process::ProcessState::Blocked => "BLOCK",
+                            crate::mm::process::ProcessState::Terminated => "DEAD",
+                            crate::mm::process::ProcessState::Unused => "-",
+                        };
+                        let prio = match p.priority {
+                            crate::mm::process::ProcessPriority::Low => "low",
+                            crate::mm::process::ProcessPriority::Normal => "normal",
+                            crate::mm::process::ProcessPriority::High => "high",
+                            crate::mm::process::ProcessPriority::Realtime => "rt",
+                        };
+                        let stats = crate::mm::user_mem::stats(p);
+                        let mut line = alloc::format!(
+                            "{:<4} {:<5} {:<9} {:<8} {:<7} {}",
+                            p.pid,
+                            p.ppid,
+                            state,
+                            prio,
+                            stats.heap_bytes + stats.mmap_bytes,
+                            p.name_str()
+                        );
+                        if p.state == crate::mm::process::ProcessState::Terminated {
+                            line.push_str(&alloc::format!(" (exit {})", p.exit_code));
+                        }
+                        lines.push(line);
+                    }
+                    lines.sort();
+                    for line in lines {
+                        self.push_line(&line, Color::TEXT_MAIN);
+                    }
+                    self.push_line(
+                        &alloc::format!(
+                            "free={} KB  cow={}  shared={}",
+                            memory.pmm.free_memory_bytes / 1024,
+                            crate::arch::x86_64::ring3::COW_FAULTS
+                                .load(core::sync::atomic::Ordering::Relaxed),
+                            crate::mm::vmm::shared_frame_count()
+                        ),
+                        Color::TEXT_MUTED,
+                    );
+                } else {
+                    self.push_line(
+                        crate::gui::ui_text(
+                            "Süreç tablosu meşgul, tekrar deneyin.",
+                            "Process table busy, try again.",
+                        ),
+                        Color::ACCENT_YELLOW,
+                    );
+                }
             }
             "apps" => {
                 self.push_line("0 files       1 settings    2 notepad", Color::ACCENT_BLUE);

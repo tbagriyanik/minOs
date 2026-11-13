@@ -94,6 +94,9 @@ const F_RAX: usize = 0;
 
 const F_RDX: usize = 3;
 
+/// `int 0x80` ABI'de 4. argüman (R10) yazmaç alanı indeksi.
+const F_R10: usize = 9;
+
 const F_RSI: usize = 4;
 
 const F_RDI: usize = 5;
@@ -215,6 +218,8 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
             core::ptr::read_volatile(frame.add(F_RDX)),
         )
     };
+    // 4. argüman R10'dan okunur (SysV uyumlu sistem çağrısı düzeni).
+    let a4 = unsafe { core::ptr::read_volatile(frame.add(F_R10)) };
 
     smp::print_locked("[RING3-TRACE] int80 no=");
 
@@ -252,11 +257,12 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
                 }
                 0
             } else {
-                crate::mm::process::syscall_dispatch(
+                crate::mm::process::syscall_dispatch_abi(
                     no,
                     a1,
                     a2,
                     a3,
+                    a4,
                     &mut memory.proc_mgr,
                     &mut memory.pmm,
                 )
@@ -334,25 +340,16 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
                 return 0;
             }
 
-            let mut buf = [0u8; 256];
             let address_space = crate::mm::vmm::AddressSpace::current();
+            let Ok(buf) = crate::mm::uaccess::copy_from_user(&address_space, a1, len) else {
+                return 0;
+            };
 
-            for (i, slot) in buf.iter_mut().enumerate().take(len) {
-                let Some(user_addr) = a1.checked_add(i as u64) else {
-                    return 0;
-                };
-                let Some(physical_addr) = address_space.translate_user(user_addr) else {
-                    return 0;
-                };
-                let physical_byte = crate::drivers::phys_to_virt(physical_addr) as *const u8;
-                *slot = unsafe { core::ptr::read_volatile(physical_byte) };
-            }
-
-            match core::str::from_utf8(&buf[..len]) {
+            match core::str::from_utf8(&buf) {
                 Ok(s) => {
                     smp::print_locked(s);
                     unsafe {
-                        LAST_RING3_OUTPUT[..len].copy_from_slice(&buf[..len]);
+                        LAST_RING3_OUTPUT[..len].copy_from_slice(&buf);
                         LAST_RING3_OUTPUT_LEN = len;
                     }
                 }
@@ -380,6 +377,67 @@ static USER_FAULT_ERR: AtomicU64 = AtomicU64::new(0);
 static USER_FAULT_ADDR: AtomicU64 = AtomicU64::new(0);
 
 static USER_EXITED: AtomicBool = AtomicBool::new(false);
+
+/// Çözülen copy-on-write sayfa hatası sayısı (teşhis/özyin testi).
+pub static COW_FAULTS: AtomicU64 = AtomicU64::new(0);
+
+/// Verilen kullanıcı zaman dilimi sayısı (canlı süreç izleme).
+pub static SLICE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Kaç dilimde bir süreç durumu raporlanacak.
+const SCHED_REPORT_INTERVAL: u64 = 64;
+
+/// Kilit alınabiliyorsa süreç tablosunun özetini seri konsola yazar.
+/// Kesme bağlamında asla bloklanmaz: kilit meşgulse rapor atlanır.
+fn report_process_state() {
+    let Some(mut guard) = crate::mm::try_lock_memory() else {
+        return;
+    };
+    let memory = guard.get();
+    let mut ready = 0u64;
+    let mut running = 0u64;
+    let mut blocked = 0u64;
+    let mut terminated = 0u64;
+    for p in memory.proc_mgr.processes.iter() {
+        match p.state {
+            crate::mm::process::ProcessState::Ready => ready += 1,
+            crate::mm::process::ProcessState::Running => running += 1,
+            crate::mm::process::ProcessState::Blocked => blocked += 1,
+            crate::mm::process::ProcessState::Terminated => terminated += 1,
+            crate::mm::process::ProcessState::Unused => {}
+        }
+    }
+    smp::print_locked("[SCHED-STAT]");
+    smp::print_locked(" slices=");
+    smp::print_locked_dec(SLICE_COUNT.load(Ordering::Relaxed));
+    smp::print_locked(" cur=");
+    smp::print_locked_dec(memory.proc_mgr.current_pid as u64);
+    smp::print_locked(" ready=");
+    smp::print_locked_dec(ready);
+    smp::print_locked(" run=");
+    smp::print_locked_dec(running);
+    smp::print_locked(" blocked=");
+    smp::print_locked_dec(blocked);
+    smp::print_locked(" term=");
+    smp::print_locked_dec(terminated);
+    smp::print_locked(" free_kb=");
+    smp::print_locked_dec(memory.pmm.free_memory_bytes / 1024);
+    smp::print_locked(" cow=");
+    smp::print_locked_dec(COW_FAULTS.load(Ordering::Relaxed));
+    smp::print_locked(" shared=");
+    smp::print_locked_dec(crate::mm::vmm::shared_frame_count() as u64);
+    if let Some(p) = memory.proc_mgr.get_process(memory.proc_mgr.current_pid) {
+        smp::print_locked(" heap=");
+        smp::print_locked_dec(p.heap_brk);
+        smp::print_locked(" mmaps=");
+        smp::print_locked_dec(crate::mm::user_mem::stats(p).mmap_regions as u64);
+        smp::print_locked(" cr3=");
+        smp::print_locked_hex(p.address_space.pml4_phys);
+        smp::print_locked(" rsp=");
+        smp::print_locked_hex(p.context.rsp);
+    }
+    smp::print_locked("\n");
+}
 
 static mut LAST_RING3_OUTPUT: [u8; 256] = [0; 256];
 static mut LAST_RING3_OUTPUT_LEN: usize = 0;
@@ -473,6 +531,138 @@ macro_rules! fault_entry {
 
                 "fxrstor64 [rsp]",
 
+                "mov rsp, r12",
+
+                "pop rax",
+
+                "pop rbx",
+
+                "pop rcx",
+
+                "pop rdx",
+
+                "pop rsi",
+
+                "pop rdi",
+
+                "pop rbp",
+
+                "pop r8",
+
+                "pop r9",
+
+                "pop r10",
+
+                "pop r11",
+
+                "pop r12",
+
+                "pop r13",
+
+                "pop r14",
+
+                "pop r15",
+
+                "add rsp, 8",
+
+                "iretq",
+
+                vec = const $vec,
+
+                handler = sym $rust,
+
+                options(),
+
+            )
+
+        }
+
+    };
+
+}
+
+/// Hata kodlu, yeniden denemeye izin veren fault girişi.
+/// `rust_fault` hata kodu dışında hiçbir alanı değiştirmez ve çerçeveyi
+/// "başarıyla çözüldü" (rax = 1) dönerse stub hata kodunu ve kaydedilmiş
+/// GPR kümesini atıp `iretq` ile sunulan komutu yeniden çalıştırır.
+/// Çözülemediyse (rah = 0) çerçeve normal yoldan `iretq`'e döner.
+macro_rules! fault_entry_rerun {
+
+    ($name:ident, $vec:expr, $rust:ident) => {
+
+        #[doc = "Naked fault entry stub (yeniden denenebilir); donanım giriş noktası."]
+
+        #[doc = ""]
+
+        #[doc = "# Safety"]
+
+        #[doc = "CPU tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan çağrılmamalıdır."]
+
+        #[no_mangle]
+
+        #[unsafe(naked)]
+
+        pub unsafe extern "C" fn $name() {
+
+            core::arch::naked_asm!(
+
+                "push r15",
+
+                "push r14",
+
+                "push r13",
+
+                "push r12",
+
+                "push r11",
+
+                "push r10",
+
+                "push r9",
+
+                "push r8",
+
+                "push rbp",
+
+                "push rdi",
+
+                "push rsi",
+
+                "push rdx",
+
+                "push rcx",
+
+                "push rbx",
+
+                "push rax",
+
+                "mov r12, rsp",
+
+                "and rsp, -16",
+
+                "sub rsp, 512",
+
+                "fxsave64 [rsp]",
+
+                "mov rdi, r12",
+
+                "mov rsi, [r12 + 120]",
+
+                "mov edx, {vec}",
+
+                "call {handler}",
+
+                "fxrstor64 [rsp]",
+
+                // `rust_fault` donus degeri ayri bir yol gerektirmez: hata
+                // cozulduyse (COW) ya da surec hatayla sonlandirildiysa, her iki
+                // durumda da kaydedilmis GPR kumesi geri yuklenip CPU cercevesiyle
+                // `iretq` yapilir. Hatali surecte rust_fault zaten cercevenin
+                // RIP/CS/SS alanlarini cekirdek park noktasina yeniden yazar.
+                //
+                // Cerceve duzeni (dusen adresler): r12+0..112 = 15 itilmis GPR,
+                // r12+120 = donanim hata kodu (yukaridaki `mov rsi, [r12 + 120]`
+                // bunu dogrular), r12+128 = RIP.
                 "mov rsp, r12",
 
                 "pop rax",
@@ -649,7 +839,7 @@ fault_entry!(ss_entry, 12u32, rust_fault);
 
 fault_entry!(gp_entry, 13u32, rust_fault);
 
-fault_entry!(pf_entry, 14u32, rust_fault);
+fault_entry_rerun!(pf_entry, 14u32, rust_fault);
 
 /// Ring3 hatası: kaydet, RIP'i park döngüsüne yönlendir, `iretq` ile dön.
 /// Çekirdek hatası: seriye yazıp dur (üçlü hata yerine kontrollü durma).
@@ -658,7 +848,7 @@ fault_entry!(pf_entry, 14u32, rust_fault);
 /// `frame`, fault entry stub tarafından hazırlanan geçerli kesme çerçevesine;
 /// `err`/`vec` ilgili hata kodu ve vektörüne işaret etmelidir.
 #[no_mangle]
-pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
+pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) -> u64 {
     let (cs, rip) = unsafe {
         (
             core::ptr::read_volatile(frame.add(EF_CS)),
@@ -667,6 +857,27 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
     };
 
     if cs & 3 == 3 {
+        // Copy-on-write yazma hatası: sayfa `PAGE_COW` işaretliyse özel kopyaya
+        // dönüştür. Çerçeve değişmez; stub (fault_entry_rerun) hata kodunu ve
+        // GPR kümesini atlayarak komutu yeniden çalıştırır.
+        if vec == 14 && err & 1 != 0 && err & 2 != 0 && err & (1 << 4) == 0 {
+            let cr2: u64;
+            unsafe {
+                core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+            }
+            let cow_resolved = if let Some(mut guard) = crate::mm::try_lock_memory() {
+                let memory = guard.get();
+                let pid = memory.proc_mgr.current_pid;
+                pid != 0 && memory.proc_mgr.handle_cow_fault(pid, cr2, &mut memory.pmm)
+            } else {
+                false
+            };
+            if cow_resolved {
+                COW_FAULTS.fetch_add(1, Ordering::Relaxed);
+                return 1;
+            }
+        }
+
         // Do not return to user mode after the process is faulted. Reclamation
         // is deferred until execute_process has switched back to the kernel CR3.
 
@@ -1070,6 +1281,7 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) {
 
         crate::boot::text_console::interactive_error_prompt(text_buf.as_str());
     }
+    0
 }
 
 // --- Ring3 girişi ----------------------------------------------------------------
@@ -1371,6 +1583,7 @@ const DEMO_CODE: u64 = crate::mm::loader::USER_CODE_BASE; // 0x40_0000
 
 const DEMO_RESULT: u64 = 0x0000_0000_0060_0000;
 
+#[allow(dead_code)]
 const DEMO_STACK_TOP: u64 = crate::mm::loader::USER_STACK_TOP - 16;
 
 /// Demo program A: getpid -> paylaşılan sayfaya yaz -> EXIT -> (park).
@@ -1481,6 +1694,7 @@ fn prog_overflow_stack() -> [u8; 1] {
 }
 
 fn map_demo_pages(
+    stack_top: u64,
     aspace: &mut crate::mm::vmm::AddressSpace,
 
     pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
@@ -1539,7 +1753,7 @@ fn map_demo_pages(
         return None;
     }
 
-    let stack_page = DEMO_STACK_TOP & !0xFFF;
+    let stack_page = stack_top & !0xFFF;
 
     if aspace
         .map_page(stack_page, stack_frame, PageFlags::USER_STACK, pmm)
@@ -1562,12 +1776,14 @@ fn unmap_demo_pages(
     pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
 
     frames: (u64, u64, u64),
+
+    stack_top: u64,
 ) {
     let _ = aspace.unmap_page(DEMO_CODE);
 
     let _ = aspace.unmap_page(DEMO_RESULT);
 
-    let _ = aspace.unmap_page(DEMO_STACK_TOP & !0xFFF);
+    let _ = aspace.unmap_page(stack_top & !0xFFF);
 
     pmm.free_frame(frames.0);
 
@@ -1643,6 +1859,15 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         smp::print_locked("\n");
 
+        // ASLR: yığın üstü her demoda rastgele kaydırılır (guard sayfası
+        // yığının hemen altında, eşlenmemiş kalır).
+        let stack_top = crate::mm::loader::randomized_stack_top() - 16;
+        smp::print_locked("[ASLR] yigin utu=");
+        smp::print_locked_hex(stack_top);
+        smp::print_locked(" taban=");
+        smp::print_locked_hex(crate::mm::loader::USER_STACK_TOP);
+        smp::print_locked("\n");
+
         // --- Adım 1: syscall yolu (getpid) ---
 
         let prog = prog_getpid();
@@ -1656,7 +1881,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         smp::print_locked("[RING3] Adim 1: sayfalar esleniyor...\n");
 
-        let frames = match map_demo_pages(&mut aspace, pmm, &prog) {
+        let frames = match map_demo_pages(stack_top, &mut aspace, pmm, &prog) {
             Some(f) => f,
 
             None => {
@@ -1668,7 +1893,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         smp::print_locked("[RING3] Adim 1: Ring3'e giriliyor...\n");
 
-        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, DEMO_STACK_TOP) };
+        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, stack_top) };
 
         smp::print_locked("[RING3] Adim 1: Ring3'ten donuldu (EXIT).\n");
 
@@ -1686,18 +1911,18 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         // Kullanıcı artık canlı değil; sayfaları güvenle geri al.
 
-        unmap_demo_pages(&mut aspace, pmm, frames);
+        unmap_demo_pages(&mut aspace, pmm, frames, stack_top);
 
         USER_FAULT_VEC.store(0, Ordering::Relaxed);
         USER_FAULT_ERR.store(0, Ordering::Relaxed);
         USER_FAULT_ADDR.store(0, Ordering::Relaxed);
         USER_EXITED.store(false, Ordering::Relaxed);
         let register_prog = prog_preserves_registers();
-        let register_frames = match map_demo_pages(&mut aspace, pmm, &register_prog) {
+        let register_frames = match map_demo_pages(stack_top, &mut aspace, pmm, &register_prog) {
             Some(frames) => frames,
             None => return false,
         };
-        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, DEMO_STACK_TOP) };
+        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, stack_top) };
         let registers_ok =
             USER_FAULT_VEC.load(Ordering::Acquire) == 0 && USER_EXITED.load(Ordering::Acquire);
         if registers_ok {
@@ -1707,7 +1932,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
         } else {
             smp::print_locked("[RING3] Kesme yazmac koruma testi: BASARISIZ\n");
         }
-        unmap_demo_pages(&mut aspace, pmm, register_frames);
+        unmap_demo_pages(&mut aspace, pmm, register_frames, stack_top);
 
         USER_FAULT_VEC.store(0, Ordering::Relaxed);
         USER_FAULT_ERR.store(0, Ordering::Relaxed);
@@ -1715,11 +1940,12 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
         USER_EXITED.store(false, Ordering::Relaxed);
         let kernel_address = core::ptr::addr_of!(RING3_KSTACK) as u64;
         let kernel_read_prog = prog_read_kernel(kernel_address);
-        let kernel_read_frames = match map_demo_pages(&mut aspace, pmm, &kernel_read_prog) {
-            Some(frames) => frames,
-            None => return false,
-        };
-        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, DEMO_STACK_TOP) };
+        let kernel_read_frames =
+            match map_demo_pages(stack_top, &mut aspace, pmm, &kernel_read_prog) {
+                Some(frames) => frames,
+                None => return false,
+            };
+        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, stack_top) };
         let kernel_access_blocked = USER_FAULT_VEC.load(Ordering::Acquire) == 14
             && USER_FAULT_ERR.load(Ordering::Relaxed) & (1 << 2) != 0
             && USER_FAULT_ADDR.load(Ordering::Relaxed) == kernel_address;
@@ -1728,18 +1954,18 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
         } else {
             smp::print_locked("[P2] Ring3 kernel belleği erişim testi: BASARISIZ\n");
         }
-        unmap_demo_pages(&mut aspace, pmm, kernel_read_frames);
+        unmap_demo_pages(&mut aspace, pmm, kernel_read_frames, stack_top);
 
         USER_FAULT_VEC.store(0, Ordering::Relaxed);
         USER_FAULT_ERR.store(0, Ordering::Relaxed);
         USER_FAULT_ADDR.store(0, Ordering::Relaxed);
         USER_EXITED.store(false, Ordering::Relaxed);
         let overflow_prog = prog_overflow_stack();
-        let overflow_frames = match map_demo_pages(&mut aspace, pmm, &overflow_prog) {
+        let overflow_frames = match map_demo_pages(stack_top, &mut aspace, pmm, &overflow_prog) {
             Some(frames) => frames,
             None => return false,
         };
-        let stack_page = DEMO_STACK_TOP & !0xFFF;
+        let stack_page = stack_top & !0xFFF;
         unsafe { enter_demo_usermode(&aspace, DEMO_CODE, stack_page) };
         let stack_overflow_caught = USER_FAULT_VEC.load(Ordering::Acquire) == 14
             && USER_FAULT_ERR.load(Ordering::Relaxed) & (1 << 2) != 0
@@ -1749,7 +1975,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
         } else {
             smp::print_locked("[P2] Kullanıcı yığını taşma testi: BASARISIZ\n");
         }
-        unmap_demo_pages(&mut aspace, pmm, overflow_frames);
+        unmap_demo_pages(&mut aspace, pmm, overflow_frames, stack_top);
 
         // --- Adım 2: hata izolasyonu (hlt -> #GP -> EXIT saplaması) ---
 
@@ -1766,7 +1992,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         smp::print_locked("[RING3] Adim 2: sayfalar esleniyor...\n");
 
-        let frames2 = match map_demo_pages(&mut aspace, pmm, &prog2) {
+        let frames2 = match map_demo_pages(stack_top, &mut aspace, pmm, &prog2) {
             Some(f) => f,
 
             None => {
@@ -1778,7 +2004,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
 
         smp::print_locked("[RING3] Adim 2: Ring3'e giriliyor (hlt bekleniyor)...\n");
 
-        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, DEMO_STACK_TOP) };
+        unsafe { enter_demo_usermode(&aspace, DEMO_CODE, stack_top) };
 
         smp::print_locked("[RING3] Adim 2: Ring3'ten donuldu.\n");
 
@@ -1793,7 +2019,7 @@ pub fn demo(pmm: &mut crate::mm::pmm::PhysicalMemoryManager) -> bool {
             smp::print_locked("[RING3] 2. Ring3 hata yakalama calismadi: BASARISIZ\n");
         }
 
-        unmap_demo_pages(&mut aspace, pmm, frames2);
+        unmap_demo_pages(&mut aspace, pmm, frames2, stack_top);
 
         // Çekirdek hâlâ ayakta: kanıt olarak GDT yüklü ve seri çalışıyor.
 
@@ -2027,6 +2253,15 @@ pub fn schedule_user_processes() {
     smp::print_locked_hex(ctx.cr3);
     smp::print_locked("\n");
 
+    // Her N dilimde bir süreç/bellek durumu raporu (scheduler yükü altında
+    // CR3, ASLR yığını, heap ve COW sayaçlarının canlı izlenmesi). İlk dilim de
+    // raporlanır: önyükleme sırasında toplam dilim sayısı rapor aralığından az
+    // olabilir ve testler bu ilk anlık görüntüye dayanır.
+    let slice = SLICE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    if slice == 1 || slice.is_multiple_of(SCHED_REPORT_INTERVAL) {
+        report_process_state();
+    }
+
     unsafe {
         if has_ctx {
             enter_user_context_raw(&ctx);
@@ -2105,6 +2340,27 @@ fn sched_prog_stack_smash() -> alloc::vec::Vec<u8> {
     c.extend_from_slice(&bad_rsp.to_le_bytes());
     c.extend_from_slice(&[0x48, 0xC7, 0x04, 0x24, 0x41, 0x00, 0x00, 0x00]); // mov qword [rsp],0x41
     c.extend_from_slice(&[0x31, 0xFF, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80]);
+    c
+}
+
+/// Copy-on-write yazma testi: `COW_TEST_PAGE` sayfasını yazar ve okur.
+/// Fork sonrası sayfa salt-okunur + `PAGE_COW` olduğundan ``mov [rax], dl``
+/// #PF üretir; çekirdek sayfayı özel kopyaya dönüştürür ve komut yeniden
+/// yürütülür. Program SONRA `[COW_TEST_PAGE]`ı tekrar okur ve değeri
+/// exit kodu olarak döner: `exit(0x5A)` başarı, `exit(0)` başarısızdır.
+const COW_TEST_PAGE: u64 = 0x0000_0000_0060_8000; // DEMO_RESULT'ın 32 KiB üstü
+
+fn sched_prog_cow_writer() -> alloc::vec::Vec<u8> {
+    let mut c = alloc::vec::Vec::new();
+    c.extend_from_slice(&[0x48, 0xB8]); // movabs rax, COW_TEST_PAGE
+    c.extend_from_slice(&COW_TEST_PAGE.to_le_bytes());
+    c.extend_from_slice(&[0xB2, 0x5A]); // mov dl, 0x5A
+    c.extend_from_slice(&[0x88, 0x10]); // mov byte [rax], dl  (COW #PF → yeniden dene)
+                                        // 0F B6 /r = MOVZX r32, r/m8. ModRM 0x38 = mod00 reg111(edi) rm000(rax),
+                                        // yani `movzx edi, byte [rax]`. (0xF8 `movzx edi, al` olurdu ve yazilan
+                                        // baytin degerini degil AL'yi dondurur; test yanlislikla 0 ile sonlaniyordu.)
+    c.extend_from_slice(&[0x0F, 0xB6, 0x38]); // movzx edi, byte [rax]  (exit kodu)
+    c.extend_from_slice(&[0xB8, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80]); // exit(edi)
     c
 }
 
@@ -2231,5 +2487,181 @@ pub fn scheduler_self_test() -> bool {
     } else {
         " => BASARISIZ\n"
     });
-    ok && pass
+
+    let cow_ok = scheduler_cow_test();
+    ok && pass && cow_ok
+}
+
+/// Gerçek Ring3 copy-on-write sınavı: yazılabilir bir veri sayfası paylaşan
+/// ebeveyn ve `fork` çocuğu; çocuk sayfaya yazar, #PF → COW kopyası, yazma
+/// tekrar denenir ve exit kodu 0x5A ile döner. Ebeveyn sayfası değişmez.
+/// Ayrıca çocuk çıkışında paylaşım defterinin boşaldığı doğrulanır.
+fn scheduler_cow_test() -> bool {
+    let cow_before = COW_FAULTS.load(Ordering::Relaxed);
+    let parent_pid = {
+        let mut guard = crate::mm::lock_memory();
+        let memory = guard.get();
+        let parent = memory
+            .proc_mgr
+            .spawn(
+                "cow-parent",
+                USER_CODE_BASE,
+                USER_STACK_TOP - 16,
+                0,
+                None,
+                &mut memory.pmm,
+            )
+            .ok();
+        parent.filter(|pid| {
+            map_sched_image(
+                &mut memory.proc_mgr,
+                &mut memory.pmm,
+                *pid,
+                &sched_prog_cow_writer(),
+            ) && map_cow_test_page(&mut memory.proc_mgr, &mut memory.pmm, *pid)
+        })
+    };
+    let Some(parent_pid) = parent_pid else {
+        smp::print_locked("[COW-TEST] hazirlik => BASARISIZ\n");
+        return false;
+    };
+
+    let child_pid = {
+        let mut guard = crate::mm::lock_memory();
+        let memory = guard.get();
+        let child = memory
+            .proc_mgr
+            .fork_process(parent_pid, &mut memory.pmm)
+            .ok();
+        if let Some(child) = child {
+            // Fork sonrası iki taraf da salt-okunur + PAGE_COW olmalı.
+            let cow_flags = memory.proc_mgr.get_process(child).is_some_and(|p| {
+                p.address_space
+                    .read_entry(COW_TEST_PAGE)
+                    .is_some_and(|entry| {
+                        entry & crate::mm::process::PAGE_COW != 0
+                            && entry & PageFlags::WRITABLE == 0
+                    })
+            });
+            if cow_flags {
+                Some(child)
+            } else {
+                let _ = memory.proc_mgr.terminate(child, -1, &mut memory.pmm);
+                None
+            }
+        } else {
+            None
+        }
+    };
+    let Some(child_pid) = child_pid else {
+        let mut guard = crate::mm::lock_memory();
+        let memory = guard.get();
+        let _ = memory.proc_mgr.terminate(parent_pid, -1, &mut memory.pmm);
+        smp::print_locked("[COW-TEST] fork/COW isaretleme => BASARISIZ\n");
+        return false;
+    };
+
+    // Sadece çocuk çalışsın (ebeveyni Ready'de bırakıp askıya al).
+    {
+        let mut guard = crate::mm::lock_memory();
+        let memory = guard.get();
+        if let Some(parent) = memory.proc_mgr.get_process_mut(parent_pid) {
+            parent.state = crate::mm::process::ProcessState::Blocked;
+        }
+    }
+    for _ in 0..64 {
+        let pending = {
+            let mut guard = crate::mm::lock_memory();
+            let memory = guard.get();
+            memory
+                .proc_mgr
+                .get_process(child_pid)
+                .is_some_and(|p| p.state == crate::mm::process::ProcessState::Ready)
+        };
+        if !pending {
+            break;
+        }
+        schedule_user_processes();
+    }
+
+    let (child_exit, parent_ok, parent_frame) = {
+        let mut guard = crate::mm::lock_memory();
+        let memory = guard.get();
+        // Çocuk exit(0x5A) ile çıkmış olmalı (yazma başarılı).
+        let child_exit = memory
+            .proc_mgr
+            .get_process(child_pid)
+            .map(|p| p.exit_code)
+            .unwrap_or(-99);
+        // Ebeveyn sayfası aynı çerçevede, içerik 0 kalmalı (çocuğun yazması
+        // ebeveyne sızmamalı).
+        let (parent_ok, parent_frame) = match memory.proc_mgr.get_process(parent_pid) {
+            Some(parent) => {
+                let frame = parent.address_space.translate_user(COW_TEST_PAGE);
+                let untouched = frame.is_some_and(|frame| unsafe {
+                    core::ptr::read_volatile(crate::drivers::phys_to_virt(frame) as *const u8) == 0
+                });
+                (untouched, frame.unwrap_or(0))
+            }
+            None => (false, 0),
+        };
+        let _ = memory
+            .proc_mgr
+            .terminate(child_pid, child_exit, &mut memory.pmm);
+        let _ = memory.proc_mgr.terminate(parent_pid, 0, &mut memory.pmm);
+        memory.proc_mgr.reap_terminated(&mut memory.pmm);
+        (child_exit, parent_ok, parent_frame)
+    };
+
+    let cow_faults = COW_FAULTS
+        .load(Ordering::Relaxed)
+        .saturating_sub(cow_before);
+    let shared_drained = crate::mm::vmm::shared_frame_count() == 0;
+    let pass = child_exit == 0x5A && parent_ok && cow_faults >= 1 && shared_drained;
+    smp::print_locked("[COW-TEST] cocuk-exit=");
+    smp::print_locked_dec(child_exit as u64);
+    smp::print_locked(" (beklenen=90) cow-fault=");
+    smp::print_locked_dec(cow_faults);
+    smp::print_locked(" ebeveyn-korundu=");
+    smp::print_locked_dec(if parent_ok { 1 } else { 0 });
+    smp::print_locked(" paylasim-bosaltt=");
+    smp::print_locked_dec(if shared_drained { 1 } else { 0 });
+    smp::print_locked(" frame=");
+    smp::print_locked_hex(parent_frame);
+    smp::print_locked(if pass {
+        " => BASARILI\n"
+    } else {
+        " => BASARISIZ\n"
+    });
+    pass
+}
+
+/// COW sınavı için yazılabilir veri sayfasını süreç adres uzayına eşler.
+fn map_cow_test_page(
+    proc_mgr: &mut crate::mm::process::ProcessManager,
+    pmm: &mut crate::mm::pmm::PhysicalMemoryManager,
+    pid: usize,
+) -> bool {
+    let Some(p) = proc_mgr.get_process_mut(pid) else {
+        return false;
+    };
+    let Some(frame) = pmm.allocate_frame() else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(
+            crate::drivers::phys_to_virt(frame) as *mut u8,
+            0,
+            PAGE_SIZE as usize,
+        );
+    }
+    if p.address_space
+        .map_page(COW_TEST_PAGE, frame, PageFlags::USER_DATA, pmm)
+        .is_err()
+        || !p.resources.record_user_frame(frame)
+    {
+        pmm.free_frame(frame);
+        return false;
+    }
+    true
 }

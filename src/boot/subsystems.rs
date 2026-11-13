@@ -159,6 +159,11 @@ pub fn init_subsystems(
     // Süreç Yöneticisi ve Sistem Çağrılarının (syscalls) Başlatımı
     serial_print("[BOOT] Süreç yöneticisi başlatılıyor...\n");
     memory_mgr.proc_mgr.init_kernel_process();
+    // Syscall fd katmanı için VFS dosyalarını önbellekle (açılış anlık görüntüsü).
+    let cached_files = memory_mgr.proc_mgr.files.cache_vfs(&fs_mgr.vfs);
+    serial_print("[FD] VFS dosya önbelleği hazır: ");
+    crate::serial::print_dec(cached_files as u64);
+    serial_print(" dosya.\n");
     // Çekirdek CR3'ünü kaydet: kullanıcı→çekirdek trampoline'leri ve
     // zamanlayıcı CR3'ü buraya geri yükler.
     arch::x86_64::ring3::note_kernel_cr3(
@@ -210,6 +215,14 @@ pub fn init_subsystems(
 
     serial_print("[BOOT] Ring 3 izolasyon testleri çalıştırılıyor...\n");
     mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n");
+    mm::process::test_syscall_pointer_validation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n");
+    mm::process::test_user_memory(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n");
+    mm::process::test_file_descriptor_lifecycle(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n");
+    mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n");
     let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
     if !ring3_demo_ok {

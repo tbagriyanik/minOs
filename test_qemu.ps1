@@ -1,4 +1,4 @@
-# File: test_qemu.ps1
+﻿# File: test_qemu.ps1
 # minOs QEMU Entegrasyon ve Boot Dogrulama Testi (test_qemu.ps1)
 #
 # Bu betik:
@@ -608,6 +608,11 @@ $checks = @(
         Description = "PML4 haritalama, ceviri ve USER|WRITABLE|NX bayraklari"
     },
     @{
+        Name = "Sayfa Tablosu Geri Kazanimi (PT/PD/PDPT)";
+        Pattern = "\[MM-TEST\] 6\..*BASARILI";
+        Description = "Unmap sonrasi bosalan alt seviye tablo cercevelerinin PMM'e iadesi (sizintisiz)"
+    },
+    @{
         Name = "Gelismis Allocator (Bump & FSB)";
         Pattern = "\[ALLOC-TEST\] 3\..*BA";
         Description = "Tasma korumali align_up, bump LIFO ve FSB free-list yeniden kullanimi"
@@ -648,6 +653,11 @@ $checks = @(
         Description = "Kernel adresi erisimi reddi (SIGSEGV), kullanici yigin tasmasi ve yield/exit dogrulamasi"
     },
     @{
+        Name = "Cok Cekirdekli Scheduler Stres Testi";
+        Pattern = "\[SCHED-TEST\] Cok cekirdekli scheduler yarismasi testi: BASARILI";
+        Description = "CPU'lar arasi gorev dagilimi, notify/iptal yarisi ve kuyruk derinligi (RUN_QUEUE_DEPTH) sizinti denetimi"
+    },
+    @{
         Name = "Ring3 Syscall Register Restore";
         Pattern = "\[RING3\] GPR ve XMM yazmaclari syscall donusunde korundu: BASARILI";
         Description = "GPR ve XMM durumunun int 0x80 donusunde korunmasi"
@@ -670,7 +680,39 @@ $checks = @(
     @{
         Name = "Process Fork Exec Wait";
         Pattern = "\[PROC-TEST\].*fork/exec/wait yasam dongusu: BASARILI";
-        Description = "Fork sayfa kopyasi, exec imaj degisimi, bloklanan wait ve kaynak iadesi"
+        Description = "Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi"
+    },
+    @{
+        Name = "Kullanici Heap ve Mmap (brk/mmap)";
+        # Basari satirinin aciklama metni degistiginde de kalici olsun: belirleyici
+        # olan `[USER-MEM] ... BASARILI` sonekidir (BASARISIZ bu kalipla eslesmez).
+        Pattern = "\[USER-MEM\][^\r\n]*BASARILI";
+        Description = "brk buyut/kucult, mmap/munmap, MEMINFO (R10 ABI) ve sizintisiz iade"
+    },
+    @{
+        Name = "Dosya Taniticisi Yasam Dongusu";
+        Pattern = "\[FD-TEST\][^\r\n]*BASARILI";
+        Description = "open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi"
+    },
+    @{
+        Name = "Surec Kaynak Limitleri";
+        Pattern = "\[RLIMIT-TEST\][^\r\n]*BASARILI";
+        Description = "RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi"
+    },
+    @{
+        Name = "Copy-on-Write (Ring3 yazma hatasi)";
+        Pattern = "\[COW-TEST\].*cocuk-exit=90.*ebeveyn-korundu=1.*BASARILI";
+        Description = "Fork sonrasi #PF ile COW kopyasi; cocuk yazari ebeveyne sizmaz"
+    },
+    @{
+        Name = "ASLR (yigin + mmap tabani)";
+        Pattern = "\[ASLR\] yigin utu=";
+        Description = "Ring3 yigin ustu her demo/surecte rastgele kaydirilir; mmap tabani ASLR"
+    },
+    @{
+        Name = "Calisan Sistem Scheduler/Surec Izleme";
+        Pattern = "\[SCHED-STAT\] slices=\d+.*cow=\d+.*shared=\d+";
+        Description = "Calisan sistemde dilim sayaci, surec durumlari, heap/mmap ve COW sayaclari"
     }
 )
 

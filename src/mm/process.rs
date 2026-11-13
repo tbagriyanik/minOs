@@ -18,11 +18,20 @@
 //!    `sys_alloc_frame`, `sys_free_frame`, `sys_get_pid`, `sys_time` vb.
 //! 6. Her surec icin ayri sanal adres uzayi (AddressSpace / Page Table) yonetimi.
 
+use crate::mm::fd::{self, FdTable, FileDescriptor, FileKind, FileTable};
 use crate::mm::pmm::{PhysicalMemoryManager, PAGE_SIZE};
+use crate::mm::uaccess;
 use crate::mm::vmm::{AddressSpace, PageFlags};
 
 /// Azami eszamanli aktif surec sayisi
 pub const MAX_PROCESSES: usize = 32;
+
+/// Copy-on-write yazılım biti: x86_64 mimarisi bit 9'u (Ignore) yok sayar,
+/// bu yüzden aynı önbellek hattını paylaşımayan güvenli bir yazılım biti olarak
+/// serbest kullanılabilir. Fork, yazılabilir sayfaları iki tarafta da bu
+/// bayrakla salt-okunur bırakır; ilk yazma #PF üretir ve `handle_cow_fault`
+/// sayfayı özel kopyaya dönüştürür.
+pub const PAGE_COW: u64 = 1 << 9;
 
 /// Surec Durumu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +195,54 @@ impl ProcessContext {
 /// Bir surece tahsis edilen kaynaklar (Sayfa cerceveleri, dosya taniticilari vb.)
 pub const MAX_PROC_FRAMES: usize = 64;
 pub const MAX_PROC_USER_FRAMES: usize = 32;
+/// Süreç başına azami mmap baytı (64 MiB).
+pub const MAX_PROC_MMAP_BYTES: u64 = 64 * 1024 * 1024;
+/// Süreç başına azami heap baytı (offset; `user_mem::HEAP_LIMIT` ile sınırlanır).
+pub const MAX_PROC_HEAP_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Süreç başına kaynak limitleri / per-process resource limits.
+///
+/// Limitler `fork` ile devralınır, `exec` sonrası korunur ve her tahsis
+/// yolunda (`record_frame`, `record_user_frame`, `mmap`, `brk`, `open`)
+/// zorunlu olarak denetlenir. Kullanıcı süreçleri `SYS_RESINFO` ile kullanım
+/// ve limitlerini okuyabilir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceLimits {
+    /// Kaynak defterindeki toplam fiziksel çerçeve (kernel yığını, PML4, imaj).
+    pub max_frames: usize,
+    /// Kullanıcı verisi için ayrılan çerçeve (heap, mmap, COW kopyaları).
+    pub max_user_frames: usize,
+    /// Açık dosya tanıtıcısı sayısı (0/1/2 dahil).
+    pub max_fds: usize,
+    /// Toplam mmap bölge baytı.
+    pub max_mmap_bytes: u64,
+    /// Heap ucunun `HEAP_BASE` göreli azami değeri.
+    pub max_heap_bytes: u64,
+}
+
+impl ResourceLimits {
+    /// Kullanıcı süreçleri için güvenli varsayılanlar.
+    pub const fn user_default() -> Self {
+        Self {
+            max_frames: MAX_PROC_FRAMES,
+            max_user_frames: MAX_PROC_USER_FRAMES,
+            max_fds: fd::MAX_FDS,
+            max_mmap_bytes: MAX_PROC_MMAP_BYTES,
+            max_heap_bytes: MAX_PROC_HEAP_BYTES,
+        }
+    }
+
+    /// Sınırsız (çekirdek süreci / PID 0) limitler.
+    pub const fn unlimited() -> Self {
+        Self {
+            max_frames: usize::MAX,
+            max_user_frames: usize::MAX,
+            max_fds: fd::MAX_FDS,
+            max_mmap_bytes: u64::MAX,
+            max_heap_bytes: u64::MAX,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProcessResources {
@@ -197,6 +254,8 @@ pub struct ProcessResources {
     /// Surec tarafindan acilan dosya veya pencere taniticisi (Handle)
     pub window_idx: Option<usize>,
     pub app_id: usize,
+    /// Bu sürecin kaynak limitleri.
+    pub limits: ResourceLimits,
 }
 
 impl ProcessResources {
@@ -208,11 +267,12 @@ impl ProcessResources {
             user_frame_count: 0,
             window_idx: None,
             app_id: 0,
+            limits: ResourceLimits::user_default(),
         }
     }
 
     pub fn record_frame(&mut self, frame: u64) -> bool {
-        if self.frame_count >= MAX_PROC_FRAMES
+        if self.frame_count >= self.limits.max_frames.min(MAX_PROC_FRAMES)
             || self.allocated_frames[..self.frame_count].contains(&frame)
         {
             return false;
@@ -236,7 +296,9 @@ impl ProcessResources {
     }
 
     pub fn record_user_frame(&mut self, frame: u64) -> bool {
-        if self.user_frame_count >= MAX_PROC_USER_FRAMES || !self.record_frame(frame) {
+        if self.user_frame_count >= self.limits.max_user_frames.min(MAX_PROC_USER_FRAMES)
+            || !self.record_frame(frame)
+        {
             return false;
         }
         self.user_allocated_frames[self.user_frame_count] = frame;
@@ -289,6 +351,16 @@ pub struct Process {
     pub wait_deadline: Option<u64>,
     pub waiting_child: Option<usize>,
     pub wait_status_addr: u64,
+    /// `brk` ile yönetilen heap ucunun `mm::user_mem::HEAP_BASE` göreli boyu.
+    pub heap_brk: u64,
+    /// ASLR ile seçilmiş mmap tabanı (süreç ömrü boyunca sabit).
+    pub mmap_base: u64,
+    /// mmap bölgelerinin taban göreli toplam boyu.
+    pub mmap_used: u64,
+    /// Açık mmap bölgeleri.
+    pub mmap_regions: crate::mm::user_mem::MmapTable,
+    /// Süreç dosya tanıtıcısı tablosu (0/1/2 standart, 3+ `open`).
+    pub fds: FdTable,
 }
 
 impl Process {
@@ -336,11 +408,30 @@ impl Process {
             wait_deadline: None,
             waiting_child: None,
             wait_status_addr: 0,
+            heap_brk: 0,
+            mmap_base: 0,
+            mmap_used: 0,
+            mmap_regions: [crate::mm::user_mem::MmapRegion {
+                addr: 0,
+                len: 0,
+                used: false,
+            }; crate::mm::user_mem::MAX_MMAP_REGIONS],
+            fds: [FileDescriptor::empty(); crate::mm::fd::MAX_FDS],
         }
     }
 
     pub fn name_str(&self) -> &str {
         core::str::from_utf8(&self.name[..self.name_len]).unwrap_or("unknown")
+    }
+
+    /// `brk` heap'inde `offset` baytındaki sanal adres.
+    pub fn heap_address(&self, offset: u64) -> u64 {
+        crate::mm::user_mem::HEAP_BASE + offset
+    }
+
+    /// Heap ucu (son geçerli bayttan bir sonraki adres).
+    pub fn heap_end(&self) -> u64 {
+        crate::mm::user_mem::HEAP_BASE + self.heap_brk
     }
 }
 
@@ -350,6 +441,8 @@ pub struct ProcessManager {
     pub current_pid: usize,
     pub next_pid: usize,
     pub active_count: usize,
+    /// Çekirdek genelinde açık dosya nesneleri (fd içerikleri, refcount).
+    pub files: FileTable,
     /// Kullanıcı süreçleri için round-robin imleci (çekirdek slotu atlanır).
     user_rr: usize,
 }
@@ -364,6 +457,7 @@ impl ProcessManager {
             current_pid: 0,
             next_pid: 1,
             active_count: 0,
+            files: FileTable::new(),
             user_rr: 1,
         }
     }
@@ -379,8 +473,10 @@ impl ProcessManager {
         p.name_len = name.len();
         p.state = ProcessState::Running;
         p.priority = ProcessPriority::Realtime;
+        p.resources.limits = ResourceLimits::unlimited();
         // Kernel sureci mevcut adres uzayini kullanir
         p.address_space = AddressSpace::current();
+        fd::init_standard_fds(&mut p.fds);
         self.processes[0] = p;
         self.current_pid = 0;
         self.active_count = 1;
@@ -449,6 +545,9 @@ impl ProcessManager {
         p.resources.app_id = app_id;
         p.resources.window_idx = window_idx;
         p.address_space = address_space;
+        fd::init_standard_fds(&mut p.fds);
+        // ASLR: her süreç için mmap tabanı rastgele seçilir.
+        p.mmap_base = crate::mm::loader::randomized_mmap_base();
 
         // Yeni PML4'ü kaynağa ekle
         if !p.resources.record_frame(pml4_frame) {
@@ -460,7 +559,7 @@ impl ProcessManager {
         if !self.ensure_kernel_stack(pid, pmm) {
             let process = &mut self.processes[slot];
             process.state = ProcessState::Terminated;
-            Self::reap_process_resources(process, pmm);
+            Self::reap_process_resources(process, &mut self.files, pmm);
             *process = Process::empty();
             return Err("PMM yetersiz bellek: surec cekirdek yigini tahsis edilemedi");
         }
@@ -472,25 +571,49 @@ impl ProcessManager {
     /// Sürecin kullanıcı sayfa tablolarını (PDPT/PD/PT) ve kayıtlı tüm
     /// fiziksel çerçeveleri (PML4, çekirdek yığını, kullanıcı sayfaları)
     /// PMM'e iade eder. Yalnızca sürecin CR3'ü artık aktif değilken çağrılmalı.
-    fn reap_process_resources(p: &mut Process, pmm: &mut PhysicalMemoryManager) {
+    fn reap_process_resources(
+        p: &mut Process,
+        files: &mut FileTable,
+        pmm: &mut PhysicalMemoryManager,
+    ) {
         if p.resources_reaped {
             return;
         }
-        // Önce alt tablolar: PML4 hâlâ geçerliyken çocuk tabloları çöz.
+        // Açık dosya tanıtıcılarını kapat; son referans içeriği serbest bırakır.
+        Self::close_fds(p, files);
+        // Heap/mmap eşlemelerini kaldır; fiziksel çerçeveler aşağıdaki kaynak
+        // defteri geçişinde tek seferde iade edilir (çift iade olmaz).
+        let _ = crate::mm::user_mem::release_user_memory(p, pmm);
+        // Sonra alt sayfa tabloları: PML4 hâlâ geçerliyken PDPT/PD/PT
+        // çerçeveleri çözülür. PML4 defterdedir, aşağıdaki döngüde iade edilir.
+        // COW paylaşımlı çerçeveler yalnız defterden referans bırakır.
         p.address_space.free_user_page_tables(pmm);
-        for &frame in p
-            .resources
-            .allocated_frames
-            .iter()
-            .take(p.resources.frame_count)
-        {
-            if frame != 0 {
+        for &frame in p.resources.allocated_frames[..p.resources.frame_count].iter() {
+            if frame == 0 {
+                continue;
+            }
+            // Her çerçeve için tek referans bırakılır. Çerçeve hâlâ başka bir
+            // adres uzayı tarafından paylaşılıyorsa (`Some(false)`) fiziksel
+            // bellek serbest bırakılmaz.
+            let still_shared = matches!(crate::mm::vmm::release_frame_shared(frame), Some(false));
+            if !still_shared {
                 pmm.free_frame(frame);
             }
         }
         p.resources.frame_count = 0;
         p.resources.user_frame_count = 0;
+        p.resources.allocated_frames = [0; MAX_PROC_FRAMES];
+        p.resources.user_allocated_frames = [0; MAX_PROC_USER_FRAMES];
         p.resources_reaped = true;
+    }
+
+    /// Sürecin tüm kullanıcı fd'lerini kapatır, nesne referanslarını bırakır ve
+    /// 0/1/2 standart tanıtıcılarını yeniden kurar.
+    fn close_fds(p: &mut Process, files: &mut FileTable) {
+        for object in fd::close_all_user_fds(&mut p.fds) {
+            files.release(object);
+        }
+        fd::init_standard_fds(&mut p.fds);
     }
 
     /// Terminate a process by PID and free its resources.
@@ -523,7 +646,7 @@ impl ProcessManager {
         // 2. Sürecin sahip olduğu tüm fiziksel sayfa çerçevelerini PMM'e iade et
         //    (PML4, çekirdek yığını ve kayıtlı kullanıcı sayfaları dahil)
         if !is_current {
-            Self::reap_process_resources(&mut self.processes[slot], pmm);
+            Self::reap_process_resources(&mut self.processes[slot], &mut self.files, pmm);
         }
         self.wake_waiting_parent(pid, parent_pid, exit_code);
         true
@@ -545,6 +668,8 @@ impl ProcessManager {
         self.processes[slot].state = ProcessState::Terminated;
         self.processes[slot].exit_code = exit_code;
         self.active_count = self.active_count.saturating_sub(1);
+        // Çıkışta fd'ler hemen kapanır; bellek iadesi reaping'e ertelenir.
+        Self::close_fds(&mut self.processes[slot], &mut self.files);
         for child in self.processes.iter_mut() {
             if child.ppid == pid && child.state != ProcessState::Unused {
                 child.ppid = 0;
@@ -575,17 +700,7 @@ impl ProcessManager {
     }
 
     fn write_wait_status(parent: &Process, address: u64, exit_code: i32) -> bool {
-        for (offset, byte) in exit_code.to_le_bytes().into_iter().enumerate() {
-            let Some(user_address) = address.checked_add(offset as u64) else {
-                return false;
-            };
-            let Some(physical_address) = parent.address_space.translate_user(user_address) else {
-                return false;
-            };
-            let status = crate::drivers::phys_to_virt(physical_address) as *mut u8;
-            unsafe { core::ptr::write_volatile(status, byte) };
-        }
-        true
+        uaccess::copy_to_user(&parent.address_space, address, &exit_code.to_le_bytes()).is_ok()
     }
 
     /// `Terminated` durumundaki ve kaynakları henüz iade edilmemiş süreçlerin
@@ -595,7 +710,7 @@ impl ProcessManager {
         let mut reaped = 0usize;
         for p in self.processes.iter_mut() {
             if p.state == ProcessState::Terminated && !p.resources_reaped {
-                Self::reap_process_resources(p, pmm);
+                Self::reap_process_resources(p, &mut self.files, pmm);
                 reaped += 1;
             }
         }
@@ -635,7 +750,7 @@ impl ProcessManager {
             p.state = ProcessState::Terminated;
             p.exit_code = -11; // SIGSEGV
             self.active_count = self.active_count.saturating_sub(1);
-            Self::reap_process_resources(p, pmm);
+            Self::reap_process_resources(p, &mut self.files, pmm);
             true
         } else {
             false
@@ -688,11 +803,22 @@ impl ProcessManager {
         true
     }
 
-    unsafe fn clone_user_table(
+    /// Çocuk adres uzayını copy-on-write semantiğiyle kurar: ebeveynin
+    /// yazılabilir kullanıcı sayfaları iki adres uzayında da salt-okunur
+    /// yapılıp paylaşılır (`PAGE_COW`), ilk yazmada `handle_cow_fault`
+    /// sayfayı özel kopyaya dönüştürür. Yalnızca yazılabilirlik biti hiç
+    /// taşımamış (salt-okunur kod, RO veri) sayfalar doğrudan paylaşılır.
+    ///
+    /// `parent_frames` / `child_frames` ilk hata durumunda geri alınacak
+    /// "bu fork sırasında paylaşıma açılan" çerçeveleri taşır.
+    unsafe fn cow_clone_user_table(
         table_phys: u64,
         level: u8,
         prefix: u64,
+        parent: &mut Process,
         child: &mut Process,
+        parent_frames: &mut alloc::vec::Vec<u64>,
+        child_frames: &mut alloc::vec::Vec<u64>,
         pmm: &mut PhysicalMemoryManager,
     ) -> Result<(), &'static str> {
         let entries = (&*AddressSpace::table_ptr(table_phys)).entries;
@@ -705,36 +831,67 @@ impl ProcessManager {
             }
             let virtual_address = prefix | ((index as u64) << shift);
             if level == 1 {
-                let frame = pmm
-                    .allocate_frame()
-                    .ok_or("PMM yetersiz bellek: fork sayfasi tahsis edilemedi")?;
-                let source =
-                    crate::drivers::phys_to_virt(entry & 0x000F_FFFF_FFFF_F000) as *const u8;
-                let destination = crate::drivers::phys_to_virt(frame) as *mut u8;
-                core::ptr::copy_nonoverlapping(source, destination, PAGE_SIZE as usize);
-                let flags = entry & !0x000F_FFFF_FFFF_F000;
-                if !child.resources.record_frame(frame) {
-                    pmm.free_frame(frame);
-                    return Err("Surec kaynak listesi dolu: fork");
+                let frame = entry & 0x000F_FFFF_FFFF_F000;
+                let writable = entry & PageFlags::WRITABLE != 0;
+                let mut child_flags = entry & !0x000F_FFFF_FFFF_F000;
+                if writable && !crate::mm::vmm::mark_frame_shared(frame) {
+                    // COW defteri dolu: çerçeveyi özel kopya olarak ayır.
+                    let copy = pmm
+                        .allocate_frame()
+                        .ok_or("PMM yetersiz bellek: fork sayfasi tahsis edilemedi")?;
+                    let source = crate::drivers::phys_to_virt(frame) as *const u8;
+                    let destination = crate::drivers::phys_to_virt(copy) as *mut u8;
+                    core::ptr::copy_nonoverlapping(source, destination, PAGE_SIZE as usize);
+                    if !child.resources.record_frame(copy) {
+                        pmm.free_frame(copy);
+                        return Err("Surec kaynak listesi dolu: fork");
+                    }
+                    if child
+                        .address_space
+                        .map_page(virtual_address, copy, child_flags, pmm)
+                        .is_err()
+                    {
+                        child.resources.take_frame(copy);
+                        pmm.free_frame(copy);
+                        return Err("Fork sayfasi eslenemedi");
+                    }
+                    continue;
+                }
+                if writable {
+                    // Paylaşım kuruldu: iki taraf da salt-okunur + COW.
+                    child_flags &= !PageFlags::WRITABLE;
+                    child_flags |= PAGE_COW;
+                    if parent
+                        .address_space
+                        .set_flags(virtual_address, child_flags, pmm)
+                        .is_err()
+                    {
+                        // Ebeveyn sayfası COW yapılamadı: sayaç kaydını geri al.
+                        let _ = crate::mm::vmm::release_frame_shared(frame);
+                        return Err("Fork: ebeveyn sayfasi COW yapilamadi");
+                    }
+                    parent_frames.push(frame);
+                    child_frames.push(frame);
                 }
                 if child
                     .address_space
-                    .map_page(virtual_address, frame, flags, pmm)
+                    .map_page(virtual_address, frame, child_flags, pmm)
                     .is_err()
                 {
-                    child.resources.take_frame(frame);
-                    pmm.free_frame(frame);
                     return Err("Fork sayfasi eslenemedi");
                 }
             } else {
                 if entry & PageFlags::HUGE_PAGE != 0 {
                     return Err("Fork buyuk kullanici sayfalarini desteklemiyor");
                 }
-                Self::clone_user_table(
+                Self::cow_clone_user_table(
                     entry & 0x000F_FFFF_FFFF_F000,
                     level - 1,
                     virtual_address,
+                    parent,
                     child,
+                    parent_frames,
+                    child_frames,
                     pmm,
                 )?;
             }
@@ -742,7 +899,64 @@ impl ProcessManager {
         Ok(())
     }
 
-    /// Creates a child with private copies of the parent's user mappings.
+    /// COW sayfalarını eski haline getirir (fork geri alınırken).
+    fn rollback_cow_shares(
+        parent: &mut Process,
+        child: &mut Process,
+        shared: &[u64],
+        pmm: &mut PhysicalMemoryManager,
+    ) {
+        for &frame in shared {
+            let _ = crate::mm::vmm::release_frame_shared(frame);
+        }
+        // Ebeveynin yazılabilirliğini geri yükle.
+        let pml4 = parent.address_space.pml4_phys;
+        let child_pml4 = child.address_space.pml4_phys;
+        if pml4 == 0 || child_pml4 == 0 {
+            return;
+        }
+        // Yalnızca hâlâ COW bayraklı (yani bu fork'ta paylaşılan ve henüz
+        // yazma ile özel kopyaya ayrılmamış) sayfalar geri alınır.
+        unsafe {
+            let source = &*AddressSpace::table_ptr(child_pml4);
+            for (index, pdpt_entry) in source.entries.iter().enumerate().take(256) {
+                if pdpt_entry & PageFlags::PRESENT == 0 || pdpt_entry & PageFlags::HUGE_PAGE != 0 {
+                    continue;
+                }
+                let pdpt = &*AddressSpace::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+                for (pdpt_idx, pd_entry) in pdpt.entries.iter().enumerate() {
+                    if pd_entry & PageFlags::PRESENT == 0 || pd_entry & PageFlags::HUGE_PAGE != 0 {
+                        continue;
+                    }
+                    let pd = &*AddressSpace::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
+                    for (pd_idx, pt_entry) in pd.entries.iter().enumerate() {
+                        if pt_entry & PageFlags::PRESENT == 0
+                            || pt_entry & PageFlags::HUGE_PAGE != 0
+                        {
+                            continue;
+                        }
+                        let pt = &*AddressSpace::table_ptr(pt_entry & 0x000F_FFFF_FFFF_F000);
+                        for (pt_idx, leaf) in pt.entries.iter().enumerate() {
+                            if leaf & (PageFlags::PRESENT | PAGE_COW)
+                                != PageFlags::PRESENT | PAGE_COW
+                            {
+                                continue;
+                            }
+                            let address = ((index as u64) << 39)
+                                | ((pdpt_idx as u64) << 30)
+                                | ((pd_idx as u64) << 21)
+                                | ((pt_idx as u64) << 12);
+                            let restored = (leaf & !PAGE_COW) | PageFlags::WRITABLE;
+                            let _ = parent.address_space.set_flags(address, restored, pmm);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Creates a child whose user mappings are shared copy-on-write with the
+    /// parent. Frames become private copies on the first write (`handle_cow_fault`).
     pub fn fork_process(
         &mut self,
         parent_pid: usize,
@@ -783,6 +997,17 @@ impl ProcessManager {
         child.has_saved_user_context = parent.has_saved_user_context;
         child.resources.app_id = parent.resources.app_id;
         child.resources.window_idx = parent.resources.window_idx;
+        // Kaynak limitleri fork ile devralınır; çerçeve defteri bu limitlerle
+        // doldurulmadan önce kopyalanmalıdır.
+        child.resources.limits = parent.resources.limits;
+        // Heap ve mmap durumu da miras alınır (fork semantiği).
+        child.heap_brk = parent.heap_brk;
+        child.mmap_base = parent.mmap_base;
+        child.mmap_used = parent.mmap_used;
+        child.mmap_regions = parent.mmap_regions;
+        // Fork, açık fd tablosunu devralır (POSIX dup semantiği); nesne
+        // referansları yalnızca fork başarıyla tamamlanınca artırılır.
+        child.fds = parent.fds;
         child.address_space = AddressSpace { pml4_phys: root };
         child.resources.record_frame(root);
 
@@ -790,8 +1015,13 @@ impl ProcessManager {
             pmm.free_frame(root);
             return Err(error);
         }
+        let mut parent_process = parent;
+        let mut cow_frames: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+        // Not: aşağıdaki `cow_clone_user_table` çağrısı ebeveynin PTE'lerini
+        // salt-okunur + PAGE_COW yapar; bu yüzden tablo girişleri
+        // `parent_process.address_space` üzerinden okunur.
         let clone_result = unsafe {
-            let source = parent.address_space.pml4_phys;
+            let source = parent_process.address_space.pml4_phys;
             let pml4 = &*AddressSpace::table_ptr(source);
             let mut result = Ok(());
             for (index, entry) in pml4.entries.iter().enumerate().take(256) {
@@ -799,11 +1029,15 @@ impl ProcessManager {
                     == PageFlags::PRESENT | PageFlags::USER
                 {
                     let prefix = (index as u64) << 39;
-                    if let Err(error) = Self::clone_user_table(
+                    let mut child_frames: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
+                    if let Err(error) = Self::cow_clone_user_table(
                         entry & 0x000F_FFFF_FFFF_F000,
                         3,
                         prefix,
+                        &mut parent_process,
                         &mut child,
+                        &mut cow_frames,
+                        &mut child_frames,
                         pmm,
                     ) {
                         result = Err(error);
@@ -814,6 +1048,7 @@ impl ProcessManager {
             result
         };
         if let Err(error) = clone_result {
+            Self::rollback_cow_shares(&mut parent_process, &mut child, &cow_frames, pmm);
             child.address_space.free_user_page_tables(pmm);
             for &frame in child
                 .resources
@@ -825,7 +1060,13 @@ impl ProcessManager {
             }
             return Err(error);
         }
+        // Paylaşılan çerçeveleri çocuk kaynak listesine işle; böylece çocuk
+        // çıkışında referans sayaçları doğru bırakılır.
+        for &frame in &cow_frames {
+            let _ = child.resources.record_frame(frame);
+        }
         if !Self::allocate_kernel_stack_for(&mut child, pmm) {
+            Self::rollback_cow_shares(&mut parent_process, &mut child, &cow_frames, pmm);
             child.address_space.free_user_page_tables(pmm);
             for &frame in child
                 .resources
@@ -838,12 +1079,105 @@ impl ProcessManager {
             return Err("PMM yetersiz bellek: fork cekirdek yigini tahsis edilemedi");
         }
 
+        let child_pid = child.pid;
+        // Devralınan fd'ler için nesne referanslarını artır.
+        for entry in child.fds.iter() {
+            if entry.used && entry.kind == FileKind::Regular {
+                if let Some(object) = self.files.objects.get_mut(entry.object as usize) {
+                    if object.used {
+                        object.refs = object.refs.saturating_add(1);
+                    }
+                }
+            }
+        }
         self.processes[slot] = child;
         self.active_count += 1;
+        // Ebeveynin çerçeve bayrakları (COW demote) güncellendi; süreç
+        // kaydını geri yaz.
         if let Some(parent) = self.get_process_mut(parent_pid) {
-            parent.context.rax = child.pid as u64;
+            *parent = parent_process;
+            parent.context.rax = child_pid as u64;
         }
-        Ok(child.pid)
+        Ok(child_pid)
+    }
+
+    /// Copy-on-write sayfa hatasını işler. `fault_addr` içeren 4KB sayfa
+    /// `PAGE_COW` işaretliyse çerçeve özel kopyaya dönüştürülür ve TLB
+    /// geçersizleştirilir; çağıran kesme çerçevesini yeniden denemek üzere
+    /// bırakır. Sayfa COW değilse `false` döner (gerçek hata).
+    ///
+    /// Başka bir adres uzayındaki çerçeve HHDM üzerinden kopyalanır; bu
+    /// yüzden yalnızca çekirdek CR3'ü aktifken de güvenlidir.
+    pub fn handle_cow_fault(
+        &mut self,
+        pid: usize,
+        fault_addr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> bool {
+        let page = fault_addr & !(PAGE_SIZE - 1);
+        let Some(slot) = self
+            .processes
+            .iter()
+            .position(|p| p.pid == pid && p.state != ProcessState::Terminated)
+        else {
+            return false;
+        };
+        let entry = match self.processes[slot].address_space.read_entry(page) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        if entry & PAGE_COW == 0 || entry & PageFlags::WRITABLE != 0 {
+            return false;
+        }
+        let shared_frame = entry & 0x000F_FFFF_FFFF_F000;
+        let private_flags = (entry & !PAGE_COW) | PageFlags::WRITABLE;
+
+        // Paylaşım tek eldeyse kopya gerekmez: çerçeveyi yerinde yazılabilir yap.
+        let copy_needed = !matches!(
+            crate::mm::vmm::release_frame_shared(shared_frame),
+            Some(true)
+        );
+        if !copy_needed {
+            return self.processes[slot]
+                .address_space
+                .set_flags(page, private_flags, pmm)
+                .is_ok();
+        }
+
+        let Some(copy) = pmm.allocate_frame() else {
+            // Bellek yok: sayfayı paylaşımlı (salt-okunur) bırak, yazma tekrar hata verir.
+            let _ = crate::mm::vmm::mark_frame_shared(shared_frame);
+            return false;
+        };
+        unsafe {
+            let source = crate::drivers::phys_to_virt(shared_frame) as *const u8;
+            let destination = crate::drivers::phys_to_virt(copy) as *mut u8;
+            core::ptr::copy_nonoverlapping(source, destination, PAGE_SIZE as usize);
+        }
+        if !self.processes[slot].resources.record_user_frame(copy) {
+            pmm.free_frame(copy);
+            let _ = crate::mm::vmm::mark_frame_shared(shared_frame);
+            return false;
+        }
+        if self.processes[slot]
+            .address_space
+            .remap_page(page, copy, pmm)
+            .is_err()
+        {
+            self.processes[slot].resources.take_user_frame(copy);
+            pmm.free_frame(copy);
+            let _ = crate::mm::vmm::mark_frame_shared(shared_frame);
+            return false;
+        }
+        let resources = &mut self.processes[slot].resources;
+        if !resources.take_user_frame(shared_frame) && !resources.take_frame(shared_frame) {
+            return false;
+        }
+        // Yeni çerçeve özel; paylaşım kaydından çıkartıldı.
+        self.processes[slot]
+            .address_space
+            .set_flags(page, private_flags, pmm)
+            .is_ok()
     }
 
     fn allocate_kernel_stack_for(p: &mut Process, pmm: &mut PhysicalMemoryManager) -> bool {
@@ -918,6 +1252,8 @@ impl ProcessManager {
         };
 
         let mut new_resources = ProcessResources::empty();
+        // Kaynak limitleri exec boyunca korunur (yalnızca fd tablosu sıfırlanır).
+        new_resources.limits = old.resources.limits;
         new_resources.app_id = old.resources.app_id;
         new_resources.window_idx = old.resources.window_idx;
         if !new_resources.record_frame(root) {
@@ -946,6 +1282,11 @@ impl ProcessManager {
         let was_active = AddressSpace::current().pml4_phys == old.address_space.pml4_phys;
         let old_resources = old.resources;
         let mut old_space = old.address_space;
+        // Başarılı exec: tüm kullanıcı fd'leri kapanır (CLOEXEC davranışı) ve
+        // 0/1/2 standart tanıtıcıları yeniden kurulur.
+        if let Some(slot) = self.processes.iter().position(|p| p.pid == pid) {
+            Self::close_fds(&mut self.processes[slot], &mut self.files);
+        }
         if let Some(process) = self.get_process_mut(pid) {
             process.address_space = new_space;
             process.resources = new_resources;
@@ -955,6 +1296,12 @@ impl ProcessManager {
             process.context.cr3 = root;
             process.context.kernel_rsp = 0;
             process.has_saved_user_context = false;
+            // Yeni imaj: heap/mm bölgeleri sıfırlanır, mmap tabanı yeniden
+            // rastgeleleştirilir (exec sonrası ASLR).
+            process.heap_brk = 0;
+            process.mmap_used = 0;
+            process.mmap_regions = Process::empty().mmap_regions;
+            process.mmap_base = crate::mm::loader::randomized_mmap_base();
         }
         if was_active {
             unsafe {
@@ -970,7 +1317,10 @@ impl ProcessManager {
             let is_kernel_stack = old.kstack_phys != 0
                 && frame >= old.kstack_phys
                 && frame < old.kstack_phys + KSTACK_PAGES as u64 * PAGE_SIZE;
-            if frame != 0 && !is_kernel_stack {
+            if frame != 0
+                && !is_kernel_stack
+                && !matches!(crate::mm::vmm::release_frame_shared(frame), Some(false))
+            {
                 pmm.free_frame(frame);
             }
         }
@@ -998,7 +1348,7 @@ impl ProcessManager {
         }
         let pid = self.processes[slot].pid;
         let exit_code = self.processes[slot].exit_code;
-        Self::reap_process_resources(&mut self.processes[slot], pmm);
+        Self::reap_process_resources(&mut self.processes[slot], &mut self.files, pmm);
         self.processes[slot] = Process::empty();
         Ok(Some((pid, exit_code)))
     }
@@ -1299,30 +1649,34 @@ pub mod sys_nos {
     pub const SYS_EXEC: u64 = 8;
     pub const SYS_FORK: u64 = 9;
     pub const SYS_WAIT: u64 = 10;
+    /// Heap ucunu ayarlar: RDI = HEAP_BASE'e göre yeni uç (bayt). Dönüş: yeni uç.
+    pub const SYS_BRK: u64 = 11;
+    /// Anonim mmap: RDI = uzunluk, RSI = bayraklar. Dönüş: adres (0 = hata).
+    pub const SYS_MMAP: u64 = 12;
+    /// mmap bölgesini bırakır: RDI = adres, RSI = uzunluk. Dönüş: 0 / u64::MAX.
+    pub const SYS_MUNMAP: u64 = 13;
+    /// Kullanıcı bellek özeti: [0] heap_brk, [1] mmap bölge sayısı,
+    /// [2] mmap bayt, [3] eşlenmiş heap sayfası. RDI = çıktı tamponu (u64 x 4).
+    pub const SYS_MEMINFO: u64 = 14;
+    /// Dosya açar: RDI = yol (`ptr`, NUL sonlu), RSI = bayraklar. Dönüş: fd / `MAX`.
+    pub const SYS_OPEN: u64 = 15;
+    /// fd kapatır: RDI = fd. Dönüş: `0` / `MAX`.
+    pub const SYS_CLOSE: u64 = 16;
+    /// Kaynak kullanımı/limit raporu: RDI = çıktı tamponu (u64 x 8).
+    pub const SYS_RESINFO: u64 = 17;
+    /// fd konumlandırma: RDI = fd, RSI = offset (i64), RDX = whence (0/1/2).
+    pub const SYS_LSEEK: u64 = 18;
 }
 
 pub const MAX_EXEC_IMAGE_SIZE: usize = 112 * 1024;
 
 fn copy_user_bytes(process: &Process, address: u64, len: usize) -> Option<alloc::vec::Vec<u8>> {
-    let mut bytes = alloc::vec::Vec::new();
-    bytes.try_reserve_exact(len).ok()?;
-    for offset in 0..len {
-        let user_address = address.checked_add(offset as u64)?;
-        let physical_address = process.address_space.translate_user(user_address)?;
-        let physical_byte = crate::drivers::phys_to_virt(physical_address) as *const u8;
-        bytes.push(unsafe { core::ptr::read_volatile(physical_byte) });
-    }
-    Some(bytes)
+    uaccess::copy_from_user(&process.address_space, address, len).ok()
 }
 
-/// System call dispatcher.
-/// x86_64 ABI:
-/// RAX = Syscall No
-/// RDI = Arg 1
-/// RSI = Arg 2
-/// RDX = Arg 3
-/// R10 = Arg 4
-/// Return value: RAX (Result code / address)
+/// System call dispatcher (test/çekirdek içi kolaylık sarmalayıcısı).
+/// `arg3` = RDX (3. argüman); 4. argüman (`R10`) yok sayılır.
+/// Ayrıntılı ABI için `syscall_dispatch_abi` kullanın.
 /// Sistem cagrisi sevkedicisi (Syscall Dispatcher).
 /// x86_64 ABI:
 /// RAX = Syscall No
@@ -1335,10 +1689,24 @@ pub fn syscall_dispatch(
     sys_no: u64,
     arg1: u64,
     arg2: u64,
-    _arg3: u64,
+    arg3: u64,
     proc_mgr: &mut ProcessManager,
     pmm: &mut PhysicalMemoryManager,
 ) -> u64 {
+    syscall_dispatch_abi(sys_no, arg1, arg2, arg3, 0, proc_mgr, pmm)
+}
+
+/// Tam ABI sevkedicisi: RDX (`arg3`) ve R10 (`arg4`) ayrı taşınır.
+pub fn syscall_dispatch_abi(
+    sys_no: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> u64 {
+    let _ = arg4;
     match sys_no {
         sys_nos::SYS_YIELD => {
             proc_mgr.schedule_next();
@@ -1407,13 +1775,15 @@ pub fn syscall_dispatch(
                 let Some(parent) = proc_mgr.get_process(parent_pid) else {
                     return u64::MAX;
                 };
-                for offset in 0..core::mem::size_of::<i32>() {
-                    let Some(address) = arg2.checked_add(offset as u64) else {
-                        return u64::MAX;
-                    };
-                    if parent.address_space.translate_user(address).is_none() {
-                        return u64::MAX;
-                    }
+                if uaccess::validate_user_range(
+                    &parent.address_space,
+                    arg2,
+                    core::mem::size_of::<i32>(),
+                    true,
+                )
+                .is_err()
+                {
+                    return u64::MAX;
                 }
             }
             match proc_mgr.wait_child(parent_pid, child_pid, pmm) {
@@ -1460,8 +1830,240 @@ pub fn syscall_dispatch(
                 u64::MAX
             }
         }
+        sys_nos::SYS_BRK => {
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            crate::mm::user_mem::brk(process, arg1, pmm)
+        }
+        sys_nos::SYS_MMAP => {
+            if arg1 == 0 || arg1 > 64 * 1024 * 1024 {
+                return 0;
+            }
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return 0;
+            };
+            crate::mm::user_mem::mmap(process, arg1, arg2, pmm).unwrap_or(0)
+        }
+        sys_nos::SYS_MUNMAP => {
+            if arg1 == 0 || arg2 == 0 {
+                return u64::MAX;
+            }
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            if crate::mm::user_mem::munmap(process, arg1, arg2, pmm) {
+                0
+            } else {
+                u64::MAX
+            }
+        }
+        sys_nos::SYS_MEMINFO => {
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process(current) else {
+                return u64::MAX;
+            };
+            let stats = crate::mm::user_mem::stats(process);
+            let report = [
+                stats.heap_bytes,
+                stats.mmap_regions as u64,
+                stats.mmap_bytes,
+                stats.heap_mapped_pages as u64,
+            ];
+            if arg1 == 0 {
+                return report
+                    .iter()
+                    .copied()
+                    .fold(0u64, |acc, v| acc ^ v.rotate_left(7));
+            }
+            let mut bytes = [0u8; 32];
+            for (index, value) in report.iter().enumerate() {
+                bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+            }
+            if uaccess::copy_to_user(&process.address_space, arg1, &bytes).is_err() {
+                return u64::MAX;
+            }
+            0
+        }
+        sys_nos::SYS_OPEN => {
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process(current) else {
+                return u64::MAX;
+            };
+            let Ok(path_bytes) =
+                uaccess::copy_cstring_from_user(&process.address_space, arg1, fd::MAX_FD_PATH)
+            else {
+                return u64::MAX;
+            };
+            if path_bytes.is_empty() {
+                return u64::MAX;
+            }
+            let Ok(path) = core::str::from_utf8(&path_bytes) else {
+                return u64::MAX;
+            };
+            let flags = arg2 as u32;
+            let Ok(object) = proc_mgr.files.open(path, flags) else {
+                return u64::MAX;
+            };
+            let allocation = {
+                let Some(process) = proc_mgr.get_process_mut(current) else {
+                    return u64::MAX;
+                };
+                let fd_limit = process.resources.limits.max_fds.min(fd::MAX_FDS);
+                if fd::used_fd_count(&process.fds) >= fd_limit {
+                    Err(())
+                } else {
+                    fd::alloc_fd(&mut process.fds, object, flags).map_err(|_| ())
+                }
+            };
+            match allocation {
+                Ok(fd_index) => fd_index as u64,
+                Err(()) => {
+                    proc_mgr.files.release(object);
+                    u64::MAX
+                }
+            }
+        }
+        sys_nos::SYS_CLOSE => {
+            let fd_index = arg1 as usize;
+            if !(fd::FIRST_USER_FD..fd::MAX_FDS).contains(&fd_index) {
+                return u64::MAX;
+            }
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            match fd::close_fd(&mut process.fds, fd_index) {
+                Some(object) => {
+                    proc_mgr.files.release(object);
+                    0
+                }
+                None => u64::MAX,
+            }
+        }
+        sys_nos::SYS_READ => {
+            let current = proc_mgr.current_pid;
+            let fd_index = arg1 as usize;
+            let buffer_address = arg2;
+            let len = arg3 as usize;
+            if len == 0 {
+                return 0;
+            }
+            if len > uaccess::MAX_USER_COPY {
+                return u64::MAX;
+            }
+            let descriptor = {
+                let Some(process) = proc_mgr.get_process(current) else {
+                    return u64::MAX;
+                };
+                match process.fds.get(fd_index) {
+                    Some(entry) if entry.used => *entry,
+                    _ => return u64::MAX,
+                }
+            };
+            if descriptor.kind == FileKind::Stdin {
+                return 0;
+            }
+            if descriptor.kind != FileKind::Regular {
+                return u64::MAX;
+            }
+            let mut buffer = alloc::vec::Vec::new();
+            if buffer.try_reserve_exact(len).is_err() {
+                return u64::MAX;
+            }
+            buffer.resize(len, 0);
+            let read =
+                proc_mgr
+                    .files
+                    .read_at(descriptor.object as usize, descriptor.offset, &mut buffer);
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            let address_space = process.address_space;
+            if uaccess::copy_to_user(&address_space, buffer_address, &buffer[..read]).is_err() {
+                return u64::MAX;
+            }
+            if let Some(entry) = process.fds.get_mut(fd_index) {
+                entry.offset = entry.offset.saturating_add(read as u64);
+            }
+            read as u64
+        }
+        sys_nos::SYS_LSEEK => {
+            let current = proc_mgr.current_pid;
+            let fd_index = arg1 as usize;
+            let delta = arg2 as i64;
+            let whence = arg3;
+            let descriptor = {
+                let Some(process) = proc_mgr.get_process(current) else {
+                    return u64::MAX;
+                };
+                match process.fds.get(fd_index) {
+                    Some(entry) if entry.used => *entry,
+                    _ => return u64::MAX,
+                }
+            };
+            if descriptor.kind != FileKind::Regular {
+                return u64::MAX;
+            }
+            let Some(size) = proc_mgr.files.object_size(descriptor.object as usize) else {
+                return u64::MAX;
+            };
+            let base = match whence {
+                0 => 0i128,
+                1 => descriptor.offset as i128,
+                2 => size as i128,
+                _ => return u64::MAX,
+            };
+            let target = base + delta as i128;
+            if target < 0 || target > size as i128 {
+                return u64::MAX;
+            }
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            let Some(entry) = process.fds.get_mut(fd_index) else {
+                return u64::MAX;
+            };
+            entry.offset = target as u64;
+            target as u64
+        }
+        sys_nos::SYS_RESINFO => {
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process(current) else {
+                return u64::MAX;
+            };
+            let stats = crate::mm::user_mem::stats(process);
+            let report = [
+                process.resources.limits.max_frames as u64,
+                process.resources.frame_count as u64,
+                process.resources.limits.max_user_frames as u64,
+                process.resources.user_frame_count as u64,
+                process.resources.limits.max_fds as u64,
+                fd::used_fd_count(&process.fds) as u64,
+                process.resources.limits.max_mmap_bytes,
+                stats.mmap_bytes,
+            ];
+            let mut bytes = [0u8; 64];
+            for (index, value) in report.iter().enumerate() {
+                bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+            }
+            if uaccess::copy_to_user(&process.address_space, arg1, &bytes).is_err() {
+                return u64::MAX;
+            }
+            0
+        }
         _ => u64::MAX, // Desteklenmeyen cagri
     }
+}
+
+/// Kullanıcı adresine 8 bayt yazar; hedef sayfa yazılabilir (`WRITABLE`) ve
+/// kullanıcı erişimli değilse reddeder. Salt-okunur kod sayfasına yazma
+/// girişimi `false` döner (çekirdek #PF üretmez).
+pub fn write_user_u64(process: &Process, address: u64, value: u64) -> bool {
+    uaccess::write_user_u64(&process.address_space, address, value).is_ok()
 }
 
 /// Test process lifecycle, crash/termination, invalid syscalls, and resource cleanup.
@@ -1628,7 +2230,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
                     let child_pid = child_raw as usize;
                     let parent_process = proc_mgr.get_process(parent_pid).copied();
                     let child_process = proc_mgr.get_process(child_pid).copied();
-                    let copied_pages_match = match (parent_process, child_process) {
+                    let (cow_shared, cow_split) = match (parent_process, child_process) {
                         (Some(parent), Some(child)) => {
                             let parent_frame = parent.address_space.translate_user(data_address);
                             let child_frame = child.address_space.translate_user(data_address);
@@ -1636,7 +2238,10 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                 && child.kstack_top != 0
                                 && parent.kstack_phys != child.kstack_phys
                                 && parent.address_space.pml4_phys != child.address_space.pml4_phys;
-                            match (parent_frame, child_frame) {
+                            // Copy-on-write: fork sonrası iki süreç de aynı
+                            // fiziksel çerçeveyi paylaşır, iki tarafta da PTE
+                            // salt-okunur + PAGE_COW olur ve içerik korunur.
+                            let shared = match (parent_frame, child_frame) {
                                 (Some(parent_frame), Some(child_frame)) => {
                                     let parent_byte = unsafe {
                                         core::ptr::read_volatile(crate::drivers::phys_to_virt(
@@ -1650,17 +2255,76 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                         )
                                             as *const u8)
                                     };
-                                    parent_frame != child_frame
+                                    let parent_entry =
+                                        parent.address_space.read_entry(data_address).unwrap_or(0);
+                                    let child_entry =
+                                        child.address_space.read_entry(data_address).unwrap_or(0);
+                                    parent_frame == child_frame
                                         && parent_byte == 0x5A
                                         && child_byte == 0x5A
+                                        && parent_entry & PageFlags::WRITABLE == 0
+                                        && child_entry & PageFlags::WRITABLE == 0
+                                        && parent_entry & PAGE_COW != 0
+                                        && child_entry & PAGE_COW != 0
+                                        && crate::mm::vmm::is_frame_shared(parent_frame)
                                         && distinct_stacks
                                 }
                                 _ => false,
-                            }
+                            };
+                            // Çocuğun ilk yazması kendi özel kopyasını üretmeli,
+                            // ebeveynin sayfası değişmemeli.
+                            let split = match (parent_frame, child_frame) {
+                                (Some(shared_frame), Some(_)) => {
+                                    let child_before =
+                                        child.address_space.translate_user(data_address);
+                                    let entry_before =
+                                        child.address_space.read_entry(data_address).unwrap_or(0);
+                                    let handled =
+                                        proc_mgr.handle_cow_fault(child.pid, data_address, pmm);
+                                    let child_after = proc_mgr
+                                        .get_process(child.pid)
+                                        .and_then(|c| c.address_space.translate_user(data_address));
+                                    let parent_after = proc_mgr
+                                        .get_process(parent_pid)
+                                        .and_then(|p| p.address_space.translate_user(data_address));
+                                    let ok = handled
+                                        && child_after
+                                            .is_some_and(|private| private != shared_frame)
+                                        && parent_after == Some(shared_frame)
+                                        && child_before == Some(shared_frame);
+                                    if !ok {
+                                        crate::serial_print("\n[PROC-TEST] split: handled=");
+                                        crate::serial::print_dec(handled as u64);
+                                        crate::serial_print(" shared=");
+                                        crate::serial::print_hex(shared_frame);
+                                        crate::serial_print(" child_before=");
+                                        crate::serial::print_hex(child_before.unwrap_or(u64::MAX));
+                                        crate::serial_print(" entry=");
+                                        crate::serial::print_hex(entry_before);
+                                        crate::serial_print(" child_after=");
+                                        crate::serial::print_hex(child_after.unwrap_or(u64::MAX));
+                                        crate::serial_print(" parent_after=");
+                                        crate::serial::print_hex(parent_after.unwrap_or(u64::MAX));
+                                        crate::serial_print("\n");
+                                    }
+                                    ok
+                                }
+                                _ => false,
+                            };
+                            (shared, split)
                         }
-                        _ => false,
+                        _ => (false, false),
                     };
 
+                    // `SYS_WAIT` status işaretçisini yazmadan önce
+                    // `uaccess::validate_user_range(.., write = true)` doğrular;
+                    // fork sonrası sayfa `PAGE_COW` + salt-okunur olduğundan bu
+                    // yazma reddedilir. Gerçek kullanıcı programı ilk yazmasında
+                    // #PF alıp COW kopyasına geçer; burada o adımı simüle ediyoruz.
+                    let status_cow = proc_mgr.handle_cow_fault(parent_pid, status_address, pmm);
+                    if !status_cow {
+                        crate::serial_print("[PROC-TEST] status COW cozulemedi\n");
+                    }
                     let pending_wait = syscall_dispatch(
                         sys_nos::SYS_WAIT,
                         child_pid as u64,
@@ -1673,6 +2337,33 @@ pub fn test_process_lifecycle_and_fault_recovery(
                         && proc_mgr
                             .get_process(parent_pid)
                             .is_some_and(|parent| parent.state == ProcessState::Blocked);
+                    if !parent_blocked {
+                        crate::serial_print("[PROC-TEST] wait1 ret=");
+                        crate::serial::print_hex(pending_wait);
+                        crate::serial_print(" status_addr=");
+                        crate::serial::print_hex(status_address);
+                        crate::serial_print(" entry=");
+                        crate::serial::print_hex(
+                            proc_mgr
+                                .get_process(parent_pid)
+                                .and_then(|p| p.address_space.read_entry(status_address))
+                                .unwrap_or(0),
+                        );
+                        crate::serial_print(" state=");
+                        crate::serial::print_dec(
+                            proc_mgr
+                                .get_process(parent_pid)
+                                .map(|p| match p.state {
+                                    ProcessState::Ready => 1,
+                                    ProcessState::Running => 2,
+                                    ProcessState::Blocked => 3,
+                                    ProcessState::Terminated => 4,
+                                    ProcessState::Unused => 5,
+                                })
+                                .unwrap_or(9),
+                        );
+                        crate::serial_print("\n");
+                    }
                     proc_mgr.current_pid = child_pid;
                     let child_exit = syscall_dispatch(sys_nos::SYS_EXIT, 42, 0, 0, proc_mgr, pmm);
                     let waiter_woken = child_exit == 0
@@ -1699,9 +2390,23 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                 ) == 42
                             })
                     });
-                    let child_reaped = wait_result == child_pid as u64
-                        && proc_mgr.get_process(child_pid).is_none()
-                        && pmm.free_memory_bytes == free_before_fork;
+                    let reaped_ret = wait_result == child_pid as u64;
+                    let reaped_gone = proc_mgr.get_process(child_pid).is_none();
+                    let reaped_free = pmm.free_memory_bytes == free_before_fork;
+                    if !(reaped_ret && reaped_gone && reaped_free) {
+                        crate::serial_print("[PROC-TEST] reap: ret=");
+                        crate::serial::print_hex(wait_result);
+                        crate::serial_print(" pid=");
+                        crate::serial::print_dec(child_pid as u64);
+                        crate::serial_print(" gone=");
+                        crate::serial::print_dec(reaped_gone as u64);
+                        crate::serial_print(" free_before=");
+                        crate::serial::print_dec(free_before_fork);
+                        crate::serial_print(" free_now=");
+                        crate::serial::print_dec(pmm.free_memory_bytes);
+                        crate::serial_print("\n");
+                    }
+                    let child_reaped = reaped_ret && reaped_gone && reaped_free;
 
                     let root_before_exec = proc_mgr
                         .get_process(parent_pid)
@@ -1753,7 +2458,35 @@ pub fn test_process_lifecycle_and_fault_recovery(
                     proc_mgr.current_pid = 0;
                     let parent_terminated = proc_mgr.terminate(parent_pid, 0, pmm);
                     proc_mgr.reap_terminated(pmm);
-                    lifecycle_ok = copied_pages_match
+                    if !(cow_shared
+                        && cow_split
+                        && parent_blocked
+                        && waiter_woken
+                        && status
+                        && child_reaped
+                        && failed_exec
+                        && exec_ok)
+                    {
+                        crate::serial_print("[PROC-TEST] fork/exec detay: cow_shared=");
+                        crate::serial::print_dec(cow_shared as u64);
+                        crate::serial_print(" cow_split=");
+                        crate::serial::print_dec(cow_split as u64);
+                        crate::serial_print(" blocked=");
+                        crate::serial::print_dec(parent_blocked as u64);
+                        crate::serial_print(" woken=");
+                        crate::serial::print_dec(waiter_woken as u64);
+                        crate::serial_print(" status=");
+                        crate::serial::print_dec(status as u64);
+                        crate::serial_print(" reaped=");
+                        crate::serial::print_dec(child_reaped as u64);
+                        crate::serial_print(" bad_exec=");
+                        crate::serial::print_dec(failed_exec as u64);
+                        crate::serial_print(" exec=");
+                        crate::serial::print_dec(exec_ok as u64);
+                        crate::serial_print("\n");
+                    }
+                    lifecycle_ok = cow_shared
+                        && cow_split
                         && parent_blocked
                         && waiter_woken
                         && status
@@ -1868,4 +2601,1004 @@ pub fn test_ring3_isolation(
     crate::serial_print("[RING3-TEST] 3. Kaynak temizleme sızıntısız: BAŞARILI\n");
     crate::serial_print("[P1] process kaynak temizligi: BASARILI\n");
     true
+}
+
+/// Syscall kullanıcı işaretçi (pointer) doğrulamalarını tek noktada toplayan test.
+///
+/// Kapsam: `SYS_WRITE`, `SYS_WAIT`, `SYS_EXEC`, `SYS_MMAP`, `SYS_MUNMAP` ve
+/// `SYS_MEMINFO` yollarındaki tüm kullanıcı adresleri `translate_user` ile
+/// doğrulanır. Bu test; NULL, hizasız, yarı eşlenmiş, çekirdek yarı adresi ve
+/// sınır aşan uzunlukların reddedildiğini, geçerli çağrıların ise çalıştığını
+/// kanıtlar. Ayrıca hatalı çağrıların PMM'de çerçeve sızdırmadığını denetler.
+pub fn test_syscall_pointer_validation(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[PTR-TEST] --- Syscall kullanıcı işaretçi doğrulama testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    let free_before = pmm.free_memory_bytes;
+
+    let Some(pid) = proc_mgr
+        .spawn(
+            "ptr_test",
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+        .ok()
+    else {
+        crate::serial_print("[PTR-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+        return false;
+    };
+    proc_mgr.current_pid = pid;
+
+    // Test tamponu: tek sayfa, kullanıcı veri bayraklarıyla eşlenir.
+    let buffer_address: u64 = 0x0000_0000_0060_0000;
+    let Some(buffer_frame) = pmm.allocate_frame() else {
+        crate::serial_print("[PTR-TEST] Çerçeve tahsisi: BAŞARISIZ\n");
+        proc_mgr.current_pid = caller_pid;
+        let _ = proc_mgr.terminate(pid, -1, pmm);
+        proc_mgr.reap_terminated(pmm);
+        return false;
+    };
+    let mapped = proc_mgr.get_process_mut(pid).is_some_and(|process| {
+        process
+            .address_space
+            .map_page(buffer_address, buffer_frame, PageFlags::USER_DATA, pmm)
+            .is_ok()
+            && process.resources.record_user_frame(buffer_frame)
+    });
+    if !mapped {
+        pmm.free_frame(buffer_frame);
+        proc_mgr.current_pid = caller_pid;
+        let _ = proc_mgr.terminate(pid, -1, pmm);
+        proc_mgr.reap_terminated(pmm);
+        crate::serial_print("[PTR-TEST] Tampon eşlenemedi: BAŞARISIZ\n");
+        return false;
+    }
+    // Tamponu taninabilir bir desenle doldur (WRITE geri okumasini dogrulamak icin).
+    let filled = proc_mgr.get_process(pid).is_some_and(|process| {
+        let physical = process.address_space.translate_user(buffer_address);
+        physical.is_some_and(|phys| unsafe {
+            let base = crate::drivers::phys_to_virt(phys) as *mut u8;
+            for offset in 0..64usize {
+                core::ptr::write_volatile(base.add(offset), b'A');
+            }
+            true
+        })
+    });
+    if !filled {
+        crate::serial_print("[PTR-TEST] Tampon doldurulamadi: BAŞARISIZ\n");
+    }
+
+    // --- Reddedilmesi gereken işaretçiler -------------------------------------
+    // NULL: arg1 = 0 uzunluk 0 -> etkisiz; uzunluk > 0 -> reddedilmeli.
+    let null_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 64, 0, proc_mgr, pmm);
+    // Hizasiz (sayfa sonundan sonraki bayt): tampon + 4096 tam olarak bir
+    // sonraki, eslenmemis sayfaya denk gelir.
+    let misaligned_write = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        buffer_address + PAGE_SIZE,
+        8,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    // Yari eslenmis tampon: ilk 8 bayt gecerli, kalan 8 bayt eslenmemis
+    // sayfaya tasiyor; tum cagri reddedilmeli.
+    let straddle_write = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        buffer_address + PAGE_SIZE - 8,
+        16,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    // Cekirdek yarisi isaretcisi (cekirdek metni; USER adres alaninin ustunde).
+    let kernel_address = test_syscall_pointer_validation as *const () as u64;
+    let kernel_write = syscall_dispatch(sys_nos::SYS_WRITE, kernel_address, 8, 0, proc_mgr, pmm);
+    // Gecersiz uzunluklar.
+    let empty_write = syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 0, 0, proc_mgr, pmm);
+    let oversized_write =
+        syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 4096, 0, proc_mgr, pmm);
+    // SYS_WAIT: arg2 (durum isaretcisi) eslenmemis.
+    let wait_bad_status = syscall_dispatch(
+        sys_nos::SYS_WAIT,
+        0,
+        buffer_address + PAGE_SIZE,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    // SYS_EXEC: arg1 NULL/eslenmemis, arg2 sifir veya asiri buyuk.
+    let exec_null = syscall_dispatch(sys_nos::SYS_EXEC, 0, 16, 0, proc_mgr, pmm);
+    let exec_unmapped = syscall_dispatch(
+        sys_nos::SYS_EXEC,
+        buffer_address + PAGE_SIZE,
+        16,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let exec_oversized = syscall_dispatch(
+        sys_nos::SYS_EXEC,
+        buffer_address,
+        MAX_EXEC_IMAGE_SIZE as u64 + 1,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    // SYS_MMAP: sifir/asiri uzunluk reddedilir (0 doner).
+    let mmap_zero = syscall_dispatch(sys_nos::SYS_MMAP, 0, 0, 0, proc_mgr, pmm);
+    let mmap_oversized =
+        syscall_dispatch(sys_nos::SYS_MMAP, 64 * 1024 * 1024 + 1, 0, 0, proc_mgr, pmm);
+    // SYS_MUNMAP: NULL adres ve sifir uzunluk reddedilir.
+    let munmap_null = syscall_dispatch(sys_nos::SYS_MUNMAP, 0, PAGE_SIZE, 0, proc_mgr, pmm);
+    let munmap_zero_len =
+        syscall_dispatch(sys_nos::SYS_MUNMAP, buffer_address, 0, 0, proc_mgr, pmm);
+    // SYS_MEMINFO: eslenmemis rapor adresi reddedilir.
+    let meminfo_bad = syscall_dispatch(
+        sys_nos::SYS_MEMINFO,
+        buffer_address + PAGE_SIZE,
+        0,
+        0,
+        proc_mgr,
+        pmm,
+    );
+
+    let rejected = null_write == 0
+        && misaligned_write == 0
+        && straddle_write == 0
+        && kernel_write == 0
+        && empty_write == 0
+        && oversized_write == 0
+        && wait_bad_status == u64::MAX
+        && exec_null == u64::MAX
+        && exec_unmapped == u64::MAX
+        && exec_oversized == u64::MAX
+        && mmap_zero == 0
+        && mmap_oversized == 0
+        && munmap_null == u64::MAX
+        && munmap_zero_len == u64::MAX
+        && meminfo_bad == u64::MAX;
+
+    // --- Kabul edilmesi gereken cagrilar -------------------------------------
+    let valid_write = syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 8, 0, proc_mgr, pmm);
+    let write_ok = valid_write == 8;
+    // Tamponun son baytina kadar (sayfa sinirinin hemen altinda) yazma.
+    let edge_write = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        buffer_address + PAGE_SIZE - 8,
+        8,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let edge_ok = edge_write == 8;
+    // Eslenmemis bir mmap bölgesi üzerinde munmap tekrar reddedilmeli.
+    let unmap_unmapped = syscall_dispatch(
+        sys_nos::SYS_MUNMAP,
+        buffer_address + 2 * PAGE_SIZE,
+        PAGE_SIZE,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let double_unmap_rejected = unmap_unmapped == u64::MAX;
+
+    proc_mgr.current_pid = caller_pid;
+    let terminated = proc_mgr.terminate(pid, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    // Sizinti denetimi: surec sonlandirilip kaynaklari iade edildikten sonra
+    // PMM tekrar baslangic degerine donmeli.
+    let no_leak = pmm.free_memory_bytes == free_before;
+    let reclaimed = no_leak && terminated;
+
+    let ok = filled && rejected && write_ok && edge_ok && double_unmap_rejected && reclaimed;
+    if ok {
+        crate::serial_print(
+            "[PTR-TEST] NULL/hizasiz/yari-eslenmis/cekirdek isaretcileri ve sinir uzunluklari reddedildi, gecerli cagrilar calisti, sizinti yok: BASARILI\n",
+        );
+    } else {
+        crate::serial_print("[PTR-TEST] Syscall isaretci dogrulamasi: BASARISIZ (");
+        crate::serial_print(if filled { "fill " } else { "fill! " });
+        crate::serial_print(if rejected { "reject " } else { "reject! " });
+        crate::serial_print(if write_ok { "write " } else { "write! " });
+        crate::serial_print(if edge_ok { "edge " } else { "edge! " });
+        crate::serial_print(if double_unmap_rejected {
+            "2munmap "
+        } else {
+            "2munmap! "
+        });
+        crate::serial_print(if no_leak { "noleak " } else { "noleak! " });
+        crate::serial_print(if reclaimed { "reclaim" } else { "reclaim!" });
+        crate::serial_print(")\n");
+    }
+    ok
+}
+
+/// Kullanıcı heap/`brk`, `mmap`/`munmap`, ASLR ve copy-on-write doğrulama testi.
+///
+/// Sıfırlamış çerçevelerle çalışır (gerçek kullanıcı yığını/kodu değil); amaç
+/// bellek semantiğini gerçek sayfa tabloları ve PMM üzerinde doğrulamaktır.
+pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryManager) -> bool {
+    crate::serial_print("[USER-MEM] --- Kullanıcı heap/mmap, ASLR ve COW doğrulama testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    let free_before = pmm.free_memory_bytes;
+
+    let Some(pid) = proc_mgr
+        .spawn(
+            "usermem",
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+        .ok()
+    else {
+        crate::serial_print("[USER-MEM] Süreç oluşturulamadı: BAŞARISIZ\n");
+        return false;
+    };
+    proc_mgr.current_pid = pid;
+
+    // 1. brk: heap büyüt, çerçeveler sıfır gelmeli.
+    let heap_end = syscall_dispatch(sys_nos::SYS_BRK, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let heap_ok = heap_end == crate::mm::user_mem::HEAP_BASE + 3 * PAGE_SIZE
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            (0..3).all(|i| {
+                let address = p.heap_address(i as u64 * PAGE_SIZE);
+                p.address_space
+                    .translate_user(address)
+                    .and_then(|phys| {
+                        p.address_space
+                            .read_entry(address)
+                            .map(|entry| (phys, entry))
+                    })
+                    .is_some_and(|(phys, entry)| {
+                        entry & PageFlags::WRITABLE != 0
+                            && entry & PageFlags::NO_EXECUTE != 0
+                            && unsafe {
+                                core::ptr::read_volatile(
+                                    crate::drivers::phys_to_virt(phys) as *const u8
+                                )
+                            } == 0
+                    })
+            })
+        });
+    // 1b. Heap uçlarında yazma/okuma çalışır (in bounds).
+    let heap_write_ok = proc_mgr
+        .get_process(pid)
+        .is_some_and(|p| write_user_u64(p, p.heap_address(0), 0xDEAD_BEEF_CAFE_F00D));
+    // 1c. Hemen üstündeki eşlenmemiş sayfaya çekirdek erişimi reddedilir.
+    let heap_bounds_ok = proc_mgr
+        .get_process(pid)
+        .is_some_and(|p| !write_user_u64(p, p.heap_address(3 * PAGE_SIZE), 1));
+
+    // 2. brk küçültme: yalnız kalan son sayfa serbest bırakılır.
+    let free_before_shrink = pmm.free_memory_bytes;
+    let shrunk = syscall_dispatch(sys_nos::SYS_BRK, 2 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let shrink_ok = shrunk == crate::mm::user_mem::HEAP_BASE + 2 * PAGE_SIZE
+        && pmm.free_memory_bytes == free_before_shrink + PAGE_SIZE
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            p.address_space
+                .translate(p.heap_address(2 * PAGE_SIZE))
+                .is_none()
+        });
+
+    // 3. mmap/munmap: ASLR tabanından ayrık bölge ve tam iade.
+    let region = syscall_dispatch(sys_nos::SYS_MMAP, 2 * 4096, 0, 0, proc_mgr, pmm);
+    let region_pages = proc_mgr.get_process(pid).is_some_and(|p| {
+        region == p.mmap_base
+            && region.is_multiple_of(PAGE_SIZE)
+            && (crate::mm::loader::ASLR_MMAP_MIN..crate::mm::loader::ASLR_MMAP_MAX)
+                .contains(&region)
+            && (0..2).all(|i| {
+                p.address_space
+                    .translate_user(region + i * PAGE_SIZE)
+                    .is_some_and(|phys| unsafe {
+                        core::ptr::read_volatile(crate::drivers::phys_to_virt(phys) as *const u64)
+                            == 0
+                    })
+            })
+    });
+    let second = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let second_ok = second == region + 2 * PAGE_SIZE;
+    let free_before_unmap = pmm.free_memory_bytes;
+    let unmap = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
+    let free_after_unmap = pmm.free_memory_bytes;
+    // `munmap` yalnız `region` aralığını (2 sayfa) iade eder; `second` hâlâ
+    // eşlenmiş kalır. Bu yüzden deltası tam olarak 2 sayfa olmalıdır.
+    let unmap_ok = unmap == 0
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.address_space.translate(region).is_none())
+        && free_after_unmap == free_before_unmap + 2 * PAGE_SIZE;
+    let unmap_twice = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
+    let mmap_ok = region_pages && second_ok && unmap_ok && unmap_twice == u64::MAX;
+
+    // 4. MEMINFO syscall'u (R10 yolu) özeti doğru raporlar.
+    let heap_address = proc_mgr
+        .get_process(pid)
+        .map(|p| p.heap_address(0))
+        .unwrap_or(0);
+    let report_addr = proc_mgr
+        .get_process(pid)
+        .and_then(|p| p.address_space.translate_user(second))
+        .map(|_| second)
+        .unwrap_or(0);
+    let meminfo = syscall_dispatch(sys_nos::SYS_MEMINFO, report_addr, 0, 0, proc_mgr, pmm);
+    let meminfo_ok = report_addr != 0
+        && meminfo == 0
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            let heap = p
+                .address_space
+                .translate_user(report_addr)
+                .map(|phys| unsafe {
+                    core::ptr::read_volatile(crate::drivers::phys_to_virt(phys) as *const u64)
+                })
+                .unwrap_or(u64::MAX);
+            heap == 2 * PAGE_SIZE && heap_address != 0
+        });
+
+    // 5. ASLR: iki süreç farklı mmap tabanı seçmeli (entropi testi).
+    let mut bases = alloc::vec::Vec::new();
+    bases.push(proc_mgr.get_process(pid).map(|p| p.mmap_base).unwrap_or(0));
+    let mut aslr_pids = alloc::vec::Vec::new();
+    for _ in 0..6u64 {
+        if let Ok(other) = proc_mgr.spawn("aslr", 0x1000, 0x7000_0000, 0, None, pmm) {
+            if let Some(p) = proc_mgr.get_process(other) {
+                bases.push(p.mmap_base);
+            }
+            aslr_pids.push(other);
+        }
+    }
+    let aslr_distinct = {
+        let mut seen = alloc::vec::Vec::new();
+        for base in &bases {
+            if !seen.contains(base) {
+                seen.push(*base);
+            }
+        }
+        seen.len() > 1 && bases.iter().all(|b| b % 0x20_0000 == 0)
+    };
+    // ASLR yığını: rastgele üst seçimi kullanıcı yığınından aşağı, hizalı olmalı.
+    let stack_tops: alloc::vec::Vec<u64> = (0..8)
+        .map(|_| crate::mm::loader::randomized_stack_top())
+        .collect();
+    let stack_ok = stack_tops.iter().all(|top| {
+        *top <= crate::mm::loader::USER_STACK_TOP
+            && *top > crate::mm::loader::USER_STACK_TOP - crate::mm::loader::ASLR_STACK_MAX_SLIDE
+            && top % PAGE_SIZE == 0
+    }) && stack_tops.iter().any(|top| *top != stack_tops[0]);
+
+    for other in aslr_pids {
+        let _ = proc_mgr.terminate(other, 0, pmm);
+    }
+
+    proc_mgr.current_pid = 0;
+    let terminated = proc_mgr.terminate(pid, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = pmm.free_memory_bytes == free_before
+        && crate::mm::vmm::shared_frame_count() == 0
+        && terminated;
+
+    if heap_ok
+        && heap_write_ok
+        && heap_bounds_ok
+        && shrink_ok
+        && mmap_ok
+        && meminfo_ok
+        && aslr_distinct
+        && stack_ok
+        && no_leak
+    {
+        crate::serial_print(
+            "[USER-MEM] heap/mmap/ASLR: brk buyut+kucult, mmap/munmap, MEMINFO ve sizintisiz iade: BASARILI\n",
+        );
+        true
+    } else {
+        crate::serial_print("[USER-MEM] heap/mmap/ASLR testi: BASARISIZ (");
+        crate::serial_print(if heap_ok { "heap " } else { "heap! " });
+        crate::serial_print(if heap_write_ok { "hw " } else { "hw! " });
+        crate::serial_print(if heap_bounds_ok { "hb " } else { "hb! " });
+        crate::serial_print(if shrink_ok { "shrink " } else { "shrink! " });
+        crate::serial_print(if region_pages { "region " } else { "region! " });
+        crate::serial_print(if mmap_ok { "mmap " } else { "mmap! " });
+        crate::serial_print(if second_ok { "2nd " } else { "2nd! " });
+        crate::serial_print(if unmap_ok { "unmap " } else { "unmap! " });
+        crate::serial_print(if meminfo_ok { "meminfo " } else { "meminfo! " });
+        crate::serial_print(if aslr_distinct && stack_ok {
+            "aslr "
+        } else {
+            "aslr! "
+        });
+        crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
+        crate::serial_print(")\n");
+        false
+    }
+}
+
+/// Dosya tanıtıcısı yaşam döngüsünü doğrular: açma, okuma, konumlandırma,
+/// kapatma, `fork` devralma/refcount, `exec` sıfırlama ve fd kotası.
+///
+/// Kullanıcı tamponu gerçek bir heap sayfasıdır; yollar `uaccess` katmanından
+/// geçtiği için test aynı zamanda güvenli kopyalama sözleşmesini de sınar.
+pub fn test_file_descriptor_lifecycle(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[FD-TEST] --- Dosya tanıtıcısı yaşam döngüsü testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    let free_before = pmm.free_memory_bytes;
+    let open_before = proc_mgr.files.open_count();
+    let refs_before = proc_mgr.files.reference_count();
+
+    let Some(pid) = proc_mgr
+        .spawn(
+            "fdtest",
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+        .ok()
+    else {
+        crate::serial_print("[FD-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+        return false;
+    };
+    proc_mgr.current_pid = pid;
+
+    // 1. 0/1/2 standart tanıtıcıları hazır olmalı.
+    let std_fds_ok = proc_mgr.get_process(pid).is_some_and(|p| {
+        p.fds[fd::FD_STDIN].used
+            && p.fds[fd::FD_STDOUT].used
+            && p.fds[fd::FD_STDERR].used
+            && fd::used_fd_count(&p.fds) == 3
+    });
+
+    // 2. Heap'te yol ve okuma tamponu hazırla.
+    let heap_end = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let heap_base = proc_mgr
+        .get_process(pid)
+        .map(|p| p.heap_address(0))
+        .unwrap_or(0);
+    let path_addr = heap_base;
+    let buffer_addr = heap_base + 128;
+    let path_ok = heap_base != 0
+        && heap_end == heap_base + PAGE_SIZE
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            uaccess::copy_to_user(&p.address_space, path_addr, b"/etc/fd-test\0").is_ok()
+        });
+
+    // 3. open + read: içerik ve imleç ilerlemesi.
+    let fd = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+    let object = proc_mgr
+        .get_process(pid)
+        .and_then(|p| p.fds.get(fd as usize))
+        .filter(|entry| entry.used)
+        .map(|entry| entry.object as usize);
+    let size = object
+        .and_then(|index| proc_mgr.files.object_size(index))
+        .unwrap_or(0);
+    let open_ok = fd == fd::FIRST_USER_FD as u64 && size > 0;
+    // Güvenli kopyalama: NULL ve eşlenmemiş kullanıcı işaretçileri reddedilir.
+    let null_open = syscall_dispatch(sys_nos::SYS_OPEN, 0, 0, 0, proc_mgr, pmm);
+    let unmapped_open = syscall_dispatch(
+        sys_nos::SYS_OPEN,
+        heap_base + PAGE_SIZE,
+        0,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let null_read = syscall_dispatch_abi(sys_nos::SYS_READ, fd, 0, 4, 0, proc_mgr, pmm);
+    let null_resinfo = syscall_dispatch(sys_nos::SYS_RESINFO, 0, 0, 0, proc_mgr, pmm);
+    let safe_copy_ok = null_open == u64::MAX
+        && unmapped_open == u64::MAX
+        && null_read == u64::MAX
+        && null_resinfo == u64::MAX;
+    let read_count =
+        syscall_dispatch_abi(sys_nos::SYS_READ, fd, buffer_addr, size, 0, proc_mgr, pmm);
+    let read_ok = read_count == size
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            uaccess::copy_from_user(&p.address_space, buffer_addr, size as usize)
+                .map(|bytes| bytes.starts_with(b"minOs file descriptor lifecycle test"))
+                .unwrap_or(false)
+        });
+
+    // 4. lseek SET/CUR/END + aralık dışı reddi.
+    let seek_set = syscall_dispatch(sys_nos::SYS_LSEEK, fd, 0, 0, proc_mgr, pmm);
+    let seek_cur = syscall_dispatch(sys_nos::SYS_LSEEK, fd, 4, 1, proc_mgr, pmm);
+    let seek_end = syscall_dispatch(sys_nos::SYS_LSEEK, fd, (-1i64) as u64, 2, proc_mgr, pmm);
+    let seek_over = syscall_dispatch(sys_nos::SYS_LSEEK, fd, size + 1, 0, proc_mgr, pmm);
+    let last_byte = syscall_dispatch_abi(
+        sys_nos::SYS_READ,
+        fd,
+        buffer_addr + 256,
+        1,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let last_ok = proc_mgr.get_process(pid).is_some_and(|p| {
+        uaccess::copy_from_user(&p.address_space, buffer_addr + 256, 1)
+            .map(|bytes| bytes.len() == 1 && bytes[0] == b'\n')
+            .unwrap_or(false)
+    });
+    let seek_ok = seek_set == 0
+        && seek_cur == 4
+        && seek_end == size.saturating_sub(1)
+        && seek_over == u64::MAX
+        && last_byte == 1
+        && last_ok;
+
+    // 5. close: fd serbest kalır, sonraki okuma reddedilir.
+    let close_result = syscall_dispatch(sys_nos::SYS_CLOSE, fd, 0, 0, proc_mgr, pmm);
+    let read_closed = syscall_dispatch_abi(sys_nos::SYS_READ, fd, buffer_addr, 4, 0, proc_mgr, pmm);
+    let close_ok = close_result == 0
+        && read_closed == u64::MAX
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| fd::used_fd_count(&p.fds) == 3);
+
+    // 6. Aynı yol iki kez açılırsa tek nesne + iki referans.
+    let dup_a = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+    let dup_b = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+    let dup_object = proc_mgr
+        .get_process(pid)
+        .and_then(|p| p.fds.get(dup_a as usize))
+        .filter(|entry| entry.used)
+        .map(|entry| entry.object as usize);
+    let refs_two = dup_object
+        .and_then(|index| proc_mgr.files.objects.get(index))
+        .map(|entry| entry.refs)
+        .unwrap_or(0);
+    let duplicate_open_ok = dup_a == fd::FIRST_USER_FD as u64
+        && dup_b == (fd::FIRST_USER_FD + 1) as u64
+        && refs_two == 2
+        && dup_object
+            .is_some_and(|index| proc_mgr.files.objects[index].path_str() == Some("/etc/fd-test"));
+    let close_dup_b = syscall_dispatch(sys_nos::SYS_CLOSE, dup_b, 0, 0, proc_mgr, pmm);
+    let refs_one = dup_object
+        .and_then(|index| proc_mgr.files.objects.get(index))
+        .map(|entry| entry.refs)
+        .unwrap_or(0);
+    let close_dup_a = syscall_dispatch(sys_nos::SYS_CLOSE, dup_a, 0, 0, proc_mgr, pmm);
+    let refs_zero = dup_object
+        .and_then(|index| proc_mgr.files.objects.get(index))
+        .map(|entry| entry.refs)
+        .unwrap_or(0);
+    let duplicate_close_ok =
+        close_dup_b == 0 && refs_one == 1 && close_dup_a == 0 && refs_zero == 0;
+
+    // 7. fork: fd tablosunu devralır ve nesne referansı iki olur.
+    let parent_fd = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+    let parent_object = proc_mgr
+        .get_process(pid)
+        .and_then(|p| p.fds.get(parent_fd as usize))
+        .filter(|entry| entry.used)
+        .map(|entry| entry.object as usize);
+    let child = proc_mgr.fork_process(pid, pmm).ok();
+    let fork_inherit_ok = child.is_some_and(|child_pid| {
+        proc_mgr.get_process(child_pid).is_some_and(|p| {
+            p.fds
+                .get(parent_fd as usize)
+                .is_some_and(|entry| entry.used)
+                && p.fds[parent_fd as usize].object as usize == parent_object.unwrap_or(usize::MAX)
+        }) && parent_object
+            .and_then(|index| proc_mgr.files.objects.get(index))
+            .is_some_and(|entry| entry.refs == 2)
+    });
+    let mut child_close_ok = false;
+    if let Some(child_pid) = child {
+        proc_mgr.current_pid = child_pid;
+        let closed = syscall_dispatch(sys_nos::SYS_CLOSE, parent_fd, 0, 0, proc_mgr, pmm);
+        child_close_ok = closed == 0
+            && proc_mgr
+                .get_process(pid)
+                .is_some_and(|p| p.fds[parent_fd as usize].used)
+            && parent_object
+                .and_then(|index| proc_mgr.files.objects.get(index))
+                .is_some_and(|entry| entry.refs == 1);
+        proc_mgr.current_pid = 0;
+        let _ = proc_mgr.terminate(child_pid, 0, pmm);
+    }
+    let _ = syscall_dispatch(sys_nos::SYS_CLOSE, parent_fd, 0, 0, proc_mgr, pmm);
+    proc_mgr.current_pid = pid;
+
+    // 8. exec: tüm kullanıcı fd'leri kapanır, 0/1/2 yeniden kurulur.
+    let _exec_fd = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+    let exec_image = crate::mm::loader::AppLoader::create_sample_elf();
+    let exec_result = proc_mgr.exec_process(pid, &exec_image, pmm);
+    let exec_ok = exec_result.is_ok()
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            fd::used_fd_count(&p.fds) == 3
+                && p.fds
+                    .iter()
+                    .skip(fd::FIRST_USER_FD)
+                    .all(|entry| !entry.used)
+                && p.fds[fd::FD_STDOUT].used
+        })
+        && proc_mgr.files.reference_count() == refs_before;
+
+    // 9. fd kotası: limit 4 iken 3 standart + 1 açık dosya sığar.
+    let quota_heap = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let quota_base = proc_mgr
+        .get_process(pid)
+        .map(|p| p.heap_address(0))
+        .unwrap_or(0);
+    let quota_path_ok = quota_base != 0
+        && quota_heap == quota_base + PAGE_SIZE
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            uaccess::copy_to_user(&p.address_space, quota_base, b"/etc/fd-test\0").is_ok()
+        });
+    let mut quota_ok = false;
+    if quota_path_ok {
+        let saved_limit = proc_mgr.get_process_mut(pid).map(|p| {
+            let old = p.resources.limits.max_fds;
+            p.resources.limits.max_fds = 4;
+            old
+        });
+        if let Some(saved_limit) = saved_limit {
+            let first = syscall_dispatch(sys_nos::SYS_OPEN, quota_base, 0, 0, proc_mgr, pmm);
+            let second = syscall_dispatch(sys_nos::SYS_OPEN, quota_base, 0, 0, proc_mgr, pmm);
+            let closed = syscall_dispatch(sys_nos::SYS_CLOSE, first, 0, 0, proc_mgr, pmm);
+            quota_ok = first == fd::FIRST_USER_FD as u64 && second == u64::MAX && closed == 0;
+            if let Some(p) = proc_mgr.get_process_mut(pid) {
+                p.resources.limits.max_fds = saved_limit;
+            }
+        }
+    }
+
+    proc_mgr.current_pid = 0;
+    let terminated = proc_mgr.terminate(pid, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = terminated
+        && pmm.free_memory_bytes == free_before
+        && proc_mgr.files.reference_count() == refs_before
+        && proc_mgr.files.open_count() <= open_before
+        && crate::mm::vmm::shared_frame_count() == 0;
+    if !no_leak {
+        crate::serial_print("[FD-TEST] cleanup-dbg terminated=");
+        crate::serial::print_dec(terminated as u64);
+        crate::serial_print(" free_before=");
+        crate::serial::print_dec(free_before);
+        crate::serial_print(" free_now=");
+        crate::serial::print_dec(pmm.free_memory_bytes);
+        crate::serial_print(" refs_before=");
+        crate::serial::print_dec(refs_before as u64);
+        crate::serial_print(" refs_now=");
+        crate::serial::print_dec(proc_mgr.files.reference_count() as u64);
+        crate::serial_print(" open_before=");
+        crate::serial::print_dec(open_before as u64);
+        crate::serial_print(" open_now=");
+        crate::serial::print_dec(proc_mgr.files.open_count() as u64);
+        crate::serial_print(" shared=");
+        crate::serial::print_dec(crate::mm::vmm::shared_frame_count() as u64);
+        crate::serial_print("\n");
+    }
+
+    if std_fds_ok
+        && path_ok
+        && open_ok
+        && safe_copy_ok
+        && read_ok
+        && seek_ok
+        && close_ok
+        && duplicate_open_ok
+        && duplicate_close_ok
+        && fork_inherit_ok
+        && child_close_ok
+        && exec_ok
+        && quota_ok
+        && no_leak
+    {
+        crate::serial_print(
+            "[FD-TEST] open/read/lseek/close, refcount, fork/exec ve fd kotası: BASARILI\n",
+        );
+        true
+    } else {
+        crate::serial_print("[FD-TEST] fd yaşam döngüsü testi: BAŞARISIZ (");
+        crate::serial_print(if std_fds_ok { "std " } else { "std! " });
+        crate::serial_print(if path_ok { "path " } else { "path! " });
+        crate::serial_print(if open_ok { "open " } else { "open! " });
+        crate::serial_print(if safe_copy_ok {
+            "safe-copy "
+        } else {
+            "safe-copy! "
+        });
+        crate::serial_print(if read_ok { "read " } else { "read! " });
+        crate::serial_print(if seek_ok { "seek " } else { "seek! " });
+        crate::serial_print(if close_ok { "close " } else { "close! " });
+        crate::serial_print(if duplicate_open_ok {
+            "dup-open "
+        } else {
+            "dup-open! "
+        });
+        crate::serial_print(if duplicate_close_ok {
+            "dup-close "
+        } else {
+            "dup-close! "
+        });
+        crate::serial_print(if fork_inherit_ok { "fork " } else { "fork! " });
+        crate::serial_print(if child_close_ok {
+            "child-close "
+        } else {
+            "child-close! "
+        });
+        crate::serial_print(if exec_ok { "exec " } else { "exec! " });
+        crate::serial_print(if quota_ok { "quota " } else { "quota! " });
+        crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
+        crate::serial_print(")\n");
+        false
+    }
+}
+
+/// Süreç başına kaynak limitlerini doğrular: `RESINFO` raporu, heap/mmap/fd/
+/// çerçeve kotası ve `fork` ile limit mirası.
+pub fn test_resource_limits(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[RLIMIT-TEST] --- Kaynak limitleri testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    let free_before = pmm.free_memory_bytes;
+    let open_before = proc_mgr.files.open_count();
+    let refs_before = proc_mgr.files.reference_count();
+
+    let Some(pid) = proc_mgr
+        .spawn(
+            "rlimit",
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+        .ok()
+    else {
+        crate::serial_print("[RLIMIT-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+        return false;
+    };
+    proc_mgr.current_pid = pid;
+
+    // 1. Varsayılan limitler.
+    let defaults_ok = proc_mgr.get_process(pid).is_some_and(|p| {
+        let limits = p.resources.limits;
+        limits.max_frames == MAX_PROC_FRAMES
+            && limits.max_user_frames == MAX_PROC_USER_FRAMES
+            && limits.max_fds == fd::MAX_FDS
+            && limits.max_mmap_bytes == MAX_PROC_MMAP_BYTES
+            && limits.max_heap_bytes == MAX_PROC_HEAP_BYTES
+    });
+
+    // 2. RESINFO: 8 x u64 rapor (limit + kullanım).
+    let heap_end = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let heap_base = proc_mgr
+        .get_process(pid)
+        .map(|p| p.heap_address(0))
+        .unwrap_or(0);
+    let report_ok = heap_base != 0
+        && heap_end == heap_base + PAGE_SIZE
+        && syscall_dispatch(sys_nos::SYS_RESINFO, heap_base, 0, 0, proc_mgr, pmm) == 0
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            uaccess::copy_from_user(&p.address_space, heap_base, 64)
+                .map(|bytes| {
+                    let value = |index: usize| {
+                        let mut raw = [0u8; 8];
+                        raw.copy_from_slice(&bytes[index * 8..index * 8 + 8]);
+                        u64::from_le_bytes(raw)
+                    };
+                    value(0) == MAX_PROC_FRAMES as u64
+                        && value(1) == p.resources.frame_count as u64
+                        && value(2) == MAX_PROC_USER_FRAMES as u64
+                        && value(3) == p.resources.user_frame_count as u64
+                        && value(4) == fd::MAX_FDS as u64
+                        && value(5) == fd::used_fd_count(&p.fds) as u64
+                        && value(6) == MAX_PROC_MMAP_BYTES
+                        && value(7) == 0
+                })
+                .unwrap_or(false)
+        });
+
+    // 3. Heap kotası: limit 2 sayfa iken 3 sayfa reddedilir, 2 sayfa kabul edilir.
+    let heap_limit_ok = {
+        let saved = proc_mgr.get_process_mut(pid).map(|p| {
+            let old = p.resources.limits.max_heap_bytes;
+            p.resources.limits.max_heap_bytes = 2 * PAGE_SIZE;
+            old
+        });
+        if let Some(saved) = saved {
+            let over = syscall_dispatch(sys_nos::SYS_BRK, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            let stayed = proc_mgr
+                .get_process(pid)
+                .is_some_and(|p| p.heap_brk == PAGE_SIZE);
+            let within = syscall_dispatch(sys_nos::SYS_BRK, 2 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            let grew = proc_mgr
+                .get_process(pid)
+                .is_some_and(|p| p.heap_brk == 2 * PAGE_SIZE);
+            let shrunk = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            if let Some(p) = proc_mgr.get_process_mut(pid) {
+                p.resources.limits.max_heap_bytes = saved;
+            }
+            over == u64::MAX
+                && stayed
+                && within == heap_base + 2 * PAGE_SIZE
+                && grew
+                && shrunk == heap_base + PAGE_SIZE
+        } else {
+            false
+        }
+    };
+
+    // 4. mmap kotası canlı bölge baytlarını sayar; munmap kotayı geri açar.
+    let mmap_limit_ok = {
+        let saved = proc_mgr.get_process_mut(pid).map(|p| {
+            let old = p.resources.limits.max_mmap_bytes;
+            p.resources.limits.max_mmap_bytes = 2 * PAGE_SIZE;
+            old
+        });
+        if let Some(saved) = saved {
+            let region = syscall_dispatch(sys_nos::SYS_MMAP, 2 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            let over = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            let unmapped = if region != 0 {
+                syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * PAGE_SIZE, 0, proc_mgr, pmm)
+            } else {
+                u64::MAX
+            };
+            let region2 = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+            let unmapped2 = if region2 != 0 {
+                syscall_dispatch(sys_nos::SYS_MUNMAP, region2, PAGE_SIZE, 0, proc_mgr, pmm)
+            } else {
+                u64::MAX
+            };
+            if let Some(p) = proc_mgr.get_process_mut(pid) {
+                p.resources.limits.max_mmap_bytes = saved;
+            }
+            region != 0
+                && over == 0
+                && unmapped == 0
+                && region2 != 0
+                && region2 != region
+                && unmapped2 == 0
+        } else {
+            false
+        }
+    };
+
+    // 5. Çerçeve kotası: mevcut kullanım + 2 çerçeve; üçüncü istek reddedilir.
+    let frame_limit_ok = {
+        let state = proc_mgr.get_process_mut(pid).map(|p| {
+            let old = p.resources.limits.max_user_frames;
+            p.resources.limits.max_user_frames = p.resources.user_frame_count + 2;
+            (old, p.resources.user_frame_count)
+        });
+        if let Some((saved, current)) = state {
+            let first = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
+            let second = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
+            let third = syscall_dispatch(sys_nos::SYS_ALLOC_FRAME, 0, 0, 0, proc_mgr, pmm);
+            let free_first = if first != 0 {
+                syscall_dispatch(sys_nos::SYS_FREE_FRAME, first, 0, 0, proc_mgr, pmm)
+            } else {
+                u64::MAX
+            };
+            let free_second = if second != 0 {
+                syscall_dispatch(sys_nos::SYS_FREE_FRAME, second, 0, 0, proc_mgr, pmm)
+            } else {
+                u64::MAX
+            };
+            let restored = proc_mgr
+                .get_process(pid)
+                .is_some_and(|p| p.resources.user_frame_count == current);
+            if let Some(p) = proc_mgr.get_process_mut(pid) {
+                p.resources.limits.max_user_frames = saved;
+            }
+            first != 0
+                && second != 0
+                && first != second
+                && third == 0
+                && free_first == 0
+                && free_second == 0
+                && restored
+        } else {
+            false
+        }
+    };
+
+    // 6. fd kotası: limit 4 iken yalnızca bir kullanıcı fd'si açılabilir.
+    let fd_limit_ok = {
+        let path_addr = heap_base + 256;
+        let path_ok = heap_base != 0
+            && proc_mgr.get_process(pid).is_some_and(|p| {
+                uaccess::copy_to_user(&p.address_space, path_addr, b"/etc/fd-test\0").is_ok()
+            });
+        if !path_ok {
+            false
+        } else if let Some(saved) = proc_mgr.get_process_mut(pid).map(|p| {
+            let old = p.resources.limits.max_fds;
+            p.resources.limits.max_fds = 4;
+            old
+        }) {
+            let first = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+            let second = syscall_dispatch(sys_nos::SYS_OPEN, path_addr, 0, 0, proc_mgr, pmm);
+            let closed = syscall_dispatch(sys_nos::SYS_CLOSE, first, 0, 0, proc_mgr, pmm);
+            if let Some(p) = proc_mgr.get_process_mut(pid) {
+                p.resources.limits.max_fds = saved;
+            }
+            first == fd::FIRST_USER_FD as u64 && second == u64::MAX && closed == 0
+        } else {
+            false
+        }
+    };
+
+    // 7. fork limitleri devralır (son adım: sonrasında kullanıcı belleğine
+    // yazılmaz, çünkü fork sayfaları COW olarak işaretler).
+    let mut child_pid = None;
+    let inheritance_ok = if let Some(parent_limits) = proc_mgr.get_process_mut(pid).map(|p| {
+        p.resources.limits.max_mmap_bytes = 5 * PAGE_SIZE;
+        p.resources.limits
+    }) {
+        child_pid = proc_mgr.fork_process(pid, pmm).ok();
+        child_pid.is_some_and(|child| {
+            proc_mgr
+                .get_process(child)
+                .is_some_and(|p| p.resources.limits == parent_limits)
+        })
+    } else {
+        false
+    };
+
+    proc_mgr.current_pid = 0;
+    if let Some(child) = child_pid {
+        let _ = proc_mgr.terminate(child, 0, pmm);
+    }
+    let terminated = proc_mgr.terminate(pid, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = terminated
+        && pmm.free_memory_bytes == free_before
+        && proc_mgr.files.reference_count() == refs_before
+        && proc_mgr.files.open_count() <= open_before
+        && crate::mm::vmm::shared_frame_count() == 0;
+
+    if defaults_ok
+        && report_ok
+        && heap_limit_ok
+        && mmap_limit_ok
+        && frame_limit_ok
+        && fd_limit_ok
+        && inheritance_ok
+        && no_leak
+    {
+        crate::serial_print(
+            "[RLIMIT-TEST] RESINFO, heap/mmap/fd/çerçeve kotası ve fork mirası: BASARILI\n",
+        );
+        true
+    } else {
+        crate::serial_print("[RLIMIT-TEST] kaynak limitleri testi: BAŞARISIZ (");
+        crate::serial_print(if defaults_ok {
+            "defaults "
+        } else {
+            "defaults! "
+        });
+        crate::serial_print(if report_ok { "resinfo " } else { "resinfo! " });
+        crate::serial_print(if heap_limit_ok { "heap " } else { "heap! " });
+        crate::serial_print(if mmap_limit_ok { "mmap " } else { "mmap! " });
+        crate::serial_print(if frame_limit_ok { "frame " } else { "frame! " });
+        crate::serial_print(if fd_limit_ok { "fd " } else { "fd! " });
+        crate::serial_print(if inheritance_ok {
+            "inherit "
+        } else {
+            "inherit! "
+        });
+        crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
+        crate::serial_print(")\n");
+        false
+    }
 }

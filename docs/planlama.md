@@ -122,6 +122,52 @@ flowchart TD
 - **Paket Yöneticisi (`minpkg`) ✅:** Ağ (HTTP/curl) veya dahili repodan paket indirme, VFS `/bin` dizinine kurma (`minpkg install`), kurulu ikili paketleri arayıp listeleme (`minpkg list`), kaldırma (`minpkg remove`) ve terminal (MinShell) arayüz entegrasyonu tamamlandı.
 - **Donanım 2D Hızlandırma ✅:** GPU/BGA ve Framebuffer üzerinde 64-bit hizalı blok dolgu (`hw_accel_fill_rect`) ve kopyalama (`hw_accel_bit_blit`), `flush_rect` ve `draw_rect` hızlandırmaları tamamlandı.
 
+### Faz 12: Süreç Bellek Modeli ve Sistem Çağrısı ABI'si ✅
+- **`fork` / `exec` / `wait` ✅:** `int 0x80` üzerinden çocuk süreç üretimi (PID döner), yeni adres uzayında atomik imaj değişimi (`exec`) ve bloklanan ebeveyn uyanışı + `status` (exit kodu `i32`) yazımı (`wait`).
+- **Copy-on-write ✅:** `fork`, yazılabilir kullanıcı sayfalarını iki adres uzayında da salt-okunur + `PAGE_COW` (PTE bit 9) yapıp paylaşır; ilk yazma `#PF` üretir ve `handle_cow_fault` sayfayı özel kopyaya dönüştürür, `fault_entry_rerun` komutu yeniden çalıştırır. Paylaşım defteri (`vmm::mark_frame_shared`/`release_frame_shared`, 512 çerçeve) referans sayar; son sahip fiziksel çerçeveyi iade eder.
+- **Kullanıcı heap ve mmap ✅:** `SYS_BRK` (16–64 MiB aralığı, sıfırlanmış sayfalar, küçültmede iade), `SYS_MMAP`/`SYS_MUNMAP` (16 bölge, 4 KiB hizalı, NX veri sayfaları) ve `SYS_MEMINFO` özet çağrısı. `int 0x80` ABI'sine **4. argüman `R10`** eklendi.
+- **ASLR ✅:** Kullanıcı yığını her süreç/demoda 0–256 KiB rastgele (4 KiB hizalı) kaydırılır; mmap tabanı süreç başına `[16 MiB, 256 MiB]` aralığında 2 MiB hizalı rastgele seçilir; `exec` sonrası yeniden rastgeleleştirilir. Entropi kaynağı TSC (xor-shift karıştırma).
+- **Guard page ✅:** Yığının hemen altındaki sayfa hiç eşlenmez (`USER_STACK_GUARD`); taşma donanım `#PF` (U/S=1) üretir ve süreç `SIGSEGV` (-11) ile sonlanır. `USER-MEM` / `COW-TEST` / `SCHED-STAT` boot testleri ve `test_qemu.ps1` kontrolleri eklendi.
+- **Syscall ABI dokümantasyonu ✅:** [`docs/SYSCALL_ABI.md`](SYSCALL_ABI.md) — yazmaç sözleşmesi (`RDX` = arg3, `R10` = arg4), 19 çağrının argüman/dönüş semantiği, hata sözleşmesi, COW akışı, fd yaşam döngüsü ve kullanıcı bellek düzeni.
+- **Güvenli kullanıcı bellek kopyalama ✅:** `src/mm/uaccess.rs` — tüm syscall işaretçileri için tam-aralık ön doğrulama (atomik), sayfa sayfa `copy_nonoverlapping`, `NULL`/çekirdek yarısı/taşma/COW-salt-okunur sayfa reddi ve 1 MiB kopya sınırı.
+- **Dosya tanıtıcısı yaşam döngüsü ✅:** `SYS_OPEN` (15), `SYS_CLOSE` (16) ve `SYS_LSEEK` (18); `SYS_READ` (6) etkinleştirildi. Süreç başına sabit `FdTable` (16 fd) + çekirdek genelinde referans sayımlı `FileTable` (32 nesne, 256 KiB/dosya); `fork` devralır, `exec` sıfırlar, çıkış/reap referansları bırakır.
+- **Süreç kaynak limitleri ✅:** `ResourceLimits` (64 toplam/32 kullanıcı çerçevesi, 16 fd, 64 MiB mmap/heap) tüm tahsis yollarında zorunlu; `SYS_RESINFO` (17) ile raporlanır, `fork` devralır, `exec` korur. `[FD-TEST]` ve `[RLIMIT-TEST]` boot testleri + `test_qemu.ps1` kontrolleri eklendi.
+- **Çalışan sistemde süreç izleme ✅:** Zamanlayıcı her 64 dilimde `[SCHED-STAT]` raporu yazar (dilim, süreç durumları, boş bellek, COW/paylaşım sayaçları, CR3, heap, mmap); MinShell `ps` komutu gerçek süreç tablosunu listeler.
+
+### Güncel Tamamlanma Özeti — 13 Kasım 2026
+
+P1 süreç, Ring 3 ve CI hedefleri mevcut kod ve QEMU boot testleriyle doğrulanmıştır:
+
+- [x] Ring 3 için ayrı kullanıcı/kernel stack ve süreç başına CR3
+- [x] Syscall ve interrupt dönüşlerinde GPR/XMM register bütünlüğü
+- [x] Kernel mapping'lerinin `USER` erişimine kapalı olduğunun testi
+- [x] Fault/exit sonrası süreç kaynaklarının temizlenmesi ve reap
+- [x] APIC timer tabanlı preemptive kullanıcı scheduler'ı
+- [x] Gerçek context switch, kayıtlı RIP/RSP/RFLAGS ve CR3 geçişi
+- [x] `fork`, `exec`, `wait`, COW, kullanıcı heap'i ve `mmap/munmap`
+- [x] ASLR, guard page, syscall ABI ve güvenli kullanıcı bellek kopyalama
+- [x] Dosya descriptor yaşam döngüsü ve süreç kaynak limitleri
+- [x] QEMU boot/COW/scheduler/Ring 3 marker kontrolleri ve CI entegrasyonu
+- [x] Kullanıcı heap ve `mmap/munmap` (brk büyüt/küçült, 16 bölge, çift iade yok)
+- [x] Gerçek copy-on-write: Ring 3 yazma → `#PF` → özel kopya (ebeveyne sızmaz)
+- [x] Guard page ve yığın taşması testi (`USER_STACK_GUARD`, SIGSEGV/-11)
+- [x] ASLR (yığın 0–256 KiB kaydırma + mmap tabanı 16–256 MiB)
+- [x] Tam syscall ABI dokümantasyonu (`docs/SYSCALL_ABI.md`, 19 çağrı, R10)
+- [x] Boot + QEMU scheduler/süreç testleri ve canlı `[SCHED-STAT]` izleme (30/30 kontrol geçti)
+
+### Kalan İşler
+
+- [ ] Faz 11 CSS: `grid-template-areas`, tam specificity/cascade ve `@media`
+- [ ] TLS PSK session resumption ve 0-RTT/1-RTT akışı
+- [ ] TLS ALPN ve çoklu `key_share` grubu (P-256 + X25519)
+- [ ] OCSP stapling ve fail-closed doğrulama
+- [ ] HTTP/2'nin TLS + ALPN + dinamik HPACK ile tarayıcıya bağlanması
+- [ ] `gzip`/`br` içerik kodlaması desteği
+- [ ] Çok çekirdekli scheduler uzun süreli stres ve **fiziksel donanımda** doğrulama (QEMU tarafı tamam)
+- [ ] Clippy uyarılarının tamamının temizlenmesi
+- [ ] TLS istemci random'ı için CSPRNG kullanılması
+- [ ] CRL/OCSP yanıtlarının otomatik ağ üzerinden alınması
+
 ### Faz 9: Kriptografi ve TLS 1.2 / 1.3 ✅
 - **Kripto İlkelleri (`src/drivers/crypto/`, `no_std`, bağımlılıksız):** SHA-256 (`sha256.rs`), HMAC-SHA256 (`hmac.rs`), AES-128/256 (`aes.rs`), GCM (`gcm.rs`), RSA + PKCS#1 v1.5 (`rsa.rs`), minimal X.509 sertifika ayrıştırıcı (`x509.rs`).
 - **TLS 1.2 / 1.3 Oturumları:** TLS 1.2'de `TLS_RSA_WITH_AES_128_GCM_SHA256` (0x009C) ve `ECDHE_RSA` suite'leri, TLS 1.3'te HKDF anahtar planı ve AES-GCM kayıtları; PRF (P_SHA256/P_SHA384), master/pre-master secret türetme, GCM şifreleme/çözme, Finished ve CertificateVerify doğrulaması.

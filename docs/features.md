@@ -74,6 +74,7 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
 - [x] **Tam Ring 3 Kullanıcı Alanı & Syscall API (v1.4.0):**
   - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
+  - Güvenli kullanıcı bellek kopyalama (`src/mm/uaccess.rs`), dosya tanıtıcısı yaşam döngüsü (`open`/`read`/`lseek`/`close`, fork/exec uyumlu refcount) ve süreç başına kaynak limitleri (`SYS_RESINFO`).
 - [x] **SMP (Symmetric Multiprocessing) Mimarisi:**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
   - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve Görev Yöneticisi per-core CPU izleme çubukları.

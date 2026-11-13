@@ -187,9 +187,34 @@ impl SimpleExecutor {
         self.take_task(id).is_some()
     }
 
+    /// Kuyruktan bir görevi çıkarır ve CPU yük sayacını geri alır.
+    /// `spawn` sayacı artırdığı için kuyruktan çıkarılan her görev sayacı
+    /// bir kez azaltmalıdır; aksi halde `least_loaded_cpu` zamanla tüm
+    /// işi BSP'ye yığar.
     fn take_task(&mut self, id: TaskId) -> Option<Task> {
         let index = self.tasks.iter().position(|t| t.id == id)?;
-        Some(self.tasks.swap_remove(index))
+        let task = self.tasks.swap_remove(index);
+        release_run_slot(task.cpu);
+        Some(task)
+    }
+
+    /// Tamamlanan veya iptal edilmiş kuyruk girdilerini atar ve her biri için
+    /// CPU yük sayacını geri alır.
+    fn drop_finished(&mut self) -> usize {
+        let before = self.tasks.len();
+        let mut dropped = 0usize;
+        let mut index = 0;
+        while index < self.tasks.len() {
+            if self.tasks[index].cancelled || self.tasks[index].completed {
+                let task = self.tasks.swap_remove(index);
+                release_run_slot(task.cpu);
+                dropped += 1;
+            } else {
+                index += 1;
+            }
+        }
+        debug_assert_eq!(before - self.tasks.len(), dropped);
+        dropped
     }
 
     pub fn task_count(&self) -> usize {
@@ -283,6 +308,19 @@ fn least_loaded_cpu() -> usize {
 }
 pub fn run_queue_depth(cpu: usize) -> usize {
     RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].load(Ordering::Relaxed)
+}
+
+/// Bir görevin kuyruktan çıkışında CPU yük sayacını geri alır.
+fn release_run_slot(cpu: usize) {
+    RUN_QUEUE_DEPTH[cpu.min(RUN_QUEUE_DEPTH.len() - 1)].fetch_sub(1, Ordering::Relaxed);
+}
+
+/// Tüm CPU'lardaki kuyruk derinliklerinin toplamı (kaçak slot denetimi için).
+pub fn total_run_queue_depth() -> usize {
+    RUN_QUEUE_DEPTH
+        .iter()
+        .map(|d| d.load(Ordering::Relaxed))
+        .sum()
 }
 static IN_SCHEDULER: AtomicBool = AtomicBool::new(false);
 static PREEMPT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -485,7 +523,8 @@ fn poll_tasks_inner() -> usize {
             }
             // Drop queued cancellations promptly, including tasks cancelled
             // while blocked and therefore never selected for dispatch.
-            executor.tasks.retain(|t| !t.cancelled && !t.completed);
+            // Her atılan girdi için CPU yük slotu da geri verilir.
+            executor.drop_finished();
             let cpu = crate::arch::x86_64::smp::current_cpu_index();
             let Some(index) = select_ready(&executor.tasks, cpu) else {
                 break;
@@ -494,7 +533,7 @@ fn poll_tasks_inner() -> usize {
                 task.ready_age = task.ready_age.saturating_add(1);
             }
             let mut task = executor.tasks.swap_remove(index);
-            RUN_QUEUE_DEPTH[task.cpu].fetch_sub(1, Ordering::Relaxed);
+            release_run_slot(task.cpu);
             task.ready = false;
             task.ready_age = 0;
             task.run_count = task.run_count.saturating_add(1);
@@ -565,7 +604,8 @@ fn poll_tasks_inner() -> usize {
         RUNNING_TASK.store(0, Ordering::Release);
         task.cancelled = task.cancelled || cancelled;
         if !task.completed && !task.cancelled {
-            RUN_QUEUE_DEPTH[task.cpu].fetch_add(1, Ordering::Relaxed);
+            RUN_QUEUE_DEPTH[task.cpu.min(RUN_QUEUE_DEPTH.len() - 1)]
+                .fetch_add(1, Ordering::Relaxed);
             executor.tasks.push(task);
         }
     }
@@ -580,6 +620,38 @@ fn recover_scheduler_state() {
     RUNNING_DEADLINE_SET.store(false, Ordering::Release);
     RUNNING_TASK.store(0, Ordering::Release);
     *RUNNING_INFO.lock() = None;
+}
+
+/// Test-only: `poll_tasks_inner` refuses to dispatch while `IN_SCHEDULER` is
+/// set. Holding that flag for the duration of a measurement window keeps APs
+/// from popping ready tasks out from under the assertions, so kuyruk derinligi
+/// checks stay deterministic. The guard does not interrupt an in-flight
+/// dispatch; it only rejects new entries, so it cannot stall a running task.
+pub struct SchedulerPauseGuard {
+    held: bool,
+}
+
+impl SchedulerPauseGuard {
+    /// Zamanlayiciyi dondurur. Zaten dondurulmus ya da calisiyor durumda
+    /// (IN_SCHEDULER dolu) ise etkisizdir.
+    pub fn new() -> Self {
+        let held = !IN_SCHEDULER.swap(true, Ordering::Acquire);
+        Self { held }
+    }
+}
+
+impl Drop for SchedulerPauseGuard {
+    fn drop(&mut self) {
+        if self.held {
+            IN_SCHEDULER.store(false, Ordering::Release);
+        }
+    }
+}
+
+impl Default for SchedulerPauseGuard {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Priority aging promotes a ready task by one level for each eight dispatch
@@ -621,65 +693,163 @@ fn select_ready(tasks: &[Task], cpu: usize) -> Option<usize> {
 }
 
 /// Cok cekirdekli scheduler davranisini dogrulayan birlesik test:
-/// - Gorevler tum online CPU'lerde dagitilmali (least_loaded_cpu).
+/// - Gorevler tum online CPU'lara dagitilmali (least_loaded_cpu).
 /// - Ayni anda yapilan wake/notify islemleri gorevi kaybetmemeli.
-/// - poll_tasks turleri gorev sayisini tutmali ve surecli bekleyenleri
-///   hazir duruma getirmeli.
+/// - Kuyruk derinligi (RUN_QUEUE_DEPTH) spawn/iptal dongulerinde geri
+///   gelmeli; iptal edilen gorevlerin CPU slotlari sizmamali.
+/// - poll_tasks birden fazla kez calistirilip kuyruk bosaltildiginda derinlik
+///   tekrar tabana inmeli.
 ///
-/// Bu test BSP baslangic surecinden cagrilir ve tek C puck calismasi
-/// assume eder; gercek CAS/yari-cokera calisma simule etmek icin atomik
-/// kuyruk derinlikleri ve SPIN kilidi uzerinden tutarlilik denetlenir.
+/// Bu test BSP baslangic surecinden cagrilir. Cok cekirdekli (SMP) makinede
+/// tum online CPU'larin gercekten kullanildigi dogrulanir; tek cekirdekli
+/// profilde dagilim beklentisi 1'e iner.
 pub fn test_scheduler_multicore_race() -> bool {
-    let cpu_count = crate::arch::x86_64::smp::cpu_count().max(1);
+    let online = crate::arch::x86_64::smp::cpu_count().max(1);
+    let tracked = online.min(RUN_QUEUE_DEPTH.len());
     let initial = EXECUTOR.lock().task_count();
+    let initial_depth = total_run_queue_depth();
+    let baseline: alloc::vec::Vec<usize> = (0..tracked).map(run_queue_depth).collect();
 
-    // Farkli onemdagore gorevler olustur; least_loaded_cpu zaten RR imleciyle
-    // dagilimi dagitir. Ayni anda coklu spawn, kuyruk kilidi altinda surecli
-    // calisir (race senaryosu).
-    let mut ids = alloc::vec::Vec::new();
-    for i in 0..32usize {
-        let prio = match i % 4 {
-            0 => TaskPriority::Realtime,
-            1 => TaskPriority::High,
-            2 => TaskPriority::Normal,
-            _ => TaskPriority::Low,
+    const TASKS_PER_ROUND: usize = 32;
+    const ROUNDS: usize = 3;
+    let mut spawned_ok = true;
+    let mut spread_ok = true;
+    let mut notify_ok = true;
+    let mut cancel_ok = true;
+    let mut drained_ok = true;
+    let mut depth_ok = true;
+
+    // AP'lerin yeni gorev secmesi kuyruk derinligi olcumlerini bozmasin:
+    // mumkunse dogrulama pencereleri boyunca zamanlayiciyi dondur. Zamanlayici
+    // zaten calisiyorsa bekcgi etkisiz kalir; olcumler buna ragmen
+    // deterministiktir cunku test gorevleri `Blocked` doner.
+    let pause = SchedulerPauseGuard::new();
+
+    for _round in 0..ROUNDS {
+        // Farkli onemdagore gorevler olustur; least_loaded_cpu RR imleciyle
+        // dagilimi tum online CPU'lara yayar. Gorevler `Blocked` doner: boylece
+        // kuyruk derinligi deterministik kalir.
+        let mut ids = alloc::vec::Vec::new();
+        for i in 0..TASKS_PER_ROUND {
+            let prio = match i % 4 {
+                0 => TaskPriority::Realtime,
+                1 => TaskPriority::High,
+                2 => TaskPriority::Normal,
+                _ => TaskPriority::Low,
+            };
+            let id = spawn("race-task", prio, move || TaskStatus::Blocked);
+            ids.push(id);
+        }
+
+        let after_spawn = EXECUTOR.lock().task_count();
+        if after_spawn != initial + TASKS_PER_ROUND {
+            spawned_ok = false;
+        }
+
+        // Bos kuyruga notify: panik yapmamali ve bekleyen gorev
+        // olmadigi icin 0 donmeli.
+        if notify(TaskEvent(999)) != 0 {
+            notify_ok = false;
+        }
+
+        // Kuyruk derinligi tam olarak eklenen gorev kadar artmis olmali.
+        if total_run_queue_depth() != initial_depth + TASKS_PER_ROUND {
+            depth_ok = false;
+        }
+
+        // Dagilim: taban derinlikler esitse (boot sirasindaki normal durum)
+        // her online CPU'ya en az bir gorev dusmus olmali. Tabandaki asimetri
+        // dagilimi oldugu gibi yonlendirecegi icin bu durumda yalnizca
+        // "en az bir CPU kullanildi" denetlenir.
+        let mut used = 0usize;
+        for (cpu, base) in baseline.iter().enumerate().take(tracked) {
+            if run_queue_depth(cpu) > *base {
+                used += 1;
+            }
+        }
+        let uniform = baseline.iter().all(|depth| *depth == baseline[0]);
+        let expected_used = if uniform {
+            tracked.min(TASKS_PER_ROUND)
+        } else {
+            1
         };
-        let id = spawn("race-task", prio, move || {
-            // Kisa, engellemeyen callback: bir kez calisip cikar.
-            TaskStatus::Completed
-        });
-        ids.push(id);
-    }
+        if used < expected_used {
+            spread_ok = false;
+        }
 
-    let after_spawn = EXECUTOR.lock().task_count();
-    let spawned_ok = after_spawn == initial + 32;
-
-    // Ayni anda 8 farklı olaya notify gonder: bekleyen yok ama kilitli erisim
-    // tutarlilagini dene (notify bos kuyrukta panik yapmamali).
-    let notified = notify(TaskEvent(999));
-    let notify_ok = notified == 0;
-
-    // Kuyruk derinliginin tum CPU'ya dagilimlarini topla; toplam spawn'a esit
-    // olmali (hiçbir gorev kaybolmamali).
-    let mut total_depth = 0usize;
-    for cpu in 0..cpu_count.min(RUN_QUEUE_DEPTH.len()) {
-        total_depth += run_queue_depth(cpu);
-    }
-    let depth_ok = total_depth == 32;
-
-    // Gorevleri iptal edip kuyrugu temizle; spin kilidinin ve take_task'in
-    // es zamanli cagrisinda kayip olmamasini dene.
-    let mut cancelled = 0usize;
-    for id in ids {
-        if cancel(id) {
-            cancelled += 1;
+        // Gorevleri iptal et: spin kilidi ve take_task es zamanli cagrisinda
+        // kayip olmamali, her iptal edilen gorev CPU slotunu geri vermeli.
+        let mut cancelled = 0usize;
+        for id in ids {
+            if cancel(id) {
+                cancelled += 1;
+            }
+        }
+        if cancelled != TASKS_PER_ROUND {
+            cancel_ok = false;
+        }
+        if EXECUTOR.lock().task_count() != initial {
+            drained_ok = false;
+        }
+        if total_run_queue_depth() != initial_depth {
+            depth_ok = false;
         }
     }
-    let cancel_ok = cancelled == 32;
-    let remaining = EXECUTOR.lock().task_count();
-    let drained_ok = remaining == initial;
 
-    let ok = spawned_ok && notify_ok && depth_ok && cancel_ok && drained_ok;
+    // --- Gercek calisma yolu: gorevler bir kez kosup yeniden hazir olsun ---
+    // `Yielded` donen gorevler kuyrukta kalir; run_count'u dogrulayarak
+    // zamanlayicinin isi gercekten sectigini kanitlariz.
+    let mut yielded_ids = alloc::vec::Vec::new();
+    for _ in 0..8usize {
+        yielded_ids.push(spawn("yield-task", TaskPriority::Normal, || {
+            TaskStatus::Yielded
+        }));
+    }
+    if total_run_queue_depth() != initial_depth + yielded_ids.len() {
+        depth_ok = false;
+    }
+
+    // Zamanlayiciyi birak ve BSP olarak isleri calistir.
+    drop(pause);
+    let budget_before = EXECUTOR.lock().step_budget();
+    EXECUTOR.lock().set_step_budget(yielded_ids.len() + 2);
+    for _ in 0..(yielded_ids.len() + 2) {
+        poll_tasks();
+    }
+    EXECUTOR.lock().set_step_budget(budget_before.max(1));
+
+    let ran = yielded_ids
+        .iter()
+        .filter(|id| {
+            EXECUTOR
+                .lock()
+                .tasks
+                .iter()
+                .any(|task| task.id == **id && task.run_count > 0)
+        })
+        .count();
+    if ran != yielded_ids.len() {
+        drained_ok = false;
+    }
+
+    // Kalan isleri temizle; derinlik yeniden tabana inmeli.
+    let mut cancelled_after_run = 0usize;
+    for id in yielded_ids {
+        if cancel(id) {
+            cancelled_after_run += 1;
+        }
+    }
+    if cancelled_after_run != ran {
+        cancel_ok = false;
+    }
+    if EXECUTOR.lock().task_count() != initial {
+        drained_ok = false;
+    }
+    if total_run_queue_depth() != initial_depth {
+        depth_ok = false;
+    }
+
+    let ok = spawned_ok && spread_ok && notify_ok && cancel_ok && drained_ok && depth_ok;
     if ok {
         crate::serial_print("[SCHED-TEST] Cok cekirdekli scheduler yarismasi testi: BASARILI\n");
     } else {

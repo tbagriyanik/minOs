@@ -6,9 +6,114 @@
 //! 3. HHDM (Higher-Half Direct Map) üzerinden fiziksel adres <-> sanal adres erişimini,
 //! 4. 4KB sanal sayfaları fiziksel sayfa çerçevelerine (PMM üzerinden) eşlemeyi (map/unmap),
 //! 5. Çekirdek ve uygulama adres uzaylarının ayrımını sağlar.
+//! 6. Copy-on-write (COW) paylaşımlı çerçeve defterini tutar.
 
+use crate::arch::x86_64::sync::SpinMutex;
 use crate::drivers::phys_to_virt;
 use crate::mm::pmm::{PhysicalMemoryManager, PAGE_SIZE};
+
+/// COW paylaşım defterinin takip edebileceği azami çerçeve sayısı.
+pub const MAX_SHARED_FRAMES: usize = 512;
+
+/// Aynı fiziksel çerçeveyi birden fazla adres uzayının paylaştığı
+/// (copy-on-write) çerçevelerin referans sayacı.
+#[derive(Clone, Copy)]
+struct SharedFrame {
+    phys: u64,
+    refs: u32,
+}
+
+struct SharedFrameTable {
+    entries: [SharedFrame; MAX_SHARED_FRAMES],
+    used: usize,
+}
+
+impl SharedFrameTable {
+    const fn new() -> Self {
+        const EMPTY: SharedFrame = SharedFrame { phys: 0, refs: 0 };
+        Self {
+            entries: [EMPTY; MAX_SHARED_FRAMES],
+            used: 0,
+        }
+    }
+
+    fn find(&self, phys: u64) -> Option<usize> {
+        self.entries[..self.used]
+            .iter()
+            .position(|e| e.phys == phys)
+    }
+}
+
+static SHARED_FRAMES: SpinMutex<SharedFrameTable> = SpinMutex::new(SharedFrameTable::new());
+
+/// Bir çerçeveyi COW paylaşımı olarak işaretler (ilk paylaşımda refs = 2).
+/// Defter doluysa `false` döner; bu durumda çağıran çerçeveyi özel kopya
+/// olarak bırakmalıdır (COW kurulamadı).
+pub fn mark_frame_shared(phys: u64) -> bool {
+    let mut table = SHARED_FRAMES.lock();
+    if let Some(index) = table.find(phys) {
+        let refs = table.entries[index].refs + 1;
+        table.entries[index].refs = refs;
+        return true;
+    }
+    if table.used >= MAX_SHARED_FRAMES {
+        return false;
+    }
+    let used = table.used;
+    table.entries[used] = SharedFrame { phys, refs: 2 };
+    table.used = used + 1;
+    true
+}
+
+/// Bir paylaşım referansını bırakır (`refs` = bu çerçeveyi eşleyen adres
+/// uzayı sayısı).
+///
+/// * `Some(false)` — bıraktıktan sonra çerçeveyi hâlâ başka bir adres uzayı
+///   eşliyor; fiziksel çerçeve **serbest bırakılmamalıdır**.
+/// * `Some(true)` — bu son referanstı; çerçeve artık kimseye ait değil ve
+///   çağıran onu PMM'e iade edebilir.
+/// * `None` — çerçeve defterde yok (zaten özel).
+///
+/// DİKKAT: iki sahipli paylaşımda `refs = 2`'dir. Bir sahip ayrıldığında
+/// `refs = 1` kalır ve bu hâlâ *paylaşılan* (özel olmayan) bir çerçevedir;
+/// dolayısıyla `Some(false)` döner. Yalnızca `refs == 0` gerçek serbest
+/// bırakmayı gösterir.
+pub fn release_frame_shared(phys: u64) -> Option<bool> {
+    let mut table = SHARED_FRAMES.lock();
+    let index = table.find(phys)?;
+    let refs = table.entries[index].refs.saturating_sub(1);
+    table.entries[index].refs = refs;
+    if refs == 0 {
+        let used = table.used - 1;
+        table.entries[index] = table.entries[used];
+        table.entries[used] = SharedFrame { phys: 0, refs: 0 };
+        table.used = used;
+        Some(true)
+    } else {
+        Some(false)
+    }
+}
+
+/// Çerçeveyi eşleyen adres uzayı sayısı (defterde yoksa `0`).
+/// `mark_frame_shared` ilk paylaşımda 2 döner (ebeveyn + çocuk).
+pub fn shared_refs(phys: u64) -> u32 {
+    let table = SHARED_FRAMES.lock();
+    table
+        .find(phys)
+        .map(|index| table.entries[index].refs)
+        .unwrap_or(0)
+}
+
+/// Çerçevenin hâlâ COW paylaşımında olup olmadığını bildirir.
+pub fn is_frame_shared(phys: u64) -> bool {
+    let table = SHARED_FRAMES.lock();
+    table.find(phys).is_some()
+}
+
+/// Paylaşılan çerçeve sayısı (özyin testleri ve teşhis için).
+pub fn shared_frame_count() -> usize {
+    SHARED_FRAMES.lock().used
+}
 
 /// Sayfa tablosu giriş bayrakları (Page Table Entry Flags)
 pub struct PageFlags;
@@ -169,6 +274,137 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Var olan bir 4KB eşlemesinin bayraklarını değiştirir; tablo tahsis etmez.
+    /// GERÇEK DONANIMDA DİKKAT: çekirdek (HHDM) eşlemesi de 4KB'tan küçük
+    /// olduğu için yalnız sembolik olarak vardır. `target_pml4` altındaki
+    /// eşleme değişir ve TLB geçersizleştirilir; `target_pml4` aktif CR3 ise
+    /// çağıran, değişen sayfaya çekirdek üzerinden erişim yapmamalıdır.
+    pub fn set_flags(
+        &mut self,
+        virt_addr: u64,
+        flags: u64,
+        _pmm: &mut PhysicalMemoryManager,
+    ) -> Result<(), &'static str> {
+        if !virt_addr.is_multiple_of(PAGE_SIZE) {
+            return Err("Adres 4KB sayfa sinirina hizali degil");
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let pt_idx = ((virt_addr >> 12) & 0x1FF) as usize;
+
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            let pml4_entry = pml4.entries[pml4_idx];
+            if (pml4_entry & PageFlags::PRESENT) == 0 {
+                return Err("set_flags: eşlenmemiş adres");
+            }
+            let pdpt = &mut *Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
+            let pdpt_entry = pdpt.entries[pdpt_idx];
+            if (pdpt_entry & PageFlags::PRESENT) == 0 {
+                return Err("set_flags: eşlenmemiş adres");
+            }
+            let pd = &mut *Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+            let pd_entry = pd.entries[pd_idx];
+            if (pd_entry & PageFlags::PRESENT) == 0 {
+                return Err("set_flags: eşlenmemiş adres");
+            }
+            if (pd_entry & PageFlags::HUGE_PAGE) != 0 {
+                return Err("set_flags: 2MB huge page eşlemesi bayrak değişimini desteklemiyor");
+            }
+            let pt = &mut *Self::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
+            let entry = pt.entries[pt_idx];
+            if (entry & PageFlags::PRESENT) == 0 {
+                return Err("set_flags: eşlenmemiş adres");
+            }
+            pt.entries[pt_idx] = (entry & 0x000F_FFFF_FFFF_F000) | flags;
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
+        }
+        Ok(())
+    }
+
+    /// Var olan bir 4KB eşlemesinin fiziksel çerçevesini değiştirir.
+    pub fn remap_page(
+        &mut self,
+        virt_addr: u64,
+        phys_addr: u64,
+        _pmm: &mut PhysicalMemoryManager,
+    ) -> Result<(), &'static str> {
+        if !virt_addr.is_multiple_of(PAGE_SIZE) || !phys_addr.is_multiple_of(PAGE_SIZE) {
+            return Err("Adresler 4KB sayfa sinirina hizali degil");
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let pt_idx = ((virt_addr >> 12) & 0x1FF) as usize;
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            let pml4_entry = pml4.entries[pml4_idx];
+            if (pml4_entry & PageFlags::PRESENT) == 0 {
+                return Err("remap_page: eşlenmemiş adres");
+            }
+            let pdpt = &mut *Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
+            let pdpt_entry = pdpt.entries[pdpt_idx];
+            if (pdpt_entry & PageFlags::PRESENT) == 0 {
+                return Err("remap_page: eşlenmemiş adres");
+            }
+            let pd = &mut *Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+            let pd_entry = pd.entries[pd_idx];
+            if (pd_entry & PageFlags::PRESENT) == 0 || (pd_entry & PageFlags::HUGE_PAGE) != 0 {
+                return Err("remap_page: geçersiz PD girdisi");
+            }
+            let pt = &mut *Self::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
+            let entry = pt.entries[pt_idx];
+            if (entry & PageFlags::PRESENT) == 0 {
+                return Err("remap_page: eşlenmemiş adres");
+            }
+            pt.entries[pt_idx] =
+                (phys_addr & 0x000F_FFFF_FFFF_F000) | (entry & !0x000F_FFFF_FFFF_F000);
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
+        }
+        Ok(())
+    }
+
+    /// Sanal adresin son seviye (PTE) girdisini olduğu gibi döner.
+    pub fn read_entry(&self, virt_addr: u64) -> Option<u64> {
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let pt_idx = ((virt_addr >> 12) & 0x1FF) as usize;
+        unsafe {
+            let pml4 = &*Self::table_ptr(self.pml4_phys);
+            let pml4_entry = pml4.entries[pml4_idx];
+            if (pml4_entry & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            let pdpt = &*Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
+            let pdpt_entry = pdpt.entries[pdpt_idx];
+            if (pdpt_entry & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            let pd = &*Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+            let pd_entry = pd.entries[pd_idx];
+            if (pd_entry & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            if (pd_entry & PageFlags::HUGE_PAGE) != 0 {
+                return Some(pd_entry);
+            }
+            let pt = &*Self::table_ptr(pd_entry & 0x000F_FFFF_FFFF_F000);
+            let entry = pt.entries[pt_idx];
+            if (entry & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            Some(entry)
+        }
+    }
+
+    /// Eşlenmiş bir sanal adresin son seviye bayraklarını döner.
+    pub fn flags(&self, virt_addr: u64) -> Option<u64> {
+        self.read_entry(virt_addr)
+            .map(|entry| entry & 0xFFF_8000_0000_0FFFu64)
+    }
+
     /// Bir sanal adresin eşlemesini (mapping) kaldırır (unmap) ve fiziksel adresi döner.
     pub fn unmap_page(&mut self, virt_addr: u64) -> Option<u64> {
         if !virt_addr.is_multiple_of(PAGE_SIZE) {
@@ -212,6 +448,99 @@ impl AddressSpace {
 
             Some(entry & 0x000F_FFFF_FFFF_F000)
         }
+    }
+
+    /// `unmap_page` + boşalan alt seviye tabloların geri kazanımı.
+    ///
+    /// `unmap_page` yalnızca yaprak girdiyi temizler; PT/PD/PDPT çerçeveleri
+    /// tahsis edilmiş olarak kalır. Bu fonksiyon yaprak girdi silindikten
+    /// sonra boşalan her alt tabloyu PMM'e iade eder ve üst girdiyi de
+    /// temizler. Böylece uzun ömürlü süreçlerde tekrarlı `munmap`/`brk`
+    /// daraltma işlemleri sayfa tablosu çerçevelerini sızdırmaz.
+    ///
+    /// Dönüş: kaldırılan fiziksel çerçeve (yaprak), eşleme yoksa `None`.
+    ///
+    /// # Safety
+    /// Çağıran, tabloların başka bir adres uzayıyla paylaşılmadığından emin
+    /// olmalıdır. Çekirdek yarı (PML4 indeks 256-511) için çağrılmamalıdır;
+    /// üst yarı girdileri asla serbest bırakılmaz.
+    pub fn unmap_page_reclaim(
+        &mut self,
+        virt_addr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> Option<u64> {
+        let leaf = self.unmap_page(virt_addr)?;
+        if (virt_addr >> 39) & 0x1FF >= 256 {
+            // Çekirdek yarı: paylaşılan üst tablolar dokunulmaz.
+            return Some(leaf);
+        }
+
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+
+        // Bosluk denetimi: ayni tabloya ikinci bir referans olusturmamak icin
+        // tablolar ham isaretci uzerinden okunur.
+        unsafe {
+            let pml4 = Self::table_ptr(self.pml4_phys);
+            if (*pml4).entries[pml4_idx] & PageFlags::PRESENT == 0 {
+                return Some(leaf);
+            }
+            let pdpt_phys = (*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000;
+
+            let pdpt = Self::table_ptr(pdpt_phys);
+            if (*pdpt).entries[pdpt_idx] & PageFlags::PRESENT == 0 {
+                return Some(leaf);
+            }
+            if (*pdpt).entries[pdpt_idx] & PageFlags::HUGE_PAGE != 0 {
+                // 1 GB buyuk sayfa: alt tablosu yok.
+                return Some(leaf);
+            }
+            let pd_phys = (*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000;
+
+            let pd = Self::table_ptr(pd_phys);
+            if (*pd).entries[pd_idx] & PageFlags::PRESENT == 0 {
+                return Some(leaf);
+            }
+            if (*pd).entries[pd_idx] & PageFlags::HUGE_PAGE != 0 {
+                // 2 MB buyuk sayfa: PT'si yok, alt tablo geri kazanimi yok.
+                return Some(leaf);
+            }
+            let pt_phys = (*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000;
+
+            // PT tamamen bosaldi mi?
+            if !Self::table_is_empty(pt_phys) {
+                return Some(leaf);
+            }
+            (*pd).entries[pd_idx] = 0;
+            pmm.free_frame(pt_phys);
+
+            // PD tamamen bosaldi mi?
+            if !Self::table_is_empty(pd_phys) {
+                return Some(leaf);
+            }
+            (*pdpt).entries[pdpt_idx] = 0;
+            pmm.free_frame(pd_phys);
+
+            // PDPT tamamen bosaldi mi?
+            if !Self::table_is_empty(pdpt_phys) {
+                return Some(leaf);
+            }
+            (*pml4).entries[pml4_idx] = 0;
+            pmm.free_frame(pdpt_phys);
+
+            Some(leaf)
+        }
+    }
+
+    /// Bir sayfa tablosundaki tum girdilerin sifir oldugunu dondurur.
+    ///
+    /// # Safety
+    /// `table_phys` gecerli ve hizali bir sayfa tablosu cercevesine isaret
+    /// etmeli; ayni tabloya canli bir `&mut` referansi bulunmamalidir.
+    unsafe fn table_is_empty(table_phys: u64) -> bool {
+        let table = Self::table_ptr(table_phys);
+        (*table).entries.iter().all(|entry| *entry == 0)
     }
 
     /// Sanal bir adresi sayfa tablolarında arayarak eşlendiği fiziksel adresi çözümler (translate).
@@ -318,6 +647,7 @@ impl AddressSpace {
     /// Releases user mappings, their page tables, and the PML4 root.
     /// Use only for a newly-created address space whose user frames are owned
     /// exclusively by that address space (for example, a failed exec image).
+    /// COW paylaşımlı çerçeveler bu yolda da serbest bırakılmaz.
     pub fn destroy_user_address_space(&mut self, pmm: &mut PhysicalMemoryManager) {
         self.free_user_address_space_tables(pmm, true);
         if self.pml4_phys != 0 {
@@ -376,7 +706,12 @@ impl AddressSpace {
                     Self::free_lower_tables(child, pmm, 1, free_leaf_frames);
                 }
                 1 if free_leaf_frames && entry & PageFlags::USER != 0 => {
-                    pmm.free_frame(child);
+                    // Copy-on-write: çerçeve paylaşılıyorsa yalnız referansı bırak,
+                    // fiziksel çerçeveyi serbest bırakma.
+                    match release_frame_shared(child) {
+                        Some(false) => {}
+                        _ => pmm.free_frame(child),
+                    }
                 }
                 _ => {}
             }
@@ -523,5 +858,71 @@ pub fn test_memory_and_isolation(pmm: &mut PhysicalMemoryManager) -> bool {
         return false;
     }
 
-    flags_valid
+    // 5. Bosalan alt seviye sayfa tablolarinin geri kazanimi (unmap + reclaim)
+    let reclaim_base: u64 = 0x0000_7000_3000_0000;
+    let reclaim_pages = 4usize;
+    let reclaim_free_before = pmm.free_memory_bytes;
+    let mut reclaim_frames = alloc::vec::Vec::new();
+    let mut reclaim_mapped = true;
+    for page in 0..reclaim_pages {
+        let address = reclaim_base + page as u64 * PAGE_SIZE;
+        let Some(frame) = pmm.allocate_frame() else {
+            reclaim_mapped = false;
+            break;
+        };
+        if current_as
+            .map_page(address, frame, PageFlags::USER_DATA, pmm)
+            .is_err()
+        {
+            pmm.free_frame(frame);
+            reclaim_mapped = false;
+            break;
+        }
+        reclaim_frames.push((address, frame));
+    }
+
+    let mut reclaim_ok = reclaim_mapped && reclaim_frames.len() == reclaim_pages;
+    if reclaim_ok {
+        // Her sayfayi geri kazanarak kaldir: yaprak cerceveleri ve bosalan
+        // PT/PD/PDPT tablolari PMM'e iade edilmeli. `unmap_page_reclaim` yaprak
+        // cerceveyi dondurur; serbest birakma cagarana aittir.
+        for (address, frame) in &reclaim_frames {
+            match current_as.unmap_page_reclaim(*address, pmm) {
+                Some(leaf) if leaf == *frame => pmm.free_frame(leaf),
+                _ => reclaim_ok = false,
+            }
+        }
+        // Ikinci cagri: esleme yok, None donmeli.
+        if reclaim_ok && current_as.unmap_page_reclaim(reclaim_base, pmm).is_some() {
+            reclaim_ok = false;
+        }
+        // Tum adresler cevrilemez olmali.
+        for (address, _) in &reclaim_frames {
+            if current_as.translate(*address).is_some() {
+                reclaim_ok = false;
+            }
+        }
+        // Sizinti denetimi: yaprak cerceveler + tablolar geri gelmeli.
+        if pmm.free_memory_bytes != reclaim_free_before {
+            reclaim_ok = false;
+        }
+    }
+
+    // Geri al: test basarisiz olsa bile surekli sizinti birakma. Yalnizca
+    // hala eslenmis sayfalari kaldir; zaten iade edilenlere dokunma.
+    for (address, frame) in reclaim_frames {
+        if current_as.unmap_page(address).is_some() {
+            pmm.free_frame(frame);
+        }
+    }
+
+    if reclaim_ok {
+        crate::serial_print(
+            "[MM-TEST] 6. Bosalan alt sayfa tablolarinin geri kazanimi (PT/PD/PDPT): BASARILI\n",
+        );
+    } else {
+        crate::serial_print("[MM-TEST] Alt sayfa tablosu geri kazanimi sizinti: BASARISIZ\n");
+    }
+
+    flags_valid && reclaim_ok
 }

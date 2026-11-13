@@ -246,6 +246,17 @@ pub mod h2 {
         // Dinamik tabloya ekle.
         dyn_table.insert(b":authority", authority);
 
+        // accept-encoding — literal header field with incremental indexing, indexed name (statik indeks 16)
+        // İsteklerde gzip, deflate, br desteklendiğini bildir.
+        encode_int(&mut out, 16, 6, 0x40);
+        encode_string(&mut out, b"gzip, deflate, br");
+        dyn_table.insert(b"accept-encoding", b"gzip, deflate, br");
+
+        // user-agent — literal header field with incremental indexing, indexed name (statik indeks 58)
+        encode_int(&mut out, 58, 6, 0x40);
+        encode_string(&mut out, b"minOs-http2/1.0");
+        dyn_table.insert(b"user-agent", b"minOs-http2/1.0");
+
         out
     }
 
@@ -1219,11 +1230,13 @@ impl Http2Connection {
 
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
+                        let mut x25519_secret = [0u8; 32];
                         crate::drivers::tls::build_client_hello_with_alpn(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
+                            &mut x25519_secret,
                             false,
                             None,
                             None,
@@ -1233,6 +1246,7 @@ impl Http2Connection {
                         let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
+                        session.set_client_x25519_secret(x25519_secret);
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 

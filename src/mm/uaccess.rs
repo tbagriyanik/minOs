@@ -56,7 +56,10 @@ impl UserCopyError {
 }
 
 /// Kullanıcı adres uzayının üst sınırı (kanonik alt yarı).
-const USER_ADDRESS_END: u64 = 0x0000_8000_0000_0000;
+///
+/// Bu değerin üzerindeki (veya ona eşit) adresler kanonik kullanıcı yarısına
+/// ait değildir; `checked_user_range` bunları `OutOfRange` ile reddeder.
+pub const USER_ADDRESS_END: u64 = 0x0000_8000_0000_0000;
 
 fn user_page_of(address: u64) -> u64 {
     address & !(PAGE_SIZE - 1)

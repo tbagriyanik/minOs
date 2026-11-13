@@ -196,7 +196,7 @@ Closes #123
 
 Yeni bir issue açarken aşağıdaki bilgileri ekleyin:
 
-- minOs sürümü (örn. v2.1.0)
+- minOs sürümü (örn. v2.4.0)
 - Donanım / emülatör (QEMU, VirtualBox, fiziksel laptop)
 - Adımları tekrar edebilir şekilde açıklayın
 - Beklenen ve gerçek davranış
@@ -436,7 +436,7 @@ Closes #123
 
 When opening a new issue, include:
 
-- minOs version (e.g. v2.1.0)
+- minOs version (e.g. v2.4.0)
 - Hardware / emulator (QEMU, VirtualBox, physical laptop)
 - Reproducible steps
 - Expected and actual behavior

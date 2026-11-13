@@ -20,8 +20,9 @@ minos/
 │   │                        # ext4/exFAT formatting, MBR/GPT partitioning
 │   ├── gui/                 # MinGUI window manager, font engine, theme engine,
 │   │                        # scrollbar and clipboard
-│   ├── apps/                # 17 desktop applications
-│   ├── mm/                  # Physical memory manager (PMM), process table, ELF loader
+│   ├── apps/                # 17 registered apps (app ID 0–16)
+│   ├── mm/                  # Physical memory manager (PMM), process table, ELF loader,
+│   │                        # memory/ submodule (huge pages, compression, profiling)
 │   └── main.rs              # Kernel entry point (_start)
 ├── tests/                   # Host unit tests (271 tests)
 ├── boot/                    # Limine bootloader configuration (limine.conf)
@@ -64,14 +65,14 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 ---
 
-## Code Statistics (v2.1.0)
+## Code Statistics (v2.4.0)
 
 | Metric | Value |
 | :--- | :--- |
-| **Total Rust Source Files** | 179 files |
-| **Total Lines of Code** | ~134,929 lines |
+| **Total Rust Source Files** | 196 files (`src/` + `tests/` + `build.rs`) |
+| **Total Lines of Code** | ~145,300 lines |
 | **Language** | Rust (Nightly, `no_std`) |
 | **Build Target** | `x86_64-minos` (custom bare-metal) |
 | **Unit Tests** | 271 tests (0 failed, 100% passing) |
-| **Built-in Applications** | 17 desktop applications + Window Manager |
+| **Built-in Applications** | 17 registered apps (app ID 0–16) + Window Manager |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |

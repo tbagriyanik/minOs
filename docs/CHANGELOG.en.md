@@ -13,6 +13,10 @@ The README files only summarise the highlights; the full list lives here.
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.
+- `SYS_KILL` (19) signal semantics added: `SIGKILL`/`SIGTERM` terminate, `SIGSTOP` moves a process to `Suspended`, `SIGCONT` returns it to `Ready`, `sig=0` probes existence; other signals pend in a `pending_signals` mask. `[KILL-TEST]` boot test.
+- User `brk`/`mmap` pages are lazily mapped (`PAGE_LAZY`, frames allocated on first write); `mmap` gained a `MAP_SHARED_FILE` zero-copy sharing flag; kernel heap moved to a 16→64 MiB growing virtual window (≥64 KiB allocations lazy).
+- New `src/mm/memory/` subsystem: 2 MiB huge-page support (`[BIGPAGE]`), disk-less compressed memory store (`[MZRAM]`), live memory profiling (`[MEM-PROFILE]`/`[MEM-STAT]`/`[KHEAP]`) and extended `SYS_MEMINFO` (12 × `u64`).
+- MinShell gained a `meminfo` command; `[SCHED-STAT]` now also reports the `susp=` counter.
 
 - [v2.3.0](#whats-new-v230) — previous release
 - [v1.6.0 and earlier](releases.md)

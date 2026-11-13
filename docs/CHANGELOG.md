@@ -13,6 +13,10 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.
+- `SYS_KILL` (19) sinyal semantiği eklendi: `SIGKILL`/`SIGTERM` sonlandırır, `SIGSTOP` süreci `Suspended` durumuna alır, `SIGCONT` `Ready`'ye döndürür, `sig=0` varlık yoklaması yapar; diğer sinyaller `pending_signals` maskesinde bekletilir. `[KILL-TEST]` boot testi.
+- Kullanıcı `brk`/`mmap` sayfaları tembel eşlenir (`PAGE_LAZY`, ilk yazmada çerçeve); `mmap`'e `MAP_SHARED_FILE` zero-copy paylaşım bayrağı; kernel heap 16→64 MiB büyüyen sanal pencere (≥64 KiB tahsislar tembel).
+- `src/mm/memory/` alt modülü: 2 MiB büyük sayfa desteği (`[BIGPAGE]`), disk'siz bellek sıkıştırma deposu (`[MZRAM]`), canlı bellek profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`/`[KHEAP]`) ve genişletilmiş `SYS_MEMINFO` (12 × `u64`).
+- MinShell'e `meminfo` komutu eklendi; `[SCHED-STAT]` artık `susp=` sayacı da raporlar.
 
 - [v2.3.0](#yenilikler-v230) — önceki sürüm
 - [v1.6.0 ve öncesi](releases.md)

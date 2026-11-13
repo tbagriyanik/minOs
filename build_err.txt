@@ -1,0 +1,76 @@
+﻿cargo :    Compiling compiler_builtins v0.1.160 (C:\Users\kasim26\.rustup\toolchains\nightly-x86_64-pc-windows-msvc\lib
+\rustlib\src\rust\library\compiler-builtins\compiler-builtins)
+At line:1 char:187
++ ... rse -Force; cargo build --release --target-dir d:\minos\target\probe  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (   Compiling co...piler-builtins):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+   Compiling core v0.0.0 (C:\Users\kasim26\.rustup\toolchains\nightly-x86_64-pc-windows-msvc\lib\rustlib\src\rust\libra
+ry\core)
+   Compiling autocfg v1.5.1
+   Compiling libm v0.2.16
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.27
+   Compiling foldhash v0.1.5
+   Compiling allocator-api2 v0.2.21
+   Compiling equivalent v1.0.3
+   Compiling crc32fast v1.5.4
+   Compiling heapless v0.9.3
+   Compiling zerocopy v0.8.63
+   Compiling num-traits v0.2.19
+   Compiling hashbrown v0.15.5
+   Compiling syn v2.0.119
+   Compiling core_maths v0.1.1
+   Compiling ttf-parser v0.25.1
+   Compiling fontdue v0.9.5
+   Compiling minos-kernel v2.4.0 (D:\minos)
+   Compiling zerocopy-derive v0.8.63
+   Compiling alloc v0.0.0 (C:\Users\kasim26\.rustup\toolchains\nightly-x86_64-pc-windows-msvc\lib\rustlib\src\rust\libr
+ary\alloc)
+   Compiling subtle v2.6.1
+   Compiling zeroize v1.9.1
+   Compiling typenum v1.20.1
+   Compiling rand_core v0.10.1
+   Compiling cmov v0.5.4
+   Compiling const-oid v0.10.2
+   Compiling cpubits v0.1.1
+   Compiling base16ct v1.0.0
+   Compiling scopeguard v1.2.0
+   Compiling cfg-if v1.0.5
+   Compiling byteorder v1.5.0
+   Compiling lock_api v0.4.14
+   Compiling ff v0.14.0
+   Compiling ctutils v0.4.8
+   Compiling der v0.8.3
+   Compiling cpufeatures v0.3.1
+   Compiling hash32 v0.3.1
+   Compiling adler2 v2.0.1
+   Compiling group v0.14.0
+   Compiling alloc-no-stdlib v3.0.0
+   Compiling bitflags v2.13.2
+   Compiling stable_deref_trait v1.2.1
+   Compiling spinning_top v0.2.5
+   Compiling brotli-decompressor v6.3.1
+   Compiling miniz_oxide v0.8.9
+   Compiling log v0.4.35
+   Compiling linked_list_allocator v0.10.6
+   Compiling raw-cpuid v11.6.0
+   Compiling hybrid-array v0.4.15
+   Compiling crypto-common v0.2.2
+   Compiling block-buffer v0.12.1
+   Compiling crypto-bigint v0.7.10
+   Compiling sec1 v0.8.1
+   Compiling digest v0.11.3
+   Compiling hmac v0.13.0
+   Compiling signature v3.0.0
+   Compiling sha2 v0.11.1
+   Compiling primefield v0.14.0
+   Compiling elliptic-curve v0.14.3
+   Compiling rfc6979 v0.6.0
+   Compiling wnaf v0.14.1
+   Compiling ecdsa v0.17.0
+   Compiling primeorder v0.14.0
+   Compiling p384 v0.14.0
+    Finished `release` profile [optimized] target(s) in 1m 14s

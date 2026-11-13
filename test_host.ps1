@@ -82,7 +82,10 @@ function Get-RegistrySrc {
     # Cargo registry konumu platforma gore degisir:
     # Windows: %USERPROFILE%\.cargo\registry\src
     # Linux/macOS: $HOME/.cargo/registry/src
-    $cargoHome = if ($IsWindows) { $env:USERPROFILE } else { $env:HOME }
+    # `$IsWindows` yalnizca PowerShell 6+ ile tanimlidir; Windows PowerShell
+    # 5.1'de $null oldugu icin $env:HOME'a dusup bos donuyordu. Once
+    # USERPROFILE, sonra HOME denenir.
+    $cargoHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
     if (-not $cargoHome) {
         Write-Host "[HATA] Cargo ev dizini (USERPROFILE/HOME) tanimli degil." -ForegroundColor Red
         return $null
@@ -110,9 +113,9 @@ if (-not $minizSrc -or -not $adlerSrc) {
 }
 
 function Build-HostCrate {
-    param([string]$Manifest, [string]$CrateName, [string[]]$ExtraArgs, [string]$Cfg)
+    param([string]$Manifest, [string]$CrateName, [string[]]$ExtraArgs, [string]$Cfg, [string]$Edition = "2021")
     $rlib = Join-Path $pkgDir "lib$CrateName.rlib"
-    $args = @("+nightly", "--edition", "2021", "--crate-type", "rlib", "--crate-name", $CrateName,
+    $args = @("+nightly", "--edition", $Edition, "--crate-type", "rlib", "--crate-name", $CrateName,
               $Manifest, "--target", $hostTriple, "-o", $rlib) + $ExtraArgs
     if ($Cfg) {
         # PowerShell native argument passing can strip the quotes from
@@ -138,6 +141,20 @@ $minizRlib = Build-HostCrate -Manifest (Join-Path $minizSrc "src\lib.rs") -Crate
     -ExtraArgs @("-L", "dependency=$pkgDir", "--extern", "adler2=$(Join-Path $pkgDir 'libadler2.rlib')") `
     -Cfg 'feature="with-alloc"'
 Write-Host "        miniz_oxide -> $minizRlib"
+
+# Brotli (`Content-Encoding: br`) bagimlilik zinciri:
+# brotli_decompressor -> alloc-no-stdlib. `default-features = false` oldugu icin
+# `alloc-stdlib` (std) derlenmez; cekirdekteki `VecAlloc` allocator kullanilir.
+$allocNoStdSrc = Get-RegistrySrc -Name "alloc-no-stdlib" -Version (Get-LockedVersion -Name "alloc-no-stdlib")
+$brotliSrc = Get-RegistrySrc -Name "brotli-decompressor" -Version (Get-LockedVersion -Name "brotli-decompressor")
+if (-not $allocNoStdSrc -or -not $brotliSrc) {
+    Write-Host "[HATA] brotli-decompressor/alloc-no-stdlib kaynak dizini bulunamadi." -ForegroundColor Red
+    exit 1
+}
+$allocNoStdRlib = Build-HostCrate -Manifest (Join-Path $allocNoStdSrc "src\lib.rs") -CrateName "alloc_no_stdlib" -ExtraArgs @() -Edition "2015"
+$brotliRlib = Build-HostCrate -Manifest (Join-Path $brotliSrc "src\lib.rs") -CrateName "brotli_decompressor" `
+    -ExtraArgs @("-L", "dependency=$pkgDir", "--extern", "alloc_no_stdlib=$allocNoStdRlib") -Edition "2015"
+Write-Host "        brotli-decompressor -> $brotliRlib"
 
 # heapless bagimlilik zinciri (src/watchdog.rs host testlerinde heapless::Vec
 # kullaniyor): byteorder -> hash32 -> stable_deref_trait -> heapless.
@@ -165,6 +182,7 @@ $rustcArgs = @(
     "-o", $binary,
     "--extern", "alloc",
     "--extern", "miniz_oxide=$minizRlib",
+    "--extern", "brotli_decompressor=$brotliRlib",
     "--extern", "heapless=$heaplessRlib",
 # miniz_oxide'nin kendi bagimliligi (transitif `-L` doyaylastirilamaz).
     "-L", "dependency=$pkgDir",

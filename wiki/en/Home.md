@@ -1,6 +1,6 @@
 # minOs Wiki – Welcome
 
-minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
+minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system written in Rust that uses `no_std` and `no_main` in the kernel. It boots via Limine v8 on both UEFI and BIOS environments.
 
 > 📄 **Project:** [GitHub Repository](https://github.com/tbagriyanik/minos)  
 > 📄 **Language:** [English](/)| [Türkçe](../tr/)
@@ -14,7 +14,7 @@ minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system
 | [About & Architecture](About-Architecture) | Design philosophy, `no_std` model, PMM and IDT structure |
 | [Installation and Running](Installation-and-Running) | `run.ps1` options, Live USB creation, disk installation |
 | [Supported Hardware List](Supported-Hardware) | Driver matrix, network, graphics, storage, input devices |
-| [17 Built-in Applications](Built-in-Applications) | Web Browser, Notepad, File Manager, etc. |
+| [17 Built-in Applications + Start Menu](Built-in-Applications) | Web Browser, Notepad, File Manager, etc. |
 | [Network and Internet](Network-and-Internet) | TCP/IP, DNS (A/AAAA), HTTP/1.1, TLS 1.3 (HTTPS), HTTP/2 infrastructure |
 | [File Systems](File-Systems) | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 | [User Guide](User-Guide) | Desktop shortcuts, MinShell commands |
@@ -23,15 +23,15 @@ minOs (Sarman Edition) v2.3.0 is a standalone 64-bit (`x86_64`) operating system
 
 ---
 
-## Status Summary (v2.1.0)
+## Status Summary (v2.4.0)
 
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Lines of Code** | ~134,929 lines (Rust) |
+| **Total Lines of Code** | ~145,300 lines (Rust: `src/` + `tests/` + `build.rs`) |
 | **Unit Tests** | 271 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
-| **Built-in Applications** | 17 desktop applications |
+| **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
 
 ---

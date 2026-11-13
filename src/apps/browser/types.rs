@@ -564,6 +564,40 @@ pub struct ElementStyle {
     pub grid_auto_flow: bool,
     /// CSS font-family özelliği (@font-face ile tanımlanabilir).
     pub font_family: Option<String>,
+    /// Flexbox: flex-direction (0=row, 1=row-reverse, 2=column, 3=column-reverse).
+    pub flex_direction: u8,
+    /// Flexbox: flex-wrap (0=nowrap, 1=wrap, 2=wrap-reverse).
+    pub flex_wrap: u8,
+    /// Flexbox: justify-content (0=flex-start, 1=flex-end, 2=center, 3=space-between, 4=space-around, 5=space-evenly).
+    pub justify_content: u8,
+    /// Flexbox: align-items (0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=baseline).
+    pub align_items: u8,
+    /// Flexbox: align-content (0=stretch, 1=flex-start, 2=flex-end, 3=center, 4=space-between, 5=space-around).
+    pub align_content: u8,
+    /// Flexbox: gap (px).
+    pub gap: usize,
+    /// Flexbox: flex-grow.
+    pub flex_grow: u32,
+    /// Flexbox: flex-shrink.
+    pub flex_shrink: u32,
+    /// Flexbox: flex-basis (px, 0 = auto).
+    pub flex_basis: usize,
+    /// Flexbox: order (çocuk sıralaması; küçük değer önce gelir).
+    pub order: i32,
+    /// Flexbox: align-self (0=stretch/kapsayıcı, 1=flex-start, 2=flex-end, 3=center, 4=baseline).
+    pub align_self: u8,
+    /// Flexbox: justify-self (0=auto/stretch, 1=flex-start, 2=flex-end, 3=center).
+    pub justify_self: u8,
+    /// Flexbox: row-gap (satır arası boşluk, px).
+    pub row_gap: usize,
+    /// Flexbox: column-gap (sütun arası boşluk, px).
+    pub column_gap: usize,
+    /// CSS margin-top (px).
+    pub margin_top: usize,
+    /// CSS Grid: grid-template-areas (satır → sütun → alan adı; "." boş hücre).
+    pub grid_template_areas: Vec<Vec<String>>,
+    /// CSS Grid: grid-area ile atanan alan adı.
+    pub grid_area: Option<String>,
 }
 
 impl ElementStyle {
@@ -616,6 +650,23 @@ impl ElementStyle {
             grid_gap: 0,
             grid_auto_flow: true,
             font_family: None,
+            flex_direction: 0,
+            flex_wrap: 0,
+            justify_content: 0,
+            align_items: 0,
+            align_content: 0,
+            gap: 0,
+            flex_grow: 0,
+            flex_shrink: 1,
+            flex_basis: 0,
+            order: 0,
+            align_self: 0,
+            justify_self: 0,
+            row_gap: 0,
+            column_gap: 0,
+            margin_top: 0,
+            grid_template_areas: Vec::new(),
+            grid_area: None,
         }
     }
 
@@ -760,6 +811,57 @@ impl ElementStyle {
         self.grid_auto_flow = other.grid_auto_flow;
         if let Some(name) = &other.font_family {
             self.font_family = Some(name.clone());
+        }
+        if other.flex_direction != 0 {
+            self.flex_direction = other.flex_direction;
+        }
+        if other.flex_wrap != 0 {
+            self.flex_wrap = other.flex_wrap;
+        }
+        if other.justify_content != 0 {
+            self.justify_content = other.justify_content;
+        }
+        if other.align_items != 0 {
+            self.align_items = other.align_items;
+        }
+        if other.align_content != 0 {
+            self.align_content = other.align_content;
+        }
+        if other.gap > 0 {
+            self.gap = other.gap;
+        }
+        if other.flex_grow != 0 {
+            self.flex_grow = other.flex_grow;
+        }
+        if other.flex_shrink != 1 {
+            self.flex_shrink = other.flex_shrink;
+        }
+        if other.flex_basis > 0 {
+            self.flex_basis = other.flex_basis;
+        }
+        if other.order != 0 {
+            self.order = other.order;
+        }
+        if other.align_self != 0 {
+            self.align_self = other.align_self;
+        }
+        if other.justify_self != 0 {
+            self.justify_self = other.justify_self;
+        }
+        if other.row_gap > 0 {
+            self.row_gap = other.row_gap;
+        }
+        if other.column_gap > 0 {
+            self.column_gap = other.column_gap;
+        }
+        if other.margin_top > 0 {
+            self.margin_top = other.margin_top;
+        }
+        if !other.grid_template_areas.is_empty() {
+            self.grid_template_areas = other.grid_template_areas.clone();
+        }
+        if let Some(area) = &other.grid_area {
+            self.grid_area = Some(area.clone());
         }
     }
 }

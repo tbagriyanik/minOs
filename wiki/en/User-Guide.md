@@ -25,6 +25,7 @@ Desktop usage, MinShell commands and shortcut reference.
 | Command | Usage | Description |
 | :--- | :--- | :--- |
 | `mem` | `mem` | Shows total and free memory |
+| `meminfo` | `meminfo` | Extended memory report (PMM, heap, COW sharing, compressed store) |
 | `ps` | `ps` | Lists active system processes |
 | `date` | `date` | Shows date and time from RTC |
 | `uname` | `uname` | Prints kernel version and architecture |

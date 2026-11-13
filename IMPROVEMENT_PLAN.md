@@ -41,18 +41,25 @@ This document outlines a comprehensive plan for improving the MinOS codebase acr
 
 ### 2.1 Heap Allocator Improvements
 **Problem**: Fixed 16MB heap with linked_list_allocator; no OOM recovery.
+**Status**: Partially done — heap now grows on demand: 16 MiB initial
+commitment inside a 64 MiB virtual window (`HEAP_WINDOW_BASE`), pages are
+mapped lazily and large allocations (≥64 KiB) populate on first touch
+(`[KHEAP]`, `[MEM-PROFILE]` markers). Remaining: tiered allocator,
+pressure notifications, per-allocation tracking.
 **Solution**:
 - Implement tiered allocator (small/large object separation)
 - Add memory pressure notifications
 - Implement allocation tracking for debugging
-- Add configurable heap size via boot parameter
+- ~~Add configurable heap size via boot parameter~~ (dynamic growth landed)
 
 ### 2.2 Page Frame Allocator
 **Problem**: Basic bitmap allocator; no zone support (DMA, Normal, HighMem).
 **Solution**:
 - Add memory zones
 - Implement per-cpu page caches
-- Add huge page support (2MB/1GB)
+- ~~Add huge page support (2MB/1GB)~~ — 2 MiB large-page map/unmap landed
+  (`src/mm/memory/bigpage.rs`, `[BIGPAGE]` test); PMM `alloc_big`/`free_big`
+  and per-process usage stats remain
 
 ### 2.3 Virtual Memory
 **Problem**: Manual page table management; no ASLR for kernel.
@@ -193,6 +200,29 @@ This document outlines a comprehensive plan for improving the MinOS codebase acr
 - Unit tests on host target
 - QEMU integration tests
 - Binary size tracking
+
+---
+
+## 9. Process & Kernel Roadmap (P1)
+
+Scheduler/process subsystem (`src/task`, `src/mm/process.rs`, `src/arch/x86_64/ring3.rs`).
+
+| # | Item | Priority | Status |
+| :- | :--- | :--- | :--- |
+| 9.1 | Multi-core scheduler stress tests | P1 | Partial — `task::test_scheduler_multicore_race` exists; needs repeated/soak runs and per-CPU accounting checks |
+| 9.2 | Scheduler tests on real hardware | P1 | Todo — validate APIC/SMP paths outside QEMU |
+| 9.3 | CPU affinity support | P2 | Partial — `Task::cpu` + `least_loaded_cpu` assign queues; no user-controllable affinity API |
+| 9.4 | Deeper security audit of process isolation | P0 | Todo — audit CR3 switching, kernel-pointer leaks, syscall pointer validation coverage |
+| 9.5 | Signal mechanism for user applications | P1 | Partial — `pending_signals` bitmask + `signals` module landed; user handler delivery pending |
+| 9.6 | `kill`, `pause`, `resume` system calls | P1 | **Done** — `SYS_KILL` (19): SIGKILL/SIGTERM terminate, SIGSTOP suspends (`ProcessState::Suspended`), SIGCONT resumes, `sig=0` probes; other signals pended |
+| 9.7 | Process group and session support | P2 | Todo — pgid/sid fields, group kill, orphan reparenting rules |
+| 9.8 | Sandboxing of user applications | P1 | Todo — seccomp-style syscall filtering, resource-limit tightening, optional restricted address space |
+
+Notes:
+- `Suspended` is a single process state; a process blocked in `SYS_WAIT` cannot
+  currently be stopped (blocked+stopped is not representable yet).
+- Signal delivery to Ring 3 handlers, `sigaction`-style registration, and
+  `waitpid` status encoding (signal vs exit code) are part of 9.5.
 
 ---
 

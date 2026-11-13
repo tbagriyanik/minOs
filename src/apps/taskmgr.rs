@@ -125,6 +125,12 @@ pub struct TaskManagerApp {
     pub scheduler_task_counts: crate::task::TaskStateCounts,
     pub ramdisk_used: usize,
     pub ramdisk_files: usize,
+    /// Kernel heap haritalanan bayt (genişletilmiş bellek istatistiği).
+    pub heap_committed_kb: usize,
+    /// COW ile paylaşılan fiziksel çerçeve sayısı.
+    pub shared_frames: usize,
+    /// Tembel (demand) çözülen sayfa hatası sayısı.
+    pub lazy_pages: usize,
     /// Sonlandırma ve liste durumu mesajı.
     pub status: &'static str,
     pub launch_menu_open: bool,
@@ -170,6 +176,9 @@ impl TaskManagerApp {
             },
             ramdisk_used: 0,
             ramdisk_files: 0,
+            heap_committed_kb: 0,
+            shared_frames: 0,
+            lazy_pages: 0,
             status: "Ready",
             launch_menu_open: false,
             actions_menu_open: false,
@@ -322,6 +331,10 @@ impl TaskManagerApp {
         self.total_memory_kb = (pmm.total_memory_bytes / 1024) as usize;
         self.free_memory_kb = (pmm.free_memory_bytes / 1024) as usize;
         self.used_memory_kb = (pmm.used_memory_bytes / 1024) as usize;
+        self.heap_committed_kb = (crate::kernel::heap::profile().committed_bytes / 1024) as usize;
+        self.shared_frames = crate::mm::vmm::shared_frame_count();
+        self.lazy_pages =
+            crate::mm::process::LAZY_FAULTS.load(core::sync::atomic::Ordering::Relaxed) as usize;
         self.ramdisk_used = 0;
         self.ramdisk_files = 0;
         for node in vfs.nodes.iter().flatten() {
@@ -930,8 +943,25 @@ impl TaskManagerApp {
                 (content_x, mem_bar_y + 18, content_w, 14),
             );
 
+            // Genişletilmiş bellek istatistikleri: kernel heap, paylaşım, tembel.
+            let mut mem_detail = TextBuf::new();
+            mem_detail.push_str(crate::gui::ui_text("Kernel heap: ", "Kernel heap: "));
+            mem_detail.push_usize(self.heap_committed_kb / 1024);
+            mem_detail.push_str(crate::gui::ui_text(" MB  Paylaşılan: ", " MB  Shared: "));
+            mem_detail.push_usize(self.shared_frames);
+            mem_detail.push_str(crate::gui::ui_text(" çerçeve  Tembel: ", " frames  Lazy: "));
+            mem_detail.push_usize(self.lazy_pages);
+            MinGuiCompositor::draw_string_clipped(
+                fb,
+                content_x,
+                mem_bar_y + 34,
+                mem_detail.as_str(),
+                Color::TEXT_MUTED,
+                (content_x, mem_bar_y + 34, content_w, 14),
+            );
+
             // 3. VFS / DEPOLAMA BİLGİSİ
-            let vfs_y = mem_bar_y + 40;
+            let vfs_y = mem_bar_y + 56;
             let mut storage_label = TextBuf::new();
             storage_label.push_str("Ramdisk VFS: ");
             storage_label.push_usize(self.ramdisk_files);

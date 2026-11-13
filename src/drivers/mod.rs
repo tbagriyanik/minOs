@@ -10,6 +10,7 @@ pub mod ata;
 pub mod atheros;
 pub mod audio;
 pub mod bluetooth;
+pub mod brotli;
 pub mod camera;
 pub mod compression;
 pub mod cookie;

@@ -76,6 +76,14 @@ pub fn strip_gzip_header(data: &[u8]) -> Option<&[u8]> {
     Some(&data[pos..])
 }
 
+/// Brotli (RFC 7932) sıkıştırılmış veriyi çözer.
+///
+/// `brotli-decompressor` crate'i (`no_std`, `Vec` tabanlı allocator) üzerinden
+/// tam RFC 7932 desteği sağlanır.
+pub fn brotli_decompress(input: &[u8]) -> Option<Vec<u8>> {
+    super::brotli::decompress(input)
+}
+
 /// HTTP Content-Encoding değerine göre veriyi çözer.
 /// `encoding` — "gzip", "deflate", "br" veya None.
 /// `data` — sıkıştırılmış veri.
@@ -98,10 +106,9 @@ pub fn decode_content_encoding(encoding: Option<&str>, data: &[u8]) -> Option<Ve
                 .ok()
                 .or_else(|| inflate(data))
         }
-        Some("br") | Some("compress") => {
-            // Brotli (RFC 7932) ve LZW "compress" desteklenmiyor; çağıran taraf
-            // `Accept-Encoding` ile bunları istemediği için (bkz.
-            // `http2.rs::STATIC_HEADER`) pratikte buraya düşülmez.
+        Some("br") => brotli_decompress(data),
+        Some("compress") => {
+            // LZW "compress" desteklenmiyor.
             None
         }
         Some(_) => None,
@@ -164,7 +171,17 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_brotli_is_reported_unsupported() {
+    fn test_decode_brotli() {
+        // "hello world" brotli (q11) çıktısı.
+        let br = [
+            0x0b, 0x05, 0x80, 0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f, 0x72, 0x6c, 0x64,
+            0x03,
+        ];
+        assert_eq!(
+            decode_content_encoding(Some("br"), &br).as_deref(),
+            Some(&b"hello world"[..])
+        );
+        // Bozuk akış reddedilmeli.
         assert_eq!(decode_content_encoding(Some("br"), &[0x00]), None);
     }
 

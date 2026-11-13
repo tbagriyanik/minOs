@@ -25,6 +25,7 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
 | Komut | Kullanım | Açıklama |
 | :--- | :--- | :--- |
 | `mem` | `mem` | Toplam ve boş bellek miktarını gösterir |
+| `meminfo` | `meminfo` | Genişletilmiş bellek raporu (PMM, heap, COW paylaşımı, sıkıştırılmış depo) |
 | `ps` | `ps` | Aktif sistem süreçlerini listeler |
 | `date` | `date` | RTC üzerinden tarih ve saati gösterir |
 | `uname` | `uname` | Çekirdek sürümünü ve mimariyi yazar |

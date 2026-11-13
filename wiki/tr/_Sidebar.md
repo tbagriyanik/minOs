@@ -4,7 +4,7 @@
 - [Hakkında & Mimari](Hakkinda)
 - [Kurulum ve Çalıştırma](Kurulum-ve-Calistirma)
 - [Desteklenen Donanım Listesi](Desteklenen-Donanimlar)
-- [Yerleşik 17 Uygulama](Uygulamalar)
+- [Yerleşik 17 Uygulama + Başlat Menüsü](Uygulamalar)
 - [Ağ ve İnternet](Ag-ve-Internet)
 - [Dosya Sistemleri](Dosya-Sistemleri)
 - [Kullanıcı Rehberi ve Kısayollar](Kullanici-Rehberi)

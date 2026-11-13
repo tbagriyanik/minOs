@@ -3,18 +3,40 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::vec;
 use alloc::vec::Vec;
 
 use super::types::{html_color, BackgroundSize, ElementStyle, GridTrack, TextAlign};
 
+/// Tek bir CSS bildirimi: özellik adı, değer ve önem (`!important`) bayrağı.
+///
+/// Bildirimler kısa gösterimlerden longhand'lara açıldıktan sonra saklanır;
+/// böylece cascade özellik bazlı (per-property) hesaplanabilir.
+#[derive(Clone, Debug)]
+pub struct CssDecl {
+    /// Longhand özellik adı (ör. "margin-top").
+    pub prop: String,
+    /// Değer metni (`!important` işareti temizlenmiş).
+    pub value: String,
+    /// `!important` işareti taşıyor mu?
+    pub important: bool,
+}
+
 #[derive(Clone)]
 pub struct CssRule {
     pub selector: String,
+    /// Kuralın birleşik stili; cascade artık `decls` üzerinden özellik bazlı
+    /// hesaplandığından bu alan geriye dönük uyum için doldurulur, okunmaz.
+    #[allow(dead_code)]
     pub style: ElementStyle,
     /// İsteğe bağlı @media koşulu (örnek: "screen and (min-width: 600px)").
     /// None ise kural her zaman etkindir.
     #[allow(dead_code)]
     pub media: Option<String>,
+    /// Kuralın bildirim listesi (özellik bazlı cascade için).
+    pub decls: Vec<CssDecl>,
+    /// Katman sırası (`@layer`). `None` = katmansız (unlayered) kural.
+    pub layer: Option<usize>,
 }
 
 /// Tek bir @keyframes adımı: yüzde konumu ve stili.
@@ -364,6 +386,169 @@ fn split_css_declarations(input: &str) -> Vec<&str> {
     out
 }
 
+/// Bildirim değerinden `!important` işaretini ayırır.
+///
+/// Dönen değer: (temizlenmiş değer, önem bayrağı).
+fn split_important(value: &str) -> (String, bool) {
+    let v = value.trim();
+    // `!important` ASCII olduğu için son 10 bayt kontrolü yeterlidir; ancak
+    // çok baytlı karakterin ortasında bölmemek için `get` kullanılır.
+    if let Some(tail) = v.get(v.len().saturating_sub(10)..) {
+        if tail.eq_ignore_ascii_case("!important") {
+            let head = &v[..v.len() - 10];
+            return (String::from(head.trim()), true);
+        }
+    }
+    (String::from(v), false)
+}
+
+/// CSS kısa gösterimini longhand (uzun) özelliklere açar.
+///
+/// Özellik bazlı cascade için kısa gösterimler ayrıştırma anında longhand
+/// bildirimlere bölünür; aksi halde `margin: 10px` ile `margin-top: 0`
+/// çakışması çözülemez.
+fn expand_css_declaration(prop: &str, value: &str) -> Vec<(String, String)> {
+    match prop {
+        "margin" | "padding" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            if parts.is_empty() {
+                return Vec::new();
+            }
+            let (top, right, bottom, left) = match parts.len() {
+                1 => (parts[0], parts[0], parts[0], parts[0]),
+                2 => (parts[0], parts[1], parts[0], parts[1]),
+                3 => (parts[0], parts[1], parts[2], parts[1]),
+                _ => (parts[0], parts[1], parts[2], parts[3]),
+            };
+            let prefix = if prop == "margin" {
+                "margin"
+            } else {
+                "padding"
+            };
+            vec![
+                (format!("{}-top", prefix), String::from(top)),
+                (format!("{}-right", prefix), String::from(right)),
+                (format!("{}-bottom", prefix), String::from(bottom)),
+                (format!("{}-left", prefix), String::from(left)),
+            ]
+        }
+        "gap" => vec![
+            (String::from("row-gap"), String::from(value.trim())),
+            (String::from("column-gap"), String::from(value.trim())),
+        ],
+        "place-items" | "place-content" | "place-self" => {
+            let names: [&str; 2] = match prop {
+                "place-items" => ["align-items", "justify-content"],
+                "place-content" => ["align-content", "justify-content"],
+                _ => ["align-self", "justify-self"],
+            };
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            match parts.len() {
+                0 => Vec::new(),
+                1 => vec![
+                    (String::from(names[0]), String::from(parts[0])),
+                    (String::from(names[1]), String::from(parts[0])),
+                ],
+                _ => vec![
+                    (String::from(names[0]), String::from(parts[0])),
+                    (String::from(names[1]), String::from(parts[1])),
+                ],
+            }
+        }
+        "flex" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            match parts.len() {
+                0 => Vec::new(),
+                1 => {
+                    let p = parts[0].trim();
+                    let (grow, shrink, basis) = if p.eq_ignore_ascii_case("none") {
+                        ("0", "0", "auto")
+                    } else if p.eq_ignore_ascii_case("auto") {
+                        ("1", "1", "auto")
+                    } else if p.eq_ignore_ascii_case("initial") {
+                        ("0", "1", "auto")
+                    } else {
+                        (p, "1", "0%")
+                    };
+                    vec![
+                        (String::from("flex-grow"), String::from(grow)),
+                        (String::from("flex-shrink"), String::from(shrink)),
+                        (String::from("flex-basis"), String::from(basis)),
+                    ]
+                }
+                _ => {
+                    let basis = parts.get(2).copied().unwrap_or("0%");
+                    vec![
+                        (String::from("flex-grow"), String::from(parts[0].trim())),
+                        (String::from("flex-shrink"), String::from(parts[1].trim())),
+                        (String::from("flex-basis"), String::from(basis.trim())),
+                    ]
+                }
+            }
+        }
+        _ => vec![(String::from(prop), String::from(value.trim()))],
+    }
+}
+
+/// Tırnaklı bölümleri ayırır: `"a b" "c d"` → ["a b", "c d"].
+fn split_quoted_segments(value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in value.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    out.push(core::mem::take(&mut current));
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => {
+                if ch == '"' || ch == '\'' {
+                    quote = Some(ch);
+                }
+            }
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// `grid-template-areas` değerini satır → sütun → alan adı tablosuna çevirir.
+///
+/// `"header header" "side main"` → [["header","header"],["side","main"]].
+/// `"."` boş hücreyi belirtir; satırlar dikdörtgen olacak şekilde tamamlanır.
+fn parse_grid_template_areas(value: &str) -> Vec<Vec<String>> {
+    let segments = split_quoted_segments(value);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    if segments.is_empty() {
+        // Tırnaksız kullanım: tüm değer tek satır sayılır.
+        let cells: Vec<String> = value.split_whitespace().map(String::from).collect();
+        if !cells.is_empty() {
+            rows.push(cells);
+        }
+    } else {
+        for seg in segments {
+            let cells: Vec<String> = seg.split_whitespace().map(String::from).collect();
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
+        }
+    }
+    // Satırları aynı genişliğe getir (eksik hücreler boş).
+    let width = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    for row in rows.iter_mut() {
+        while row.len() < width {
+            row.push(String::from("."));
+        }
+    }
+    rows
+}
+
 /// `url(...)` içindeki ilk adresi döndürür (tırnaklar temizlenir).
 fn extract_css_url(value: &str) -> Option<String> {
     let lower = value.to_ascii_lowercase();
@@ -493,8 +678,10 @@ fn apply_background_tokens(style: &mut ElementStyle, value: &str) {
 #[allow(unreachable_patterns)]
 fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
     let mut val = raw_val.trim();
-    if val.len() >= 10 && val[val.len() - 10..].eq_ignore_ascii_case("!important") {
-        val = val[..val.len() - 10].trim();
+    if let Some(tail) = val.get(val.len().saturating_sub(10)..) {
+        if tail.eq_ignore_ascii_case("!important") {
+            val = val[..val.len() - 10].trim();
+        }
     }
     match prop {
         "color" => {
@@ -599,6 +786,11 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
             // Varsayılan: viewport ve parent bilgis yok, direkt px/em/rem parse et
             if let Some(px) = parse_px_value(val, None, None, None, None) {
                 style.indent_px = px;
+            }
+        }
+        "margin-top" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.margin_top = px;
             }
         }
         "margin" | "padding" => {
@@ -873,16 +1065,19 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         "grid-gap" | "gap" => {
             if let Some(px) = parse_px_value(val, None, None, None, None) {
                 style.grid_gap = px;
+                style.gap = px;
             }
         }
+        "grid-template-areas" => {
+            style.grid_template_areas = parse_grid_template_areas(val);
+        }
         "grid-area" => {
-            // grid-area: row-start / column-start / row-end / column-end
-            // Basit implementasyon: sadece ilk iki degeri kaydet (satir, sutun baslangici)
-            let parts: Vec<&str> = val.split('/').collect();
-            if let Some(first) = parts.first() {
-                if let Ok(_n) = first.trim().parse::<usize>() {
-                    // grid-area basit tutuluyor, html.rs'te kullanilacak
-                }
+            // grid-area: <isim> → adlandırılmış alan ataması.
+            // grid-area: row / column biçimi sayısal; şu an yalnızca alan
+            // adı desteklenir.
+            let v = val.trim();
+            if !v.is_empty() && !v.contains('/') && !v.starts_with(|c: char| c.is_ascii_digit()) {
+                style.grid_area = Some(String::from(v));
             }
         }
         "grid-column" => {
@@ -890,6 +1085,156 @@ fn apply_css_decl(style: &mut ElementStyle, prop: &str, raw_val: &str) {
         }
         "grid-row" => {
             // grid-row: start / end
+        }
+        // CSS Flexbox özellikleri
+        "flex-direction" => {
+            style.flex_direction = match val.to_ascii_lowercase().trim() {
+                "row" => 0,
+                "row-reverse" => 1,
+                "column" => 2,
+                "column-reverse" => 3,
+                _ => 0,
+            };
+        }
+        "flex-wrap" => {
+            style.flex_wrap = match val.to_ascii_lowercase().trim() {
+                "nowrap" => 0,
+                "wrap" => 1,
+                "wrap-reverse" => 2,
+                _ => 0,
+            };
+        }
+        "justify-content" => {
+            style.justify_content = match val.to_ascii_lowercase().trim() {
+                "flex-start" | "start" => 0,
+                "flex-end" | "end" => 1,
+                "center" => 2,
+                "space-between" => 3,
+                "space-around" => 4,
+                "space-evenly" => 5,
+                _ => 0,
+            };
+        }
+        "align-items" => {
+            style.align_items = match val.to_ascii_lowercase().trim() {
+                "stretch" | "normal" => 0,
+                "flex-start" | "start" => 1,
+                "flex-end" | "end" => 2,
+                "center" => 3,
+                "baseline" => 4,
+                _ => 0,
+            };
+        }
+        "align-content" => {
+            style.align_content = match val.to_ascii_lowercase().trim() {
+                "stretch" | "normal" => 0,
+                "flex-start" | "start" => 1,
+                "flex-end" | "end" => 2,
+                "center" => 3,
+                "space-between" => 4,
+                "space-around" => 5,
+                _ => 0,
+            };
+        }
+        "align-self" => {
+            // align-self, align-items ile aynı kodlamayı kullanır.
+            style.align_self = match val.to_ascii_lowercase().trim() {
+                "stretch" | "normal" | "auto" => 0,
+                "flex-start" | "start" => 1,
+                "flex-end" | "end" => 2,
+                "center" => 3,
+                "baseline" => 4,
+                _ => 0,
+            };
+        }
+        "justify-self" => {
+            style.justify_self = match val.to_ascii_lowercase().trim() {
+                "stretch" | "normal" | "auto" => 0,
+                "flex-start" | "start" | "left" => 1,
+                "flex-end" | "end" | "right" => 2,
+                "center" => 3,
+                _ => 0,
+            };
+        }
+        "order" => {
+            if let Ok(n) = val.trim().parse::<i32>() {
+                style.order = n;
+            }
+        }
+        "flex-grow" => {
+            if let Ok(n) = val.trim().parse::<u32>() {
+                style.flex_grow = n;
+            }
+        }
+        "flex-shrink" => {
+            if let Ok(n) = val.trim().parse::<u32>() {
+                style.flex_shrink = n;
+            }
+        }
+        "flex-basis" => {
+            let v = val.trim().to_ascii_lowercase();
+            if v == "auto" {
+                style.flex_basis = 0;
+            } else if let Some(px) = parse_px_value(&v, None, None, None, None) {
+                style.flex_basis = px;
+            }
+        }
+        "flex" => {
+            // Kısa gösterim: flex-grow [flex-shrink] [flex-basis]
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if parts.len() == 1 {
+                let p = parts[0].trim();
+                if p.eq_ignore_ascii_case("none") {
+                    style.flex_grow = 0;
+                    style.flex_shrink = 0;
+                    style.flex_basis = 0;
+                } else if p.eq_ignore_ascii_case("auto") {
+                    style.flex_grow = 1;
+                    style.flex_shrink = 1;
+                    style.flex_basis = 0;
+                } else if let Ok(n) = p.parse::<u32>() {
+                    style.flex_grow = n;
+                    style.flex_shrink = 1;
+                    style.flex_basis = 0;
+                }
+            } else if parts.len() >= 2 {
+                if let Ok(g) = parts[0].trim().parse::<u32>() {
+                    style.flex_grow = g;
+                }
+                if let Ok(s) = parts[1].trim().parse::<u32>() {
+                    style.flex_shrink = s;
+                }
+                if parts.len() >= 3 {
+                    let b = parts[2].trim().to_ascii_lowercase();
+                    if b == "auto" {
+                        style.flex_basis = 0;
+                    } else if let Some(px) = parse_px_value(&b, None, None, None, None) {
+                        style.flex_basis = px;
+                    }
+                }
+            }
+        }
+        "row-gap" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.row_gap = px;
+                if style.gap == 0 {
+                    style.gap = px;
+                }
+                if style.grid_gap == 0 {
+                    style.grid_gap = px;
+                }
+            }
+        }
+        "column-gap" => {
+            if let Some(px) = parse_px_value(val, None, None, None, None) {
+                style.column_gap = px;
+                if style.gap == 0 {
+                    style.gap = px;
+                }
+                if style.grid_gap == 0 {
+                    style.grid_gap = px;
+                }
+            }
         }
         _ => {}
     }
@@ -939,12 +1284,29 @@ fn parse_single_grid_track(part: &str) -> GridTrack {
     GridTrack::Auto
 }
 
+/// Katman adının sırasını döndürür; ad ilk kez görülüyorsa sona eklenir.
+///
+/// Katman önceliği ilk bildirilen katman en düşük, sonraki katmanlar daha
+/// yüksek önceliklidir.
+fn layer_index(layers: &mut Vec<String>, name: &str) -> usize {
+    if let Some(idx) = layers.iter().position(|l| l == name) {
+        return idx;
+    }
+    layers.push(String::from(name));
+    layers.len() - 1
+}
+
 /// Seçicileri ve bildirim bloklarını ayrıştırır; `@media` gibi iç içe bloklar recursive işlenir.
+///
+/// `layers` katman adlarının bildirim sırasını tutar; `current_layer` ise
+/// içinde bulunulan `@layer` bloğunun sırasını (katmansız kural için `None`).
 fn parse_css_rules(
     bytes: &[u8],
     rules: &mut Vec<CssRule>,
     keyframes: &mut Vec<Keyframes>,
+    layers: &mut Vec<String>,
     current_media: Option<&str>,
+    current_layer: Option<usize>,
 ) {
     let mut p = 0;
     while p < bytes.len() {
@@ -955,10 +1317,39 @@ fn parse_css_rules(
             break;
         }
         let sel_start = p;
-        while p < bytes.len() && bytes[p] != b'{' && bytes[p] != b'<' {
+        while p < bytes.len()
+            && bytes[p] != b'{'
+            && bytes[p] != b'<'
+            && bytes[p] != b';'
+            && bytes[p] != b'}'
+        {
             p += 1;
         }
-        if p >= bytes.len() || bytes[p] != b'{' {
+        if p >= bytes.len() {
+            break;
+        }
+        // Bloksuz at-kuralı (ör. `@layer base, components;`).
+        if bytes[p] == b';' {
+            let stmt = core::str::from_utf8(&bytes[sel_start..p])
+                .unwrap_or("")
+                .trim();
+            p += 1;
+            if stmt.len() > 6 && stmt[..6].eq_ignore_ascii_case("@layer") {
+                for name in stmt[6..].split(',') {
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        layer_index(layers, name);
+                    }
+                }
+            }
+            continue;
+        }
+        // Kapanış parantezi: blok dışına çık.
+        if bytes[p] == b'}' {
+            p += 1;
+            continue;
+        }
+        if bytes[p] != b'{' {
             break;
         }
         let selector = core::str::from_utf8(&bytes[sel_start..p])
@@ -1004,9 +1395,45 @@ fn parse_css_rules(
                     (None, false) => Some(media_cond),
                     (None, true) => None,
                 };
-                parse_css_rules(block.as_bytes(), rules, keyframes, combined.as_deref());
-            } else if at == "@supports" || at == "@layer" || at == "@container" {
-                parse_css_rules(block.as_bytes(), rules, keyframes, current_media);
+                parse_css_rules(
+                    block.as_bytes(),
+                    rules,
+                    keyframes,
+                    layers,
+                    combined.as_deref(),
+                    current_layer,
+                );
+            } else if at == "@layer" {
+                // `@layer ad { ... }`: blok içindeki kurallar katmana aittir.
+                // Katmansız (isimsiz) `@layer { ... }` katman önceliğine girmez.
+                let layer_name = selector
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let layer = if layer_name.is_empty() {
+                    current_layer
+                } else {
+                    Some(layer_index(layers, &layer_name))
+                };
+                parse_css_rules(
+                    block.as_bytes(),
+                    rules,
+                    keyframes,
+                    layers,
+                    current_media,
+                    layer,
+                );
+            } else if at == "@supports" || at == "@container" {
+                parse_css_rules(
+                    block.as_bytes(),
+                    rules,
+                    keyframes,
+                    layers,
+                    current_media,
+                    current_layer,
+                );
             } else if at == "@keyframes" {
                 // @keyframes NAME { 0% { opacity: 1 } 50% { opacity: 0.5 } }
                 let kf_name = selector
@@ -1117,11 +1544,25 @@ fn parse_css_rules(
             continue;
         }
 
+        // Bildirimleri longhand'lara açarak sakla; cascade özellik bazlı
+        // hesaplanır. `rule.style` ise geriye dönük uyum için doldurulur.
+        let mut decls: Vec<CssDecl> = Vec::new();
         let mut style = ElementStyle::new();
         for decl in split_css_declarations(block) {
             if let Some((prop, val)) = decl.split_once(':') {
                 let prop = prop.trim().to_ascii_lowercase();
-                apply_css_decl(&mut style, &prop, val);
+                if prop.is_empty() {
+                    continue;
+                }
+                let (value, important) = split_important(val);
+                for (longhand, longhand_value) in expand_css_declaration(&prop, &value) {
+                    apply_css_decl(&mut style, &longhand, &longhand_value);
+                    decls.push(CssDecl {
+                        prop: longhand,
+                        value: longhand_value,
+                        important,
+                    });
+                }
             }
         }
         for s in selector.split(',') {
@@ -1131,6 +1572,8 @@ fn parse_css_rules(
                     selector: String::from(trimmed),
                     style: style.clone(),
                     media: current_media.map(String::from),
+                    decls: decls.clone(),
+                    layer: current_layer,
                 });
             }
         }
@@ -1156,7 +1599,15 @@ pub fn parse_css(css_code: &str) -> ParsedCss {
     } else {
         substitute_css_variables(&cleaned, &variables)
     };
-    parse_css_rules(expanded.as_bytes(), &mut rules, &mut keyframes, None);
+    let mut layers: Vec<String> = Vec::new();
+    parse_css_rules(
+        expanded.as_bytes(),
+        &mut rules,
+        &mut keyframes,
+        &mut layers,
+        None,
+        None,
+    );
     ParsedCss { rules, keyframes }
 }
 
@@ -1175,113 +1626,163 @@ impl Specificity {
     }
 }
 
+/// Seçici adı karakterlerini (harf, rakam, '-', '_') atlar.
+fn skip_name_chars(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len()
+        && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+    {
+        i += 1;
+    }
+    i
+}
+
+/// `(` konumundan başlayarak parantez içeriğini ve kapanıştan sonraki indeksi
+/// döndürür. İç içe parantezler desteklenir.
+fn extract_paren_content(text: &str, open: usize) -> (String, usize) {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return (String::from(&text[open + 1..i]), i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (String::from(&text[open + 1..]), bytes.len())
+}
+
+/// Parantez içinde olmayan virgüllerden böler.
+fn split_top_level(text: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if bytes[i] == sep as u8 && depth == 0 {
+            out.push(&text[start..i]);
+            start = i + 1;
+        }
+        i += 1;
+    }
+    out.push(&text[start..]);
+    out
+}
+
 /// Bir CSS seçicisinin özgüllük skorunu hesaplar.
+///
+/// `:is()`, `:not()` ve `:has()` fonksiyonel sözde-sınıfları argümanlarındaki
+/// en yüksek özgüllüğü alır; `:where()` hiçbir katkı yapmaz (0). Diğer
+/// sözde-sınıflar (`:hover`, `:nth-child` ...) birer sınıf (b) sayılır.
 fn selector_specificity(sel: &str) -> Specificity {
+    let s = sel.trim();
+    let bytes = s.as_bytes();
     let mut a = 0u32;
     let mut b = 0u32;
     let mut c = 0u32;
-    let s = sel.trim();
-    // Virgülle ayrılmış çoklu seçiciler: her birinin en yüksek skoru alınır.
-    for part in s.split(',') {
-        let p = part.trim();
-        if p.is_empty() {
-            continue;
-        }
-        let mut pa = 0u32;
-        let mut pb = 0u32;
-        let mut pc = 0u32;
-        let mut chars = p.chars().peekable();
-        while let Some(&ch) = chars.peek() {
-            match ch {
-                '#' => {
-                    pa += 1;
-                    chars.next();
-                    while let Some(&c2) = chars.peek() {
-                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'#' => {
+                a += 1;
+                i = skip_name_chars(bytes, i + 1);
+            }
+            b'.' => {
+                b += 1;
+                i = skip_name_chars(bytes, i + 1);
+            }
+            b'[' => {
+                // Öznitelik seçicisi → sınıf (b) sayılır.
+                b += 1;
+                i += 1;
+                while i < bytes.len() && bytes[i] != b']' {
+                    i += 1;
                 }
-                '.' => {
-                    pb += 1;
-                    chars.next();
-                    while let Some(&c2) = chars.peek() {
-                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                '[' => {
-                    pb += 1;
-                    chars.next();
-                    while let Some(&c2) = chars.peek() {
-                        if c2 == ']' {
-                            chars.next();
-                            break;
-                        } else {
-                            chars.next();
-                        }
-                    }
-                }
-                ':' => {
-                    chars.next();
-                    if let Some(&c2) = chars.peek() {
-                        if c2 == ':' {
-                            chars.next();
-                            // Sözde-element: ::before, ::after vb. → c++
-                            pc += 1;
-                        } else {
-                            // Sözde-sınıf: :hover, :nth-child() vb. → b++
-                            pb += 1;
-                        }
-                        while let Some(&c3) = chars.peek() {
-                            if c3.is_ascii_alphanumeric()
-                                || c3 == '-'
-                                || c3 == '_'
-                                || c3 == '('
-                                || c3 == ')'
-                            {
-                                chars.next();
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                }
-                '*' => {
-                    chars.next(); // Evrensel seçici, 0 etki
-                }
-                _ if ch.is_ascii_alphabetic() => {
-                    pc += 1;
-                    chars.next();
-                    while let Some(&c2) = chars.peek() {
-                        if c2.is_ascii_alphanumeric() || c2 == '-' || c2 == '_' {
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                }
-                _ => {
-                    chars.next();
+                if i < bytes.len() {
+                    i += 1;
                 }
             }
+            b':' => {
+                i += 1;
+                if i < bytes.len() && bytes[i] == b':' {
+                    // Sözde-element: ::before, ::after vb. → c++
+                    c += 1;
+                    i = skip_name_chars(bytes, i + 1);
+                    continue;
+                }
+                let name_start = i;
+                i = skip_name_chars(bytes, i);
+                let name = s[name_start..i].to_ascii_lowercase();
+                if i < bytes.len() && bytes[i] == b'(' {
+                    let (args, next) = extract_paren_content(s, i);
+                    i = next;
+                    match name.as_str() {
+                        "is" | "not" | "has" => {
+                            // Argümanlardaki en yüksek özgüllük alınır.
+                            let mut best = Specificity::new(0, 0, 0);
+                            for arg in split_top_level(&args, ',') {
+                                let sp = selector_specificity(arg);
+                                if sp > best {
+                                    best = sp;
+                                }
+                            }
+                            a += best.a;
+                            b += best.b;
+                            c += best.c;
+                        }
+                        // :where() her zaman 0 özgüllük katkısı yapar.
+                        "where" => {}
+                        _ => b += 1,
+                    }
+                } else {
+                    b += 1;
+                }
+            }
+            b'*' => {
+                i += 1; // Evrensel seçici, 0 etki
+            }
+            _ if bytes[i].is_ascii_alphabetic() => {
+                c += 1;
+                i = skip_name_chars(bytes, i + 1);
+            }
+            _ => {
+                i += 1;
+            }
         }
-        a = a.max(pa);
-        b = b.max(pb);
-        c = c.max(pc);
     }
     Specificity::new(a, b, c)
 }
 
-/// CSS kuralı ile özgüllük skoru.
-struct ScoredRule {
+/// Cascade sıralamasına giren tek bir bildirim.
+///
+/// Sıralama anahtarı: (önem, satır içi mi, katman, özgüllük, kaynak sırası).
+struct CascadeEntry {
+    /// `@layer` sırası (`None` = katmansız).
+    layer: Option<usize>,
+    /// Seçicinin özgüllüğü.
     specificity: Specificity,
-    style: ElementStyle,
+    /// Kaynak sırası (kurallar vektöründeki indeks).
+    source: usize,
+    /// Satır içi (`style="..."`) bildirim mi?
+    inline_rule: bool,
+    /// `!important` işareti taşıyor mu?
+    important: bool,
+    /// Longhand özellik adı.
+    prop: String,
+    /// Değer metni.
+    value: String,
 }
 
 /// Bir @media koşulunu değerlendirir.
@@ -1374,47 +1875,142 @@ fn class_list_contains(class: Option<&str>, want: &str) -> bool {
     })
 }
 
+/// Bileşik seçicinin sözde-sınıf bölümlerini toplar: (ad, argüman metni).
+///
+/// Sözde-elementler ("::before") özel olarak işaretlenir.
+fn collect_pseudo_classes(part: &str) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let bytes = part.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'[' => {
+                // Öznitelik seçicileri statik eşleştirmede yok sayılır.
+                while i < bytes.len() && bytes[i] != b']' {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            }
+            b':' => {
+                i += 1;
+                let mut is_element = false;
+                if i < bytes.len() && bytes[i] == b':' {
+                    is_element = true;
+                    i += 1;
+                }
+                let start = i;
+                i = skip_name_chars(bytes, i);
+                let name = part[start..i].to_ascii_lowercase();
+                let mut args = None;
+                if !is_element && i < bytes.len() && bytes[i] == b'(' {
+                    let (content, next) = extract_paren_content(part, i);
+                    args = Some(content);
+                    i = next;
+                }
+                if is_element {
+                    out.push((String::from("::"), args));
+                } else {
+                    out.push((name, args));
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
 /// Bir bileşik seçiciyi (`div.card`, `.a.b`, `#id`, `*`) eşleştirir.
-/// Öznitelik ve sözde-sınıf bölümleri statik eşleştirmede yok sayılır.
+///
+/// `:is()`, `:not()` ve `:where()` fonksiyonel sözde-sınıfları eşleştirilir;
+/// desteklenmeyen sözde-sınıflar (`:hover`, `:nth-child` ...) statik çizimde
+/// eşleşmez (false döner).
 fn compound_selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
-    let base: String = sel.chars().take_while(|&c| c != ':' && c != '[').collect();
-    let base = base.trim();
-    if base.is_empty() {
+    let s = sel.trim();
+    if s.is_empty() {
         return false;
     }
-    if base == "*" {
-        return true;
+    let base_end = s.find([':', '[']).unwrap_or(s.len());
+    let base = s[..base_end].trim();
+    let pseudos = collect_pseudo_classes(&s[base_end..]);
+
+    if base.is_empty() && pseudos.is_empty() {
+        // Yalnızca öznitelik seçicisi olan bir bileşik seçici statik olarak
+        // eşleştirilemez.
+        return false;
     }
 
-    let (tag_part, mut rest) = match base.find(['#', '.']) {
-        Some(pos) => (&base[..pos], &base[pos..]),
-        None => (base, ""),
-    };
-    if !tag_part.is_empty() && tag_part != "*" && !tag_part.eq_ignore_ascii_case(tag) {
-        return false;
+    if !base.is_empty() && base != "*" {
+        let (tag_part, mut rest) = match base.find(['#', '.']) {
+            Some(pos) => (&base[..pos], &base[pos..]),
+            None => (base, ""),
+        };
+        if !tag_part.is_empty() && tag_part != "*" && !tag_part.eq_ignore_ascii_case(tag) {
+            return false;
+        }
+        while let Some(ch) = rest.chars().next() {
+            if ch == '#' {
+                rest = &rest[1..];
+                let end = rest.find(['#', '.']).unwrap_or(rest.len());
+                let want = &rest[..end];
+                if !id.is_some_and(|v| v.eq_ignore_ascii_case(want)) {
+                    return false;
+                }
+                rest = &rest[end..];
+            } else if ch == '.' {
+                rest = &rest[1..];
+                let end = rest.find(['#', '.']).unwrap_or(rest.len());
+                let want = &rest[..end];
+                if !class_list_contains(class, want) {
+                    return false;
+                }
+                rest = &rest[end..];
+            } else {
+                rest = &rest[1..];
+            }
+        }
     }
-    while let Some(ch) = rest.chars().next() {
-        if ch == '#' {
-            rest = &rest[1..];
-            let end = rest.find(['#', '.']).unwrap_or(rest.len());
-            let want = &rest[..end];
-            if !id.is_some_and(|v| v.eq_ignore_ascii_case(want)) {
-                return false;
+
+    // Sözde-sınıfları değerlendir.
+    for (name, args) in pseudos {
+        match name.as_str() {
+            "is" | "where" => {
+                let list = args.unwrap_or_default();
+                let matched = split_top_level(&list, ',')
+                    .iter()
+                    .any(|arg| complex_part_matches(arg, tag, class, id));
+                if !matched {
+                    return false;
+                }
             }
-            rest = &rest[end..];
-        } else if ch == '.' {
-            rest = &rest[1..];
-            let end = rest.find(['#', '.']).unwrap_or(rest.len());
-            let want = &rest[..end];
-            if !class_list_contains(class, want) {
-                return false;
+            "not" => {
+                let list = args.unwrap_or_default();
+                let matched = split_top_level(&list, ',')
+                    .iter()
+                    .any(|arg| complex_part_matches(arg, tag, class, id));
+                if matched {
+                    return false;
+                }
             }
-            rest = &rest[end..];
-        } else {
-            rest = &rest[1..];
+            // Desteklenmeyen sözde-sınıflar statik çizimde eşleşmez.
+            _ => return false,
         }
     }
     true
+}
+
+/// Karmaşık (birleştiricili) seçicinin son bileşik parçasını eşleştirir.
+fn complex_part_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>) -> bool {
+    let part = sel.trim();
+    if part.is_empty() {
+        return false;
+    }
+    let last = part
+        .rsplit(|c: char| c.is_ascii_whitespace() || c == '>' || c == '+' || c == '~')
+        .find(|s| !s.is_empty())
+        .unwrap_or(part);
+    compound_selector_matches(last, tag, class, id)
 }
 
 /// Seçici eşleştirme: virgülle ayrılmış parçalar, torun/çocuk birleştiricileri
@@ -1449,30 +2045,30 @@ fn selector_matches(sel: &str, tag: &str, class: Option<&str>, id: Option<&str>)
             continue;
         }
         // Torun/çocuk seçicide son bileşik seçiciyi eşleştir.
-        let last = part
-            .rsplit(|c: char| c.is_ascii_whitespace() || c == '>' || c == '+' || c == '~')
-            .find(|s| !s.is_empty())
-            .unwrap_or(part);
-        if compound_selector_matches(last, tag, class, id) {
+        if complex_part_matches(part, tag, class, id) {
             return true;
         }
     }
     false
 }
 
-/// CSS Cascade: kuralları özgüllüğe göre sıralar ve en yüksek skoru uygular.
+/// CSS Cascade: kuralları katman → özgüllük → kaynak sırası ile sıralar ve
+/// bildirimleri özellik bazlı çözer.
+///
 /// `media` ile filtreleme yapılır; eşleşmeyen @media kuralları atlanır.
 /// Aynı özgüllükteyse sonra gelen kural kazanır (son kazanır kuralı).
+/// `!important` bildirimler normal bildirimlerin üzerinde uygulanır.
 fn apply_css_cascade(
     rules: &[CssRule],
     tag: &str,
     class: Option<&str>,
     id: Option<&str>,
+    inline_style: Option<&str>,
     viewport_w: usize,
     viewport_h: usize,
 ) -> ElementStyle {
-    let mut scored: Vec<ScoredRule> = Vec::new();
-    for rule in rules {
+    let mut entries: Vec<CascadeEntry> = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
         // @media filtresi
         if let Some(ref media) = rule.media {
             if !media_matches(media, viewport_w, viewport_h) {
@@ -1480,21 +2076,79 @@ fn apply_css_cascade(
             }
         }
 
-        let sel = rule.selector.as_str();
-        if selector_matches(sel, tag, class, id) {
-            scored.push(ScoredRule {
-                specificity: selector_specificity(sel),
-                style: rule.style.clone(),
-            });
+        // Virgülle ayrılmış her seçici kendi özgüllüğüyle değerlendirilir.
+        for part in rule.selector.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            if !selector_matches(part, tag, class, id) {
+                continue;
+            }
+            let specificity = selector_specificity(part);
+            for decl in &rule.decls {
+                entries.push(CascadeEntry {
+                    layer: rule.layer,
+                    specificity,
+                    source: index,
+                    inline_rule: false,
+                    important: decl.important,
+                    prop: decl.prop.clone(),
+                    value: decl.value.clone(),
+                });
+            }
         }
     }
 
-    // Özgüllüğe göre sırala (aşşağıdan yukarıya); eşit skorlarda orijinal sırayı koru (stabil).
-    scored.sort_by_key(|a| a.specificity);
+    // Satır içi bildirimler: normal kuralların üstünde, `!important` kurallarının
+    // altında yer alır.
+    if let Some(inline) = inline_style {
+        for decl in split_css_declarations(inline) {
+            if let Some((prop, val)) = decl.split_once(':') {
+                let prop = prop.trim().to_ascii_lowercase();
+                if prop.is_empty() {
+                    continue;
+                }
+                let (value, important) = split_important(val);
+                for (longhand, longhand_value) in expand_css_declaration(&prop, &value) {
+                    entries.push(CascadeEntry {
+                        layer: None,
+                        specificity: Specificity::new(0, 0, 0),
+                        source: usize::MAX,
+                        inline_rule: true,
+                        important,
+                        prop: longhand,
+                        value: longhand_value,
+                    });
+                }
+            }
+        }
+    }
 
+    // Çözümleme sırası: önce normal bildirimler (katman → özgüllük → kaynak
+    // sırası), sonra `!important` bildirimler (aynı sıralama).
+    entries.sort_by(|x, y| {
+        let kx = (
+            x.important,
+            x.inline_rule,
+            x.layer.unwrap_or(usize::MAX),
+            x.specificity,
+            x.source,
+        );
+        let ky = (
+            y.important,
+            y.inline_rule,
+            y.layer.unwrap_or(usize::MAX),
+            y.specificity,
+            y.source,
+        );
+        kx.cmp(&ky)
+    });
+
+    // Bildirimler sırayla uygulanır; son uygulanan kazanır.
     let mut resolved = ElementStyle::new();
-    for sr in scored {
-        resolved.merge_from(&sr.style);
+    for entry in &entries {
+        apply_css_decl(&mut resolved, &entry.prop, &entry.value);
     }
     resolved
 }
@@ -1508,16 +2162,7 @@ pub fn match_css_style(
     viewport_w: usize,
     viewport_h: usize,
 ) -> ElementStyle {
-    let mut resolved = apply_css_cascade(rules, tag, class, id, viewport_w, viewport_h);
-    if let Some(inline) = inline_style {
-        for decl in split_css_declarations(inline) {
-            if let Some((prop, val)) = decl.split_once(':') {
-                let prop = prop.trim().to_ascii_lowercase();
-                apply_css_decl(&mut resolved, &prop, val);
-            }
-        }
-    }
-    resolved
+    apply_css_cascade(rules, tag, class, id, inline_style, viewport_w, viewport_h)
 }
 
 /// Animasyon ismi ile keyframes kaydını bulur.

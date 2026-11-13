@@ -3481,11 +3481,13 @@ impl BrowserApp {
                         }
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
+                        let mut x25519_secret = [0u8; 32];
                         crate::drivers::tls::build_client_hello_with_alpn(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
+                            &mut x25519_secret,
                             false,
                             None,
                             None,
@@ -3495,8 +3497,9 @@ impl BrowserApp {
                         let mut tls_session =
                             crate::drivers::tls::TlsSession::new(host, client_random);
                         tls_session.note_client_hello(ch_body);
-                        // TLS 1.3 anahtar türetimi için istemci ECDHE gizlisi saklanır.
+                        // TLS 1.3 anahtar türetimi için istemci ECDHE gizlileri saklanır.
                         tls_session.set_client_ecdhe_secret(ecdhe_secret);
+                        tls_session.set_client_x25519_secret(x25519_secret);
                         if crate::drivers::netstack::tcp_send(&hello) {
                             self.tls_session = Some(tls_session);
                             self.request_state = 2;

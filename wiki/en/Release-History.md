@@ -4,7 +4,24 @@ minOs release notes and future plans.
 
 ---
 
-## v2.3.0 (Current)
+## v2.4.0 (Current)
+
+### What's New
+
+- **🛡️ Watchdog Runs Independently of the Main Loop:** Frozen-app detection runs in the APIC timer interrupt (`watchdog::timer_tick()`); the interrupt context only updates state in a short `try_lock`-guarded critical section, and termination is deferred to the main loop via `drain_frozen()`. The `guard` context flags only the stuck application.
+- **🎮 FPS 3D Real Performance Metrics:** `FPS 3D Game` (app ID 16) produces real measurements from completed frames: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` serial output plus live/minimum FPS and frame time on the HUD. Verified via the `[FPS3D] Uygulama açıldı` boot marker.
+- **🧪 FPS 3D Stress Test Automation:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game from the Start menu over QMP; 10/30/60-minute runs validate QEMU liveness and positive FPS/min-FPS metrics.
+- **🖼️ Partial Frame Protection on Budget Expiry:** When `RENDER_BUDGET_MS` is exceeded the half-drawn framebuffer is never shown; the FPS 3D content region is backed up statically and restored if the render cannot complete.
+- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour (271 host tests).
+- **🎵 Direct WAV Playback:** Double-clicking a WAV file in File Manager opens it directly in Music Player.
+- **🖼️ Tiled Desktop Wallpaper:** Image Viewer can now set the loaded image as a tiled desktop wallpaper.
+- **🎨 New Desktop Images:** Three new desktop images (`desktop1.png`–`desktop3.png`) added to Settings.
+- **🔫 Process Signals & Control:** `SYS_KILL` (19) provides POSIX-style signal semantics: `SIGKILL`/`SIGTERM` terminate, `SIGSTOP` moves a process to `Suspended`, `SIGCONT` returns it to `Ready`, `sig=0` probes existence; other signals are pended in a `pending_signals` mask. `[KILL-TEST]` boot test added.
+- **🧠 Advanced Memory Management:** User `brk`/`mmap` pages are now **lazily** mapped (`PAGE_LAZY` — frames allocated on first write); `mmap` gained a `MAP_SHARED_FILE` zero-copy sharing flag. The kernel heap moved to a 16→64 MiB growing virtual window (≥64 KiB allocations lazy). `src/mm/memory/` adds 2 MiB huge-page support (`[BIGPAGE]`), a disk-less compressed memory store (`[MZRAM]`) and live profiling (`[MEM-PROFILE]`/`[MEM-STAT]`); MinShell gained a `meminfo` command.
+
+---
+
+## v2.3.0 (Previous)
 
 ### What's New
 
@@ -65,7 +82,7 @@ minOs release notes and future plans.
 
 ---
 
-## v2.1.0 (Previous)
+## v2.1.0 (Older)
 
 ### What's New
 

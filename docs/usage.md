@@ -23,7 +23,8 @@ MinShell, klavye geçmişi (Yukarı/Aşağı oklar), akıllı sekme tamamlama (`
 | Komut | Kullanım | Açıklama |
 | :--- | :--- | :--- |
 | `mem` | `mem` | Fiziksel Bellek Yöneticisi (PMM) üzerinden toplam ve boş bellek miktarını (KB) gösterir. |
-| `ps` | `ps` | Çekirdek ve aktif sistem süreçlerini (PID, isim) listeler. |
+| `meminfo` | `meminfo` | Genişletilmiş bellek raporu: PMM profili, kernel heap (büyüme/tembel tahsis), COW paylaşımı, sıkıştırılmış depo ve kullanıcı/kernel çerçeve ayrımı. |
+| `ps` | `ps` | Çekirdek ve aktif sistem süreçlerini (PID, isim, durum) listeler. |
 | `date` | `date` | Gerçek Zamanlı Saat (RTC / CMOS) üzerinden güncel tarih ve saati gösterir. |
 | `uname` | `uname` | minOs çekirdek sürümünü ve mimari bilgisini (`x86_64 Sarman Edition`) yazar. |
 | `whoami` | `whoami` | Aktif kullanıcı yetkisini gösterir (`sarman (root)`). |
@@ -157,15 +158,15 @@ minos/
 
 ## 📊 Kod İstatistikleri (Code Statistics)
 
-> Son güncelleme: 09 Kasım 2026 (v2.3.0)
+> Son güncelleme: 13 Kasım 2026 (v2.4.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 187 dosya (`src/**/*.rs` + `tests/**/*.rs`) |
-| **Toplam Kod Satırı (ham)** | ~137.647 satır (`src/**/*.rs` + `tests/**/*.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 196 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | ~145.300 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Birim Testleri (`test_host.ps1`)** | 271 test (0 hata, %100 başarılı) |
-| **Yerleşik Uygulama Sayısı** | 17 masaüstü uygulaması + Pencere Yöneticisi |
+| **Yerleşik Uygulama Sayısı** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü + Pencere Yöneticisi |
 | **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 
 ---

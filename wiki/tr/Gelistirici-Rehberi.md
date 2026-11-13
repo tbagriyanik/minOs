@@ -20,8 +20,9 @@ minos/
 │   │                        # ext4/exFAT biçimlendirme, MBR/GPT bölümleme
 │   ├── gui/                 # MinGUI pencere yöneticisi, font motoru, tema motoru,
 │   │                        # kaydırma çubuğu ve pano
-│   ├── apps/                # 17 Masaüstü uygulaması
-│   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici
+│   ├── apps/                # 17 kayıtlı uygulama (app ID 0–16)
+│   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici,
+│   │                        # memory/ alt modülü (büyük sayfa, sıkıştırma, profilleme)
 │   └── main.rs              # Çekirdek giriş noktası (_start)
 ├── tests/                   # Host birim testleri (271 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
@@ -74,14 +75,14 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 ---
 
-## Kod İstatistikleri (v2.1.0)
+## Kod İstatistikleri (v2.4.0)
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 179 dosya |
-| **Toplam Kod Satırı** | ~134.929 satır |
+| **Toplam Rust Kaynak Dosyası** | 196 dosya (`src/` + `tests/` + `build.rs`) |
+| **Toplam Kod Satırı** | ~145.300 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
 | **Birim Testleri** | 271 test (0 hata, %100 başarılı) |
-| **Yerleşik Uygulama** | 17 masaüstü uygulaması + Pencere Yöneticisi |
+| **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Pencere Yöneticisi |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |

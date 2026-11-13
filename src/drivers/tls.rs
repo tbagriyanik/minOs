@@ -147,13 +147,16 @@ pub const TLS_VERSION_1_3: u16 = 0x0304;
 
 pub const HANDSHAKE_CLIENT_HELLO: u8 = 1;
 pub const HANDSHAKE_SERVER_HELLO: u8 = 2;
+pub const HANDSHAKE_NEW_SESSION_TICKET: u8 = 4;
+pub const HANDSHAKE_ENCRYPTED_EXTENSIONS: u8 = 8;
 pub const HANDSHAKE_CERTIFICATE: u8 = 11;
 pub const HANDSHAKE_SERVER_KEY_EXCHANGE: u8 = 12;
+pub const HANDSHAKE_CERTIFICATE_REQUEST: u8 = 13;
 pub const HANDSHAKE_SERVER_HELLO_DONE: u8 = 14;
+pub const HANDSHAKE_CERTIFICATE_VERIFY: u8 = 15;
 pub const HANDSHAKE_CLIENT_KEY_EXCHANGE: u8 = 16;
 pub const HANDSHAKE_FINISHED: u8 = 20;
-pub const HANDSHAKE_ENCRYPTED_EXTENSIONS: u8 = 8;
-pub const HANDSHAKE_CERTIFICATE_VERIFY: u8 = 15;
+pub const HANDSHAKE_CERTIFICATE_STATUS: u8 = 22;
 
 /// ECDHE + RSA sertifikası + AES-128-GCM + SHA-256.
 pub const TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256: u16 = 0xC02F;
@@ -181,6 +184,8 @@ pub const TLS_CHACHA20_POLY1305_SHA256: u16 = 0x1303;
 
 /// secp256r1 (NIST P-256) named curve kimliği.
 pub const NAMED_CURVE_SECP256R1: u16 = 0x0017;
+/// X25519 (Curve25519) named group kimliği (RFC 8446 / 7748).
+pub const NAMED_CURVE_X25519: u16 = 0x001d;
 
 const TLS_MASTER_SECRET_LEN: usize = 48;
 const TLS_KEY_BLOCK_LEN: usize = 40;
@@ -200,14 +205,14 @@ const TLS13_LABEL_PREFIX: &[u8] = b"tls13 ";
 /// TLS 1.3 el sıkışmasında kullanılan hash algoritması. Paketle birlikte
 /// seçilir (RFC 8446 §7.1): AES-128-GCM ⇒ SHA-256, AES-256-GCM ⇒ SHA-384.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Tls13HashAlg {
+pub enum Tls13HashAlg {
     Sha256,
     Sha384,
 }
 
 impl Tls13HashAlg {
     /// TLS 1.3 paketine karşılık gelen hash algoritması; bilinmiyorsa `None`.
-    fn for_cipher_suite(cipher_suite: u16) -> Option<Self> {
+    pub fn for_cipher_suite(cipher_suite: u16) -> Option<Self> {
         match cipher_suite {
             TLS_AES_128_GCM_SHA256 => Some(Self::Sha256),
             TLS_AES_256_GCM_SHA384 => Some(Self::Sha384),
@@ -216,7 +221,7 @@ impl Tls13HashAlg {
     }
 
     /// Transcript-Hash / HMAC / HKDF çıktı uzunluğu.
-    fn hash_len(self) -> usize {
+    pub fn hash_len(self) -> usize {
         match self {
             Self::Sha256 => SHA256_HASH_LEN,
             Self::Sha384 => SHA384_HASH_LEN,
@@ -224,7 +229,7 @@ impl Tls13HashAlg {
     }
 
     /// AEAD kayıt anahtarı uzunluğu (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
-    fn key_len(self) -> usize {
+    pub fn key_len(self) -> usize {
         match self {
             Self::Sha256 => 16,
             Self::Sha384 => 32,
@@ -232,7 +237,7 @@ impl Tls13HashAlg {
     }
 
     /// HKDF/HMAC primitifi (RFC 8446 §7.1).
-    fn hmac(self, key: &[u8], data: &[u8]) -> Vec<u8> {
+    pub fn hmac(self, key: &[u8], data: &[u8]) -> Vec<u8> {
         match self {
             Self::Sha256 => HmacSha256::sign(key, data).to_vec(),
             Self::Sha384 => HmacSha384::sign(key, data).to_vec(),
@@ -240,7 +245,7 @@ impl Tls13HashAlg {
     }
 
     /// Transcript-Hash (RFC 8446 §4.4.1).
-    fn hash(self, data: &[u8]) -> Vec<u8> {
+    pub fn hash(self, data: &[u8]) -> Vec<u8> {
         match self {
             Self::Sha256 => Sha256::hash(data).to_vec(),
             Self::Sha384 => Sha384::hash(data).to_vec(),
@@ -263,6 +268,207 @@ fn tls13_zero_secret(alg: Tls13HashAlg) -> Vec<u8> {
 /// Sabit bir protokol değeri olarak tek yerde tanımlanır.
 fn tls13_empty_hash(alg: Tls13HashAlg) -> Vec<u8> {
     alg.hash(&[])
+}
+
+// ---------------------------------------------------------------------------
+// TLS 1.3 PSK / oturum yeniden kullanımı (RFC 8446 §4.2.11, §4.6.1)
+// ---------------------------------------------------------------------------
+
+/// Bir bağlantıda sunucuya sunulacak PSK (pre-shared key) teklifi.
+///
+/// `psk`, önceki el sıkışmadan türetilen `resumption_master_secret` değeridir;
+/// `ticket` ise sunucunun `NewSessionTicket` mesajında verdiği ticket baytlarıdır.
+#[derive(Clone, Copy)]
+pub struct PskOffer<'a> {
+    /// Sunucu tarafından verilen oturum ticket'ı (kimlik).
+    pub ticket: &'a [u8],
+    /// PSK değeri (resumption master secret).
+    pub psk: &'a [u8],
+    /// PSK'nin bağlı olduğu hash algoritması (ticket ile aynı pakette üretilmiş).
+    pub hash_alg: Tls13HashAlg,
+    /// Ticket yaşı (ms): `obfuscated_ticket_age` alanında gönderilir.
+    pub ticket_age_ms: u64,
+}
+
+/// Önbellekte saklanan oturum yeniden kullanımı verisi (kopya).
+#[derive(Clone)]
+pub struct ResumptionSession {
+    /// Sunucunun verdiği ticket.
+    pub ticket: alloc::vec::Vec<u8>,
+    /// `resumption_master_secret` (PSK).
+    pub psk: alloc::vec::Vec<u8>,
+    /// Ticket ile eşleşen hash algoritması.
+    pub hash_alg: Tls13HashAlg,
+    /// Sunucunun bildirdiği `ticket_age_add` (ms).
+    pub ticket_age_ms: u64,
+}
+
+/// Önbellek giriş sayısı.
+const MAX_CACHED_SESSIONS: usize = 8;
+/// Önbellekteki host adı için azami uzunluk.
+const MAX_CACHED_HOST: usize = 64;
+/// Önbellekteki ticket için azami uzunluk.
+const MAX_CACHED_TICKET: usize = 512;
+
+/// Önbellek kaydının sabit boyutlu (POD) gösterimi.
+///
+/// `Vec`/`String` statik alanlarda bırakılamayacağı için alanlar sabit
+/// boyutlu dizilerdir; `Drop` uygulanmadığından statik ömür boyunca güvenlidir.
+#[derive(Clone, Copy)]
+struct CachedSession {
+    host: [u8; MAX_CACHED_HOST],
+    host_len: u8,
+    ticket: [u8; MAX_CACHED_TICKET],
+    ticket_len: u16,
+    psk: [u8; SHA384_HASH_LEN],
+    psk_len: u8,
+    hash_alg: u8,
+    ticket_age_ms: u32,
+    obtained_ms: u64,
+}
+
+impl CachedSession {
+    const fn empty() -> Self {
+        Self {
+            host: [0; MAX_CACHED_HOST],
+            host_len: 0,
+            ticket: [0; MAX_CACHED_TICKET],
+            ticket_len: 0,
+            psk: [0; SHA384_HASH_LEN],
+            psk_len: 0,
+            hash_alg: 0,
+            ticket_age_ms: 0,
+            obtained_ms: 0,
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        self.host_len > 0 && self.ticket_len > 0 && self.psk_len > 0
+    }
+}
+
+/// Host başına saklanan TLS 1.3 oturumlarının statik önbelleği.
+static mut SESSION_CACHE: [CachedSession; MAX_CACHED_SESSIONS] =
+    [CachedSession::empty(); MAX_CACHED_SESSIONS];
+
+/// Oturum önbelleğine yeni kayıt ekler (aynı host için eskisi güncellenir).
+///
+/// `psk`, `resumption_master_secret` değeridir; `alg` ticket ile eşleşen
+/// hash algoritmasıdır (binder hesabı bu algoritmaya bağlıdır).
+pub fn cache_session(host: &str, ticket: &[u8], psk: &[u8], alg: Tls13HashAlg, ticket_age_ms: u64) {
+    if host.is_empty() || ticket.is_empty() || ticket.len() > MAX_CACHED_TICKET {
+        return;
+    }
+    if psk.is_empty() || psk.len() > SHA384_HASH_LEN {
+        return;
+    }
+    let host_bytes = host.as_bytes();
+    let host_len = host_bytes.len().min(MAX_CACHED_HOST);
+    let now = crate::boot::time::main_monotonic_ms() as u64;
+
+    // Güvenli: statik önbelleğe yalnızca bu modül erişir.
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(SESSION_CACHE) };
+    for slot in cache.iter_mut() {
+        if slot.is_valid()
+            && slot.host_len as usize == host_len
+            && slot.host[..host_len] == host_bytes[..host_len]
+        {
+            *slot = CachedSession::empty();
+            slot.host[..host_len].copy_from_slice(&host_bytes[..host_len]);
+            slot.host_len = host_len as u8;
+            slot.ticket[..ticket.len()].copy_from_slice(ticket);
+            slot.ticket_len = ticket.len() as u16;
+            slot.psk[..psk.len()].copy_from_slice(psk);
+            slot.psk_len = psk.len() as u8;
+            slot.hash_alg = match alg {
+                Tls13HashAlg::Sha256 => 0,
+                Tls13HashAlg::Sha384 => 1,
+            };
+            slot.ticket_age_ms = (ticket_age_ms & 0xFFFF_FFFF) as u32;
+            slot.obtained_ms = now;
+            return;
+        }
+    }
+    // Boş yer yoksa en eski kaydı değiştir.
+    let mut oldest = 0usize;
+    for (i, slot) in cache.iter().enumerate() {
+        if !slot.is_valid() {
+            oldest = i;
+            break;
+        }
+        if slot.obtained_ms < cache[oldest].obtained_ms {
+            oldest = i;
+        }
+    }
+    let slot = &mut cache[oldest];
+    *slot = CachedSession::empty();
+    slot.host[..host_len].copy_from_slice(&host_bytes[..host_len]);
+    slot.host_len = host_len as u8;
+    slot.ticket[..ticket.len()].copy_from_slice(ticket);
+    slot.ticket_len = ticket.len() as u16;
+    slot.psk[..psk.len()].copy_from_slice(psk);
+    slot.psk_len = psk.len() as u8;
+    slot.hash_alg = match alg {
+        Tls13HashAlg::Sha256 => 0,
+        Tls13HashAlg::Sha384 => 1,
+    };
+    slot.ticket_age_ms = (ticket_age_ms & 0xFFFF_FFFF) as u32;
+    slot.obtained_ms = now;
+}
+
+/// Önbellekte bu host için bir oturum var mı?
+pub fn has_cached_session(host: &str) -> bool {
+    session_cache_lookup(host).is_some()
+}
+
+/// Önbellekten host'a ait oturum verisini getirir.
+///
+/// `ticket_age_ms` alanı, ticket'in yaşını `ticket_age_add` ile birlikte
+/// `obfuscated_ticket_age` olarak hesaplanmış halde döner.
+pub fn session_cache_lookup(host: &str) -> Option<ResumptionSession> {
+    let host_bytes = host.as_bytes();
+    let host_len = host_bytes.len().min(MAX_CACHED_HOST);
+    let now = crate::boot::time::main_monotonic_ms() as u64;
+
+    let cache = unsafe { &*core::ptr::addr_of!(SESSION_CACHE) };
+    for slot in cache.iter() {
+        if !slot.is_valid() {
+            continue;
+        }
+        if slot.host_len as usize != host_len || slot.host[..host_len] != host_bytes[..host_len] {
+            continue;
+        }
+        let elapsed = now.saturating_sub(slot.obtained_ms);
+        let age = elapsed.saturating_add(slot.ticket_age_ms as u64);
+        return Some(ResumptionSession {
+            ticket: slot.ticket[..slot.ticket_len as usize].to_vec(),
+            psk: slot.psk[..slot.psk_len as usize].to_vec(),
+            hash_alg: if slot.hash_alg == 1 {
+                Tls13HashAlg::Sha384
+            } else {
+                Tls13HashAlg::Sha256
+            },
+            ticket_age_ms: age,
+        });
+    }
+    None
+}
+
+/// Önbellekten host'un kaydını siler (ör. sunucu PSK'yı reddettiyse).
+///
+/// Böylece hatalı bir PSK bir sonraki bağlantıda tekrar denenmez.
+pub fn invalidate_session(host: &str) {
+    let host_bytes = host.as_bytes();
+    let host_len = host_bytes.len().min(MAX_CACHED_HOST);
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(SESSION_CACHE) };
+    for slot in cache.iter_mut() {
+        if slot.is_valid()
+            && slot.host_len as usize == host_len
+            && slot.host[..host_len] == host_bytes[..host_len]
+        {
+            *slot = CachedSession::empty();
+        }
+    }
 }
 
 /// Signature algorithms supported.
@@ -341,7 +547,12 @@ pub struct TlsSession {
     /// kapanışı — hata değildir; eldeki yanıt verisi yine de işlenmelidir.)
     peer_closed: bool,
     /// Client ECDHE secret for TLS 1.3 key derivation (stored after ClientHello).
+    /// secp256r1 için 32 baytlık skalar.
     client_ecdhe_secret: Option<[u8; 32]>,
+    /// X25519 için istemci gizli anahtarı (çoklu key_share desteği).
+    client_x25519_secret: Option<[u8; 32]>,
+    /// Sunucunun seçtiği ECDHE grubu (key_share).
+    selected_group: u16,
     /// Sertifika hostname ve süre doğrulaması başarılı mı?
     pub cert_verified: bool,
     /// Sertifika doğrulama hatası (varsa).
@@ -362,6 +573,14 @@ pub struct TlsSession {
     record_history: alloc::vec::Vec<u64>,
     /// Kalp atışı (heartbeat) destekleyici veri.
     heartbeat_data: Option<alloc::vec::Vec<u8>>,
+    /// Sunucudan alınan stapled OCSP yanıtı (DER).
+    stapled_ocsp_response: Option<Vec<u8>>,
+    /// Son alınan NewSessionTicket (ham ticket baytları).
+    received_session_ticket: Option<Vec<u8>>,
+    /// OCSP doğrulaması için yaprak sertifika (DER).
+    leaf_cert_der: Option<Vec<u8>>,
+    /// OCSP doğrulaması için ara/issuer sertifika (DER).
+    issuer_cert_der: Option<Vec<u8>>,
 }
 
 impl TlsSession {
@@ -405,6 +624,8 @@ impl TlsSession {
             last_alert: None,
             peer_closed: false,
             client_ecdhe_secret: None,
+            client_x25519_secret: None,
+            selected_group: NAMED_CURVE_SECP256R1,
             cert_verified: false,
             cert_error: None,
             max_chain_depth: 6,
@@ -415,6 +636,10 @@ impl TlsSession {
             last_record_seq: 0,
             record_history: Vec::new(),
             heartbeat_data: None,
+            stapled_ocsp_response: None,
+            received_session_ticket: None,
+            leaf_cert_der: None,
+            issuer_cert_der: None,
         }
     }
 
@@ -428,6 +653,20 @@ impl TlsSession {
 
     pub fn set_client_ecdhe_secret(&mut self, secret: [u8; 32]) {
         self.client_ecdhe_secret = Some(secret);
+    }
+
+    pub fn set_client_x25519_secret(&mut self, secret: [u8; 32]) {
+        self.client_x25519_secret = Some(secret);
+    }
+
+    /// Sunucunun `status_request` (OCSP stapling) ile gönderdiği DER yanıtı.
+    pub fn stapled_ocsp_response(&self) -> Option<&[u8]> {
+        self.stapled_ocsp_response.as_deref()
+    }
+
+    /// El sıkışma sırasında alınan TLS 1.3 `NewSessionTicket` (ham bayt).
+    pub fn received_session_ticket(&self) -> Option<&[u8]> {
+        self.received_session_ticket.as_deref()
     }
 
     /// Sunucudan gelen son TLS uyarısı (seviye, açıklama) — hata mesajı için.
@@ -804,6 +1043,7 @@ impl TlsSession {
                 HANDSHAKE_SERVER_HELLO => self.handle_server_hello(msg_body)?,
                 HANDSHAKE_ENCRYPTED_EXTENSIONS => self.handle_encrypted_extensions(msg_body)?,
                 HANDSHAKE_CERTIFICATE => self.handle_certificate(msg_body)?,
+                HANDSHAKE_CERTIFICATE_STATUS => self.handle_certificate_status(msg_body)?,
                 HANDSHAKE_SERVER_KEY_EXCHANGE => self.handle_server_key_exchange(msg_body)?,
                 HANDSHAKE_SERVER_HELLO_DONE => {
                     self.handle_server_hello_done()?;
@@ -990,23 +1230,30 @@ impl TlsSession {
                 }
                 0x0033 => {
                     // key_share: server's ECDHE share.
-                    // Duz nokta (uncompressed, 0x04 ile baslayan 65 bayt) beklenir;
-                    // destekledigimiz tek grup secp256r1'dir.
+                    // secp256r1: 65 bayt (04||X||Y), x25519: 32 bayt.
                     if ext_len < 4 {
                         return Err(());
                     }
                     let group = u16::from_be_bytes([ext_body[0], ext_body[1]]);
-                    if group != NAMED_CURVE_SECP256R1 {
-                        return Err(());
-                    }
                     let point_len = u16::from_be_bytes([ext_body[2], ext_body[3]]) as usize;
-                    if point_len != 65 || ext_len != 4 + point_len {
+                    if ext_len != 4 + point_len {
                         return Err(());
                     }
                     let point = &ext_body[4..4 + point_len];
-                    if point[0] != 0x04 {
-                        return Err(());
+                    match group {
+                        NAMED_CURVE_SECP256R1 => {
+                            if point_len != 65 || point[0] != 0x04 {
+                                return Err(());
+                            }
+                        }
+                        NAMED_CURVE_X25519 => {
+                            if point_len != 32 {
+                                return Err(());
+                            }
+                        }
+                        _ => return Err(()),
                     }
+                    self.selected_group = group;
                     self.ecdhe_point = point.to_vec();
                 }
                 _ => {}
@@ -1026,17 +1273,26 @@ impl TlsSession {
             return Err(());
         }
         if body[0] != 3 {
+            // curve_type: 3 = named_curve
             return Err(());
         }
         let curve = u16::from_be_bytes([body[1], body[2]]);
-        if curve != NAMED_CURVE_SECP256R1 {
-            return Err(());
-        }
         let point_len = u16::from_be_bytes([body[3], body[4]]) as usize;
-        if point_len != 65 || body.len() < 5 + point_len + 4 {
-            return Err(());
+        match curve {
+            NAMED_CURVE_SECP256R1 => {
+                if point_len != 65 || body.len() < 5 + point_len + 4 {
+                    return Err(());
+                }
+            }
+            NAMED_CURVE_X25519 => {
+                if point_len != 32 || body.len() < 5 + point_len + 4 {
+                    return Err(());
+                }
+            }
+            _ => return Err(()),
         }
         let params_end = 5 + point_len;
+        self.selected_group = curve;
         self.ecdhe_point = body[5..params_end].to_vec();
 
         let sig_alg = u16::from_be_bytes([body[params_end], body[params_end + 1]]);
@@ -1195,11 +1451,36 @@ impl TlsSession {
                     return Err(());
                 }
                 let ext_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
-                pos += 2 + ext_len;
-                if pos > list_end {
+                let ext_end = pos + 2 + ext_len;
+                if ext_end > list_end {
                     return Err(());
                 }
+                // Yaprak sertifikanın status_request uzantısı OCSP yanıtını taşır.
+                if cert_chain.len() == 1 {
+                    let mut ep = pos + 2;
+                    while ep + 4 <= ext_end {
+                        let ext_type = u16::from_be_bytes([body[ep], body[ep + 1]]);
+                        let elen = u16::from_be_bytes([body[ep + 2], body[ep + 3]]) as usize;
+                        ep += 4;
+                        if ep + elen > ext_end {
+                            return Err(());
+                        }
+                        if ext_type == 0x0005 {
+                            self.parse_ocsp_status(&body[ep..ep + elen])?;
+                        }
+                        ep += elen;
+                    }
+                }
+                pos = ext_end;
             }
+        }
+
+        // OCSP doğrulaması ve gelecekteki bağlantılar için sertifika kopyaları.
+        if let Some(leaf) = cert_chain.first() {
+            self.leaf_cert_der = Some(leaf.to_vec());
+        }
+        if let Some(issuer) = cert_chain.get(1) {
+            self.issuer_cert_der = Some(issuer.to_vec());
         }
 
         // Sertifika zinciri sertifika "uyarısı" değil, sertifika hatasıdır:
@@ -1307,12 +1588,80 @@ impl TlsSession {
         {
             self.cert_verified = true;
         }
+        self.apply_stapled_ocsp()?;
         if self.rsa_key.is_none() && self.ec_key.is_none() {
             // Hicbir sertifika RSA/EC icermiyor; imza dogrulanamaz.
             return Err(());
         }
         self.state = TlsState::CertificateReceived;
         Ok(())
+    }
+
+    /// TLS 1.2 `CertificateStatus` mesajı (OCSP stapling).
+    fn handle_certificate_status(&mut self, body: &[u8]) -> Result<(), ()> {
+        // CertificateStatus: status_type(1) + OCSPResponse<1..2^24-1>
+        self.parse_ocsp_status(body)
+    }
+
+    /// `CertificateStatus` / TLS 1.3 `status_request` uzantı gövdesini ayrıştırır:
+    /// `status_type(1) || uint24 length || DER OCSP yanıtı`.
+    fn parse_ocsp_status(&mut self, body: &[u8]) -> Result<(), ()> {
+        if body.len() < 4 || body[0] != 1 {
+            return Err(());
+        }
+        let len = ((body[1] as usize) << 16) | ((body[2] as usize) << 8) | (body[3] as usize);
+        if len == 0 || body.len() < 4 + len {
+            return Err(());
+        }
+        self.stapled_ocsp_response = Some(body[4..4 + len].to_vec());
+        serial_print("[TLS] OCSP stapling yanıtı alındı (");
+        crate::serial::print_dec(len as u64);
+        serial_print(" bayt).\n");
+        Ok(())
+    }
+
+    /// Stapled OCSP yanıtını doğrular ve iptal deposuna yazar (fail-closed).
+    ///
+    /// Sunucu OCSP yanıtı göndermediyse hiçbir şey yapılmaz. Gönderdiyse
+    /// imza/tazelik doğrulaması `revocation_core::check_ocsp` ile yapılır;
+    /// doğrulanamayan veya `revoked` sonucu veren yanıt bağlantıyı reddeder.
+    fn apply_stapled_ocsp(&mut self) -> Result<(), ()> {
+        let Some(ocsp) = self.stapled_ocsp_response.clone() else {
+            return Ok(());
+        };
+        let (Some(leaf), Some(issuer)) = (self.leaf_cert_der.clone(), self.issuer_cert_der.clone())
+        else {
+            serial_print("[TLS] Stapled OCSP doğrulanamadı: issuer sertifikası yok.\n");
+            return Err(());
+        };
+        let serial = match crate::drivers::crypto::revocation_core::certificate_serial(&leaf) {
+            Ok(s) => s,
+            Err(_) => {
+                serial_print("[TLS] Stapled OCSP: yaprak seri numarası okunamadı.\n");
+                return Err(());
+            }
+        };
+        let now = crate::drivers::crypto::x509::X509Time::now();
+        match crate::drivers::crypto::revocation_core::check_ocsp(&ocsp, &serial, &now, &issuer) {
+            Ok(result) => {
+                crate::drivers::crypto::revocation::set_status(
+                    crate::drivers::crypto::revocation::RevocationSource::Ocsp,
+                    result,
+                );
+                if result.status
+                    == crate::drivers::crypto::revocation_core::RevocationStatus::Revoked
+                {
+                    serial_print("[TLS] Stapled OCSP: sertifika iptal edilmiş.\n");
+                    return Err(());
+                }
+                serial_print("[TLS] Stapled OCSP imzası doğrulandı.\n");
+                Ok(())
+            }
+            Err(_) => {
+                serial_print("[TLS] Stapled OCSP doğrulaması başarısız (fail-closed).\n");
+                Err(())
+            }
+        }
     }
 
     fn handle_server_hello_done(&mut self) -> Result<(), ()> {
@@ -1336,23 +1685,41 @@ impl TlsSession {
             || self.cipher_suite == TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384
             || self.cipher_suite == TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
         {
-            if self.ecdhe_point.len() != 65 {
-                serial_print("[TLS] ECDHE noktası yanlış uzunluk\n");
-                return Err(());
-            }
-            // ClientHello'da oluşturulan secret'ı kullan
-            let client_secret = self.client_ecdhe_secret.ok_or(())?;
-            let shared =
-                crate::drivers::crypto::ecc::shared_secret(&client_secret, &self.ecdhe_point)
+            // TLS 1.2 ECDHE: seçilen gruba göre shared secret hesapla.
+            match self.selected_group {
+                NAMED_CURVE_X25519 => {
+                    if self.ecdhe_point.len() != 32 {
+                        serial_print("[TLS] X25519 ECDHE noktası yanlış uzunluk\n");
+                        return Err(());
+                    }
+                    let client_secret = self.client_x25519_secret.ok_or(())?;
+                    let peer: [u8; 32] = self.ecdhe_point[..32].try_into().map_err(|_| ())?;
+                    let shared =
+                        crate::drivers::crypto::x25519::shared_secret(&client_secret, &peer);
+                    self.pre_master_secret = Some(shared.to_vec());
+                    let (_, client_public) =
+                        crate::drivers::crypto::x25519::generate_keypair(&client_secret);
+                    cke_body.push(client_public.len() as u8);
+                    cke_body.extend_from_slice(&client_public);
+                }
+                _ => {
+                    // secp256r1 (varsayılan)
+                    if self.ecdhe_point.len() != 65 {
+                        serial_print("[TLS] ECDHE noktası yanlış uzunluk\n");
+                        return Err(());
+                    }
+                    let client_secret = self.client_ecdhe_secret.ok_or(())?;
+                    let shared = crate::drivers::crypto::ecc::shared_secret(
+                        &client_secret,
+                        &self.ecdhe_point,
+                    )
                     .ok_or(())?;
-            self.pre_master_secret = Some(shared.to_vec());
-            // RFC 4492 §5.4: ClientKeyExchange, istemcinin geçici ECDH açık
-            // noktasını `ECPoint` (1 bayt uzunluk + nokta) olarak taşımak
-            // zorundadır. TLS 1.2 sunucusu ClientHello'daki key_share uzantısını
-            // yok sayar; nokta burada gönderilmezse el sıkışma başarısız olur.
-            let client_public = crate::drivers::crypto::ecc::public_key(&client_secret);
-            cke_body.push(client_public.len() as u8);
-            cke_body.extend_from_slice(&client_public);
+                    self.pre_master_secret = Some(shared.to_vec());
+                    let client_public = crate::drivers::crypto::ecc::public_key(&client_secret);
+                    cke_body.push(client_public.len() as u8);
+                    cke_body.extend_from_slice(&client_public);
+                }
+            }
         } else {
             let mut pms = [0u8; 48];
             pms[0] = (TLS_VERSION_1_2 >> 8) as u8;
@@ -1433,10 +1800,26 @@ impl TlsSession {
 
     /// Compute ECDHE shared secret from client secret and server's public point.
     fn compute_ecdh_shared_secret(&self) -> Result<[u8; 32], ()> {
-        let client_secret = self.client_ecdhe_secret.ok_or(())?;
-        let shared = crate::drivers::crypto::ecc::shared_secret(&client_secret, &self.ecdhe_point)
-            .ok_or(())?;
-        Ok(shared)
+        match self.selected_group {
+            NAMED_CURVE_X25519 => {
+                let client_secret = self.client_x25519_secret.ok_or(())?;
+                if self.ecdhe_point.len() != 32 {
+                    return Err(());
+                }
+                let peer: [u8; 32] = self.ecdhe_point[..32].try_into().map_err(|_| ())?;
+                Ok(crate::drivers::crypto::x25519::shared_secret(
+                    &client_secret,
+                    &peer,
+                ))
+            }
+            _ => {
+                let client_secret = self.client_ecdhe_secret.ok_or(())?;
+                let shared =
+                    crate::drivers::crypto::ecc::shared_secret(&client_secret, &self.ecdhe_point)
+                        .ok_or(())?;
+                Ok(shared)
+            }
+        }
     }
 
     fn handle_server_finished(&mut self, body: &[u8], pre_transcript: &[u8]) -> Result<(), ()> {
@@ -2013,11 +2396,13 @@ pub fn build_client_hello(
     session_id: Option<&[u8]>,
     session_ticket: Option<&[u8]>,
 ) {
+    let mut x25519_secret = [0u8; 32];
     build_client_hello_with_alpn(
         hostname,
         client_random,
         out,
         ecdhe_secret_out,
+        &mut x25519_secret,
         fallback,
         session_id,
         session_ticket,
@@ -2034,6 +2419,7 @@ pub fn build_client_hello_with_alpn(
     client_random: &[u8; 32],
     out: &mut Vec<u8>,
     ecdhe_secret_out: &mut [u8; 32],
+    x25519_secret_out: &mut [u8; 32],
     fallback: bool,
     session_id: Option<&[u8]>,
     session_ticket: Option<&[u8]>,
@@ -2104,6 +2490,15 @@ pub fn build_client_hello_with_alpn(
         extensions.extend_from_slice(host_bytes);
     }
 
+    // status_request (0x0005, RFC 6066 §8): OCSP stapling iste.
+    // CertificateStatusRequest: status_type=ocsp(1), boş responder_id_list,
+    // boş request_extensions.
+    extensions.extend_from_slice(&0x0005u16.to_be_bytes());
+    extensions.extend_from_slice(&5u16.to_be_bytes());
+    extensions.push(1); // status_type = ocsp
+    extensions.extend_from_slice(&0u16.to_be_bytes()); // responder_id_list uzunluğu
+    extensions.extend_from_slice(&0u16.to_be_bytes()); // request_extensions uzunluğu
+
     // ALPN (Application-Layer Protocol Negotiation): `alpn_protocols`
     // sıralı tercih listesidir. Tarayıcının ana UI döngüsü http/1.1
     // kullanır; HTTP/2 istemcisi `h2` ilave eder.
@@ -2159,34 +2554,51 @@ pub fn build_client_hello_with_alpn(
         extensions.extend_from_slice(&s.to_be_bytes());
     }
 
+    // supported_groups (0x000a): X25519 ve secp256r1 (tercih sırasıyla).
+    let groups: [u16; 2] = [NAMED_CURVE_X25519, NAMED_CURVE_SECP256R1];
     extensions.extend_from_slice(&0x000au16.to_be_bytes());
-    extensions.extend_from_slice(&4u16.to_be_bytes());
-    extensions.extend_from_slice(&2u16.to_be_bytes());
-    extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
+    extensions.extend_from_slice(&((2 + groups.len() * 2) as u16).to_be_bytes());
+    extensions.extend_from_slice(&((groups.len() * 2) as u16).to_be_bytes());
+    for g in &groups {
+        extensions.extend_from_slice(&g.to_be_bytes());
+    }
 
+    // ec_point_formats (0x000b): uncompressed only.
     extensions.extend_from_slice(&0x000bu16.to_be_bytes());
     extensions.extend_from_slice(&2u16.to_be_bytes());
     extensions.push(1);
     extensions.push(0);
 
-    // TLS 1.2 için ECDHE secret oluştur (ServerKeyExchange'de kullanılacak)
-    // Donanım Rastgelelik kaynağından tohum.
+    // ECDHE anahtar çiftleri: secp256r1 (TLS 1.2 ECDHE ve TLS 1.3 key_share için)
     let mut ks_seed = [0u8; 32];
     crate::random::fill_bytes(&mut ks_seed);
-    let kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
-    ecdhe_secret_out.copy_from_slice(&kp.secret);
-    // TLS 1.3: istemcinin ECDHE paylasimini ClientHello key_share (0x0033)
-    // uzantisinda ilan et, ki sunucu direkt ortak anahtarla ECDHE yapabilme.
-    // fallback == true ise key_share uzantisini cikar (TLS 1.2'de gerekli degil).
+    let p256_kp = crate::drivers::crypto::ecc::generate_keypair(&ks_seed);
+    ecdhe_secret_out.copy_from_slice(&p256_kp.secret);
+
+    // X25519 anahtar çifti (çoklu key_share desteği)
+    let mut x_seed = [0u8; 32];
+    crate::random::fill_bytes(&mut x_seed);
+    let (x25519_secret, x25519_public) = crate::drivers::crypto::x25519::generate_keypair(&x_seed);
+    x25519_secret_out.copy_from_slice(&x25519_secret);
+
+    // TLS 1.3: istemcinin ECDHE paylaşımlarını ClientHello key_share (0x0033)
+    // uzantısında ilan et. Hem X25519 hem secp256r1 gönderilir.
+    // fallback == true ise key_share uzantısını çıkar.
     if !fallback {
-        let ks_entry_len = 2 + 2 + kp.public.len(); // group + point_len + point
-        let ks_body_len = 2 + ks_entry_len; // shares_len + entry
+        let x_entry_len = 2 + 2 + x25519_public.len(); // group + point_len + point
+        let p256_entry_len = 2 + 2 + p256_kp.public.len();
+        let ks_body_len = 2 + x_entry_len + p256_entry_len; // shares_len + entries
         extensions.extend_from_slice(&0x0033u16.to_be_bytes());
         extensions.extend_from_slice(&(ks_body_len as u16).to_be_bytes());
-        extensions.extend_from_slice(&(ks_entry_len as u16).to_be_bytes());
+        extensions.extend_from_slice(&((ks_body_len - 2) as u16).to_be_bytes());
+        // X25519 share (tercih edilen)
+        extensions.extend_from_slice(&NAMED_CURVE_X25519.to_be_bytes());
+        extensions.extend_from_slice(&(x25519_public.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&x25519_public);
+        // secp256r1 share
         extensions.extend_from_slice(&NAMED_CURVE_SECP256R1.to_be_bytes());
-        extensions.extend_from_slice(&(kp.public.len() as u16).to_be_bytes());
-        extensions.extend_from_slice(&kp.public);
+        extensions.extend_from_slice(&(p256_kp.public.len() as u16).to_be_bytes());
+        extensions.extend_from_slice(&p256_kp.public);
     }
 
     // Session ticket extension (TLS 1.2, type 0x0023).

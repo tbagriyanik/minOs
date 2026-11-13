@@ -13,11 +13,34 @@
 //!
 //! Her iki bölge de çerçeveleri süreç kaynak defterine (`record_user_frame`)
 //! işler; süreç sonlandığında `reap_process_resources` bunları zaten iade eder.
+//!
+//! ## Tembel (demand) ahırlama
+//!
+//! Hem `brk` hem de anonim `mmap` sayfaları **tembel** olarak eşlenir: PTE
+//! `PRESENT | USER | NX | PAGE_LAZY` (yazılabilir değil) bayraklarıyla
+//! paylaşılan **sıfır sayfası** çerçevesini gösterir. Okumalar sıfır döner;
+//! ilk yazma koruma ihlali `#PF` üretir ve `process::handle_lazy_fault`
+//! sıfırlanmış özel bir çerçeve ayırıp PTE'yi kalıcı bayraklarla değiştirir.
+//! Böylece ayrılıp hiç yazılmayan `mmap` bölgeleri ve `brk` kuyruğu fiziksel
+//! bellek harcamaz. Fork, tembel sayfaları aynen klonlar; her iki taraf da
+//! ilk yazmada kendi çerçevesini alır.
 
 use crate::drivers::phys_to_virt;
 use crate::mm::pmm::{PhysicalMemoryManager, PAGE_SIZE};
-use crate::mm::process::{Process, PAGE_COW};
-use crate::mm::vmm::PageFlags;
+use crate::mm::process::{Process, PAGE_COW, PAGE_LAZY};
+use crate::mm::vmm::{self, PageFlags};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+/// Yazma paylaşımlı (shared/map-shared) bölge bayrağı.
+///
+/// `mmap` çağrısında `flags` içinde bu bit varsa sayfa fiziksel olarak
+/// süreçler arasında paylaşılır: tüm eşlemeler aynı çerçeveye işaret eder ve
+/// `munmap` eden süreç yalnız kendi referansını bırakır. Sayfa paylaşımı
+/// optimizasyonu böylece kopya olmadan (zero-copy) çalışır ve paylaşılan
+/// veri değişiklikleri tüm süreçlerde g görünür.
+pub const MAP_SHARED_FILE: u64 = 1 << 20;
+/// Eşlemenin paylaşımlı (`MAP_SHARED_FILE`) olduğunu gösteren PTE yazılım biti.
+pub const PAGE_SHARED: u64 = 1 << 11;
 
 /// Kullanıcı heap'inin taban adresi (kod 4 MiB'de bittiği için güvenli boşluk).
 pub const HEAP_BASE: u64 = 0x0000_0000_0100_0000; // 16 MiB
@@ -27,6 +50,40 @@ pub const HEAP_LIMIT: u64 = 0x0000_0000_0400_0000; // 64 MiB
 pub const MAX_MMAP_REGIONS: usize = 16;
 /// Mmap arenasının üst sınırı; kullanıcı yığınından (≈128 TiB) uzak kalır.
 pub const MMAP_LIMIT: u64 = 0x0000_0000_4000_0000; // 1 GiB
+
+/// Tembel sayfaların gösterdiği kalıcı sıfır çerçevesi (fiziksel adres).
+///
+/// Lazy PTE'ler bu çerçeveyi **salt-okunur** gösterir: okumalar sıfır döner,
+/// ilk yazma koruma ihlali `#PF` üretir ve `handle_lazy_fault` özel çerçeve
+/// ayırır. Çerçeve tüm süreçlerce paylaşılır; asla PMM'e iade edilmez ve
+/// hiçbir süreç kaynak defterine işlenmez.
+static ZERO_FRAME: AtomicU64 = AtomicU64::new(0);
+
+/// Sıfır sayfası çerçevesini döndürür; ilk çağrıda PMM'den ayrılıp
+/// sıfırlanır. Yarışta kaybeden taraf fazladan çerçeveyi iade eder.
+fn zero_page_frame(pmm: &mut PhysicalMemoryManager) -> Option<u64> {
+    let existing = ZERO_FRAME.load(Ordering::Acquire);
+    if existing != 0 {
+        return Some(existing);
+    }
+    let frame = pmm.allocate_frame()?;
+    unsafe {
+        core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE as usize);
+    }
+    match ZERO_FRAME.compare_exchange(0, frame, Ordering::AcqRel, Ordering::Acquire) {
+        Ok(_) => Some(frame),
+        Err(winner) => {
+            pmm.free_frame(frame);
+            Some(winner)
+        }
+    }
+}
+
+/// Verilen fiziksel çerçeve paylaşılan sıfır sayfası mı?
+pub(crate) fn is_zero_frame(frame: u64) -> bool {
+    let zero = ZERO_FRAME.load(Ordering::Acquire);
+    zero != 0 && frame == zero
+}
 
 /// Mmap bölge tablosu (sabit boyutlu; `Process` `Copy` kalabilsin).
 pub type MmapTable = [MmapRegion; MAX_MMAP_REGIONS];
@@ -72,7 +129,16 @@ pub fn map_zeroed_range(
         unsafe {
             core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE as usize);
         }
-        if !process.resources.record_user_frame(frame) {
+        // Çerçeve türü: yalnızca kullanıcı veri/yığın sayfaları kullanıcı
+        // kotasını (25 çerçeve) harcar; salt-okunur sayfalar yalnız toplam
+        // çerçeve defterine işlenir (kota çift sayılmaz).
+        let writable = flags & PageFlags::WRITABLE != 0 || flags & PageFlags::USER == 0;
+        let recorded = if writable {
+            process.resources.record_user_frame(frame)
+        } else {
+            process.resources.record_frame(frame)
+        };
+        if !recorded {
             pmm.free_frame(frame);
             unmap_range(process, start_page, address, pmm);
             return Err("Surec kaynak listesi dolu");
@@ -82,7 +148,11 @@ pub fn map_zeroed_range(
             .map_page(address, frame, flags, pmm)
             .is_err()
         {
-            process.resources.take_user_frame(frame);
+            if writable {
+                process.resources.take_user_frame(frame);
+            } else {
+                process.resources.take_frame(frame);
+            }
             pmm.free_frame(frame);
             unmap_range(process, start_page, address, pmm);
             return Err("Kullanici sayfasi eslenemedi");
@@ -108,6 +178,12 @@ pub fn unmap_range(
             address += PAGE_SIZE;
             continue;
         };
+        if is_zero_frame(frame) {
+            // Paylaşılan sıfır sayfası: süreçlerce ortak, asla iade edilmez.
+            freed += 1;
+            address += PAGE_SIZE;
+            continue;
+        }
         let _ = process.resources.take_user_frame(frame);
         match crate::mm::vmm::release_frame_shared(frame) {
             Some(false) => {}
@@ -117,6 +193,333 @@ pub fn unmap_range(
         address += PAGE_SIZE;
     }
     freed
+}
+
+/// `[start, end)` aralığını **tembel** olarak eşler: her sayfa için PTE
+/// `PRESENT | USER | NX | PAGE_LAZY` (yazılabilir **değil**) olarak yazılır ve
+/// paylaşılan sıfır sayfası çerçevesini gösterir. Okumalar sıfır döner; ilk
+/// yazma koruma ihlali `#PF` üretir ve `process::handle_lazy_fault` özel bir
+/// çerçeve ayırır (demand paging).
+///
+/// Adres aralığı daha önce eşlenmişse hata döner; kısmi eşleme bırakılmaz.
+pub fn map_lazy_range(
+    process: &mut Process,
+    start: u64,
+    end: u64,
+    flags: u64,
+    pmm: &mut PhysicalMemoryManager,
+) -> Result<(), &'static str> {
+    let start_page = page_of(start);
+    let limit = page_up(end);
+    let mut address = start_page;
+    while address < limit {
+        if process.address_space.read_entry(address).is_some() {
+            unmap_range_keep_frames(process, start_page, address);
+            return Err("Bellek araligi zaten eslenmis");
+        }
+        address += PAGE_SIZE;
+    }
+    // Veri sayfası semantiği: kullanıcı + NX; yazma koruma ihlaliyle #PF üretir.
+    let _ = flags;
+    let Some(zero) = zero_page_frame(pmm) else {
+        return Err("PMM yetersiz bellek: sifir sayfasi");
+    };
+    let lazy_flags = (PageFlags::USER_DATA & !PageFlags::WRITABLE) | PAGE_LAZY;
+    address = start_page;
+    while address < limit {
+        if process
+            .address_space
+            .map_page(address, zero, lazy_flags, pmm)
+            .is_err()
+        {
+            unmap_range_keep_frames(process, start_page, address);
+            return Err("Tembel sayfa eslenemedi");
+        }
+        address += PAGE_SIZE;
+    }
+    Ok(())
+}
+
+/// Tembel bir kullanıcı sayfasını gerçekleştirir: sıfırlanmış çerçeve
+/// ayırır, süreç kaynak defterine işler, PTE'yi kalıcı bayraklarla değiştirir.
+///
+/// Dönüş: `true` → komut yeniden çalıştırılmalı; `false` → hata gerçek
+/// (sayfa tembel değil veya bellek yok).
+pub fn realize_lazy_page(
+    process: &mut Process,
+    fault_addr: u64,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    let page = page_of(fault_addr);
+    let Some(entry) = process.address_space.read_entry(page) else {
+        return false;
+    };
+    if entry & PAGE_LAZY == 0 || entry & PageFlags::USER == 0 {
+        return false;
+    }
+    // Tembel PTE paylaşılan sıfır sayfasını gösterir ve yazılabilir değildir;
+    // çerçeve alanı bu yüzden yok sayılır ve özel çerçeveyle değiştirilir.
+    let Some(frame) = pmm.allocate_frame() else {
+        return false;
+    };
+    unsafe {
+        core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE as usize);
+    }
+    if !process.resources.record_user_frame(frame) {
+        pmm.free_frame(frame);
+        return false;
+    }
+    let final_flags = (entry & !PAGE_LAZY & !0x000F_FFFF_FFFF_F000) | PageFlags::WRITABLE;
+    if process
+        .address_space
+        .map_page(page, frame, final_flags, pmm)
+        .is_err()
+    {
+        process.resources.take_user_frame(frame);
+        pmm.free_frame(frame);
+        return false;
+    }
+    true
+}
+
+/// Aralıkta tembel işaretli sayfa sayısı (teşhis / test).
+pub fn lazy_page_count(process: &Process, start: u64, end: u64) -> usize {
+    let mut address = page_of(start);
+    let limit = page_up(end);
+    let mut count = 0usize;
+    while address < limit {
+        if let Some(entry) = process.address_space.read_entry(address) {
+            if entry & PAGE_LAZY != 0 {
+                count += 1;
+            }
+        }
+        address += PAGE_SIZE;
+    }
+    count
+}
+
+/// Bir çerçeveyi paylaşım defterine kaydeder. Defter doluysa `false`.
+pub fn share_frame(frame: u64) -> bool {
+    vmm::mark_frame_shared(frame)
+}
+
+// ---------------------------------------------------------------------------
+// Paylaşımlı bölge kaydı (süreçler arası zero-copy sayfa paylaşımı)
+// ---------------------------------------------------------------------------
+
+/// Paylaşımlı bölge kayıtları (bu süreç tarafından oluşturulan çerçeve havuzları).
+///
+/// `mmap(MAP_SHARED_FILE)` çağrısı bölge için yeni çerçeveler kurar ve buraya
+/// kaydeder; aynı sanal adresi eşleyen sonraki süreçler çerçeveleri kopya
+/// olmadan yeniden kullanır. Kayıtlar referans sayımlıdır: son eşleme
+/// bırakıldığında kayıt silinir.
+pub const MAX_SHARED_REGIONS: usize = 8;
+/// Paylaşımlı bölge başına azami sayfa sayısı.
+pub const MAX_SHARED_REGION_PAGES: usize = 32;
+
+#[derive(Clone, Copy)]
+pub struct SharedRegion {
+    pub addr: u64,
+    pub len: u64,
+    pub pages: usize,
+    pub refs: u16,
+    pub frames: [u64; MAX_SHARED_REGION_PAGES],
+    pub used: bool,
+}
+
+impl SharedRegion {
+    pub const fn empty() -> Self {
+        Self {
+            addr: 0,
+            len: 0,
+            pages: 0,
+            refs: 0,
+            frames: [0; MAX_SHARED_REGION_PAGES],
+            used: false,
+        }
+    }
+}
+
+static SHARED_REGIONS: crate::arch::x86_64::sync::SpinMutex<[SharedRegion; MAX_SHARED_REGIONS]> =
+    crate::arch::x86_64::sync::SpinMutex::new([SharedRegion::empty(); MAX_SHARED_REGIONS]);
+
+/// `addr`/`len` ile eşleşen paylaşımlı bölgenin çerçeve listesini döner ve
+/// referansını artırır.
+pub fn shared_region_frames(addr: u64, len: u64) -> Option<alloc::vec::Vec<u64>> {
+    let mut table = SHARED_REGIONS.lock();
+    for region in table.iter_mut() {
+        if region.used && region.addr == addr && region.len == len {
+            region.refs = region.refs.saturating_add(1);
+            let mut frames = alloc::vec::Vec::with_capacity(region.pages);
+            frames.extend_from_slice(&region.frames[..region.pages]);
+            return Some(frames);
+        }
+    }
+    None
+}
+
+fn remember_shared_region(process: &Process, addr: u64, len: u64) {
+    if process.resources.user_frame_count > MAX_SHARED_REGION_PAGES {
+        // Kayıt taşması: paylaşım yine geçerlidir (çerçeve defteri), yalnız
+        // başka süreç zero-copy yoluyla yeniden kullanamaz.
+        return;
+    }
+    const EMPTY: SharedRegion = SharedRegion::empty();
+    let mut frames = EMPTY.frames;
+    let mut pages = 0usize;
+    let mut address = page_of(addr);
+    while address < page_up(addr + len) && pages < MAX_SHARED_REGION_PAGES {
+        if let Some(frame) = process.address_space.translate_user(address) {
+            frames[pages] = frame & !(PAGE_SIZE - 1);
+            pages += 1;
+        }
+        address += PAGE_SIZE;
+    }
+    let mut table = SHARED_REGIONS.lock();
+    if let Some(region) = table
+        .iter_mut()
+        .find(|region| !region.used || (region.addr == addr && region.len == len))
+    {
+        *region = SharedRegion {
+            addr,
+            len,
+            pages,
+            refs: 1,
+            frames,
+            used: pages > 0,
+        };
+    }
+}
+
+/// Eşleşen bir paylaşımlı bölgenin mevcut çerçevelerini bu sürece eşler.
+fn map_shared_reuse(
+    process: &mut Process,
+    start: u64,
+    end: u64,
+    frames: &[u64],
+    pmm: &mut PhysicalMemoryManager,
+) -> Result<(), &'static str> {
+    let needed = (page_up(end - start) / PAGE_SIZE) as usize;
+    if frames.len() < needed {
+        return Err("Paylasim kaydi eksik cerceve");
+    }
+    let simple = start;
+    let flags = PageFlags::USER_DATA | PAGE_SHARED;
+    let mut address = simple;
+    for frame in frames.iter().take(needed) {
+        if process.address_space.read_entry(address).is_some() {
+            unmap_range_keep_frames(process, simple, address);
+            return Err("Bellek araligi zaten eslenmis");
+        }
+        // Paylaşım defteri artırılır; sahiplik referansı sürece aittir.
+        if !vmm::mark_frame_shared(*frame) {
+            unmap_range_keep_frames(process, simple, address);
+            return Err("Paylasim defteri dolu");
+        }
+        if !process.resources.record_user_frame(*frame) {
+            let _ = vmm::release_frame_shared(*frame);
+            unmap_range_keep_frames(process, simple, address);
+            return Err("Surec kaynak listesi dolu");
+        }
+        if process
+            .address_space
+            .map_page(address, *frame, flags, pmm)
+            .is_err()
+        {
+            process.resources.take_user_frame(*frame);
+            let _ = vmm::release_frame_shared(*frame);
+            unmap_range_keep_frames(process, simple, address);
+            return Err("Paylasimli sayfa eslenemedi");
+        }
+        address += PAGE_SIZE;
+    }
+    Ok(())
+}
+
+/// Paylaşımlı bölge kaydını bırakır (son referansta silinir).
+pub fn release_shared_region(addr: u64, len: u64) {
+    let mut table = SHARED_REGIONS.lock();
+    for region in table.iter_mut() {
+        if region.used && region.addr == addr && region.len == len {
+            region.refs = region.refs.saturating_sub(1);
+            if region.refs == 0 {
+                *region = SharedRegion::empty();
+            }
+            return;
+        }
+    }
+    // Bölge kaydedilmemişse (kayıt tablosu dolu) yapacak iş yok.
+}
+
+/// Test yardımı: paylaşımlı bölge kaydı var mı?
+pub fn shared_region_registered(addr: u64, len: u64) -> bool {
+    SHARED_REGIONS
+        .lock()
+        .iter()
+        .any(|region| region.used && region.addr == addr && region.len == len)
+}
+
+/// Tüm paylaşım bölge kayıtlarını siler (süreç yeniden başlatma testleri).
+pub fn release_shared_regions() {
+    let mut table = SHARED_REGIONS.lock();
+    for region in table.iter_mut() {
+        *region = SharedRegion::empty();
+    }
+}
+
+/// Çerçevenin hâlâ başka bir eşleme tarafından paylaşıldığını bildirir.
+pub fn frame_still_shared(frame: u64) -> bool {
+    vmm::is_frame_shared(frame)
+}
+
+/// Paylaşımlı (`MAP_SHARED_FILE`) aralık eşlemesi. `[start, end)` için tek
+/// bir aralık çerçeve havuzu oluşturur: her sayfa ayrı sanal tabanda
+/// görünür ama süreçler arasında aynı fiziksel çerçeveyi paylaşır.
+fn map_shared_range(
+    process: &mut Process,
+    start: u64,
+    end: u64,
+    pmm: &mut PhysicalMemoryManager,
+) -> Result<(), &'static str> {
+    let start_page = page_of(start);
+    let limit = page_up(end);
+    let mut address = start_page;
+    while address < limit {
+        if process.address_space.read_entry(address).is_some() {
+            unmap_range_keep_frames(process, start_page, address);
+            return Err("Bellek araligi zaten eslenmis");
+        }
+        address += PAGE_SIZE;
+    }
+    let flags = PageFlags::USER_DATA | PAGE_SHARED;
+    address = start_page;
+    while address < limit {
+        let Some(frame) = pmm.allocate_frame() else {
+            unmap_range(process, start_page, address, pmm);
+            return Err("PMM yetersiz bellek: paylasimli sayfa");
+        };
+        unsafe {
+            core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE as usize);
+        }
+        if !vmm::mark_frame_shared(frame) || !process.resources.record_user_frame(frame) {
+            pmm.free_frame(frame);
+            unmap_range(process, start_page, address, pmm);
+            return Err("Paylasim defteri veya kaynak listesi dolu");
+        }
+        if process
+            .address_space
+            .map_page(address, frame, flags, pmm)
+            .is_err()
+        {
+            process.resources.take_user_frame(frame);
+            let _ = vmm::release_frame_shared(frame);
+            pmm.free_frame(frame);
+            unmap_range(process, start_page, address, pmm);
+            return Err("Paylasimli sayfa eslenemedi");
+        }
+        address += PAGE_SIZE;
+    }
+    Ok(())
 }
 
 /// Heap ucunu `HEAP_BASE + brk` konumuna taşır. Dönen değer yeni uçtur
@@ -129,7 +532,8 @@ pub fn brk(process: &mut Process, new_brk: u64, pmm: &mut PhysicalMemoryManager)
     }
     let new_end = HEAP_BASE + new_brk;
     if new_end > old_end {
-        if map_zeroed_range(process, old_end, new_end, PageFlags::USER_DATA, pmm).is_err() {
+        // Heap büyümesi tembel: sayfalar ilk yazmada ayrılır.
+        if map_lazy_range(process, old_end, new_end, PageFlags::USER_DATA, pmm).is_err() {
             // Kısmi eşleme olmadığından başarısız istekte eski uç geçerli.
             return u64::MAX;
         }
@@ -178,7 +582,21 @@ pub fn mmap(
     } else {
         PageFlags::USER_DATA
     };
-    map_zeroed_range(process, addr, end, page_flags, pmm)?;
+    if flags & MAP_SHARED_FILE != 0 {
+        // Yazma paylaşımlı bölge: daha önce aynı bölgeyi eşlemiş başka bir
+        // süreç varsa çerçeveler **kopyalanmadan** paylaşılır (zero-copy);
+        // yoksa yeni çerçeve havuzu kurulur ve kayıt edilir. `munmap` yalnız
+        // referans bırakır, çerçeve son sahibine kadar yaşar.
+        if let Some(frames) = shared_region_frames(addr, len) {
+            map_shared_reuse(process, addr, end, &frames, pmm)?;
+        } else {
+            map_shared_range(process, addr, end, pmm)?;
+            remember_shared_region(process, addr, len);
+        }
+    } else {
+        // Anonim bölge tembel eşlenir: yazılmayan sayfalar fiziksel bellek harcamaz.
+        map_lazy_range(process, addr, end, page_flags, pmm)?;
+    }
     process.mmap_regions[slot] = MmapRegion {
         addr,
         len,
@@ -201,6 +619,13 @@ pub fn munmap(process: &mut Process, addr: u64, len: u64, pmm: &mut PhysicalMemo
     let start = region.addr;
     let end = region.addr + region.len;
     let _ = len;
+    if process
+        .address_space
+        .read_entry(start)
+        .is_some_and(|entry| entry & PAGE_SHARED != 0)
+    {
+        release_shared_region(start, region.len);
+    }
     unmap_range(process, start, end, pmm);
     process.mmap_regions[slot] = MmapRegion::default();
     // Mmap tabanı ASLR için değişmez; serbest bölgeler yeniden kullanılmaz
@@ -253,8 +678,8 @@ pub struct UserMemoryStats {
 }
 
 pub fn stats(process: &Process) -> UserMemoryStats {
-    let heap_pages = ((HEAP_BASE + process.heap_brk).saturating_add(PAGE_SIZE - 1) / PAGE_SIZE)
-        .saturating_sub(HEAP_BASE / PAGE_SIZE) as usize;
+    // Heap sayfa sayısı = heap aralığının sayfa karşılığı (brk 0 ise 0).
+    let heap_pages = (process.heap_brk.div_ceil(PAGE_SIZE)) as usize;
     let mut regions = 0usize;
     let mut bytes = 0u64;
     for region in process.mmap_regions.iter() {

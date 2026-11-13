@@ -1,12 +1,12 @@
-# 17 Built-in Applications
+# 17 Built-in Applications + Start Menu
 
-minOs includes **17 built-in applications** and a window manager, providing a full desktop experience.
+minOs includes **17 registered built-in applications** (app ID 0–16) and a window manager, providing a full desktop experience. The table below also lists the **Start Menu**, which is part of the desktop shell rather than a registered app, so it has 18 rows.
 
 | Application | Description |
 | :--- | :--- |
 | **🔘 Start Menu** | Category menus (`System`, `Productivity`, `Media`, `Power`) with iconified graphical listing. Keyboard arrow keys, Enter, mouse wheel navigation and search. |
-| **📁 File Manager** | Virtual file system (VFS/TarFS) explorer; file type icons (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), sizes and location bar. USB drive **FAT32** and CD **ISO9660** contents listed via `-UsbDisks`. Desktop (`/desktop`) is independent from the file manager. |
-| **⚙️ System Settings** | Five tabs (Basic / Display / Network / Devices / Tests): v2.1.0 version info and kernel status, five themes, volume, night light, language (TR/EN), keyboard layout, text zoom, target resolution and region selection; selectable wallpaper/background with instant preview; window layout saving and **persistent settings via `settings.cfg`**. Default screen mode selected from Limine boot menu. |
+| **📁 File Manager** | Virtual file system (VFS/TarFS) explorer; file type icons (`[LOG]`, `[TXT]`, `[IMG]`, `[SND]`, `[VID]`), sizes and location bar. USB drive **FAT32** and CD **ISO9660** contents listed via `-UsbDisks`. Desktop (`/desktop`) is independent from the file manager and both views keep separate selection and navigation state. **Double-clicking a WAV file opens it directly in Music Player**; image files open in Image Viewer. |
+| **⚙️ System Settings** | Five tabs (Basic / Display / Network / Devices / Tests): v2.4.0 version info and kernel status, five themes, volume, night light, language (TR/EN), keyboard layout, text zoom, target resolution and region selection; selectable wallpaper/background with instant preview; window layout saving and **persistent settings via `settings.cfg`**. Default screen mode selected from Limine boot menu. v2.4.0 adds **three new desktop images** (`desktop1.png`–`desktop3.png`). |
 | **🎛️ Control Panel** | Live system info: OS/kernel version, CPU vendor and logical core count, online SMP CPUs, RAM usage and fill bar, resolution, theme, keyboard layout, uptime and date. Network tab with the active NIC, link status, DHCP/IP/mask/gateway/DNS and audio driver; one-click theme change. |
 | **📦 Package Manager (`minPak`)** | Graphical and command-line package management interface. Repository catalog listing, package search, local/network package installation and installed package management. |
 | **📝 Notepad** | Top menu bar (`File`, `Edit`, `Help`), text clear/save, **Cut / Copy / Paste / Select All**, **Undo / Redo** (Ctrl+Z / Ctrl+Y). Turkish character support, `Backspace`, `Enter`, **Home / End**, **Shift+arrow keys selection**, line numbers and cursor. |
@@ -74,8 +74,8 @@ minOs includes a minimal client-side JavaScript engine (`src/apps/js.rs`, `no_st
 
 > **Note:** minJs is intentionally small — its goal is running simple page-enhancing scripts, not full web application compatibility.
 
-| **🖼️ Image Viewer** | Opens 24-bit `.bmp` drawings saved from Paint and images in the virtual file system; zoom in/out and detailed image metadata panel; shows a cute cat mascot when no image is loaded. |
-| **🎵 Music Player** | Audio via HDA/PC speaker when user starts playback, animated spectrum equalizer and playlist. No automatic sound at system boot. |
+| **🖼️ Image Viewer** | Opens 24-bit `.bmp` drawings saved from Paint and images in the virtual file system; zoom in/out and detailed image metadata panel; shows a cute cat mascot when no image is loaded. **v2.4.0 adds the option to set the image as a tiled desktop wallpaper.** |
+| **🎵 Music Player** | Audio via HDA/PC speaker when user starts playback, animated spectrum equalizer and playlist. No automatic sound at system boot. **WAV files opened from File Manager play directly in this app.** |
 | **🎬 Video Player** | Live synthwave horizon scene, neon sun scanlines, downward-flowing 3D perspective grid road and cyber vehicle simulation. |
 | **📊 Task Manager** | Kernel memory usage, CPU fluctuation graph, multi-core (SMP) per-core CPU bars, process table, process termination (`Kill`), alphabetical "Launch Program" start menu and RAM fill bar. Status bar pinned below window for comfortable performance monitoring. |
 | **🧮 Calculator** | Keyboard-input expression calculator (`+`, `-`, `*`, `/`); wide number range with 128-bit fixed-point arithmetic and up to six decimal places precision. `Backspace` and `Esc` for editing/clearing. |

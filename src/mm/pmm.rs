@@ -24,9 +24,13 @@ pub const PAGE_SIZE: u64 = 4096;
 /// Maksimum takip edilebilir kullanılabilir fiziksel bellek bölgesi sayısı.
 pub const MAX_USABLE_REGIONS: usize = 16;
 
+/// 2 MiB büyük sayfa (huge page) boyutu ve hizalama maskesi.
+pub const BIG_PAGE_SIZE: u64 = 2 * 1024 * 1024;
+pub const BIG_PAGE_MASK: u64 = BIG_PAGE_SIZE - 1;
+
 /// Statik bitmap ile yönetilen maksimum fiziksel sayfa çerçevesi sayısı:
-/// 32,768 çerçeve * 4KB = 128 MB yönetilebilir kullanılabilir RAM.
-pub const MAX_FRAMES: usize = 32768;
+/// 65,536 çerçeve * 4KB = 256 MB yönetilebilir kullanılabilir RAM.
+pub const MAX_FRAMES: usize = 65536;
 const BITMAP_WORDS: usize = MAX_FRAMES / 64;
 
 #[derive(Debug, Clone, Copy)]
@@ -51,6 +55,17 @@ pub struct PhysicalMemoryManager {
     pub bitmap: [u64; BITMAP_WORDS],
     pub total_managed_frames: usize,
     pub next_search_frame: usize,
+    /// Kullanım profili: başarılı 4 KiB çerçeve talepleri.
+    pub alloc_requests: u64,
+    /// Kullanım profili: başarılı bitişik (contiguous) tahsis çağrıları.
+    pub contiguous_requests: u32,
+    /// Kullanım profili: başarısız (bellek yok) tahsis denemeleri.
+    pub failed_requests: u32,
+    /// Kullanım profili: şimdiye kadar yapılan en büyük serbest bitişik blok
+    /// (çerçeve cinsinden). Her tahsiste artımlı olarak güncellenir.
+    pub largest_free_run: usize,
+    /// Kullanım profili: en son ölçümdeki serbest çerçeve sayısı.
+    pub low_watermark_frames: usize,
 }
 
 impl PhysicalMemoryManager {
@@ -64,6 +79,106 @@ impl PhysicalMemoryManager {
             bitmap: [0; BITMAP_WORDS],
             total_managed_frames: 0,
             next_search_frame: 0,
+            alloc_requests: 0,
+            contiguous_requests: 0,
+            failed_requests: 0,
+            largest_free_run: 0,
+            low_watermark_frames: 0,
+        }
+    }
+
+    /// Boş bir çerçevenin fiziksel adresini döndürür (bitmap'i değiştirmez).
+    fn peek_free_frame(&self) -> Option<u64> {
+        let max = self.total_managed_frames;
+        for i in 0..max {
+            let frame_idx = (self.next_search_frame + i) % max;
+            let word_idx = frame_idx / 64;
+            if word_idx >= BITMAP_WORDS {
+                break;
+            }
+            if (self.bitmap[word_idx] & (1u64 << (frame_idx % 64))) == 0 {
+                return self.frame_index_to_address(frame_idx);
+            }
+        }
+        None
+    }
+
+    /// Bitmap'te `phys` çerçevesini kullanımda olarak işaretler.
+    fn mark_used(&mut self, phys: u64) -> bool {
+        let Some(frame_idx) = self.address_to_frame_index(phys) else {
+            return false;
+        };
+        let word_idx = frame_idx / 64;
+        let bit_idx = frame_idx % 64;
+        if word_idx >= BITMAP_WORDS {
+            return false;
+        }
+        let mask = 1u64 << bit_idx;
+        if (self.bitmap[word_idx] & mask) != 0 {
+            return false;
+        }
+        self.bitmap[word_idx] |= mask;
+        self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
+        self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+        true
+    }
+
+    /// Bitmap'te toplam boş çerçeve sayısı (teşhis için O(MAX_FRAMES)).
+    pub fn free_frame_count(&self) -> usize {
+        let mut free = 0usize;
+        for index in 0..self.total_managed_frames {
+            let word_idx = index / 64;
+            if word_idx >= BITMAP_WORDS {
+                break;
+            }
+            if (self.bitmap[word_idx] & (1u64 << (index % 64))) == 0 {
+                free += 1;
+            }
+        }
+        free
+    }
+
+    /// Yönetilen bölgelerdeki en uzun bitişik boş çerçeve dizisinin boyu.
+    pub fn longest_free_run(&self) -> usize {
+        let mut best = 0usize;
+        let mut current = 0usize;
+        for index in 0..self.total_managed_frames {
+            let word_idx = index / 64;
+            if word_idx >= BITMAP_WORDS {
+                break;
+            }
+            if (self.bitmap[word_idx] & (1u64 << (index % 64))) == 0 {
+                current += 1;
+                best = best.max(current);
+            } else {
+                current = 0;
+            }
+        }
+        best
+    }
+
+    /// Boş bellek oranı (0–100).
+    pub fn free_percent(&self) -> u32 {
+        if self.total_memory_bytes == 0 {
+            return 0;
+        }
+        ((self.free_memory_bytes.saturating_mul(100)) / self.total_memory_bytes) as u32
+    }
+
+    /// Kullanım profili özeti (TR/EN sızıntısız teşhis satırı için).
+    pub fn profile(&self) -> MemoryProfile {
+        MemoryProfile {
+            total_bytes: self.total_memory_bytes,
+            free_bytes: self.free_memory_bytes,
+            used_bytes: self.used_memory_bytes,
+            free_percent: self.free_percent(),
+            managed_frames: self.total_managed_frames,
+            free_frames: self.free_memory_bytes / PAGE_SIZE,
+            largest_free_run: self.largest_free_run.max(self.longest_free_run()),
+            low_watermark_frames: self.low_watermark_frames,
+            alloc_requests: self.alloc_requests,
+            contiguous_requests: self.contiguous_requests as u64,
+            failed_requests: self.failed_requests as u64,
         }
     }
 
@@ -185,12 +300,74 @@ impl PhysicalMemoryManager {
                 self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
                 self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
                 self.next_search_frame = (frame_idx + 1) % max;
+                self.alloc_requests = self.alloc_requests.saturating_add(1);
+                let free_frames = self.free_memory_bytes / PAGE_SIZE;
+                if self.low_watermark_frames == 0 || free_frames < self.low_watermark_frames as u64
+                {
+                    self.low_watermark_frames = free_frames as usize;
+                }
 
                 return self.frame_index_to_address(frame_idx);
             }
         }
 
+        self.failed_requests = self.failed_requests.saturating_add(1);
         None
+    }
+
+    /// 2 MiB büyük sayfa için hizalı ve bitişik 512 çerçeve tahsis eder.
+    ///
+    /// Dönen adres `BIG_PAGE_SIZE` sınırına hizalıdır; böylece doğrudan bir PD
+    /// girdisine `HUGE_PAGE` olarak yazılabilir. Blok bulunamazsa `None`.
+    pub fn allocate_big_page(&mut self) -> Option<u64> {
+        if self.total_managed_frames < (BIG_PAGE_SIZE / PAGE_SIZE) as usize {
+            return None;
+        }
+        for region_index in 0..self.region_count {
+            let region = self.usable_regions[region_index];
+            let region_start = align_up_u64(region.base, BIG_PAGE_SIZE);
+            let region_end = (region.base + region.length) & !BIG_PAGE_MASK;
+            let mut base = region_start;
+            while base + BIG_PAGE_SIZE <= region_end {
+                let count = (BIG_PAGE_SIZE / PAGE_SIZE) as usize;
+                let free = (0..count).all(|offset| {
+                    self.address_to_frame_index(base + offset as u64 * PAGE_SIZE)
+                        .map(|index| {
+                            let word = self.bitmap[index / 64];
+                            (word & (1u64 << (index % 64))) == 0
+                        })
+                        .unwrap_or(false)
+                });
+                if free {
+                    for offset in 0..count {
+                        let _ = self.mark_used(base + offset as u64 * PAGE_SIZE);
+                    }
+                    self.contiguous_requests = self.contiguous_requests.saturating_add(1);
+                    let free_frames = self.free_memory_bytes / PAGE_SIZE;
+                    if self.low_watermark_frames == 0
+                        || free_frames < self.low_watermark_frames as u64
+                    {
+                        self.low_watermark_frames = free_frames as usize;
+                    }
+                    return Some(base);
+                }
+                base += BIG_PAGE_SIZE;
+            }
+        }
+        self.failed_requests = self.failed_requests.saturating_add(1);
+        None
+    }
+
+    /// 2 MiB hizalı büyük sayfa bloğunu serbest bırakır.
+    pub fn free_big_page(&mut self, base: u64) {
+        for offset in 0..(BIG_PAGE_SIZE / PAGE_SIZE) {
+            self.free_frame(base + offset * PAGE_SIZE);
+        }
+    }
+
+    /// Bir sonraki tahsis için tercih edilecek boş çerçevenin fiziksel adresi.
+    pub fn next_free_frame_hint(&self) -> Option<u64> {
+        self.peek_free_frame()
     }
 
     /// Daha önce tahsis edilmiş bir fiziksel çerçeveyi serbest bırakır.
@@ -266,10 +443,16 @@ impl PhysicalMemoryManager {
             let total_bytes = (count as u64) * PAGE_SIZE;
             self.free_memory_bytes = self.free_memory_bytes.saturating_sub(total_bytes);
             self.used_memory_bytes = self.used_memory_bytes.saturating_add(total_bytes);
+            self.contiguous_requests = self.contiguous_requests.saturating_add(1);
+            let free_frames = self.free_memory_bytes / PAGE_SIZE;
+            if self.low_watermark_frames == 0 || free_frames < self.low_watermark_frames as u64 {
+                self.low_watermark_frames = free_frames as usize;
+            }
 
             return Some(start_addr);
         }
 
+        self.failed_requests = self.failed_requests.saturating_add(1);
         None
     }
 
@@ -286,4 +469,38 @@ impl Default for PhysicalMemoryManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Bellek kullanım profili özeti (`meminfo` / `MEM-STAT` raporu).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MemoryProfile {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub used_bytes: u64,
+    pub free_percent: u32,
+    pub managed_frames: usize,
+    pub free_frames: u64,
+    pub largest_free_run: usize,
+    pub low_watermark_frames: usize,
+    pub alloc_requests: u64,
+    pub contiguous_requests: u64,
+    pub failed_requests: u64,
+}
+
+impl MemoryProfile {
+    /// PMM tükendiğinde tetiklenecek sıkıştırma eşiği (yüzde).
+    pub const LOW_PRESSURE_PERCENT: u32 = 8;
+
+    /// Bellek baskısı altında mı? (`LOW_PRESSURE_PERCENT` altında boş alan).
+    pub fn under_pressure(&self) -> bool {
+        self.free_percent <= Self::LOW_PRESSURE_PERCENT
+    }
+}
+
+/// 64 bit adresi `align` (2'nin kuvveti) sınırına yukarı yuvarlar.
+pub fn align_up_u64(value: u64, align: u64) -> u64 {
+    if align == 0 {
+        return value;
+    }
+    (value + align - 1) & !(align - 1)
 }

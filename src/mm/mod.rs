@@ -1,6 +1,7 @@
 pub mod allocator;
 pub mod fd;
 pub mod loader;
+pub mod memory;
 pub mod paging;
 pub mod pmm;
 pub mod process;

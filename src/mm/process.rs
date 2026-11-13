@@ -26,12 +26,25 @@ use crate::mm::vmm::{AddressSpace, PageFlags};
 /// Azami eszamanli aktif surec sayisi
 pub const MAX_PROCESSES: usize = 32;
 
+/// Çözülen tembel (demand paging) sayfa hatası sayacı (teşhis).
+pub static LAZY_FAULTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Copy-on-write yazılım biti: x86_64 mimarisi bit 9'u (Ignore) yok sayar,
 /// bu yüzden aynı önbellek hattını paylaşımayan güvenli bir yazılım biti olarak
 /// serbest kullanılabilir. Fork, yazılabilir sayfaları iki tarafta da bu
 /// bayrakla salt-okunur bırakır; ilk yazma #PF üretir ve `handle_cow_fault`
 /// sayfayı özel kopyaya dönüştürür.
 pub const PAGE_COW: u64 = 1 << 9;
+
+/// Tembel (demand) sayfa yazılım biti (AVL / PTE bit 10).
+///
+/// `PRESENT` + `PAGE_LAZY` olan bir kullanıcı PTE'si paylaşılan sıfır
+/// sayfası çerçevesini gösterir ve yazılabilir değildir; sayfa için özel
+/// fiziksel çerçeve henüz ayrılmamıştır. İlk yazma koruma ihlali `#PF`
+/// üretir ve `handle_lazy_fault` sıfırlanmış bir çerçeve ayırıp PTE'yi
+/// kalıcı bayraklarla değiştirir. x86_64 bu biti yok sayar, dolayısıyla
+/// PTE geçerliliği bozulmaz.
+pub const PAGE_LAZY: u64 = 1 << 10;
 
 /// Surec Durumu
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +53,9 @@ pub enum ProcessState {
     Ready,
     Running,
     Blocked,
+    /// SIGSTOP ile duraklatılmış süreç: bağlamı kayıtlı kalır, zamanlayıcı
+    /// onu seçmez; SIGCONT ile `Ready`'ye döner.
+    Suspended,
     Terminated,
 }
 
@@ -361,6 +377,11 @@ pub struct Process {
     pub mmap_regions: crate::mm::user_mem::MmapTable,
     /// Süreç dosya tanıtıcısı tablosu (0/1/2 standart, 3+ `open`).
     pub fds: FdTable,
+    /// Henüz teslim edilmemiş fatal-olmayan sinyallerin bit maskesi.
+    /// Bit `sig - 1` set ise `sig` pending'dir; `kill` ile işlenir, kullanıcı
+    /// işleyicisine teslimat sonraki sinyal altyapısı maddesinde yapılır.
+    /// `fork`/`exec` ile sıfırlanır (POSIX semantiği).
+    pub pending_signals: u64,
 }
 
 impl Process {
@@ -417,6 +438,7 @@ impl Process {
                 used: false,
             }; crate::mm::user_mem::MAX_MMAP_REGIONS],
             fds: [FileDescriptor::empty(); crate::mm::fd::MAX_FDS],
+            pending_signals: 0,
         }
     }
 
@@ -831,6 +853,19 @@ impl ProcessManager {
             }
             let virtual_address = prefix | ((index as u64) << shift);
             if level == 1 {
+                if entry & PAGE_LAZY != 0 {
+                    // Tembel sayfa: fiziksel çerçeve yok. Çocuk aynı tembel PTE'yi
+                    // alır; her iki taraf da ilk yazmada kendi çerçevesini ayırır
+                    // (COW paylaşımı ve kota tüketimi yok).
+                    if child
+                        .address_space
+                        .map_page(virtual_address, 0, entry, pmm)
+                        .is_err()
+                    {
+                        return Err("Fork tembel sayfasi eslenemedi");
+                    }
+                    continue;
+                }
                 let frame = entry & 0x000F_FFFF_FFFF_F000;
                 let writable = entry & PageFlags::WRITABLE != 0;
                 let mut child_flags = entry & !0x000F_FFFF_FFFF_F000;
@@ -1126,6 +1161,10 @@ impl ProcessManager {
             Some(entry) => entry,
             None => return false,
         };
+        // Tembel sayfa COW değildir; çerçevesi yoktur.
+        if entry & PAGE_LAZY != 0 {
+            return false;
+        }
         if entry & PAGE_COW == 0 || entry & PageFlags::WRITABLE != 0 {
             return false;
         }
@@ -1178,6 +1217,102 @@ impl ProcessManager {
             .address_space
             .set_flags(page, private_flags, pmm)
             .is_ok()
+    }
+
+    /// `[addr, addr+len)` aralığındaki tembel kullanıcı sayfalarını
+    /// gerçekleştirir. Syscall çıktı tamponları (MEMINFO/RESINFO/READ)
+    /// henüz yazılmamış lazy sayfalara işaret edebilir; salt-okunur sıfır
+    /// sayfası `uaccess` yazmasını reddettiğinden kopyadan önce çağrılır.
+    /// Tembel olmayan sayfalar `handle_lazy_fault` tarafından yok sayılır.
+    pub fn realize_lazy_range(
+        &mut self,
+        pid: usize,
+        addr: u64,
+        len: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) {
+        if addr == 0 || len == 0 {
+            return;
+        }
+        let mut offset = 0u64;
+        while offset < len {
+            let page_addr = (addr + offset) & !(PAGE_SIZE - 1);
+            let _ = self.handle_lazy_fault(pid, page_addr, pmm);
+            offset += PAGE_SIZE;
+        }
+    }
+
+    /// Tembel (demand) sayfa hatasını işler: `PAGE_LAZY` işaretli kullanıcı
+    /// sayfası için sıfırlanmış çerçeve ayırır, kaynak defterine işler ve
+    /// PTE'yi kalıcı bayraklar (`USER_DATA`) ile değiştirir. Başarıda `true`
+    /// döner ve çağıran komutu yeniden çalıştırır.
+    pub fn handle_lazy_fault(
+        &mut self,
+        pid: usize,
+        fault_addr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> bool {
+        let page = fault_addr & !(PAGE_SIZE - 1);
+        let Some(slot) = self
+            .processes
+            .iter()
+            .position(|p| p.pid == pid && p.state != ProcessState::Terminated)
+        else {
+            return false;
+        };
+        let Some(entry) = self.processes[slot].address_space.read_entry(page) else {
+            return false;
+        };
+        if entry & PAGE_LAZY == 0 || entry & PageFlags::USER == 0 {
+            return false;
+        }
+        let Some(frame) = pmm.allocate_frame() else {
+            return false;
+        };
+        // Sıfırlanmış sayfa: anonim bellek sözleşmesi.
+        unsafe {
+            core::ptr::write_bytes(
+                crate::drivers::phys_to_virt(frame) as *mut u8,
+                0,
+                PAGE_SIZE as usize,
+            );
+        }
+        if !self.processes[slot].resources.record_user_frame(frame) {
+            pmm.free_frame(frame);
+            return false;
+        }
+        let flags = PageFlags::USER_DATA;
+        if self.processes[slot]
+            .address_space
+            .map_page(page, frame, flags, pmm)
+            .is_err()
+        {
+            self.processes[slot].resources.take_user_frame(frame);
+            pmm.free_frame(frame);
+            return false;
+        }
+        LAZY_FAULTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
+    /// Süreç adres uzayında tembel sayfa sayısı (heap + mmap).
+    pub fn lazy_pages(&self, pid: usize) -> usize {
+        let Some(process) = self.get_process(pid) else {
+            return 0;
+        };
+        let mut total = crate::mm::user_mem::lazy_page_count(
+            process,
+            crate::mm::user_mem::HEAP_BASE,
+            crate::mm::user_mem::HEAP_BASE + process.heap_brk,
+        );
+        for region in process.mmap_regions.iter().filter(|region| region.used) {
+            total += crate::mm::user_mem::lazy_page_count(
+                process,
+                region.addr,
+                region.addr + region.len,
+            );
+        }
+        total
     }
 
     fn allocate_kernel_stack_for(p: &mut Process, pmm: &mut PhysicalMemoryManager) -> bool {
@@ -1302,6 +1437,8 @@ impl ProcessManager {
             process.mmap_used = 0;
             process.mmap_regions = Process::empty().mmap_regions;
             process.mmap_base = crate::mm::loader::randomized_mmap_base();
+            // exec sonrası bekleyen sinyaller sıfırlanır (POSIX semantiği).
+            process.pending_signals = 0;
         }
         if was_active {
             unsafe {
@@ -1623,6 +1760,87 @@ impl ProcessManager {
         }
         count
     }
+
+    /// Surec `Ready`/`Running` durumdaysa `Suspended`'a alir (SIGSTOP
+    /// semantigi). Zamanlayici `Suspended` surecleri secmez; kayitli kullanici
+    /// baglami `SIGCONT`'a kadar korunur. Calisan surecin kendisi de
+    /// duraklatilabilir — bir sonraki zaman dilimi sinirinda baglami kaydedilir
+    /// ve surec bir daha secilmez. `Blocked`/`Terminated`/`Unused` icin
+    /// `false` doner (tek durum alani blocked+stopped birlesimini temsil
+    /// edemediginden bekleyen surecler simdilik duraklatilamaz).
+    pub fn suspend(&mut self, pid: usize) -> bool {
+        let Some(p) = self.processes.iter_mut().find(|p| p.pid == pid) else {
+            return false;
+        };
+        match p.state {
+            ProcessState::Ready | ProcessState::Running => {
+                p.state = ProcessState::Suspended;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// `Suspended` sureci `Ready`'ye dondurur (SIGCONT semantigi). Durdurulmamış
+    /// süreçlerde (Ready/Running/Blocked) zararsız başarı sayılır; sonlanmış
+    /// veya var olmayan süreçler `false` döner.
+    pub fn resume(&mut self, pid: usize) -> bool {
+        let Some(p) = self.processes.iter_mut().find(|p| p.pid == pid) else {
+            return false;
+        };
+        match p.state {
+            ProcessState::Suspended => {
+                p.state = ProcessState::Ready;
+                true
+            }
+            // SIGCONT, durdurulmamış süreçte zararsızdır (POSIX): Blocked
+            // süreçler "stopped" sayılmadığından durumları korunur.
+            ProcessState::Ready | ProcessState::Running | ProcessState::Blocked => true,
+            _ => false,
+        }
+    }
+
+    /// `kill(2)` semantigi: `sig` hedef surece sinyal gonderir.
+    ///
+    /// * `pid == 0` (cekirdek) veya gecersiz `sig` (> `signals::MAX_SIGNAL`):
+    ///   `false`.
+    /// * `sig == 0`: varlik denetimi — surec varsa `true`.
+    /// * `SIGKILL` / `SIGTERM`: surec `-(sig)` cikis koduyla sonlandirilir.
+    /// * `SIGSTOP`: `Ready`/`Running` surec `Suspended`'a alinir.
+    /// * `SIGCONT`: `Suspended` surec `Ready`'ye doner.
+    /// * Diger sinyaller `pending_signals` bit maskesine islenir; kullanici
+    ///   isleyicisine teslimat sonraki sinyal altyapisi maddesinde yapilacak.
+    pub fn kill(&mut self, pid: usize, sig: u64, pmm: &mut PhysicalMemoryManager) -> bool {
+        if pid == 0 || sig > signals::MAX_SIGNAL {
+            return false;
+        }
+        let exists = self.processes.iter().any(|p| {
+            p.pid == pid && p.state != ProcessState::Unused && p.state != ProcessState::Terminated
+        });
+        if !exists {
+            return false;
+        }
+        if sig == 0 {
+            return true;
+        }
+        match sig {
+            signals::SIGKILL | signals::SIGTERM => self.terminate(pid, -(sig as i32), pmm),
+            signals::SIGSTOP => self.suspend(pid),
+            signals::SIGCONT => self.resume(pid),
+            _ => {
+                if let Some(p) = self
+                    .processes
+                    .iter_mut()
+                    .find(|p| p.pid == pid && p.state != ProcessState::Terminated)
+                {
+                    p.pending_signals |= 1u64 << (sig - 1);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
 }
 
 impl Default for ProcessManager {
@@ -1656,7 +1874,12 @@ pub mod sys_nos {
     /// mmap bölgesini bırakır: RDI = adres, RSI = uzunluk. Dönüş: 0 / u64::MAX.
     pub const SYS_MUNMAP: u64 = 13;
     /// Kullanıcı bellek özeti: [0] heap_brk, [1] mmap bölge sayısı,
-    /// [2] mmap bayt, [3] eşlenmiş heap sayfası. RDI = çıktı tamponu (u64 x 4).
+    /// [2] mmap bayt, [3] eşlenmiş heap sayfası (ABI uyumlu ilk 4 alan).
+    /// Genişletilmiş alanlar: [4] kullanıcı çerçevesi, [5] paylaşılan (COW)
+    /// sayfa, [6] paylaşımla kazanılan bayt, [7] sistem toplam bayt,
+    /// [8] sistem boş bayt, [9] sistem kullanıcı çerçevesi,
+    /// [10] sistem kernel çerçevesi, [11] kernel heap haritalanan bayt.
+    /// RDI = çıktı tamponu (u64 x 12 = 96 bayt).
     pub const SYS_MEMINFO: u64 = 14;
     /// Dosya açar: RDI = yol (`ptr`, NUL sonlu), RSI = bayraklar. Dönüş: fd / `MAX`.
     pub const SYS_OPEN: u64 = 15;
@@ -1666,6 +1889,40 @@ pub mod sys_nos {
     pub const SYS_RESINFO: u64 = 17;
     /// fd konumlandırma: RDI = fd, RSI = offset (i64), RDX = whence (0/1/2).
     pub const SYS_LSEEK: u64 = 18;
+    /// Sürece sinyal gönderir / süreci kontrol eder: RDI = pid, RSI = sinyal
+    /// numarası. SIGKILL/SIGTERM sonlandırır, SIGSTOP/SIGCONT duraklatır ve
+    /// sürdürür, `sig == 0` varlık denetimidir. Diğer sinyaller
+    /// `pending_signals`'e işlenir. Dönüş: `0` / `MAX`.
+    pub const SYS_KILL: u64 = 19;
+}
+
+/// Standart sinyal numaraları (Linux numaralandırmasıyla uyumlu alt küme).
+/// `kill` syscall'ı ve `Process::pending_signals` bu değerleri kullanır.
+pub mod signals {
+    pub const SIGHUP: u64 = 1;
+    pub const SIGINT: u64 = 2;
+    pub const SIGQUIT: u64 = 3;
+    pub const SIGILL: u64 = 4;
+    pub const SIGTRAP: u64 = 5;
+    pub const SIGABRT: u64 = 6;
+    pub const SIGBUS: u64 = 7;
+    pub const SIGFPE: u64 = 8;
+    pub const SIGKILL: u64 = 9;
+    pub const SIGUSR1: u64 = 10;
+    pub const SIGSEGV: u64 = 11;
+    pub const SIGUSR2: u64 = 12;
+    pub const SIGPIPE: u64 = 13;
+    pub const SIGALRM: u64 = 14;
+    pub const SIGTERM: u64 = 15;
+    pub const SIGSTKFLT: u64 = 16;
+    pub const SIGCHLD: u64 = 17;
+    pub const SIGCONT: u64 = 18;
+    pub const SIGSTOP: u64 = 19;
+    pub const SIGTSTP: u64 = 20;
+    pub const SIGTTIN: u64 = 21;
+    pub const SIGTTOU: u64 = 22;
+    /// İşlenebilir sinyal bit maskesinin üst sınırı (64 bit).
+    pub const MAX_SIGNAL: u64 = 64;
 }
 
 pub const MAX_EXEC_IMAGE_SIZE: usize = 112 * 1024;
@@ -1863,15 +2120,29 @@ pub fn syscall_dispatch_abi(
         }
         sys_nos::SYS_MEMINFO => {
             let current = proc_mgr.current_pid;
+            // Sistem geneli profil (salt okuma; süreç tablosu zaten kilitli).
+            let system = crate::mm::memory::profile::snapshot();
             let Some(process) = proc_mgr.get_process(current) else {
                 return u64::MAX;
             };
             let stats = crate::mm::user_mem::stats(process);
+            let extended = stats.extended(process);
+            let address_space = process.address_space;
+            // İlk 4 alan ABI uyumluluğu için korunur; 5..12 genişletilmiş
+            // kullanıcı/kernel istatistikleridir (bkz. docs/SYSCALL_ABI.md).
             let report = [
                 stats.heap_bytes,
                 stats.mmap_regions as u64,
                 stats.mmap_bytes,
                 stats.heap_mapped_pages as u64,
+                extended.user_frame_count as u64,
+                extended.shared_pages as u64,
+                extended.shared_saved_bytes,
+                system.total_bytes,
+                system.free_bytes,
+                system.user_frames as u64,
+                system.kernel_frames as u64,
+                system.heap_mapped_bytes,
             ];
             if arg1 == 0 {
                 return report
@@ -1879,11 +2150,13 @@ pub fn syscall_dispatch_abi(
                     .copied()
                     .fold(0u64, |acc, v| acc ^ v.rotate_left(7));
             }
-            let mut bytes = [0u8; 32];
+            let mut bytes = [0u8; 96];
             for (index, value) in report.iter().enumerate() {
                 bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
             }
-            if uaccess::copy_to_user(&process.address_space, arg1, &bytes).is_err() {
+            // Çıktı tamponu tembel sayfaya düşebilir; önce gerçekleyin.
+            proc_mgr.realize_lazy_range(current, arg1, 96, pmm);
+            if uaccess::copy_to_user(&address_space, arg1, &bytes).is_err() {
                 return u64::MAX;
             }
             0
@@ -1979,6 +2252,8 @@ pub fn syscall_dispatch_abi(
                 proc_mgr
                     .files
                     .read_at(descriptor.object as usize, descriptor.offset, &mut buffer);
+            // Hedef tampon tembel sayfalara düşebilir; önce gerçekleyin.
+            proc_mgr.realize_lazy_range(current, buffer_address, read as u64, pmm);
             let Some(process) = proc_mgr.get_process_mut(current) else {
                 return u64::MAX;
             };
@@ -2030,12 +2305,20 @@ pub fn syscall_dispatch_abi(
             entry.offset = target as u64;
             target as u64
         }
+        sys_nos::SYS_KILL => {
+            if proc_mgr.kill(arg1 as usize, arg2, pmm) {
+                0
+            } else {
+                u64::MAX
+            }
+        }
         sys_nos::SYS_RESINFO => {
             let current = proc_mgr.current_pid;
             let Some(process) = proc_mgr.get_process(current) else {
                 return u64::MAX;
             };
             let stats = crate::mm::user_mem::stats(process);
+            let address_space = process.address_space;
             let report = [
                 process.resources.limits.max_frames as u64,
                 process.resources.frame_count as u64,
@@ -2050,7 +2333,9 @@ pub fn syscall_dispatch_abi(
             for (index, value) in report.iter().enumerate() {
                 bytes[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
             }
-            if uaccess::copy_to_user(&process.address_space, arg1, &bytes).is_err() {
+            // Çıktı tamponu tembel sayfaya düşebilir; önce gerçekleyin.
+            proc_mgr.realize_lazy_range(current, arg1, 64, pmm);
+            if uaccess::copy_to_user(&address_space, arg1, &bytes).is_err() {
                 return u64::MAX;
             }
             0
@@ -2357,6 +2642,7 @@ pub fn test_process_lifecycle_and_fault_recovery(
                                     ProcessState::Ready => 1,
                                     ProcessState::Running => 2,
                                     ProcessState::Blocked => 3,
+                                    ProcessState::Suspended => 6,
                                     ProcessState::Terminated => 4,
                                     ProcessState::Unused => 5,
                                 })
@@ -2634,7 +2920,7 @@ pub fn test_syscall_pointer_validation(
     };
     proc_mgr.current_pid = pid;
 
-    // Test tamponu: tek sayfa, kullanıcı veri bayraklarıyla eşlenir.
+    // Test tamponu: iki sayfa, kullanici veri bayraklariyla eslenir.
     let buffer_address: u64 = 0x0000_0000_0060_0000;
     let Some(buffer_frame) = pmm.allocate_frame() else {
         crate::serial_print("[PTR-TEST] Çerçeve tahsisi: BAŞARISIZ\n");
@@ -2658,6 +2944,30 @@ pub fn test_syscall_pointer_validation(
         crate::serial_print("[PTR-TEST] Tampon eşlenemedi: BAŞARISIZ\n");
         return false;
     }
+
+    // Ikinci sayfa: salt-okunur (WRITABLE yok) kullanici eslemesi. Yazma yollari
+    // bu sayfayi reddetmeli; okuma yollari kabul etmeli.
+    let readonly_address: u64 = buffer_address + PAGE_SIZE;
+    let readonly_mapped = pmm.allocate_frame().is_some_and(|frame| {
+        let ok = proc_mgr.get_process_mut(pid).is_some_and(|process| {
+            process
+                .address_space
+                .map_page(readonly_address, frame, PageFlags::USER_CODE, pmm)
+                .is_ok()
+                && process.resources.record_user_frame(frame)
+        });
+        if !ok {
+            pmm.free_frame(frame);
+        }
+        ok
+    });
+    if !readonly_mapped {
+        proc_mgr.current_pid = caller_pid;
+        let _ = proc_mgr.terminate(pid, -1, pmm);
+        proc_mgr.reap_terminated(pmm);
+        crate::serial_print("[PTR-TEST] Salt-okunur sayfa eslenemedi: BAŞARISIZ\n");
+        return false;
+    }
     // Tamponu taninabilir bir desenle doldur (WRITE geri okumasini dogrulamak icin).
     let filled = proc_mgr.get_process(pid).is_some_and(|process| {
         let physical = process.address_space.translate_user(buffer_address);
@@ -2674,20 +2984,56 @@ pub fn test_syscall_pointer_validation(
     }
 
     // --- Reddedilmesi gereken işaretçiler -------------------------------------
-    // NULL: arg1 = 0 uzunluk 0 -> etkisiz; uzunluk > 0 -> reddedilmeli.
-    let null_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 64, 0, proc_mgr, pmm);
-    // Hizasiz (sayfa sonundan sonraki bayt): tampon + 4096 tam olarak bir
-    // sonraki, eslenmemis sayfaya denk gelir.
-    let misaligned_write = syscall_dispatch(
+    // Eslenmemis adres: iki sayfa sonrasi (tampon + salt-okunur sayfa dolu).
+    let unmapped_address: u64 = buffer_address + 2 * PAGE_SIZE;
+
+    // (a) Cekirdek yarisi isaretcileri.
+    //   - Cekirdek metni (islev isaretcisi).
+    let kernel_address = test_syscall_pointer_validation as *const () as u64;
+    let kernel_write = syscall_dispatch(sys_nos::SYS_WRITE, kernel_address, 8, 0, proc_mgr, pmm);
+    //   - Kanonik cekirdek tabani (HHDM basi): USER yarinin ustunde.
+    let kernel_base_write = syscall_dispatch(
         sys_nos::SYS_WRITE,
-        buffer_address + PAGE_SIZE,
+        0xFFFF_8000_0000_0000u64,
         8,
         0,
         proc_mgr,
         pmm,
     );
-    // Yari eslenmis tampon: ilk 8 bayt gecerli, kalan 8 bayt eslenmemis
-    // sayfaya tasiyor; tum cagri reddedilmeli.
+    //   - Kanonik olmayan adres: kullanici yarisi sinirinin hemen ustu.
+    let noncanonical_write = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        uaccess::USER_ADDRESS_END,
+        8,
+        0,
+        proc_mgr,
+        pmm,
+    );
+
+    // (b) Adres/uzunluk aritmetigi sinirlari.
+    //   - NULL (uzunluk > 0).
+    let null_write = syscall_dispatch(sys_nos::SYS_WRITE, 0, 64, 0, proc_mgr, pmm);
+    //   - Tasma: address + len u64'u asar.
+    let overflow_write = syscall_dispatch(sys_nos::SYS_WRITE, u64::MAX - 3, 8, 0, proc_mgr, pmm);
+    //   - Kullanici yarisi sinirinin son baytlari: aralik gecerli ama eslenmemis.
+    let user_end_write = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        uaccess::USER_ADDRESS_END - 8,
+        8,
+        0,
+        proc_mgr,
+        pmm,
+    );
+
+    // (c) Sayfa/hizalama sinirlari.
+    //   - Salt-okunur sayfaya yazma (WRITABLE yok).
+    let readonly_write =
+        syscall_dispatch(sys_nos::SYS_WRITE, readonly_address, 8, 0, proc_mgr, pmm);
+    //   - Eslenmemis sayfaya yazma.
+    let unmapped_write =
+        syscall_dispatch(sys_nos::SYS_WRITE, unmapped_address, 8, 0, proc_mgr, pmm);
+    //   - Yari eslenmis aralik: ilk 8 bayt yazilabilir tampon, kalan 8 bayt
+    //     eslenmemis sayfaya tasiyor; tum cagri reddedilmeli.
     let straddle_write = syscall_dispatch(
         sys_nos::SYS_WRITE,
         buffer_address + PAGE_SIZE - 8,
@@ -2696,32 +3042,26 @@ pub fn test_syscall_pointer_validation(
         proc_mgr,
         pmm,
     );
-    // Cekirdek yarisi isaretcisi (cekirdek metni; USER adres alaninin ustunde).
-    let kernel_address = test_syscall_pointer_validation as *const () as u64;
-    let kernel_write = syscall_dispatch(sys_nos::SYS_WRITE, kernel_address, 8, 0, proc_mgr, pmm);
-    // Gecersiz uzunluklar.
+
+    // (d) Uzunluk sinirlari: 0 etkisiz, 1024 kabul, 1025 reddedilir.
     let empty_write = syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 0, 0, proc_mgr, pmm);
+    let max_len_write =
+        syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 1024, 0, proc_mgr, pmm);
     let oversized_write =
-        syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 4096, 0, proc_mgr, pmm);
-    // SYS_WAIT: arg2 (durum isaretcisi) eslenmemis.
-    let wait_bad_status = syscall_dispatch(
-        sys_nos::SYS_WAIT,
-        0,
-        buffer_address + PAGE_SIZE,
-        0,
-        proc_mgr,
-        pmm,
-    );
-    // SYS_EXEC: arg1 NULL/eslenmemis, arg2 sifir veya asiri buyuk.
+        syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 1025, 0, proc_mgr, pmm);
+
+    // (e) Diger syscall yollari.
+    //   - SYS_WAIT: arg2 (durum isaretcisi) salt-okunur / eslenmemis.
+    let wait_ro_status = syscall_dispatch(sys_nos::SYS_WAIT, 0, readonly_address, 0, proc_mgr, pmm);
+    let wait_bad_status =
+        syscall_dispatch(sys_nos::SYS_WAIT, 0, unmapped_address, 0, proc_mgr, pmm);
+    //   - SYS_MEMINFO: salt-okunur / eslenmemis rapor adresi.
+    let meminfo_ro = syscall_dispatch(sys_nos::SYS_MEMINFO, readonly_address, 0, 0, proc_mgr, pmm);
+    let meminfo_bad = syscall_dispatch(sys_nos::SYS_MEMINFO, unmapped_address, 0, 0, proc_mgr, pmm);
+    //   - SYS_EXEC: arg1 NULL/eslenmemis, arg2 sifir veya asiri buyuk.
     let exec_null = syscall_dispatch(sys_nos::SYS_EXEC, 0, 16, 0, proc_mgr, pmm);
-    let exec_unmapped = syscall_dispatch(
-        sys_nos::SYS_EXEC,
-        buffer_address + PAGE_SIZE,
-        16,
-        0,
-        proc_mgr,
-        pmm,
-    );
+    let exec_unmapped = syscall_dispatch(sys_nos::SYS_EXEC, unmapped_address, 16, 0, proc_mgr, pmm);
+    let exec_empty = syscall_dispatch(sys_nos::SYS_EXEC, buffer_address, 0, 0, proc_mgr, pmm);
     let exec_oversized = syscall_dispatch(
         sys_nos::SYS_EXEC,
         buffer_address,
@@ -2730,39 +3070,62 @@ pub fn test_syscall_pointer_validation(
         proc_mgr,
         pmm,
     );
-    // SYS_MMAP: sifir/asiri uzunluk reddedilir (0 doner).
+    //   - SYS_OPEN: NULL ve eslenmemis yol.
+    let open_null = syscall_dispatch(sys_nos::SYS_OPEN, 0, 0, 0, proc_mgr, pmm);
+    let open_unmapped = syscall_dispatch(sys_nos::SYS_OPEN, unmapped_address, 0, 0, proc_mgr, pmm);
+    //   - SYS_MMAP: sifir/asiri uzunluk reddedilir (0 doner).
     let mmap_zero = syscall_dispatch(sys_nos::SYS_MMAP, 0, 0, 0, proc_mgr, pmm);
     let mmap_oversized =
         syscall_dispatch(sys_nos::SYS_MMAP, 64 * 1024 * 1024 + 1, 0, 0, proc_mgr, pmm);
-    // SYS_MUNMAP: NULL adres ve sifir uzunluk reddedilir.
+    //   - SYS_MUNMAP: NULL adres ve sifir uzunluk reddedilir.
     let munmap_null = syscall_dispatch(sys_nos::SYS_MUNMAP, 0, PAGE_SIZE, 0, proc_mgr, pmm);
     let munmap_zero_len =
         syscall_dispatch(sys_nos::SYS_MUNMAP, buffer_address, 0, 0, proc_mgr, pmm);
-    // SYS_MEMINFO: eslenmemis rapor adresi reddedilir.
-    let meminfo_bad = syscall_dispatch(
-        sys_nos::SYS_MEMINFO,
-        buffer_address + PAGE_SIZE,
-        0,
-        0,
-        proc_mgr,
-        pmm,
-    );
+
+    // (f) Kopyalama katmani sozlesmesi (kutuphane seviyesi, deterministik):
+    //     salt-okunur sayfadan okuma serbest, yazma reddedilir.
+    let (ro_read_ok, ro_write_rejected) = proc_mgr
+        .get_process(pid)
+        .map(|process| {
+            let read_ok =
+                uaccess::copy_from_user(&process.address_space, readonly_address, 8).is_ok();
+            let write_err =
+                uaccess::copy_to_user(&process.address_space, readonly_address, &[0u8; 8]);
+            (
+                read_ok,
+                matches!(write_err, Err(uaccess::UserCopyError::NotWritable)),
+            )
+        })
+        .unwrap_or((false, false));
 
     let rejected = null_write == 0
-        && misaligned_write == 0
-        && straddle_write == 0
+        && overflow_write == 0
+        && user_end_write == 0
         && kernel_write == 0
+        && kernel_base_write == 0
+        && noncanonical_write == 0
+        && readonly_write == 0
+        && unmapped_write == 0
+        && straddle_write == 0
         && empty_write == 0
+        && max_len_write == 1024
         && oversized_write == 0
+        && wait_ro_status == u64::MAX
         && wait_bad_status == u64::MAX
+        && meminfo_ro == u64::MAX
+        && meminfo_bad == u64::MAX
         && exec_null == u64::MAX
         && exec_unmapped == u64::MAX
+        && exec_empty == u64::MAX
         && exec_oversized == u64::MAX
+        && open_null == u64::MAX
+        && open_unmapped == u64::MAX
         && mmap_zero == 0
         && mmap_oversized == 0
         && munmap_null == u64::MAX
         && munmap_zero_len == u64::MAX
-        && meminfo_bad == u64::MAX;
+        && ro_read_ok
+        && ro_write_rejected;
 
     // --- Kabul edilmesi gereken cagrilar -------------------------------------
     let valid_write = syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 8, 0, proc_mgr, pmm);
@@ -2777,10 +3140,21 @@ pub fn test_syscall_pointer_validation(
         pmm,
     );
     let edge_ok = edge_write == 8;
+    // Tek bayt: tamponun ilk ve son bayti.
+    let first_byte = syscall_dispatch(sys_nos::SYS_WRITE, buffer_address, 1, 0, proc_mgr, pmm);
+    let last_byte = syscall_dispatch(
+        sys_nos::SYS_WRITE,
+        buffer_address + PAGE_SIZE - 1,
+        1,
+        0,
+        proc_mgr,
+        pmm,
+    );
+    let byte_edges_ok = first_byte == 1 && last_byte == 1;
     // Eslenmemis bir mmap bölgesi üzerinde munmap tekrar reddedilmeli.
     let unmap_unmapped = syscall_dispatch(
         sys_nos::SYS_MUNMAP,
-        buffer_address + 2 * PAGE_SIZE,
+        unmapped_address,
         PAGE_SIZE,
         0,
         proc_mgr,
@@ -2796,10 +3170,17 @@ pub fn test_syscall_pointer_validation(
     let no_leak = pmm.free_memory_bytes == free_before;
     let reclaimed = no_leak && terminated;
 
-    let ok = filled && rejected && write_ok && edge_ok && double_unmap_rejected && reclaimed;
+    let ok = filled
+        && rejected
+        && write_ok
+        && edge_ok
+        && byte_edges_ok
+        && ro_read_ok
+        && double_unmap_rejected
+        && reclaimed;
     if ok {
         crate::serial_print(
-            "[PTR-TEST] NULL/hizasiz/yari-eslenmis/cekirdek isaretcileri ve sinir uzunluklari reddedildi, gecerli cagrilar calisti, sizinti yok: BASARILI\n",
+            "[PTR-TEST] NULL/hizasiz/yari-eslenmis/cekirdek/salt-okunur isaretcileri ve sinir uzunluklari reddedildi, gecerli cagrilar calisti, sizinti yok: BASARILI\n",
         );
     } else {
         crate::serial_print("[PTR-TEST] Syscall isaretci dogrulamasi: BASARISIZ (");
@@ -2807,6 +3188,8 @@ pub fn test_syscall_pointer_validation(
         crate::serial_print(if rejected { "reject " } else { "reject! " });
         crate::serial_print(if write_ok { "write " } else { "write! " });
         crate::serial_print(if edge_ok { "edge " } else { "edge! " });
+        crate::serial_print(if byte_edges_ok { "bytes " } else { "bytes! " });
+        crate::serial_print(if ro_read_ok { "ro-read " } else { "ro-read! " });
         crate::serial_print(if double_unmap_rejected {
             "2munmap "
         } else {
@@ -2844,12 +3227,39 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
     };
     proc_mgr.current_pid = pid;
 
-    // 1. brk: heap büyüt, çerçeveler sıfır gelmeli.
+    // 1. brk: heap büyütülür (tembel eşleme, çerçeve ayrılmaz) ve ilk yazma
+    //    ile her sayfa sıfır gelmiş olarak gerçekleştirilir.
+    let free_before_heap = pmm.free_memory_bytes;
     let heap_end = syscall_dispatch(sys_nos::SYS_BRK, 3 * PAGE_SIZE, 0, 0, proc_mgr, pmm);
-    let heap_ok = heap_end == crate::mm::user_mem::HEAP_BASE + 3 * PAGE_SIZE
+    // Lazy PTE'ler paylaşılan sıfır sayfasını gösterir: en fazla bir kez
+    // (ilk tembel eşlemede) tek bir sıfır çerçevesi ayrılır.
+    let lazy_heap_ok = pmm.free_memory_bytes + PAGE_SIZE >= free_before_heap
+        && proc_mgr.lazy_pages(pid) == 3
         && proc_mgr.get_process(pid).is_some_and(|p| {
             (0..3).all(|i| {
                 let address = p.heap_address(i as u64 * PAGE_SIZE);
+                p.address_space.read_entry(address).is_some_and(|entry| {
+                    entry & PAGE_LAZY != 0
+                        && entry & PageFlags::PRESENT != 0
+                        && entry & PageFlags::WRITABLE == 0
+                        && entry & PageFlags::NO_EXECUTE != 0
+                })
+            })
+        });
+    // İlk yazma: tembel sayfalar önce sıfırlanmış özel çerçevelere
+    // dönüştürülür (Ring 3 yolu `#PF` → `handle_lazy_fault`), sonra yazılır.
+    for i in 0..3u64 {
+        let _ =
+            proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE + i * PAGE_SIZE, pmm);
+        if let Some(p) = proc_mgr.get_process(pid) {
+            let _ = write_user_u64(p, p.heap_address(i * PAGE_SIZE), 0x1122_3344 + i);
+        }
+    }
+    let heap_ok = heap_end == crate::mm::user_mem::HEAP_BASE + 3 * PAGE_SIZE
+        && lazy_heap_ok
+        && (0..3u64).all(|i| {
+            proc_mgr.get_process(pid).is_some_and(|p| {
+                let address = p.heap_address(i * PAGE_SIZE);
                 p.address_space
                     .translate_user(address)
                     .and_then(|phys| {
@@ -2860,11 +3270,12 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
                     .is_some_and(|(phys, entry)| {
                         entry & PageFlags::WRITABLE != 0
                             && entry & PageFlags::NO_EXECUTE != 0
+                            && entry & PAGE_LAZY == 0
                             && unsafe {
                                 core::ptr::read_volatile(
-                                    crate::drivers::phys_to_virt(phys) as *const u8
-                                )
-                            } == 0
+                                    crate::drivers::phys_to_virt(phys) as *const u64
+                                ) == 0x1122_3344 + i
+                            }
                     })
             })
         });
@@ -2888,46 +3299,55 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
                 .is_none()
         });
 
-    // 3. mmap/munmap: ASLR tabanından ayrık bölge ve tam iade.
+    // 3. mmap/munmap: bölge tembel eşlenir; ilk yazma sayfayı gerçekleştirir.
+    let free_before_mmap = pmm.free_memory_bytes;
     let region = syscall_dispatch(sys_nos::SYS_MMAP, 2 * 4096, 0, 0, proc_mgr, pmm);
-    let region_pages = proc_mgr.get_process(pid).is_some_and(|p| {
-        region == p.mmap_base
-            && region.is_multiple_of(PAGE_SIZE)
-            && (crate::mm::loader::ASLR_MMAP_MIN..crate::mm::loader::ASLR_MMAP_MAX)
-                .contains(&region)
-            && (0..2).all(|i| {
-                p.address_space
-                    .translate_user(region + i * PAGE_SIZE)
+    let lazy_mmap_ok = region != 0 && pmm.free_memory_bytes == free_before_mmap;
+    // Tembel sayfayı kullanıcı CR3'ü olmadan çekirdek yolundan gerçekleştir
+    // (Ring 3 yazma yolu `#PF` → `handle_lazy_fault` iken bu eşdeğer çağrıdır).
+    if region != 0 {
+        let _ = proc_mgr.handle_lazy_fault(pid, region, pmm);
+    }
+    let region_pages = lazy_mmap_ok
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            region == p.mmap_base
+                && region.is_multiple_of(PAGE_SIZE)
+                && (crate::mm::loader::ASLR_MMAP_MIN..crate::mm::loader::ASLR_MMAP_MAX)
+                    .contains(&region)
+                && p.address_space
+                    .translate_user(region)
                     .is_some_and(|phys| unsafe {
                         core::ptr::read_volatile(crate::drivers::phys_to_virt(phys) as *const u64)
                             == 0
                     })
-            })
-    });
+        });
     let second = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, 0, 0, proc_mgr, pmm);
     let second_ok = second == region + 2 * PAGE_SIZE;
     let free_before_unmap = pmm.free_memory_bytes;
     let unmap = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
     let free_after_unmap = pmm.free_memory_bytes;
-    // `munmap` yalnız `region` aralığını (2 sayfa) iade eder; `second` hâlâ
-    // eşlenmiş kalır. Bu yüzden deltası tam olarak 2 sayfa olmalıdır.
+    // `region` iki sayfa, yalnız ilk sayfa gerçekleştirildi: munmap tam 1 sayfa
+    // iade eder; kullanılmayan tembel sayfa fiziksel bellek tüketmedi.
     let unmap_ok = unmap == 0
         && proc_mgr
             .get_process(pid)
             .is_some_and(|p| p.address_space.translate(region).is_none())
-        && free_after_unmap == free_before_unmap + 2 * PAGE_SIZE;
+        && free_after_unmap == free_before_unmap + PAGE_SIZE;
     let unmap_twice = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
     let mmap_ok = region_pages && second_ok && unmap_ok && unmap_twice == u64::MAX;
 
-    // 4. MEMINFO syscall'u (R10 yolu) özeti doğru raporlar.
+    // 4. MEMINFO syscall'u (R10 yolu) özeti doğru raporlar. `second` tembel
+    //    olduğundan rapor hedefi için heap'in gerçek sayfası kullanılır.
     let heap_address = proc_mgr
         .get_process(pid)
         .map(|p| p.heap_address(0))
         .unwrap_or(0);
     let report_addr = proc_mgr
         .get_process(pid)
-        .and_then(|p| p.address_space.translate_user(second))
-        .map(|_| second)
+        .and_then(|p| {
+            let address = p.heap_address(0);
+            p.address_space.translate_user(address).map(|_| address)
+        })
         .unwrap_or(0);
     let meminfo = syscall_dispatch(sys_nos::SYS_MEMINFO, report_addr, 0, 0, proc_mgr, pmm);
     let meminfo_ok = report_addr != 0
@@ -2940,8 +3360,102 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
                     core::ptr::read_volatile(crate::drivers::phys_to_virt(phys) as *const u64)
                 })
                 .unwrap_or(u64::MAX);
+            // MEMINFO raporu heap ucunu (2 sayfa) ilk alan olarak döner.
             heap == 2 * PAGE_SIZE && heap_address != 0
         });
+
+    // 4b. Genişletilmiş MEMINFO: u64 x 12 rapor; kullanıcı çerçevesi ve sistem
+    //     toplam/boş bellek alanları makul olmalı.
+    let meminfo_ext_ok = report_addr != 0
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            uaccess::copy_from_user(&p.address_space, report_addr, 96)
+                .map(|bytes| {
+                    let value = |index: usize| {
+                        let mut raw = [0u8; 8];
+                        raw.copy_from_slice(&bytes[index * 8..index * 8 + 8]);
+                        u64::from_le_bytes(raw)
+                    };
+                    let user_frames = p.resources.user_frame_count as u64;
+                    value(0) == p.heap_brk
+                        && value(4) == user_frames
+                        && user_frames >= 3
+                        && value(7) > 0
+                        && value(8) > 0
+                        && value(7) > value(8)
+                        && value(9) == user_frames
+                        && value(10) > 0
+                })
+                .unwrap_or(false)
+        });
+
+    // 4c. Sayfa paylaşımı optimizasyonu: `FILE_SHARED` mmap bölgesini iki
+    //     süreç eşler; aynı fiziksel çerçeve paylaşılır, kopya yoktur.
+    //     İkinci süreç bölgeyi bırakınca birinci sürecin eşlemesi bozulmaz.
+    let share_pid = proc_mgr
+        .spawn("share", 0x1000, 0x7000_0000, 0, None, pmm)
+        .ok();
+    let share_free_before = pmm.free_memory_bytes;
+    let mut shared_frame_matched = false;
+    if let (Some(reader), Some(writer)) = (Some(pid), share_pid) {
+        let flags = crate::mm::user_mem::MAP_SHARED_FILE | PageFlags::USER;
+        let reader_addr = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, flags, 0, proc_mgr, pmm);
+        let writer_addr = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, flags, 0, proc_mgr, pmm);
+        shared_frame_matched = reader_addr != 0
+            && writer_addr == reader_addr
+            && proc_mgr.get_process(reader).is_some_and(|p| {
+                let entry = p.address_space.read_entry(reader_addr).unwrap_or(0);
+                entry & crate::mm::user_mem::PAGE_SHARED != 0
+            })
+            && proc_mgr.get_process(writer).is_some_and(|p| {
+                let entry = p.address_space.read_entry(writer_addr).unwrap_or(0);
+                entry & crate::mm::user_mem::PAGE_SHARED != 0
+            })
+            && proc_mgr
+                .get_process(reader)
+                .zip(proc_mgr.get_process(writer))
+                .is_some_and(|(a, b)| {
+                    let pa = a
+                        .address_space
+                        .translate_user(reader_addr)
+                        .unwrap_or(u64::MAX);
+                    let pb = b
+                        .address_space
+                        .translate_user(writer_addr)
+                        .unwrap_or(u64::MAX);
+                    pa != u64::MAX && pa == pb
+                });
+        // Yazar sürecin eşlemesini bırak; okuyucunun eşlemesi korunur.
+        // Ardından okuyucu da bırakır; çerçeve son sahiple birlikte iade edilir.
+        if shared_frame_matched {
+            proc_mgr.current_pid = writer;
+            let unmapped = syscall_dispatch(
+                sys_nos::SYS_MUNMAP,
+                writer_addr,
+                PAGE_SIZE,
+                0,
+                proc_mgr,
+                pmm,
+            );
+            proc_mgr.current_pid = pid;
+            shared_frame_matched = unmapped == 0
+                && proc_mgr
+                    .get_process(reader)
+                    .is_some_and(|p| p.address_space.translate_user(reader_addr).is_some());
+            let released = syscall_dispatch(
+                sys_nos::SYS_MUNMAP,
+                reader_addr,
+                PAGE_SIZE,
+                0,
+                proc_mgr,
+                pmm,
+            );
+            shared_frame_matched = shared_frame_matched && released == 0;
+        }
+        // Paylaşımlı sayfa (1) dışında ek fiziksel bellek kullanılmamalı.
+        shared_frame_matched = shared_frame_matched
+            && share_free_before.saturating_sub(pmm.free_memory_bytes) <= PAGE_SIZE;
+        crate::mm::user_mem::release_shared_regions();
+    }
 
     // 5. ASLR: iki süreç farklı mmap tabanı seçmeli (entropi testi).
     let mut bases = alloc::vec::Vec::new();
@@ -2977,6 +3491,9 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
     for other in aslr_pids {
         let _ = proc_mgr.terminate(other, 0, pmm);
     }
+    if let Some(writer) = share_pid {
+        let _ = proc_mgr.terminate(writer, 0, pmm);
+    }
 
     proc_mgr.current_pid = 0;
     let terminated = proc_mgr.terminate(pid, 0, pmm);
@@ -2992,12 +3509,14 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         && shrink_ok
         && mmap_ok
         && meminfo_ok
+        && meminfo_ext_ok
+        && shared_frame_matched
         && aslr_distinct
         && stack_ok
         && no_leak
     {
         crate::serial_print(
-            "[USER-MEM] heap/mmap/ASLR: brk buyut+kucult, mmap/munmap, MEMINFO ve sizintisiz iade: BASARILI\n",
+            "[USER-MEM] heap/mmap/ASLR: brk buyut+kucult, tembel sayfa, mmap/munmap, MEMINFO, sayfa paylasimi ve sizintisiz iade: BASARILI\n",
         );
         true
     } else {
@@ -3011,6 +3530,16 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         crate::serial_print(if second_ok { "2nd " } else { "2nd! " });
         crate::serial_print(if unmap_ok { "unmap " } else { "unmap! " });
         crate::serial_print(if meminfo_ok { "meminfo " } else { "meminfo! " });
+        crate::serial_print(if meminfo_ext_ok {
+            "meminfo-ext "
+        } else {
+            "meminfo-ext! "
+        });
+        crate::serial_print(if shared_frame_matched {
+            "shared "
+        } else {
+            "shared! "
+        });
         crate::serial_print(if aslr_distinct && stack_ok {
             "aslr "
         } else {
@@ -3061,8 +3590,10 @@ pub fn test_file_descriptor_lifecycle(
             && fd::used_fd_count(&p.fds) == 3
     });
 
-    // 2. Heap'te yol ve okuma tamponu hazırla.
+    // 2. Heap'te yol ve okuma tamponu hazırla. `brk` tembel eşlendiği için
+    //    sayfa `uaccess` yazmından önce gerçekleştirilir (Ring 3 yolu `#PF`).
     let heap_end = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let _ = proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE, pmm);
     let heap_base = proc_mgr
         .get_process(pid)
         .map(|p| p.heap_address(0))
@@ -3378,8 +3909,10 @@ pub fn test_resource_limits(
             && limits.max_heap_bytes == MAX_PROC_HEAP_BYTES
     });
 
-    // 2. RESINFO: 8 x u64 rapor (limit + kullanım).
+    // 2. RESINFO: 8 x u64 rapor (limit + kullanım). Tembel heap sayfası rapor
+    //    hedefi olarak kullanılacağı için önce gerçekleştirilir.
     let heap_end = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    let _ = proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE, pmm);
     let heap_base = proc_mgr
         .get_process(pid)
         .map(|p| p.heap_address(0))
@@ -3423,6 +3956,9 @@ pub fn test_resource_limits(
             let grew = proc_mgr
                 .get_process(pid)
                 .is_some_and(|p| p.heap_brk == 2 * PAGE_SIZE);
+            // Sayfa 1 tembel; küçültmede yalnız gerçek çerçevesi olan sayfa iade edilir.
+            let _ =
+                proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE + PAGE_SIZE, pmm);
             let shrunk = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
             if let Some(p) = proc_mgr.get_process_mut(pid) {
                 p.resources.limits.max_heap_bytes = saved;
@@ -3597,6 +4133,90 @@ pub fn test_resource_limits(
         } else {
             "inherit! "
         });
+        crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
+        crate::serial_print(")\n");
+        false
+    }
+}
+
+/// `SYS_KILL` (kill/pause/resume) doğrulaması: varlık denetimi, geçersiz
+/// sinyal reddi, `pending_signals` işlenmesi, SIGSTOP→Suspended, SIGCONT→Ready
+/// ve SIGTERM sonlandırması (`exit_code = -15`).
+pub fn test_kill_suspend_resume(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[KILL-TEST] --- kill/SIGSTOP/SIGCONT/SIGTERM testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    proc_mgr.current_pid = 0;
+    let free_before = pmm.free_memory_bytes;
+
+    let pid = match proc_mgr.spawn(
+        "sig_test",
+        crate::mm::loader::USER_CODE_BASE,
+        crate::mm::loader::USER_STACK_TOP - 16,
+        0,
+        None,
+        pmm,
+    ) {
+        Ok(pid) => pid,
+        Err(_) => {
+            crate::serial_print("[KILL-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+            proc_mgr.current_pid = caller_pid;
+            return false;
+        }
+    };
+
+    let kill = |sig: u64, proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryManager| {
+        syscall_dispatch(sys_nos::SYS_KILL, pid as u64, sig, 0, proc_mgr, pmm)
+    };
+
+    // 1. Varlık denetimi ve sınır kontrolleri.
+    let probe_ok = kill(0, proc_mgr, pmm) == 0
+        && syscall_dispatch(sys_nos::SYS_KILL, 9999, 0, 0, proc_mgr, pmm) == u64::MAX
+        && syscall_dispatch(sys_nos::SYS_KILL, 0, 0, 0, proc_mgr, pmm) == u64::MAX
+        && kill(signals::MAX_SIGNAL + 1, proc_mgr, pmm) == u64::MAX;
+
+    // 2. Fatal-olmayan sinyal pending_signals'e işlenir.
+    let pending_ok = kill(signals::SIGUSR1, proc_mgr, pmm) == 0
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.pending_signals & (1u64 << (signals::SIGUSR1 - 1)) != 0);
+
+    // 3. SIGSTOP: süreç Suspended olur ve zamanlayıcı onu seçmez.
+    let suspended_ok = kill(signals::SIGSTOP, proc_mgr, pmm) == 0
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.state == ProcessState::Suspended)
+        && proc_mgr.schedule_next() != Some(pid);
+
+    // 4. SIGCONT: Suspended süreç Ready'ye döner.
+    let resumed_ok = kill(signals::SIGCONT, proc_mgr, pmm) == 0
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.state == ProcessState::Ready || p.state == ProcessState::Running);
+
+    // 5. SIGTERM: süreç -15 çıkış koduyla sonlanır; ikinci kill reddedilir.
+    let terminated_ok = kill(signals::SIGTERM, proc_mgr, pmm) == 0
+        && proc_mgr.get_process(pid).is_some_and(|p| {
+            p.state == ProcessState::Terminated && p.exit_code == -(signals::SIGTERM as i32)
+        })
+        && kill(signals::SIGTERM, proc_mgr, pmm) == u64::MAX;
+
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = pmm.free_memory_bytes == free_before;
+
+    if probe_ok && pending_ok && suspended_ok && resumed_ok && terminated_ok && no_leak {
+        crate::serial_print("[KILL-TEST] kill/SIGSTOP/SIGCONT/SIGTERM: BASARILI\n");
+        true
+    } else {
+        crate::serial_print("[KILL-TEST] kill/sinyal testi: BAŞARISIZ (probe=");
+        crate::serial_print(if probe_ok { "ok " } else { "! " });
+        crate::serial_print(if pending_ok { "pending " } else { "pending! " });
+        crate::serial_print(if suspended_ok { "stop " } else { "stop! " });
+        crate::serial_print(if resumed_ok { "cont " } else { "cont! " });
+        crate::serial_print(if terminated_ok { "term " } else { "term! " });
         crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
         crate::serial_print(")\n");
         false

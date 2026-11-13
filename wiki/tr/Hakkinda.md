@@ -1,6 +1,6 @@
 # Hakkında & Mimari
 
-minOs (Sarman Edition) v2.1.0, Rust programlama diliyle geliştirilmiş, `no_std` ve `no_main` özelliklerini kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
+minOs (Sarman Edition) v2.4.0, Rust programlama diliyle geliştirilmiş, `no_std` ve `no_main` özelliklerini kullanan bağımsız bir 64-bit (`x86_64`) işletim sistemidir. Limine v8 önyükleyici ile UEFI ve BIOS (Legacy) ortamlarında sorunsuz önyüklenir.
 
 ---
 
@@ -22,9 +22,9 @@ minOs (Sarman Edition) v2.1.0, Rust programlama diliyle geliştirilmiş, `no_std
 | **Önyükleme** | `src/boot/` | Limine konsolu, metin çizimi, ilerleme çubuğu |
 | **Sürücüler** | `src/drivers/` | GPU, ağ, depolama, giriş, ses, USB, ACPI, kripto |
 | **GUI** | `src/gui/` | Pencere yöneticisi, font motoru, tema motoru |
-| **Uygulamalar** | `src/apps/` | 17 masaüstü uygulaması |
+| **Uygulamalar** | `src/apps/` | 17 kayıtlı uygulama (app ID 0–16) |
 | **Masaüstü** | `src/desktop/` | Oturum yönetimi, ana olay döngüsü |
-| **Bellek** | `src/mm/` | Fiziksel bellek yöneticisi (PMM), ELF yükleyici |
+| **Bellek** | `src/mm/` | Fiziksel bellek yöneticisi (PMM), sanal bellek, süreç tablosu, ELF yükleyici, `memory/` alt modülü (büyük sayfa, sıkıştırma, profilleme) |
 | **Dosya Sistemi** | `src/fs/` | VFS, FAT32, Ext2, Ext4, exFAT, ISO9660 |
 
 ---

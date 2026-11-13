@@ -61,7 +61,7 @@ kopyalama `src/mm/uaccess.rs` üzerinden yapılır:
 | 2 | `SYS_GETPID` | — | — | — | — | `pid` |
 | 3 | `SYS_ALLOC_FRAME` | — | — | — | — | fiziksel çerçeve veya `0` |
 | 4 | `SYS_FREE_FRAME` | `frame: u64` | — | — | — | `0` / `MAX` |
-| 5 | `SYS_WRITE` | `fd: usize` | `buf: ptr` | `len: usize` | — | yazılan bayt |
+| 5 | `SYS_WRITE` | `buf: ptr` | `len: usize` | — | — | yazılan bayt / `0` |
 | 6 | `SYS_READ` | `fd: usize` | `buf: ptr` | `len: usize` | — | okunan bayt / `MAX` |
 | 7 | `SYS_SPAWN` | — | — | — | — | **ayrılmış**, `MAX` |
 | 8 | `SYS_EXEC` | `image: ptr` | `len: usize` | — | — | `0` / `MAX` |
@@ -75,6 +75,7 @@ kopyalama `src/mm/uaccess.rs` üzerinden yapılır:
 | 16 | `SYS_CLOSE` | `fd: usize` | — | — | — | `0` / `MAX` |
 | 17 | `SYS_RESINFO` | `out: ptr` | — | — | — | `0` / `MAX` |
 | 18 | `SYS_LSEEK` | `fd: usize` | `offset: i64` | `whence: u64` | — | yeni konum / `MAX` |
+| 19 | `SYS_KILL` | `pid: usize` | `sig: u64` | — | — | `0` / `MAX` |
 
 ### 2.1 `SYS_YIELD` (0)
 
@@ -111,8 +112,8 @@ sahipsiz çerçeve `MAX` döner ve PMM'e dokunulmaz.
 ### 2.5 `SYS_WRITE` (5) / `SYS_READ` (6)
 
 `buf` kullanıcı adresinden `len` baytı `uaccess::copy_from_user` /
-`copy_to_user` ile **sayfa sayfa** kopyalar. `SYS_WRITE` seri konsola ve
-`fd`'ye bağlı akışa yazar; `len == 0` veya `len > 1024` → `0`. Geçersiz
+`copy_to_user` ile **sayfa sayfa** kopyalar. `SYS_WRITE` seri konsola yazar
+(fd argümanı yoktur); `len == 0` veya `len > 1024` → `0`. Geçersiz
 kullanıcı aralığında **hiçbir bayt** kopyalanmaz (ön doğrulama atomiktir).
 `SYS_READ` için hedef sayfa yazılabilir ve `PAGE_COW` içermiyor olmalıdır;
 aksi halde `MAX` döner.
@@ -159,9 +160,14 @@ Kullanıcı heap'inin ucunu ayarlar. Aralık: `HEAP_BASE = 0x0100_0000` (16 MiB)
 
 * `new_brk > HEAP_LIMIT` veya `new_brk > limits.max_heap_bytes` → `MAX`, uç
   değişmez.
-* Büyütme: `[eski_uç, yeni_uç)` sayfaları **sıfırlanmış** çerçevelerle
-  `USER_DATA` (W, NX) olarak eşlenir.
-* Küçültme: uçtan çıkan sayfalar `unmap` edilir ve çerçeveleri PMM'e döner.
+* Büyütme: `[eski_uç, yeni_uç)` sayfaları **tembel (lazy)** eşlenir —
+  PTE `PRESENT | USER | NX | PAGE_LAZY` (yazılabilir değil) olarak yazılır
+  ve paylaşılan **sıfır sayfası** çerçevesini gösterir. Okumalar sıfır
+  döner; ilk yazma koruma ihlali `#PF` üretir ve `handle_lazy_fault`
+  sıfırlanmış özel çerçeve ayırır. Böylece büyütülen ama yazılmayan heap
+  fiziksel bellek harcamaz.
+* Küçültme: uçtan çıkan sayfalar `unmap` edilir; gerçekleşmiş çerçeveler
+  PMM'e döner.
 * Başarı → `HEAP_BASE + new_brk`.
 
 Heap başlangıcı kod segmentinden (4 MiB) uzaktır; `HEAP_BASE` öncesi
@@ -171,9 +177,16 @@ eşlenmemiş olduğundan heap'ten aşağı taşma #PF üretir.
 
 * `SYS_MMAP(len, flags)`: `len` 4 KiB'e yukarı yuvarlanır; bölge
   `mmap_base + mmap_used` adresine eklenir. `mmap_base` süreç ömrü boyunca
-  sabittir ve ASLR ile `[0x0100_0000, 0x1000_0000]` aralığında **2 MiB
-  hizalı** seçilir. `flags` içinde `USER` yoksa `USER_DATA` kullanılır.
+  sabittir ve ASLR ile `[0x0400_0000, 0x1000_0000]` (64 MiB – 256 MiB)
+  aralığında **2 MiB hizalı** seçilir. `flags` içinde `USER` yoksa `USER_DATA` kullanılır.
   Dönüş: bölge adresi; hata → `0`.
+* Anonim bölgeler **tembel** eşlenir: PTE'ler paylaşılan sıfır sayfasını
+  gösteren salt-okunur `PAGE_LAZY` girdileridir; okumalar sıfır döner,
+  ilk yazma `#PF` → `handle_lazy_fault` ile özel çerçeve ayırır.
+  `flags` bit 20 (`MAP_SHARED_FILE = 1 << 20`) set ise
+  bölge dosya-paylaşımlı olur: aynı adres aralığını daha önce eşlemiş bir
+  süreç varsa çerçeveler kopyalanmadan paylaşılır (zero-copy), yoksa yeni
+  bir paylaşımlı çerçeve havuzu kurulur. `munmap` yalnızca referans bırakır.
 * Sınırlar: `len ≤ 64 MiB`, en fazla 16 açık bölge, canlı bölge baytları
   toplamı `limits.max_mmap_bytes` (varsayılan 64 MiB) aşamaz; bölge kullanıcı
   yığınına ulaşamaz. `munmap` kotayı geri açar.
@@ -185,10 +198,27 @@ eşlenmemiş olduğundan heap'ten aşağı taşma #PF üretir.
 
 Çağıranın kullanıcı bellek özetini raporlar.
 
-* `out == 0` → `[heap_bytes, mmap_bölge, mmap_bytes, heap_sayfa]` dizisinin
-  katlanmış özeti (`v ^= v.rotate_left(7)`); sanity kontrolü için.
-* `out != 0` → dört `u64` (LE) `out` adresine yazılır; dönüş `0`.
-  Hedef yazılabilir değilse `MAX`.
+* `out == 0` → 12 alanlı raporun katlanmış özeti (`v ^= v.rotate_left(7)`
+  zinciri); sanity kontrolü için.
+* `out != 0` → on iki `u64` (LE, toplam 96 bayt) `out` adresine yazılır;
+  dönüş `0`. Hedef yazılabilir değilse `MAX`.
+
+Rapor alanları (ilk dördü ABI uyumluluğu için korunur):
+
+| # | Alan |
+| :- | :--- |
+| 0 | `heap_bytes` — `brk` heap ucunun `HEAP_BASE` göreli boyu |
+| 1 | `mmap_regions` — açık mmap bölgesi sayısı |
+| 2 | `mmap_bytes` — canlı mmap baytları |
+| 3 | `heap_mapped_pages` — heap için eşlenmiş sayfa sayısı |
+| 4 | `user_frame_count` — kullanıcı verisi çerçeve sayısı |
+| 5 | `shared_pages` — heap+mmap'te COW/paylaşımlı sayfa sayısı |
+| 6 | `shared_saved_bytes` — paylaşımın tasarruf ettiği bayt |
+| 7 | `total_bytes` — sistem toplam fiziksel bellek |
+| 8 | `free_bytes` — sistem boş fiziksel bellek |
+| 9 | `user_frames` — kullanıcı çerçeveleri (sistem geneli) |
+| 10 | `kernel_frames` — çekirdek çerçeveleri |
+| 11 | `heap_mapped_bytes` — kernel heap'e eşlenmiş bayt |
 
 ### 2.12 `SYS_OPEN` (15) / `SYS_CLOSE` (16)
 
@@ -220,6 +250,29 @@ kopyalamadan sonra ilerler.
 Hedef `0..=dosya_boyu` aralığında olmalıdır; dışına taşma, negatif sonuç ve
 desteklenmeyen `whence` → `MAX`. Başarı → yeni konum (bayt). Standart
 tanıtıcılar `MAX` döner.
+
+### 2.14b `SYS_KILL` (19)
+
+`SYS_KILL(pid, sig)`: hedef sürece sinyal gönderir veya süreç denetimi yapar.
+Numaralar Linux ile uyumludur (`src/mm/process.rs::signals`).
+
+| `sig` | Etki | Dönüş |
+| ---: | :--- | :--- |
+| `0` | Yalnızca varlık denetimi (kill(2) probe) | süreç varsa `0`, yoksa `MAX` |
+| `9` `SIGKILL`, `15` `SIGTERM` | Süreç `-(sig)` çıkış koduyla `Terminated` olur (kaynaklar reap edilir) | `0` / `MAX` |
+| `19` `SIGSTOP` | `Ready`/`Running` süreç `Suspended` olur; bağlam korunur, zamanlayıcı seçmez | `0` / `MAX` |
+| `18` `SIGCONT` | `Suspended` süreç `Ready`'ye döner; diğer durumlarda zararsız başarı | `0` / `MAX` |
+| diğer `1..=64` | `pending_signals` bit maskesine işlenir (kullanıcı işleyicisi teslimi henüz yok) | `0` / `MAX` |
+| `> 64` veya `pid == 0` | Geçersiz | `MAX` |
+
+* `SIGSTOP`'u **kendisi çağıran** süreç kullanıcıya dönmez; bağlamı
+  `int 0x80` dönüş noktası olarak kaydedilir ve `rax` sonuçla (`0`) yazılır.
+  `SIGCONT` sonrası `kill()` çağrısı `0` döndürür.
+* `Blocked` durumundaki süreç şu an duraklatılamaz (tek durum alanı
+  blocked+stopped birleşimini temsil edemez); `SIGSTOP` → `MAX`.
+* PID 0 (`kernel_core`) hiçbir sinyalle sonlandırılamaz/duraklatılamaz.
+* `wait`/`reap` çıkış kodu negatif sinyal numarası taşır (`-9`, `-15`);
+  `-11` (`SIGSEGV`) ile aynı kural.
 
 ### 2.15 `SYS_RESINFO` (17)
 
@@ -284,7 +337,9 @@ bırakır.
 | `u64::MAX` | başarısız / desteklenmeyen çağrı numarası / geçersiz kullanıcı tamponu |
 | `0` | `SYS_ALLOC_FRAME`/`SYS_MMAP` için "kaynak yok"; `SYS_OPEN` için "fd yok" (`fd = 0` hiçbir zaman dönmez) |
 
-Syscall'lar **sinyal üretmez**; hata dönüş koduyla bildirilir. Ring 3
+Syscall'lar kullanıcıya doğrudan sinyal üretmez; hata dönüş koduyla bildirilir.
+`SYS_KILL` ile gönderilen fatal-olmayan sinyaller `pending_signals`'te bekler,
+kullanıcı işleyicisine teslimat henüz uygulanmadı. Ring 3
 hafıza hataları (`#PF`, `#GP`) ayrı yoldan `SIGSEGV` (`exit_code = -11`) ile
 süreç sonlandırır.
 
@@ -319,8 +374,8 @@ Defter kapasitesi `MAX_SHARED_FRAMES = 512`'dir; dolarsa fork çerçeveyi
 | `0x0000_0000_0040_0000` | Kod + RO veri (`PT_LOAD`, `PF_X`) | `USER`, NX=0 |
 | `0x0000_0000_0060_0000` | Demo sonuç sayfası (test) | `USER_DATA` |
 | `0x0000_0000_0100_0000` | **Heap** (`brk`) | `USER_DATA` (W, NX) |
-| `0x0100_0000 – 0x1000_0000` | **mmap** (ASLR tabanı, 2 MiB hizalı) | `USER_DATA` |
-| `0x0000_7FFF_FFF0_0000` civarı | **Kullanıcı yığını** (4 sayfa, ASLR ile 0–256 KiB aşağı kaydırılır) | `USER_STACK` (W, NX) |
+| `0x0400_0000 – 0x1000_0000` | **mmap** (ASLR tabanı, 2 MiB hizalı) | `USER_DATA` |
+| `0x0000_7FFF_FFFF_0000` | **Kullanıcı yığını** (4 sayfa, ASLR ile 0–256 KiB aşağı kaydırılır) | `USER_STACK` (W, NX) |
 | yığın altındaki 1 sayfa | **Guard sayfası** — hiç eşlenmez | — |
 | `0xFFFF_8000_0000_0000+` | Çekirdek (HHDM, PML4 üst yarı) | `USER` biti **yok** |
 
@@ -338,7 +393,7 @@ Defter kapasitesi `MAX_SHARED_FRAMES = 512`'dir; dolarsa fork çerçeveyi
 mov eax, 2
 int 0x80                    ; rax = pid
 
-; write(0, msg, len)
+; write(buf, len) — seri konsola yazar, fd argümanı yok
 mov eax, 5
 lea rdi, [rip + msg]
 mov esi, msg_len
@@ -386,6 +441,12 @@ mov eax, 16
 mov rdi, rax
 int 0x80
 
+; kill(pid, SIGTERM) — RSI = sinyal no
+mov eax, 19
+mov rdi, target_pid
+mov esi, 15
+int 0x80
+
 ; exit(42)
 mov eax, 1
 mov edi, 42
@@ -405,4 +466,9 @@ int 0x80
 | `[FD-TEST] ... BASARILI` | open/read/lseek/close, refcount, fork/exec, kota |
 | `[RLIMIT-TEST] ... BASARILI` | RESINFO raporu, limitler ve fork mirası |
 | `[P2] Kullanıcı yığını guard sayfası taşması yakalandı` | Guard sayfası #PF |
-| `[SCHED-STAT] slices=... cow=... shared=...` | Çalışan sistemde süreç/bellek izleme |
+| `[KILL-TEST] kill/SIGSTOP/SIGCONT/SIGTERM: BASARILI` | `SYS_KILL` probe, suspend/resume, SIGTERM, kaynak temizliği |
+| `[BIGPAGE] ... BASARILI` | 2 MiB büyük sayfa eşleme/geri alma doğrulaması |
+| `[MZRAM] ... BASARILI` | Sıkıştırılmış (swap'siz) bellek deposu |
+| `[MEM-STAT] total_kb=...` | Genişletilmiş bellek profili raporu |
+| `[MEM-PROFILE] ...` / `[KHEAP] ...` | Açılışta PMM + kernel heap özeti |
+| `[SCHED-STAT] slices=... cow=... shared=... susp=...` | Çalışan sistemde süreç/bellek izleme |

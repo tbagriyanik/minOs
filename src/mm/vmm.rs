@@ -7,10 +7,11 @@
 //! 4. 4KB sanal sayfaları fiziksel sayfa çerçevelerine (PMM üzerinden) eşlemeyi (map/unmap),
 //! 5. Çekirdek ve uygulama adres uzaylarının ayrımını sağlar.
 //! 6. Copy-on-write (COW) paylaşımlı çerçeve defterini tutar.
+//! 7. 2 MiB büyük sayfa (huge page) eşlemesini (`map_big_page`/`unmap_big_page`) yönetir.
 
 use crate::arch::x86_64::sync::SpinMutex;
 use crate::drivers::phys_to_virt;
-use crate::mm::pmm::{PhysicalMemoryManager, PAGE_SIZE};
+use crate::mm::pmm::{PhysicalMemoryManager, BIG_PAGE_SIZE as HUGE_PAGE_BYTES, PAGE_SIZE};
 
 /// COW paylaşım defterinin takip edebileceği azami çerçeve sayısı.
 pub const MAX_SHARED_FRAMES: usize = 512;
@@ -168,6 +169,9 @@ impl PageTable {
     }
 }
 
+/// Huge page PD girdilerinin fiziksel adres maskesi (bit 51..21).
+const HUGE_PAGE_BASE_MASK: u64 = 0x000F_FFFF_FFE0_0000;
+
 /// Sanal Bellek Adres Uzayı
 #[derive(Debug, Clone, Copy)]
 pub struct AddressSpace {
@@ -272,6 +276,117 @@ impl AddressSpace {
         }
 
         Ok(())
+    }
+
+    /// 2 MiB büyük sayfa (huge page) eşlemesi: PD seviyesinde `HUGE_PAGE`
+    /// bayrağıyla tek girdi 2 MiB'lik fiziksel bloğu kapsar.
+    ///
+    /// * `virt_addr` ve `phys_addr` `2 MiB` sınırına hizalı olmalıdır.
+    /// * Eşlenecek 1024 4 KiB alt tablo yerine 1 PD girdisi kullanıldığı için
+    ///   TLB baskısı ve sayfa tablosu çerçeve tüketimi 512 kat azalır.
+    /// * Kullanıcı bayrağı (`USER`) verilirse adres kullanıcı yarısında olmalıdır.
+    /// * PD'de 4 KiB eşlemesi varsa **reddeder** (üzerine yazmaz).
+    ///
+    /// Fiziksel blok PMM'den `allocate_big_page` ile alınmalıdır.
+    pub fn map_big_page(
+        &mut self,
+        virt_addr: u64,
+        phys_addr: u64,
+        flags: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> Result<(), &'static str> {
+        if !virt_addr.is_multiple_of(HUGE_PAGE_BYTES) || !phys_addr.is_multiple_of(HUGE_PAGE_BYTES)
+        {
+            return Err("Buyuk sayfa adresleri 2MB sinirina hizali degil");
+        }
+        if flags & PageFlags::USER != 0 && virt_addr >= Self::USER_ADDRESS_END {
+            return Err("Kullanici buyuk sayfasi kullanici adres alaninin disinda");
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let user = (flags & PageFlags::USER) != 0;
+
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            let pdpt_phys = Self::get_or_create_next_level(&mut pml4.entries[pml4_idx], pmm, user)
+                .ok_or("PMM yetersiz bellek: PDPT tahsis edilemedi")?;
+            let pdpt = &mut *Self::table_ptr(pdpt_phys);
+            if (pdpt.entries[pdpt_idx] & PageFlags::PRESENT) != 0
+                && (pdpt.entries[pdpt_idx] & PageFlags::HUGE_PAGE) != 0
+            {
+                return Err("map_big_page: 1GB huge page ile cakisiyor");
+            }
+            let pd_phys = Self::get_or_create_next_level(&mut pdpt.entries[pdpt_idx], pmm, user)
+                .ok_or("PMM yetersiz bellek: PD tahsis edilemedi")?;
+            let pd = &mut *Self::table_ptr(pd_phys);
+            if (pd.entries[pd_idx] & PageFlags::PRESENT) != 0 {
+                return Err("map_big_page: adres araligi zaten eslenmis");
+            }
+            pd.entries[pd_idx] = (phys_addr & HUGE_PAGE_BASE_MASK) | flags | PageFlags::HUGE_PAGE;
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
+        }
+        Ok(())
+    }
+
+    /// 2 MiB büyük sayfa eşlemesini kaldırır ve eşlenen fiziksel bloğun
+    /// taban adresini döner (sahiplik çağırana aittir).
+    pub fn unmap_big_page(
+        &mut self,
+        virt_addr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> Option<u64> {
+        if !virt_addr.is_multiple_of(HUGE_PAGE_BYTES) {
+            return None;
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            if (pml4.entries[pml4_idx] & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            let pdpt = &mut *Self::table_ptr(pml4.entries[pml4_idx] & 0x000F_FFFF_FFFF_F000);
+            if (pdpt.entries[pdpt_idx] & PageFlags::PRESENT) == 0 {
+                return None;
+            }
+            let pd = &mut *Self::table_ptr(pdpt.entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000);
+            let entry = pd.entries[pd_idx];
+            if (entry & PageFlags::PRESENT) == 0 || (entry & PageFlags::HUGE_PAGE) == 0 {
+                return None;
+            }
+            pd.entries[pd_idx] = 0;
+            core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
+            let _ = pmm;
+            Some(entry & HUGE_PAGE_BASE_MASK)
+        }
+    }
+
+    /// Verilen sanal adresi kapsayan 2 MiB büyük sayfanın yol üzerindeki
+    /// bayraklarını (PD girdisi) döner.
+    pub fn big_page_flags(&self, virt_addr: u64) -> Option<u64> {
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        unsafe {
+            let pml4 = &*Self::table_ptr(self.pml4_phys);
+            let pml4_entry = pml4.entries[pml4_idx];
+            if (pml4_entry & PageFlags::PRESENT) == 0 || (pml4_entry & PageFlags::HUGE_PAGE) != 0 {
+                return None;
+            }
+            let pdpt = &*Self::table_ptr(pml4_entry & 0x000F_FFFF_FFFF_F000);
+            let pdpt_entry = pdpt.entries[pdpt_idx];
+            if (pdpt_entry & PageFlags::PRESENT) == 0 || (pdpt_entry & PageFlags::HUGE_PAGE) != 0 {
+                return None;
+            }
+            let pd = &*Self::table_ptr(pdpt_entry & 0x000F_FFFF_FFFF_F000);
+            let entry = pd.entries[pd_idx];
+            if (entry & PageFlags::PRESENT) == 0 || (entry & PageFlags::HUGE_PAGE) == 0 {
+                return None;
+            }
+            Some(entry & 0xFFF_8000_0000_0FFFu64)
+        }
     }
 
     /// Var olan bir 4KB eşlemesinin bayraklarını değiştirir; tablo tahsis etmez.
@@ -706,12 +821,23 @@ impl AddressSpace {
                     Self::free_lower_tables(child, pmm, 1, free_leaf_frames);
                 }
                 1 if free_leaf_frames && entry & PageFlags::USER != 0 => {
+                    // Tembel sayfalar paylaşılan sıfır sayfasını gösterir;
+                    // o çerçeve süreçlerden bağımsızdır ve asla iade edilmez.
+                    if crate::mm::user_mem::is_zero_frame(child) {
+                        continue;
+                    }
                     // Copy-on-write: çerçeve paylaşılıyorsa yalnız referansı bırak,
                     // fiziksel çerçeveyi serbest bırakma.
                     match release_frame_shared(child) {
                         Some(false) => {}
                         _ => pmm.free_frame(child),
                     }
+                }
+                2 if free_leaf_frames && entry & PageFlags::HUGE_PAGE != 0 => {
+                    // 2 MiB büyük sayfa: tek PD girdisi 512 veri çerçevesini kapsar.
+                    // Bloğun tamamı iade edilir (hizalı taban + 512 x 4 KiB).
+                    let child_huge_base = entry & HUGE_PAGE_BASE_MASK;
+                    pmm.free_big_page(child_huge_base);
                 }
                 _ => {}
             }

@@ -1,0 +1,7 @@
+﻿cargo :     Finished `release` profile [optimized] target(s) in 0.23s
+At line:1 char:107
++ ... ing]::UTF8; cargo build -Zjson-target-spec --target x86_64-minos.json ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Finished `r...get(s) in 0.23s:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 

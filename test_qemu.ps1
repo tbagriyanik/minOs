@@ -618,6 +618,26 @@ $checks = @(
         Description = "Tasma korumali align_up, bump LIFO ve FSB free-list yeniden kullanimi"
     },
     @{
+        Name = "Buyuk Sayfa (2MB Huge Page)";
+        Pattern = "\[BIGPAGE\].*BASARILI";
+        Description = "2MB hizali tahsis, PD seviyesinde HUGE_PAGE esleme ve sizintisiz iade"
+    },
+    @{
+        Name = "Bellek Sikistirma (Swap'siz MZRAM)";
+        Pattern = "\[MZRAM\].*BASARILI";
+        Description = "Sifir sayfa RLE, desen eslesmesi, geri acma ve sikistirilamaz veri reddi"
+    },
+    @{
+        Name = "Kernel Heap Buyutme ve Tembel Doldurma";
+        Pattern = "\[KHEAP-TEST\] 2\..*BASARILI";
+        Description = "Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi"
+    },
+    @{
+        Name = "Bellek Kullanim Profili";
+        Pattern = "\[MEM-STAT\] total_kb=";
+        Description = "PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari"
+    },
+    @{
         Name = "CPU & Cekirdek Donanim Baslatimi";
         Pattern = "\[SMP\] (\d+ CPU bulundu|1 CPU modunda devam ediliyor)";
         Description = "BSP GDT, IDT ve coklu/tek CPU baslatma durumu"

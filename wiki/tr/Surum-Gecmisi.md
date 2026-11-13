@@ -4,7 +4,24 @@ minOs sürüm notları ve gelecek planları.
 
 ---
 
-## v2.3.0 (Güncel)
+## v2.4.0 (Güncel)
+
+### Yenilikler
+
+- **🛡️ Watchdog Artık Ana Döngüden Bağımsız:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde (`watchdog::timer_tick()`) çalışır; kesme bağlamında yalnızca `try_lock` korumalı kısa kritik bölümde durum güncellenir, sonlandırma ana döngüde `drain_frozen()` ile ertelenir. `guard` bağlamı sayesinde yalnızca takılan uygulama işaretlenir.
+- **🎮 FPS 3D Gerçek Performans Metrikleri:** `FPS 3D Oyun` (app ID 16) tamamlanan karelerden gerçek ölçüm üretir: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` seri çıktısı ve HUD'da anlık/minimum FPS + kare süresi. Açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
+- **🧪 FPS 3D Stres Testi Otomasyonu:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu Başlat menüsünden açar; 10/30/60 dakikalık koşullarda QEMU canlılığı ve pozitif FPS/min-FPS metrikleri doğrulanır.
+- **🖼️ Bütçe Aşımında Kısmi Kare Koruması:** `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp render tamamlanamazsa geri yüklenir.
+- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır (271 test).
+- **🎵 WAV Dosyası Doğrudan Çalma:** Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı doğrudan Müzik Çalar'da açar.
+- **🖼️ Döşeli Masaüstü Arka Planı:** Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
+- **🎨 Yeni Masaüstü Görselleri:** Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.
+- **🔫 Süreç Sinyalleri ve Kontrol:** `SYS_KILL` (19) POSIX benzeri sinyal semantiği sunar: `SIGKILL`/`SIGTERM` sonlandırır, `SIGSTOP` süreci `Suspended` durumuna alır, `SIGCONT` `Ready`'ye döndürür, `sig=0` varlık yoklaması yapar; diğer sinyaller `pending_signals` maskesinde bekletilir. `[KILL-TEST]` boot testi eklendi.
+- **🧠 Gelişmiş Bellek Yönetimi:** Kullanıcı `brk`/`mmap` sayfaları artık **tembel** eşlenir (`PAGE_LAZY` — ilk yazmada çerçeve ayrılır); `mmap`'e `MAP_SHARED_FILE` zero-copy paylaşım bayrağı eklendi. Kernel heap 16→64 MiB büyüyen sanal pencereye geçti (≥64 KiB tahsislar tembel). `src/mm/memory/` altında 2 MiB büyük sayfa desteği (`[BIGPAGE]`), disk'siz bellek sıkıştırma deposu (`[MZRAM]`) ve canlı profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`) var; MinShell'e `meminfo` komutu eklendi.
+
+---
+
+## v2.3.0 (Önceki)
 
 ### Yenilikler
 
@@ -65,7 +82,7 @@ minOs sürüm notları ve gelecek planları.
 
 ---
 
-## v2.1.0 (Önceki)
+## v2.1.0 (Daha Eski)
 
 ### Yenilikler
 

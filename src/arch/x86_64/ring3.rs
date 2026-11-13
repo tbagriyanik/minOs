@@ -280,7 +280,20 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
                 .proc_mgr
                 .get_process(pid)
                 .is_some_and(|process| process.state == crate::mm::process::ProcessState::Blocked);
-            Some((result, exec_context, yielded, blocked))
+            // SYS_KILL + SIGSTOP ile kendi kendini duraklatan süreç: bağlamı
+            // int80 dönüş adresinden kaydet ve kullanıcıya dönme; `result`
+            // rax'e yazılır ki SIGCONT sonrası kill() çağrısı 0 dönsün.
+            let suspended = memory.proc_mgr.get_process(pid).is_some_and(|process| {
+                process.state == crate::mm::process::ProcessState::Suspended
+            });
+            if suspended {
+                if let Some(process) = memory.proc_mgr.get_process_mut(pid) {
+                    process.context = unsafe { frame_to_process_context(frame) };
+                    process.context.rax = result;
+                    process.has_saved_user_context = true;
+                }
+            }
+            Some((result, exec_context, yielded, blocked || suspended))
         }
     } else {
         None
@@ -397,12 +410,14 @@ fn report_process_state() {
     let mut ready = 0u64;
     let mut running = 0u64;
     let mut blocked = 0u64;
+    let mut suspended = 0u64;
     let mut terminated = 0u64;
     for p in memory.proc_mgr.processes.iter() {
         match p.state {
             crate::mm::process::ProcessState::Ready => ready += 1,
             crate::mm::process::ProcessState::Running => running += 1,
             crate::mm::process::ProcessState::Blocked => blocked += 1,
+            crate::mm::process::ProcessState::Suspended => suspended += 1,
             crate::mm::process::ProcessState::Terminated => terminated += 1,
             crate::mm::process::ProcessState::Unused => {}
         }
@@ -418,12 +433,16 @@ fn report_process_state() {
     smp::print_locked_dec(running);
     smp::print_locked(" blocked=");
     smp::print_locked_dec(blocked);
+    smp::print_locked(" susp=");
+    smp::print_locked_dec(suspended);
     smp::print_locked(" term=");
     smp::print_locked_dec(terminated);
     smp::print_locked(" free_kb=");
     smp::print_locked_dec(memory.pmm.free_memory_bytes / 1024);
     smp::print_locked(" cow=");
     smp::print_locked_dec(COW_FAULTS.load(Ordering::Relaxed));
+    smp::print_locked(" lazy=");
+    smp::print_locked_dec(crate::mm::process::LAZY_FAULTS.load(Ordering::Relaxed));
     smp::print_locked(" shared=");
     smp::print_locked_dec(crate::mm::vmm::shared_frame_count() as u64);
     if let Some(p) = memory.proc_mgr.get_process(memory.proc_mgr.current_pid) {
@@ -874,6 +893,26 @@ pub unsafe extern "C" fn rust_fault(frame: *mut u64, err: u64, vec: u32) -> u64 
             };
             if cow_resolved {
                 COW_FAULTS.fetch_add(1, Ordering::Relaxed);
+                return 1;
+            }
+        }
+
+        // Tembel (demand) sayfa hatası: PTE geçerli (`P=1`), sayfa yazılabilir,
+        // ancak fiziksel çerçeve hiç ayrılmamıştır (`PAGE_LAZY`). Korumalı
+        // (#PF `P=0`) ve talimat getirme hataları burada çözülmez.
+        if vec == 14 && err & 1 != 0 && err & 2 != 0 && err & (1 << 4) == 0 {
+            let cr2: u64;
+            unsafe {
+                core::arch::asm!("mov {}, cr2", out(reg) cr2, options(nomem, nostack, preserves_flags));
+            }
+            let lazy_resolved = if let Some(mut guard) = crate::mm::try_lock_memory() {
+                let memory = guard.get();
+                let pid = memory.proc_mgr.current_pid;
+                pid != 0 && memory.proc_mgr.handle_lazy_fault(pid, cr2, &mut memory.pmm)
+            } else {
+                false
+            };
+            if lazy_resolved {
                 return 1;
             }
         }

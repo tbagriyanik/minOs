@@ -98,6 +98,15 @@ pub fn init_subsystems(
     serial_print("[PMM] Fiziksel bellek yöneticisi başlatıldı.\n");
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
 
+    // Kernel heap büyütme: ayırıcıyı yeşil alan (greenfield) sanal pencereye
+    // taşı; statik tampon yalnızca erken önyükleme içindi ve bu noktadan
+    // sonra heap `HEAP_MAX_SIZE` boyuna kadar büyüyebilir.
+    if !crate::kernel::heap::relocate_to_window() {
+        serial_print(
+            "[KHEAP] UYARI: Heap sanal penceresi kurulamadı; statik 16 MB sınırı geçerli.\n",
+        );
+    }
+
     // VRAM MMIO aralığını (16MB) sayfa tablolarına eşle; çözünürlük veya çizim unmapped #PF üretmesin.
     let fb_phys = (fb_ptr as u64).wrapping_sub(drivers::phys_to_virt(0));
     for off in (0..16 * 1024 * 1024).step_by(2 * 1024 * 1024) {
@@ -206,6 +215,10 @@ pub fn init_subsystems(
     serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
     mm::allocator::test_allocator_subsystem();
+    serial_print("[BOOT] Büyük sayfa ve sıkıştırma testleri çalıştırılıyor...\n");
+    mm::memory::run_boot_tests(&mut memory_mgr.pmm);
+    crate::kernel::heap::test_heap_growth();
+    mm::memory::profile::report_boot_summary();
 
     serial_print("[BOOT] Süreç testleri çalıştırılıyor...\n");
     mm::process::test_process_lifecycle_and_fault_recovery(
@@ -223,6 +236,8 @@ pub fn init_subsystems(
     mm::process::test_file_descriptor_lifecycle(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Süreç kaynak limitleri testleri çalıştırılıyor...\n");
     mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n");
+    mm::process::test_kill_suspend_resume(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n");
     let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
     if !ring3_demo_ok {

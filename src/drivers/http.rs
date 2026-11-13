@@ -397,6 +397,36 @@ fn parse_hex_len(line: &[u8]) -> Option<usize> {
     Some(v)
 }
 
+/// Content-Encoding başlığına göre gövdeyi çözer (gzip/deflate/br).
+/// `resp_buf`: [headers][body...] tamponu, `hlen`: başlık uzunluğu, `total`: mevcut toplam uzunluk.
+/// Döner: yeni toplam uzunluk (başlık + çözülmüş gövde).
+fn maybe_decode_content_encoding(
+    resp_buf: &mut [u8],
+    hlen: usize,
+    total: usize,
+) -> Result<usize, i32> {
+    let encoding = header_value(&resp_buf[..hlen], b"content-encoding").and_then(|v| {
+        let s = core::str::from_utf8(v).ok()?.trim();
+        Some(s.split(',').next().unwrap_or(s).trim().to_string())
+    });
+    let Some(enc) = encoding else {
+        return Ok(total);
+    };
+    let enc_lc = enc.to_ascii_lowercase();
+    if enc_lc.is_empty() || enc_lc == "identity" {
+        return Ok(total);
+    }
+    let body = resp_buf[hlen..total].to_vec();
+    let decoded =
+        crate::drivers::compression::decode_content_encoding(Some(&enc_lc), &body).ok_or(E_HTTP)?;
+    let new_total = hlen + decoded.len();
+    if new_total > resp_buf.len() {
+        return Err(E_HTTP);
+    }
+    resp_buf[hlen..new_total].copy_from_slice(&decoded);
+    Ok(new_total)
+}
+
 /// Ham chunked gövdeyi yerinde çözer, çözülmüş uzunluğu döner.
 pub fn decode_chunked(buf: &mut [u8], len: usize) -> Option<usize> {
     let mut read = 0usize;
@@ -444,7 +474,7 @@ fn build_request_with_headers(
         path,
         b" HTTP/1.1\r\nHost: ",
         host,
-        b"\r\nUser-Agent: minOs-curl/1.0\r\nConnection: keep-alive",
+        b"\r\nUser-Agent: minOs-curl/1.0\r\nAccept-Encoding: gzip, deflate, br\r\nConnection: keep-alive",
     ];
 
     let mut n = 0usize;
@@ -602,11 +632,13 @@ pub fn fetch_once(
 
                     let mut hello = Vec::new();
                     let mut ecdhe_secret = [0u8; 32];
+                    let mut x25519_secret = [0u8; 32];
                     crate::drivers::tls::build_client_hello_with_alpn(
                         host_str,
                         &client_random,
                         &mut hello,
                         &mut ecdhe_secret,
+                        &mut x25519_secret,
                         false,
                         None,
                         None,
@@ -616,6 +648,7 @@ pub fn fetch_once(
                     let mut session = TlsSession::new(host_str, client_random);
                     session.note_client_hello(ch_body);
                     session.set_client_ecdhe_secret(ecdhe_secret);
+                    session.set_client_x25519_secret(x25519_secret);
 
                     socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -898,11 +931,13 @@ fn fetch_https(
 
     let mut hello = Vec::new();
     let mut ecdhe_secret = [0u8; 32];
+    let mut x25519_secret = [0u8; 32];
     crate::drivers::tls::build_client_hello_with_alpn(
         host_str,
         &client_random,
         &mut hello,
         &mut ecdhe_secret,
+        &mut x25519_secret,
         false,
         None,
         None,
@@ -912,6 +947,7 @@ fn fetch_https(
     let mut session = TlsSession::new(host_str, client_random);
     session.note_client_hello(ch_body);
     session.set_client_ecdhe_secret(ecdhe_secret);
+    session.set_client_x25519_secret(x25519_secret);
 
     socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -1044,9 +1080,8 @@ pub fn http_get_range(
                 return Err(E_REDIRECT);
             }
         }
-        // Chunked gövdeyi yerinde çöz.
-        let headers = &resp_buf[..hlen];
-        let is_chunked = header_value(headers, b"transfer-encoding")
+        // Chunked gövdeyi yerinde çöz, ardından Content-Encoding uygula.
+        let is_chunked = header_value(&resp_buf[..hlen], b"transfer-encoding")
             .map(|v| {
                 v.iter()
                     .zip(b"chunked".iter())
@@ -1054,17 +1089,20 @@ pub fn http_get_range(
                     && v.len() == 7
             })
             .unwrap_or(false);
+        let mut body_total = total;
         if is_chunked {
             let body_len = total - hlen;
             let mut tmp = resp_buf[hlen..total].to_vec();
             if let Some(decoded) = decode_chunked(&mut tmp, body_len) {
                 resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
-                return Ok((status, hlen, hlen + decoded));
+                body_total = hlen + decoded;
+            } else {
+                return Err(E_HTTP);
             }
-            return Err(E_HTTP);
         }
+        let body_total = maybe_decode_content_encoding(resp_buf, hlen, body_total)?;
         let _ = (host_str, path_str);
-        return Ok((status, hlen, total));
+        return Ok((status, hlen, body_total));
     }
 }
 
@@ -1125,11 +1163,13 @@ pub(crate) fn http_get_impl(
 
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
+                        let mut x25519_secret = [0u8; 32];
                         crate::drivers::tls::build_client_hello_with_alpn(
                             host_str,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
+                            &mut x25519_secret,
                             false,
                             None,
                             None,
@@ -1139,6 +1179,7 @@ pub(crate) fn http_get_impl(
                         let mut session = TlsSession::new(host_str, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
+                        session.set_client_x25519_secret(x25519_secret);
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -1264,7 +1305,7 @@ pub(crate) fn http_get_impl(
                             }
                         }
 
-                        // Chunked gövdeyi yerinde çöz.
+                        // Chunked gövdeyi yerinde çöz, ardından Content-Encoding uygula.
                         let headers = &resp_buf[..hlen];
                         let is_chunked = header_value(headers, b"transfer-encoding")
                             .map(|v| {
@@ -1274,16 +1315,19 @@ pub(crate) fn http_get_impl(
                                     && v.len() == 7
                             })
                             .unwrap_or(false);
+                        let mut body_total = total;
                         if is_chunked {
                             let body_len = total - hlen;
                             let mut tmp = resp_buf[hlen..total].to_vec();
                             if let Some(decoded) = decode_chunked(&mut tmp, body_len) {
                                 resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
-                                return Ok((status, hlen, hlen + decoded));
+                                body_total = hlen + decoded;
+                            } else {
+                                return Err(E_HTTP);
                             }
-                            return Err(E_HTTP);
                         }
-                        return Ok((status, hlen, total));
+                        let body_total = maybe_decode_content_encoding(resp_buf, hlen, body_total)?;
+                        return Ok((status, hlen, body_total));
                     }
                     Err(_e) => {
                         // IPv6 yolu başarısız (TCP/TLS/HTTP hatası): IPv4'e düş.
@@ -1326,9 +1370,8 @@ pub(crate) fn http_get_impl(
                 return Err(E_REDIRECT);
             }
         }
-        // Chunked gövdeyi yerinde çöz.
-        let headers = &resp_buf[..hlen];
-        let is_chunked = header_value(headers, b"transfer-encoding")
+        // Chunked gövdeyi yerinde çöz, ardından Content-Encoding uygula.
+        let is_chunked = header_value(&resp_buf[..hlen], b"transfer-encoding")
             .map(|v| {
                 v.iter()
                     .zip(b"chunked".iter())
@@ -1336,17 +1379,20 @@ pub(crate) fn http_get_impl(
                     && v.len() == 7
             })
             .unwrap_or(false);
+        let mut body_total = total;
         if is_chunked {
             let body_len = total - hlen;
             let mut tmp = resp_buf[hlen..total].to_vec();
             if let Some(decoded) = decode_chunked(&mut tmp, body_len) {
                 resp_buf[hlen..hlen + decoded].copy_from_slice(&tmp[..decoded]);
-                return Ok((status, hlen, hlen + decoded));
+                body_total = hlen + decoded;
+            } else {
+                return Err(E_HTTP);
             }
-            return Err(E_HTTP);
         }
+        let body_total = maybe_decode_content_encoding(resp_buf, hlen, body_total)?;
         let _ = (host_str, path_str);
-        return Ok((status, hlen, total));
+        return Ok((status, hlen, body_total));
     }
 }
 
@@ -2056,11 +2102,13 @@ impl WebSocketConnection {
 
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
+                        let mut x25519_secret = [0u8; 32];
                         crate::drivers::tls::build_client_hello_with_alpn(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
+                            &mut x25519_secret,
                             false,
                             None,
                             None,
@@ -2070,6 +2118,7 @@ impl WebSocketConnection {
                         let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
+                        session.set_client_x25519_secret(x25519_secret);
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 

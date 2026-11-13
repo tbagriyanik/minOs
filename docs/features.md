@@ -8,13 +8,13 @@ Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
 - FPS 3D Oyunu tamamlanan karelerden gerçek FPS ve kare süresi ölçümleri üretir. QEMU stres testi `test_qemu.ps1 -FpsStressTest` ile başlatılabilir.
 - Render bütçesi aşılırsa tamamlanmamış kare geri yüklenir; `TimeBudget` zaman aşımı davranışı deterministik host testleriyle kapsanır.
 - Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı Müzik Çalar'da açar. Resim Gösterici görüntüyü döşeli masaüstü arka planı yapabilir.
-- Ayarlar'da ek masaüstü görselleri bulunur.
+- Ayarlar'da üç yeni ek masaüstü görseli bulunur (`desktop1.png`–`desktop3.png`).
 
 Önceki sürümlerin ayrıntıları için [sürüm günlüğüne](CHANGELOG.md), tam değişiklik listesi için [değişiklik arşivine](releases.md) bakın.
 
 ## ✨ Özellikler ve Uygulama Paketi
 
-minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygulama** ve pencere yöneticisi içerir:
+minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet kayıtlı yerleşik uygulama** (app ID 0–16) ve pencere yöneticisi içerir. Aşağıdaki tabloda ayrıca masaüstü kabuğunun parçası olan **Başlat Menüsü** de listelenir; bu nedenle tablo 18 satır içerir.
 
 | Uygulama | Açıklama |
 | :--- | :--- |
@@ -24,9 +24,9 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygul
 | **🎛️ Kontrol Paneli** | Canlı sistem bilgisi: işletim sistemi/çekirdek sürümü, CPU üreticisi ve mantıksal çekirdek sayısı, RAM kullanımı ve doluluk çubuğu, çözünürlük, tema, klavye düzeni, çalışma süresi ve tarih. Ağ sekmesinde etkin ağ sürücüsü (e1000 / RTL816x / RTL8139 / NE2000), link durumu, DHCP/IP/maske/ağ geçidi/DNS ve ses sürücüsü; tek düğmeyle tema değiştirme. |
 | **📦 Paket Yöneticisi (`minPak`)** | Grafiksel ve komut satırı destekli paket yönetim arayüzü. Depo kataloglarını listeleme, paket arama, yerel/ağ üzerinden paket kurma ve kurulu paketleri yönetme. |
 | **📝 Not Defteri** | Üst menü çubuğu (`Dosya`, `Düzen`, `Yardım`), metin temizleme/kaydetme, **Kes / Kopyala / Yapıştır / Tümünü Seç**, **Geri Al / İleri Al** (Ctrl+Z / Ctrl+Y). Türkçe karakter desteği, `Backspace`, `Enter`, **Home / End**, **Shift+ok tuşlarıyla seçim**, satır numaraları ve imleç. |
-| **🌐 Web Tarayıcısı** | Sık kullanılanlar (Bookmarks) çubuğu, hafif HTTP test sitesi, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` / `minos://demo-img` / `minos://demo-video` yerel demo sayfaları, sekmeli gezinme ve e1000 ARP/ping/DNS test paneli. `https://` adresleri (443 portu) **TLS 1.3** el sıkışması ile güvenli bağlantı kurar; sunucu yanıtı AES-128-GCM ile şifresi çözülüp HTTP olarak işlenir. İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir; Dosya Yöneticisi'nden `.html`/`.htm`/`.xhtml` dosyalarına çift tıklandığında tarayıcıda açılır. **Sayfa açılışında sistem donması giderildi:** harici kaynaklar (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) render sırasında senkron olarak getirilmez; URL'ler `pending_resources` listesine eklenir ve `poll_network()` tarafından kare başına tek tek asenkron olarak getirilir, sayfa her kaynaktan sonra yeniden render edilir. |
-| **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. |
-| **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. |
+| **🌐 Web Tarayıcısı** | Sık kullanılanlar (Bookmarks) çubuğu, hafif HTTP test sitesi, `minos://bookmarks`, `minos://help`, `minos://cats`, `minos://net`, `minos://history` ve `minos://demo` / `minos://demo-img` / `minos://demo-video` yerel demo sayfaları, sekmeli gezinme ve e1000 ARP/ping/DNS test paneli. `https://` adresleri (443 portu) **TLS 1.3** el sıkışması ile güvenli bağlantı kurar; sunucu yanıtı AES-128-GCM ile şifresi çözülüp HTTP olarak işlenir. İndirilen sayfalar `/root/Downloads/` altına `.html` uzantısıyla kaydedilir; Dosya Yöneticisi'nden `.html`/`.htm`/`.xhtml` dosyalarına çift tıklandığında tarayıcıda açılır. **Sayfa açılışında sistem donması giderildi:** harici kaynaklar (`<link rel="stylesheet">`, `<script src="...">`, `<img src="...">`) render sırasında senkron olarak getirilmez; URL'ler `pending_resources` listesine eklenir ve `poll_network()` tarafından kare başına tek tek asenkron olarak getirilir, sayfa her kaynaktan sonra yeniden render edilir. **`Ctrl+Shift+D` ile DevTools açılır; Elements, Console, Network ve Storage sekmeleri tarayıcı durumunu gösterir.** |
+| **🖼️ Resim Gösterici** | Çizim Tahtası'ndan kaydedilen 24-bit `.bmp` çizimlerini ve sanal dosya sistemindeki resimleri açar, yakınlaştırma/uzaklaştırma ve ayrıntılı resim meta verisi paneli sunar; resim yüklenmemişken sevimli kedi maskotunu gösterir. Görüntüyü **döşeli masaüstü arka planı** yapabilir. |
+| **🎵 Müzik Çalar** | Kullanıcı oynatmayı başlattığında HDA/PC hoparlörü üzerinden ses, animasyonlu spektrum ekolayzerı ve çalma listesi. Sistem açılışında otomatik ses çalınmaz. Dosya Yöneticisi'nden açılan **WAV dosyaları doğrudan burada çalar**. |
 | **🎬 Video Oynatıcı** | Canlı synthwave ufuk sahnesi, neon güneş scanline'ları, aşağı doğru akan 3D perspektif grid yol ve siber araç simülasyonu. |
 | **📊 Görev Yöneticisi** | Çekirdek bellek kullanımı, CPU dalgalanma grafiği, çok çekirdekli (SMP) per-core CPU çubukları, görev tablosu, süreç sonlandırma (`Kill`), alfabetik "Program Aç" başlatma menüsü ve RAM doluluk çubuğu. Pencere altına sabitlenmiş durum çubuğu ile ferah performans izleme. |
 | **🧮 Hesap Makinesi** | Klavyeyle giriş yapılabilen ifade hesaplayıcı (`+`, `-`, `*`, `/`); 128 bit sabit nokta aritmetiğiyle geniş sayı aralığı ve altı basamağa kadar ondalık hassasiyet. `Backspace` ve `Esc` ile düzenleme/temizleme. |
@@ -45,7 +45,7 @@ minOs, tam teşekküllü bir masaüstü deneyimi sunan **17 adet yerleşik uygul
 - **İşlemci ve giriş:** SMP zamanlayıcısı ve tek CPU'ya güvenli geri dönüş; xHCI USB HID klavye/fare ve PS/2 yedek yolu. EHCI/UHCI/OHCI transfer altyapısı bulunsa da HID raporlarının ayrıştırılması bu denetleyicilerde tamamlanmış değildir.
 - **Grafik:** QEMU/Bochs framebuffer ve VirtIO-GPU 2D yolu desteklenir. AMD ve NVIDIA sürücüleri temel framebuffer/2D işlemleri sunar; 3D hızlandırma kapsam dışıdır.
 - **Ağ:** IPv4/IPv6, TCP/UDP, DNS, HTTP ve TLS 1.3 altyapısı; ağ kartlarının model bazında uyumluluk durumu [donanım tablosunda](HARDWARE_DRIVER_SUPPORT_MATRIX.md) yer alır.
-- **Tarayıcı:** Yerel demo sayfaları, HTML/CSS/JavaScript işleme, çeşitli görsel biçimleri, HTTPS ve ağ kaynaklarını ana döngüyü engellemeden yükleme.
+- **Tarayıcı:** Yerel demo sayfaları, HTML/CSS/JavaScript işleme, çeşitli görsel biçimleri, HTTPS ve ağ kaynaklarını ana döngüyü engellemeden yükleme. Dahili **minJs** JavaScript motoru closure, ok fonksiyonları, `setTimeout`/`setInterval`, Promise ve dizi geri çağırmalarını destekler (ayrıntı: [wiki — Yerleşik Uygulamalar](https://github.com/tbagriyanik/minos/wiki/tr/Uygulamalar)).
 
 | Dosya sistemi | Destek | Önemli sınırlar |
 |---|---|---|
@@ -75,6 +75,9 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
   - `int 0x80` mimarisiyle çekirdekten izole kullanıcı alanı süreçleri, GDT TSS kullanıcı segmentleri.
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
   - Güvenli kullanıcı bellek kopyalama (`src/mm/uaccess.rs`), dosya tanıtıcısı yaşam döngüsü (`open`/`read`/`lseek`/`close`, fork/exec uyumlu refcount) ve süreç başına kaynak limitleri (`SYS_RESINFO`).
+  - `SYS_KILL` sinyal semantiği (SIGKILL/SIGTERM sonlandırma, SIGSTOP/SIGCONT suspend-resume, `Suspended` süreç durumu, pending sinyal maskesi) ve `kill`/`pause`/`resume` karşılığı.
+  - Tembel kullanıcı bellek eşleme (`PAGE_LAZY` — brk/mmap sayfaları ilk yazmada ayrılır), `MAP_SHARED_FILE` zero-copy paylaşımı, 2 MiB büyük sayfa desteği ve disk'siz bellek sıkıştırma deposu (`src/mm/memory/`).
+  - Büyüyen kernel heap (16→64 MiB sanal pencere, 64 KiB üstü tahsislar tembel), canlı bellek profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`) ve `meminfo` komutu.
 - [x] **SMP (Symmetric Multiprocessing) Mimarisi:**
   - Limine SMP protokolü ile AP çekirdeklerini uyandırma, bağımsız yığınlar ve Local APIC Timer/vektör izolasyonu.
   - TTAS Spinlock (`src/arch/x86_64/sync.rs`), çekirdekler arası paralel atomik iş kuyruğu ve Görev Yöneticisi per-core CPU izleme çubukları.

@@ -18,7 +18,10 @@ extern crate heapless;
 #[path = "../src/drivers/crypto/mod.rs"]
 pub mod crypto;
 
-// HTTP `Content-Encoding` çözücüsü (miniz_oxide tabanlı).
+// HTTP `Content-Encoding` çözücüsü (miniz_oxide + brotli-decompressor).
+#[path = "../src/drivers/brotli.rs"]
+pub mod brotli;
+
 #[path = "../src/drivers/compression.rs"]
 pub mod compression;
 

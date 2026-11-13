@@ -44,6 +44,7 @@ const COMPLETION_COMMANDS: &[&str] = &[
     "echo",
     "clear",
     "mem",
+    "meminfo",
     "ps",
     "apps",
     "ipconfig",
@@ -1367,7 +1368,7 @@ impl TerminalApp {
 
         match cmd {
             "help" => {
-                self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem ps exec", Color::TEXT_MAIN);
+                self.push_line("help ls cd pwd mkdir touch rm cat write disks df usb lsusb format echo clear mem meminfo ps exec", Color::TEXT_MAIN);
                 self.push_line(
                     "uptime fetch neofetch date uname whoami theme ipconfig ping ping6 dns nslookup curl wget cam wifi",
                     Color::ACCENT_GREEN,
@@ -2772,8 +2773,39 @@ impl TerminalApp {
                 b.push_usize((pmm.total_memory_bytes / 1024) as usize);
                 b.push_str(crate::gui::ui_text(" KB  Boş: ", " KB  Free: "));
                 b.push_usize((pmm.free_memory_bytes / 1024) as usize);
-                b.push_str(" KB");
+                b.push_str(crate::gui::ui_text(" KB  Kullanılan: ", " KB  Used: "));
+                b.push_usize((pmm.used_memory_bytes / 1024) as usize);
+                b.push_str(crate::gui::ui_text(" KB (%", " KB ("));
+                b.push_usize(pmm.free_percent() as usize);
+                if crate::gui::ui_english() {
+                    b.push_str("% free)");
+                } else {
+                    b.push_str("% bos)");
+                }
                 self.push_line(b.as_str(), Color::ACCENT_GREEN);
+            }
+            "meminfo" => {
+                // Genişletilmiş bellek istatistikleri: PMM profili, kernel heap,
+                // COW paylaşımı, sıkıştırılmış depo ve kullanıcı/kernel ayrımı.
+                let report = crate::mm::memory::render_report();
+                for line in report.lines() {
+                    self.push_line(line, Color::TEXT_MAIN);
+                }
+                let profile = crate::mm::memory::profile::snapshot();
+                let mut b = TextBuf::new();
+                b.push_str(crate::gui::ui_text(
+                    "En büyük bitişik boş: ",
+                    "Largest free run: ",
+                ));
+                b.push_usize(profile.largest_free_run);
+                b.push_str(crate::gui::ui_text(
+                    " çerçeve, tahsis isteği: ",
+                    " frames, alloc requests: ",
+                ));
+                b.push_usize(profile.alloc_requests as usize);
+                b.push_str(crate::gui::ui_text(", başarısız: ", ", failed: "));
+                b.push_usize(profile.failed_requests as usize);
+                self.push_line(b.as_str(), Color::TEXT_MUTED);
             }
             "ps" => {
                 self.push_line(
@@ -2794,6 +2826,7 @@ impl TerminalApp {
                             crate::mm::process::ProcessState::Ready => "READY",
                             crate::mm::process::ProcessState::Running => "RUN",
                             crate::mm::process::ProcessState::Blocked => "BLOCK",
+                            crate::mm::process::ProcessState::Suspended => "STOP",
                             crate::mm::process::ProcessState::Terminated => "DEAD",
                             crate::mm::process::ProcessState::Unused => "-",
                         };

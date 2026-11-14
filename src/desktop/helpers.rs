@@ -139,6 +139,8 @@ pub fn open_image_file(
     _paints: &[Option<apps::paint::PaintApp>],
     viewer: &mut apps::imageviewer::ImageViewerApp,
 ) {
+    // Görüntü çözme (PNG/JPEG/GIF/BMP) uzun sürebilir; imleç kum saati olsun.
+    let _busy = gui::screens::BusyScope::new();
     let display_name = if path.ends_with("cizim.bmp") {
         "cizim.bmp"
     } else if path.ends_with(".png") {

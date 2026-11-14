@@ -24,7 +24,7 @@ minos/
 │   ├── mm/                  # PMM, 4/5-level paging, süreç tablosu, ELF yükleyici,
 │   │                        # memory/ alt modülü (büyük sayfa, sıkıştırma, profilleme)
 │   └── main.rs              # Çekirdek giriş noktası (_start)
-├── tests/                   # Host birim testleri (271 test)
+├── tests/                   # Host birim testleri (290 test)
 ├── boot/                    # Limine bootloader yapılandırması (limine.conf)
 ├── docs/                    # Yerel Markdown dokümanları
 ├── wiki/                    # Wiki sayfaları (bu dizin)
@@ -50,13 +50,13 @@ kodlarıyla, sıfır harici bağımlılıkla çalışır; `webpki-roots`, `smolt
 
 ## Birim Testleri (`test_host.ps1`)
 
-Kriptografi (AES, GCM, RSA, ECC, ECDSA, SHA-256, SHA-384, SHA-512), X.509 sertifika, zincir derinliği ve geçerlilik süresi/hostname doğrulama, TLS 1.2 / TLS 1.3 el sıkışması, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu (`TextBuf`) testlerini içeren 271 birim testi host ortamında yürütülür:
+Kriptografi, X.509, TLS 1.2 / TLS 1.3, JavaScript, HTML, dosya sistemi, bellek, sürücüler ve GUI testlerini içeren 290 birim testi host ortamında yürütülür:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\test_host.ps1
 ```
 
-Test sonuçları: **271 geçti / 0 hata**
+Test sonuçları: **290 geçti / 0 hata**
 
 ---
 
@@ -79,10 +79,10 @@ powershell -ExecutionPolicy Bypass -File .\build_iso.ps1
 
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 196 dosya (`src/` + `tests/` + `build.rs`) |
-| **Toplam Kod Satırı** | ~145.300 satır |
+| **Toplam Rust Kaynak Dosyası** | 202 dosya (`src/` + `tests/` + `build.rs`) |
+| **Toplam Kod Satırı** | 139.168 satır |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri** | 271 test (0 hata, %100 başarılı) |
+| **Birim Testleri** | 290 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Pencere Yöneticisi |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |

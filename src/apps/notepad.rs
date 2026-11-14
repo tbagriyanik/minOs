@@ -298,9 +298,18 @@ impl NotepadApp {
     }
 
     /// Menü kutusunun sol üst köşesinin pencere içi Y koordinatı.
+    /// Araç çubuğunun altına açılır; pencere dibine sığmazsa yukarı kaydırılır
+    /// ve her zaman pencere sınırları içine kelepçelenir.
     #[inline(always)]
-    pub fn menu_box_y() -> usize {
-        crate::gui::sp(54)
+    pub fn menu_box_y(menu: u8, win_h: usize) -> usize {
+        let h = Self::menu_box_h(menu);
+        let preferred = crate::gui::sp(54);
+        let max_y = win_h.saturating_sub(h + crate::gui::sp(4));
+        if preferred <= max_y {
+            preferred
+        } else {
+            max_y.max(crate::gui::sp(4))
+        }
     }
 
     /// Menü öğesi sayısı.
@@ -328,9 +337,8 @@ impl NotepadApp {
 
     /// Menü açıkken bir öğenin pencere içi dikey aralığı (üst, alt).
     #[inline(always)]
-    pub fn menu_item_bounds(menu: u8, item: usize) -> (usize, usize) {
-        let _ = menu;
-        let top = Self::menu_box_y() + Self::menu_pad() + item * Self::menu_item_h();
+    pub fn menu_item_bounds(menu: u8, item: usize, win_h: usize) -> (usize, usize) {
+        let top = Self::menu_box_y(menu, win_h) + Self::menu_pad() + item * Self::menu_item_h();
         (top, top + Self::menu_item_h())
     }
 
@@ -2052,7 +2060,7 @@ impl NotepadApp {
         // editörü menü kutusunu kapatır.
         if self.menu != 0 {
             let mx = win_x + Self::menu_box_x(self.menu, win_w);
-            let box_y = win_y + Self::menu_box_y();
+            let box_y = win_y + Self::menu_box_y(self.menu, win_h);
             let box_w = Self::menu_box_w();
             let box_h = Self::menu_box_h(self.menu);
             let items = Self::menu_items(self.menu);

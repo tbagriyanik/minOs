@@ -12,7 +12,9 @@ minOs sürüm notları ve gelecek planları.
 - **🎮 FPS 3D Gerçek Performans Metrikleri:** `FPS 3D Oyun` (app ID 16) tamamlanan karelerden gerçek ölçüm üretir: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` seri çıktısı ve HUD'da anlık/minimum FPS + kare süresi. Açılış `[FPS3D] Uygulama açıldı` marker'ı ile doğrulanır.
 - **🧪 FPS 3D Stres Testi Otomasyonu:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu Başlat menüsünden açar; 10/30/60 dakikalık koşullarda QEMU canlılığı ve pozitif FPS/min-FPS metrikleri doğrulanır.
 - **🖼️ Bütçe Aşımında Kısmi Kare Koruması:** `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp render tamamlanamazsa geri yüklenir.
-- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır (271 test).
+- **🎮 FPS Oyunu Menüsü:** Oyuna başlangıç ve sonuç menüleri eklendi; oyun bitince yeniden başlatma veya çıkış seçenekleri sunulur.
+- **⌨️ Form Klavye Kısayolları:** Hoş Geldin ekranı, kurulum sihirbazı ve Dosya Yöneticisi kontrollerinde Tab gezinme, Enter onaylama ve Esc vazgeçme desteklenir.
+- **⏱️ TimeBudget Deterministik Testleri:** Enjekte edilebilir test saati; zaman ilerlemesi, tam sınırda zaman aşımı, sıfır bütçe, geri giden saat doygunluğu, `reset()` ve `OperationGuard` davranışı host testleriyle kapsanır (290 test).
 - **🎵 WAV Dosyası Doğrudan Çalma:** Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı doğrudan Müzik Çalar'da açar.
 - **🖼️ Döşeli Masaüstü Arka Planı:** Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - **🎨 Yeni Masaüstü Görselleri:** Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

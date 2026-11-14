@@ -308,6 +308,14 @@ fn parse_px_value(
             Some((n * w as f32 / 100.0) as usize)
         }
         "pt" => Some((n * 1.25f32) as usize), // 1pt ≈ 1.25px
+        // Birimsiz sıfır geçerli bir uzunluktur (`margin-top: 0`).
+        "" => {
+            if n == 0.0 {
+                Some(0)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -547,6 +555,210 @@ fn parse_grid_template_areas(value: &str) -> Vec<Vec<String>> {
         }
     }
     rows
+}
+
+/// `grid-template-areas` tablosundaki adlandırılmış bir alanın hücre aralığı.
+///
+/// Satır ve sütun indeksleri 0 tabanlıdır; aralıklar iki uç dahildir.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GridAreaRect {
+    /// Alan adı (`.` ve boş adlar hariç tutulur).
+    pub name: String,
+    /// Başlangıç satırı.
+    pub row_start: usize,
+    /// Başlangıç sütunu.
+    pub col_start: usize,
+    /// Bitiş satırı (dahil).
+    pub row_end: usize,
+    /// Bitiş sütunu (dahil).
+    pub col_end: usize,
+}
+
+/// Grid'e yerleştirilen tek bir öğenin hücresi.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GridSlot {
+    /// Satır indeksi.
+    pub row: usize,
+    /// Sütun indeksi (adlandırılmış alanda alanın başlangıç sütunu).
+    pub col: usize,
+    /// Öğenin kapladığı sütun sayısı (tek hücrede 1).
+    pub col_span: usize,
+}
+
+/// CSS Grid yerleşim hesabı: `grid-template-areas` alanları + otomatik akış.
+///
+/// Saf bir durum makinesidir; `html.rs` metin-akışı çizicisi hücre başına
+/// metin yazarken bu hesabı kullanır.
+///
+/// Kurallar:
+/// - `grid-area` adı şablonda varsa öğe o alanın dikdörtgenine yerleşir.
+/// - Aynı alan adını taşıyan ikinci öğe otomatik akışa düşer.
+/// - Şablonda olmayan alan adı da otomatik akışa düşer.
+/// - Şablon hücrelerinin tamamı (adlandırılmış alanlar ve `.` boş hücreler)
+///   otomatik akışa kapalıdır; otomatik akış yalnızca şablon dışı hücrelere
+///   (örtülü sütunlar / örtük satırlar) yerleşir. Aynı alan adını taşıyan
+///   ikinci öğe de bu yüzden şablonun altındaki satıra iner.
+pub struct GridPlacer {
+    /// Şablondaki adlandırılmış alanların dikdörtgenleri.
+    rects: Vec<GridAreaRect>,
+    /// Hücrelerin rezerve olup olmadığı (satır → sütun).
+    reserved: Vec<Vec<bool>>,
+    /// Izgaranın açık sütun sayısı (şablondan geniş olabilir).
+    col_count: usize,
+    /// Otomatik akış imleci (satır).
+    auto_row: usize,
+    /// Otomatik akış imleci (sütun).
+    auto_col: usize,
+    /// Kullanılmış alan adları.
+    claimed: Vec<String>,
+    /// Yerleştirilen alanların dikdörtgenleri (render için).
+    placed: Vec<GridAreaRect>,
+}
+
+impl GridPlacer {
+    /// Yeni bir grid yerleşim durumu başlatır.
+    ///
+    /// `template`: `grid-template-areas` tablosu (satır → hücre adları).
+    /// `col_count`: ızgaranın açık sütun sayısı.
+    pub fn new(template: &[Vec<String>], col_count: usize) -> Self {
+        let mut rects: Vec<GridAreaRect> = Vec::new();
+        let mut template_rows = 0usize;
+        let mut template_cols = 0usize;
+        for (r, row) in template.iter().enumerate() {
+            template_rows = template_rows.max(r + 1);
+            template_cols = template_cols.max(row.len());
+            for (c, cell) in row.iter().enumerate() {
+                let name = cell.trim();
+                if name.is_empty() || name == "." {
+                    continue;
+                }
+                match rects.iter_mut().find(|x| x.name == name) {
+                    Some(existing) => {
+                        // Alan birden çok hücreye yayılıyor: dikdörtgeni büyüt.
+                        existing.row_start = existing.row_start.min(r);
+                        existing.col_start = existing.col_start.min(c);
+                        existing.row_end = existing.row_end.max(r);
+                        existing.col_end = existing.col_end.max(c);
+                    }
+                    None => rects.push(GridAreaRect {
+                        name: String::from(name),
+                        row_start: r,
+                        col_start: c,
+                        row_end: r,
+                        col_end: c,
+                    }),
+                }
+            }
+        }
+        // Şablon hücrelerinin tamamı rezervedir (adlandırılmış alanlar ve "."
+        // boş hücreler otomatik akışa kapalıdır: auto_row zaten şablonun
+        // altından başlar ve sütun, şablondan daha geniş olabilir).
+        let mut reserved: Vec<Vec<bool>> = Vec::new();
+        for _ in 0..template_rows {
+            reserved.push(vec![true; template_cols]);
+        }
+        GridPlacer {
+            rects,
+            reserved,
+            col_count: col_count.max(1),
+            auto_row: template_rows,
+            auto_col: 0,
+            claimed: Vec::new(),
+            placed: Vec::new(),
+        }
+    }
+
+    /// Bir grid çocuğunu yerleştirir ve hücresini döner.
+    ///
+    /// `area`: çocuğun `grid-area` değeri (alan adı). Şablonda karşılığı yoksa
+    /// veya alan daha önce kullanıldıysa öğe otomatik akışa düşer.
+    pub fn place(&mut self, area: Option<&str>) -> GridSlot {
+        if let Some(name) = area {
+            let name = name.trim();
+            if !name.is_empty() && !self.claimed.iter().any(|c| c == name) {
+                if let Some(rect) = self.rects.iter().find(|r| r.name == name).cloned() {
+                    self.claimed.push(String::from(name));
+                    for r in rect.row_start..=rect.row_end {
+                        for c in rect.col_start..=rect.col_end {
+                            self.mark_occupied(r, c);
+                        }
+                    }
+                    self.placed.push(rect.clone());
+                    return GridSlot {
+                        row: rect.row_start,
+                        col: rect.col_start,
+                        col_span: rect.col_end - rect.col_start + 1,
+                    };
+                }
+            }
+        }
+        // Otomatik akış: sıradaki boş hücre.
+        let (row, col) = self.next_auto_cell();
+        GridSlot {
+            row,
+            col,
+            col_span: 1,
+        }
+    }
+
+    /// Otomatik akışta sıradaki boş hücreyi bulur, işaretler ve döner.
+    ///
+    /// Konteynerın kendi metni (bir grid öğesine ait olmayan) bu yolla
+    /// hücrelere yazılır.
+    pub fn next_auto_cell(&mut self) -> (usize, usize) {
+        let (row, col) = self.next_free_cell();
+        self.mark_occupied(row, col);
+        self.auto_col = col + 1;
+        if self.auto_col >= self.col_count {
+            self.auto_col = 0;
+            self.auto_row = row + 1;
+        }
+        (row, col)
+    }
+
+    /// Yerleştirilen alanların dikdörtgenleri (render için).
+    pub fn placed_rects(&self) -> &[GridAreaRect] {
+        &self.placed
+    }
+
+    /// İmleçten sonraki boş hücreyi bulur (rezerve hücreler atlanır).
+    fn next_free_cell(&self) -> (usize, usize) {
+        let mut row = self.auto_row;
+        let mut col = self.auto_col;
+        loop {
+            if self.is_reserved(row, col) {
+                col += 1;
+                if col >= self.col_count {
+                    col = 0;
+                    row += 1;
+                }
+                continue;
+            }
+            break;
+        }
+        (row, col)
+    }
+
+    /// Hücre rezerve mi? (şablon hücreleri ve dolu hücreler rezervedir)
+    fn is_reserved(&self, row: usize, col: usize) -> bool {
+        self.reserved
+            .get(row)
+            .and_then(|cells| cells.get(col))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Hücreyi dolu (rezerve) olarak işaretler.
+    fn mark_occupied(&mut self, row: usize, col: usize) {
+        while self.reserved.len() <= row {
+            self.reserved.push(Vec::new());
+        }
+        let cells = &mut self.reserved[row];
+        while cells.len() <= col {
+            cells.push(false);
+        }
+        cells[col] = true;
+    }
 }
 
 /// `url(...)` içindeki ilk adresi döndürür (tırnaklar temizlenir).
@@ -1613,7 +1825,7 @@ pub fn parse_css(css_code: &str) -> ParsedCss {
 
 /// CSS özgüllük (specificity) skoru: (ID sayısı, sınıf/özellik sayısı, etiket sayısı).
 /// W3C spesifikasyonuna göre hesaplanır; yüksek skor kazanıcı.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Specificity {
     pub a: u32, // ID seçicileri
     pub b: u32, // Sınıf, özellik, sözde-sınıf seçicileri
@@ -2275,6 +2487,32 @@ pub fn transition_progress(elapsed_ms: u64, duration_ms: f32) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn grid_placer_assigns_named_areas_and_spans() {
+        // "header header" / "side main" şablonu.
+        let parsed = parse_css(".g { grid-template-areas: \"header header\" \"side main\"; }");
+        let style = match_css_style(&parsed.rules, "div", Some("g"), None, None, 600, 768);
+        assert_eq!(style.grid_template_areas.len(), 2);
+        assert_eq!(
+            style.grid_template_areas[1],
+            vec![String::from("side"), String::from("main")]
+        );
+
+        let mut placer = GridPlacer::new(&style.grid_template_areas, 2);
+        let header = placer.place(Some("header"));
+        assert_eq!((header.row, header.col, header.col_span), (0, 0, 2));
+        // Aynı alan ikinci kez istenirse otomatik akışa düşer (şablon hücreleri
+        // rezerve olduğu için şablon dışındaki satıra geçer).
+        let again = placer.place(Some("header"));
+        assert!(again.row >= 2);
+        let side = placer.place(Some("side"));
+        assert_eq!((side.row, side.col), (1, 0));
+        let main = placer.place(Some("main"));
+        assert_eq!((main.row, main.col), (1, 1));
+        // Yerleşen alanlar çizim için kaydedilir.
+        assert_eq!(placer.placed_rects().len(), 3);
+    }
 
     #[test]
     fn resolves_css_variables_and_color_formats() {

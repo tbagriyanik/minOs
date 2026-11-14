@@ -970,7 +970,7 @@ impl PaintApp {
 
         // 5. Açılır Menü (File Dropdown: En Üst Katman)
         if self.file_menu_open {
-            let (mx, my, mw, mh) = Self::file_dropdown_rect(w);
+            let (mx, my, mw, mh) = Self::file_dropdown_rect(w, h);
             let drop_x = x + mx;
             let drop_y = y + my;
             fb.draw_shadow(drop_x, drop_y, mw, mh, Color::SHADOW);
@@ -979,7 +979,7 @@ impl PaintApp {
 
             let labels = Self::file_menu_labels();
             for (i, label) in labels.iter().enumerate() {
-                let r = Self::file_menu_item_rect(w, i);
+                let r = Self::file_menu_item_rect(w, h, i);
                 let item_y = y + r.1;
                 let item_x = x + r.0;
                 fb.draw_rect(item_x, item_y, r.2, r.3, Color::TITLE_BAR_INACTIVE);
@@ -1073,8 +1073,28 @@ impl PaintApp {
     }
 
     /// Açılır menü listesinin pencere içi (x, y, w, h) ölçüleri.
-    pub fn file_dropdown_rect(w: usize) -> (usize, usize, usize, usize) {
-        (w.saturating_sub(182), 52, 174, 166)
+    /// "Dosya" düğmesinin altına açılır; alta sığmazsa üste çevrilir ve
+    /// her zaman pencere sınırları içine kelepçelenir.
+    pub fn file_dropdown_rect(w: usize, h: usize) -> (usize, usize, usize, usize) {
+        let mw = 174usize.min(w.saturating_sub(16));
+        let mh = 166usize.min(h.saturating_sub(8));
+        let mut mx = w.saturating_sub(182).max(4);
+        let mx_max = w.saturating_sub(mw + 4);
+        if mx > mx_max {
+            mx = mx_max;
+        }
+        // "Dosya" düğmesi: (w-40, 28, 28, 22) -> alt kenar 50
+        let below = 52usize;
+        let above = 28usize.saturating_sub(mh + 4);
+        let mut my = if below + mh <= h { below } else { above };
+        let y_min = 4usize;
+        let y_max = h.saturating_sub(mh + 4);
+        if my < y_min {
+            my = y_min;
+        } else if my > y_max && y_max >= y_min {
+            my = y_max;
+        }
+        (mx, my, mw, mh)
     }
 
     /// Menüdeki öğe sayısı.
@@ -1094,8 +1114,8 @@ impl PaintApp {
     }
 
     /// Açılır menüdeki öğe (x, y, w, h) koordinatlarını (pencere içi) döndürür.
-    pub fn file_menu_item_rect(w: usize, index: usize) -> (usize, usize, usize, usize) {
-        let (mx, my, mw, _mh) = Self::file_dropdown_rect(w);
+    pub fn file_menu_item_rect(w: usize, h: usize, index: usize) -> (usize, usize, usize, usize) {
+        let (mx, my, mw, _mh) = Self::file_dropdown_rect(w, h);
         (mx + 4, my + 4 + index * 22, mw.saturating_sub(8), 21)
     }
 

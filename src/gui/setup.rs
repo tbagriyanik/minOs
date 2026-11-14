@@ -24,13 +24,52 @@ pub struct AppInstances {
     pub fps_3d_app: apps::fps_game::FpsGameApp,
 }
 
+/// Kurulum çıktısı: tüm uygulama örnekleri ve pencere yöneticisi.
+///
+/// `Box` ile kurulur: iki yapı birlikte ~110 KiB tutar ve yığın çerçevesinde
+/// taşınması çekirdek yığınını zorlar.
+pub struct AppSetup {
+    pub apps: AppInstances,
+    pub compositor: gui::MinGuiCompositor,
+}
+
 /// Initializes all applications and registers them with the compositor.
+///
+/// Dönüş değeri `Box<AppSetup>`'dur: `AppInstances` ve `MinGuiCompositor`
+/// birlikte ~110 KiB yer kaplar; yığın çerçevesinde birleştirilirse çekirdek
+/// yığınını zorlar.
 pub fn init_apps(
     fs_mgr: &mut fs::FileSystemManager,
     width: usize,
     height: usize,
-) -> (AppInstances, gui::MinGuiCompositor) {
-    let mut compositor = gui::MinGuiCompositor::new();
+) -> alloc::boxed::Box<AppSetup> {
+    // Yerinde kurulum: yapılar doğrudan ayrılan (heap) bellekte oluşturulur,
+    // böylece ne dönüş değeri ne de ara adımlar ~110 KiB'lık yığın çerçevesi
+    // gerektirir.
+    let mut setup = alloc::boxed::Box::new(AppSetup {
+        apps: AppInstances {
+            filemanager_app: apps::filemanager::FileManagerApp::new(),
+            desktop_files: apps::filemanager::FileManagerApp::new(),
+            settings_app: apps::settings::SystemSettings::default(),
+            notepad_app: apps::notepad::NotepadApp::new(),
+            browser_app: apps::browser::BrowserApp::new(),
+            imageviewer_app: apps::imageviewer::ImageViewerApp::new(),
+            musicplayer_app: apps::musicplayer::MusicPlayerApp::new(),
+            videoplayer_app: apps::videoplayer::VideoPlayerApp::new(),
+            taskmgr_app: apps::taskmgr::TaskManagerApp::new(),
+            calculator_app: apps::calculator::CalculatorApp::new(),
+            paint_apps: (0..gui::MAX_WINDOWS).map(|_| None).collect(),
+            terminal_app: apps::terminal::TerminalApp::new(),
+            installer_app: apps::installer::InstallerApp::new(),
+            viewer3d_app: apps::viewer3d::Viewer3DApp::new(),
+            pkgmgr_app: apps::pkgmgr::PackageManagerApp::new(),
+            fps_game_app: apps::game::GameApp::new(),
+            fps_3d_app: apps::fps_game::FpsGameApp::new(),
+        },
+        compositor: gui::MinGuiCompositor::new(),
+    });
+    let compositor = &mut setup.compositor;
+    let apps_all = &mut setup.apps;
 
     // Yerleşik uygulamaları kayıt defterine ekle; `/bin` taraması
     // `sync_installed_apps` içinde harici/hot-load girdilerini ekler.
@@ -56,14 +95,12 @@ pub fn init_apps(
         compositor.app_registry.register_builtin(id, name);
     }
 
-    let mut filemanager_app = apps::filemanager::FileManagerApp::new();
-    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+    apps_all.filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
 
-    let mut desktop_files = apps::filemanager::FileManagerApp::new();
-    desktop_files.set_path("/desktop");
-    desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+    apps_all.desktop_files.set_path("/desktop");
+    apps_all.desktop_files.refresh_from_vfs(&fs_mgr.vfs);
 
-    let mut settings_app = apps::settings::SystemSettings::default();
+    let settings_app = &mut apps_all.settings_app;
     settings_app.display_res = (width, height);
     settings_app.screen_res = (width, height);
 
@@ -74,54 +111,14 @@ pub fn init_apps(
     }
     settings_app.load_from_vfs(&fs_mgr.vfs);
 
-    let notepad_app = apps::notepad::NotepadApp::new();
-    let mut browser_app = apps::browser::BrowserApp::new();
-    let _ = browser_app.load_bookmarks_from_vfs(&fs_mgr.vfs);
-    let imageviewer_app = apps::imageviewer::ImageViewerApp::new();
-    let musicplayer_app = apps::musicplayer::MusicPlayerApp::new();
-    let videoplayer_app = apps::videoplayer::VideoPlayerApp::new();
-    let taskmgr_app = apps::taskmgr::TaskManagerApp::new();
-    let calculator_app = apps::calculator::CalculatorApp::new();
+    let _ = apps_all.browser_app.load_bookmarks_from_vfs(&fs_mgr.vfs);
 
-    let paint_apps: alloc::vec::Vec<Option<apps::paint::PaintApp>> =
-        (0..gui::MAX_WINDOWS).map(|_| None).collect();
-
-    let mut terminal_app = apps::terminal::TerminalApp::new();
-    terminal_app.init_banner();
-
-    let mut installer_app = apps::installer::InstallerApp::new();
-    installer_app.refresh_drives();
-
-    let viewer3d_app = apps::viewer3d::Viewer3DApp::new();
-
-    let mut pkgmgr_app = apps::pkgmgr::PackageManagerApp::new();
-    pkgmgr_app.refresh_installed(&fs_mgr.vfs);
+    apps_all.terminal_app.init_banner();
+    apps_all.installer_app.refresh_drives();
+    apps_all.pkgmgr_app.refresh_installed(&fs_mgr.vfs);
     compositor.sync_installed_apps(&fs_mgr.vfs);
 
-    let fps_game_app = apps::game::GameApp::new();
-    let fps_3d_app = apps::fps_game::FpsGameApp::new();
-
-    let apps_instances = AppInstances {
-        filemanager_app,
-        desktop_files,
-        settings_app,
-        notepad_app,
-        browser_app,
-        imageviewer_app,
-        musicplayer_app,
-        videoplayer_app,
-        taskmgr_app,
-        calculator_app,
-        paint_apps,
-        terminal_app,
-        installer_app,
-        viewer3d_app,
-        pkgmgr_app,
-        fps_game_app,
-        fps_3d_app,
-    };
-
-    (apps_instances, compositor)
+    setup
 }
 
 /// Creates and registers all default application windows.

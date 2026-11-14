@@ -1,21 +1,55 @@
 //! Loading, boot and welcome screens.
 
 use super::*;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Fare imlecinin "meşgul" (kum saati) kipinde olup olmadığı.
 /// `true` olduğunda `draw_mouse_cursor` ok yerine kum saati çizer.
-static CURSOR_BUSY: AtomicBool = AtomicBool::new(false);
+/// Sayaç biçimindedir: iç içe uzun işlemler (ör. paket kurulumu içinden
+/// küçük bir dosya okuma) birbirini erken kapatmaz.
+static CURSOR_BUSY: AtomicUsize = AtomicUsize::new(0);
 
 /// Meşgul durumunu ayarlar. Uzun işlemler (PNG çözme, kopyalama vb.) sırasında
 /// `true`, işlem bittiğinde `false` yapılmalıdır.
 pub fn set_cursor_busy(busy: bool) {
-    CURSOR_BUSY.store(busy, Ordering::SeqCst);
+    if busy {
+        CURSOR_BUSY.fetch_add(1, Ordering::SeqCst);
+    } else {
+        CURSOR_BUSY
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                Some(v.saturating_sub(1))
+            })
+            .ok();
+    }
 }
 
 /// Meşgul durumu döner.
 pub fn is_cursor_busy() -> bool {
-    CURSOR_BUSY.load(Ordering::SeqCst)
+    CURSOR_BUSY.load(Ordering::SeqCst) > 0
+}
+
+/// Kapsam koruyucu: oluşturulduğunda imleci kum saatine alır, `Drop` olduğunda
+/// (işlev kapsamı bitince) otomatik olarak normale döndürür. Erken `return`
+/// yollarında bile doğru çalışır.
+pub struct BusyScope;
+
+impl BusyScope {
+    pub fn new() -> Self {
+        set_cursor_busy(true);
+        Self
+    }
+}
+
+impl Default for BusyScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for BusyScope {
+    fn drop(&mut self) {
+        set_cursor_busy(false);
+    }
 }
 
 /// Draw one frame of the centered minOs loading transition.
@@ -297,6 +331,7 @@ pub fn render_welcome_screen(
     height: usize,
     english: bool,
     selected: theme::ThemeId,
+    focused_control: usize,
     mouse: &MouseState,
 ) {
     let (x, y, w, h) = welcome_panel(width, height);
@@ -367,6 +402,15 @@ pub fn render_welcome_screen(
                 Color::TEXT_MAIN
             },
         );
+        if focused_control == i {
+            fb.draw_rect_outline(
+                rect.0.saturating_sub(2),
+                rect.1.saturating_sub(2),
+                rect.2 + 4,
+                rect.3 + 4,
+                Color::ACCENT_YELLOW,
+            );
+        }
     }
 
     // 2. Masaüstü Teması Bölümü
@@ -426,13 +470,22 @@ pub fn render_welcome_screen(
         } else {
             fb.draw_rect_outline(rect.0, rect.1, rect.2, rect.3, Color::BORDER);
         }
+        if focused_control == i + 2 {
+            fb.draw_rect_outline(
+                rect.0.saturating_sub(2),
+                rect.1.saturating_sub(2),
+                rect.2 + 4,
+                rect.3 + 4,
+                Color::ACCENT_YELLOW,
+            );
+        }
     }
 
     // 3. Alt Kısım: Bilgi İpucu (Zaman Aşımı Göstergesi) & Başla Düğmesi
     let hint_text = if english {
-        "Press Enter or wait to start..."
+        "Tab: select  Enter: confirm  Esc: cancel"
     } else {
-        "Enter'a basın veya bekleyin..."
+        "Tab: sec  Enter: onayla  Esc: vazgec"
     };
     MinGuiCompositor::draw_string(
         fb,
@@ -451,6 +504,15 @@ pub fn render_welcome_screen(
         6,
         Color::ACCENT_GREEN,
     );
+    if focused_control == 2 + theme::ThemeId::ALL.len() {
+        fb.draw_rect_outline(
+            button.0.saturating_sub(2),
+            button.1.saturating_sub(2),
+            button.2 + 4,
+            button.3 + 4,
+            Color::ACCENT_YELLOW,
+        );
+    }
     let btn_text = if english { "Get Started" } else { "Başla" };
     let text_col = MinGuiCompositor::text_on(Color::ACCENT_GREEN);
     MinGuiCompositor::draw_string(fb, button.0 + 20, button.1 + 10, btn_text, text_col);

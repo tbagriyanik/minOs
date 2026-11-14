@@ -8,6 +8,26 @@ use crate::fs;
 use crate::gui;
 use crate::mm;
 
+fn activate_welcome_control(
+    focused_control: usize,
+    settings_app: &mut apps::settings::SystemSettings,
+    accepted: &mut bool,
+) {
+    if focused_control < 2 {
+        settings_app.language = if focused_control == 0 {
+            apps::settings::UiLanguage::Turkish
+        } else {
+            apps::settings::UiLanguage::English
+        };
+        gui::set_ui_language_english(settings_app.language.is_english());
+    } else if let Some(theme) = gui::theme::ThemeId::ALL.get(focused_control - 2) {
+        settings_app.theme = *theme;
+        gui::theme::set_theme(*theme);
+    } else {
+        *accepted = true;
+    }
+}
+
 pub fn run_welcome_screen(
     fb: &mut Framebuffer,
     width: usize,
@@ -19,10 +39,15 @@ pub fn run_welcome_screen(
     fs_mgr: &mut fs::FileSystemManager,
     memory_mgr: &mut mm::MemoryManager,
 ) {
+    let original_language = settings_app.language;
+    let original_theme = settings_app.theme;
     let mut welcome_was_left_down = false;
     let mut welcome_dirty = true;
+    let mut welcome_focus = 0;
+    let welcome_focus_count = 3 + gui::theme::ThemeId::ALL.len();
     let mut welcome_mouse_pos = (mouse.x, mouse.y);
     let mut welcome_accepted = false;
+    let mut welcome_cancelled = false;
     let mut welcome_announced = false;
     let mut welcome_diag_last = monotonic_ms();
     let mut _welcome_diag_iters: u64 = 0;
@@ -43,6 +68,7 @@ pub fn run_welcome_screen(
                 height,
                 settings_app.language.is_english(),
                 settings_app.theme,
+                welcome_focus,
                 mouse,
             );
             welcome_dirty = false;
@@ -88,13 +114,14 @@ pub fn run_welcome_screen(
             welcome_accepted = true;
         }
 
-        // Enter veya Escape ile hoş geldin ekranını geç.
+        let mut enter_requested = false;
         while let Some(action) = keyboard.take_last_action() {
             if matches!(action, drivers::keyboard::KeyAction::EnterKey) {
-                welcome_accepted = true;
+                enter_requested = true;
             }
         }
 
+        let mut enter_char_seen = false;
         while let Some(ch) = keyboard.take_last_char() {
             if ch == 'e' || ch == 'E' {
                 // E tuşu ile boot mesajlarını göster/gizle.
@@ -113,13 +140,38 @@ pub fn run_welcome_screen(
                     }
                 }
             }
-            if ch == '\x1b' || ch == ' ' {
+            if ch == '\t' {
+                welcome_focus = if keyboard.shift {
+                    (welcome_focus + welcome_focus_count - 1) % welcome_focus_count
+                } else {
+                    (welcome_focus + 1) % welcome_focus_count
+                };
+                welcome_dirty = true;
+            } else if ch == '\n' || ch == '\r' {
+                enter_char_seen = true;
+                activate_welcome_control(welcome_focus, settings_app, &mut welcome_accepted);
+                welcome_dirty = true;
+            } else if ch == '\x1b' {
+                settings_app.language = original_language;
+                settings_app.theme = original_theme;
+                gui::set_ui_language_english(original_language.is_english());
+                gui::theme::set_theme(original_theme);
+                welcome_cancelled = true;
+                welcome_accepted = true;
+            } else if ch == ' ' {
                 welcome_accepted = true;
             }
         }
 
+        if enter_requested && !enter_char_seen {
+            activate_welcome_control(welcome_focus, settings_app, &mut welcome_accepted);
+            welcome_dirty = true;
+        }
+
         if welcome_accepted {
-            settings_app.save_all(compositor, &mut fs_mgr.vfs);
+            if !welcome_cancelled {
+                settings_app.save_all(compositor, &mut fs_mgr.vfs);
+            }
             break;
         }
 

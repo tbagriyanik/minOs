@@ -1,8 +1,8 @@
-# minOs QEMU Entegrasyon Test Raporu
+﻿# minOs QEMU Entegrasyon Test Raporu
 
 | Alan | Değer |
 | :--- | :--- |
-| Zaman | 2026-11-13 15:58:46 UTC |
+| Zaman | 2026-11-14 13:56:18 UTC |
 | ISO | `D:\minos\minos.iso` |
 | QEMU profili | default |
 | Bellek / vCPU | 512 MB / 2 |
@@ -18,6 +18,10 @@
 | VMM (Sayfalama & Ring-3 Izolasyon) | ✅ GEÇTİ | PML4 haritalama, ceviri ve USER|WRITABLE|NX bayraklari |
 | Sayfa Tablosu Geri Kazanimi (PT/PD/PDPT) | ✅ GEÇTİ | Unmap sonrasi bosalan alt seviye tablo cercevelerinin PMM'e iadesi (sizintisiz) |
 | Gelismis Allocator (Bump & FSB) | ✅ GEÇTİ | Tasma korumali align_up, bump LIFO ve FSB free-list yeniden kullanimi |
+| Buyuk Sayfa (2MB Huge Page) | ✅ GEÇTİ | 2MB hizali tahsis, PD seviyesinde HUGE_PAGE esleme ve sizintisiz iade |
+| Bellek Sikistirma (Swap'siz MZRAM) | ✅ GEÇTİ | Sifir sayfa RLE, desen eslesmesi, geri acma ve sikistirilamaz veri reddi |
+| Kernel Heap Buyutme ve Tembel Doldurma | ✅ GEÇTİ | Heap genisletme (commit) ve buyuk tahsisatlarin tembel doldurulmasi |
+| Bellek Kullanim Profili | ✅ GEÇTİ | PMM/kernel/kullanici bellek profili ve COW paylasim sayaclari |
 | CPU & Cekirdek Donanim Baslatimi | ✅ GEÇTİ | BSP GDT, IDT ve coklu/tek CPU baslatma durumu |
 | Ag Adaptoru (e1000 / RTL8139 / NE2000 Link & Ring Hazir) | ✅ GEÇTİ | PCI/ISA donanim tespiti, MAC cozumu ve RX/TX halkalarinin aktivasyonu |
 | Giris Suruculeri (USB-HID / PS-2 Fallback) | ✅ GEÇTİ | xHCI taramasi veya basarili PS/2 fallback aktivasyonu |
@@ -31,10 +35,10 @@
 | Ring3 Kernel Memory Denial | ✅ GEÇTİ | Kullanici modundan cekirdek bellegi okuma girisiminin engellenmesi |
 | Ring3 Stack Guard Fault | ✅ GEÇTİ | Kullanici yigin guard sayfasi tasmasinin yakalanmasi |
 | Process Fork Exec Wait | ✅ GEÇTİ | Copy-on-write fork paylasimi, exec imaj degisimi, bloklanan wait ve kaynak iadesi |
-| Kullanici Heap ve Mmap (brk/mmap) | ✅ GEÇTİ | brk buyut/kucult, mmap/munmap, MEMINFO (R10 ABI) ve sizintisiz iade |
-| Dosya Taniticisi Yasam Dongusu | ✅ GEÇTİ | open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi |
-| Surec Kaynak Limitleri | ✅ GEÇTİ | RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi |
-| Copy-on-Write (Ring3 yazma hatasi) | ✅ GEÇTİ | Fork sonrasi #PF ile COW kopyasi; cocuk yazari ebeveyne sizmaz |
+| Kullanici Heap ve Mmap (brk/mmap) | ❌ BAŞARISIZ | brk buyut/kucult, mmap/munmap, MEMINFO (R10 ABI) ve sizintisiz iade |
+| Dosya Taniticisi Yasam Dongusu | ❌ BAŞARISIZ | open/read/lseek/close, nesne referans sayimi, fork devralma, exec sifirlama ve fd kotasi |
+| Surec Kaynak Limitleri | ❌ BAŞARISIZ | RESINFO raporu, heap/mmap/fd/cerceve kotasi ve fork ile limit mirasi |
+| Copy-on-Write (Ring3 yazma hatasi) | ❌ BAŞARISIZ | Fork sonrasi #PF ile COW kopyasi; cocuk yazari ebeveyne sizmaz |
 | ASLR (yigin + mmap tabani) | ✅ GEÇTİ | Ring3 yigin ustu her demo/surecte rastgele kaydirilir; mmap tabani ASLR |
 | Calisan Sistem Scheduler/Surec Izleme | ✅ GEÇTİ | Calisan sistemde dilim sayaci, surec durumlari, heap/mmap ve COW sayaclari |
 | Ag Yigini On Testi (ARP TX) | ✅ GEÇTİ | Boot sirasinda ARP istegi TX halkasindan iletildi |
@@ -46,7 +50,7 @@
 
 ## Sonuç
 
-**BAŞARILI** — tüm kontroller geçti.
+**BAŞARISIZ** — bir veya daha fazla kontrol başarısız oldu.
 
 > Bu rapor 	est_qemu.ps1 tarafından otomatik üretilmiştir.
 

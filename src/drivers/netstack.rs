@@ -700,6 +700,53 @@ static mut TCP_CONNECTED: bool = false;
 static mut TCP_SYN_ACKED: bool = false;
 static mut TCP_FIN_RECEIVED: bool = false;
 static mut TCP_RESET: bool = false;
+/// Tek-bağlantılı TCP yolunun sahibi: 0 = boş, 1 = tarayıcı,
+/// 2 = paket yöneticisi, 3 = diğer/yerleşik çağıranlar.
+/// `tcp_claim`/`tcp_begin_owned` ile korunur; aksi halde eşzamanlı iki
+/// istemci (ör. tarayıcı + paket indirme) birbirinin bağlantısını ezerdi.
+static mut TCP_OWNER: u8 = 0;
+static mut TCP_OWNER_ACTIVE_MS: u64 = 0;
+/// Sahiplik kira süresi: bu kadar süre `tcp_claim` ile yenilenmeyen sahip
+/// devredilebilir (çökme/terk senaryoları için).
+const TCP_OWNER_LEASE_MS: u64 = 5000;
+
+fn touch_tcp_owner() {
+    unsafe {
+        TCP_OWNER_ACTIVE_MS = crate::monotonic_ms();
+    }
+}
+
+/// Tek-bağlantılı TCP yolunun mevcut sahibi (0 = boş).
+pub fn tcp_owner() -> u8 {
+    unsafe { TCP_OWNER }
+}
+
+/// TCP yolunun sahipliğini almaya çalışır. Başka bir sahibi son
+/// `TCP_OWNER_LEASE_MS` içinde yenilemişse `false` döner; çağıran bu durumda
+/// bekleyip sonra tekrar deneyebilir. DNS aşamasında da çağrılabilir.
+pub fn tcp_claim(owner: u8) -> bool {
+    let now = crate::monotonic_ms();
+    unsafe {
+        if TCP_OWNER != 0
+            && TCP_OWNER != owner
+            && now.wrapping_sub(TCP_OWNER_ACTIVE_MS) < TCP_OWNER_LEASE_MS
+        {
+            return false;
+        }
+        TCP_OWNER = owner;
+        TCP_OWNER_ACTIVE_MS = now;
+        true
+    }
+}
+
+/// TCP yolunun sahipliğini bırakır (indirme/gezinme bittiğinde).
+pub fn tcp_release(owner: u8) {
+    unsafe {
+        if TCP_OWNER == owner {
+            TCP_OWNER = 0;
+        }
+    }
+}
 
 pub fn take_udp_data() -> Option<&'static [u8]> {
     unsafe {
@@ -793,6 +840,8 @@ fn handle_tcp(src_ip: Ipv4Address, payload: &[u8]) {
         if dst_port != TCP_LOCAL_PORT || src_port != TCP_REMOTE_PORT || src_ip != TCP_REMOTE_IP {
             return;
         }
+        // Yerleşik bağlantıya ait trafik sahiplik kirasını taze tutar.
+        touch_tcp_owner();
         if flags & 0x04 != 0 {
             TCP_RESET = true;
             TCP_CONNECTED = false;
@@ -1124,6 +1173,7 @@ pub fn take_dns_packet(buf: &mut [u8]) -> usize {
     }
 }
 pub fn take_tcp_data(buf: &mut [u8]) -> usize {
+    touch_tcp_owner();
     unsafe {
         let n = TCP_DATA_LEN.min(buf.len());
         buf[..n].copy_from_slice(&TCP_DATA[..n]);
@@ -1281,7 +1331,13 @@ pub(crate) fn send_tcp_segment(
     send_ipv4(dst, IP_PROTO_TCP, &seg[..n])
 }
 
-pub fn tcp_begin(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
+/// `tcp_begin`'in sahipli sürümü: `owner` kimliğiyle TCP yolu üzerinde
+/// bağlantı hakkı ister. Yabancı bir sahibi taze tutan etkin bir aktarım
+/// varsa `false` döner (eski davranışta iki istemci birbirini ezerdi).
+pub fn tcp_begin_owned(dst: Ipv4Address, dst_port: u16, src_port: u16, owner: u8) -> bool {
+    if !tcp_claim(owner) {
+        return false;
+    }
     unsafe {
         TCP_LOCAL_PORT = src_port;
         TCP_REMOTE_PORT = dst_port;
@@ -1294,7 +1350,18 @@ pub fn tcp_begin(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
         TCP_FIN_RECEIVED = false;
         TCP_RESET = false;
     }
-    send_tcp_segment(dst, dst_port, src_port, 0x1020_3040, 0, 0x02, &[])
+    let ok = send_tcp_segment(dst, dst_port, src_port, 0x1020_3040, 0, 0x02, &[]);
+    if ok {
+        touch_tcp_owner();
+    }
+    ok
+}
+
+pub fn tcp_begin(dst: Ipv4Address, dst_port: u16, src_port: u16) -> bool {
+    // Yerleşik/tek seferlik çağıranlar (ayarlar ağ testi, kendi kendine test)
+    // ayrı bir sahiplik kimliği kullanır; tarayıcı (1) ve pkgmgr (2) ile
+    // çakışmazlar.
+    tcp_begin_owned(dst, dst_port, src_port, 3)
 }
 
 pub fn tcp_send(data: &[u8]) -> bool {
@@ -1302,6 +1369,7 @@ pub fn tcp_send(data: &[u8]) -> bool {
         if !TCP_CONNECTED {
             return false;
         }
+        touch_tcp_owner();
         let ok = send_tcp_segment(
             TCP_REMOTE_IP,
             TCP_REMOTE_PORT,

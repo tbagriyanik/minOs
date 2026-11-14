@@ -9,9 +9,9 @@ impl MinGuiCompositor {
     }
 
     /// Bir menü ÖĞESİNİN Y konumu.
-    pub fn start_menu_item_y(menu_y: usize, item_index: usize) -> usize {
+    pub fn start_menu_item_y(menu_y: usize, item_index: usize, fb_w: usize) -> usize {
         let (g, k) = Self::item_group_and_index(item_index);
-        let (_, sub_y, _, _) = Self::start_menu_submenu_rect(menu_y, g, menu_y + MENU_H + 4);
+        let (_, sub_y, _, _) = Self::start_menu_submenu_rect(menu_y, g, menu_y + MENU_H + 4, fb_w);
         sub_y + sp(28) + k * sp(24)
     }
 
@@ -42,10 +42,12 @@ impl MinGuiCompositor {
         group_index: usize,
         tb_y: usize,
         count: usize,
+        fb_w: usize,
     ) -> (usize, usize, usize, usize) {
         let sub_w = sp(240);
         let sub_h = sp(32) + count * sp(28) + sp(8);
-        let sub_x = 6 + sp(190) + 4;
+        // Sağ kenara taşmasın: ekran genişliğine göre kelepçele.
+        let sub_x = (6 + sp(190) + 4).min(fb_w.saturating_sub(sub_w + 4));
         let cat_y = menu_y + sp(MENU_CONTENT_TOP) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
         (sub_x, sub_y, sub_w, sub_h)
@@ -55,6 +57,7 @@ impl MinGuiCompositor {
         menu_y: usize,
         group_index: usize,
         tb_y: usize,
+        fb_w: usize,
     ) -> (usize, usize, usize, usize) {
         let sub_w = sp(240);
         let count = match group_index {
@@ -63,7 +66,8 @@ impl MinGuiCompositor {
             g => MENU_GROUPS[g.min(4)].2,
         };
         let sub_h = sp(32) + count * sp(28) + sp(8);
-        let sub_x = 6 + sp(190) + 4;
+        // Sağ kenara taşmasın: ekran genişliğine göre kelepçele.
+        let sub_x = (6 + sp(190) + 4).min(fb_w.saturating_sub(sub_w + 4));
         let cat_y = menu_y + sp(74) + group_index * sp(32) + sp(4);
         let sub_y = cat_y.min(tb_y.saturating_sub(sub_h + 4));
         (sub_x, sub_y, sub_w, sub_h)
@@ -74,8 +78,10 @@ impl MinGuiCompositor {
         group_index: usize,
         item_in_group: usize,
         tb_y: usize,
+        fb_w: usize,
     ) -> (usize, usize, usize, usize) {
-        let (sub_x, sub_y, sub_w, _) = Self::start_menu_submenu_rect(menu_y, group_index, tb_y);
+        let (sub_x, sub_y, sub_w, _) =
+            Self::start_menu_submenu_rect(menu_y, group_index, tb_y, fb_w);
         let x = sub_x + sp(6);
         let y = sub_y + sp(30) + item_in_group * sp(28);
         let w = sub_w.saturating_sub(sp(12));
@@ -88,9 +94,10 @@ impl MinGuiCompositor {
         menu_y: usize,
         index: usize,
         tb_y: usize,
+        fb_w: usize,
     ) -> (usize, usize, usize, usize) {
         let (g, k) = Self::item_group_and_index(index);
-        Self::start_menu_subitem_rect(menu_y, g, k, tb_y)
+        Self::start_menu_subitem_rect(menu_y, g, k, tb_y, fb_w)
     }
 
     /// Menü öğesinin hedef uygulama indeksini döndürür.
@@ -669,7 +676,7 @@ impl MinGuiCompositor {
             let mut results = [0; 32];
             let count = self.start_search_matches(english, &mut results);
             let (sub_x, sub_y, sub_w, sub_h) =
-                Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1));
+                Self::start_search_results_rect(menu_y, active_g, tb_y, count.max(1), fb.width);
             fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
             fb.draw_rounded_rect(sub_x, sub_y, sub_w, sub_h, 8, Color::TASKBAR_BG);
             fb.draw_rounded_rect_outline(sub_x, sub_y, sub_w, sub_h, 8, Color::BORDER);
@@ -797,7 +804,8 @@ impl MinGuiCompositor {
         mx: usize,
         my: usize,
     ) {
-        let (sub_x, sub_y, sub_w, sub_h) = Self::start_menu_submenu_rect(menu_y, group_idx, tb_y);
+        let (sub_x, sub_y, sub_w, sub_h) =
+            Self::start_menu_submenu_rect(menu_y, group_idx, tb_y, fb.width);
 
         fb.draw_shadow(sub_x, sub_y, sub_w, sub_h, Color::SHADOW);
         fb.draw_rounded_rect(sub_x, sub_y, sub_w, sub_h, 8, Color::TASKBAR_BG);
@@ -1002,7 +1010,7 @@ impl MinGuiCompositor {
         for k in 0..count {
             let i = first + k;
             let (name, _col, app_or_code) = menu_items[i];
-            let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y);
+            let r = Self::start_menu_subitem_rect(menu_y, group_idx, k, tb_y, fb.width);
 
             let is_hovered = in_rect(mx, my, r)
                 || (self.start_menu_focus_submenu && self.selected_start_item == k);

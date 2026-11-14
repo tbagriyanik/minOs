@@ -287,7 +287,7 @@ pub struct FileManagerApp {
     pub rename_active: bool,
     pub rename_buf: [u8; diskfs::NAME_MAX],
     pub rename_len: usize,
-    pub focused_control: usize, // 0: Refresh, 1: New, 2: Folder, 3: Delete, 4: Open, 5: List
+    pub focused_control: usize, // 0-4: actions, 5: List, 6: Search
     pub actions_menu_open: bool,
     pub last_click_idx: Option<usize>,
     pub last_click_ms: u64,
@@ -476,21 +476,48 @@ impl FileManagerApp {
         (win_x + win_w.saturating_sub(40), win_y + 32, 28, 22)
     }
 
+    /// "İşlemler" açılır menüsünün pencere içi dikdörtgeni.
+    /// Düğmenin altına açılır; pencere dibine sığmazsa düğmenin üstüne çevrilir
+    /// ve her durumda pencere sınırları içine kelepçelenir.
     pub fn actions_menu_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
     ) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 176)
+        let w = 180usize.min(win_w.saturating_sub(16));
+        let h = 176usize.min(win_h.saturating_sub(8));
+        let btn = Self::actions_button_rect(win_x, win_y, win_w);
+        let mut x = (win_x + win_w).saturating_sub(190).max(win_x + 8);
+        let x_max = (win_x + win_w).saturating_sub(w + 8);
+        if x > x_max {
+            x = x_max;
+        }
+        let below = btn.1 + btn.3 + 4;
+        let above = btn.1.saturating_sub(h + 4);
+        let mut y = if below + h <= win_y + win_h {
+            below
+        } else {
+            above
+        };
+        let y_min = win_y + 4;
+        let y_max = (win_y + win_h).saturating_sub(h + 4);
+        if y < y_min {
+            y = y_min;
+        } else if y > y_max && y_max >= y_min {
+            y = y_max;
+        }
+        (x, y, w, h)
     }
 
     pub fn actions_menu_item_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
         index: usize,
     ) -> (usize, usize, usize, usize) {
-        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w);
+        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w, win_h);
         (x + 4, y + 4 + index * 24, w - 8, 22)
     }
 
@@ -535,6 +562,8 @@ impl FileManagerApp {
 
     /// Izgara görünümü/önizleme için küçük resimler hazır değilse üretir.
     pub fn ensure_thumbs(&mut self, vfs: &VirtualFileSystem) {
+        // Küçük resim çözme (PNG/JPEG) uzun sürebilir; imleç kum saati olsun.
+        let _busy = crate::gui::screens::BusyScope::new();
         if self.thumbs.len() != self.file_count {
             self.rebuild_thumbs(vfs);
         }
@@ -782,7 +811,12 @@ impl FileManagerApp {
     }
 
     pub fn focus_next_control(&mut self) {
-        self.focused_control = (self.focused_control + 1) % 6;
+        self.focused_control = (self.focused_control + 1) % 7;
+    }
+
+    /// Shift+Tab ile bir önceki denetime gider.
+    pub fn focus_prev_control(&mut self) {
+        self.focused_control = (self.focused_control + 6) % 7;
     }
 
     pub fn select_prev(&mut self) {
@@ -1318,6 +1352,8 @@ impl FileManagerApp {
         clipboard: &mut FileClipboard,
         vfs: &mut VirtualFileSystem,
     ) -> usize {
+        // Kopyalama/kesme-taşıma disk I/O'su içerebilir; imleç kum saati olsun.
+        let _busy = crate::gui::screens::BusyScope::new();
         let dest = String::from(self.path());
         if dest == "/media/cdrom" {
             self.status = crate::gui::ui_text("CD-ROM salt okunurdur.", "CD-ROM is read-only.");
@@ -1457,6 +1493,8 @@ impl FileManagerApp {
     /// Geri Dönüşüm Kutusu'na (`/root/Trash`) taşınır. Çöp kutusundayken yapılan
     /// silme işlemi ise kalıcıdır (boşaltma davranışı).
     pub fn delete_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
+        // Toplu silme/taşıma uzun sürebilir; imleç kum saati olsun.
+        let _busy = crate::gui::screens::BusyScope::new();
         if !self.selected_items.iter().any(|&s| s) {
             if self.selected_idx >= self.file_count {
                 return false;
@@ -1607,6 +1645,7 @@ impl FileManagerApp {
     /// Geri Dönüşüm Kutusu'nda seçili öğeyi önceki konumuna değil, `/root/Documents`
     /// klasörüne geri yükler. Öğe adı çakışırsa numaralandırılır.
     pub fn restore_selected(&mut self, vfs: &mut VirtualFileSystem) -> bool {
+        let _busy = crate::gui::screens::BusyScope::new();
         if self.path() != crate::fs::vfs::TRASH_DIR {
             return false;
         }
@@ -1633,6 +1672,7 @@ impl FileManagerApp {
 
     /// Geri Dönüşüm Kutusu'nu boşaltır.
     pub fn empty_trash(&mut self, vfs: &mut VirtualFileSystem) -> usize {
+        let _busy = crate::gui::screens::BusyScope::new();
         let n = vfs.empty_trash();
         if self.path() == crate::fs::vfs::TRASH_DIR {
             self.refresh_from_vfs(vfs);
@@ -2136,6 +2176,16 @@ impl FileManagerApp {
             4,
             Color::BORDER,
         );
+        if self.focused_control == 6 {
+            fb.draw_rounded_rect_outline(
+                search_r.0.saturating_sub(2),
+                search_r.1.saturating_sub(2),
+                search_r.2 + 4,
+                search_r.3 + 4,
+                5,
+                Color::ACCENT_YELLOW,
+            );
+        }
         if self.search_len == 0 {
             MinGuiCompositor::draw_string(
                 fb,
@@ -2170,6 +2220,15 @@ impl FileManagerApp {
                 2,
                 2,
                 Color::TEXT_MAIN,
+            );
+        }
+        if self.focused_control < 5 {
+            fb.draw_rect_outline(
+                actions.0.saturating_sub(2),
+                actions.1.saturating_sub(2),
+                actions.2 + 4,
+                actions.3 + 4,
+                Color::ACCENT_YELLOW,
             );
         }
 
@@ -2620,7 +2679,8 @@ impl FileManagerApp {
             sb.push_str(self.path());
         }
         if self.actions_menu_open {
-            let (menu_x, menu_y, menu_w, menu_h) = Self::actions_menu_rect(win_x, win_y, win_w);
+            let (menu_x, menu_y, menu_w, menu_h) =
+                Self::actions_menu_rect(win_x, win_y, win_w, win_h);
             fb.draw_shadow(menu_x, menu_y, menu_w, menu_h, Color::SHADOW);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
@@ -2638,7 +2698,7 @@ impl FileManagerApp {
                 crate::gui::ui_text("Önizleme", "Preview"),
             ];
             for (i, label) in labels.iter().enumerate() {
-                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, i);
+                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, win_h, i);
                 fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
                 MinGuiCompositor::draw_string_clipped(
                     fb,

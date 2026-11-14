@@ -12,7 +12,9 @@ minOs release notes and future plans.
 - **🎮 FPS 3D Real Performance Metrics:** `FPS 3D Game` (app ID 16) produces real measurements from completed frames: `[FPS3D-METRICS] fps=… min_fps=… frame_ms=… interval_ms=… max_interval_ms=… frames=…` serial output plus live/minimum FPS and frame time on the HUD. Verified via the `[FPS3D] Uygulama açıldı` boot marker.
 - **🧪 FPS 3D Stress Test Automation:** `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game from the Start menu over QMP; 10/30/60-minute runs validate QEMU liveness and positive FPS/min-FPS metrics.
 - **🖼️ Partial Frame Protection on Budget Expiry:** When `RENDER_BUDGET_MS` is exceeded the half-drawn framebuffer is never shown; the FPS 3D content region is backed up statically and restored if the render cannot complete.
-- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour (271 host tests).
+- **🎮 FPS Game Menus:** Start and result menus were added, with options to restart or exit after the game ends.
+- **⌨️ Form Keyboard Shortcuts:** Tab navigation, Enter confirmation and Esc cancellation are supported on the Welcome screen, installer and File Manager controls.
+- **⏱️ Deterministic TimeBudget Tests:** Injectable test clock covering time advance, exact-boundary timeout, zero budget, backward clock saturation, `reset()` and `OperationGuard` behaviour (290 host tests).
 - **🎵 Direct WAV Playback:** Double-clicking a WAV file in File Manager opens it directly in Music Player.
 - **🖼️ Tiled Desktop Wallpaper:** Image Viewer can now set the loaded image as a tiled desktop wallpaper.
 - **🎨 New Desktop Images:** Three new desktop images (`desktop1.png`–`desktop3.png`) added to Settings.

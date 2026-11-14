@@ -161,14 +161,22 @@ minos/
 > Son güncelleme: 13 Kasım 2026 (v2.4.0)
 | Ölçüt | Değer |
 | :--- | :--- |
-| **Toplam Rust Kaynak Dosyası** | 196 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
-| **Toplam Kod Satırı (ham)** | ~145.300 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Rust Kaynak Dosyası** | 202 dosya (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
+| **Toplam Kod Satırı (ham)** | 139.168 satır (`src/**/*.rs` + `tests/**/*.rs` + `build.rs`) |
 | **Dil** | Rust (Nightly, `no_std`) |
 | **Derleme Hedefi** | `x86_64-minos` (özel bare-metal) |
-| **Birim Testleri (`test_host.ps1`)** | 271 test (0 hata, %100 başarılı) |
+| **Birim Testleri (`test_host.ps1`)** | 290 test (0 hata, %100 başarılı) |
 | **Yerleşik Uygulama Sayısı** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü + Pencere Yöneticisi |
 | **Kernel / ISO Boyutu** | ~2.0 MB Çekirdek / ~6.0 MB Hibrit Bootable ISO |
 
 ---
 
+## Formlar ve FPS Oyunu için Klavye Kısayolları
+
+- **Tab:** Desteklenen form kontrolleri arasında odağı ilerletir.
+- **Enter:** Odaktaki seçeneği veya düğmeyi onaylar.
+- **Esc:** Açık onay penceresinden vazgeçer; Hoş Geldin ekranında henüz kaydedilmemiş seçimleri iptal eder.
+- FPS Oyunu başlangıç menüsünden Enter, Space veya fare tıklamasıyla başlatılabilir; sonuç ekranından yeniden başlatılabilir ya da menüye dönülebilir.
+
+Bu kısayollar Hoş Geldin ekranı dahil olmak üzere kurulum sihirbazı ve Dosya Yöneticisi'nin desteklenen arama/işlem kontrollerinde kullanılabilir.
 

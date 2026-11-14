@@ -756,6 +756,8 @@ pub fn render_html_to_lines(
     let mut cur_line_w: usize = 0;
     let mut cur_line_tag = HtmlTagType::Normal;
     let mut cur_line_align = TextAlign::Left;
+    // Grid içindeyken aktif öğenin `grid-area` değeri (hücre yerleşimi için).
+    let mut grid_item_area: Option<String> = None;
 
     // Tablo durumu: mevcut satırda kaçıncı hücreyiz.
     let mut table_cell_count: usize = 0;
@@ -771,6 +773,12 @@ pub fn render_html_to_lines(
     let mut grid_current_row: usize = 0;
     let mut grid_current_col: usize = 0;
     let mut grid_col_count: usize = 0;
+    // `grid-template-areas` şablonu: adlandırılmış alanların hücre
+    // dikdörtgenleri bu konumlandırıcıdan alınır (`None` = şablon yok).
+    let mut grid_placer: Option<super::css::GridPlacer> = None;
+    // Şablon alanlarına yerleştirilen öğelerin dikim dikdörtgenleri
+    // (konteyner kapanışında `render_grid_areas` ile çizilir).
+    let mut grid_line_rects: Vec<super::css::GridAreaRect> = Vec::new();
 
     let tag_indent = |t: HtmlTagType| -> usize {
         let base: usize = match t {
@@ -982,16 +990,9 @@ pub fn render_html_to_lines(
             let is_link = active_link.is_some();
             let onclick_str = active_onclick.as_deref().unwrap_or("");
             let elem_id_str = active_id.as_deref().unwrap_or("");
-            // CSS Grid modu: kelimeyi grid hucreye ekle
+            // CSS Grid modu: kelimeyi aktif öğenin hücresine ekle.
             if in_grid && !word_buf.is_empty() {
-                while grid_cells.len() <= grid_current_row {
-                    grid_cells.push(Vec::new());
-                }
-                while grid_cells[grid_current_row].len() <= grid_current_col {
-                    grid_cells[grid_current_row].push(Vec::new());
-                }
-                let cell_spans = &mut grid_cells[grid_current_row][grid_current_col];
-                cell_spans.push(TextSpan {
+                let word_span = TextSpan {
                     text: core::mem::take(&mut word_buf),
                     color: current_color,
                     bg_color: current_bg,
@@ -1008,12 +1009,32 @@ pub fn render_html_to_lines(
                     underline: current_underline,
                     onclick: String::from(onclick_str),
                     elem_id: String::from(elem_id_str),
-                });
-                grid_current_col += 1;
-                if grid_current_col >= grid_col_count.max(1) {
-                    grid_current_col = 0;
-                    grid_current_row += 1;
-                    grid_cells.push(Vec::new());
+                };
+                if let Some(placer) = grid_placer.as_mut() {
+                    // Konteyner metni (alan adı yok) şablon hücrelerine (`.` dahil)
+                    // yazılmaz; otomatik akış şablon dışındaki hücrelere yerleşir.
+                    let slot = placer.place(grid_item_area.as_deref());
+                    while grid_cells.len() <= slot.row {
+                        grid_cells.push(Vec::new());
+                    }
+                    while grid_cells[slot.row].len() <= slot.col {
+                        grid_cells[slot.row].push(Vec::new());
+                    }
+                    grid_cells[slot.row][slot.col].push(word_span);
+                } else {
+                    while grid_cells.len() <= grid_current_row {
+                        grid_cells.push(Vec::new());
+                    }
+                    while grid_cells[grid_current_row].len() <= grid_current_col {
+                        grid_cells[grid_current_row].push(Vec::new());
+                    }
+                    grid_cells[grid_current_row][grid_current_col].push(word_span);
+                    grid_current_col += 1;
+                    if grid_current_col >= grid_col_count.max(1) {
+                        grid_current_col = 0;
+                        grid_current_row += 1;
+                        grid_cells.push(Vec::new());
+                    }
                 }
             } else {
                 flush_word(
@@ -1205,6 +1226,10 @@ pub fn render_html_to_lines(
                 if matched.align != TextAlign::Left {
                     cur_line_align = matched.align;
                 }
+                // CSS Grid: açılış etiketinin `grid-area` adı hücre yerleşiminde kullanılır.
+                if in_grid {
+                    grid_item_area = matched.grid_area.clone();
+                }
                 // CSS sol kenar boşluğu
                 cur_line_indent.set(matched.indent_px);
                 current_bold = matched.bold;
@@ -1234,6 +1259,20 @@ pub fn render_html_to_lines(
                     } else {
                         grid_columns.len()
                     };
+                    // `grid-template-areas`: adlandırılmış alan dikdörtgenleri
+                    // (satır aralığına yayılmış alanlar dahil) yerleşime katılır.
+                    // Hücreler hâlâ sıralı akışla doldurulur; alan dikdörtgenleri
+                    // konteyner kapanışında ölçülen hücrelerle birlikte çizilir.
+                    grid_line_rects.clear();
+                    grid_placer = if matched.grid_template_areas.is_empty() {
+                        None
+                    } else {
+                        Some(super::css::GridPlacer::new(
+                            &matched.grid_template_areas,
+                            grid_col_count,
+                        ))
+                    };
+                    grid_item_area = None;
                     // İlk satırı oluştur
                     grid_cells.push(Vec::new());
                     // Grid konteynerı için mevcut satırı temizle
@@ -2449,16 +2488,31 @@ pub fn render_html_to_lines(
             } else {
                 // CSS Grid konteynerını kapat ve grid'i render et
                 if in_grid {
-                    render_grid(
-                        out_lines,
-                        &mut grid_cells,
-                        &grid_columns,
-                        grid_gap,
-                        grid_current_row,
-                        grid_current_col,
-                        wrap_width_px,
-                        max_lines,
-                    );
+                    if let Some(placer) = grid_placer.as_mut() {
+                        // `grid-template-areas`: hücreler alan adlarına göre
+                        // yerleştirildi; sıralı çizim yeniden düzenlerdi.
+                        render_grid_areas(
+                            out_lines,
+                            &grid_cells,
+                            &grid_columns,
+                            grid_gap,
+                            placer.placed_rects(),
+                            wrap_width_px,
+                            max_lines,
+                        );
+                    } else {
+                        render_grid(
+                            out_lines,
+                            &mut grid_cells,
+                            &grid_columns,
+                            grid_gap,
+                            grid_current_row,
+                            grid_current_col,
+                            wrap_width_px,
+                            max_lines,
+                        );
+                    }
+
                     in_grid = false;
                     grid_cells.clear();
                     grid_columns.clear();
@@ -2466,6 +2520,8 @@ pub fn render_html_to_lines(
                     grid_current_row = 0;
                     grid_current_col = 0;
                     grid_col_count = 0;
+                    grid_placer = None;
+                    grid_item_area = None;
                     // Grid sonrasi mevcut satiri temizle
                     flush_line(
                         out_lines,
@@ -2837,6 +2893,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_render_grid_areas_places_named_areas() {
+        let template = [
+            vec![String::from("header"), String::from("header")],
+            vec![String::from("side"), String::from("main")],
+        ];
+        let cols = [super::super::types::GridTrack::Fraction(1); 2];
+        let span = |text: &str| TextSpan {
+            text: String::from(text),
+            color: 0,
+            bg_color: None,
+            bg_image: None,
+            is_link: false,
+            link_url: String::new(),
+            is_button: false,
+            is_image: false,
+            image_width: 0,
+            image_height: 0,
+            image_rgb: None,
+            image_url: String::new(),
+            onclick: String::new(),
+            elem_id: String::new(),
+            bold: false,
+            underline: false,
+        };
+        let mut placer = super::super::css::GridPlacer::new(&template, 2);
+        let header = placer.place(Some("header"));
+        let side = placer.place(Some("side"));
+        assert_eq!((header.row, header.col, header.col_span), (0, 0, 2));
+        assert_eq!((side.row, side.col), (1, 0));
+
+        // `GridPlacer` hücreleri: header iki hücreye yayılır.
+        let cells = vec![
+            vec![vec![span("HEADER")], vec![span("HEADER")]],
+            vec![vec![span("SIDE")], vec![span("MAIN")]],
+        ];
+        let mut lines = Vec::new();
+        render_grid_areas(&mut lines, &cells, &cols, 0, placer.placed_rects(), 400, 50);
+        assert!(!lines.is_empty());
+        let flat: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.text.as_str())
+            .collect();
+        assert!(flat.contains("HEADER"));
+        assert!(flat.contains("SIDE"));
+        assert!(flat.contains("MAIN"));
+        // Aynı satırdaki öğeler sütun sırasıyla (SIDE, MAIN) gelmeli.
+        assert!(flat.find("SIDE") < flat.find("MAIN"));
+    }
+
+    #[test]
     fn test_resolve_url() {
         let base = "http://example.com/sub/page.html";
         assert_eq!(
@@ -2996,6 +3103,134 @@ fn render_grid(
             x_offset += col_widths[col];
         }
 
+        if !line_spans.is_empty() {
+            out_lines.push(BrowserLine {
+                spans: line_spans,
+                tag: HtmlTagType::Normal,
+                indent: 0,
+                align: TextAlign::Left,
+            });
+        }
+    }
+}
+
+/// `grid-template-areas` şablonlu grid konteynerı için çizim.
+///
+/// Hücreler (`grid_cells`) `GridPlacer` ile zaten alan dikdörtgenlerine
+/// yerleştirilmiştir; burada dikdörtgenlerin sütun genişliklerine göre piksel
+/// konumları hesaplanıp satırlar üretilir. Aynı satırdaki hücreler tek bir
+/// `BrowserLine` içinde soldan sağa birleştirilir.
+fn render_grid_areas(
+    out_lines: &mut Vec<BrowserLine>,
+    grid_cells: &[Vec<Vec<TextSpan>>],
+    grid_columns: &[super::types::GridTrack],
+    grid_gap: usize,
+    placed: &[super::css::GridAreaRect],
+    wrap_width_px: usize,
+    max_lines: usize,
+) {
+    if grid_cells.is_empty() {
+        return;
+    }
+    // Yerleşmiş bir alan yoksa öğeler otomatik akış hücrelerinde; sıralı çizim
+    // yeterlidir.
+    if placed.is_empty() {
+        let mut cells: Vec<Vec<Vec<TextSpan>>> = grid_cells.to_vec();
+        render_grid(
+            out_lines,
+            &mut cells,
+            grid_columns,
+            grid_gap,
+            0,
+            0,
+            wrap_width_px,
+            max_lines,
+        );
+        return;
+    }
+
+    let col_count = if grid_columns.is_empty() {
+        1
+    } else {
+        grid_columns.len()
+    }
+    .max(1);
+    // Sütun genişlikleri `render_grid` ile aynı kuralla ölçülür.
+    let mut col_widths: Vec<usize> = vec![0; col_count];
+    let avail_w =
+        wrap_width_px.saturating_sub(grid_gap.saturating_mul(col_count.saturating_sub(1)));
+    let mut total_fr: u32 = 0;
+    let mut total_fixed: usize = 0;
+    for (i, track) in grid_columns.iter().enumerate().take(col_count) {
+        match track {
+            super::types::GridTrack::Fixed(w) => {
+                col_widths[i] = *w;
+                total_fixed += w;
+            }
+            super::types::GridTrack::Fraction(fr) => total_fr += fr,
+            super::types::GridTrack::Auto => {}
+        }
+    }
+    let remaining_w = avail_w.saturating_sub(total_fixed);
+    if total_fr > 0 && remaining_w > 0 {
+        let per_fr = remaining_w as f32 / total_fr as f32;
+        for (i, track) in grid_columns.iter().enumerate().take(col_count) {
+            if let super::types::GridTrack::Fraction(fr) = track {
+                col_widths[i] = (per_fr * *fr as f32) as usize;
+            }
+        }
+    }
+    let x_of = |col: usize| -> usize {
+        col_widths.iter().take(col.min(col_count)).sum::<usize>() + grid_gap.saturating_mul(col)
+    };
+    // Alanın kapladığı satır aralığının en büyüğü (örtük satırlar dahil).
+    let mut row_count = grid_cells.len();
+    for rect in placed {
+        row_count = row_count.max(rect.row_end + 1);
+    }
+
+    for row in 0..row_count {
+        if out_lines.len() >= max_lines {
+            break;
+        }
+        // Aynı satıra düşen öğeleri sütun sırasına göre topla.
+        let mut row_items: Vec<(usize, &Vec<TextSpan>)> = Vec::new();
+        for (line, cells) in grid_cells.iter().enumerate() {
+            for (col, spans) in cells.iter().enumerate() {
+                if spans.is_empty() {
+                    continue;
+                }
+                // Hücre (line, col) hangi yerleşmiş dikdörtgene ait?
+                let target = placed
+                    .iter()
+                    .find(|r| r.row_start <= line && line <= r.row_end)
+                    .map(|r| (r.row_start, r.col_start))
+                    .unwrap_or((line, col));
+                if target.0 == row {
+                    row_items.push((target.1, spans));
+                }
+            }
+        }
+        row_items.sort_by_key(|(col, _)| *col);
+
+        let mut line_spans: Vec<TextSpan> = Vec::new();
+        for (col, spans) in row_items {
+            let x = x_of(col);
+            let mut cell_spans = Vec::with_capacity(spans.len());
+            for span in spans {
+                let mut s = span.clone();
+                if x > 0 {
+                    s.text = format!("{}{}", " ".repeat(x.min(50)), s.text);
+                }
+                cell_spans.push(s);
+            }
+            if let Some(first) = cell_spans.first_mut() {
+                if !line_spans.is_empty() {
+                    first.text.insert(0, ' ');
+                }
+            }
+            line_spans.extend(cell_spans);
+        }
         if !line_spans.is_empty() {
             out_lines.push(BrowserLine {
                 spans: line_spans,

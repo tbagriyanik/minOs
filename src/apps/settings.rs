@@ -1662,6 +1662,22 @@ impl SystemSettings {
         }
     }
 
+    /// Shift+Tab ile bir önceki denetime gider.
+    pub fn focus_prev_control(&mut self) {
+        let total = match self.active_tab {
+            0 => 11,
+            1 => 32,
+            2 => 7,
+            3 => 7,
+            4 => 8,
+            _ => 8,
+        };
+        self.focused_control = (self.focused_control + total - 1) % total;
+        if self.focused_control < 5 {
+            self.active_tab = self.focused_control;
+        }
+    }
+
     pub fn select_tab_prev(&mut self) {
         self.active_tab = (self.active_tab + 5 - 1) % 5;
         self.focused_control = self.active_tab;
@@ -2338,6 +2354,10 @@ impl SystemSettings {
                     wall_lbl.as_str(),
                     Color::ACCENT_BLUE,
                 );
+                // Çözülmemiş küçük resim varsa kum saati imlecini yalnızca bir kez
+                // (kapsam koruyucu ile) aç; sayaç kipinde her karede true/false
+                // çağrısı sayacı şişirir ve imleç kalıcı meşgul kalırdı.
+                let mut _wall_busy: Option<crate::gui::screens::BusyScope> = None;
                 for i in 0..crate::gui::wallpaper::COUNT {
                     let r = Self::wallpaper_btn_rect(win_x, win_y, i);
                     if r.1 + r.3 > win_y + win_h {
@@ -2345,7 +2365,9 @@ impl SystemSettings {
                     }
                     if i >= 7 && !crate::gui::wallpaper::thumb_ready(i - 7) {
                         // PNG küçük resmi henüz çözülmemiş: bekleme imleci ve yer tutucu.
-                        crate::gui::screens::set_cursor_busy(true);
+                        if _wall_busy.is_none() {
+                            _wall_busy = Some(crate::gui::screens::BusyScope::new());
+                        }
                         fb.draw_rect(r.0, r.1, r.2, r.3, Color::TITLE_BAR_INACTIVE);
                         fb.draw_rect_outline(r.0, r.1, r.2, r.3, Color::BORDER);
                         let mut lbl = TextBuf::new();
@@ -2359,7 +2381,6 @@ impl SystemSettings {
                             (r.0, r.1, r.2, r.3),
                         );
                     } else {
-                        crate::gui::screens::set_cursor_busy(false);
                         crate::gui::wallpaper::draw_preview(
                             fb,
                             r.0 + 2,

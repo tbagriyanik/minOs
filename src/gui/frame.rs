@@ -14,7 +14,10 @@ static mut FPS3D_FRAME_BACKUP: [u32; drivers::video::BACKBUFFER_LEN] =
     [0; drivers::video::BACKBUFFER_LEN];
 
 /// Uygulama çizimi için kare bütçesi (ms).
-const RENDER_BUDGET_MS: u64 = 16;
+// Kare hedefi 16 ms olsa da raycasting render'ı küçük zamanlama sapmalarıyla
+// bunu aşabilir. 16 ms bütçesi aşıldığında içerik geri alındığı için oyun hiç
+// görünmeyebiliyordu; render bütçesine güvenli bir pay bırakıyoruz.
+const RENDER_BUDGET_MS: u64 = 24;
 /// State for the main event loop.
 pub struct EventLoopState {
     pub last_mouse_x: usize,

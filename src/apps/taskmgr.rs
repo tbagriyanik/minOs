@@ -202,6 +202,21 @@ impl TaskManagerApp {
         self.launch_menu_open = false;
     }
 
+    /// Shift+Tab ile bir önceki denetime gider.
+    pub fn focus_prev_control(&mut self) {
+        if self.active_tab == 0 {
+            let focusable_count = (4 + self.proc_count).max(1);
+            self.focused_control = (self.focused_control + focusable_count - 1) % focusable_count;
+            if self.focused_control >= 4 {
+                self.selected = self.focused_control - 4;
+            }
+        } else {
+            // İki sekme olduğundan ters yön de aynı adımdır.
+            self.focused_control = (self.focused_control + 1) % 2;
+        }
+        self.launch_menu_open = false;
+    }
+
     pub fn applications_tab_rect(win_x: usize, win_y: usize) -> (usize, usize, usize, usize) {
         (win_x + 10, win_y + TM_TAB_Y, 130, TM_TAB_H)
     }
@@ -234,25 +249,64 @@ impl TaskManagerApp {
         )
     }
 
+    /// Menü dikdörtgenini pencere içine kelepçeler: alta sığmazsa eylem
+    /// satırının üstüne açılır, sağ/sol taşmada pencere sınırına çekilir.
+    fn clamp_menu(
+        x: usize,
+        y_below: usize,
+        y_above: usize,
+        w: usize,
+        h: usize,
+        win_x: usize,
+        win_y: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
+        let w = w.min(win_w.saturating_sub(16));
+        let h = h.min(win_h.saturating_sub(8));
+        let mut x = x.max(win_x + 8);
+        let x_max = (win_x + win_w).saturating_sub(w + 8);
+        if x > x_max {
+            x = x_max;
+        }
+        let mut y = if y_below + h <= win_y + win_h {
+            y_below
+        } else {
+            y_above
+        };
+        let y_min = win_y + 4;
+        let y_max = (win_y + win_h).saturating_sub(h + 4);
+        if y < y_min {
+            y = y_min;
+        } else if y > y_max && y_max >= y_min {
+            y = y_max;
+        }
+        (x, y, w, h)
+    }
+
     pub fn actions_menu_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
     ) -> (usize, usize, usize, usize) {
         let kill = Self::kill_btn_rect(win_x, win_y, win_w);
         let menu_w = 180.min(win_w.saturating_sub(24));
         // Menüyü kill button'un tam soluna yerleştir, asla üzerine gelmesin
         let x = kill.0.saturating_sub(menu_w + 12).max(win_x + 12);
-        (x, win_y + TM_ACTION_Y + TM_ACTION_H + 4, menu_w, 52)
+        let below = win_y + TM_ACTION_Y + TM_ACTION_H + 4;
+        let above = (win_y + TM_ACTION_Y).saturating_sub(52 + 4);
+        Self::clamp_menu(x, below, above, menu_w, 52, win_x, win_y, win_w, win_h)
     }
 
     pub fn actions_menu_item_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
         index: usize,
     ) -> (usize, usize, usize, usize) {
-        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w);
+        let (x, y, w, _) = Self::actions_menu_rect(win_x, win_y, win_w, win_h);
         (x + 4, y + 4 + index * 22, w - 8, 20)
     }
 
@@ -260,30 +314,30 @@ impl TaskManagerApp {
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
     ) -> (usize, usize, usize, usize) {
         let button = Self::launch_button_rect(win_x, win_y, win_w);
         let kill = Self::kill_btn_rect(win_x, win_y, win_w);
         let menu_w = 260.min(win_w.saturating_sub(24));
+        let menu_h = 28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H;
         let x = button
             .0
             .saturating_sub(menu_w)
             .max(win_x + 12)
             .min(kill.0.saturating_sub(menu_w + 12).max(win_x + 12));
-        (
-            x,
-            win_y + TM_ACTION_Y + TM_ACTION_H + 4,
-            menu_w,
-            28 + LAUNCH_APP_COUNT * LAUNCH_ITEM_H,
-        )
+        let below = win_y + TM_ACTION_Y + TM_ACTION_H + 4;
+        let above = (win_y + TM_ACTION_Y).saturating_sub(menu_h + 4);
+        Self::clamp_menu(x, below, above, menu_w, menu_h, win_x, win_y, win_w, win_h)
     }
 
     pub fn launch_item_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
         index: usize,
     ) -> (usize, usize, usize, usize) {
-        let (x, y, w, _) = Self::launch_menu_rect(win_x, win_y, win_w);
+        let (x, y, w, _) = Self::launch_menu_rect(win_x, win_y, win_w, win_h);
         (x + 4, y + 4 + index * LAUNCH_ITEM_H, w - 8, LAUNCH_ITEM_H)
     }
 
@@ -293,9 +347,10 @@ impl TaskManagerApp {
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
     ) -> Option<usize> {
         for index in 0..LAUNCH_APP_COUNT {
-            let rect = Self::launch_item_rect(win_x, win_y, win_w, index);
+            let rect = Self::launch_item_rect(win_x, win_y, win_w, win_h, index);
             if mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3 {
                 return Some(index);
             }
@@ -1016,7 +1071,8 @@ impl TaskManagerApp {
         );
 
         if self.actions_menu_open {
-            let (menu_x, menu_y, menu_w, menu_h) = Self::actions_menu_rect(win_x, win_y, win_w);
+            let (menu_x, menu_y, menu_w, menu_h) =
+                Self::actions_menu_rect(win_x, win_y, win_w, win_h);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
             for (index, label) in [
@@ -1026,7 +1082,7 @@ impl TaskManagerApp {
             .iter()
             .enumerate()
             {
-                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, index);
+                let item = Self::actions_menu_item_rect(win_x, win_y, win_w, win_h, index);
                 fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
                 MinGuiCompositor::draw_string_clipped(
                     fb,
@@ -1045,11 +1101,12 @@ impl TaskManagerApp {
         }
 
         if self.launch_menu_open {
-            let (menu_x, menu_y, menu_w, menu_h) = Self::launch_menu_rect(win_x, win_y, win_w);
+            let (menu_x, menu_y, menu_w, menu_h) =
+                Self::launch_menu_rect(win_x, win_y, win_w, win_h);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
             for index in 0..LAUNCH_APP_COUNT {
-                let item = Self::launch_item_rect(win_x, win_y, win_w, index);
+                let item = Self::launch_item_rect(win_x, win_y, win_w, win_h, index);
                 let color = if index == self.launch_selected {
                     Color::ACCENT_BLUE
                 } else {

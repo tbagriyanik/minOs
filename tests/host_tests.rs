@@ -137,6 +137,10 @@ pub mod boot {
             None
         }
     }
+    pub mod console {
+        pub fn serial_print(_s: &str) {}
+        pub fn serial_print_dec(_v: u64) {}
+    }
 }
 
 // Watchdog kesme-bağımsız denetimde uygulama bağlamını okur; host testinde
@@ -403,3 +407,10 @@ mod host_driver_tests;
 #[cfg(test)]
 #[path = "host_compression_tests.rs"]
 mod host_compression_tests;
+
+#[path = "../src/mm/memory/compress.rs"]
+pub mod mzram_compress;
+
+#[cfg(test)]
+#[path = "host_mzram_tests.rs"]
+mod host_mzram_tests;

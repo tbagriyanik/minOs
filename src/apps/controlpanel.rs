@@ -16,6 +16,10 @@ pub const TAB_COUNT: usize = 4;
 
 static ACTIVE_TAB: AtomicUsize = AtomicUsize::new(0);
 static REFRESHED_AT_MS: AtomicU64 = AtomicU64::new(0);
+/// Klavye (Tab / Shift+Tab) ile gezilen odaklı denetim:
+/// 0..TAB_COUNT sekmeler, TAB_COUNT "Ayarlar" düğmesi,
+/// TAB_COUNT+1 "Ağ Testi" (yalnız Ağ sekmesi), TAB_COUNT+2 "Performans Testi" (yalnız Testler sekmesi).
+static FOCUSED_CONTROL: AtomicUsize = AtomicUsize::new(0);
 /// 0: bos, 1: yanit bekleniyor, 2: basarili, 3: basarisiz.
 static NET_TEST_STATE: AtomicUsize = AtomicUsize::new(0);
 static NET_TEST_START_MS: AtomicU64 = AtomicU64::new(0);
@@ -53,7 +57,7 @@ static BENCH_STEPS: AtomicU32 = AtomicU32::new(0);
 /// Performans testinin süresi (~3 sn, 33 ms kare ile).
 const PERF_TICKS: u32 = 90;
 
-fn perf_phase() -> PerfPhase {
+pub fn perf_phase() -> PerfPhase {
     match PERF_PHASE.load(Ordering::Relaxed) {
         1 => PerfPhase::Collecting,
         2 => PerfPhase::Finished,
@@ -178,9 +182,100 @@ pub fn select_tab(tab: usize) {
     }
 }
 
+/// Odaklı denetim sayısı; yalnızca etkin sekmede görünen düğmeler sayılır.
+fn focusable_count() -> usize {
+    TAB_COUNT + 1 + usize::from(active_tab() == 1) + usize::from(active_tab() == 3)
+}
+
+/// Odaklı denetim indeksini döndürür.
+pub fn focused_control() -> usize {
+    FOCUSED_CONTROL
+        .load(Ordering::Relaxed)
+        .min(focusable_count().saturating_sub(1))
+}
+
+/// Tab / Shift+Tab ile odaklı denetime geçer.
+pub fn focus_next_control(reverse: bool) {
+    let count = focusable_count();
+    if count == 0 {
+        return;
+    }
+    let cur = focused_control();
+    FOCUSED_CONTROL.store(
+        if reverse {
+            (cur + count - 1) % count
+        } else {
+            (cur + 1) % count
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Etkin sekmeye göre sol/sağ ok ile sekme değiştirir.
+pub fn select_tab_step(forward: bool) {
+    let cur = active_tab();
+    let next = if forward {
+        (cur + 1) % TAB_COUNT
+    } else {
+        (cur + TAB_COUNT - 1) % TAB_COUNT
+    };
+    select_tab(next);
+}
+
+/// Odaklı denetimin ekran dikdörtgeni (çizim ve Enter eşlemesi ortak kullanır).
+pub fn focused_rect(
+    win_x: usize,
+    win_y: usize,
+    win_w: usize,
+    win_h: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    let f = focused_control();
+    if f < TAB_COUNT {
+        return Some(tab_rect(win_x, win_y, win_w, f));
+    }
+    if f == TAB_COUNT {
+        return Some(refresh_btn_rect(win_x, win_y, win_w, win_h));
+    }
+    if f == TAB_COUNT + 1 && active_tab() == 1 {
+        return Some(net_test_btn_rect(win_x, win_y, win_w, win_h));
+    }
+    if f == TAB_COUNT + 2 && active_tab() == 3 {
+        return Some(perf_btn_rect(win_x, win_y, win_w, win_h));
+    }
+    None
+}
+
+/// Odaklı denetimin Enter ile tetiklediği eylem.
+pub enum CpAction {
+    None,
+    OpenSettings,
+    NetTest,
+    PerfTest,
+}
+
+/// Odaklı denetimi etkinleştirir; ana eylemler `event_loop` tarafından yürütülür.
+pub fn activate_focused() -> CpAction {
+    let f = focused_control();
+    if f < TAB_COUNT {
+        select_tab(f);
+        return CpAction::None;
+    }
+    if f == TAB_COUNT {
+        return CpAction::OpenSettings;
+    }
+    if f == TAB_COUNT + 1 && active_tab() == 1 {
+        return CpAction::NetTest;
+    }
+    if f == TAB_COUNT + 2 && active_tab() == 3 {
+        return CpAction::PerfTest;
+    }
+    CpAction::None
+}
+
 /// Pencere kapatıldığında sekmeyi başa alır.
 pub fn reset() {
     ACTIVE_TAB.store(0, Ordering::Relaxed);
+    FOCUSED_CONTROL.store(0, Ordering::Relaxed);
     NET_TEST_STATE.store(0, Ordering::Relaxed);
     REFRESHED_AT_MS.store(0, Ordering::Relaxed);
 }
@@ -960,6 +1055,17 @@ pub fn render_content(
             by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2,
             crate::gui::ui_text("Performans Testini Başlat", "Start Performance Test"),
             MinGuiCompositor::text_on(bg),
+        );
+    }
+
+    // Klavye odağı (Tab) göstergesi: odaklı denetimin çevresine halka çiz.
+    if let Some(r) = focused_rect(win_x, win_y, win_w, win_h) {
+        fb.draw_rect_outline(
+            r.0.saturating_sub(1),
+            r.1.saturating_sub(1),
+            r.2.saturating_add(2),
+            r.3.saturating_add(2),
+            Color::ACCENT_BLUE,
         );
     }
 }

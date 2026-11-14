@@ -633,22 +633,25 @@ pub fn fetch_once(
                     let mut hello = Vec::new();
                     let mut ecdhe_secret = [0u8; 32];
                     let mut x25519_secret = [0u8; 32];
-                    crate::drivers::tls::build_client_hello_with_alpn(
+                    let mut psk = None;
+                    crate::drivers::tls::build_client_hello_cached(
                         host_str,
                         &client_random,
                         &mut hello,
                         &mut ecdhe_secret,
                         &mut x25519_secret,
-                        false,
-                        None,
-                        None,
                         &[b"h2", b"http/1.1"],
+                        &mut psk,
                     );
                     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                     let mut session = TlsSession::new(host_str, client_random);
                     session.note_client_hello(ch_body);
                     session.set_client_ecdhe_secret(ecdhe_secret);
                     session.set_client_x25519_secret(x25519_secret);
+                    // Oturum yeniden kullanımı PSK'sı varsa sunucuya teklif edilir.
+                    if let Some(ref p) = psk {
+                        session.set_psk(p);
+                    }
 
                     socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -666,7 +669,11 @@ pub fn fetch_once(
                         let mut hs = Vec::new();
                         match session.process_records(&mut hs, &mut app) {
                             Ok(_) => {}
-                            Err(_) => return Err(E_TLS),
+                            Err(_) => {
+                                // Sunucu PSK'yı reddettiyse önbellek kaydı düşer.
+                                session.discard_psk_on_failure();
+                                return Err(E_TLS);
+                            }
                         }
 
                         if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished {
@@ -868,7 +875,11 @@ fn read_http_response(
                     let mut hs = Vec::new();
                     match session.process_records(&mut hs, &mut app) {
                         Ok(_) => {}
-                        Err(_) => return Err(E_TLS),
+                        Err(_) => {
+                            // Sunucu PSK'yı reddettiyse önbellek kaydı düşer.
+                            session.discard_psk_on_failure();
+                            return Err(E_TLS);
+                        }
                     }
                     if !app.is_empty() {
                         let end = (total + app.len()).min(resp_buf.len());
@@ -932,22 +943,25 @@ fn fetch_https(
     let mut hello = Vec::new();
     let mut ecdhe_secret = [0u8; 32];
     let mut x25519_secret = [0u8; 32];
-    crate::drivers::tls::build_client_hello_with_alpn(
+    let mut psk = None;
+    crate::drivers::tls::build_client_hello_cached(
         host_str,
         &client_random,
         &mut hello,
         &mut ecdhe_secret,
         &mut x25519_secret,
-        false,
-        None,
-        None,
         &[b"h2", b"http/1.1"],
+        &mut psk,
     );
     let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
     let mut session = TlsSession::new(host_str, client_random);
     session.note_client_hello(ch_body);
     session.set_client_ecdhe_secret(ecdhe_secret);
     session.set_client_x25519_secret(x25519_secret);
+    // Oturum yeniden kullanımı PSK'sı varsa sunucuya teklif edilir.
+    if let Some(ref p) = psk {
+        session.set_psk(p);
+    }
 
     socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -965,7 +979,11 @@ fn fetch_https(
         let mut hs = Vec::new();
         match session.process_records(&mut hs, &mut app) {
             Ok(_) => {}
-            Err(_) => return Err(E_TLS),
+            Err(_) => {
+                // Sunucu PSK'yı reddettiyse önbellek kaydı düşer.
+                session.discard_psk_on_failure();
+                return Err(E_TLS);
+            }
         }
 
         // Sunucu Finished doğrulandıysa istemci Finished'ı gönder.
@@ -1164,22 +1182,24 @@ pub(crate) fn http_get_impl(
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
                         let mut x25519_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello_with_alpn(
+                        let mut psk = None;
+                        crate::drivers::tls::build_client_hello_cached(
                             host_str,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
                             &mut x25519_secret,
-                            false,
-                            None,
-                            None,
                             &[b"h2", b"http/1.1"],
+                            &mut psk,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut session = TlsSession::new(host_str, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
                         session.set_client_x25519_secret(x25519_secret);
+                        if let Some(ref p) = psk {
+                            session.set_psk(p);
+                        }
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -1196,7 +1216,12 @@ pub(crate) fn http_get_impl(
                             let mut hs = Vec::new();
                             match session.process_records(&mut hs, &mut app) {
                                 Ok(_) => {}
-                                Err(_) => return Err(E_TLS),
+                                Err(_) => {
+                                    // Sunucu PSK'yı reddettiyse önbellek kaydı düşer;
+                                    // sonraki bağlantı tam el sıkışma ile kurulur.
+                                    session.discard_psk_on_failure();
+                                    return Err(E_TLS);
+                                }
                             }
 
                             if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished
@@ -2103,22 +2128,24 @@ impl WebSocketConnection {
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
                         let mut x25519_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello_with_alpn(
+                        let mut psk = None;
+                        crate::drivers::tls::build_client_hello_cached(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
                             &mut x25519_secret,
-                            false,
-                            None,
-                            None,
                             &[b"h2", b"http/1.1"],
+                            &mut psk,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
                         session.set_client_x25519_secret(x25519_secret);
+                        if let Some(ref p) = psk {
+                            session.set_psk(p);
+                        }
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -2135,7 +2162,12 @@ impl WebSocketConnection {
                             let mut hs = Vec::new();
                             match session.process_records(&mut hs, &mut app) {
                                 Ok(_) => {}
-                                Err(_) => return Err(E_TLS),
+                                Err(_) => {
+                                    // Sunucu PSK'yı reddettiyse önbellek kaydı düşer;
+                                    // sonraki bağlantı tam el sıkışma ile kurulur.
+                                    session.discard_psk_on_failure();
+                                    return Err(E_TLS);
+                                }
                             }
 
                             if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished

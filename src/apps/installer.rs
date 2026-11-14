@@ -32,6 +32,13 @@ impl FormatFsType {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum InstallerAction {
+    None,
+    Format,
+    Install,
+}
+
 pub struct InstallerApp {
     pub selected_drive: u8,
     pub format_type: FormatFsType,
@@ -39,6 +46,7 @@ pub struct InstallerApp {
     pub status_msg: (&'static str, &'static str),
     pub progress_pct: usize,
     pub drive_count: usize,
+    pub focused_control: usize,
     /// Secili disk bicimlendirildi mi? (Biçimlendir adımı)
     pub disk_formatted: bool,
     /// Kullanicinin "Tek Tıkla Kur" icin verdigi onay (2. tiklamada kurar).
@@ -57,6 +65,7 @@ impl InstallerApp {
             ),
             progress_pct: 0,
             drive_count: 0,
+            focused_control: 0,
             disk_formatted: false,
             confirm_install: false,
         }
@@ -81,6 +90,48 @@ impl InstallerApp {
             FormatFsType::Exfat => FormatFsType::Fat32,
         };
         self.set_format_type(next);
+    }
+
+    fn format_choice_count() -> usize {
+        if cfg!(feature = "exfat") {
+            3
+        } else {
+            2
+        }
+    }
+
+    pub fn focus_next_control(&mut self, reverse: bool) {
+        let count = Self::format_choice_count() + 3;
+        self.focused_control = if reverse {
+            (self.focused_control + count - 1) % count
+        } else {
+            (self.focused_control + 1) % count
+        };
+    }
+
+    pub fn activate_focused_control(&mut self) -> InstallerAction {
+        if self.focused_control == 0 {
+            self.select_next_drive();
+            return InstallerAction::None;
+        }
+
+        let format_index = self.focused_control - 1;
+        if format_index < Self::format_choice_count() {
+            match format_index {
+                0 => self.set_format_type(FormatFsType::Fat32),
+                1 => self.set_format_type(FormatFsType::Ext4),
+                #[cfg(feature = "exfat")]
+                2 => self.set_format_type(FormatFsType::Exfat),
+                _ => {}
+            }
+            return InstallerAction::None;
+        }
+
+        if format_index == Self::format_choice_count() {
+            InstallerAction::Format
+        } else {
+            InstallerAction::Install
+        }
     }
 
     pub fn refresh_drives(&mut self) {
@@ -157,6 +208,8 @@ impl InstallerApp {
     /// Hedef diski MBR + dosya sistemi (LBA 2048) olarak bölümler, Limine MBR önyükleyicisini kurar
     /// ve seçili dosya sistemini hazırlar.
     pub fn format_selected_drive(&mut self) -> bool {
+        // Disk bölümleme/biçimlendirme uzun sürer; imleç kum saati olsun.
+        let _busy = crate::gui::screens::BusyScope::new();
         self.state = InstallState::Formatting;
         self.progress_pct = 20;
         self.status_msg = (
@@ -311,6 +364,8 @@ impl InstallerApp {
     /// 3. VFS'deki mevcut sistem ayarlarını (settings.cfg) diske kalıcı olarak kaydeder
     /// 4. VFS'e bağlar ve sistem durumunu günceller
     pub fn perform_install(&mut self, vfs: &mut VirtualFileSystem) -> bool {
+        // Kurulum dosya kopyalama içerir; imleç kum saati olsun.
+        let _busy = crate::gui::screens::BusyScope::new();
         let drive = self.selected_drive;
         if !ata::device(drive)
             .map(|d| d.kind == ata::DeviceKind::Ata)
@@ -945,6 +1000,29 @@ impl InstallerApp {
         let tx = bx + (bw.saturating_sub(tw)) / 2;
         let ty = by + (bh.saturating_sub(MinGuiCompositor::text_height())) / 2;
         MinGuiCompositor::draw_string(fb, tx, ty, btn_text, MinGuiCompositor::text_on(btn_bg));
+
+        let focused_rect = if self.focused_control == 0 {
+            Some(Self::drive_select_rect(win_x, win_y, win_w))
+        } else if self.focused_control <= Self::format_choice_count() {
+            Some(Self::radio_btn_rect(
+                win_x,
+                win_y + 20,
+                self.focused_control - 1,
+            ))
+        } else if self.focused_control == Self::format_choice_count() + 1 {
+            Some((fx, fy, fw, fh))
+        } else {
+            Some((bx, by, bw, bh))
+        };
+        if let Some((x, y, w, h)) = focused_rect {
+            fb.draw_rect_outline(
+                x.saturating_sub(2),
+                y.saturating_sub(2),
+                w + 4,
+                h + 4,
+                Color::ACCENT_YELLOW,
+            );
+        }
     }
 }
 

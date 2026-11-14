@@ -28,8 +28,8 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 | Ölçüm | Değer |
 | :--- | :--- |
 | **Rust Derleyici** | 1.102.0-nightly |
-| **Toplam Kod Satırı** | ~145.300 satır (Rust: `src/` + `tests/` + `build.rs`) |
-| **Birim Testleri** | 271 geçti / 0 hata |
+| **Toplam Kod Satırı** | 139.168 satır (Rust: `src/` + `tests/` + `build.rs`) |
+| **Birim Testleri** | 290 geçti / 0 hata |
 | **Güvenilen Kök CA** | 51 sertifika |
 | **Yerleşik Uygulama** | 17 kayıtlı uygulama (app ID 0–16) + Başlat Menüsü |
 | **Çekirdek / ISO Boyutu** | ~2.0 MB / ~6.0 MB |
@@ -52,3 +52,4 @@ minOs (Sarman Edition) v2.4.0, Rust ile geliştirilmiş, `no_std` ve `no_main` k
 - **Ekran Ayarları:** PNG duvar kağıdı küçük resimleri önyükleme sırasında önceden çözülür; uzun işlemlerde kum saati imleci gösterilir.
 - **Watchdog:** Donmuş uygulama tespiti APIC zamanlayıcı kesmesinde bağımsız çalışır; sonlandırma ana döngüde `drain_frozen()` ile ertelenir ve yalnızca takılan uygulama işaretlenir.
 - **FPS 3D Performans Metrikleri:** FPS 3D Oyun tamamlanan karelerden gerçek `fps`/`min_fps`/`frame_ms` ölçer (`[FPS3D-METRICS]`); bütçe aşımında kısmi kare geri yüklenir. `test_qemu.ps1 -FpsStressTest` ile 10/30/60 dk stres doğrulaması.
+- **FPS Oyunu Menüsü ve Klavye Erişimi:** FPS Oyunu başlangıç/sonuç menülerini sunar; Hoş Geldin ekranı ve desteklenen form kontrollerinde Tab gezinme, Enter onaylama ve Esc vazgeçme kısayolları kullanılabilir.

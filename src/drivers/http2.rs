@@ -1231,22 +1231,24 @@ impl Http2Connection {
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
                         let mut x25519_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello_with_alpn(
+                        let mut psk = None;
+                        crate::drivers::tls::build_client_hello_cached(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
                             &mut x25519_secret,
-                            false,
-                            None,
-                            None,
                             &[b"h2", b"http/1.1"],
+                            &mut psk,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut session = crate::drivers::tls::TlsSession::new(host, client_random);
                         session.note_client_hello(ch_body);
                         session.set_client_ecdhe_secret(ecdhe_secret);
                         session.set_client_x25519_secret(x25519_secret);
+                        if let Some(ref p) = psk {
+                            session.set_psk(p);
+                        }
 
                         socket::send(fd, &hello).map_err(|_| E_TLS)?;
 
@@ -1263,7 +1265,11 @@ impl Http2Connection {
                             let mut hs = Vec::new();
                             match session.process_records(&mut hs, &mut app) {
                                 Ok(_) => {}
-                                Err(_) => return Err(E_TLS),
+                                Err(_) => {
+                                    // Sunucu PSK'yı reddettiyse önbellek kaydı düşer.
+                                    session.discard_psk_on_failure();
+                                    return Err(E_TLS);
+                                }
                             }
 
                             if session.state() == crate::drivers::tls::TlsState::Tls13ServerFinished

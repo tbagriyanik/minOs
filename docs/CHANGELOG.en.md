@@ -7,9 +7,11 @@ The README files only summarise the highlights; the full list lives here.
 
 - Watchdog frozen-app detection moved to the APIC timer interrupt (`watchdog::timer_tick()`); interrupt context uses a short `try_lock`-guarded section and termination is deferred to the main loop via `drain_frozen()`.
 - FPS 3D Game (app ID 16) reports real `fps`/`min_fps`/`frame_ms` metrics from completed frames (`[FPS3D-METRICS]`); launch is verified via the `[FPS3D] Uygulama açıldı` marker.
+- The FPS game has start and result menus, with options to restart or exit after a game ends.
+- Tab focus navigation, Enter confirmation and Esc cancellation were added to form controls on the Welcome screen, installer and File Manager.
 - `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` opens the game via QMP and validates QEMU liveness plus positive metrics during 10/30/60-minute stress runs.
 - On `RENDER_BUDGET_MS` expiry, half-drawn framebuffer content is no longer visible; the FPS 3D content region is backed up and restored when the render does not complete.
-- `TimeBudget` gained an injectable test clock and deterministic timeout tests; host test count is now 271.
+- `TimeBudget` gained an injectable test clock and deterministic timeout tests; the host test suite contains 290 tests (290 passed / 0 failed).
 - Double-clicking a WAV file plays the selected file directly in Music Player.
 - Image Viewer can apply the current image as a tiled desktop wallpaper.
 - Three desktop image choices were added to Settings: `desktop1.png`–`desktop3.png`.

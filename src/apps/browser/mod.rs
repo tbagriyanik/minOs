@@ -988,21 +988,47 @@ impl BrowserApp {
         (win_x + win_w.saturating_sub(38), win_y + 32, 28, 20)
     }
 
+    /// "⋯" taşma menüsünün pencere içi dikdörtgeni. Düğmenin altına açılır;
+    /// alta sığmazsa üste çevrilir ve pencere sınırları içine kelepçelenir.
     pub fn toolbar_menu_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
     ) -> (usize, usize, usize, usize) {
-        (win_x + win_w.saturating_sub(190), win_y + 56, 180, 128)
+        let w = 180usize.min(win_w.saturating_sub(16));
+        let h = 128usize.min(win_h.saturating_sub(8));
+        let btn = Self::toolbar_menu_button_rect(win_x, win_y, win_w);
+        let mut x = (win_x + win_w).saturating_sub(190).max(win_x + 8);
+        let x_max = (win_x + win_w).saturating_sub(w + 8);
+        if x > x_max {
+            x = x_max;
+        }
+        let below = btn.1 + btn.3 + 4;
+        let above = btn.1.saturating_sub(h + 4);
+        let mut y = if below + h <= win_y + win_h {
+            below
+        } else {
+            above
+        };
+        let y_min = win_y + 4;
+        let y_max = (win_y + win_h).saturating_sub(h + 4);
+        if y < y_min {
+            y = y_min;
+        } else if y > y_max && y_max >= y_min {
+            y = y_max;
+        }
+        (x, y, w, h)
     }
 
     pub fn toolbar_menu_item_rect(
         win_x: usize,
         win_y: usize,
         win_w: usize,
+        win_h: usize,
         index: usize,
     ) -> (usize, usize, usize, usize) {
-        let (x, y, w, _) = Self::toolbar_menu_rect(win_x, win_y, win_w);
+        let (x, y, w, _) = Self::toolbar_menu_rect(win_x, win_y, win_w, win_h);
         (x + 4, y + 4 + index * 24, w - 8, 22)
     }
 
@@ -3275,6 +3301,9 @@ impl BrowserApp {
         // Bu blok, ana istek durum makinesinden önce gelmelidir; aksi halde
         // "istek yok" durumunda erken dönüş kaynak kuyruğunu hiç tetiklemez.
         if !self.request_pending {
+            // İstek yok: TCP yolunun sahipliğini bırak (pkgmgr indirmesi
+            // gibi diğer istemciler devralabilsin).
+            crate::drivers::netstack::tcp_release(1);
             self.start_next_resource();
         }
 
@@ -3305,6 +3334,9 @@ impl BrowserApp {
             }
             return;
         }
+        // İstek sürdükçe TCP yolunun sahibi olarak kal (pkgmgr indirmesi
+        // gibi diğer istemcilerin araya girmesini önler).
+        let _ = crate::drivers::netstack::tcp_claim(1);
         match self.request_state {
             0 => {
                 let host =
@@ -3320,7 +3352,7 @@ impl BrowserApp {
                 } else if let Some(ip) = crate::drivers::netstack::parse_ipv4(host) {
                     self.request_ip = ip;
                     let port = self.request_port;
-                    if crate::drivers::netstack::tcp_begin(ip, port, 49153) {
+                    if crate::drivers::netstack::tcp_begin_owned(ip, port, 49153, 1) {
                         self.request_state = 1;
                         self.request_deadline = 0; // Yeni pencere: 15 sn daha
                         self.load_progress = 30;
@@ -3334,6 +3366,12 @@ impl BrowserApp {
                             "Could not start TCP connection.",
                         ));
                     }
+                } else if !crate::drivers::netstack::tcp_claim(1) {
+                    // Paket yöneticisi gibi başka bir istemci TCP yolunu tutuyor;
+                    // sahiplik boşalana dek (en çok ~5 sn) bekle, sonra yeniden dene.
+                    self.load_progress = 20;
+                    self.status =
+                        crate::gui::ui_text("Ağ meşgul, bekleniyor...", "Network busy, waiting...");
                 } else if crate::drivers::netstack::dns_query(host) {
                     self.request_state = 4;
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
@@ -3350,11 +3388,16 @@ impl BrowserApp {
                 }
             }
             4 => {
-                if let Some(ip) = crate::drivers::netstack::take_dns_result() {
+                // DNS yanıtı beklenirken sahiplik başka istemciye geçmiş
+                // olabilir; önce hakkı yeniden al, sonra yanıtı işle.
+                if !crate::drivers::netstack::tcp_claim(1) {
+                    self.status =
+                        crate::gui::ui_text("Ağ meşgul, bekleniyor...", "Network busy, waiting...");
+                } else if let Some(ip) = crate::drivers::netstack::take_dns_result() {
                     self.request_ip = ip;
                     self.request_deadline = 0; // Yeni pencere: 15 sn daha
                     self.load_progress = 30;
-                    if crate::drivers::netstack::tcp_begin(ip, self.request_port, 49153) {
+                    if crate::drivers::netstack::tcp_begin_owned(ip, self.request_port, 49153, 1) {
                         self.request_state = 1;
                         self.status = crate::gui::ui_text(
                             "TCP bağlantısı kuruluyor...",
@@ -3482,16 +3525,15 @@ impl BrowserApp {
                         let mut hello = Vec::new();
                         let mut ecdhe_secret = [0u8; 32];
                         let mut x25519_secret = [0u8; 32];
-                        crate::drivers::tls::build_client_hello_with_alpn(
+                        let mut psk = None;
+                        crate::drivers::tls::build_client_hello_cached(
                             host,
                             &client_random,
                             &mut hello,
                             &mut ecdhe_secret,
                             &mut x25519_secret,
-                            false,
-                            None,
-                            None,
                             &[b"h2", b"http/1.1"],
+                            &mut psk,
                         );
                         let ch_body = if hello.len() > 5 { &hello[5..] } else { &hello };
                         let mut tls_session =
@@ -3500,6 +3542,11 @@ impl BrowserApp {
                         // TLS 1.3 anahtar türetimi için istemci ECDHE gizlileri saklanır.
                         tls_session.set_client_ecdhe_secret(ecdhe_secret);
                         tls_session.set_client_x25519_secret(x25519_secret);
+                        // Oturum yeniden kullanımı: önbellekte PSK varsa sunucuya
+                        // teklif edilir (RFC 8446 §4.2.11).
+                        if let Some(ref p) = psk {
+                            tls_session.set_psk(p);
+                        }
                         if crate::drivers::netstack::tcp_send(&hello) {
                             self.tls_session = Some(tls_session);
                             self.request_state = 2;
@@ -3582,6 +3629,9 @@ impl BrowserApp {
                             }
                         }
                         Err(()) => {
+                            // Sunucu PSK'yı reddettiyse önbellek kaydı düşer;
+                            // sonraki istek tam el sıkışma ile kurulur.
+                            tls.discard_psk_on_failure();
                             let alert = tls.last_alert();
                             let context = tls.diagnostic_context();
                             let detail = match alert {
@@ -5860,7 +5910,8 @@ impl BrowserApp {
             }
         }
         if self.toolbar_menu_open {
-            let (menu_x, menu_y, menu_w, menu_h) = Self::toolbar_menu_rect(win_x, win_y, win_w);
+            let (menu_x, menu_y, menu_w, menu_h) =
+                Self::toolbar_menu_rect(win_x, win_y, win_w, win_h);
             fb.draw_rect(menu_x, menu_y, menu_w, menu_h, Color::TASKBAR_BG);
             fb.draw_rect_outline(menu_x, menu_y, menu_w, menu_h, Color::BORDER);
             let current_url = core::str::from_utf8(&self.url[..self.url_len]).unwrap_or("");
@@ -5887,7 +5938,7 @@ impl BrowserApp {
                 crate::gui::ui_text("Konsol", "Console"),
             ];
             for (i, label) in labels.iter().enumerate() {
-                let item = Self::toolbar_menu_item_rect(win_x, win_y, win_w, i);
+                let item = Self::toolbar_menu_item_rect(win_x, win_y, win_w, win_h, i);
                 fb.draw_rect(item.0, item.1, item.2, item.3, Color::WINDOW_BG);
                 MinGuiCompositor::draw_string_clipped(
                     fb,

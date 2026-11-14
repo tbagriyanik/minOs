@@ -324,6 +324,7 @@ struct CachedSession {
     psk_len: u8,
     hash_alg: u8,
     ticket_age_ms: u32,
+    lifetime_ms: u32,
     obtained_ms: u64,
 }
 
@@ -338,6 +339,7 @@ impl CachedSession {
             psk_len: 0,
             hash_alg: 0,
             ticket_age_ms: 0,
+            lifetime_ms: 0,
             obtained_ms: 0,
         }
     }
@@ -351,11 +353,63 @@ impl CachedSession {
 static mut SESSION_CACHE: [CachedSession; MAX_CACHED_SESSIONS] =
     [CachedSession::empty(); MAX_CACHED_SESSIONS];
 
+/// PSK teklifinin reddedildiği host sayısı (sunucu PSK'yı kabul etmiyor).
+const MAX_REJECTED_HOSTS: usize = 8;
+
+/// PSK'sı reddedilen host listesi. Böylece hatalı bir PSK her bağlantıda
+/// tekrar denenmez ve bağlantı tam el sıkışma ile kurulur.
+static mut PSK_REJECTED_HOSTS: [[u8; MAX_CACHED_HOST]; MAX_REJECTED_HOSTS] =
+    [[0; MAX_CACHED_HOST]; MAX_REJECTED_HOSTS];
+/// Reddedilen host adlarının uzunlukları (0 = boş yuva).
+static mut PSK_REJECTED_LENS: [u8; MAX_REJECTED_HOSTS] = [0; MAX_REJECTED_HOSTS];
+
+/// Bu host için PSK teklifi daha önce reddedildi mi?
+pub fn is_psk_rejected(host: &str) -> bool {
+    let host_bytes = host.as_bytes();
+    let host_len = host_bytes.len().min(MAX_CACHED_HOST);
+    let rejected = unsafe { &*core::ptr::addr_of!(PSK_REJECTED_HOSTS) };
+    let lens = unsafe { &*core::ptr::addr_of!(PSK_REJECTED_LENS) };
+    for (i, slot) in rejected.iter().enumerate() {
+        if lens[i] as usize == host_len && slot[..host_len] == host_bytes[..host_len] {
+            return true;
+        }
+    }
+    false
+}
+
+/// Host'u "PSK kabul etmiyor" olarak işaretler.
+pub fn mark_psk_rejected(host: &str) {
+    let host_bytes = host.as_bytes();
+    let host_len = host_bytes.len().min(MAX_CACHED_HOST);
+    if host_len == 0 {
+        return;
+    }
+    if is_psk_rejected(host) {
+        return;
+    }
+    let rejected = unsafe { &mut *core::ptr::addr_of_mut!(PSK_REJECTED_HOSTS) };
+    let lens = unsafe { &mut *core::ptr::addr_of_mut!(PSK_REJECTED_LENS) };
+    // İlk boş yuva; yoksa son yuvanın üzerine yaz.
+    let slot = lens
+        .iter()
+        .position(|len| *len == 0)
+        .unwrap_or(MAX_REJECTED_HOSTS - 1);
+    rejected[slot][..host_len].copy_from_slice(&host_bytes[..host_len]);
+    lens[slot] = host_len as u8;
+}
+
 /// Oturum önbelleğine yeni kayıt ekler (aynı host için eskisi güncellenir).
 ///
 /// `psk`, `resumption_master_secret` değeridir; `alg` ticket ile eşleşen
 /// hash algoritmasıdır (binder hesabı bu algoritmaya bağlıdır).
-pub fn cache_session(host: &str, ticket: &[u8], psk: &[u8], alg: Tls13HashAlg, ticket_age_ms: u64) {
+pub fn cache_session(
+    host: &str,
+    ticket: &[u8],
+    psk: &[u8],
+    alg: Tls13HashAlg,
+    ticket_age_ms: u64,
+    lifetime_ms: u64,
+) {
     if host.is_empty() || ticket.is_empty() || ticket.len() > MAX_CACHED_TICKET {
         return;
     }
@@ -385,6 +439,7 @@ pub fn cache_session(host: &str, ticket: &[u8], psk: &[u8], alg: Tls13HashAlg, t
                 Tls13HashAlg::Sha384 => 1,
             };
             slot.ticket_age_ms = (ticket_age_ms & 0xFFFF_FFFF) as u32;
+            slot.lifetime_ms = (lifetime_ms & 0xFFFF_FFFF) as u32;
             slot.obtained_ms = now;
             return;
         }
@@ -413,6 +468,7 @@ pub fn cache_session(host: &str, ticket: &[u8], psk: &[u8], alg: Tls13HashAlg, t
         Tls13HashAlg::Sha384 => 1,
     };
     slot.ticket_age_ms = (ticket_age_ms & 0xFFFF_FFFF) as u32;
+    slot.lifetime_ms = (lifetime_ms & 0xFFFF_FFFF) as u32;
     slot.obtained_ms = now;
 }
 
@@ -426,6 +482,10 @@ pub fn has_cached_session(host: &str) -> bool {
 /// `ticket_age_ms` alanı, ticket'in yaşını `ticket_age_add` ile birlikte
 /// `obfuscated_ticket_age` olarak hesaplanmış halde döner.
 pub fn session_cache_lookup(host: &str) -> Option<ResumptionSession> {
+    // Sunucu PSK'yı reddettiyse bu host için bir daha teklif yapılmaz.
+    if is_psk_rejected(host) {
+        return None;
+    }
     let host_bytes = host.as_bytes();
     let host_len = host_bytes.len().min(MAX_CACHED_HOST);
     let now = crate::boot::time::main_monotonic_ms() as u64;
@@ -439,6 +499,10 @@ pub fn session_cache_lookup(host: &str) -> Option<ResumptionSession> {
             continue;
         }
         let elapsed = now.saturating_sub(slot.obtained_ms);
+        // Ticket ömrü dolduysa oturum yeniden kullanılamaz.
+        if slot.lifetime_ms > 0 && elapsed > slot.lifetime_ms as u64 {
+            continue;
+        }
         let age = elapsed.saturating_add(slot.ticket_age_ms as u64);
         return Some(ResumptionSession {
             ticket: slot.ticket[..slot.ticket_len as usize].to_vec(),
@@ -581,6 +645,18 @@ pub struct TlsSession {
     leaf_cert_der: Option<Vec<u8>>,
     /// OCSP doğrulaması için ara/issuer sertifika (DER).
     issuer_cert_der: Option<Vec<u8>>,
+    /// Oturum yeniden kullanımı (PSK) için saklanan `resumption_master_secret`.
+    psk: Option<Vec<u8>>,
+    /// ClientHello'da `pre_shared_key` uzantısı gönderildi mi?
+    psk_offered: bool,
+    /// Sunucu PSK'yı kabul etti mi? (EncryptedExtensions'te `pre_shared_key`)
+    psk_accepted: bool,
+    /// İstemci Finished sonrası hesaplanan resumption master secret.
+    resumption_master_secret: Option<Vec<u8>>,
+    /// Sunucunun `NewSessionTicket` mesajından alınan ticket.
+    pending_ticket: Option<Vec<u8>>,
+    /// Sunucunun bildirdiği `ticket_age_add` (ms).
+    ticket_age_add_ms: u64,
 }
 
 impl TlsSession {
@@ -640,6 +716,12 @@ impl TlsSession {
             received_session_ticket: None,
             leaf_cert_der: None,
             issuer_cert_der: None,
+            psk: None,
+            psk_offered: false,
+            psk_accepted: false,
+            resumption_master_secret: None,
+            pending_ticket: None,
+            ticket_age_add_ms: 0,
         }
     }
 
@@ -659,14 +741,50 @@ impl TlsSession {
         self.client_x25519_secret = Some(secret);
     }
 
+    /// Oturum yeniden kullanımı PSK'sini ayarlar (RFC 8446 §4.2.11).
+    ///
+    /// PSK, önceki el sıkışmadan türetilen `resumption_master_secret`
+    /// değeridir. Aynı değer `pre_shared_key` uzantısındaki binder'ın
+    /// hesaplanmasında da kullanılır.
+    pub fn set_psk(&mut self, psk: &[u8]) {
+        if psk.is_empty() {
+            return;
+        }
+        self.psk = Some(psk.to_vec());
+        self.psk_offered = true;
+    }
+
+    /// PSK teklif edildi mi? (ClientHello'da `pre_shared_key` gönderildi)
+    pub fn psk_offered(&self) -> bool {
+        self.psk_offered
+    }
+
+    /// Sunucu PSK'yı kabul etti mi?
+    pub fn psk_accepted(&self) -> bool {
+        self.psk_accepted
+    }
+
+    /// El sıkışma başarısız olduğunda PSK önbelleğini temizler.
+    ///
+    /// PSK teklif edilmişse ve sunucu el sıkışmayı tamamlayamadıysa, sunucu
+    /// PSK'yı reddetmiş olabilir. Böyle bir durumda kayıt düşürülür ve host
+    /// "PSK kabul etmiyor" olarak işaretlenir; bir sonraki bağlantı tam el
+    /// sıkışma ile kurulur (başarısız deneme tekrar edilmez).
+    pub fn discard_psk_on_failure(&mut self) {
+        if self.psk_offered {
+            invalidate_session(&self.hostname);
+            mark_psk_rejected(&self.hostname);
+        }
+    }
+
+    /// Sunucudan alınan `NewSessionTicket` (ham ticket baytları).
+    pub fn received_session_ticket(&self) -> Option<&[u8]> {
+        self.received_session_ticket.as_deref()
+    }
+
     /// Sunucunun `status_request` (OCSP stapling) ile gönderdiği DER yanıtı.
     pub fn stapled_ocsp_response(&self) -> Option<&[u8]> {
         self.stapled_ocsp_response.as_deref()
-    }
-
-    /// El sıkışma sırasında alınan TLS 1.3 `NewSessionTicket` (ham bayt).
-    pub fn received_session_ticket(&self) -> Option<&[u8]> {
-        self.received_session_ticket.as_deref()
     }
 
     /// Sunucudan gelen son TLS uyarısı (seviye, açıklama) — hata mesajı için.
@@ -1053,6 +1171,7 @@ impl TlsSession {
                     self.handle_certificate_verify(msg_body, &pre_transcript)?;
                 }
                 HANDSHAKE_FINISHED => self.handle_server_finished(msg_body, &pre_transcript)?,
+                HANDSHAKE_NEW_SESSION_TICKET => self.handle_new_session_ticket(msg_body)?,
                 _ => {}
             }
         }
@@ -1160,12 +1279,83 @@ impl TlsSession {
             }
             if ext_type == 0x0010 {
                 self.handle_alpn_extension(&body[pos..pos + len])?;
+            } else if ext_type == 0x0029 {
+                // pre_shared_key (RFC 8446 §4.2.11): sunucu seçili kimliği
+                // bildirir. `selected_identity` 0 ise ilk (ve tek) teklif
+                // kabul edilmiştir.
+                self.handle_pre_shared_key_extension(&body[pos..pos + len])?;
             }
             pos += len;
         }
         if pos != body.len() {
             return Err(());
         }
+        Ok(())
+    }
+
+    /// TLS 1.3 `NewSessionTicket` mesajını işler (RFC 8446 §4.6.1).
+    ///
+    /// Ticket, bir sonraki bağlantıda PSK olarak sunulabilmesi için statik
+    /// önbelleğe yazılır. Bunun için önceki el sıkışmada hesaplanan
+    /// `resumption_master_secret` gerekir (istemci Finished sonrası).
+    ///
+    /// Gövde yapısı:
+    ///   uint32 ticket_lifetime; uint32 ticket_age_add;
+    ///   opaque ticket_nonce<0..255>; opaque ticket<1..2^16-1>;
+    ///   Extension extensions<0..2^16-1>;
+    fn handle_new_session_ticket(&mut self, body: &[u8]) -> Result<(), ()> {
+        if body.len() < 9 {
+            return Err(());
+        }
+        let lifetime_ms = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as u64;
+        let ticket_age_add = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as u64;
+        let nonce_len = body[8] as usize;
+        let mut pos = 9 + nonce_len;
+        if pos + 2 > body.len() {
+            return Err(());
+        }
+        let ticket_len = u16::from_be_bytes([body[pos], body[pos + 1]]) as usize;
+        pos += 2;
+        if pos + ticket_len > body.len() {
+            return Err(());
+        }
+        let ticket = body[pos..pos + ticket_len].to_vec();
+
+        self.received_session_ticket = Some(ticket.clone());
+        self.pending_ticket = Some(ticket.clone());
+        self.ticket_age_add_ms = ticket_age_add;
+
+        // PSK'yı önbelleğe yaz: resumption master secret elimizdeyse hazır.
+        if let Some(psk) = self.resumption_master_secret.clone() {
+            cache_session(
+                &self.hostname,
+                &ticket,
+                &psk,
+                self.tls13_hash_alg,
+                ticket_age_add,
+                lifetime_ms,
+            );
+            serial_print("[TLS] Oturum ticket'ı alındı, PSK önbelleğe yazıldı.\n");
+        }
+        Ok(())
+    }
+
+    /// Sunucunun `pre_shared_key` uzantısını işler (RFC 8446 §4.2.11).
+    ///
+    /// Gövde: `uint16 selected_identity`. Sunucu 0 değerini gönderirse
+    /// istemcinin teklif ettiği PSK kabul edilmiştir. Başka bir değer
+    /// (teklif edilmemiş kimlik) `illegal_parameter` hatasıdır.
+    fn handle_pre_shared_key_extension(&mut self, body: &[u8]) -> Result<(), ()> {
+        if body.len() < 2 {
+            return Err(());
+        }
+        let selected = u16::from_be_bytes([body[0], body[1]]);
+        if selected != 0 {
+            // İstemci yalnızca bir kimlik teklif etti; başka bir kimlik seçilemez.
+            serial_print("[TLS] Sunucu geçersiz PSK kimliği seçti, el sıkışma iptal.\n");
+            return Err(());
+        }
+        self.psk_accepted = true;
         Ok(())
     }
 
@@ -1901,6 +2091,18 @@ impl TlsSession {
         // İstemci Finished transcript'e eklenir.
         let _ = self.tls13_transcript.extend_from_slice(&finished);
 
+        // RFC 8446 §4.6.1: resumption_master_secret =
+        //   Derive-Secret(Master Secret, "res master",
+        //                   Transcript-Hash(ClientHello..client Finished))
+        // Bu değer, sunucunun göndereceği NewSessionTicket ile birlikte
+        // gelecek PSK'yı oluşturur.
+        if let Some(master) = self.tls13_master_secret.clone() {
+            let transcript = alg.hash(&self.tls13_transcript);
+            let res_master =
+                Self::hkdf_expand_label(alg, &master, b"res master", &transcript, alg.hash_len());
+            self.resumption_master_secret = Some(res_master);
+        }
+
         // Kayıt anahtarı/IV'si client handshake traffic secret'tan türetilir.
         // Anahtar uzunluğu paketle belirlenir (AES-128 ⇒ 16, AES-256 ⇒ 32 bayt).
         let key = Self::hkdf_expand_label(alg, client_hs, b"key", b"", alg.key_len());
@@ -2039,7 +2241,11 @@ impl TlsSession {
         let zeros = tls13_zero_secret(alg);
         let empty_hash = tls13_empty_hash(alg);
         // With no PSK, both the salt and IKM are Hash.length zero bytes.
-        let early_secret = Self::hkdf_extract(alg, &zeros, &zeros);
+        // PSK ile (RFC 8446 §7.1): early_secret = HKDF-Extract(0, PSK).
+        let early_secret = match self.psk.as_ref() {
+            Some(psk) if !psk.is_empty() => Self::hkdf_extract(alg, &zeros, psk),
+            _ => Self::hkdf_extract(alg, &zeros, &zeros),
+        };
         // Derive-Secret uses Transcript-Hash(empty), not an empty context.
         let derived =
             Self::hkdf_expand_label(alg, &early_secret, b"derived", &empty_hash, alg.hash_len());
@@ -2425,6 +2631,40 @@ pub fn build_client_hello_with_alpn(
     session_ticket: Option<&[u8]>,
     alpn_protocols: &[&[u8]],
 ) {
+    build_client_hello_with_alpn_psk(
+        hostname,
+        client_random,
+        out,
+        ecdhe_secret_out,
+        x25519_secret_out,
+        fallback,
+        session_id,
+        session_ticket,
+        alpn_protocols,
+        None,
+    );
+}
+
+/// PSK (oturum yeniden kullanımı) teklifiyle ClientHello üretir.
+///
+/// `psk` verildiğinde ClientHello'ya RFC 8446 §4.2.11'e uygun
+/// `pre_shared_key` (0x0029) uzantısı eklenir. Bu uzantı **daima son**
+/// uzantı olmalıdır; binder değeri, ClientHello'nun binders listesi hariç
+/// kısmının Transcript-Hash'i üzerinden hesaplanır (§4.2.11.2) ve el sıkışma
+/// gövdesi tamamlandıktan sonra yerine yazılır.
+#[allow(clippy::too_many_arguments)]
+pub fn build_client_hello_with_alpn_psk(
+    hostname: &str,
+    client_random: &[u8; 32],
+    out: &mut Vec<u8>,
+    ecdhe_secret_out: &mut [u8; 32],
+    x25519_secret_out: &mut [u8; 32],
+    fallback: bool,
+    session_id: Option<&[u8]>,
+    session_ticket: Option<&[u8]>,
+    alpn_protocols: &[&[u8]],
+    psk: Option<&PskOffer<'_>>,
+) {
     out.clear();
 
     let mut handshake = Vec::new();
@@ -2609,6 +2849,41 @@ pub fn build_client_hello_with_alpn(
         extensions.extend_from_slice(ticket);
     }
 
+    // pre_shared_key (0x0029, RFC 8446 §4.2.11): DAİMA son uzantı olmalı.
+    //
+    // Yapı:
+    //   identities<7..2^16-1> = u16 len + (u16 identity_len + identity + u32 age)*
+    //   binders<33..2^16-1>  = u16 len + (u8 binder_len + binder)*
+    //
+    // Binder değeri geçici olarak sıfır yazılır; aşağıda, el sıkışma gövdesi
+    // tamamlandıktan sonra gerçek binder ile değiştirilir.
+    let mut psk_binder_len = 0usize;
+    if let Some(offer) = psk {
+        if !fallback && !offer.ticket.is_empty() && !offer.psk.is_empty() {
+            let hash_len = offer.hash_alg.hash_len();
+
+            let mut identities = Vec::new();
+            identities.extend_from_slice(&(offer.ticket.len() as u16).to_be_bytes());
+            identities.extend_from_slice(offer.ticket);
+            // obfuscated_ticket_age = (şimdi - ticket_oluşma) + ticket_age_add
+            let age = (offer.ticket_age_ms & 0xFFFF_FFFF) as u32;
+            identities.extend_from_slice(&age.to_be_bytes());
+
+            let mut ext = Vec::new();
+            ext.extend_from_slice(&(identities.len() as u16).to_be_bytes());
+            ext.extend_from_slice(&identities);
+            ext.extend_from_slice(&((1 + hash_len) as u16).to_be_bytes());
+            ext.push(hash_len as u8);
+            let zero: u8 = Default::default();
+            ext.extend(core::iter::repeat_n(zero, hash_len));
+
+            extensions.extend_from_slice(&0x0029u16.to_be_bytes());
+            extensions.extend_from_slice(&(ext.len() as u16).to_be_bytes());
+            extensions.extend_from_slice(&ext);
+            psk_binder_len = hash_len;
+        }
+    }
+
     if !extensions.is_empty() {
         handshake.extend_from_slice(&(extensions.len() as u16).to_be_bytes());
         handshake.extend_from_slice(&extensions);
@@ -2619,12 +2894,95 @@ pub fn build_client_hello_with_alpn(
     handshake[2] = ((hs_len >> 8) & 0xFF) as u8;
     handshake[3] = (hs_len & 0xFF) as u8;
 
+    // PSK binder'ını hesapla (RFC 8446 §4.2.11.2):
+    //   binder       = HMAC(finished_key, Transcript-Hash(Truncate(ClientHello1)))
+    //   finished_key = HKDF-Expand-Label(binder_key, "finished", "")
+    //   binder_key   = Derive-Secret(early_secret, "res binder", "")
+    //   early_secret = HKDF-Extract(0, PSK)
+    //
+    // Truncate(ClientHello), binders listesinin *girdilerini* kaldırır; uzunluk
+    // alanları binder'lar varmış gibi kalır.
+    if psk_binder_len > 0 {
+        if let Some(offer) = psk {
+            let alg = offer.hash_alg;
+            let hash_len = alg.hash_len();
+            let zeros = tls13_zero_secret(alg);
+            let early_secret = TlsSession::hkdf_extract(alg, &zeros, offer.psk);
+            let binder_key = TlsSession::hkdf_expand_label(
+                alg,
+                &early_secret,
+                b"res binder",
+                b"",
+                alg.hash_len(),
+            );
+            let finished_key =
+                TlsSession::hkdf_expand_label(alg, &binder_key, b"finished", b"", alg.hash_len());
+            let truncated = &handshake[..handshake.len() - (1 + hash_len)];
+            let transcript = alg.hash(truncated);
+            let binder = alg.hmac(&finished_key, &transcript);
+            let start = handshake.len() - hash_len;
+            handshake[start..].copy_from_slice(&binder[..hash_len]);
+        }
+    }
+
     out.push(TLS_RECORD_HANDSHAKE);
     // TLS 1.3 compatibility requires the initial ClientHello record to use 0x0301.
     out.extend_from_slice(&TLS_VERSION_1_0.to_be_bytes());
     let rec_len = handshake.len() as u16;
     out.extend_from_slice(&rec_len.to_be_bytes());
     out.extend_from_slice(&handshake);
+}
+
+/// Önbellekte bu host için bir oturum varsa PSK teklifiyle, yoksa normal
+/// şekilde ClientHello kurar.
+///
+/// `true` dönüyorsa PSK teklif edilmiştir ve `psk_out` içinde anahtar
+/// planında kullanılacak PSK değeri bulunur; çağıran taraf bunu
+/// `TlsSession::set_psk` ile oturuma vermelidir.
+pub fn build_client_hello_cached(
+    hostname: &str,
+    client_random: &[u8; 32],
+    out: &mut Vec<u8>,
+    ecdhe_secret_out: &mut [u8; 32],
+    x25519_secret_out: &mut [u8; 32],
+    alpn_protocols: &[&[u8]],
+    psk_out: &mut Option<alloc::vec::Vec<u8>>,
+) -> bool {
+    *psk_out = None;
+    let Some(session) = session_cache_lookup(hostname) else {
+        build_client_hello_with_alpn(
+            hostname,
+            client_random,
+            out,
+            ecdhe_secret_out,
+            x25519_secret_out,
+            false,
+            None,
+            None,
+            alpn_protocols,
+        );
+        return false;
+    };
+    let offer = PskOffer {
+        ticket: &session.ticket,
+        psk: &session.psk,
+        hash_alg: session.hash_alg,
+        ticket_age_ms: session.ticket_age_ms,
+    };
+    build_client_hello_with_alpn_psk(
+        hostname,
+        client_random,
+        out,
+        ecdhe_secret_out,
+        x25519_secret_out,
+        false,
+        None,
+        None,
+        alpn_protocols,
+        Some(&offer),
+    );
+    *psk_out = Some(session.psk);
+    true
 }
 
 #[cfg(test)]
@@ -3801,5 +4159,290 @@ mod tests {
         assert_eq!(plain[0], HANDSHAKE_FINISHED);
         assert_eq!(plain[3] as usize, SHA256_HASH_LEN);
         assert_eq!(plain.len(), 4 + SHA256_HASH_LEN);
+    }
+
+    // -----------------------------------------------------------------------
+    // TLS 1.3 PSK / oturum yeniden kullanımı testleri (RFC 8446 §4.2.11)
+    // -----------------------------------------------------------------------
+
+    /// ClientHello içindeki `pre_shared_key` uzantısını ayrıştırır.
+    ///
+    /// Dönüş: (kimlik, obfuscated_ticket_age, binder, son uzantı mı?)
+    fn client_hello_pre_shared_key(hs: &[u8]) -> Option<(Vec<u8>, u32, Vec<u8>, bool)> {
+        let mut pos = 4 + 34;
+        if pos >= hs.len() {
+            return None;
+        }
+        let sess_len = hs[pos] as usize;
+        pos += 1 + sess_len;
+        if pos + 2 > hs.len() {
+            return None;
+        }
+        let cs_len = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
+        pos += 2 + cs_len;
+        if pos >= hs.len() {
+            return None;
+        }
+        let comp_len = hs[pos] as usize;
+        pos += 1 + comp_len;
+        if pos + 2 > hs.len() {
+            return None;
+        }
+        let ext_total = u16::from_be_bytes([hs[pos], hs[pos + 1]]) as usize;
+        pos += 2;
+        let ext_end = pos + ext_total;
+        while pos + 4 <= ext_end {
+            let et = u16::from_be_bytes([hs[pos], hs[pos + 1]]);
+            let el = u16::from_be_bytes([hs[pos + 2], hs[pos + 3]]) as usize;
+            if pos + 4 + el > hs.len() {
+                return None;
+            }
+            let body = &hs[pos + 4..pos + 4 + el];
+            let is_last = pos + 4 + el >= ext_end;
+            if et == 0x0029 && body.len() >= 4 {
+                let ids_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+                if ids_len + 2 <= body.len() {
+                    let id_len = u16::from_be_bytes([body[2], body[3]]) as usize;
+                    if 4 + id_len + 4 <= body.len() {
+                        let identity = body[4..4 + id_len].to_vec();
+                        let age = u32::from_be_bytes([
+                            body[4 + id_len],
+                            body[5 + id_len],
+                            body[6 + id_len],
+                            body[7 + id_len],
+                        ]);
+                        let bpos = 2 + ids_len;
+                        if bpos + 3 <= body.len() {
+                            let blen = body[bpos + 2] as usize;
+                            if bpos + 3 + blen <= body.len() {
+                                let binder = body[bpos + 3..bpos + 3 + blen].to_vec();
+                                return Some((identity, age, binder, is_last));
+                            }
+                        }
+                    }
+                }
+            }
+            pos += 4 + el;
+        }
+        None
+    }
+
+    #[test]
+    fn client_hello_with_psk_carries_pre_shared_key_last() {
+        let ticket = [0xABu8; 16];
+        let psk = [0x11u8; 32];
+        let offer = PskOffer {
+            ticket: &ticket,
+            psk: &psk,
+            hash_alg: Tls13HashAlg::Sha256,
+            ticket_age_ms: 1234,
+        };
+        let mut hello = Vec::new();
+        let mut ecdhe = [0u8; 32];
+        let mut x25519 = [0u8; 32];
+        build_client_hello_with_alpn_psk(
+            "example.com",
+            &[0x5Au8; 32],
+            &mut hello,
+            &mut ecdhe,
+            &mut x25519,
+            false,
+            None,
+            None,
+            &[b"http/1.1"],
+            Some(&offer),
+        );
+        let hs = &hello[5..];
+        let (identity, age, binder, is_last) =
+            client_hello_pre_shared_key(hs).expect("pre_shared_key uzantisi yok");
+        assert_eq!(identity, ticket.to_vec());
+        assert_eq!(age, 1234);
+        assert_eq!(binder.len(), SHA256_HASH_LEN);
+        assert!(is_last, "pre_shared_key DAIMA son uzanti olmali");
+    }
+
+    #[test]
+    fn psk_binder_matches_truncated_transcript() {
+        // Binder = HMAC(finished_key, Transcript-Hash(Truncate(ClientHello)))
+        // Truncate, binders listesinin girdilerini kaldırır; uzunluk alanları kalır.
+        let ticket = [0x22u8; 8];
+        let psk = [0x33u8; 32];
+        let offer = PskOffer {
+            ticket: &ticket,
+            psk: &psk,
+            hash_alg: Tls13HashAlg::Sha256,
+            ticket_age_ms: 500,
+        };
+        let mut hello = Vec::new();
+        let mut ecdhe = [0u8; 32];
+        let mut x25519 = [0u8; 32];
+        build_client_hello_with_alpn_psk(
+            "host",
+            &[0x77u8; 32],
+            &mut hello,
+            &mut ecdhe,
+            &mut x25519,
+            false,
+            None,
+            None,
+            &[b"http/1.1"],
+            Some(&offer),
+        );
+        let hs = &hello[5..];
+        let (_, _, binder, _) = client_hello_pre_shared_key(hs).expect("pre_shared_key yok");
+
+        let alg = Tls13HashAlg::Sha256;
+        let zeros = tls13_zero_secret(alg);
+        let early = TlsSession::hkdf_extract(alg, &zeros, &psk);
+        let binder_key =
+            TlsSession::hkdf_expand_label(alg, &early, b"res binder", b"", alg.hash_len());
+        let finished_key =
+            TlsSession::hkdf_expand_label(alg, &binder_key, b"finished", b"", alg.hash_len());
+        let truncated = &hs[..hs.len() - (1 + SHA256_HASH_LEN)];
+        let expected = alg.hmac(&finished_key, &alg.hash(truncated));
+        assert_eq!(binder, expected);
+    }
+
+    #[test]
+    fn psk_changes_early_secret_and_handshake_keys() {
+        let mut plain = TlsSession::new("host", [0u8; 32]);
+        let mut with_psk = TlsSession::new("host", [0u8; 32]);
+        with_psk.set_psk(&[0x44u8; 32]);
+        let shared = [0x55u8; 32];
+        plain.derive_tls13_handshake_keys(&shared).unwrap();
+        with_psk.derive_tls13_handshake_keys(&shared).unwrap();
+        assert_ne!(
+            plain.tls13_handshake_secret, with_psk.tls13_handshake_secret,
+            "PSK early secret'i el sikisma sirlarini degistirmeli"
+        );
+    }
+
+    #[test]
+    fn new_session_ticket_is_parsed_and_cached() {
+        let mut session = TlsSession::new("ticket.example", [0u8; 32]);
+        session.resumption_master_secret = Some(alloc::vec![0x66u8; 32]);
+
+        let ticket = [0x77u8; 12];
+        let mut body = Vec::new();
+        body.extend_from_slice(&3600u32.to_be_bytes()); // ticket_lifetime
+        body.extend_from_slice(&42u32.to_be_bytes()); // ticket_age_add
+        body.push(0); // ticket_nonce (bos)
+        body.extend_from_slice(&(ticket.len() as u16).to_be_bytes());
+        body.extend_from_slice(&ticket);
+        body.extend_from_slice(&0u16.to_be_bytes()); // extensions (bos)
+
+        session.handle_new_session_ticket(&body).unwrap();
+        assert_eq!(session.received_session_ticket(), Some(&ticket[..]));
+        assert_eq!(session.ticket_age_add_ms, 42);
+
+        let cached = session_cache_lookup("ticket.example").expect("oturum onbellege yazilmadi");
+        assert_eq!(cached.ticket, ticket.to_vec());
+        assert_eq!(cached.psk, alloc::vec![0x66u8; 32]);
+        assert_eq!(cached.ticket_age_ms, 42);
+
+        invalidate_session("ticket.example");
+        assert!(session_cache_lookup("ticket.example").is_none());
+    }
+
+    #[test]
+    fn pre_shared_key_extension_acceptance() {
+        let mut session = TlsSession::new("host", [0u8; 32]);
+        session.set_psk(&[0x88u8; 32]);
+        assert!(session.psk_offered());
+        assert!(!session.psk_accepted());
+        session.handle_pre_shared_key_extension(&[0, 0]).unwrap();
+        assert!(session.psk_accepted());
+
+        // Teklif edilmemiş bir kimlik secilemez (illegal_parameter).
+        let mut other = TlsSession::new("host", [0u8; 32]);
+        assert!(other.handle_pre_shared_key_extension(&[0, 1]).is_err());
+    }
+
+    #[test]
+    fn rejected_host_is_not_offered_psk_again() {
+        let ticket = [0x5Cu8; 8];
+        cache_session(
+            "reject.example",
+            &ticket,
+            &[0xC1u8; 32],
+            Tls13HashAlg::Sha256,
+            10,
+            60_000,
+        );
+        assert!(has_cached_session("reject.example"));
+
+        // PSK teklifi başarısız oldu: kayıt düşer ve host işaretlenir.
+        let mut session = TlsSession::new("reject.example", [0u8; 32]);
+        session.set_psk(&[0xC1u8; 32]);
+        session.discard_psk_on_failure();
+
+        assert!(!has_cached_session("reject.example"));
+        assert!(is_psk_rejected("reject.example"));
+
+        let mut hello = Vec::new();
+        let mut ecdhe = [0u8; 32];
+        let mut x25519 = [0u8; 32];
+        let mut psk = None;
+        let offered = build_client_hello_cached(
+            "reject.example",
+            &[0x11u8; 32],
+            &mut hello,
+            &mut ecdhe,
+            &mut x25519,
+            &[b"http/1.1"],
+            &mut psk,
+        );
+        assert!(!offered, "reddedilen host icin PSK teklif edilmemeli");
+        assert!(psk.is_none());
+        assert!(client_hello_pre_shared_key(&hello[5..]).is_none());
+    }
+
+    #[test]
+    fn client_hello_cached_offers_psk_when_session_exists() {
+        let ticket = [0x99u8; 10];
+        cache_session(
+            "cached.example",
+            &ticket,
+            &[0xABu8; 32],
+            Tls13HashAlg::Sha256,
+            100,
+            60_000,
+        );
+        let mut hello = Vec::new();
+        let mut ecdhe = [0u8; 32];
+        let mut x25519 = [0u8; 32];
+        let mut psk = None;
+        let offered = build_client_hello_cached(
+            "cached.example",
+            &[0x11u8; 32],
+            &mut hello,
+            &mut ecdhe,
+            &mut x25519,
+            &[b"http/1.1"],
+            &mut psk,
+        );
+        assert!(offered, "onbellekte oturum varken PSK teklif edilmeli");
+        assert!(psk.is_some());
+        let (_, _, binder, is_last) =
+            client_hello_pre_shared_key(&hello[5..]).expect("pre_shared_key yok");
+        assert_eq!(binder.len(), SHA256_HASH_LEN);
+        assert!(is_last);
+        invalidate_session("cached.example");
+
+        // Onbellek bos iken PSK teklif edilmemeli.
+        let mut hello2 = Vec::new();
+        let mut psk2 = None;
+        let offered2 = build_client_hello_cached(
+            "cached.example",
+            &[0x11u8; 32],
+            &mut hello2,
+            &mut ecdhe,
+            &mut x25519,
+            &[b"http/1.1"],
+            &mut psk2,
+        );
+        assert!(!offered2);
+        assert!(psk2.is_none());
+        assert!(client_hello_pre_shared_key(&hello2[5..]).is_none());
     }
 }

@@ -48,26 +48,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     serial_print("[BOOT] Pencere yöneticisi ve uygulamalar hazırlanıyor...\n");
 
-    let (app_instances, mut compositor) = gui::setup::init_apps(&mut fs_mgr, width, height);
-    let gui::setup::AppInstances {
-        mut filemanager_app,
-        mut desktop_files,
-        mut settings_app,
-        mut notepad_app,
-        mut browser_app,
-        mut imageviewer_app,
-        mut musicplayer_app,
-        mut videoplayer_app,
-        mut taskmgr_app,
-        mut calculator_app,
-        mut paint_apps,
-        mut terminal_app,
-        mut installer_app,
-        mut viewer3d_app,
-        mut pkgmgr_app,
-        mut fps_game_app,
-        mut fps_3d_app,
-    } = app_instances;
+    // Kurulum `Box` döner; içerikler ayrılan (heap) yerde açıldığı için
+    // ~110 KiB'lık yapılar yığın çerçevesine kopyalanmaz ve dönüş değerinin
+    // (RVO'nun) yığın kullanması gerekmez.
+    let gui::setup::AppSetup {
+        apps:
+            gui::setup::AppInstances {
+                mut filemanager_app,
+                mut desktop_files,
+                mut settings_app,
+                mut notepad_app,
+                mut browser_app,
+                mut imageviewer_app,
+                mut musicplayer_app,
+                mut videoplayer_app,
+                mut taskmgr_app,
+                mut calculator_app,
+                mut paint_apps,
+                mut terminal_app,
+                mut installer_app,
+                mut viewer3d_app,
+                mut pkgmgr_app,
+                mut fps_game_app,
+                mut fps_3d_app,
+            },
+        mut compositor,
+    } = *gui::setup::init_apps(&mut fs_mgr, width, height);
 
     let mut desktop_drag_source = false;
     let mut file_clipboard = apps::filemanager::FileClipboard::new();
@@ -248,6 +254,14 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     let mut last_mouse_y = mouse.y;
 
     let mut last_buttons = (mouse.left_button, mouse.right_button);
+
+    // Fare Tuşları (MouseKeys) sentetik tıklamaları: 0 = yok, 1 = basış bekliyor,
+    // 2 = basılı (bırakış sonraki turda üretilecek). Böylece tuş vuruşu gerçek
+    // bir fare bas/bırak dizisi gibi iki ayrı kenar (mouse_clicked/mouse_released)
+    // üretir ve düğme asla takılı kalmaz.
+    let mut mousekeys_click_left: u8 = 0;
+
+    let mut mousekeys_click_right: u8 = 0;
 
     let mut pending_window_control: Option<(usize, u8)> = None;
 
@@ -637,6 +651,32 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
         let my = mouse.y as usize;
 
+        // MouseKeys sentetik tıklama darbesini gerçek fare sinyali gibi üret:
+        // bir tur basılı, ertesi tur bırakılı görünsün ki basma/bırakma
+        // kenarları (mouse_clicked / mouse_released) normal yoldan işlensin.
+        match mousekeys_click_left {
+            1 => {
+                mouse.left_button = true;
+                mousekeys_click_left = 2;
+            }
+            2 => {
+                mouse.left_button = false;
+                mousekeys_click_left = 0;
+            }
+            _ => {}
+        }
+        match mousekeys_click_right {
+            1 => {
+                mouse.right_button = true;
+                mousekeys_click_right = 2;
+            }
+            2 => {
+                mouse.right_button = false;
+                mousekeys_click_right = 0;
+            }
+            _ => {}
+        }
+
         gui::MinGuiCompositor::set_pointer_state(mx, my, mouse.left_button);
 
         let mouse_clicked = mouse.left_button && !last_buttons.0;
@@ -916,6 +956,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     menu_y,
                     compositor.active_start_group,
                     tb_y,
+                    width,
                 );
 
                 if !gui::in_rect(mx, my, (menu_x, menu_y, menu_w + 6, menu_h))
@@ -956,7 +997,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     gui::in_rect(
                         mx,
                         my,
-                        apps::taskmgr::TaskManagerApp::launch_menu_rect(w.x, w.y, w.width),
+                        apps::taskmgr::TaskManagerApp::launch_menu_rect(
+                            w.x, w.y, w.width, w.height,
+                        ),
                     )
                 });
 
@@ -978,7 +1021,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     gui::in_rect(
                         mx,
                         my,
-                        apps::taskmgr::TaskManagerApp::actions_menu_rect(w.x, w.y, w.width),
+                        apps::taskmgr::TaskManagerApp::actions_menu_rect(
+                            w.x, w.y, w.width, w.height,
+                        ),
                     )
                 });
                 let in_button = compositor.windows[7].is_some_and(|w| {
@@ -1076,7 +1121,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 notepad_app.menu,
                                 w.width,
                             ),
-                            w.y + crate::apps::notepad::NotepadApp::menu_box_y(),
+                            w.y + crate::apps::notepad::NotepadApp::menu_box_y(
+                                notepad_app.menu,
+                                w.height,
+                            ),
                             crate::apps::notepad::NotepadApp::menu_box_w(),
                             crate::apps::notepad::NotepadApp::menu_box_h(notepad_app.menu),
                         ),
@@ -1740,7 +1788,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 let active_g = compositor.active_start_group;
 
                 let mut sub_rect =
-                    gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y);
+                    gui::MinGuiCompositor::start_menu_submenu_rect(menu_y, active_g, tb_y, width);
 
                 if compositor.start_search_len > 0 {
                     let mut matches = [0; 32];
@@ -1753,6 +1801,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         active_g,
                         tb_y,
                         count.max(1),
+                        width,
                     );
                 }
 
@@ -1879,7 +1928,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         };
 
                         let rect = gui::MinGuiCompositor::start_menu_subitem_rect(
-                            menu_y, active_g, k, tb_y,
+                            menu_y, active_g, k, tb_y, width,
                         );
 
                         if gui::in_rect(mx, my, rect) {
@@ -2474,9 +2523,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 if gui::in_rect(mx, my, menu_button) {
                                     filemanager_app.actions_menu_open =
                                         !filemanager_app.actions_menu_open;
+                                    filemanager_app.focused_control = 0;
                                 } else if filemanager_app.actions_menu_open {
                                     menu_action = (0..7).find(|&i| gui::in_rect(mx, my,
-                                        apps::filemanager::FileManagerApp::actions_menu_item_rect(wx, wy, ww, i)));
+                                        apps::filemanager::FileManagerApp::actions_menu_item_rect(wx, wy, ww, wh, i)));
                                     filemanager_app.actions_menu_open = false;
                                 }
 
@@ -2486,7 +2536,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     my,
                                     apps::filemanager::FileManagerApp::search_rect(wx, wy, ww),
                                 ) {
-                                    filemanager_app.focused_control = 5;
+                                    filemanager_app.focused_control = 6;
                                 } else if menu_action == Some(0) {
                                     filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
                                 } else if menu_action == Some(1) {
@@ -3295,7 +3345,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                                 notepad_app.menu,
                                                 ww,
                                             ),
-                                            wy + crate::apps::notepad::NotepadApp::menu_box_y(),
+                                            wy + crate::apps::notepad::NotepadApp::menu_box_y(
+                                                notepad_app.menu,
+                                                wh,
+                                            ),
                                             crate::apps::notepad::NotepadApp::menu_box_w(),
                                             crate::apps::notepad::NotepadApp::menu_box_h(
                                                 notepad_app.menu,
@@ -3304,8 +3357,10 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     )
                                 {
                                     let rel_y = my.saturating_sub(
-                                        wy + crate::apps::notepad::NotepadApp::menu_box_y()
-                                            + crate::apps::notepad::NotepadApp::menu_pad(),
+                                        wy + crate::apps::notepad::NotepadApp::menu_box_y(
+                                            notepad_app.menu,
+                                            wh,
+                                        ) + crate::apps::notepad::NotepadApp::menu_pad(),
                                     );
 
                                     let item_idx =
@@ -3616,7 +3671,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             mx,
                                             my,
                                             apps::browser::BrowserApp::toolbar_menu_item_rect(
-                                                wx, wy, ww, i,
+                                                wx, wy, ww, wh, i,
                                             ),
                                         )
                                     });
@@ -3880,7 +3935,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                 } else if taskmgr_app.launch_menu_open {
                                     if let Some(item) =
                                         apps::taskmgr::TaskManagerApp::launch_item_at(
-                                            mx, my, wx, wy, ww,
+                                            mx, my, wx, wy, ww, wh,
                                         )
                                     {
                                         taskmgr_app.launch_selected = item;
@@ -3941,7 +3996,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                             );
                                         }
                                     } else if taskmgr_app.actions_menu_open {
-                                        let action = (0..2).find(|&i| gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_menu_item_rect(wx, wy, ww, i)));
+                                        let action = (0..2).find(|&i| gui::in_rect(mx, my, apps::taskmgr::TaskManagerApp::actions_menu_item_rect(wx, wy, ww, wh, i)));
                                         taskmgr_app.actions_menu_open = false;
                                         match action {
                                             Some(0) => {
@@ -4057,8 +4112,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                 if paint_apps[idx].as_ref().is_some_and(|p| p.file_menu_open) {
                                     for item in 0..apps::paint::PaintApp::FILE_MENU_COUNT {
-                                        let r =
-                                            apps::paint::PaintApp::file_menu_item_rect(ww, item);
+                                        let r = apps::paint::PaintApp::file_menu_item_rect(
+                                            ww, wh, item,
+                                        );
 
                                         let item_rect = (wx + r.0, wy + r.1, r.2, r.3);
 
@@ -4851,6 +4907,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_prev();
+                        } else if app_is_focused(&compositor, 13) {
+                            let win_h = focused_window_for_app(&compositor, 13)
+                                .map(|(_, w)| w.height)
+                                .unwrap_or(0);
+
+                            pkgmgr_app.move_selection(-1, win_h);
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x -= 0.1;
                         } else if app_is_focused(&compositor, 15) {
@@ -4964,6 +5026,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                             fm_ensure_selection_visible(&mut compositor, &filemanager_app);
                         } else if set_focused && settings_app.focused_control < 5 {
                             settings_app.select_tab_next();
+                        } else if app_is_focused(&compositor, 13) {
+                            let win_h = focused_window_for_app(&compositor, 13)
+                                .map(|(_, w)| w.height)
+                                .unwrap_or(0);
+
+                            pkgmgr_app.move_selection(1, win_h);
                         } else if app_is_focused(&compositor, 12) {
                             viewer3d_app.rot_x += 0.1;
                         } else if app_is_focused(&compositor, 15) {
@@ -5043,6 +5111,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         taskmgr_app.focused_control = 0;
                     } else if app_is_focused(&compositor, 1) {
                         settings_app.select_tab_prev();
+                    } else if app_is_focused(&compositor, 14) {
+                        apps::controlpanel::select_tab_step(false);
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y -= 0.1;
                     } else if app_is_focused(&compositor, 15) {
@@ -5132,6 +5202,8 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                             notepad_ensure_cursor_visible(&mut compositor, &notepad_app);
                         }
+                    } else if app_is_focused(&compositor, 14) {
+                        apps::controlpanel::select_tab_step(true);
                     } else if app_is_focused(&compositor, 12) {
                         viewer3d_app.rot_y += 0.1;
                     } else if app_is_focused(&compositor, 15) {
@@ -5404,7 +5476,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                     filemanager_app.delete_selected(&mut fs_mgr.vfs);
                                 }
 
-                                _ => {
+                                4 | 5 => {
                                     if filemanager_app.path() == crate::fs::vfs::TRASH_DIR {
                                         filemanager_app.restore_selected(&mut fs_mgr.vfs);
                                     } else if let Some((tag, path)) =
@@ -5473,6 +5545,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                                         }
                                     }
                                 }
+                                _ => {}
                             }
                         }
                     } else if app_is_focused(&compositor, 1) {
@@ -5646,6 +5719,88 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                         enter_char_consumed = true;
 
                         notepad_app.menu = 0;
+                    } else if app_is_focused(&compositor, 11) {
+                        enter_char_consumed = true;
+
+                        match installer_app.activate_focused_control() {
+                            apps::installer::InstallerAction::None => {}
+                            apps::installer::InstallerAction::Format => {
+                                if installer_app.state != apps::installer::InstallState::Formatting
+                                    && installer_app.state != apps::installer::InstallState::Copying
+                                {
+                                    let formatted = with_busy_progress(
+                                        &mut fb,
+                                        mx,
+                                        my,
+                                        gui::ui_text(
+                                            "Disk biçimlendiriliyor...",
+                                            "Formatting disk...",
+                                        ),
+                                        || installer_app.format_selected_drive(),
+                                    );
+                                    if formatted {
+                                        filemanager_app.set_path("/media/hdd0");
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
+                                }
+                            }
+                            apps::installer::InstallerAction::Install => {
+                                if installer_app.state != apps::installer::InstallState::Formatting
+                                    && installer_app.state != apps::installer::InstallState::Copying
+                                {
+                                    if installer_app.disk_formatted || installer_app.confirm_install
+                                    {
+                                        let installed = with_busy_progress(
+                                            &mut fb,
+                                            mx,
+                                            my,
+                                            gui::ui_text(
+                                                "minOs kuruluyor...",
+                                                "Installing minOs...",
+                                            ),
+                                            || installer_app.perform_install(&mut fs_mgr.vfs),
+                                        );
+                                        if installed {
+                                            filemanager_app.set_path("/media/hdd0");
+                                        }
+                                        filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
+                                    } else {
+                                        installer_app.confirm_install = true;
+                                        installer_app.status_msg = (
+                                            "UYARI: Disk silinip biçimlendirilecek. Onaylamak için tekrar tıklayın.",
+                                            "WARNING: Disk will be erased and formatted. Click again to confirm.",
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    } else if app_is_focused(&compositor, 13) {
+                        enter_char_consumed = true;
+
+                        let (win_w, win_h) = focused_window_for_app(&compositor, 13)
+                            .map(|(_, w)| (w.width, w.height))
+                            .unwrap_or((640, 420));
+
+                        pkgmgr_app.activate_focused(win_w, win_h, &mut fs_mgr.vfs);
+                    } else if app_is_focused(&compositor, 14) {
+                        enter_char_consumed = true;
+
+                        match apps::controlpanel::activate_focused() {
+                            apps::controlpanel::CpAction::OpenSettings => {
+                                open_app(&mut compositor, 1);
+                            }
+                            apps::controlpanel::CpAction::NetTest => {
+                                apps::controlpanel::start_network_test();
+                            }
+                            apps::controlpanel::CpAction::PerfTest => {
+                                if apps::controlpanel::perf_phase()
+                                    != apps::controlpanel::PerfPhase::Collecting
+                                {
+                                    apps::controlpanel::start_perf_test();
+                                }
+                            }
+                            apps::controlpanel::CpAction::None => {}
+                        }
                     }
                 }
 
@@ -6068,6 +6223,58 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     if focused {
                         browser_app.forward();
                     }
+                }
+
+                // --- MouseKeys: fare çalışmadığında tuş takımıyla imleç/tıklama ---
+                drivers::keyboard::KeyAction::ToggleMouseKeys => {
+                    keyboard.mouse_keys = !keyboard.mouse_keys;
+                    compositor.push_toast(
+                        gui::ToastKind::Info,
+                        gui::ui_text("Fare Tuşları", "Mouse Keys"),
+                        if keyboard.mouse_keys {
+                            gui::ui_text("Tuş takımı ile fare açık", "Numpad controls mouse")
+                        } else {
+                            gui::ui_text("Tuş takımı ile fare kapalı", "Numpad controls mouse")
+                        },
+                        monotonic_ms(),
+                        2500,
+                    );
+                    force_render = true;
+                }
+                drivers::keyboard::KeyAction::MouseNumpadUp
+                | drivers::keyboard::KeyAction::MouseNumpadDown
+                | drivers::keyboard::KeyAction::MouseNumpadLeft
+                | drivers::keyboard::KeyAction::MouseNumpadRight => {
+                    // İmleci ekran sınırları içinde taşı (hız ayarıyla orantılı).
+                    let step = (mouse.speed.clamp(1, 10) as i32 + 3) * 2;
+                    let (dx, dy) = match action {
+                        drivers::keyboard::KeyAction::MouseNumpadUp => (0, -step),
+                        drivers::keyboard::KeyAction::MouseNumpadDown => (0, step),
+                        drivers::keyboard::KeyAction::MouseNumpadLeft => (-step, 0),
+                        _ => (step, 0),
+                    };
+                    mouse.x = (mouse.x + dx).clamp(0, width.saturating_sub(1) as i32);
+                    mouse.y = (mouse.y + dy).clamp(0, height.saturating_sub(1) as i32);
+                }
+                drivers::keyboard::KeyAction::MouseClickLeft => {
+                    // Basış bu turda değil, bir sonraki turda kenar olarak üretilir;
+                    // aksi halde bırakma kenarı asla oluşmaz ve düğme takılırdı.
+                    if mousekeys_click_left == 0 {
+                        mousekeys_click_left = 1;
+                    }
+                    force_render = true;
+                }
+                drivers::keyboard::KeyAction::MouseClickRight => {
+                    if mousekeys_click_right == 0 {
+                        mousekeys_click_right = 1;
+                    }
+                    force_render = true;
+                }
+                drivers::keyboard::KeyAction::MouseSpeedUp => {
+                    mouse.speed = mouse.speed.saturating_add(1).min(10);
+                }
+                drivers::keyboard::KeyAction::MouseSpeedDown => {
+                    mouse.speed = mouse.speed.saturating_sub(1).max(1);
                 }
 
                 drivers::keyboard::KeyAction::RunDialog => {
@@ -7296,6 +7503,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x1b'
             {
                 settings_app.static_ip_edit = false;
+            } else if ch == '\x1b'
+                && app_is_focused(&compositor, 11)
+                && installer_app.confirm_install
+            {
+                installer_app.confirm_install = false;
+                installer_app.status_msg = (
+                    "Hedef diski seçip önce 'Biçimlendir', sonra 'Tek Tıkla Kur' basınız.",
+                    "Select target disk, click 'Format' first, then 'One-Click Install'.",
+                );
             } else if app_is_focused(&compositor, 1) && settings_app.static_ip_edit && ch == '\x08'
             {
                 settings_app.static_ip_backspace();
@@ -7306,6 +7522,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 && ch.is_ascii_digit()
             {
                 settings_app.static_ip_input_char(ch);
+            } else if ch == '\x1b'
+                && app_is_focused(&compositor, 0)
+                && filemanager_app.actions_menu_open
+            {
+                filemanager_app.actions_menu_open = false;
             } else if ch == '\x1b'
                 && app_is_focused(&compositor, 0)
                 && filemanager_app.search_len > 0
@@ -7438,13 +7659,35 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             } else if ch == '\t' && app_is_focused(&compositor, 10) {
                 terminal_app.complete();
             } else if ch == '\t' && app_is_focused(&compositor, 7) {
-                taskmgr_app.focus_next_control();
+                if keyboard.shift {
+                    taskmgr_app.focus_prev_control();
+                } else {
+                    taskmgr_app.focus_next_control();
+                }
             } else if ch == '\t' && app_is_focused(&compositor, 1) {
-                settings_app.focus_next_control();
+                if keyboard.shift {
+                    settings_app.focus_prev_control();
+                } else {
+                    settings_app.focus_next_control();
+                }
             } else if ch == '\t' && app_is_focused(&compositor, 3) {
-                browser_app.focus_next_control();
+                if keyboard.shift {
+                    browser_app.focus_prev_control();
+                } else {
+                    browser_app.focus_next_control();
+                }
             } else if ch == '\t' && app_is_focused(&compositor, 0) {
-                filemanager_app.focus_next_control();
+                if keyboard.shift {
+                    filemanager_app.focus_prev_control();
+                } else {
+                    filemanager_app.focus_next_control();
+                }
+            } else if ch == '\t' && app_is_focused(&compositor, 13) {
+                pkgmgr_app.focus_next_control(keyboard.shift);
+            } else if ch == '\t' && app_is_focused(&compositor, 14) {
+                apps::controlpanel::focus_next_control(keyboard.shift);
+            } else if ch == '\t' && app_is_focused(&compositor, 11) {
+                installer_app.focus_next_control(keyboard.shift);
             } else {
                 let browser_focused = app_is_focused(&compositor, 3);
 
@@ -7770,27 +8013,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 crate::serial_print(" idle=");
                 crate::serial_print_dec(fw.idle_ms);
                 crate::serial_print(" ms\n");
-                terminate_app(
-                    fw.idx,
-                    &mut compositor,
-                    &mut filemanager_app,
-                    &mut settings_app,
-                    &mut notepad_app,
-                    &mut browser_app,
-                    &mut imageviewer_app,
-                    &mut musicplayer_app,
-                    &mut videoplayer_app,
-                    &mut taskmgr_app,
-                    &mut calculator_app,
-                    &mut paint_apps[fw.idx],
-                    &mut terminal_app,
-                    &mut installer_app,
-                    &mut viewer3d_app,
-                    &mut pkgmgr_app,
-                    &mut fps_game_app,
-                    &mut fps_3d_app,
-                );
-                watchdog::clear_frozen(fw.idx);
+                // Watchdog yalnızca donmayı bildirir; zaman aşımına uğrayan
+                // uygulama kullanıcı açıkça kapatana kadar çalışmaya devam eder.
+                watchdog::acknowledge_frozen(fw.idx);
             }
         }
 
@@ -8056,6 +8281,13 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             // Tarayıcı medya oynatıcılarının ses çıkışını render et.
             browser_app.render_audio(&mut audio_dev);
+        }
+
+        // Paket Yöneticisi uzak indirmesi: tarayıcıyla aynı şekilde kare kare
+        // ilerler; tek-bağlantılı TCP yolunu sahiplik (lease) ile korur.
+        {
+            let _pkg_context = apps::guard::ContextScope::new(13, apps::guard::NO_WINDOW);
+            pkgmgr_app.poll_download(&mut fs_mgr.vfs);
         }
 
         // Bes parcali, HDA PCM tabanli melodi yurutucusu. (HDA yoksa PIT/PC speaker fallback).

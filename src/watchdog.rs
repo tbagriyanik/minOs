@@ -2,11 +2,12 @@
 //!
 //! Ana render döngüsünden bağımsız olarak çalışır. Her izlenen uygulama için
 //! bir "son etkinlik zamanı" tutar ve bu zaman `WATCHDOG_TIMEOUT_MS`'ı aştığında
-//! uygulamayı donmuş olarak işaretler ve sonlandırır.
+//! uygulamayı donmuş olarak işaretler. Donmuş uygulamanın sonlandırılması
+//! watchdog tarafından otomatik olarak yapılmaz.
 //!
 //! Watchdog, APIC zamanlayıcı kesmesinde `timer_tick()` ile ilerler; yalnızca
 //! atomik/kısa kritik bölümlerde durum günceller ve donmuş adayları kuyruğa
-//! alır. Sonlandırma ve GUI mutasyonu ana döngüde `drain_frozen()` ile yapılır.
+//! alır. Donma bildirimleri ana döngüde `drain_frozen()` ile tüketilir.
 //!
 //! no_std + alloc ortamında çalışır.
 
@@ -236,6 +237,17 @@ impl Watchdog {
         }
     }
 
+    /// Donma bildirimini tüketir; pencereyi izleme listesinde tutar.
+    /// Uygulama açık kalır ve sonraki heartbeat ile yeniden normal duruma döner.
+    pub fn acknowledge_frozen(&mut self, idx: usize) {
+        for w in self.windows.iter_mut().take(self.watch_count) {
+            if w.idx == idx {
+                w.flagged_frozen = false;
+                return;
+            }
+        }
+    }
+
     /// Toplam sonlandırma sayısını döndürür.
     pub fn total_terminations(&self) -> u64 {
         self.total_terminations
@@ -299,6 +311,12 @@ pub fn unwatch(idx: usize) {
 pub fn clear_frozen(idx: usize) {
     let mut shared = SHARED.lock();
     shared.watchdog.clear_frozen(idx);
+}
+
+/// Donma bildirimini tüketir; pencereyi kapatmadan izlemeye devam eder.
+pub fn acknowledge_frozen(idx: usize) {
+    let mut shared = SHARED.lock();
+    shared.watchdog.acknowledge_frozen(idx);
 }
 
 /// APIC timer interrupt'ından çağrılır. Donanım kesmesi bağlamında çalışır;

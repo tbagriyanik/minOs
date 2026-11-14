@@ -195,6 +195,7 @@ pub enum RenderMode {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GameResult {
+    Menu,
     Playing,
     Won,
     Lost,
@@ -333,7 +334,7 @@ impl FpsGameApp {
             hits: 0,
             shooting: false,
             shoot_timer: 0,
-            result: GameResult::Playing,
+            result: GameResult::Menu,
             render_mode: RenderMode::Mode3D,
             enemies,
             enemy_count: n,
@@ -1456,6 +1457,15 @@ impl FpsGameApp {
         let view_y = win_y + 30 + crate::gui::sp(24) + 2;
         let view_h = win_h.saturating_sub((view_y - win_y) + 26);
 
+        if self.result == GameResult::Menu {
+            if budget.is_expired() {
+                return false;
+            }
+            fb.draw_rect(win_x + 2, view_y, win_w.saturating_sub(4), view_h, 0x101722);
+            self.render_result_menu(fb, win_x, view_y, view_h, win_w);
+            return true;
+        }
+
         // Görünüm moduna göre sahne çiz.
         let mut completed = true;
         match self.render_mode {
@@ -1549,6 +1559,10 @@ impl FpsGameApp {
             }
         }
 
+        if completed && self.result != GameResult::Playing {
+            self.render_result_menu(fb, win_x, view_y, view_h, win_w);
+        }
+
         completed
     }
 
@@ -1563,7 +1577,6 @@ impl FpsGameApp {
         let _ = self.render_content_with_budget(fb, win_x, win_y, win_w, win_h, u64::MAX);
     }
 
-    #[allow(dead_code)]
     fn render_result_menu(
         &self,
         fb: &mut Framebuffer,
@@ -1576,11 +1589,19 @@ impl FpsGameApp {
             return;
         }
         let panel_w = win_w.min(360);
-        let panel_h = 92;
+        let panel_h = if self.result == GameResult::Menu {
+            154
+        } else {
+            104
+        };
         let panel_x = win_x + win_w.saturating_sub(panel_w) / 2;
         let panel_y = view_y + view_h.saturating_sub(panel_h) / 2;
         fb.draw_rounded_rect_alpha(panel_x, panel_y, panel_w, panel_h, 8, 0x080B12, 238);
         let (title, color) = match self.result {
+            GameResult::Menu => (
+                crate::gui::ui_text("FPS 3D OYUN", "FPS 3D GAME"),
+                Color::ACCENT_YELLOW,
+            ),
             GameResult::Won => (
                 crate::gui::ui_text("KAZANDIN!", "YOU WIN!"),
                 Color::ACCENT_GREEN,
@@ -1591,23 +1612,74 @@ impl FpsGameApp {
             ),
             GameResult::Playing => ("", Color::TEXT_MAIN),
         };
-        MinGuiCompositor::draw_string(fb, panel_x + 58, panel_y + 20, title, color);
-        MinGuiCompositor::draw_string(
-            fb,
-            panel_x + 58,
-            panel_y + 52,
-            crate::gui::ui_text("R veya BOS: Yeniden baslat", "R or SPACE: Restart"),
-            Color::TEXT_MAIN,
-        );
+        let title_x = panel_x + panel_w.saturating_sub(MinGuiCompositor::text_width(title, 1)) / 2;
+        MinGuiCompositor::draw_string(fb, title_x, panel_y + 18, title, color);
+        match self.result {
+            GameResult::Menu => {
+                let controls = [
+                    crate::gui::ui_text(
+                        "WASD: Hareket  |  Fare: Bakis",
+                        "WASD: Move  |  Mouse: Look",
+                    ),
+                    crate::gui::ui_text("Sol tik / BOS: Ates", "Left click / SPACE: Shoot"),
+                    crate::gui::ui_text("T: 2D / 3D gorunum", "T: Toggle 2D / 3D view"),
+                    crate::gui::ui_text("BOS/ENTER/Tikla: Basla", "SPACE/ENTER/Click: Start"),
+                ];
+                for (i, text) in controls.iter().enumerate() {
+                    let text_x =
+                        panel_x + panel_w.saturating_sub(MinGuiCompositor::text_width(text, 1)) / 2;
+                    MinGuiCompositor::draw_string(
+                        fb,
+                        text_x,
+                        panel_y + 46 + i * 22,
+                        text,
+                        if i == controls.len() - 1 {
+                            Color::ACCENT_YELLOW
+                        } else {
+                            Color::TEXT_MAIN
+                        },
+                    );
+                }
+            }
+            GameResult::Won | GameResult::Lost => {
+                let prompt = crate::gui::ui_text(
+                    "R, BOS veya tikla: Menuye don",
+                    "R, SPACE or click: Main menu",
+                );
+                let prompt_x =
+                    panel_x + panel_w.saturating_sub(MinGuiCompositor::text_width(prompt, 1)) / 2;
+                MinGuiCompositor::draw_string(fb, prompt_x, panel_y + 58, prompt, Color::TEXT_MAIN);
+            }
+            GameResult::Playing => {}
+        }
     }
 
     /// Klavye girdisini işle. true dönerse tüketildi.
     pub fn handle_key(&mut self, ch: char, audio_dev: &mut AudioDevice) -> bool {
+        if self.result == GameResult::Menu {
+            match ch {
+                ' ' | '\n' | '\r' => {
+                    self.result = GameResult::Playing;
+                    return true;
+                }
+                't' | 'T' => {
+                    self.render_mode = match self.render_mode {
+                        RenderMode::Mode3D => RenderMode::TopDown2D,
+                        RenderMode::TopDown2D => RenderMode::Mode3D,
+                    };
+                    return true;
+                }
+                _ => return false,
+            }
+        }
         if self.result != GameResult::Playing {
             if ch == 'r' || ch == 'R' || ch == ' ' {
                 *self = Self::new();
                 return true;
             }
+            return false;
+        }
+        if ch == '\n' || ch == '\r' {
             return false;
         }
         match ch {
@@ -1676,6 +1748,9 @@ impl FpsGameApp {
 
     /// Ok tuşu ile dönüş (tuş basımı kaydı, gerçek dönüş update() içinde).
     pub fn handle_arrow(&mut self, left: bool, right: bool) {
+        if self.result != GameResult::Playing {
+            return;
+        }
         if left {
             self.key_mask |= KEY_LEFT;
         }
@@ -1686,6 +1761,9 @@ impl FpsGameApp {
 
     /// Ok tuşu ile ileri/geri hareket (tuş basımı kaydı, gerçek hareket update() içinde).
     pub fn handle_arrow_up_down(&mut self, up: bool, down: bool) {
+        if self.result != GameResult::Playing {
+            return;
+        }
         if up {
             self.key_mask |= KEY_UP;
         }
@@ -1696,11 +1774,21 @@ impl FpsGameApp {
 
     /// Fare hareketi ile bakış.
     pub fn handle_mouse_look(&mut self, dx: f32) {
-        self.look(dx);
+        if self.result == GameResult::Playing {
+            self.look(dx);
+        }
     }
 
     /// Fare tıklaması ile ateş.
     pub fn handle_mouse_click(&mut self, audio_dev: &mut AudioDevice) -> bool {
+        if self.result == GameResult::Menu {
+            self.result = GameResult::Playing;
+            return true;
+        }
+        if self.result != GameResult::Playing {
+            *self = Self::new();
+            return true;
+        }
         if self.shoot_timer == 0 {
             self.shoot_timer = 10;
             self.shooting = true;

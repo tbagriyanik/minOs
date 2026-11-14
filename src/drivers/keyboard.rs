@@ -47,6 +47,15 @@ pub enum KeyAction {
     Screenshot,
     RunDialog,
     Properties,
+    ToggleMouseKeys,
+    MouseNumpadUp,
+    MouseNumpadDown,
+    MouseNumpadLeft,
+    MouseNumpadRight,
+    MouseClickLeft,
+    MouseClickRight,
+    MouseSpeedUp,
+    MouseSpeedDown,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -65,6 +74,9 @@ pub struct KeyboardState {
     pub alt: bool,
     pub super_key: bool,
     pub super_key_combo: bool,
+    /// Fare çalışmadığında tuş takımıyla fare sürme (MouseKeys) modu.
+    /// Açıkken sayısal tuş takımı hareket ve tıklama üretir.
+    pub mouse_keys: bool,
     pub last_char: Option<char>,
     action_queue: [Option<KeyAction>; 8],
     action_head: usize,
@@ -85,6 +97,7 @@ impl KeyboardState {
             alt: false,
             super_key: false,
             super_key_combo: false,
+            mouse_keys: false,
             last_char: None,
             action_queue: [None; 8],
             action_head: 0,
@@ -193,6 +206,68 @@ impl KeyboardState {
             return None;
         }
 
+        // Fare tuşları (MouseKeys) modu: tuş takımı fare imlecini sürer.
+        // NumLock durumundan bağımsız olarak sayısal tuşlar fare eylemi üretir;
+        // böylece yazı girişi bozulmadan fare kurtarma modu çalışır.
+        if self.mouse_keys {
+            match scancode {
+                0x48 => {
+                    self.push_action(KeyAction::MouseNumpadUp);
+                    return None;
+                }
+                0x50 => {
+                    self.push_action(KeyAction::MouseNumpadDown);
+                    return None;
+                }
+                0x4B => {
+                    self.push_action(KeyAction::MouseNumpadLeft);
+                    return None;
+                }
+                0x4D => {
+                    self.push_action(KeyAction::MouseNumpadRight);
+                    return None;
+                }
+                // Çapraz hareket: 7/9/1/3 köşe tuşları iki yönü birden üretir.
+                0x47 => {
+                    self.push_action(KeyAction::MouseNumpadUp);
+                    self.push_action(KeyAction::MouseNumpadLeft);
+                    return None;
+                }
+                0x49 => {
+                    self.push_action(KeyAction::MouseNumpadUp);
+                    self.push_action(KeyAction::MouseNumpadRight);
+                    return None;
+                }
+                0x4F => {
+                    self.push_action(KeyAction::MouseNumpadDown);
+                    self.push_action(KeyAction::MouseNumpadLeft);
+                    return None;
+                }
+                0x51 => {
+                    self.push_action(KeyAction::MouseNumpadDown);
+                    self.push_action(KeyAction::MouseNumpadRight);
+                    return None;
+                }
+                0x4C | 0x52 => {
+                    self.push_action(KeyAction::MouseClickLeft);
+                    return None;
+                }
+                0x53 => {
+                    self.push_action(KeyAction::MouseClickRight);
+                    return None;
+                }
+                0x4E => {
+                    self.push_action(KeyAction::MouseSpeedUp);
+                    return None;
+                }
+                0x4A => {
+                    self.push_action(KeyAction::MouseSpeedDown);
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         if scancode == 0x54 {
             // Alt+PrintScreen (SysRq make code)
             self.push_action(KeyAction::Screenshot);
@@ -210,7 +285,12 @@ impl KeyboardState {
                 return None;
             }
             0x45 => {
-                self.num_lock = !self.num_lock;
+                if self.ctrl && self.alt {
+                    // Ctrl+Alt+NumLock: fare tuşları (MouseKeys) aç/kapat
+                    self.push_action(KeyAction::ToggleMouseKeys);
+                } else {
+                    self.num_lock = !self.num_lock;
+                }
                 return None;
             }
             0x1D => {
@@ -471,6 +551,12 @@ impl KeyboardState {
                 }
                 self.super_key_combo = false;
             }
+            return None;
+        }
+
+        // Fare tuşları modunda tuş takımı Enter'ı sol tıklamadır.
+        if self.mouse_keys && scancode == 0x1C {
+            self.push_action(KeyAction::MouseClickLeft);
             return None;
         }
 

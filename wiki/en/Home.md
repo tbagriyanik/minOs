@@ -28,8 +28,8 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Lines of Code** | ~145,300 lines (Rust: `src/` + `tests/` + `build.rs`) |
-| **Unit Tests** | 271 passed / 0 failed |
+| **Total Lines of Code** | 139,168 lines (Rust: `src/` + `tests/` + `build.rs`) |
+| **Unit Tests** | 290 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
@@ -52,3 +52,4 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 - **Display Settings:** PNG wallpaper thumbnails are pre-decoded during boot; hourglass cursor shown during long operations.
 - **Watchdog:** Frozen-app detection runs independently in the APIC timer interrupt; termination is deferred to the main loop via `drain_frozen()` and only the stuck app is flagged.
 - **FPS 3D Performance Metrics:** FPS 3D Game measures real `fps`/`min_fps`/`frame_ms` from completed frames (`[FPS3D-METRICS]`); partial frames are rolled back on budget expiry. `test_qemu.ps1 -FpsStressTest` runs 10/30/60-minute stress validation.
+- **FPS Game Menus & Keyboard Access:** The FPS game has start/result menus; Tab navigation, Enter confirmation and Esc cancellation are available on the Welcome screen and supported form controls.

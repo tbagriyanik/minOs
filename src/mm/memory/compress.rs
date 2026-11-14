@@ -24,12 +24,20 @@
 //!
 //! Bu biçim deterministiktir ve host testleri (saf Rust) ile doğrulanır.
 
+use alloc::boxed::Box;
+
 use crate::arch::x86_64::sync::SpinMutex;
 
 /// Sıkıştırılmış sayfa havuzu kapasitesi (kayıt sayısı).
 pub const MAX_STORED_PAGES: usize = 64;
 /// Kayıt başına azami sıkıştırılmış boy (4 KiB sayfa sınırı).
 pub const MAX_COMPRESSED_BYTES: usize = 4096;
+/// Sıkıştırma çıktısı için gereken azami tampon (girdi + literal çalıştırma
+/// overhead'i: en kotu durumda her 128 bayt için 1 token baytı eklenir,
+/// yani 4096 + 32 = 4128 bayt). `store_page` ve testler bu tamponu kullanır;
+/// depodaki Kayıt `MAX_COMPRESSED_BYTES` (4096) ile sınırlıdır çünkü kazanç
+/// olan sıkıştırma çıktısı her zaman girdiden küçüktür.
+pub const MAX_COMPRESSED_BUFFER: usize = MAX_COMPRESSED_BYTES + MAX_LITERAL + 2;
 /// Eşleşme aramasında taranacak azami geri mesafe.
 const MAX_DISTANCE: usize = 4096;
 /// Azami eşleşme uzunluğu (belirteç 6 bit uzunluk taşır: 3..=66).
@@ -154,6 +162,14 @@ pub fn compress(src: &[u8], dst: &mut [u8]) -> Result<usize, CompressError> {
     }
 
     if literal_len > 0 {
+        // Sıkıştırılamaz (rastgele) veride daha kaç bayt daha yazılacağı kalan
+        // literallerden bilinir; tampon yetmezse "orta yolda" OutputTooSmall
+        // yerine karar önceden verilir. Sıkıştırılabilir verinin çıktısı
+        // girdiden çok daha erken bittiği için kazanç yolu aynı kalır.
+        let remaining_tokens = literal_len.div_ceil(MAX_LITERAL);
+        if out + literal_len + remaining_tokens > dst.len() {
+            return Err(CompressError::NoGain);
+        }
         flush_literals(dst, &mut out, literal_start, literal_len)?;
     }
     if out >= src.len() {
@@ -241,10 +257,12 @@ impl CompressionStats {
 }
 
 /// Tek bir depo kaydı.
-#[derive(Clone, Copy)]
+///
+/// Veri tamponu `Box` içindedir: havuzun `const` başlatıcısı 256 KiB'lık
+/// gövdeleri yığın çerçevesinde kopyalamaz (bkz. `CompressedPool`).
 struct StoredPage {
     /// Sıkıştırılmış veri (kullanılan kısım `len` bayt).
-    data: [u8; MAX_COMPRESSED_BYTES],
+    data: Box<[u8; MAX_COMPRESSED_BYTES]>,
     len: usize,
     /// Açılan (ham) sayfa boyu.
     raw_len: usize,
@@ -252,9 +270,9 @@ struct StoredPage {
 }
 
 impl StoredPage {
-    const fn empty() -> Self {
+    fn empty() -> Self {
         Self {
-            data: [0; MAX_COMPRESSED_BYTES],
+            data: Box::new([0; MAX_COMPRESSED_BYTES]),
             len: 0,
             raw_len: 0,
             used: false,
@@ -263,6 +281,8 @@ impl StoredPage {
 }
 
 struct CompressedPool {
+    /// Kayıtlar hazır (boş) tutulur; gövdeleri `Box` olduğu için havuzun
+    /// yığın çerçevesinde yalnızca işaretçi dizisi kadarı bulunur.
     pages: [StoredPage; MAX_STORED_PAGES],
     next_slot: usize,
     stored_bytes: u64,
@@ -274,9 +294,9 @@ struct CompressedPool {
 }
 
 impl CompressedPool {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
-            pages: [StoredPage::empty(); MAX_STORED_PAGES],
+            pages: core::array::from_fn(|_| StoredPage::empty()),
             next_slot: 0,
             stored_bytes: 0,
             raw_bytes: 0,
@@ -288,7 +308,19 @@ impl CompressedPool {
     }
 }
 
-static POOL: SpinMutex<CompressedPool> = SpinMutex::new(CompressedPool::new());
+/// `const` başlatma `Box` ayıramadığı için havuz ilk kullanımda oluşturulur;
+/// gövdeler `Box` olduğundan bu sırada yığın çerçevesi yalnızca işaretçi
+/// dizisi kadardır.
+static POOL: SpinMutex<Option<CompressedPool>> = SpinMutex::new(None);
+
+/// Havuzu (gerekirse) başlatıp kilitli referansını döner.
+fn pool() -> crate::arch::x86_64::sync::SpinGuard<'static, Option<CompressedPool>> {
+    let mut guard = POOL.lock();
+    if guard.is_none() {
+        *guard = Some(CompressedPool::new());
+    }
+    guard
+}
 
 /// Bir sayfayı sıkıştırıp depoya ekler; sıkıştırılmış boyu döner.
 ///
@@ -299,20 +331,20 @@ pub fn store_page(raw: &[u8]) -> Result<usize, CompressError> {
         return Err(CompressError::Corrupt);
     }
     if raw.iter().all(|byte| *byte == 0) {
-        let mut pool = POOL.lock();
-        pool.zero_pages += 1;
+        pool().as_mut().expect("havuz hazir").zero_pages += 1;
         return Ok(0);
     }
-    let mut scratch = [0u8; MAX_COMPRESSED_BYTES];
+    let mut scratch = [0u8; MAX_COMPRESSED_BUFFER];
     let compressed = match compress(raw, &mut scratch) {
         Ok(len) => len,
         Err(CompressError::NoGain) => {
-            POOL.lock().rejected += 1;
+            pool().as_mut().expect("havuz hazir").rejected += 1;
             return Err(CompressError::NoGain);
         }
         Err(other) => return Err(other),
     };
-    let mut pool = POOL.lock();
+    let mut guard = pool();
+    let pool = guard.as_mut().expect("havuz hazir");
     let slot = pool.next_slot % MAX_STORED_PAGES;
     if pool.pages[slot].used {
         pool.stored_bytes = pool
@@ -338,7 +370,8 @@ pub fn store_page(raw: &[u8]) -> Result<usize, CompressError> {
 
 /// Depodaki en eski kaydı açar ve `dst` tamponuna yazar; açılan uzunluğu döner.
 pub fn retrieve_page(dst: &mut [u8]) -> Result<usize, CompressError> {
-    let mut pool = POOL.lock();
+    let mut guard = pool();
+    let pool = guard.as_mut().expect("havuz hazir");
     let Some(slot) = pool.pages.iter().position(|page| page.used) else {
         return Err(CompressError::Corrupt);
     };
@@ -349,14 +382,15 @@ pub fn retrieve_page(dst: &mut [u8]) -> Result<usize, CompressError> {
     pool.raw_bytes = pool.raw_bytes.saturating_sub(raw_len as u64);
     pool.pages[slot].used = false;
     pool.count = pool.count.saturating_sub(1);
-    drop(pool);
+    drop(guard);
     let opened = decompress(&scratch[..len], dst)?;
     Ok(opened)
 }
 
 /// Anlık sıkıştırma istatistikleri.
 pub fn stats() -> CompressionStats {
-    let pool = POOL.lock();
+    let guard = pool();
+    let pool = guard.as_ref().expect("havuz hazir");
     CompressionStats {
         pages: pool.count,
         stored_bytes: pool.stored_bytes,
@@ -393,7 +427,7 @@ pub fn self_test() -> bool {
 
     // 1. Sıfır sayfa: RLE çalıştırması çok küçük bir çıktı üretmeli.
     let zeros = [0u8; 4096];
-    let mut buffer = [0u8; 4096];
+    let mut buffer = [0u8; MAX_COMPRESSED_BUFFER];
     let zero_len = match compress(&zeros, &mut buffer) {
         Ok(len) => len,
         Err(_) => {
@@ -437,6 +471,7 @@ pub fn self_test() -> bool {
     let pool_ok = stored > 0 && fetched_len == pattern.len() && fetched == pattern;
 
     let ok = zero_ok && pattern_ok && noise_rejected && pool_ok;
+
     serial_print("[MZRAM] Sikistirma (sifir=");
     serial_print_dec(zero_len as u64);
     serial_print(" B, desen=");
@@ -453,10 +488,10 @@ mod tests {
     use super::*;
 
     fn roundtrip(data: &[u8]) -> usize {
-        let mut packed = [0u8; MAX_COMPRESSED_BYTES];
+        let mut packed = [0u8; MAX_COMPRESSED_BUFFER];
         let len = compress(data, &mut packed).expect("sikistirma basarili olmali");
         assert!(len < data.len(), "cikti girdiden kucuk olmali");
-        let mut opened = [0u8; MAX_COMPRESSED_BYTES];
+        let mut opened = [0u8; MAX_COMPRESSED_BUFFER];
         let opened_len = decompress(&packed[..len], &mut opened).expect("acilabilmeli");
         assert_eq!(opened_len, data.len());
         assert_eq!(&opened[..opened_len], data);
@@ -504,7 +539,7 @@ mod tests {
             seed ^= seed << 17;
             *byte = seed as u8;
         }
-        let mut out = [0u8; MAX_COMPRESSED_BYTES];
+        let mut out = [0u8; MAX_COMPRESSED_BUFFER];
         assert_eq!(compress(&noise, &mut out), Err(CompressError::NoGain));
     }
 
@@ -528,5 +563,25 @@ mod tests {
         let mut out = [0u8; 8];
         assert_eq!(compress(&[], &mut out), Ok(0));
         assert_eq!(decompress(&[], &mut out), Ok(0));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "x86_64")))]
+mod tuning {
+    use super::*;
+
+    #[test]
+    fn show_noise_binary() {
+        let mut noise = [0u8; 4096];
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        for byte in noise.iter_mut() {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            *byte = seed as u8;
+        }
+        let mut buffer = [0u8; MAX_COMPRESSED_BUFFER];
+        let r = compress(&noise, &mut buffer);
+        assert_eq!(r, Err(CompressError::NoGain));
     }
 }

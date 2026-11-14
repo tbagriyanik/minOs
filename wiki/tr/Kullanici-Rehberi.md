@@ -77,7 +77,8 @@ Masaüstü kullanımı, MinShell komutları ve kısayol referansı.
 - **Pencere Değiştirme:** `Alt+Tab` (ileri), `Shift+Alt+Tab` (geri).
 - **Super Kısayolları:** `Super+D` masaüstü, `Super+M` tüm pencereleri küçültür, `Super+E` Dosya Yöneticisi.
 - **Sistem Tepsisi:** Klavye rozeti (`TR`/`EN`), tema düğmesi, SES düğmesi, canlı saat.
-- **Tema Değiştirme:** Görev çubuğundaki renk örneği, Sistem Ayarları > Değiştir, tema palet şeridi veya masaüstü sağ tık > Tema Değiştir.
+- **Tema Değiştirme:** Görev çubuğundaki renk örneği, Sistem Ayarları > Değiştir veya tema palet şeridinden yapılır.
+- **Masaüstü Sağ Tık Menüsü:** Boş alanda **Yeni** alt menüsüyle dosya/klasör oluşturabilir, masaüstünü **Yenile**'yebilir veya **Görev Yöneticisi**'ni açabilirsiniz.
 - **Not Defteri Kısayolları:** `Ctrl+C` (Kopyala), `Ctrl+X` (Kes), `Ctrl+V` (Yapıştır), `Ctrl+A` (Tümünü Seç), `Ctrl+Z` (Geri Al), `Ctrl+Y` (İleri Al), `Delete`, `Home`/`End`, `Shift+Ok tuşları`.
 - **Çizim Tahtası:** Renk, Silgi, Aç veya Kaydet seçin; sol tuşu basılı tutarak çizin. `C` temizler, `E` silgiyi açar/kapar. 24-bit BMP olarak `/root/Documents/cizim.bmp` konumuna kaydedilir.
 - **Resim Görüntüleyici:** `+`/`=` yakınlaştırır, `-` uzaklaştırır, `0` varsayılan ölçeğe döner.

@@ -11,17 +11,13 @@ impl MinGuiCompositor {
     // -------------------------------------------------------------------
     /// Hızlı simge etiketleri (TR + EN). Şerit genişliği dile göre değişmesin
     /// diye her iki dilin en uzun etiketi ölçülür.
-    const DESKTOP_QUICK_LABELS: [&str; 12] = [
+    const DESKTOP_QUICK_LABELS: [&str; 8] = [
         "Bilgisayarım",
-        "Notlar",
         "SarmanNet",
-        "Çalma Listesi",
         "Sistem Ayarları",
         "minOs'u Kur",
         "Computer",
-        "Notes",
         "SarmanNet",
-        "Playlist",
         "Settings",
         "Install minOs",
     ];
@@ -100,18 +96,14 @@ impl MinGuiCompositor {
         let desk_icons = if ui_english() {
             [
                 ("Computer", 0),
-                ("Notes", 1),
                 ("SarmanNet", 2),
-                ("Playlist", 3),
                 ("Settings", 4),
                 ("Install minOs", 0),
             ]
         } else {
             [
                 ("Bilgisayarım", 0),
-                ("Notlar", 1),
                 ("SarmanNet", 2),
-                ("Çalma Listesi", 3),
                 ("Sistem Ayarları", 4),
                 ("minOs'u Kur", 0),
             ]

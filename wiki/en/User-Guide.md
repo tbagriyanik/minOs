@@ -77,7 +77,8 @@ Desktop usage, MinShell commands and shortcut reference.
 - **Window Switching:** `Alt+Tab` (forward), `Shift+Alt+Tab` (backward).
 - **Super Shortcuts:** `Super+D` desktop, `Super+M` minimize all windows, `Super+E` File Manager.
 - **System Tray:** Keyboard layout (`TR`/`EN`), theme button, volume button, live clock.
-- **Theme Change:** Taskbar color swatch, System Settings > Change, theme palette strip, or desktop right-click > Change Theme.
+- **Theme Change:** Use the taskbar color swatch, System Settings > Change, or the theme palette strip.
+- **Desktop Right-Click Menu:** On an empty area, use **New** to create a file/folder, **Refresh** to update the desktop list, or open **Task Manager**.
 - **Notepad Shortcuts:** `Ctrl+C` (Copy), `Ctrl+X` (Cut), `Ctrl+V` (Paste), `Ctrl+A` (Select All), `Ctrl+Z` (Undo), `Ctrl+Y` (Redo), `Delete`, `Home`/`End`, `Shift+Arrow keys`.
 - **Paint:** Select color, Eraser, Open or Save; draw with left mouse button held. `C` clears, `E` toggles eraser. Saved as 24-bit BMP to `/root/Documents/cizim.bmp`.
 - **Image Viewer:** `+`/`=` zoom in, `-` zoom out, `0` default scale.

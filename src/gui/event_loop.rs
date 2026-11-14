@@ -124,7 +124,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
     // Widget/Component agaci mimarisini (yerlesim, Tab odagi, olaylar) dogrula.
 
-    if !gui::widget::self_test(&mut fb) {
+    if !gui::widget::self_test() {
         boot::text_console::fatal("Grafik arayuz oz-denetimi basarisiz; GUI acilmadi");
     }
 
@@ -1365,9 +1365,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     // "Yeni ▶" ogesine tiklandiysa alt menuyu ac / kapa, ana menuyu kapatma
 
                     let is_sub_parent = match compositor.context_kind {
-                        gui::ContextKind::Desktop => clicked_item == 1,
+                        gui::ContextKind::Desktop => clicked_item == 0,
 
-                        gui::ContextKind::DesktopItem => clicked_item == 4,
+                        gui::ContextKind::DesktopItem => clicked_item == 5,
 
                         gui::ContextKind::FileManager => clicked_item == 5,
 
@@ -1381,26 +1381,11 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     } else {
                         match compositor.context_kind {
                             gui::ContextKind::Desktop => match clicked_item {
-                                0 => {
-                                    filemanager_app.set_path("/root/Documents");
-                                    filemanager_app.refresh_from_vfs(&fs_mgr.vfs);
-                                    open_app(&mut compositor, 0);
-                                }
-
-                                2 => {
-                                    desktop_files
-                                        .paste_selection(&mut file_clipboard, &mut fs_mgr.vfs);
-                                }
-
-                                3 => open_app(&mut compositor, 1),
-
-                                4 => open_app(&mut compositor, 7),
-
-                                5 => {
+                                1 => {
                                     desktop_files.refresh_from_vfs(&fs_mgr.vfs);
                                 }
 
-                                6 => open_app(&mut compositor, 2),
+                                2 => open_app(&mut compositor, 7),
 
                                 _ => {}
                             },
@@ -1465,13 +1450,39 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                                     3 => desktop_files.copy_selection(&mut file_clipboard, false),
 
-                                    4 => {} // Yeni ▶
+                                    4 => {
+                                        desktop_files
+                                            .paste_selection(&mut file_clipboard, &mut fs_mgr.vfs);
+                                    }
 
-                                    5 => desktop_files.begin_rename(),
+                                    5 => {} // Yeni ▶ submenu is handled above.
 
-                                    6 => {
+                                    6 => desktop_files.begin_rename(),
+
+                                    7 => {
                                         desktop_files.delete_selected(&mut fs_mgr.vfs);
                                         desktop_files.refresh_from_vfs(&fs_mgr.vfs);
+                                    }
+
+                                    8 => {
+                                        if let Some(file_idx) = compositor.context_file_idx {
+                                            if file_idx < desktop_files.file_count {
+                                                desktop_files.selected_idx = file_idx;
+                                                let file = &desktop_files.files[file_idx];
+                                                properties_name.clear();
+                                                properties_name.push_str(file.display_name());
+                                                properties_type.clear();
+                                                properties_type.push_str(file.file_type);
+                                                properties_size.clear();
+                                                properties_size.push_str(file.size_str.as_str());
+                                                properties_location.clear();
+                                                properties_location.push_str(desktop_files.path());
+                                                properties_path.clear();
+                                                let full_path = desktop_files.selected_full_path();
+                                                properties_path.push_str(&full_path);
+                                                properties_open = true;
+                                            }
+                                        }
                                     }
 
                                     _ => {}
@@ -2326,7 +2337,7 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
             // Masaustu sol serit hizli simgeleri (cizimle ayni kanonik geometri).
 
             if !consumed && !compositor.is_point_covered_by_window(mx, my) && my < tb_y {
-                let desk_apps = [0, 2, 3, 5, 1, 11];
+                let desk_apps = [0, 3, 1, 11];
 
                 // Kurulu sistemde kaldirilan kurulum kisayolunu (app 11) atla.
 

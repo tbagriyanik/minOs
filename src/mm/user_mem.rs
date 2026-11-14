@@ -51,6 +51,36 @@ pub const MAX_MMAP_REGIONS: usize = 16;
 /// Mmap arenasının üst sınırı; kullanıcı yığınından (≈128 TiB) uzak kalır.
 pub const MMAP_LIMIT: u64 = 0x0000_0000_4000_0000; // 1 GiB
 
+/// `MAP_SHARED_FILE` bölgelerinin prosesler arası ortak adres arenası.
+///
+/// Sıradan `mmap` adresleri `mmap_base + mmap_used` ile proses başına
+/// rastgele seçilir; paylaşımlı eşlemelerin ise tüm proseslerde **aynı**
+/// sanal adreste buluşması gerekir (zero-copy paylaşım adres + uzunluk
+/// anahtarıyla çalışır). Bu yüzden paylaşımlı bölgeler ASLR tabanını
+/// atlayıp bu sabit, sayfa hizalı arena içinden monotonik tahsis edilir.
+/// Üst sınır, anonim mmap üst sınırının (`mmap_base ≤ 256 MiB` + 64 MiB
+/// kota) altında kalacak ve heap/mmap/stack aralıklarıyla çakışmayacak
+/// şekilde seçilmiştir.
+pub const SHARED_ARENA_BASE: u64 = 0x0000_0000_2000_0000; // 512 MiB
+pub const SHARED_ARENA_LIMIT: u64 = 0x0000_0000_3800_0000; // 896 MiB
+static SHARED_ARENA_NEXT: AtomicU64 = AtomicU64::new(SHARED_ARENA_BASE);
+
+/// Paylaşımlı arena'dan `len` bayt ayırır; yoksa `None`.
+fn shared_arena_alloc(len: u64) -> Option<u64> {
+    loop {
+        let current = SHARED_ARENA_NEXT.load(Ordering::Acquire);
+        let next = current.checked_add(len)?;
+        if next > SHARED_ARENA_LIMIT {
+            return None;
+        }
+        match SHARED_ARENA_NEXT.compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => return Some(current),
+            Err(_) => continue,
+        }
+    }
+}
+
 /// Tembel sayfaların gösterdiği kalıcı sıfır çerçevesi (fiziksel adres).
 ///
 /// Lazy PTE'ler bu çerçeveyi **salt-okunur** gösterir: okumalar sıfır döner,
@@ -343,6 +373,29 @@ impl SharedRegion {
 static SHARED_REGIONS: crate::arch::x86_64::sync::SpinMutex<[SharedRegion; MAX_SHARED_REGIONS]> =
     crate::arch::x86_64::sync::SpinMutex::new([SharedRegion::empty(); MAX_SHARED_REGIONS]);
 
+/// `len` boyutunda kayıtlı bir paylaşımlı bölge varsa `(addr, len)` döner.
+/// Paylaşımlı eşlemeler prosesler arası aynı adresi kullanmak zorunda
+/// olduğundan ikinci ve sonraki `MAP_SHARED_FILE` çağrıları bu kayıtla
+/// eşleşir (zero-copy).
+fn find_shared_region(len: u64) -> Option<(u64, u64)> {
+    SHARED_REGIONS
+        .lock()
+        .iter()
+        .find(|region| region.used && region.len == len)
+        .map(|region| (region.addr, region.len))
+}
+
+/// Test/boot yardımı: paylaşılan sıfır sayfası çerçevesini önden ayırır.
+///
+/// Tembel eşleme ilk `brk`/`mmap` çağrısında sıfır çerçevesini tembel olarak
+/// ayırır; bu kalıcı çekirdek kaynağı olduğundan boot'ta bir kez
+/// `ensure_zero_page` ile hazırlanır. Böylece süreç yaşam döngüsü
+/// testlerinin `free_memory_bytes` karşılaştırmaları bu tek seferlik
+/// tahsisi "sızıntı" olarak görmez.
+pub fn ensure_zero_page(pmm: &mut PhysicalMemoryManager) {
+    let _ = zero_page_frame(pmm);
+}
+
 /// `addr`/`len` ile eşleşen paylaşımlı bölgenin çerçeve listesini döner ve
 /// referansını artırır.
 pub fn shared_region_frames(addr: u64, len: u64) -> Option<alloc::vec::Vec<u64>> {
@@ -412,7 +465,7 @@ fn map_shared_reuse(
             return Err("Bellek araligi zaten eslenmis");
         }
         // Paylaşım defteri artırılır; sahiplik referansı sürece aittir.
-        if !vmm::mark_frame_shared(*frame) {
+        if !vmm::share_frame_mapping(*frame) {
             unmap_range_keep_frames(process, simple, address);
             return Err("Paylasim defteri dolu");
         }
@@ -501,7 +554,7 @@ fn map_shared_range(
         unsafe {
             core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE as usize);
         }
-        if !vmm::mark_frame_shared(frame) || !process.resources.record_user_frame(frame) {
+        if !vmm::share_frame_mapping(frame) || !process.resources.record_user_frame(frame) {
             pmm.free_frame(frame);
             unmap_range(process, start_page, address, pmm);
             return Err("Paylasim defteri veya kaynak listesi dolu");
@@ -557,8 +610,6 @@ pub fn mmap(
     let Some(slot) = process.mmap_regions.iter().position(|region| !region.used) else {
         return Err("Mmap bolge tablosu dolu");
     };
-    let addr = process.mmap_base + process.mmap_used;
-    let end = addr.checked_add(len).ok_or("Mmap adres tasmasi")?;
     // Süreç başına mmap bayt kotası (varsayılan 64 MiB). Kota **canlı**
     // bölgelerin toplamına göre hesaplanır; `mmap_used` arena imleci olduğu
     // için munmap sonrası küçülmez.
@@ -572,37 +623,58 @@ pub fn mmap(
     if projected > process.resources.limits.max_mmap_bytes {
         return Err("Mmap kaynak limiti asildi");
     }
-    // Ayrılan bölge mmap arenasının üst sınırını aşamaz (kullanıcı yığınından
-    // zaten çok uzaktadır).
-    if end > MMAP_LIMIT {
-        return Err("Mmap arenasi sinira ulasti");
-    }
     let page_flags = if flags & PageFlags::USER != 0 {
         flags
     } else {
         PageFlags::USER_DATA
     };
-    if flags & MAP_SHARED_FILE != 0 {
-        // Yazma paylaşımlı bölge: daha önce aynı bölgeyi eşlemiş başka bir
-        // süreç varsa çerçeveler **kopyalanmadan** paylaşılır (zero-copy);
-        // yoksa yeni çerçeve havuzu kurulur ve kayıt edilir. `munmap` yalnız
-        // referans bırakır, çerçeve son sahibine kadar yaşar.
-        if let Some(frames) = shared_region_frames(addr, len) {
-            map_shared_reuse(process, addr, end, &frames, pmm)?;
-        } else {
-            map_shared_range(process, addr, end, pmm)?;
-            remember_shared_region(process, addr, len);
+    let shared = flags & MAP_SHARED_FILE != 0;
+    let addr = if shared {
+        // Yazma paylaşımlı bölge: prosesler arası aynı sanal adresi
+        // kullanmak zorunda olduğundan ASLR tabanı atlanır; önce kayıtlı
+        // bir bölge aranır (zero-copy), yoksa sabit arena'dan tahsis edilir.
+        let existing = find_shared_region(len).and_then(|(found_addr, found_len)| {
+            shared_region_frames(found_addr, found_len)
+                .map(|frames| (found_addr, found_len, frames))
+        });
+        match existing {
+            Some((shared_addr, _, frames)) => {
+                if let Err(error) =
+                    map_shared_reuse(process, shared_addr, shared_addr + len, &frames, pmm)
+                {
+                    // Bölge referansı geri alınır; kayıt diğer sahiplerle kalır.
+                    release_shared_region(shared_addr, len);
+                    return Err(error);
+                }
+                shared_addr
+            }
+            None => {
+                let shared_addr = shared_arena_alloc(len).ok_or("Paylasim arenası dolu")?;
+                map_shared_range(process, shared_addr, shared_addr + len, pmm)?;
+                remember_shared_region(process, shared_addr, len);
+                shared_addr
+            }
         }
     } else {
+        let addr = process.mmap_base + process.mmap_used;
+        let end = addr.checked_add(len).ok_or("Mmap adres tasmasi")?;
+        // Ayrılan bölge mmap arenasının üst sınırını aşamaz (kullanıcı
+        // yığınından zaten çok uzaktadır).
+        if end > MMAP_LIMIT {
+            return Err("Mmap arenasi sinira ulasti");
+        }
         // Anonim bölge tembel eşlenir: yazılmayan sayfalar fiziksel bellek harcamaz.
         map_lazy_range(process, addr, end, page_flags, pmm)?;
-    }
+        addr
+    };
     process.mmap_regions[slot] = MmapRegion {
         addr,
         len,
         used: true,
     };
-    process.mmap_used += len;
+    if !shared {
+        process.mmap_used += len;
+    }
     Ok(addr)
 }
 
@@ -643,6 +715,15 @@ pub fn release_user_memory(process: &mut Process, _pmm: &mut PhysicalMemoryManag
     for slot in 0..process.mmap_regions.len() {
         let region = process.mmap_regions[slot];
         if region.used {
+            // Paylaşımlı bölge kaydını da bırak: süreç `munmap` çağırmadan
+            // sonlanırsa bölge referansı burada dengelenir.
+            if process
+                .address_space
+                .read_entry(region.addr)
+                .is_some_and(|entry| entry & PAGE_SHARED != 0)
+            {
+                release_shared_region(region.addr, region.len);
+            }
             unmapped += unmap_range_keep_frames(process, region.addr, region.addr + region.len);
             process.mmap_regions[slot] = MmapRegion::default();
         }

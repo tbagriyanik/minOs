@@ -66,6 +66,29 @@ pub fn mark_frame_shared(phys: u64) -> bool {
     true
 }
 
+/// Paylaşımlı dosya sayfası (`MAP_SHARED_FILE`) için tek bir eşleme
+/// referansı ekler. Kayıt yoksa `refs = 1` ile oluşturulur; her yeni
+/// eşleme `refs`'i bir artırır. Bırakma `release_frame_shared` ile yapılır;
+/// `refs` sıfıra indiğinde kayıt silinir ve çerçeve iade edilebilir.
+///
+/// `mark_frame_shared`'den farkı: COW fork iki sahipliği tek adımda
+/// kurduğu için `refs = 2` yazar; burada her çağrı tam olarak bir
+/// eşlemenin sahipliğini temsil eder.
+pub fn share_frame_mapping(phys: u64) -> bool {
+    let mut table = SHARED_FRAMES.lock();
+    if let Some(index) = table.find(phys) {
+        table.entries[index].refs = table.entries[index].refs.saturating_add(1);
+        return true;
+    }
+    if table.used >= MAX_SHARED_FRAMES {
+        return false;
+    }
+    let used = table.used;
+    table.entries[used] = SharedFrame { phys, refs: 1 };
+    table.used = used + 1;
+    true
+}
+
 /// Bir paylaşım referansını bırakır (`refs` = bu çerçeveyi eşleyen adres
 /// uzayı sayısı).
 ///
@@ -275,6 +298,37 @@ impl AddressSpace {
             core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
         }
 
+        Ok(())
+    }
+
+    /// `virt_addr`'i kapsayan PDPT/PD/PT tablo zincirini, yaprak sayfa
+    /// eşlemesi olmadan kurar. Paylaşımlı mmap arenası gibi prosesler arası
+    /// aynı sanal adresi kullanan bölgelerde ilk `mmap`'in tablo maliyetini
+    /// önden öder; aksi halde her `MAP_SHARED_FILE` eşlemesi yeni PT/PD
+    /// çerçeveleri ayırırdı.
+    pub fn ensure_table_path(
+        &mut self,
+        virt_addr: u64,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> Result<(), &'static str> {
+        if virt_addr >= Self::USER_ADDRESS_END {
+            return Err("Kullanici adresi alan disinda");
+        }
+        let pml4_idx = ((virt_addr >> 39) & 0x1FF) as usize;
+        let pdpt_idx = ((virt_addr >> 30) & 0x1FF) as usize;
+        let pd_idx = ((virt_addr >> 21) & 0x1FF) as usize;
+        let user = true;
+        unsafe {
+            let pml4 = &mut *Self::table_ptr(self.pml4_phys);
+            let pdpt_phys = Self::get_or_create_next_level(&mut pml4.entries[pml4_idx], pmm, user)
+                .ok_or("PMM yetersiz bellek: PDPT tahsis edilemedi")?;
+            let pdpt = &mut *Self::table_ptr(pdpt_phys);
+            let pd_phys = Self::get_or_create_next_level(&mut pdpt.entries[pdpt_idx], pmm, user)
+                .ok_or("PMM yetersiz bellek: PD tahsis edilemedi")?;
+            let pd = &mut *Self::table_ptr(pd_phys);
+            let _ = Self::get_or_create_next_level(&mut pd.entries[pd_idx], pmm, user)
+                .ok_or("PMM yetersiz bellek: PT tahsis edilemedi")?;
+        }
         Ok(())
     }
 

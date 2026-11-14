@@ -1684,9 +1684,8 @@ fn report(ok: bool, label: &str, all_ok: &mut bool) {
 }
 
 /// Widget ağacı, dinamik yerleşim, Tab sırası ve olay yönlendirmesini
-/// gerçek bir ağaç üzerinde doğrular. Çizim yolu da çalıştırılır; böylece
-/// odak halkası ve tüm denetim çizimleri çekirdekte sınanmış olur.
-pub fn self_test(fb: &mut Framebuffer) -> bool {
+/// açılışta örnek arayüz çizmeden doğrular.
+pub fn self_test() -> bool {
     let mut ok = true;
 
     let text = TextBox::new("Ad yazin");
@@ -1848,9 +1847,6 @@ pub fn self_test(fb: &mut Framebuffer) -> bool {
     );
 
     // Dinamik yerleşim: kalan boşluk Fill ağırlıklarına göre paylaşılır.
-    // Çizim yolu: ağacı gerçek çerçeve tamponuna çiz (hoş geldin ekranı
-    // hemen ardından tüm ekranı yeniden çizer).
-    ui.draw(fb);
 
     let mut weights = Container::new(Axis::Horizontal).gap(0).pad(Insets::all(0));
     let mut left = Container::new(Axis::Horizontal).size(Sizing::Fill(1), Sizing::Content);

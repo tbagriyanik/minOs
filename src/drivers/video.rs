@@ -1151,41 +1151,100 @@ impl Framebuffer {
             return;
         }
 
-        for cy in y0..y_end {
-            let is_edge_y = cy == y || cy == y + h - 1;
-            let dy = if cy < y + r {
-                (y + r - 1) as isize - cy as isize
-            } else if cy >= y + h - r {
-                cy as isize - (y + h - r) as isize
+        // Üst köşe bölgesi (üst kenar satırını ve dy==0 sınır satırını içerir):
+        // tam satır taramesi — çizilmesi gereken eğri pikselleri için zorunlu.
+        let top_corner_end = (y + r).min(y_end);
+        for cy in y0..top_corner_end {
+            let dy = (y + r - 1) as isize - cy as isize;
+            self.draw_rounded_outline_row(
+                cy, x, y, w, h, r, x0, x_end, dy, r_outer_sq, r_inner_sq, c,
+            );
+        }
+
+        // Orta gövde (dy == 0, kenar satırı değil): 1px cerceve sadece iki
+        // dikey kenar sütununu dokundurur. İçerin taraması tamamen gereksiz;
+        // onceki uygulama burada tam Genişik tararken atlanirdi.
+        let mid_start = top_corner_end.max(y0);
+        let mid_end = (y + h - r).min(y_end);
+        if mid_start < mid_end {
+            let left_x = x;
+            let right_x = x + w - 1;
+            let left_in = left_x >= x0 && left_x < x_end;
+            let right_in = right_x >= x0 && right_x < x_end;
+            if left_in || right_in {
+                for cy in mid_start..mid_end {
+                    let row_offset = cy * self.width;
+                    if left_in {
+                        let off = row_offset + left_x;
+                        unsafe {
+                            if off < BACKBUFFER_LEN {
+                                BACKBUFFER[off] = c;
+                            }
+                        }
+                    }
+                    if right_in {
+                        let off = row_offset + right_x;
+                        unsafe {
+                            if off < BACKBUFFER_LEN {
+                                BACKBUFFER[off] = c;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Alt köşe bölgesi: tam satır taramesi.
+        let bot_start = (y + h - r).max(y0);
+        for cy in bot_start..y_end {
+            let dy = cy as isize - (y + h - r) as isize;
+            self.draw_rounded_outline_row(
+                cy, x, y, w, h, r, x0, x_end, dy, r_outer_sq, r_inner_sq, c,
+            );
+        }
+    }
+
+    /// `draw_rounded_rect_outline` içi için tek satır taramesi. Köşe
+    /// bölgesi satırlarında calling side tam Genişik tarar; orada eğri
+    /// pikselleri ve üst/alt kenar satırlarının tamamı çizilir.
+    #[inline(always)]
+    fn draw_rounded_outline_row(
+        &mut self,
+        cy: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        r: usize,
+        x0: usize,
+        x_end: usize,
+        dy: isize,
+        r_outer_sq: isize,
+        r_inner_sq: isize,
+        color: u32,
+    ) {
+        let row_offset = cy * self.width;
+        for cx in x0..x_end {
+            let dx = if cx < x + r {
+                (x + r - 1) as isize - cx as isize
+            } else if cx >= x + w - r {
+                cx as isize - (x + w - r) as isize
             } else {
                 0
             };
 
-            let row_offset = cy * self.width;
-            for cx in x0..x_end {
-                let is_edge_x = cx == x || cx == x + w - 1;
+            let d_sq = dx * dx + dy * dy;
+            let is_stroke = if dx > 0 || dy > 0 {
+                d_sq <= r_outer_sq && d_sq >= r_inner_sq
+            } else {
+                (cx == x || cx == x + w - 1) || (cy == y || cy == y + h - 1)
+            };
 
-                let dx = if cx < x + r {
-                    (x + r - 1) as isize - cx as isize
-                } else if cx >= x + w - r {
-                    cx as isize - (x + w - r) as isize
-                } else {
-                    0
-                };
-
-                let d_sq = dx * dx + dy * dy;
-                let is_stroke = if dx > 0 || dy > 0 {
-                    d_sq <= r_outer_sq && d_sq >= r_inner_sq
-                } else {
-                    is_edge_x || is_edge_y
-                };
-
-                if is_stroke {
-                    let offset = row_offset + cx;
-                    unsafe {
-                        if offset < BACKBUFFER_LEN {
-                            BACKBUFFER[offset] = c;
-                        }
+            if is_stroke {
+                let offset = row_offset + cx;
+                unsafe {
+                    if offset < BACKBUFFER_LEN {
+                        BACKBUFFER[offset] = color;
                     }
                 }
             }

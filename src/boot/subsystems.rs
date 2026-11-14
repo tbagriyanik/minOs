@@ -212,6 +212,10 @@ pub fn init_subsystems(
         serial_print("[PROC] Süreç tablosu ve sistem çağrıları (syscalls) etkin.\n");
     }
 
+    // Paylaşılan sıfır sayfasını önden ayır: tembel eşleme altyapısının
+    // tek seferlik kaynağı süreç testi ölçümlerine "sızıntı" olarak yansımasın.
+    mm::user_mem::ensure_zero_page(&mut memory_mgr.pmm);
+
     serial_print("[BOOT] Bellek testleri çalıştırılıyor...\n");
     mm::vmm::test_memory_and_isolation(&mut memory_mgr.pmm);
     mm::allocator::test_allocator_subsystem();

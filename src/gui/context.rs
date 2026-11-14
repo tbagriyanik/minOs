@@ -21,14 +21,10 @@ pub enum ContextKind {
 }
 
 /// Masaüstü sağ tık menüsü.
-pub const CTX_DESKTOP: [(&str, u32); 7] = [
-    ("Dosya Yöneticisini Aç", Color::ACCENT_BLUE),
+pub const CTX_DESKTOP: [(&str, u32); 3] = [
     ("Yeni >", Color::ACCENT_GREEN),
-    ("Yapıştır", Color::ACCENT_GREEN),
-    ("Sistem Ayarları", Color::ACCENT_PINK),
-    ("Görev Yöneticisi", Color::ACCENT_YELLOW),
     ("Masaüstünü Yenile", Color::TEXT_MUTED),
-    ("Yeni Not Oluştur", Color::TEXT_MAIN),
+    ("Görev Yöneticisi", Color::ACCENT_YELLOW),
 ];
 pub const CTX_DESKTOP_ITEM: [(&str, u32); 9] = [
     ("Aç / Klasöre Gir", Color::ACCENT_GREEN),
@@ -79,14 +75,10 @@ pub const CTX_WINDOW: [(&str, u32); 4] = [
     ("Kapat", Color::ACCENT_RED),
 ];
 
-const CTX_DESKTOP_EN: [(&str, u32); 7] = [
-    ("Open File Manager", Color::ACCENT_BLUE),
+const CTX_DESKTOP_EN: [(&str, u32); 3] = [
     ("New >", Color::ACCENT_GREEN),
-    ("Paste", Color::ACCENT_GREEN),
-    ("System Settings", Color::ACCENT_PINK),
-    ("Task Manager", Color::ACCENT_YELLOW),
     ("Refresh Desktop", Color::TEXT_MUTED),
-    ("New Note", Color::TEXT_MAIN),
+    ("Task Manager", Color::ACCENT_YELLOW),
 ];
 const CTX_DESKTOP_ITEM_EN: [(&str, u32); 9] = [
     ("Open / Enter Folder", Color::ACCENT_GREEN),
@@ -266,7 +258,16 @@ impl MinGuiCompositor {
                 // Masaüstü sağ tık menüsü simgeleri (12x12 piksel)
                 let icon_x = menu_x + sp(10);
                 let icon_y = item_y + (item_h.saturating_sub(sp(4)).saturating_sub(12)) / 2;
-                Self::draw_desktop_context_icon(fb, icon_x, icon_y, i, *color);
+                let icon_index = if self.context_kind == ContextKind::Desktop {
+                    match i {
+                        0 => 1,
+                        1 => 6,
+                        _ => 4,
+                    }
+                } else {
+                    i
+                };
+                Self::draw_desktop_context_icon(fb, icon_x, icon_y, icon_index, *color);
                 text_x += sp(20);
             } else if self.context_kind == ContextKind::Notepad {
                 // Not Defteri / Textarea sağ tık menüsü simgeleri (12x12 piksel)
@@ -298,7 +299,6 @@ impl MinGuiCompositor {
                 (ContextKind::Notepad, 2) => "Ctrl+V",
                 (ContextKind::Notepad, 3) => "Del",
                 (ContextKind::Notepad, 4) => "Ctrl+A",
-                (ContextKind::Desktop, 2) => "Ctrl+V",
                 (ContextKind::DesktopItem, 2) | (ContextKind::FileManager, 2) => "Ctrl+X",
                 (ContextKind::DesktopItem, 3) | (ContextKind::FileManager, 3) => "Ctrl+C",
                 (ContextKind::DesktopItem, 4) | (ContextKind::FileManager, 4) => "Ctrl+V",
@@ -336,8 +336,8 @@ impl MinGuiCompositor {
     /// "Yeni ▶" menü öğesinin ana menüdeki satır indeksi.
     pub fn context_submenu_parent_idx(&self) -> usize {
         match self.context_kind {
-            ContextKind::Desktop => 1,
-            ContextKind::DesktopItem => 4,
+            ContextKind::Desktop => 0,
+            ContextKind::DesktopItem => 5,
             ContextKind::FileManager => 5,
             _ => 1,
         }

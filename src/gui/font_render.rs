@@ -442,6 +442,11 @@ pub fn draw(
 }
 
 /// Tek bir glifi verilen konuma çizer.
+///
+/// `factor` (font ölçüsü / 14.0) genellikle 1.0 civarında; bu yüzden
+/// `dy as f32 / factor` tarzı bölme her piksel için FP bölme yapar.
+/// Ters çarpanı bir kez hesaplayıp tam sayı çarpımı kullanarak
+/// kaynak koordinatlarını buluyoruz (faster + deterministik).
 fn blit_glyph(
     fb: &mut crate::drivers::video::Framebuffer,
     bitmap: &'static [u8],
@@ -459,13 +464,22 @@ fn blit_glyph(
     let left = pen_x + record.xmin as f32 * factor;
     let top = baseline - (record.ymin + record.height as i16) as f32 * factor;
 
+    // Ters çarpan: 1/factor'ı bir kez hesapla, her pikselde bölme yerine
+    // tam sayı çarpımı kullan. factor == 1.0 durumunda bu 1.0 olur.
+    let inv_factor = 1.0 / factor;
+    let src_w = record.width as usize;
+    let src_stride = src_w;
+
     for dy in 0..dst_height {
+        // Kaynak satırı: dst_height > src_height durumunda son satırı
+        // tekrarlamak için min() ile sınırlayınca deterministik kalır.
         let source_y =
-            ((dy as f32 / factor) as usize).min(record.height.saturating_sub(1) as usize);
+            ((dy as f32 * inv_factor) as usize).min(record.height.saturating_sub(1) as usize);
+        let src_row_off = record.offset + source_y * src_stride;
         for dx in 0..dst_width {
             let source_x =
-                ((dx as f32 / factor) as usize).min(record.width.saturating_sub(1) as usize);
-            let alpha = bitmap[record.offset + source_y * record.width as usize + source_x];
+                ((dx as f32 * inv_factor) as usize).min(record.width.saturating_sub(1) as usize);
+            let alpha = bitmap[src_row_off + source_x];
             if alpha == 0 {
                 continue;
             }

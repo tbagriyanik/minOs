@@ -548,6 +548,10 @@ impl ProcessManager {
             pmm.free_frame(pml4_frame);
             return Err(e);
         }
+        // Paylaşımlı mmap arenasının tablo yolunu önden kur: ilk
+        // `MAP_SHARED_FILE` eşlemesi PDPT/PD/PT tahsisi yapmasın
+        // (best-effort; hata durumunda eşleme yine de tembel çalışır).
+        let _ = address_space.ensure_table_path(crate::mm::user_mem::SHARED_ARENA_BASE, pmm);
 
         let mut p = Process::empty();
         p.pid = pid;
@@ -1050,6 +1054,11 @@ impl ProcessManager {
             pmm.free_frame(root);
             return Err(error);
         }
+        // Paylaşımlı mmap arenasının tablo yolunu önden kur (spawn ile aynı
+        // gerekçe; best-effort).
+        let _ = child
+            .address_space
+            .ensure_table_path(crate::mm::user_mem::SHARED_ARENA_BASE, pmm);
         let mut parent_process = parent;
         let mut cow_frames: alloc::vec::Vec<u64> = alloc::vec::Vec::new();
         // Not: aşağıdaki `cow_clone_user_table` çağrısı ebeveynin PTE'lerini
@@ -1374,6 +1383,9 @@ impl ProcessManager {
             pmm.free_frame(root);
             return Err(error);
         }
+        // Paylaşımlı mmap arenasının tablo yolunu önden kur (spawn ile aynı
+        // gerekçe; best-effort).
+        let _ = new_space.ensure_table_path(crate::mm::user_mem::SHARED_ARENA_BASE, pmm);
         let loaded = match crate::mm::loader::AppLoader::load_binary(image, &mut new_space, pmm) {
             Ok(loaded) if loaded.allocated_pages <= crate::mm::loader::MAX_LOADED_FRAMES => loaded,
             Ok(_) => {
@@ -3026,17 +3038,14 @@ pub fn test_syscall_pointer_validation(
     );
 
     // (c) Sayfa/hizalama sinirlari.
-    //   - Salt-okunur sayfaya yazma (WRITABLE yok).
-    let readonly_write =
-        syscall_dispatch(sys_nos::SYS_WRITE, readonly_address, 8, 0, proc_mgr, pmm);
     //   - Eslenmemis sayfaya yazma.
     let unmapped_write =
         syscall_dispatch(sys_nos::SYS_WRITE, unmapped_address, 8, 0, proc_mgr, pmm);
-    //   - Yari eslenmis aralik: ilk 8 bayt yazilabilir tampon, kalan 8 bayt
+    //   - Yari eslenmis aralik: ilk 8 bayt okunabilir sayfada, kalan 8 bayt
     //     eslenmemis sayfaya tasiyor; tum cagri reddedilmeli.
     let straddle_write = syscall_dispatch(
         sys_nos::SYS_WRITE,
-        buffer_address + PAGE_SIZE - 8,
+        readonly_address + PAGE_SIZE - 8,
         16,
         0,
         proc_mgr,
@@ -3104,7 +3113,6 @@ pub fn test_syscall_pointer_validation(
         && kernel_write == 0
         && kernel_base_write == 0
         && noncanonical_write == 0
-        && readonly_write == 0
         && unmapped_write == 0
         && straddle_write == 0
         && empty_write == 0
@@ -3151,6 +3159,10 @@ pub fn test_syscall_pointer_validation(
         pmm,
     );
     let byte_edges_ok = first_byte == 1 && last_byte == 1;
+    // SYS_WRITE kullanıcı belleğini okur: salt-okunur sayfa da geçerli bir
+    // kaynak olarak kabul edilir (korunan yön `copy_to_user` iledir).
+    let readonly_read = syscall_dispatch(sys_nos::SYS_WRITE, readonly_address, 8, 0, proc_mgr, pmm);
+    let readonly_read_ok = readonly_read == 8;
     // Eslenmemis bir mmap bölgesi üzerinde munmap tekrar reddedilmeli.
     let unmap_unmapped = syscall_dispatch(
         sys_nos::SYS_MUNMAP,
@@ -3177,6 +3189,7 @@ pub fn test_syscall_pointer_validation(
         && byte_edges_ok
         && ro_read_ok
         && double_unmap_rejected
+        && readonly_read_ok
         && reclaimed;
     if ok {
         crate::serial_print(
@@ -3190,6 +3203,11 @@ pub fn test_syscall_pointer_validation(
         crate::serial_print(if edge_ok { "edge " } else { "edge! " });
         crate::serial_print(if byte_edges_ok { "bytes " } else { "bytes! " });
         crate::serial_print(if ro_read_ok { "ro-read " } else { "ro-read! " });
+        crate::serial_print(if readonly_read_ok {
+            "ro-syscall "
+        } else {
+            "ro-syscall! "
+        });
         crate::serial_print(if double_unmap_rejected {
             "2munmap "
         } else {
@@ -3300,9 +3318,17 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         });
 
     // 3. mmap/munmap: bölge tembel eşlenir; ilk yazma sayfayı gerçekleştirir.
-    let free_before_mmap = pmm.free_memory_bytes;
+    //    Sayfa tablosu çerçeveleri kaynak defterine girmediği için tembellik
+    //    `user_frame_count` üzerinden doğrulanır.
+    let user_frames_before_mmap = proc_mgr
+        .get_process(pid)
+        .map(|p| p.resources.user_frame_count)
+        .unwrap_or(0);
     let region = syscall_dispatch(sys_nos::SYS_MMAP, 2 * 4096, 0, 0, proc_mgr, pmm);
-    let lazy_mmap_ok = region != 0 && pmm.free_memory_bytes == free_before_mmap;
+    let lazy_mmap_ok = region != 0
+        && proc_mgr
+            .get_process(pid)
+            .is_some_and(|p| p.resources.user_frame_count == user_frames_before_mmap);
     // Tembel sayfayı kullanıcı CR3'ü olmadan çekirdek yolundan gerçekleştir
     // (Ring 3 yazma yolu `#PF` → `handle_lazy_fault` iken bu eşdeğer çağrıdır).
     if region != 0 {
@@ -3335,9 +3361,13 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
         && free_after_unmap == free_before_unmap + PAGE_SIZE;
     let unmap_twice = syscall_dispatch(sys_nos::SYS_MUNMAP, region, 2 * 4096, 0, proc_mgr, pmm);
     let mmap_ok = region_pages && second_ok && unmap_ok && unmap_twice == u64::MAX;
+    // `second` tembel sayfasını da gerçekleştir: genişletilmiş MEMINFO'daki
+    // kullanıcı çerçevesi sayısı heap (2) + bu sayfa (1) = 3 olur.
+    if second != 0 {
+        let _ = proc_mgr.handle_lazy_fault(pid, second, pmm);
+    }
 
-    // 4. MEMINFO syscall'u (R10 yolu) özeti doğru raporlar. `second` tembel
-    //    olduğundan rapor hedefi için heap'in gerçek sayfası kullanılır.
+    // 4. MEMINFO syscall'u (R10 yolu) özeti doğru raporlar.
     let heap_address = proc_mgr
         .get_process(pid)
         .map(|p| p.heap_address(0))
@@ -3399,7 +3429,9 @@ pub fn test_user_memory(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryM
     if let (Some(reader), Some(writer)) = (Some(pid), share_pid) {
         let flags = crate::mm::user_mem::MAP_SHARED_FILE | PageFlags::USER;
         let reader_addr = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, flags, 0, proc_mgr, pmm);
+        proc_mgr.current_pid = writer;
         let writer_addr = syscall_dispatch(sys_nos::SYS_MMAP, PAGE_SIZE, flags, 0, proc_mgr, pmm);
+        proc_mgr.current_pid = pid;
         shared_frame_matched = reader_addr != 0
             && writer_addr == reader_addr
             && proc_mgr.get_process(reader).is_some_and(|p| {
@@ -3759,6 +3791,9 @@ pub fn test_file_descriptor_lifecycle(
 
     // 9. fd kotası: limit 4 iken 3 standart + 1 açık dosya sığar.
     let quota_heap = syscall_dispatch(sys_nos::SYS_BRK, PAGE_SIZE, 0, 0, proc_mgr, pmm);
+    // Exec sonrası heap sayfası tembel eşlenir; `copy_to_user` yazabilmesi
+    // için önce gerçekleştirilir (Ring 3'teki ilk yazma #PF ile aynı yol).
+    let _ = proc_mgr.handle_lazy_fault(pid, crate::mm::user_mem::HEAP_BASE, pmm);
     let quota_base = proc_mgr
         .get_process(pid)
         .map(|p| p.heap_address(0))

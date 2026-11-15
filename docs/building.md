@@ -15,12 +15,12 @@ Desteklenen donanım, sistem gereksinimleri ve çalıştırma adımları.
 
 | Özellik | Kaynak konumu |
 | :--- | :--- |
-| Erken framebuffer doğrulaması ve SMP/CPU açılışı | [`src/main.rs:102`](../src/main.rs#L102), [`src/arch/x86_64/smp.rs`](../src/arch/x86_64/smp.rs) |
-| PS/2 fare/touchpad başlatma ve paket yoklama | [`src/drivers/ps2.rs:73`](../src/drivers/ps2.rs#L73), [`src/drivers/ps2.rs:163`](../src/drivers/ps2.rs#L163) |
-| USB controller ve legacy capability tanılama | [`src/drivers/usb.rs:280`](../src/drivers/usb.rs#L280), [`src/drivers/usb.rs:336`](../src/drivers/usb.rs#L336) |
-| Yerel xHCI USB HID klavye/fare sürücüsü | [`src/drivers/usb_hid.rs:1`](../src/drivers/usb_hid.rs#L1), [`src/drivers/usb_hid.rs:1731`](../src/drivers/usb_hid.rs#L1731) |
-| Boot log metin çizimi, ayna font ve fatal stop | [`src/boot/text_console.rs:197`](../src/boot/text_console.rs#L197), [`src/boot/text_console.rs:269`](../src/boot/text_console.rs#L269), [`src/boot/text_console.rs:335`](../src/boot/text_console.rs#L335) |
-| Panic ekranında otomatik resetin engellenmesi | [`src/panic_handler.rs:51`](../src/panic_handler.rs#L51) |
+| Erken framebuffer doğrulaması ve SMP/CPU açılışı | [`src/boot/start.rs:50`](../src/boot/start.rs#L50), [`src/boot/subsystems.rs:275`](../src/boot/subsystems.rs#L275), [`src/arch/x86_64/smp.rs`](../src/arch/x86_64/smp.rs) |
+| PS/2 fare/touchpad başlatma ve paket yoklama | [`src/drivers/ps2.rs:107`](../src/drivers/ps2.rs#L107), [`src/drivers/ps2.rs:215`](../src/drivers/ps2.rs#L215) |
+| USB controller ve legacy capability tanılama | [`src/drivers/usb.rs:281`](../src/drivers/usb.rs#L281), [`src/drivers/usb.rs:368`](../src/drivers/usb.rs#L368) |
+| Yerel xHCI USB HID klavye/fare sürücüsü | [`src/drivers/usb_hid.rs:1`](../src/drivers/usb_hid.rs#L1), [`src/drivers/usb_hid.rs:1744`](../src/drivers/usb_hid.rs#L1744), [`src/drivers/usb_hid.rs:3025`](../src/drivers/usb_hid.rs#L3025) |
+| Boot log metin çizimi, ayna font ve fatal stop | [`src/boot/text_console.rs:289`](../src/boot/text_console.rs#L289), [`src/boot/text_console.rs:349`](../src/boot/text_console.rs#L349), [`src/boot/text_console.rs:677`](../src/boot/text_console.rs#L677) |
+| Panic ekranında otomatik resetin engellenmesi | [`src/panic_handler.rs:9`](../src/panic_handler.rs#L9), [`src/panic_handler.rs:61`](../src/panic_handler.rs#L61) |
 
 
 ---

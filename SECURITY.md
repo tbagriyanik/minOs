@@ -62,6 +62,20 @@ minOs'ta kriptografik ilkeller ağırlıklı olarak **elle yazılmıştır** (`s
 - **Kriptografik kod `src/drivers/crypto/` altındadır.** Bu modüldeki değişiklikler güvenlik açısından
   kritik olarak değerlendirilmelidir.
 
+## Çekirdek Güvenlik Önlemleri (v2.4.0)
+
+| Önlem | Durum |
+| :--- | :--- |
+| KASLR | **Aktif** — çekirdek PIE/ET_DYN derlenir, Limine `kaslr: yes` + `randomise_hhdm_base: yes` ile her açılışta rastgele sanal taban; `[KASLR]` boot raporu |
+| Kullanıcı pointer doğrulama | `src/mm/uaccess.rs` — aralık doğrulama + her sayfa seviyesinde `USER` biti; `MAX_USER_COPY` sınırı |
+| Adres uzayı izolasyonu | `clone_kernel_mappings` kernel eşlemelerini `USER` biti olmadan klonlar; `translate_user` 4 seviyede `USER` şartı arar |
+| ELF yükleyici | `e_entry` kullanıcı-aralığı/doğrulama, program-header taşma ve `e_phentsize` kontrolleri, NULL sayfa reddi (`src/mm/loader.rs`) |
+| Syscall filtreleme | `SYS_SECCOMP` (28) — süreç başına geri döndürülemez izin maskesi, yalnızca daraltma, `SYS_EXIT` muaf |
+| Sinyal işleyici | `SYS_SIGACTION` işleyici adresi kullanıcı-yürütülebilir alanla sınırlı |
+
+Bilinen kalan yüzey: kernel pointer sızıntısı için kullanıcıya açık log/teşhis
+arayüzü yoktur; `SYS_ALLOC_FRAME` fiziksel adres döndürür (test amaçlı).
+
 ## Güvenlik ile İlgili Olmayan Konular
 
 Genel hata raporları (çökme, ekran bozulması, performans sorunları) normal GitHub issue olarak

@@ -36,6 +36,140 @@ pub const MAX_USABLE_REGIONS: usize = 16;
 pub const BIG_PAGE_SIZE: u64 = 2 * 1024 * 1024;
 pub const BIG_PAGE_MASK: u64 = BIG_PAGE_SIZE - 1;
 
+// ---------------------------------------------------------------------------
+// Bellek bölgeleri (memory zones)
+// ---------------------------------------------------------------------------
+
+/// Desteklenen fiziksel bellek bölgesi sayısı.
+pub const NUM_ZONES: usize = 3;
+/// ISA DMA uyumlu düşük bellek sınırı (16 MiB).
+pub const DMA_ZONE_LIMIT: u64 = 16 * 1024 * 1024;
+/// Yüksek bellek (HighMem) başlangıcı (4 GiB).
+pub const HIGHMEM_ZONE_START: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Fiziksel bellek bölgesi. x86_64'te ISA DMA aygıtları yalnızca ilk
+/// 16 MiB'a erişebildiği için çekirdek sayfaları Normal bölgeden,
+/// DMA tamponları ise açıkça DMA bölgesinden ayrılır.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(usize)]
+pub enum MemoryZone {
+    Dma = 0,
+    Normal = 1,
+    HighMem = 2,
+}
+
+impl MemoryZone {
+    pub const ALL: [MemoryZone; NUM_ZONES] =
+        [MemoryZone::Dma, MemoryZone::Normal, MemoryZone::HighMem];
+
+    #[inline(always)]
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Fiziksel adresin ait olduğu bellek bölgesi.
+#[inline(always)]
+pub const fn zone_for_address(addr: u64) -> MemoryZone {
+    if addr < DMA_ZONE_LIMIT {
+        MemoryZone::Dma
+    } else if addr < HIGHMEM_ZONE_START {
+        MemoryZone::Normal
+    } else {
+        MemoryZone::HighMem
+    }
+}
+
+/// Bölge başına canlı sayfa istatistikleri.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ZoneStats {
+    pub total_frames: usize,
+    pub free_frames: usize,
+    pub cached_frames: usize,
+    pub used_frames: usize,
+}
+
+// ---------------------------------------------------------------------------
+// CPU başına sayfa önbelleği (per-CPU page cache)
+// ---------------------------------------------------------------------------
+
+/// Önbellek başına tutulan çerçeve sayısı.
+pub const PAGE_CACHE_BATCH: usize = 16;
+/// Önbelleklenebilen en fazla CPU sayısı (smp::MAX_CPUS ile aynı üst sınır).
+pub const MAX_PAGE_CACHES: usize = 64;
+/// CPU başına bölge başına bir önbellek: `cpu * NUM_ZONES + zone`.
+pub const PAGE_CACHE_SLOTS: usize = MAX_PAGE_CACHES * NUM_ZONES;
+
+/// LIFO sayfa önbelleği. Çerçeveler bitmap'te "ayrılmış" olarak işaretli
+/// kalır (başka CPU kapmasın) fakat muhasebede boş sayılır.
+///
+/// `frames` dizisi ve `pop`/`push`/`frame_at` yöntemleri production
+/// kod yolunda kullanılmaktadır (bkz. `allocate_cached_locked`,
+/// `refill_cache_locked`, `flush_cache_locked`). Derleyici bu yolları
+/// kapalı kolayca göremediği için `#[allow(dead_code)]` ile bastırılır.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub struct PerCpuPageCache {
+    frames: [u64; PAGE_CACHE_BATCH],
+    len: usize,
+}
+
+#[allow(dead_code)]
+impl PerCpuPageCache {
+    pub const fn new() -> Self {
+        Self {
+            frames: [0; PAGE_CACHE_BATCH],
+            len: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn pop(&mut self) -> Option<u64> {
+        if self.len == 0 {
+            return None;
+        }
+        self.len -= 1;
+        Some(self.frames[self.len])
+    }
+
+    fn push(&mut self, frame: u64) -> bool {
+        if self.len >= PAGE_CACHE_BATCH {
+            return false;
+        }
+        self.frames[self.len] = frame;
+        self.len += 1;
+        true
+    }
+
+    fn frame_at(&self, index: usize) -> Option<u64> {
+        (index < self.len).then_some(self.frames[index])
+    }
+}
+
+impl Default for PerCpuPageCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Sayfa önbelleği kullanım sayaçları.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PageCacheStats {
+    pub hits: u64,
+    pub refills: u64,
+    pub flushes: u64,
+    pub cached_frames: usize,
+}
+
 /// Statik bitmap ile yönetilen maksimum fiziksel sayfa çerçevesi sayısı:
 /// 65,536 çerçeve * 4KB = 256 MB yönetilebilir kullanılabilir RAM.
 pub const MAX_FRAMES: usize = 65536;
@@ -74,6 +208,16 @@ pub struct PhysicalMemoryManager {
     pub largest_free_run: usize,
     /// Kullanım profili: en son ölçümdeki serbest çerçeve sayısı.
     pub low_watermark_frames: usize,
+    /// Bölge başına toplam yönetilen çerçeve sayısı.
+    zone_total_frames: [usize; NUM_ZONES],
+    /// Bölge başına mantıksal boş çerçeve sayısı (önbellektekiler dahil).
+    zone_free_frames: [usize; NUM_ZONES],
+    /// CPU/bölge başına sayfa önbellekleri.
+    page_caches: [PerCpuPageCache; PAGE_CACHE_SLOTS],
+    /// Önbellek sayaçları.
+    cache_hits: u64,
+    cache_refills: u64,
+    cache_flushes: u64,
 }
 
 impl PhysicalMemoryManager {
@@ -92,6 +236,12 @@ impl PhysicalMemoryManager {
             failed_requests: 0,
             largest_free_run: 0,
             low_watermark_frames: 0,
+            zone_total_frames: [0; NUM_ZONES],
+            zone_free_frames: [0; NUM_ZONES],
+            page_caches: [PerCpuPageCache::new(); PAGE_CACHE_SLOTS],
+            cache_hits: 0,
+            cache_refills: 0,
+            cache_flushes: 0,
         }
     }
 
@@ -128,10 +278,13 @@ impl PhysicalMemoryManager {
         self.bitmap[word_idx] |= mask;
         self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
         self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+        let zone = zone_for_address(phys).index();
+        self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
         true
     }
 
-    /// Bitmap'te toplam boş çerçeve sayısı (teşhis için O(MAX_FRAMES)).
+    /// Toplam boş çerçeve sayısı: bitmap'te boş olanlar + CPU önbelleklerinde
+    /// bekleyen çerçeveler (teşhis için O(MAX_FRAMES + PAGE_CACHE_SLOTS)).
     pub fn free_frame_count(&self) -> usize {
         let mut free = 0usize;
         for index in 0..self.total_managed_frames {
@@ -143,7 +296,88 @@ impl PhysicalMemoryManager {
                 free += 1;
             }
         }
-        free
+        free + self.cached_frame_count()
+    }
+
+    /// CPU önbelleklerinde bekleyen toplam çerçeve sayısı.
+    pub fn cached_frame_count(&self) -> usize {
+        self.page_caches.iter().map(PerCpuPageCache::len).sum()
+    }
+
+    /// Bir bölgedeki mantıksal boş çerçeve sayısı (önbellek dahil).
+    pub fn free_frames_in_zone(&self, zone: MemoryZone) -> usize {
+        self.zone_free_frames[zone.index()]
+    }
+
+    /// Bir bölgenin canlı istatistikleri.
+    pub fn zone_stats(&self, zone: MemoryZone) -> ZoneStats {
+        let index = zone.index();
+        let total = self.zone_total_frames[index];
+        let free = self.zone_free_frames[index];
+        let cached = self
+            .page_caches
+            .iter()
+            .enumerate()
+            .filter(|(slot, _)| *slot % NUM_ZONES == index)
+            .map(|(_, cache)| cache.len())
+            .sum();
+        ZoneStats {
+            total_frames: total,
+            free_frames: free,
+            cached_frames: cached,
+            used_frames: total.saturating_sub(free),
+        }
+    }
+
+    /// Tüm bölgelerin istatistikleri.
+    pub fn zone_report(&self) -> [ZoneStats; NUM_ZONES] {
+        [
+            self.zone_stats(MemoryZone::Dma),
+            self.zone_stats(MemoryZone::Normal),
+            self.zone_stats(MemoryZone::HighMem),
+        ]
+    }
+
+    /// Sayfa önbelleği sayaçları.
+    pub fn page_cache_stats(&self) -> PageCacheStats {
+        PageCacheStats {
+            hits: self.cache_hits,
+            refills: self.cache_refills,
+            flushes: self.cache_flushes,
+            cached_frames: self.cached_frame_count(),
+        }
+    }
+
+    /// Bölge ve önbellek yolunu doğrulayan açılış öz-testi.
+    ///
+    /// DMA ve Normal bölgelerinden birer çerçeve alır, adreslerin doğru
+    /// bölgeye düştüğünü ve iade edilen çerçevenin önbellekten geri
+    /// geldiğini denetler. Bölge hiç yoksa o bölge atlanır.
+    pub fn zone_self_test(&mut self) -> bool {
+        let mut ok = true;
+        for zone in [MemoryZone::Dma, MemoryZone::Normal] {
+            if self.free_frames_in_zone(zone) == 0 {
+                continue;
+            }
+            let Some(frame) = self.allocate_frame_in_zone(zone) else {
+                ok = false;
+                continue;
+            };
+            if zone_for_address(frame) != zone {
+                ok = false;
+            }
+            let hits_before = self.page_cache_stats().hits;
+            self.free_frame(frame);
+            let returned = self.allocate_frame_in_zone(zone);
+            let cached = returned == Some(frame);
+            if let Some(returned) = returned {
+                self.free_frame(returned);
+            }
+            if !cached || self.page_cache_stats().hits <= hits_before {
+                ok = false;
+            }
+        }
+        ok
     }
 
     /// Yönetilen bölgelerdeki en uzun bitişik boş çerçeve dizisinin boyu.
@@ -238,6 +472,28 @@ impl PhysicalMemoryManager {
         self.region_count += 1;
         self.total_managed_frames += frame_count;
 
+        // Bölge muhasebesi: bölge 16 MiB / 4 GiB sınırlarını kesebilir.
+        let mut remaining = frame_count;
+        let mut address = aligned_start;
+        while remaining > 0 {
+            let zone = zone_for_address(address);
+            let zone_limit = match zone {
+                MemoryZone::Dma => DMA_ZONE_LIMIT,
+                MemoryZone::Normal => HIGHMEM_ZONE_START,
+                MemoryZone::HighMem => u64::MAX,
+            };
+            let zone_end = aligned_start
+                .saturating_add((frame_count as u64) * PAGE_SIZE)
+                .min(zone_limit);
+            let frames_in_zone = (((zone_end.saturating_sub(address)) / PAGE_SIZE) as usize)
+                .min(remaining)
+                .max(1);
+            self.zone_total_frames[zone.index()] += frames_in_zone;
+            self.zone_free_frames[zone.index()] += frames_in_zone;
+            remaining -= frames_in_zone;
+            address = address.saturating_add((frames_in_zone as u64) * PAGE_SIZE);
+        }
+
         // Counters reflect pages the allocator can actually return, not raw
         // firmware bytes or the unaligned edges of usable regions.
         let managed_bytes = managed_len;
@@ -284,14 +540,122 @@ impl PhysicalMemoryManager {
         None
     }
 
-    /// Gerçek ve çakışmayan 4KB fiziksel sayfa çerçevesi tahsis eder.
-    /// Her çağrıda boş bir çerçeve bulunur, bitmap'te işaretlenir ve benzersiz fiziksel adresi döndürülür.
+    /// Genel amaçlı 4 KiB fiziksel sayfa çerçevesi tahsis eder.
+    ///
+    /// Çağıran CPU'nun bölge önbelleğine bakar; boşsa bitmap'ten bir grup
+    /// doldurur. Genel çekirdek tahsisleri önce Normal, sonra HighMem, en son
+    /// DMA bölgesini kullanır; böylece 16 MiB altı DMA havuzu sürücülere kalır.
     pub fn allocate_frame(&mut self) -> Option<u64> {
         let _guard = PMM_LOCK.lock();
-        self.allocate_frame_locked()
+        for zone in [MemoryZone::Normal, MemoryZone::HighMem, MemoryZone::Dma] {
+            if let Some(frame) = self.allocate_cached_locked(zone) {
+                return Some(frame);
+            }
+        }
+        self.failed_requests = self.failed_requests.saturating_add(1);
+        None
     }
 
-    /// `PMM_LOCK` tutulurken çağrılan kilitsiz tahsis gövdesi.
+    /// Yalnızca belirtilen bölgeden çerçeve tahsis eder. DMA tamponları için
+    /// `MemoryZone::Dma` kullanılmalıdır; bölge boşsa `None` döner.
+    pub fn allocate_frame_in_zone(&mut self, zone: MemoryZone) -> Option<u64> {
+        let _guard = PMM_LOCK.lock();
+        self.allocate_cached_locked(zone)
+    }
+
+    #[inline(always)]
+    fn cache_slot(cpu: usize, zone: MemoryZone) -> usize {
+        cpu.min(MAX_PAGE_CACHES - 1) * NUM_ZONES + zone.index()
+    }
+
+    /// Önbellek için CPU kimliği. SMP açılmadan önce LAPIC okumaktan kaçınır.
+    #[inline(always)]
+    fn cache_cpu_index() -> usize {
+        if crate::arch::x86_64::smp::cpu_count() <= 1 {
+            0
+        } else {
+            crate::arch::x86_64::smp::current_cpu_index().min(MAX_PAGE_CACHES - 1)
+        }
+    }
+
+    fn allocate_cached_locked(&mut self, zone: MemoryZone) -> Option<u64> {
+        let slot = Self::cache_slot(Self::cache_cpu_index(), zone);
+        if self.page_caches[slot].is_empty() {
+            self.refill_cache_locked(slot, zone);
+        }
+        let frame = self.page_caches[slot].pop()?;
+        self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
+        self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+        self.zone_free_frames[zone.index()] = self.zone_free_frames[zone.index()].saturating_sub(1);
+        self.alloc_requests = self.alloc_requests.saturating_add(1);
+        self.cache_hits = self.cache_hits.saturating_add(1);
+        self.update_low_watermark();
+        Some(frame)
+    }
+
+    /// Önbelleği bitmap'ten doldurur. Çerçeveler bitmap'te ayrılmış kalır,
+    /// fakat mantıksal muhasebede boş sayılır (başka CPU kapmasın).
+    fn refill_cache_locked(&mut self, slot: usize, zone: MemoryZone) {
+        self.cache_refills = self.cache_refills.saturating_add(1);
+        for _ in 0..PAGE_CACHE_BATCH {
+            if self.page_caches[slot].len() >= PAGE_CACHE_BATCH {
+                break;
+            }
+            let Some(frame) = self.take_bitmap_frame_zone_locked(zone) else {
+                break;
+            };
+            self.free_memory_bytes = self.free_memory_bytes.saturating_add(PAGE_SIZE);
+            self.used_memory_bytes = self.used_memory_bytes.saturating_sub(PAGE_SIZE);
+            self.zone_free_frames[zone.index()] =
+                self.zone_free_frames[zone.index()].saturating_add(1);
+            if !self.page_caches[slot].push(frame) {
+                break;
+            }
+        }
+    }
+
+    /// Bitmap'ten yalnızca `zone` bölgesindeki bir çerçeveyi ayırır.
+    fn take_bitmap_frame_zone_locked(&mut self, zone: MemoryZone) -> Option<u64> {
+        let max = self.total_managed_frames;
+        if max == 0 {
+            return None;
+        }
+        for i in 0..max {
+            let frame_idx = (self.next_search_frame + i) % max;
+            let Some(address) = self.frame_index_to_address(frame_idx) else {
+                continue;
+            };
+            if zone_for_address(address) != zone {
+                continue;
+            }
+            let word_idx = frame_idx / 64;
+            let bit_idx = frame_idx % 64;
+            if word_idx >= BITMAP_WORDS {
+                break;
+            }
+            if (self.bitmap[word_idx] & (1u64 << bit_idx)) == 0 {
+                self.bitmap[word_idx] |= 1u64 << bit_idx;
+                self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
+                self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+                self.zone_free_frames[zone.index()] =
+                    self.zone_free_frames[zone.index()].saturating_sub(1);
+                self.next_search_frame = (frame_idx + 1) % max;
+                return Some(address);
+            }
+        }
+        None
+    }
+
+    fn update_low_watermark(&mut self) {
+        let free_frames = self.free_memory_bytes / PAGE_SIZE;
+        if self.low_watermark_frames == 0 || free_frames < self.low_watermark_frames as u64 {
+            self.low_watermark_frames = free_frames as usize;
+        }
+    }
+
+    /// `PMM_LOCK` tutulurken çağrılan kilitsiz bitmap tahsisi. Genel
+    /// `allocate_frame` yolundan farklı olarak önbellek kullanmaz; bitişik
+    /// blok tahsisi gibi toplu işlemlerin temelidir.
     fn allocate_frame_locked(&mut self) -> Option<u64> {
         let max = self.total_managed_frames;
         if max == 0 {
@@ -310,19 +674,20 @@ impl PhysicalMemoryManager {
 
             let word = self.bitmap[word_idx];
             if (word & (1u64 << bit_idx)) == 0 {
+                let Some(address) = self.frame_index_to_address(frame_idx) else {
+                    break;
+                };
                 // Çerçeve boş, tahsis et!
                 self.bitmap[word_idx] |= 1u64 << bit_idx;
                 self.free_memory_bytes = self.free_memory_bytes.saturating_sub(PAGE_SIZE);
                 self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
+                let zone = zone_for_address(address).index();
+                self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
                 self.next_search_frame = (frame_idx + 1) % max;
                 self.alloc_requests = self.alloc_requests.saturating_add(1);
-                let free_frames = self.free_memory_bytes / PAGE_SIZE;
-                if self.low_watermark_frames == 0 || free_frames < self.low_watermark_frames as u64
-                {
-                    self.low_watermark_frames = free_frames as usize;
-                }
+                self.update_low_watermark();
 
-                return self.frame_index_to_address(frame_idx);
+                return Some(address);
             }
         }
 
@@ -392,12 +757,67 @@ impl PhysicalMemoryManager {
     }
 
     /// Daha önce tahsis edilmiş bir fiziksel çerçeveyi serbest bırakır.
+    /// Çerçeve çağıran CPU'nun bölge önbelleğine eklenir; önbellek doluysa
+    /// bir grup bitmap'e iade edilir.
     pub fn free_frame(&mut self, frame_addr: u64) {
         let _guard = PMM_LOCK.lock();
-        self.free_frame_locked(frame_addr);
+        if self.is_frame_cached(frame_addr) {
+            return; // çift iade: çerçeve zaten boş havuzda
+        }
+        let Some(frame_idx) = self.address_to_frame_index(frame_addr) else {
+            return;
+        };
+        let word_idx = frame_idx / 64;
+        let bit_idx = frame_idx % 64;
+        if word_idx >= BITMAP_WORDS || (self.bitmap[word_idx] & (1u64 << bit_idx)) == 0 {
+            return; // zaten boş
+        }
+        let zone = zone_for_address(frame_addr);
+        let slot = Self::cache_slot(Self::cache_cpu_index(), zone);
+        if !self.page_caches[slot].push(frame_addr) {
+            self.flush_cache_locked(slot);
+            if !self.page_caches[slot].push(frame_addr) {
+                self.free_frame_locked(frame_addr);
+                return;
+            }
+        }
+        self.free_memory_bytes = self.free_memory_bytes.saturating_add(PAGE_SIZE);
+        self.used_memory_bytes = self.used_memory_bytes.saturating_sub(PAGE_SIZE);
+        self.zone_free_frames[zone.index()] = self.zone_free_frames[zone.index()].saturating_add(1);
+        self.update_low_watermark();
     }
 
-    /// `PMM_LOCK` tutulurken çağrılan kilitsiz serbest bırakma gövdesi.
+    /// Bir çerçevenin herhangi bir CPU önbelleğinde bekleyip beklemediği.
+    fn is_frame_cached(&self, frame_addr: u64) -> bool {
+        self.page_caches
+            .iter()
+            .any(|cache| (0..cache.len()).any(|i| cache.frames[i] == frame_addr))
+    }
+
+    /// Önbellekteki çerçeveleri bitmap'e iade eder. Mantıksal muhasebe
+    /// önbelleğe alınırken zaten "boş" yapıldığı için sayaçlara dokunulmaz.
+    fn flush_cache_locked(&mut self, slot: usize) {
+        self.cache_flushes = self.cache_flushes.saturating_add(1);
+        for index in 0..PAGE_CACHE_BATCH {
+            let Some(frame_addr) = self.page_caches[slot].frame_at(index) else {
+                break;
+            };
+            if let Some(frame_idx) = self.address_to_frame_index(frame_addr) {
+                let word_idx = frame_idx / 64;
+                let bit_idx = frame_idx % 64;
+                if word_idx < BITMAP_WORDS {
+                    self.bitmap[word_idx] &= !(1u64 << bit_idx);
+                    if frame_idx < self.next_search_frame {
+                        self.next_search_frame = frame_idx;
+                    }
+                }
+            }
+        }
+        self.page_caches[slot] = PerCpuPageCache::new();
+    }
+
+    /// `PMM_LOCK` tutulurken çağrılan doğrudan (önbelleksiz) serbest bırakma.
+    /// Bitişik/büyük sayfa iadeleri gibi toplu yollarda kullanılır.
     fn free_frame_locked(&mut self, frame_addr: u64) {
         if let Some(frame_idx) = self.address_to_frame_index(frame_addr) {
             let word_idx = frame_idx / 64;
@@ -409,9 +829,12 @@ impl PhysicalMemoryManager {
                     self.bitmap[word_idx] &= !mask;
                     self.free_memory_bytes = self.free_memory_bytes.saturating_add(PAGE_SIZE);
                     self.used_memory_bytes = self.used_memory_bytes.saturating_sub(PAGE_SIZE);
+                    let zone = zone_for_address(frame_addr).index();
+                    self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_add(1);
                     if frame_idx < self.next_search_frame {
                         self.next_search_frame = frame_idx;
                     }
+                    self.update_low_watermark();
                 }
             }
         }
@@ -466,16 +889,15 @@ impl PhysicalMemoryManager {
                 let word_idx = idx / 64;
                 let bit_idx = idx % 64;
                 self.bitmap[word_idx] |= 1u64 << bit_idx;
+                let zone = zone_for_address(start_addr + (offset as u64) * PAGE_SIZE).index();
+                self.zone_free_frames[zone] = self.zone_free_frames[zone].saturating_sub(1);
+                self.used_memory_bytes = self.used_memory_bytes.saturating_add(PAGE_SIZE);
             }
 
             let total_bytes = (count as u64) * PAGE_SIZE;
             self.free_memory_bytes = self.free_memory_bytes.saturating_sub(total_bytes);
-            self.used_memory_bytes = self.used_memory_bytes.saturating_add(total_bytes);
             self.contiguous_requests = self.contiguous_requests.saturating_add(1);
-            let free_frames = self.free_memory_bytes / PAGE_SIZE;
-            if self.low_watermark_frames == 0 || free_frames < self.low_watermark_frames as u64 {
-                self.low_watermark_frames = free_frames as usize;
-            }
+            self.update_low_watermark();
 
             return Some(start_addr);
         }

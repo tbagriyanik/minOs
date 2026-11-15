@@ -382,6 +382,23 @@ pub struct Process {
     /// işleyicisine teslimat sonraki sinyal altyapısı maddesinde yapılır.
     /// `fork`/`exec` ile sıfırlanır (POSIX semantiği).
     pub pending_signals: u64,
+    /// Süreç grubu kimliği (POSIX `pgid`). `setsid`/`setpgid` ile değişir.
+    pub pgid: usize,
+    /// Oturum kimliği (POSIX `sid`). Oturum lideri `sid == pid` olur.
+    pub sid: usize,
+    /// CPU yakınlık maskesi: bit `i` set ise süreç CPU `i` üzerinde çalışabilir.
+    /// `0` tüm çevrimiçi CPU'lar anlamına gelir (varsayılan).
+    pub affinity: u64,
+    /// Sinyal başına kullanıcı işleyici adresi (`0` = varsayılan eylem).
+    /// İndeks `sig - 1`; `SIGKILL`/`SIGSTOP` için işleyici kaydedilemez.
+    pub signal_handlers: [u64; signals::MAX_SIGNAL as usize],
+    /// Engellenen (bloklanan) sinyallerin bit maskesi.
+    pub signal_mask: u64,
+    /// Seccomp-tarzı syscall izin maskesi: bit `n` set ise `n` numaralı
+    /// syscall çağrılabilir. `u64::MAX` = filtresiz (varsayılan).
+    /// `SYS_SECCOMP` ile yalnızca daraltılabilir (AND); `fork` ile devralınır,
+    /// `exec` boyunca korunur (POSIX semantiği).
+    pub syscall_mask: u64,
 }
 
 impl Process {
@@ -439,6 +456,12 @@ impl Process {
             }; crate::mm::user_mem::MAX_MMAP_REGIONS],
             fds: [FileDescriptor::empty(); crate::mm::fd::MAX_FDS],
             pending_signals: 0,
+            pgid: 0,
+            sid: 0,
+            affinity: 0,
+            signal_handlers: [0; signals::MAX_SIGNAL as usize],
+            signal_mask: 0,
+            syscall_mask: u64::MAX,
         }
     }
 
@@ -572,6 +595,21 @@ impl ProcessManager {
         p.resources.window_idx = window_idx;
         p.address_space = address_space;
         fd::init_standard_fds(&mut p.fds);
+        // POSIX: alt süreç ebeveynin grup/oturumunu devralır. Çekirdek
+        // sürecinin grubu yoksa (0) çocuk kendi grubunu/oturumunu kurar.
+        let (ppid, parent_pgid, parent_sid, parent_affinity) = {
+            let parent = self.get_process(self.current_pid);
+            (
+                self.current_pid,
+                parent.map_or(0, |p| p.pgid),
+                parent.map_or(0, |p| p.sid),
+                parent.map_or(0, |p| p.affinity),
+            )
+        };
+        p.ppid = ppid;
+        p.pgid = if parent_pgid == 0 { pid } else { parent_pgid };
+        p.sid = if parent_sid == 0 { pid } else { parent_sid };
+        p.affinity = parent_affinity;
         // ASLR: her süreç için mmap tabanı rastgele seçilir.
         p.mmap_base = crate::mm::loader::randomized_mmap_base();
 
@@ -1047,6 +1085,13 @@ impl ProcessManager {
         // Fork, açık fd tablosunu devralır (POSIX dup semantiği); nesne
         // referansları yalnızca fork başarıyla tamamlanınca artırılır.
         child.fds = parent.fds;
+        // Grup/oturum, CPU yakınlığı ve sinyal dağıtımı fork ile devralınır.
+        child.pgid = parent.pgid;
+        child.sid = parent.sid;
+        child.affinity = parent.affinity;
+        child.signal_handlers = parent.signal_handlers;
+        child.signal_mask = parent.signal_mask;
+        child.syscall_mask = parent.syscall_mask;
         child.address_space = AddressSpace { pml4_phys: root };
         child.resources.record_frame(root);
 
@@ -1449,8 +1494,11 @@ impl ProcessManager {
             process.mmap_used = 0;
             process.mmap_regions = Process::empty().mmap_regions;
             process.mmap_base = crate::mm::loader::randomized_mmap_base();
-            // exec sonrası bekleyen sinyaller sıfırlanır (POSIX semantiği).
+            // exec sonrası bekleyen sinyaller ve kullanıcı işleyicileri
+            // sıfırlanır; grup/oturum, affinity ve sinyal maskesi korunur
+            // (POSIX exec semantiği).
             process.pending_signals = 0;
+            process.signal_handlers = [0; signals::MAX_SIGNAL as usize];
         }
         if was_active {
             unsafe {
@@ -1812,6 +1860,287 @@ impl ProcessManager {
         }
     }
 
+    /// `setpgid(2)`: süreci bir süreç grubuna taşır.
+    ///
+    /// `pgid == 0` hedefin kendi PID'si anlamına gelir. Oturum lideri kendi
+    /// grubunu değiştiremez ve başka oturumdaki bir gruba geçilemez.
+    pub fn setpgid(&mut self, pid: usize, pgid: usize) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        let target_pgid = if pgid == 0 { pid } else { pgid };
+        let Some(target) = self.get_process(pid) else {
+            return false;
+        };
+        let sid = target.sid;
+        if target.pgid == pid {
+            return false; // oturum/grup lideri
+        }
+        if target_pgid != pid {
+            let Some(leader) = self
+                .processes
+                .iter()
+                .find(|p| p.pid == target_pgid && p.state != ProcessState::Unused)
+            else {
+                return false;
+            };
+            if leader.sid != sid {
+                return false;
+            }
+        }
+        if let Some(target) = self.get_process_mut(pid) {
+            target.pgid = target_pgid;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `getpgid(2)`.
+    pub fn getpgid(&self, pid: usize) -> Option<usize> {
+        self.get_process(pid).map(|process| {
+            if process.pgid == 0 {
+                process.pid
+            } else {
+                process.pgid
+            }
+        })
+    }
+
+    /// `setsid(2)`: yeni bir oturum ve süreç grubu oluşturur.
+    pub fn setsid(&mut self, pid: usize) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        let Some(target) = self.get_process(pid) else {
+            return false;
+        };
+        // Grup lideri zaten oturum lideridir; POSIX buna izin vermez.
+        if target.pgid == pid {
+            return false;
+        }
+        if let Some(target) = self.get_process_mut(pid) {
+            target.sid = pid;
+            target.pgid = pid;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `getsid(2)`.
+    pub fn getsid(&self, pid: usize) -> Option<usize> {
+        self.get_process(pid).map(|process| {
+            if process.sid == 0 {
+                process.pid
+            } else {
+                process.sid
+            }
+        })
+    }
+
+    /// `sched_setaffinity(2)`: sürecin çalışabileceği CPU kümesini belirler.
+    ///
+    /// Maske `0` veya çevrimiçi olmayan bir CPU biti içeriyorsa reddedilir.
+    /// Kullanıcı süreçleri şu an BSP üzerinde çalıştığı için API ileride SMP
+    /// kullanıcı zamanlaması etkinleştiğinde doğrudan uygulanabilir.
+    pub fn set_affinity(&mut self, pid: usize, mask: u64) -> bool {
+        let cpus = crate::arch::x86_64::smp::cpu_count().clamp(1, 64) as u32;
+        let valid_mask = if cpus >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << cpus) - 1
+        };
+        if pid == 0 || mask == 0 || (mask & !valid_mask) != 0 {
+            return false;
+        }
+        if let Some(process) = self.get_process_mut(pid) {
+            process.affinity = mask;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// `sched_getaffinity(2)`: etkin CPU maskesi (`0` → tüm CPU'lar).
+    pub fn get_affinity(&self, pid: usize) -> Option<u64> {
+        let cpus = crate::arch::x86_64::smp::cpu_count().clamp(1, 64) as u32;
+        let all = if cpus >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << cpus) - 1
+        };
+        self.get_process(pid).map(|process| {
+            if process.affinity == 0 {
+                all
+            } else {
+                process.affinity
+            }
+        })
+    }
+
+    /// Süreç grubundaki tüm canlı süreçlere sinyal gönderir.
+    /// Dönüş: sinyalin başarıyla iletildiği süreç sayısı.
+    pub fn kill_group(&mut self, pgid: usize, sig: u64, pmm: &mut PhysicalMemoryManager) -> usize {
+        if pgid == 0 || sig > signals::MAX_SIGNAL {
+            return 0;
+        }
+        let mut targets = [0usize; MAX_PROCESSES];
+        let mut count = 0;
+        for process in self.processes.iter() {
+            if process.pid != 0
+                && process.state != ProcessState::Unused
+                && process.state != ProcessState::Terminated
+                && process.pgid == pgid
+            {
+                targets[count] = process.pid;
+                count += 1;
+            }
+        }
+        let mut delivered = 0;
+        for &pid in targets.iter().take(count) {
+            if self.kill(pid, sig, pmm) {
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
+    /// Oturumdaki tüm canlı süreçlere sinyal gönderir.
+    pub fn kill_session(&mut self, sid: usize, sig: u64, pmm: &mut PhysicalMemoryManager) -> usize {
+        if sid == 0 || sig > signals::MAX_SIGNAL {
+            return 0;
+        }
+        let mut targets = [0usize; MAX_PROCESSES];
+        let mut count = 0;
+        for process in self.processes.iter() {
+            if process.pid != 0
+                && process.state != ProcessState::Unused
+                && process.state != ProcessState::Terminated
+                && process.sid == sid
+            {
+                targets[count] = process.pid;
+                count += 1;
+            }
+        }
+        let mut delivered = 0;
+        for &pid in targets.iter().take(count) {
+            if self.kill(pid, sig, pmm) {
+                delivered += 1;
+            }
+        }
+        delivered
+    }
+
+    /// Bekleyen sinyaller içinde varsayılan eylemi olanları uygular.
+    ///
+    /// Kullanıcı işleyicisi kaydedilmiş sinyaller beklemede bırakılır
+    /// (`SYS_SIGACTION` ile kayıt yapılabilir). Ölümcül sinyaller süreci
+    /// `-(sig)` çıkış koduyla sonlandırır; durdurma sinyalleri `Suspended`
+    /// yapar. En az bir eylem uygulandıysa `true` döner.
+    pub fn deliver_pending_defaults(
+        &mut self,
+        pid: usize,
+        pmm: &mut PhysicalMemoryManager,
+    ) -> bool {
+        let Some(process) = self.get_process(pid) else {
+            return false;
+        };
+        let pending = process.pending_signals & !process.signal_mask;
+        if pending == 0 {
+            return false;
+        }
+        // İlk uygulanabilir sinyali seç: kullanıcı işleyicisi kayıtlı
+        // sinyaller beklemede kalır. Seçim döngüsü `self` üzerinde salt-okunur
+        // kalır; eylem uygulaması ayrı adımda yapılır (borç çakışması yok).
+        let mut chosen = None;
+        for sig in 1..=signals::MAX_SIGNAL {
+            let bit = 1u64 << (sig - 1);
+            if pending & bit == 0 {
+                continue;
+            }
+            let handler = process
+                .signal_handlers
+                .get((sig - 1) as usize)
+                .copied()
+                .unwrap_or(0);
+            let action = match handler {
+                0 => default_signal_action(sig),
+                // `SIG_IGN`: bekleyen sinyal sessizce düşürülür.
+                1 => SignalAction::Ignore,
+                // Kayıtlı kullanıcı işleyicisi: sinyal beklemede kalır.
+                _ => continue,
+            };
+            chosen = Some((sig, action));
+            break;
+        }
+        let Some((sig, action)) = chosen else {
+            return false;
+        };
+        let bit = 1u64 << (sig - 1);
+        if let Some(process) = self.get_process_mut(pid) {
+            process.pending_signals &= !bit;
+        }
+        match action {
+            SignalAction::Terminate => {
+                self.terminate(pid, -(sig as i32), pmm);
+            }
+            SignalAction::Stop => {
+                self.suspend(pid);
+            }
+            SignalAction::Continue => {
+                self.resume(pid);
+            }
+            SignalAction::Ignore => {}
+        }
+        true
+    }
+
+    /// `SYS_SIGACTION`: kullanıcı sinyal işleyicisi kaydeder.
+    ///
+    /// `SIGKILL` ve `SIGSTOP` için işleyici atanamaz. `handler == 0` varsayılan
+    /// eyleme dönüş anlamına gelir; `handler == 1` sinyali yok sayar
+    /// (`SIG_IGN`).
+    pub fn set_signal_handler(&mut self, pid: usize, sig: u64, handler: u64) -> bool {
+        if sig == 0
+            || sig > signals::MAX_SIGNAL
+            || matches!(sig, signals::SIGKILL | signals::SIGSTOP)
+        {
+            return false;
+        }
+        // `handler` ileride kullanıcı kipinde çağrılacak bir adrestir;
+        // çekirdek adresi veya non-canonical değer kabul edilirse teslimat
+        // anında ring0'da #GP/#PF üretir. 0 (varsayılan) ve 1 (SIG_IGN)
+        // ayrılmış değerlerdir; diğerleri kanonik kullanıcı yarısında olmalı.
+        if handler >= crate::mm::uaccess::USER_ADDRESS_END {
+            return false;
+        }
+        let Some(process) = self.get_process_mut(pid) else {
+            return false;
+        };
+        process.signal_handlers[(sig - 1) as usize] = handler;
+        // SIG_IGN: bekleyen aynı sinyali düşür.
+        if handler == 1 {
+            process.pending_signals &= !(1u64 << (sig - 1));
+        }
+        true
+    }
+
+    /// `SYS_SIGPROCMASK`: sinyal maskesini ayarlar. `how`: 0 = kapat, 1 = aç,
+    /// 2 = değiştir. Dönüş: önceki maske.
+    pub fn set_signal_mask(&mut self, pid: usize, how: u64, mask: u64) -> Option<u64> {
+        let process = self.get_process_mut(pid)?;
+        let old = process.signal_mask;
+        let mask = mask & !(1u64 << (signals::SIGKILL - 1)) & !(1u64 << (signals::SIGSTOP - 1));
+        process.signal_mask = match how {
+            0 => old & !mask,
+            1 => old | mask,
+            2 => mask,
+            _ => return None,
+        };
+        Some(old)
+    }
+
     /// `kill(2)` semantigi: `sig` hedef surece sinyal gonderir.
     ///
     /// * `pid == 0` (cekirdek) veya gecersiz `sig` (> `signals::MAX_SIGNAL`):
@@ -1904,8 +2233,36 @@ pub mod sys_nos {
     /// Sürece sinyal gönderir / süreci kontrol eder: RDI = pid, RSI = sinyal
     /// numarası. SIGKILL/SIGTERM sonlandırır, SIGSTOP/SIGCONT duraklatır ve
     /// sürdürür, `sig == 0` varlık denetimidir. Diğer sinyaller
-    /// `pending_signals`'e işlenir. Dönüş: `0` / `MAX`.
+    /// `pending_signals`'e işlenir. Negatif `pid` süreç grubunu hedefler.
+    /// Dönüş: `0` / `MAX`.
     pub const SYS_KILL: u64 = 19;
+    /// Süreç grubunu ayarlar: RDI = pid (`0` = çağıran), RSI = pgid
+    /// (`0` = kendi PID'si). Dönüş: `0` / `MAX`.
+    pub const SYS_SETPGID: u64 = 20;
+    /// Süreç grubunu döndürür: RDI = pid (`0` = çağıran). Dönüş: pgid / `MAX`.
+    pub const SYS_GETPGID: u64 = 21;
+    /// Yeni oturum açar: RDI yok sayılır, çağıran oturum lideri olur.
+    /// Dönüş: yeni sid / `MAX`.
+    pub const SYS_SETSID: u64 = 22;
+    /// Oturum kimliğini döndürür: RDI = pid (`0` = çağıran). Dönüş: sid / `MAX`.
+    pub const SYS_GETSID: u64 = 23;
+    /// CPU yakınlık maskesini ayarlar: RDI = pid (`0` = çağıran),
+    /// RSI = maske (bit `i` = CPU `i`). Dönüş: `0` / `MAX`.
+    pub const SYS_SCHED_SETAFFINITY: u64 = 24;
+    /// CPU yakınlık maskesini döndürür: RDI = pid (`0` = çağıran).
+    /// Dönüş: maske / `MAX`.
+    pub const SYS_SCHED_GETAFFINITY: u64 = 25;
+    /// Sinyal işleyicisi kaydeder: RDI = sinyal, RSI = işleyici adresi
+    /// (`0` = varsayılan, `1` = yok say). Dönüş: `0` / `MAX`.
+    pub const SYS_SIGACTION: u64 = 26;
+    /// Sinyal maskesini değiştirir: RDI = nasıl (`0` kapat, `1` aç,
+    /// `2` değiştir), RSI = maske bitleri. Dönüş: önceki maske / `MAX`.
+    pub const SYS_SIGPROCMASK: u64 = 27;
+    /// Seccomp-tarzı syscall filtresi: RDI = yeni izin maskesi (bit `n` =
+    /// syscall `n` serbest). Yalnızca daraltma kabul edilir
+    /// (`yeni = eski & arg1`); genişletme imkânsızdır. `SYS_EXIT` her zaman
+    /// serbesttir. Dönüş: `0` / `MAX`.
+    pub const SYS_SECCOMP: u64 = 28;
 }
 
 /// Standart sinyal numaraları (Linux numaralandırmasıyla uyumlu alt küme).
@@ -1935,6 +2292,46 @@ pub mod signals {
     pub const SIGTTOU: u64 = 22;
     /// İşlenebilir sinyal bit maskesinin üst sınırı (64 bit).
     pub const MAX_SIGNAL: u64 = 64;
+}
+
+/// Kullanıcı işleyicisi kayıtlı değilken uygulanan varsayılan sinyal eylemi.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalAction {
+    /// Süreci `-(sig)` çıkış koduyla sonlandırır.
+    Terminate,
+    /// Süreci `Suspended` durumuna alır.
+    Stop,
+    /// Duraklatılmış süreci sürdürür.
+    Continue,
+    /// Sinyali sessizce düşürür.
+    Ignore,
+}
+
+/// Linux numaralandırmasıyla uyumlu varsayılan sinyal eylemi tablosu.
+pub const fn default_signal_action(sig: u64) -> SignalAction {
+    match sig {
+        signals::SIGHUP
+        | signals::SIGINT
+        | signals::SIGQUIT
+        | signals::SIGILL
+        | signals::SIGTRAP
+        | signals::SIGABRT
+        | signals::SIGBUS
+        | signals::SIGFPE
+        | signals::SIGKILL
+        | signals::SIGUSR1
+        | signals::SIGSEGV
+        | signals::SIGUSR2
+        | signals::SIGPIPE
+        | signals::SIGALRM
+        | signals::SIGTERM
+        | signals::SIGSTKFLT => SignalAction::Terminate,
+        signals::SIGSTOP | signals::SIGTSTP | signals::SIGTTIN | signals::SIGTTOU => {
+            SignalAction::Stop
+        }
+        signals::SIGCONT => SignalAction::Continue,
+        _ => SignalAction::Ignore,
+    }
 }
 
 pub const MAX_EXEC_IMAGE_SIZE: usize = 112 * 1024;
@@ -1976,6 +2373,22 @@ pub fn syscall_dispatch_abi(
     pmm: &mut PhysicalMemoryManager,
 ) -> u64 {
     let _ = arg4;
+
+    // Seccomp-tarzı izin maskesi: sürecin `syscall_mask`'i `u64::MAX`'ten
+    // farklıysa yalnızca maskede biti set olan syscall'ler çalışır.
+    // `SYS_EXIT` her zaman serbesttir; aksi halde filtrelenmiş bir süreç
+    // sonlandırılamaz hale gelebilir. 64 ve üzeri numaralar maskeye sığmaz,
+    // filtreli süreçte doğrudan reddedilir.
+    if let Some(process) = proc_mgr.get_process(proc_mgr.current_pid) {
+        let mask = process.syscall_mask;
+        if mask != u64::MAX
+            && sys_no != sys_nos::SYS_EXIT
+            && (sys_no >= 64 || (mask >> sys_no) & 1 == 0)
+        {
+            return u64::MAX;
+        }
+    }
+
     match sys_no {
         sys_nos::SYS_YIELD => {
             proc_mgr.schedule_next();
@@ -2318,11 +2731,107 @@ pub fn syscall_dispatch_abi(
             target as u64
         }
         sys_nos::SYS_KILL => {
-            if proc_mgr.kill(arg1 as usize, arg2, pmm) {
+            // Negatif pid süreç grubunu hedefler (POSIX `kill(-pgid, sig)`).
+            let target = arg1 as i64;
+            if target < 0 {
+                let pgid = target.unsigned_abs() as usize;
+                if proc_mgr.kill_group(pgid, arg2, pmm) > 0 {
+                    0
+                } else {
+                    u64::MAX
+                }
+            } else if proc_mgr.kill(arg1 as usize, arg2, pmm) {
                 0
             } else {
                 u64::MAX
             }
+        }
+        sys_nos::SYS_SETPGID => {
+            let target = if arg1 == 0 {
+                proc_mgr.current_pid
+            } else {
+                arg1 as usize
+            };
+            if proc_mgr.setpgid(target, arg2 as usize) {
+                0
+            } else {
+                u64::MAX
+            }
+        }
+        sys_nos::SYS_GETPGID => {
+            let target = if arg1 == 0 {
+                proc_mgr.current_pid
+            } else {
+                arg1 as usize
+            };
+            proc_mgr
+                .getpgid(target)
+                .map(|pgid| pgid as u64)
+                .unwrap_or(u64::MAX)
+        }
+        sys_nos::SYS_SETSID => {
+            let pid = proc_mgr.current_pid;
+            if proc_mgr.setsid(pid) {
+                pid as u64
+            } else {
+                u64::MAX
+            }
+        }
+        sys_nos::SYS_GETSID => {
+            let target = if arg1 == 0 {
+                proc_mgr.current_pid
+            } else {
+                arg1 as usize
+            };
+            proc_mgr
+                .getsid(target)
+                .map(|sid| sid as u64)
+                .unwrap_or(u64::MAX)
+        }
+        sys_nos::SYS_SCHED_SETAFFINITY => {
+            let target = if arg1 == 0 {
+                proc_mgr.current_pid
+            } else {
+                arg1 as usize
+            };
+            if proc_mgr.set_affinity(target, arg2) {
+                0
+            } else {
+                u64::MAX
+            }
+        }
+        sys_nos::SYS_SCHED_GETAFFINITY => {
+            let target = if arg1 == 0 {
+                proc_mgr.current_pid
+            } else {
+                arg1 as usize
+            };
+            proc_mgr.get_affinity(target).unwrap_or(u64::MAX)
+        }
+        sys_nos::SYS_SIGACTION => {
+            let pid = proc_mgr.current_pid;
+            if proc_mgr.set_signal_handler(pid, arg1, arg2) {
+                0
+            } else {
+                u64::MAX
+            }
+        }
+        sys_nos::SYS_SIGPROCMASK => {
+            let pid = proc_mgr.current_pid;
+            proc_mgr
+                .set_signal_mask(pid, arg1, arg2)
+                .unwrap_or(u64::MAX)
+        }
+        sys_nos::SYS_SECCOMP => {
+            // Yalnızca daraltma: mevcut maskeyle AND'lenir, böylece bir
+            // süreç kendini bir kez kısıtladıktan sonra filtreyi geri alamaz.
+            // `SYS_EXIT` biti maskede olmasa bile her zaman çağrılabilir.
+            let current = proc_mgr.current_pid;
+            let Some(process) = proc_mgr.get_process_mut(current) else {
+                return u64::MAX;
+            };
+            process.syscall_mask &= arg1;
+            0
         }
         sys_nos::SYS_RESINFO => {
             let current = proc_mgr.current_pid;
@@ -3217,6 +3726,90 @@ pub fn test_syscall_pointer_validation(
         crate::serial_print(if reclaimed { "reclaim" } else { "reclaim!" });
         crate::serial_print(")\n");
     }
+    ok
+}
+
+/// Seccomp-tarzı syscall izin maskesi (`SYS_SECCOMP` / `Process::syscall_mask`)
+/// doğrulama testi. Filtrelemenin daraltıcı (AND-only) olduğunu, engellenen
+/// çağrıların `u64::MAX` döndürdüğünü ve `SYS_EXIT`'in her zaman serbest
+/// kaldığını gerçek dispatch yoluyla sınar.
+pub fn test_syscall_filter(proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryManager) -> bool {
+    crate::serial_print("[SECCOMP-TEST] --- Syscall izin maskesi (seccomp) testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    let Some(pid) = proc_mgr
+        .spawn(
+            "seccomp_test",
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+        .ok()
+    else {
+        crate::serial_print("[SECCOMP-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+        return false;
+    };
+    proc_mgr.current_pid = pid;
+
+    // Maske: GETPID(2) + WRITE(5) + SECCOMP(28) serbest; MEMINFO(14),
+    // OPEN(15), EXIT(1) maskede yok (EXIT yine de muaf).
+    let mask_a = (1u64 << sys_nos::SYS_GETPID)
+        | (1u64 << sys_nos::SYS_WRITE)
+        | (1u64 << sys_nos::SYS_SECCOMP);
+
+    // 1. Filtresiz süreç: GETPID pid döndürür, MEMINFO checksum üretir.
+    let unfiltered_pid = syscall_dispatch(sys_nos::SYS_GETPID, 0, 0, 0, proc_mgr, pmm);
+    let unfiltered_meminfo = syscall_dispatch(sys_nos::SYS_MEMINFO, 0, 0, 0, proc_mgr, pmm);
+
+    // 2. Maske kur: yalnızca daraltma kabul edilir.
+    let set_ok = syscall_dispatch(sys_nos::SYS_SECCOMP, mask_a, 0, 0, proc_mgr, pmm) == 0;
+    let stored = proc_mgr
+        .get_process(pid)
+        .map(|process| process.syscall_mask)
+        .unwrap_or(0);
+
+    // 3. İzinli çağrılar çalışır, izinsiz olanlar u64::MAX döner.
+    let getpid_ok = syscall_dispatch(sys_nos::SYS_GETPID, 0, 0, 0, proc_mgr, pmm) == pid as u64;
+    let write_allowed = syscall_dispatch(sys_nos::SYS_WRITE, 0, 0, 0, proc_mgr, pmm) == 0;
+    let meminfo_blocked =
+        syscall_dispatch(sys_nos::SYS_MEMINFO, 0, 0, 0, proc_mgr, pmm) == u64::MAX;
+    let open_blocked = syscall_dispatch(sys_nos::SYS_OPEN, 0, 0, 0, proc_mgr, pmm) == u64::MAX;
+
+    // 4. Genişletme girişimi yok sayılır: maskeye u64::MAX verilse bile
+    //    AND semantiği eski maskeyi korur.
+    let _ = syscall_dispatch(sys_nos::SYS_SECCOMP, u64::MAX, 0, 0, proc_mgr, pmm);
+    let still_blocked = syscall_dispatch(sys_nos::SYS_MEMINFO, 0, 0, 0, proc_mgr, pmm) == u64::MAX;
+
+    // 5. İkinci daraltma: GETPID biti de kapatılır.
+    let mask_b = mask_a & !(1u64 << sys_nos::SYS_GETPID);
+    let _ = syscall_dispatch(sys_nos::SYS_SECCOMP, mask_b, 0, 0, proc_mgr, pmm);
+    let getpid_now_blocked =
+        syscall_dispatch(sys_nos::SYS_GETPID, 0, 0, 0, proc_mgr, pmm) == u64::MAX;
+
+    // 6. SYS_EXIT maskede olmasa bile her zaman serbesttir (sonlandırma
+    //    hakkı). Bu çağrı süreci Terminated yapar; temizlik aşağıda.
+    let exit_allowed = syscall_dispatch(sys_nos::SYS_EXIT, 0, 0, 0, proc_mgr, pmm) == 0;
+
+    proc_mgr.current_pid = caller_pid;
+    proc_mgr.reap_terminated(pmm);
+
+    let ok = unfiltered_pid == pid as u64
+        && unfiltered_meminfo != u64::MAX
+        && set_ok
+        && stored == mask_a
+        && getpid_ok
+        && write_allowed
+        && meminfo_blocked
+        && open_blocked
+        && still_blocked
+        && getpid_now_blocked
+        && exit_allowed;
+    crate::serial_print(if ok {
+        "[SECCOMP-TEST] daraltma/AND-only/engel/suzinti-yok/EXIT-muaf: BASARILI\n"
+    } else {
+        "[SECCOMP-TEST] Syscall izin maskesi: BAŞARISIZ\n"
+    });
     ok
 }
 
@@ -4252,6 +4845,303 @@ pub fn test_kill_suspend_resume(
         crate::serial_print(if suspended_ok { "stop " } else { "stop! " });
         crate::serial_print(if resumed_ok { "cont " } else { "cont! " });
         crate::serial_print(if terminated_ok { "term " } else { "term! " });
+        crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
+        crate::serial_print(")\n");
+        false
+    }
+}
+
+/// Süreç grubu/oturum, CPU yakınlığı ve sinyal işleyici syscall'larının
+/// (`SYS_SETPGID`/`SYS_GETPGID`/`SYS_SETSID`/`SYS_GETSID`,
+/// `SYS_SCHED_SETAFFINITY`/`SYS_SCHED_GETAFFINITY`, `SYS_SIGACTION`/
+/// `SYS_SIGPROCMASK`) uçtan uca doğrulaması.
+pub fn test_process_groups_and_signals(
+    proc_mgr: &mut ProcessManager,
+    pmm: &mut PhysicalMemoryManager,
+) -> bool {
+    crate::serial_print("[PROC-GROUP-TEST] --- grup/oturum/affinity/sinyal testi ---\n");
+    let caller_pid = proc_mgr.current_pid;
+    proc_mgr.current_pid = 0;
+    let free_before = pmm.free_memory_bytes;
+
+    let spawn = |name: &str, proc_mgr: &mut ProcessManager, pmm: &mut PhysicalMemoryManager| {
+        proc_mgr.spawn(
+            name,
+            crate::mm::loader::USER_CODE_BASE,
+            crate::mm::loader::USER_STACK_TOP - 16,
+            0,
+            None,
+            pmm,
+        )
+    };
+    let call = |sys_no: u64,
+                arg1: u64,
+                arg2: u64,
+                proc_mgr: &mut ProcessManager,
+                pmm: &mut PhysicalMemoryManager| {
+        syscall_dispatch(sys_no, arg1, arg2, 0, proc_mgr, pmm)
+    };
+
+    let Ok(parent) = spawn("group_parent", proc_mgr, pmm) else {
+        crate::serial_print("[PROC-GROUP-TEST] Süreç oluşturulamadı: BAŞARISIZ\n");
+        proc_mgr.current_pid = caller_pid;
+        return false;
+    };
+
+    // 1. spawn: süreç kendi grubunun ve oturumunun lideri olur.
+    let leader_ok = call(sys_nos::SYS_GETPGID, parent as u64, 0, proc_mgr, pmm) == parent as u64
+        && call(sys_nos::SYS_GETSID, parent as u64, 0, proc_mgr, pmm) == parent as u64;
+
+    // 2. fork: alt süreç grup/oturumu ve affinity maskesini devralır.
+    let Ok(child) = proc_mgr.fork_process(parent, pmm) else {
+        crate::serial_print("[PROC-GROUP-TEST] fork: BAŞARISIZ\n");
+        let _ = proc_mgr.terminate(parent, 0, pmm);
+        proc_mgr.reap_terminated(pmm);
+        proc_mgr.current_pid = caller_pid;
+        return false;
+    };
+    let inherit_ok = call(sys_nos::SYS_GETPGID, child as u64, 0, proc_mgr, pmm) == parent as u64
+        && call(sys_nos::SYS_GETSID, child as u64, 0, proc_mgr, pmm) == parent as u64;
+
+    // 3. setsid: çağıran (child) yeni oturum ve grup lideri olur; `pid == 0`
+    //    çağıranı hedefler.
+    proc_mgr.current_pid = child;
+    let session_ok = call(sys_nos::SYS_SETSID, 0, 0, proc_mgr, pmm) == child as u64
+        && call(sys_nos::SYS_GETPGID, 0, 0, proc_mgr, pmm) == child as u64
+        && call(sys_nos::SYS_GETSID, 0, 0, proc_mgr, pmm) == child as u64
+        // Oturum üyeliği: yeni oturumda yalnızca `child`, ebeveyn oturumunda
+        // yalnızca `parent` bulunur.
+        && proc_mgr.kill_session(child, 0, pmm) == 1
+        && proc_mgr.kill_session(parent, 0, pmm) == 1;
+    proc_mgr.current_pid = 0;
+
+    // Farklı oturumdaki bir gruba geçiş reddedilir (POSIX EPERM).
+    let cross_session_rejected = call(
+        sys_nos::SYS_SETPGID,
+        child as u64,
+        parent as u64,
+        proc_mgr,
+        pmm,
+    ) == u64::MAX;
+
+    // 4. CPU yakınlığı: varsayılan tüm CPU'lar, daraltma ve geçersiz maske.
+    let cpus = crate::arch::x86_64::smp::cpu_count().clamp(1, 64) as u32;
+    let all_mask = if cpus >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << cpus) - 1
+    };
+    let affinity_ok = call(
+        sys_nos::SYS_SCHED_GETAFFINITY,
+        parent as u64,
+        0,
+        proc_mgr,
+        pmm,
+    ) == all_mask
+        && call(
+            sys_nos::SYS_SCHED_SETAFFINITY,
+            parent as u64,
+            1,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && call(
+            sys_nos::SYS_SCHED_GETAFFINITY,
+            parent as u64,
+            0,
+            proc_mgr,
+            pmm,
+        ) == 1
+        && (cpus >= 64
+            || call(
+                sys_nos::SYS_SCHED_SETAFFINITY,
+                parent as u64,
+                all_mask << 1,
+                proc_mgr,
+                pmm,
+            ) == u64::MAX)
+        && call(
+            sys_nos::SYS_SCHED_SETAFFINITY,
+            parent as u64,
+            0,
+            proc_mgr,
+            pmm,
+        ) == u64::MAX;
+
+    // 5. Süreç grubuna toplu sinyal: negatif pid ile `SIGSTOP`, ardından
+    //    tekil `SIGCONT`. `child` ayrı oturumda olduğu için etkilenmez.
+    let Ok(sibling) = proc_mgr.fork_process(parent, pmm) else {
+        crate::serial_print("[PROC-GROUP-TEST] ikinci fork: BAŞARISIZ\n");
+        let _ = proc_mgr.terminate(child, 0, pmm);
+        let _ = proc_mgr.terminate(parent, 0, pmm);
+        proc_mgr.reap_terminated(pmm);
+        proc_mgr.current_pid = caller_pid;
+        return false;
+    };
+    let group_mask = (-(parent as i64)) as u64;
+    let group_stop_ok = call(
+        sys_nos::SYS_KILL,
+        group_mask,
+        signals::SIGSTOP,
+        proc_mgr,
+        pmm,
+    ) == 0
+        && call(
+            sys_nos::SYS_KILL,
+            child as u64,
+            signals::SIGSTOP,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && proc_mgr
+            .get_process(parent)
+            .is_some_and(|p| p.state == ProcessState::Suspended)
+        && proc_mgr
+            .get_process(sibling)
+            .is_some_and(|p| p.state == ProcessState::Suspended)
+        && proc_mgr
+            .get_process(child)
+            .is_some_and(|p| p.state == ProcessState::Suspended);
+    let group_resume_ok = call(
+        sys_nos::SYS_KILL,
+        parent as u64,
+        signals::SIGCONT,
+        proc_mgr,
+        pmm,
+    ) == 0
+        && call(
+            sys_nos::SYS_KILL,
+            sibling as u64,
+            signals::SIGCONT,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && call(
+            sys_nos::SYS_KILL,
+            child as u64,
+            signals::SIGCONT,
+            proc_mgr,
+            pmm,
+        ) == 0;
+
+    // 6. Sinyal işleyicisi: SIGKILL reddedilir, kullanıcı işleyicisi bekleyen
+    //    sinyali varsayılan eyleme düşürmez, SIG_IGN sinyali düşürür.
+    //    `SYS_SIGACTION`/`SYS_SIGPROCMASK` çağıran süreci hedefler.
+    proc_mgr.current_pid = parent;
+    let sig_usr1_bit = 1u64 << (signals::SIGUSR1 - 1);
+    let sig_usr2_bit = 1u64 << (signals::SIGUSR2 - 1);
+    let handler_rejected = call(
+        sys_nos::SYS_SIGACTION,
+        signals::SIGKILL,
+        0x1234,
+        proc_mgr,
+        pmm,
+    ) == u64::MAX;
+    let handler_ok = call(
+        sys_nos::SYS_SIGACTION,
+        signals::SIGUSR1,
+        0x7000_1234,
+        proc_mgr,
+        pmm,
+    ) == 0
+        && call(
+            sys_nos::SYS_KILL,
+            parent as u64,
+            signals::SIGUSR1,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && !proc_mgr.deliver_pending_defaults(parent, pmm)
+        && proc_mgr
+            .get_process(parent)
+            .is_some_and(|p| p.pending_signals & sig_usr1_bit != 0);
+
+    let ignore_ok = call(sys_nos::SYS_SIGACTION, signals::SIGUSR1, 1, proc_mgr, pmm) == 0
+        && proc_mgr
+            .get_process(parent)
+            .is_some_and(|p| p.pending_signals & sig_usr1_bit == 0)
+        && call(
+            sys_nos::SYS_KILL,
+            parent as u64,
+            signals::SIGUSR1,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && proc_mgr.deliver_pending_defaults(parent, pmm)
+        && proc_mgr.get_process(parent).is_some_and(|p| {
+            p.pending_signals & sig_usr1_bit == 0 && p.state != ProcessState::Terminated
+        });
+
+    // 7. Sinyal maskesi: maskeli sinyal varsayılan eyleme düşmez; maske
+    //    kaldırılınca SIGUSR2 varsayılan eylemi süreci sonlandırır.
+    let mask_ok = call(sys_nos::SYS_SIGACTION, signals::SIGUSR2, 0, proc_mgr, pmm) == 0
+        && call(sys_nos::SYS_SIGPROCMASK, 1, sig_usr2_bit, proc_mgr, pmm) == 0
+        && call(
+            sys_nos::SYS_KILL,
+            parent as u64,
+            signals::SIGUSR2,
+            proc_mgr,
+            pmm,
+        ) == 0
+        && !proc_mgr.deliver_pending_defaults(parent, pmm)
+        && proc_mgr
+            .get_process(parent)
+            .is_some_and(|p| p.pending_signals & sig_usr2_bit != 0)
+        && call(sys_nos::SYS_SIGPROCMASK, 0, sig_usr2_bit, proc_mgr, pmm) == sig_usr2_bit
+        && proc_mgr.deliver_pending_defaults(parent, pmm)
+        && proc_mgr.get_process(parent).is_some_and(|p| {
+            p.state == ProcessState::Terminated && p.exit_code == -(signals::SIGUSR2 as i32)
+        });
+
+    proc_mgr.reap_terminated(pmm);
+    let _ = proc_mgr.terminate(child, 0, pmm);
+    let _ = proc_mgr.terminate(sibling, 0, pmm);
+    proc_mgr.reap_terminated(pmm);
+    proc_mgr.current_pid = caller_pid;
+    let no_leak = pmm.free_memory_bytes == free_before;
+
+    if leader_ok
+        && inherit_ok
+        && session_ok
+        && cross_session_rejected
+        && affinity_ok
+        && group_stop_ok
+        && group_resume_ok
+        && handler_rejected
+        && handler_ok
+        && ignore_ok
+        && mask_ok
+        && no_leak
+    {
+        crate::serial_print(
+            "[PROC-GROUP-TEST] grup/oturum/affinity/sinyal işleyicileri: BASARILI\n",
+        );
+        true
+    } else {
+        crate::serial_print("[PROC-GROUP-TEST] test: BAŞARISIZ (");
+        crate::serial_print(if leader_ok { "leader " } else { "leader! " });
+        crate::serial_print(if inherit_ok { "inherit " } else { "inherit! " });
+        crate::serial_print(if session_ok { "session " } else { "session! " });
+        crate::serial_print(if cross_session_rejected {
+            "cross "
+        } else {
+            "cross! "
+        });
+        crate::serial_print(if affinity_ok {
+            "affinity "
+        } else {
+            "affinity! "
+        });
+        crate::serial_print(if group_stop_ok { "stop " } else { "stop! " });
+        crate::serial_print(if group_resume_ok { "cont " } else { "cont! " });
+        crate::serial_print(if handler_rejected {
+            "kill-action "
+        } else {
+            "kill-action! "
+        });
+        crate::serial_print(if handler_ok { "handler " } else { "handler! " });
+        crate::serial_print(if ignore_ok { "ignore " } else { "ignore! " });
+        crate::serial_print(if mask_ok { "mask " } else { "mask! " });
         crate::serial_print(if no_leak { "leak-free" } else { "leak!" });
         crate::serial_print(")\n");
         false

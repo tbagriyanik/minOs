@@ -8,5 +8,5 @@ target = "x86_64-minos.json"
 
 [target.'cfg(target_os = "none")']
 runner = "qemu-system-x86_64 -cdrom"
-rustflags = ["-C", "link-arg=-Tlinker.ld"]
+rustflags = ["-C", "link-arg=-Tlinker.ld", "-C", "link-arg=-pie"]
 

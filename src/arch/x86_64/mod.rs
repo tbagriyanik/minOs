@@ -3,6 +3,7 @@ pub mod context;
 pub mod gdt;
 pub mod idt;
 pub mod ioapic;
+pub mod pku;
 pub mod ring3;
 pub mod smp;
 pub mod sync;
@@ -27,10 +28,13 @@ fn alloc_table_frame() -> Option<u64> {
     }
 }
 
-pub fn init_interrupts() {
+/// `cpu` çağıran CPU'nun indeksi olmalıdır: her çekirdek kendi GDT/TSS
+/// slotunu yükler. AP'lerin `cpu = 0` geçmesi, AP'nin TSS'ini BSP'nin
+/// kernel yığınına (`TSSS[0].rsp0`) bağlayacağı için yasaktır.
+pub fn init_interrupts(cpu: usize) {
     unsafe {
-        // Erken CPU GDT + TSS yükle (BSP = 0)
-        gdt::load_for_cpu(0);
+        // Erken CPU GDT + TSS yükle (çağıranın kendi slotu)
+        gdt::load_for_cpu(cpu);
         // IDT kapılarını erkenden yükle (#DE, #UD, #DF, #SS, #GP, #PF, 0x80)
         ring3::install_gates();
         let idt_ptr = core::ptr::addr_of_mut!(IDT);

@@ -10,6 +10,7 @@ Bu belge, minOs ISO'sunun nasıl üretildiğini, otomatik testlerin nasıl
 | `minos.iso` | `build_iso.ps1` / CI `release.yml` | Önyüklenebilir sürüm imajı |
 | `test-report.md` | `test_qemu.ps1` | QEMU entegrasyon test raporu (Markdown) |
 | `target/qemu_audio.wav` | `test_qemu.ps1` (HDA) | Gerçek ses çıkış doğrulaması |
+| `target/stress_report.txt` | `test_stress_24h.ps1` | Soak/panik testi sonuç raporu |
 | `serial.log` | CI `qemu-boot-test` | Önyükleme seri günlüğü |
 
 ---
@@ -71,6 +72,10 @@ yazar.
 
 # FPS 3D acilis + gercek FPS/min-FPS/frame-time stres testi (10/30/60 dk)
 ./test_qemu.ps1 -FpsStressTest -FpsStressMinutes 10
+
+# Yapilandirilabilir sureli QEMU soak / panic testi (varsayilan 24 saat)
+./test_stress_24h.ps1 -Hours 24
+./test_stress_24h.ps1 -Hours 0.05 -Fps3d   # kisa duman testi
 ```
 
 Test sonunda:

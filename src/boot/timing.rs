@@ -27,6 +27,13 @@ static LAST_MARK_MS: AtomicU64 = AtomicU64::new(0);
 static TIMING_ENABLED: AtomicU64 = AtomicU64::new(0);
 /// Ölçülen aşama sayısı.
 static PHASE_COUNT: AtomicU64 = AtomicU64::new(0);
+/// En uzun tek aşamanın süresi (ms).
+static MAX_PHASE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Hedeflenen çekirdek açılış süresi (masaüstüne hazır).
+pub const BOOT_BUDGET_MS: u64 = 3_000;
+/// Bu süreyi aşan aşamalar "yavaş faz" olarak işaretlenir.
+const SLOW_PHASE_MS: u64 = 500;
 
 /// Ölçüm başlangıcını işaretler. Zaman tabanı hazır olduktan hemen sonra
 /// çağrılmalıdır.
@@ -63,6 +70,7 @@ impl PhaseTimer {
         let last = LAST_MARK_MS.swap(now, Ordering::AcqRel);
         let delta = now.saturating_sub(last);
         PHASE_COUNT.fetch_add(1, Ordering::AcqRel);
+        MAX_PHASE_MS.fetch_max(delta, Ordering::AcqRel);
         serial_print("[BOOT-TIME] ");
         serial_print(label);
         serial_print("=");
@@ -70,6 +78,15 @@ impl PhaseTimer {
         serial_print("ms toplam=");
         serial_print_dec(now);
         serial_print("ms\n");
+        if delta >= SLOW_PHASE_MS {
+            serial_print("[BOOT-TIME] UYARI yavas faz: ");
+            serial_print(label);
+            serial_print("=");
+            serial_print_dec(delta);
+            serial_print("ms (esik=");
+            serial_print_dec(SLOW_PHASE_MS);
+            serial_print("ms)\n");
+        }
     }
 
     /// Ölçülen aşama sayısı.
@@ -84,13 +101,24 @@ impl Default for PhaseTimer {
     }
 }
 
-/// Açılış süresinin özet satırını yazar (toplam süre + aşama sayısı).
+/// Açılış süresinin özet satırını yazar (toplam süre, aşama sayısı,
+/// en yavaş aşama ve bütçe durumu).
 pub fn report_total() {
+    let total = since_boot_ms();
     serial_print("[BOOT-TIME] SURUM=");
-    serial_print_dec(since_boot_ms());
+    serial_print_dec(total);
     serial_print("ms asama=");
     serial_print_dec(PHASE_COUNT.load(Ordering::Acquire));
-    serial_print("\n");
+    serial_print(" en-yavas=");
+    serial_print_dec(MAX_PHASE_MS.load(Ordering::Acquire));
+    serial_print("ms butce=");
+    serial_print_dec(BOOT_BUDGET_MS);
+    serial_print("ms durum=");
+    if total <= BOOT_BUDGET_MS {
+        serial_print("OK\n");
+    } else {
+        serial_print("ASIM\n");
+    }
 }
 
 fn monotonic_ms() -> u64 {

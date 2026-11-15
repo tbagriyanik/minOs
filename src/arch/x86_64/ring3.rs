@@ -221,12 +221,6 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
     // 4. argüman R10'dan okunur (SysV uyumlu sistem çağrısı düzeni).
     let a4 = unsafe { core::ptr::read_volatile(frame.add(F_R10)) };
 
-    smp::print_locked("[RING3-TRACE] int80 no=");
-
-    smp::print_locked_dec(no);
-
-    smp::print_locked("\n");
-
     let process_result = if let Some(mut guard) = crate::mm::try_lock_memory() {
         let memory = guard.get();
         let pid = memory.proc_mgr.current_pid;
@@ -286,14 +280,40 @@ pub unsafe extern "C" fn rust_int80(frame: *mut u64) -> u64 {
             let suspended = memory.proc_mgr.get_process(pid).is_some_and(|process| {
                 process.state == crate::mm::process::ProcessState::Suspended
             });
-            if suspended {
+            // Bekleyen sinyallerin varsayılan eylemini uygula: kullanıcı
+            // işleyicisi kayıtlı olmayan ölümcül sinyaller süreci sonlandırır,
+            // durdurma sinyalleri `Suspended` yapar. Her iki durumda da
+            // kullanıcıya dönülmez; çekirdeğe dönülür.
+            let _ = memory
+                .proc_mgr
+                .deliver_pending_defaults(pid, &mut memory.pmm);
+            let stopped = memory.proc_mgr.get_process(pid).is_some_and(|process| {
+                matches!(
+                    process.state,
+                    crate::mm::process::ProcessState::Suspended
+                        | crate::mm::process::ProcessState::Terminated
+                )
+            });
+            if memory.proc_mgr.get_process(pid).is_some_and(|process| {
+                process.state == crate::mm::process::ProcessState::Terminated
+            }) {
+                // Varsayılan eylemi ölümcül olan bekleyen sinyal süreci
+                // sonlandırdı: `schedule_user_processes` kaynakları iade etsin.
+                USER_EXITED.store(true, Ordering::Release);
+            }
+            if suspended || stopped {
                 if let Some(process) = memory.proc_mgr.get_process_mut(pid) {
                     process.context = unsafe { frame_to_process_context(frame) };
                     process.context.rax = result;
                     process.has_saved_user_context = true;
                 }
             }
-            Some((result, exec_context, yielded, blocked || suspended))
+            Some((
+                result,
+                exec_context,
+                yielded,
+                blocked || suspended || stopped,
+            ))
         }
     } else {
         None
@@ -1436,14 +1456,14 @@ pub unsafe fn timer_preempt(frame: *mut u64) {
 #[unsafe(naked)]
 pub unsafe extern "C" fn ring3_fault_exit_trampoline() {
     core::arch::naked_asm!(
-        "mov rax, [{kcr3}]",
+        "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
         "mov cr3, rax",
         "1:",
-        "mov rax, [{saved_fx}]",
+        "mov rax, [rip + {saved_fx}]",
         "fxrstor64 [rax]",
-        "mov rsp, [{saved}]",
+        "mov rsp, [rip + {saved}]",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -1472,14 +1492,14 @@ fn ring3_kstack_top() -> u64 {
 #[unsafe(naked)]
 pub unsafe extern "C" fn ring3_exit_trampoline() {
     core::arch::naked_asm!(
-        "mov rax, [{kcr3}]",
+        "mov rax, [rip + {kcr3}]",
         "test rax, rax",
         "jz 1f",
         "mov cr3, rax",
         "1:",
-        "mov rax, [{saved_fx}]",
+        "mov rax, [rip + {saved_fx}]",
         "fxrstor64 [rax]",
-        "mov rsp, [{saved}]",
+        "mov rsp, [rip + {saved}]",
         "pop r15",
         "pop r14",
         "pop r13",
@@ -1520,12 +1540,12 @@ pub unsafe extern "C" fn enter_usermode_raw(entry: u64, stack_top: u64) {
         "push r13",
         "push r14",
         "push r15",
-        "mov [{saved}], rsp",
+        "mov [rip + {saved}], rsp",
         "mov rax, rsp",
         "and rsp, -16",
         "sub rsp, 512",
         "fxsave64 [rsp]",
-        "mov [{saved_fx}], rsp",
+        "mov [rip + {saved_fx}], rsp",
         "mov rsp, rax",
         "push {udata}",
 
@@ -1568,12 +1588,12 @@ pub unsafe extern "C" fn enter_user_context_raw(
         "push r13",
         "push r14",
         "push r15",
-        "mov [{saved}], rsp",
+        "mov [rip + {saved}], rsp",
         "mov rax, rsp",
         "and rsp, -16",
         "sub rsp, 512",
         "fxsave64 [rsp]",
-        "mov [{saved_fx}], rsp",
+        "mov [rip + {saved_fx}], rsp",
         "mov rsp, rax",
         "mov r11, rdi",
         "push qword ptr [r11 + 152]",

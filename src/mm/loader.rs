@@ -300,6 +300,14 @@ impl AppLoader {
         pmm: &mut PhysicalMemoryManager,
     ) -> Result<LoadedProgram, &'static str> {
         let header = Self::validate_elf(data)?;
+
+        // Giriş noktası doğrulanmadan iretq'a verilirse non-canonical bir
+        // adres ring0'da #GP üretir ve süreç öldürme yerine çekirdek panik
+        // yoluna düşer. Yalnızca kanonik kullanıcı alt-yarısı kabul edilir.
+        if header.entry == 0 || header.entry >= crate::mm::uaccess::USER_ADDRESS_END {
+            return Err("ELF giris noktasi kullanici adres uzayi disinda");
+        }
+
         let mut allocated_pages = 0usize;
         let mut allocated_frames = [0u64; MAX_LOADED_FRAMES];
         let mut mapped_vaddrs = [0u64; MAX_LOADED_FRAMES];
@@ -307,8 +315,13 @@ impl AppLoader {
         let ph_size = header.ph_entry_size as usize;
         let ph_count = header.ph_num as usize;
         let ph_offset = header.ph_offset as usize;
-
-        if ph_offset + ph_size * ph_count > data.len() {
+        let ph_total = ph_size
+            .checked_mul(ph_count)
+            .and_then(|total| ph_offset.checked_add(total))
+            .ok_or("ELF program baslik tablosu tasmasi")?;
+        // Her girdi Elf64ProgramHeader boyutunda okunur; ph_entry_size daha
+        // küçükse okuma tabloyu dosya sonunun ötesine taşırır.
+        if ph_size < core::mem::size_of::<Elf64ProgramHeader>() || ph_total > data.len() {
             return Err("Program baslik tablosu dosya sinirlarinin disinda");
         }
 
@@ -323,10 +336,13 @@ impl AppLoader {
             }
 
             // Güvenlik kontrolü: Kullanıcı alanı sınırları (0 .. 0x0000_7FFF_FFFF_FFFF)
-            if ph.vaddr >= 0x0000_8000_0000_0000
+            // ve NULL sayfa: vaddr=0 bir kullanıcı sayfasını eşler ve NULL
+            // işaretçi hatalarını sessiz başarılı kod yürütmesine çevirir.
+            if ph.vaddr < PAGE_SIZE
+                || ph.vaddr >= 0x0000_8000_0000_0000
                 || ph.vaddr.saturating_add(ph.mem_size) >= 0x0000_8000_0000_0000
             {
-                return Err("Segment cekirdek adres uzayiyla cakisan alanda bulunamaz");
+                return Err("Segment gecersiz veya cekirdek adres uzayiyla cakisan alanda");
             }
 
             // Segment izinleri (W^X Prensibi)

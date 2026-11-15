@@ -302,15 +302,7 @@ impl MinGuiCompositor {
             ws.push_usize(self.active_workspace + 1);
             ws.push_byte(b'/');
             ws.push_usize(Self::MAX_WORKSPACES);
-            Self::draw_string_shadow(
-                fb,
-                bx,
-                by,
-                ws.as_str(),
-                Color::TEXT_MAIN,
-                Color::SHADOW,
-                1,
-            );
+            Self::draw_string_shadow(fb, bx, by, ws.as_str(), Color::TEXT_MAIN, Color::SHADOW, 1);
         }
 
         // Sistem Tepsisi: saat, ses, Ethernet, tema ve klavye düzeni.

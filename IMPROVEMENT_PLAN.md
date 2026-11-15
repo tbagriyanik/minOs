@@ -56,21 +56,28 @@ populate on first touch. Tiered allocation landed (`tiered_alloc` /
 
 ### 2.2 Page Frame Allocator
 **Problem**: Basic bitmap allocator; no zone support (DMA, Normal, HighMem).
-**Status**: Partially done — 2 MiB huge-page alloc/free landed
+**Status**: **Done (core)** — 2 MiB huge-page alloc/free
 (`allocate_big_page`/`free_big_page`, `bigpage.rs`), contiguous DMA
-allocation exists, and the whole PMM is now SMP-safe via an internal
-`PMM_LOCK` spinlock (all mutating methods serialize; `*_locked` private
-variants avoid self-deadlock). Remaining: memory zones, per-cpu page
-caches.
+allocation, SMP-safe bitmap under an internal `PMM_LOCK` (mutating methods
+serialize; `*_locked` variants avoid self-deadlock), three memory zones
+(`MemoryZone::{Dma,Normal,HighMem}`, `zone_for_address`, `allocate_frame_in_zone`)
+and per-CPU/per-zone page caches (`PerCpuPageCache`, batch 16, double-free
+guard, cache refill/flush) landed. `[PMM-ZONE]` boot self-test and
+`[MEM-ZONE]` profile output verify accounting.
 **Solution**:
-- Add memory zones
-- Implement per-cpu page caches
+- ~~Add memory zones~~
+- ~~Implement per-cpu page caches~~
 
 ### 2.3 Virtual Memory
 **Problem**: Manual page table management; no ASLR for kernel.
 **Status**: Partially done — user-space ASLR and copy-on-write landed
 (`[USER-MEM]`/`[COW-TEST]` boot checks, `mm::user_mem`, `mm::memory::cow`).
-Remaining: KASLR, PKRU.
+KASLR is active through Limine (`kaslr: yes`, ET_DYN link at 0) and now
+verified at boot: `[KASLR] fiziksel=… sanal=… kayma=… hizalama=ok|HATA
+durum=etkin|kapali` (`boot::limine::kaslr_slide`). PKU detection,
+`CR4.PKE` enablement and `PKRU` read/write helpers landed
+(`arch::x86_64::pku`, `[PKU]` marker). Remaining: per-page protection-key
+assignment / per-process PKRU policy, full KASLR entropy audit.
 
 ---
 
@@ -88,8 +95,10 @@ acceleration.
 **Problem**: O(n²) z-order sorting; no workspace support.
 **Status**: Partially done — 4 virtual workspaces landed
 (`active_workspace`, `switch_workspace`, `move_active_window_workspace`,
-workspace-aware focus/alt-tab), Aero Snap preview exists. Remaining:
-O(n²) z-order scan (still a linear `draw_order` pass), more snap zones.
+workspace-aware focus/alt-tab), Aero Snap preview exists. `draw_order` now uses
+an insertion sort with a local z-value array (near-O(n) for the common already
+ordered case), avoiding repeated `windows[...]` lookups. Remaining: true
+incremental z-index list/cache, more snap zones.
 
 ### 3.3 Input Handling
 **Problem**: Direct mouse/keyboard polling in main loop.
@@ -216,20 +225,24 @@ Scheduler/process subsystem (`src/task`, `src/mm/process.rs`, `src/arch/x86_64/r
 
 | # | Item | Priority | Status |
 | :- | :--- | :--- | :--- |
-| 9.1 | Multi-core scheduler stress tests | P1 | Partial — `task::test_scheduler_multicore_race` exists; needs repeated/soak runs and per-CPU accounting checks |
+| 9.1 | Multi-core scheduler stress tests | P1 | Partial — `task::test_scheduler_multicore_race` exists; `test_stress_24h.ps1` provides configurable-duration QEMU soak runs (panic/exception/QEMU-exit auto-detection, `-Fps3d` render load); needs repeated/soak runs and per-CPU accounting checks |
 | 9.2 | Scheduler tests on real hardware | P1 | Todo — validate APIC/SMP paths outside QEMU |
-| 9.3 | CPU affinity support | P2 | Partial — `Task::cpu` + `least_loaded_cpu` assign queues; no user-controllable affinity API |
-| 9.4 | Deeper security audit of process isolation | P0 | Todo — audit CR3 switching, kernel-pointer leaks, syscall pointer validation coverage |
-| 9.5 | Signal mechanism for user applications | P1 | Partial — `pending_signals` bitmask + `signals` module landed; user handler delivery pending |
-| 9.6 | `kill`, `pause`, `resume` system calls | P1 | **Done** — `SYS_KILL` (19): SIGKILL/SIGTERM terminate, SIGSTOP suspends (`ProcessState::Suspended`), SIGCONT resumes, `sig=0` probes; other signals pended |
-| 9.7 | Process group and session support | P2 | Todo — pgid/sid fields, group kill, orphan reparenting rules |
-| 9.8 | Sandboxing of user applications | P1 | Todo — seccomp-style syscall filtering, resource-limit tightening, optional restricted address space |
+| 9.3 | CPU affinity support | P2 | Partial — `Task::cpu` + `least_loaded_cpu` assign queues; `SYS_SCHED_SETAFFINITY`/`GETAFFINITY` (24/25) store a per-process mask, but the scheduler does not yet consult it (Ring 3 slices still run on the BSP) |
+| 9.4 | Deeper security audit of process isolation | P0 | **Done** — `uaccess` range/USER-bit validation, `translate_user` 4-level USER checks, `clone_kernel_mappings` USER-bit stripping, syscall pointer coverage audited; ELF loader hardened (`e_entry` validation, phdr overflow/`e_phentsize` checks, NULL-page rejection), `SYS_SIGACTION` handler restricted to user-executable space |
+| 9.4a | KASLR | P0 | **Done** — kernel builds PIE/ET_DYN (linker base 0, `PT_DYNAMIC`), Limine `kaslr: yes` + `randomise_hhdm_base: yes`; slide verified at boot via `[KASLR]` line; naked-asm absolute operands converted to RIP-relative; `gdt.rs` missing `rax` clobber fixed |
+| 9.5 | Signal mechanism for user applications | P1 | Partial — `pending_signals` bitmask, `signals`/`SignalAction` tables, `SYS_SIGACTION` (26), `SYS_SIGPROCMASK` (27), mask-aware default actions and `rust_int80` delivery point landed; Ring 3 user-handler invocation (trampoline/return frame) still pending |
+| 9.6 | `kill`, `pause`, `resume` system calls | P1 | **Done** — `SYS_KILL` (19): SIGKILL/SIGTERM terminate, SIGSTOP suspends (`ProcessState::Suspended`), SIGCONT resumes, `sig=0` probes, negative `pid` targets a process group; other signals pended |
+| 9.7 | Process group and session support | P2 | **Done (core)** — `pgid`/`sid` inheritance via `spawn`/`fork`, `SYS_SETPGID`/`GETPGID`/`SETSID`/`GETSID` (20–23), `kill_group`/`kill_session`, session-leader checks and orphan reparenting to PID 0 |
+| 9.8 | Sandboxing of user applications | P1 | **Done (core)** — `SYS_SECCOMP` (28): per-process irreversible syscall allow-mask (`Process::syscall_mask`, AND-only narrowing, `SYS_EXIT` exempt); enforced centrally in `syscall_dispatch_abi`; `[SECCOMP-TEST]` boot test; ABI docs in `docs/SYSCALL_ABI.md` 2.14d. Remaining: resource-limit tightening, optional restricted address space |
 
 Notes:
 - `Suspended` is a single process state; a process blocked in `SYS_WAIT` cannot
   currently be stopped (blocked+stopped is not representable yet).
-- Signal delivery to Ring 3 handlers, `sigaction`-style registration, and
-  `waitpid` status encoding (signal vs exit code) are part of 9.5.
+- Signal delivery to Ring 3 user handlers is the remaining part of 9.5:
+  registration (`SYS_SIGACTION`), masking (`SYS_SIGPROCMASK`) and the
+  post-syscall default-action delivery point are implemented and covered by
+  `[PROC-GROUP-TEST]`. `waitpid` status encoding (signal vs exit code) is
+  already handled via negative exit codes.
 
 ---
 
@@ -259,7 +272,14 @@ Notes:
 
 - **Boot time profiling**: `src/boot/timing.rs` (`PhaseTimer`, `begin()`,
   `mark()`, `report_total()`) instruments every boot phase; serial output
-  shows `[BOOT-TIME] phase=Nms toplam=Mms` and a final `SURUM=` line.
+  shows `[BOOT-TIME] phase=Nms toplam=Mms` and a final
+  `SURUM=<ms> asama=<n> en-yavas=<ms>ms butce=3000ms durum=OK|ASIM` line.
+  Phases at or above 500 ms are flagged as slow.
+- **Idle power**: after APIC timer setup the BSP probes interrupt delivery
+  (`apic::enable_bsp_idle()`, 25 ms bounded tick wait) and then uses
+  `sti; hlt` while idle (`[IDLE]` marker); platforms where the timer never
+  arrives keep the polling fallback. The GUI loop no longer prints a serial
+  trace line for every `int 0x80`.
 - **Parallel driver init**: independent driver groups (HDA audio, NIC+netstack,
   USB host+Wi-Fi, xHCI HID) run as lanes on APs via
   `smp::parallel_run()`/`ParallelTask` (`unsafe fn(*mut u8)` work queue
@@ -271,6 +291,14 @@ Notes:
   - `mm::pmm::PMM_LOCK` — internal spinlock in `PhysicalMemoryManager`;
     mutating methods lock, internal callers use `*_locked` variants.
   - `serial::SERIAL_LOCK` — protects `LOG_BYTES` and UART output.
+- **SMP audit fixes (post-P0 review)**: `init_interrupts(cpu)` loads the
+  caller's own GDT/TSS slot (APs previously rebound to `TSSS[0]`/BSP stack);
+  `current_cpu_index()` scans all `MAX_CPUS` slots instead of `cpu_count()`
+  (wrong-BSP attribution after `wait_for_aps` timeout); APIC ticks moved to
+  `TICKS_PER_CPU[MAX_CPUS]` so `enable_bsp_idle()` verifies BSP ticks only.
+- **24h soak harness**: `test_stress_24h.ps1` — configurable-duration QEMU
+  run with TCP-chardev serial capture, panic/exception/triple-fault/QEMU-exit
+  auto-detection and `target/stress_report.txt` reporting.
 
 ## Success Metrics
 - Boot time < 3s kernel-side (currently ~3.5s to desktop-ready; welcome

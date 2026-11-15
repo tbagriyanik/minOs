@@ -144,6 +144,11 @@ pub unsafe fn load_for_cpu(cpu: usize) {
         kdata = in(reg) SEL_KDATA,
         kcode = in(reg) SEL_KCODE as u64,
         tss_sel = in(reg) SEL_TSS,
+        // `retfq`/`ltr` öncesi `rax` kasıtlı olarak yeniden kullanılır;
+        // LLVM'nin asm sonrası `cpu`'yu yanlış register'da canlı saymasını
+        // önlemek için açıkça clobber bildirilir (KASLR/PIC codegen'da
+        // gizli bir yanlış-derleme oluşuyordu).
+        out("rax") _,
         options(),
     );
     *core::ptr::addr_of_mut!(GDT_READY[cpu]) = true;

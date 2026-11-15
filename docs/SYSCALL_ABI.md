@@ -75,7 +75,16 @@ kopyalama `src/mm/uaccess.rs` üzerinden yapılır:
 | 16 | `SYS_CLOSE` | `fd: usize` | — | — | — | `0` / `MAX` |
 | 17 | `SYS_RESINFO` | `out: ptr` | — | — | — | `0` / `MAX` |
 | 18 | `SYS_LSEEK` | `fd: usize` | `offset: i64` | `whence: u64` | — | yeni konum / `MAX` |
-| 19 | `SYS_KILL` | `pid: usize` | `sig: u64` | — | — | `0` / `MAX` |
+| 19 | `SYS_KILL` | `pid: i64` (negatif = grup) | `sig: u64` | — | — | `0` / `MAX` |
+| 20 | `SYS_SETPGID` | `pid` (`0` = çağıran) | `pgid` (`0` = kendi PID) | — | — | `0` / `MAX` |
+| 21 | `SYS_GETPGID` | `pid` (`0` = çağıran) | — | — | — | `pgid` / `MAX` |
+| 22 | `SYS_SETSID` | — | — | — | — | yeni `sid` / `MAX` |
+| 23 | `SYS_GETSID` | `pid` (`0` = çağıran) | — | — | — | `sid` / `MAX` |
+| 24 | `SYS_SCHED_SETAFFINITY` | `pid` (`0` = çağıran) | `mask: u64` | — | — | `0` / `MAX` |
+| 25 | `SYS_SCHED_GETAFFINITY` | `pid` (`0` = çağıran) | — | — | — | `mask` / `MAX` |
+| 26 | `SYS_SIGACTION` | `sig: u64` | `handler: u64` | — | — | `0` / `MAX` |
+| 27 | `SYS_SIGPROCMASK` | `how: u64` | `mask: u64` | — | — | önceki maske / `MAX` |
+| 28 | `SYS_SECCOMP` | `mask: u64` | — | — | — | `0` / `MAX` |
 
 ### 2.1 `SYS_YIELD` (0)
 
@@ -262,7 +271,8 @@ Numaralar Linux ile uyumludur (`src/mm/process.rs::signals`).
 | `9` `SIGKILL`, `15` `SIGTERM` | Süreç `-(sig)` çıkış koduyla `Terminated` olur (kaynaklar reap edilir) | `0` / `MAX` |
 | `19` `SIGSTOP` | `Ready`/`Running` süreç `Suspended` olur; bağlam korunur, zamanlayıcı seçmez | `0` / `MAX` |
 | `18` `SIGCONT` | `Suspended` süreç `Ready`'ye döner; diğer durumlarda zararsız başarı | `0` / `MAX` |
-| diğer `1..=64` | `pending_signals` bit maskesine işlenir (kullanıcı işleyicisi teslimi henüz yok) | `0` / `MAX` |
+| diğer `1..=64` | `pending_signals` bit maskesine işlenir; kullanıcı işleyicisi varsa bekler, yoksa varsayılan eylem uygulanır | `0` / `MAX` |
+| `pid < 0` | `kill(-pgid, sig)` — gruptaki canlı süreçlere toplu gönderim | en az bir süreç aldıysa `0` |
 | `> 64` veya `pid == 0` | Geçersiz | `MAX` |
 
 * `SIGSTOP`'u **kendisi çağıran** süreç kullanıcıya dönmez; bağlamı
@@ -273,6 +283,46 @@ Numaralar Linux ile uyumludur (`src/mm/process.rs::signals`).
 * PID 0 (`kernel_core`) hiçbir sinyalle sonlandırılamaz/duraklatılamaz.
 * `wait`/`reap` çıkış kodu negatif sinyal numarası taşır (`-9`, `-15`);
   `-11` (`SIGSEGV`) ile aynı kural.
+
+### 2.14c Süreç Grubu, Oturum, CPU Yakınlığı ve Sinyaller (20–27)
+
+`spawn` süreci kendi grubunun ve oturumunun lideri yapar
+(`pgid = sid = pid`). `fork` grup/oturum kimliğini, CPU yakınlık maskesini ve
+sinyal işleyici/maskesini devralır; `exec` kullanıcı işleyicilerini sıfırlar,
+grup/oturum/affinity/maskeyi korur (POSIX). `pid == 0` argümanı **çağıran
+süreç** anlamına gelir.
+
+| Çağrı | Davranış | Hata (`MAX`) |
+| :--- | :--- | :--- |
+| `SYS_SETPGID(pid, pgid)` | Süreci gruba taşır; `pgid == 0` kendi PID'si | Süreç yok, grup lideri kendi grubunu değiştiriyor veya grup başka oturumda |
+| `SYS_GETPGID(pid)` | Etkin `pgid` (`0` alanı → `pid`) | Süreç yok |
+| `SYS_SETSID()` | Yeni oturum + grup açar, `sid = pgid = pid` | Grup lideri (`pgid == pid`) |
+| `SYS_GETSID(pid)` | Etkin `sid` | Süreç yok |
+| `SYS_SCHED_SETAFFINITY(pid, mask)` | Çalışabileceği CPU kümesini daraltır; bit `i` = CPU `i` | `mask == 0`, çevrimdışı CPU biti veya süreç yok |
+| `SYS_SCHED_GETAFFINITY(pid)` | Etkin maske; `0` alanı tüm çevrimiçi CPU'lar | Süreç yok |
+| `SYS_SIGACTION(sig, handler)` | `handler` = kullanıcı adresi, `0` = varsayılan, `1` = `SIG_IGN` | `sig == 0`, `sig > 64`, `SIGKILL`/`SIGSTOP` |
+| `SYS_SIGPROCMASK(how, mask)` | `0` kapat, `1` aç, `2` değiştir; önceki maskeyi döner | `how > 2` |
+
+Sinyal numaraları Linux ile uyumludur (`src/mm/process.rs::signals`).
+Varsayılan eylemler (`default_signal_action`):
+
+| Eylem | Sinyaller | Sonuç |
+| :--- | :--- | :--- |
+| `Terminate` | `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGILL`, `SIGTRAP`, `SIGABRT`, `SIGBUS`, `SIGFPE`, `SIGKILL`, `SIGUSR1`, `SIGSEGV`, `SIGUSR2`, `SIGPIPE`, `SIGALRM`, `SIGTERM`, `SIGSTKFLT` | `Terminated`, `exit_code = -(sig)` |
+| `Stop` | `SIGSTOP`, `SIGTSTP`, `SIGTTIN`, `SIGTTOU` | `Suspended` |
+| `Continue` | `SIGCONT` | `Ready` |
+| `Ignore` | `SIGCHLD` ve tanımsız diğerleri | Bekleyen bit düşürülür |
+
+* Teslimat noktası `rust_int80` içinde sistem çağrısı sevkinden **sonradır**.
+  Kullanıcı işleyicisi kayıtlı sinyaller beklemede kalır (işleyici çağrısı
+  henüz uygulanmıyor); işleyicisi olmayan sinyal varsayılan eylemini uygular.
+  Sonuç `Terminated` veya `Suspended` ise kullanıcıya dönülmez, çekirdeğe
+  dönülür; `Suspended` süreç `SIGCONT` ile sürer.
+* `SIGKILL`/`SIGSTOP` için işleyici kaydedilemez ve sinyal maskesi bu iki
+  biti her zaman açık tutar.
+* `SIG_IGN` (`handler == 1`) aynı sinyalin bekleyen bitini hemen düşürür.
+* Negatif `pid` ile `SYS_KILL` grup üyelerine sırayla uygulanır; dönüş
+  değeri en az bir sürece iletildiyse `0`, hiçbir süreç yoksa `MAX`.
 
 ### 2.15 `SYS_RESINFO` (17)
 
@@ -293,6 +343,21 @@ Numaralar Linux ile uyumludur (`src/mm/process.rs::signals`).
 Varsayılan kullanıcı limitleri: 64 toplam çerçeve, 32 kullanıcı çerçevesi,
 16 fd, 64 MiB mmap, 64 MiB heap. PID 0 (`kernel_core`) sınırsızdır; limitler
 `fork` ile devralınır ve `exec` sonrası korunur.
+
+### 2.14d Seccomp-tarzı Syscall Filtresi (28)
+
+Her sürecin `syscall_mask` alanı bir izin bitmaskesidir: bit `n` set ise `n`
+numaralı syscall çağrılabilir. Varsayılan `u64::MAX` (filtresiz). Maske
+`SYS_SECCOMP` ile **yalnızca daraltılabilir** — yeni değer eski maskeyle
+AND'lenir, bu yüzden bir süreç filtreyi bir kez kurduktan sonra geri alamaz
+(seccomp'in geri döndürülemezlik ilkesi). `fork` maskeyi devralır, `exec`
+korur. `SYS_EXIT` maskede olmasa bile her zaman serbesttir; 64 ve üzeri
+syscall numaraları filtreli süreçte doğrudan `MAX` döner. Engel `MAX` hata
+değeriyle sonuçlanır; süreç öldürülmez.
+
+| Çağrı | Davranış | Hata (`MAX`) |
+| :--- | :--- | :--- |
+| `SYS_SECCOMP(mask)` | `syscall_mask &= mask`; `0` döner | Çağıran süreç yok |
 
 ### 2.16 fd / Limit Yaşam Döngüsü
 
@@ -467,6 +532,7 @@ int 0x80
 | `[RLIMIT-TEST] ... BASARILI` | RESINFO raporu, limitler ve fork mirası |
 | `[P2] Kullanıcı yığını guard sayfası taşması yakalandı` | Guard sayfası #PF |
 | `[KILL-TEST] kill/SIGSTOP/SIGCONT/SIGTERM: BASARILI` | `SYS_KILL` probe, suspend/resume, SIGTERM, kaynak temizliği |
+| `[PROC-GROUP-TEST] grup/oturum/affinity/sinyal işleyicileri: BASARILI` | `SETPGID`/`SETSID`, affinity maskesi, `SIGACTION`/`SIGPROCMASK`, grup sinyali |
 | `[BIGPAGE] ... BASARILI` | 2 MiB büyük sayfa eşleme/geri alma doğrulaması |
 | `[MZRAM] ... BASARILI` | Sıkıştırılmış (swap'siz) bellek deposu |
 | `[MEM-STAT] total_kb=...` | Genişletilmiş bellek profili raporu |

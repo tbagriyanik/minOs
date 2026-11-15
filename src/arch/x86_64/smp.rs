@@ -172,7 +172,7 @@ pub unsafe extern "C" fn ap_entry() {
         "cli",
         // idx = NEXT_AP++ (0-tabanlı AP sırası); BSP hariç kimlik = idx + 1.
         "mov eax, 1",
-        "lock xadd dword ptr [{next}], eax",
+        "lock xadd dword ptr [rip + {next}], eax",
         "add eax, 1",
         "cmp eax, {max}",
         "jae 3f",
@@ -210,7 +210,7 @@ pub extern "C" fn ap_main_rust(idx: u32) -> ! {
     unsafe { gdt::load_for_cpu(cpu) };
     // IDT CPU başına bir yazmaçtır (IDTR); BSP'nin LIDT'si AP'yi kapsamaz.
     // Her AP kendi IDTR'sini yüklemeli, yoksa en ufak kesmede üçlü hata olur.
-    super::init_interrupts();
+    super::init_interrupts(cpu);
     // Bu AP'nin Local APIC'ini ve kendi timer LVT'sini etkinleştir.
     lapic_init();
     super::apic::init_timer();
@@ -487,7 +487,11 @@ pub fn cpu_count() -> usize {
 
 pub fn current_cpu_index() -> usize {
     let id = lapic_read(0x20) >> 24;
-    for (cpu, slot) in LAPIC_ID.iter().enumerate().take(cpu_count().min(MAX_CPUS)) {
+    // `cpu_count()` AP bekleme zaman aşımında düşürülebilir; o durumda
+    // çevrimiçi kalmış yüksek indeksli bir AP bulunamaz ve yanlışlıkla
+    // 0 (BSP) dönerdi. LAPIC ID'leri benzersiz olduğundan tüm slotlar
+    // taranır — bulunamayan ID için 0 dönmek güvenli varsayılandır.
+    for (cpu, slot) in LAPIC_ID.iter().enumerate().take(MAX_CPUS) {
         if slot.load(Ordering::Relaxed) == id {
             return cpu;
         }

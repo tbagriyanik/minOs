@@ -3,13 +3,21 @@
 //! Bu modül:
 //! 1. Local APIC Timer başlatımı (tek seferlik / periyodik mod).
 //! 2. IDT üzerinde Timer kesme vektörünün (0x20) kaydedilmesi.
-//! 3. Her zamanlayıcı tikinde (timer tick) `SYSTEM_TICKS` sayacının artırılması.
+//! 3. Her zamanlayıcı tikinde (timer tick) CPU başına `TICKS_PER_CPU` sayacının artırılması.
 //! 4. Preemptive çoklu görev (preemptive context switch) desteği için EOI ve hook çağrısı.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-/// Sistem başlangıcından bu yana geçen APIC Timer tik sayısı.
-pub static SYSTEM_TICKS: AtomicU64 = AtomicU64::new(0);
+/// CPU başına APIC Timer tik sayısı. SMP altında her çekirdeğin kendi
+/// Local APIC timer'ı çalışır; tek bir global sayaç olsaydı `get_ticks()`
+/// ve `enable_bsp_idle()` N kat hızlı/yanlış değer görürdü. Yalnızca
+/// BSP'nin (index 0) tikleri `bsp_timer_ticks()` üzerinden doğrulanır.
+static TICKS_PER_CPU: [AtomicU64; super::smp::MAX_CPUS] =
+    [const { AtomicU64::new(0) }; super::smp::MAX_CPUS];
+
+/// BSP'de boşta `hlt` güvenli mi? Periyodik timer kesmesinin gerçekten
+/// teslim edildiği `enable_bsp_idle()` tarafından doğrulanır.
+static BSP_IDLE_HLT: AtomicBool = AtomicBool::new(false);
 
 /// APIC Timer Kesme Vektörü (IDT vektör 32)
 pub const APIC_TIMER_VECTOR: u8 = 0x20;
@@ -54,7 +62,8 @@ pub fn send_eoi() {
 /// çerçevesine işaret etmelidir; yalnızca kesme bağlamında çağrılmalıdır.
 #[no_mangle]
 pub unsafe extern "C" fn apic_timer_handler_rust(frame: *mut u64) {
-    SYSTEM_TICKS.fetch_add(1, Ordering::Relaxed);
+    let cpu = super::smp::current_cpu_index().min(super::smp::MAX_CPUS - 1);
+    TICKS_PER_CPU[cpu].fetch_add(1, Ordering::Relaxed);
     crate::task::scheduler_tick();
     crate::watchdog::timer_tick();
     // Ring3 kullanıcı süreçleri için gerçek önalım: quantum dolmuşsa tam
@@ -140,9 +149,86 @@ pub fn init_timer() {
     lapic_write(LAPIC_TIMER_INIT_CNT, 0x100000);
 }
 
-/// Mevcut tik sayısını okur.
+/// Tüm CPU'ların toplam tik sayısı (tanılama amaçlı).
 pub fn get_ticks() -> u64 {
-    SYSTEM_TICKS.load(Ordering::Relaxed)
+    TICKS_PER_CPU
+        .iter()
+        .fold(0u64, |acc, t| acc.saturating_add(t.load(Ordering::Relaxed)))
+}
+
+/// Yalnızca BSP'nin (CPU 0) aldığı timer tik sayısı. `enable_bsp_idle`
+/// doğrulaması AP tiklerini saymamalıdır; aksi halde AP timer'ı çalışıp
+/// BSP'ninki bozuksa bile doğrulama yanlışlıkla başarılı dönerdi.
+fn bsp_timer_ticks() -> u64 {
+    TICKS_PER_CPU[0].load(Ordering::Relaxed)
+}
+
+/// BSP'de boşta `hlt` kullanılabilir mi? (timer kesmesi doğrulandı)
+pub fn bsp_idle_hlt_enabled() -> bool {
+    BSP_IDLE_HLT.load(Ordering::Acquire)
+}
+
+/// BSP kesmelerini açar ve periyodik APIC timerinin gerçekten teslim
+/// edildiğini doğrular.
+///
+/// Başarılıysa `true` döner ve boşta `hlt` güvenlidir: bir sonraki APIC
+/// tikinde (≈10 ms) veya PS/2/USB girdi kesmesinde CPU uyanır. Timer
+/// yönlendirmesi olmayan ortamlarda (ör. bazı hipervizörler) 25 ms içinde tik
+/// gelmezse kesmeler özgün IF durumuna döndürülür ve `false` döner; ana döngü
+/// yoklamalı boşta beklemeye devam eder. Böylece HLT'nin sistemi kilitlemesi
+/// ve PS/2 IRQ modunun bozulması engellenir.
+pub fn enable_bsp_idle() -> bool {
+    if BSP_IDLE_HLT.load(Ordering::Acquire) {
+        return true;
+    }
+    let ticks_before = bsp_timer_ticks();
+    let start = crate::boot::time::read_cpu_cycles();
+    // Kesmeler zaten açık olabilir (PS/2 IRQ modu). Özgün IF durumunu sakla:
+    // yoklama başarısız olursa açtığımız kesmeleri körü körüne kapatmayız,
+    // aksi halde klavye/fare IRQ'ları sessizce kesilir.
+    let flags_before: u64;
+    unsafe {
+        core::arch::asm!("pushfq", "pop {}", out(reg) flags_before, options(nomem));
+    }
+    let interrupts_were_enabled = flags_before & (1 << 9) != 0;
+    // Kesmeleri aç: STI sonrası ilk komut HLT olsa bile bekleyen kesme kaybolmaz.
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
+    }
+    // APIC timer ~100 Hz (10 ms) çalışabilir; 5 ms'lik yoklama yanlış negatif
+    // üretmesin diye iki tikten biraz fazla (25 ms) bekle.
+    let timeout = unsafe { crate::boot::time::TSC_CYCLES_PER_US }
+        .saturating_mul(25_000)
+        .max(1);
+    while bsp_timer_ticks() == ticks_before
+        && crate::boot::time::read_cpu_cycles().wrapping_sub(start) < timeout
+    {
+        core::hint::spin_loop();
+    }
+    let advanced = bsp_timer_ticks() != ticks_before;
+    if !advanced && !interrupts_were_enabled {
+        unsafe {
+            core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
+        }
+    }
+    BSP_IDLE_HLT.store(advanced, Ordering::Release);
+    advanced
+}
+
+/// Boşta bekleme noktası: doğrulanmışsa sonraki kesmeye kadar CPU'yu uyutur.
+///
+/// `hlt` yalnızca `enable_bsp_idle()` başarılıysa çalıştırılır; aksi halde
+/// yalnızca `pause` yürütülür ve eski yoklamalı davranış korunur.
+pub fn idle_pause() {
+    if BSP_IDLE_HLT.load(Ordering::Acquire) {
+        // STI+HLT klasik boşta bekleme dizisi: bekleyen kesme HLT'yi uyandırır,
+        // kesme maskesi açık kalır. `cli` yok — kesme sonrası iretq IF'i geri yükler.
+        unsafe {
+            core::arch::asm!("sti", "hlt", options(nomem, nostack, preserves_flags));
+        }
+    } else {
+        core::hint::spin_loop();
+    }
 }
 
 /// AP çekirdekleri için çağrılır: bu CPU'daki Local APIC kesmelerini maskeler.

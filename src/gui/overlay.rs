@@ -12,9 +12,7 @@ impl MinGuiCompositor {
                 .iter()
                 .filter(|slot| {
                     slot.is_some_and(|win| {
-                        win.is_open
-                            && !win.is_minimized
-                            && win.workspace == self.active_workspace
+                        win.is_open && !win.is_minimized && win.workspace == self.active_workspace
                     })
                 })
                 .count()

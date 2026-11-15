@@ -511,6 +511,15 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
     boot_timer.mark("masaustu");
     crate::boot::timing::report_total();
 
+    // Boşta güç tüketimi: BSP kesmelerini aç ve periyodik APIC timerinin
+    // gerçekten teslim edildiğini doğrula. Doğrulanırsa ana döngü boşta
+    // `hlt` ile uyur (CPU ~%0); aksi halde yoklamalı bekleme korunur.
+    if arch::x86_64::apic::enable_bsp_idle() {
+        serial_print("[IDLE] BSP timer kesmesi doğrulandı; boşta HLT etkin.\n");
+    } else {
+        serial_print("[IDLE] UYARI: BSP timer kesmesi yok; boşta yoklama modu.\n");
+    }
+
     loop {
         // Bir onceki turda yakalanan uygulama hatasini raporla ve yalnizca
         // hatali uygulamayi kapat; masaustu ve diger uygulamalar yasamaya
@@ -4836,15 +4845,9 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     // masaüstlerindeki pencereler açık kalır.
                     // Win+D only affects the active virtual desktop; windows
                     // on other workspaces stay visible.
-                    let show_desktop = compositor
-                        .windows
-                        .iter()
-                        .flatten()
-                        .any(|w| {
-                            w.is_open
-                                && !w.is_minimized
-                                && w.workspace == compositor.active_workspace
-                        });
+                    let show_desktop = compositor.windows.iter().flatten().any(|w| {
+                        w.is_open && !w.is_minimized && w.workspace == compositor.active_workspace
+                    });
 
                     for w in compositor.windows.iter_mut().flatten() {
                         if w.is_open && w.workspace == compositor.active_workspace {
@@ -8827,19 +8830,26 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
             let browser_waiting = browser_app.take_net_idle_hint();
 
-            let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(20_000);
-
-            let busy_wait_cycles = if browser_waiting {
-                unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_000)
+            if arch::x86_64::apic::bsp_idle_hlt_enabled() && !browser_waiting {
+                // APIC timer ~100 Hz: HLT en geç ~10 ms içinde uyanır. PS/2 veya
+                // USB girdi kesmesi geldiğinde daha erken uyanıp olayı işleriz.
+                // Böylece boşta CPU döngüsü yerine gerçek uyku kullanılır.
+                arch::x86_64::apic::idle_pause();
             } else {
-                idle_wait_cycles
-            };
+                let idle_wait_cycles = unsafe { TSC_CYCLES_PER_US }.saturating_mul(20_000);
 
-            while read_cpu_cycles().wrapping_sub(wait_start) < busy_wait_cycles {
-                if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
-                    break;
+                let busy_wait_cycles = if browser_waiting {
+                    unsafe { TSC_CYCLES_PER_US }.saturating_mul(2_000)
+                } else {
+                    idle_wait_cycles
+                };
+
+                while read_cpu_cycles().wrapping_sub(wait_start) < busy_wait_cycles {
+                    if drivers::ps2::has_input() || drivers::usb_hid::has_event() {
+                        break;
+                    }
+                    core::hint::spin_loop();
                 }
-                core::hint::spin_loop();
             }
 
             let loop_end_cycles = read_cpu_cycles();

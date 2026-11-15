@@ -167,6 +167,67 @@ pub static MEMORY_MAP_REQUEST: LimineMemoryMapRequest = LimineMemoryMapRequest {
     response: core::ptr::null(),
 };
 
+// --- Limine Kernel Address istegi: cekirdegin fiziksel/sanal yukleme tabanini bildirir.
+// KASLR etkinken `virtual_base`, baglanti tabaninin (link-time 0) uzerine
+// uygulanan rastgele kaymanin sonucudur; cekirdek adresi dogrulamak ve
+// teşhis amaçlı günlüklemek için kullanılır.
+#[repr(C, align(8))]
+pub struct LimineKernelAddressResponse {
+    pub revision: u64,
+    pub physical_base: u64,
+    pub virtual_base: u64,
+}
+
+#[repr(C, align(8))]
+pub struct LimineKernelAddressRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *const LimineKernelAddressResponse,
+}
+
+unsafe impl Sync for LimineKernelAddressRequest {}
+
+#[used]
+#[link_section = ".requests"]
+pub static KERNEL_ADDRESS_REQUEST: LimineKernelAddressRequest = LimineKernelAddressRequest {
+    id: [
+        0xc7b1dd30df4c8b88,
+        0x0a82e883a194f07b,
+        0x71ba76863cc55f63,
+        0xb2644a48c516a487,
+    ],
+    revision: 0,
+    response: core::ptr::null(),
+};
+
+/// Çekirdeğin yüklendiği fiziksel/sanal taban çiftini döndürür.
+/// `None` ise istek yanıtlanamadı (desteklenmeyen bootloader).
+pub fn limine_kernel_address() -> Option<(u64, u64)> {
+    unsafe {
+        let resp = valid_limine_response(core::ptr::addr_of!(KERNEL_ADDRESS_REQUEST.response))?;
+        let physical = core::ptr::read_volatile(core::ptr::addr_of!((*resp).physical_base));
+        let virtual_ = core::ptr::read_volatile(core::ptr::addr_of!((*resp).virtual_base));
+        Some((physical, virtual_))
+    }
+}
+
+/// Çekirdeğin kanonik yüksek-yarı tabanı. `linker.ld` çekirdeği ET_DYN olarak
+/// `0` tabanından bağlar; Limine en az `0xffffffff80000000 - min_vaddr`
+/// (yani bu taban) kadar bir kayma uygular. KASLR kayması bu tabana göre
+/// ölçülür: `virtual_base - KERNEL_LINK_BASE`. KASLR kapalıyken sonuç `0`,
+/// etkinken rastgele (genelde 2 MiB hizalı) bir değerdir.
+pub const KERNEL_LINK_BASE: u64 = 0xffff_ffff_8000_0000;
+
+/// KASLR kaymasını (bayt) döndürür; kernel adres yanıtı yoksa `None`.
+pub fn kaslr_slide() -> Option<u64> {
+    limine_kernel_address().map(|(_, virtual_base)| virtual_base.wrapping_sub(KERNEL_LINK_BASE))
+}
+
+/// KASLR kayması sayfa hizalı mı? (4 KiB)
+pub fn kaslr_slide_aligned() -> bool {
+    kaslr_slide().is_some_and(|slide| slide % 4096 == 0)
+}
+
 // --- Limine Kernel File istegi: önyükleme komut satirini (cmdline) okur ---
 // Boot menüsündeki "live" / "installed" seçimi bu cmdline ile kernel'e bildirilir.
 #[repr(C, align(8))]

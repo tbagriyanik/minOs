@@ -481,27 +481,34 @@ impl MinGuiCompositor {
     /// Açık pencereleri z değerine göre artan sırada (arkadan öne) sıralar.
     /// `include_minimized`: true ise küçültülmüş pencereler de dahildir
     /// (Alt+Tab hepsine dönebilir); false ise yalnız görünür olanlar.
+    ///
+    /// Ekleme sıralaması kullanılır: `z` değerleri çoğunlukla pencere sırasıyla
+    /// arttığı için tek geçişte O(n) maliyet oluşur; `z` değerleri yerel diziye
+    /// kopyalanır, her karşılaştırmada `windows[...]` erişimi yapılmaz.
     fn sorted_open_windows(&self, include_minimized: bool) -> ([usize; MAX_WINDOWS], usize) {
         let mut order = [0; MAX_WINDOWS];
+        let mut z_values = [0usize; MAX_WINDOWS];
         let mut count = 0;
-        for (i, slot) in self.windows.iter().enumerate() {
-            if slot.is_some_and(|w| {
-                w.is_open
-                    && w.workspace == self.active_workspace
-                    && (include_minimized || !w.is_minimized)
-            }) {
-                order[count] = i;
-                count += 1;
+        for (index, slot) in self.windows.iter().enumerate() {
+            let Some(window) = slot else {
+                continue;
+            };
+            if !window.is_open
+                || window.workspace != self.active_workspace
+                || (!include_minimized && window.is_minimized)
+            {
+                continue;
             }
-        }
-        for i in 0..count {
-            for j in i + 1..count {
-                let zi = self.windows[order[i]].map(|w| w.z).unwrap_or(0);
-                let zj = self.windows[order[j]].map(|w| w.z).unwrap_or(0);
-                if zj < zi {
-                    order.swap(i, j);
-                }
+            let z = window.z;
+            let mut position = count;
+            while position > 0 && z_values[position - 1] > z {
+                z_values[position] = z_values[position - 1];
+                order[position] = order[position - 1];
+                position -= 1;
             }
+            z_values[position] = z;
+            order[position] = index;
+            count += 1;
         }
         (order, count)
     }

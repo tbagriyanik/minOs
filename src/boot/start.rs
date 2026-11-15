@@ -32,6 +32,13 @@ pub fn init() -> BootDisplay {
     // 115200 8N1 ile çerçeveye oturur.
     crate::serial::init();
 
+    // PKU/PKRU: kullanıcı sayfa koruma anahtarı altyapısı (varsa).
+    if crate::arch::x86_64::pku::init() {
+        crate::serial_print("[PKU] Koruma anahtarlari etkin (CR4.PKE, PKRU=0).\n");
+    } else {
+        crate::serial_print("[PKU] CPU PKU desteklemiyor; PKRU devre disi.\n");
+    }
+
     crate::kernel::heap::init();
     crate::random::init();
 
@@ -148,6 +155,37 @@ pub fn early_init() -> BootDisplay {
     crate::boot::console::serial_print_hex(hhdm_offset);
     serial_print("\n");
     drivers::set_hhdm_offset(hhdm_offset);
+
+    // KASLR: Limine'in seçtiği yükleme tabanını ve türetilen kaymayı günlüğe
+    // yaz. `virtual_base` ET_DYN kayması uygulanmış gerçek sanal tabandır.
+    if let Some((kphys, kvirt)) = crate::boot::limine::limine_kernel_address() {
+        let slide = crate::boot::limine::kaslr_slide().unwrap_or(0);
+        let aligned = crate::boot::limine::kaslr_slide_aligned();
+        serial_print("[KASLR] fiziksel=");
+        crate::boot::console::serial_print_hex(kphys);
+        serial_print(" sanal=");
+        crate::boot::console::serial_print_hex(kvirt);
+        serial_print(" kayma=");
+        crate::boot::console::serial_print_hex(slide);
+        serial_print(" hizalama=");
+        if aligned {
+            serial_print("ok");
+        } else {
+            serial_print("HATA");
+        }
+        serial_print(" durum=");
+        if slide != 0 {
+            serial_print("etkin");
+        } else {
+            serial_print("kapali");
+        }
+        serial_print("\n");
+        if !aligned {
+            serial_print("[KASLR] UYARI: kayma sayfa hizali degil; adres varsayimlari riskli.\n");
+        }
+    } else {
+        serial_print("[KASLR] Kernel adres yaniti yok; KASLR kapali olabilir.\n");
+    }
 
     BootDisplay {
         fb,

@@ -10,6 +10,7 @@ Uygulama kataloğu, sistem yetenekleri ve proje yol haritası.
 - Render bütçesi aşılırsa tamamlanmamış kare geri yüklenir; `TimeBudget` zaman aşımı davranışı deterministik host testleriyle kapsanır.
 - Dosya Yöneticisi'nde WAV dosyasına çift tıklamak seçilen dosyayı Müzik Çalar'da açar. Resim Gösterici görüntüyü döşeli masaüstü arka planı yapabilir.
 - Ayarlar'da üç yeni ek masaüstü görseli bulunur (`desktop1.png`–`desktop3.png`).
+- Çekirdek KASLR ile her açılışta rastgele adreslenir; `SYS_SECCOMP` syscall filtreleme ve ELF yükleyici güvenlik sertleştirmesi eklendi. `test_stress_24h.ps1` ile yapılandırılabilir süreli QEMU soak/panik testi çalıştırılabilir.
 
 Önceki sürümlerin ayrıntıları için [sürüm günlüğüne](CHANGELOG.md), tam değişiklik listesi için [değişiklik arşivine](releases.md) bakın.
 
@@ -78,6 +79,8 @@ Yakın ve orta vadede minOs için planlanan başlıca geliştirmeler:
   - Statik ELF yükleyici (`src/mm/loader.rs`), sanal bellek sayfa koruması ve `#GP` / `#PF` hata yakalama.
   - Güvenli kullanıcı bellek kopyalama (`src/mm/uaccess.rs`), dosya tanıtıcısı yaşam döngüsü (`open`/`read`/`lseek`/`close`, fork/exec uyumlu refcount) ve süreç başına kaynak limitleri (`SYS_RESINFO`).
   - `SYS_KILL` sinyal semantiği (SIGKILL/SIGTERM sonlandırma, SIGSTOP/SIGCONT suspend-resume, `Suspended` süreç durumu, pending sinyal maskesi) ve `kill`/`pause`/`resume` karşılığı.
+  - `SYS_SECCOMP` (28) ile süreç başına geri döndürülemez syscall izin maskesi (yalnızca daraltma; `SYS_EXIT` her zaman muaf) ve ELF yükleyici sertleştirmesi (`e_entry` doğrulaması, program-header taşma kontrolleri, NULL sayfa reddi).
+  - KASLR: çekirdek PIE/ET_DYN derlenir, Limine `kaslr: yes` ile her açılışta rastgele sanal taban alır (`[KASLR]` boot raporu).
   - Tembel kullanıcı bellek eşleme (`PAGE_LAZY` — brk/mmap sayfaları ilk yazmada ayrılır), `MAP_SHARED_FILE` zero-copy paylaşımı, 2 MiB büyük sayfa desteği ve disk'siz bellek sıkıştırma deposu (`src/mm/memory/`).
   - Büyüyen kernel heap (16→64 MiB sanal pencere, 64 KiB üstü tahsislar tembel), canlı bellek profilleme (`[MEM-PROFILE]`/`[MEM-STAT]`) ve `meminfo` komutu.
 - [x] **SMP (Symmetric Multiprocessing) Mimarisi:**

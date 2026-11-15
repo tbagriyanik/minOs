@@ -41,7 +41,7 @@ pub fn init_subsystems(
 
     // 1. Donanim Kesmeleri (IDT) ve PMM Baslatimi
     serial_print("[BOOT] Donanım kesmeleri ve bellek yöneticisi başlatılıyor...\n");
-    arch::x86_64::init_interrupts();
+    arch::x86_64::init_interrupts(0);
 
     unsafe {
         if let Some(response) =
@@ -100,6 +100,11 @@ pub fn init_subsystems(
     }
 
     serial_print("[PMM] Fiziksel bellek yöneticisi başlatıldı.\n");
+    if memory_mgr.pmm.zone_self_test() {
+        serial_print("[PMM-ZONE] DMA/Normal bolgeleri ve CPU sayfa onbellegi dogrulandi.\n");
+    } else {
+        serial_print("[PMM-ZONE] UYARI: bolge/onbellek oz-testi basarisiz.\n");
+    }
     arch::x86_64::set_mmio_frame_allocator(alloc_pmm_frame_global);
     timer.mark("pmm");
 
@@ -245,6 +250,8 @@ pub fn init_subsystems(
     mm::process::test_ring3_isolation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Syscall kullanıcı işaretçi doğrulama testleri çalıştırılıyor...\n");
     mm::process::test_syscall_pointer_validation(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Seccomp syscall izin maskesi testleri çalıştırılıyor...\n");
+    mm::process::test_syscall_filter(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Kullanıcı heap/mmap/ASLR/COW testleri çalıştırılıyor...\n");
     mm::process::test_user_memory(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Dosya tanıtıcısı yaşam döngüsü testleri çalıştırılıyor...\n");
@@ -253,6 +260,8 @@ pub fn init_subsystems(
     mm::process::test_resource_limits(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] kill/SIGSTOP/SIGCONT/SIGTERM testleri çalıştırılıyor...\n");
     mm::process::test_kill_suspend_resume(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
+    serial_print("[BOOT] Süreç grubu/oturum/affinity/sinyal testleri çalıştırılıyor...\n");
+    mm::process::test_process_groups_and_signals(&mut memory_mgr.proc_mgr, &mut memory_mgr.pmm);
     serial_print("[BOOT] Ring 3 syscall ve register dönüş testleri çalıştırılıyor...\n");
     let ring3_demo_ok = arch::x86_64::ring3::demo(&mut memory_mgr.pmm);
     if !ring3_demo_ok {

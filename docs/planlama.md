@@ -173,7 +173,7 @@ P1 süreç, Ring 3 ve CI hedefleri mevcut kod ve QEMU boot testleriyle doğrulan
 - [ ] OCSP stapling ve fail-closed doğrulama
 - [x] **HTTP/2 tarayıcıya bağlandı** — `http::http2_get` + ALPN h2 (`browser/mod.rs` `[H2]` yolu)
 - [x] **`gzip`/`deflate` içerik kodlaması** — `src/drivers/` HTTP yolu (`Content-Encoding` çözümü)
-- [ ] Çok çekirdekli scheduler uzun süreli stres ve **fiziksel donanımda** doğrulama (QEMU tarafı tamam)
+- [ ] Çok çekirdekli scheduler uzun süreli stres ve **fiziksel donanımda** doğrulama (QEMU tarafı tamam; `test_stress_24h.ps1` soak harness'i eklendi)
 - [x] **Clippy uyarılarının temizlenmesi** — `cargo clean` sonrası `cargo clippy --release`: 0 uyarı, 0 hata (39.7s tam derleme)
 - [ ] TLS istemci random'ı için CSPRNG kullanılması — `http2::make_client_random` hâlâ `monotonic_ms` tabanlı xorshift; `RDRAND`/`RDSEED` veya tohumlanmış ChaCha20 gerekli
 - [ ] CRL/OCSP yanıtlarının otomatik ağ üzerinden alınması

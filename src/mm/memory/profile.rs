@@ -36,27 +36,51 @@ pub struct MemorySnapshot {
     pub largest_free_run: usize,
     pub alloc_requests: u64,
     pub failed_requests: u64,
+    /// Bölge başına mantıksal boş çerçeve (DMA, Normal, HighMem).
+    pub zone_free_frames: [usize; crate::mm::pmm::NUM_ZONES],
+    /// CPU önbelleklerinde bekleyen çerçeve sayısı.
+    pub cached_frames: usize,
+    /// Önbellek isabet sayısı.
+    pub cache_hits: u64,
     pub under_pressure: bool,
 }
 
 /// Profil anlık görüntüsü. `mm` kilidi meşgulse temel PMM alanlarıyla
 /// (sıfır süreç bilgisi) döner; kesme bağlamında asla bloklanmaz.
 pub fn snapshot() -> MemorySnapshot {
-    let (pmm_profile, user_frames, processes) = match crate::mm::try_lock_memory() {
-        Some(mut guard) => {
-            let memory = guard.get();
-            let mut user = 0usize;
-            let mut count = 0usize;
-            for process in memory.proc_mgr.processes.iter() {
-                if process.state != crate::mm::process::ProcessState::Unused {
-                    user += process.resources.user_frame_count;
-                    count += 1;
+    let (pmm_profile, user_frames, processes, zone_free, cache_stats) =
+        match crate::mm::try_lock_memory() {
+            Some(mut guard) => {
+                let memory = guard.get();
+                let mut user = 0usize;
+                let mut count = 0usize;
+                for process in memory.proc_mgr.processes.iter() {
+                    if process.state != crate::mm::process::ProcessState::Unused {
+                        user += process.resources.user_frame_count;
+                        count += 1;
+                    }
                 }
+                let report = memory.pmm.zone_report();
+                let mut zones = [0usize; crate::mm::pmm::NUM_ZONES];
+                for (index, stats) in report.iter().enumerate() {
+                    zones[index] = stats.free_frames;
+                }
+                (
+                    memory.pmm.profile(),
+                    user,
+                    count,
+                    zones,
+                    memory.pmm.page_cache_stats(),
+                )
             }
-            (memory.pmm.profile(), user, count)
-        }
-        None => (crate::mm::pmm::MemoryProfile::default(), 0, 0),
-    };
+            None => (
+                crate::mm::pmm::MemoryProfile::default(),
+                0,
+                0,
+                [0; crate::mm::pmm::NUM_ZONES],
+                crate::mm::pmm::PageCacheStats::default(),
+            ),
+        };
     let heap = crate::kernel::heap::profile();
     // Kullanılan çerçeveler: kullanıcı verisi + kernel (PML4/PT/PD/kstack).
     let used_frames = (pmm_profile.used_bytes / PAGE_SIZE) as usize;
@@ -79,6 +103,9 @@ pub fn snapshot() -> MemorySnapshot {
         largest_free_run: pmm_profile.largest_free_run,
         alloc_requests: pmm_profile.alloc_requests,
         failed_requests: pmm_profile.failed_requests,
+        zone_free_frames: zone_free,
+        cached_frames: cache_stats.cached_frames,
+        cache_hits: cache_stats.hits,
         under_pressure: pmm_profile.under_pressure(),
     }
 }
@@ -133,6 +160,17 @@ pub fn report_boot_summary() {
     serial_print_dec(snapshot.alloc_requests);
     serial_print(" failed=");
     serial_print_dec(snapshot.failed_requests);
+    serial_print(" cache_frames=");
+    serial_print_dec(snapshot.cached_frames as u64);
+    serial_print(" cache_hits=");
+    serial_print_dec(snapshot.cache_hits);
+    serial_print("\n");
+    serial_print("[MEM-ZONE] dma=");
+    serial_print_dec(snapshot.zone_free_frames[crate::mm::pmm::MemoryZone::Dma.index()] as u64);
+    serial_print(" normal=");
+    serial_print_dec(snapshot.zone_free_frames[crate::mm::pmm::MemoryZone::Normal.index()] as u64);
+    serial_print(" highmem=");
+    serial_print_dec(snapshot.zone_free_frames[crate::mm::pmm::MemoryZone::HighMem.index()] as u64);
     serial_print("\n");
     crate::kernel::heap::report_profile();
     if snapshot.under_pressure {

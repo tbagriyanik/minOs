@@ -4,13 +4,17 @@ PHDRS {
     text PT_LOAD;
     rodata PT_LOAD;
     data PT_LOAD;
+    dynamic PT_DYNAMIC;
 }
 
 SECTIONS {
-    . = 0xffffffff80000000;
+    /* KASLR: cekirdek ET_DYN (PIE) olarak baglanir; Limine bu tabani
+       rastgele bir yuksek-yari adresine kaydirir (bkz. boot/limine.conf `kaslr`). */
+    . = 0;
 
     .text : {
         *(.text .text.*)
+        *(.plt .plt.got .plt.sec .iplt)
     } :text
 
     . = ALIGN(4096);
@@ -18,6 +22,19 @@ SECTIONS {
     .rodata : {
         *(.rodata .rodata.*)
     } :rodata
+
+    /* PIE/KASLR metadata must remain separate output sections.  Placing
+       these into .rodata makes lld assign them SHT_PROGBITS, while their
+       input types are SHT_RELA/SHT_DYNSYM/SHT_STRTAB/etc. */
+    .rela.dyn : { *(.rela.dyn) *(.rela.plt) *(.rela*) } :rodata
+    .relr.dyn : { *(.relr.dyn) } :rodata
+    .dynsym : { *(.dynsym) } :rodata
+    .dynstr : { *(.dynstr) } :rodata
+    .gnu.hash : { *(.gnu.hash) } :rodata
+    .hash : { *(.hash) } :rodata
+    .gnu.version : { *(.gnu.version) } :rodata
+    .gnu.version_d : { *(.gnu.version_d) } :rodata
+    .gnu.version_r : { *(.gnu.version_r) } :rodata
 
     . = ALIGN(4096);
 
@@ -33,6 +50,12 @@ SECTIONS {
         *(.data .data.*)
         *(.got .got.*)
     } :data
+
+    /* Limine ET_DYN çekirdekleri için PT_DYNAMIC segmenti.
+       Bu segmentin dosya içeriği .dynamic bölümünü içerir. */
+    .dynamic : {
+        *(.dynamic)
+    } :dynamic
 
     .bss : {
         *(.bss .bss.*)

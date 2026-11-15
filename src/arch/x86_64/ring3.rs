@@ -1336,7 +1336,7 @@ static SAVED_KRSP: AtomicU64 = AtomicU64::new(0);
 static SAVED_KFXSP: AtomicU64 = AtomicU64::new(0);
 
 /// Kesme çerçevesini (int80/timer ortak yerleşimi: [0]=rax .. [14]=r15,
-/// [15]=rip, [16]=cs, [17]=rflags, [18]=rsp, [19]=ss) süreç bağlamına çevirir.
+/// index 15 = rip, index 16 = cs, index 17 = rflags, index 18 = rsp, index 19 = ss) süreç bağlamına çevirir.
 ///
 /// # Safety
 /// `frame`, 15 yazmaç + CPU çerçevesi saklayan geçerli bir kesme yığınını

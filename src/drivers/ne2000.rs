@@ -335,7 +335,7 @@ pub fn has_pending() -> bool {
 /// RX halkasından bir paket okur; paket boyutunu (Ethernet çerçevesi)
 /// döndürür. Tampon doluysa 0.
 ///
-/// NE2000 halka girdisi: [durum][sonraki sayfa][boyut_lo][boyut_hi][çerçeve].
+/// NE2000 halka girdisi: [durum][sonraki sayfa][boyut_lo]byte_hiframe.
 pub fn receive(buf: &mut [u8]) -> usize {
     if !is_ready() {
         return 0;

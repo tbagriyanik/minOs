@@ -182,7 +182,7 @@ fn base64_encode(data: &[u8]) -> String {
     out
 }
 
-/// URL'i (scheme://host[:port]/path) parçalar; yalnızca http şeması desteklenir.
+/// URL'i (scheme://hostport/path) parçalar; yalnızca http şeması desteklenir.
 fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
     let rest = url.strip_prefix("http://")?;
     let (authority, path) = match rest.find('/') {

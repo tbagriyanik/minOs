@@ -2196,7 +2196,7 @@ pub enum IpAddress {
     V6(Ipv6Address),
 }
 
-/// Standart veya sıkıştırılmış IPv6 adres dizesini ayrıştırır (Örn: "::1", "fe80::1", "2001:db8::1", "[::1]").
+/// Standart veya sıkıştırılmış IPv6 adres dizesini ayrıştırır (Örn: "::1", "fe80::1", "2001:db8::1", "[loopback").
 pub fn parse_ipv6(host: &str) -> Option<Ipv6Address> {
     let clean = host.trim().trim_start_matches('[').trim_end_matches(']');
     if clean.is_empty() {

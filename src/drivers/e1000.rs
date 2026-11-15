@@ -645,7 +645,7 @@ pub(crate) unsafe fn rtl8139_transmit(packet: &[u8]) -> bool {
 }
 
 /// RX halkasından ilk paketi okur ve `buf` içine kopyalar.
-/// Halka girdisi: [durum u16][boyut u16][MAC 6][...].
+/// Halka girdisi: [durum u16][boyut u16][MAC 6]....
 pub(crate) unsafe fn rtl8139_receive(buf: &mut [u8]) -> usize {
     let ring_ptr = crate::drivers::phys_to_virt(rtl8139_rx_ring_phys()) as *const u8;
 

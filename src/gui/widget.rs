@@ -817,12 +817,20 @@ impl Widget for CheckBox {
 
     fn draw(&self, fb: &mut Framebuffer, ctx: &DrawCtx) {
         let b = self.box_rect();
+        let hovered = ctx.is_hovered(self.id);
         let border = if ctx.is_focused(self.id) || self.checked {
             Color::ACCENT_BLUE
+        } else if hovered {
+            MinGuiCompositor::shade(Color::BORDER, 60)
         } else {
             Color::BORDER
         };
-        fb.draw_rounded_rect(b.x, b.y, b.w, b.h, 3, Color::DARK_BG);
+        let box_bg = if hovered {
+            MinGuiCompositor::shade(Color::DARK_BG, 24)
+        } else {
+            Color::DARK_BG
+        };
+        fb.draw_rounded_rect(b.x, b.y, b.w, b.h, 3, box_bg);
         fb.draw_rounded_rect_outline(b.x, b.y, b.w, b.h, 3, border);
         if self.checked {
             let tick = Color::ACCENT_GREEN;

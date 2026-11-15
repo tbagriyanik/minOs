@@ -1888,7 +1888,7 @@ pub mod sys_nos {
     /// Kullanıcı bellek özeti: [0] heap_brk, [1] mmap bölge sayısı,
     /// [2] mmap bayt, [3] eşlenmiş heap sayfası (ABI uyumlu ilk 4 alan).
     /// Genişletilmiş alanlar: [4] kullanıcı çerçevesi, [5] paylaşılan (COW)
-    /// sayfa, [6] paylaşımla kazanılan bayt, [7] sistem toplam bayt,
+    /// page, index 6 = shared bytes gained, index 7 = system total bytes,
     /// [8] sistem boş bayt, [9] sistem kullanıcı çerçevesi,
     /// [10] sistem kernel çerçevesi, [11] kernel heap haritalanan bayt.
     /// RDI = çıktı tamponu (u64 x 12 = 96 bayt).

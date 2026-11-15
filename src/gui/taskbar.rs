@@ -52,6 +52,43 @@ impl MinGuiCompositor {
         let h = sp(26).min(taskbar_h().saturating_sub(8));
         (tab_x, tb_y + 5, Self::taskbar_tab_width(), h)
     }
+    /// "Masaüstü n/N" göstergesinin dikdörtgeni; sekmelerle tepsi arasında
+    /// yer kalmazsa `None` döner. Çizim ve tıklama aynı geometriyi kullanır.
+    /// Rect of the "Workspace n/N" badge; `None` when tabs leave no room
+    /// before the tray. Drawing and hit-testing share this geometry.
+    pub fn workspace_badge_rect(
+        &self,
+        width: usize,
+        height: usize,
+    ) -> Option<(usize, usize, usize, usize)> {
+        let open_count = self
+            .windows
+            .iter()
+            .filter(|slot| {
+                slot.is_some_and(|win| win.is_open && win.workspace == self.active_workspace)
+            })
+            .count();
+        let mut ws = TextBuf::new();
+        ws.push_str(ui_text("Masaüstü ", "Workspace "));
+        ws.push_usize(self.active_workspace + 1);
+        ws.push_byte(b'/');
+        ws.push_usize(Self::MAX_WORKSPACES);
+        let ws_w = Self::text_width(ws.as_str(), 1);
+        let (_, _, _, _, tab_slots) = Self::taskbar_tabs_layout(width, height, open_count);
+        let tabs_end = Self::taskbar_tab_start() + tab_slots * Self::taskbar_tab_step();
+        let tray_x = Self::tray_left_bound(width, height);
+        if tabs_end + ws_w + sp(12) > tray_x {
+            return None;
+        }
+        let text_h = Self::text_height();
+        let tb_y = Self::tray_layout(width, height).tb_y;
+        Some((
+            tray_x.saturating_sub(ws_w + sp(8)),
+            tb_y + taskbar_h().saturating_sub(text_h) / 2,
+            ws_w,
+            text_h,
+        ))
+    }
     // -----------------------------------------------------------------------
     // 3. Görev Çubuğu, Sistem Tepsisi (saat/ses/tema) ve Kaplamalar
     // -----------------------------------------------------------------------
@@ -253,29 +290,27 @@ impl MinGuiCompositor {
         }
 
         // Sanal masaüstü göstergesi: sekmelerin kapladığı alan ile tepsi
-        // arasında yer kalırsa "Masaüstü n/N" etiketi çizilir.
-        {
+        // arasında yer kalırsa tıklanabilir "Masaüstü n/N" etiketi çizilir.
+        // Workspace badge: drawn as a clickable "Workspace n/N" label when
+        // room remains between the tabs and the tray.
+        if let Some((bx, by, bw, bh)) = self.workspace_badge_rect(fb.width, fb.height) {
+            if in_rect(mx, my, (bx, by, bw, bh)) {
+                fb.draw_rounded_rect(bx, by, bw, bh, 5, Self::shade(Color::TITLE_BAR, 16));
+            }
             let mut ws = TextBuf::new();
             ws.push_str(ui_text("Masaüstü ", "Workspace "));
             ws.push_usize(self.active_workspace + 1);
             ws.push_byte(b'/');
             ws.push_usize(Self::MAX_WORKSPACES);
-            let ws_w = Self::text_width(ws.as_str(), 1);
-            let tabs_end = tab_start + tab_slots * tab_step;
-            let tray_x = Self::tray_left_bound(fb.width, fb.height);
-            if tabs_end + ws_w + sp(12) <= tray_x {
-                let text_h = Self::text_height();
-                let ws_y = tb_y + (taskbar_h().saturating_sub(text_h)) / 2;
-                Self::draw_string_shadow(
-                    fb,
-                    tray_x.saturating_sub(ws_w + sp(8)),
-                    ws_y,
-                    ws.as_str(),
-                    Color::TEXT_MAIN,
-                    Color::SHADOW,
-                    1,
-                );
-            }
+            Self::draw_string_shadow(
+                fb,
+                bx,
+                by,
+                ws.as_str(),
+                Color::TEXT_MAIN,
+                Color::SHADOW,
+                1,
+            );
         }
 
         // Sistem Tepsisi: saat, ses, Ethernet, tema ve klavye düzeni.
@@ -433,10 +468,13 @@ impl MinGuiCompositor {
         // 4. "Masaüstünü Göster" şeridi (en sağda ince alan)
         if l.desktop.2 > 0 {
             let desktop_hover = in_rect(mx, my, l.desktop);
+            // Yalnızca etkin sanal masaüstü pencere durumunu yansıtır.
+            // Only the active virtual desktop's window state is reflected.
             let all_minimized = self
                 .windows
                 .iter()
                 .flatten()
+                .filter(|w| w.workspace == self.active_workspace)
                 .all(|w| !w.is_open || w.is_minimized);
             let line_color = if all_minimized || desktop_hover {
                 Color::ACCENT_BLUE

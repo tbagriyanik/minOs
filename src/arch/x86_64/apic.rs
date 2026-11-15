@@ -65,7 +65,7 @@ pub unsafe extern "C" fn apic_timer_handler_rust(frame: *mut u64) {
 
 /// Naked interrupt kapısı (tüm yazmaçları korur, Rust işleyicisini çağırır, EOI sonrası iretq ile döner).
 /// Çerçeve yerleşimi `ring3::int80_entry` ile aynıdır: [0]=rax .. [14]=r15,
-/// [15]=rip, [16]=cs, [17]=rflags, [18]=rsp, [19]=ss.
+/// index 15 = rip, index 16 = cs, index 17 = rflags, index 18 = rsp, index 19 = ss.
 ///
 /// # Safety
 /// Donanım kesmesi tarafından IDT üzerinden çağrılır; Rust kodundan doğrudan

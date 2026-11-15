@@ -398,7 +398,7 @@ fn parse_hex_len(line: &[u8]) -> Option<usize> {
 }
 
 /// Content-Encoding başlığına göre gövdeyi çözer (gzip/deflate/br).
-/// `resp_buf`: [headers][body...] tamponu, `hlen`: başlık uzunluğu, `total`: mevcut toplam uzunluk.
+/// `resp_buf`: [headers]body... tamponu, `hlen`: başlık uzunluğu, `total`: mevcut toplam uzunluk.
 /// Döner: yeni toplam uzunluk (başlık + çözülmüş gövde).
 fn maybe_decode_content_encoding(
     resp_buf: &mut [u8],

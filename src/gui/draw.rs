@@ -1,11 +1,80 @@
 //! Text and colour drawing helpers.
 
 use super::*;
+use crate::arch::x86_64::sync::SpinMutex;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static POINTER_X: AtomicUsize = AtomicUsize::new(0);
 static POINTER_Y: AtomicUsize = AtomicUsize::new(0);
 static POINTER_DOWN: AtomicBool = AtomicBool::new(false);
+
+// ---------------------------------------------------------------------------
+// Hover animasyonu
+//
+// `draw_button` her karede bir kez çağrıldığı için, düğme dikdörtgeni başına
+// tutulan ilerleme değeri kare başına hedefe üstel olarak yaklaşır
+// (~200-300 ms'de oturur). Böylece hover'da renk aniden değişmek yerine
+// yumuşak geçiş yapar. Tablo doluysa animasyon atlanır (tam hover uygulanır).
+// ---------------------------------------------------------------------------
+
+const HOVER_ANIM_CAP: usize = 96;
+
+#[derive(Clone, Copy)]
+struct HoverAnimSlot {
+    key: u64,
+    progress: f32,
+}
+
+const EMPTY_SLOT: HoverAnimSlot = HoverAnimSlot {
+    key: u64::MAX,
+    progress: 0.0,
+};
+
+struct HoverAnims {
+    slots: [HoverAnimSlot; HOVER_ANIM_CAP],
+}
+
+static HOVER_ANIMS: SpinMutex<HoverAnims> = SpinMutex::new(HoverAnims {
+    slots: [EMPTY_SLOT; HOVER_ANIM_CAP],
+});
+
+/// Dikdörtgeni 16 bitlik bileşenlerle tek u64 anahtara paketler.
+#[inline]
+fn hover_key(r: (usize, usize, usize, usize)) -> u64 {
+    (r.0 as u64 & 0xFFFF)
+        | ((r.1 as u64 & 0xFFFF) << 16)
+        | ((r.2 as u64 & 0xFFFF) << 32)
+        | ((r.3 as u64 & 0xFFFF) << 48)
+}
+
+/// `active` hedefine doğru ilerleyen 0.0..1.0 hover şiddetini döndürür.
+fn hover_blend(r: (usize, usize, usize, usize), active: bool) -> f32 {
+    let key = hover_key(r);
+    let target = if active { 1.0 } else { 0.0 };
+    let mut guard = HOVER_ANIMS.lock();
+    let slots = &mut guard.slots;
+    if let Some(i) = slots.iter().position(|s| s.key == key) {
+        let p = &mut slots[i].progress;
+        *p += (target - *p) * 0.22;
+        if *p < 0.01 && target == 0.0 {
+            slots[i] = EMPTY_SLOT;
+            return 0.0;
+        }
+        return *p;
+    }
+    if !active {
+        return 0.0;
+    }
+    if let Some(free) = slots.iter().position(|s| s.key == u64::MAX) {
+        slots[free] = HoverAnimSlot {
+            key,
+            progress: 0.22,
+        };
+        0.22
+    } else {
+        1.0
+    }
+}
 
 impl MinGuiCompositor {
     pub fn set_pointer_state(x: usize, y: usize, down: bool) {
@@ -167,10 +236,11 @@ impl MinGuiCompositor {
             px >= r.0 && px < r.0.saturating_add(r.2) && py >= r.1 && py < r.1.saturating_add(r.3);
         let hovered = hovered || pointer_over;
         let pressed = POINTER_DOWN.load(Ordering::Relaxed) && pointer_over;
+        let blend = hover_blend(r, hovered);
         let bg = if pressed {
             Self::shade(bg, -48)
-        } else if hovered {
-            Self::shade(bg, 40)
+        } else if blend > 0.001 {
+            Self::shade(bg, (blend * 40.0) as i32)
         } else {
             bg
         };
@@ -191,7 +261,13 @@ impl MinGuiCompositor {
             rect.2,
             rect.3,
             5,
-            if pressed { Color::WHITE } else { Color::BORDER },
+            if pressed {
+                Color::WHITE
+            } else if blend > 0.4 {
+                Self::shade(Color::BORDER, 50)
+            } else {
+                Color::BORDER
+            },
         );
         let tw = Self::text_width(label, 1).saturating_sub(1);
         let tx = rect.0 + rect.2.saturating_sub(tw) / 2;

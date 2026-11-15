@@ -2081,14 +2081,19 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
 
                     consumed = true;
                 } else if gui::in_rect(mx, my, l.desktop) {
-                    // "Masaüstünü Göster" şeridi: tüm pencereleri küçült/geri getir
+                    // "Masaüstünü Göster" şeridi: yalnızca etkin sanal
+                    // masaüstündeki pencereleri küçült/geri getir; diğer
+                    // masaüstlerinin pencere durumuna dokunma.
+                    // "Show Desktop" strip: only toggle windows on the
+                    // active workspace; leave other desktops untouched.
                     let all_minimized = compositor
                         .windows
                         .iter()
                         .flatten()
+                        .filter(|w| w.workspace == compositor.active_workspace)
                         .all(|w| !w.is_open || w.is_minimized);
                     for w in compositor.windows.iter_mut().flatten() {
-                        if w.is_open {
+                        if w.is_open && w.workspace == compositor.active_workspace {
                             w.is_minimized = !all_minimized;
                             w.is_focused = false;
                         }
@@ -2120,6 +2125,18 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                     settings_app.keyboard_layout = keyboard.layout;
 
                     consumed = true;
+                } else if let Some(badge) = compositor.workspace_badge_rect(width, height) {
+                    // "Masaüstü n/N" göstergesi: tıklayınca sonraki sanal
+                    // masaüstüne geçilir (4'ten sonra 1'e sarar).
+                    // Workspace badge: click advances to the next virtual
+                    // desktop (wraps from 4 back to 1).
+                    if gui::in_rect(mx, my, badge) {
+                        compositor.switch_workspace(1);
+
+                        force_render = true;
+
+                        consumed = true;
+                    }
                 }
             }
 
@@ -4815,14 +4832,22 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
 
                 drivers::keyboard::KeyAction::WinShowDesktop => {
+                    // Win+D yalnızca etkin sanal masaüstünü etkiler; diğer
+                    // masaüstlerindeki pencereler açık kalır.
+                    // Win+D only affects the active virtual desktop; windows
+                    // on other workspaces stay visible.
                     let show_desktop = compositor
                         .windows
                         .iter()
                         .flatten()
-                        .any(|w| w.is_open && !w.is_minimized);
+                        .any(|w| {
+                            w.is_open
+                                && !w.is_minimized
+                                && w.workspace == compositor.active_workspace
+                        });
 
                     for w in compositor.windows.iter_mut().flatten() {
-                        if w.is_open {
+                        if w.is_open && w.workspace == compositor.active_workspace {
                             w.is_minimized = show_desktop;
                             w.is_focused = false;
                         }
@@ -4836,8 +4861,12 @@ pub fn run_desktop(display: boot::start::BootDisplay) -> ! {
                 }
 
                 drivers::keyboard::KeyAction::WinMinimizeAll => {
+                    // Yalnızca etkin sanal masaüstündeki pencereleri
+                    // küçült; diğer masaüstleri etkilenmez.
+                    // Minimize only windows on the active virtual desktop;
+                    // other workspaces are unaffected.
                     for w in compositor.windows.iter_mut().flatten() {
-                        if w.is_open {
+                        if w.is_open && w.workspace == compositor.active_workspace {
                             w.is_minimized = true;
                             w.is_focused = false;
                         }

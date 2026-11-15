@@ -568,8 +568,8 @@ const OCSP_ACCESS_METHOD: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x
 
 /// CRL Distribution Points (RFC 5280 §4.2.1.13) uzantısından HTTP(S) URL'leri
 /// çıkarır. CRLDistributionPoints ::= SEQUENCE OF DistributionPoint
-/// DistributionPoint ::= SEQUENCE { distributionPoint [0] EXPLICIT OPTIONAL, ... }
-/// DistributionPointName içinde [6] (0x86) uniformResourceIdentifier aranır.
+/// DistributionPoint ::= SEQUENCE { distributionPoint tag 0 = EXPLICIT OPTIONAL, ... }
+/// DistributionPointName içinde tag 6 (0x86) = uniformResourceIdentifier aranır.
 /// AIA OID'i: 2.5.29.31 aslında CRL DP'dir; AIA 1.3.6.1.5.5.7.1.1'dir.
 /// (Doğru OID eşlemesi aşağıdaki fonksiyonlarda yapılır.)
 pub fn find_crl_urls(cert_der: &[u8]) -> Vec<String> {

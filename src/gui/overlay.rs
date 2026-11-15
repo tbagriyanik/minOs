@@ -10,7 +10,13 @@ impl MinGuiCompositor {
         } else {
             self.windows
                 .iter()
-                .filter(|slot| slot.is_some_and(|win| win.is_open && !win.is_minimized))
+                .filter(|slot| {
+                    slot.is_some_and(|win| {
+                        win.is_open
+                            && !win.is_minimized
+                            && win.workspace == self.active_workspace
+                    })
+                })
                 .count()
         };
         let columns = (box_w.saturating_sub(24) / 58).max(1);

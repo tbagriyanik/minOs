@@ -281,13 +281,17 @@ impl MinGuiCompositor {
                 .position(|slot| slot.is_some_and(|w| w.app_id as usize == app_id))
         })?;
         if existing.is_none() {
-            let ws = self.windows[source_idx].map(|w| w.workspace).unwrap_or(0);
             if let Some(win) = self.windows[source_idx].as_mut() {
                 win.is_open = true;
                 win.is_minimized = false;
                 win.is_maximized = false;
+                // Yeniden açılan pencere her zaman etkin sanal masaüstünde
+                // belirir; kullanıcının içinde bulunduğu masaüstünden başka
+                // bir masaüstüne ışınlanmaz.
+                // A reopened window always appears on the active workspace;
+                // it must not teleport the user to a different desktop.
+                win.workspace = self.active_workspace;
             }
-            self.active_workspace = ws;
             self.focus_window(source_idx);
             return Some(source_idx);
         }

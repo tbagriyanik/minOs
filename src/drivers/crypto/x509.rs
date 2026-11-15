@@ -106,6 +106,11 @@ pub enum CertValidationError {
     NotYetValid,
     Expired,
     HostnameMismatch,
+    InvalidBasicConstraints,
+    InvalidKeyUsage,
+    InvalidExtendedKeyUsage,
+    UnsupportedCriticalExtension,
+    PathLengthExceeded,
     UntrustedRoot,
     InvalidSignature,
     UnsupportedSignatureAlgorithm,
@@ -835,17 +840,7 @@ pub fn verify_certificate_fields(
 ) -> Result<(), CertValidationError> {
     let info = parse_certificate_info(cert_der).map_err(|_| CertValidationError::InvalidDer)?;
 
-    // 1. Zaman geçerliliği
-    if let Some(not_before) = &info.not_before {
-        if now < not_before {
-            return Err(CertValidationError::NotYetValid);
-        }
-    }
-    if let Some(not_after) = &info.not_after {
-        if now > not_after {
-            return Err(CertValidationError::Expired);
-        }
-    }
+    verify_validity(&info, now)?;
 
     // 2. Hostname kontrolü
     if !expected_hostname.is_empty() {
@@ -868,6 +863,267 @@ pub fn verify_certificate_fields(
         }
     }
 
+    Ok(())
+}
+
+fn verify_validity(info: &CertificateInfo, now: &X509Time) -> Result<(), CertValidationError> {
+    let not_before = info
+        .not_before
+        .as_ref()
+        .ok_or(CertValidationError::InvalidDer)?;
+    let not_after = info
+        .not_after
+        .as_ref()
+        .ok_or(CertValidationError::InvalidDer)?;
+    if not_before > not_after {
+        return Err(CertValidationError::InvalidDer);
+    }
+    if now < not_before {
+        return Err(CertValidationError::NotYetValid);
+    }
+    if now > not_after {
+        return Err(CertValidationError::Expired);
+    }
+    Ok(())
+}
+
+const OID_BASIC_CONSTRAINTS: &[u8] = &[0x55, 0x1d, 0x13];
+const OID_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x0f];
+const OID_SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
+const OID_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25];
+const OID_SERVER_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01];
+const OID_ANY_EXTENDED_KEY_USAGE: &[u8] = &[0x55, 0x1d, 0x25, 0x00];
+
+#[derive(Default)]
+struct CertificateExtensions {
+    basic_constraints: Option<(bool, Option<usize>)>,
+    key_usage: Option<u16>,
+    server_auth_eku: Option<bool>,
+}
+
+fn parse_certificate_extensions(
+    cert_der: &[u8],
+) -> Result<CertificateExtensions, CertValidationError> {
+    let (spki_start, _) = locate_spki_tlv(cert_der).map_err(|_| CertValidationError::InvalidDer)?;
+    let (_, _, _, mut pos) =
+        read_der_tlv(cert_der, spki_start).map_err(|_| CertValidationError::InvalidDer)?;
+    let (cert_tag, cert_vo, _, _) =
+        read_der_tlv(cert_der, 0).map_err(|_| CertValidationError::InvalidDer)?;
+    if cert_tag != TAG_SEQUENCE {
+        return Err(CertValidationError::InvalidDer);
+    }
+    let (_, tbs_vo, tbs_vl, _) =
+        read_der_tlv(cert_der, cert_vo).map_err(|_| CertValidationError::InvalidDer)?;
+    let tbs_end = tbs_vo
+        .checked_add(tbs_vl)
+        .ok_or(CertValidationError::InvalidDer)?;
+
+    while pos < tbs_end {
+        let (tag, value_offset, value_len, next) =
+            read_der_tlv(cert_der, pos).map_err(|_| CertValidationError::InvalidDer)?;
+        if tag == TAG_CONTEXT_3 {
+            let ext_end = value_offset
+                .checked_add(value_len)
+                .ok_or(CertValidationError::InvalidDer)?;
+            let (seq_tag, mut ext_pos, seq_len, seq_next) = read_der_tlv(cert_der, value_offset)
+                .map_err(|_| CertValidationError::InvalidDer)?;
+            if seq_tag != TAG_SEQUENCE || seq_next != ext_end {
+                return Err(CertValidationError::InvalidDer);
+            }
+            let seq_end = ext_pos
+                .checked_add(seq_len)
+                .ok_or(CertValidationError::InvalidDer)?;
+            let mut parsed = CertificateExtensions::default();
+            while ext_pos < seq_end {
+                let (extension_tag, extension_vo, _extension_vl, extension_next) =
+                    read_der_tlv(cert_der, ext_pos).map_err(|_| CertValidationError::InvalidDer)?;
+                if extension_tag != TAG_SEQUENCE {
+                    return Err(CertValidationError::InvalidDer);
+                }
+                let mut field = extension_vo;
+                let (oid_tag, oid_vo, oid_vl, oid_next) =
+                    read_der_tlv(cert_der, field).map_err(|_| CertValidationError::InvalidDer)?;
+                if oid_tag != TAG_OID {
+                    return Err(CertValidationError::InvalidDer);
+                }
+                let oid = &cert_der[oid_vo..oid_vo + oid_vl];
+                field = oid_next;
+
+                let mut critical = false;
+                if field < extension_next {
+                    let (field_tag, field_vo, field_vl, field_next) = read_der_tlv(cert_der, field)
+                        .map_err(|_| CertValidationError::InvalidDer)?;
+                    if field_tag == 0x01 {
+                        if field_vl != 1 || !matches!(cert_der[field_vo], 0x00 | 0xff) {
+                            return Err(CertValidationError::InvalidDer);
+                        }
+                        critical = cert_der[field_vo] != 0;
+                        field = field_next;
+                    }
+                }
+                let (value_tag, value_vo, value_vl, value_next) =
+                    read_der_tlv(cert_der, field).map_err(|_| CertValidationError::InvalidDer)?;
+                if value_tag != TAG_OCTET_STRING || value_next != extension_next {
+                    return Err(CertValidationError::InvalidDer);
+                }
+                let value = &cert_der[value_vo..value_vo + value_vl];
+
+                if oid == OID_BASIC_CONSTRAINTS {
+                    if parsed.basic_constraints.is_some() {
+                        return Err(CertValidationError::InvalidDer);
+                    }
+                    parsed.basic_constraints = Some(parse_basic_constraints(value)?);
+                } else if oid == OID_KEY_USAGE {
+                    if parsed.key_usage.is_some() {
+                        return Err(CertValidationError::InvalidDer);
+                    }
+                    parsed.key_usage = Some(parse_key_usage(value)?);
+                } else if oid == OID_EXTENDED_KEY_USAGE {
+                    if parsed.server_auth_eku.is_some() {
+                        return Err(CertValidationError::InvalidDer);
+                    }
+                    parsed.server_auth_eku = Some(parse_server_auth_eku(value)?);
+                } else if oid == OID_SUBJECT_ALT_NAME {
+                    if parse_general_names(value).is_err() && critical {
+                        return Err(CertValidationError::InvalidDer);
+                    }
+                } else if critical {
+                    return Err(CertValidationError::UnsupportedCriticalExtension);
+                }
+                ext_pos = extension_next;
+            }
+            if ext_pos != seq_end {
+                return Err(CertValidationError::InvalidDer);
+            }
+            return Ok(parsed);
+        }
+        pos = next;
+    }
+    Ok(CertificateExtensions::default())
+}
+
+fn parse_extension_value(
+    value: &[u8],
+    expected_tag: u8,
+) -> Result<(usize, usize), CertValidationError> {
+    let (tag, offset, len, next) =
+        read_der_tlv(value, 0).map_err(|_| CertValidationError::InvalidDer)?;
+    if tag != expected_tag || next != value.len() {
+        return Err(CertValidationError::InvalidDer);
+    }
+    Ok((offset, len))
+}
+
+fn parse_basic_constraints(value: &[u8]) -> Result<(bool, Option<usize>), CertValidationError> {
+    let (seq_vo, seq_vl) = parse_extension_value(value, TAG_SEQUENCE)?;
+    let end = seq_vo
+        .checked_add(seq_vl)
+        .ok_or(CertValidationError::InvalidDer)?;
+    let mut pos = seq_vo;
+    let mut is_ca = false;
+    let mut path_len = None;
+    if pos < end {
+        let (tag, value_offset, value_len, next) =
+            read_der_tlv(value, pos).map_err(|_| CertValidationError::InvalidDer)?;
+        if tag == 0x01 {
+            if value_len != 1 || !matches!(value[value_offset], 0x00 | 0xff) {
+                return Err(CertValidationError::InvalidDer);
+            }
+            is_ca = value[value_offset] != 0;
+            pos = next;
+        }
+    }
+    if pos < end {
+        let (tag, value_offset, value_len, next) =
+            read_der_tlv(value, pos).map_err(|_| CertValidationError::InvalidDer)?;
+        if tag != TAG_INTEGER || value_len == 0 || value_len > 4 || value[value_offset] & 0x80 != 0
+        {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let mut length = 0usize;
+        for byte in &value[value_offset..value_offset + value_len] {
+            length = length
+                .checked_mul(256)
+                .and_then(|current| current.checked_add(*byte as usize))
+                .ok_or(CertValidationError::InvalidDer)?;
+        }
+        path_len = Some(length);
+        pos = next;
+    }
+    if pos != end || (path_len.is_some() && !is_ca) {
+        return Err(CertValidationError::InvalidDer);
+    }
+    Ok((is_ca, path_len))
+}
+
+fn parse_key_usage(value: &[u8]) -> Result<u16, CertValidationError> {
+    let (bit_vo, bit_vl) = parse_extension_value(value, TAG_BIT_STRING)?;
+    if bit_vl == 0 || value[bit_vo] > 7 {
+        return Err(CertValidationError::InvalidDer);
+    }
+    let unused = value[bit_vo] as usize;
+    let bytes = &value[bit_vo + 1..bit_vo + bit_vl];
+    if bytes.is_empty()
+        || (unused > 0
+            && bytes
+                .last()
+                .is_some_and(|last| last & ((1 << unused) - 1) != 0))
+    {
+        return Err(CertValidationError::InvalidDer);
+    }
+    let mut usage = 0u16;
+    for (byte_index, byte) in bytes.iter().enumerate() {
+        for bit_index in 0..8 {
+            if byte & (0x80 >> bit_index) != 0 {
+                let bit = byte_index * 8 + bit_index;
+                if bit < 16 {
+                    usage |= 1 << bit;
+                }
+            }
+        }
+    }
+    Ok(usage)
+}
+
+fn parse_server_auth_eku(value: &[u8]) -> Result<bool, CertValidationError> {
+    let (seq_vo, seq_vl) = parse_extension_value(value, TAG_SEQUENCE)?;
+    let end = seq_vo
+        .checked_add(seq_vl)
+        .ok_or(CertValidationError::InvalidDer)?;
+    let mut pos = seq_vo;
+    let mut accepts_server = false;
+    let mut has_oid = false;
+    while pos < end {
+        let (tag, oid_vo, oid_vl, next) =
+            read_der_tlv(value, pos).map_err(|_| CertValidationError::InvalidDer)?;
+        if tag != TAG_OID {
+            return Err(CertValidationError::InvalidDer);
+        }
+        let oid = &value[oid_vo..oid_vo + oid_vl];
+        accepts_server |= oid == OID_SERVER_AUTH || oid == OID_ANY_EXTENDED_KEY_USAGE;
+        has_oid = true;
+        pos = next;
+    }
+    if !has_oid {
+        return Err(CertValidationError::InvalidDer);
+    }
+    Ok(accepts_server)
+}
+
+fn parse_general_names(value: &[u8]) -> Result<(), CertValidationError> {
+    let (seq_vo, seq_vl) = parse_extension_value(value, TAG_SEQUENCE)?;
+    let end = seq_vo
+        .checked_add(seq_vl)
+        .ok_or(CertValidationError::InvalidDer)?;
+    let mut pos = seq_vo;
+    while pos < end {
+        let (_, _, _, next) =
+            read_der_tlv(value, pos).map_err(|_| CertValidationError::InvalidDer)?;
+        pos = next;
+    }
+    if pos != end {
+        return Err(CertValidationError::InvalidDer);
+    }
     Ok(())
 }
 
@@ -1424,6 +1680,14 @@ pub const TRUSTED_ROOTS: &[&[u8]] = &[
 pub const MAX_CHAIN_DEPTH: usize = 6;
 
 pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationError> {
+    verify_certificate_chain_with_roots_at(chain, TRUSTED_ROOTS, &X509Time::now())
+}
+
+pub(crate) fn verify_certificate_chain_with_roots_at(
+    chain: &[&[u8]],
+    trusted_roots: &[&[u8]],
+    now: &X509Time,
+) -> Result<(), CertValidationError> {
     if chain.is_empty() {
         return Err(CertValidationError::InvalidDer);
     }
@@ -1437,6 +1701,57 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
         parsed_chain.push(ParsedX509Cert::parse(cert_der)?);
     }
 
+    for (index, &cert_der) in chain.iter().enumerate() {
+        if trusted_roots.contains(&cert_der) {
+            continue;
+        }
+        let info = parse_certificate_info(cert_der).map_err(|_| CertValidationError::InvalidDer)?;
+        verify_validity(&info, now)?;
+        let extensions = parse_certificate_extensions(cert_der)?;
+        if index == 0 {
+            if extensions.basic_constraints.is_some_and(|(is_ca, _)| is_ca) {
+                return Err(CertValidationError::InvalidBasicConstraints);
+            }
+            if extensions
+                .key_usage
+                .is_some_and(|usage| usage & (1 << 0) == 0)
+            {
+                return Err(CertValidationError::InvalidKeyUsage);
+            }
+            if extensions.server_auth_eku == Some(false) {
+                return Err(CertValidationError::InvalidExtendedKeyUsage);
+            }
+        } else {
+            let (is_ca, path_len) = extensions
+                .basic_constraints
+                .ok_or(CertValidationError::InvalidBasicConstraints)?;
+            if !is_ca {
+                return Err(CertValidationError::InvalidBasicConstraints);
+            }
+            if extensions
+                .key_usage
+                .is_some_and(|usage| usage & (1 << 5) == 0)
+            {
+                return Err(CertValidationError::InvalidKeyUsage);
+            }
+            if let Some(max_path_len) = path_len {
+                let subordinate_ca_count = parsed_chain[1..index]
+                    .iter()
+                    .filter(|cert| cert.issuer_raw != cert.subject_raw)
+                    .filter(|cert| {
+                        parse_certificate_extensions(cert.cert_der)
+                            .ok()
+                            .and_then(|ext| ext.basic_constraints)
+                            .is_some_and(|(is_ca, _)| is_ca)
+                    })
+                    .count();
+                if subordinate_ca_count > max_path_len {
+                    return Err(CertValidationError::PathLengthExceeded);
+                }
+            }
+        }
+    }
+
     // 2. Yapraktan başlayarak zincirdeki her sertifikanın bir sonraki tarafından imzalandığını doğrula.
     //    Kök sertifika sunucu tarafından gönderilmek zorunda değildir; bu yüzden zincir,
     //    kendinden imzalı bir köke veya gömülü bir güvenilen köke ulaşana kadar ilerler.
@@ -1448,11 +1763,11 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
         if current.issuer_raw == current.subject_raw {
             if chain
                 .get(depth)
-                .is_some_and(|cert| TRUSTED_ROOTS.contains(cert))
+                .is_some_and(|cert| trusted_roots.contains(cert))
             {
                 return Ok(());
             }
-            if let Some(spki) = trust_anchor_spki_for(current.subject_raw) {
+            if let Some(spki) = trust_anchor_spki_for_in(current.subject_raw, trusted_roots) {
                 current.verify_signature_with_spki(spki)?;
                 return Ok(());
             }
@@ -1462,7 +1777,7 @@ pub fn verify_certificate_chain(chain: &[&[u8]]) -> Result<(), CertValidationErr
         // 3. Mevcut sertifikanın vereni (issuer) güvenilen köklerimizden biriyle eşleşiyorsa,
         //    kökün açık anahtarıyla imzayı doğrula. Sunucu zinciri kökü
         //    göndermemiş olsa bile (yaygın durum) doğrulama burada tamamlanır.
-        if let Some(spki) = trust_anchor_spki_for(current.issuer_raw) {
+        if let Some(spki) = trust_anchor_spki_for_in(current.issuer_raw, trusted_roots) {
             current.verify_signature_with_spki(spki)?;
             return Ok(());
         }
@@ -1500,8 +1815,13 @@ pub fn trusted_root_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
 /// Kökler `TRUSTED_ROOTS` tablosunda gömülüdür (eski harici `webpki-roots`
 /// deposu kaldırıldı); sunucu zinciri kökü göndermek zorunda olmadığı için
 /// bu arama, el sıkışmanın kök olmadan da doğrulanmasını sağlar.
+#[cfg(test)]
 fn trust_anchor_spki_for(issuer_raw: &[u8]) -> Option<&'static [u8]> {
-    TRUSTED_ROOTS.iter().find_map(|&root| {
+    trust_anchor_spki_for_in(issuer_raw, TRUSTED_ROOTS)
+}
+
+fn trust_anchor_spki_for_in<'a>(issuer_raw: &[u8], roots: &'a [&'a [u8]]) -> Option<&'a [u8]> {
+    roots.iter().find_map(|&root| {
         let parsed = ParsedX509Cert::parse(root).ok()?;
         if parsed.subject_raw == issuer_raw {
             spki_slice(root).ok()
@@ -1731,8 +2051,20 @@ mod tests {
         // (gerçek R3 yerine test üretimi) zincir sonunda kökle eşleşmelidir:
         // kendinden imzalı ve gömülü olmayan bir sertifika reddedilmelidir.
         let rogue_root = make_test_cert_der();
+        let valid_now = X509Time {
+            year: 2024,
+            month: 6,
+            day: 15,
+            hour: 12,
+            minute: 0,
+            second: 0,
+        };
         assert_eq!(
-            verify_certificate_chain(&[rogue_root.as_slice()]),
+            verify_certificate_chain_with_roots_at(
+                &[rogue_root.as_slice()],
+                TRUSTED_ROOTS,
+                &valid_now,
+            ),
             Err(CertValidationError::UntrustedRoot)
         );
     }

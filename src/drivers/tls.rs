@@ -631,6 +631,8 @@ pub struct TlsSession {
     negotiated_protocol: Option<alloc::vec::Vec<u8>>,
     /// Sertifika pinning: güvenilen sertifika hash'leri.
     pinned_cert_hashes: alloc::vec::Vec<alloc::vec::Vec<u8>>,
+    #[cfg(test)]
+    test_trust_roots: alloc::vec::Vec<alloc::vec::Vec<u8>>,
     /// Son gönderilen uygulama verisi kaydı sayısı (rate limiting).
     last_record_seq: u64,
     /// DDoS koruması: son N kayıt sayısı (rate limiting).
@@ -709,6 +711,8 @@ impl TlsSession {
             tls13_ticket: None,
             negotiated_protocol: None,
             pinned_cert_hashes: Vec::new(),
+            #[cfg(test)]
+            test_trust_roots: Vec::new(),
             last_record_seq: 0,
             record_history: Vec::new(),
             heartbeat_data: None,
@@ -731,6 +735,11 @@ impl TlsSession {
 
     pub fn cert_error(&self) -> Option<crate::drivers::crypto::x509::CertValidationError> {
         self.cert_error
+    }
+
+    #[cfg(test)]
+    fn add_test_trust_anchor(&mut self, root: &[u8]) {
+        self.test_trust_roots.push(root.to_vec());
     }
 
     pub fn set_client_ecdhe_secret(&mut self, secret: [u8; 32]) {
@@ -1676,10 +1685,6 @@ impl TlsSession {
         // Sertifika zinciri sertifika "uyarısı" değil, sertifika hatasıdır:
         // doğrulama başarısızsa el sıkışma durdurulur. Tanılama bilgisi
         // (cert_verified / cert_error) tarayıcıya raporlanır.
-        // Host testlerinde (`--test`) bu bölüm derlenmez: el sıkışma düzeneği
-        // gerçek bir zincir değil, imza yollarını sınayan sentetik sertifikalar
-        // kullanır. Üretim derlemesinde sertifika doğrulaması zorunludur.
-        #[cfg(not(test))]
         if let Some(first_cert) = cert_chain.first() {
             // 1. Sertifika zinciri derinliği sınırı.
             if cert_chain.len() > self.max_chain_depth {
@@ -1700,7 +1705,27 @@ impl TlsSession {
                 &self.hostname,
                 &now,
             );
-            let chain_res = crate::drivers::crypto::x509::verify_certificate_chain(&cert_chain);
+            #[cfg(test)]
+            let chain_res = if self.test_trust_roots.is_empty() {
+                crate::drivers::crypto::x509::verify_certificate_chain(&cert_chain)
+            } else {
+                let roots: alloc::vec::Vec<&[u8]> = self
+                    .test_trust_roots
+                    .iter()
+                    .map(|root| root.as_slice())
+                    .collect();
+                crate::drivers::crypto::x509::verify_certificate_chain_with_roots_at(
+                    &cert_chain,
+                    &roots,
+                    &now,
+                )
+            };
+            #[cfg(not(test))]
+            let chain_res = crate::drivers::crypto::x509::verify_certificate_chain_with_roots_at(
+                &cert_chain,
+                crate::drivers::crypto::x509::TRUSTED_ROOTS,
+                &now,
+            );
 
             if let Err(e) = field_res {
                 self.cert_verified = false;
@@ -1773,10 +1798,6 @@ impl TlsSession {
                     }
                 }
             }
-        }
-        #[cfg(test)]
-        {
-            self.cert_verified = true;
         }
         self.apply_stapled_ocsp()?;
         if self.rsa_key.is_none() && self.ec_key.is_none() {
@@ -3387,9 +3408,163 @@ mod tests {
         out
     }
 
-    /// Test icin P-256 (secp256r1) EC sertifikası uretir.
-    ///
-    /// SPKI: id-ecPublicKey + secp256r1 OID + 04||X||Y BIT STRING.
+    fn test_name(common_name: &[u8]) -> Vec<u8> {
+        let mut atv = Vec::new();
+        atv.extend_from_slice(&der_tlv(0x06, &[0x55, 0x04, 0x03]));
+        atv.extend_from_slice(&der_tlv(0x13, common_name));
+        der_tlv(0x30, &der_tlv(0x31, &der_tlv(0x30, &atv)))
+    }
+
+    fn test_rsa_spki() -> Vec<u8> {
+        let mut rsa_key_body = Vec::new();
+        let mut modulus = Vec::with_capacity(TEST_N.len() + 1);
+        modulus.push(0);
+        modulus.extend_from_slice(&TEST_N);
+        rsa_key_body.extend_from_slice(&der_tlv(0x02, &modulus));
+        rsa_key_body.extend_from_slice(&der_tlv(0x02, &[1, 0, 1]));
+        let rsa_key = der_tlv(0x30, &rsa_key_body);
+
+        const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+        let mut alg_body = Vec::new();
+        alg_body.extend_from_slice(&der_tlv(0x06, RSA_OID));
+        alg_body.extend_from_slice(&der_tlv(0x05, &[]));
+        let alg_id = der_tlv(0x30, &alg_body);
+
+        let mut bits = vec![0];
+        bits.extend_from_slice(&rsa_key);
+        der_tlv(0x30, &[alg_id, der_tlv(0x03, &bits)].concat())
+    }
+
+    fn test_extension(oid: &[u8], critical: bool, value: &[u8]) -> Vec<u8> {
+        let mut body = Vec::new();
+        body.extend_from_slice(&der_tlv(0x06, oid));
+        if critical {
+            body.extend_from_slice(&der_tlv(0x01, &[0xff]));
+        }
+        body.extend_from_slice(&der_tlv(0x04, value));
+        der_tlv(0x30, &body)
+    }
+
+    fn test_ca_extensions() -> Vec<u8> {
+        test_ca_extensions_with(1, &[1, 0x06])
+    }
+
+    fn test_ca_extensions_with(path_len: u8, key_usage_bits: &[u8]) -> Vec<u8> {
+        let basic_constraints = der_tlv(
+            0x30,
+            &[der_tlv(0x01, &[0xff]), der_tlv(0x02, &[path_len])].concat(),
+        );
+        let key_usage = der_tlv(0x03, key_usage_bits);
+        let extensions = [
+            test_extension(&[0x55, 0x1d, 0x13], true, &basic_constraints),
+            test_extension(&[0x55, 0x1d, 0x0f], true, &key_usage),
+        ]
+        .concat();
+        der_tlv(0xa3, &der_tlv(0x30, &extensions))
+    }
+
+    fn test_server_extensions() -> Vec<u8> {
+        test_server_extensions_with_eku(&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x01])
+    }
+
+    fn test_server_extensions_with_eku(eku_oid: &[u8]) -> Vec<u8> {
+        let basic_constraints = der_tlv(0x30, &[]);
+        let key_usage = der_tlv(0x03, &[7, 0x80]);
+        let san = der_tlv(0x30, &der_tlv(0x82, b"minos.test"));
+        let eku = der_tlv(0x30, &der_tlv(0x06, eku_oid));
+        let extensions = [
+            test_extension(&[0x55, 0x1d, 0x13], true, &basic_constraints),
+            test_extension(&[0x55, 0x1d, 0x0f], true, &key_usage),
+            test_extension(&[0x55, 0x1d, 0x11], false, &san),
+            test_extension(&[0x55, 0x1d, 0x25], false, &eku),
+        ]
+        .concat();
+        der_tlv(0xa3, &der_tlv(0x30, &extensions))
+    }
+
+    fn test_non_ca_extensions() -> Vec<u8> {
+        let basic_constraints = der_tlv(0x30, &[]);
+        let key_usage = der_tlv(0x03, &[1, 0x04]);
+        let extensions = [
+            test_extension(&[0x55, 0x1d, 0x13], true, &basic_constraints),
+            test_extension(&[0x55, 0x1d, 0x0f], true, &key_usage),
+        ]
+        .concat();
+        der_tlv(0xa3, &der_tlv(0x30, &extensions))
+    }
+
+    fn test_certificate(
+        spki: &[u8],
+        subject: &[u8],
+        issuer: &[u8],
+        serial: u8,
+        extensions: &[u8],
+    ) -> Vec<u8> {
+        test_certificate_with_validity(
+            spki,
+            subject,
+            issuer,
+            serial,
+            b"240101000000Z",
+            b"340101000000Z",
+            extensions,
+        )
+    }
+
+    fn test_certificate_with_validity(
+        spki: &[u8],
+        subject: &[u8],
+        issuer: &[u8],
+        serial: u8,
+        not_before: &[u8],
+        not_after: &[u8],
+        extensions: &[u8],
+    ) -> Vec<u8> {
+        const RSA_SHA256_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+        let mut sig_alg_body = Vec::new();
+        sig_alg_body.extend_from_slice(&der_tlv(0x06, RSA_SHA256_OID));
+        sig_alg_body.extend_from_slice(&der_tlv(0x05, &[]));
+        let sig_alg = der_tlv(0x30, &sig_alg_body);
+
+        let mut validity_body = Vec::new();
+        for ts in [not_before, not_after] {
+            validity_body.extend_from_slice(&der_tlv(0x17, ts));
+        }
+        let validity = der_tlv(0x30, &validity_body);
+
+        let mut tbs_body = Vec::new();
+        tbs_body.extend_from_slice(&der_tlv(0xa0, &der_tlv(0x02, &[2])));
+        tbs_body.extend_from_slice(&der_tlv(0x02, &[serial]));
+        tbs_body.extend_from_slice(&sig_alg);
+        tbs_body.extend_from_slice(issuer);
+        tbs_body.extend_from_slice(&validity);
+        tbs_body.extend_from_slice(subject);
+        tbs_body.extend_from_slice(spki);
+        tbs_body.extend_from_slice(extensions);
+        let tbs = der_tlv(0x30, &tbs_body);
+        let signing_key = crate::drivers::crypto::rsa::RsaPrivateKey {
+            n: TEST_N.to_vec(),
+            d: TEST_D.to_vec(),
+        };
+        let signature = crate::drivers::crypto::rsa::pkcs1_v1_5_sign(&signing_key, &tbs)
+            .expect("test certificate signature");
+        der_tlv(
+            0x30,
+            &[
+                tbs,
+                sig_alg,
+                der_tlv(0x03, &[&[0][..], &signature].concat()),
+            ]
+            .concat(),
+        )
+    }
+
+    fn make_test_root_cert() -> Vec<u8> {
+        let name = test_name(b"Minos Test Root");
+        test_certificate(&test_rsa_spki(), &name, &name, 1, &test_ca_extensions())
+    }
+
+    /// Test icin P-256 (secp256r1) EC sunucu sertifikası uretir.
     fn make_test_ec_cert(point: &[u8; 65]) -> Vec<u8> {
         let mut bits = Vec::new();
         bits.push(0x00);
@@ -3412,42 +3587,14 @@ mod tests {
         spki_body.extend_from_slice(&alg_id);
         spki_body.extend_from_slice(&bitstring);
         let spki = der_tlv(0x30, &spki_body);
-
-        let mut atv = Vec::new();
-        atv.push(0x06);
-        atv.push(3);
-        atv.extend_from_slice(&[0x55, 0x04, 0x03]);
-        atv.push(0x13);
-        atv.push(11);
-        atv.extend_from_slice(b"minos.test");
-        let atv_seq = der_tlv(0x30, &atv);
-        let set = der_tlv(0x31, &atv_seq);
-        let name = der_tlv(0x30, &set);
-
-        let mut val_body = Vec::new();
-        for ts in [&b"240101000000Z"[..], &b"340101000000Z"[..]] {
-            val_body.push(0x17);
-            val_body.push(ts.len() as u8);
-            val_body.extend_from_slice(ts);
-        }
-        let validity = der_tlv(0x30, &val_body);
-
-        let mut tbs_body = Vec::new();
-        tbs_body.push(0x02);
-        tbs_body.push(0x01);
-        tbs_body.push(0x01);
-        tbs_body.extend_from_slice(&alg_id);
-        tbs_body.extend_from_slice(&name);
-        tbs_body.extend_from_slice(&validity);
-        tbs_body.extend_from_slice(&name);
-        tbs_body.extend_from_slice(&spki);
-        let tbs = der_tlv(0x30, &tbs_body);
-
-        let mut cert_body = Vec::new();
-        cert_body.extend_from_slice(&tbs);
-        cert_body.extend_from_slice(&alg_id);
-        cert_body.extend_from_slice(&der_tlv(0x03, &[0x00]));
-        der_tlv(0x30, &cert_body)
+        let root_name = test_name(b"Minos Test Root");
+        test_certificate(
+            &spki,
+            &test_name(b"minos.test"),
+            &root_name,
+            2,
+            &test_server_extensions(),
+        )
     }
 
     /// ClientHello içindeki key_share uzantısından istemcinin açık noktasını
@@ -3493,74 +3640,48 @@ mod tests {
         None
     }
 
-    /// Test icin kendi kendine imzali RSA sertifikasi uretir.
+    /// Test icin test kok CA'si tarafindan imzalanmis RSA sunucu sertifikasi uretir.
     fn make_test_cert() -> Vec<u8> {
-        let mut rsapubkey_body = Vec::new();
-        rsapubkey_body.push(0x02);
-        rsapubkey_body.push(0x82);
-        rsapubkey_body.push(0x00);
-        rsapubkey_body.push(64);
-        rsapubkey_body.extend_from_slice(&TEST_N);
-        rsapubkey_body.push(0x02);
-        rsapubkey_body.push(0x03);
-        rsapubkey_body.extend_from_slice(&[0x01, 0x00, 0x01]);
-        let rsapubkey = der_tlv(0x30, &rsapubkey_body);
+        let root_name = test_name(b"Minos Test Root");
+        test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &root_name,
+            3,
+            &test_server_extensions(),
+        )
+    }
 
-        let mut bits = Vec::new();
-        bits.push(0x00);
-        bits.extend_from_slice(&rsapubkey);
-        let bitstring = der_tlv(0x03, &bits);
-
-        const RSA_OID: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
-        let mut alg_body = Vec::new();
-        alg_body.push(0x06);
-        alg_body.push(RSA_OID.len() as u8);
-        alg_body.extend_from_slice(RSA_OID);
-        alg_body.push(0x05);
-        alg_body.push(0x00);
-        let alg_id = der_tlv(0x30, &alg_body);
-
-        let mut spki_body = Vec::new();
-        spki_body.extend_from_slice(&alg_id);
-        spki_body.extend_from_slice(&bitstring);
-        let spki = der_tlv(0x30, &spki_body);
-
-        let mut atv = Vec::new();
-        atv.push(0x06);
-        atv.push(3);
-        atv.extend_from_slice(&[0x55, 0x04, 0x03]);
-        atv.push(0x13);
-        atv.push(11);
-        atv.extend_from_slice(b"minos.test");
-        let atv_seq = der_tlv(0x30, &atv);
-        let set = der_tlv(0x31, &atv_seq);
-        let name = der_tlv(0x30, &set);
-
-        let mut val_body = Vec::new();
-        for ts in [&b"240101000000Z"[..], &b"340101000000Z"[..]] {
-            val_body.push(0x17);
-            val_body.push(ts.len() as u8);
-            val_body.extend_from_slice(ts);
+    fn make_tls13_certificate_body(chain: &[&[u8]]) -> Vec<u8> {
+        let list_len: usize = chain.iter().map(|cert| cert.len() + 5).sum();
+        let mut body = vec![
+            0,
+            ((list_len >> 16) & 0xff) as u8,
+            ((list_len >> 8) & 0xff) as u8,
+            (list_len & 0xff) as u8,
+        ];
+        for cert in chain {
+            body.extend_from_slice(&[
+                ((cert.len() >> 16) & 0xff) as u8,
+                ((cert.len() >> 8) & 0xff) as u8,
+                (cert.len() & 0xff) as u8,
+            ]);
+            body.extend_from_slice(cert);
+            body.extend_from_slice(&[0, 0]);
         }
-        let validity = der_tlv(0x30, &val_body);
+        body
+    }
 
-        let mut tbs_body = Vec::new();
-        // serialNumber INTEGER
-        tbs_body.push(0x02);
-        tbs_body.push(0x01);
-        tbs_body.push(0x01);
-        tbs_body.extend_from_slice(&alg_id);
-        tbs_body.extend_from_slice(&name);
-        tbs_body.extend_from_slice(&validity);
-        tbs_body.extend_from_slice(&name);
-        tbs_body.extend_from_slice(&spki);
-        let tbs = der_tlv(0x30, &tbs_body);
-
-        let mut cert_body = Vec::new();
-        cert_body.extend_from_slice(&tbs);
-        cert_body.extend_from_slice(&alg_id);
-        cert_body.extend_from_slice(&der_tlv(0x03, &[0x00]));
-        der_tlv(0x30, &cert_body)
+    fn assert_rejected_test_chain(
+        chain: &[&[u8]],
+        expected: crate::drivers::crypto::x509::CertValidationError,
+    ) {
+        let mut session = TlsSession::new("minos.test", [0; 32]);
+        session.tls13_mode = true;
+        session.add_test_trust_anchor(chain.last().expect("test chain root"));
+        let body = make_tls13_certificate_body(chain);
+        assert!(session.handle_certificate(&body).is_err());
+        assert_eq!(session.cert_error(), Some(expected));
     }
 
     /// Test icin minimum TLS 1.3 sunucusu.
@@ -3795,7 +3916,9 @@ mod tests {
             None,
         );
 
+        let root_cert = make_test_root_cert();
         let mut client = TlsSession::new("minos.test", client_random);
+        client.add_test_trust_anchor(&root_cert);
         let ch_body = &hello[5..];
         client.note_client_hello(ch_body);
         // TLS 1.3 anahtar turetimi icin istemci ECDHE gizlisi saklanir.
@@ -3860,18 +3983,7 @@ mod tests {
             parse_x509_rsa_public_key(&cert).is_ok(),
             "test sertifikasi cozulemeli"
         );
-        let mut cert_body = Vec::new();
-        cert_body.push(0); // certificate_request_context length
-        let list_len = cert.len() + 5; // 3 bayt cert_data + 2 bayt extensions
-        cert_body.push(((list_len >> 16) & 0xFF) as u8);
-        cert_body.push(((list_len >> 8) & 0xFF) as u8);
-        cert_body.push((list_len & 0xFF) as u8);
-        cert_body.push(((cert.len() >> 16) & 0xFF) as u8);
-        cert_body.push(((cert.len() >> 8) & 0xFF) as u8);
-        cert_body.push((cert.len() & 0xFF) as u8);
-        cert_body.extend_from_slice(&cert);
-        cert_body.push(0); // extensions length
-        cert_body.push(0);
+        let cert_body = make_tls13_certificate_body(&[&cert, &root_cert]);
         let cert_msg = hs_message(HANDSHAKE_CERTIFICATE, &cert_body);
         server.note(&cert_msg);
         let cert_rec = server.encrypt_hs_record(&cert_msg);
@@ -3924,6 +4036,7 @@ mod tests {
                 .unwrap_or_else(|_| panic!("{name} kaydi islenemedi: {:?}", client.state()));
         }
         assert_eq!(client.state(), TlsState::Tls13ServerFinished);
+        assert!(client.is_cert_verified());
 
         // Istemci Finished uretir.
         let client_finished = client
@@ -4007,7 +4120,9 @@ mod tests {
             None,
             None,
         );
+        let root_cert = make_test_root_cert();
         let mut client = TlsSession::new("minos.test", client_random);
+        client.add_test_trust_anchor(&root_cert);
         let ch_body = &hello[5..];
         client.note_client_hello(ch_body);
         client.set_client_ecdhe_secret(client_ecdhe);
@@ -4063,18 +4178,7 @@ mod tests {
             parse_x509_ec_public_key(&cert).is_ok(),
             "EC test sertifikat cozulemeli"
         );
-        let mut cert_body = Vec::new();
-        cert_body.push(0);
-        let list_len = cert.len() + 5;
-        cert_body.push(((list_len >> 16) & 0xFF) as u8);
-        cert_body.push(((list_len >> 8) & 0xFF) as u8);
-        cert_body.push((list_len & 0xFF) as u8);
-        cert_body.push(((cert.len() >> 16) & 0xFF) as u8);
-        cert_body.push(((cert.len() >> 8) & 0xFF) as u8);
-        cert_body.push((cert.len() & 0xFF) as u8);
-        cert_body.extend_from_slice(&cert);
-        cert_body.push(0);
-        cert_body.push(0);
+        let cert_body = make_tls13_certificate_body(&[&cert, &root_cert]);
         let cert_msg = hs_message(HANDSHAKE_CERTIFICATE, &cert_body);
         server.note(&cert_msg);
         let cert_rec = server.encrypt_hs_record(&cert_msg);
@@ -4152,6 +4256,7 @@ mod tests {
             TlsState::Tls13ServerFinished,
             "ECDSA CertificateVerify dogrulanmaliydi"
         );
+        assert!(client.is_cert_verified());
 
         let client_finished = client.build_tls13_client_finished().unwrap();
         assert_eq!(client.state(), TlsState::Established);
@@ -4159,6 +4264,145 @@ mod tests {
         assert_eq!(plain[0], HANDSHAKE_FINISHED);
         assert_eq!(plain[3] as usize, SHA256_HASH_LEN);
         assert_eq!(plain.len(), 4 + SHA256_HASH_LEN);
+    }
+
+    #[test]
+    fn tls_certificate_validation_rejects_non_ca_intermediate() {
+        use crate::drivers::crypto::x509::CertValidationError;
+
+        let root = make_test_root_cert();
+        let root_name = test_name(b"Minos Test Root");
+        let intermediate_name = test_name(b"Not A CA");
+        let intermediate = test_certificate(
+            &test_rsa_spki(),
+            &intermediate_name,
+            &root_name,
+            4,
+            &test_non_ca_extensions(),
+        );
+        let leaf = test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &intermediate_name,
+            5,
+            &test_server_extensions(),
+        );
+
+        assert_rejected_test_chain(
+            &[&leaf, &intermediate, &root],
+            CertValidationError::InvalidBasicConstraints,
+        );
+    }
+
+    #[test]
+    fn tls_certificate_validation_rejects_expired_intermediate() {
+        use crate::drivers::crypto::x509::CertValidationError;
+
+        let root = make_test_root_cert();
+        let root_name = test_name(b"Minos Test Root");
+        let intermediate_name = test_name(b"Expired CA");
+        let intermediate = test_certificate_with_validity(
+            &test_rsa_spki(),
+            &intermediate_name,
+            &root_name,
+            6,
+            b"140101000000Z",
+            b"150101000000Z",
+            &test_ca_extensions(),
+        );
+        let leaf = test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &intermediate_name,
+            7,
+            &test_server_extensions(),
+        );
+
+        assert_rejected_test_chain(&[&leaf, &intermediate, &root], CertValidationError::Expired);
+    }
+
+    #[test]
+    fn tls_certificate_validation_rejects_intermediate_without_key_cert_sign() {
+        use crate::drivers::crypto::x509::CertValidationError;
+
+        let root = make_test_root_cert();
+        let root_name = test_name(b"Minos Test Root");
+        let intermediate_name = test_name(b"Wrong Key Usage CA");
+        let intermediate = test_certificate(
+            &test_rsa_spki(),
+            &intermediate_name,
+            &root_name,
+            8,
+            &test_ca_extensions_with(1, &[7, 0x80]),
+        );
+        let leaf = test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &intermediate_name,
+            9,
+            &test_server_extensions(),
+        );
+
+        assert_rejected_test_chain(
+            &[&leaf, &intermediate, &root],
+            CertValidationError::InvalidKeyUsage,
+        );
+    }
+
+    #[test]
+    fn tls_certificate_validation_rejects_intermediate_path_length() {
+        use crate::drivers::crypto::x509::CertValidationError;
+
+        let root = make_test_root_cert();
+        let root_name = test_name(b"Minos Test Root");
+        let upper_name = test_name(b"Upper CA");
+        let lower_name = test_name(b"Lower CA");
+        let upper = test_certificate(
+            &test_rsa_spki(),
+            &upper_name,
+            &root_name,
+            10,
+            &test_ca_extensions_with(0, &[1, 0x06]),
+        );
+        let lower = test_certificate(
+            &test_rsa_spki(),
+            &lower_name,
+            &upper_name,
+            11,
+            &test_ca_extensions(),
+        );
+        let leaf = test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &lower_name,
+            12,
+            &test_server_extensions(),
+        );
+
+        assert_rejected_test_chain(
+            &[&leaf, &lower, &upper, &root],
+            CertValidationError::PathLengthExceeded,
+        );
+    }
+
+    #[test]
+    fn tls_certificate_validation_requires_server_auth_eku() {
+        use crate::drivers::crypto::x509::CertValidationError;
+
+        let root = make_test_root_cert();
+        let root_name = test_name(b"Minos Test Root");
+        let leaf = test_certificate(
+            &test_rsa_spki(),
+            &test_name(b"minos.test"),
+            &root_name,
+            13,
+            &test_server_extensions_with_eku(&[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x02]),
+        );
+
+        assert_rejected_test_chain(
+            &[&leaf, &root],
+            CertValidationError::InvalidExtendedKeyUsage,
+        );
     }
 
     // -----------------------------------------------------------------------

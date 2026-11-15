@@ -60,9 +60,9 @@ An RFC 7540 client core lives in `src/drivers/http.rs`.
 | **Handshake** | Full TLS 1.3 handshake loop (RSA & ECDSA CertificateVerify, HKDF key schedule, encrypted record processing) |
 | **RFC 8446** | AAD length (§5.2), `Finished` key derivation (§4.4.4), graceful `close_notify` (§6.1) |
 | **Encryption** | AES-128-GCM |
-| **Certificate Verification** | X.509, RFC 5280, `not_before` / `not_after` (against CMOS RTC clock), CN and SAN DNS records (RFC 6125), wildcard `*.domain.com` |
+| **Certificate Verification** | Leaf and intermediate validity dates; CN/SAN hostname checks; intermediate CA BasicConstraints and `pathLen`; CA `keyCertSign` and leaf KeyUsage/EKU extensions when present. Untrusted chains and unknown critical extensions are rejected. |
 | **Chain Depth Limit** | `MAX_CHAIN_DEPTH` (6) certificates |
-| **Revocation Checking** | CRL & OCSP parsing, signature-verified, fail-closed policy; delegated OCSP responder supported |
+| **Revocation Checking** | If stapled OCSP is present, its signature, validity and revocation status are verified; invalid/revoked responses reject the connection. Without stapled OCSP, TLS does not check revocation. CRL parsing helpers are also available. |
 | **Root CA Store** | 51 trusted root CA certificates (`src/drivers/crypto/roots/`) |
 
 > Includes Let's Encrypt ISRG Root X1 & X2, Google Trust Services, DigiCert, SSL.com, GoDaddy, Starfield, IdenTrust, QuoVadis, Certum, Buypass, Actalis, T-TeleSec, Microsoft, D-TRUST, Telia, SwissSign, OISTE WISeKey, FNMT-RCM, SECOM roots.

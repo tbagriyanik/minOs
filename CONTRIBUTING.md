@@ -70,7 +70,7 @@ powershell -ExecutionPolicy Bypass -File .\run.ps1
 
 ## 🧪 Test Süreci
 
-### Host birim testleri (290 test)
+### Host birim testleri (295 test)
 
 Kriptografi, X.509, TLS, JavaScript motoru, HTML ayrıştırıcı ve GUI metin tamponu testleri:
 
@@ -310,7 +310,7 @@ For `run.ps1` options see `docs/building.md` and wiki pages.
 
 ## 🧪 Test Process
 
-### Host unit tests (290 tests)
+### Host unit tests (295 tests)
 
 Cryptography, X.509, TLS, JavaScript engine, HTML parser, and GUI text buffer tests:
 

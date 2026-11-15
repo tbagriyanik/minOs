@@ -11,7 +11,9 @@ README dosyaları yalnızca öne çıkan yenilikleri özetler; tam liste buradad
 - Hoş Geldin ekranı, kurulum sihirbazı ve Dosya Yöneticisi form kontrollerinde Tab ile odak gezinmesi, Enter ile onaylama ve Esc ile vazgeçme kısayolları eklendi.
 - `test_qemu.ps1 -FpsStressTest [-FpsStressMinutes N|-FpsStressSeconds N]` QMP ile oyunu açar ve 10/30/60 dakikalık stres koşularında QEMU canlılığı ile pozitif metrikleri doğrular.
 - `RENDER_BUDGET_MS` aşımında yarım çizilmiş framebuffer artık görünmez; FPS 3D içerik bölgesi statik yedeğe alınıp tamamlanmazsa geri yüklenir.
-- `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi; host test paketi 290 test içerir (290 geçti / 0 hata).
+- `TimeBudget` için enjekte edilebilir test saati ve deterministik zaman aşımı testleri eklendi.
+- TLS/X.509 sertifika zinciri doğrulaması sıkılaştırıldı: güvenilmeyen zincir sertifikalarının tarihleri ve CA BasicConstraints/pathLen kısıtları; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları denetlenir. Bilinmeyen kritik uzantılar reddedilir. Host TLS testlerinde doğrulama kestirmesi kaldırıldı; geçerli RSA/ECDSA el sıkışmaları ile geçersiz ara CA senaryoları doğrulanır.
+- Host test paketi 295 test içerir (295 geçti / 0 hata).
 - WAV dosyasına çift tıklama seçilen dosyayı doğrudan Müzik Çalar'da oynatır.
 - Resim Gösterici'den görüntüyü masaüstüne döşeli arka plan olarak ayarlama seçeneği eklendi.
 - Ayarlar'a üç yeni masaüstü görseli (`desktop1.png`–`desktop3.png`) eklendi.

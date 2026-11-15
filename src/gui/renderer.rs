@@ -9,15 +9,18 @@ use crate::apps;
 use crate::desktop::helpers::{desktop_item_rect, desktop_item_visible, window_content_h};
 use crate::drivers;
 use crate::gui;
+use crate::gui::dirty_rect::DirtyRect;
 
 /// Masaüstü simgelerini çizer.
+/// Sadece belirtilen rect'ler değişmişse onlar yeniden çizilir.
 pub fn render_desktop_icons(
-    compositor: &MinGuiCompositor,
+    compositor: &mut MinGuiCompositor,
     fb: &mut drivers::video::Framebuffer,
     desktop_fm: &apps::filemanager::FileManagerApp,
     width: usize,
     height: usize,
 ) {
+    // Arka planı temizle (tam ekran yenileme yerine son frame'i koru)
     compositor.render_desktop_bg(fb);
 
     for i in 0..desktop_fm.file_count {
@@ -27,6 +30,10 @@ pub fn render_desktop_icons(
         if !desktop_item_visible((x, y, w, h), width, height) {
             continue;
         }
+
+        // Kirli rect'i işaretle - sadece bu bölgeyi tekrar çizeceğiz
+        let dirty = DirtyRect::new(x, y, w, h);
+        compositor.dirty_tracker.track(0, dirty);
 
         if desktop_fm.is_row_selected(i) {
             fb.draw_rounded_rect_alpha(

@@ -28,8 +28,8 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 | Metric | Value |
 | :--- | :--- |
 | **Rust Compiler** | 1.102.0-nightly |
-| **Total Lines of Code** | 139,168 lines (Rust: `src/` + `tests/` + `build.rs`) |
-| **Unit Tests** | 290 passed / 0 failed |
+| **Total Raw Rust Lines** | 140,094 lines (`src/` + `tests/` + `build.rs`) |
+| **Unit Tests** | 295 passed / 0 failed |
 | **Trusted Root CAs** | 51 certificates |
 | **Built-in Applications** | 17 registered apps (app ID 0–16) + Start Menu |
 | **Kernel / ISO Size** | ~2.0 MB / ~6.0 MB |
@@ -38,7 +38,7 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 
 ## Feature Highlights
 
-- **TLS 1.3 HTTPS:** Browser completes `https://` connections per RFC 8446, preferring IPv6 (AAAA) with an IPv4 fallback.
+- **TLS 1.3 HTTPS:** Browser validates leaf and intermediate certificate validity, CA BasicConstraints/pathLen and any KeyUsage/EKU extensions; host TLS tests exercise the same validation path.
 - **Browser Engine:** Progressive (SOF2) JPEG decoding, `@font-face` rule parsing and `@keyframes` color/opacity animation.
 - **minJs JavaScript Runtime:** Built-in `no_std` JavaScript engine expanded with **closures** (function expressions, arrow functions, scope capture), **`setTimeout`/`setInterval`** timers with `clearTimeout`/`clearInterval`, **`Object.keys()`/`Object.values()`/`Object.entries()`**, and array callback methods (`forEach`, `map`, `filter`, `find`, `findIndex`, `some`, `every`, `reduce`). Function values can be assigned to variables/object properties and invoked as `obj.method()`.
 - **Dynamic Themes:** 5 themes (Velvet Dark, Daylight, Nord, Terminal Green, Sunset) with live switching.
@@ -46,7 +46,7 @@ minOs (Sarman Edition) v2.4.0 is a standalone 64-bit (`x86_64`) operating system
 - **Networking:** Intel PRO/1000, RTL8139, AMD PCnet detection, NE2000, I219-V, Realtek PCIe, Broadcom NetXtreme, VirtIO-net and VMware VMXNET3.
 - **Storage:** AHCI/SATA, NVMe, VirtIO-blk, USB Mass Storage, SD/MMC.
 - **File Systems:** FAT32, Ext2, Ext4, exFAT (read/write/format).
-- **Crypto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509, CRL/OCSP.
+- **Crypto:** SHA-256/384/512, HMAC, AES-GCM, RSA, ECDSA, X.509 and CRL/OCSP helpers.
 - **Wi-Fi (802.11):** 802.11 frame structures, WPA2-PSK PBKDF2-HMAC-SHA1 PMK/PTK derivation, WPA 4-way handshake and PCI/USB interface detection.
 - **EC Fan Profiles:** `fan_temp.rs` EC (0x66/0x62) fan profiles (Silent/Normal/Performance/Full/Auto) with temperature-based auto-switching.
 - **Display Settings:** PNG wallpaper thumbnails are pre-decoded during boot; hourglass cursor shown during long operations.

@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod context;
 pub mod desktop;
+pub mod dirty_rect;
 pub mod draw;
 pub mod event_loop;
 pub mod font_render;
@@ -144,6 +145,8 @@ pub struct MinGuiCompositor {
     pub windows: [Option<Window>; MAX_WINDOWS],
     pub active_window_idx: Option<usize>,
     pub is_start_menu_open: bool,
+    /// Kirli rectangle takibi: sadece değişen bölgeler yeniden çizilir.
+    pub dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker,
     pub active_start_group: usize,
     pub selected_start_item: usize,
     pub start_menu_focus_submenu: bool,
@@ -217,6 +220,7 @@ impl MinGuiCompositor {
             confirm_shutdown: false,
             confirm_restart: false,
             toasts: [None, None, None, None],
+            dirty_tracker: crate::gui::dirty_rect::GlobalDirtyTracker::new(),
             installed_apps: [[0; 24]; 8],
             installed_apps_len: [0; 8],
             installed_apps_count: 0,

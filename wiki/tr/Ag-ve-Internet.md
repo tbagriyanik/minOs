@@ -60,9 +60,9 @@ Desteklenen PCI ağ kartları Intel PRO/1000, Realtek RTL8139 ve AMD PCnet algı
 | **El Sıkışması** | Tam TLS 1.3 el sıkışma döngüsü (RSA & ECDSA CertificateVerify, HKDF anahtar planı, şifreli kayıt işleme) |
 | **RFC 8446** | AAD uzunluğu (§5.2), `Finished` anahtar türetimi (§4.4.4), `close_notify` zarif kapanış (§6.1) |
 | **Şifreleme** | AES-128-GCM |
-| **Sertifika Doğrulama** | X.509, RFC 5280, `not_before` / `not_after` (CMOS RTC ile), CN ve SAN DNS kayıtları (RFC 6125), joker `*.domain.com` |
+| **Sertifika Doğrulama** | Yaprak ve ara sertifikaların geçerlilik tarihleri; CN/SAN hostname kontrolü; ara CA için BasicConstraints ve `pathLen`; varsa CA `keyCertSign` ve yaprak KeyUsage/EKU uzantıları. Bilinmeyen kritik uzantılar ve güvenilmeyen zincirler reddedilir. |
 | **Zincir Derinliği** | `MAX_CHAIN_DEPTH` (6) sertifika sınırı |
-| **İptal Kontrolü** | CRL & OCSP ayrıştırma, imza doğrulamalı, fail-closed politika; delegated OCSP yanıtlayıcısı desteklenir |
+| **İptal Kontrolü** | Stapled OCSP sunulursa imza, geçerlilik ve iptal durumu doğrulanır; geçersiz/iptal edilmiş yanıt bağlantıyı reddeder. OCSP stapling yoksa TLS bağlantısında iptal kontrolü yapılmaz. CRL ayrıştırma yardımcıları ayrıca bulunur. |
 | **Kök CA Deposu** | 51 güvenilen kök CA sertifikası (`src/drivers/crypto/roots/`) |
 
 > Let's Encrypt ISRG Root X1 & X2, Google Trust Services, DigiCert, SSL.com, GoDaddy, Starfield, IdenTrust, QuoVadis, Certum, Buypass, Actalis, T-TeleSec, Microsoft, D-TRUST, Telia, SwissSign, OISTE WISeKey, FNMT-RCM, SECOM kökleri dahil.
